@@ -63,3 +63,4 @@ frontend/test/*.js.map
 frontend/*.tsbuildinfo
 worker/src/*.js
 worker/test/*.js
+.gstack/
