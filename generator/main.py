@@ -21,7 +21,9 @@ import requests
 
 from . import __version__
 from .cloud import (
+    CloudSample,
     CloudSampler,
+    GeostationaryIRSampler,
     GIBSCloudSampler,
     MockCloudSampler,
     SatCORPSSampler,
@@ -106,16 +108,51 @@ def fetch_tle(
         raise RuntimeError("TLE fetch failed and no cache available") from exc
 
 
+class CombinedCloudSampler:
+    """Two-tier cloud sampler.
+
+    Tier 1: MODIS direct cloud fraction (most accurate, but only ~5/33 passes have it).
+    Tier 2: Geostationary IR brightness → cloud fraction proxy (95%+ globe coverage,
+            10-15 min cadence, but IR is a noisier signal at night and over snow).
+    Fallback: cf=50 with source="combined-no-coverage" only when both miss.
+
+    For each lat/lon, prefer Tier 1; if it returns "no observation," fall through
+    to Tier 2.
+    """
+
+    def __init__(self, modis: GIBSCloudSampler, geo_ir: GeostationaryIRSampler):
+        self._modis = modis
+        self._geo_ir = geo_ir
+
+    def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
+        modis_sample = self._modis.sample(lat, lon, when)
+        if modis_sample.source == "gibs":
+            return modis_sample  # tier 1 wins
+        geo_sample = self._geo_ir.sample(lat, lon, when)
+        if geo_sample.source.startswith("geo-ir-") and not geo_sample.source.endswith(
+            "-no-coverage"
+        ) and not geo_sample.source.endswith("-nodata"):
+            return geo_sample
+        # Both missed — surface a "combined" fallback so the UI knows.
+        return CloudSample(
+            cloud_fraction=50.0,
+            sample_time=when,
+            source="combined-no-coverage",
+        )
+
+
 def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSampler, datetime, str]:
     """Pick a cloud sampler.
 
     Order of preference (V1):
-      1. NOAA SatCORPS NetCDF if cached and < 90 min old (deferred — fetcher unwired)
-      2. NASA GIBS (MODIS Aqua daily cloud fraction global) — public WMTS, no auth
-      3. Mock sampler (last-resort fallback if GIBS fetch also fails)
+      1. SatCORPS NetCDF if cached and < 90 min old (fetcher deferred to V2).
+      2. CombinedCloudSampler — MODIS daily (tier 1) + geostationary IR (tier 2).
+         Geo-IR provides 95%+ global coverage at 10-15 min cadence; MODIS where
+         present is more accurate.
+      3. Mock sampler (last-resort fallback when both real sources fail).
 
-    Override via env var `OPD_CLOUD_SOURCE=mock` to force the mock sampler (used in
-    tests so they don't hit the real GIBS API). Any other value is ignored.
+    Override via env var `OPD_CLOUD_SOURCE=mock` to force the mock sampler
+    (tests use this so they don't hit the real GIBS API).
     """
     import os
 
@@ -124,7 +161,7 @@ def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSample
         composite_hour = now.replace(minute=0, second=0, microsecond=0)
         return MockCloudSampler(default_cf=30.0), composite_hour, "mock"
 
-    # 1. SatCORPS hourly composite (preferred when present)
+    # 1. SatCORPS hourly composite (preferred when present; fetcher V2)
     cached = settings.cache_dir / "satcorps_latest.nc"
     if cached.exists():
         age_min = (now.timestamp() - cached.stat().st_mtime) / 60.0
@@ -138,19 +175,35 @@ def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSample
             except Exception as exc:  # noqa: BLE001
                 log.warning("SatCORPS open failed (%s); falling back to GIBS", exc)
 
-    # 2. NASA GIBS (V1 production source — MODIS Aqua daily cloud fraction)
+    # 2. Combined: MODIS (tier 1) + geostationary IR (tier 2)
+    modis: GIBSCloudSampler | None = None
+    geo_ir: GeostationaryIRSampler | None = None
     try:
-        gibs = GIBSCloudSampler(now)
-        # GIBS daily product — composite_hour is "yesterday's" 00:00 UTC by convention.
+        modis = GIBSCloudSampler(now)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("MODIS GIBS fetch failed (%s); continuing without it", exc)
+    try:
+        geo_ir = GeostationaryIRSampler(now)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Geostationary IR fetch failed (%s); continuing without it", exc)
+
+    if modis and geo_ir:
+        log.info("using combined MODIS + geostationary IR cloud sampler")
+        # composite_hour anchored to the freshest input — geo-IR (today, current hour)
+        composite_hour = now.replace(minute=0, second=0, microsecond=0)
+        return CombinedCloudSampler(modis, geo_ir), composite_hour, "combined-modis+geoir"
+    if geo_ir:
+        log.info("using geostationary IR only (MODIS unavailable)")
+        composite_hour = now.replace(minute=0, second=0, microsecond=0)
+        return geo_ir, composite_hour, "geo-ir"
+    if modis:
+        log.info("using MODIS only (geo IR unavailable)")
         composite_hour = (now - timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        log.info("using GIBS MODIS Aqua daily cloud fraction (%s)", composite_hour.date())
-        return gibs, composite_hour, "gibs"
-    except Exception as exc:  # noqa: BLE001
-        log.warning("GIBS fetch failed (%s); falling back to mock sampler", exc)
+        return modis, composite_hour, "gibs"
 
-    # 3. Mock fallback (only when both real sources fail)
+    # 3. Mock fallback (only when all real sources fail)
     log.warning("no real cloud data available; using mock sampler with default cf=30")
     composite_hour = now.replace(minute=0, second=0, microsecond=0)
     return MockCloudSampler(default_cf=30.0), composite_hour, "mock"
@@ -279,7 +332,16 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
         "tle_freshness_factor": round(fresh, 3),
     }
 
-    observed_count = sum(1 for p in all_passes if p["cloud_source"] == "gibs")
+    # "Real observation" = any source that gave a real measurement, not a fallback:
+    #   gibs            (MODIS direct cloud fraction, 1-100)
+    #   geo-ir-{tag}    (geostationary IR converted via brightness threshold)
+    #   satcorps        (SatCORPS NetCDF when wired up)
+    observed_count = sum(
+        1 for p in all_passes
+        if p["cloud_source"] == "gibs"
+        or p["cloud_source"].startswith("geo-ir-")
+        or p["cloud_source"] == "satcorps"
+    )
     status_data = {
         "last_run": utcnow_iso(n),
         "tick_minutes": settings.tick_minutes,

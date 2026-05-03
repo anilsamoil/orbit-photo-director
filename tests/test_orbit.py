@@ -204,6 +204,15 @@ def test_fit_iss_polynomial_returns_coeffs_30min(sample_tle: TLE, now_utc: datet
     assert poly["start"].endswith("Z")
 
 
+def test_fit_iss_polynomial_scales_order_for_1h_window(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """1h window scales to 7th order — covers ~0.65 ISS orbits cleanly."""
+    poly = fit_iss_polynomial(sample_tle, now_utc, minutes=60)
+    assert poly["polynomial_order"] == 7
+    assert len(poly["lat_coeffs"]) == 8
+
+
 def test_fit_iss_polynomial_scales_order_for_2h_window(
     sample_tle: TLE, now_utc: datetime
 ) -> None:

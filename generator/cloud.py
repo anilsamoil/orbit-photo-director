@@ -350,3 +350,119 @@ class GIBSCloudSampler:
         return CloudSample(
             cloud_fraction=50.0, sample_time=when, source="gibs-no-obs"
         )
+
+
+# --------------------------------------------------------------------------
+# Geostationary IR sampler — covers the gaps that MODIS swaths leave behind.
+# --------------------------------------------------------------------------
+
+GEO_IR_LAYERS = (
+    # Each entry: (GIBS layer name, satellite nominal lon, source-tag suffix)
+    ("GOES-East_ABI_Band13_Clean_Infrared", -75.0, "goes-e"),
+    ("GOES-West_ABI_Band13_Clean_Infrared", -137.0, "goes-w"),
+    # Himawari was originally here but GIBS reprojects it incorrectly at zoom 0
+    # (data lands at wrong longitudes; Asian targets get no coverage). At zoom 1
+    # the dateline-wrap tile returns HTTP 400. V2: fetch from JAXA Himawari
+    # real-time API directly (different format, different code path).
+    # Meteosat (lon ~0) isn't on GIBS at all; V2 via EUMETSAT WMS endpoint.
+    # V1 gap: Asia (~lon 60-180), Europe + Africa (~lon -10 to 60). MODIS
+    # Aqua+Terra Day+Night fills these when its passes overlap; otherwise the
+    # cards mark "no observation" honestly.
+)
+
+
+def _ir_pixel_to_cloud_fraction(ir_byte: int) -> float:
+    """Map IR Band 13 brightness (0=cold/cloud, 255=warm/surface) to cloud fraction.
+
+    Linear inverse: cf = 100 - (pixel/255)*100, clamped to [0, 100].
+    Conservative; won't distinguish thin cirrus from thick cloud, and night-time
+    surface cooling will look like cloud. Calibration loop tunes V2.
+    """
+    cf = 100.0 - (ir_byte / 255.0) * 100.0
+    return max(0.0, min(100.0, cf))
+
+
+class GeostationaryIRSampler:
+    """Sample IR brightness temperature from 3 geostationary satellites via GIBS.
+
+    Each satellite covers ~half its hemisphere; combined they cover most of the
+    globe (Africa + Europe gap because Meteosat isn't on GIBS yet — V2). For a
+    given lat/lon we walk the layers, check the alpha channel (0 = off-disk for
+    that satellite), and use the first layer with a valid pixel.
+
+    Tile fetch: 6 PNGs × 80-160KB ≈ 700KB per refresh. Geostationary updates
+    every 10-15 min upstream so a 60-min generator tick gets fresh data.
+    """
+
+    def __init__(self, when: datetime, fetcher: Any | None = None):
+        self._when = when
+        date = when.strftime("%Y-%m-%d")
+        self._layers: list[tuple[str, str, Any]] = []
+        for layer_name, _sat_lon, tag in GEO_IR_LAYERS:
+            try:
+                arr = self._fetch_global_tile(layer_name, date, fetcher=fetcher)
+                self._layers.append((layer_name, tag, arr))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Geo IR fetch failed for %s: %s", layer_name, exc)
+        if not self._layers:
+            raise RuntimeError(f"all {len(GEO_IR_LAYERS)} geo IR layers failed to fetch")
+
+    @classmethod
+    def _fetch_global_tile(
+        cls, layer: str, date_str: str, *, fetcher: Any | None = None
+    ) -> Any:
+        """Download both halves of the globe at zoom 0 and stitch them.
+
+        Geostationary tiles are RGBA: alpha=0 outside the satellite's disk, RGB
+        is grayscale brightness on-disk.
+        """
+        from io import BytesIO
+
+        import numpy as np
+        from PIL import Image
+
+        if fetcher is None:
+            import requests
+
+            def _get(url: str) -> bytes:
+                resp = requests.get(url, timeout=20)
+                resp.raise_for_status()
+                return resp.content
+
+            fetcher = _get
+
+        west_bytes = fetcher(_gibs_url(layer, date_str, 0, 0, 0))
+        east_bytes = fetcher(_gibs_url(layer, date_str, 0, 0, 1))
+        # Stay in RGBA so alpha tells us off-disk pixels.
+        west = np.asarray(Image.open(BytesIO(west_bytes)).convert("RGBA"))
+        east = np.asarray(Image.open(BytesIO(east_bytes)).convert("RGBA"))
+        return np.concatenate([west, east], axis=1)
+
+    def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+        if not self._layers:
+            return CloudSample(50.0, when, "geo-ir-nodata")
+
+        h, w = self._layers[0][2].shape[:2]
+        row = int(round((90.0 - lat) / 180.0 * (h - 1)))
+        col = int(round((lon + 180.0) / 360.0 * (w - 1)))
+        row = max(0, min(h - 1, row))
+        col = max(0, min(w - 1, col))
+
+        for _layer_name, tag, arr in self._layers:
+            pixel = arr[row, col]
+            # RGBA: alpha=0 means off-disk for THIS satellite — try the next one.
+            if pixel[3] == 0:
+                continue
+            ir_byte = int(pixel[0])  # grayscale, R == G == B
+            cf = _ir_pixel_to_cloud_fraction(ir_byte)
+            return CloudSample(
+                cloud_fraction=cf,
+                sample_time=when,
+                source=f"geo-ir-{tag}",
+            )
+
+        return CloudSample(
+            cloud_fraction=50.0, sample_time=when, source="geo-ir-no-coverage"
+        )
