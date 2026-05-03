@@ -24,6 +24,10 @@ export interface PassEntry {
   target_lon: number;
   closest_approach: string; // ISO 8601 Z
   nadir_distance_km: number;
+  /** Angle from ISS-nadir vector to the line-of-sight to the target.
+   *  <30° → WORF (Destiny lab nadir window). ≥30° → Cupola (panoramic dome).
+   *  Older builds may not include this field; treat as optional. */
+  angle_off_nadir_deg?: number;
   pass_regime: 'day' | 'night' | 'terminator';
   obstruction_class: 'clear' | 'cloudy' | 'sun-glint risk';
   p_unobstructed: number;

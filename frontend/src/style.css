@@ -149,6 +149,28 @@ main {
 .tag.obs-clear { color: var(--green); border-color: rgba(91, 227, 122, 0.3); }
 .tag.obs-cloudy { color: var(--text-dim); }
 .tag.obs-glint { color: var(--yellow); border-color: rgba(255, 206, 77, 0.3); }
+.tag.obs-noobs {
+  color: var(--text-dim);
+  font-style: italic;
+  border-color: rgba(108, 115, 135, 0.4);
+  border-style: dashed;
+}
+
+/* WORF (nadir window in Destiny) vs Cupola (panoramic dome): which window
+ * to use is the most consequential operational choice the user makes per
+ * pass. Distinct colors so they read at a glance. */
+.tag.window-worf {
+  color: #b29bff;
+  border-color: rgba(178, 155, 255, 0.4);
+  background: rgba(178, 155, 255, 0.08);
+  font-weight: 600;
+}
+.tag.window-cupola {
+  color: #ffb37a;
+  border-color: rgba(255, 179, 122, 0.4);
+  background: rgba(255, 179, 122, 0.08);
+  font-weight: 600;
+}
 
 .card-score {
   grid-area: score;

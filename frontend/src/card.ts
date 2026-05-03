@@ -46,6 +46,21 @@ export function renderCard(
   meta.appendChild(makeTag(obstructionClass(p.obstruction_class), p.obstruction_class));
   meta.appendChild(makeTag('', `${formatUtcLabel(p.closest_approach)}`));
   meta.appendChild(makeTag('', `nadir ${Math.round(p.nadir_distance_km)} km`));
+  // Angle off nadir → WORF window vs Cupola hint. Older manifests may not
+  // include the field; only render the badge when the generator shipped one.
+  if (typeof p.angle_off_nadir_deg === 'number') {
+    const deg = p.angle_off_nadir_deg;
+    const isWorf = deg < 30;
+    const window = isWorf ? 'WORF' : 'Cupola';
+    meta.appendChild(makeTag(
+      isWorf ? 'window-worf' : 'window-cupola',
+      `${Math.round(deg)}° · ${window}`,
+    ));
+  }
+  if (p.cloud_source === 'combined-no-coverage') {
+    // Tell the user the cloud score is a placeholder, not a real measurement.
+    meta.appendChild(makeTag('obs-noobs', 'no cloud obs'));
+  }
 
   const score = document.createElement('div');
   score.className = 'card-score';

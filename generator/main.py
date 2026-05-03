@@ -44,6 +44,7 @@ from .config import (
 from .manifest import cleanup_old_versions, utcnow_iso, version_id, write_manifest
 from .orbit import (
     TLE,
+    angle_off_nadir_deg,
     detect_reboost,
     find_passes,
     fit_iss_polynomial,
@@ -275,6 +276,11 @@ def score_pass_for_target(
         "target_lon": pass_obj.target_lon,
         "closest_approach": utcnow_iso(when),
         "nadir_distance_km": round(pass_obj.nadir_distance_km, 2),
+        # Angle off nadir lets the frontend show whether this is a WORF
+        # shot (~<30°, nadir window in Destiny) or a Cupola shot (oblique).
+        "angle_off_nadir_deg": round(
+            angle_off_nadir_deg(pass_obj.nadir_distance_km, iss.alt_km), 1
+        ),
         "pass_regime": regime,
         "obstruction_class": obs.obstruction_class,
         "p_unobstructed": round(p_unobs_adjusted, 2),

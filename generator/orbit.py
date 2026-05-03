@@ -136,6 +136,29 @@ def great_circle_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float
     return 2 * EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(a)))
 
 
+def angle_off_nadir_deg(ground_distance_km: float, altitude_km: float) -> float:
+    """Angle from ISS nadir vector to the line-of-sight to a surface target.
+
+    Spherical geometry, not flat-Earth — at ISS altitudes (~408 km) the
+    curvature matters once ground distance gets past a few hundred km. The
+    horizon limit (where the line of sight grazes Earth's surface) is
+    `acos(R / (R+h))` ≈ 19.97° at the *Earth-center* angle, which works out
+    to ~70° off-nadir as seen from ISS.
+
+    Used for window selection: <30° = WORF (Destiny lab nadir window),
+    ≥30° = Cupola (panoramic dome handles obliques well).
+    """
+    if ground_distance_km <= 0.0:
+        return 0.0
+    R = EARTH_RADIUS_KM
+    theta = ground_distance_km / R  # angle subtended at Earth's center, radians
+    sin_t = math.sin(theta)
+    cos_t = math.cos(theta)
+    # tan(alpha) = R sin θ / (R + h − R cos θ)
+    alpha = math.atan2(R * sin_t, R + altitude_km - R * cos_t)
+    return math.degrees(alpha)
+
+
 def find_passes(
     tle: TLE,
     target: dict[str, Any],

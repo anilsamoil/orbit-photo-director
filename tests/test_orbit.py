@@ -11,6 +11,7 @@ from generator.orbit import (
     TLE,
     Pass,
     Position,
+    angle_off_nadir_deg,
     detect_reboost,
     find_passes,
     fit_iss_polynomial,
@@ -258,3 +259,44 @@ def test_detect_reboost_threshold() -> None:
     prev = TLE.from_text(base)
     curr = TLE.from_text(boosted)
     assert detect_reboost(prev, curr) is True
+
+
+# --------------------------------------------------------------------------
+# Angle off nadir
+# --------------------------------------------------------------------------
+
+
+def test_angle_off_nadir_zero_at_subpoint() -> None:
+    assert angle_off_nadir_deg(0.0, 408.0) == 0.0
+
+
+def test_angle_off_nadir_negative_distance_clamped() -> None:
+    assert angle_off_nadir_deg(-5.0, 408.0) == 0.0
+
+
+def test_angle_off_nadir_30deg_threshold_at_iss_alt() -> None:
+    """At 408 km altitude, 30° off-nadir falls at ~236 km ground distance.
+    Verifies the WORF/Cupola threshold matches what is shown to the user."""
+    deg = angle_off_nadir_deg(236.0, 408.0)
+    assert 29.5 < deg < 30.5
+
+
+def test_angle_off_nadir_below_threshold_for_close_pass() -> None:
+    # 100 km nadir distance at ISS altitude should be well under 30°
+    deg = angle_off_nadir_deg(100.0, 408.0)
+    assert 13.0 < deg < 14.5
+
+
+def test_angle_off_nadir_approaches_horizon_at_long_distance() -> None:
+    # Near the visibility horizon (~2225 km ground distance for ISS), angle
+    # approaches the horizon limit (~70°) but not over it.
+    deg = angle_off_nadir_deg(2200.0, 408.0)
+    assert 68.0 < deg < 71.0
+
+
+def test_angle_off_nadir_scales_with_altitude() -> None:
+    # Same ground distance, higher altitude → smaller angle off nadir.
+    a_low = angle_off_nadir_deg(200.0, 200.0)
+    a_high = angle_off_nadir_deg(200.0, 800.0)
+    assert a_low > a_high
+

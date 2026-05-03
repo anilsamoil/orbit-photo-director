@@ -90,6 +90,50 @@ describe('renderCard', () => {
     const el = renderCard(samplePass({ obstruction_class: 'cloudy' }), NOW, false, () => undefined);
     expect(el.querySelector('.tag.obs-cloudy')).toBeTruthy();
   });
+
+  it('shows WORF badge when angle is below 30°', () => {
+    const el = renderCard(
+      samplePass({ angle_off_nadir_deg: 18 }),
+      NOW, false, () => undefined,
+    );
+    const tag = el.querySelector('.tag.window-worf');
+    expect(tag).toBeTruthy();
+    expect(tag?.textContent).toContain('WORF');
+    expect(tag?.textContent).toContain('18');
+    expect(el.querySelector('.tag.window-cupola')).toBeNull();
+  });
+
+  it('shows Cupola badge when angle is at or above 30°', () => {
+    const el = renderCard(
+      samplePass({ angle_off_nadir_deg: 45 }),
+      NOW, false, () => undefined,
+    );
+    const tag = el.querySelector('.tag.window-cupola');
+    expect(tag).toBeTruthy();
+    expect(tag?.textContent).toContain('Cupola');
+    expect(el.querySelector('.tag.window-worf')).toBeNull();
+  });
+
+  it('omits the WORF/Cupola badge when angle is missing', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    expect(el.querySelector('.tag.window-worf, .tag.window-cupola')).toBeNull();
+  });
+
+  it('shows "no cloud obs" tag when source is combined-no-coverage', () => {
+    const el = renderCard(
+      samplePass({ cloud_source: 'combined-no-coverage' }),
+      NOW, false, () => undefined,
+    );
+    expect(el.querySelector('.tag.obs-noobs')).toBeTruthy();
+  });
+
+  it('omits the "no cloud obs" tag for real cloud sources', () => {
+    const el = renderCard(
+      samplePass({ cloud_source: 'gibs' }),
+      NOW, false, () => undefined,
+    );
+    expect(el.querySelector('.tag.obs-noobs')).toBeNull();
+  });
 });
 
 describe('renderCards', () => {
