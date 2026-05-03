@@ -80,6 +80,41 @@ df -h /
 | Site shows manifest but `freshness.ok: false` | TLE or cloud composite source is degraded. Daemon is running but inputs are bad. Check upstream status pages: Celestrak, NASA Earthdata. |
 | Mac unresponsive | Hard reboot. launchd will auto-start the daemon after login. |
 
+## Adding personal targets
+
+The `targets.json` file ships with 106 curated targets (auroras, night-megacities, iconic shapes, big terrain, volcanoes, lightning belts, dynamic events, US + global communities) selected via a "social-media legibility" framework — each scores ≥7/10 on recognizability + local connection + visual contrast + caption-ability.
+
+To add YOUR targets (hometown, family/friends' cities, alma mater, etc.):
+
+1. Open `personal-targets.csv`. Uncomment the example rows or add new ones. Each row:
+   ```
+   id,name,lat,lon,priority,regime,category,notes,caption_hook
+   ```
+   Example:
+   ```
+   my-hometown,My hometown — Kyiv,50.4501,30.5234,5,any,community-personal,Where I grew up,
+   ```
+
+2. Run the importer:
+   ```bash
+   cd ~/orbit-photo-director
+   python scripts/import_personal_targets.py
+   ```
+   This merges into `targets.json`, removing the `[FILL IN]` placeholder entries (your real targets supersede them) and preserving all curated entries.
+
+3. Verify + push:
+   ```bash
+   python -m generator.main          # tick locally with new targets
+   bash scripts/deploy.sh            # publish to map.astroanil.dev
+   git add personal-targets.csv targets.json
+   git commit -m "feat: add personal targets"
+   git push
+   ```
+
+**Recommended priorities:** hometown = 5 (the "I saw you from orbit" caption hits hardest), parents/partner cities = 5, sibling cities = 4, close friends = 3-4, schools/alma mater = 3.
+
+**Lat/lon reach reminder:** ISS orbit is inclined 51.6°. Targets with `|lat| > 60°` are oblique-only. `|lat| > 70°` is effectively unreachable.
+
 ## Periodic maintenance (~once per quarter)
 
 - [ ] Verify Earthdata token expiry: `cat ~/.config/orbit-photo-director/credentials.json | jq .earthdata` (tokens expire roughly every 60-90 days; set a reminder)

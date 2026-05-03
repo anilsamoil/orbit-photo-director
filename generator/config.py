@@ -73,7 +73,12 @@ class Settings:
 
 
 def load_targets(targets_file: Path) -> list[dict]:
-    """Load and validate targets.json. Raises ValueError on schema violation."""
+    """Load and validate targets.json. Raises ValueError on schema violation.
+
+    Targets with `"_placeholder": true` are skipped (they're stub entries
+    waiting for the user to fill in real lat/lon — typically hometown / family
+    cities). Skipped placeholders do NOT contribute passes to the queue.
+    """
     if not targets_file.exists():
         raise FileNotFoundError(f"targets file not found: {targets_file}")
     raw = json.loads(targets_file.read_text())
@@ -86,6 +91,8 @@ def load_targets(targets_file: Path) -> list[dict]:
         if t["id"] in seen_ids:
             raise ValueError(f"duplicate target id: {t['id']}")
         seen_ids.add(t["id"])
+        if t.get("_placeholder") is True:
+            continue
         valid.append(t)
     return valid
 

@@ -1,0 +1,24 @@
+id,name,lat,lon,priority,regime,category,notes,caption_hook
+# ─────────────────────────────────────────────────────────────────────────────
+# Personal targets — fill in the rows below, then run:
+#   python scripts/import_personal_targets.py
+# It will merge these into targets.json (preserving the curated list).
+#
+# Conventions:
+#   id          — short kebab-case, unique. e.g., "kyiv-hometown" or "mom-seattle"
+#   name        — what the queue card shows. e.g., "My hometown — Kyiv"
+#   lat,lon     — decimal degrees, WGS84. Right-click in Google Maps → copy coords.
+#   priority    — 1-5. Family/hometown should be 5; close friends 4; alumni 3.
+#   regime      — day | night | terminator | any. "any" if you'd shoot it day or night.
+#   category    — community-personal (always for these), unless hometown overlaps a city we already track.
+#   notes       — caption-relevant context. Optional.
+#   caption_hook— example caption for the social post. Optional but high-value.
+#
+# Examples (uncomment + edit):
+# my-hometown,My hometown — [city],47.6062,-122.3321,5,any,community-personal,The place I grew up,
+# parents-city,My parents' city,40.7128,-74.0060,5,any,community-personal,,Looking down at the city my parents are in tonight
+# alma-mater,My university — [name],42.3601,-71.0589,3,any,community-personal,Where I trained,
+#
+# ISS reach reminder: ISS orbits at 51.6° inclination. Latitudes |lat| > 60 only
+# get oblique shots. |lat| > 70 effectively unreachable. Pick targets accordingly.
+# ─────────────────────────────────────────────────────────────────────────────
