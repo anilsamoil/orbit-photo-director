@@ -1,0 +1,30 @@
+# Cloudflare Worker configuration for the calibration log + health endpoints.
+# Deploy: wrangler deploy
+# Dev:    wrangler dev
+
+name = "orbit-photo-director"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Custom domain — bound after R2 bucket exists and DNS is wired.
+# routes = [
+#   { pattern = "map.astroanil.dev/api/*", custom_domain = true }
+# ]
+
+[[r2_buckets]]
+binding = "SITE"
+bucket_name = "map-astroanil-dev"
+
+[[r2_buckets]]
+binding = "CALIB"
+bucket_name = "orbit-calib"
+
+# Set the calibration shared secret via:
+#   wrangler secret put CALIB_TOKEN
+# Set the staleness alert threshold (seconds):
+[vars]
+STALE_THRESHOLD_SECONDS = "1800"
+
+[observability]
+enabled = true

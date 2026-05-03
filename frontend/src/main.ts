@@ -1,0 +1,134 @@
+/**
+ * Orbit Photo Director — frontend entry point.
+ *
+ * Loads manifest.json once, dereferences every artifact through it (so mixed-version
+ * reads are impossible), renders the queue, wires up Shoot/Skip POST actions, and
+ * refreshes every 60s. The map view is loaded lazily when the user toggles to it.
+ */
+
+import { renderCards } from './card';
+import { bannerError, bannerFromManifest, bannerLoading } from './banner';
+import { buildPayload, drainQueue, postCalib } from './calib';
+import type { BannerState } from './banner';
+import type { Manifest, PassEntry } from './types';
+import { fetchManifest, fetchTop5 } from './manifest';
+
+const REFRESH_MS = 60_000;
+
+let currentManifest: Manifest | null = null;
+let currentTop5: PassEntry[] = [];
+let refreshTimer: number | null = null;
+
+function setBanner(state: BannerState): void {
+  const el = document.getElementById('status-banner');
+  if (!el) return;
+  el.className = `banner banner-${state.level}`;
+  el.textContent = state.text;
+}
+
+function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
+  const generated = Date.parse(manifest.generated_at);
+  if (Number.isNaN(generated)) return true;
+  const ageMin = (nowMs - generated) / 60000;
+  return ageMin >= 60 || !manifest.freshness.ok;
+}
+
+async function refresh(): Promise<void> {
+  try {
+    const manifest = await fetchManifest();
+    currentManifest = manifest;
+    const top5 = await fetchTop5(manifest);
+    currentTop5 = top5;
+
+    const cards = document.getElementById('cards');
+    const empty = document.getElementById('empty');
+    if (!cards || !empty) return;
+
+    const now = Date.now();
+    const stale = isStaleManifest(manifest, now);
+
+    if (top5.length === 0) {
+      cards.replaceChildren();
+      empty.hidden = false;
+    } else {
+      empty.hidden = true;
+      renderCards(cards, top5, now, stale, onCardAction);
+    }
+
+    setBanner(bannerFromManifest(manifest.generated_at, manifest.freshness.ok, now));
+  } catch (e) {
+    setBanner(bannerError((e as Error).message));
+  }
+}
+
+function rerenderCountdowns(): void {
+  if (!currentManifest || currentTop5.length === 0) return;
+  const cards = document.getElementById('cards');
+  if (!cards) return;
+  const now = Date.now();
+  const stale = isStaleManifest(currentManifest, now);
+  renderCards(cards, currentTop5, now, stale, onCardAction);
+  setBanner(bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now));
+}
+
+async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<void> {
+  const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);
+  const result = await postCalib(payload);
+  // Visual feedback: dim the card's button row briefly
+  const card = document.querySelector<HTMLElement>(
+    `.card[data-target-id="${p.target_id}"][data-pass-time="${p.closest_approach}"]`
+  );
+  if (card) {
+    card.style.opacity = result.ok ? '0.5' : '0.7';
+    setTimeout(() => {
+      card.style.opacity = '';
+    }, 1500);
+  }
+}
+
+function bindTabs(): void {
+  const view = document.getElementById('view');
+  const tabQueue = document.getElementById('tab-queue');
+  const tabMap = document.getElementById('tab-map');
+  if (!view || !tabQueue || !tabMap) return;
+
+  tabQueue.addEventListener('click', () => {
+    view.className = 'view-queue';
+    tabQueue.classList.add('active');
+    tabMap.classList.remove('active');
+  });
+
+  tabMap.addEventListener('click', () => {
+    void loadMapPane();
+    view.className = 'view-map';
+    tabMap.classList.add('active');
+    tabQueue.classList.remove('active');
+  });
+}
+
+let mapModule: typeof import('./map') | null = null;
+
+async function loadMapPane(): Promise<void> {
+  if (!currentManifest) return;
+  if (!mapModule) {
+    mapModule = await import('./map');
+  }
+  await mapModule.renderMap(currentManifest);
+}
+
+async function init(): Promise<void> {
+  setBanner(bannerLoading());
+  bindTabs();
+  // Drain any queued calibrations from the previous session (network may have failed)
+  void drainQueue();
+  await refresh();
+  refreshTimer = window.setInterval(() => void refresh(), REFRESH_MS);
+  // Per-second countdown updates without re-fetching the manifest
+  window.setInterval(rerenderCountdowns, 1000);
+}
+
+if (typeof document !== 'undefined') {
+  void init();
+}
+
+export { init, refresh, rerenderCountdowns };

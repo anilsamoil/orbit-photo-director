@@ -1,0 +1,275 @@
+"""Generator orchestrator. One tick:
+  1. Fetch + cache TLE
+  2. Fetch + cache SatCORPS cloud composite (or use cached < TTL)
+  3. Load targets
+  4. For each target: find passes in next pass_window_hours; score each
+  5. Write versioned artifacts (passes.json, track.json, status.json, iss_polynomial.json)
+  6. Atomic write manifest.json pointer
+  7. (Caller) rclone sync to R2
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sys
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import requests
+
+from . import __version__
+from .cloud import (
+    CloudSampler,
+    MockCloudSampler,
+    SatCORPSSampler,
+    assess_obstruction,
+    lighting_regime,
+    sun_glint_risk,
+    sun_subpoint,
+)
+from .config import (
+    DEFAULT_TOP_MAP,
+    DEFAULT_TOP_QUEUE,
+    PASS_MAX_DISTANCE_KM,
+    PASS_SAMPLE_STEP_SECONDS,
+    Settings,
+    load_targets,
+)
+from .manifest import cleanup_old_versions, utcnow_iso, version_id, write_manifest
+from .orbit import TLE, find_passes, fit_iss_polynomial, freshness_factor, tle_age_hours
+from .score import compute_score, top_n
+
+log = logging.getLogger(__name__)
+
+
+def fetch_tle(
+    url: str,
+    cache_path: Path,
+    ttl_hours: float = 1.0,
+    now: datetime | None = None,
+) -> TLE:
+    """Fetch latest TLE from Celestrak, cache to disk. If cache fresh, use it."""
+    n = now or datetime.now(tz=UTC)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    if cache_path.exists():
+        age_h = (n.timestamp() - cache_path.stat().st_mtime) / 3600.0
+        if age_h < ttl_hours:
+            return TLE.from_text(cache_path.read_text())
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        text = resp.text
+        cache_path.write_text(text)
+        return TLE.from_text(text)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("TLE fetch failed: %s; using cached if present", exc)
+        if cache_path.exists():
+            return TLE.from_text(cache_path.read_text())
+        raise RuntimeError("TLE fetch failed and no cache available") from exc
+
+
+def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSampler, datetime, str]:
+    """Pick a cloud sampler. If real SatCORPS NetCDF is cached and fresh, use it; else mock.
+
+    Returns: (sampler, composite_hour, source_label).
+    The composite_hour is the hour-precision UTC timestamp of the cached composite.
+    """
+    cached = settings.cache_dir / "satcorps_latest.nc"
+    if cached.exists():
+        age_min = (now.timestamp() - cached.stat().st_mtime) / 60.0
+        if age_min < 90:
+            try:
+                sampler = SatCORPSSampler(cached)
+                composite_hour = datetime.fromtimestamp(cached.stat().st_mtime, tz=UTC).replace(
+                    minute=0, second=0, microsecond=0
+                )
+                return sampler, composite_hour, "satcorps"
+            except Exception as exc:  # noqa: BLE001
+                log.warning("SatCORPS open failed (%s); falling back to mock", exc)
+    log.info("no fresh SatCORPS cache; using mock sampler")
+    composite_hour = now.replace(minute=0, second=0, microsecond=0)
+    return MockCloudSampler(default_cf=30.0), composite_hour, "mock"
+
+
+def score_pass_for_target(
+    target: dict[str, Any],
+    pass_obj: Any,
+    sampler: CloudSampler,
+    tle_freshness: float,
+) -> dict[str, Any]:
+    when = pass_obj.closest_approach
+    iss = pass_obj.iss_position
+    sun_lat, sun_lon = sun_subpoint(when)
+    regime = lighting_regime(sun_lat, sun_lon, pass_obj.target_lat, pass_obj.target_lon)
+
+    glint = sun_glint_risk(
+        sun_lat, sun_lon,
+        pass_obj.target_lat, pass_obj.target_lon,
+        iss.lat, iss.lon,
+    )
+    sample = sampler.sample(pass_obj.target_lat, pass_obj.target_lon, when)
+    obs = assess_obstruction(sample, glint)
+
+    p_unobs_adjusted = obs.p_unobstructed * tle_freshness
+    sc = compute_score(
+        p_unobstructed=p_unobs_adjusted,
+        target_regime=target["regime"],
+        pass_regime=regime,
+        distance_km=pass_obj.nadir_distance_km,
+        priority=target["priority"],
+    )
+    return {
+        "target_id": target["id"],
+        "target_name": target["name"],
+        "target_regime": target["regime"],
+        "target_priority": target["priority"],
+        "target_lat": pass_obj.target_lat,
+        "target_lon": pass_obj.target_lon,
+        "closest_approach": utcnow_iso(when),
+        "nadir_distance_km": round(pass_obj.nadir_distance_km, 2),
+        "pass_regime": regime,
+        "obstruction_class": obs.obstruction_class,
+        "p_unobstructed": round(p_unobs_adjusted, 2),
+        "cloud_fraction": round(sample.cloud_fraction, 2),
+        "cloud_source": sample.source,
+        "score": round(sc.final, 3),
+        "score_components": {
+            "p_unobstructed": round(sc.p_unobstructed, 2),
+            "regime_fit": round(sc.regime_fit, 2),
+            "nadir_proximity": round(sc.nadir_proximity, 2),
+            "priority_weight": round(sc.priority_weight, 2),
+            "tle_freshness": round(tle_freshness, 3),
+        },
+        "iss_at_closest": {
+            "lat": round(iss.lat, 4),
+            "lon": round(iss.lon, 4),
+            "alt_km": round(iss.alt_km, 1),
+        },
+    }
+
+
+def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
+    """Run one generator tick. Returns the manifest contents."""
+    n = now or datetime.now(tz=UTC)
+    settings.ensure_dirs()
+
+    log.info("tick start: %s", utcnow_iso(n))
+
+    # 1. TLE
+    tle_cache = settings.cache_dir / "iss.tle"
+    tle = fetch_tle(settings.tle_url, tle_cache, ttl_hours=1.0, now=n)
+    age_h = tle_age_hours(tle, n)
+    fresh = freshness_factor(age_h)
+    log.info("TLE epoch=%s age=%.1fh freshness=%.2f", utcnow_iso(tle.epoch), age_h, fresh)
+
+    # 2. Cloud sampler
+    sampler, composite_hour, source_label = select_cloud_sampler(settings, n)
+
+    # 3. Targets
+    targets = load_targets(settings.targets_file)
+    log.info("loaded %d targets", len(targets))
+
+    # 4. Find + score passes
+    window_end = n + timedelta(hours=settings.pass_window_hours)
+    all_passes: list[dict[str, Any]] = []
+    for target in targets:
+        passes = find_passes(
+            tle=tle,
+            target=target,
+            window_start=n,
+            window_end=window_end,
+            step_seconds=PASS_SAMPLE_STEP_SECONDS,
+            max_distance_km=PASS_MAX_DISTANCE_KM,
+        )
+        for p in passes:
+            all_passes.append(score_pass_for_target(target, p, sampler, fresh))
+    log.info("found %d passes across %d targets", len(all_passes), len(targets))
+
+    # 5. Write versioned artifacts
+    version = version_id(n)
+    v_dir = settings.out_dir / "v" / version
+    v_dir.mkdir(parents=True, exist_ok=True)
+
+    next_90 = sorted(
+        [p for p in all_passes if datetime.fromisoformat(
+            p["closest_approach"].replace("Z", "+00:00")
+        ) - n < timedelta(minutes=90)],
+        key=lambda p: p["score"],
+        reverse=True,
+    )[:DEFAULT_TOP_QUEUE]
+
+    top25 = top_n(all_passes, DEFAULT_TOP_MAP)
+
+    track_data = {
+        "iss_polynomial": fit_iss_polynomial(tle, n, minutes=settings.tick_minutes),
+        "tle_epoch": utcnow_iso(tle.epoch),
+        "tle_age_hours": round(age_h, 2),
+        "tle_freshness_factor": round(fresh, 3),
+    }
+
+    status_data = {
+        "last_run": utcnow_iso(n),
+        "tick_minutes": settings.tick_minutes,
+        "tle_age_hours": round(age_h, 2),
+        "tle_freshness_factor": round(fresh, 3),
+        "cloud_source": source_label,
+        "cloud_composite_hour": utcnow_iso(composite_hour),
+        "target_count": len(targets),
+        "pass_count": len(all_passes),
+        "version": version,
+        "build_version": __version__,
+    }
+
+    (v_dir / "passes.json").write_text(json.dumps(top25, indent=2))
+    (v_dir / "top5.json").write_text(json.dumps(next_90, indent=2))
+    (v_dir / "track.json").write_text(json.dumps(track_data, indent=2))
+    (v_dir / "status.json").write_text(json.dumps(status_data, indent=2))
+
+    # Targets snapshot for the frontend
+    target_data_version = "v1"
+    (v_dir / "targets.json").write_text(json.dumps(targets, indent=2))
+
+    # 6. Manifest
+    manifest_path = write_manifest(
+        out_dir=settings.out_dir,
+        version=version,
+        generated_at=n,
+        tle_epoch=tle.epoch,
+        cloud_composite_hour=composite_hour,
+        target_data_version=target_data_version,
+        build_version=__version__,
+        artifacts={
+            "passes": v_dir / "passes.json",
+            "top5": v_dir / "top5.json",
+            "track": v_dir / "track.json",
+            "status": v_dir / "status.json",
+            "targets": v_dir / "targets.json",
+        },
+    )
+
+    deleted = cleanup_old_versions(settings.out_dir, keep_minutes=60)
+    if deleted:
+        log.info("cleaned %d old versions", len(deleted))
+
+    log.info("tick complete: version=%s passes=%d", version, len(all_passes))
+    return json.loads(manifest_path.read_text())
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    settings = Settings.from_env()
+    try:
+        run_tick(settings)
+        return 0
+    except Exception:
+        log.exception("tick failed")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

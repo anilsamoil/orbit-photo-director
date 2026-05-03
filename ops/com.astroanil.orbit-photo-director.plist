@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd plist for the Orbit Photo Director generator daemon.
+
+Install:
+  cp ops/com.astroanil.orbit-photo-director.plist ~/Library/LaunchAgents/
+  launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.astroanil.orbit-photo-director.plist
+  launchctl enable gui/$UID/com.astroanil.orbit-photo-director
+
+Stop / unload:
+  launchctl bootout gui/$UID/com.astroanil.orbit-photo-director
+
+Verify:
+  launchctl print gui/$UID/com.astroanil.orbit-photo-director
+
+EDIT BEFORE INSTALL:
+  - Replace REPO_PATH below with the absolute path to your orbit-photo-director repo
+    (e.g., /Users/astroanil/orbit-photo-director)
+  - Confirm the Python interpreter path (use the venv's python: REPO_PATH/.venv/bin/python)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.astroanil.orbit-photo-director</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REPO_PATH/.venv/bin/python</string>
+        <string>-m</string>
+        <string>generator.daemon</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>REPO_PATH</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OPD_ROOT</key>
+        <string>REPO_PATH</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>REPO_PATH/data/logs/launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>REPO_PATH/data/logs/launchd.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

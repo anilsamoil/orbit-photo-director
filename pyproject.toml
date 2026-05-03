@@ -60,7 +60,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "S"]
-ignore = ["S101"]
+# S105 false-positives on "terminator" regime literal in score.py
+ignore = ["S101", "S105"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S106"]
+"tests/*" = ["S101", "S105", "S106", "E501"]
