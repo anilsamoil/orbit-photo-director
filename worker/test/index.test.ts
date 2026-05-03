@@ -9,17 +9,35 @@ import worker from '../src/index';
 interface MockObj {
   body: string;
   meta: Record<string, unknown>;
+  httpMetadata?: { contentType?: string; cacheControl?: string };
 }
 
 class MockR2Bucket {
   private store = new Map<string, MockObj>();
+  /** Test hook: when set, get() throws this error. Lets us simulate R2 outages. */
+  public throwOnGet: Error | null = null;
 
-  async get(key: string): Promise<{ json: () => Promise<unknown>; text: () => Promise<string> } | null> {
+  async get(
+    key: string,
+  ): Promise<
+    | {
+        json: () => Promise<unknown>;
+        text: () => Promise<string>;
+        body: string;
+        httpMetadata?: { contentType?: string; cacheControl?: string };
+        httpEtag: string;
+      }
+    | null
+  > {
+    if (this.throwOnGet) throw this.throwOnGet;
     const v = this.store.get(key);
     if (!v) return null;
     return {
       json: async () => JSON.parse(v.body),
       text: async () => v.body,
+      body: v.body,
+      httpMetadata: v.httpMetadata,
+      httpEtag: `"${key}-etag"`,
     };
   }
 
@@ -507,5 +525,71 @@ describe('input hardening', () => {
       headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
     });
     expect(r.status).toBe(503);
+  });
+});
+
+// --------------------------------------------------------------------------
+// handleStatic — R2 fallback for site assets
+// --------------------------------------------------------------------------
+
+describe('handleStatic (R2 fallback)', () => {
+  let env: TestEnv;
+
+  beforeEach(() => {
+    env = makeEnv();
+  });
+
+  it('rewrites root / to index.html', async () => {
+    await env.SITE.put('index.html', '<html>home</html>', {
+      httpMetadata: { contentType: 'text/html; charset=utf-8' },
+    });
+    const r = await fetchWorker(env, '/');
+    expect(r.status).toBe(200);
+    expect(await r.text()).toBe('<html>home</html>');
+    expect(r.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('rewrites trailing-slash paths to {path}index.html', async () => {
+    await env.SITE.put('docs/index.html', '<html>docs</html>', {});
+    const r = await fetchWorker(env, '/docs/');
+    expect(r.status).toBe(200);
+    expect(await r.text()).toBe('<html>docs</html>');
+  });
+
+  it('returns 404 for log/ prefix even if the key exists in R2 (defense-in-depth)', async () => {
+    await env.SITE.put('log/202605.jsonl', 'leaked!', {});
+    const r = await fetchWorker(env, '/log/202605.jsonl');
+    expect(r.status).toBe(404);
+  });
+
+  it('returns 404 when the key is not in R2', async () => {
+    const r = await fetchWorker(env, '/missing-asset.css');
+    expect(r.status).toBe(404);
+  });
+
+  it('returns 503 when R2 get throws (simulated outage)', async () => {
+    env.SITE.throwOnGet = new Error('R2 outage');
+    const r = await fetchWorker(env, '/anything.html');
+    expect(r.status).toBe(503);
+  });
+
+  it('uses long-immutable cache for hashed asset extensions', async () => {
+    await env.SITE.put('assets/index-abc.js', 'console.log(1);', {});
+    const r = await fetchWorker(env, '/assets/index-abc.js');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('cache-control')).toContain('immutable');
+    expect(r.headers.get('content-type')).toContain('application/javascript');
+  });
+
+  it('uses short cache for index.html', async () => {
+    await env.SITE.put('index.html', '<html></html>', {});
+    const r = await fetchWorker(env, '/');
+    expect(r.headers.get('cache-control')).toContain('max-age=60');
+  });
+
+  it('serves the etag header for client-side cache validation', async () => {
+    await env.SITE.put('index.html', '<html></html>', {});
+    const r = await fetchWorker(env, '/');
+    expect(r.headers.get('etag')).toBeTruthy();
   });
 });

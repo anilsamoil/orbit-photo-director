@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchLog, mergeLogEntries, renderLog } from '../src/log';
+import { fetchLog, mergeLogEntries, openRateModal, renderLog } from '../src/log';
 import type { LogEntry, MergedRow } from '../src/log';
 import { setToken } from '../src/calib';
 
@@ -171,5 +171,117 @@ describe('renderLog', () => {
     expect(stats.textContent).toContain('total: 3');
     expect(stats.textContent).toContain('shoots: 2');
     expect(stats.textContent).toContain('rated: 1/2');
+  });
+});
+
+describe('openRateModal', () => {
+  function sampleRow(overrides: Partial<MergedRow> = {}): MergedRow {
+    return {
+      target_id: 'tokyo',
+      target_name: 'Tokyo / Osaka',
+      pass_time: '2024-10-17T12:00:00Z',
+      action: 'shoot',
+      received_at: '2024-10-17T12:00:30Z',
+      score_at_time: 87,
+      ...overrides,
+    };
+  }
+
+  it('renders the modal with target name and pass meta', () => {
+    void openRateModal(sampleRow());
+    const modal = document.querySelector('.modal');
+    expect(modal).toBeTruthy();
+    expect(modal?.querySelector('h3')?.textContent).toContain('Tokyo / Osaka');
+    expect(modal?.querySelector('.modal-meta')?.textContent).toContain('87');
+    expect(modal?.querySelectorAll('.star-btn')).toHaveLength(5);
+    document.querySelector('.modal-backdrop')?.remove();
+  });
+
+  it('resolves false and removes the modal when the user clicks Cancel', async () => {
+    const p = openRateModal(sampleRow());
+    const cancel = document.querySelector<HTMLButtonElement>('.modal-actions .btn-skip');
+    cancel?.click();
+    const result = await p;
+    expect(result).toBe(false);
+    expect(document.querySelector('.modal-backdrop')).toBeNull();
+  });
+
+  it('resolves false when the backdrop is clicked', async () => {
+    const p = openRateModal(sampleRow());
+    const backdrop = document.querySelector<HTMLDivElement>('.modal-backdrop');
+    // Dispatch a click whose target is the backdrop itself, not a child element.
+    backdrop?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const result = await p;
+    expect(result).toBe(false);
+  });
+
+  it('refuses to submit until a star is picked', () => {
+    void openRateModal(sampleRow());
+    const submit = document.querySelector<HTMLButtonElement>('.modal-actions .btn-shoot');
+    submit?.click();
+    expect(submit?.textContent).toContain('rating');
+    expect(submit?.disabled).toBe(false);
+    document.querySelector('.modal-backdrop')?.remove();
+  });
+
+  it('marks star buttons active up to the chosen rating', () => {
+    void openRateModal(sampleRow());
+    const stars = document.querySelectorAll<HTMLButtonElement>('.star-btn');
+    stars[2]?.click();
+    expect(stars[0]?.classList.contains('active')).toBe(true);
+    expect(stars[1]?.classList.contains('active')).toBe(true);
+    expect(stars[2]?.classList.contains('active')).toBe(true);
+    expect(stars[3]?.classList.contains('active')).toBe(false);
+    expect(stars[4]?.classList.contains('active')).toBe(false);
+    document.querySelector('.modal-backdrop')?.remove();
+  });
+
+  it('posts a rate event with the chosen rating + obstruction and resolves true on success', async () => {
+    setToken('abc');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = openRateModal(sampleRow());
+
+    const stars = document.querySelectorAll<HTMLButtonElement>('.star-btn');
+    stars[3]?.click(); // rating = 4
+    const select = document.querySelector<HTMLSelectElement>('.modal select');
+    if (select) select.value = 'cloudy';
+    const submit = document.querySelector<HTMLButtonElement>('.modal-actions .btn-shoot');
+    submit?.click();
+
+    const result = await p;
+    expect(result).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const calls = fetchMock.mock.calls as unknown[][];
+    const body = JSON.parse((calls[0]?.[1] as RequestInit).body as string);
+    expect(body.action).toBe('rate');
+    expect(body.rating).toBe(4);
+    expect(body.observed_obstruction).toBe('cloudy');
+    expect(body.dedupe_key).toContain('|rate|4');
+  });
+
+  it('omits observed_obstruction when the user leaves the select blank', async () => {
+    setToken('abc');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = openRateModal(sampleRow());
+
+    document.querySelectorAll<HTMLButtonElement>('.star-btn')[0]?.click();
+    document.querySelector<HTMLButtonElement>('.modal-actions .btn-shoot')?.click();
+    await p;
+
+    const calls = fetchMock.mock.calls as unknown[][];
+    const body = JSON.parse((calls[0]?.[1] as RequestInit).body as string);
+    expect(body.observed_obstruction).toBeUndefined();
+  });
+
+  it('resolves false when postCalib reports failure', async () => {
+    setToken('abc');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('fail', { status: 500 })));
+    const p = openRateModal(sampleRow());
+    document.querySelectorAll<HTMLButtonElement>('.star-btn')[0]?.click();
+    document.querySelector<HTMLButtonElement>('.modal-actions .btn-shoot')?.click();
+    const result = await p;
+    expect(result).toBe(false);
   });
 });
