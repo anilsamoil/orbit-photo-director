@@ -20,6 +20,9 @@ import { liveIssPosition, wrapLon } from './iss';
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
 let liveTimer: number | null = null;
+let currentTrack: Track | null = null;
+// 0 = "Now" (live position); 90 = "+90 min" (preview future ISS position).
+let lookaheadMinutes = 0;
 
 /** GIBS true-color tile URL pattern. {date} is replaced per render. Daily layer
  *  — captures cloud cover visually (you can SEE clouds, not derive them).
@@ -125,6 +128,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
 
   const passes = await fetchArtifact<PassEntry[]>(manifest, 'passes');
   const track = await fetchArtifact<Track>(manifest, 'track');
+  currentTrack = track;
 
   if (!map) {
     map = new maplibregl.Map({
@@ -219,7 +223,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
 
   // ISS dot
   if (!issMarker) {
-    const initial = liveIssPosition(track, Date.now()) ?? { lat: 0, lon: 0 };
+    const initial = markerPositionFor(track) ?? { lat: 0, lon: 0 };
     const el = document.createElement('div');
     el.style.cssText =
       'width:14px;height:14px;border-radius:50%;background:#5cd0ff;' +
@@ -229,17 +233,62 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       .addTo(map);
   }
 
-  // Live ISS position update (every 1s while map is open)
+  // Live ISS position update (every 1s while map is open).
+  // In "+90 min" mode the marker is anchored to the future projection and
+  // updates only when the user toggles or new track data arrives.
   if (liveTimer !== null) {
     clearInterval(liveTimer);
   }
   liveTimer = window.setInterval(() => {
-    if (!map || !issMarker) return;
-    const pos = liveIssPosition(track, Date.now());
-    if (pos) {
-      issMarker.setLngLat([pos.lon, pos.lat]);
-    }
+    if (!map || !issMarker || !currentTrack) return;
+    const pos = markerPositionFor(currentTrack);
+    if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
   }, 1000);
+
+  bindTimeToggle();
+}
+
+/** Return the position the ISS marker should occupy given the current
+ *  lookahead toggle. Returns null if the polynomial doesn't cover the
+ *  requested time (clamps to end-of-window).
+ */
+function markerPositionFor(track: Track): { lat: number; lon: number } | null {
+  const targetMs = Date.now() + lookaheadMinutes * 60_000;
+  const pos = liveIssPosition(track, targetMs);
+  if (pos) return pos;
+  // Fallback: clamp to last point in the polynomial window
+  const startMs = Date.parse(track.iss_polynomial.start);
+  if (Number.isNaN(startMs)) return null;
+  const endMs = startMs + track.iss_polynomial.duration_seconds * 1000;
+  return liveIssPosition(track, Math.min(targetMs, endMs - 1000));
+}
+
+let toggleBound = false;
+function bindTimeToggle(): void {
+  if (toggleBound) return;
+  const nowBtn = document.getElementById('time-now');
+  const plus90Btn = document.getElementById('time-plus90');
+  if (!nowBtn || !plus90Btn) return;
+
+  const setMode = (minutes: 0 | 90) => {
+    lookaheadMinutes = minutes;
+    nowBtn.classList.toggle('active', minutes === 0);
+    plus90Btn.classList.toggle('active', minutes === 90);
+    if (map && issMarker && currentTrack) {
+      const pos = markerPositionFor(currentTrack);
+      if (pos) {
+        issMarker.setLngLat([pos.lon, pos.lat]);
+        // On +90, recenter so the user can see where ISS will be
+        if (minutes === 90) {
+          map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+        }
+      }
+    }
+  };
+
+  nowBtn.addEventListener('click', () => setMode(0));
+  plus90Btn.addEventListener('click', () => setMode(90));
+  toggleBound = true;
 }
 
 function upsertGeoJson(

@@ -8,7 +8,7 @@
 
 import { renderCards } from './card';
 import { bannerError, bannerFromManifest, bannerLoading } from './banner';
-import { buildPayload, drainQueue, postCalib } from './calib';
+import { buildPayload, clearToken, drainQueue, getToken, postCalib, setToken } from './calib';
 import type { BannerState } from './banner';
 import type { Manifest, PassEntry } from './types';
 import { fetchManifest, fetchTop5 } from './manifest';
@@ -116,15 +116,51 @@ async function loadLogPane(): Promise<void> {
   const emptyEl = document.getElementById('log-empty');
   const statsEl = document.getElementById('log-stats');
   if (!listEl || !emptyEl || !statsEl) return;
+  renderTokenStatus();
   const entries = await fetchLog();
   const merged = mergeLogEntries(entries);
   renderLog(listEl, emptyEl, statsEl, merged, async (row: MergedRow) => {
     const ok = await openRateModal(row);
     if (ok) {
-      // refetch + rerender
       await loadLogPane();
     }
   });
+}
+
+/** Render the calibration-token status row in the log pane header. Lets the
+ *  user paste/clear the x-calib-token without opening DevTools.
+ */
+function renderTokenStatus(): void {
+  const slot = document.getElementById('log-token');
+  if (!slot) return;
+  slot.replaceChildren();
+  const hasToken = !!getToken();
+
+  const status = document.createElement('span');
+  status.className = `token-status ${hasToken ? 'set' : 'unset'}`;
+  status.textContent = hasToken ? 'token: set' : 'token: not set';
+  slot.appendChild(status);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'token-btn';
+  btn.textContent = hasToken ? 'change' : 'set';
+  btn.addEventListener('click', () => {
+    const next = window.prompt(
+      hasToken
+        ? 'Paste a new calibration token (or leave empty to clear):'
+        : 'Paste your calibration token (from the Worker):',
+      '',
+    );
+    if (next === null) return; // cancel
+    if (next.trim() === '') {
+      clearToken();
+    } else {
+      setToken(next.trim());
+    }
+    void loadLogPane();
+  });
+  slot.appendChild(btn);
 }
 
 let mapModule: typeof import('./map') | null = null;

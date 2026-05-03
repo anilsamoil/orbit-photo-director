@@ -283,6 +283,26 @@ main {
 }
 .log-stats .stat-value { color: var(--text); font-weight: 600; }
 
+.log-token {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.8rem;
+}
+.log-token .token-status.set { color: var(--green); }
+.log-token .token-status.unset { color: var(--text-dim); }
+.log-token .token-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.log-token .token-btn:hover { background: var(--accent); color: var(--bg); }
+
 .log-list {
   max-width: 900px;
   margin: 0 auto;
