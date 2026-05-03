@@ -91,16 +91,141 @@ df -h /
 
 ## Pre-launch hardening (one-time, ~1h)
 
-These steps were partially completed during the pre-launch soak. Verify before sealing the Mac for the mission:
+Run the script:
 
-- [ ] Auto-login enabled (System Settings → Users & Groups → Login Options)
-- [ ] Auto-update for macOS major versions DISABLED (security-only updates allowed)
-- [ ] No screensaver / no display sleep on AC power: `pmset -a displaysleep 0 sleep 0`
-- [ ] No password requirement after sleep: `defaults write com.apple.screensaver askForPassword -int 0`
-- [ ] Passwords don't expire: confirm via `pwpolicy -getaccountpolicies anilsamoil`
-- [ ] FileVault: if enabled, configure auto-unlock or document the recovery key location
-- [ ] Verify `rclone --version` and `wrangler --version` are on the system PATH for the launchd-spawned process
-- [ ] 2-week unattended soak test passed with at least one of each injection scenario in `scripts/soak/inject_failure.sh`
+```bash
+bash scripts/harden-mac.sh           # apply (prompts for sudo once)
+bash scripts/harden-mac.sh --verify  # show state without changing anything
+```
+
+What the script handles automatically:
+- Power management: no system sleep, no display sleep, no disk sleep, no Power Nap
+- Auto-restart on power loss (so a brief outage doesn't leave the Mac off)
+- Screen lock disabled — no password prompt after sleep
+- Screensaver idle time set to 0 (never starts)
+- macOS major version auto-update DISABLED (security-only updates kept enabled)
+- App Store auto-update DISABLED
+- Login keychain stays unlocked while user is logged in
+
+What you have to do manually:
+- [ ] **Auto-login**: System Settings → Users & Groups → Automatic Login → set to your user. Apple removed the scriptable path on Apple Silicon.
+- [ ] **FileVault decision**: see "FileVault tradeoff" below.
+- [ ] **Wi-Fi auto-connect**: System Settings → Network → Wi-Fi → Other Networks → Auto-Join.
+- [ ] **Wired ethernet** if available — more reliable than Wi-Fi for 8-month uptime.
+- [ ] **UPS / surge protector** to protect against power blips.
+- [ ] **Disable Time Machine** OR ensure it doesn't compete with the daemon for I/O.
+- [ ] **Test reboot recovery**: `sudo shutdown -r +1` then verify daemon resumes within 5 min of login.
+- [ ] **2-week unattended soak test** with at least one injection scenario per category from `scripts/soak/inject_failure.sh`.
+
+### FileVault tradeoff
+
+FileVault encrypts the disk. After a kernel update reboot, the disk is locked at the EFI password prompt — launchd cannot start the daemon until someone enters the password. Two options:
+
+- **Turn FileVault OFF** (System Settings → Privacy & Security → FileVault → Turn Off…). Simpler ops; the Mac fully auto-resumes after any reboot. Less protection if the Mac is physically stolen.
+- **Keep FileVault ON**. After kernel updates, your support contact must use `sudo fdesetup authrestart -inputplist <plist>` to schedule an auto-unlock for the next reboot, OR be physically present after the reboot to type the password. Document this carefully — multiple kernel updates per year is normal.
+
+This Mac currently: **FileVault ON**. Decision pending — record outcome here once made.
+
+## Credential rotation
+
+Run `bash scripts/check-credentials.sh` daily (or weekly) to spot expired creds before they bite:
+
+```
+[1] NASA Earthdata    — checks ~/.netrc + credentials.json + URS reachability
+[2] Cloudflare R2     — runs `rclone lsf` against the bucket
+[3] Cloudflare API    — informational (the cfat_ token is unused at runtime)
+[4] CALIB_TOKEN       — confirms Worker secret is set
+```
+
+### Earthdata password rotation (~every 60-90 days)
+
+Earthdata passwords don't strictly expire on a schedule, but URS occasionally forces resets. If you see HTTP 401 from any data fetch, rotate:
+
+1. Visit `https://urs.earthdata.nasa.gov/profile` and log in (`anilsamoil` / current password).
+2. Go to "Change Password" and set a new one. Copy it before closing the window.
+3. Update `~/.netrc`:
+   ```bash
+   # back up first
+   cp ~/.netrc ~/.netrc.bak.$(date +%Y%m%d)
+   # rewrite the urs.earthdata.nasa.gov entry
+   python3 - <<EOF
+   from pathlib import Path
+   import re
+   netrc = Path.home() / ".netrc"
+   text = netrc.read_text()
+   new = re.sub(
+       r"machine urs\.earthdata\.nasa\.gov\s+login \S+\s+password \S+",
+       f"machine urs.earthdata.nasa.gov\n  login anilsamoil\n  password NEW_PASSWORD_HERE",
+       text,
+   )
+   netrc.write_text(new)
+   EOF
+   chmod 600 ~/.netrc
+   ```
+4. Update `~/.config/orbit-photo-director/credentials.json`:
+   ```bash
+   python3 - <<EOF
+   import json, os
+   from pathlib import Path
+   p = Path.home() / ".config" / "orbit-photo-director" / "credentials.json"
+   data = json.loads(p.read_text())
+   data["earthdata"]["password"] = "NEW_PASSWORD_HERE"
+   p.write_text(json.dumps(data, indent=2))
+   os.chmod(p, 0o600)
+   EOF
+   ```
+5. Verify: `bash scripts/check-credentials.sh` should pass.
+6. Restart daemon to pick up new creds:
+   ```bash
+   launchctl kickstart -k gui/$UID/com.astroanil.orbit-photo-director
+   ```
+
+### Cloudflare R2 keys rotation
+
+R2 user API tokens don't expire by default but Cloudflare may revoke them if the token is exposed.
+
+1. Go to `https://dash.cloudflare.com/<account-id>/r2/api-tokens`.
+2. Click **Create User API Token** → name it `orbit-photo-director-deploy-rotated-YYYY-MM-DD`.
+3. Permissions: **Object Read & Write**, scoped to `map-astroanil-dev` AND `orbit-calib`.
+4. Copy the new Access Key ID + Secret Access Key (Cloudflare only shows them ONCE).
+5. Update `~/.config/rclone/rclone.conf`:
+   ```bash
+   # The [r2] section: replace access_key_id and secret_access_key values.
+   nano ~/.config/rclone/rclone.conf
+   ```
+6. Verify: `rclone lsf r2:map-astroanil-dev/ --max-depth 1` lists files.
+7. Update `~/.config/orbit-photo-director/credentials.json` with the new keys.
+8. Revoke the OLD token from the dashboard.
+9. Run `bash scripts/check-credentials.sh` — should pass.
+
+### CALIB_TOKEN rotation (Worker secret)
+
+If the calibration token leaks (it lives in browser localStorage, plaintext), rotate:
+
+1. Generate a new token: `python3 -c "import secrets; print(secrets.token_hex(32))"` (copy output).
+2. Set on Worker:
+   ```bash
+   cd ~/orbit-photo-director/worker
+   echo "NEW_TOKEN_HERE" | wrangler secret put CALIB_TOKEN
+   wrangler deploy
+   ```
+3. Update credentials.json:
+   ```bash
+   python3 -c "
+   import json, os
+   from pathlib import Path
+   p = Path.home() / '.config' / 'orbit-photo-director' / 'credentials.json'
+   d = json.loads(p.read_text())
+   d['calib_token'] = 'NEW_TOKEN_HERE'
+   p.write_text(json.dumps(d, indent=2))
+   os.chmod(p, 0o600)
+   "
+   ```
+4. **Important**: any browser that previously visited `map.astroanil.dev` has the OLD token in localStorage. The `/api/log` Worker will return 401 on those POSTs and the frontend (per its hardening) will clear the token + show the setup banner. The astronaut needs to paste the new token into localStorage on the ISS-side device:
+   ```js
+   // In browser DevTools console on map.astroanil.dev:
+   localStorage.setItem('opd-calib-token', 'NEW_TOKEN_HERE');
+   ```
 
 ## Escalation
 
