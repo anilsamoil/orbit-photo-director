@@ -27,6 +27,7 @@ from .cloud import (
     GFSForecastSampler,
     GIBSCloudSampler,
     HimawariNICTSampler,
+    MeteosatEUMETSATSampler,
     MockCloudSampler,
     SatCORPSSampler,
     assess_obstruction,
@@ -118,26 +119,29 @@ def fetch_tle(
 
 
 class CombinedCloudSampler:
-    """Three-tier cloud sampler.
+    """Four-tier observed-cloud sampler covering the full globe day+night.
 
     Tier 1: MODIS direct cloud fraction (most accurate, but only ~5/33 passes have it).
     Tier 2: GOES geostationary IR (~Americas + adjacent oceans, day+night, 10-15 min).
-    Tier 3: Himawari NICT true-color (Asia + W.Pacific, DAYTIME ONLY, 10-min cadence).
-            Replaces the broken GIBS Himawari layer; uses NICT's reliable PNG tiles.
-    Fallback: cf=50 with source="combined-no-coverage" only when all three miss.
+    Tier 3: Meteosat IR108 (Africa + Europe, day+night, 15 min).
+    Tier 4: Himawari NICT true-color (Asia + W.Pacific, DAYTIME ONLY, 10 min).
+    Fallback: cf=50 with source="combined-no-coverage" only when all tiers miss.
 
-    For each lat/lon: prefer Tier 1; if it returns "no observation," try Tier 2;
-    if that returns "no coverage," try Tier 3.
+    For each lat/lon: prefer Tier 1; cascade through 2 → 3 → 4 on no-coverage.
+    Meteosat goes BEFORE Himawari NICT because it's a real IR signal (day+night);
+    NICT is visible-band (daytime only).
     """
 
     def __init__(
         self,
         modis: GIBSCloudSampler,
         geo_ir: GeostationaryIRSampler,
+        meteosat: MeteosatEUMETSATSampler | None = None,
         himawari: HimawariNICTSampler | None = None,
     ):
         self._modis = modis
         self._geo_ir = geo_ir
+        self._meteosat = meteosat
         self._himawari = himawari
 
     def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
@@ -152,6 +156,12 @@ class CombinedCloudSampler:
             and not geo_sample.source.endswith("-nodata")
         ):
             return geo_sample
+
+        if self._meteosat is not None:
+            met_sample = self._meteosat.sample(lat, lon, when)
+            if met_sample.source == "meteosat-ir108":
+                return met_sample
+            # meteosat-no-coverage / meteosat-off-disk → fall through
 
         if self._himawari is not None:
             him_sample = self._himawari.sample(lat, lon, when)
@@ -200,9 +210,10 @@ def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSample
             except Exception as exc:  # noqa: BLE001
                 log.warning("SatCORPS open failed (%s); falling back to GIBS", exc)
 
-    # 2. Combined: MODIS (tier 1) + geostationary IR (tier 2) + Himawari NICT (tier 3)
+    # 2. Combined: MODIS (tier 1) + GOES-IR (tier 2) + Meteosat (tier 3) + Himawari NICT (tier 4)
     modis: GIBSCloudSampler | None = None
     geo_ir: GeostationaryIRSampler | None = None
+    meteosat: MeteosatEUMETSATSampler | None = None
     himawari: HimawariNICTSampler | None = None
     try:
         modis = GIBSCloudSampler(now)
@@ -213,20 +224,27 @@ def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSample
     except Exception as exc:  # noqa: BLE001
         log.warning("Geostationary IR fetch failed (%s); continuing without it", exc)
     try:
+        meteosat = MeteosatEUMETSATSampler(now)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Meteosat EUMETSAT fetch failed (%s); continuing without it", exc)
+    try:
         himawari = HimawariNICTSampler(now)
     except Exception as exc:  # noqa: BLE001
         log.warning("Himawari NICT fetch failed (%s); continuing without it", exc)
 
     if modis and geo_ir:
         tier_label = "combined-modis+geoir"
+        tier_log = "MODIS + GOES-IR"
+        if meteosat is not None:
+            tier_label += "+meteosat"
+            tier_log += " + Meteosat"
         if himawari is not None:
             tier_label += "+himawari"
-            log.info("using combined MODIS + GOES-IR + Himawari-NICT cloud sampler")
-        else:
-            log.info("using combined MODIS + GOES-IR (Himawari unavailable)")
+            tier_log += " + Himawari-NICT"
+        log.info("using combined %s cloud sampler", tier_log)
         composite_hour = now.replace(minute=0, second=0, microsecond=0)
         return (
-            CombinedCloudSampler(modis, geo_ir, himawari),
+            CombinedCloudSampler(modis, geo_ir, meteosat, himawari),
             composite_hour,
             tier_label,
         )
@@ -433,6 +451,7 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
         1 for p in all_passes
         if p["cloud_source"] == "gibs"
         or p["cloud_source"].startswith("geo-ir-")
+        or p["cloud_source"] == "meteosat-ir108"
         or p["cloud_source"] == "himawari-nict"
         or p["cloud_source"] == "satcorps"
         or p["cloud_source"] == "gfs-forecast"

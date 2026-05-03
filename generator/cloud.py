@@ -361,9 +361,8 @@ GEO_IR_LAYERS = (
     ("GOES-East_ABI_Band13_Clean_Infrared", -75.0, "goes-e"),
     ("GOES-West_ABI_Band13_Clean_Infrared", -137.0, "goes-w"),
     # GIBS Himawari is broken (zoom 0 reprojects to wrong longitudes; zoom 1
-    # dateline tile is HTTP 400). HimawariNICTSampler below replaces it for
-    # daytime Asia/W.Pacific coverage. Meteosat (Africa/Europe) is still
-    # unfilled — V2 work via EUMETSAT.
+    # dateline tile is HTTP 400). HimawariNICTSampler covers Asia via NICT;
+    # MeteosatEUMETSATSampler covers Africa/Europe via EUMETSAT WMS.
 )
 
 
@@ -486,6 +485,108 @@ class GeostationaryIRSampler:
 
         return CloudSample(
             cloud_fraction=50.0, sample_time=when, source="geo-ir-no-coverage"
+        )
+
+
+# --------------------------------------------------------------------------
+# Meteosat IR108 via EUMETSAT WMS — Africa / Europe day+night filler.
+# --------------------------------------------------------------------------
+#
+# EUMETSAT publishes the MSG (Meteosat Second Generation) primary at 0° lon
+# under `msg_fes` (Full Earth Scan). The IR108 channel (10.8 μm brightness
+# temperature) is the same physical signal as GOES Band 13 — cold pixels
+# (high cloud tops) read bright, warm pixels (ground/sea) read dark — so
+# we can reuse the exact `_ir_pixel_to_cloud_fraction()` heuristic the
+# GOES sampler already uses. Day+night, so this also covers the Asian
+# nighttime gap that the daytime-only Himawari NICT sampler can't fill.
+#
+# Endpoint: WMS 1.3.0 GetMap on geoserver, no auth, free, public.
+# Coverage: ~ 60°N-60°S × 60°W-60°E (the high-quality MSG-0° disk).
+# Cadence: full disk every 15 min upstream.
+
+EUMETSAT_WMS_BASE = "https://view.eumetsat.int/geoserver/wms"
+EUMETSAT_WMS_LAYER = "msg_fes:ir108"
+# MSG-0° disk centered at 0°/0°. Going past ±60° starts to lose
+# geolocation accuracy quickly — keep within the high-quality region.
+EUMETSAT_LAT_N = 60.0
+EUMETSAT_LAT_S = -60.0
+EUMETSAT_LON_W = -60.0
+EUMETSAT_LON_E = 60.0
+# 1024×1024 over a 120°×120° box → ~13 km per pixel — plenty for
+# orbital-scale shot planning and matches MSG's ~3 km resolution roughly.
+EUMETSAT_TILE_PX = 1024
+
+
+class MeteosatEUMETSATSampler:
+    """Sample IR108 brightness over Africa / Europe via EUMETSAT WMS.
+
+    Day+night (true IR, not visible-band like Himawari NICT). One
+    GetMap fetch per init — ~300 KB PNG — then in-memory sampling.
+    """
+
+    def __init__(self, when: datetime, fetcher: Any | None = None):
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+        self._when = when
+
+        from io import BytesIO
+
+        import numpy as np
+        from PIL import Image
+
+        if fetcher is None:
+            import requests
+
+            def _get(url: str) -> bytes:
+                resp = requests.get(url, timeout=30)
+                resp.raise_for_status()
+                return resp.content
+
+            fetcher = _get
+
+        # WMS 1.3 with EPSG:4326 uses lat,lon axis order: bbox is min_lat,
+        # min_lon, max_lat, max_lon. Older 1.1.1 (and our intuitions)
+        # use lon,lat — getting this wrong silently returns a wrong
+        # geographic region with no error.
+        url = (
+            f"{EUMETSAT_WMS_BASE}?service=WMS&version=1.3.0&request=GetMap"
+            f"&layers={EUMETSAT_WMS_LAYER}"
+            f"&styles=&format=image/png&transparent=true"
+            f"&width={EUMETSAT_TILE_PX}&height={EUMETSAT_TILE_PX}"
+            f"&crs=EPSG:4326"
+            f"&bbox={EUMETSAT_LAT_S},{EUMETSAT_LON_W},{EUMETSAT_LAT_N},{EUMETSAT_LON_E}"
+        )
+        png_bytes = fetcher(url)
+        # IR108 returns RGB grayscale (R==G==B). Stay in RGBA when present
+        # so transparent off-disk pixels survive and we can detect them.
+        self._image = np.asarray(Image.open(BytesIO(png_bytes)).convert("RGBA"))
+
+    def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+
+        # Outside the high-quality MSG-0° disk → no coverage.
+        if not (EUMETSAT_LAT_S <= lat <= EUMETSAT_LAT_N):
+            return CloudSample(50.0, when, "meteosat-no-coverage")
+        if not (EUMETSAT_LON_W <= lon <= EUMETSAT_LON_E):
+            return CloudSample(50.0, when, "meteosat-no-coverage")
+
+        h, w = self._image.shape[:2]
+        # WMS image: top row is max-lat, left col is min-lon. Plate-carrée
+        # mapping into our pre-fetched 1024×1024 array.
+        row = int(round((EUMETSAT_LAT_N - lat) / (EUMETSAT_LAT_N - EUMETSAT_LAT_S) * (h - 1)))
+        col = int(round((lon - EUMETSAT_LON_W) / (EUMETSAT_LON_E - EUMETSAT_LON_W) * (w - 1)))
+        row = max(0, min(h - 1, row))
+        col = max(0, min(w - 1, col))
+
+        pixel = self._image[row, col]
+        # Alpha=0 → off-disk (e.g., far southern Indian Ocean within bbox).
+        if pixel[3] == 0:
+            return CloudSample(50.0, when, "meteosat-off-disk")
+        ir_byte = int(pixel[0])  # grayscale, R == G == B
+        cf = _ir_pixel_to_cloud_fraction(ir_byte)
+        return CloudSample(
+            cloud_fraction=cf, sample_time=when, source="meteosat-ir108"
         )
 
 

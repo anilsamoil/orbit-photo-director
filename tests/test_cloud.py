@@ -492,6 +492,133 @@ def test_gfs_forecast_handles_fetch_failure_gracefully() -> None:
     assert r.source == "gfs-forecast-no-data"
 
 
+# --------------------------------------------------------------------------
+# MeteosatEUMETSATSampler — Africa/Europe day+night via EUMETSAT WMS IR108
+# --------------------------------------------------------------------------
+
+
+def _make_fake_meteosat_fetcher(brightness_grid: dict[tuple[int, int], int] | None = None,
+                                 alpha_grid: dict[tuple[int, int], int] | None = None,
+                                 default_brightness: int = 100):
+    """Return a fetcher that synthesizes a 1024x1024 RGBA PNG with controllable
+    brightness/alpha per pixel (or per region). Pixels not in `brightness_grid`
+    use `default_brightness`. Pixels not in `alpha_grid` are alpha=255.
+    """
+    from io import BytesIO
+
+    import numpy as np
+    from PIL import Image
+
+    from generator.cloud import EUMETSAT_TILE_PX
+
+    def _fetch(_url: str) -> bytes:
+        n = EUMETSAT_TILE_PX
+        arr = np.full((n, n, 4), default_brightness, dtype=np.uint8)
+        arr[:, :, 3] = 255
+        if brightness_grid:
+            for (row, col), b in brightness_grid.items():
+                arr[row, col, 0:3] = b
+        if alpha_grid:
+            for (row, col), a in alpha_grid.items():
+                arr[row, col, 3] = a
+        buf = BytesIO()
+        Image.fromarray(arr, mode="RGBA").save(buf, format="PNG")
+        return buf.getvalue()
+
+    return _fetch
+
+
+def test_meteosat_returns_no_coverage_outside_disk() -> None:
+    from generator.cloud import MeteosatEUMETSATSampler
+
+    fetcher = _make_fake_meteosat_fetcher(default_brightness=100)
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = MeteosatEUMETSATSampler(when, fetcher=fetcher)
+    # Tokyo (lon 139) is well outside MSG-0° disk (max lon 60)
+    r = s.sample(35.7, 139.7, when)
+    assert r.source == "meteosat-no-coverage"
+    # NYC (lon -74) is outside the western edge
+    r = s.sample(40.7, -74.0, when)
+    assert r.source == "meteosat-no-coverage"
+
+
+def test_meteosat_returns_off_disk_for_alpha_zero() -> None:
+    from generator.cloud import EUMETSAT_TILE_PX, MeteosatEUMETSATSampler
+
+    # Set the (0,0) pixel — corresponds to (lat 60, lon -60), upper-left
+    # corner of the box — to alpha=0.
+    fetcher = _make_fake_meteosat_fetcher(
+        default_brightness=100,
+        alpha_grid={(0, 0): 0},
+    )
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = MeteosatEUMETSATSampler(when, fetcher=fetcher)
+    r = s.sample(60.0, -60.0, when)
+    assert r.source == "meteosat-off-disk"
+
+
+def test_meteosat_returns_ir108_cf_for_known_pixel() -> None:
+    from generator.cloud import EUMETSAT_TILE_PX, MeteosatEUMETSATSampler
+
+    # Place a pixel at the center of the bbox (0°lat, 0°lon) → row,col = (n/2, n/2).
+    # IR brightness 200 → cf = 100 - (200/255)*100 ≈ 21.6 → "warm" so low cloud.
+    n = EUMETSAT_TILE_PX
+    fetcher = _make_fake_meteosat_fetcher(
+        default_brightness=10,
+        brightness_grid={(n // 2, n // 2): 200},
+    )
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = MeteosatEUMETSATSampler(when, fetcher=fetcher)
+    r = s.sample(0.0, 0.0, when)
+    assert r.source == "meteosat-ir108"
+    # 200/255 → ~21.6% cloud
+    assert 20 < r.cloud_fraction < 24
+
+
+def test_meteosat_high_brightness_means_high_cloud() -> None:
+    from generator.cloud import MeteosatEUMETSATSampler
+
+    fetcher = _make_fake_meteosat_fetcher(default_brightness=240)
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = MeteosatEUMETSATSampler(when, fetcher=fetcher)
+    # Cairo is comfortably inside MSG-0° disk
+    r = s.sample(30.0, 31.0, when)
+    assert r.source == "meteosat-ir108"
+    # 240/255 → ~5.9% cloud (LOW because IR-brightness inverts: bright = warm = no cloud)
+    assert r.cloud_fraction < 10
+
+
+def test_meteosat_low_brightness_means_low_cloud_per_ir_inversion() -> None:
+    from generator.cloud import MeteosatEUMETSATSampler
+
+    # Dark pixels = cold = high cloud tops → high cf.
+    fetcher = _make_fake_meteosat_fetcher(default_brightness=10)
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = MeteosatEUMETSATSampler(when, fetcher=fetcher)
+    r = s.sample(0.0, 0.0, when)
+    assert r.source == "meteosat-ir108"
+    # 10/255 → ~96% cloud
+    assert r.cloud_fraction > 90
+
+
+def test_meteosat_rejects_naive_when_in_init() -> None:
+    from generator.cloud import MeteosatEUMETSATSampler
+
+    fetcher = _make_fake_meteosat_fetcher(default_brightness=100)
+    with pytest.raises(ValueError):
+        MeteosatEUMETSATSampler(datetime(2026, 5, 3, 12, 0, 0), fetcher=fetcher)
+
+
+def test_meteosat_rejects_naive_when_in_sample() -> None:
+    from generator.cloud import MeteosatEUMETSATSampler
+
+    fetcher = _make_fake_meteosat_fetcher(default_brightness=100)
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = MeteosatEUMETSATSampler(when, fetcher=fetcher)
+    with pytest.raises(ValueError):
+        s.sample(0.0, 0.0, datetime(2026, 5, 3, 12, 0, 0))
+
+
 def test_gfs_forecast_batches_above_100_targets() -> None:
     """Targets > OPEN_METEO_BATCH_SIZE split into multiple HTTP calls."""
     from generator.cloud import GFSForecastSampler
