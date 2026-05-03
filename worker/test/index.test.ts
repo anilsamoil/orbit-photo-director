@@ -31,7 +31,20 @@ class MockR2Bucket {
     this.store.set(key, { body, meta: meta ?? {} });
   }
 
-  // helper for tests
+  async list(opts: { prefix?: string; limit?: number }): Promise<{ objects: Array<{ key: string }> }> {
+    const prefix = opts.prefix ?? '';
+    const limit = opts.limit ?? 1000;
+    const matches: Array<{ key: string }> = [];
+    for (const key of this.store.keys()) {
+      if (key.startsWith(prefix)) {
+        matches.push({ key });
+        if (matches.length >= limit) break;
+      }
+    }
+    return { objects: matches };
+  }
+
+  // helpers for tests
   has(key: string): boolean {
     return this.store.has(key);
   }
@@ -276,6 +289,97 @@ describe('GET /api/health', () => {
 // --------------------------------------------------------------------------
 // Routing + CORS
 // --------------------------------------------------------------------------
+
+describe('GET /api/log', () => {
+  let env: TestEnv;
+
+  beforeEach(() => {
+    env = makeEnv();
+  });
+
+  it('rejects without token', async () => {
+    const r = await fetchWorker(env, '/api/log');
+    expect(r.status).toBe(401);
+  });
+
+  it('returns empty when no entries exist', async () => {
+    const r = await fetchWorker(env, '/api/log', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { entries: unknown[] };
+    expect(body.entries).toEqual([]);
+  });
+
+  it('returns entries from current month', async () => {
+    const now = new Date();
+    const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    await env.CALIB.put(`log/${yyyymm}/event-a.json`, JSON.stringify({
+      target_id: 'tokyo-night',
+      pass_time: '2024-10-17T12:00:00Z',
+      action: 'shoot',
+      received_at: '2024-10-17T12:00:30Z',
+    }));
+    await env.CALIB.put(`log/${yyyymm}/event-b.json`, JSON.stringify({
+      target_id: 'tokyo-night',
+      pass_time: '2024-10-17T12:00:00Z',
+      action: 'rate',
+      rating: 4,
+      received_at: '2024-10-17T13:00:00Z',
+    }));
+
+    const r = await fetchWorker(env, '/api/log', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { entries: Array<{ action: string }> };
+    expect(body.entries).toHaveLength(2);
+    // sorted by received_at desc — rate (13:00) comes before shoot (12:00:30)
+    expect(body.entries[0]?.action).toBe('rate');
+    expect(body.entries[1]?.action).toBe('shoot');
+  });
+
+  it('respects limit query parameter', async () => {
+    const now = new Date();
+    const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    for (let i = 0; i < 5; i++) {
+      await env.CALIB.put(`log/${yyyymm}/event-${i}.json`, JSON.stringify({
+        target_id: `t${i}`,
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+        received_at: `2024-10-17T12:0${i}:00Z`,
+      }));
+    }
+    const r = await fetchWorker(env, '/api/log?limit=3', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { entries: unknown[] };
+    expect(body.entries).toHaveLength(3);
+  });
+
+  it('clamps oversized limit', async () => {
+    const r = await fetchWorker(env, '/api/log?limit=99999', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('skips unparseable entries gracefully', async () => {
+    const now = new Date();
+    const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    await env.CALIB.put(`log/${yyyymm}/junk.json`, 'not json');
+    await env.CALIB.put(`log/${yyyymm}/good.json`, JSON.stringify({
+      target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot', received_at: '2024-10-17T12:00:00Z',
+    }));
+    const r = await fetchWorker(env, '/api/log', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { entries: unknown[] };
+    expect(body.entries).toHaveLength(1);
+  });
+});
 
 describe('routing + CORS', () => {
   it('returns 404 for unknown paths', async () => {

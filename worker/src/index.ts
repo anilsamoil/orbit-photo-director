@@ -245,6 +245,70 @@ async function handleStatic(pathname: string, env: Env): Promise<Response> {
   });
 }
 
+/** GET /api/log — list recent calibration log entries.
+ *
+ *  Reads from r2:CALIB. Token-gated (same X-Calib-Token as POST). Returns up to
+ *  `limit` (default 100, max 200) entries from the current month, ordered by
+ *  received_at descending. If the current month has fewer entries than limit,
+ *  also reads from the previous month.
+ *
+ *  Each entry is the JSON object exactly as written by handleLog.
+ */
+async function handleLogList(request: Request, env: Env): Promise<Response> {
+  const token = request.headers.get('x-calib-token');
+  if (!token || !constantTimeEqual(token, env.CALIB_TOKEN)) {
+    return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+  const url = new URL(request.url);
+  const limitRaw = Number(url.searchParams.get('limit') ?? '100');
+  const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 100));
+
+  const now = new Date();
+  const monthKeys = [
+    `log/${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}/`,
+  ];
+  // Include previous month so user opening the page on the 1st still sees data.
+  const prev = new Date(now.getUTCFullYear(), now.getUTCMonth() - 1, 1);
+  monthKeys.push(
+    `log/${prev.getUTCFullYear()}${String(prev.getUTCMonth() + 1).padStart(2, '0')}/`,
+  );
+
+  const entries: Array<Record<string, unknown>> = [];
+  try {
+    for (const prefix of monthKeys) {
+      if (entries.length >= limit) break;
+      const list = await env.CALIB.list({
+        prefix,
+        limit: Math.min(200, limit - entries.length + 50),
+      });
+      for (const obj of list.objects) {
+        if (entries.length >= limit) break;
+        const body = await env.CALIB.get(obj.key);
+        if (!body) continue;
+        try {
+          const json = (await body.json()) as Record<string, unknown>;
+          entries.push(json);
+        } catch {
+          // skip unparseable entries
+        }
+      }
+    }
+  } catch (e) {
+    console.error('R2 list failed', e);
+    return jsonResponse({ error: 'storage_unavailable' }, 503);
+  }
+
+  // Sort by received_at desc; missing received_at sinks to the bottom.
+  entries.sort((a, b) => {
+    const ar = typeof a.received_at === 'string' ? a.received_at : '';
+    const br = typeof b.received_at === 'string' ? b.received_at : '';
+    return br.localeCompare(ar);
+  });
+
+  return jsonResponse({ entries: entries.slice(0, limit), count: entries.length });
+}
+
+
 async function handleHealth(env: Env): Promise<Response> {
   let obj: R2ObjectBody | null;
   try {
@@ -302,6 +366,14 @@ export default {
     let response: Response;
     if (url.pathname === '/api/log' && request.method === 'POST') {
       response = await handleLog(request, env);
+    } else if (
+      url.pathname === '/api/log' &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      response = await handleLogList(request, env);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
     } else if (
       url.pathname === '/api/health' &&
       (request.method === 'GET' || request.method === 'HEAD')

@@ -12,6 +12,8 @@ import { buildPayload, drainQueue, postCalib } from './calib';
 import type { BannerState } from './banner';
 import type { Manifest, PassEntry } from './types';
 import { fetchManifest, fetchTop5 } from './manifest';
+import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
+import type { MergedRow } from './log';
 
 const REFRESH_MS = 60_000;
 
@@ -90,19 +92,38 @@ function bindTabs(): void {
   const view = document.getElementById('view');
   const tabQueue = document.getElementById('tab-queue');
   const tabMap = document.getElementById('tab-map');
-  if (!view || !tabQueue || !tabMap) return;
+  const tabLog = document.getElementById('tab-log');
+  if (!view || !tabQueue || !tabMap || !tabLog) return;
 
-  tabQueue.addEventListener('click', () => {
-    view.className = 'view-queue';
-    tabQueue.classList.add('active');
-    tabMap.classList.remove('active');
-  });
+  const setActive = (className: string, activeTab: HTMLElement) => {
+    view.className = className;
+    [tabQueue, tabMap, tabLog].forEach((t) => t.classList.toggle('active', t === activeTab));
+  };
 
+  tabQueue.addEventListener('click', () => setActive('view-queue', tabQueue));
   tabMap.addEventListener('click', () => {
     void loadMapPane();
-    view.className = 'view-map';
-    tabMap.classList.add('active');
-    tabQueue.classList.remove('active');
+    setActive('view-map', tabMap);
+  });
+  tabLog.addEventListener('click', () => {
+    setActive('view-log', tabLog);
+    void loadLogPane();
+  });
+}
+
+async function loadLogPane(): Promise<void> {
+  const listEl = document.getElementById('log-list');
+  const emptyEl = document.getElementById('log-empty');
+  const statsEl = document.getElementById('log-stats');
+  if (!listEl || !emptyEl || !statsEl) return;
+  const entries = await fetchLog();
+  const merged = mergeLogEntries(entries);
+  renderLog(listEl, emptyEl, statsEl, merged, async (row: MergedRow) => {
+    const ok = await openRateModal(row);
+    if (ok) {
+      // refetch + rerender
+      await loadLogPane();
+    }
   });
 }
 

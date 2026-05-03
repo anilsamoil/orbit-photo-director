@@ -248,7 +248,132 @@ main {
   font-weight: 600;
 }
 
+/* View toggle: each view-* class hides everything BUT the active pane.
+ * We pair each "view" with the panes that should be hidden in that state. */
 .view-queue #map-pane,
-.view-map #queue-pane {
+.view-queue #log-pane,
+.view-map #queue-pane,
+.view-map #log-pane,
+.view-log #queue-pane,
+.view-log #map-pane {
   display: none;
 }
+
+/* Log pane */
+.log-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  max-width: 900px;
+  margin: 0 auto 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.log-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.log-stats {
+  display: flex;
+  gap: 1rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.log-stats .stat-value { color: var(--text); font-weight: 600; }
+
+.log-list {
+  max-width: 900px;
+  margin: 0 auto;
+  display: grid;
+  gap: 0.6rem;
+  padding-bottom: 4rem;
+}
+
+.log-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem 0.95rem;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+.log-row .row-target { font-weight: 600; }
+.log-row .row-meta {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.15rem;
+}
+.log-row .row-action {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+}
+.log-row .row-action.shoot { background: rgba(91,227,122,0.15); color: var(--green); }
+.log-row .row-action.skip  { background: rgba(108,115,135,0.18); color: var(--text-dim); }
+.log-row .row-rating-stars { color: var(--yellow); letter-spacing: 1px; }
+.log-row .row-rate-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.log-row .row-rate-btn:hover { background: var(--accent); color: var(--bg); }
+
+/* Rating modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.2rem 1.3rem;
+  max-width: 420px;
+  width: 100%;
+  display: grid;
+  gap: 0.9rem;
+}
+.modal h3 { margin: 0; font-size: 1rem; }
+.modal .modal-meta { color: var(--text-dim); font-size: 0.85rem; }
+.modal .star-row { display: flex; gap: 0.3rem; }
+.modal .star-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  width: 44px; height: 44px;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.modal .star-btn.active { background: var(--yellow); color: var(--bg); border-color: var(--yellow); }
+.modal label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.3rem; }
+.modal select {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  font: inherit;
+}
+.modal-actions { display: flex; gap: 0.5rem; }
+.modal-actions .btn { flex: 1; }

@@ -20,6 +20,7 @@
       <nav class="tabs">
         <button id="tab-queue" class="tab active" type="button">Queue</button>
         <button id="tab-map" class="tab" type="button">Map</button>
+        <button id="tab-log" class="tab" type="button">Log</button>
       </nav>
     </header>
 
@@ -35,6 +36,15 @@
           <button id="time-now" class="time-btn active" type="button">Now</button>
           <button id="time-plus90" class="time-btn" type="button">+90 min</button>
         </div>
+      </section>
+
+      <section id="log-pane" class="pane">
+        <div class="log-header">
+          <h2 class="log-title">Calibration log</h2>
+          <div id="log-stats" class="log-stats"></div>
+        </div>
+        <div id="log-list" class="log-list" aria-live="polite"></div>
+        <div id="log-empty" class="empty" hidden>No calibration entries yet. Tap Shoot or Skip on a queue card to start logging.</div>
       </section>
     </main>
 
