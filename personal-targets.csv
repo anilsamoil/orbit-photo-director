@@ -22,3 +22,56 @@ id,name,lat,lon,priority,regime,category,notes,caption_hook
 # ISS reach reminder: ISS orbits at 51.6° inclination. Latitudes |lat| > 60 only
 # get oblique shots. |lat| > 70 effectively unreachable. Pick targets accordingly.
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Populated entries — review priorities/regime before importing ───────────
+# Assumptions (adjust if wrong):
+#   - Minneapolis treated as hometown (priority 5).
+#   - SpaceX sites use 4–5 based on social-media reach not personal ties.
+#   - Universities use priority 3 per the convention above.
+#   - "regime: night" used wherever city lights are the visual hook.
+
+# SpaceX + space-industry sites
+starbase-boca-chica,Starbase — Boca Chica TX,25.9968,-97.1556,5,day,community-personal,Starship test and launch complex on the South Texas coast,Watching Starbase from orbit
+spacex-cape-canaveral,Cape Canaveral — Falcon east coast,28.6082,-80.6041,5,any,community-personal,LC-39A and SLC-40 — Falcon and Dragon launch complex,Florida's coastline from orbit — and the pad Falcon flies from
+spacex-vandenberg,Vandenberg SFB — Falcon west coast,34.7420,-120.5724,4,day,community-personal,SLC-4E — polar and SSO Falcon launches,
+spacex-hawthorne-hq,SpaceX HQ — Hawthorne CA,33.9211,-118.3279,4,any,community-personal,SpaceX HQ and Falcon production in the LA basin,
+spacex-mcgregor,SpaceX McGregor engine test TX,31.3920,-97.4660,3,day,community-personal,Raptor and Merlin engine test stands in central Texas,
+nasa-jsc-houston,NASA Johnson Space Center — Houston,29.5502,-95.0901,4,any,community-personal,Mission Control for this very station,Saying hi to Mission Control from above
+
+# Hometown + important cities
+minneapolis-home,My hometown — Minneapolis,44.9778,-93.2650,5,night,community-personal,Twin Cities — lakes scattered through the urban grid,Minneapolis tonight — can you find your block?
+saint-paul-twin,Saint Paul — Twin Cities,44.9537,-93.0900,4,night,community-personal,Eastern half of the Twin Cities night frame,
+los-angeles,Los Angeles basin,34.0522,-118.2437,4,night,community-personal,One of the largest contiguous night-light fields on Earth,LA basin from orbit — a sea of light
+palo-alto,Palo Alto CA,37.4419,-122.1430,4,night,community-personal,Bay Area peninsula — Stanford and tech corridor,
+boston,Boston MA,42.3601,-71.0589,4,night,community-personal,Compact New England coastline — Logan/harbor/Charles River,Boston's coastline at night
+
+# Universities — personal ties
+stanford-univ,Stanford University,37.4275,-122.1697,3,day,community-personal,Personal tie — Palo Alto campus,
+harvard-univ,Harvard University,42.3744,-71.1169,3,day,community-personal,Personal tie — Cambridge campus,
+ut-austin,University of Texas — Austin,30.2849,-97.7341,3,day,community-personal,Personal tie — UT Austin campus,
+umn-twin-cities,University of Minnesota — Twin Cities,44.9740,-93.2277,3,day,community-personal,Personal tie — UMN campus on the Mississippi,
+tcu-fort-worth,Texas Christian University — Fort Worth,32.7095,-97.3631,3,day,community-personal,Personal tie — TCU campus,
+duke-univ,Duke University — Durham NC,36.0014,-78.9382,3,day,community-personal,Personal tie — Duke campus,
+
+# Great Lakes
+lake-michigan,Lake Michigan,43.9000,-87.0000,4,day,community-personal,Southernmost Great Lake — Chicago/Milwaukee/Indiana shoreline,
+lake-superior,Lake Superior,47.7000,-87.5000,3,day,community-personal,Largest Great Lake — Duluth and the North Shore,
+lake-huron,Lake Huron,45.0000,-82.5000,3,day,community-personal,Great Lake — Georgian Bay arc is unmistakable,
+lake-erie,Lake Erie,42.2000,-81.2000,3,day,community-personal,Cleveland/Detroit/Toledo shoreline,
+lake-ontario,Lake Ontario,43.7000,-77.9000,3,day,community-personal,Toronto and Rochester shorelines,
+
+# Additional space-industry sites
+wallops-flight-facility,Wallops Flight Facility — VA,37.9407,-75.4664,4,day,community-personal,NASA / Northrop Grumman launch range — Antares/Cygnus to ISS,
+mojave-air-space-port,Mojave Air & Space Port — CA,35.0594,-118.1521,3,day,community-personal,Test-pilot history — Scaled Composites/Stratolaunch/Virgin Galactic origins,
+blue-origin-hq-kent,Blue Origin HQ — Kent WA,47.4275,-122.2469,4,any,community-personal,Blue Origin headquarters and engineering campus south of Seattle,
+blue-origin-launch-site-one,Blue Origin Launch Site One — Van Horn TX,31.4231,-104.7575,4,day,community-personal,New Shepard suborbital launches in West Texas,
+blue-origin-lc36,Blue Origin LC-36 — New Glenn,28.4708,-80.5400,4,any,community-personal,New Glenn launch complex at Cape Canaveral — adjacent to SpaceX 39A,
+blue-origin-huntsville,Blue Origin Huntsville — engine plant,34.7304,-86.5861,3,day,community-personal,BE-4 and BE-3U engine production in Alabama,
+
+# Additional cities
+chicago,Chicago IL,41.8781,-87.6298,4,night,community-personal,Loop and Lake Michigan shoreline are unmistakable at night,
+
+# Crew hometowns — for "I saw you from orbit" captions when these crew members are aboard
+watkins-lafayette,Jessica Watkins's hometown — Lafayette CO,39.9936,-105.0897,4,night,community-personal,NASA astronaut J. Watkins (Crew-4) hometown — Boulder/Front Range,For Jessica — Lafayette tonight from above
+delaney-debary,Luke Delaney's hometown — DeBary FL,28.8862,-81.3037,4,night,community-personal,NASA astronaut L. Delaney (Crew-13) hometown — central Florida north of Orlando,For Luke — DeBary from orbit
+kutryk-beauvallon,Joshua Kutryk's hometown — Beauvallon AB,53.8500,-111.5700,4,any,community-personal,CSA astronaut J. Kutryk (Crew-13) hometown — Alberta. Above 51.6° so oblique only,For Josh — looking north toward Beauvallon
