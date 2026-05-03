@@ -254,3 +254,12 @@ function upsertGeoJson(
     m.addSource(id, { type: 'geojson', data });
   }
 }
+
+/** Force the map to recompute its canvas size. Call after the container becomes
+ *  visible (e.g., after the user clicks the Map tab). MapLibre samples the
+ *  container size at init; if it was display:none, the canvas is stuck at 0×0
+ *  until a resize event fires.
+ */
+export function resizeMap(): void {
+  if (map) map.resize();
+}

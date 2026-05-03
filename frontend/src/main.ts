@@ -114,6 +114,10 @@ async function loadMapPane(): Promise<void> {
     mapModule = await import('./map');
   }
   await mapModule.renderMap(currentManifest);
+  // MapLibre needs explicit resize() after its container becomes visible.
+  // The container starts hidden (display: none) so the canvas was 0×0 at init.
+  // Defer one frame so the browser reflows the now-visible container first.
+  requestAnimationFrame(() => mapModule!.resizeMap());
 }
 
 async function init(): Promise<void> {
