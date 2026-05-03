@@ -1,22 +1,30 @@
 import type { PassEntry } from './types';
 import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
 
+/** Variant marker for cards: 'observed' uses Queue styling (Shoot/Skip on
+ *  the imminent pass), 'forecast' uses Upcoming styling (no actions; soft
+ *  yellow accent so the user can tell forecast from observed at a glance). */
+export type CardVariant = 'observed' | 'forecast';
+
 /** Render the card list into the cards container.
  *  Each card emits Shoot/Skip events via the provided `onAction` callback.
+ *  When `variant === 'forecast'`, action buttons are omitted (a pass 6 h
+ *  away isn't actionable yet — the user sets an alarm, doesn't tap Shoot).
  */
 export function renderCards(
   container: HTMLElement,
   passes: PassEntry[],
   nowMs: number,
   isStale: boolean,
-  onAction: (action: 'shoot' | 'skip', p: PassEntry) => void
+  onAction: (action: 'shoot' | 'skip', p: PassEntry) => void,
+  variant: CardVariant = 'observed',
 ): void {
   container.replaceChildren();
   if (passes.length === 0) {
     return;
   }
   for (const p of passes) {
-    container.appendChild(renderCard(p, nowMs, isStale, onAction));
+    container.appendChild(renderCard(p, nowMs, isStale, onAction, variant));
   }
 }
 
@@ -24,10 +32,14 @@ export function renderCard(
   p: PassEntry,
   nowMs: number,
   isStale: boolean,
-  onAction: (action: 'shoot' | 'skip', p: PassEntry) => void
+  onAction: (action: 'shoot' | 'skip', p: PassEntry) => void,
+  variant: CardVariant = 'observed',
 ): HTMLElement {
   const card = document.createElement('article');
-  card.className = isStale ? 'card stale' : 'card';
+  const classes = ['card'];
+  if (isStale) classes.push('stale');
+  if (variant === 'forecast') classes.push('forecast');
+  card.className = classes.join(' ');
   card.dataset.targetId = p.target_id;
   card.dataset.passTime = p.closest_approach;
 
@@ -61,6 +73,12 @@ export function renderCard(
     // Tell the user the cloud score is a placeholder, not a real measurement.
     meta.appendChild(makeTag('obs-noobs', 'no cloud obs'));
   }
+  // Forecast variant: tag the pass so the user knows the cloud number came
+  // from GFS (forward-looking) not a current observation. Less certain by
+  // design — the badge sets the expectation.
+  if (variant === 'forecast' || p.cloud_source === 'gfs-forecast') {
+    meta.appendChild(makeTag('forecast-tag', 'forecast'));
+  }
 
   const score = document.createElement('div');
   score.className = 'card-score';
@@ -75,22 +93,27 @@ export function renderCard(
   sep.textContent = `· P(unobstructed) ${formatScore(p.p_unobstructed)}`;
   score.append(label, value, sep);
 
-  const actions = document.createElement('div');
-  actions.className = 'card-actions';
-  const shoot = document.createElement('button');
-  shoot.className = 'btn btn-shoot';
-  shoot.type = 'button';
-  shoot.textContent = 'Shoot';
-  shoot.disabled = isStale;
-  shoot.addEventListener('click', () => onAction('shoot', p));
-  const skip = document.createElement('button');
-  skip.className = 'btn btn-skip';
-  skip.type = 'button';
-  skip.textContent = 'Skip';
-  skip.addEventListener('click', () => onAction('skip', p));
-  actions.append(shoot, skip);
-
-  card.append(name, countdown, meta, score, actions);
+  // Forecast cards omit Shoot/Skip — passes that far out aren't actionable
+  // yet, and the user submits a Shoot record only when actually shooting.
+  if (variant === 'observed') {
+    const actions = document.createElement('div');
+    actions.className = 'card-actions';
+    const shoot = document.createElement('button');
+    shoot.className = 'btn btn-shoot';
+    shoot.type = 'button';
+    shoot.textContent = 'Shoot';
+    shoot.disabled = isStale;
+    shoot.addEventListener('click', () => onAction('shoot', p));
+    const skip = document.createElement('button');
+    skip.className = 'btn btn-skip';
+    skip.type = 'button';
+    skip.textContent = 'Skip';
+    skip.addEventListener('click', () => onAction('skip', p));
+    actions.append(shoot, skip);
+    card.append(name, countdown, meta, score, actions);
+  } else {
+    card.append(name, countdown, meta, score);
+  }
   return card;
 }
 

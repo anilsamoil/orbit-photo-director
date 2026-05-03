@@ -329,3 +329,193 @@ def test_himawari_nict_rejects_naive_when() -> None:
     s = HimawariNICTSampler(when, fetcher=fetcher)
     with pytest.raises(ValueError):
         s.sample(35.7, 139.7, datetime(2026, 5, 3, 5, 0, 0))
+
+
+# --------------------------------------------------------------------------
+# GFSForecastSampler — forward cloud-cover via Open-Meteo's GFS endpoint
+# --------------------------------------------------------------------------
+
+
+def _make_fake_gfs_fetcher(per_target: dict[tuple[float, float], list[tuple[str, float]]]):
+    """Return a fetcher that synthesizes Open-Meteo-shaped JSON for the
+    requested batch. Each target's hourly time/cloud arrays are pulled from
+    `per_target`, keyed by (lat, lon) snapped to 0.25° grid.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    def _fetch(url: str) -> Any:
+        q = parse_qs(urlparse(url).query)
+        lats = [float(x) for x in q["latitude"][0].split(",")]
+        lons = [float(x) for x in q["longitude"][0].split(",")]
+        items = []
+        for lat, lon in zip(lats, lons, strict=False):
+            key = (round(lat * 4) / 4.0, round(lon * 4) / 4.0)
+            series = per_target.get(key, [])
+            items.append({
+                "latitude": lat,
+                "longitude": lon,
+                "hourly": {
+                    "time": [t for t, _ in series],
+                    "cloud_cover": [c for _, c in series],
+                },
+            })
+        # Single-target requests return dict; multi-target returns list (Open-Meteo behavior).
+        return items[0] if len(items) == 1 else items
+
+    return _fetch
+
+
+def test_gfs_forecast_returns_no_data_for_empty_targets() -> None:
+    from generator.cloud import GFSForecastSampler
+
+    s = GFSForecastSampler(targets=[], fetcher=lambda url: [])
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    r = s.sample(35.7, 139.7, when)
+    assert r.source == "gfs-forecast-no-data"
+
+
+def test_gfs_forecast_snaps_lat_lon_to_grid() -> None:
+    from generator.cloud import GFSForecastSampler
+
+    fetcher = _make_fake_gfs_fetcher({
+        (35.75, 139.75): [
+            ("2026-05-03T12:00", 60.0),
+            ("2026-05-03T13:00", 75.0),
+        ],
+    })
+    # Construction lat/lon NOT exactly on the 0.25° grid — sampler should
+    # snap to (35.75, 139.75) when looking up.
+    s = GFSForecastSampler(targets=[(35.68, 139.69)], fetcher=fetcher)
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    r = s.sample(35.68, 139.69, when)
+    assert r.source == "gfs-forecast"
+    assert r.cloud_fraction == 60.0
+
+
+def test_gfs_forecast_returns_cloud_cover_at_target_hour() -> None:
+    from generator.cloud import GFSForecastSampler
+
+    fetcher = _make_fake_gfs_fetcher({
+        (40.75, -74.0): [
+            ("2026-05-03T12:00", 30.0),
+            ("2026-05-03T13:00", 45.0),
+            ("2026-05-03T14:00", 80.0),
+        ],
+    })
+    s = GFSForecastSampler(targets=[(40.71, -74.01)], fetcher=fetcher)
+    # Sample a non-aligned minute — should floor to 13:00 hour.
+    when = datetime(2026, 5, 3, 13, 47, 12, tzinfo=UTC)
+    r = s.sample(40.71, -74.01, when)
+    assert r.source == "gfs-forecast"
+    assert r.cloud_fraction == 45.0
+
+
+def test_gfs_forecast_returns_out_of_horizon_past_window() -> None:
+    from generator.cloud import GFSForecastSampler
+
+    fetcher = _make_fake_gfs_fetcher({
+        (40.75, -74.0): [("2026-05-03T12:00", 30.0)],
+    })
+    s = GFSForecastSampler(targets=[(40.71, -74.01)], fetcher=fetcher)
+    # 24 hours past the only forecast step
+    when = datetime(2026, 5, 4, 12, 0, 0, tzinfo=UTC)
+    r = s.sample(40.71, -74.01, when)
+    assert r.source == "gfs-forecast-out-of-horizon"
+
+
+def test_gfs_forecast_deduplicates_targets_on_grid_snap() -> None:
+    """Two targets within the same 0.25° cell share one forecast time-series."""
+    from generator.cloud import GFSForecastSampler
+
+    fetch_calls: list[str] = []
+
+    def counting_fetcher(url: str) -> Any:
+        fetch_calls.append(url)
+        # Only one target's worth of data needed
+        return {
+            "latitude": 35.75,
+            "longitude": 139.75,
+            "hourly": {
+                "time": ["2026-05-03T12:00"],
+                "cloud_cover": [50.0],
+            },
+        }
+
+    # Both targets snap to (35.75, 139.75)
+    s = GFSForecastSampler(
+        targets=[(35.68, 139.69), (35.78, 139.78)],
+        fetcher=counting_fetcher,
+    )
+    assert len(fetch_calls) == 1
+    # URL should only contain one lat / one lon (not two)
+    assert fetch_calls[0].count(",") == 0  # no comma-separated lats/lons
+
+
+def test_gfs_forecast_clamps_cloud_fraction() -> None:
+    """Open-Meteo can return values like 100.5 due to interpolation; clamp 0..100."""
+    from generator.cloud import GFSForecastSampler
+
+    fetcher = _make_fake_gfs_fetcher({
+        (40.75, -74.0): [
+            ("2026-05-03T12:00", -5.0),
+            ("2026-05-03T13:00", 105.0),
+        ],
+    })
+    s = GFSForecastSampler(targets=[(40.71, -74.01)], fetcher=fetcher)
+    r1 = s.sample(40.71, -74.01, datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC))
+    r2 = s.sample(40.71, -74.01, datetime(2026, 5, 3, 13, 0, 0, tzinfo=UTC))
+    assert r1.cloud_fraction == 0.0
+    assert r2.cloud_fraction == 100.0
+
+
+def test_gfs_forecast_rejects_naive_when() -> None:
+    from generator.cloud import GFSForecastSampler
+
+    fetcher = _make_fake_gfs_fetcher({
+        (40.75, -74.0): [("2026-05-03T12:00", 30.0)],
+    })
+    s = GFSForecastSampler(targets=[(40.71, -74.01)], fetcher=fetcher)
+    with pytest.raises(ValueError):
+        s.sample(40.71, -74.01, datetime(2026, 5, 3, 12, 0, 0))
+
+
+def test_gfs_forecast_handles_fetch_failure_gracefully() -> None:
+    """Network/HTTP failure mid-batch leaves the affected targets uncached;
+    .sample returns the no-data placeholder rather than raising."""
+    from generator.cloud import GFSForecastSampler
+
+    def failing_fetcher(url: str) -> Any:
+        raise RuntimeError("simulated network failure")
+
+    s = GFSForecastSampler(targets=[(40.71, -74.01)], fetcher=failing_fetcher)
+    r = s.sample(40.71, -74.01, datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC))
+    assert r.source == "gfs-forecast-no-data"
+
+
+def test_gfs_forecast_batches_above_100_targets() -> None:
+    """Targets > OPEN_METEO_BATCH_SIZE split into multiple HTTP calls."""
+    from generator.cloud import GFSForecastSampler
+
+    fetch_calls: list[str] = []
+
+    def counting_fetcher(url: str) -> Any:
+        fetch_calls.append(url)
+        # Parse the URL to know how many lats came in this batch
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(url).query)
+        lats_str = q["latitude"][0].split(",")
+        # Build matching response shape
+        items = [
+            {
+                "latitude": float(lats_str[i]),
+                "longitude": -74.0,
+                "hourly": {"time": ["2026-05-03T12:00"], "cloud_cover": [42.0]},
+            }
+            for i in range(len(lats_str))
+        ]
+        return items[0] if len(items) == 1 else items
+
+    # 150 unique targets → 2 batches (100 + 50)
+    targets = [(20.0 + 0.25 * i, -74.0) for i in range(150)]
+    GFSForecastSampler(targets=targets, fetcher=counting_fetcher)
+    assert len(fetch_calls) == 2

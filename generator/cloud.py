@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -616,3 +616,155 @@ class HimawariNICTSampler:
         cf = (brightness - HIMAWARI_NICT_BRIGHT_FLOOR) / HIMAWARI_NICT_BRIGHT_RANGE * 100.0
         cf = max(0.0, min(100.0, cf))
         return CloudSample(cloud_fraction=cf, sample_time=when, source="himawari-nict")
+
+
+# --------------------------------------------------------------------------
+# GFS Forecast sampler — forward cloud cover for pass-time planning.
+# --------------------------------------------------------------------------
+#
+# Source: Open-Meteo's free GFS endpoint (https://api.open-meteo.com/v1/gfs).
+# Same NOAA GFS data underneath the more-authoritative NOMADS GRIB2 path, but
+# pure HTTP+JSON — no eccodes/pygrib/cfgrib binary deps to break in the field
+# during an 8-month unattended run. The trade-off is a third-party CDN in the
+# path; if Open-Meteo ever has issues, ground-side support can swap to NOMADS
+# direct without changing the sampler's call shape.
+#
+# Cadence: GFS publishes every 6h (00/06/12/18 UTC) with hourly forecast
+# steps. Open-Meteo serves the latest run, so we get forecast horizon up to
+# ~16 days. We only ever care about the next 24-48 h.
+#
+# Free-tier limits: 10K calls/day, 5K/hour, 600/min. We hit ~24-72 calls/day
+# (one batch per 60-min tick × 1-3 batches for 137 targets), well inside.
+
+OPEN_METEO_GFS_BASE = "https://api.open-meteo.com/v1/gfs"
+# Cap targets per request so the URL stays under reasonable length limits
+# (servers + proxies typically tolerate up to 8 KB; 100 coords × ~14 chars =
+# ~1.4 KB per axis, safe).
+OPEN_METEO_BATCH_SIZE = 100
+OPEN_METEO_TIMEOUT_SECONDS = 30
+
+
+class GFSForecastSampler:
+    """Forecast cloud-fraction sampler for any (lat, lon, when).
+
+    Pre-fetches per-target forecast hourly time-series at construction time,
+    one batched HTTP call per 100 targets. Subsequent .sample() calls are
+    in-memory lookups — O(1) per pass scored.
+
+    The forecast horizon defaults to 48 hours so passes anywhere in the next
+    24 h fall comfortably inside the window. Target lat/lon mismatches with
+    the GFS 0.25° grid are < 14 km and tolerated silently.
+    """
+
+    def __init__(
+        self,
+        targets: list[tuple[float, float]],
+        forecast_days: int = 2,
+        fetcher: Any | None = None,
+    ):
+        if not targets:
+            self._by_coord: dict[tuple[float, float], list[tuple[datetime, float]]] = {}
+            return
+        if fetcher is None:
+            import requests
+
+            def _get(url: str) -> Any:
+                resp = requests.get(url, timeout=OPEN_METEO_TIMEOUT_SECONDS)
+                resp.raise_for_status()
+                return resp.json()
+
+            fetcher = _get
+
+        # Round target coords to the GFS grid step (0.25°) so duplicate
+        # nearby targets share a single forecast time-series. This also
+        # cuts batch size when many targets cluster (e.g., a city plus
+        # its airport).
+        rounded: list[tuple[float, float]] = []
+        seen: set[tuple[float, float]] = set()
+        for lat, lon in targets:
+            key = (round(lat * 4) / 4.0, round(lon * 4) / 4.0)
+            if key not in seen:
+                seen.add(key)
+                rounded.append(key)
+
+        self._by_coord = {}
+        for batch_start in range(0, len(rounded), OPEN_METEO_BATCH_SIZE):
+            batch = rounded[batch_start : batch_start + OPEN_METEO_BATCH_SIZE]
+            self._fetch_batch(batch, forecast_days, fetcher)
+
+    @staticmethod
+    def _build_url(
+        batch: list[tuple[float, float]], forecast_days: int
+    ) -> str:
+        lats = ",".join(f"{lat:.4f}" for lat, _ in batch)
+        lons = ",".join(f"{lon:.4f}" for _, lon in batch)
+        return (
+            f"{OPEN_METEO_GFS_BASE}?latitude={lats}&longitude={lons}"
+            f"&hourly=cloud_cover&forecast_days={forecast_days}"
+        )
+
+    def _fetch_batch(
+        self,
+        batch: list[tuple[float, float]],
+        forecast_days: int,
+        fetcher: Any,
+    ) -> None:
+        url = self._build_url(batch, forecast_days)
+        try:
+            payload = fetcher(url)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("GFS forecast fetch failed for %d targets: %s", len(batch), exc)
+            return
+
+        # Single-target requests return a dict; multi-target returns a list.
+        items = payload if isinstance(payload, list) else [payload]
+        if len(items) != len(batch):
+            log.warning(
+                "GFS forecast: requested %d targets, got %d back; truncating",
+                len(batch), len(items),
+            )
+        for (lat, lon), item in zip(batch, items, strict=False):
+            try:
+                hourly = item.get("hourly") or {}
+                times = hourly.get("time") or []
+                covers = hourly.get("cloud_cover") or []
+            except (AttributeError, TypeError):
+                continue
+            series: list[tuple[datetime, float]] = []
+            for t_str, cf in zip(times, covers, strict=False):
+                if cf is None:
+                    continue
+                try:
+                    # Open-Meteo defaults to UTC ISO8601 without timezone suffix
+                    dt = datetime.fromisoformat(t_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=UTC)
+                    series.append((dt, float(cf)))
+                except (ValueError, TypeError):
+                    continue
+            self._by_coord[(lat, lon)] = series
+
+    def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
+        """Return forecast cloud-fraction at the hour bucket containing `when`.
+
+        Snaps lat/lon to the nearest 0.25° grid cell to match the cache key.
+        Returns a "gfs-forecast-no-data" placeholder if the target wasn't in
+        the pre-fetched batch (defensive — should not happen in normal use).
+        """
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+        key = (round(lat * 4) / 4.0, round(lon * 4) / 4.0)
+        series = self._by_coord.get(key)
+        if not series:
+            return CloudSample(50.0, when, "gfs-forecast-no-data")
+        # Floor `when` to the hour, then find the matching forecast step.
+        target_hour = when.replace(minute=0, second=0, microsecond=0)
+        for dt, cf in series:
+            if dt == target_hour:
+                return CloudSample(
+                    cloud_fraction=max(0.0, min(100.0, cf)),
+                    sample_time=when,
+                    source="gfs-forecast",
+                )
+        # `when` is past the forecast horizon — surface honestly.
+        return CloudSample(50.0, when, "gfs-forecast-out-of-horizon")

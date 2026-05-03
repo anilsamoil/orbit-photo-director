@@ -272,13 +272,47 @@ main {
 
 /* View toggle: each view-* class hides everything BUT the active pane.
  * We pair each "view" with the panes that should be hidden in that state. */
+.view-queue #upcoming-pane,
 .view-queue #map-pane,
 .view-queue #log-pane,
+.view-upcoming #queue-pane,
+.view-upcoming #map-pane,
+.view-upcoming #log-pane,
 .view-map #queue-pane,
+.view-map #upcoming-pane,
 .view-map #log-pane,
 .view-log #queue-pane,
+.view-log #upcoming-pane,
 .view-log #map-pane {
   display: none;
+}
+
+/* Upcoming pane (forecast-scored next 24 h) */
+.upcoming-header {
+  max-width: 720px;
+  margin: 0 auto 1rem;
+}
+.upcoming-title {
+  margin: 0 0 0.2rem 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.upcoming-sub {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+/* Forecast cards have a softer accent so the user can tell observed-now
+ * (Queue) from forecast-later (Upcoming) at a glance. */
+.card.forecast .card-countdown {
+  color: var(--yellow);
+}
+.card.forecast .tag.forecast-tag {
+  color: var(--yellow);
+  border-color: rgba(255, 206, 77, 0.35);
+  background: rgba(255, 206, 77, 0.08);
+  font-weight: 600;
 }
 
 /* Log pane */

@@ -8,11 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_TICK_MINUTES = 60  # 1h — geostationary IR refreshes every 10-15 min upstream
-DEFAULT_PASS_WINDOW_HOURS = 6
+DEFAULT_PASS_WINDOW_HOURS = 24  # 1 full day so the Upcoming view can plan tonight + tomorrow
 DEFAULT_TLE_CACHE_TTL_HOURS = 1
 DEFAULT_CLOUD_CACHE_TTL_MINUTES = 55
 DEFAULT_TOP_QUEUE = 5
 DEFAULT_TOP_MAP = 25
+DEFAULT_TOP_UPCOMING = 10
+# Passes within this horizon use observed cloud sources (MODIS / GOES-IR /
+# Himawari). Beyond it, observation is irrelevant — the GFS forecast governs.
+OBSERVED_CLOUD_HORIZON_MINUTES = 90
 
 # Pass detection
 PASS_SAMPLE_STEP_SECONDS = 30

@@ -24,6 +24,7 @@ from .cloud import (
     CloudSample,
     CloudSampler,
     GeostationaryIRSampler,
+    GFSForecastSampler,
     GIBSCloudSampler,
     HimawariNICTSampler,
     MockCloudSampler,
@@ -36,6 +37,8 @@ from .cloud import (
 from .config import (
     DEFAULT_TOP_MAP,
     DEFAULT_TOP_QUEUE,
+    DEFAULT_TOP_UPCOMING,
+    OBSERVED_CLOUD_HORIZON_MINUTES,
     PASS_MAX_DISTANCE_KM,
     PASS_SAMPLE_STEP_SECONDS,
     Settings,
@@ -249,6 +252,10 @@ def score_pass_for_target(
     pass_obj: Any,
     sampler: CloudSampler,
     tle_freshness: float,
+    *,
+    forecast_sampler: CloudSampler | None = None,
+    now: datetime | None = None,
+    observed_horizon_minutes: float = OBSERVED_CLOUD_HORIZON_MINUTES,
 ) -> dict[str, Any]:
     when = pass_obj.closest_approach
     iss = pass_obj.iss_position
@@ -260,7 +267,17 @@ def score_pass_for_target(
         pass_obj.target_lat, pass_obj.target_lon,
         iss.lat, iss.lon,
     )
-    sample = sampler.sample(pass_obj.target_lat, pass_obj.target_lon, when)
+    # Pick observed sampler for imminent passes (<= horizon); forecast for
+    # everything beyond. Observed cloud is irrelevant for a pass 6h from now;
+    # forecast is the only signal that makes sense.
+    use_forecast = (
+        forecast_sampler is not None
+        and now is not None
+        and (when - now).total_seconds() / 60.0 > observed_horizon_minutes
+    )
+    chosen = forecast_sampler if use_forecast else sampler
+    assert chosen is not None  # forecast_sampler only None when use_forecast is False
+    sample = chosen.sample(pass_obj.target_lat, pass_obj.target_lon, when)
     obs = assess_obstruction(sample, glint)
 
     p_unobs_adjusted = obs.p_unobstructed * tle_freshness
@@ -327,14 +344,27 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
     fresh = freshness_factor(age_h)
     log.info("TLE epoch=%s age=%.1fh freshness=%.2f", utcnow_iso(tle.epoch), age_h, fresh)
 
-    # 2. Cloud sampler
+    # 2. Cloud sampler (observed: MODIS / GOES-IR / Himawari)
     sampler, composite_hour, source_label = select_cloud_sampler(settings, n)
 
     # 3. Targets
     targets = load_targets(settings.targets_file)
     log.info("loaded %d targets", len(targets))
 
-    # 4. Find + score passes
+    # 4. Forecast cloud sampler (GFS via Open-Meteo) — covers passes >90min
+    # ahead where observed cloud is irrelevant. Pre-fetches all target
+    # forecasts in batched HTTP calls so per-pass scoring is O(1) lookup.
+    # If the fetch fails, downstream passes get "gfs-forecast-no-data" and
+    # the tick keeps going.
+    forecast_sampler: GFSForecastSampler | None = None
+    try:
+        target_coords = [(t["geom"]["lat"], t["geom"]["lon"]) for t in targets]
+        forecast_sampler = GFSForecastSampler(target_coords)
+        log.info("GFS forecast sampler ready for %d targets", len(target_coords))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("GFS forecast init failed (%s); upcoming passes will use fallback", exc)
+
+    # 5. Find + score passes
     window_end = n + timedelta(hours=settings.pass_window_hours)
     all_passes: list[dict[str, Any]] = []
     for target in targets:
@@ -347,7 +377,11 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
             max_distance_km=PASS_MAX_DISTANCE_KM,
         )
         for p in passes:
-            all_passes.append(score_pass_for_target(target, p, sampler, fresh))
+            all_passes.append(score_pass_for_target(
+                target, p, sampler, fresh,
+                forecast_sampler=forecast_sampler,
+                now=n,
+            ))
     log.info("found %d passes across %d targets", len(all_passes), len(targets))
 
     # 5. Write versioned artifacts
@@ -365,6 +399,19 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
 
     top25 = top_n(all_passes, DEFAULT_TOP_MAP)
 
+    # Upcoming view: top forecast-scored passes spanning the full pass window
+    # (defaults to 24h). Excludes the next-90-min passes already in `next_90`
+    # so the two views don't double up.
+    upcoming = sorted(
+        [
+            p for p in all_passes
+            if (datetime.fromisoformat(p["closest_approach"].replace("Z", "+00:00")) - n)
+                >= timedelta(minutes=OBSERVED_CLOUD_HORIZON_MINUTES)
+        ],
+        key=lambda p: p["score"],
+        reverse=True,
+    )[:DEFAULT_TOP_UPCOMING]
+
     # Polynomial covers 120 min so the frontend's +90 min lookahead button
     # has data even at the end of a tick interval (tick_minutes is 60 by
     # default; polynomial duration is decoupled from refresh cadence).
@@ -380,12 +427,15 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
     #   geo-ir-{tag}    (GOES-East/-West IR converted via brightness threshold)
     #   himawari-nict   (NICT Himawari true-color RGB; daytime Asia/W.Pacific only)
     #   satcorps        (SatCORPS NetCDF when wired up)
+    #   gfs-forecast    (GFS forecast for passes >90 min ahead — different
+    #                   confidence band but still a real signal, not a guess)
     observed_count = sum(
         1 for p in all_passes
         if p["cloud_source"] == "gibs"
         or p["cloud_source"].startswith("geo-ir-")
         or p["cloud_source"] == "himawari-nict"
         or p["cloud_source"] == "satcorps"
+        or p["cloud_source"] == "gfs-forecast"
     )
     status_data = {
         "last_run": utcnow_iso(n),
@@ -404,6 +454,7 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
 
     (v_dir / "passes.json").write_text(json.dumps(top25, indent=2))
     (v_dir / "top5.json").write_text(json.dumps(next_90, indent=2))
+    (v_dir / "top_24h.json").write_text(json.dumps(upcoming, indent=2))
     (v_dir / "track.json").write_text(json.dumps(track_data, indent=2))
     (v_dir / "status.json").write_text(json.dumps(status_data, indent=2))
 
@@ -423,6 +474,7 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
         artifacts={
             "passes": v_dir / "passes.json",
             "top5": v_dir / "top5.json",
+            "top_24h": v_dir / "top_24h.json",
             "track": v_dir / "track.json",
             "status": v_dir / "status.json",
             "targets": v_dir / "targets.json",

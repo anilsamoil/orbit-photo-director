@@ -134,6 +134,41 @@ describe('renderCard', () => {
     );
     expect(el.querySelector('.tag.obs-noobs')).toBeNull();
   });
+
+  it('forecast variant: applies forecast class, omits Shoot/Skip, shows tag', () => {
+    const el = renderCard(
+      samplePass({ cloud_source: 'gfs-forecast' }),
+      NOW, false, () => undefined,
+      'forecast',
+    );
+    expect(el.classList.contains('forecast')).toBe(true);
+    expect(el.querySelector('.btn-shoot')).toBeNull();
+    expect(el.querySelector('.btn-skip')).toBeNull();
+    expect(el.querySelector('.tag.forecast-tag')?.textContent).toContain('forecast');
+  });
+
+  it('observed variant: shows Shoot/Skip and no forecast tag for non-forecast source', () => {
+    const el = renderCard(
+      samplePass({ cloud_source: 'gibs' }),
+      NOW, false, () => undefined,
+      'observed',
+    );
+    expect(el.classList.contains('forecast')).toBe(false);
+    expect(el.querySelector('.btn-shoot')).toBeTruthy();
+    expect(el.querySelector('.btn-skip')).toBeTruthy();
+    expect(el.querySelector('.tag.forecast-tag')).toBeNull();
+  });
+
+  it('marks gfs-forecast cloud source with forecast tag even in observed variant', () => {
+    // If a stale or boundary case ships gfs-forecast in the immediate queue,
+    // still tag it so the user knows the source.
+    const el = renderCard(
+      samplePass({ cloud_source: 'gfs-forecast' }),
+      NOW, false, () => undefined,
+      'observed',
+    );
+    expect(el.querySelector('.tag.forecast-tag')).toBeTruthy();
+  });
 });
 
 describe('renderCards', () => {

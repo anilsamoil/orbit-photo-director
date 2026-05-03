@@ -31,6 +31,15 @@ export async function fetchTop5(manifest: Manifest, baseUrl = ''): Promise<PassE
   return fetchArtifact<PassEntry[]>(manifest, 'top5', baseUrl);
 }
 
+/** Top forecast-scored passes for the next ~24 h, excluding ones already in
+ *  top5 (the immediate-now queue). Newer manifests (v1.1+) include this; older
+ *  ones won't. Returns an empty array if the artifact is missing — callers
+ *  should treat absence as "nothing to render," not an error. */
+export async function fetchTop24h(manifest: Manifest, baseUrl = ''): Promise<PassEntry[]> {
+  if (!manifest.artifacts.top_24h) return [];
+  return fetchArtifact<PassEntry[]>(manifest, 'top_24h', baseUrl);
+}
+
 export async function fetchPasses(manifest: Manifest, baseUrl = ''): Promise<PassEntry[]> {
   return fetchArtifact<PassEntry[]>(manifest, 'passes', baseUrl);
 }

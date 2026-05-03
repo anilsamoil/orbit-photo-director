@@ -19,6 +19,7 @@
       </div>
       <nav class="tabs">
         <button id="tab-queue" class="tab active" type="button">Queue</button>
+        <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
         <button id="tab-map" class="tab" type="button">Map</button>
         <button id="tab-log" class="tab" type="button">Log</button>
       </nav>
@@ -28,6 +29,15 @@
       <section id="queue-pane" class="pane">
         <div id="cards" class="cards" aria-live="polite"></div>
         <div id="empty" class="empty" hidden>No passes in the next 90 minutes.</div>
+      </section>
+
+      <section id="upcoming-pane" class="pane">
+        <div class="upcoming-header">
+          <h2 class="upcoming-title">Next 24 hours</h2>
+          <p class="upcoming-sub">Forecast-scored. GFS cloud cover for each pass time.</p>
+        </div>
+        <div id="upcoming-cards" class="cards" aria-live="polite"></div>
+        <div id="upcoming-empty" class="empty" hidden>No upcoming passes in the next 24 hours.</div>
       </section>
 
       <section id="map-pane" class="pane">

@@ -11,7 +11,7 @@ import { bannerError, bannerFromManifest, bannerLoading } from './banner';
 import { buildPayload, clearToken, drainQueue, getToken, postCalib, setToken } from './calib';
 import type { BannerState } from './banner';
 import type { Manifest, PassEntry } from './types';
-import { fetchManifest, fetchTop5 } from './manifest';
+import { fetchManifest, fetchTop24h, fetchTop5 } from './manifest';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
@@ -19,6 +19,7 @@ const REFRESH_MS = 60_000;
 
 let currentManifest: Manifest | null = null;
 let currentTop5: PassEntry[] = [];
+let currentTop24h: PassEntry[] = [];
 let refreshTimer: number | null = null;
 
 function setBanner(state: BannerState): void {
@@ -39,8 +40,12 @@ async function refresh(): Promise<void> {
   try {
     const manifest = await fetchManifest();
     currentManifest = manifest;
-    const top5 = await fetchTop5(manifest);
+    const [top5, top24h] = await Promise.all([
+      fetchTop5(manifest),
+      fetchTop24h(manifest),
+    ]);
     currentTop5 = top5;
+    currentTop24h = top24h;
 
     const cards = document.getElementById('cards');
     const empty = document.getElementById('empty');
@@ -57,19 +62,39 @@ async function refresh(): Promise<void> {
       renderCards(cards, top5, now, stale, onCardAction);
     }
 
+    // Render Upcoming pane too — uses forecast variant.
+    renderUpcoming(now, stale);
+
     setBanner(bannerFromManifest(manifest.generated_at, manifest.freshness.ok, now));
   } catch (e) {
     setBanner(bannerError((e as Error).message));
   }
 }
 
+function renderUpcoming(nowMs: number, stale: boolean): void {
+  const cards = document.getElementById('upcoming-cards');
+  const empty = document.getElementById('upcoming-empty');
+  if (!cards || !empty) return;
+  if (currentTop24h.length === 0) {
+    cards.replaceChildren();
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+  renderCards(cards, currentTop24h, nowMs, stale, onCardAction, 'forecast');
+}
+
 function rerenderCountdowns(): void {
-  if (!currentManifest || currentTop5.length === 0) return;
-  const cards = document.getElementById('cards');
-  if (!cards) return;
+  if (!currentManifest) return;
   const now = Date.now();
   const stale = isStaleManifest(currentManifest, now);
-  renderCards(cards, currentTop5, now, stale, onCardAction);
+  if (currentTop5.length > 0) {
+    const cards = document.getElementById('cards');
+    if (cards) renderCards(cards, currentTop5, now, stale, onCardAction);
+  }
+  if (currentTop24h.length > 0) {
+    renderUpcoming(now, stale);
+  }
   setBanner(bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now));
 }
 
@@ -91,16 +116,18 @@ async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<voi
 function bindTabs(): void {
   const view = document.getElementById('view');
   const tabQueue = document.getElementById('tab-queue');
+  const tabUpcoming = document.getElementById('tab-upcoming');
   const tabMap = document.getElementById('tab-map');
   const tabLog = document.getElementById('tab-log');
-  if (!view || !tabQueue || !tabMap || !tabLog) return;
+  if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLog) return;
 
   const setActive = (className: string, activeTab: HTMLElement) => {
     view.className = className;
-    [tabQueue, tabMap, tabLog].forEach((t) => t.classList.toggle('active', t === activeTab));
+    [tabQueue, tabUpcoming, tabMap, tabLog].forEach((t) => t.classList.toggle('active', t === activeTab));
   };
 
   tabQueue.addEventListener('click', () => setActive('view-queue', tabQueue));
+  tabUpcoming.addEventListener('click', () => setActive('view-upcoming', tabUpcoming));
   tabMap.addEventListener('click', () => {
     void loadMapPane();
     setActive('view-map', tabMap);
