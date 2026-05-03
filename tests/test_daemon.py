@@ -127,41 +127,49 @@ def test_deploy_returns_false_on_nonzero_exit(settings_in_tmp: Settings) -> None
     """Deploy script exits non-zero → returns False, logs stderr tail."""
     script = settings_in_tmp.repo_root / "scripts"
     script.mkdir(parents=True, exist_ok=True)
-    (script / "deploy.sh").write_text("#!/bin/bash\nexit 1\n")
+    (script / "deploy.sh").write_text("#!/bin/bash\necho 'boom' >&2\nexit 1\n")
+    (script / "deploy.sh").chmod(0o755)
     os.environ.pop("OPD_SKIP_DEPLOY", None)
     os.environ.pop("OPD_DEPLOY_SCRIPT", None)
     with patch("generator.daemon.shutil.which", return_value="/usr/bin/rclone"):
-        fake_proc = MagicMock(returncode=1, stdout="", stderr="boom")
-        with patch("generator.daemon.subprocess.run", return_value=fake_proc):
-            assert deploy_to_r2(settings_in_tmp) is False
+        # Real subprocess: bash runs the script, exits 1, deploy returns False.
+        assert deploy_to_r2(settings_in_tmp, timeout_seconds=5) is False
 
 
 def test_deploy_returns_false_on_timeout(settings_in_tmp: Settings) -> None:
-    """Subprocess timeout → return False, log error (no exception escapes)."""
+    """Subprocess timeout → killpg the process group, return False (no hang).
+
+    Verifies the new Popen + thread-drain + killpg path: a `sleep 30`
+    child under the test's 1s timeout is SIGTERM'd within the grace period
+    and the function returns False quickly. This is the behavior we lost
+    with subprocess.run (its cleanup can wedge on stuck pipe writers).
+    """
     script = settings_in_tmp.repo_root / "scripts"
     script.mkdir(parents=True, exist_ok=True)
-    (script / "deploy.sh").write_text("#!/bin/bash\nsleep 999\n")
+    (script / "deploy.sh").write_text("#!/bin/bash\nsleep 30\n")
+    (script / "deploy.sh").chmod(0o755)
     os.environ.pop("OPD_SKIP_DEPLOY", None)
     os.environ.pop("OPD_DEPLOY_SCRIPT", None)
+    import time as _time
     with patch("generator.daemon.shutil.which", return_value="/usr/bin/rclone"):
-        with patch(
-            "generator.daemon.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="bash", timeout=1),
-        ):
-            assert deploy_to_r2(settings_in_tmp) is False
+        start = _time.monotonic()
+        result = deploy_to_r2(settings_in_tmp, timeout_seconds=1)
+        elapsed = _time.monotonic() - start
+    assert result is False
+    # Should kill within ~1s timeout + ~5s grace; far below the 30s sleep.
+    assert elapsed < 15.0, f"deploy_to_r2 took {elapsed:.1f}s — kill path is wedged"
 
 
 def test_deploy_succeeds_on_zero_exit(settings_in_tmp: Settings) -> None:
     """Happy path: deploy script returns 0 → True."""
     script = settings_in_tmp.repo_root / "scripts"
     script.mkdir(parents=True, exist_ok=True)
-    (script / "deploy.sh").write_text("#!/bin/bash\nexit 0\n")
+    (script / "deploy.sh").write_text("#!/bin/bash\necho 'ok'\nexit 0\n")
+    (script / "deploy.sh").chmod(0o755)
     os.environ.pop("OPD_SKIP_DEPLOY", None)
     os.environ.pop("OPD_DEPLOY_SCRIPT", None)
     with patch("generator.daemon.shutil.which", return_value="/usr/bin/rclone"):
-        fake_proc = MagicMock(returncode=0, stdout="ok", stderr="")
-        with patch("generator.daemon.subprocess.run", return_value=fake_proc):
-            assert deploy_to_r2(settings_in_tmp) is True
+        assert deploy_to_r2(settings_in_tmp, timeout_seconds=5) is True
 
 
 def test_deploy_wrangler_script_does_not_require_rclone(
@@ -171,10 +179,9 @@ def test_deploy_wrangler_script_does_not_require_rclone(
     script = settings_in_tmp.repo_root / "scripts"
     script.mkdir(parents=True, exist_ok=True)
     (script / "deploy_wrangler.sh").write_text("#!/bin/bash\nexit 0\n")
+    (script / "deploy_wrangler.sh").chmod(0o755)
     with patch.dict(os.environ, {"OPD_DEPLOY_SCRIPT": "scripts/deploy_wrangler.sh"}, clear=False):
         os.environ.pop("OPD_SKIP_DEPLOY", None)
         with patch("generator.daemon.shutil.which", return_value=None):
-            fake_proc = MagicMock(returncode=0, stdout="ok", stderr="")
-            with patch("generator.daemon.subprocess.run", return_value=fake_proc):
-                assert deploy_to_r2(settings_in_tmp) is True
+            assert deploy_to_r2(settings_in_tmp, timeout_seconds=5) is True
 

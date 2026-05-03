@@ -93,8 +93,12 @@ def fetch_tle(
         resp = requests.get(url, timeout=15)
         resp.raise_for_status()
         text = resp.text
-        cache_path.write_text(text)
+        # Parse FIRST. If the upstream returned a CDN error page or HTML
+        # captured as 200, TLE.from_text raises and we fall through to the
+        # cached copy below. Writing the cache BEFORE parsing would replace
+        # our last good TLE with garbage.
         new_tle = TLE.from_text(text)
+        cache_path.write_text(text)
         if detect_reboost(prior, new_tle):
             log.warning(
                 "ISS reboost detected: TLE epoch advanced from %s to %s "

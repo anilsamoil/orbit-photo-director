@@ -16,6 +16,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .config import Settings
 from .main import run_tick
@@ -109,30 +110,88 @@ def deploy_to_r2(
 
     # subprocess: deploy script path is built from settings.repo_root (trusted) +
     # a constant relative path. No user-supplied input enters the argv.
+    #
+    # Why Popen + thread-drain instead of subprocess.run(timeout=...):
+    # subprocess.run's cleanup can hang past the timeout if the child has
+    # stuck pipe writers (the OpenClaw daemon hit this exact pattern — wedge
+    # for hours). We explicitly kill the process group on timeout and drain
+    # output through threads so neither side can block forever.
     argv = ["bash", str(script)]  # noqa: S607
+    return _run_subprocess_with_kill_on_timeout(
+        argv, cwd=settings.repo_root, timeout=timeout_seconds, label="deploy"
+    )
+
+
+def _run_subprocess_with_kill_on_timeout(
+    argv: list[str], *, cwd: Path, timeout: int, label: str
+) -> bool:
+    """Run argv, kill its process group on timeout, drain output via threads.
+
+    Returns True on rc=0, False on any failure (timeout, non-zero rc, exception).
+    """
+    import os
+    proc: subprocess.Popen[str] | None = None
+    out_lines: list[str] = []
+    err_lines: list[str] = []
+
+    def _drain(stream: Any, sink: list[str]) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                sink.append(line)
+                if len(sink) > 500:  # cap memory; keep last 500 lines
+                    del sink[: len(sink) - 500]
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
-        proc = subprocess.run(  # noqa: S603
+        proc = subprocess.Popen(  # noqa: S603
             argv,
-            cwd=settings.repo_root,
-            timeout=timeout_seconds,
-            capture_output=True,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
+            start_new_session=True,  # own process group → killpg works
         )
-    except subprocess.TimeoutExpired:
-        log.error("deploy timed out after %ds", timeout_seconds)
-        return False
+        out_thread = threading.Thread(target=_drain, args=(proc.stdout, out_lines), daemon=True)
+        err_thread = threading.Thread(target=_drain, args=(proc.stderr, err_lines), daemon=True)
+        out_thread.start()
+        err_thread.start()
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            log.error("%s timed out after %ds; killing process group", label, timeout)
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                # Brief grace period before SIGKILL
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait(timeout=5)
+            except (ProcessLookupError, PermissionError) as kill_exc:
+                log.warning("%s killpg failed: %s", label, kill_exc)
+            return False
+        finally:
+            # Give drainers a moment to flush; they're daemon threads so they
+            # die with the process if they don't finish.
+            out_thread.join(timeout=2)
+            err_thread.join(timeout=2)
+        if rc != 0:
+            log.error(
+                "%s failed (rc=%d); stdout=%s stderr=%s",
+                label, rc, "".join(out_lines)[-500:], "".join(err_lines)[-500:],
+            )
+            return False
+        log.info("%s ok", label)
+        return True
     except Exception:  # noqa: BLE001
-        log.exception("deploy raised unexpectedly")
+        log.exception("%s raised unexpectedly", label)
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
         return False
-    if proc.returncode != 0:
-        log.error(
-            "deploy failed (rc=%d); stdout=%s stderr=%s",
-            proc.returncode, proc.stdout[-500:], proc.stderr[-500:],
-        )
-        return False
-    log.info("deploy ok")
-    return True
 
 
 def supervisor_loop(settings: Settings, *, max_iterations: int | None = None) -> None:
@@ -169,8 +228,13 @@ def supervisor_loop(settings: Settings, *, max_iterations: int | None = None) ->
         try:
             time.sleep(sleep_s)
         except KeyboardInterrupt:
-            log.info("supervisor interrupted; exiting")
-            return
+            # The stall watchdog ALSO raises SIGINT to break a stuck tick. If
+            # we swallow that and return cleanly, launchd's KeepAlive (which
+            # restarts on Crashed=true / SuccessfulExit=false) won't bring the
+            # daemon back. Re-raise so main() exits non-zero and launchd
+            # treats it as a crash.
+            log.info("supervisor interrupted; exiting non-zero so launchd restarts")
+            raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,7 +243,13 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     settings = Settings.from_env()
-    supervisor_loop(settings)
+    try:
+        supervisor_loop(settings)
+    except KeyboardInterrupt:
+        return 130  # standard SIGINT exit code; non-zero so launchd restarts
+    except Exception:
+        log.exception("supervisor crashed")
+        return 1
     return 0
 
 
