@@ -360,15 +360,36 @@ GEO_IR_LAYERS = (
     # Each entry: (GIBS layer name, satellite nominal lon, source-tag suffix)
     ("GOES-East_ABI_Band13_Clean_Infrared", -75.0, "goes-e"),
     ("GOES-West_ABI_Band13_Clean_Infrared", -137.0, "goes-w"),
-    # Himawari was originally here but GIBS reprojects it incorrectly at zoom 0
-    # (data lands at wrong longitudes; Asian targets get no coverage). At zoom 1
-    # the dateline-wrap tile returns HTTP 400. V2: fetch from JAXA Himawari
-    # real-time API directly (different format, different code path).
-    # Meteosat (lon ~0) isn't on GIBS at all; V2 via EUMETSAT WMS endpoint.
-    # V1 gap: Asia (~lon 60-180), Europe + Africa (~lon -10 to 60). MODIS
-    # Aqua+Terra Day+Night fills these when its passes overlap; otherwise the
-    # cards mark "no observation" honestly.
+    # GIBS Himawari is broken (zoom 0 reprojects to wrong longitudes; zoom 1
+    # dateline tile is HTTP 400). HimawariNICTSampler below replaces it for
+    # daytime Asia/W.Pacific coverage. Meteosat (Africa/Europe) is still
+    # unfilled — V2 work via EUMETSAT.
 )
+
+
+# --- Himawari via NICT real-time true-color tiles (Asia/W.Pacific gap-filler) ---
+# NICT publishes the JMA Himawari-9 imagery as zoomable PNG tiles, no auth, every
+# 10 minutes. We use the 2d zoom level (2x2 grid of 550px tiles → 1100x1100 px
+# coverage of the Himawari disk). It is true-color RGB, not IR — useful only on
+# the daylight half. Night pixels are near-black and we surface "no-obs" so the
+# CombinedCloudSampler falls through cleanly.
+HIMAWARI_NICT_BASE = "https://himawari8-dl.nict.go.jp/himawari8/img/D531106"
+HIMAWARI_NICT_LEVEL = 2  # "2d" in the URL — 2x2 tile grid
+HIMAWARI_NICT_TILE_PX = 550
+# Coverage of the stitched 2x2 image. Approximate plate-carrée bounds; the
+# Himawari disk is centered at sub-satellite (0°, 140.7°E) and extends ~80° in
+# each direction. NICT's level-2 tile grid maps:
+#   (0,0)=NW, (1,0)=NE, (0,1)=SW, (1,1)=SE
+HIMAWARI_NICT_LAT_N = 60.0
+HIMAWARI_NICT_LAT_S = -60.0
+HIMAWARI_NICT_LON_W = 60.0    # eastern hemisphere edge
+HIMAWARI_NICT_LON_E = 220.0   # = -140°W (across dateline, expressed unwrapped)
+HIMAWARI_NICT_NIGHT_THRESHOLD = 25  # avg-RGB below this → night / off-disk
+# Brightness → cloud-fraction heuristic. Roughly: ocean/clear ≈ 40-80, cloud ≈
+# 150-250. Linear map past the night cutoff. Coarser than IR but the calibration
+# loop will refine over the mission. V2 swaps in proper RGB→cloud-mask classifier.
+HIMAWARI_NICT_BRIGHT_FLOOR = 50.0
+HIMAWARI_NICT_BRIGHT_RANGE = 150.0  # 50→cf=0, 200→cf=100
 
 
 def _ir_pixel_to_cloud_fraction(ir_byte: int) -> float:
@@ -466,3 +487,132 @@ class GeostationaryIRSampler:
         return CloudSample(
             cloud_fraction=50.0, sample_time=when, source="geo-ir-no-coverage"
         )
+
+
+# --------------------------------------------------------------------------
+# Himawari real-time tiles via NICT — daytime Asia / Western-Pacific filler.
+# --------------------------------------------------------------------------
+
+
+def _himawari_nict_timestamp(when: datetime) -> str:
+    """Floor `when` to the nearest 10-min mark and format as NICT-path components.
+
+    NICT publishes a new image every 10 minutes; the path is
+    `.../{Y}/{M}/{D}/HHMMSS_x_y.png` with HH:MM aligned to a 10-min boundary
+    and SS=00.
+    """
+    if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+        raise ValueError("when must be UTC-aware")
+    minute = (when.minute // 10) * 10
+    floored = when.replace(minute=minute, second=0, microsecond=0)
+    return floored.strftime("%Y/%m/%d/%H%M00")
+
+
+def _himawari_nict_url(time_path: str, x: int, y: int) -> str:
+    return (
+        f"{HIMAWARI_NICT_BASE}/{HIMAWARI_NICT_LEVEL}d/{HIMAWARI_NICT_TILE_PX}/"
+        f"{time_path}_{x}_{y}.png"
+    )
+
+
+class HimawariNICTSampler:
+    """Sample cloud cover over Asia/W.Pacific from NICT's Himawari-9 tile service.
+
+    DAYTIME ONLY. The NICT product is RGB true-color; at night pixels are
+    near-black and we surface "himawari-night" so the upstream CombinedCloudSampler
+    can fall through. Coverage area is the Himawari disk: roughly
+    60°N–60°S × 60°E–140°W (across the dateline).
+
+    Uses zoom level 2 (2×2 = 4 tiles × 550 px = 1100 px stitched). One refresh
+    is ~4 PNGs × 30–80 KB ≈ 250 KB. Upstream cadence is 10 min.
+
+    Why true-color and not IR? GIBS Himawari is broken (mis-projected) and the
+    JMA IR endpoints either require auth or 404. NICT's true-color is the
+    most reliable public option that fills the daytime Asia gap. Calibration
+    will tune the brightness→cf heuristic.
+    """
+
+    def __init__(self, when: datetime, fetcher: Any | None = None):
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+        self._when = when
+        # NICT occasionally drops a 10-min slot. Step back up to 60 min in 10-min
+        # increments looking for a complete 4-tile set. Initial offset of 20 min
+        # avoids racing the publisher's most recent slot.
+        last_exc: Exception | None = None
+        for offset_min in (20, 30, 40, 50, 60, 70):
+            try:
+                self._stitched = self._fetch_stitched(
+                    when - timedelta(minutes=offset_min), fetcher=fetcher
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                log.info(
+                    "Himawari NICT slot at -%d min unavailable (%s); trying older",
+                    offset_min,
+                    exc,
+                )
+        raise RuntimeError(
+            f"Himawari NICT: no usable slot in last 70 min (last error: {last_exc})"
+        )
+
+    @classmethod
+    def _fetch_stitched(
+        cls, when: datetime, *, fetcher: Any | None = None
+    ) -> Any:
+        """Fetch all 4 tiles for the floored 10-min mark and stitch into a 2D RGB array."""
+        from io import BytesIO
+
+        import numpy as np
+        from PIL import Image
+
+        if fetcher is None:
+            import requests
+
+            def _get(url: str) -> bytes:
+                resp = requests.get(url, timeout=20)
+                resp.raise_for_status()
+                return resp.content
+
+            fetcher = _get
+
+        time_path = _himawari_nict_timestamp(when)
+        n = HIMAWARI_NICT_LEVEL  # 2x2 grid
+        rows = []
+        for y in range(n):
+            row_tiles = []
+            for x in range(n):
+                tile_bytes = fetcher(_himawari_nict_url(time_path, x, y))
+                tile = np.asarray(Image.open(BytesIO(tile_bytes)).convert("RGB"))
+                row_tiles.append(tile)
+            rows.append(np.concatenate(row_tiles, axis=1))
+        return np.concatenate(rows, axis=0)
+
+    def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+
+        # Outside the Himawari disk → no coverage.
+        # Normalize lon into the unwrapped 60..220 frame: e.g., -120 → 240, -150 → 210.
+        unwrapped = lon if lon >= HIMAWARI_NICT_LON_W else lon + 360.0
+        if not (HIMAWARI_NICT_LAT_S <= lat <= HIMAWARI_NICT_LAT_N):
+            return CloudSample(50.0, when, "himawari-no-coverage")
+        if not (HIMAWARI_NICT_LON_W <= unwrapped <= HIMAWARI_NICT_LON_E):
+            return CloudSample(50.0, when, "himawari-no-coverage")
+
+        h, w = self._stitched.shape[:2]
+        # Plate-carrée mapping: lat decreases top→bottom, lon increases left→right.
+        row = int(round((HIMAWARI_NICT_LAT_N - lat) / (HIMAWARI_NICT_LAT_N - HIMAWARI_NICT_LAT_S) * (h - 1)))
+        col = int(round((unwrapped - HIMAWARI_NICT_LON_W) / (HIMAWARI_NICT_LON_E - HIMAWARI_NICT_LON_W) * (w - 1)))
+        row = max(0, min(h - 1, row))
+        col = max(0, min(w - 1, col))
+
+        pixel = self._stitched[row, col]
+        brightness = (int(pixel[0]) + int(pixel[1]) + int(pixel[2])) / 3.0
+        if brightness < HIMAWARI_NICT_NIGHT_THRESHOLD:
+            return CloudSample(50.0, when, "himawari-night")
+
+        cf = (brightness - HIMAWARI_NICT_BRIGHT_FLOOR) / HIMAWARI_NICT_BRIGHT_RANGE * 100.0
+        cf = max(0.0, min(100.0, cf))
+        return CloudSample(cloud_fraction=cf, sample_time=when, source="himawari-nict")

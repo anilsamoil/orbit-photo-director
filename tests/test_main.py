@@ -107,10 +107,13 @@ def test_run_tick_track_includes_polynomial(settings_in_tmp: Settings, cached_tl
     v_dir = settings_in_tmp.out_dir / "v" / "20241017T120000Z"
     track = json.loads((v_dir / "track.json").read_text())
     poly = track["iss_polynomial"]
-    assert len(poly["lat_coeffs"]) == 6
-    assert len(poly["lon_coeffs"]) == 6
+    # Polynomial covers 120 min so the frontend's +90 min lookahead has data.
+    # Order 11 → 12 coefficients (see _polynomial_order_for_window).
+    assert len(poly["lat_coeffs"]) == 12
+    assert len(poly["lon_coeffs"]) == 12
     assert poly["start"].endswith("Z")
-    assert poly["polynomial_order"] == 5
+    assert poly["polynomial_order"] == 11
+    assert poly["duration_seconds"] == 120 * 60
 
 
 def test_score_pass_for_target_handles_glint_path(sample_tle: TLE) -> None:

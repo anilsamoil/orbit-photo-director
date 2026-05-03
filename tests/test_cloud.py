@@ -216,3 +216,116 @@ def test_mock_sampler_overrides() -> None:
     when = datetime(2024, 10, 17, tzinfo=UTC)
     assert s.sample(35.68, 139.69, when).cloud_fraction == 90.0
     assert s.sample(0.0, 0.0, when).cloud_fraction == 10.0
+
+
+# --------------------------------------------------------------------------
+# Himawari NICT sampler — Asia/W.Pacific gap-filler
+# --------------------------------------------------------------------------
+
+
+def _make_fake_himawari_fetcher(brightness_per_tile: dict[tuple[int, int], int]):
+    """Return a fetcher that synthesizes a PNG of constant brightness per (x,y) tile.
+
+    Each tile in the 2x2 grid is rendered as a uniform RGB(b,b,b) PNG. Lets us
+    drive the sampler with known values per quadrant.
+    """
+    from io import BytesIO
+
+    import numpy as np
+    from PIL import Image
+
+    from generator.cloud import HIMAWARI_NICT_TILE_PX
+
+    def _fetch(url: str) -> bytes:
+        # Parse the trailing "{x}_{y}.png" to know which tile is requested.
+        tail = url.rsplit("/", 1)[-1]
+        coords = tail.replace(".png", "").split("_")
+        x, y = int(coords[-2]), int(coords[-1])
+        b = brightness_per_tile.get((x, y), 0)
+        arr = np.full((HIMAWARI_NICT_TILE_PX, HIMAWARI_NICT_TILE_PX, 3), b, dtype=np.uint8)
+        buf = BytesIO()
+        Image.fromarray(arr).save(buf, format="PNG")
+        return buf.getvalue()
+
+    return _fetch
+
+
+def test_himawari_nict_timestamp_floors_to_10_min() -> None:
+    from generator.cloud import _himawari_nict_timestamp
+
+    when = datetime(2026, 5, 3, 16, 37, 42, tzinfo=UTC)
+    assert _himawari_nict_timestamp(when) == "2026/05/03/163000"
+
+
+def test_himawari_nict_timestamp_rejects_naive() -> None:
+    from generator.cloud import _himawari_nict_timestamp
+
+    with pytest.raises(ValueError):
+        _himawari_nict_timestamp(datetime(2026, 5, 3, 16, 37))
+
+
+def test_himawari_nict_returns_no_coverage_outside_disk() -> None:
+    from generator.cloud import HimawariNICTSampler
+
+    fetcher = _make_fake_himawari_fetcher({(0, 0): 200, (1, 0): 200, (0, 1): 200, (1, 1): 200})
+    when = datetime(2026, 5, 3, 5, 0, 0, tzinfo=UTC)
+    s = HimawariNICTSampler(when, fetcher=fetcher)
+    # New York: lon -74, lat 40 — well outside Himawari disk
+    result = s.sample(40.0, -74.0, when)
+    assert result.source == "himawari-no-coverage"
+    # Sahara: lon 0, lat 20 — outside
+    result = s.sample(20.0, 0.0, when)
+    assert result.source == "himawari-no-coverage"
+
+
+def test_himawari_nict_returns_night_for_dark_pixel() -> None:
+    from generator.cloud import HimawariNICTSampler
+
+    # All tiles return brightness 5 (very dark — night)
+    fetcher = _make_fake_himawari_fetcher({(0, 0): 5, (1, 0): 5, (0, 1): 5, (1, 1): 5})
+    when = datetime(2026, 5, 3, 16, 30, 0, tzinfo=UTC)
+    s = HimawariNICTSampler(when, fetcher=fetcher)
+    # Tokyo: lon 139.7, lat 35.7 — inside disk but "night" via brightness
+    result = s.sample(35.7, 139.7, when)
+    assert result.source == "himawari-night"
+
+
+def test_himawari_nict_returns_cloud_fraction_for_bright_pixel() -> None:
+    from generator.cloud import HimawariNICTSampler
+
+    # NE tile (Tokyo) bright (cloud); others dark
+    fetcher = _make_fake_himawari_fetcher({(0, 0): 5, (1, 0): 200, (0, 1): 5, (1, 1): 5})
+    when = datetime(2026, 5, 3, 5, 0, 0, tzinfo=UTC)
+    s = HimawariNICTSampler(when, fetcher=fetcher)
+    # Tokyo: lon 139.7, lat 35.7 — top-half (lat > 0), but lon 139.7 is at the
+    # boundary between (0,0) and (1,0). 140.7° subsolar = boundary.
+    # Test slightly east at lon 160 to land cleanly in (1,0).
+    result = s.sample(35.7, 160.0, when)
+    assert result.source == "himawari-nict"
+    # brightness=200 → cf = (200-50)/150*100 = 100
+    assert result.cloud_fraction == pytest.approx(100.0, abs=1.0)
+
+
+def test_himawari_nict_handles_dateline_wrap() -> None:
+    from generator.cloud import HimawariNICTSampler
+
+    # All tiles bright
+    fetcher = _make_fake_himawari_fetcher({(0, 0): 100, (1, 0): 100, (0, 1): 100, (1, 1): 100})
+    when = datetime(2026, 5, 3, 5, 0, 0, tzinfo=UTC)
+    s = HimawariNICTSampler(when, fetcher=fetcher)
+    # Hawaii: lon -157, lat 21 — across the dateline from Himawari sub-point.
+    # Unwrapped: -157 + 360 = 203, which is inside the 60..220 disk frame.
+    result = s.sample(21.0, -157.0, when)
+    assert result.source == "himawari-nict"
+    # brightness=100 → cf = (100-50)/150*100 ≈ 33.3
+    assert 30.0 < result.cloud_fraction < 40.0
+
+
+def test_himawari_nict_rejects_naive_when() -> None:
+    from generator.cloud import HimawariNICTSampler
+
+    fetcher = _make_fake_himawari_fetcher({(0, 0): 100, (1, 0): 100, (0, 1): 100, (1, 1): 100})
+    when = datetime(2026, 5, 3, 5, 0, 0, tzinfo=UTC)
+    s = HimawariNICTSampler(when, fetcher=fetcher)
+    with pytest.raises(ValueError):
+        s.sample(35.7, 139.7, datetime(2026, 5, 3, 5, 0, 0))
