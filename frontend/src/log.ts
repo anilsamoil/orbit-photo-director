@@ -85,19 +85,22 @@ export function mergeLogEntries(entries: LogEntry[]): MergedRow[] {
     }
   }
   // Second pass: fold rate events into the matching shoot/skip rows.
+  // "Latest rate wins" — tracked per (target, pass) by received_at so the
+  // result is order-independent and a downgrade (5 → 2) sticks the same
+  // way an upgrade (2 → 5) does.
+  const latestRateTs = new Map<string, string>();
   for (const e of entries) {
     if (e.action !== 'rate') continue;
+    if (typeof e.rating !== 'number') continue;
     const key = `${e.target_id}|${e.pass_time}`;
     const row = byKey.get(key);
     if (!row) continue;
-    if (typeof e.rating === 'number' && (row.rating === undefined || row.rating < e.rating)) {
-      // Most recent rate wins; keep latest by received_at
-      const existingTs = row.received_at ?? '';
-      const newTs = e.received_at ?? '';
-      if (newTs >= existingTs || row.rating === undefined) {
-        row.rating = e.rating;
-        row.observed_obstruction = e.observed_obstruction;
-      }
+    const newTs = e.received_at ?? '';
+    const lastTs = latestRateTs.get(key) ?? '';
+    if (newTs >= lastTs) {
+      row.rating = e.rating;
+      row.observed_obstruction = e.observed_obstruction;
+      latestRateTs.set(key, newTs);
     }
   }
   // Order: most recent received_at desc

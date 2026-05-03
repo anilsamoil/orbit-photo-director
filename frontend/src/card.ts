@@ -57,7 +57,7 @@ export function renderCard(
       `${Math.round(deg)}° · ${window}`,
     ));
   }
-  if (p.cloud_source === 'combined-no-coverage') {
+  if (isNoObservationSource(p.cloud_source)) {
     // Tell the user the cloud score is a placeholder, not a real measurement.
     meta.appendChild(makeTag('obs-noobs', 'no cloud obs'));
   }
@@ -106,4 +106,19 @@ function obstructionClass(c: string): string {
   if (c === 'cloudy') return 'obs-cloudy';
   if (c === 'sun-glint risk') return 'obs-glint';
   return '';
+}
+
+const NO_OBSERVATION_SOURCES = new Set([
+  'combined-no-coverage',
+  'gibs-no-obs',
+  'gibs-nodata',
+  'geo-ir-no-coverage',
+  'geo-ir-nodata',
+  'himawari-no-coverage',
+  'himawari-night',
+  'mock',
+]);
+
+function isNoObservationSource(source: string): boolean {
+  return NO_OBSERVATION_SOURCES.has(source);
 }
