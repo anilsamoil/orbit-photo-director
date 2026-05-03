@@ -48,8 +48,11 @@ rclone copyto "$OUT_DIR/manifest.json" "$REMOTE/manifest.json" \
   --header-upload "Cache-Control: public, max-age=10" \
   $VERBOSE_FLAG
 
-echo "==> Pruning remote versions older than 2h (AFTER manifest flip)"
-rclone delete "$REMOTE/v/" --min-age 2h $VERBOSE_FLAG || true
-rclone rmdirs "$REMOTE/v/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
+# NOTE: pruning is intentionally NOT done in this deploy step.
+# `rclone delete --min-age` uses the SOURCE mtime stored in X-Amz-Meta-Mtime
+# headers (not the upload time), which means a freshly-uploaded file can be
+# pruned the moment it lands if its source mtime was old. We learned this the
+# hard way. R2 storage is cheap; we let versions accumulate and prune via the
+# separate `scripts/prune_versions.sh` (run daily from cron, or on demand).
 
 echo "==> Deploy complete"

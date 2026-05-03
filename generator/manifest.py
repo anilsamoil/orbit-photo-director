@@ -76,7 +76,11 @@ def write_manifest(
         "cloud_hours": (generated_at - cloud_composite_hour).total_seconds() / 3600.0,
         "ok": True,  # adjusted below
     }
-    freshness["ok"] = freshness["tle_hours"] < 36 and freshness["cloud_hours"] < 2
+    # Thresholds: TLE accuracy degrades fast (36h). GIBS daily MODIS data is
+    # naturally 24-48h old by design (we use yesterday's product to ensure it's
+    # fully published); allow up to 48h. SatCORPS hourly will be much fresher
+    # when wired up; the threshold tolerates either source.
+    freshness["ok"] = freshness["tle_hours"] < 36 and freshness["cloud_hours"] < 48
 
     manifest = {
         "version": version,

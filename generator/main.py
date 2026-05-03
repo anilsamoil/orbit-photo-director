@@ -22,6 +22,7 @@ import requests
 from . import __version__
 from .cloud import (
     CloudSampler,
+    GIBSCloudSampler,
     MockCloudSampler,
     SatCORPSSampler,
     assess_obstruction,
@@ -106,11 +107,24 @@ def fetch_tle(
 
 
 def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSampler, datetime, str]:
-    """Pick a cloud sampler. If real SatCORPS NetCDF is cached and fresh, use it; else mock.
+    """Pick a cloud sampler.
 
-    Returns: (sampler, composite_hour, source_label).
-    The composite_hour is the hour-precision UTC timestamp of the cached composite.
+    Order of preference (V1):
+      1. NOAA SatCORPS NetCDF if cached and < 90 min old (deferred — fetcher unwired)
+      2. NASA GIBS (MODIS Aqua daily cloud fraction global) — public WMTS, no auth
+      3. Mock sampler (last-resort fallback if GIBS fetch also fails)
+
+    Override via env var `OPD_CLOUD_SOURCE=mock` to force the mock sampler (used in
+    tests so they don't hit the real GIBS API). Any other value is ignored.
     """
+    import os
+
+    if os.environ.get("OPD_CLOUD_SOURCE") == "mock":
+        log.info("OPD_CLOUD_SOURCE=mock; forcing mock sampler")
+        composite_hour = now.replace(minute=0, second=0, microsecond=0)
+        return MockCloudSampler(default_cf=30.0), composite_hour, "mock"
+
+    # 1. SatCORPS hourly composite (preferred when present)
     cached = settings.cache_dir / "satcorps_latest.nc"
     if cached.exists():
         age_min = (now.timestamp() - cached.stat().st_mtime) / 60.0
@@ -122,8 +136,22 @@ def select_cloud_sampler(settings: Settings, now: datetime) -> tuple[CloudSample
                 )
                 return sampler, composite_hour, "satcorps"
             except Exception as exc:  # noqa: BLE001
-                log.warning("SatCORPS open failed (%s); falling back to mock", exc)
-    log.info("no fresh SatCORPS cache; using mock sampler")
+                log.warning("SatCORPS open failed (%s); falling back to GIBS", exc)
+
+    # 2. NASA GIBS (V1 production source — MODIS Aqua daily cloud fraction)
+    try:
+        gibs = GIBSCloudSampler(now)
+        # GIBS daily product — composite_hour is "yesterday's" 00:00 UTC by convention.
+        composite_hour = (now - timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        log.info("using GIBS MODIS Aqua daily cloud fraction (%s)", composite_hour.date())
+        return gibs, composite_hour, "gibs"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("GIBS fetch failed (%s); falling back to mock sampler", exc)
+
+    # 3. Mock fallback (only when both real sources fail)
+    log.warning("no real cloud data available; using mock sampler with default cf=30")
     composite_hour = now.replace(minute=0, second=0, microsecond=0)
     return MockCloudSampler(default_cf=30.0), composite_hour, "mock"
 
@@ -251,6 +279,7 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
         "tle_freshness_factor": round(fresh, 3),
     }
 
+    observed_count = sum(1 for p in all_passes if p["cloud_source"] == "gibs")
     status_data = {
         "last_run": utcnow_iso(n),
         "tick_minutes": settings.tick_minutes,
@@ -260,6 +289,8 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
         "cloud_composite_hour": utcnow_iso(composite_hour),
         "target_count": len(targets),
         "pass_count": len(all_passes),
+        "passes_with_real_observation": observed_count,
+        "passes_with_no_observation": len(all_passes) - observed_count,
         "version": version,
         "build_version": __version__,
     }

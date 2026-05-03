@@ -26,7 +26,9 @@ HARD_TIMEOUT_SECONDS = 600  # 10 min
 DEPLOY_TIMEOUT_SECONDS = 300  # 5 min
 INITIAL_BACKOFF_SECONDS = 30
 MAX_BACKOFF_SECONDS = 3600  # 1h
-DEPLOY_SCRIPT_RELATIVE = Path("scripts") / "deploy.sh"
+# Default to the rclone-based deploy. Override with OPD_DEPLOY_SCRIPT if needed
+# (e.g., to use scripts/deploy_wrangler.sh when R2 keys aren't available).
+DEPLOY_SCRIPT_DEFAULT = Path("scripts") / "deploy.sh"
 
 
 class StallWatchdog:
@@ -86,17 +88,24 @@ def deploy_to_r2(
     supervisor can apply backoff. Skipped (returning True) when rclone is missing
     OR when OPD_SKIP_DEPLOY is set, so dev runs don't fail without rclone configured.
     """
-    if shutil.which("rclone") is None:
-        log.warning("rclone not on PATH; skipping deploy step")
-        return True
     import os
     if os.environ.get("OPD_SKIP_DEPLOY") == "1":
         log.info("OPD_SKIP_DEPLOY=1 set; skipping deploy step")
         return True
-    script = settings.repo_root / DEPLOY_SCRIPT_RELATIVE
+    script_rel = Path(os.environ.get("OPD_DEPLOY_SCRIPT", str(DEPLOY_SCRIPT_DEFAULT)))
+    script = settings.repo_root / script_rel
     if not script.exists():
         log.error("deploy script missing at %s; cannot publish", script)
         return False
+    # The rclone-based deploy.sh is the default; only require rclone if THAT script
+    # is selected. The wrangler fallback (deploy_wrangler.sh) doesn't need rclone.
+    if "deploy.sh" in script.name and "wrangler" not in script.name:
+        if shutil.which("rclone") is None:
+            log.warning(
+                "rclone not on PATH; skipping deploy "
+                "(configure rclone or set OPD_DEPLOY_SCRIPT)"
+            )
+            return True
 
     # subprocess: deploy script path is built from settings.repo_root (trusted) +
     # a constant relative path. No user-supplied input enters the argv.

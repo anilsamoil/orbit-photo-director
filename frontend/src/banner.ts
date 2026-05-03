@@ -9,9 +9,10 @@ export interface BannerState {
 
 /** Compute the staleness banner from manifest age + freshness flags.
  *
- *  green    < 40 min old AND freshness.ok
- *  yellow   40–60 min old, or freshness.ok=false but recent
- *  red      > 60 min old, OR explicit stale flag from server
+ *  Generator ticks every 2h. Thresholds:
+ *    green    < 2h30m old AND freshness.ok
+ *    yellow   2h30m–3h old, or freshness.ok=false but recent
+ *    red      > 3h old, OR explicit stale flag from server
  */
 export function bannerFromManifest(
   generatedAtIso: string,
@@ -25,10 +26,10 @@ export function bannerFromManifest(
     return { level: 'red', text: `Clock skew: server ahead ${Math.round(-ageMin)} min — verify Mac time` };
   }
 
-  if (ageMin < 40 && freshnessOk) {
+  if (ageMin < 150 && freshnessOk) {
     return { level: 'green', text: `Last updated ${formatAge(ageMin)} ago` };
   }
-  if (ageMin < 60 && freshnessOk) {
+  if (ageMin < 180 && freshnessOk) {
     return { level: 'yellow', text: `Last updated ${formatAge(ageMin)} ago — generator running slow` };
   }
   if (!freshnessOk) {

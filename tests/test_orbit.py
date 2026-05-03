@@ -193,14 +193,24 @@ def test_find_passes_no_passes_for_polar_target(sample_tle: TLE, now_utc: dateti
 # --------------------------------------------------------------------------
 
 
-def test_fit_iss_polynomial_returns_coeffs(sample_tle: TLE, now_utc: datetime) -> None:
+def test_fit_iss_polynomial_returns_coeffs_30min(sample_tle: TLE, now_utc: datetime) -> None:
+    """30-min window scales to 5th order."""
     poly = fit_iss_polynomial(sample_tle, now_utc, minutes=30, samples=31)
     assert "lat_coeffs" in poly
     assert "lon_coeffs" in poly
-    assert len(poly["lat_coeffs"]) == 6  # 5th order
+    assert len(poly["lat_coeffs"]) == 6  # 5th order = 6 coefficients
     assert len(poly["lon_coeffs"]) == 6
     assert poly["polynomial_order"] == 5
     assert poly["start"].endswith("Z")
+
+
+def test_fit_iss_polynomial_scales_order_for_2h_window(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """2h window scales to 11th order to keep accuracy across ~1.3 orbits."""
+    poly = fit_iss_polynomial(sample_tle, now_utc, minutes=120)
+    assert poly["polynomial_order"] == 11
+    assert len(poly["lat_coeffs"]) == 12
 
 
 def test_fit_iss_polynomial_handles_antimeridian(sample_tle: TLE, now_utc: datetime) -> None:

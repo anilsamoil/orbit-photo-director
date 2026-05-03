@@ -180,12 +180,39 @@ def find_passes(
     return passes
 
 
+def _polynomial_order_for_window(minutes: int) -> int:
+    """Polynomial order scaled to the inter-tick window.
+    ISS orbital period is ~93 min. Orders chosen to keep RMS error <0.05° lat over the window:
+      <=30 min  → 5  (less than 1/3 orbit)
+      <=60 min  → 7
+      <=90 min  → 9
+      <=180 min → 11 (just under 2 orbits)
+      else      → 13 (best-effort; UI degrades visibly past this)
+    """
+    if minutes <= 30:
+        return 5
+    if minutes <= 60:
+        return 7
+    if minutes <= 90:
+        return 9
+    if minutes <= 180:
+        return 11
+    return 13
+
+
 def fit_iss_polynomial(
-    tle: TLE, start: datetime, minutes: int = 30, samples: int = 31
+    tle: TLE, start: datetime, minutes: int = 120, samples: int | None = None
 ) -> dict[str, Any]:
-    """Fit a 5th-order polynomial in lat/lon vs t (seconds from start) for live frontend rendering.
-    Longitude is unwrapped to handle the antimeridian crossing inside the window."""
+    """Fit a polynomial in lat/lon vs t (seconds from start) for live frontend rendering.
+
+    Order scales with `minutes` (see `_polynomial_order_for_window`). Longitude is
+    unwrapped to handle antimeridian crossings within the window.
+    """
     _ensure_utc(start, "start")
+    order = _polynomial_order_for_window(minutes)
+    if samples is None:
+        # ~1 sample per minute; ensures over-determined fit at every order.
+        samples = max(order * 4 + 1, minutes + 1)
     ts = np.linspace(0.0, minutes * 60.0, samples)
     lats = np.empty(samples)
     lons = np.empty(samples)
@@ -194,14 +221,14 @@ def fit_iss_polynomial(
         lats[i] = pos.lat
         lons[i] = pos.lon
     lons_unwrapped = np.degrees(np.unwrap(np.radians(lons)))
-    lat_coeffs = np.polyfit(ts, lats, 5).tolist()
-    lon_coeffs = np.polyfit(ts, lons_unwrapped, 5).tolist()
+    lat_coeffs = np.polyfit(ts, lats, order).tolist()
+    lon_coeffs = np.polyfit(ts, lons_unwrapped, order).tolist()
     return {
         "start": start.isoformat().replace("+00:00", "Z"),
         "duration_seconds": minutes * 60,
         "lat_coeffs": lat_coeffs,
         "lon_coeffs": lon_coeffs,
-        "polynomial_order": 5,
+        "polynomial_order": order,
     }
 
 

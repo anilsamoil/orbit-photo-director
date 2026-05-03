@@ -11,6 +11,12 @@ import pytest
 from generator.config import Settings
 from generator.orbit import TLE
 
+
+@pytest.fixture(autouse=True)
+def _force_mock_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests force the mock cloud sampler so they don't hit the real GIBS API."""
+    monkeypatch.setenv("OPD_CLOUD_SOURCE", "mock")
+
 # A real ISS TLE (epoch 2024-10-16). For tests we just need sgp4 to propagate
 # and produce sane lat/lon. Accuracy versus real ISS is irrelevant here.
 SAMPLE_TLE_TEXT = (

@@ -1,8 +1,18 @@
-"""Cloud cover adapter: NOAA SatCORPS NetCDF + obstruction class derivation.
+"""Cloud cover adapter: derive `P(unobstructed)` and an obstruction class for a
+target lat/lon at a UTC timestamp.
 
-V1 source: SatCORPS hourly global composite. Mock sampler used for tests.
-Three-class obstruction model: clear / cloudy / sun-glint risk.
-Thin cirrus / haze / snow-IR detection deferred to V2.
+Three sources, in order of preference at runtime:
+  1. NASA GIBS (GIBSCloudSampler) — public WMTS, no auth, daily MODIS Aqua cloud
+     fraction global tile. The V1 production source. PNGs are 8-bit colormap;
+     the pixel value 0-100 IS the cloud fraction percent (127 = nodata).
+  2. NOAA SatCORPS (SatCORPSSampler) — NetCDF/HDF hourly composite via Earthdata.
+     Higher temporal resolution; requires fetcher implementation that we left as
+     a stub for V1 because the file-listing API isn't documented well.
+  3. MockCloudSampler — deterministic for tests, used as a fallback when neither
+     real source is fresh.
+
+Three-class obstruction model: `clear` / `cloudy` / `sun-glint risk`. Thin cirrus
+/ haze / snow-IR detection requires a real classifier and is deferred to V2.
 """
 
 from __future__ import annotations
@@ -15,6 +25,24 @@ from pathlib import Path
 from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
+
+# GIBS cloud-fraction PNG encoding: pixel value 0-100 IS the cloud fraction %.
+# Special values:
+GIBS_NODATA_VALUE = 127  # the "no data" entry in the published colormap
+GIBS_TILE_MATRIX_SET = "2km"
+GIBS_BASE = "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best"
+
+# Each layer captures one MODIS pass: Aqua afternoon, Terra morning, day or night.
+# Merging all four gives near-global coverage (each satellite observes ~half the
+# globe per day; combined they fill most pixels). Within each layer, pixel value
+# 0 + values >100 are conflated "no observation" — treated as no-data and
+# we look for valid data in the next layer.
+GIBS_LAYERS = (
+    "MODIS_Aqua_Cloud_Fraction_Day",
+    "MODIS_Terra_Cloud_Fraction_Day",
+    "MODIS_Aqua_Cloud_Fraction_Night",
+    "MODIS_Terra_Cloud_Fraction_Night",
+)
 
 # Recognized cloud-fraction variable names across SatCORPS products
 CLOUD_VAR_CANDIDATES = (
@@ -206,3 +234,119 @@ class SatCORPSSampler:
 
     def close(self) -> None:
         self._ds.close()
+
+
+# --------------------------------------------------------------------------
+# NASA GIBS sampler — V1 production cloud source.
+# --------------------------------------------------------------------------
+
+
+def _gibs_url(layer: str, date_iso: str, z: int, y: int, x: int) -> str:
+    return f"{GIBS_BASE}/{layer}/default/{date_iso}/{GIBS_TILE_MATRIX_SET}/{z}/{y}/{x}.png"
+
+
+def _date_iso(when: datetime) -> str:
+    return when.strftime("%Y-%m-%d")
+
+
+def _is_valid_gibs_pixel(value: int) -> bool:
+    """A GIBS cloud-fraction pixel is valid only when 1-100. 0 and 127 and >100 are no-obs."""
+    return 1 <= value <= 100
+
+
+class GIBSCloudSampler:
+    """Sample global cloud fraction from NASA GIBS WMTS by merging four MODIS layers.
+
+    Each MODIS Aqua/Terra Day/Night layer captures one orbit's daylight or
+    nighttime view; combined, they fill most of the globe per day. We fetch
+    all four at zoom 0 (a 2x1 grid covering the world in two PNGs each) and
+    sample the FIRST layer that returns a valid 1-100 pixel for the lat/lon.
+
+    Zoom 0 → ~0.7° per pixel, plenty for orbital-scale shot planning. Higher zoom
+    is V2 if needed. Total bandwidth per fetch: ~8 PNGs × 50-100 KB ≈ 0.5 MB.
+    """
+
+    def __init__(self, when: datetime, fetcher: Any | None = None):
+        """Pre-fetch the four GIBS layers for the given date.
+
+        `fetcher` is an optional callable for tests; defaults to requests.get.
+        """
+        self._when = when
+        # Use yesterday's date — today's products may not be published yet.
+        date = when - timedelta(days=1)
+        self._date_str = _date_iso(date)
+        self._layers: list[Any] = []
+        for layer in GIBS_LAYERS:
+            try:
+                arr = self._fetch_global_tile(layer, self._date_str, fetcher=fetcher)
+                self._layers.append(arr)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("GIBS fetch failed for %s: %s", layer, exc)
+
+        if not self._layers:
+            raise RuntimeError(f"all {len(GIBS_LAYERS)} GIBS layers failed to fetch")
+
+    @classmethod
+    def _fetch_global_tile(
+        cls, layer: str, date_str: str, *, fetcher: Any | None = None
+    ) -> Any:
+        """Download both halves of the globe at zoom 0 and stitch them."""
+        from io import BytesIO
+
+        import numpy as np
+        from PIL import Image
+
+        if fetcher is None:
+            import requests
+
+            def _get(url: str) -> bytes:
+                resp = requests.get(url, timeout=20)
+                resp.raise_for_status()
+                return resp.content
+
+            fetcher = _get
+
+        west_bytes = fetcher(_gibs_url(layer, date_str, 0, 0, 0))
+        east_bytes = fetcher(_gibs_url(layer, date_str, 0, 0, 1))
+        west = np.asarray(Image.open(BytesIO(west_bytes)))
+        east = np.asarray(Image.open(BytesIO(east_bytes)))
+        return np.concatenate([west, east], axis=1)
+
+    def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
+        """Return cloud fraction (0-100) for lat/lon.
+
+        Walks the four loaded MODIS layers (Aqua/Terra × Day/Night) and returns
+        the first valid 1-100 pixel. Falls back to 50 (uncertain) only if all
+        four layers lack an observation for this lat/lon.
+
+        MODIS pixel encoding nuances:
+        - 127 = explicit nodata (per the published colormap)
+        - 0 = ambiguous: colormap says "0% cloud" but MODIS also fills 0 for
+          pixels not observed during the layer's pass. Treat as no-obs.
+        - 1-100 = trustworthy cloud fraction percent.
+        - 101+ = outside the documented range (most likely sea-ice/snow flag).
+          Treat as no-obs.
+        """
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+        if not self._layers:
+            return CloudSample(50.0, when, "gibs-nodata")
+
+        sample_h, sample_w = self._layers[0].shape[:2]
+        row = int(round((90.0 - lat) / 180.0 * (sample_h - 1)))
+        col = int(round((lon + 180.0) / 360.0 * (sample_w - 1)))
+        row = max(0, min(sample_h - 1, row))
+        col = max(0, min(sample_w - 1, col))
+
+        for layer_arr in self._layers:
+            raw = int(layer_arr[row, col])
+            if _is_valid_gibs_pixel(raw):
+                return CloudSample(
+                    cloud_fraction=float(raw),
+                    sample_time=when,
+                    source="gibs",
+                )
+
+        return CloudSample(
+            cloud_fraction=50.0, sample_time=when, source="gibs-no-obs"
+        )

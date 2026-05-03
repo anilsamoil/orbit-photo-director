@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_TICK_MINUTES = 30
+DEFAULT_TICK_MINUTES = 120  # 2h — cloud data is daily, TLE is sub-daily
 DEFAULT_PASS_WINDOW_HOURS = 6
 DEFAULT_TLE_CACHE_TTL_HOURS = 1
 DEFAULT_CLOUD_CACHE_TTL_MINUTES = 55

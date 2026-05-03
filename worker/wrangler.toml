@@ -27,11 +27,11 @@ bucket_name = "orbit-calib"
 #   wrangler secret put CALIB_TOKEN
 #
 # Staleness alert threshold (seconds).
-# 2700 = 45 min. Generator ticks every 30 min, so a tick that runs 5-10 min PLUS
-# UptimeRobot's 5-min check interval can momentarily exceed 30 min without being
-# a real outage. 45 min absorbs that jitter and only fires on genuine stalls.
+# 10800 = 3h. Generator ticks every 2h (cloud data is daily so 30 min was overkill).
+# A tick that runs 5-10 min PLUS UptimeRobot's 5-min check interval can momentarily
+# push past 2h without being a real outage. 3h absorbs that jitter and fires on stalls.
 [vars]
-STALE_THRESHOLD_SECONDS = "2700"
+STALE_THRESHOLD_SECONDS = "10800"
 
 [observability]
 enabled = true
