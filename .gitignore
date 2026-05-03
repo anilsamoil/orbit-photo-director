@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.venv/
+.env
+.env.local
+
+# Node
+node_modules/
+.next/
+.cache/
+.parcel-cache/
+*.log
+npm-debug.log*
+
+# Bun
+bun.lockb
+
+# Generator runtime data (NEVER commit)
+out/
+data/cache/
+data/logs/
+*.nc
+*.hdf
+*.tle
+
+# Credentials (NEVER commit)
+.netrc
+credentials.json
+.dev.vars
+.wrangler/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+playwright-report/
+test-results/
