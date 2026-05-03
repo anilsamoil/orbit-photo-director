@@ -17,6 +17,7 @@
         <span class="brand-mark">🛰️</span>
         <span class="brand-name">Orbit Photo Director</span>
       </div>
+      <div id="iss-now" class="iss-now" title="Live ISS sub-point from polynomial fit"></div>
       <nav class="tabs">
         <button id="tab-queue" class="tab active" type="button">Queue</button>
         <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
@@ -24,6 +25,8 @@
         <button id="tab-log" class="tab" type="button">Log</button>
       </nav>
     </header>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
     <main id="view" class="view-queue">
       <section id="queue-pane" class="pane">

@@ -6,6 +6,14 @@ import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
  *  yellow accent so the user can tell forecast from observed at a glance). */
 export type CardVariant = 'observed' | 'forecast';
 
+export interface RenderOptions {
+  variant?: CardVariant;
+  /** When false, the Shoot/Skip buttons get a "(set token to sync)" hint
+   *  so first-time users understand why their clicks aren't persisting
+   *  to the calibration log. Click still queues to localStorage. */
+  tokenSet?: boolean;
+}
+
 /** Render the card list into the cards container.
  *  Each card emits Shoot/Skip events via the provided `onAction` callback.
  *  When `variant === 'forecast'`, action buttons are omitted (a pass 6 h
@@ -17,14 +25,15 @@ export function renderCards(
   nowMs: number,
   isStale: boolean,
   onAction: (action: 'shoot' | 'skip', p: PassEntry) => void,
-  variant: CardVariant = 'observed',
+  options: RenderOptions | CardVariant = {},
 ): void {
+  const opts = typeof options === 'string' ? { variant: options } : options;
   container.replaceChildren();
   if (passes.length === 0) {
     return;
   }
   for (const p of passes) {
-    container.appendChild(renderCard(p, nowMs, isStale, onAction, variant));
+    container.appendChild(renderCard(p, nowMs, isStale, onAction, opts));
   }
 }
 
@@ -33,8 +42,11 @@ export function renderCard(
   nowMs: number,
   isStale: boolean,
   onAction: (action: 'shoot' | 'skip', p: PassEntry) => void,
-  variant: CardVariant = 'observed',
+  options: RenderOptions | CardVariant = {},
 ): HTMLElement {
+  const opts = typeof options === 'string' ? { variant: options } : options;
+  const variant: CardVariant = opts.variant ?? 'observed';
+  const tokenSet = opts.tokenSet ?? true;
   const card = document.createElement('article');
   const classes = ['card'];
   if (isStale) classes.push('stale');
@@ -101,13 +113,15 @@ export function renderCard(
     const shoot = document.createElement('button');
     shoot.className = 'btn btn-shoot';
     shoot.type = 'button';
-    shoot.textContent = 'Shoot';
+    shoot.textContent = tokenSet ? 'Shoot' : 'Shoot · set token';
     shoot.disabled = isStale;
+    if (!tokenSet) shoot.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
     shoot.addEventListener('click', () => onAction('shoot', p));
     const skip = document.createElement('button');
     skip.className = 'btn btn-skip';
     skip.type = 'button';
-    skip.textContent = 'Skip';
+    skip.textContent = tokenSet ? 'Skip' : 'Skip · set token';
+    if (!tokenSet) skip.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
     skip.addEventListener('click', () => onAction('skip', p));
     actions.append(shoot, skip);
     card.append(name, countdown, meta, score, actions);

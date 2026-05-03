@@ -10,8 +10,9 @@ import { renderCards } from './card';
 import { bannerError, bannerFromManifest, bannerLoading } from './banner';
 import { buildPayload, clearToken, drainQueue, getToken, postCalib, setToken } from './calib';
 import type { BannerState } from './banner';
-import type { Manifest, PassEntry } from './types';
-import { fetchManifest, fetchTop24h, fetchTop5 } from './manifest';
+import { liveIssPosition } from './iss';
+import type { Manifest, PassEntry, Track } from './types';
+import { fetchManifest, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
@@ -20,6 +21,7 @@ const REFRESH_MS = 60_000;
 let currentManifest: Manifest | null = null;
 let currentTop5: PassEntry[] = [];
 let currentTop24h: PassEntry[] = [];
+let currentTrack: Track | null = null;
 let refreshTimer: number | null = null;
 
 function setBanner(state: BannerState): void {
@@ -40,12 +42,14 @@ async function refresh(): Promise<void> {
   try {
     const manifest = await fetchManifest();
     currentManifest = manifest;
-    const [top5, top24h] = await Promise.all([
+    const [top5, top24h, track] = await Promise.all([
       fetchTop5(manifest),
       fetchTop24h(manifest),
+      fetchTrack(manifest),
     ]);
     currentTop5 = top5;
     currentTop24h = top24h;
+    currentTrack = track;
 
     const cards = document.getElementById('cards');
     const empty = document.getElementById('empty');
@@ -59,7 +63,7 @@ async function refresh(): Promise<void> {
       empty.hidden = false;
     } else {
       empty.hidden = true;
-      renderCards(cards, top5, now, stale, onCardAction);
+      renderCards(cards, top5, now, stale, onCardAction, { tokenSet: !!getToken() });
     }
 
     // Render Upcoming pane too — uses forecast variant.
@@ -81,16 +85,17 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
     return;
   }
   empty.hidden = true;
-  renderCards(cards, currentTop24h, nowMs, stale, onCardAction, 'forecast');
+  renderCards(cards, currentTop24h, nowMs, stale, onCardAction, { variant: 'forecast' });
 }
 
 function rerenderCountdowns(): void {
+  updateIssNow();
   if (!currentManifest) return;
   const now = Date.now();
   const stale = isStaleManifest(currentManifest, now);
   if (currentTop5.length > 0) {
     const cards = document.getElementById('cards');
-    if (cards) renderCards(cards, currentTop5, now, stale, onCardAction);
+    if (cards) renderCards(cards, currentTop5, now, stale, onCardAction, { tokenSet: !!getToken() });
   }
   if (currentTop24h.length > 0) {
     renderUpcoming(now, stale);
@@ -101,16 +106,90 @@ function rerenderCountdowns(): void {
 async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<void> {
   const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);
   const result = await postCalib(payload);
-  // Visual feedback: dim the card's button row briefly
+  // Dim the card briefly as before — keep this for visual locality.
   const card = document.querySelector<HTMLElement>(
     `.card[data-target-id="${p.target_id}"][data-pass-time="${p.closest_approach}"]`
   );
   if (card) {
     card.style.opacity = result.ok ? '0.5' : '0.7';
-    setTimeout(() => {
-      card.style.opacity = '';
-    }, 1500);
+    setTimeout(() => { card.style.opacity = ''; }, 1500);
   }
+
+  // Toast: explicit confirmation that the click actually did something.
+  // The previous silent dim was easy to miss on first-use.
+  const verb = action === 'shoot' ? 'Shoot' : 'Skip';
+  if (result.ok) {
+    showToast(`✓ ${verb} logged: ${p.target_name}`, 'success');
+  } else if (result.reason === 'token_missing') {
+    showToast(`Saved offline — set token in Log tab to sync`, 'warn');
+  } else if (result.reason === 'network') {
+    showToast(`Offline — ${verb.toLowerCase()} queued for next visit`, 'warn');
+  } else if (result.reason?.startsWith('server_4')) {
+    showToast(`Server rejected ${verb.toLowerCase()} (${result.reason})`, 'error');
+  } else {
+    showToast(`${verb} queued — server unreachable`, 'warn');
+  }
+}
+
+let toastTimer: number | null = null;
+function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success'): void {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.className = `toast ${kind} show`;
+  el.textContent = text;
+  el.hidden = false;
+  if (toastTimer !== null) window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    el.classList.remove('show');
+    // Leave hidden=false so the fade-out animation is visible; remove after.
+    window.setTimeout(() => { el.hidden = true; }, 250);
+  }, 2400);
+}
+
+/** Update the topbar's live ISS sub-point from the polynomial fit. Called
+ *  every second from rerenderCountdowns so the user always sees where the
+ *  station is right now — solves "is the queue empty because of geography
+ *  or because it's stale?" without making them open the Map tab. */
+function updateIssNow(): void {
+  const el = document.getElementById('iss-now');
+  if (!el || !currentTrack) return;
+  const pos = liveIssPosition(currentTrack, Date.now());
+  if (!pos) {
+    // Polynomial window expired — surface that visibly so the user knows
+    // the live update is stale (separate from manifest staleness).
+    el.classList.add('ready');
+    el.innerHTML = '<span class="iss-label">ISS</span><span class="iss-region">live track expired</span>';
+    return;
+  }
+  const ns = pos.lat >= 0 ? 'N' : 'S';
+  const ew = pos.lon >= 0 ? 'E' : 'W';
+  const region = roughRegion(pos.lat, pos.lon);
+  el.classList.add('ready');
+  el.innerHTML =
+    `<span class="iss-label">ISS</span>` +
+    `${Math.abs(pos.lat).toFixed(1)}°${ns}, ${Math.abs(pos.lon).toFixed(1)}°${ew}` +
+    `<span class="iss-region">over ${region}</span>`;
+}
+
+/** Coarse ocean / continent label for an ISS sub-point. Intentionally crude
+ *  — the user wants "is it over land or water, roughly which one" not a
+ *  precise reverse-geocode. Boundaries are rough lat/lon boxes; near coasts
+ *  we may show the wrong one. Good enough for the topbar context. */
+function roughRegion(lat: number, lon: number): string {
+  // Polar caps first
+  if (lat > 66) return 'Arctic';
+  if (lat < -60) return 'Antarctica';
+  // Continents (rough lat/lon boxes; ocean fall-through below)
+  if (lat > 12 && lat < 72 && lon > -170 && lon < -50) return 'North America';
+  if (lat > -55 && lat < 12 && lon > -82 && lon < -34) return 'South America';
+  if (lat > 35 && lat < 72 && lon > -10 && lon < 60) return 'Europe';
+  if (lat > -35 && lat < 37 && lon > -18 && lon < 52) return 'Africa';
+  if (lat > -10 && lat < 60 && lon > 25 && lon < 145) return 'Asia';
+  if (lat > -45 && lat < -10 && lon > 110 && lon < 155) return 'Australia';
+  // Oceans by hemisphere
+  if (lon > -30 && lon < 25) return 'Atlantic Ocean';
+  if (lon >= 25 && lon < 110) return 'Indian Ocean';
+  return 'Pacific Ocean';
 }
 
 function bindTabs(): void {
@@ -182,10 +261,23 @@ function renderTokenStatus(): void {
     if (next === null) return; // cancel
     if (next.trim() === '') {
       clearToken();
+      showToast('Token cleared — Shoot/Skip will queue offline', 'warn');
     } else {
       setToken(next.trim());
+      showToast('Token saved — Shoot/Skip will sync to the Worker', 'success');
+      // Drain anything queued during the no-token period.
+      void drainQueue();
     }
     void loadLogPane();
+    // Re-render the Queue so its buttons reflect the new token state.
+    if (currentManifest && currentTop5.length > 0) {
+      const cards = document.getElementById('cards');
+      if (cards) {
+        const now = Date.now();
+        const stale = isStaleManifest(currentManifest, now);
+        renderCards(cards, currentTop5, now, stale, onCardAction, { tokenSet: !!getToken() });
+      }
+    }
   });
   slot.appendChild(btn);
 }

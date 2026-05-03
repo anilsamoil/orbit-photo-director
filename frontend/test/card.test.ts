@@ -169,6 +169,40 @@ describe('renderCard', () => {
     );
     expect(el.querySelector('.tag.forecast-tag')).toBeTruthy();
   });
+
+  it('token-aware buttons: hint text + tooltip when no token is set', () => {
+    const el = renderCard(
+      samplePass(),
+      NOW, false, () => undefined,
+      { tokenSet: false },
+    );
+    const shoot = el.querySelector<HTMLButtonElement>('.btn-shoot');
+    const skip = el.querySelector<HTMLButtonElement>('.btn-skip');
+    expect(shoot?.textContent).toContain('set token');
+    expect(skip?.textContent).toContain('set token');
+    expect(shoot?.title).toContain('queues offline');
+    expect(skip?.title).toContain('queues offline');
+  });
+
+  it('token-aware buttons: plain "Shoot"/"Skip" when token is set', () => {
+    const el = renderCard(
+      samplePass(),
+      NOW, false, () => undefined,
+      { tokenSet: true },
+    );
+    const shoot = el.querySelector<HTMLButtonElement>('.btn-shoot');
+    const skip = el.querySelector<HTMLButtonElement>('.btn-skip');
+    expect(shoot?.textContent).toBe('Shoot');
+    expect(skip?.textContent).toBe('Skip');
+    expect(shoot?.title).toBe('');
+    expect(skip?.title).toBe('');
+  });
+
+  it('renderCards still accepts the old positional variant string', () => {
+    const c = document.getElementById('cards')!;
+    renderCards(c, [samplePass()], NOW, false, () => undefined, 'forecast');
+    expect(c.querySelector('.card.forecast')).toBeTruthy();
+  });
 });
 
 describe('renderCards', () => {

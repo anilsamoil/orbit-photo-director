@@ -49,6 +49,54 @@ body {
 
 .brand-mark { font-size: 1.2rem; }
 
+/* Live ISS sub-point in the topbar — tells the user where the station is
+ * right now, in seconds, so an empty queue isn't ambiguous ("over Pacific
+ * means few targets, not a stale tick"). Hidden until first polynomial
+ * sample arrives so we never render a stale or undefined value. */
+.iss-now {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  display: none;
+}
+.iss-now.ready { display: inline; }
+.iss-now .iss-label {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 0.3rem;
+}
+.iss-now .iss-region {
+  color: var(--text-dim);
+  margin-left: 0.4rem;
+}
+
+/* Toast: brief inline confirmation for Shoot/Skip clicks. Replaces the
+ * previous "dim the card 1.5s" feedback that was easy to miss. */
+.toast {
+  position: fixed;
+  top: 4.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+.toast.show { opacity: 1; }
+.toast.success { border-color: rgba(91, 227, 122, 0.5); color: var(--green); }
+.toast.warn { border-color: rgba(255, 206, 77, 0.5); color: var(--yellow); }
+.toast.error { border-color: rgba(255, 100, 100, 0.5); color: var(--red); }
+
 .tabs {
   display: flex;
   gap: 0.25rem;
