@@ -8,11 +8,14 @@ On repeated failures, exponential backoff up to MAX_BACKOFF_SECONDS.
 from __future__ import annotations
 
 import logging
+import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from .config import Settings
 from .main import run_tick
@@ -20,8 +23,10 @@ from .main import run_tick
 log = logging.getLogger(__name__)
 
 HARD_TIMEOUT_SECONDS = 600  # 10 min
+DEPLOY_TIMEOUT_SECONDS = 300  # 5 min
 INITIAL_BACKOFF_SECONDS = 30
 MAX_BACKOFF_SECONDS = 3600  # 1h
+DEPLOY_SCRIPT_RELATIVE = Path("scripts") / "deploy.sh"
 
 
 class StallWatchdog:
@@ -70,6 +75,57 @@ def run_tick_with_watchdog(settings: Settings, now: datetime | None = None) -> b
         return False
 
 
+def deploy_to_r2(
+    settings: Settings,
+    *,
+    timeout_seconds: int = DEPLOY_TIMEOUT_SECONDS,
+) -> bool:
+    """Run scripts/deploy.sh to publish out/ to Cloudflare R2.
+
+    Returns True on success. Failures are logged and surfaced as False so the
+    supervisor can apply backoff. Skipped (returning True) when rclone is missing
+    OR when OPD_SKIP_DEPLOY is set, so dev runs don't fail without rclone configured.
+    """
+    if shutil.which("rclone") is None:
+        log.warning("rclone not on PATH; skipping deploy step")
+        return True
+    import os
+    if os.environ.get("OPD_SKIP_DEPLOY") == "1":
+        log.info("OPD_SKIP_DEPLOY=1 set; skipping deploy step")
+        return True
+    script = settings.repo_root / DEPLOY_SCRIPT_RELATIVE
+    if not script.exists():
+        log.error("deploy script missing at %s; cannot publish", script)
+        return False
+
+    # subprocess: deploy script path is built from settings.repo_root (trusted) +
+    # a constant relative path. No user-supplied input enters the argv.
+    argv = ["bash", str(script)]  # noqa: S607
+    try:
+        proc = subprocess.run(  # noqa: S603
+            argv,
+            cwd=settings.repo_root,
+            timeout=timeout_seconds,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        log.error("deploy timed out after %ds", timeout_seconds)
+        return False
+    except Exception:  # noqa: BLE001
+        log.exception("deploy raised unexpectedly")
+        return False
+    if proc.returncode != 0:
+        log.error(
+            "deploy failed (rc=%d); stdout=%s stderr=%s",
+            proc.returncode, proc.stdout[-500:], proc.stderr[-500:],
+        )
+        return False
+    log.info("deploy ok")
+    return True
+
+
 def supervisor_loop(settings: Settings, *, max_iterations: int | None = None) -> None:
     """Run ticks every settings.tick_minutes. Exponential backoff on consecutive failures."""
     backoff = INITIAL_BACKOFF_SECONDS
@@ -81,7 +137,9 @@ def supervisor_loop(settings: Settings, *, max_iterations: int | None = None) ->
             return
         iteration += 1
 
-        ok = run_tick_with_watchdog(settings)
+        tick_ok = run_tick_with_watchdog(settings)
+        deploy_ok = deploy_to_r2(settings) if tick_ok else False
+        ok = tick_ok and deploy_ok
         if ok:
             consecutive_fail = 0
             backoff = INITIAL_BACKOFF_SECONDS
@@ -90,10 +148,10 @@ def supervisor_loop(settings: Settings, *, max_iterations: int | None = None) ->
             consecutive_fail += 1
             sleep_s = min(backoff, MAX_BACKOFF_SECONDS)
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+            failed_step = "tick" if not tick_ok else "deploy"
             log.warning(
-                "tick failed (consecutive=%d); sleeping %ds before retry",
-                consecutive_fail,
-                sleep_s,
+                "%s failed (consecutive=%d); sleeping %ds before retry",
+                failed_step, consecutive_fail, sleep_s,
             )
 
         if max_iterations is not None and iteration >= max_iterations:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -71,11 +71,6 @@ def write_manifest(
             "bytes": path.stat().st_size,
         }
 
-    age_now = datetime.now().astimezone()
-    if age_now.tzinfo is None:
-
-        age_now = datetime.now(tz=UTC)
-
     freshness = {
         "tle_hours": (generated_at - tle_epoch).total_seconds() / 3600.0,
         "cloud_hours": (generated_at - cloud_composite_hour).total_seconds() / 3600.0,
@@ -103,16 +98,40 @@ def write_manifest(
     return manifest_path
 
 
+def _current_published_version(out_dir: Path) -> str | None:
+    """Return the version name referenced by the current manifest.json, if any.
+
+    Used by cleanup to AVOID deleting the version that is still being served.
+    """
+    manifest_path = out_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        data = json.loads(manifest_path.read_text())
+        return data.get("version")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def cleanup_old_versions(out_dir: Path, keep_minutes: int = 60) -> list[Path]:
-    """Delete versioned subfolders older than `keep_minutes`. Returns deleted paths."""
+    """Delete versioned subfolders older than `keep_minutes`. Returns deleted paths.
+
+    SAFETY: never deletes the version that the current `manifest.json` points at,
+    even if that version's mtime is past the cutoff. If the daemon stalls and the
+    only published version goes "old," cleanup leaves it in place so readers don't
+    hit 404s on every artifact between manifest fetches.
+    """
     versions_dir = out_dir / "v"
     if not versions_dir.exists():
         return []
 
+    published = _current_published_version(out_dir)
     deleted: list[Path] = []
     cutoff_ts = datetime.now().timestamp() - keep_minutes * 60
     for entry in versions_dir.iterdir():
         if not entry.is_dir():
+            continue
+        if entry.name == published:
             continue
         if entry.stat().st_mtime < cutoff_ts:
             shutil.rmtree(entry)

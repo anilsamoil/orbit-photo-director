@@ -7,10 +7,13 @@ main = "src/index.ts"
 compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Custom domain — bound after R2 bucket exists and DNS is wired.
-# routes = [
-#   { pattern = "map.astroanil.dev/api/*", custom_domain = true }
-# ]
+# Worker routes ALL of map.astroanil.dev. The Worker handles /api/log and
+# /api/health directly; all other GETs are streamed from the SITE bucket
+# (handleStatic). This way `/` correctly serves index.html — R2 alone doesn't
+# do that for custom-domain bindings.
+routes = [
+  { pattern = "map.astroanil.dev/*", zone_name = "astroanil.dev" },
+]
 
 [[r2_buckets]]
 binding = "SITE"
@@ -22,9 +25,13 @@ bucket_name = "orbit-calib"
 
 # Set the calibration shared secret via:
 #   wrangler secret put CALIB_TOKEN
-# Set the staleness alert threshold (seconds):
+#
+# Staleness alert threshold (seconds).
+# 2700 = 45 min. Generator ticks every 30 min, so a tick that runs 5-10 min PLUS
+# UptimeRobot's 5-min check interval can momentarily exceed 30 min without being
+# a real outage. 45 min absorbs that jitter and only fires on genuine stalls.
 [vars]
-STALE_THRESHOLD_SECONDS = "1800"
+STALE_THRESHOLD_SECONDS = "2700"
 
 [observability]
 enabled = true

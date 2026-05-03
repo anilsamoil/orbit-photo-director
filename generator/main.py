@@ -38,8 +38,20 @@ from .config import (
     load_targets,
 )
 from .manifest import cleanup_old_versions, utcnow_iso, version_id, write_manifest
-from .orbit import TLE, find_passes, fit_iss_polynomial, freshness_factor, tle_age_hours
+from .orbit import (
+    TLE,
+    detect_reboost,
+    find_passes,
+    fit_iss_polynomial,
+    freshness_factor,
+    tle_age_hours,
+)
 from .score import compute_score, top_n
+
+# Hard-fail threshold: above this TLE age, sgp4 predictions degrade so badly
+# the queue would mislead the user. Better to publish a stale-flag manifest
+# than confidently-wrong shot times.
+TLE_HARD_FAIL_HOURS = 96.0
 
 log = logging.getLogger(__name__)
 
@@ -50,19 +62,42 @@ def fetch_tle(
     ttl_hours: float = 1.0,
     now: datetime | None = None,
 ) -> TLE:
-    """Fetch latest TLE from Celestrak, cache to disk. If cache fresh, use it."""
+    """Fetch latest TLE from Celestrak, cache to disk. If cache fresh, use it.
+
+    Side effect: when fetching a NEW TLE, compares it to the previous cached one
+    and logs a warning if a likely reboost is detected (mean motion change >
+    0.005 rev/day). Reboost detection lets ground-side support know when the new
+    TLE arrived and validates that pass times are now trustworthy.
+    """
     n = now or datetime.now(tz=UTC)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     if cache_path.exists():
         age_h = (n.timestamp() - cache_path.stat().st_mtime) / 3600.0
         if age_h < ttl_hours:
             return TLE.from_text(cache_path.read_text())
+
+    # Snapshot prior TLE for reboost comparison BEFORE overwriting.
+    prior: TLE | None = None
+    if cache_path.exists():
+        try:
+            prior = TLE.from_text(cache_path.read_text())
+        except (ValueError, OSError):
+            prior = None
+
     try:
         resp = requests.get(url, timeout=15)
         resp.raise_for_status()
         text = resp.text
         cache_path.write_text(text)
-        return TLE.from_text(text)
+        new_tle = TLE.from_text(text)
+        if detect_reboost(prior, new_tle):
+            log.warning(
+                "ISS reboost detected: TLE epoch advanced from %s to %s "
+                "(mean motion changed > 0.005 rev/day)",
+                prior.epoch.isoformat() if prior else "<none>",
+                new_tle.epoch.isoformat(),
+            )
+        return new_tle
     except Exception as exc:  # noqa: BLE001
         log.warning("TLE fetch failed: %s; using cached if present", exc)
         if cache_path.exists():
@@ -161,6 +196,13 @@ def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
     tle_cache = settings.cache_dir / "iss.tle"
     tle = fetch_tle(settings.tle_url, tle_cache, ttl_hours=1.0, now=n)
     age_h = tle_age_hours(tle, n)
+    if age_h > TLE_HARD_FAIL_HOURS:
+        # Predictions will be off by hundreds of km. Better to fail loudly than
+        # silently publish wrong shot times. UptimeRobot will alert on staleness.
+        raise RuntimeError(
+            f"TLE age {age_h:.1f}h exceeds hard-fail threshold ({TLE_HARD_FAIL_HOURS}h); "
+            "refusing to publish. Refresh Celestrak network access."
+        )
     fresh = freshness_factor(age_h)
     log.info("TLE epoch=%s age=%.1fh freshness=%.2f", utcnow_iso(tle.epoch), age_h, fresh)
 

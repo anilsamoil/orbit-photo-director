@@ -115,17 +115,21 @@ def is_water(lat: float, lon: float, mask: Any | None = None) -> bool:
     """
     if mask is not None:
         return bool(mask(lat, lon))
-    # Crude ocean heuristic: points more than ~5° from the named landmass bands
-    # (approximate; real impl swaps in a binary GSHHG-derived mask)
-    if -60 < lat < 60:
-        # Pacific (approx) - large central band
+    # V1 heuristic. Lat band extended to ±70 so polar/sub-polar coastal targets
+    # (Iceland ~65, Norway ~61, southern Patagonia ~-50) get a glint check.
+    # V2 swaps in a real GSHHG-derived binary mask so coastlines are precise.
+    if -70 < lat < 70:
+        # Pacific - large central band
         if 140 < lon < 180 or -180 < lon < -110:
             return True
-        # Atlantic (approx)
-        if -60 < lon < -20 and -50 < lat < 40:
+        # Atlantic - includes north Atlantic to capture Iceland approaches
+        if -60 < lon < -10 and -50 < lat < 65:
             return True
-        # Indian (approx)
+        # Indian
         if 50 < lon < 100 and -50 < lat < 10:
+            return True
+        # Norwegian/Arctic-fringe Atlantic
+        if -10 < lon < 20 and 55 < lat < 70:
             return True
     return False
 

@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# scripts/deploy.sh — sync the latest generator output to Cloudflare R2.
+# scripts/deploy.sh — publish the latest generator output to Cloudflare R2.
 #
-# Order matters:
-#   1. Sync versioned subfolders first (out/v/* → r2:.../v/*).
-#   2. Copy manifest.json LAST — atomic pointer flip; readers never see torn state.
-#   3. Trigger a small cleanup of versions older than 1h on the bucket.
+# Order matters. NEVER `rclone sync` /v/ because sync deletes destination files
+# missing locally — after cleanup_old_versions prunes a 60-min-old folder that
+# the CURRENT manifest still points to, a sync would erase it from R2 first and
+# break readers between that step and the manifest flip.
+#
+# Correct order:
+#   1. `rclone copy` (additive) the new versioned artifacts to /v/.
+#   2. Atomic `rclone copyto` of manifest.json (single-file flip).
+#   3. Prune remote versions older than 2h (AFTER manifest flip — the 2h horizon
+#      vs local 1h gives in-flight readers headroom against the prior version).
 #
 # Run from the repo root. Environment vars (with defaults):
 #   OPD_OUT          path to out/ dir (default: out)
@@ -30,8 +36,8 @@ if [ ! -f "$OUT_DIR/manifest.json" ]; then
   exit 3
 fi
 
-echo "==> Syncing versioned artifacts: $OUT_DIR/v/ -> $REMOTE/v/"
-rclone sync "$OUT_DIR/v/" "$REMOTE/v/" \
+echo "==> Uploading new versioned artifacts (additive copy): $OUT_DIR/v/ -> $REMOTE/v/"
+rclone copy "$OUT_DIR/v/" "$REMOTE/v/" \
   --transfers 4 \
   --checkers 8 \
   --header-upload "Cache-Control: public, max-age=3600, immutable" \
@@ -42,8 +48,8 @@ rclone copyto "$OUT_DIR/manifest.json" "$REMOTE/manifest.json" \
   --header-upload "Cache-Control: public, max-age=10" \
   $VERBOSE_FLAG
 
-echo "==> Cleanup remote versions older than 1h"
-# rclone delete by min-age (entries OLDER than min-age get deleted)
-rclone delete "$REMOTE/v/" --min-age 1h $VERBOSE_FLAG || true
+echo "==> Pruning remote versions older than 2h (AFTER manifest flip)"
+rclone delete "$REMOTE/v/" --min-age 2h $VERBOSE_FLAG || true
+rclone rmdirs "$REMOTE/v/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
 
 echo "==> Deploy complete"

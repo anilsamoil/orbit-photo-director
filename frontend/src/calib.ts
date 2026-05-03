@@ -2,6 +2,7 @@ import type { CalibAction, CalibPayload } from './types';
 
 const TOKEN_KEY = 'opd-calib-token';
 const QUEUE_KEY = 'opd-calib-queue';
+const QUEUE_MAX_ENTRIES = 200; // hard cap so localStorage never balloons
 
 export function getToken(): string | null {
   try {
@@ -27,7 +28,19 @@ export function clearToken(): void {
   }
 }
 
-/** POST a calibration record. On network failure, queue locally for retry on next page load. */
+/** Should this server status trigger a queued retry, or should we drop?
+ *
+ *  Queue: network errors, 429, 5xx — recoverable.
+ *  Drop:  4xx (except 429) — not recoverable; retrying floods the queue with junk.
+ *  401:   special — also clear the token so the user gets the setup banner.
+ */
+function shouldQueueOnStatus(status: number): boolean {
+  if (status === 429) return true;
+  if (status >= 500) return true;
+  return false; // 4xx (other than 429) — drop
+}
+
+/** POST a calibration record. On retryable failure, queue locally for next visit. */
 export async function postCalib(
   payload: CalibPayload,
   baseUrl = ''
@@ -49,11 +62,17 @@ export async function postCalib(
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
-      enqueue(body);
+      if (resp.status === 401) {
+        // Token rejected; clear it so the next page load surfaces the setup banner.
+        clearToken();
+      }
+      if (shouldQueueOnStatus(resp.status)) {
+        enqueue(body);
+      }
       return { ok: false, reason: `server_${resp.status}` };
     }
     return { ok: true };
-  } catch (e) {
+  } catch {
     enqueue(body);
     return { ok: false, reason: 'network' };
   }
@@ -100,6 +119,11 @@ export function buildPayload(
 export function enqueue(p: CalibPayload): void {
   const q = readQueue();
   q.push(p);
+  // Drop oldest entries when over the cap so localStorage stays bounded.
+  // Calibration data is best-effort — the alternative (failing the write) is worse.
+  if (q.length > QUEUE_MAX_ENTRIES) {
+    q.splice(0, q.length - QUEUE_MAX_ENTRIES);
+  }
   writeQueue(q);
 }
 

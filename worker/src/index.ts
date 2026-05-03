@@ -41,15 +41,57 @@ interface Manifest {
   freshness: ManifestFreshness;
 }
 
-const ALLOWED_METHODS = new Set(['GET', 'POST', 'OPTIONS']);
+const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'OPTIONS']);
+
+const ALLOWED_ORIGINS = new Set([
+  'https://map.astroanil.dev',
+  'http://localhost:5173', // vite dev server
+  'http://127.0.0.1:5173',
+]);
+
+const MAX_BODY_BYTES = 8 * 1024; // 8 KB cap on /api/log payloads
+const MAX_FIELD_LEN = 200;
+const VALID_OBSTRUCTIONS = new Set([
+  'clear',
+  'cloudy',
+  'sun-glint',
+  'thin cirrus',
+  'haze',
+  'other',
+]);
 
 function corsHeaders(origin: string | null): HeadersInit {
-  return {
-    'access-control-allow-origin': origin ?? '*',
+  // Only echo trusted origins; otherwise omit ACAO entirely (browser blocks).
+  const allowed = origin && ALLOWED_ORIGINS.has(origin) ? origin : null;
+  const headers: Record<string, string> = {
     'access-control-allow-methods': 'GET, POST, OPTIONS',
     'access-control-allow-headers': 'content-type, x-calib-token',
     'access-control-max-age': '86400',
+    vary: 'origin',
   };
+  if (allowed) {
+    headers['access-control-allow-origin'] = allowed;
+  }
+  return headers;
+}
+
+/** Constant-time string compare; avoids token-timing leaks across requests. */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+/** Strip dedupe_key down to URL- and bucket-safe characters; cap length.
+ *  Excludes `.` so a key like `../../../foo` cannot survive as `....foo` and
+ *  produce path-like substrings in the R2 object key.
+ */
+function sanitizeDedupeKey(raw: string): string {
+  const cleaned = raw.replace(/[^a-zA-Z0-9_\-|]/g, '').slice(0, 128);
+  return cleaned || crypto.randomUUID();
 }
 
 function jsonResponse(body: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
@@ -67,18 +109,37 @@ function isLogRequest(value: unknown): value is LogRequest {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.target_id !== 'string' || v.target_id.length === 0) return false;
+  if (v.target_id.length > MAX_FIELD_LEN) return false;
   if (typeof v.pass_time !== 'string' || !v.pass_time.endsWith('Z')) return false;
+  if (v.pass_time.length > MAX_FIELD_LEN) return false;
   if (v.action !== 'shoot' && v.action !== 'skip' && v.action !== 'rate') return false;
   if (v.action === 'rate') {
     if (typeof v.rating !== 'number' || v.rating < 1 || v.rating > 5) return false;
+  }
+  if (v.observed_obstruction !== undefined) {
+    if (typeof v.observed_obstruction !== 'string') return false;
+    if (!VALID_OBSTRUCTIONS.has(v.observed_obstruction)) return false;
+  }
+  if (v.dedupe_key !== undefined) {
+    if (typeof v.dedupe_key !== 'string' || v.dedupe_key.length > MAX_FIELD_LEN) return false;
   }
   return true;
 }
 
 async function handleLog(request: Request, env: Env): Promise<Response> {
   const token = request.headers.get('x-calib-token');
-  if (!token || token !== env.CALIB_TOKEN) {
+  if (!token || !constantTimeEqual(token, env.CALIB_TOKEN)) {
     return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+
+  // Reject oversized bodies BEFORE buffering. Cloudflare's body parser will also
+  // refuse very large requests, but Content-Length lets us short-circuit cheaply.
+  const lengthHeader = request.headers.get('content-length');
+  if (lengthHeader) {
+    const length = Number(lengthHeader);
+    if (Number.isFinite(length) && length > MAX_BODY_BYTES) {
+      return jsonResponse({ error: 'payload_too_large' }, 413);
+    }
   }
 
   let body: unknown;
@@ -92,30 +153,106 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
   }
   const payload = body as LogRequest;
 
-  // Object key: log/YYYYMM/<dedupe_key or uuid>.json
+  // Object key: log/YYYYMM/<sanitized-dedupe_key or uuid>.json
   const now = new Date();
   const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-  const key = payload.dedupe_key ?? crypto.randomUUID();
+  const key = payload.dedupe_key ? sanitizeDedupeKey(payload.dedupe_key) : crypto.randomUUID();
   const objectKey = `log/${yyyymm}/${key}.json`;
 
-  // Idempotent: HEAD first; if exists, return 200 with no-op
-  const existing = await env.CALIB.head(objectKey);
-  if (existing) {
-    return jsonResponse({ ok: true, deduped: true, key: objectKey });
+  try {
+    // Idempotent: HEAD first; if exists, return 200 with no-op.
+    const existing = await env.CALIB.head(objectKey);
+    if (existing) {
+      return jsonResponse({ ok: true, deduped: true, key: objectKey });
+    }
+    const record = {
+      ...payload,
+      received_at: now.toISOString().replace(/\.\d+Z$/, 'Z'),
+    };
+    await env.CALIB.put(objectKey, JSON.stringify(record), {
+      httpMetadata: { contentType: 'application/json' },
+    });
+    return jsonResponse({ ok: true, deduped: false, key: objectKey });
+  } catch (e) {
+    // R2 transient failures: surface 503 (frontend will queue + retry) instead of
+    // a generic 500 (which the frontend would also queue, but with worse signal).
+    console.error('R2 write failed', e);
+    return jsonResponse({ error: 'storage_unavailable' }, 503);
   }
+}
 
-  const record = {
-    ...payload,
-    received_at: now.toISOString().replace(/\.\d+Z$/, 'Z'),
-  };
-  await env.CALIB.put(objectKey, JSON.stringify(record), {
-    httpMetadata: { contentType: 'application/json' },
+/** Map a request path to its R2 object key. `/` becomes `index.html`; trailing `/` adds it. */
+function pathToKey(pathname: string): string {
+  let p = pathname.replace(/^\/+/, ''); // strip leading slashes
+  if (p === '' || p.endsWith('/')) {
+    p = `${p}index.html`;
+  }
+  return p;
+}
+
+const CACHE_BY_EXT: Record<string, string> = {
+  html: 'public, max-age=60',
+  json: 'public, max-age=10',
+  css: 'public, max-age=31536000, immutable',
+  js: 'public, max-age=31536000, immutable',
+  map: 'public, max-age=31536000, immutable',
+  png: 'public, max-age=86400',
+  svg: 'public, max-age=86400',
+  woff: 'public, max-age=31536000, immutable',
+  woff2: 'public, max-age=31536000, immutable',
+};
+
+const CONTENT_TYPE_BY_EXT: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  json: 'application/json',
+  css: 'text/css; charset=utf-8',
+  js: 'application/javascript; charset=utf-8',
+  map: 'application/json',
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  txt: 'text/plain; charset=utf-8',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+};
+
+async function handleStatic(pathname: string, env: Env): Promise<Response> {
+  const key = pathToKey(pathname);
+  // Defense-in-depth: never serve internal calibration prefixes from the SITE bucket
+  // (the bucket doesn't host them anyway, but a future misconfig shouldn't expose them).
+  if (key.startsWith('log/')) {
+    return jsonResponse({ error: 'not_found' }, 404);
+  }
+  let obj: R2ObjectBody | null;
+  try {
+    obj = await env.SITE.get(key);
+  } catch (e) {
+    console.error('R2 get failed', e);
+    return jsonResponse({ error: 'storage_unavailable' }, 503);
+  }
+  if (!obj) {
+    return jsonResponse({ error: 'not_found' }, 404);
+  }
+  const ext = key.split('.').pop()?.toLowerCase() ?? '';
+  const ct = obj.httpMetadata?.contentType ?? CONTENT_TYPE_BY_EXT[ext] ?? 'application/octet-stream';
+  const cc = obj.httpMetadata?.cacheControl ?? CACHE_BY_EXT[ext] ?? 'public, max-age=300';
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      'content-type': ct,
+      'cache-control': cc,
+      etag: obj.httpEtag,
+    },
   });
-  return jsonResponse({ ok: true, deduped: false, key: objectKey });
 }
 
 async function handleHealth(env: Env): Promise<Response> {
-  const obj = await env.SITE.get('manifest.json');
+  let obj: R2ObjectBody | null;
+  try {
+    obj = await env.SITE.get('manifest.json');
+  } catch (e) {
+    console.error('R2 read failed', e);
+    return jsonResponse({ ok: false, reason: 'storage_unavailable' }, 503);
+  }
   if (!obj) {
     return jsonResponse(
       { ok: false, reason: 'manifest_not_found' },
@@ -165,8 +302,21 @@ export default {
     let response: Response;
     if (url.pathname === '/api/log' && request.method === 'POST') {
       response = await handleLog(request, env);
-    } else if (url.pathname === '/api/health' && request.method === 'GET') {
+    } else if (
+      url.pathname === '/api/health' &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
       response = await handleHealth(env);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+    } else if (request.method === 'GET' || request.method === 'HEAD') {
+      // Static fallback: serve any non-/api GET from the SITE bucket. Maps
+      // `/` to `index.html`. Returns 404 if the object doesn't exist in R2.
+      response = await handleStatic(url.pathname, env);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
     } else {
       response = jsonResponse({ error: 'not_found' }, 404);
     }

@@ -297,9 +297,111 @@ describe('routing + CORS', () => {
     expect(r.status).toBe(405);
   });
 
-  it('attaches CORS headers to all api responses', async () => {
+  it('attaches CORS headers to allowed origin', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/health', {
+      headers: { origin: 'https://map.astroanil.dev' },
+    });
+    expect(r.headers.get('access-control-allow-origin')).toBe('https://map.astroanil.dev');
+    expect(r.headers.get('vary')).toBe('origin');
+  });
+
+  it('omits ACAO for disallowed origin', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/health', {
+      headers: { origin: 'https://evil.example.com' },
+    });
+    expect(r.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('omits ACAO when no origin header', async () => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/health');
-    expect(r.headers.get('access-control-allow-origin')).toBeTruthy();
+    expect(r.headers.get('access-control-allow-origin')).toBeNull();
+  });
+});
+
+describe('input hardening', () => {
+  it('rejects oversized target_id', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 'a'.repeat(500),
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+      }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('rejects unknown observed_obstruction', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 'tokyo-night',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'rate',
+        rating: 4,
+        observed_obstruction: 'aurora-tag',
+      }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('sanitizes path-like dedupe_key (no traversal in resulting object key)', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 'tokyo-night',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+        dedupe_key: '../../../site/manifest.json',
+      }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { key: string };
+    expect(body.key.includes('..')).toBe(false);
+    expect(body.key.includes('/site/')).toBe(false);
+  });
+
+  it('rejects oversized body via content-length header', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 'x',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-calib-token': 'test-secret-123',
+        'content-length': '100000', // 100 KB > 8 KB cap
+      },
+    });
+    expect(r.status).toBe(413);
+  });
+
+  it('returns 503 when R2 write fails', async () => {
+    const env = makeEnv();
+    env.CALIB.put = async () => {
+      throw new Error('simulated R2 outage');
+    };
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 'x',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+      }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(503);
   });
 });
