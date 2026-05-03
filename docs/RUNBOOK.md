@@ -152,6 +152,27 @@ What you have to do manually:
 - [ ] **Test reboot recovery**: `sudo shutdown -r +1` then verify daemon resumes within 5 min of login.
 - [ ] **2-week unattended soak test** with at least one injection scenario per category from `scripts/soak/inject_failure.sh`.
 
+### Daemon cold-start (without a full reboot — quick smoke test)
+
+Run before each soak test to confirm the daemon survives a clean restart of the
+LaunchAgent. Validates: TLE fetch, all 3 cloud tiers, R2 credentials,
+manifest publish, end-to-end timing.
+
+```bash
+# Stop, restart, watch the first tick + deploy.
+launchctl bootout gui/$UID/com.astroanil.orbit-photo-director
+truncate -s 0 data/logs/launchd.err
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.astroanil.orbit-photo-director.plist
+# Wait ~15s, then read logs:
+sleep 15
+cat data/logs/launchd.err
+# Confirm map.astroanil.dev picked up the new manifest:
+curl -s https://map.astroanil.dev/manifest.json | jq -r '.version'
+```
+
+Expected on a healthy install: tick complete in 5–10 s, "deploy ok" within
+a further 2 s, live `version` matches the new tick's timestamp.
+
 ### FileVault tradeoff
 
 FileVault encrypts the disk. After a kernel update reboot, the disk is locked at the EFI password prompt — launchd cannot start the daemon until someone enters the password. Two options:
