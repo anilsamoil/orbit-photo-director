@@ -15,6 +15,7 @@ from generator.daemon import (
     INITIAL_BACKOFF_SECONDS,
     StallWatchdog,
     deploy_to_r2,
+    main,
     run_tick_with_watchdog,
     supervisor_loop,
 )
@@ -180,4 +181,150 @@ def test_deploy_wrangler_script_does_not_require_rclone(
         os.environ.pop("OPD_SKIP_DEPLOY", None)
         with patch("generator.daemon.shutil.which", return_value=None):
             assert deploy_to_r2(settings_in_tmp, timeout_seconds=5) is True
+
+
+# --------------------------------------------------------------------------
+# supervisor_loop — backoff + iteration cap behavior
+# --------------------------------------------------------------------------
+
+
+def test_supervisor_loop_resets_backoff_on_success(
+    settings_in_tmp: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful tick resets the backoff counter and sleeps tick_minutes*60."""
+    sleep_durations: list[float] = []
+    monkeypatch.setattr("time.sleep", lambda s: sleep_durations.append(s))
+    monkeypatch.setattr("generator.daemon.run_tick_with_watchdog", lambda s: True)
+    monkeypatch.setattr("generator.daemon.deploy_to_r2", lambda s: True)
+    supervisor_loop(settings_in_tmp, max_iterations=2)
+    # Both iterations succeeded → both sleeps are tick_minutes * 60
+    assert all(d == settings_in_tmp.tick_minutes * 60 for d in sleep_durations)
+
+
+def test_supervisor_loop_skips_deploy_when_tick_fails(
+    settings_in_tmp: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If run_tick fails, deploy is not attempted (avoid publishing stale out/)."""
+    deploy_called = []
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("generator.daemon.run_tick_with_watchdog", lambda s: False)
+    monkeypatch.setattr(
+        "generator.daemon.deploy_to_r2",
+        lambda s: deploy_called.append(True) or True,
+    )
+    supervisor_loop(settings_in_tmp, max_iterations=1)
+    assert deploy_called == []
+
+
+def test_supervisor_loop_reraises_keyboard_interrupt(
+    settings_in_tmp: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KeyboardInterrupt during sleep must propagate so launchd sees a crash."""
+    def kbint(_):
+        raise KeyboardInterrupt
+    monkeypatch.setattr("time.sleep", kbint)
+    monkeypatch.setattr("generator.daemon.run_tick_with_watchdog", lambda s: True)
+    monkeypatch.setattr("generator.daemon.deploy_to_r2", lambda s: True)
+    with pytest.raises(KeyboardInterrupt):
+        supervisor_loop(settings_in_tmp, max_iterations=5)
+
+
+# --------------------------------------------------------------------------
+# main() entry point — exit codes feed launchd's KeepAlive policy
+# --------------------------------------------------------------------------
+
+
+def test_daemon_main_returns_zero_on_clean_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """supervisor_loop returns normally → main() returns 0."""
+    monkeypatch.setattr("generator.daemon.supervisor_loop", lambda s: None)
+    monkeypatch.setattr(
+        "generator.daemon.Settings.from_env",
+        classmethod(lambda cls: Settings(
+            repo_root=Path("/tmp"),
+            out_dir=Path("/tmp/out"),
+            cache_dir=Path("/tmp/cache"),
+            log_dir=Path("/tmp/log"),
+            targets_file=Path("/tmp/targets.json"),
+            tle_url="http://example.invalid",
+            satcorps_creds_file=Path("/tmp/creds.json"),
+            rclone_remote="r2:bucket",
+            tick_minutes=30,
+            pass_window_hours=6,
+        )),
+    )
+    assert main() == 0
+
+
+def test_daemon_main_returns_130_on_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SIGINT (stall watchdog or external) → exit 130 so launchd restarts."""
+    def kbint(s):
+        raise KeyboardInterrupt
+    monkeypatch.setattr("generator.daemon.supervisor_loop", kbint)
+    monkeypatch.setattr(
+        "generator.daemon.Settings.from_env",
+        classmethod(lambda cls: Settings(
+            repo_root=Path("/tmp"),
+            out_dir=Path("/tmp/out"),
+            cache_dir=Path("/tmp/cache"),
+            log_dir=Path("/tmp/log"),
+            targets_file=Path("/tmp/targets.json"),
+            tle_url="http://example.invalid",
+            satcorps_creds_file=Path("/tmp/creds.json"),
+            rclone_remote="r2:bucket",
+            tick_minutes=30,
+            pass_window_hours=6,
+        )),
+    )
+    assert main() == 130
+
+
+def test_daemon_main_returns_one_on_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any other exception → exit 1 so launchd treats as crash and restarts."""
+    def boom(s):
+        raise RuntimeError("supervisor blew up")
+    monkeypatch.setattr("generator.daemon.supervisor_loop", boom)
+    monkeypatch.setattr(
+        "generator.daemon.Settings.from_env",
+        classmethod(lambda cls: Settings(
+            repo_root=Path("/tmp"),
+            out_dir=Path("/tmp/out"),
+            cache_dir=Path("/tmp/cache"),
+            log_dir=Path("/tmp/log"),
+            targets_file=Path("/tmp/targets.json"),
+            tle_url="http://example.invalid",
+            satcorps_creds_file=Path("/tmp/creds.json"),
+            rclone_remote="r2:bucket",
+            tick_minutes=30,
+            pass_window_hours=6,
+        )),
+    )
+    assert main() == 1
+
+
+# --------------------------------------------------------------------------
+# run_tick_with_watchdog — failure paths
+# --------------------------------------------------------------------------
+
+
+def test_run_tick_with_watchdog_returns_false_on_keyboard_interrupt(
+    settings_in_tmp: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stall watchdog raises SIGINT → run_tick_with_watchdog returns False."""
+    def kbint(*args, **kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr("generator.daemon.run_tick", kbint)
+    assert run_tick_with_watchdog(settings_in_tmp) is False
+
+
+def test_run_tick_with_watchdog_returns_false_on_other_exception(
+    settings_in_tmp: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*args, **kwargs):
+        raise RuntimeError("tick fell over")
+    monkeypatch.setattr("generator.daemon.run_tick", boom)
+    assert run_tick_with_watchdog(settings_in_tmp) is False
 

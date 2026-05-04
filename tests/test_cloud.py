@@ -452,6 +452,163 @@ def test_gfs_forecast_deduplicates_targets_on_grid_snap() -> None:
     assert fetch_calls[0].count(",") == 0  # no comma-separated lats/lons
 
 
+# --------------------------------------------------------------------------
+# Smaller branches: sun_subpoint wrap, is_water mask + ocean bands,
+# GFS forecast malformed-response handling
+# --------------------------------------------------------------------------
+
+
+def test_sun_subpoint_wraps_longitude_positive() -> None:
+    """At UTC midnight the unnormalized sub_lon is +180 → wrap path triggers."""
+    when = datetime(2024, 6, 21, 0, 0, 0, tzinfo=UTC)
+    sun_lat, sun_lon = sun_subpoint(when)
+    assert -180 <= sun_lon <= 180
+
+
+def test_sun_subpoint_wraps_longitude_negative() -> None:
+    """At UTC noon+12 the unnormalized sub_lon is < -180 → wrap path triggers."""
+    when = datetime(2024, 6, 21, 23, 59, 59, tzinfo=UTC)
+    sun_lat, sun_lon = sun_subpoint(when)
+    assert -180 <= sun_lon <= 180
+
+
+def test_sun_subpoint_rejects_naive_datetime() -> None:
+    with pytest.raises(ValueError, match="UTC-aware"):
+        sun_subpoint(datetime(2024, 6, 21, 12, 0, 0))
+
+
+def test_is_water_with_explicit_mask() -> None:
+    """When a mask callable is provided, is_water defers to it (V2 GSHHG path)."""
+    def always_water(_lat: float, _lon: float) -> bool:
+        return True
+
+    def always_land(_lat: float, _lon: float) -> bool:
+        return False
+
+    assert is_water(0.0, 0.0, mask=always_water) is True
+    assert is_water(0.0, 0.0, mask=always_land) is False
+
+
+@pytest.mark.parametrize(
+    ("lat", "lon", "expected_water"),
+    [
+        (0.0, 160.0, True),    # mid-Pacific
+        (0.0, -150.0, True),   # mid-Pacific (negative lon side)
+        (0.0, -30.0, True),    # mid-Atlantic
+        (-30.0, 75.0, True),   # Indian Ocean
+        (60.0, 0.0, True),     # Norwegian Sea
+        (40.0, -100.0, False), # central US (land)
+        (80.0, 0.0, False),    # outside ±70 lat band
+    ],
+)
+def test_is_water_ocean_bands(lat: float, lon: float, expected_water: bool) -> None:
+    assert is_water(lat, lon) is expected_water
+
+
+def test_gfs_forecast_handles_truncated_payload() -> None:
+    """Open-Meteo returning fewer items than requested logs but doesn't crash."""
+    from generator.cloud import GFSForecastSampler
+
+    def short_fetcher(url: str) -> list[dict]:
+        # Two targets requested, only one response object returned.
+        return [{
+            "latitude": 35.75,
+            "longitude": 139.75,
+            "hourly": {
+                "time": ["2026-05-03T12:00"],
+                "cloud_cover": [50.0],
+            },
+        }]
+
+    GFSForecastSampler(
+        targets=[(35.75, 139.75), (40.75, -74.0)],
+        fetcher=short_fetcher,
+    )
+
+
+def test_gfs_forecast_skips_unparseable_timestamps() -> None:
+    """Bad ISO timestamps in the upstream payload are skipped silently."""
+    from generator.cloud import GFSForecastSampler
+
+    def fetcher_with_bad_time(url: str):
+        return {
+            "latitude": 35.75,
+            "longitude": 139.75,
+            "hourly": {
+                "time": ["not-a-timestamp", "2026-05-03T13:00"],
+                "cloud_cover": [50.0, 30.0],
+            },
+        }
+
+    s = GFSForecastSampler(
+        targets=[(35.75, 139.75)],
+        fetcher=fetcher_with_bad_time,
+    )
+    # The valid sample remains accessible; sample() returns SOMETHING.
+    sample = s.sample(35.75, 139.75, datetime(2026, 5, 3, 13, 0, tzinfo=UTC))
+    assert sample is not None
+
+
+def test_gibs_helper_url_format() -> None:
+    """_gibs_url builds a WMTS-shaped URL string."""
+    from generator.cloud import _gibs_url
+    url = _gibs_url("MODIS_Aqua_Cloud_Fraction_Day", "2024-10-17", 0, 0, 0)
+    assert "MODIS_Aqua_Cloud_Fraction_Day" in url
+    assert "2024-10-17" in url
+    assert url.endswith("/0/0/0.png")
+
+
+def test_date_iso_strips_time() -> None:
+    """_date_iso formats yyyy-mm-dd regardless of clock component."""
+    from generator.cloud import _date_iso
+    assert _date_iso(datetime(2024, 10, 17, 23, 59, 59, tzinfo=UTC)) == "2024-10-17"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, False),    # 0 = no observation
+        (1, True),     # cloud-fraction=1 (sparsest cloud)
+        (50, True),
+        (100, True),   # full cloud
+        (101, False),  # >100 invalid
+        (127, False),  # GIBS no-data sentinel
+        (-5, False),
+    ],
+)
+def test_is_valid_gibs_pixel(value: int, expected: bool) -> None:
+    from generator.cloud import _is_valid_gibs_pixel
+    assert _is_valid_gibs_pixel(value) is expected
+
+
+def test_himawari_nict_sampler_rejects_naive_datetime() -> None:
+    """Same UTC-awareness contract as sun_subpoint."""
+    from generator.cloud import HimawariNICTSampler
+    with pytest.raises(ValueError, match="UTC-aware"):
+        HimawariNICTSampler(datetime(2024, 10, 17, 12, 0, 0))
+
+
+def test_gfs_forecast_skips_null_cloud_cover() -> None:
+    from generator.cloud import GFSForecastSampler
+
+    def fetcher_with_null(url: str):
+        return {
+            "latitude": 35.75,
+            "longitude": 139.75,
+            "hourly": {
+                "time": ["2026-05-03T12:00", "2026-05-03T13:00"],
+                "cloud_cover": [None, 40.0],
+            },
+        }
+
+    s = GFSForecastSampler(
+        targets=[(35.75, 139.75)],
+        fetcher=fetcher_with_null,
+    )
+    sample = s.sample(35.75, 139.75, datetime(2026, 5, 3, 13, 0, tzinfo=UTC))
+    assert sample is not None
+
+
 def test_gfs_forecast_clamps_cloud_fraction() -> None:
     """Open-Meteo can return values like 100.5 due to interpolation; clamp 0..100."""
     from generator.cloud import GFSForecastSampler

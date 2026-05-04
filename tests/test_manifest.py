@@ -230,3 +230,36 @@ def test_cleanup_old_versions_keeps_recent(tmp_path: Path) -> None:
     deleted = cleanup_old_versions(out, keep_minutes=60)
     assert deleted == []
     assert recent.exists()
+
+
+def test_cleanup_old_versions_skips_non_directory_entries(tmp_path: Path) -> None:
+    """Loose files in out/v/ (e.g. accidental writes) should be ignored, not deleted."""
+    out = tmp_path / "out"
+    out.mkdir()
+    versions = out / "v"
+    versions.mkdir()
+    stray_file = versions / "stray.txt"
+    stray_file.write_text("not a version dir")
+
+    deleted = cleanup_old_versions(out, keep_minutes=60)
+    assert deleted == []
+    assert stray_file.exists()
+
+
+def test_cleanup_old_versions_handles_corrupted_manifest(tmp_path: Path) -> None:
+    """A malformed manifest.json shouldn't crash cleanup — fall back to deleting normally."""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "manifest.json").write_text("{not valid json")  # corrupt
+    versions = out / "v"
+    versions.mkdir()
+    old = versions / "20200101T000000Z"
+    old.mkdir()
+    (old / "passes.json").write_text("[]")
+    import os as _os
+    old_mtime = _os.path.getmtime(old) - 7200  # 2 hours old
+    _os.utime(old, (old_mtime, old_mtime))
+
+    # Cleanup runs without raising; the manifest read returns None for "published".
+    deleted = cleanup_old_versions(out, keep_minutes=60)
+    assert any(p.name == "20200101T000000Z" for p in deleted)
