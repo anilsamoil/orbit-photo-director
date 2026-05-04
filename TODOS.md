@@ -82,6 +82,18 @@ unattended run with the same TLE (Mac dead), the cached satrec accumulates
 mutating state. Re-parse on each new manifest version to get a fresh
 satrec — cheap, safer.
 
+### V2-P3 — Map tab tile fetch in headless browser (/qa limitation)
+/qa run on 2026-05-04 caught that the Map tab renders blank under
+`browse $B` headless — MapLibre initializes the canvas but never fetches
+a single tile (zero requests to cartocdn / gibs.earthdata).
+`renderMap`'s `await map.once('load')` hangs forever, so the
+`ensureImageryDateBadge` call (and the ground track + targets layers)
+never run. Reproduced on `https://map.astroanil.dev/` (V1 live deploy)
+under the same browse — confirms env limitation, not a V2 code bug.
+Real Chrome works (the user has been using the live site fine).
+Investigate browse $B CDP-mode or a local tile mock so future /qa runs
+can fully verify the map view.
+
 ### V2-P3 — Post-mission: drop polynomial, keep SGP4 only
 After 8-month mission validates SGP4 client-side, the 60-min polynomial
 becomes redundant. Defer until post-mission. Removing earlier risks
