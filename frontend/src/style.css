@@ -302,6 +302,10 @@ main {
   border-radius: 999px;
   vertical-align: 1px;
 }
+/* Explicit display:inline-block above wins over the default UA hidden=true,
+ * so the empty span renders as a small inline-block "•" next to the Log
+ * tab even with hidden set. Hide it explicitly when the attribute is on. */
+.pending-badge[hidden] { display: none; }
 
 .map-imagery-date {
   position: absolute;
