@@ -329,6 +329,12 @@ def score_pass_for_target(
         "p_unobstructed": round(p_unobs_adjusted, 2),
         "cloud_fraction": round(sample.cloud_fraction, 2),
         "cloud_source": sample.source,
+        # Wall-clock time of the cloud observation that fed this score.
+        # Drives the frontend's "obs Nm ago" tag so the user can see at a
+        # glance whether the cloud reading is fresh (10 min, GOES-IR) or
+        # day-old (MODIS daily composite). For forecast samples this is
+        # the forecast valid-time, not the request time.
+        "sample_time": utcnow_iso(sample.sample_time),
         "score": round(sc.final, 3),
         "score_components": {
             "p_unobstructed": round(sc.p_unobstructed, 2),

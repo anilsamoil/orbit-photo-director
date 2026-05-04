@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderCard, renderCards } from '../src/card';
+import { formatObsAge, renderCard, renderCards } from '../src/card';
 import type { PassEntry } from '../src/types';
 
 const samplePass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -224,5 +224,68 @@ describe('renderCards', () => {
     renderCards(c, [samplePass()], NOW, false, () => undefined);
     renderCards(c, [], NOW, false, () => undefined);
     expect(c.children.length).toBe(0);
+  });
+});
+
+describe('formatObsAge', () => {
+  const now = Date.parse('2024-10-17T12:00:00Z');
+
+  it('returns "<1m ago" for sub-minute ages', () => {
+    expect(formatObsAge('2024-10-17T11:59:30Z', now)).toBe('<1m ago');
+  });
+
+  it('returns minutes for ages under 1h', () => {
+    expect(formatObsAge('2024-10-17T11:48:00Z', now)).toBe('12m ago');
+  });
+
+  it('returns hours (1 decimal) for ages under 10h', () => {
+    expect(formatObsAge('2024-10-17T08:30:00Z', now)).toBe('3.5h ago');
+  });
+
+  it('returns hours (whole) for ages 10h–24h', () => {
+    expect(formatObsAge('2024-10-17T00:00:00Z', now)).toBe('12h ago');
+  });
+
+  it('returns days past 24h', () => {
+    expect(formatObsAge('2024-10-15T12:00:00Z', now)).toBe('2d ago');
+  });
+
+  it('returns empty string for malformed timestamps', () => {
+    expect(formatObsAge('not a date', now)).toBe('');
+  });
+
+  it('returns empty string for future-dated samples (clock skew)', () => {
+    expect(formatObsAge('2024-10-17T12:30:00Z', now)).toBe('');
+  });
+});
+
+describe('renderCard obs-age tag', () => {
+  const now = Date.parse('2024-10-17T12:00:00Z');
+
+  it('renders the obs-age tag when sample_time is present', () => {
+    const card = renderCard(
+      samplePass({ cloud_source: 'gibs', sample_time: '2024-10-17T11:48:00Z' }),
+      now, false, () => undefined,
+    );
+    const tag = card.querySelector('.tag.obs-age');
+    expect(tag?.textContent).toBe('obs 12m ago');
+  });
+
+  it('omits obs-age when cloud_source is a no-observation placeholder', () => {
+    const card = renderCard(
+      samplePass({ cloud_source: 'mock', sample_time: '2024-10-17T11:48:00Z' }),
+      now, false, () => undefined,
+    );
+    expect(card.querySelector('.tag.obs-age')).toBeNull();
+    // Still gets the no-cloud-obs tag instead.
+    expect(card.querySelector('.tag.obs-noobs')).not.toBeNull();
+  });
+
+  it('omits obs-age silently when sample_time is missing (older manifests)', () => {
+    const card = renderCard(
+      samplePass({ cloud_source: 'gibs' }),  // no sample_time
+      now, false, () => undefined,
+    );
+    expect(card.querySelector('.tag.obs-age')).toBeNull();
   });
 });

@@ -84,6 +84,12 @@ export function renderCard(
   if (isNoObservationSource(p.cloud_source)) {
     // Tell the user the cloud score is a placeholder, not a real measurement.
     meta.appendChild(makeTag('obs-noobs', 'no cloud obs'));
+  } else if (p.sample_time) {
+    // Show how recent the cloud reading is so the user can weight day-old
+    // MODIS vs 10-min GOES-IR appropriately. Renders as "obs 12m ago" /
+    // "obs 3h ago"; older manifests without sample_time fall through silently.
+    const age = formatObsAge(p.sample_time, nowMs);
+    if (age) meta.appendChild(makeTag('obs-age', `obs ${age}`));
   }
   // Forecast variant: tag the pass so the user knows the cloud number came
   // from GFS (forward-looking) not a current observation. Less certain by
@@ -136,6 +142,23 @@ function makeTag(extraClass: string, text: string): HTMLElement {
   span.className = `tag ${extraClass}`.trim();
   span.textContent = text;
   return span;
+}
+
+/** Format the age of a cloud observation as a card tag suffix. Returns the
+ *  empty string (which the caller treats as "skip the tag") for malformed
+ *  timestamps or future-dated samples — better to omit the tag than render
+ *  "obs -3m ago" on clock skew.
+ */
+export function formatObsAge(sampleTimeIso: string, nowMs: number): string {
+  const t = Date.parse(sampleTimeIso);
+  if (Number.isNaN(t)) return '';
+  const ageMin = (nowMs - t) / 60_000;
+  if (ageMin < 0) return '';
+  if (ageMin < 1) return '<1m ago';
+  if (ageMin < 60) return `${Math.round(ageMin)}m ago`;
+  const h = ageMin / 60;
+  if (h < 24) return `${h.toFixed(h < 10 ? 1 : 0)}h ago`;
+  return `${Math.round(h / 24)}d ago`;
 }
 
 function obstructionClass(c: string): string {

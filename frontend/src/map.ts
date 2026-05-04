@@ -160,6 +160,11 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
   }
 
+  // Imagery-date badge: tells the user how recent the cloud composite the
+  // map's tiles are showing actually is. Especially load-bearing offline —
+  // GIBS tiles cached past day-roll could otherwise read as today's clouds.
+  ensureImageryDateBadge(container, manifest);
+
   // Ground track layer
   const trackFc: GeoJSON.FeatureCollection = {
     type: 'FeatureCollection',
@@ -396,4 +401,32 @@ export function createIssMarkerElement(): HTMLElement {
 
   wrap.appendChild(svg);
   return wrap;
+}
+
+/** Inject (or update) a small "Imagery: YYYY-MM-DD" badge in the map
+ *  container so the user knows how recent the cloud composite they're
+ *  looking at actually is. Important offline — a GIBS tile cached past
+ *  day-roll otherwise reads as today's clouds. Idempotent.
+ */
+export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifest): void {
+  let badge = container.querySelector<HTMLElement>('.map-imagery-date');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.className = 'map-imagery-date';
+    container.appendChild(badge);
+  }
+  const hour = manifest.cloud_composite_hour;
+  if (!hour) {
+    badge.hidden = true;
+    badge.textContent = '';
+    return;
+  }
+  const t = Date.parse(hour);
+  if (Number.isNaN(t)) {
+    badge.hidden = true;
+    return;
+  }
+  const date = new Date(t).toISOString().slice(0, 10);
+  badge.textContent = `Imagery: ${date}`;
+  badge.hidden = false;
 }

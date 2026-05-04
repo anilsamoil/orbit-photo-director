@@ -73,6 +73,9 @@ def test_run_tick_top5_passes_format(settings_in_tmp: Settings, cached_tle: Path
         assert "obstruction_class" in p
         assert p["obstruction_class"] in ("clear", "cloudy", "sun-glint risk")
         assert p["pass_regime"] in ("day", "night", "terminator")
+        # V2: per-pass cloud sample timestamp drives the frontend's "obs Nm ago" tag.
+        assert "sample_time" in p
+        assert p["sample_time"].endswith("Z")
 
 
 def test_run_tick_status_includes_freshness(settings_in_tmp: Settings, cached_tle: Path) -> None:

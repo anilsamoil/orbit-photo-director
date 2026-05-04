@@ -78,6 +78,15 @@ export async function postCalib(
   }
 }
 
+/** Read the queued-calibration count without parsing the full payload list.
+ *  Drives the topbar "N pending sync" badge. Cheap enough to call every
+ *  refresh — readQueue() is one localStorage read + one JSON.parse, and
+ *  the queue is bounded at QUEUE_MAX_ENTRIES.
+ */
+export function queuedCalibCount(): number {
+  return readQueue().length;
+}
+
 /** Drain queued calibrations on page load. Returns how many were sent successfully. */
 export async function drainQueue(baseUrl = ''): Promise<number> {
   const queued = readQueue();

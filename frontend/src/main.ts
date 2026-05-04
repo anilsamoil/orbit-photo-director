@@ -8,7 +8,7 @@
 
 import { renderCards } from './card';
 import { bannerError, bannerFromManifest, bannerLoading, bannerOffline, bannerWithTleOverlay } from './banner';
-import { buildPayload, clearToken, drainQueue, getToken, postCalib, setToken } from './calib';
+import { buildPayload, clearToken, drainQueue, getToken, postCalib, queuedCalibCount, setToken } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
@@ -31,6 +31,23 @@ function setBanner(state: BannerState): void {
   if (!el) return;
   el.className = `banner banner-${state.level}`;
   el.textContent = state.text;
+}
+
+/** Render or hide the topbar "N pending sync" badge based on the calib queue.
+ *  The badge sits inside the Log tab button so the user sees the count
+ *  regardless of which view they're on. */
+function updatePendingSyncBadge(): void {
+  const el = document.getElementById('pending-sync-badge');
+  if (!el) return;
+  const n = queuedCalibCount();
+  if (n === 0) {
+    el.hidden = true;
+    el.textContent = '';
+  } else {
+    el.hidden = false;
+    el.textContent = String(n);
+    el.title = `${n} calibration ${n === 1 ? 'entry' : 'entries'} queued — will sync when online`;
+  }
 }
 
 function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
@@ -83,6 +100,7 @@ async function refresh(): Promise<void> {
       bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
       track.tle_age_hours,
     ));
+    updatePendingSyncBadge();
   } catch (e) {
     // Refresh failed — keep showing whatever the snapshot path rendered and
     // surface the failure in the banner. currentManifest/Top5/etc still hold
@@ -184,6 +202,9 @@ function rerenderCountdowns(): void {
 async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<void> {
   const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);
   const result = await postCalib(payload);
+  // postCalib may have queued the action (offline / token missing / 5xx);
+  // refresh the badge regardless so the user sees the new count immediately.
+  updatePendingSyncBadge();
   // Dim the card briefly as before — keep this for visual locality.
   const card = document.querySelector<HTMLElement>(
     `.card[data-target-id="${p.target_id}"][data-pass-time="${p.closest_approach}"]`
@@ -462,7 +483,9 @@ async function init(): Promise<void> {
   if (!hadSnapshot) setBanner(bannerLoading());
 
   // Drain any queued calibrations from the previous session (network may have failed)
-  void drainQueue();
+  void drainQueue().then(updatePendingSyncBadge);
+  // Initial badge from whatever's already queued, before drain finishes.
+  updatePendingSyncBadge();
 
   await refresh();
 
