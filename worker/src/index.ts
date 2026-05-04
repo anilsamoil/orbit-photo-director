@@ -51,6 +51,11 @@ const ALLOWED_ORIGINS = new Set([
 
 const MAX_BODY_BYTES = 8 * 1024; // 8 KB cap on /api/log payloads
 const MAX_FIELD_LEN = 200;
+// Bound abuse if the calibration token is ever leaked. Personal use is
+// ~3-5 POSTs/day; 200/day is ~50× headroom, then 429 + retry-after.
+// TOCTOU on the counter object is acceptable for an abuse cap (off by
+// at most the concurrency).
+const RATE_LIMIT_PER_DAY = 200;
 const VALID_OBSTRUCTIONS = new Set([
   'clear',
   'cloudy',
@@ -85,6 +90,55 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/** Check the day's POST counter, increment, return remaining budget.
+ *
+ *  Uses an R2 object as the counter. Read-modify-write is racy; that's
+ *  acceptable for abuse mitigation (off-by-N at concurrency=N is fine
+ *  when the cap is in the hundreds). For strict accounting we'd want
+ *  Cloudflare's Rate Limiting binding (paid tier) or KV with TTL.
+ *
+ *  Counter key: `_meta/ratelimit/YYYYMMDD.json` with `{count: N}`.
+ *  Resets at next UTC midnight by virtue of the new key.
+ */
+async function checkAndBumpRateLimit(
+  env: Env, now: Date
+): Promise<{ ok: true; count: number } | { ok: false; resetAt: string }> {
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  const key = `_meta/ratelimit/${y}${m}${d}.json`;
+  let count = 0;
+  try {
+    const obj = await env.CALIB.get(key);
+    if (obj) {
+      const data = (await obj.json()) as { count?: number };
+      if (typeof data.count === 'number' && Number.isFinite(data.count)) {
+        count = data.count;
+      }
+    }
+  } catch (e) {
+    // Read failure → fail open for availability; the cap is best-effort.
+    console.error('rate limit read failed', e);
+    return { ok: true, count: 0 };
+  }
+  if (count >= RATE_LIMIT_PER_DAY) {
+    const reset = new Date(now);
+    reset.setUTCDate(reset.getUTCDate() + 1);
+    reset.setUTCHours(0, 0, 0, 0);
+    return { ok: false, resetAt: reset.toISOString() };
+  }
+  // Increment. Best-effort write — if the put fails the user still gets
+  // their write through, just without counting toward the cap.
+  try {
+    await env.CALIB.put(key, JSON.stringify({ count: count + 1 }), {
+      httpMetadata: { contentType: 'application/json' },
+    });
+  } catch (e) {
+    console.error('rate limit write failed', e);
+  }
+  return { ok: true, count: count + 1 };
+}
+
 /** Strip dedupe_key down to URL- and bucket-safe characters; cap length.
  *  Excludes `.` so a key like `../../../foo` cannot survive as `....foo` and
  *  produce path-like substrings in the R2 object key.
@@ -105,12 +159,17 @@ function jsonResponse(body: unknown, status = 200, extraHeaders: HeadersInit = {
   });
 }
 
+// Strict ISO 8601 UTC matcher: 2024-10-17T12:00:00Z or 2024-10-17T12:00:00.123Z.
+// The prior check (endsWith('Z') + length cap) accepted "AAAAAAAAZ" — the
+// frontend would later show "Invalid Date" for those rows.
+const PASS_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
 function isLogRequest(value: unknown): value is LogRequest {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.target_id !== 'string' || v.target_id.length === 0) return false;
   if (v.target_id.length > MAX_FIELD_LEN) return false;
-  if (typeof v.pass_time !== 'string' || !v.pass_time.endsWith('Z')) return false;
+  if (typeof v.pass_time !== 'string' || !PASS_TIME_RE.test(v.pass_time)) return false;
   if (v.pass_time.length > MAX_FIELD_LEN) return false;
   if (v.action !== 'shoot' && v.action !== 'skip' && v.action !== 'rate') return false;
   if (v.action === 'rate') {
@@ -127,6 +186,12 @@ function isLogRequest(value: unknown): value is LogRequest {
 }
 
 async function handleLog(request: Request, env: Env): Promise<Response> {
+  // Guard against secret deletion / deploy misconfig: an undefined CALIB_TOKEN
+  // would crash constantTimeEqual on `undefined.length`. Return 503 so the
+  // client knows the server is misconfigured rather than seeing a 500.
+  if (!env.CALIB_TOKEN) {
+    return jsonResponse({ error: 'service_misconfigured' }, 503);
+  }
   const token = request.headers.get('x-calib-token');
   if (!token || !constantTimeEqual(token, env.CALIB_TOKEN)) {
     return jsonResponse({ error: 'unauthorized' }, 401);
@@ -153,25 +218,44 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
   }
   const payload = body as LogRequest;
 
-  // Object key: log/YYYYMM/<sanitized-dedupe_key or uuid>.json
+  // Rate limit AFTER auth + payload validation so we don't burn R2 ops
+  // on unauthed or malformed requests. Authed-but-rate-limited returns
+  // 429 with a reset_at hint.
   const now = new Date();
+  const rate = await checkAndBumpRateLimit(env, now);
+  if (!rate.ok) {
+    return jsonResponse(
+      { error: 'rate_limited', reset_at: rate.resetAt, limit: RATE_LIMIT_PER_DAY },
+      429,
+    );
+  }
+
+  // Object key: log/YYYYMM/<sanitized-dedupe_key or uuid>.json
   const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
   const key = payload.dedupe_key ? sanitizeDedupeKey(payload.dedupe_key) : crypto.randomUUID();
   const objectKey = `log/${yyyymm}/${key}.json`;
 
   try {
-    // Idempotent: HEAD first; if exists, return 200 with no-op.
-    const existing = await env.CALIB.head(objectKey);
-    if (existing) {
-      return jsonResponse({ ok: true, deduped: true, key: objectKey });
-    }
+    // Atomic dedupe via R2 conditional put — `onlyIf: { etagDoesNotMatch: '*' }`
+    // means "only put if the key does NOT already exist." Replaces the prior
+    // HEAD-then-PUT pattern which had a TOCTOU race: two concurrent requests
+    // with the same dedupe_key could both pass HEAD-not-found and the second
+    // PUT would silently overwrite the first.
+    //
+    // R2 returns null on conditional-put miss (key already exists with any
+    // etag); we surface that as `deduped: true` to the client.
     const record = {
       ...payload,
       received_at: now.toISOString().replace(/\.\d+Z$/, 'Z'),
     };
-    await env.CALIB.put(objectKey, JSON.stringify(record), {
+    const result = await env.CALIB.put(objectKey, JSON.stringify(record), {
       httpMetadata: { contentType: 'application/json' },
+      onlyIf: { etagDoesNotMatch: '*' },
     });
+    if (result === null) {
+      // Key already exists — duplicate. The first writer's record stands.
+      return jsonResponse({ ok: true, deduped: true, key: objectKey });
+    }
     return jsonResponse({ ok: true, deduped: false, key: objectKey });
   } catch (e) {
     // R2 transient failures: surface 503 (frontend will queue + retry) instead of
@@ -248,20 +332,29 @@ async function handleStatic(pathname: string, env: Env): Promise<Response> {
 /** GET /api/log — list recent calibration log entries.
  *
  *  Reads from r2:CALIB. Token-gated (same X-Calib-Token as POST). Returns up to
- *  `limit` (default 100, max 200) entries from the current month, ordered by
+ *  `limit` (default 50, max 50) entries from the current month, ordered by
  *  received_at descending. If the current month has fewer entries than limit,
  *  also reads from the previous month.
  *
  *  Each entry is the JSON object exactly as written by handleLog.
+ *
+ *  The 50-cap is the Workers Free subrequest budget per invocation. Each
+ *  entry costs 1 R2 .get() = 1 subrequest, plus 1-2 .list() calls. Returning
+ *  more than 50 would force users on the free tier into silent truncation
+ *  partway through. A V3 fix is to denormalize: store entries inline in the
+ *  list response or include customMetadata so the per-key get isn't needed.
  */
 async function handleLogList(request: Request, env: Env): Promise<Response> {
+  if (!env.CALIB_TOKEN) {
+    return jsonResponse({ error: 'service_misconfigured' }, 503);
+  }
   const token = request.headers.get('x-calib-token');
   if (!token || !constantTimeEqual(token, env.CALIB_TOKEN)) {
     return jsonResponse({ error: 'unauthorized' }, 401);
   }
   const url = new URL(request.url);
-  const limitRaw = Number(url.searchParams.get('limit') ?? '100');
-  const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 100));
+  const limitRaw = Number(url.searchParams.get('limit') ?? '50');
+  const limit = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50));
 
   const now = new Date();
   const monthKeys = [
@@ -279,7 +372,7 @@ async function handleLogList(request: Request, env: Env): Promise<Response> {
       if (entries.length >= limit) break;
       const list = await env.CALIB.list({
         prefix,
-        limit: Math.min(200, limit - entries.length + 50),
+        limit: Math.min(50, limit - entries.length + 10),
       });
       for (const obj of list.objects) {
         if (entries.length >= limit) break;

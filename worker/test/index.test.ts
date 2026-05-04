@@ -45,8 +45,23 @@ class MockR2Bucket {
     return this.store.get(key) ?? null;
   }
 
-  async put(key: string, body: string, meta?: Record<string, unknown>): Promise<void> {
-    this.store.set(key, { body, meta: meta ?? {} });
+  async put(
+    key: string,
+    body: string,
+    meta?: Record<string, unknown>,
+  ): Promise<{ key: string } | null> {
+    // Honor R2 conditional put: `onlyIf: { etagDoesNotMatch: '*' }` returns
+    // null if the key already exists. Used by handleLog for atomic dedupe.
+    const onlyIf = (meta as { onlyIf?: { etagDoesNotMatch?: string } } | undefined)?.onlyIf;
+    if (onlyIf?.etagDoesNotMatch === '*' && this.store.has(key)) {
+      return null;
+    }
+    this.store.set(key, {
+      body,
+      meta: meta ?? {},
+      httpMetadata: (meta as { httpMetadata?: { contentType?: string; cacheControl?: string } } | undefined)?.httpMetadata,
+    });
+    return { key };
   }
 
   async list(opts: { prefix?: string; limit?: number }): Promise<{ objects: Array<{ key: string }> }> {
@@ -68,6 +83,13 @@ class MockR2Bucket {
   }
   size(): number {
     return this.store.size;
+  }
+  /** Count only calibration log entries; excludes internal meta keys like
+   *  the rate-limit counter. Use this in tests asserting record counts. */
+  logSize(): number {
+    let n = 0;
+    for (const k of this.store.keys()) if (k.startsWith('log/')) n++;
+    return n;
   }
 }
 
@@ -175,7 +197,7 @@ describe('POST /api/log', () => {
     const body = (await r.json()) as { ok: boolean; deduped: boolean; key: string };
     expect(body.ok).toBe(true);
     expect(body.deduped).toBe(false);
-    expect(env.CALIB.size()).toBe(1);
+    expect(env.CALIB.logSize()).toBe(1);
   });
 
   it('rejects rate action without rating', async () => {
@@ -231,7 +253,7 @@ describe('POST /api/log', () => {
     expect(r2.status).toBe(200);
     const b2 = (await r2.json()) as { deduped: boolean };
     expect(b2.deduped).toBe(true);
-    expect(env.CALIB.size()).toBe(1);
+    expect(env.CALIB.logSize()).toBe(1);
   });
 });
 
@@ -376,11 +398,24 @@ describe('GET /api/log', () => {
     expect(body.entries).toHaveLength(3);
   });
 
-  it('clamps oversized limit', async () => {
+  it('clamps oversized limit to 50 (Workers Free subrequest budget)', async () => {
+    const now = new Date();
+    const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    // Seed 80 entries — more than the 50 cap
+    for (let i = 0; i < 80; i++) {
+      await env.CALIB.put(`log/${yyyymm}/entry-${String(i).padStart(2, '0')}.json`, JSON.stringify({
+        target_id: 't',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+        received_at: `2024-10-17T${String(i).padStart(2, '0')}:00:00Z`,
+      }));
+    }
     const r = await fetchWorker(env, '/api/log?limit=99999', {
       headers: { 'x-calib-token': 'test-secret-123' },
     });
     expect(r.status).toBe(200);
+    const body = (await r.json()) as { entries: unknown[] };
+    expect(body.entries.length).toBeLessThanOrEqual(50);
   });
 
   it('skips unparseable entries gracefully', async () => {
@@ -591,5 +626,164 @@ describe('handleStatic (R2 fallback)', () => {
     await env.SITE.put('index.html', '<html></html>', {});
     const r = await fetchWorker(env, '/');
     expect(r.headers.get('etag')).toBeTruthy();
+  });
+});
+
+// --------------------------------------------------------------------------
+// CALIB_TOKEN unset → 503 (deploy-misconfig guard)
+// --------------------------------------------------------------------------
+
+describe('CALIB_TOKEN unset', () => {
+  it('POST /api/log returns 503 when CALIB_TOKEN is missing', async () => {
+    const env = makeEnv({ CALIB_TOKEN: '' as string });
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({ target_id: 'x', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'whatever' },
+    });
+    expect(r.status).toBe(503);
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toBe('service_misconfigured');
+  });
+
+  it('GET /api/log returns 503 when CALIB_TOKEN is missing', async () => {
+    const env = makeEnv({ CALIB_TOKEN: '' as string });
+    const r = await fetchWorker(env, '/api/log', {
+      headers: { 'x-calib-token': 'whatever' },
+    });
+    expect(r.status).toBe(503);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Rate limit: per-day counter caps abuse if the token leaks
+// --------------------------------------------------------------------------
+
+describe('rate limit', () => {
+  it('counter object lands at _meta/ratelimit/<date>.json after a successful POST', async () => {
+    const env = makeEnv();
+    await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({ target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    const meta = Array.from(env.CALIB['store'].keys()).filter((k) => k.startsWith('_meta/ratelimit/'));
+    expect(meta).toHaveLength(1);
+  });
+
+  it('returns 429 once the daily counter reaches the cap', async () => {
+    const env = makeEnv();
+    // Pre-seed the counter at the cap
+    const today = new Date();
+    const y = today.getUTCFullYear();
+    const m = String(today.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(today.getUTCDate()).padStart(2, '0');
+    await env.CALIB.put(`_meta/ratelimit/${y}${m}${d}.json`, JSON.stringify({ count: 200 }), {});
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({ target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(429);
+    const body = (await r.json()) as { error: string; reset_at: string; limit: number };
+    expect(body.error).toBe('rate_limited');
+    expect(body.limit).toBe(200);
+    // reset_at should be the next UTC midnight
+    expect(body.reset_at).toMatch(/T00:00:00\.000Z$/);
+  });
+
+  it('does NOT consume rate-limit budget on auth failure', async () => {
+    const env = makeEnv();
+    await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({ target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'WRONG-TOKEN' },
+    });
+    const meta = Array.from(env.CALIB['store'].keys()).filter((k) => k.startsWith('_meta/ratelimit/'));
+    expect(meta).toHaveLength(0);
+  });
+
+  it('does NOT consume rate-limit budget on invalid payload', async () => {
+    const env = makeEnv();
+    await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({ /* missing required fields */ }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    const meta = Array.from(env.CALIB['store'].keys()).filter((k) => k.startsWith('_meta/ratelimit/'));
+    expect(meta).toHaveLength(0);
+  });
+
+  it('rejects malformed pass_time (loose-Z trick like "AAAAAAAAZ")', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 't',
+        pass_time: 'AAAAAAAAZ',
+        action: 'shoot',
+      }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toBe('invalid_payload');
+  });
+
+  it('accepts pass_time with fractional seconds', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 't',
+        pass_time: '2024-10-17T12:00:00.123Z',
+        action: 'shoot',
+      }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('atomic dedupe: concurrent identical posts → second is deduped, not overwritten', async () => {
+    const env = makeEnv();
+    const payload = JSON.stringify({
+      target_id: 't',
+      pass_time: '2024-10-17T12:00:00Z',
+      action: 'shoot' as const,
+      dedupe_key: 'race-1',
+    });
+    const headers = { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' };
+    // Two concurrent POSTs with the same dedupe_key
+    const [r1, r2] = await Promise.all([
+      fetchWorker(env, '/api/log', { method: 'POST', body: payload, headers }),
+      fetchWorker(env, '/api/log', { method: 'POST', body: payload, headers }),
+    ]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    const b1 = (await r1.json()) as { deduped: boolean };
+    const b2 = (await r2.json()) as { deduped: boolean };
+    // Exactly one of the two responses should have deduped=true.
+    expect([b1.deduped, b2.deduped].filter((v) => v).length).toBe(1);
+    expect(env.CALIB.logSize()).toBe(1);
+  });
+
+  it('rate-limit read failure fails open (still accepts the write)', async () => {
+    const env = makeEnv();
+    // Force a get failure on the counter-read path; the put for the actual
+    // log entry must still succeed.
+    const realGet = env.CALIB.get.bind(env.CALIB);
+    let getCalls = 0;
+    env.CALIB.get = async (key: string) => {
+      getCalls++;
+      if (key.startsWith('_meta/ratelimit/')) throw new Error('read outage');
+      return realGet(key);
+    };
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({ target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }),
+      headers: { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    expect(getCalls).toBeGreaterThan(0);
   });
 });
