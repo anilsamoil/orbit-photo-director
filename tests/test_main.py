@@ -126,6 +126,22 @@ def test_run_tick_track_includes_polynomial(settings_in_tmp: Settings, cached_tl
     assert poly["duration_seconds"] == 120 * 60
 
 
+def test_run_tick_track_includes_tle(settings_in_tmp: Settings, cached_tle: Path) -> None:
+    """track.json ships the source TLE so the frontend can run SGP4 past the polynomial window."""
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    run_tick(settings_in_tmp, now=now)
+
+    v_dir = settings_in_tmp.out_dir / "v" / "20241017T120000Z"
+    track = json.loads((v_dir / "track.json").read_text())
+    tle = track["tle"]
+    assert tle["line1"].startswith("1 25544U")
+    assert tle["line2"].startswith("2 25544")
+    # Round-trip: parsed back through TLE.from_text yields the same epoch
+    # the manifest declares (proves we didn't ship a corrupted line pair).
+    parsed = TLE.from_text(f"{tle['line1']}\n{tle['line2']}")
+    assert parsed.epoch.isoformat().replace("+00:00", "Z") == track["tle_epoch"]
+
+
 def test_score_pass_for_target_handles_glint_path(sample_tle: TLE) -> None:
     """Smoke-test the per-pass scorer with a synthetic over-water pass."""
     from generator.cloud import MockCloudSampler

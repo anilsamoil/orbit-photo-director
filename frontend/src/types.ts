@@ -58,6 +58,11 @@ export interface Track {
    *  dot but degrades past ~120 min; track_points has zero drift over the
    *  full 2-orbit window. Older manifests may not include this field. */
   track_points?: [number, number, number][];
+  /** Source TLE the polynomial + track_points were fit from. Lets the
+   *  frontend run satellite.js SGP4 client-side past the polynomial window
+   *  or during a multi-hour Mac outage. Older manifests may not include
+   *  this field. */
+  tle?: { line1: string; line2: string };
   tle_epoch: string;
   tle_age_hours: number;
   tle_freshness_factor: number;

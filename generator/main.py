@@ -481,6 +481,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     track_data = {
         "iss_polynomial": fit_iss_polynomial(tle, n, minutes=120),
         "track_points": sample_track_points(tle, n, minutes=200, step_seconds=30),
+        "tle": {"line1": tle.line1, "line2": tle.line2},
         "tle_epoch": utcnow_iso(tle.epoch),
         "tle_age_hours": round(age_h, 2),
         "tle_freshness_factor": round(fresh, 3),
