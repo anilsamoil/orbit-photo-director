@@ -123,7 +123,7 @@ describe('readSnapshot', () => {
     const back = readSnapshot();
     expect(back).not.toBeNull();
     expect(back!.manifest.version).toBe(snap.manifest.version);
-    expect(back!.top5[0].target_id).toBe('tokyo-night');
+    expect(back!.top5[0]?.target_id).toBe('tokyo-night');
     expect(back!.savedAt).toBe(snap.savedAt);
   });
 
