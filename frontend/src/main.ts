@@ -211,7 +211,12 @@ function renderOfflineBanner(): void {
     setBanner(bannerError('offline — no cached data'));
     return;
   }
-  const ageMin = (Date.now() - snap.savedAt) / 60_000;
+  // Clamp to 0: a backward clock skew (NTP correction after a long
+  // offline period) would otherwise yield a negative ageMin and render
+  // "Offline · <1 min ago — last sync recent", which misleads the user
+  // into thinking they just synced when they haven't. 0 means "treat as
+  // freshest possible" which is wrong but at least conservative.
+  const ageMin = Math.max(0, (Date.now() - snap.savedAt) / 60_000);
   setBanner(bannerWithTleOverlay(
     bannerOffline(ageMin),
     snap.track.tle_age_hours,
@@ -253,9 +258,18 @@ async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<voi
   // refresh the badge regardless so the user sees the new count immediately.
   updatePendingSyncBadge();
   // Dim the card briefly as before — keep this for visual locality.
-  const card = document.querySelector<HTMLElement>(
-    `.card[data-target-id="${p.target_id}"][data-pass-time="${p.closest_approach}"]`
-  );
+  // We iterate + dataset-compare instead of interpolating into a CSS
+  // selector. A target_id containing '"' (personal-targets.csv is
+  // user-controlled) would otherwise throw SyntaxError out of
+  // querySelector and silently swallow the toast — the calibration
+  // posted, but the user sees no confirmation and re-clicks.
+  let card: HTMLElement | null = null;
+  for (const el of document.querySelectorAll<HTMLElement>('.card')) {
+    if (el.dataset.targetId === p.target_id && el.dataset.passTime === p.closest_approach) {
+      card = el;
+      break;
+    }
+  }
   if (card) {
     card.style.opacity = result.ok ? '0.5' : '0.7';
     setTimeout(() => { card.style.opacity = ''; }, 1500);
