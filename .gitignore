@@ -54,3 +54,13 @@ htmlcov/
 .tox/
 playwright-report/
 test-results/
+
+# TypeScript stray emit (vite handles compilation; tsc --noEmit is the typecheck path)
+frontend/src/*.js
+frontend/src/*.js.map
+frontend/test/*.js
+frontend/test/*.js.map
+frontend/*.tsbuildinfo
+worker/src/*.js
+worker/test/*.js
+.gstack/

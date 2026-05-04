@@ -1,0 +1,51 @@
+name: test
+
+on:
+  push:
+    branches: [main, "feat/**", "fix/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    name: Python (generator)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check generator/ tests/
+
+      - name: Test + coverage
+        run: pytest tests/ --cov=generator --cov-fail-under=85
+
+  worker:
+    runs-on: ubuntu-latest
+    name: Cloudflare Worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: cd worker && bun install
+      - run: cd worker && bun run typecheck
+      - run: cd worker && bun run test
+
+  frontend:
+    runs-on: ubuntu-latest
+    name: Frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: cd frontend && bun install
+      - run: cd frontend && bun run typecheck
+      - run: cd frontend && bun run test
+      - run: cd frontend && bun run build

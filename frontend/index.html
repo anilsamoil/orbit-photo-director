@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Orbit Photo Director</title>
+    <meta
+      name="description"
+      content="Earth-photography planner for the ISS. The shot queue tells you what's about to be under the station and whether it's worth raising the camera."
+    />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%B0%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">🛰️</span>
+        <span class="brand-name">Orbit Photo Director</span>
+      </div>
+      <div id="iss-now" class="iss-now" title="Live ISS sub-point from polynomial fit"></div>
+      <nav class="tabs">
+        <button id="tab-queue" class="tab active" type="button">Queue</button>
+        <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
+        <button id="tab-map" class="tab" type="button">Map</button>
+        <button id="tab-log" class="tab" type="button">Log</button>
+      </nav>
+    </header>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <main id="view" class="view-queue">
+      <section id="queue-pane" class="pane">
+        <div id="cards" class="cards" aria-live="polite"></div>
+        <div id="empty" class="empty" hidden>No passes in the next 90 minutes.</div>
+      </section>
+
+      <section id="upcoming-pane" class="pane">
+        <div class="upcoming-header">
+          <h2 class="upcoming-title">Next 24 hours</h2>
+          <p class="upcoming-sub">Forecast-scored. GFS cloud cover for each pass time.</p>
+        </div>
+        <div id="upcoming-cards" class="cards" aria-live="polite"></div>
+        <div id="upcoming-empty" class="empty" hidden>No upcoming passes in the next 24 hours.</div>
+      </section>
+
+      <section id="map-pane" class="pane">
+        <div id="map" class="map"></div>
+        <div class="map-controls">
+          <button id="time-now" class="time-btn active" type="button">Now</button>
+          <button id="time-plus90" class="time-btn" type="button">+90 min</button>
+        </div>
+      </section>
+
+      <section id="log-pane" class="pane">
+        <div class="log-header">
+          <h2 class="log-title">Calibration log</h2>
+          <div id="log-stats" class="log-stats"></div>
+          <div id="log-token" class="log-token"></div>
+        </div>
+        <div id="log-list" class="log-list" aria-live="polite"></div>
+        <div id="log-empty" class="empty" hidden>No calibration entries yet. Tap Shoot or Skip on a queue card to start logging.</div>
+      </section>
+    </main>
+
+    <footer id="status-banner" class="banner banner-loading" role="status" aria-live="polite">
+      Loading…
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

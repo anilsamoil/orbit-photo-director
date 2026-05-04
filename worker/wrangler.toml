@@ -1,0 +1,38 @@
+# Cloudflare Worker configuration for the calibration log + health endpoints.
+# Deploy: wrangler deploy
+# Dev:    wrangler dev
+
+name = "orbit-photo-director"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Worker routes ALL of map.astroanil.dev. The Worker handles /api/log and
+# /api/health directly; all other GETs are streamed from the SITE bucket
+# (handleStatic). This way `/` correctly serves index.html — R2 alone doesn't
+# do that for custom-domain bindings.
+routes = [
+  { pattern = "map.astroanil.dev/*", zone_name = "astroanil.dev" },
+]
+
+[[r2_buckets]]
+binding = "SITE"
+bucket_name = "map-astroanil-dev"
+
+[[r2_buckets]]
+binding = "CALIB"
+bucket_name = "orbit-calib"
+
+# Set the calibration shared secret via:
+#   wrangler secret put CALIB_TOKEN
+#
+# Staleness alert threshold (seconds).
+# 7200 = 2h. Generator ticks every 1h (geostationary IR refreshes every 10-15 min,
+# so 1h ticks exercise the high-cadence data without thrashing). A tick that runs
+# 5-10 min PLUS UptimeRobot's 5-min check can momentarily push past 1h without
+# being a real outage. 2h absorbs that jitter and fires on genuine stalls.
+[vars]
+STALE_THRESHOLD_SECONDS = "7200"
+
+[observability]
+enabled = true
