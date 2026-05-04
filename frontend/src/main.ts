@@ -329,6 +329,10 @@ function updateIssNow(): void {
  *  precise reverse-geocode. Boundaries are rough lat/lon boxes; near coasts
  *  we may show the wrong one. Good enough for the topbar context. */
 function roughRegion(lat: number, lon: number): string {
+  // NaN comparisons are all false — without this guard, a NaN lat/lon
+  // would fall through every branch and silently render "Pacific Ocean"
+  // for a position that's actually unknown.
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return 'unknown region';
   // Polar caps first
   if (lat > 66) return 'Arctic';
   if (lat < -60) return 'Antarctica';
