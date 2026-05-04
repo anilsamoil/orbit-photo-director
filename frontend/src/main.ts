@@ -585,8 +585,22 @@ async function init(): Promise<void> {
   window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);
 }
 
-if (typeof document !== 'undefined') {
+// Auto-init in the browser. Skipped under vitest so test files can drive
+// init() explicitly with seeded localStorage + DOM fixtures + module mocks.
+if (typeof document !== 'undefined' && import.meta.env.MODE !== 'test') {
   void init();
 }
 
-export { init, refresh, rerenderCountdowns };
+export {
+  init,
+  refresh,
+  rerenderCountdowns,
+  // Test surface — exposed so frontend/test/main-integration.test.ts can
+  // exercise the orchestration helpers without going through the full
+  // init() / setInterval chain. Production code should use init().
+  bootFromSnapshot,
+  doRefresh,
+  renderOfflineBanner,
+  renderQueue,
+  updatePendingSyncBadge,
+};
