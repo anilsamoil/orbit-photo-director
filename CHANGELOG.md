@@ -2,6 +2,87 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.1.0.0] - 2026-05-04
+
+### **V2 ships — the page works when the network doesn't.**
+### Open the tab on the ISS during a 30-minute LOS window and the queue still renders.
+
+The frontend now boots from a localStorage snapshot before manifest.json comes back. If the fetch fails, the snapshot keeps showing. If the fetch only half-succeeds (manifest loads but a track artifact 404s mid-deploy), the previous snapshot stays intact — no torn writes. The live ISS dot keeps moving past the 120-min polynomial window via client-side SGP4 propagation. The banner color escalates with snapshot age (green<1h → yellow<3h → orange<12h → red beyond) so the user always knows how trustworthy what they're looking at actually is.
+
+The shipped V1 had a single failure mode: tab refresh during LOS = blank page. V2 makes that an "Offline · 23 min ago" badge with the full last-known-good queue rendered from disk. For an 8-month unattended mission with routine 30-60 min LOS windows, that's the difference between "the page is dead for hours" and "the page is honest about being a few minutes stale."
+
+### The numbers that matter
+
+Measured from the locked V2 plan (`~/Desktop/orbit-photo-director-offline-v2-plan.md`) and verified by `/qa` against `localhost:5173` (vite dev) and `localhost:4173` (vite preview, production build).
+
+| Metric | V1 | V2 | Δ |
+|---|---|---|---|
+| Page after LOS refresh | Blank "Loading..." | Snapshot UI in <50ms | ∞ |
+| Live ISS dot past 120 min | Frozen ("track expired") | SGP4 propagation, no horizon | unbounded |
+| Manifest poll while tab hidden | Every 60s wasted | Paused; resumes immediately on visible | -100% bandwidth on hidden tabs |
+| Snapshot writes per 60-min tick | Every 60s = 60 writes | 1 (skip-if-version-unchanged) | -98% localStorage churn |
+| Frontend test count | 113 | 187 | +65% |
+| Bundle (gzip) | 17.92 kB | 18.71 kB | +0.79 kB (4%) |
+| Bundle (raw, satellite.js v6) | 42.79 kB | 43.83 kB | +1.04 kB |
+
+The bundle growth is satellite.js v6 (~30 kB raw, ~6 kB gzip) plus the V2 modules (snapshot, network-status, banner state machine, the boot orchestration). 4% gzip cost for a fully-offline-resilient frontend is a good trade.
+
+### Real bugs caught + fixed during the ship cycle
+
+`/review` and `/qa` together caught and fixed:
+- A hostile/torn-write snapshot would have permanently bricked the page across reloads (boot threw inside `bootFromSnapshot`, `pollScheduler` never started, reload re-read same poison). Recovery: try/catch + `clearSnapshot`.
+- Snapshot version monotonicity: a CDN edge serving a stale manifest could overwrite a newer snapshot with older data. Fix: only save when manifest.version > on-disk version.
+- SGP4 NaN propagation would render "NaN°N, NaN°W over Pacific Ocean" in the topbar from a degenerate propagation. Fix: NaN guards + roughRegion fallback.
+- TLE epoch verification: an attacker-swapped TLE for a different object that parsed cleanly would produce confidently-wrong ISS positions. Fix: cross-check satrec epoch against manifest's tle_epoch within 2s.
+- `obs Nm ago` tag was functionally dead — generator was shipping the future pass time as `sample_time`, so frontend's age formatter silently hid the tag. Fix in generator: ship the imagery composite hour for observed sources.
+- Pending-sync badge rendered as a "_" / "•" artifact next to the Log tab (CSS `display: inline-block` overrode `hidden`). Fix: explicit `[hidden] { display: none }`.
+- satellite.js v7 added a top-level-await WASM path that broke `vite build`. Pinned to v6 (same JS API, no WASM).
+
+### What this means for the 8-month mission
+
+The realistic worst case used to be: ISS in LOS, user refreshes the tab, page goes blank, user has no idea what's about to be photographable. After V2: page renders the previous snapshot in <50ms with a banner saying "Offline · 23 min ago — last sync recent" (green). The user keeps planning. When network comes back, the snapshot transparently updates. If the Mac on Earth dies entirely, the snapshot keeps the queue alive for hours; SGP4 keeps the live ISS dot moving even days past the polynomial window, with a TLE>48h overlay banner warning of drift.
+
+V2-P1 (still deferred): Workbox service worker (Lane F), kill-switch DNS at reset.astroanil.dev (Lane G), pre-launch e2e checklist (Lane H). See TODOS.md.
+
+### Itemized changes
+
+#### Added
+
+- **Boot from localStorage snapshot** — synchronous queue + map render before manifest.json comes back. First paint shows the previous-known-good UI within milliseconds instead of "Loading..." until the network resolves (or never resolves during LOS).
+- **SGP4 client-side fall-through** — when the polynomial window expires (120 min past manifest), the live ISS dot keeps moving via satellite.js SGP4 propagation against the source TLE shipped in `track.json`. Coordinate frame matches the Python generator (geocentric spherical from ECEF) so the handoff is seamless.
+- **Visibility-aware poll scheduler** — `createPollScheduler` pauses manifest fetches when the tab is hidden, fires immediately on visible-again. Saves ISS bandwidth on tabs nobody is watching.
+- **Offline-confidence banner** — color escalates with snapshot age: green (<1h, "Offline · Nm ago — last sync recent"), yellow (1–3h), orange (3–12h, "values may be drifting"), red (>12h, "data may be very stale"). TLE>48h adds an orange overlay ("TLE 72h old — live track may drift").
+- **`obs Nm ago` cloud-age tag on cards** — shows how recent the cloud reading is so the user can weight day-old MODIS vs 10-min GOES-IR appropriately. Hidden silently when the cloud_source is a no-observation placeholder (the existing "no cloud obs" tag handles that case).
+- **Pending-sync badge in Log tab** — "Log [3]" when calibration writes are queued offline. Updates immediately on every Shoot/Skip click and after `drainQueue`.
+- **Map imagery-date badge** — "Imagery: 2026-05-03" overlay in the bottom-right of the map so a GIBS tile cached past midnight doesn't read as today's clouds.
+
+#### Changed
+
+- **Generator ships source TLE in `track.json`** — alongside the polynomial fit, so the frontend can SGP4-propagate client-side without a separate fetch.
+- **Generator ships per-pass `sample_time`** — the actual imagery composite hour (not the pass time) for observed sources, so the frontend's `obs Nm ago` tag works. Forecast samples keep the forecast valid-time.
+- **Transactional refresh** — `refresh()` in main.ts mutates `currentManifest`/`Top5`/`Track` only AFTER all artifacts resolve (`Promise.all`). A partial fetch failure leaves the previous snapshot untouched. Idempotent saveSnapshot: skips writes when manifest.version is unchanged (~98% fewer localStorage writes per 60-min tick).
+- **`refresh()` short-circuits when `navigator.onLine` is false** — saves the doomed fetch + the error-banner flash on every poll while LOS.
+- **Polynomial accuracy documented** — the existing order-11 fit has up to 1.1° lat error vs SGP4 truth (Runge wobble near window edges). SGP4 fall-through is provably the more accurate path. Documented inline in `frontend/test/iss-sgp4.test.ts`; tracked as V2-P2 ("tighten polynomial OR drop for SGP4-only") in TODOS.md.
+
+#### Fixed
+
+- **Hostile/torn-write snapshot brick recovery** — `init()` now wraps `bootFromSnapshot` in try/catch + `clearSnapshot` on failure. A malformed snapshot (Chrome crash mid-setItem, browser extension, schema drift) used to permanently brick the page across reloads.
+- **Snapshot version monotonicity** — only writes when `manifest.version > existing snapshot version`. A CDN edge serving stale data couldn't overwrite a newer snapshot before this.
+- **SGP4 NaN guards + TLE epoch verification + whitespace tolerance** — NaN-typed positions from degenerate propagations no longer render "NaN°N, NaN°W"; satrec epoch is cross-checked against manifest's `tle_epoch` (defends against attacker-swapped TLEs); TLE lines are trimmed before parsing (defends against `\r` from Windows-edited cache files).
+- **Safe card lookup** — `onCardAction` uses dataset comparison instead of CSS-selector interpolation; a target_id with `"` would have crashed `querySelector` and silently swallowed the toast.
+- **Clock-rollback clamp on snapshot age** — backward NTP correction during long offline period no longer renders "Offline · -50 min ago" misleading text.
+- **`obs Nm ago` tag now actually renders** — generator shipped pass time (always future) as sample_time; tag was silently hidden for every observed source. See "Changed" above.
+- **Pending-sync badge "_" artifact** — CSS `display: inline-block` overrode `hidden`. Explicit `.pending-badge[hidden] { display: none }` rule fixes it.
+
+#### For contributors
+
+- **187 frontend tests** (was 113) — `iss-sgp4.test.ts` (10), `snapshot.test.ts` (15), `network-status.test.ts` (10), `main-integration.test.ts` (11) for boot/refresh/banner/badge integration. `iss.test.ts` extended with `liveIssNow` combined-path tests. `card.test.ts` extended with `formatObsAge` boundary tests + `obs-age` tag rendering tests. `banner.test.ts` extended with offline + TLE overlay tests. `calib.test.ts` extended with `queuedCalibCount` tests. `map-imagery-date.test.ts` for the new badge.
+- **228 python tests** (was 162) — `test_main.py::test_run_tick_track_includes_tle` for the new generator field, `test_score_pass_for_target_uses_composite_hour_for_observed_sample_time` regression test for the obs-age fix, plus expanded coverage in `tests/test_main.py`.
+- **satellite.js pinned to v6.0.2** — v7 added a WASM-pthreads runtime with top-level-await that broke `vite build` (iife output doesn't support TLA). The v6 JS API is identical for the four functions we use.
+- **`frontend/src/vite-env.d.ts` added** — so TypeScript knows about `import.meta.env.MODE` for the test-mode auto-init guard in `main.ts`.
+- **TODOS.md restructured** — V3 → V2 naming aligned with what shipped. Lanes F/G/H captured as V2-P1; sha256 verification + polynomial tightening as V2-P2; forecast-horizon UI tag + periodic satrec re-parse as V2-P3.
+- **`frontend/public/` and `uv.lock` gitignored** — public/ is a dev-only artifact mirror used by /qa; uv.lock is the Python lockfile that was supposed to be ignored per V1 checkpoint intent.
+
 ## [1.0.0.0] - 2026-05-03
 
 ### V1 ships — Earth-photography planner for the ISS, end to end.
