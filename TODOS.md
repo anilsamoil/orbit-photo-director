@@ -38,6 +38,35 @@ breaking the live dot if SGP4 has unknown edge cases.
 
 ## Open
 
+### Per-second full re-render of all cards
+**Priority:** P3
+
+`frontend/src/main.ts:rerenderCountdowns` runs every 1s and calls
+renderCards on both Queue and Upcoming (~15 cards). Full
+replaceChildren + DOM rebuild. Layout thrash on a tab the user
+leaves open for 8 months. Either diff or update only the countdown
+text node in place. V3 work — not breaking anything today, just
+more wattage than necessary on the unattended Mac.
+
+### SVG pulse animation runs 24/7
+**Priority:** P3
+
+iss-pulse keyframes infinite-loop while the marker is alive,
+including when the Map tab is hidden. Browsers usually pause
+hidden-tab animations but MapLibre keeps the marker DOM live.
+Pause on tab change, OR use IntersectionObserver to suspend.
+V3 polish.
+
+### Cloud sampler re-fetches every tick (no inter-tick cache)
+**Priority:** P3
+
+GIBSCloudSampler / GeostationaryIRSampler / MeteosatEUMETSATSampler /
+HimawariNICTSampler all instantiate fresh in select_cloud_sampler
+every tick. Each fetches its full set of PNGs upstream. ~28 MB/day
+egress from third-party WMS / CDN over the mission. Fine today,
+worth caching to disk between ticks if upstream rate-limits become
+a real problem.
+
 ### Reboost detection skipped when prior cache parse fails
 **Priority:** P3
 

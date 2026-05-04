@@ -744,6 +744,41 @@ describe('rate limit', () => {
     expect(r.status).toBe(200);
   });
 
+  it('dedupe-no-op retries do NOT consume rate-limit budget', async () => {
+    const env = makeEnv();
+    const payload = JSON.stringify({
+      target_id: 't',
+      pass_time: '2024-10-17T12:00:00Z',
+      action: 'shoot' as const,
+      dedupe_key: 'replay-key-1',
+    });
+    const headers = { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' };
+
+    // First write succeeds and counts.
+    const r1 = await fetchWorker(env, '/api/log', { method: 'POST', body: payload, headers });
+    expect(r1.status).toBe(200);
+
+    // 50 replays of the same dedupe_key — drainQueue's pathological case
+    // when the network was flaky and the same record is queued/retried.
+    for (let i = 0; i < 50; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await fetchWorker(env, '/api/log', { method: 'POST', body: payload, headers });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { deduped: boolean };
+      expect(body.deduped).toBe(true);
+    }
+
+    // Counter should be at exactly 1 — the first-time write — NOT 51.
+    const today = new Date();
+    const y = today.getUTCFullYear();
+    const m = String(today.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(today.getUTCDate()).padStart(2, '0');
+    const counterObj = await env.CALIB.get(`_meta/ratelimit/${y}${m}${d}.json`);
+    expect(counterObj).toBeTruthy();
+    const counterData = (await counterObj!.json()) as { count: number };
+    expect(counterData.count).toBe(1);
+  });
+
   it('atomic dedupe: concurrent identical posts → second is deduped, not overwritten', async () => {
     const env = makeEnv();
     const payload = JSON.stringify({

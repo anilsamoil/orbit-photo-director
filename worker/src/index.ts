@@ -90,53 +90,61 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** Check the day's POST counter, increment, return remaining budget.
- *
- *  Uses an R2 object as the counter. Read-modify-write is racy; that's
- *  acceptable for abuse mitigation (off-by-N at concurrency=N is fine
- *  when the cap is in the hundreds). For strict accounting we'd want
- *  Cloudflare's Rate Limiting binding (paid tier) or KV with TTL.
+/** Day's rate-limit counter: read-only check, used BEFORE the conditional
+ *  put to gate over-limit traffic. The bump happens AFTER a successful
+ *  first-time write — duplicate-dedupe retries (which return a no-op
+ *  204-equivalent) don't consume budget. This matters because the
+ *  frontend's drainQueue replays offline writes on every visit; a flaky
+ *  network would otherwise burn the daily 200 cap on dedupe-no-ops.
  *
  *  Counter key: `_meta/ratelimit/YYYYMMDD.json` with `{count: N}`.
  *  Resets at next UTC midnight by virtue of the new key.
  */
-async function checkAndBumpRateLimit(
-  env: Env, now: Date
-): Promise<{ ok: true; count: number } | { ok: false; resetAt: string }> {
+function rateLimitKey(now: Date): string {
   const y = now.getUTCFullYear();
   const m = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d = String(now.getUTCDate()).padStart(2, '0');
-  const key = `_meta/ratelimit/${y}${m}${d}.json`;
-  let count = 0;
+  return `_meta/ratelimit/${y}${m}${d}.json`;
+}
+
+async function readRateLimitCount(env: Env, now: Date): Promise<number> {
   try {
-    const obj = await env.CALIB.get(key);
-    if (obj) {
-      const data = (await obj.json()) as { count?: number };
-      if (typeof data.count === 'number' && Number.isFinite(data.count)) {
-        count = data.count;
-      }
-    }
+    const obj = await env.CALIB.get(rateLimitKey(now));
+    if (!obj) return 0;
+    const data = (await obj.json()) as { count?: number };
+    return typeof data.count === 'number' && Number.isFinite(data.count) ? data.count : 0;
   } catch (e) {
     // Read failure → fail open for availability; the cap is best-effort.
     console.error('rate limit read failed', e);
-    return { ok: true, count: 0 };
+    return 0;
   }
+}
+
+async function checkRateLimit(
+  env: Env, now: Date
+): Promise<{ ok: true; count: number } | { ok: false; resetAt: string }> {
+  const count = await readRateLimitCount(env, now);
   if (count >= RATE_LIMIT_PER_DAY) {
     const reset = new Date(now);
     reset.setUTCDate(reset.getUTCDate() + 1);
     reset.setUTCHours(0, 0, 0, 0);
     return { ok: false, resetAt: reset.toISOString() };
   }
-  // Increment. Best-effort write — if the put fails the user still gets
-  // their write through, just without counting toward the cap.
+  return { ok: true, count };
+}
+
+async function bumpRateLimit(env: Env, now: Date): Promise<void> {
+  // Read-modify-write is racy under concurrency; that's acceptable for an
+  // abuse cap. Cloudflare Rate Limiting binding (paid) or KV with TTL
+  // would be strict, but this is sufficient for a single-user mission.
+  const count = await readRateLimitCount(env, now);
   try {
-    await env.CALIB.put(key, JSON.stringify({ count: count + 1 }), {
+    await env.CALIB.put(rateLimitKey(now), JSON.stringify({ count: count + 1 }), {
       httpMetadata: { contentType: 'application/json' },
     });
   } catch (e) {
     console.error('rate limit write failed', e);
   }
-  return { ok: true, count: count + 1 };
 }
 
 /** Strip dedupe_key down to URL- and bucket-safe characters; cap length.
@@ -218,11 +226,11 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
   }
   const payload = body as LogRequest;
 
-  // Rate limit AFTER auth + payload validation so we don't burn R2 ops
-  // on unauthed or malformed requests. Authed-but-rate-limited returns
-  // 429 with a reset_at hint.
+  // Rate-limit CHECK runs after auth + payload validation. The BUMP happens
+  // after a successful first-time write below, so dedupe-no-op retries
+  // (drainQueue replays on flaky network) don't consume budget.
   const now = new Date();
-  const rate = await checkAndBumpRateLimit(env, now);
+  const rate = await checkRateLimit(env, now);
   if (!rate.ok) {
     return jsonResponse(
       { error: 'rate_limited', reset_at: rate.resetAt, limit: RATE_LIMIT_PER_DAY },
@@ -254,8 +262,11 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
     });
     if (result === null) {
       // Key already exists — duplicate. The first writer's record stands.
+      // Do NOT bump the rate-limit counter for dedupes.
       return jsonResponse({ ok: true, deduped: true, key: objectKey });
     }
+    // First-time write succeeded — count it toward the daily cap.
+    await bumpRateLimit(env, now);
     return jsonResponse({ ok: true, deduped: false, key: objectKey });
   } catch (e) {
     // R2 transient failures: surface 503 (frontend will queue + retry) instead of

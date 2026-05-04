@@ -213,20 +213,26 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         'circle-stroke-width': 1.5,
       },
     });
-    // Click handler: popup with target name + score
+    // Click handler: popup with target name + score. Uses setDOMContent +
+    // textContent (NOT setHTML) so target names with HTML-meta characters
+    // can't render as markup. personal-targets.csv is user-controlled, so
+    // a name like "<img onerror=...>" must not become a script-injection
+    // surface inside the popup.
     map.on('click', 'targets-layer', (e) => {
       const f = e.features?.[0];
       if (!f || f.geometry.type !== 'Point') return;
       const props = f.properties as { target_name?: string; score?: number };
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
+      const popupBody = document.createElement('div');
+      popupBody.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12';
+      const name = document.createElement('strong');
+      name.textContent = props.target_name ?? 'unknown';
+      const score = document.createElement('div');
+      score.textContent = `score ${Math.round(props.score ?? 0)}`;
+      popupBody.append(name, score);
       new maplibregl.Popup()
         .setLngLat(coords)
-        .setHTML(
-          `<div style="font:0.85rem/1.4 system-ui;color:#0b0d12">
-            <strong>${props.target_name ?? 'unknown'}</strong><br/>
-            score ${Math.round(props.score ?? 0)}
-          </div>`,
-        )
+        .setDOMContent(popupBody)
         .addTo(map!);
     });
     map.on('mouseenter', 'targets-layer', () => {

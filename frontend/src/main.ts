@@ -131,18 +131,21 @@ async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<voi
   }
 }
 
-let toastTimer: number | null = null;
+let toastFadeTimer: number | null = null;
+let toastHideTimer: number | null = null;
 function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success'): void {
   const el = document.getElementById('toast');
   if (!el) return;
+  // Cancel BOTH pending timers so a rapid re-show doesn't get yanked
+  // into hidden=true by the previous toast's fade-out timer.
+  if (toastFadeTimer !== null) window.clearTimeout(toastFadeTimer);
+  if (toastHideTimer !== null) window.clearTimeout(toastHideTimer);
   el.className = `toast ${kind} show`;
   el.textContent = text;
   el.hidden = false;
-  if (toastTimer !== null) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => {
+  toastFadeTimer = window.setTimeout(() => {
     el.classList.remove('show');
-    // Leave hidden=false so the fade-out animation is visible; remove after.
-    window.setTimeout(() => { el.hidden = true; }, 250);
+    toastHideTimer = window.setTimeout(() => { el.hidden = true; }, 250);
   }, 2400);
 }
 
