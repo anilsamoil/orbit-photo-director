@@ -35,7 +35,10 @@ def parse_csv(path: Path) -> list[dict]:
             if raw_line_num == 1 and fields[0] == "id":
                 continue
             if len(fields) < 6:
-                print(f"  skip line {raw_line_num}: not enough columns ({len(fields)})", file=sys.stderr)
+                print(
+                    f"  skip line {raw_line_num}: not enough columns ({len(fields)})",
+                    file=sys.stderr,
+                )
                 continue
             id_, name, lat, lon, priority, regime, *rest = (f.strip() for f in fields)
             category = rest[0] if len(rest) > 0 and rest[0] else "community-personal"
@@ -54,7 +57,10 @@ def parse_csv(path: Path) -> list[dict]:
                 print(f"  skip line {raw_line_num}: priority must be 1-5", file=sys.stderr)
                 continue
             if regime not in ("day", "night", "terminator", "any"):
-                print(f"  skip line {raw_line_num}: regime must be day/night/terminator/any", file=sys.stderr)
+                print(
+                    f"  skip line {raw_line_num}: regime must be day/night/terminator/any",
+                    file=sys.stderr,
+                )
                 continue
             entry: dict = {
                 "id": id_,

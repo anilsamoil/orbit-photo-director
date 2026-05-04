@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from generator.config import Settings
 from generator.daemon import (
     INITIAL_BACKOFF_SECONDS,
     StallWatchdog,
+    deploy_to_r2,
     run_tick_with_watchdog,
     supervisor_loop,
 )
@@ -90,12 +92,6 @@ def test_supervisor_loop_backs_off_on_failure(settings_in_tmp: Settings) -> None
 # --------------------------------------------------------------------------
 # deploy_to_r2 — subprocess shell-out paths matter for 8-month unattended ops
 # --------------------------------------------------------------------------
-
-import os
-import subprocess
-from unittest.mock import MagicMock
-
-from generator.daemon import deploy_to_r2
 
 
 def test_deploy_skipped_when_env_var_set(settings_in_tmp: Settings) -> None:

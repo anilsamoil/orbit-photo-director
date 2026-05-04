@@ -704,8 +704,10 @@ class HimawariNICTSampler:
 
         h, w = self._stitched.shape[:2]
         # Plate-carrée mapping: lat decreases top→bottom, lon increases left→right.
-        row = int(round((HIMAWARI_NICT_LAT_N - lat) / (HIMAWARI_NICT_LAT_N - HIMAWARI_NICT_LAT_S) * (h - 1)))
-        col = int(round((unwrapped - HIMAWARI_NICT_LON_W) / (HIMAWARI_NICT_LON_E - HIMAWARI_NICT_LON_W) * (w - 1)))
+        lat_span = HIMAWARI_NICT_LAT_N - HIMAWARI_NICT_LAT_S
+        lon_span = HIMAWARI_NICT_LON_E - HIMAWARI_NICT_LON_W
+        row = int(round((HIMAWARI_NICT_LAT_N - lat) / lat_span * (h - 1)))
+        col = int(round((unwrapped - HIMAWARI_NICT_LON_W) / lon_span * (w - 1)))
         row = max(0, min(h - 1, row))
         col = max(0, min(w - 1, col))
 

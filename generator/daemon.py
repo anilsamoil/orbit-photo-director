@@ -140,7 +140,7 @@ def _run_subprocess_with_kill_on_timeout(
                 sink.append(line)
                 if len(sink) > 500:  # cap memory; keep last 500 lines
                     del sink[: len(sink) - 500]
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
 
     try:

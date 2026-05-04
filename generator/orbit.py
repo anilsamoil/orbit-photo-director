@@ -150,7 +150,7 @@ def angle_off_nadir_deg(ground_distance_km: float, altitude_km: float) -> float:
     """
     if ground_distance_km <= 0.0:
         return 0.0
-    R = EARTH_RADIUS_KM
+    R = EARTH_RADIUS_KM  # noqa: N806 — geometric convention
     theta = ground_distance_km / R  # angle subtended at Earth's center, radians
     sin_t = math.sin(theta)
     cos_t = math.cos(theta)

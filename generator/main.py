@@ -14,10 +14,11 @@ import fcntl
 import json
 import logging
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import requests
 
@@ -373,7 +374,7 @@ def _tick_lock(out_dir: Path) -> Iterator[None]:
     finally:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         f.close()
 

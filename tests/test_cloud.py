@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -442,7 +443,7 @@ def test_gfs_forecast_deduplicates_targets_on_grid_snap() -> None:
         }
 
     # Both targets snap to (35.75, 139.75)
-    s = GFSForecastSampler(
+    GFSForecastSampler(
         targets=[(35.68, 139.69), (35.78, 139.78)],
         fetcher=counting_fetcher,
     )
@@ -543,7 +544,7 @@ def test_meteosat_returns_no_coverage_outside_disk() -> None:
 
 
 def test_meteosat_returns_off_disk_for_alpha_zero() -> None:
-    from generator.cloud import EUMETSAT_TILE_PX, MeteosatEUMETSATSampler
+    from generator.cloud import MeteosatEUMETSATSampler
 
     # Set the (0,0) pixel — corresponds to (lat 60, lon -60), upper-left
     # corner of the box — to alpha=0.
