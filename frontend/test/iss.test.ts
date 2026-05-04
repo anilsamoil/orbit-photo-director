@@ -11,6 +11,11 @@ const fixture = fixtureRaw as {
   iss_polynomial: Track['iss_polynomial'];
 };
 
+// Reset module-level satrec cache between every test in this file so cache
+// state from one describe block can't bleed into another. iss-sgp4.test.ts
+// does the same — both are needed because test file order isn't guaranteed.
+beforeEach(() => _resetSatrecCacheForTests());
+
 describe('wrapLon', () => {
   it('passes through in-range', () => {
     expect(wrapLon(0)).toBe(0);
@@ -123,5 +128,15 @@ describe('liveIssNow (combined polynomial + SGP4 path)', () => {
     const noTle: Track = { ...trackWithTle, tle: undefined };
     const pastWindow = startMs + (fixture.iss_polynomial.duration_seconds + 60) * 1000;
     expect(liveIssNow(noTle, pastWindow)).toBeNull();
+  });
+
+  it('falls through to SGP4 when the polynomial start is malformed but TLE is valid', () => {
+    const broken: Track = {
+      ...trackWithTle,
+      iss_polynomial: { ...trackWithTle.iss_polynomial, start: 'not-a-date' },
+    };
+    const p = liveIssNow(broken, startMs);
+    expect(p).not.toBeNull();
+    expect(Math.abs(p!.lat)).toBeLessThan(53);
   });
 });

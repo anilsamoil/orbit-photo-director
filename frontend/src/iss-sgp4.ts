@@ -19,7 +19,8 @@ let cache: SatrecCacheEntry | null = null;
 
 /** Parse the TLE shipped on `track.tle` into a satellite.js satrec.
  *  Returns null on malformed input (caller falls back to polynomial only).
- *  Cached on (line1, line2) identity so a stable track doesn't re-parse every tick.
+ *  Cached by (line1, line2) string equality so a stable track doesn't
+ *  re-parse every tick.
  */
 export function parseTLE(tle: { line1: string; line2: string } | undefined): SatRec | null {
   if (!tle) return null;

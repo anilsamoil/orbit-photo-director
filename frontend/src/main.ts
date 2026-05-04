@@ -19,12 +19,27 @@ import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
 const REFRESH_MS = 60_000;
+const COUNTDOWN_TICK_MS = 1_000;
 
 let currentManifest: Manifest | null = null;
 let currentTop5: PassEntry[] = [];
 let currentTop24h: PassEntry[] = [];
 let currentTrack: Track | null = null;
+// Held to keep the scheduler's listeners alive and reachable. Production
+// code never tears down (single-page lifetime); reserved for future SW
+// upgrade flow that may want pollScheduler.stop() before reload.
 let pollScheduler: PollScheduler | null = null;
+// Re-entrancy guard. createPollScheduler explicitly does NOT serialize
+// onPoll calls (see network-status.ts); visibility-resume can fire
+// onPoll while a prior interval-driven refresh is still in flight.
+// Returning the in-flight promise is cheaper than running two parallel
+// fetch+JSON.parse+saveSnapshot pipelines.
+let refreshInFlight: Promise<void> | null = null;
+// Last-saved manifest version. saveSnapshot is idempotent for the same
+// version (the only thing that changes between intra-tick polls is the
+// counter on R2), so skipping unchanged writes drops ~350K localStorage
+// writes over an 8-month mission to ~5K.
+let lastSavedManifestVersion: string | null = null;
 
 function setBanner(state: BannerState): void {
   const el = document.getElementById('status-banner');
@@ -58,6 +73,14 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 }
 
 async function refresh(): Promise<void> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<void> {
   // Skip the network round-trip entirely when the OS says we're offline —
   // saves a doomed fetch + the error banner flash on every poll while LOS.
   if (!isOnline()) {
@@ -81,19 +104,25 @@ async function refresh(): Promise<void> {
     currentTop24h = top24h;
     currentTrack = track;
 
-    // Persist atomically AFTER all artifacts loaded successfully. Snapshot
-    // failure (quota, etc.) does NOT block the live render — saveSnapshot
-    // returns false silently.
-    saveSnapshot({
-      manifest,
-      top5,
-      top_24h: top24h,
-      track,
-      // Status isn't currently fetched in the live path; null is allowed and
-      // the consuming UI degrades gracefully.
-      status: null,
-      savedAt: Date.now(),
-    });
+    // Persist atomically AFTER all artifacts loaded successfully — but ONLY
+    // when the manifest version actually changed. The poll fires every 60s;
+    // the generator only ticks every 60 min. Re-stringifying + writing the
+    // same ~30-50KB blob 60 times per tick is wasted work over an 8-month
+    // mission. saveSnapshot itself is non-blocking (returns false on quota
+    // failure rather than throwing), so the skip is purely a perf win.
+    if (manifest.version !== lastSavedManifestVersion) {
+      saveSnapshot({
+        manifest,
+        top5,
+        top_24h: top24h,
+        track,
+        // Status isn't currently fetched in the live path; null is allowed
+        // and the consuming UI degrades gracefully.
+        status: null,
+        savedAt: Date.now(),
+      });
+      lastSavedManifestVersion = manifest.version;
+    }
 
     renderQueue();
     setBanner(bannerWithTleOverlay(
@@ -105,7 +134,8 @@ async function refresh(): Promise<void> {
     // Refresh failed — keep showing whatever the snapshot path rendered and
     // surface the failure in the banner. currentManifest/Top5/etc still hold
     // the last good state because we only mutated them after Promise.all
-    // resolved.
+    // resolved. A snapshot-restored manifest counts as "has data" here, so
+    // transient fetch errors get the offline banner rather than a red toast.
     if (currentManifest) {
       renderOfflineBanner();
     } else {
@@ -498,7 +528,7 @@ async function init(): Promise<void> {
     onPoll: () => void refresh(),
   });
   // Per-second countdown updates without re-fetching the manifest
-  window.setInterval(rerenderCountdowns, 1000);
+  window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);
 }
 
 if (typeof document !== 'undefined') {

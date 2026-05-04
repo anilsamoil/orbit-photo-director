@@ -246,6 +246,15 @@ describe('formatObsAge', () => {
     expect(formatObsAge('2024-10-17T00:00:00Z', now)).toBe('12h ago');
   });
 
+  it('formats just under and just over the 10h boundary correctly', () => {
+    // 9.0h → '9.0h ago' (1 decimal), 9.9h → '9.9h ago', 10h → '10h ago' (whole).
+    // Off-by-one at the toFixed switch point would break the visual rhythm
+    // of the obs-age tag.
+    expect(formatObsAge('2024-10-17T03:00:00Z', now)).toBe('9.0h ago');
+    expect(formatObsAge('2024-10-17T02:06:00Z', now)).toBe('9.9h ago');
+    expect(formatObsAge('2024-10-17T02:00:00Z', now)).toBe('10h ago');
+  });
+
   it('returns days past 24h', () => {
     expect(formatObsAge('2024-10-15T12:00:00Z', now)).toBe('2d ago');
   });

@@ -7,6 +7,7 @@ import {
   enqueue,
   getToken,
   postCalib,
+  queuedCalibCount,
   readQueue,
   setToken,
 } from '../src/calib';
@@ -127,5 +128,25 @@ describe('drainQueue', () => {
     const sent = await drainQueue();
     expect(sent).toBe(0);
     expect(readQueue()).toHaveLength(1);
+  });
+});
+
+describe('queuedCalibCount', () => {
+  beforeEach(() => clearQueue());
+  afterEach(() => clearQueue());
+
+  it('returns 0 when nothing is queued', () => {
+    expect(queuedCalibCount()).toBe(0);
+  });
+
+  it('reflects queue length after enqueues', () => {
+    enqueue(buildPayload('shoot', 'tokyo', '2024-10-17T12:00:00Z', 50));
+    enqueue(buildPayload('skip', 'baikal', '2024-10-17T13:00:00Z', 30));
+    expect(queuedCalibCount()).toBe(2);
+  });
+
+  it('returns 0 on a corrupted queue (parse failure)', () => {
+    localStorage.setItem('opd-calib-queue', '{not valid json');
+    expect(queuedCalibCount()).toBe(0);
   });
 });

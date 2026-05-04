@@ -34,6 +34,12 @@ describe('createPollScheduler', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    // Restore visibility/online globals so test order changes (or future
+    // describe blocks in this file) inherit a clean baseline. Without this,
+    // a previous test that left visibilityState='hidden' would leak into
+    // the next file via the shared happy-dom document.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
   });
 
   it('does not call onPoll synchronously on creation', () => {

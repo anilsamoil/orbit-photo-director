@@ -33,7 +33,10 @@ export function saveSnapshot(snapshot: Snapshot): boolean {
 }
 
 /** Read the snapshot. Returns null on missing, corrupted, or schema-shape failure.
- *  Never throws — a corrupted snapshot is treated identically to no snapshot. */
+ *  Never throws — a corrupted snapshot is treated identically to no snapshot.
+ *  Validates the load-bearing fields (manifest, track, top5, top_24h, savedAt)
+ *  so downstream consumers like renderOfflineBanner can deref snap.track.X
+ *  without needing their own null guards. */
 export function readSnapshot(): Snapshot | null {
   let raw: string | null;
   try {
@@ -44,10 +47,11 @@ export function readSnapshot(): Snapshot | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Snapshot;
-    // Minimum shape check — older snapshots written before a schema change
-    // shouldn't crash boot. Anything missing the manifest pointer is unusable.
     if (!parsed || typeof parsed !== 'object') return null;
-    if (!parsed.manifest || typeof parsed.savedAt !== 'number') return null;
+    if (!parsed.manifest || typeof parsed.manifest !== 'object') return null;
+    if (typeof parsed.savedAt !== 'number' || !Number.isFinite(parsed.savedAt)) return null;
+    if (!parsed.track || typeof parsed.track !== 'object') return null;
+    if (!Array.isArray(parsed.top5) || !Array.isArray(parsed.top_24h)) return null;
     return parsed;
   } catch {
     return null;
