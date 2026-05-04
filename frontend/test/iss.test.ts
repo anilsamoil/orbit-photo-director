@@ -1,7 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { liveIssPosition, wrapLon } from '../src/iss';
+import { liveIssNow, liveIssPosition, wrapLon } from '../src/iss';
+import { _resetSatrecCacheForTests } from '../src/iss-sgp4';
 import type { Track } from '../src/types';
+
+import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
+const fixture = fixtureRaw as {
+  tle: { line1: string; line2: string };
+  start: string;
+  iss_polynomial: Track['iss_polynomial'];
+};
 
 describe('wrapLon', () => {
   it('passes through in-range', () => {
@@ -78,5 +86,42 @@ describe('liveIssPosition', () => {
       iss_polynomial: { ...track.iss_polynomial, start: 'not-a-date' },
     };
     expect(liveIssPosition(broken, Date.now())).toBeNull();
+  });
+});
+
+describe('liveIssNow (combined polynomial + SGP4 path)', () => {
+  beforeEach(() => _resetSatrecCacheForTests());
+
+  const startMs = Date.parse(fixture.start);
+  const trackWithTle: Track = {
+    iss_polynomial: fixture.iss_polynomial,
+    tle: fixture.tle,
+    tle_epoch: '2024-10-16T18:58:11.999Z',
+    tle_age_hours: 17,
+    tle_freshness_factor: 1,
+  };
+
+  it('returns the polynomial result inside the window (cheap path)', () => {
+    // 1 hour into the 2-hour window — polynomial should answer.
+    const p = liveIssNow(trackWithTle, startMs + 3600_000);
+    expect(p).not.toBeNull();
+    // Confirm it's the polynomial path: matches liveIssPosition exactly.
+    const direct = liveIssPosition(trackWithTle, startMs + 3600_000);
+    expect(p).toEqual(direct);
+  });
+
+  it('falls through to SGP4 past the polynomial window', () => {
+    // 30 min PAST the window end. Polynomial returns null; SGP4 keeps going.
+    const pastWindow = startMs + (fixture.iss_polynomial.duration_seconds + 1800) * 1000;
+    expect(liveIssPosition(trackWithTle, pastWindow)).toBeNull();
+    const p = liveIssNow(trackWithTle, pastWindow);
+    expect(p).not.toBeNull();
+    expect(Math.abs(p!.lat)).toBeLessThan(53);
+  });
+
+  it('returns null past the window when track has no TLE (V1 manifests)', () => {
+    const noTle: Track = { ...trackWithTle, tle: undefined };
+    const pastWindow = startMs + (fixture.iss_polynomial.duration_seconds + 60) * 1000;
+    expect(liveIssNow(noTle, pastWindow)).toBeNull();
   });
 });

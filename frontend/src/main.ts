@@ -10,7 +10,9 @@ import { renderCards } from './card';
 import { bannerError, bannerFromManifest, bannerLoading } from './banner';
 import { buildPayload, clearToken, drainQueue, getToken, postCalib, setToken } from './calib';
 import type { BannerState } from './banner';
-import { liveIssPosition } from './iss';
+import { liveIssNow } from './iss';
+import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
+import { readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import type { Manifest, PassEntry, Track } from './types';
 import { fetchManifest, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
@@ -22,7 +24,7 @@ let currentManifest: Manifest | null = null;
 let currentTop5: PassEntry[] = [];
 let currentTop24h: PassEntry[] = [];
 let currentTrack: Track | null = null;
-let refreshTimer: number | null = null;
+let pollScheduler: PollScheduler | null = null;
 
 function setBanner(state: BannerState): void {
   const el = document.getElementById('status-banner');
@@ -39,40 +41,115 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 }
 
 async function refresh(): Promise<void> {
+  // Skip the network round-trip entirely when the OS says we're offline —
+  // saves a doomed fetch + the error banner flash on every poll while LOS.
+  if (!isOnline()) {
+    renderOfflineBanner();
+    return;
+  }
   try {
     const manifest = await fetchManifest();
-    currentManifest = manifest;
+    // Stage everything before mutating module state so a partial failure
+    // (any artifact 404, JSON parse, etc.) leaves currentManifest/Top5/Track
+    // pointing at the previous snapshot. This is the transactional refresh
+    // discipline from the V2 plan: versioned URLs guarantee artifact
+    // separation; an aborted refresh never produces a torn snapshot.
     const [top5, top24h, track] = await Promise.all([
       fetchTop5(manifest),
       fetchTop24h(manifest),
       fetchTrack(manifest),
     ]);
+    currentManifest = manifest;
     currentTop5 = top5;
     currentTop24h = top24h;
     currentTrack = track;
 
-    const cards = document.getElementById('cards');
-    const empty = document.getElementById('empty');
-    if (!cards || !empty) return;
+    // Persist atomically AFTER all artifacts loaded successfully. Snapshot
+    // failure (quota, etc.) does NOT block the live render — saveSnapshot
+    // returns false silently.
+    saveSnapshot({
+      manifest,
+      top5,
+      top_24h: top24h,
+      track,
+      // Status isn't currently fetched in the live path; null is allowed and
+      // the consuming UI degrades gracefully.
+      status: null,
+      savedAt: Date.now(),
+    });
 
-    const now = Date.now();
-    const stale = isStaleManifest(manifest, now);
-
-    if (top5.length === 0) {
-      cards.replaceChildren();
-      empty.hidden = false;
-    } else {
-      empty.hidden = true;
-      renderCards(cards, top5, now, stale, onCardAction, { tokenSet: !!getToken() });
-    }
-
-    // Render Upcoming pane too — uses forecast variant.
-    renderUpcoming(now, stale);
-
-    setBanner(bannerFromManifest(manifest.generated_at, manifest.freshness.ok, now));
+    renderQueue();
+    setBanner(bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()));
   } catch (e) {
-    setBanner(bannerError((e as Error).message));
+    // Refresh failed — keep showing whatever the snapshot path rendered and
+    // surface the failure in the banner. currentManifest/Top5/etc still hold
+    // the last good state because we only mutated them after Promise.all
+    // resolved.
+    if (currentManifest) {
+      renderOfflineBanner();
+    } else {
+      setBanner(bannerError((e as Error).message));
+    }
   }
+}
+
+/** Render the Queue + Upcoming panes from current module state. Extracted so
+ *  both the snapshot boot and a normal refresh share one render path. */
+function renderQueue(): void {
+  if (!currentManifest) return;
+  const cards = document.getElementById('cards');
+  const empty = document.getElementById('empty');
+  if (!cards || !empty) return;
+  const now = Date.now();
+  const stale = isStaleManifest(currentManifest, now);
+  if (currentTop5.length === 0) {
+    cards.replaceChildren();
+    empty.hidden = false;
+  } else {
+    empty.hidden = true;
+    renderCards(cards, currentTop5, now, stale, onCardAction, { tokenSet: !!getToken() });
+  }
+  renderUpcoming(now, stale);
+}
+
+/** Boot the queue from localStorage before the first network round-trip
+ *  resolves. Lets the page render the previous-known-good UI within a few
+ *  ms of loading instead of staring at "Loading…" until manifest.json
+ *  comes back (or worse, never comes back during LOS). Returns true if a
+ *  snapshot was loaded, false if there was nothing to restore. */
+function bootFromSnapshot(): boolean {
+  const snap: Snapshot | null = readSnapshot();
+  if (!snap) return false;
+  currentManifest = snap.manifest;
+  currentTop5 = snap.top5;
+  currentTop24h = snap.top_24h;
+  currentTrack = snap.track;
+  renderQueue();
+  // The banner reflects the snapshot's manifest age, NOT current freshness —
+  // refresh() will overwrite it the moment the network call resolves.
+  setBanner(bannerFromManifest(snap.manifest.generated_at, snap.manifest.freshness.ok, Date.now()));
+  return true;
+}
+
+/** Banner shown when the manifest fetch fails or navigator.onLine is false.
+ *  The message reflects snapshot age (the only data the user is seeing).
+ *  When there's no snapshot AND no network, this still renders something
+ *  useful instead of leaving the previous banner stuck. */
+function renderOfflineBanner(): void {
+  const snap = readSnapshot();
+  if (!snap) {
+    setBanner(bannerError('offline — no cached data'));
+    return;
+  }
+  const ageMin = (Date.now() - snap.savedAt) / 60_000;
+  const fresh = snap.manifest.freshness.ok;
+  // Re-use bannerFromManifest's wording but anchor the age on snapshot
+  // savedAt — the user's actual data freshness, not the manifest's stamp.
+  setBanner(bannerFromManifest(
+    new Date(Date.now() - ageMin * 60_000).toISOString(),
+    fresh,
+    Date.now(),
+  ));
 }
 
 function renderUpcoming(nowMs: number, stale: boolean): void {
@@ -149,17 +226,21 @@ function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success')
   }, 2400);
 }
 
-/** Update the topbar's live ISS sub-point from the polynomial fit. Called
- *  every second from rerenderCountdowns so the user always sees where the
- *  station is right now — solves "is the queue empty because of geography
- *  or because it's stale?" without making them open the Map tab. */
+/** Update the topbar's live ISS sub-point. Called every second from
+ *  rerenderCountdowns so the user always sees where the station is right
+ *  now — solves "is the queue empty because of geography or because it's
+ *  stale?" without making them open the Map tab.
+ *
+ *  In window: polynomial. Past window: SGP4 from track.tle (V2). Both
+ *  paths return null only when the polynomial start is malformed AND the
+ *  TLE is missing/malformed — at which point "live track expired" is the
+ *  right thing to show. */
 function updateIssNow(): void {
   const el = document.getElementById('iss-now');
   if (!el || !currentTrack) return;
-  const pos = liveIssPosition(currentTrack, Date.now());
+  const pos = liveIssNow(currentTrack, Date.now());
   if (!pos) {
-    // Polynomial window expired — surface that visibly so the user knows
-    // the live update is stale (separate from manifest staleness).
+    // Both polynomial AND SGP4 returned null — track shape is unusable.
     el.classList.add('ready');
     el.innerHTML = '<span class="iss-label">ISS</span><span class="iss-region">live track expired</span>';
     return;
@@ -371,12 +452,27 @@ async function loadMapPane(): Promise<void> {
 }
 
 async function init(): Promise<void> {
-  setBanner(bannerLoading());
   bindTabs();
+  // Restore the previous-known-good UI synchronously BEFORE the network call
+  // so the user sees their queue + map within ms of the page loading. If the
+  // refresh below succeeds, snapshot is overwritten transactionally; if it
+  // fails (LOS, bad gateway), the snapshot UI keeps showing.
+  const hadSnapshot = bootFromSnapshot();
+  if (!hadSnapshot) setBanner(bannerLoading());
+
   // Drain any queued calibrations from the previous session (network may have failed)
   void drainQueue();
+
   await refresh();
-  refreshTimer = window.setInterval(() => void refresh(), REFRESH_MS);
+
+  // Visibility-aware polling: pause while the tab is hidden, fetch
+  // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
+  // watching and gives the user fresh data the moment they look at the
+  // page after a long pause.
+  pollScheduler = createPollScheduler({
+    intervalMs: REFRESH_MS,
+    onPoll: () => void refresh(),
+  });
   // Per-second countdown updates without re-fetching the manifest
   window.setInterval(rerenderCountdowns, 1000);
 }

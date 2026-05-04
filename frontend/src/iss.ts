@@ -1,4 +1,5 @@
 import type { Track } from './types';
+import { liveIssPositionSGP4 } from './iss-sgp4';
 
 /** Evaluate a polynomial p(t) = c[0]*t^n + c[1]*t^(n-1) + ... + c[n]. */
 function evalPoly(coeffs: number[], t: number): number {
@@ -28,4 +29,17 @@ export function liveIssPosition(track: Track, nowMs: number): { lat: number; lon
   const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
   const lon = wrapLon(evalPoly(track.iss_polynomial.lon_coeffs, t));
   return { lat, lon };
+}
+
+/** Best-effort live ISS position with SGP4 fall-through.
+ *  - In window: polynomial (cheap to evaluate every second).
+ *  - Past window OR polynomial-malformed: SGP4 from track.tle (slower but
+ *    accurate for hours-to-days past the polynomial's 120-min cap).
+ *  - Track has no TLE (older manifests pre-V2): polynomial only; returns
+ *    null past the window.
+ */
+export function liveIssNow(track: Track, nowMs: number): { lat: number; lon: number } | null {
+  const poly = liveIssPosition(track, nowMs);
+  if (poly) return poly;
+  return liveIssPositionSGP4(track, nowMs);
 }
