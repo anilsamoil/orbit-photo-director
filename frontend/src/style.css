@@ -9,6 +9,7 @@
   --accent: #5cd0ff;
   --green: #5be37a;
   --yellow: #ffce4d;
+  --orange: #ff9a3c;
   --red: #ff6464;
   --grey: #6c7387;
   font-family: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", sans-serif;
@@ -280,6 +281,7 @@ main {
 
 .banner-green { background: rgba(91, 227, 122, 0.1); color: var(--green); }
 .banner-yellow { background: rgba(255, 206, 77, 0.1); color: var(--yellow); }
+.banner-orange { background: rgba(255, 154, 60, 0.13); color: var(--orange); font-weight: 600; }
 .banner-red { background: rgba(255, 100, 100, 0.15); color: var(--red); font-weight: 600; }
 .banner-loading { background: var(--surface); color: var(--text-dim); }
 

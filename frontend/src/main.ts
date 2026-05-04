@@ -7,7 +7,7 @@
  */
 
 import { renderCards } from './card';
-import { bannerError, bannerFromManifest, bannerLoading } from './banner';
+import { bannerError, bannerFromManifest, bannerLoading, bannerOffline, bannerWithTleOverlay } from './banner';
 import { buildPayload, clearToken, drainQueue, getToken, postCalib, setToken } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
@@ -79,7 +79,10 @@ async function refresh(): Promise<void> {
     });
 
     renderQueue();
-    setBanner(bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()));
+    setBanner(bannerWithTleOverlay(
+      bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
+      track.tle_age_hours,
+    ));
   } catch (e) {
     // Refresh failed — keep showing whatever the snapshot path rendered and
     // surface the failure in the banner. currentManifest/Top5/etc still hold
@@ -132,7 +135,9 @@ function bootFromSnapshot(): boolean {
 }
 
 /** Banner shown when the manifest fetch fails or navigator.onLine is false.
- *  The message reflects snapshot age (the only data the user is seeing).
+ *  The level escalates with snapshot age (green <1h → yellow <3h → orange
+ *  <12h → red beyond) — the user is reading data from localStorage and
+ *  the banner is the only signal of how stale it might be.
  *  When there's no snapshot AND no network, this still renders something
  *  useful instead of leaving the previous banner stuck. */
 function renderOfflineBanner(): void {
@@ -142,13 +147,9 @@ function renderOfflineBanner(): void {
     return;
   }
   const ageMin = (Date.now() - snap.savedAt) / 60_000;
-  const fresh = snap.manifest.freshness.ok;
-  // Re-use bannerFromManifest's wording but anchor the age on snapshot
-  // savedAt — the user's actual data freshness, not the manifest's stamp.
-  setBanner(bannerFromManifest(
-    new Date(Date.now() - ageMin * 60_000).toISOString(),
-    fresh,
-    Date.now(),
+  setBanner(bannerWithTleOverlay(
+    bannerOffline(ageMin),
+    snap.track.tle_age_hours,
   ));
 }
 
