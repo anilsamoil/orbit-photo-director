@@ -278,6 +278,7 @@ def score_pass_for_target(
     forecast_sampler: CloudSampler | None = None,
     now: datetime | None = None,
     observed_horizon_minutes: float = OBSERVED_CLOUD_HORIZON_MINUTES,
+    composite_hour: datetime | None = None,
 ) -> dict[str, Any]:
     when = pass_obj.closest_approach
     iss = pass_obj.iss_position
@@ -329,12 +330,22 @@ def score_pass_for_target(
         "p_unobstructed": round(p_unobs_adjusted, 2),
         "cloud_fraction": round(sample.cloud_fraction, 2),
         "cloud_source": sample.source,
-        # Wall-clock time of the cloud observation that fed this score.
+        # Wall-clock time the cloud reading was actually taken.
         # Drives the frontend's "obs Nm ago" tag so the user can see at a
         # glance whether the cloud reading is fresh (10 min, GOES-IR) or
-        # day-old (MODIS daily composite). For forecast samples this is
-        # the forecast valid-time, not the request time.
-        "sample_time": utcnow_iso(sample.sample_time),
+        # day-old (MODIS daily composite).
+        #
+        # The cloud samplers all default sample.sample_time = `when` (the
+        # pass time), which is the FORECAST VALID-TIME for forecast sources
+        # but useless for observed sources (always future-dated, so the
+        # frontend's age formatter silently hides the tag). Override here:
+        # observed sources use composite_hour (the imagery composite time
+        # the manifest already declares); forecast keeps sample.sample_time.
+        "sample_time": utcnow_iso(
+            sample.sample_time
+            if sample.source == "gfs-forecast" or composite_hour is None
+            else composite_hour
+        ),
         "score": round(sc.final, 3),
         "score_components": {
             "p_unobstructed": round(sc.p_unobstructed, 2),
@@ -449,6 +460,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 target, p, sampler, fresh,
                 forecast_sampler=forecast_sampler,
                 now=n,
+                composite_hour=composite_hour,
             ))
     log.info("found %d passes across %d targets", len(all_passes), len(targets))
 

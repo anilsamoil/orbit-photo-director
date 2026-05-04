@@ -145,6 +145,56 @@ def test_run_tick_track_includes_tle(settings_in_tmp: Settings, cached_tle: Path
     assert parsed.epoch.isoformat().replace("+00:00", "Z") == track["tle_epoch"]
 
 
+def test_score_pass_for_target_uses_composite_hour_for_observed_sample_time(
+    sample_tle: TLE,
+) -> None:
+    """Regression for /qa: observed sample_time was the future pass time, hiding the obs-age tag.
+
+    Found by /qa on 2026-05-04. Report: .gstack/qa-reports/qa-report-localhost-2026-05-04.md
+
+    Each cloud sampler sets `sample.sample_time = when` (the pass time). The
+    pass time is in the FUTURE for upcoming passes, so the frontend's
+    formatObsAge('+Nm') returned '' (no future-dated tag) and the obs-age
+    tag never rendered for observed sources. Fix: score_pass_for_target now
+    overrides sample_time to composite_hour for non-forecast sources, so
+    sample_time is in the past (the actual imagery time) and the tag works.
+    """
+    from generator.cloud import MockCloudSampler
+
+    pass_time = datetime(2026, 5, 4, 21, 0, 0, tzinfo=UTC)  # future-dated pass
+    composite_hour = datetime(2026, 5, 4, 19, 0, 0, tzinfo=UTC)  # 2 hours earlier
+    target = {
+        "id": "test", "name": "Test",
+        "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+        "priority": 4, "regime": "any",
+    }
+    pass_obj = Pass(
+        target_id="test", target_lat=0.0, target_lon=0.0,
+        closest_approach=pass_time, nadir_distance_km=200.0,
+        iss_position=Position(lat=0.5, lon=0.5, alt_km=410, when=pass_time),
+    )
+    # MockCloudSampler returns source="mock" (a no-observation source). For the
+    # observed-source path we need a sampler whose source isn't "gfs-forecast".
+    sampler = MockCloudSampler(default_cf=20.0)
+
+    # Pass composite_hour explicitly: sample_time should equal composite_hour,
+    # NOT the pass time.
+    result = score_pass_for_target(
+        target, pass_obj, sampler, tle_freshness=1.0,
+        composite_hour=composite_hour,
+    )
+    assert result["sample_time"] == "2026-05-04T19:00:00Z", \
+        f"observed sample_time should be composite_hour, got {result['sample_time']}"
+
+    # Without composite_hour (older callers), behavior unchanged: falls back
+    # to sample.sample_time (= when, the pass time). Backward compatible.
+    result_legacy = score_pass_for_target(
+        target, pass_obj, sampler, tle_freshness=1.0,
+    )
+    assert result_legacy["sample_time"] == "2026-05-04T21:00:00Z", \
+        "without composite_hour, falls back to sample.sample_time (= pass time)"
+
+
 def test_score_pass_for_target_handles_glint_path(sample_tle: TLE) -> None:
     """Smoke-test the per-pass scorer with a synthetic over-water pass."""
     from generator.cloud import MockCloudSampler
