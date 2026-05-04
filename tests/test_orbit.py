@@ -308,6 +308,9 @@ def test_fit_iss_polynomial_handles_antimeridian(sample_tle: TLE, now_utc: datet
     """Polynomial fit should not blow up when the ISS crosses ±180° longitude in the window."""
     # Use a 90-min window so the ISS crosses the antimeridian at least once
     poly = fit_iss_polynomial(sample_tle, now_utc, minutes=90, samples=91)
+    # Pin the order=9 branch (60 < minutes <= 90) — closes the only branch
+    # gap in _polynomial_order_for_window.
+    assert poly["polynomial_order"] == 9
     # Coefficients should be finite numbers
     for c in poly["lat_coeffs"] + poly["lon_coeffs"]:
         assert math.isfinite(c)

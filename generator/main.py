@@ -492,10 +492,16 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     #   satcorps        (SatCORPS NetCDF when wired up)
     #   gfs-forecast    (GFS forecast for passes >90 min ahead — different
     #                   confidence band but still a real signal, not a guess)
+    # Match the frontend's no-observation set in card.ts:NO_OBSERVATION_SOURCES.
+    # `startswith("geo-ir-")` alone would over-count: geo-ir-nodata and
+    # geo-ir-no-coverage are fallback cf=50 placeholders, not real observations.
     observed_count = sum(
         1 for p in all_passes
         if p["cloud_source"] == "gibs"
-        or p["cloud_source"].startswith("geo-ir-")
+        or (
+            p["cloud_source"].startswith("geo-ir-")
+            and not p["cloud_source"].endswith(("-nodata", "-no-coverage"))
+        )
         or p["cloud_source"] == "meteosat-ir108"
         or p["cloud_source"] == "himawari-nict"
         or p["cloud_source"] == "satcorps"
