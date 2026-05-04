@@ -37,18 +37,40 @@ cache_control_for() {
 }
 
 COUNT=0
+FAILED_FILES=()
 while IFS= read -r FILE; do
   REL_PATH="${FILE#$DIST_DIR/}"
   CT=$(content_type_for "$REL_PATH")
   CC=$(cache_control_for "$REL_PATH")
-  wrangler r2 object put "$BUCKET/$REL_PATH" \
+  # Capture stderr so we can surface real errors instead of silently
+  # leaving index.html pointing at a 404'd asset on R2. `wrangler r2
+  # object put` writes useful error detail (auth failure, network, R2
+  # quota) to stderr.
+  WRANGLER_ERR=$(wrangler r2 object put "$BUCKET/$REL_PATH" \
     --file "$FILE" \
     --content-type "$CT" \
     --cache-control "$CC" \
-    --remote >/dev/null 2>&1
+    --remote 2>&1 >/dev/null) || {
+    echo "  ✗ $REL_PATH" >&2
+    echo "    $WRANGLER_ERR" | head -5 | sed 's/^/    /' >&2
+    FAILED_FILES+=("$REL_PATH")
+    continue
+  }
   COUNT=$((COUNT + 1))
-  echo "  $REL_PATH"
+  echo "  ✓ $REL_PATH"
 done < <(find "$DIST_DIR" -type f)
+
+if [ "${#FAILED_FILES[@]}" -gt 0 ]; then
+  echo "" >&2
+  echo "==> $COUNT files uploaded, ${#FAILED_FILES[@]} FAILED:" >&2
+  for f in "${FAILED_FILES[@]}"; do
+    echo "    $f" >&2
+  done
+  echo "==> NOT updating index.html assumption — the site may reference" >&2
+  echo "    assets that didn't upload. Re-run upload_frontend.sh, or" >&2
+  echo "    inspect the errors above." >&2
+  exit 3
+fi
 
 echo "==> Uploaded $COUNT frontend files to $BUCKET"
 echo "==> Live at https://map.astroanil.dev"

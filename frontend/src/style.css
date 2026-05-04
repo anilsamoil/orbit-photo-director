@@ -479,6 +479,24 @@ main {
 .modal h3 { margin: 0; font-size: 1rem; }
 .modal .modal-meta { color: var(--text-dim); font-size: 0.85rem; }
 .modal .star-row { display: flex; gap: 0.3rem; }
+
+/* Token input — password-type for masking, no autofill capture. */
+.modal .token-input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.55rem 0.75rem;
+  border-radius: 6px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.9rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+.modal .token-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .modal .star-btn {
   background: var(--surface-2);
   border: 1px solid var(--border);
