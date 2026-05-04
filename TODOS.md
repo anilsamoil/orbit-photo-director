@@ -3,20 +3,26 @@
 Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 (must fix before mission start), P2 (nice to have), P3+ (future).
 
-## V3 — offline-resilient frontend (deferred)
+## V2 — offline-resilient frontend (in progress)
 
-Plan: `~/.gstack/projects/astroanil/astroanil-feat-v1-scaffold-design-20260503-203926.md`
+Plan: `~/Desktop/orbit-photo-director-offline-v2-plan.md`
 
-V3 ships service worker (vite-plugin-pwa/Workbox), localStorage snapshot,
-client-side SGP4 via satellite.js, atomic-set artifact handling, and a
-kill-switch on a different origin. Targets full offline operation through
-ISS LOS windows. ~3 hours of CC implementation time, see the plan for the
-sequencing.
+V2 ships in two parts. Lanes A-E shipped on `feat/v2-offline`; F-H deferred
+to a follow-up PR.
 
-### V3-P0 — Pre-launch SW upgrade test
-Single biggest 8-month risk in the V3 plan is a buggy SW. Test recipe:
+### Shipped on feat/v2-offline (Lanes A-E)
+- ✅ Generator ships source TLE in track.json (Lane A)
+- ✅ satellite.js SGP4 fall-through past the 120-min polynomial window (Lane B)
+- ✅ localStorage `opd-snapshot` for synchronous boot before network resolves (Lane C)
+- ✅ Visibility-aware poll scheduler — pause hidden, fetch on resume (Lane D)
+- ✅ Boot-from-snapshot + transactional refresh + offline-confidence banner
+  (green<1h / yellow<3h / orange<12h / red beyond) + TLE>48h overlay +
+  obs-age tag + map imagery-date badge + pending-sync badge (Lane E)
 
-1. Deploy v1 with the V3 SW. Boot, verify offline mode.
+### V2-P0 — Pre-launch SW upgrade test (blocks Lane F)
+Single biggest 8-month risk is a buggy SW. Test recipe:
+
+1. Deploy v1 with the Lane F SW. Boot, verify offline mode.
 2. Deliberate change in vite-plugin-pwa runtime caching (e.g., bump GIBS
    LRU from 200 → 250) to force a cache-key change.
 3. Deploy v2.
@@ -29,7 +35,54 @@ Single biggest 8-month risk in the V3 plan is a buggy SW. Test recipe:
 
 Must pass before launch.
 
-### V3-P3 — Post-mission: drop polynomial, keep SGP4 only
+### V2-P1 — Lane F: vite-plugin-pwa + Workbox SW (deferred)
+Service worker for full offline-while-LOS support. App shell + versioned
+artifacts cached, manifest NetworkFirst with 2s timeout, GIBS/carto tiles
+LRU-bounded. Architectural commitments locked in the plan: skipWaiting
+only (no clients.claim), Workbox via vite-plugin-pwa, transactional refresh.
+
+### V2-P1 — Lane G: kill-switch DNS + Worker (deferred)
+`reset.astroanil.dev/orbit-photo-director` on a different origin so a
+broken SW can't intercept it. Tiny static page that unregisters all SWs
++ clears caches API + redirects back to map.astroanil.dev. Needs DNS
+write access on astroanil.dev.
+
+### V2-P1 — Lane H: pre-launch checklist (blocked by F+G)
+15 manual e2e items in the V2 plan covering offline boot, SW upgrade flow,
+multi-tab races, kill-switch recovery, tile-cache budget, mock-stale-TLE
+banner escalation, snapshot corruption recovery.
+
+### V2-P2 — sha256 verification of artifact fetches
+Generator already ships sha256 for every artifact in manifest.json.
+Frontend fetches and parses without checking. A partial R2 deploy
+(manifest pointing at a not-yet-uploaded artifact) or CF compromise would
+silently feed wrong data. Add SubtleCrypto.digest('SHA-256') in
+`frontend/src/manifest.ts:fetchArtifact` and throw on mismatch — the
+existing transactional refresh already shields against the resulting
+exception. ~30 min CC.
+
+### V2-P2 — Tighten polynomial fit (or drop it for SGP4-only)
+/review discovered the order-11 polynomial fit has up to 1.1° lat error
+vs SGP4 truth — about 120 km on the map. Live dot is visibly off-truth
+even inside the 120-min window. Two paths: (1) split into two shorter
+polynomial fits (<90 min each), or (2) drop the polynomial entirely and
+use SGP4 client-side for the 1Hz live dot. Path 2 is simpler but blocks
+on confirming SGP4 is cheap enough for sustained 1Hz on the unattended
+Mac. Documented in `frontend/test/iss-sgp4.test.ts:96-101`.
+
+### V2-P3 — Forecast-horizon obs-age tag
+`formatObsAge` silently hides the tag for forecast (future-dated) cloud
+samples — the user can't tell a 1h-ahead forecast from a 23h-ahead one.
+Detect `cloud_source === 'gfs-forecast'` in card.ts and render
+"forecast +Nh" instead of suppressing.
+
+### V2-P3 — Periodic satrec re-parse
+satellite.js mutates `satrec.error` per propagate call. Over an 8-month
+unattended run with the same TLE (Mac dead), the cached satrec accumulates
+mutating state. Re-parse on each new manifest version to get a fresh
+satrec — cheap, safer.
+
+### V2-P3 — Post-mission: drop polynomial, keep SGP4 only
 After 8-month mission validates SGP4 client-side, the 60-min polynomial
 becomes redundant. Defer until post-mission. Removing earlier risks
 breaking the live dot if SGP4 has unknown edge cases.
