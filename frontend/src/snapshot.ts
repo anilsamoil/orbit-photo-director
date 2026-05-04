@@ -66,12 +66,20 @@ export function snapshotAgeMinutes(nowMs: number = Date.now()): number {
   return (nowMs - snap.savedAt) / 60_000;
 }
 
-/** Test-only: clear the snapshot. Production code should never need this —
- *  the never-discard rule says we always have something to show. */
-export function _clearSnapshotForTests(): void {
+/** Discard the snapshot. Used as a recovery path when boot detects a
+ *  corrupted snapshot AT THE CONSUMER LEVEL (e.g., readSnapshot's shape
+ *  check passed but a nested field is bad). The never-discard rule
+ *  applies to STALENESS — old snapshots are valuable. Corruption is a
+ *  different category: an unparseable snapshot is worse than no snapshot
+ *  because it can permanently brick boot.
+ */
+export function clearSnapshot(): void {
   try {
     localStorage.removeItem(SNAPSHOT_KEY);
   } catch {
     // ignore
   }
 }
+
+/** @deprecated use clearSnapshot — kept for the existing test imports. */
+export const _clearSnapshotForTests = clearSnapshot;

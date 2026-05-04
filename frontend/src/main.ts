@@ -12,7 +12,7 @@ import { buildPayload, clearToken, drainQueue, getToken, postCalib, queuedCalibC
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
-import { readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
+import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import type { Manifest, PassEntry, Track } from './types';
 import { fetchManifest, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
@@ -105,12 +105,20 @@ async function doRefresh(): Promise<void> {
     currentTrack = track;
 
     // Persist atomically AFTER all artifacts loaded successfully — but ONLY
-    // when the manifest version actually changed. The poll fires every 60s;
-    // the generator only ticks every 60 min. Re-stringifying + writing the
-    // same ~30-50KB blob 60 times per tick is wasted work over an 8-month
-    // mission. saveSnapshot itself is non-blocking (returns false on quota
-    // failure rather than throwing), so the skip is purely a perf win.
-    if (manifest.version !== lastSavedManifestVersion) {
+    // when the manifest version is STRICTLY NEWER than what's on disk. Two
+    // protections in one check:
+    //   1. Skip identical-version writes (the poll fires every 60s; the
+    //      generator only ticks every 60 min, so 59 of 60 polls return the
+    //      same manifest — saves ~350K wasted localStorage writes / 8 mo).
+    //   2. Block monotonicity regressions. A CDN edge serving a stale
+    //      manifest, a multi-tab race, or a re-published version would
+    //      otherwise overwrite a newer snapshot with older data — silent
+    //      data corruption the user never sees. Versions are timestamped
+    //      slugs (YYYYMMDDTHHMMSSZ), so lexicographic comparison works.
+    const onDiskVersion = readSnapshot()?.manifest.version ?? null;
+    const isNewer = manifest.version !== lastSavedManifestVersion
+      && (onDiskVersion === null || manifest.version > onDiskVersion);
+    if (isNewer) {
       saveSnapshot({
         manifest,
         top5,
@@ -167,7 +175,13 @@ function renderQueue(): void {
  *  resolves. Lets the page render the previous-known-good UI within a few
  *  ms of loading instead of staring at "Loading…" until manifest.json
  *  comes back (or worse, never comes back during LOS). Returns true if a
- *  snapshot was loaded, false if there was nothing to restore. */
+ *  snapshot was loaded, false if there was nothing to restore.
+ *
+ *  Caller is expected to wrap this in a try/catch + clearSnapshot — even
+ *  with readSnapshot's shape validation, a snapshot whose nested fields
+ *  fail (e.g. manifest.freshness.ok missing) would throw inside one of
+ *  the consumers below and brick boot permanently. The init() try/catch
+ *  is the recovery surface. */
 function bootFromSnapshot(): boolean {
   const snap: Snapshot | null = readSnapshot();
   if (!snap) return false;
@@ -175,6 +189,9 @@ function bootFromSnapshot(): boolean {
   currentTop5 = snap.top5;
   currentTop24h = snap.top_24h;
   currentTrack = snap.track;
+  // Init the version-skip cache from the loaded snapshot so the first
+  // refresh doesn't write a redundant identical-version snapshot.
+  lastSavedManifestVersion = snap.manifest.version;
   renderQueue();
   // The banner reflects the snapshot's manifest age, NOT current freshness —
   // refresh() will overwrite it the moment the network call resolves.
@@ -509,7 +526,26 @@ async function init(): Promise<void> {
   // so the user sees their queue + map within ms of the page loading. If the
   // refresh below succeeds, snapshot is overwritten transactionally; if it
   // fails (LOS, bad gateway), the snapshot UI keeps showing.
-  const hadSnapshot = bootFromSnapshot();
+  //
+  // Recovery: bootFromSnapshot can throw if a torn write or hostile browser
+  // extension left malformed nested fields in the snapshot (e.g.,
+  // manifest.freshness missing). Without this catch, init's promise rejects,
+  // the poll scheduler is never created, refresh() never runs, and the page
+  // is permanently bricked because reload would just re-read the same poison.
+  // On catch we discard the snapshot — staleness is precious, corruption is
+  // worse than nothing — and proceed with the loading banner.
+  let hadSnapshot = false;
+  try {
+    hadSnapshot = bootFromSnapshot();
+  } catch (e) {
+    console.warn('snapshot restore failed, discarding:', e);
+    clearSnapshot();
+    currentManifest = null;
+    currentTop5 = [];
+    currentTop24h = [];
+    currentTrack = null;
+    lastSavedManifestVersion = null;
+  }
   if (!hadSnapshot) setBanner(bannerLoading());
 
   // Drain any queued calibrations from the previous session (network may have failed)
