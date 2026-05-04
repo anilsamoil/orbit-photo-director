@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -167,3 +167,44 @@ def test_run_tick_skips_targets_with_no_passes(
     v_dir = settings_in_tmp.out_dir / "v" / "20241017T120000Z"
     top5 = json.loads((v_dir / "top5.json").read_text())
     assert top5 == []
+
+
+def test_run_tick_lock_blocks_concurrent_tick(
+    settings_in_tmp: Settings, cached_tle: Path
+) -> None:
+    """A second run_tick while the first holds the lock raises RuntimeError.
+
+    Simulated by holding the flock manually before calling run_tick. The
+    second call should fail fast (LOCK_NB) rather than block or silently
+    corrupt out/.
+    """
+    import fcntl
+    settings_in_tmp.out_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = settings_in_tmp.out_dir / ".tick.lock"
+    holder = open(lock_path, "w")
+    try:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+        with pytest.raises(RuntimeError, match="another tick is already running"):
+            run_tick(settings_in_tmp, now=now)
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
+
+
+def test_run_tick_lock_releases_on_normal_completion(
+    settings_in_tmp: Settings, cached_tle: Path
+) -> None:
+    """After run_tick returns, the lock is released so the next tick can proceed."""
+    targets = [{
+        "id": "tokyo",
+        "name": "Tokyo",
+        "geom": {"type": "point", "lat": 35.7, "lon": 139.7},
+        "priority": 5,
+        "regime": "any",
+    }]
+    settings_in_tmp.targets_file.write_text(json.dumps(targets))
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    run_tick(settings_in_tmp, now=now)
+    # Second call should succeed too, with the same lock file in place.
+    run_tick(settings_in_tmp, now=now + timedelta(seconds=1))

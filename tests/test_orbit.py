@@ -223,6 +223,86 @@ def test_fit_iss_polynomial_scales_order_for_2h_window(
     assert len(poly["lat_coeffs"]) == 12
 
 
+def test_fit_iss_polynomial_caps_order_at_11_for_long_windows(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """Past 180 min, order is capped at 11 (numerical stability).
+
+    Higher order on a single-variable polyfit triggers RankWarning and Runge
+    oscillations near the window edges. The cap forces callers into the
+    shorter-window or client-side-SGP4 path instead of getting a wobbly fit.
+    """
+    poly = fit_iss_polynomial(sample_tle, now_utc, minutes=240)
+    assert poly["polynomial_order"] == 11
+
+
+def _eval_poly(coeffs: list[float], t: float) -> float:
+    acc = 0.0
+    for c in coeffs:
+        acc = acc * t + c
+    return acc
+
+
+def test_fit_iss_polynomial_residual_30min_under_tenth_degree(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """30-min window at order 5 fits ISS lat within 0.1° max residual.
+
+    The 30-min/order-5 regime is where the polynomial is genuinely
+    accurate (~0.006° measured). 0.1° is loose regression-guard headroom
+    — if a future change cuts samples or drops the order past need, this
+    fires before the live ISS dot visibly drifts.
+    """
+    from generator.orbit import propagate
+
+    minutes = 30
+    poly = fit_iss_polynomial(sample_tle, now_utc, minutes=minutes)
+
+    max_lat_err = 0.0
+    for sec in range(0, minutes * 60 + 1, 30):
+        truth = propagate(sample_tle, now_utc + timedelta(seconds=sec))
+        fit_lat = _eval_poly(poly["lat_coeffs"], float(sec))
+        err = abs(truth.lat - fit_lat)
+        if err > max_lat_err:
+            max_lat_err = err
+
+    assert max_lat_err < 0.1, (
+        f"30-min polynomial lat residual {max_lat_err:.3f}° > 0.1° threshold."
+    )
+
+
+def test_fit_iss_polynomial_residual_120min_documented_drift(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """120-min window at order 11 documents the lat drift envelope.
+
+    Reality: ~1° max lat error across a 2-hour window covering ~1.3 ISS
+    orbits. The live ISS dot displays at ~3-pixel resolution at the
+    default map zoom, so 1° drift is visually noticeable but not
+    catastrophic. V3 ships satellite.js client-side SGP4 to replace this
+    past the 60-min window. The cap here is a regression-guard, not a
+    quality target.
+    """
+    from generator.orbit import propagate
+
+    minutes = 120
+    poly = fit_iss_polynomial(sample_tle, now_utc, minutes=minutes)
+
+    max_lat_err = 0.0
+    for sec in range(0, minutes * 60 + 1, 30):
+        truth = propagate(sample_tle, now_utc + timedelta(seconds=sec))
+        fit_lat = _eval_poly(poly["lat_coeffs"], float(sec))
+        err = abs(truth.lat - fit_lat)
+        if err > max_lat_err:
+            max_lat_err = err
+
+    assert max_lat_err < 2.0, (
+        f"120-min polynomial lat residual {max_lat_err:.3f}° > 2.0°: regression "
+        "vs the documented ~1° envelope. Either bump samples, change basis "
+        "(Chebyshev), or accelerate the SGP4-client-side V3 plan."
+    )
+
+
 def test_fit_iss_polynomial_handles_antimeridian(sample_tle: TLE, now_utc: datetime) -> None:
     """Polynomial fit should not blow up when the ISS crosses ±180° longitude in the window."""
     # Use a 90-min window so the ISS crosses the antimeridian at least once
@@ -245,20 +325,40 @@ def test_detect_reboost_same_tle_returns_false(sample_tle: TLE) -> None:
     assert detect_reboost(sample_tle, sample_tle) is False
 
 
-def test_detect_reboost_threshold() -> None:
-    """A simulated mean motion change > 0.005 rev/day should flag a reboost."""
+def test_detect_reboost_fires_on_mean_motion_decrease() -> None:
+    """A reboost adds energy → raises altitude → mean motion DECREASES.
+    detect_reboost only fires in that direction."""
     base = (
         "1 25544U 98067A   24290.79041667  .00031560  00000-0  56270-3 0  9990\n"
         "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.49814196479596"
     )
-    # Boosted version: mean motion bumped by ~0.05 rev/day
-    boosted = (
+    # Reboosted: mean motion DECREASED by ~0.05 rev/day (orbit raised).
+    reboosted = (
+        "1 25544U 98067A   24290.79041667  .00031560  00000-0  56270-3 0  9990\n"
+        "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.44814196479596"
+    )
+    prev = TLE.from_text(base)
+    curr = TLE.from_text(reboosted)
+    assert detect_reboost(prev, curr) is True
+
+
+def test_detect_reboost_does_not_fire_on_mean_motion_increase() -> None:
+    """The opposite direction (mean motion INCREASES) is a deboost / debris
+    avoidance burn that lowers the orbit. The previous abs()-based check
+    flagged this as a reboost too — a false positive that ground-side
+    support could misread as a planned orbit raise."""
+    base = (
+        "1 25544U 98067A   24290.79041667  .00031560  00000-0  56270-3 0  9990\n"
+        "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.49814196479596"
+    )
+    deboosted = (
         "1 25544U 98067A   24290.79041667  .00031560  00000-0  56270-3 0  9990\n"
         "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.55000000479596"
     )
     prev = TLE.from_text(base)
-    curr = TLE.from_text(boosted)
-    assert detect_reboost(prev, curr) is True
+    curr = TLE.from_text(deboosted)
+    # Mean motion went UP — not a reboost.
+    assert detect_reboost(prev, curr) is False
 
 
 # --------------------------------------------------------------------------

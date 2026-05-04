@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import sys
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import requests
 
@@ -341,11 +343,51 @@ def score_pass_for_target(
     }
 
 
+@contextmanager
+def _tick_lock(out_dir: Path) -> Iterator[None]:
+    """Hold an exclusive flock for the duration of a tick.
+
+    Two daemons or a manual `make tick` co-running with the daemon would
+    both call cleanup_old_versions and both deploy, racing each other on
+    R2 and the local out/ tree. The lock fails fast (LOCK_NB) so the
+    second caller surfaces the misconfiguration as a RuntimeError rather
+    than silently corrupting state.
+
+    Lock file: <out_dir>/.tick.lock. Released on exit even if the body
+    raises (file close also releases on Linux/macOS). POSIX-only — fine
+    for Mac on Earth + the launchd setup we ship.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = out_dir / ".tick.lock"
+    f = open(lock_path, "w")
+    try:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                f"another tick is already running (lock: {lock_path}); "
+                "check `ps` for a stale daemon or manual tick before retrying"
+            ) from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:  # noqa: BLE001
+            pass
+        f.close()
+
+
 def run_tick(settings: Settings, now: datetime | None = None) -> dict[str, Any]:
     """Run one generator tick. Returns the manifest contents."""
     n = now or datetime.now(tz=UTC)
     settings.ensure_dirs()
 
+    with _tick_lock(settings.out_dir):
+        return _run_tick_body(settings, n)
+
+
+def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
+    """Inner tick body — runs under the flock from run_tick."""
     log.info("tick start: %s", utcnow_iso(n))
 
     # 1. TLE

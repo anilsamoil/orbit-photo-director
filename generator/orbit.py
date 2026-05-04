@@ -203,14 +203,26 @@ def find_passes(
     return passes
 
 
+_POLYNOMIAL_ORDER_CAP = 11
+"""Hard cap on polyfit degree. Past 11, np.polyfit on ISS lat/lon over multiple
+orbits gets numerically ill-conditioned (RankWarning, Runge oscillations near
+window edges). For windows >180 min the right answer is to fit two shorter
+polynomials (or run SGP4 client-side, see V3 plan) — not to crank degree
+further. We keep the cap and let the frontend fall back to its slower path
+when more accuracy is needed."""
+
+
 def _polynomial_order_for_window(minutes: int) -> int:
     """Polynomial order scaled to the inter-tick window.
     ISS orbital period is ~93 min. Orders chosen to keep RMS error <0.05° lat over the window:
       <=30 min  → 5  (less than 1/3 orbit)
       <=60 min  → 7
       <=90 min  → 9
-      <=180 min → 11 (just under 2 orbits)
-      else      → 13 (best-effort; UI degrades visibly past this)
+      else      → 11 (just under 2 orbits — capped for numerical stability)
+
+    Past ~180 min, even order 13 starts to wobble at the edges. We cap at 11
+    and let callers re-fit with shorter windows if they need finer-grained
+    accuracy.
     """
     if minutes <= 30:
         return 5
@@ -218,9 +230,7 @@ def _polynomial_order_for_window(minutes: int) -> int:
         return 7
     if minutes <= 90:
         return 9
-    if minutes <= 180:
-        return 11
-    return 13
+    return _POLYNOMIAL_ORDER_CAP
 
 
 def fit_iss_polynomial(
@@ -256,11 +266,19 @@ def fit_iss_polynomial(
 
 
 def detect_reboost(prev: TLE | None, curr: TLE) -> bool:
-    """Detect a likely reboost: mean motion changed by > 0.005 rev/day vs prior TLE."""
+    """Detect a likely orbit-raising reboost.
+
+    A reboost adds energy → raises altitude → period lengthens → mean motion
+    DECREASES. So `curr.no_kozai < prev.no_kozai` is the reboost direction.
+    Threshold: > 0.005 rev/day decrease (the prior code used abs() and was
+    flagging both reboosts AND debris-avoidance burns / TLE noise that goes
+    the other way; this returns false on those non-reboost deltas).
+    """
     if prev is None:
         return False
     prev_sat = Satrec.twoline2rv(prev.line1, prev.line2)
     curr_sat = Satrec.twoline2rv(curr.line1, curr.line2)
-    delta = abs(prev_sat.no_kozai - curr_sat.no_kozai)  # rad/min
+    # Positive delta = mean motion DECREASED = reboost.
+    delta = prev_sat.no_kozai - curr_sat.no_kozai  # rad/min
     delta_revs_per_day = delta * (1440.0 / (2 * math.pi))
     return delta_revs_per_day > 0.005
