@@ -65,3 +65,4 @@ frontend/*.tsbuildinfo
 worker/src/*.js
 worker/test/*.js
 .gstack/
+frontend/public/
