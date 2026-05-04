@@ -52,6 +52,12 @@ export interface Track {
     lon_coeffs: number[];
     polynomial_order: number;
   };
+  /** Direct SGP4 samples for the ground-track polyline. Each entry is
+   *  `[t_seconds_from_polynomial.start, lat, lon]`. Covers ~2 ISS orbits
+   *  (200 min @ 30s = 401 points). The polynomial is great for the live
+   *  dot but degrades past ~120 min; track_points has zero drift over the
+   *  full 2-orbit window. Older manifests may not include this field. */
+  track_points?: [number, number, number][];
   tle_epoch: string;
   tle_age_hours: number;
   tle_freshness_factor: number;

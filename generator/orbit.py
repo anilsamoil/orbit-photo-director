@@ -265,6 +265,32 @@ def fit_iss_polynomial(
     }
 
 
+def sample_track_points(
+    tle: TLE, start: datetime, *, minutes: int = 200, step_seconds: int = 30
+) -> list[list[float]]:
+    """Sample ISS lat/lon directly from SGP4 every `step_seconds` for `minutes`.
+
+    The polynomial fit (fit_iss_polynomial) is great for fast in-window
+    interpolation but degrades visibly past ~120 min. For the map's ground-
+    track polyline we want 2 full orbits (~190 min); raw SGP4 samples have
+    no drift accumulation regardless of duration.
+
+    Returns a list of [t_seconds_from_start, lat_deg, lon_deg] triples,
+    rounded to 3 decimals (~110 m surface accuracy — plenty for a map line).
+    With minutes=200, step=30 → 401 points × 3 floats × ~8 bytes = ~9.6 KB
+    JSON, ~3 KB gzipped. Cheap.
+    """
+    _ensure_utc(start, "start")
+    points: list[list[float]] = []
+    total_seconds = minutes * 60
+    t = 0
+    while t <= total_seconds:
+        pos = propagate(tle, start + timedelta(seconds=t))
+        points.append([float(t), round(pos.lat, 3), round(pos.lon, 3)])
+        t += step_seconds
+    return points
+
+
 def detect_reboost(prev: TLE | None, curr: TLE) -> bool:
     """Detect a likely orbit-raising reboost.
 

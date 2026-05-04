@@ -55,6 +55,7 @@ from .orbit import (
     find_passes,
     fit_iss_polynomial,
     freshness_factor,
+    sample_track_points,
     tle_age_hours,
 )
 from .score import compute_score, top_n
@@ -472,11 +473,13 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         reverse=True,
     )[:DEFAULT_TOP_UPCOMING]
 
-    # Polynomial covers 120 min so the frontend's +90 min lookahead button
-    # has data even at the end of a tick interval (tick_minutes is 60 by
-    # default; polynomial duration is decoupled from refresh cadence).
+    # Polynomial (120 min) drives the precise live ISS marker.
+    # track_points (200 min ≈ 2 ISS orbits) drives the map's ground-track
+    # polyline — same SGP4 source as the polynomial but no fit drift past
+    # the polynomial's window. ~9.6 KB JSON, ~3 KB gzipped.
     track_data = {
         "iss_polynomial": fit_iss_polynomial(tle, n, minutes=120),
+        "track_points": sample_track_points(tle, n, minutes=200, step_seconds=30),
         "tle_epoch": utcnow_iso(tle.epoch),
         "tle_age_hours": round(age_h, 2),
         "tle_freshness_factor": round(fresh, 3),

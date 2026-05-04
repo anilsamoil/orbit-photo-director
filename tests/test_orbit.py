@@ -18,6 +18,7 @@ from generator.orbit import (
     freshness_factor,
     great_circle_km,
     propagate,
+    sample_track_points,
     teme_to_geodetic,
     tle_age_hours,
 )
@@ -400,3 +401,60 @@ def test_angle_off_nadir_scales_with_altitude() -> None:
     a_high = angle_off_nadir_deg(200.0, 800.0)
     assert a_low > a_high
 
+
+
+# --------------------------------------------------------------------------
+# sample_track_points — raw SGP4 samples for the 2-orbit ground track
+# --------------------------------------------------------------------------
+
+
+def test_sample_track_points_count_matches_duration_and_step(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """200 min × 1 sample / 30s + 1 = 401 points (inclusive boundary)."""
+    pts = sample_track_points(sample_tle, now_utc, minutes=200, step_seconds=30)
+    assert len(pts) == 401
+    assert pts[0][0] == 0.0
+    assert pts[-1][0] == 200.0 * 60.0
+
+
+def test_sample_track_points_lat_lon_match_propagate(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """Each sample matches a direct propagate() call at the same time."""
+    pts = sample_track_points(sample_tle, now_utc, minutes=10, step_seconds=60)
+    for t_sec, lat, lon in pts:
+        truth = propagate(sample_tle, now_utc + timedelta(seconds=int(t_sec)))
+        # 3-decimal rounding in the sampler → ~0.001° tolerance
+        assert abs(truth.lat - lat) < 0.005
+        assert abs(truth.lon - lon) < 0.005
+
+
+def test_sample_track_points_covers_two_full_orbits(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """200 min ≈ 2.15 ISS orbits — lat traces should peak at +51.6° and dip
+    to -51.6° at least twice (two full crossings of each extreme)."""
+    pts = sample_track_points(sample_tle, now_utc, minutes=200, step_seconds=30)
+    lats = [p[1] for p in pts]
+    # ISS inclination ≈ 51.6°; allow a small margin for SGP4
+    assert max(lats) > 50.0, f"max lat {max(lats)} should exceed +50°"
+    assert min(lats) < -50.0, f"min lat {min(lats)} should be below -50°"
+
+
+def test_sample_track_points_rejects_naive(sample_tle: TLE) -> None:
+    with pytest.raises(ValueError):
+        sample_track_points(sample_tle, datetime(2024, 10, 17, 12, 0, 0))
+
+
+def test_sample_track_points_payload_size_under_15kb(
+    sample_tle: TLE, now_utc: datetime
+) -> None:
+    """200-min track at 30-s step compresses to under 15 KB JSON.
+    If a future change changes the encoding (more decimals, more fields),
+    this test fires before the artifact bloat reaches the user's bandwidth.
+    """
+    import json
+    pts = sample_track_points(sample_tle, now_utc, minutes=200, step_seconds=30)
+    encoded = json.dumps(pts)
+    assert len(encoded) < 15_000, f"track_points JSON {len(encoded)} bytes > 15 KB cap"

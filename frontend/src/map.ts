@@ -80,31 +80,47 @@ function buildStyle(): maplibregl.StyleSpecification {
   };
 }
 
-/** Render the ground track polyline from the iss_polynomial.
- *  Samples every 30s for the polynomial's full duration. Splits at antimeridian
- *  crossings so the line doesn't drag across the whole map.
+/** Render the ground track polyline. Prefers `track_points` (raw SGP4
+ *  samples covering 2 orbits, no fit drift) when present. Falls back to
+ *  evaluating the polynomial across its full duration for older manifests
+ *  that don't ship `track_points` yet.
+ *
+ *  Splits at antimeridian crossings so the line doesn't drag across the
+ *  whole map.
  */
 function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
-  const startMs = Date.parse(track.iss_polynomial.start);
-  if (Number.isNaN(startMs)) return [];
-  const dur = track.iss_polynomial.duration_seconds;
-  const stepSec = 30;
-
-  // Evaluate polynomial at each sample
-  const evalPoly = (coeffs: number[], t: number): number => {
-    let acc = 0;
-    for (const c of coeffs) acc = acc * t + c;
-    return acc;
-  };
-
   type Pt = [number, number];
+
+  // Source 1: explicit SGP4 samples. Each entry: [t_sec, lat, lon].
+  // Always preferred when available — drift-free over 2 orbits.
+  const samples: [number, number][] = (() => {
+    if (track.track_points && track.track_points.length > 0) {
+      return track.track_points.map(([, lat, lon]) => [lat, lon] as [number, number]);
+    }
+    // Source 2 (fallback): polynomial-derived samples over the polynomial's
+    // own window. Used only when the manifest predates track_points.
+    const dur = track.iss_polynomial.duration_seconds;
+    const stepSec = 30;
+    const evalPoly = (coeffs: number[], t: number): number => {
+      let acc = 0;
+      for (const c of coeffs) acc = acc * t + c;
+      return acc;
+    };
+    const out: [number, number][] = [];
+    for (let t = 0; t <= dur; t += stepSec) {
+      const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
+      const lon = evalPoly(track.iss_polynomial.lon_coeffs, t);
+      out.push([lat, lon]);
+    }
+    return out;
+  })();
+
   const segments: Pt[][] = [];
   let current: Pt[] = [];
   let prevLon: number | null = null;
 
-  for (let t = 0; t <= dur; t += stepSec) {
-    const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
-    const lon = wrapLon(evalPoly(track.iss_polynomial.lon_coeffs, t));
+  for (const [lat, lonRaw] of samples) {
+    const lon = wrapLon(lonRaw);
     // Detect antimeridian crossing: previous lon and current lon differ by > 180°
     if (prevLon !== null && Math.abs(lon - prevLon) > 180) {
       if (current.length > 1) segments.push(current);
@@ -221,14 +237,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
   }
 
-  // ISS dot
+  // ISS marker: ISS-silhouette icon + pulsing halo. Replaces the prior
+  // cyan dot which blended into the cloud overlay at world-zoom and was
+  // hard to spot.
   if (!issMarker) {
     const initial = markerPositionFor(track) ?? { lat: 0, lon: 0 };
-    const el = document.createElement('div');
-    el.style.cssText =
-      'width:14px;height:14px;border-radius:50%;background:#5cd0ff;' +
-      'box-shadow:0 0 8px #5cd0ff,0 0 16px rgba(92,208,255,0.5);border:2px solid #0b0d12';
-    issMarker = new maplibregl.Marker({ element: el })
+    const el = createIssMarkerElement();
+    issMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
       .setLngLat([initial.lon, initial.lat])
       .addTo(map);
   }
@@ -311,4 +326,68 @@ function upsertGeoJson(
  */
 export function resizeMap(): void {
   if (map) map.resize();
+}
+
+/** Build the ISS marker DOM: a stylized ISS silhouette (central truss + two
+ *  long solar arrays) with a pulsing halo behind it. The whole thing is
+ *  ~40 × 16 px so the truss center sits exactly on the lat/lon point.
+ *
+ *  Exported for unit tests.
+ */
+export function createIssMarkerElement(): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'iss-marker';
+  // Pulse halo (CSS-driven). Sits behind the SVG, centered on the truss.
+  const pulse = document.createElement('span');
+  pulse.className = 'iss-pulse';
+  wrap.appendChild(pulse);
+
+  // SVG silhouette. viewBox -20..20 horizontally, -8..8 vertically so the
+  // truss sits at (0,0). The marker's CSS width sizes the whole thing.
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '-20 -8 40 16');
+  svg.setAttribute('aria-label', 'ISS live position');
+  svg.setAttribute('role', 'img');
+
+  // Solar arrays (left + right). Cyan with dark stroke; small interior
+  // grid lines for the photovoltaic-cell look.
+  const panel = (x: number) => {
+    const r = document.createElementNS(SVG_NS, 'rect');
+    r.setAttribute('x', String(x));
+    r.setAttribute('y', '-3');
+    r.setAttribute('width', '14');
+    r.setAttribute('height', '6');
+    r.setAttribute('fill', '#5cd0ff');
+    r.setAttribute('stroke', '#0b0d12');
+    r.setAttribute('stroke-width', '0.7');
+    svg.appendChild(r);
+    // Grid divisions inside the panel
+    for (const dx of [4, 8, 12]) {
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('x1', String(x + dx));
+      line.setAttribute('y1', '-3');
+      line.setAttribute('x2', String(x + dx));
+      line.setAttribute('y2', '3');
+      line.setAttribute('stroke', '#0b0d12');
+      line.setAttribute('stroke-width', '0.4');
+      svg.appendChild(line);
+    }
+  };
+  panel(-18); // port array
+  panel(4);   // starboard array
+
+  // Central truss + modules (white core for max contrast on cloudy basemap)
+  const truss = document.createElementNS(SVG_NS, 'rect');
+  truss.setAttribute('x', '-3');
+  truss.setAttribute('y', '-2');
+  truss.setAttribute('width', '6');
+  truss.setAttribute('height', '4');
+  truss.setAttribute('fill', '#ffffff');
+  truss.setAttribute('stroke', '#0b0d12');
+  truss.setAttribute('stroke-width', '0.7');
+  svg.appendChild(truss);
+
+  wrap.appendChild(svg);
+  return wrap;
 }
