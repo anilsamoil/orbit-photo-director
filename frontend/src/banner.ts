@@ -1,6 +1,6 @@
 import { parseUtcIso } from './countdown';
 
-export type BannerLevel = 'green' | 'yellow' | 'red' | 'loading';
+export type BannerLevel = 'green' | 'yellow' | 'orange' | 'red' | 'loading';
 
 export interface BannerState {
   level: BannerLevel;
@@ -42,6 +42,55 @@ export function bannerFromManifest(
     level: 'red',
     text: `STALE — last updated ${formatAge(ageMin)} ago — values may be wrong`,
   };
+}
+
+/** Confidence banner shown when the live fetch fails or the OS reports offline.
+ *  The user is reading data from localStorage; the level escalates with how long
+ *  it's been since the last good network refresh.
+ *
+ *  Thresholds (V2 plan):
+ *    < 1h     green   "Offline · Nm — last sync recent"
+ *    1–3h     yellow  "Offline 2h 15m"
+ *    3–12h    orange  "Offline 5h — values may be drifting"
+ *    > 12h    red     "Offline 14h — data may be very stale"
+ *
+ *  Confidence NEVER causes the snapshot to be discarded; this is a UX signal,
+ *  not a kill switch. Always show *something*.
+ */
+export function bannerOffline(snapshotAgeMin: number): BannerState {
+  const age = formatAge(snapshotAgeMin);
+  if (snapshotAgeMin < 60) {
+    return { level: 'green', text: `Offline · ${age} ago — last sync recent` };
+  }
+  if (snapshotAgeMin < 180) {
+    return { level: 'yellow', text: `Offline · ${age} ago` };
+  }
+  if (snapshotAgeMin < 720) {
+    return { level: 'orange', text: `Offline · ${age} ago — values may be drifting` };
+  }
+  return { level: 'red', text: `Offline · ${age} ago — data may be very stale` };
+}
+
+/** Append a TLE-age overlay onto an existing banner. The plan thresholds
+ *  surface a TLE older than 48h as orange (the SGP4 propagation drifts
+ *  noticeably past that). If the base banner is already red, only the
+ *  text gets appended — we don't downgrade red to orange.
+ */
+export function bannerWithTleOverlay(
+  base: BannerState,
+  tleAgeHours: number | undefined,
+): BannerState {
+  if (typeof tleAgeHours !== 'number' || !Number.isFinite(tleAgeHours)) return base;
+  // Compare against the displayed (rounded) value. tleAgeHours=47.6 was
+  // previously below the threshold (no overlay) but the rendered text
+  // would have read "TLE 48h old" — boundary inconsistency.
+  const displayedHours = Math.round(tleAgeHours);
+  if (displayedHours <= 48) return base;
+  const tleNote = `TLE ${displayedHours}h old — live track may drift`;
+  if (base.level === 'red') {
+    return { level: 'red', text: `${base.text} · ${tleNote}` };
+  }
+  return { level: 'orange', text: `${base.text} · ${tleNote}` };
 }
 
 export function bannerLoading(): BannerState {

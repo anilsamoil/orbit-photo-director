@@ -207,9 +207,9 @@ _POLYNOMIAL_ORDER_CAP = 11
 """Hard cap on polyfit degree. Past 11, np.polyfit on ISS lat/lon over multiple
 orbits gets numerically ill-conditioned (RankWarning, Runge oscillations near
 window edges). For windows >180 min the right answer is to fit two shorter
-polynomials (or run SGP4 client-side, see V3 plan) — not to crank degree
-further. We keep the cap and let the frontend fall back to its slower path
-when more accuracy is needed."""
+polynomials (or run SGP4 client-side, see frontend/src/iss-sgp4.ts) — not to
+crank degree further. We keep the cap and let the frontend fall back to its
+slower path when more accuracy is needed."""
 
 
 def _polynomial_order_for_window(minutes: int) -> int:

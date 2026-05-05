@@ -9,6 +9,7 @@
   --accent: #5cd0ff;
   --green: #5be37a;
   --yellow: #ffce4d;
+  --orange: #ff9a3c;
   --red: #ff6464;
   --grey: #6c7387;
   font-family: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", sans-serif;
@@ -197,6 +198,11 @@ main {
 .tag.obs-clear { color: var(--green); border-color: rgba(91, 227, 122, 0.3); }
 .tag.obs-cloudy { color: var(--text-dim); }
 .tag.obs-glint { color: var(--yellow); border-color: rgba(255, 206, 77, 0.3); }
+.tag.obs-age {
+  color: var(--text-dim);
+  border-color: rgba(108, 115, 135, 0.3);
+  font-variant-numeric: tabular-nums;
+}
 .tag.obs-noobs {
   color: var(--text-dim);
   font-style: italic;
@@ -280,8 +286,41 @@ main {
 
 .banner-green { background: rgba(91, 227, 122, 0.1); color: var(--green); }
 .banner-yellow { background: rgba(255, 206, 77, 0.1); color: var(--yellow); }
+.banner-orange { background: rgba(255, 154, 60, 0.13); color: var(--orange); font-weight: 600; }
 .banner-red { background: rgba(255, 100, 100, 0.15); color: var(--red); font-weight: 600; }
 .banner-loading { background: var(--surface); color: var(--text-dim); }
+
+.pending-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  background: var(--orange);
+  color: var(--bg);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.2;
+  border-radius: 999px;
+  vertical-align: 1px;
+}
+/* Explicit display:inline-block above wins over the default UA hidden=true,
+ * so the empty span renders as a small inline-block "•" next to the Log
+ * tab even with hidden set. Hide it explicitly when the attribute is on. */
+.pending-badge[hidden] { display: none; }
+
+.map-imagery-date {
+  position: absolute;
+  right: 0.6rem;
+  bottom: 1.6rem;
+  padding: 0.25rem 0.55rem;
+  background: rgba(11, 13, 18, 0.78);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 10;
+}
 
 .map {
   width: 100%;

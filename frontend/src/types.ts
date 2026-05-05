@@ -33,6 +33,11 @@ export interface PassEntry {
   p_unobstructed: number;
   cloud_fraction: number;
   cloud_source: string;
+  /** Wall-clock time the cloud sample was taken (or, for forecasts, the
+   *  forecast valid-time). Drives the card "obs Nm ago" tag so the user
+   *  can tell day-old MODIS from 10-min GOES-IR. Older manifests may not
+   *  include this field. */
+  sample_time?: string;
   score: number;
   score_components: {
     p_unobstructed: number;
@@ -58,6 +63,11 @@ export interface Track {
    *  dot but degrades past ~120 min; track_points has zero drift over the
    *  full 2-orbit window. Older manifests may not include this field. */
   track_points?: [number, number, number][];
+  /** Source TLE the polynomial + track_points were fit from. Lets the
+   *  frontend run satellite.js SGP4 client-side past the polynomial window
+   *  or during a multi-hour Mac outage. Older manifests may not include
+   *  this field. */
+  tle?: { line1: string; line2: string };
   tle_epoch: string;
   tle_age_hours: number;
   tle_freshness_factor: number;

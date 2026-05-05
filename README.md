@@ -4,9 +4,11 @@ Earth-photography planner for an 8-month ISS mission. Mac-side Python generator 
 
 - the next 5 shots in the next 90 minutes (target, countdown, `P(unobstructed)`, day/night/terminator regime)
 - the live ISS dot + ground track + cloud overlay (secondary view)
-- a stale banner if the data goes cold
+- a confidence banner that escalates with snapshot age (green <1h → yellow <3h → orange <12h → red beyond) so it's always honest about how trustworthy the data on screen is
 
 The product is the shot queue, not the map.
+
+**Works offline.** The page boots from a localStorage snapshot before manifest.json comes back, so a tab refresh during an LOS window renders the previous queue in <50ms instead of going blank. The live ISS dot keeps moving past the polynomial window via client-side SGP4. See `CHANGELOG.md` for the V2 ship details.
 
 ## Why this exists
 
@@ -56,7 +58,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) for ground-side support procedures.
 
 ## Status
 
-V1 in development. Pre-launch checklist in `docs/RUNBOOK.md`.
+V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0. Pre-mission service worker (Lane F) and kill-switch DNS (Lane G) deferred to a follow-up — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
 
 ## License
 

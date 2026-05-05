@@ -7,28 +7,62 @@
  */
 
 import { renderCards } from './card';
-import { bannerError, bannerFromManifest, bannerLoading } from './banner';
-import { buildPayload, clearToken, drainQueue, getToken, postCalib, setToken } from './calib';
+import { bannerError, bannerFromManifest, bannerLoading, bannerOffline, bannerWithTleOverlay } from './banner';
+import { buildPayload, clearToken, drainQueue, getToken, postCalib, queuedCalibCount, setToken } from './calib';
 import type { BannerState } from './banner';
-import { liveIssPosition } from './iss';
+import { liveIssNow } from './iss';
+import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
+import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import type { Manifest, PassEntry, Track } from './types';
 import { fetchManifest, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
 const REFRESH_MS = 60_000;
+const COUNTDOWN_TICK_MS = 1_000;
 
 let currentManifest: Manifest | null = null;
 let currentTop5: PassEntry[] = [];
 let currentTop24h: PassEntry[] = [];
 let currentTrack: Track | null = null;
-let refreshTimer: number | null = null;
+// Held to keep the scheduler's listeners alive and reachable. Production
+// code never tears down (single-page lifetime); reserved for future SW
+// upgrade flow that may want pollScheduler.stop() before reload.
+let pollScheduler: PollScheduler | null = null;
+// Re-entrancy guard. createPollScheduler explicitly does NOT serialize
+// onPoll calls (see network-status.ts); visibility-resume can fire
+// onPoll while a prior interval-driven refresh is still in flight.
+// Returning the in-flight promise is cheaper than running two parallel
+// fetch+JSON.parse+saveSnapshot pipelines.
+let refreshInFlight: Promise<void> | null = null;
+// Last-saved manifest version. saveSnapshot is idempotent for the same
+// version (the only thing that changes between intra-tick polls is the
+// counter on R2), so skipping unchanged writes drops ~350K localStorage
+// writes over an 8-month mission to ~5K.
+let lastSavedManifestVersion: string | null = null;
 
 function setBanner(state: BannerState): void {
   const el = document.getElementById('status-banner');
   if (!el) return;
   el.className = `banner banner-${state.level}`;
   el.textContent = state.text;
+}
+
+/** Render or hide the topbar "N pending sync" badge based on the calib queue.
+ *  The badge sits inside the Log tab button so the user sees the count
+ *  regardless of which view they're on. */
+function updatePendingSyncBadge(): void {
+  const el = document.getElementById('pending-sync-badge');
+  if (!el) return;
+  const n = queuedCalibCount();
+  if (n === 0) {
+    el.hidden = true;
+    el.textContent = '';
+  } else {
+    el.hidden = false;
+    el.textContent = String(n);
+    el.title = `${n} calibration ${n === 1 ? 'entry' : 'entries'} queued — will sync when online`;
+  }
 }
 
 function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
@@ -39,40 +73,154 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 }
 
 async function refresh(): Promise<void> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<void> {
+  // Skip the network round-trip entirely when the OS says we're offline —
+  // saves a doomed fetch + the error banner flash on every poll while LOS.
+  if (!isOnline()) {
+    renderOfflineBanner();
+    return;
+  }
   try {
     const manifest = await fetchManifest();
-    currentManifest = manifest;
+    // Stage everything before mutating module state so a partial failure
+    // (any artifact 404, JSON parse, etc.) leaves currentManifest/Top5/Track
+    // pointing at the previous snapshot. This is the transactional refresh
+    // discipline from the V2 plan: versioned URLs guarantee artifact
+    // separation; an aborted refresh never produces a torn snapshot.
     const [top5, top24h, track] = await Promise.all([
       fetchTop5(manifest),
       fetchTop24h(manifest),
       fetchTrack(manifest),
     ]);
+    currentManifest = manifest;
     currentTop5 = top5;
     currentTop24h = top24h;
     currentTrack = track;
 
-    const cards = document.getElementById('cards');
-    const empty = document.getElementById('empty');
-    if (!cards || !empty) return;
-
-    const now = Date.now();
-    const stale = isStaleManifest(manifest, now);
-
-    if (top5.length === 0) {
-      cards.replaceChildren();
-      empty.hidden = false;
-    } else {
-      empty.hidden = true;
-      renderCards(cards, top5, now, stale, onCardAction, { tokenSet: !!getToken() });
+    // Persist atomically AFTER all artifacts loaded successfully — but ONLY
+    // when the manifest version is STRICTLY NEWER than what's on disk. Two
+    // protections in one check:
+    //   1. Skip identical-version writes (the poll fires every 60s; the
+    //      generator only ticks every 60 min, so 59 of 60 polls return the
+    //      same manifest — saves ~350K wasted localStorage writes / 8 mo).
+    //   2. Block monotonicity regressions. A CDN edge serving a stale
+    //      manifest, a multi-tab race, or a re-published version would
+    //      otherwise overwrite a newer snapshot with older data — silent
+    //      data corruption the user never sees. Versions are timestamped
+    //      slugs (YYYYMMDDTHHMMSSZ), so lexicographic comparison works.
+    const onDiskVersion = readSnapshot()?.manifest.version ?? null;
+    const isNewer = manifest.version !== lastSavedManifestVersion
+      && (onDiskVersion === null || manifest.version > onDiskVersion);
+    if (isNewer) {
+      saveSnapshot({
+        manifest,
+        top5,
+        top_24h: top24h,
+        track,
+        // Status isn't currently fetched in the live path; null is allowed
+        // and the consuming UI degrades gracefully.
+        status: null,
+        savedAt: Date.now(),
+      });
+      lastSavedManifestVersion = manifest.version;
     }
 
-    // Render Upcoming pane too — uses forecast variant.
-    renderUpcoming(now, stale);
-
-    setBanner(bannerFromManifest(manifest.generated_at, manifest.freshness.ok, now));
+    renderQueue();
+    setBanner(bannerWithTleOverlay(
+      bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
+      track.tle_age_hours,
+    ));
+    updatePendingSyncBadge();
   } catch (e) {
-    setBanner(bannerError((e as Error).message));
+    // Refresh failed — keep showing whatever the snapshot path rendered and
+    // surface the failure in the banner. currentManifest/Top5/etc still hold
+    // the last good state because we only mutated them after Promise.all
+    // resolved. A snapshot-restored manifest counts as "has data" here, so
+    // transient fetch errors get the offline banner rather than a red toast.
+    if (currentManifest) {
+      renderOfflineBanner();
+    } else {
+      setBanner(bannerError((e as Error).message));
+    }
   }
+}
+
+/** Render the Queue + Upcoming panes from current module state. Extracted so
+ *  both the snapshot boot and a normal refresh share one render path. */
+function renderQueue(): void {
+  if (!currentManifest) return;
+  const cards = document.getElementById('cards');
+  const empty = document.getElementById('empty');
+  if (!cards || !empty) return;
+  const now = Date.now();
+  const stale = isStaleManifest(currentManifest, now);
+  if (currentTop5.length === 0) {
+    cards.replaceChildren();
+    empty.hidden = false;
+  } else {
+    empty.hidden = true;
+    renderCards(cards, currentTop5, now, stale, onCardAction, { tokenSet: !!getToken() });
+  }
+  renderUpcoming(now, stale);
+}
+
+/** Boot the queue from localStorage before the first network round-trip
+ *  resolves. Lets the page render the previous-known-good UI within a few
+ *  ms of loading instead of staring at "Loading…" until manifest.json
+ *  comes back (or worse, never comes back during LOS). Returns true if a
+ *  snapshot was loaded, false if there was nothing to restore.
+ *
+ *  Caller is expected to wrap this in a try/catch + clearSnapshot — even
+ *  with readSnapshot's shape validation, a snapshot whose nested fields
+ *  fail (e.g. manifest.freshness.ok missing) would throw inside one of
+ *  the consumers below and brick boot permanently. The init() try/catch
+ *  is the recovery surface. */
+function bootFromSnapshot(): boolean {
+  const snap: Snapshot | null = readSnapshot();
+  if (!snap) return false;
+  currentManifest = snap.manifest;
+  currentTop5 = snap.top5;
+  currentTop24h = snap.top_24h;
+  currentTrack = snap.track;
+  // Init the version-skip cache from the loaded snapshot so the first
+  // refresh doesn't write a redundant identical-version snapshot.
+  lastSavedManifestVersion = snap.manifest.version;
+  renderQueue();
+  // The banner reflects the snapshot's manifest age, NOT current freshness —
+  // refresh() will overwrite it the moment the network call resolves.
+  setBanner(bannerFromManifest(snap.manifest.generated_at, snap.manifest.freshness.ok, Date.now()));
+  return true;
+}
+
+/** Banner shown when the manifest fetch fails or navigator.onLine is false.
+ *  The level escalates with snapshot age (green <1h → yellow <3h → orange
+ *  <12h → red beyond) — the user is reading data from localStorage and
+ *  the banner is the only signal of how stale it might be.
+ *  When there's no snapshot AND no network, this still renders something
+ *  useful instead of leaving the previous banner stuck. */
+function renderOfflineBanner(): void {
+  const snap = readSnapshot();
+  if (!snap) {
+    setBanner(bannerError('offline — no cached data'));
+    return;
+  }
+  // Clamp to 0: a backward clock skew (NTP correction after a long
+  // offline period) would otherwise yield a negative ageMin and render
+  // "Offline · <1 min ago — last sync recent", which misleads the user
+  // into thinking they just synced when they haven't. 0 means "treat as
+  // freshest possible" which is wrong but at least conservative.
+  const ageMin = Math.max(0, (Date.now() - snap.savedAt) / 60_000);
+  setBanner(bannerWithTleOverlay(
+    bannerOffline(ageMin),
+    snap.track.tle_age_hours,
+  ));
 }
 
 function renderUpcoming(nowMs: number, stale: boolean): void {
@@ -106,10 +254,22 @@ function rerenderCountdowns(): void {
 async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<void> {
   const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);
   const result = await postCalib(payload);
+  // postCalib may have queued the action (offline / token missing / 5xx);
+  // refresh the badge regardless so the user sees the new count immediately.
+  updatePendingSyncBadge();
   // Dim the card briefly as before — keep this for visual locality.
-  const card = document.querySelector<HTMLElement>(
-    `.card[data-target-id="${p.target_id}"][data-pass-time="${p.closest_approach}"]`
-  );
+  // We iterate + dataset-compare instead of interpolating into a CSS
+  // selector. A target_id containing '"' (personal-targets.csv is
+  // user-controlled) would otherwise throw SyntaxError out of
+  // querySelector and silently swallow the toast — the calibration
+  // posted, but the user sees no confirmation and re-clicks.
+  let card: HTMLElement | null = null;
+  for (const el of document.querySelectorAll<HTMLElement>('.card')) {
+    if (el.dataset.targetId === p.target_id && el.dataset.passTime === p.closest_approach) {
+      card = el;
+      break;
+    }
+  }
   if (card) {
     card.style.opacity = result.ok ? '0.5' : '0.7';
     setTimeout(() => { card.style.opacity = ''; }, 1500);
@@ -149,17 +309,21 @@ function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success')
   }, 2400);
 }
 
-/** Update the topbar's live ISS sub-point from the polynomial fit. Called
- *  every second from rerenderCountdowns so the user always sees where the
- *  station is right now — solves "is the queue empty because of geography
- *  or because it's stale?" without making them open the Map tab. */
+/** Update the topbar's live ISS sub-point. Called every second from
+ *  rerenderCountdowns so the user always sees where the station is right
+ *  now — solves "is the queue empty because of geography or because it's
+ *  stale?" without making them open the Map tab.
+ *
+ *  In window: polynomial. Past window: SGP4 from track.tle (V2). Both
+ *  paths return null only when the polynomial start is malformed AND the
+ *  TLE is missing/malformed — at which point "live track expired" is the
+ *  right thing to show. */
 function updateIssNow(): void {
   const el = document.getElementById('iss-now');
   if (!el || !currentTrack) return;
-  const pos = liveIssPosition(currentTrack, Date.now());
+  const pos = liveIssNow(currentTrack, Date.now());
   if (!pos) {
-    // Polynomial window expired — surface that visibly so the user knows
-    // the live update is stale (separate from manifest staleness).
+    // Both polynomial AND SGP4 returned null — track shape is unusable.
     el.classList.add('ready');
     el.innerHTML = '<span class="iss-label">ISS</span><span class="iss-region">live track expired</span>';
     return;
@@ -179,6 +343,10 @@ function updateIssNow(): void {
  *  precise reverse-geocode. Boundaries are rough lat/lon boxes; near coasts
  *  we may show the wrong one. Good enough for the topbar context. */
 function roughRegion(lat: number, lon: number): string {
+  // NaN comparisons are all false — without this guard, a NaN lat/lon
+  // would fall through every branch and silently render "Pacific Ocean"
+  // for a position that's actually unknown.
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return 'unknown region';
   // Polar caps first
   if (lat > 66) return 'Arctic';
   if (lat < -60) return 'Antarctica';
@@ -371,18 +539,68 @@ async function loadMapPane(): Promise<void> {
 }
 
 async function init(): Promise<void> {
-  setBanner(bannerLoading());
   bindTabs();
+  // Restore the previous-known-good UI synchronously BEFORE the network call
+  // so the user sees their queue + map within ms of the page loading. If the
+  // refresh below succeeds, snapshot is overwritten transactionally; if it
+  // fails (LOS, bad gateway), the snapshot UI keeps showing.
+  //
+  // Recovery: bootFromSnapshot can throw if a torn write or hostile browser
+  // extension left malformed nested fields in the snapshot (e.g.,
+  // manifest.freshness missing). Without this catch, init's promise rejects,
+  // the poll scheduler is never created, refresh() never runs, and the page
+  // is permanently bricked because reload would just re-read the same poison.
+  // On catch we discard the snapshot — staleness is precious, corruption is
+  // worse than nothing — and proceed with the loading banner.
+  let hadSnapshot = false;
+  try {
+    hadSnapshot = bootFromSnapshot();
+  } catch (e) {
+    console.warn('snapshot restore failed, discarding:', e);
+    clearSnapshot();
+    currentManifest = null;
+    currentTop5 = [];
+    currentTop24h = [];
+    currentTrack = null;
+    lastSavedManifestVersion = null;
+  }
+  if (!hadSnapshot) setBanner(bannerLoading());
+
   // Drain any queued calibrations from the previous session (network may have failed)
-  void drainQueue();
+  void drainQueue().then(updatePendingSyncBadge);
+  // Initial badge from whatever's already queued, before drain finishes.
+  updatePendingSyncBadge();
+
   await refresh();
-  refreshTimer = window.setInterval(() => void refresh(), REFRESH_MS);
+
+  // Visibility-aware polling: pause while the tab is hidden, fetch
+  // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
+  // watching and gives the user fresh data the moment they look at the
+  // page after a long pause.
+  pollScheduler = createPollScheduler({
+    intervalMs: REFRESH_MS,
+    onPoll: () => void refresh(),
+  });
   // Per-second countdown updates without re-fetching the manifest
-  window.setInterval(rerenderCountdowns, 1000);
+  window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);
 }
 
-if (typeof document !== 'undefined') {
+// Auto-init in the browser. Skipped under vitest so test files can drive
+// init() explicitly with seeded localStorage + DOM fixtures + module mocks.
+if (typeof document !== 'undefined' && import.meta.env.MODE !== 'test') {
   void init();
 }
 
-export { init, refresh, rerenderCountdowns };
+export {
+  init,
+  refresh,
+  rerenderCountdowns,
+  // Test surface — exposed so frontend/test/main-integration.test.ts can
+  // exercise the orchestration helpers without going through the full
+  // init() / setInterval chain. Production code should use init().
+  bootFromSnapshot,
+  doRefresh,
+  renderOfflineBanner,
+  renderQueue,
+  updatePendingSyncBadge,
+};

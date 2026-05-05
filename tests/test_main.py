@@ -73,6 +73,9 @@ def test_run_tick_top5_passes_format(settings_in_tmp: Settings, cached_tle: Path
         assert "obstruction_class" in p
         assert p["obstruction_class"] in ("clear", "cloudy", "sun-glint risk")
         assert p["pass_regime"] in ("day", "night", "terminator")
+        # V2: per-pass cloud sample timestamp drives the frontend's "obs Nm ago" tag.
+        assert "sample_time" in p
+        assert p["sample_time"].endswith("Z")
 
 
 def test_run_tick_status_includes_freshness(settings_in_tmp: Settings, cached_tle: Path) -> None:
@@ -124,6 +127,72 @@ def test_run_tick_track_includes_polynomial(settings_in_tmp: Settings, cached_tl
     assert poly["start"].endswith("Z")
     assert poly["polynomial_order"] == 11
     assert poly["duration_seconds"] == 120 * 60
+
+
+def test_run_tick_track_includes_tle(settings_in_tmp: Settings, cached_tle: Path) -> None:
+    """track.json ships the source TLE so the frontend can run SGP4 past the polynomial window."""
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    run_tick(settings_in_tmp, now=now)
+
+    v_dir = settings_in_tmp.out_dir / "v" / "20241017T120000Z"
+    track = json.loads((v_dir / "track.json").read_text())
+    tle = track["tle"]
+    assert tle["line1"].startswith("1 25544U")
+    assert tle["line2"].startswith("2 25544")
+    # Round-trip: parsed back through TLE.from_text yields the same epoch
+    # the manifest declares (proves we didn't ship a corrupted line pair).
+    parsed = TLE.from_text(f"{tle['line1']}\n{tle['line2']}")
+    assert parsed.epoch.isoformat().replace("+00:00", "Z") == track["tle_epoch"]
+
+
+def test_score_pass_for_target_uses_composite_hour_for_observed_sample_time(
+    sample_tle: TLE,
+) -> None:
+    """Regression for /qa: observed sample_time was the future pass time, hiding the obs-age tag.
+
+    Found by /qa on 2026-05-04. Report: .gstack/qa-reports/qa-report-localhost-2026-05-04.md
+
+    Each cloud sampler sets `sample.sample_time = when` (the pass time). The
+    pass time is in the FUTURE for upcoming passes, so the frontend's
+    formatObsAge('+Nm') returned '' (no future-dated tag) and the obs-age
+    tag never rendered for observed sources. Fix: score_pass_for_target now
+    overrides sample_time to composite_hour for non-forecast sources, so
+    sample_time is in the past (the actual imagery time) and the tag works.
+    """
+    from generator.cloud import MockCloudSampler
+
+    pass_time = datetime(2026, 5, 4, 21, 0, 0, tzinfo=UTC)  # future-dated pass
+    composite_hour = datetime(2026, 5, 4, 19, 0, 0, tzinfo=UTC)  # 2 hours earlier
+    target = {
+        "id": "test", "name": "Test",
+        "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+        "priority": 4, "regime": "any",
+    }
+    pass_obj = Pass(
+        target_id="test", target_lat=0.0, target_lon=0.0,
+        closest_approach=pass_time, nadir_distance_km=200.0,
+        iss_position=Position(lat=0.5, lon=0.5, alt_km=410, when=pass_time),
+    )
+    # MockCloudSampler returns source="mock" (a no-observation source). For the
+    # observed-source path we need a sampler whose source isn't "gfs-forecast".
+    sampler = MockCloudSampler(default_cf=20.0)
+
+    # Pass composite_hour explicitly: sample_time should equal composite_hour,
+    # NOT the pass time.
+    result = score_pass_for_target(
+        target, pass_obj, sampler, tle_freshness=1.0,
+        composite_hour=composite_hour,
+    )
+    assert result["sample_time"] == "2026-05-04T19:00:00Z", \
+        f"observed sample_time should be composite_hour, got {result['sample_time']}"
+
+    # Without composite_hour (older callers), behavior unchanged: falls back
+    # to sample.sample_time (= when, the pass time). Backward compatible.
+    result_legacy = score_pass_for_target(
+        target, pass_obj, sampler, tle_freshness=1.0,
+    )
+    assert result_legacy["sample_time"] == "2026-05-04T21:00:00Z", \
+        "without composite_hour, falls back to sample.sample_time (= pass time)"
 
 
 def test_score_pass_for_target_handles_glint_path(sample_tle: TLE) -> None:
