@@ -9,9 +9,10 @@ export default defineConfig({
       // take over existing tabs immediately. V2 plan explicitly forbids
       // this (it's the multi-tab race the plan was designed to prevent).
       // 'prompt' lets the workbox config below decide skipWaiting/claim
-      // honestly. We don't show a UI prompt — main.ts silently triggers
-      // update() so the new SW activates on install and takes over only
-      // on next navigation.
+      // honestly. We don't show a UI prompt and don't import
+      // virtual:pwa-register — workbox.skipWaiting:true (below) is what
+      // makes the new SW activate on install; clientsClaim:false keeps
+      // existing tabs on their old SW until natural navigation.
       registerType: 'prompt',
       injectRegister: 'auto',
 
@@ -145,9 +146,10 @@ export default defineConfig({
         ],
       },
 
-      // Don't auto-inject `<link rel="manifest">` — we'll keep index.html clean.
-      // vite-plugin-pwa handles manifest.webmanifest generation; the link is
-      // injected by injectRegister: 'auto' above.
+      // Don't include extra static assets in the precache from outside the
+      // build dir. (vite-plugin-pwa generates manifest.webmanifest + injects
+      // the <link rel="manifest"> + the registerSW <script> into index.html
+      // automatically as part of injectRegister: 'auto'.)
       includeAssets: [],
     }),
   ],
