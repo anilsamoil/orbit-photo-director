@@ -58,7 +58,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) for ground-side support procedures.
 
 ## Status
 
-V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0. Pre-mission service worker (Lane F) and kill-switch DNS (Lane G) deferred to a follow-up — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
+V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0. Workbox service worker (Lane F) at v1.1.0.1 — first-visit-then-LOS recovery, app-shell precache, runtime caching for manifest + versioned artifacts + Carto/GIBS tiles. Kill-switch DNS (Lane G) and pre-launch e2e checklist (Lane H) still deferred — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
 
 ## License
 

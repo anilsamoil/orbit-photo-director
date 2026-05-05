@@ -1,6 +1,6 @@
 {
   "name": "@orbit-photo-director/frontend",
-  "version": "1.1.0.0",
+  "version": "1.1.0.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
     "happy-dom": "^15.0.0",
     "typescript": "^5.5.0",
     "vite": "^5.4.0",
+    "vite-plugin-pwa": "^1.2.0",
     "vitest": "^1.6.0"
   }
 }
