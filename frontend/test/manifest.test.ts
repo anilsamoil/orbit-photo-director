@@ -59,7 +59,10 @@ describe('fetchManifest', () => {
     await expect(fetchManifest()).rejects.toThrow(/manifest fetch failed/);
   });
 
-  it('cache-busts the URL', async () => {
+  it('uses cache:no-cache to force revalidation (no query-string buster)', async () => {
+    // Why no ?cb= buster: the SW NetworkFirst rule for manifest.json does exact
+    // URL matching, so a unique query string per request would never hit the
+    // cache offline. `cache: 'no-cache'` already forces a conditional revalidate.
     const fetchMock = vi.fn(
       async () => new Response(JSON.stringify(SAMPLE_MANIFEST), { status: 200 })
     );
@@ -67,7 +70,10 @@ describe('fetchManifest', () => {
     await fetchManifest();
     const calls: unknown[][] = fetchMock.mock.calls as unknown[][];
     expect(calls.length).toBeGreaterThan(0);
-    expect(String(calls[0]?.[0])).toContain('cb=');
+    const url = String(calls[0]?.[0]);
+    const init = calls[0]?.[1] as RequestInit | undefined;
+    expect(url).toBe('/manifest.json');
+    expect(init?.cache).toBe('no-cache');
   });
 });
 

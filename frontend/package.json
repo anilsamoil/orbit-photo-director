@@ -12,8 +12,7 @@
   },
   "dependencies": {
     "maplibre-gl": "^4.7.0",
-    "satellite.js": "^6.0.2",
-    "workbox-window": "^7.4.1"
+    "satellite.js": "^6.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

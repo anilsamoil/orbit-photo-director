@@ -2,7 +2,11 @@ import type { Manifest, PassEntry, Status, Track } from './types';
 
 /** Fetch manifest.json from the site root and dereference an artifact by logical name. */
 export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
-  const url = `${baseUrl}/manifest.json?cb=${Date.now()}`;
+  // No ?cb= buster: `cache: 'no-cache'` already forces revalidation, and a
+  // unique query string would defeat the SW's NetworkFirst manifest rule
+  // (Workbox does exact URL matching by default → cached entry never matches
+  // a new ?cb= value, so the offline second-line-of-defense never fires).
+  const url = `${baseUrl}/manifest.json`;
   const resp = await fetch(url, { cache: 'no-cache' });
   if (!resp.ok) {
     throw new Error(`manifest fetch failed: ${resp.status}`);
