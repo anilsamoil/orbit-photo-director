@@ -7,10 +7,10 @@ Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 
 Plan: `~/Desktop/orbit-photo-director-offline-v2-plan.md`
 
-V2 ships in two parts. Lanes A-E shipped on `feat/v2-offline`; F-H deferred
-to a follow-up PR.
+V2 ships in two parts. Lanes A-E shipped on `feat/v2-offline` (v1.1.0.0);
+Lane F shipped on `feat/v2-lane-f-sw` (v1.1.0.1); G-H still deferred.
 
-### Shipped on feat/v2-offline (Lanes A-E)
+### Shipped on feat/v2-offline (Lanes A-E, v1.1.0.0)
 - ✅ Generator ships source TLE in track.json (Lane A)
 - ✅ satellite.js SGP4 fall-through past the 120-min polynomial window (Lane B)
 - ✅ localStorage `opd-snapshot` for synchronous boot before network resolves (Lane C)
@@ -18,6 +18,17 @@ to a follow-up PR.
 - ✅ Boot-from-snapshot + transactional refresh + offline-confidence banner
   (green<1h / yellow<3h / orange<12h / red beyond) + TLE>48h overlay +
   obs-age tag + map imagery-date badge + pending-sync badge (Lane E)
+
+### Shipped on feat/v2-lane-f-sw (Lane F, v1.1.0.1)
+- ✅ Workbox-generated service worker via vite-plugin-pwa (registerType:
+  'prompt', generateSW). skipWaiting:true + clientsClaim:false for the
+  multi-tab safety the V2 plan locked in.
+- ✅ Runtime caching: manifest NetworkFirst (2s timeout), versioned
+  artifacts CacheFirst, Carto/GIBS tiles CacheFirst LRU-bounded,
+  POST /api/log NetworkOnly (calib.ts owns the offline queue path).
+- ✅ Adversarial review caught + fixed: `fetchManifest()` ?cb= buster was
+  defeating the SW NetworkFirst manifest rule (Workbox does exact URL
+  matching by default); `workbox-window` was an unused declared dep.
 
 ### V2-P0 — Pre-launch SW upgrade test (blocks Lane F)
 Single biggest 8-month risk is a buggy SW. Test recipe:
@@ -34,12 +45,6 @@ Single biggest 8-month risk is a buggy SW. Test recipe:
 5. Open two tabs simultaneously, repeat step 3. Verify no breakage.
 
 Must pass before launch.
-
-### V2-P1 — Lane F: vite-plugin-pwa + Workbox SW (deferred)
-Service worker for full offline-while-LOS support. App shell + versioned
-artifacts cached, manifest NetworkFirst with 2s timeout, GIBS/carto tiles
-LRU-bounded. Architectural commitments locked in the plan: skipWaiting
-only (no clients.claim), Workbox via vite-plugin-pwa, transactional refresh.
 
 ### V2-P1 — Lane G: kill-switch DNS + Worker (deferred)
 `reset.astroanil.dev/orbit-photo-director` on a different origin so a

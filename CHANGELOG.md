@@ -2,6 +2,56 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.1.0.1] - 2026-05-05
+
+### Workbox service worker — the V2 offline story now works on first visit too.
+
+V2 made the page survive LOS by booting from a localStorage snapshot. That works for any user who's loaded the page once. This release adds a Workbox-generated service worker so the precached app shell, the live manifest.json, the versioned artifacts, and the basemap tiles all stay reachable when the network is dead — including on a fresh tab where there is no snapshot yet.
+
+### What changed for the user
+
+- **First-visit-then-LOS recovery.** With the SW installed, opening a fresh tab during LOS now serves the cached app shell + manifest + last-known artifacts instead of a blank page. The snapshot path still wins on returning visits (single-digit-ms render); the SW path fills the gap on the first one.
+- **Tile cache survives LOS.** Carto basemap tiles cached for 7 days, GIBS true-color tiles for 24 h. The map keeps rendering tiles you've panned over even with the network off.
+- **Multi-tab safety.** `skipWaiting: true` + `clientsClaim: false` means new SWs activate on install but only take over a tab on its next navigation. Two tabs open across a deploy: the new one gets the new code, the old one keeps the code it loaded with. No "new SW + old JS in same tab" race.
+
+### How it's wired
+
+- `vite-plugin-pwa` in `generateSW` mode. Routing rules: manifest NetworkFirst (2 s timeout), versioned artifacts CacheFirst, Carto/GIBS tiles CacheFirst LRU-bounded, `POST /api/log` NetworkOnly (so the existing offline-queue in calib.ts keeps owning the queue path).
+- Adversarial review caught two issues that were fixed in the same PR: `fetchManifest()` was sending `?cb=${Date.now()}`, which silently defeated the SW NetworkFirst rule via Workbox's exact-URL match — fixed by relying on the existing `cache: 'no-cache'` header. `workbox-window` was a declared runtime dep but never imported — dropped to transitive only.
+
+### Numbers
+
+| Metric | v1.1.0.0 | v1.1.0.1 |
+|---|---|---|
+| Generated SW | none | dist/sw.js (2.4 KB) + workbox-*.js (23 KB) |
+| Precached app-shell entries | 0 | 8 (~909 KB) |
+| Runtime cache rules | 0 | 5 (manifest, versioned artifacts, Carto, GIBS, /api/log opt-out) |
+| Frontend test count | 187 | 187 (manifest test updated for the no-cb contract) |
+| Bundle (gzip, app chunk) | 18.71 kB | 18.70 kB (unchanged) |
+
+### Verified
+
+- 187/187 vitest tests pass on merged HEAD.
+- Real-Chrome SW lifecycle: registers + activates, caches populate (workbox-precache=8, opd-manifest=1, opd-versioned-artifacts=3), offline reload renders 15 cards from SW + snapshot, upgrade lifecycle keeps existing tabs on their old SW until navigation.
+- Static SW analysis: `dist/sw.js` contains `skipWaiting()` (1×), zero `clientsClaim()` calls.
+
+### Added
+
+- `vite-plugin-pwa` with Workbox-generated service worker (`frontend/vite.config.ts`).
+- PWA manifest (`dist/manifest.webmanifest`) with inline-SVG icon (real PNG icons remain V2-P3 polish).
+- Runtime caches: `opd-manifest`, `opd-versioned-artifacts`, `opd-tiles-carto`, `opd-tiles-gibs`.
+
+### Fixed
+
+- `fetchManifest()` no longer appends `?cb=${Date.now()}` — defeated the SW NetworkFirst manifest cache because Workbox does exact URL matching by default.
+- Removed `workbox-window` from declared dependencies (was never imported; vite-plugin-pwa pulls it in transitively for the build pipeline).
+
+### Known follow-ups (NOT in this PR)
+
+- V2-P3 polish: real PNG icons (192×192, 512×512, maskable) for full PWA installability across Chrome / iOS Safari validators.
+- Lane G: kill-switch DNS (needs DNS write access).
+- Lane H: pre-launch e2e checklist (manual; blocked by F + G complete).
+
 ## [1.1.0.0] - 2026-05-04
 
 ### **V2 ships — the page works when the network doesn't.**
