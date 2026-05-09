@@ -63,7 +63,7 @@ describe('bannerOffline (snapshot age escalation)', () => {
   it('green when snapshot is < 1h old', () => {
     const r = bannerOffline(15);
     expect(r.level).toBe('green');
-    expect(r.text).toContain('Offline');
+    expect(r.text).toContain('LOS');
     expect(r.text).toContain('15 min');
   });
 
@@ -83,7 +83,7 @@ describe('bannerOffline (snapshot age escalation)', () => {
   it('red beyond 12h', () => {
     expect(bannerOffline(720).level).toBe('red');
     expect(bannerOffline(1500).level).toBe('red');
-    expect(bannerOffline(1500).text).toContain('very stale');
+    expect(bannerOffline(1500).text).toContain('very old');
   });
 
   it('formats hours+minutes for >1h ages', () => {

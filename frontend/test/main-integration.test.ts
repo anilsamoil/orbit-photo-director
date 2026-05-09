@@ -263,7 +263,7 @@ describe('main.ts: renderOfflineBanner branches', () => {
     await refresh();
 
     const banner = document.getElementById('status-banner');
-    expect(banner?.textContent).toContain('Offline');
+    expect(banner?.textContent).toContain('LOS');
     expect(banner?.textContent).toContain('30 min');
   });
 
