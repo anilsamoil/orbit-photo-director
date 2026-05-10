@@ -2,6 +2,22 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.1.0.2] - 2026-05-10
+
+### Hide already-happened passes from Queue + Upcoming
+
+Chris (operator) reported via WhatsApp 2026-05-10: "Occasionally, all of the queue items will be in the past — not sure why." Screenshot showed 4 cards in the Queue tab, every one tagged "Past." Confirmed expected behavior of the existing code: the generator publishes top5 as the next-90-min slice from when the manifest tick ran. By the time the user looks 30-60 min later, the highest-scored picks have happened. The cards rendered with a "Past" countdown text but stayed visible — the user (correctly) wondered what they were supposed to do with cards they could no longer shoot.
+
+### Fixed
+
+- `renderQueue` and `renderUpcoming` now filter out passes whose `closest_approach` is in the past before rendering. The 1Hz `rerenderCountdowns` tick re-evaluates the filter, so the moment a pass transitions to past it disappears from the list (no flicker of "Past" text first).
+- When the entire Queue is past-filtered to empty, the existing "No passes in the next 90 minutes." empty state shows — accurate now since they really have all happened.
+- Upcoming gets the same filter as defense-in-depth for very stale manifests (>90 min old, where Upcoming entries can also leak into the past).
+
+3 new tests in `frontend/test/main-integration.test.ts` (past-only Queue → empty state; mixed Queue → only future renders; Upcoming filter symmetry). 190/190 tests pass.
+
+Note: the `Offline → LOS` banner rename Chris also asked for is bundled into the V3.0 ship (`feat/v3-rocket-launches`), not this hotfix.
+
 ## [1.1.0.1] - 2026-05-05
 
 ### Workbox service worker — the V2 offline story now works on first visit too.
