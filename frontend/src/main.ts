@@ -152,6 +152,16 @@ async function doRefresh(): Promise<void> {
   }
 }
 
+/** Drop passes whose closest_approach has already happened. The generator
+ *  publishes top5 as the next-90-min slice from the manifest's tick time;
+ *  by the time the user looks 30-60 min later, several picks may already
+ *  be in the past. Showing them as "Past" cards (Chris, 2026-05-10) is
+ *  worse than honest empty state — the user wonders what they're meant
+ *  to do with cards they can no longer shoot. */
+function upcomingPasses(passes: PassEntry[], nowMs: number): PassEntry[] {
+  return passes.filter((p) => Date.parse(p.closest_approach) > nowMs);
+}
+
 /** Render the Queue + Upcoming panes from current module state. Extracted so
  *  both the snapshot boot and a normal refresh share one render path. */
 function renderQueue(): void {
@@ -161,12 +171,13 @@ function renderQueue(): void {
   if (!cards || !empty) return;
   const now = Date.now();
   const stale = isStaleManifest(currentManifest, now);
-  if (currentTop5.length === 0) {
+  const visible = upcomingPasses(currentTop5, now);
+  if (visible.length === 0) {
     cards.replaceChildren();
     empty.hidden = false;
   } else {
     empty.hidden = true;
-    renderCards(cards, currentTop5, now, stale, onCardAction, { tokenSet: !!getToken() });
+    renderCards(cards, visible, now, stale, onCardAction, { tokenSet: !!getToken() });
   }
   renderUpcoming(now, stale);
 }
@@ -227,13 +238,14 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const cards = document.getElementById('upcoming-cards');
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;
-  if (currentTop24h.length === 0) {
+  const visible = upcomingPasses(currentTop24h, nowMs);
+  if (visible.length === 0) {
     cards.replaceChildren();
     empty.hidden = false;
     return;
   }
   empty.hidden = true;
-  renderCards(cards, currentTop24h, nowMs, stale, onCardAction, { variant: 'forecast' });
+  renderCards(cards, visible, nowMs, stale, onCardAction, { variant: 'forecast' });
 }
 
 function rerenderCountdowns(): void {
@@ -241,13 +253,10 @@ function rerenderCountdowns(): void {
   if (!currentManifest) return;
   const now = Date.now();
   const stale = isStaleManifest(currentManifest, now);
-  if (currentTop5.length > 0) {
-    const cards = document.getElementById('cards');
-    if (cards) renderCards(cards, currentTop5, now, stale, onCardAction, { tokenSet: !!getToken() });
-  }
-  if (currentTop24h.length > 0) {
-    renderUpcoming(now, stale);
-  }
+  // Re-route through renderQueue so the past-filter + empty-state toggle stay
+  // in one place. The 1Hz tick is the moment a pass transitions from imminent
+  // to past, so we MUST re-evaluate the filter here, not just the countdown text.
+  renderQueue();
   setBanner(bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now));
 }
 

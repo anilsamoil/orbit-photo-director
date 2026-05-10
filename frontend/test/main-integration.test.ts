@@ -287,6 +287,94 @@ describe('main.ts: renderOfflineBanner branches', () => {
   });
 });
 
+describe('main.ts: past-pass filter on Queue + Upcoming render', () => {
+  // Chris reported (2026-05-10): generator publishes top5 as the next-90-min
+  // slice from the manifest tick time; by the time the user looks 30-60 min
+  // later, several picks may already be past. Old behavior rendered them as
+  // "Past" cards. New behavior filters past at render + falls back to the
+  // empty-state placeholder.
+  it('hides Queue cards whose closest_approach is in the past', async () => {
+    const now = Date.now();
+    const past = new Date(now - 5 * 60_000).toISOString(); // 5 min ago
+    const future = new Date(now + 25 * 60_000).toISOString(); // 25 min from now
+    localStorage.setItem('opd-snapshot', JSON.stringify({
+      manifest: buildManifest(),
+      top5: [
+        buildPass({ target_id: 'past-1', closest_approach: past }),
+        buildPass({ target_id: 'past-2', closest_approach: past }),
+        buildPass({ target_id: 'future-1', closest_approach: future }),
+      ],
+      top_24h: [],
+      track: buildTrack(),
+      status: null,
+      savedAt: now,
+    }));
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise(() => {}));
+
+    const { init } = await import('../src/main');
+    void init();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const cards = document.querySelectorAll('#cards .card');
+    expect(cards.length).toBe(1);
+    const ids = Array.from(cards).map((c) => (c as HTMLElement).dataset.targetId);
+    expect(ids).toEqual(['future-1']);
+  });
+
+  it('shows the empty state when ALL queue picks are past', async () => {
+    const now = Date.now();
+    const past = new Date(now - 10 * 60_000).toISOString();
+    localStorage.setItem('opd-snapshot', JSON.stringify({
+      manifest: buildManifest(),
+      top5: [
+        buildPass({ target_id: 'past-1', closest_approach: past }),
+        buildPass({ target_id: 'past-2', closest_approach: past }),
+      ],
+      top_24h: [],
+      track: buildTrack(),
+      status: null,
+      savedAt: now,
+    }));
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise(() => {}));
+
+    const { init } = await import('../src/main');
+    void init();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(document.querySelectorAll('#cards .card').length).toBe(0);
+    expect(document.getElementById('empty')?.hidden).toBe(false);
+  });
+
+  it('also hides past entries from Upcoming (defense-in-depth for very stale manifests)', async () => {
+    const now = Date.now();
+    const past = new Date(now - 60_000).toISOString();
+    const future = new Date(now + 6 * 3600_000).toISOString(); // 6h out
+    localStorage.setItem('opd-snapshot', JSON.stringify({
+      manifest: buildManifest(),
+      top5: [],
+      top_24h: [
+        buildPass({ target_id: 'past-upcoming', closest_approach: past }),
+        buildPass({ target_id: 'future-upcoming', closest_approach: future }),
+      ],
+      track: buildTrack(),
+      status: null,
+      savedAt: now,
+    }));
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise(() => {}));
+
+    const { init } = await import('../src/main');
+    void init();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const upcomingCards = document.querySelectorAll('#upcoming-cards .card');
+    expect(upcomingCards.length).toBe(1);
+    expect((upcomingCards[0] as HTMLElement).dataset.targetId).toBe('future-upcoming');
+  });
+});
+
 describe('main.ts: updatePendingSyncBadge', () => {
   it('hides the badge when the calib queue is empty', async () => {
     localStorage.removeItem('opd-calib-queue');
