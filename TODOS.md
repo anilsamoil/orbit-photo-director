@@ -139,6 +139,33 @@ each upcoming target's lat/lon at z6-z10. Adds ~50-100 KB per target to
 the SW cache (negligible vs the 100/200 LRU caps). Limit to top-N
 upcoming. ~30 min CC.
 
+### V4-P2 — Queue vs Upcoming + scoring explainer
+Chris reported (2026-05-10): "I think I don't fully understand the queue
+vs upcoming and the scoring, but it generally makes sense!" The two-tab
+distinction (Queue = next 90 min observed-cloud passes; Upcoming = next
+24h forecast-cloud passes) is implicit in tab labels but not explained.
+Same for the score components (p_unobstructed × regime_fit × nadir_proximity
+× priority_weight × tle_freshness). Two cheap remedies:
+
+1. Subtitle copy under each tab heading. Queue: "Next 90 min — what to
+   shoot now. Cloud: observed (MODIS / GOES-IR)." Upcoming: "Next 24h —
+   what to plan for. Cloud: forecast (GFS)."
+2. Click-to-expand score breakdown on each card. Tapping the score
+   number opens a tooltip / accordion: "47 = priority 100% × regime 100%
+   × nadir 75% × p(unobstructed) 99% × TLE freshness 100%." Maps directly
+   to `score_components` already in PassEntry.
+
+~45 min CC for both. Highest leverage operator-clarity win after queue-filter.
+
+### V4-P3 — "Why empty?" hint when Queue is empty
+Once v1.1.0.2 hides past cards, an empty Queue could be either "no passes
+in the next 90 min" (orbital geometry) or "manifest is so stale every pick
+elapsed" (generator lag). Today both show the same "No passes in the next
+90 minutes." message. Add a hint when manifest is >90min old AND queue is
+empty: "Showing a 1h 42m old manifest — generator has been slow. Next
+update in N min." Avoids confusion about whether to wait or whether
+nothing's happening. ~15 min CC.
+
 ### V2-P2 — sha256 verification of artifact fetches
 Generator already ships sha256 for every artifact in manifest.json.
 Frontend fetches and parses without checking. A partial R2 deploy
