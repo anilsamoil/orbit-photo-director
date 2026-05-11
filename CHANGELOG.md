@@ -2,6 +2,37 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.0.1] - 2026-05-11
+
+### Queue and Upcoming now explain themselves; tap any score for the breakdown.
+
+Chris (operator, 2026-05-10): "I think I don't fully understand the queue vs upcoming and the scoring, but it generally makes sense!" This release answers both questions inline so he doesn't have to remember.
+
+Each tab now has a header explaining what it shows and how scoring works:
+- **Queue** — "Next 90 min — what to shoot now. Cloud: observed (MODIS / GOES-IR / Meteosat / Himawari)."
+- **Upcoming** — "Next 24 hours — what to plan for. Cloud: forecast (GFS, hourly). Less certain by design."
+
+Each card's score line is now a button. Tap it and a breakdown panel expands underneath with all 5 components: p(unobstructed), regime fit, nadir proximity, priority weight, TLE freshness. Each component shows the value (0-100) plus a one-line plain-English context — "ISS 234 km off target," "target priority 5/5," "track confidence; 1.0 = fresh, 0.5 = days old," etc. The composite score is shown as the table footer so the math arrives at the score line above.
+
+No new data fetched. Everything in the breakdown was already on `PassEntry.score_components` from the generator; we're just exposing it.
+
+### Verified
+
+- 217/217 frontend tests pass (was 210 + 7 new breakdown tests).
+- Local headless preview confirms the new pane headers render on both Queue and Upcoming.
+- Backward compat: older PassEntries with `score_components` (every version since V1) work unchanged.
+
+### Added
+
+- Pane header on the Queue tab (matching the Upcoming pane header introduced in V2).
+- Click-to-expand score breakdown table on every card. Button-style score line, chevron rotates 180° when open, breakdown panel renders inline below.
+- 7 new tests in `frontend/test/card.test.ts`: button shape, default-hidden, click-to-open, double-click-toggle, 5-component table + composite footer, dynamic nadir-km contextualization, regime='any' wording.
+
+### Changed
+
+- Upcoming pane header copy: now matches the Queue pane structure ("Next 24 hours — what to plan for" + cloud-source clarification + tap-for-breakdown hint).
+- `.card-score` is now a `<button>` with focus styles + cursor pointer + faint hover background. Same visual rhythm as before, plus discoverable interactivity.
+
 ## [1.2.0.0] - 2026-05-11
 
 ### **V3.0 ships rocket-launch photography. The ISS planner now surfaces overhead launches in the Queue.**
