@@ -107,18 +107,7 @@ export function renderCard(
     meta.appendChild(makeTag('forecast-tag', 'forecast'));
   }
 
-  const score = document.createElement('div');
-  score.className = 'card-score';
-  const label = document.createElement('span');
-  label.className = 'score-label';
-  label.textContent = 'Score';
-  const value = document.createElement('span');
-  value.className = 'score-value';
-  value.textContent = formatScore(p.score);
-  const sep = document.createElement('span');
-  sep.className = 'score-label';
-  sep.textContent = `· P(unobstructed) ${formatScore(p.p_unobstructed)}`;
-  score.append(label, value, sep);
+  const score = renderScoreWithBreakdown(p);
 
   // Forecast cards omit Shoot/Skip — passes that far out aren't actionable
   // yet, and the user submits a Shoot record only when actually shooting.
@@ -207,4 +196,106 @@ export function formatLaunchWindow(netWindowSeconds: number): string {
   }
   const h = netWindowSeconds / 3600;
   return `Window: ±${h.toFixed(h < 10 ? 1 : 0)}h`;
+}
+
+/** Render the score line with a click-to-expand breakdown panel.
+ *  Chris (2026-05-10): "I think I don't fully understand the queue vs
+ *  upcoming and the scoring." This makes the formula transparent — tap the
+ *  score number, see the components that produced it. No tooltips (touch
+ *  devices), no hover (operator's iPad). Click toggles the panel under the
+ *  score line, second click hides it.
+ *
+ *  The data already exists in PassEntry.score_components — we're not
+ *  recomputing anything, just exposing what the generator already published.
+ */
+export function renderScoreWithBreakdown(p: PassEntry): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'card-score-wrap';
+
+  const line = document.createElement('button');
+  line.type = 'button';
+  line.className = 'card-score';
+  line.setAttribute('aria-expanded', 'false');
+  line.title = 'Tap to see the score breakdown';
+
+  const label = document.createElement('span');
+  label.className = 'score-label';
+  label.textContent = 'Score';
+  const value = document.createElement('span');
+  value.className = 'score-value';
+  value.textContent = formatScore(p.score);
+  const sep = document.createElement('span');
+  sep.className = 'score-label';
+  sep.textContent = `· P(unobstructed) ${formatScore(p.p_unobstructed)}`;
+  const chev = document.createElement('span');
+  chev.className = 'score-chev';
+  chev.textContent = '▾';  // rotates to ▴ when open via CSS
+  chev.setAttribute('aria-hidden', 'true');
+  line.append(label, value, sep, chev);
+
+  const panel = document.createElement('div');
+  panel.className = 'score-breakdown';
+  panel.hidden = true;
+  panel.appendChild(buildBreakdownTable(p));
+
+  line.addEventListener('click', () => {
+    const open = panel.hidden;
+    panel.hidden = !open;
+    line.setAttribute('aria-expanded', String(open));
+    line.classList.toggle('open', open);
+  });
+
+  wrap.append(line, panel);
+  return wrap;
+}
+
+function buildBreakdownTable(p: PassEntry): HTMLElement {
+  const c = p.score_components;
+  // Each row: [name, value 0-100 from generator, what it means]. The
+  // generator publishes each component on a 0-100 scale (see
+  // generator/score.py:compute_score). Final score is the product divided
+  // by 10^4 and clamped — but exposing the components alone is enough for
+  // the operator to see "ah, regime fit is the low one" or "nadir distance
+  // is killing this score."
+  const rows: Array<[string, number, string]> = [
+    ['p(unobstructed)', c.p_unobstructed, 'cloud + sun-glint clear'],
+    ['regime fit', c.regime_fit, p.target_regime === 'any'
+      ? 'target accepts any lighting'
+      : `target wants ${p.target_regime}; pass is ${p.pass_regime}`],
+    ['nadir proximity', c.nadir_proximity, `ISS ${Math.round(p.nadir_distance_km)} km off target`],
+    ['priority weight', c.priority_weight, `target priority ${p.target_priority}/5`],
+    ['TLE freshness', c.tle_freshness * 100, `track confidence; 1.0 = fresh, 0.5 = days old`],
+  ];
+  const table = document.createElement('table');
+  table.className = 'score-breakdown-table';
+  for (const [name, val, note] of rows) {
+    const tr = document.createElement('tr');
+    const td1 = document.createElement('td');
+    td1.className = 'sb-name';
+    td1.textContent = name;
+    const td2 = document.createElement('td');
+    td2.className = 'sb-val';
+    td2.textContent = formatScore(val);
+    const td3 = document.createElement('td');
+    td3.className = 'sb-note';
+    td3.textContent = note;
+    tr.append(td1, td2, td3);
+    table.appendChild(tr);
+  }
+  // Footer with the final composite score so the user can see the math
+  // arrives at the score line above.
+  const tfoot = document.createElement('tr');
+  tfoot.className = 'sb-foot';
+  const f1 = document.createElement('td');
+  f1.className = 'sb-name';
+  f1.textContent = 'Composite';
+  const f2 = document.createElement('td');
+  f2.className = 'sb-val';
+  f2.textContent = formatScore(p.score);
+  const f3 = document.createElement('td');
+  f3.className = 'sb-note';
+  f3.textContent = 'product of the five above, scaled 0-100';
+  tfoot.append(f1, f2, f3);
+  table.appendChild(tfoot);
+  return table;
 }

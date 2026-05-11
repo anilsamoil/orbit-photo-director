@@ -205,6 +205,71 @@ describe('renderCard', () => {
   });
 });
 
+describe('renderCard score breakdown (V4-P2 explainer)', () => {
+  it('renders the score line as a button (clickable)', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    const score = el.querySelector('.card-score');
+    expect(score?.tagName).toBe('BUTTON');
+    expect(score?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('hides the breakdown panel by default', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    const panel = el.querySelector('.score-breakdown') as HTMLElement;
+    expect(panel.hidden).toBe(true);
+  });
+
+  it('opens the breakdown panel on click + sets aria-expanded', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    const score = el.querySelector('.card-score') as HTMLButtonElement;
+    const panel = el.querySelector('.score-breakdown') as HTMLElement;
+    score.click();
+    expect(panel.hidden).toBe(false);
+    expect(score.getAttribute('aria-expanded')).toBe('true');
+    expect(score.classList.contains('open')).toBe(true);
+  });
+
+  it('toggles closed on second click', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    const score = el.querySelector('.card-score') as HTMLButtonElement;
+    const panel = el.querySelector('.score-breakdown') as HTMLElement;
+    score.click();
+    score.click();
+    expect(panel.hidden).toBe(true);
+    expect(score.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('breakdown table lists all 5 score components + composite footer', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    const rows = el.querySelectorAll('.score-breakdown-table tr');
+    expect(rows.length).toBe(6); // 5 components + composite footer
+    const names = Array.from(el.querySelectorAll('.sb-name')).map((n) => n.textContent);
+    expect(names).toEqual([
+      'p(unobstructed)',
+      'regime fit',
+      'nadir proximity',
+      'priority weight',
+      'TLE freshness',
+      'Composite',
+    ]);
+  });
+
+  it('breakdown contextualizes nadir distance using the actual km value', () => {
+    const el = renderCard(samplePass({ nadir_distance_km: 234 }), NOW, false, () => undefined);
+    const noteCells = Array.from(el.querySelectorAll('.sb-note')).map((c) => c.textContent);
+    expect(noteCells.some((t) => t?.includes('234 km off target'))).toBe(true);
+  });
+
+  it("breakdown explains regime='any' targets without a mismatch reading", () => {
+    const el = renderCard(
+      samplePass({ target_regime: 'any', pass_regime: 'day' }),
+      NOW, false, () => undefined,
+    );
+    const noteCells = Array.from(el.querySelectorAll('.sb-note')).map((c) => c.textContent);
+    expect(noteCells.some((t) => t?.includes('any lighting'))).toBe(true);
+  });
+});
+
 describe('renderCards', () => {
   it('clears the container when empty', () => {
     const c = document.getElementById('cards')!;
