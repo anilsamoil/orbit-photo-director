@@ -22,6 +22,7 @@ import { createPollScheduler, isOnline, type PollScheduler } from './network-sta
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
+import { gibsTrueColorUrl, precacheTilesForTargets, yesterdayIso } from './tile-precache';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
@@ -162,6 +163,13 @@ async function doRefresh(): Promise<void> {
       launchesStaleHours(status, Date.now()),
     ));
     updatePendingSyncBadge();
+    // V4-P2 (Chris 2026-05-05): pre-cache basemap + cloud tiles for the
+    // top-3 Queue targets at z6/z8/z10. Fire-and-forget; SW's CacheFirst
+    // rules write to the tile caches automatically. Skipped when offline
+    // (no point hitting the network when it's unreachable). When the
+    // operator next opens Map during LOS over one of those targets, the
+    // wider-context tiles are already there.
+    precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
   } catch (e) {
     // Refresh failed — keep showing whatever the snapshot path rendered and
     // surface the failure in the banner. currentManifest/Top5/etc still hold

@@ -49,16 +49,11 @@ export function _resetMapStateForTest(): void {
 /** GIBS true-color tile URL pattern. {date} is replaced per render. Daily layer
  *  — captures cloud cover visually (you can SEE clouds, not derive them).
  */
-function gibsTrueColorUrl(dateIso: string): string {
-  const layer = 'VIIRS_NOAA21_CorrectedReflectance_TrueColor';
-  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer}/default/${dateIso}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
-}
-
-/** Yesterday's date in YYYY-MM-DD; today's product may not be published yet. */
-function yesterdayIso(): string {
-  const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  return d.toISOString().slice(0, 10);
-}
+// gibsTrueColorUrl + yesterdayIso live in tile-precache.ts so main.ts can
+// import them without pulling the heavy MapLibre bundle. Re-exported from
+// here so this module's existing internal callers (buildStyle below) don't
+// have to change.
+import { gibsTrueColorUrl, yesterdayIso } from './tile-precache';
 
 function buildStyle(): maplibregl.StyleSpecification {
   const dateIso = yesterdayIso();
