@@ -2,6 +2,19 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.0.2] - 2026-05-11
+
+### Score breakdown panel now stays open across the 1Hz tick.
+
+Caught immediately after v1.2.0.1 went live: tapping the score breakdown opened the panel for ~1 second, then the next `rerenderCountdowns` tick rebuilt all the cards from scratch and silently closed it. The user would have seen the breakdown flash open and disappear — a worse UX than not having the feature at all.
+
+### Fixed
+
+- `card.ts` now tracks open-breakdown state in a module-level `OPEN_BREAKDOWNS` Set keyed by `(target_id, closest_approach)`. Each card render (including the 1Hz tick) checks the Set and re-applies the open state. Toggle handler updates the Set on click.
+- 3 new tests cover the persistence behavior: open survives re-render, close removes the persistent state, open state is per-card (different target_ids keep their own panel state).
+
+220/220 tests pass. Same root cause as TODOS:111 ("Per-second full re-render of all cards") but solved locally for this feature without rewriting the render loop.
+
 ## [1.2.0.1] - 2026-05-11
 
 ### Queue and Upcoming now explain themselves; tap any score for the breakdown.
