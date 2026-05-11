@@ -97,6 +97,34 @@ export function bannerWithTleOverlay(
   return { level: 'orange', text: `${base.text} · ${tleNote}` };
 }
 
+/** Append a launches-stale overlay onto an existing banner. Mirrors
+ *  `bannerWithTleOverlay` (eng-review ARCH-2): when LL2 has been unreachable
+ *  for >24h the topbar gets a "🚀 launches stale Nh" suffix so the operator
+ *  knows the launches feature is degraded. Threshold 24h matches "anything
+ *  less is just a few missed polls, which the cached data already covers."
+ *
+ *  If launches data is fresh (hoursStale undefined or <=24) the base banner
+ *  passes through unchanged. If the base is already red, the text gets the
+ *  overlay note appended without downgrading the level. Same precedent as
+ *  bannerWithTleOverlay. */
+export function bannerWithLaunchesOverlay(
+  base: BannerState,
+  hoursStale: number | undefined,
+): BannerState {
+  if (typeof hoursStale !== 'number' || !Number.isFinite(hoursStale)) return base;
+  if (hoursStale <= 24) return base;
+  const note = `🚀 launches stale ${formatStaleAge(hoursStale)}`;
+  if (base.level === 'red') {
+    return { level: 'red', text: `${base.text} · ${note}` };
+  }
+  return { level: 'orange', text: `${base.text} · ${note}` };
+}
+
+function formatStaleAge(hours: number): string {
+  if (hours < 48) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 export function bannerLoading(): BannerState {
   return { level: 'loading', text: 'Loading…' };
 }

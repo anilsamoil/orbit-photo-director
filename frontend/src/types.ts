@@ -47,6 +47,28 @@ export interface PassEntry {
     tle_freshness: number;
   };
   iss_at_closest: { lat: number; lon: number; alt_km: number };
+  /** Present iff this PassEntry came from the V3.0 launch pipeline (the
+   *  generator wrapped a rocket launch's site as a synthetic target).
+   *  Triggers the 🚀 LAUNCH tag + rocket name + window-confidence chip on
+   *  the card. Older v1.0/v1.1 manifests don't include this field; treat
+   *  as optional everywhere. */
+  launch?: {
+    name: string;
+    rocket_type: string;
+    /** Currently always 'overhead' (V3.0 OVERHEAD-only scope per /autoplan
+     *  D4=B). V3.1 will add 'ascent' when terminator + slant-range modeling
+     *  lands. Discriminator lets the card render differently per geometry. */
+    geometry: 'overhead';
+    site_name: string;
+    /** Half-width of the LL2 NET window in seconds. 0 = precisely scheduled.
+     *  Card renders "Window: ±N min" so the operator can weight a "T-0
+     *  exact" Falcon vs a "±15 min Soyuz." */
+    net_window_seconds: number;
+    /** ISO 8601 Z. The headline launch time (LL2 `net`). Distinct from
+     *  `closest_approach` (when ISS is overhead) — the two should agree
+     *  within ±5 min. */
+    t0: string;
+  };
 }
 
 export interface Track {
@@ -84,6 +106,15 @@ export interface Status {
   pass_count: number;
   version: string;
   build_version: string;
+  /** V3.0 launches health (per ARCH-1 in the eng review — folded into
+   *  status.json instead of a separate launches-health.json artifact).
+   *  All four are optional so older v1.0/v1.1 status snapshots still
+   *  parse cleanly. Frontend uses last_successful_fetch to drive the
+   *  stale-launches banner overlay when >24h old. */
+  launches_last_successful_fetch?: string | null;
+  launches_count_upcoming?: number;
+  launches_count_pass_opportunities?: number;
+  launches_schema_hash?: string | null;
 }
 
 export type CalibAction = 'shoot' | 'skip' | 'rate';

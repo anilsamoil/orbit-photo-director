@@ -226,6 +226,28 @@ main {
   font-weight: 600;
 }
 
+/* V3.0 launch tags. Orange-on-dark to match the rocket-flame mental model
+ * + read as "louder than ground passes" without competing with the
+ * regime/obstruction colors. The 🚀 LAUNCH tag is the loudest (filled
+ * background); rocket name + window confidence are quieter siblings. */
+.tag.launch-overhead {
+  color: #ff8a3d;
+  background: rgba(255, 138, 61, 0.18);
+  border-color: rgba(255, 138, 61, 0.55);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.tag.launch-rocket {
+  color: #ffb37a;
+  border-color: rgba(255, 179, 122, 0.4);
+  background: rgba(255, 179, 122, 0.06);
+}
+.tag.launch-window {
+  color: var(--text-dim);
+  border-color: rgba(255, 179, 122, 0.25);
+  font-variant-numeric: tabular-nums;
+}
+
 .card-score {
   grid-area: score;
   display: flex;

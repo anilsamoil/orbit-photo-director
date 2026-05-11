@@ -7,14 +7,21 @@
  */
 
 import { renderCards } from './card';
-import { bannerError, bannerFromManifest, bannerLoading, bannerOffline, bannerWithTleOverlay } from './banner';
+import {
+  bannerError,
+  bannerFromManifest,
+  bannerLoading,
+  bannerOffline,
+  bannerWithLaunchesOverlay,
+  bannerWithTleOverlay,
+} from './banner';
 import { buildPayload, clearToken, drainQueue, getToken, postCalib, queuedCalibCount, setToken } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
-import type { Manifest, PassEntry, Track } from './types';
-import { fetchManifest, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
+import type { Manifest, PassEntry, Status, Track } from './types';
+import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
@@ -25,6 +32,10 @@ let currentManifest: Manifest | null = null;
 let currentTop5: PassEntry[] = [];
 let currentTop24h: PassEntry[] = [];
 let currentTrack: Track | null = null;
+// V3.0: status drives the launches-stale banner overlay (per ARCH-1, the
+// `launches_last_successful_fetch` field on status.json is the source of
+// truth for "is the launches feature degraded?").
+let currentStatus: Status | null = null;
 // Held to keep the scheduler's listeners alive and reachable. Production
 // code never tears down (single-page lifetime); reserved for future SW
 // upgrade flow that may want pollScheduler.stop() before reload.
@@ -94,15 +105,25 @@ async function doRefresh(): Promise<void> {
     // pointing at the previous snapshot. This is the transactional refresh
     // discipline from the V2 plan: versioned URLs guarantee artifact
     // separation; an aborted refresh never produces a torn snapshot.
-    const [top5, top24h, track] = await Promise.all([
+    // status.json is fetched alongside the others — V3 needs the
+    // launches_last_successful_fetch field to drive the stale-launches
+    // banner overlay. Older manifests without status in the artifacts map
+    // would 404; we tolerate it (the launches overlay simply doesn't fire).
+    const [top5, top24h, track, status] = await Promise.all([
       fetchTop5(manifest),
       fetchTop24h(manifest),
       fetchTrack(manifest),
+      // Promise.resolve() defends against synchronous undefined returns
+      // (test mocks default to undefined; the real fetchStatus is async).
+      // .catch() then handles the actual fetch-rejection case for older
+      // manifests that don't have status.json in the artifacts map.
+      Promise.resolve(fetchStatus(manifest)).catch(() => null),
     ]);
     currentManifest = manifest;
     currentTop5 = top5;
     currentTop24h = top24h;
     currentTrack = track;
+    currentStatus = status ?? null;
 
     // Persist atomically AFTER all artifacts loaded successfully — but ONLY
     // when the manifest version is STRICTLY NEWER than what's on disk. Two
@@ -124,18 +145,21 @@ async function doRefresh(): Promise<void> {
         top5,
         top_24h: top24h,
         track,
-        // Status isn't currently fetched in the live path; null is allowed
-        // and the consuming UI degrades gracefully.
-        status: null,
+        // Status now fetched alongside the others (V3.0). Tolerates null
+        // for older snapshots that predate this field.
+        status,
         savedAt: Date.now(),
       });
       lastSavedManifestVersion = manifest.version;
     }
 
     renderQueue();
-    setBanner(bannerWithTleOverlay(
-      bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
-      track.tle_age_hours,
+    setBanner(bannerWithLaunchesOverlay(
+      bannerWithTleOverlay(
+        bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
+        track.tle_age_hours,
+      ),
+      launchesStaleHours(status, Date.now()),
     ));
     updatePendingSyncBadge();
   } catch (e) {
@@ -200,13 +224,17 @@ function bootFromSnapshot(): boolean {
   currentTop5 = snap.top5;
   currentTop24h = snap.top_24h;
   currentTrack = snap.track;
+  currentStatus = snap.status;
   // Init the version-skip cache from the loaded snapshot so the first
   // refresh doesn't write a redundant identical-version snapshot.
   lastSavedManifestVersion = snap.manifest.version;
   renderQueue();
   // The banner reflects the snapshot's manifest age, NOT current freshness —
   // refresh() will overwrite it the moment the network call resolves.
-  setBanner(bannerFromManifest(snap.manifest.generated_at, snap.manifest.freshness.ok, Date.now()));
+  setBanner(bannerWithLaunchesOverlay(
+    bannerFromManifest(snap.manifest.generated_at, snap.manifest.freshness.ok, Date.now()),
+    launchesStaleHours(snap.status, Date.now()),
+  ));
   return true;
 }
 
@@ -228,9 +256,12 @@ function renderOfflineBanner(): void {
   // into thinking they just synced when they haven't. 0 means "treat as
   // freshest possible" which is wrong but at least conservative.
   const ageMin = Math.max(0, (Date.now() - snap.savedAt) / 60_000);
-  setBanner(bannerWithTleOverlay(
-    bannerOffline(ageMin),
-    snap.track.tle_age_hours,
+  setBanner(bannerWithLaunchesOverlay(
+    bannerWithTleOverlay(
+      bannerOffline(ageMin),
+      snap.track.tle_age_hours,
+    ),
+    launchesStaleHours(snap.status, Date.now()),
   ));
 }
 
@@ -257,7 +288,22 @@ function rerenderCountdowns(): void {
   // in one place. The 1Hz tick is the moment a pass transitions from imminent
   // to past, so we MUST re-evaluate the filter here, not just the countdown text.
   renderQueue();
-  setBanner(bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now));
+  setBanner(bannerWithLaunchesOverlay(
+    bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now),
+    launchesStaleHours(currentStatus, now),
+  ));
+}
+
+/** How many hours since the generator's last successful LL2 fetch. Returns
+ *  undefined when status / the field is absent (older snapshots, LL2 has
+ *  never succeeded), which `bannerWithLaunchesOverlay` reads as "no overlay
+ *  needed." Reads `launches_last_successful_fetch` per ARCH-1's status.json
+ *  fold-in. */
+function launchesStaleHours(status: Status | null, nowMs: number): number | undefined {
+  if (!status || !status.launches_last_successful_fetch) return undefined;
+  const t = Date.parse(status.launches_last_successful_fetch);
+  if (Number.isNaN(t)) return undefined;
+  return Math.max(0, (nowMs - t) / 3_600_000);
 }
 
 async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<void> {
