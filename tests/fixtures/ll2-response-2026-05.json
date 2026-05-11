@@ -1,0 +1,146 @@
+{
+  "count": 4,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "f9-starlink-2026-05-test-1",
+      "url": "https://ll.thespacedevs.com/2.2.0/launch/f9-starlink-2026-05-test-1/",
+      "name": "Falcon 9 Block 5 | Starlink Group 6-99",
+      "net": "2026-05-12T03:42:00Z",
+      "window_end": "2026-05-12T03:42:00Z",
+      "window_start": "2026-05-12T03:42:00Z",
+      "status": {
+        "id": 1,
+        "name": "Go for Launch",
+        "abbrev": "Go",
+        "description": "Current T-0 confirmed by official or reliable sources."
+      },
+      "rocket": {
+        "id": 7001,
+        "configuration": {
+          "id": 164,
+          "name": "Falcon 9",
+          "family": "Falcon",
+          "full_name": "Falcon 9 Block 5",
+          "variant": "Block 5"
+        }
+      },
+      "pad": {
+        "id": 80,
+        "name": "Launch Complex 39A",
+        "location": {
+          "id": 27,
+          "name": "Kennedy Space Center, FL, USA",
+          "country_code": "USA"
+        },
+        "latitude": "28.6082",
+        "longitude": "-80.6041"
+      }
+    },
+    {
+      "id": "soyuz-progress-baikonur-2026-05-test-2",
+      "url": "https://ll.thespacedevs.com/2.2.0/launch/soyuz-progress-baikonur-2026-05-test-2/",
+      "name": "Soyuz 2.1a | Progress MS-30",
+      "net": "2026-05-13T15:18:00Z",
+      "window_end": "2026-05-13T15:18:00Z",
+      "window_start": "2026-05-13T15:18:00Z",
+      "status": {
+        "id": 3,
+        "name": "Launch Successful",
+        "abbrev": "Success",
+        "description": "The launch vehicle successfully inserted its payload(s) into the target orbit(s)."
+      },
+      "rocket": {
+        "id": 7002,
+        "configuration": {
+          "id": 33,
+          "name": "Soyuz 2.1a",
+          "family": "Soyuz",
+          "full_name": "Soyuz 2.1a",
+          "variant": "2.1a"
+        }
+      },
+      "pad": {
+        "id": 30,
+        "name": "31/6, Baikonur Cosmodrome",
+        "location": {
+          "id": 15,
+          "name": "Baikonur Cosmodrome, Republic of Kazakhstan",
+          "country_code": "KAZ"
+        },
+        "latitude": "45.9966",
+        "longitude": "63.5644"
+      }
+    },
+    {
+      "id": "vulcan-tbd-2026-test-3",
+      "url": "https://ll.thespacedevs.com/2.2.0/launch/vulcan-tbd-2026-test-3/",
+      "name": "Vulcan Centaur | USSF-106 (TBD payload)",
+      "net": "2026-05-20T12:00:00Z",
+      "window_end": "2026-05-20T16:00:00Z",
+      "window_start": "2026-05-20T08:00:00Z",
+      "status": {
+        "id": 2,
+        "name": "To Be Determined",
+        "abbrev": "TBD",
+        "description": "Awaiting official confirmation - current date is best guess based on available information."
+      },
+      "rocket": {
+        "id": 7003,
+        "configuration": {
+          "id": 200,
+          "name": "Vulcan Centaur",
+          "family": "Vulcan",
+          "full_name": "Vulcan Centaur",
+          "variant": "VC2S"
+        }
+      },
+      "pad": {
+        "id": 84,
+        "name": "Space Launch Complex 41",
+        "location": {
+          "id": 12,
+          "name": "Cape Canaveral, FL, USA",
+          "country_code": "USA"
+        },
+        "latitude": "28.5833",
+        "longitude": "-80.5833"
+      }
+    },
+    {
+      "id": "f9-cap-vandy-2026-test-4",
+      "url": "https://ll.thespacedevs.com/2.2.0/launch/f9-cap-vandy-2026-test-4/",
+      "name": "Falcon 9 Block 5 | Wide-window test fixture",
+      "net": "2026-05-15T22:00:00Z",
+      "window_end": "2026-05-15T23:00:00Z",
+      "window_start": "2026-05-15T21:00:00Z",
+      "status": {
+        "id": 1,
+        "name": "Go for Launch",
+        "abbrev": "Go"
+      },
+      "rocket": {
+        "id": 7004,
+        "configuration": {
+          "id": 164,
+          "name": "Falcon 9",
+          "family": "Falcon",
+          "full_name": "Falcon 9 Block 5",
+          "variant": "Block 5"
+        }
+      },
+      "pad": {
+        "id": 134,
+        "name": "Space Launch Complex 4E",
+        "location": {
+          "id": 11,
+          "name": "Vandenberg SFB, CA, USA",
+          "country_code": "USA"
+        },
+        "latitude": "34.6322",
+        "longitude": "-120.6107"
+      }
+    }
+  ]
+}
