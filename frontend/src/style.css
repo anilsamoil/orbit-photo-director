@@ -482,6 +482,11 @@ main {
   z-index: 10;
 }
 
+/* Bearing toggle sits below the time toggle on the same right edge. */
+.map-controls.map-controls-bearing {
+  top: 130px;
+}
+
 .time-btn {
   background: transparent;
   border: 0;

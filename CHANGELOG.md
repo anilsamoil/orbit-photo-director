@@ -2,6 +2,37 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.1.0] - 2026-05-11
+
+### ISS-up toggle on the map: rotate so direction-of-travel points up.
+
+Chris (operator, 2026-05-05) described his mental model in WORF as "I'm looking down, this is what's coming next." North-up is the geographic convention but it's the wrong frame for an operator scanning for a target as the ISS approaches it. This release adds a toggle next to the existing Now / +90 min controls.
+
+Tap **ISS↑** and the map rotates so the ISS's current direction-of-travel is at the top of the screen. The bearing updates every second so the rotation stays accurate as ISS arcs around the planet (heading drifts ~1°/min). Tap **N↑** to return to the standard north-up view.
+
+The preference persists to localStorage, so once Chris flips it on it stays on across reloads. Default is N↑ — operators new to the page see the conventional view first.
+
+### How it's wired
+
+- `greatCircleBearingDeg(lat1, lon1, lat2, lon2)` — standard spherical formula. Sample the polynomial fit at `now` and `now + 30s`, compute the great-circle bearing between the two positions. ISS travels great circles, so the right formula avoids antimeridian + polar weirdness that flat-Earth `atan2(Δlat, Δlon)` would introduce.
+- The 1Hz live-marker tick now also calls `applyBearing(false)` when ISS-up is on. No animation on the per-tick update — the per-second rotation is sub-degree and would jitter visibly.
+- User-initiated toggle uses `map.easeTo({ bearing })` for a smooth 600ms rotation so the operator sees it as intentional, not a glitch.
+
+### Verified
+
+- 7 new tests on `greatCircleBearingDeg`: cardinal directions, range invariants (0..360, finite), antimeridian + near-pole, realistic ISS-pair sample.
+- 227/227 frontend tests pass.
+
+### Added
+
+- `ISS↑` / `N↑` toggle in the map controls (top-right, below the existing time toggle).
+- `greatCircleBearingDeg` exported helper in `map.ts`.
+- `BEARING_PREF_KEY` localStorage entry to persist operator preference.
+
+### Changed
+
+- The map's 1Hz live tick now calls `applyBearing` when ISS-up is on so the rotation tracks the live ISS heading.
+
 ## [1.2.0.2] - 2026-05-11
 
 ### Score breakdown panel now stays open across the 1Hz tick.
