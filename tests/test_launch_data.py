@@ -47,7 +47,7 @@ def cache_path(tmp_path: Path) -> Path:
 
 
 def test_parse_response_extracts_all_four_results(fixture_payload: dict) -> None:
-    launches = parse_response(fixture_payload)
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     assert len(launches) == 4
     assert {la.id for la in launches} == {
         "f9-starlink-2026-05-test-1",
@@ -58,7 +58,7 @@ def test_parse_response_extracts_all_four_results(fixture_payload: dict) -> None
 
 
 def test_parse_response_falcon9_fields(fixture_payload: dict) -> None:
-    launches = parse_response(fixture_payload)
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     falcon = next(la for la in launches if la.id == "f9-starlink-2026-05-test-1")
     assert falcon.name == "Falcon 9 Block 5 | Starlink Group 6-99"
     assert falcon.t0 == datetime(2026, 5, 12, 3, 42, 0, tzinfo=UTC)
@@ -71,7 +71,7 @@ def test_parse_response_falcon9_fields(fixture_payload: dict) -> None:
 
 
 def test_parse_response_wide_window_computes_half_width(fixture_payload: dict) -> None:
-    launches = parse_response(fixture_payload)
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     wide = next(la for la in launches if la.id == "f9-cap-vandy-2026-test-4")
     # window_start=21:00, window_end=23:00 → 2h total → ±1h half = 3600s
     assert wide.net_window_seconds == 3600
@@ -112,7 +112,7 @@ def test_parse_response_results_not_list_returns_empty() -> None:
 
 
 def test_filter_drops_tbd_status(fixture_payload: dict) -> None:
-    launches = parse_response(fixture_payload)
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     filtered = filter_launches(launches)
     ids = {la.id for la in filtered}
     assert "vulcan-tbd-2026-test-3" not in ids  # TBD status
@@ -121,16 +121,18 @@ def test_filter_drops_tbd_status(fixture_payload: dict) -> None:
 
 
 def test_filter_drops_wide_net_window(fixture_payload: dict) -> None:
-    launches = parse_response(fixture_payload)
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     filtered = filter_launches(launches)
     ids = {la.id for la in filtered}
     # Vandy fixture has a 1-hour half-window = 3600s > NET_WINDOW_MAX_SECONDS
     assert "f9-cap-vandy-2026-test-4" not in ids
-    assert NET_WINDOW_MAX_SECONDS == 1800  # codify the threshold
+    # Threshold tightened 2026-05-10 (review): NET cap must align with the
+    # find_passes window so a NET-uncertain launch can't fall outside it.
+    assert NET_WINDOW_MAX_SECONDS == 300
 
 
 def test_filter_keeps_clean_falcon9(fixture_payload: dict) -> None:
-    launches = parse_response(fixture_payload)
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     filtered = filter_launches(launches)
     assert len(filtered) == 1
     assert filtered[0].id == "f9-starlink-2026-05-test-1"
@@ -330,3 +332,113 @@ def test_fetch_result_carries_schema_hash_for_status_json(
     # Same shape → same hash across calls.
     result2 = fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
     assert result2.schema_hash == result.schema_hash
+
+
+# -------- Sanity rejections (review 2026-05-10) -----------------------------
+
+
+def test_parse_response_rejects_nan_pad_coords() -> None:
+    """float('NaN') parses cleanly but breaks json.dumps + great-circle math.
+    Must skip the row + log a warning, not surface a broken Launch."""
+    payload = {
+        "results": [{
+            "id": "nan-coords",
+            "name": "Bad",
+            "net": "2099-01-01T00:00:00Z",  # far future so past-filter doesn't fire
+            "window_start": "2099-01-01T00:00:00Z",
+            "window_end": "2099-01-01T00:00:00Z",
+            "status": {"abbrev": "Go"},
+            "rocket": {"configuration": {"name": "X", "full_name": "X"}},
+            "pad": {"latitude": "NaN", "longitude": "0", "location": {"name": "Test"}},
+        }]
+    }
+    assert parse_response(payload) == []
+
+
+def test_parse_response_rejects_infinity_pad_coords() -> None:
+    payload = {
+        "results": [{
+            "id": "inf-coords",
+            "name": "Bad",
+            "net": "2099-01-01T00:00:00Z",
+            "window_start": "2099-01-01T00:00:00Z",
+            "window_end": "2099-01-01T00:00:00Z",
+            "status": {"abbrev": "Go"},
+            "rocket": {"configuration": {"name": "X", "full_name": "X"}},
+            "pad": {"latitude": "Infinity", "longitude": "-Infinity", "location": {"name": "Test"}},
+        }]
+    }
+    assert parse_response(payload) == []
+
+
+def test_parse_response_rejects_out_of_range_coords() -> None:
+    """abs(lat) > 90 or abs(lon) > 180 is geographically invalid."""
+    payload = {
+        "results": [{
+            "id": "ooor",
+            "name": "Bad",
+            "net": "2099-01-01T00:00:00Z",
+            "window_start": "2099-01-01T00:00:00Z",
+            "window_end": "2099-01-01T00:00:00Z",
+            "status": {"abbrev": "Go"},
+            "rocket": {"configuration": {"name": "X", "full_name": "X"}},
+            "pad": {"latitude": "100", "longitude": "0", "location": {"name": "Test"}},
+        }]
+    }
+    assert parse_response(payload) == []
+
+
+def test_parse_response_rejects_t0_in_past() -> None:
+    """LL2 occasionally returns completed launches in the upcoming feed.
+    Cache-fallback after weeks of LL2 downtime would otherwise re-publish
+    them as upcoming. parse_response with now=N filters past-t0 rows."""
+    n = datetime(2026, 5, 12, 12, 0, 0, tzinfo=UTC)
+    payload = {
+        "results": [{
+            "id": "past-launch",
+            "name": "Yesterday",
+            "net": "2026-05-11T03:42:00Z",  # 1 day before now
+            "window_start": "2026-05-11T03:42:00Z",
+            "window_end": "2026-05-11T03:42:00Z",
+            "status": {"abbrev": "Go"},
+            "rocket": {"configuration": {"name": "X", "full_name": "X"}},
+            "pad": {"latitude": "28.6", "longitude": "-80.6", "location": {"name": "Test"}},
+        }]
+    }
+    assert parse_response(payload, now=n) == []
+
+
+def test_parse_response_keeps_t0_in_future(fixture_payload: dict) -> None:
+    """Sanity check: future-t0 launches still parse when now is in the past."""
+    n = datetime(2025, 1, 1, tzinfo=UTC)  # well before fixture's 2026 launches
+    launches = parse_response(fixture_payload, now=n)
+    assert len(launches) == 4
+
+
+def test_fetch_from_stale_cache_drops_completed_launches(
+    cache_path: Path, fixture_text: str
+) -> None:
+    """Cache-fallback after LL2 has been down for weeks: re-filter against
+    the current wall clock so completed launches don't surface as upcoming."""
+    cache_path.write_text(fixture_text)
+    # Pre-set old mtime so TTL is stale
+    import os
+    old = (datetime.now(tz=UTC) - timedelta(hours=2)).timestamp()
+    os.utime(cache_path, (old, old))
+    # "now" is in 2030 — well past all fixture launches (2026).
+    n = datetime(2030, 1, 1, tzinfo=UTC)
+    with patch(
+        "generator.launch_data.requests.get",
+        side_effect=requests.ConnectionError("net down"),
+    ):
+        result = fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
+    # All 4 fixture launches are pre-2030 → past → filtered out
+    assert result.launches == []
+
+
+def test_net_window_max_aligns_with_pass_window() -> None:
+    """The NET-window cap must NEVER exceed PASS_WINDOW_SECONDS — if NET
+    uncertainty is wider than the find_passes window, the searched window
+    can miss the real T-0 entirely. Locked by adversarial review 2026-05-10."""
+    from generator.launch_data import NET_WINDOW_MAX_SECONDS, PASS_WINDOW_SECONDS
+    assert NET_WINDOW_MAX_SECONDS <= PASS_WINDOW_SECONDS

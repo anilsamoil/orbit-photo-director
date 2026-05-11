@@ -824,3 +824,114 @@ def test_reserve_launch_slot_picks_soonest_when_multiple_missing() -> None:
     # 'near' wins on time even though 'far' has higher score.
     assert "launch:near" in ids
     assert "launch:far" not in ids
+
+
+# --------------------------------------------------------------------------
+# ARCH-4 extension: Queue (next_90) reserved slot — review 2026-05-10
+# --------------------------------------------------------------------------
+
+
+def test_reserve_launch_slot_in_queue_inserts_when_launch_outside_topn() -> None:
+    """A qualifying launch within the next 90 min that doesn't make it into
+    the score-sorted top-N still gets inserted (displacing the lowest-scoring
+    ground entry)."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    next_90 = [
+        {
+            "target_id": f"ground-{i}",
+            "closest_approach": (now + timedelta(minutes=10 + i * 5)).isoformat().replace("+00:00", "Z"),
+            "score": 80.0 - i * 0.1,
+        }
+        for i in range(5)  # DEFAULT_TOP_QUEUE assumed >= 5
+    ]
+    launch = {
+        "target_id": "launch:f9-imminent",
+        "closest_approach": (now + timedelta(minutes=45)).isoformat().replace("+00:00", "Z"),
+        "score": 30.0,
+        "launch": {"name": "F9 Imminent", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue(next_90, [launch], now, queue_horizon_minutes=90)
+    ids = [p["target_id"] for p in result]
+    assert "launch:f9-imminent" in ids
+
+
+def test_reserve_launch_slot_in_queue_excludes_launches_outside_window() -> None:
+    """Launches >=90min away belong to upcoming, not the queue."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    next_90: list = []
+    far_launch = {
+        "target_id": "launch:far",
+        "closest_approach": (now + timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
+        "score": 90.0,
+        "launch": {"name": "Far", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue(next_90, [far_launch], now, queue_horizon_minutes=90)
+    assert result == []
+
+
+def test_reserve_launch_slot_in_queue_excludes_past_launches() -> None:
+    """Launches with closest_approach in the past (clock skew, scrubbed-but-cached)
+    must not surface in the queue."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    past_launch = {
+        "target_id": "launch:past",
+        "closest_approach": (now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z"),
+        "score": 90.0,
+        "launch": {"name": "Past", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue([], [past_launch], now, queue_horizon_minutes=90)
+    assert result == []
+
+
+def test_reserve_launch_slot_in_queue_picks_soonest() -> None:
+    """When multiple launches qualify within the queue window, pick the
+    soonest by t_closest (operator's 'what's next' mental model)."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    near = {
+        "target_id": "launch:near",
+        "closest_approach": (now + timedelta(minutes=20)).isoformat().replace("+00:00", "Z"),
+        "score": 30.0,
+        "launch": {"name": "Near", "geometry": "overhead"},
+    }
+    later = {
+        "target_id": "launch:later",
+        "closest_approach": (now + timedelta(minutes=70)).isoformat().replace("+00:00", "Z"),
+        "score": 70.0,  # higher score
+        "launch": {"name": "Later", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue([], [near, later], now, queue_horizon_minutes=90)
+    ids = [p["target_id"] for p in result]
+    assert "launch:near" in ids
+    assert "launch:later" not in ids
+
+
+def test_reserve_launch_slot_in_queue_preserves_score_descending_order() -> None:
+    """After insertion, the list must be re-sorted by score descending —
+    the launch lands at its natural rank (testing-specialist finding)."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    next_90 = [
+        {"target_id": "ground-1", "closest_approach": (now + timedelta(minutes=10)).isoformat().replace("+00:00", "Z"), "score": 90.0},
+        {"target_id": "ground-2", "closest_approach": (now + timedelta(minutes=20)).isoformat().replace("+00:00", "Z"), "score": 70.0},
+        {"target_id": "ground-3", "closest_approach": (now + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"), "score": 60.0},
+        {"target_id": "ground-4", "closest_approach": (now + timedelta(minutes=40)).isoformat().replace("+00:00", "Z"), "score": 55.0},
+        {"target_id": "ground-5", "closest_approach": (now + timedelta(minutes=50)).isoformat().replace("+00:00", "Z"), "score": 50.0},
+    ]
+    launch = {
+        "target_id": "launch:mid",
+        "closest_approach": (now + timedelta(minutes=60)).isoformat().replace("+00:00", "Z"),
+        "score": 65.0,  # mid-rank score
+        "launch": {"name": "Mid", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue(next_90, [launch], now, queue_horizon_minutes=90)
+    scores = [p["score"] for p in result]
+    assert scores == sorted(scores, reverse=True)

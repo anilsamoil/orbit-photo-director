@@ -393,8 +393,9 @@ def _reserve_launch_slot(
     horizon_minutes: float,
 ) -> list[dict[str, Any]]:
     """ARCH-4 (eng review 2026-05-05): if a qualifying launch exists in the
-    upcoming time window AND it isn't already in the score-sorted top-N,
-    insert it (displacing the lowest-scoring ground entry).
+    upcoming time window (>=horizon_minutes from now, matching the upstream
+    upcoming filter) AND it isn't already in the score-sorted top-N, insert
+    it (displacing the lowest-scoring ground entry).
 
     'Qualifying' = pass_finding returned an opportunity (overhead geometry
     OK) AND the closest_approach is in the upcoming horizon window. Picking
@@ -406,22 +407,53 @@ def _reserve_launch_slot(
         if (datetime.fromisoformat(p["closest_approach"].replace("Z", "+00:00")) - now)
             >= timedelta(minutes=horizon_minutes)
     ]
+    return _insert_soonest_if_missing(upcoming, in_window, DEFAULT_TOP_UPCOMING)
+
+
+def _reserve_launch_slot_in_queue(
+    next_90: list[dict[str, Any]],
+    launch_pass_entries: list[dict[str, Any]],
+    now: datetime,
+    queue_horizon_minutes: float,
+) -> list[dict[str, Any]]:
+    """Queue (next-90-min) sibling of `_reserve_launch_slot` (added 2026-05-10
+    after /review caught that the Upcoming-only ARCH-4 left imminent
+    launches buried by score in the Queue view — exactly the highest-stakes
+    case the operator must NOT miss).
+
+    Predicate is the inverse: launches WITHIN the queue window (0 < t < 90min)
+    qualify, vs upcoming's "outside the queue window" rule. Same insert/displace
+    logic, same soonest-by-time tiebreaker.
+    """
+    in_window = [
+        p for p in launch_pass_entries
+        if timedelta(0) < (
+            datetime.fromisoformat(p["closest_approach"].replace("Z", "+00:00")) - now
+        ) < timedelta(minutes=queue_horizon_minutes)
+    ]
+    return _insert_soonest_if_missing(next_90, in_window, DEFAULT_TOP_QUEUE)
+
+
+def _insert_soonest_if_missing(
+    target_list: list[dict[str, Any]],
+    in_window: list[dict[str, Any]],
+    max_size: int,
+) -> list[dict[str, Any]]:
+    """Shared helper for both reserve-slot paths. Picks the soonest qualifying
+    entry, inserts if not already present, displaces the lowest-scoring entry
+    to keep `target_list` at `max_size`, returns score-sorted result."""
     if not in_window:
-        return upcoming
-    already = {(p["target_id"], p["closest_approach"]) for p in upcoming}
+        return target_list
+    already = {(p["target_id"], p["closest_approach"]) for p in target_list}
     missing = [p for p in in_window if (p["target_id"], p["closest_approach"]) not in already]
     if not missing:
-        return upcoming
-    # Pick the soonest (lowest closest_approach time) qualifying launch.
+        return target_list
     next_launch = min(missing, key=lambda p: p["closest_approach"])
-    if len(upcoming) >= DEFAULT_TOP_UPCOMING:
-        # Displace the lowest-scoring entry to keep the list at DEFAULT_TOP_UPCOMING.
-        upcoming = upcoming[:-1] + [next_launch]
+    if len(target_list) >= max_size:
+        target_list = target_list[:-1] + [next_launch]
     else:
-        upcoming = list(upcoming) + [next_launch]
-    # Re-sort by score so the launch lands at its natural rank position
-    # (frontend's score-sorted display stays consistent).
-    return sorted(upcoming, key=lambda p: p["score"], reverse=True)
+        target_list = list(target_list) + [next_launch]
+    return sorted(target_list, key=lambda p: p["score"], reverse=True)
 
 
 @contextmanager
@@ -590,6 +622,17 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         key=lambda p: p["score"],
         reverse=True,
     )[:DEFAULT_TOP_QUEUE]
+
+    # ARCH-4 extension (review 2026-05-10): same reserved-slot logic for the
+    # Queue. The original eng-review locked ARCH-4 to Upcoming only on the
+    # assumption that imminent launches would naturally outscore ground
+    # targets; adversarial review caught that a mid-day Falcon 9 with average
+    # cloud forecast (~50) routinely loses to 5 priority-5 ground passes
+    # (~80+). The Queue is the operator's PRIMARY action surface — burying a
+    # launch there is the worst-case product failure for V3.
+    next_90 = _reserve_launch_slot_in_queue(
+        next_90, launch_pass_entries, n, queue_horizon_minutes=90,
+    )
 
     top25 = top_n(all_passes, DEFAULT_TOP_MAP)
 

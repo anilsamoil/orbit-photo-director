@@ -273,6 +273,23 @@ mid-Pacific water targets get appropriate glint flags, but island
 targets in the band get over-flagged. Documented as V2 (real GSHHG
 mask).
 
+### sun_glint heuristic flags coastal launch sites as water
+**Priority:** P3
+
+V3.0 review (2026-05-10) caught: `cloud.py:138-162` `is_water` heuristic
+classifies Vandenberg SLC-4E (-120.6°W) as water → triggers
+sun_glint_risk evaluation that depresses the launch's score relative to
+inland sites like Baikonur. KSC LC-39A is in the "land" band so it's
+unaffected. Asymmetric scoring across launch sites. The reserved-slot
+logic (ARCH-4) masks the symptom by guaranteeing surfacing, but the
+displayed `obstruction_class` on the card is wrong for Vandenberg.
+
+Fix path: launch sites bypass `is_water` (they're pad coordinates, not
+surface targets — water/land is irrelevant for the launch geometry
+itself). One-line override in `_synthesize_launch_target` to pass a
+"skip water heuristic" flag, OR just give launch sites a known-correct
+land/water classification. Same root cause as the Hawaii flag.
+
 ### sun_subpoint missing Equation of Time
 **Priority:** P3
 

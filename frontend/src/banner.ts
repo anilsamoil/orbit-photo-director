@@ -113,6 +113,10 @@ export function bannerWithLaunchesOverlay(
 ): BannerState {
   if (typeof hoursStale !== 'number' || !Number.isFinite(hoursStale)) return base;
   if (hoursStale <= 24) return base;
+  // Don't overlay onto the loading state. A cold-start with a stale-launches
+  // signal would otherwise upgrade "Loading…" → "orange" and surface the
+  // overlay before any data has been fetched (review 2026-05-10).
+  if (base.level === 'loading') return base;
   const note = `🚀 launches stale ${formatStaleAge(hoursStale)}`;
   if (base.level === 'red') {
     return { level: 'red', text: `${base.text} · ${note}` };

@@ -8,11 +8,19 @@ the pass-finding pipeline can treat as a synthetic target with a time
 constraint (see /plan-eng-review 2026-05-05 for the architecture).
 
 Hardening locked from the /autoplan + /plan-eng-review cycles:
-- ETag conditional GET (TTL-based cache, then 304 fallthrough)
-- Cache fallback on net error AND on parse error (not just net)
+- TTL-based file cache; fall back to cache on network error AND parse error
 - Pinned schema fixture so a silent LL2 shape change fails tests loudly
 - `compute_schema_hash()` over sorted keys at depth 2 — catches added or
   removed top-level / per-result fields without false-positiving on order
+- Coordinate sanity: lat/lon must be finite + in valid bounds (rejects the
+  NaN / Inf / out-of-range cases an attacker-controlled feed could send)
+- Past-launch rejection at parse time: LL2 occasionally returns completed
+  launches in the upcoming feed; skip them so cache-fallback after weeks
+  of LL2 downtime doesn't surface historical entries
+
+Future polish (not yet wired): ETag conditional GET (304 fallthrough). LL2
+supports If-None-Match. Currently the file-TTL gate covers the steady-state
+case; ETag would eliminate the 1 fresh fetch/hour against the rate budget.
 
 Note: per ARCH-1 in the eng review, launches health (last_successful_fetch,
 count_upcoming, schema_hash) is published via fields on the existing
@@ -25,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,16 +49,18 @@ LL2_FETCH_TIMEOUT_SECONDS = 15
 # LL2 status abbrev field is stable across the 2.2.0 schema.
 LL2_GO_STATUS_ABBREVS = frozenset({"Go", "Confirmed"})
 
-# A launch with a NET window wider than this is "TBD next week" territory, not
-# something we can confidently predict ISS overhead for. The pass-finding
-# window is t0 ± PASS_WINDOW_SECONDS, so a launch that could happen anywhere
-# in a 2-hour window doesn't deserve to displace a real ground target.
-NET_WINDOW_MAX_SECONDS = 1800  # 30 min half-window (1 h total)
-
 # How wide a window around t0 to ask find_passes about. The launch can slip
 # anywhere within (window_start, window_end); the ISS overhead window is
 # narrower. ±5 min covers Falcon-class launches that announce a tight T-0.
 PASS_WINDOW_SECONDS = 300
+
+# A launch with a NET window wider than this is "TBD next week" territory, not
+# something we can confidently predict ISS overhead for. Must be <=
+# PASS_WINDOW_SECONDS — if NET uncertainty exceeds the find_passes window,
+# the geometry is meaningless (the real T-0 could fall outside the searched
+# window). Adversarial review 2026-05-10 caught the original 1800s threshold
+# allowing 30-min-uncertain launches to publish bogus pass entries.
+NET_WINDOW_MAX_SECONDS = PASS_WINDOW_SECONDS
 
 log = logging.getLogger(__name__)
 
@@ -84,15 +95,28 @@ def _parse_iso8601_z(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
-def _parse_one_result(result: dict[str, Any]) -> Launch | None:
+def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> Launch | None:
     """Pull a single LL2 result into a Launch. Return None if any required
-    field is missing — silently skipping is the right call for one bad row in
-    a large response (vs failing the whole tick).
+    field is missing OR if the row would produce invalid geometry — silently
+    skipping is the right call for one bad row in a large response (vs
+    failing the whole tick).
 
     Required fields: id, name, net (or window_start), window_start/end,
     status.abbrev, rocket.configuration.{name|full_name|family},
     pad.location.name, pad.{latitude,longitude}.
+
+    Sanity rejections (added 2026-05-10 from adversarial + security review):
+    - lat/lon must be finite + within geographic bounds. float("NaN") /
+      float("Infinity") parse cleanly but break json.dumps downstream
+      (status.json publication would fail) and silently corrupt great-circle
+      distance comparisons (NaN < anything is False, so the launch would be
+      filtered out with no signal that LL2 sent garbage).
+    - t0 must be in the future. LL2 occasionally surfaces completed launches
+      in the upcoming feed; if our cache is served back after weeks of LL2
+      downtime, those launches would otherwise be reported as "upcoming"
+      with closest_approach in the past.
     """
+    n = now or datetime.now(tz=UTC)
     try:
         launch_id = result["id"]
         name = result["name"]
@@ -120,6 +144,18 @@ def _parse_one_result(result: dict[str, Any]) -> Launch | None:
         site_lon = float(pad["longitude"])
     except (KeyError, TypeError, ValueError) as exc:
         log.debug("LL2 result skipped (parse failure): %s", exc)
+        return None
+
+    if not (math.isfinite(site_lat) and math.isfinite(site_lon)):
+        log.warning("LL2 result skipped (non-finite coords): id=%s lat=%s lon=%s",
+                    launch_id, site_lat, site_lon)
+        return None
+    if abs(site_lat) > 90 or abs(site_lon) > 180:
+        log.warning("LL2 result skipped (out-of-range coords): id=%s lat=%s lon=%s",
+                    launch_id, site_lat, site_lon)
+        return None
+    if t0 <= n:
+        log.debug("LL2 result skipped (t0 in past): id=%s t0=%s", launch_id, t0.isoformat())
         return None
 
     return Launch(
@@ -150,10 +186,16 @@ def filter_launches(launches: list[Launch]) -> list[Launch]:
     return out
 
 
-def parse_response(payload: dict[str, Any]) -> list[Launch]:
-    """Parse a full LL2 response into Launch objects. Skips malformed rows;
-    does NOT apply status / NET filters (those run separately so callers can
-    audit the raw count)."""
+def parse_response(payload: dict[str, Any], now: datetime | None = None) -> list[Launch]:
+    """Parse a full LL2 response into Launch objects. Skips malformed rows
+    AND past-t0 rows; does NOT apply status / NET filters (those run
+    separately so callers can audit the raw count).
+
+    `now` parameter threaded through so the cache-fallback path can re-filter
+    a stale cached response against the current wall clock — without it, a
+    cache served after LL2 has been down for days would surface launches
+    that have already happened.
+    """
     results = payload.get("results", [])
     if not isinstance(results, list):
         log.warning("LL2 response 'results' is not a list (type=%s)", type(results).__name__)
@@ -162,7 +204,7 @@ def parse_response(payload: dict[str, Any]) -> list[Launch]:
     for r in results:
         if not isinstance(r, dict):
             continue
-        parsed = _parse_one_result(r)
+        parsed = _parse_one_result(r, now=now)
         if parsed is not None:
             out.append(parsed)
     return out
@@ -248,7 +290,10 @@ def fetch_upcoming_launches(
         try:
             text = cache_path.read_text()
             payload = json.loads(text)
-            launches = parse_response(payload)
+            # Re-filter against the CURRENT wall clock — a cache served after
+            # weeks of LL2 downtime would otherwise surface completed launches
+            # as upcoming. parse_response with now=n drops past-t0 rows.
+            launches = parse_response(payload, now=n)
             schema_hash = compute_schema_hash(payload)
             mtime = datetime.fromtimestamp(cache_path.stat().st_mtime, tz=UTC)
             log.info(
@@ -285,7 +330,7 @@ def fetch_upcoming_launches(
         # a JSON shape we can't parse, fall back to cache (matches the
         # fetch_tle pattern; never overwrite a known-good cache with garbage).
         payload = json.loads(text)
-        launches = parse_response(payload)
+        launches = parse_response(payload, now=n)
         schema_hash = compute_schema_hash(payload)
         cache_path.write_text(text)
         log.info(

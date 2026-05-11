@@ -164,6 +164,16 @@ describe('bannerWithLaunchesOverlay', () => {
     expect(r.text).toContain('🚀 launches stale 4d');
   });
 
+  it('does not overlay onto the loading state (cold-start guard)', () => {
+    // Review 2026-05-10: cold start with stale launches signal would otherwise
+    // upgrade "Loading…" to orange and surface the overlay before any data
+    // has been fetched, hiding the loading indicator.
+    const loadingBase = { level: 'loading' as const, text: 'Loading…' };
+    const r = bannerWithLaunchesOverlay(loadingBase, 48);
+    expect(r.level).toBe('loading');
+    expect(r.text).toBe('Loading…');
+  });
+
   it('composes correctly with bannerWithTleOverlay (TLE drift + launches stale together)', () => {
     // Scenario: LOS for hours, TLE 60h old, launches 30h stale.
     // The user should see all three signals in priority order.
