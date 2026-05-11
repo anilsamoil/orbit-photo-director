@@ -612,3 +612,326 @@ def test_run_tick_raises_when_tle_age_exceeds_hard_fail(
     )
     with pytest.raises(RuntimeError, match="hard-fail threshold"):
         run_tick(settings_in_tmp, now=now)
+
+
+# --------------------------------------------------------------------------
+# V3.0 launches integration (Lane C)
+# Tests that run_tick correctly threads launch passes + status.json fields.
+# --------------------------------------------------------------------------
+
+
+def _seed_launches_cache(
+    settings: Settings, fixture_path: Path, mtime_age_seconds: float = 0.0
+) -> Path:
+    """Pre-seed the LL2 cache so run_tick doesn't hit the network."""
+    settings.cache_dir.mkdir(parents=True, exist_ok=True)
+    cache = settings.cache_dir / "launches.json"
+    cache.write_text(fixture_path.read_text())
+    if mtime_age_seconds:
+        import os
+        ts = time.time() - mtime_age_seconds
+        os.utime(cache, (ts, ts))
+    return cache
+
+
+def test_run_tick_status_json_includes_launches_fields(
+    settings_in_tmp: Settings, cached_tle: Path
+) -> None:
+    """ARCH-1: launches health folds into status.json."""
+    fixture = Path(__file__).parent / "fixtures" / "ll2-response-2026-05.json"
+    _seed_launches_cache(settings_in_tmp, fixture)
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    run_tick(settings_in_tmp, now=now)
+
+    status = json.loads(
+        (settings_in_tmp.out_dir / "v" / "20241017T120000Z" / "status.json").read_text()
+    )
+    assert "launches_last_successful_fetch" in status
+    assert "launches_count_upcoming" in status
+    assert "launches_schema_hash" in status
+    assert "launches_count_pass_opportunities" in status
+    # Fixture has 4 launches; 1 passes the actionable filter (Falcon 9 KSC).
+    assert status["launches_count_upcoming"] == 1
+    assert status["launches_schema_hash"] is not None
+    assert len(status["launches_schema_hash"]) == 16
+
+
+def test_run_tick_status_reflects_no_cache_when_ll2_unavailable(
+    settings_in_tmp: Settings, cached_tle: Path
+) -> None:
+    """When LL2 is unreachable AND no cache exists, status fields are null/0
+    but tick still publishes."""
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    # No launches cache + mock the network to fail.
+    import requests
+    with patch(
+        "generator.launch_data.requests.get",
+        side_effect=requests.ConnectionError("net down"),
+    ):
+        run_tick(settings_in_tmp, now=now)
+
+    status = json.loads(
+        (settings_in_tmp.out_dir / "v" / "20241017T120000Z" / "status.json").read_text()
+    )
+    assert status["launches_last_successful_fetch"] is None
+    assert status["launches_count_upcoming"] == 0
+    assert status["launches_schema_hash"] is None
+
+
+def test_run_tick_emits_launch_pass_entries_with_launch_field(
+    settings_in_tmp: Settings, cached_tle: Path
+) -> None:
+    """Launch passes get a `launch` dict in their PassEntry — frontend
+    renders the 🚀 LAUNCH tag from this presence.
+
+    The fixture's Falcon 9 launches at 2026-05-12T03:42Z from KSC. The
+    cached TLE is from 2024-10. SGP4 propagation 1.5y forward is wildly
+    inaccurate but the test only cares about the SHAPE — does run_tick
+    produce a launch entry at all? It will iff the propagated ISS happens
+    to fly within max_distance_km of KSC during the ±5min window. Since
+    the answer is timing-dependent and may be 0, this test verifies the
+    shape only when entries exist; emptiness is also valid.
+    """
+    fixture = Path(__file__).parent / "fixtures" / "ll2-response-2026-05.json"
+    _seed_launches_cache(settings_in_tmp, fixture)
+    # Use a tick time near the Falcon 9 launch so the launch is "upcoming."
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    # Past TLE_HARD_FAIL_HOURS for the Oct-2024 sample TLE → use a fresher one.
+    fresh_tle = cached_tle
+    fresh_tle.write_text(
+        "ISS (ZARYA)\n"
+        "1 25544U 98067A   26131.50000000  .00031560  00000-0  56270-3 0  9990\n"
+        "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.49814196479596\n"
+    )
+    run_tick(settings_in_tmp, now=now)
+
+    passes = json.loads(
+        (settings_in_tmp.out_dir / "v" / "20260512T010000Z" / "passes.json").read_text()
+    )
+    launch_entries = [p for p in passes if "launch" in p]
+    # Whether SGP4 places ISS over KSC at 03:42 is geometry-dependent on the
+    # synthesized 2026 TLE; assert SHAPE if any are emitted, don't require count.
+    for p in launch_entries:
+        assert p["launch"]["geometry"] == "overhead"
+        assert p["launch"]["name"]
+        assert p["launch"]["rocket_type"]
+        assert p["launch"]["site_name"]
+        assert "net_window_seconds" in p["launch"]
+        assert "t0" in p["launch"]
+        assert p["target_id"].startswith("launch:")
+
+
+def test_reserve_launch_slot_inserts_when_launch_outside_topn() -> None:
+    """ARCH-4 unit test: a qualifying launch entry that wouldn't make it
+    into the score-sorted top-N still gets inserted (displacing the
+    lowest-scoring ground entry)."""
+    from generator.main import _reserve_launch_slot
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    # 25 high-score ground passes already filling upcoming.
+    upcoming = [
+        {
+            "target_id": f"ground-{i}",
+            "closest_approach": (now + timedelta(hours=2 + i)).isoformat().replace("+00:00", "Z"),
+            "score": 80.0 - i * 0.1,
+        }
+        for i in range(25)
+    ]
+    # One mediocre-score launch in the upcoming window.
+    launch = {
+        "target_id": "launch:f9-test",
+        "closest_approach": (now + timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
+        "score": 30.0,  # below all 25 ground passes
+        "launch": {"name": "F9 Test", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot(upcoming, [launch], now, horizon_minutes=90)
+    ids = [p["target_id"] for p in result]
+    assert "launch:f9-test" in ids
+    assert len(result) == 25  # length preserved (one ground entry displaced)
+
+
+def test_reserve_launch_slot_no_op_when_launch_already_in_topn() -> None:
+    """If the launch already made it into upcoming on score, don't
+    duplicate or re-insert."""
+    from generator.main import _reserve_launch_slot
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    launch_entry = {
+        "target_id": "launch:f9-test",
+        "closest_approach": (now + timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
+        "score": 95.0,
+        "launch": {"name": "F9 Test", "geometry": "overhead"},
+    }
+    upcoming = [launch_entry] + [
+        {
+            "target_id": f"ground-{i}",
+            "closest_approach": (now + timedelta(hours=4 + i)).isoformat().replace("+00:00", "Z"),
+            "score": 80.0 - i * 0.1,
+        }
+        for i in range(24)
+    ]
+    result = _reserve_launch_slot(upcoming, [launch_entry], now, horizon_minutes=90)
+    # No duplicate, length unchanged.
+    assert sum(1 for p in result if p["target_id"] == "launch:f9-test") == 1
+    assert len(result) == 25
+
+
+def test_reserve_launch_slot_no_op_when_no_launches_in_window() -> None:
+    """If a launch's closest_approach is INSIDE the horizon (i.e. <90min)
+    or there are no launch entries at all, upcoming is unchanged."""
+    from generator.main import _reserve_launch_slot
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    upcoming = [
+        {
+            "target_id": "ground-1",
+            "closest_approach": (now + timedelta(hours=4)).isoformat().replace("+00:00", "Z"),
+            "score": 80.0,
+        }
+    ]
+    # No launches at all
+    assert _reserve_launch_slot(upcoming, [], now, horizon_minutes=90) == upcoming
+    # Launch in the immediate window (< 90min) — handled by next_90, not upcoming
+    too_soon = {
+        "target_id": "launch:soon",
+        "closest_approach": (now + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"),
+        "score": 95.0,
+    }
+    assert _reserve_launch_slot(upcoming, [too_soon], now, horizon_minutes=90) == upcoming
+
+
+def test_reserve_launch_slot_picks_soonest_when_multiple_missing() -> None:
+    """Two qualifying launches, neither in upcoming → pick the one with
+    the soonest closest_approach (operator's mental model: 'what's next')."""
+    from generator.main import _reserve_launch_slot
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    upcoming: list = []
+    near = {
+        "target_id": "launch:near",
+        "closest_approach": (now + timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
+        "score": 30.0,
+        "launch": {"name": "Near", "geometry": "overhead"},
+    }
+    far = {
+        "target_id": "launch:far",
+        "closest_approach": (now + timedelta(hours=20)).isoformat().replace("+00:00", "Z"),
+        "score": 70.0,  # higher score
+        "launch": {"name": "Far", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot(upcoming, [near, far], now, horizon_minutes=90)
+    ids = [p["target_id"] for p in result]
+    # 'near' wins on time even though 'far' has higher score.
+    assert "launch:near" in ids
+    assert "launch:far" not in ids
+
+
+# --------------------------------------------------------------------------
+# ARCH-4 extension: Queue (next_90) reserved slot — review 2026-05-10
+# --------------------------------------------------------------------------
+
+
+def test_reserve_launch_slot_in_queue_inserts_when_launch_outside_topn() -> None:
+    """A qualifying launch within the next 90 min that doesn't make it into
+    the score-sorted top-N still gets inserted (displacing the lowest-scoring
+    ground entry)."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    next_90 = [
+        {
+            "target_id": f"ground-{i}",
+            "closest_approach": (now + timedelta(minutes=10 + i * 5)).isoformat().replace("+00:00", "Z"),
+            "score": 80.0 - i * 0.1,
+        }
+        for i in range(5)  # DEFAULT_TOP_QUEUE assumed >= 5
+    ]
+    launch = {
+        "target_id": "launch:f9-imminent",
+        "closest_approach": (now + timedelta(minutes=45)).isoformat().replace("+00:00", "Z"),
+        "score": 30.0,
+        "launch": {"name": "F9 Imminent", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue(next_90, [launch], now, queue_horizon_minutes=90)
+    ids = [p["target_id"] for p in result]
+    assert "launch:f9-imminent" in ids
+
+
+def test_reserve_launch_slot_in_queue_excludes_launches_outside_window() -> None:
+    """Launches >=90min away belong to upcoming, not the queue."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    next_90: list = []
+    far_launch = {
+        "target_id": "launch:far",
+        "closest_approach": (now + timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
+        "score": 90.0,
+        "launch": {"name": "Far", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue(next_90, [far_launch], now, queue_horizon_minutes=90)
+    assert result == []
+
+
+def test_reserve_launch_slot_in_queue_excludes_past_launches() -> None:
+    """Launches with closest_approach in the past (clock skew, scrubbed-but-cached)
+    must not surface in the queue."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    past_launch = {
+        "target_id": "launch:past",
+        "closest_approach": (now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z"),
+        "score": 90.0,
+        "launch": {"name": "Past", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue([], [past_launch], now, queue_horizon_minutes=90)
+    assert result == []
+
+
+def test_reserve_launch_slot_in_queue_picks_soonest() -> None:
+    """When multiple launches qualify within the queue window, pick the
+    soonest by t_closest (operator's 'what's next' mental model)."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    near = {
+        "target_id": "launch:near",
+        "closest_approach": (now + timedelta(minutes=20)).isoformat().replace("+00:00", "Z"),
+        "score": 30.0,
+        "launch": {"name": "Near", "geometry": "overhead"},
+    }
+    later = {
+        "target_id": "launch:later",
+        "closest_approach": (now + timedelta(minutes=70)).isoformat().replace("+00:00", "Z"),
+        "score": 70.0,  # higher score
+        "launch": {"name": "Later", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue([], [near, later], now, queue_horizon_minutes=90)
+    ids = [p["target_id"] for p in result]
+    assert "launch:near" in ids
+    assert "launch:later" not in ids
+
+
+def test_reserve_launch_slot_in_queue_preserves_score_descending_order() -> None:
+    """After insertion, the list must be re-sorted by score descending —
+    the launch lands at its natural rank (testing-specialist finding)."""
+    from generator.main import _reserve_launch_slot_in_queue
+
+    now = datetime(2026, 5, 12, 1, 0, 0, tzinfo=UTC)
+    next_90 = [
+        {"target_id": "ground-1", "closest_approach": (now + timedelta(minutes=10)).isoformat().replace("+00:00", "Z"), "score": 90.0},
+        {"target_id": "ground-2", "closest_approach": (now + timedelta(minutes=20)).isoformat().replace("+00:00", "Z"), "score": 70.0},
+        {"target_id": "ground-3", "closest_approach": (now + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"), "score": 60.0},
+        {"target_id": "ground-4", "closest_approach": (now + timedelta(minutes=40)).isoformat().replace("+00:00", "Z"), "score": 55.0},
+        {"target_id": "ground-5", "closest_approach": (now + timedelta(minutes=50)).isoformat().replace("+00:00", "Z"), "score": 50.0},
+    ]
+    launch = {
+        "target_id": "launch:mid",
+        "closest_approach": (now + timedelta(minutes=60)).isoformat().replace("+00:00", "Z"),
+        "score": 65.0,  # mid-rank score
+        "launch": {"name": "Mid", "geometry": "overhead"},
+    }
+    result = _reserve_launch_slot_in_queue(next_90, [launch], now, queue_horizon_minutes=90)
+    scores = [p["score"] for p in result]
+    assert scores == sorted(scores, reverse=True)

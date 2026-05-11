@@ -66,6 +66,15 @@ export function renderCard(
 
   const meta = document.createElement('div');
   meta.className = 'card-meta';
+  // V3.0 launch-tag is leftmost when present — operator scans the meta
+  // row from left to right; "this is a rocket launch" is the most
+  // load-bearing thing they can know about a card. Rocket name + window
+  // confidence follow as adjacent tags so the visual cluster stays tight.
+  if (p.launch) {
+    meta.appendChild(makeTag('launch-overhead', '🚀 LAUNCH'));
+    meta.appendChild(makeTag('launch-rocket', p.launch.rocket_type));
+    meta.appendChild(makeTag('launch-window', formatLaunchWindow(p.launch.net_window_seconds)));
+  }
   meta.appendChild(makeTag(`regime-${p.pass_regime}`, p.pass_regime));
   meta.appendChild(makeTag(obstructionClass(p.obstruction_class), p.obstruction_class));
   meta.appendChild(makeTag('', `${formatUtcLabel(p.closest_approach)}`));
@@ -181,4 +190,21 @@ const NO_OBSERVATION_SOURCES = new Set([
 
 function isNoObservationSource(source: string): boolean {
   return NO_OBSERVATION_SOURCES.has(source);
+}
+
+/** Render the launch's NET (No Earlier Than) window half-width as a
+ *  human-readable confidence chip. 0s = "T-0 exact"; under 60s = seconds;
+ *  under 60min = minutes; otherwise hours. The "±" prefix is critical —
+ *  a "Window: 15 min" chip is ambiguous (is that the window length or
+ *  half-width?), but "Window: ±15 min" reads as "anywhere in [T-15, T+15]."
+ *  Source for the half-width is launch_data.py's net_window_seconds field
+ *  computed from (LL2.window_end - LL2.window_start) / 2. */
+export function formatLaunchWindow(netWindowSeconds: number): string {
+  if (netWindowSeconds <= 0) return 'T-0 exact';
+  if (netWindowSeconds < 60) return `Window: ±${netWindowSeconds}s`;
+  if (netWindowSeconds < 3600) {
+    return `Window: ±${Math.round(netWindowSeconds / 60)} min`;
+  }
+  const h = netWindowSeconds / 3600;
+  return `Window: ±${h.toFixed(h < 10 ? 1 : 0)}h`;
 }

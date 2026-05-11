@@ -5,6 +5,7 @@ import {
   bannerFromManifest,
   bannerLoading,
   bannerOffline,
+  bannerWithLaunchesOverlay,
   bannerWithTleOverlay,
 } from '../src/banner';
 
@@ -63,7 +64,7 @@ describe('bannerOffline (snapshot age escalation)', () => {
   it('green when snapshot is < 1h old', () => {
     const r = bannerOffline(15);
     expect(r.level).toBe('green');
-    expect(r.text).toContain('Offline');
+    expect(r.text).toContain('LOS');
     expect(r.text).toContain('15 min');
   });
 
@@ -83,7 +84,7 @@ describe('bannerOffline (snapshot age escalation)', () => {
   it('red beyond 12h', () => {
     expect(bannerOffline(720).level).toBe('red');
     expect(bannerOffline(1500).level).toBe('red');
-    expect(bannerOffline(1500).text).toContain('very stale');
+    expect(bannerOffline(1500).text).toContain('very old');
   });
 
   it('formats hours+minutes for >1h ages', () => {
@@ -117,5 +118,71 @@ describe('bannerWithTleOverlay', () => {
     expect(r.level).toBe('red');
     expect(r.text).toContain('STALE');
     expect(r.text).toContain('TLE 72h old');
+  });
+});
+
+describe('bannerWithLaunchesOverlay', () => {
+  const greenBase = { level: 'green' as const, text: 'Last updated 5 min ago' };
+  const orangeBase = { level: 'orange' as const, text: 'LOS · 5h ago — values may be drifting' };
+  const redBase = { level: 'red' as const, text: 'STALE — 4h ago' };
+
+  it('passes through when launches data is fresh (<=24h)', () => {
+    expect(bannerWithLaunchesOverlay(greenBase, 12).level).toBe('green');
+    expect(bannerWithLaunchesOverlay(greenBase, 24).level).toBe('green');
+    expect(bannerWithLaunchesOverlay(greenBase, 0).level).toBe('green');
+  });
+
+  it('passes through when hoursStale is undefined (no LL2 fetch ever, or older snapshot)', () => {
+    expect(bannerWithLaunchesOverlay(greenBase, undefined).level).toBe('green');
+    expect(bannerWithLaunchesOverlay(greenBase, NaN).level).toBe('green');
+    expect(bannerWithLaunchesOverlay(greenBase, undefined).text).toBe(greenBase.text);
+  });
+
+  it('bumps green to orange and appends note when launches >24h stale', () => {
+    const r = bannerWithLaunchesOverlay(greenBase, 30);
+    expect(r.level).toBe('orange');
+    expect(r.text).toContain('Last updated 5 min ago');
+    expect(r.text).toContain('🚀 launches stale 30h');
+  });
+
+  it('keeps orange as orange and appends note', () => {
+    const r = bannerWithLaunchesOverlay(orangeBase, 36);
+    expect(r.level).toBe('orange');
+    expect(r.text).toContain('LOS');
+    expect(r.text).toContain('🚀 launches stale 36h');
+  });
+
+  it('keeps red as red but still appends the note (no downgrade)', () => {
+    const r = bannerWithLaunchesOverlay(redBase, 36);
+    expect(r.level).toBe('red');
+    expect(r.text).toContain('STALE');
+    expect(r.text).toContain('🚀 launches stale 36h');
+  });
+
+  it('formats long staleness as days past 48h (operator scan-readability)', () => {
+    const r = bannerWithLaunchesOverlay(greenBase, 96);
+    expect(r.text).toContain('🚀 launches stale 4d');
+  });
+
+  it('does not overlay onto the loading state (cold-start guard)', () => {
+    // Review 2026-05-10: cold start with stale launches signal would otherwise
+    // upgrade "Loading…" to orange and surface the overlay before any data
+    // has been fetched, hiding the loading indicator.
+    const loadingBase = { level: 'loading' as const, text: 'Loading…' };
+    const r = bannerWithLaunchesOverlay(loadingBase, 48);
+    expect(r.level).toBe('loading');
+    expect(r.text).toBe('Loading…');
+  });
+
+  it('composes correctly with bannerWithTleOverlay (TLE drift + launches stale together)', () => {
+    // Scenario: LOS for hours, TLE 60h old, launches 30h stale.
+    // The user should see all three signals in priority order.
+    const composed = bannerWithLaunchesOverlay(
+      bannerWithTleOverlay(bannerOffline(300), 60),
+      30,
+    );
+    expect(composed.text).toContain('LOS');
+    expect(composed.text).toContain('TLE 60h old');
+    expect(composed.text).toContain('🚀 launches stale 30h');
   });
 });

@@ -2,6 +2,115 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.0.0] - 2026-05-11
+
+### **V3.0 ships rocket-launch photography. The ISS planner now surfaces overhead launches in the Queue.**
+
+When a Falcon 9, Soyuz, or any other rocket launches AND the ISS happens to be passing within ~800 km of the launch site at T-0 ±5 min, you'll see a 🚀 LAUNCH card in the Queue (or Upcoming for launches more than 90 min out). The card shows the rocket name, the NET-window confidence (`T-0 exact` or `Window: ±15 min`), and the same nadir-distance + WORF/Cupola tags every other pass card carries. Launches go through the same pass-finding + cloud-scoring pipeline as ground targets, so an overhead launch with clear skies scores the same way an overhead Tokyo pass does.
+
+The product reason: launch shots are visually iconic and inherently rare (3-10 per year geometrically qualify for ISS). They were the obvious next thing to surface after V2's offline-resilience work landed. Chris (operator) and the rest of the crew can plan a launch shot the same way they plan any other.
+
+### What changed for the user
+
+- **🚀 LAUNCH cards in Queue + Upcoming.** Orange tag, leftmost in the meta row. Adjacent chips show the rocket family and NET-window confidence.
+- **Reserved-slot guarantee** in both Queue (next 90 min) and Upcoming (next 24 h). If a launch qualifies geometrically and falls in the time window, it appears even when 5 priority-5 ground targets outscore it. The product would lose its purpose otherwise: a once-a-year overhead Falcon 9 buried under 5 Tokyo passes is the worst-case product failure.
+- **Stale-launches banner overlay.** When the LL2 (Launch Library 2) feed has been unreachable for >24 h, the topbar gets a `🚀 launches stale Nh` suffix on top of whatever banner is showing (LOS, TLE drift, etc.). Operator knows the launches feature is degraded without having to inspect anything.
+- **Banner copy: `Offline · X ago` → `LOS · X ago`.** Chris asked: LOS (Loss of Signal) is the operational term on ISS, reads more clearly at a glance during a real LOS window than the generic `Offline`.
+
+### How it's wired
+
+Each upcoming launch from LL2 gets treated as a synthetic target: launch site coords + priority=5 + the existing `find_passes` window of ±5 min around T-0. If pass geometry qualifies, the pass goes through the same `score_pass_for_target` pipeline as ground targets and gets tagged with a `launch` field on the resulting `PassEntry`. The frontend renders the 🚀 LAUNCH chip when `launch` is present; older v1.0/v1.1 snapshots without the field render normally.
+
+LL2 health (last_successful_fetch + count_upcoming + schema_hash) folds into the existing `status.json` artifact rather than a separate `launches-health.json`. One source of truth for "did the last tick succeed at fetching X." The schema_hash is a depth-2 sorted-keys fingerprint that catches added or removed top-level / per-result fields without false-positiving on value-only changes.
+
+### The numbers that matter
+
+Verified by running the full 480-test suite (270 generator + 210 frontend) on merged HEAD, and `scripts/verify-sw-upgrade.sh` against the live deploy.
+
+| Metric | v1.1.0.2 | v1.2.0.0 | Δ |
+|---|---|---|---|
+| Generator tests | 197 | 270 | +73 (V3 + LL2 hardening) |
+| Frontend tests | 190 | 210 | +20 (launch-card + banner overlay + queue-filter) |
+| Total tests | 387 | 480 | +93 |
+| New generator module | — | `launch_data.py` | +281 lines |
+| Status.json fields | 12 | 16 | +4 (launches_*) |
+| Frontend bundle (gzip, app chunk) | 18.70 kB | ~18.9 kB | +0.2 kB (1%) |
+| New banner overlay tier | — | `bannerWithLaunchesOverlay` | matches `bannerWithTleOverlay` precedent |
+
+The bundle growth is the launch-tag rendering + Status type extension + banner overlay factory. 1% gzip cost for a new feature with full backward compat for older snapshots is honest.
+
+### Adversarial review caught + fixed (in same PR)
+
+The /review pipeline ran four specialists (testing, maintainability, security, adversarial). Two MULTI-SPECIALIST-CONFIRMED findings + 5 high-confidence single-source findings auto-fixed before ship:
+
+- **NaN/Inf coordinate parsing.** `float("NaN")` parses cleanly but breaks `json.dumps` AND silently drops launches from filtering (NaN < N is always False). Fixed: `math.isfinite` + bounds check on lat/lon in `_parse_one_result`.
+- **NET window vs PASS window mismatch.** Original 1800s NET cap allowed launches with ±30 min uncertainty into the pipeline, but `find_passes` searches only ±5 min around T-0. A 30-min-uncertain launch's real T-0 could fall outside the searched window. Tightened `NET_WINDOW_MAX_SECONDS = PASS_WINDOW_SECONDS` so the cap can never exceed search reach.
+- **Past-t0 rejection.** LL2 occasionally surfaces completed launches in the upcoming feed; cache-fallback after weeks of LL2 downtime would re-publish them. Added past-t0 filter at parse time.
+- **Cache-fallback re-filter.** _from_cache now uses `now=n` to drop past-t0 rows on every cache read.
+- **bannerWithLaunchesOverlay loading-state guard.** Cold start with stale launches signal would have upgraded `Loading…` → orange and surfaced the overlay before any data fetched. Now passes loading state through unchanged.
+- **ARCH-4 extension to Queue.** Original eng-review locked reserved-slot to Upcoming; adversarial caught that imminent launches (the highest-stakes case) would still get buried by score in Queue. Added `_reserve_launch_slot_in_queue` + 5 tests.
+
+### V2-P0 SW upgrade verification piggybacks on this deploy
+
+The V3 deploy is the natural "v2 deploy" for the V2-P0 SW upgrade test recipe in TODOS. New artifacts ship with this PR:
+
+- `scripts/verify-sw-upgrade.sh` — 6-section / 15-check headless verifier. Validates against the live URL post-deploy: SW shape (skipWaiting yes, clientsClaim no), runtime cache strategies + names, PWA manifest reachability, registerSW.js auto-injection. Already validated against current live (15/15 PASS pre-V3 deploy).
+- `docs/SW_UPGRADE_VERIFY.md` — 6-section eyes-on-glass checklist for the things headless can't see (multi-tab controller race, snapshot survival across upgrade, tile cache survival, PWA install drift).
+
+### Verified
+
+- 270/270 generator tests pass on merged HEAD.
+- 210/210 frontend tests pass.
+- `bun run build` clean: dist/sw.js still has `skipWaiting()` ×1, zero `clientsClaim()`.
+- Live `map.astroanil.dev` (currently v1.1.0.2): `/qa` smoke against all 4 tabs, 0 console errors, queue-filter hotfix working as designed.
+- `scripts/verify-sw-upgrade.sh` against live: 15/15 PASS.
+
+### Known follow-ups (NOT in this PR)
+
+- V3.1 ASCENT geometry (rocket climbing through atmosphere): per-rocket profiles, terminator gate, slant-range cap, multi-point cloud sampling. Filed as V3-P2 in TODOS. Revisit after V3.0 has run for ~4 weeks against real launches.
+- V3-P3 `make ll2-diff` for schema-drift diagnosis when the alert fires.
+- V4 operator wishlist from Chris (filed as V4-P2): map zoom-in for terrain detail, rotate-to-ISS-track toggle, NOAA SWPC aurora indicator, pre-cache tiles for upcoming targets.
+- V4-P2 explainer copy + click-to-expand score breakdown ("I think I don't fully understand the queue vs upcoming and the scoring" — Chris).
+- V4-P3 stale-manifest hint when Queue is empty.
+- V2-P3 launch-site water heuristic override (Vandenberg-as-water artifact in `cloud.py:138`).
+
+### Itemized changes
+
+#### Added
+
+- `generator/launch_data.py`: LL2 fetcher + `Launch` dataclass + filters + `compute_schema_hash` + cache-fallback discipline matching `fetch_tle`. NaN/Inf coordinate guards. Past-t0 rejection.
+- `generator/main.py`: launch pipeline integration in `run_tick`. `_synthesize_launch_target` + `_reserve_launch_slot` + `_reserve_launch_slot_in_queue` + `_insert_soonest_if_missing` shared helper.
+- `tests/fixtures/ll2-response-2026-05.json`: pinned LL2 schema fixture (4 launches, exercises filter rules).
+- `tests/test_launch_data.py`: 30 tests covering parse, filter, schema-hash drift detection, cache-fallback, NaN/Inf rejection, past-t0 rejection, NET window invariant.
+- `tests/test_main.py`: 12 new integration tests covering the launch pipeline + status.json fields + reserved-slot logic for both Queue and Upcoming.
+- `frontend/src/types.ts`: `PassEntry.launch?` + 4 optional `Status` launches_* fields. Backward-compatible with v1.0/v1.1 snapshots.
+- `frontend/src/card.ts`: 🚀 LAUNCH + rocket name + window confidence chips. New `formatLaunchWindow` helper.
+- `frontend/src/banner.ts`: `bannerWithLaunchesOverlay` matching the `bannerWithTleOverlay` precedent. Pass-through on loading state.
+- `frontend/src/style.css`: `.tag.launch-overhead`, `.tag.launch-rocket`, `.tag.launch-window` (orange-on-dark to match the rocket-flame mental model).
+- `frontend/test/launch-card.test.ts`: 12 new tests (formatLaunchWindow + render + backward compat).
+- `frontend/test/banner.test.ts`: +7 launches-overlay tests including loading-state guard + three-way composition (offline + TLE + launches).
+- `scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md`: V2-P0 SW upgrade verification artifacts.
+
+#### Changed
+
+- Banner copy: `"Offline · X ago"` → `"LOS · X ago"` across 4 messages. Red-state copy `"data may be very stale"` → `"data may be very old"` to avoid the redundant "stale" reading.
+- Banner state machine: `bannerOffline`'s 4 levels (green / yellow / orange / red) now use LOS terminology throughout including doc-comments.
+- `frontend/src/main.ts:refresh()`: now fetches `status` alongside the other artifacts (Promise.all with .catch fallthrough so older manifests without status.json don't break the path). Threads `launchesStaleHours(status, now)` through all 4 `setBanner` sites.
+- `frontend/src/snapshot.ts`: status field now populated (was always null pre-V3).
+- `generator/main.py:run_tick`: `status_data` gains `launches_last_successful_fetch`, `launches_count_upcoming`, `launches_count_pass_opportunities`, `launches_schema_hash`.
+
+#### Fixed
+
+- `frontend/src/main.ts`: `renderQueue` and `renderUpcoming` filter past `closest_approach` entries at render time. Was shipped as v1.1.0.2 hotfix; included here for completeness of the v1.1 → v1.2 release notes.
+- `frontend/src/manifest.ts:fetchManifest`: dropped `?cb=${Date.now()}` query buster (silently defeated SW NetworkFirst manifest cache via Workbox's exact URL match). Was shipped as v1.1.0.1.
+- TODOS.md: 3 V3-related (ASCENT V3.1, ll2-diff, Lane H V2-P0 overlap note) + 5 V4-P2/P3 (Chris's WhatsApp feedback) + 1 V2-P3 (Vandenberg-as-water).
+
+#### For contributors
+
+- New `compute_schema_hash` module pattern: depth-2 sorted-keys fingerprint of an external API response. Reusable for any feed where you want to catch shape drift without false-positiving on value changes.
+- New `_insert_soonest_if_missing` shared helper: parameterizes the reserved-slot pattern across Queue and Upcoming filters. If V3.1 ASCENT lands, the same helper handles "reserve a slot for the next ASCENT" without needing a third specialized function.
+- `scripts/verify-sw-upgrade.sh` is repeatable for V4/V5 deploys — V2-P0 becomes "just a thing we always run" rather than a one-off recipe.
+
 ## [1.1.0.2] - 2026-05-10
 
 ### Hide already-happened passes from Queue + Upcoming

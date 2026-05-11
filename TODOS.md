@@ -57,6 +57,115 @@ write access on astroanil.dev.
 multi-tab races, kill-switch recovery, tile-cache budget, mock-stale-TLE
 banner escalation, snapshot corruption recovery.
 
+**Partial overlap (2026-05-05 /plan-eng-review):** the V2-P0 SW upgrade
+verification (`scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md`,
+shipping with V3.0) covers the SW upgrade lifecycle (~6 of the 15 items).
+Remaining: kill-switch recovery (blocks on Lane G), tile-cache budget,
+banner escalation, snapshot corruption.
+
+### V3-P2 — V3.1 ASCENT geometry (rocket climbing through atmosphere)
+After V3.0 (OVERHEAD-only) has run for 4+ weeks against real launches and
+the OVERHEAD pipeline is validated, V3.1 adds ASCENT geometry. Both
+/autoplan voices required these additions before approving ASCENT:
+
+1. Per-rocket ascent profile tables for top 10 rocket families (Falcon 9,
+   Falcon Heavy, Atlas V, Vulcan, Soyuz, Long March 5/7, SLS, New Glenn,
+   Ariane 6, Starship)
+2. Terminator geometry gate — only surface ASCENT when rocket is
+   sun-illuminated AND ISS is in Earth shadow or twilight
+3. Slant-range cap at ~1500 km (rocket subtends useful angular size)
+4. Ascent azimuth modeling — polar vs equatorial launches differ
+5. Confidence labels on cards: "candidate ascent" / "trajectory approximate"
+   / "low confidence" vs OVERHEAD's "confirmed"
+6. `|lat|>52°` filter relaxed for ASCENT (ISS has a horizon, can see
+   beyond subpoint latitude)
+7. Multi-point cloud sampling along ISS→rocket sight line
+
+V3.1 plan should be its own /office-hours + /autoplan cycle when V3.0 has
+shipped and run for a month. Restore point at design doc lines 251-262.
+
+### V3-P3 — `make ll2-diff` for LL2 schema-drift diagnosis
+When `status.launches_schema_hash` differs from the pinned fixture (LL2
+changed shape), the user sees a stale-launches banner but has to manually
+run jq against the live LL2 response to see what changed. Add a Makefile
+target that fetches current LL2, compares against
+`tests/fixtures/ll2-response-2026-05.json`, prints diff. ~15 min CC. Zero
+cost when it never fires (LL2 schema is stable for years at a time).
+
+## V4 — Operator feedback (Chris Williams, ISS, 2026-05-05)
+
+Chris set the calibration token, tried the live site at v1.1.0.1, called
+it "incredible" + sent four observations via WhatsApp. None block V3.0;
+they reshape what "polish" looks like once V3.0 is in flight. Source:
+WhatsApp screenshot 2026-05-05 17:00 (archive in `docs/MISSION_LOG.md`).
+
+### V4-P2 — Map zoom-in for terrain detail
+Chris uses Google Maps as a secondary reference in WORF to pick out
+mountains / shoreline shapes / man-made features that orient him to the
+target. The current map view caps at a relatively shallow zoom; Chris
+wants tighter zoom to "zero in on the target." Likely a one-line
+`maxZoom` bump in the MapLibre style + verifying carto basemap supports
+the deeper tiles (it does up to z19, possibly z22 with retina). GIBS
+true-color caps lower (~z9) so deeper zooms drop GIBS overlay
+gracefully. ~15 min CC.
+
+### V4-P2 — Rotate map to ISS track ("ISS-up" toggle)
+Chris's mental model in WORF: "I'm looking down, this is what's coming
+next." Rotating the map so ISS direction-of-travel points up matches
+that model exactly (currently north-up). Implementation: derive ISS
+heading from the polynomial fit (dlat/dlon over a 30s lookahead window),
+call `map.setBearing(heading)` on each tick. Toggle between north-up and
+ISS-up via a small button in the map controls. ~45 min CC. Cheap, high
+operator-impact change.
+
+### V4-P2 — Aurora forecast / current-level indicator
+Chris visits NOAA SWPC daily (`https://www.swpc.noaa.gov/communities/aurora-dashboard-experimental`).
+Adding an aurora indicator to the page — either as a topbar widget
+("Kp 4 · auroral oval visible from ISS") or as a card category — would
+save him a tab. Shape: new generator pipeline (`generator/aurora.py`)
+fetching SWPC's 30-min Kp + ovation product + auroral-electrojet feeds,
+publishing as a new artifact (or as fields in `status.json` per the V3
+ARCH-1 pattern). Frontend renders. New data source = its own
+`/plan-eng-review` cycle when picked up (architecture decisions: data
+shape, refresh cadence, banner integration, card vs topbar). Estimate
+deferred to that planning round.
+
+### V4-P2 — Pre-cache tiles for upcoming-queue targets
+Chris reported (2026-05-05): "the map doesn't work when you are LOS but
+you still get the upcoming targets." Expected: Lane F SW caches tiles
+the user has previously panned over; new regions during LOS get blank
+tiles. Improvement: when online, pre-fetch the carto + GIBS tiles for
+each upcoming target's lat/lon at z6-z10. Adds ~50-100 KB per target to
+the SW cache (negligible vs the 100/200 LRU caps). Limit to top-N
+upcoming. ~30 min CC.
+
+### V4-P2 — Queue vs Upcoming + scoring explainer
+Chris reported (2026-05-10): "I think I don't fully understand the queue
+vs upcoming and the scoring, but it generally makes sense!" The two-tab
+distinction (Queue = next 90 min observed-cloud passes; Upcoming = next
+24h forecast-cloud passes) is implicit in tab labels but not explained.
+Same for the score components (p_unobstructed × regime_fit × nadir_proximity
+× priority_weight × tle_freshness). Two cheap remedies:
+
+1. Subtitle copy under each tab heading. Queue: "Next 90 min — what to
+   shoot now. Cloud: observed (MODIS / GOES-IR)." Upcoming: "Next 24h —
+   what to plan for. Cloud: forecast (GFS)."
+2. Click-to-expand score breakdown on each card. Tapping the score
+   number opens a tooltip / accordion: "47 = priority 100% × regime 100%
+   × nadir 75% × p(unobstructed) 99% × TLE freshness 100%." Maps directly
+   to `score_components` already in PassEntry.
+
+~45 min CC for both. Highest leverage operator-clarity win after queue-filter.
+
+### V4-P3 — "Why empty?" hint when Queue is empty
+Once v1.1.0.2 hides past cards, an empty Queue could be either "no passes
+in the next 90 min" (orbital geometry) or "manifest is so stale every pick
+elapsed" (generator lag). Today both show the same "No passes in the next
+90 minutes." message. Add a hint when manifest is >90min old AND queue is
+empty: "Showing a 1h 42m old manifest — generator has been slow. Next
+update in N min." Avoids confusion about whether to wait or whether
+nothing's happening. ~15 min CC.
+
 ### V2-P2 — sha256 verification of artifact fetches
 Generator already ships sha256 for every artifact in manifest.json.
 Frontend fetches and parses without checking. A partial R2 deploy
@@ -163,6 +272,23 @@ recency. Belongs with the V3 calibration-log denormalization work.
 mid-Pacific water targets get appropriate glint flags, but island
 targets in the band get over-flagged. Documented as V2 (real GSHHG
 mask).
+
+### sun_glint heuristic flags coastal launch sites as water
+**Priority:** P3
+
+V3.0 review (2026-05-10) caught: `cloud.py:138-162` `is_water` heuristic
+classifies Vandenberg SLC-4E (-120.6°W) as water → triggers
+sun_glint_risk evaluation that depresses the launch's score relative to
+inland sites like Baikonur. KSC LC-39A is in the "land" band so it's
+unaffected. Asymmetric scoring across launch sites. The reserved-slot
+logic (ARCH-4) masks the symptom by guaranteeing surfacing, but the
+displayed `obstruction_class` on the card is wrong for Vandenberg.
+
+Fix path: launch sites bypass `is_water` (they're pad coordinates, not
+surface targets — water/land is irrelevant for the launch geometry
+itself). One-line override in `_synthesize_launch_target` to pass a
+"skip water heuristic" flag, OR just give launch sites a known-correct
+land/water classification. Same root cause as the Hawaii flag.
 
 ### sun_subpoint missing Equation of Time
 **Priority:** P3

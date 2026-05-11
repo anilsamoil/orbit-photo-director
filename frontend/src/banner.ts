@@ -48,11 +48,15 @@ export function bannerFromManifest(
  *  The user is reading data from localStorage; the level escalates with how long
  *  it's been since the last good network refresh.
  *
+ *  "LOS" = Loss of Signal, the spaceflight term for an unattended-comms gap.
+ *  Chris (operator) requested this over "Offline" since LOS is the operational
+ *  vocabulary on ISS — clearer signal at a glance during a real LOS window.
+ *
  *  Thresholds (V2 plan):
- *    < 1h     green   "Offline · Nm — last sync recent"
- *    1–3h     yellow  "Offline 2h 15m"
- *    3–12h    orange  "Offline 5h — values may be drifting"
- *    > 12h    red     "Offline 14h — data may be very stale"
+ *    < 1h     green   "LOS · Nm — last sync recent"
+ *    1–3h     yellow  "LOS 2h 15m"
+ *    3–12h    orange  "LOS 5h — values may be drifting"
+ *    > 12h    red     "LOS 14h — data may be very old"
  *
  *  Confidence NEVER causes the snapshot to be discarded; this is a UX signal,
  *  not a kill switch. Always show *something*.
@@ -60,15 +64,15 @@ export function bannerFromManifest(
 export function bannerOffline(snapshotAgeMin: number): BannerState {
   const age = formatAge(snapshotAgeMin);
   if (snapshotAgeMin < 60) {
-    return { level: 'green', text: `Offline · ${age} ago — last sync recent` };
+    return { level: 'green', text: `LOS · ${age} ago — last sync recent` };
   }
   if (snapshotAgeMin < 180) {
-    return { level: 'yellow', text: `Offline · ${age} ago` };
+    return { level: 'yellow', text: `LOS · ${age} ago` };
   }
   if (snapshotAgeMin < 720) {
-    return { level: 'orange', text: `Offline · ${age} ago — values may be drifting` };
+    return { level: 'orange', text: `LOS · ${age} ago — values may be drifting` };
   }
-  return { level: 'red', text: `Offline · ${age} ago — data may be very stale` };
+  return { level: 'red', text: `LOS · ${age} ago — data may be very old` };
 }
 
 /** Append a TLE-age overlay onto an existing banner. The plan thresholds
@@ -91,6 +95,38 @@ export function bannerWithTleOverlay(
     return { level: 'red', text: `${base.text} · ${tleNote}` };
   }
   return { level: 'orange', text: `${base.text} · ${tleNote}` };
+}
+
+/** Append a launches-stale overlay onto an existing banner. Mirrors
+ *  `bannerWithTleOverlay` (eng-review ARCH-2): when LL2 has been unreachable
+ *  for >24h the topbar gets a "🚀 launches stale Nh" suffix so the operator
+ *  knows the launches feature is degraded. Threshold 24h matches "anything
+ *  less is just a few missed polls, which the cached data already covers."
+ *
+ *  If launches data is fresh (hoursStale undefined or <=24) the base banner
+ *  passes through unchanged. If the base is already red, the text gets the
+ *  overlay note appended without downgrading the level. Same precedent as
+ *  bannerWithTleOverlay. */
+export function bannerWithLaunchesOverlay(
+  base: BannerState,
+  hoursStale: number | undefined,
+): BannerState {
+  if (typeof hoursStale !== 'number' || !Number.isFinite(hoursStale)) return base;
+  if (hoursStale <= 24) return base;
+  // Don't overlay onto the loading state. A cold-start with a stale-launches
+  // signal would otherwise upgrade "Loading…" → "orange" and surface the
+  // overlay before any data has been fetched (review 2026-05-10).
+  if (base.level === 'loading') return base;
+  const note = `🚀 launches stale ${formatStaleAge(hoursStale)}`;
+  if (base.level === 'red') {
+    return { level: 'red', text: `${base.text} · ${note}` };
+  }
+  return { level: 'orange', text: `${base.text} · ${note}` };
+}
+
+function formatStaleAge(hours: number): string {
+  if (hours < 48) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 export function bannerLoading(): BannerState {

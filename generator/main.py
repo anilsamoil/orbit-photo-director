@@ -48,6 +48,14 @@ from .config import (
     Settings,
     load_targets,
 )
+from .launch_data import (
+    PASS_WINDOW_SECONDS as LAUNCH_PASS_WINDOW_SECONDS,
+)
+from .launch_data import (
+    Launch,
+    fetch_upcoming_launches,
+    filter_launches,
+)
 from .manifest import cleanup_old_versions, utcnow_iso, version_id, write_manifest
 from .orbit import (
     TLE,
@@ -362,6 +370,94 @@ def score_pass_for_target(
     }
 
 
+def _synthesize_launch_target(la: Launch) -> dict[str, Any]:
+    """Wrap a Launch in the shape `find_passes` + `score_pass_for_target`
+    expect. priority=5 (max) so launches outrank median ground targets;
+    regime='any' because we don't have a day/night preference for the rocket
+    itself (the launch site lighting matters via the cloud forecast, not via
+    pass-regime fit).
+    """
+    return {
+        "id": f"launch:{la.id}",
+        "name": f"🚀 {la.name}",  # tag is also rendered by the frontend; the
+                                   # 🚀 in the name lets fallback views (RSS,
+                                   # plain JSON inspection) still see it.
+        "regime": "any",
+        "priority": 5,
+        "geom": {"lat": la.site_lat, "lon": la.site_lon},
+    }
+
+
+def _reserve_launch_slot(
+    upcoming: list[dict[str, Any]],
+    launch_pass_entries: list[dict[str, Any]],
+    now: datetime,
+    horizon_minutes: float,
+) -> list[dict[str, Any]]:
+    """ARCH-4 (eng review 2026-05-05): if a qualifying launch exists in the
+    upcoming time window (>=horizon_minutes from now, matching the upstream
+    upcoming filter) AND it isn't already in the score-sorted top-N, insert
+    it (displacing the lowest-scoring ground entry).
+
+    'Qualifying' = pass_finding returned an opportunity (overhead geometry
+    OK) AND the closest_approach is in the upcoming horizon window. Picking
+    the soonest by t_closest is the right tiebreaker — operator's mental
+    model is "what's coming next."
+    """
+    in_window = [
+        p for p in launch_pass_entries
+        if (datetime.fromisoformat(p["closest_approach"].replace("Z", "+00:00")) - now)
+            >= timedelta(minutes=horizon_minutes)
+    ]
+    return _insert_soonest_if_missing(upcoming, in_window, DEFAULT_TOP_UPCOMING)
+
+
+def _reserve_launch_slot_in_queue(
+    next_90: list[dict[str, Any]],
+    launch_pass_entries: list[dict[str, Any]],
+    now: datetime,
+    queue_horizon_minutes: float,
+) -> list[dict[str, Any]]:
+    """Queue (next-90-min) sibling of `_reserve_launch_slot` (added 2026-05-10
+    after /review caught that the Upcoming-only ARCH-4 left imminent
+    launches buried by score in the Queue view — exactly the highest-stakes
+    case the operator must NOT miss).
+
+    Predicate is the inverse: launches WITHIN the queue window (0 < t < 90min)
+    qualify, vs upcoming's "outside the queue window" rule. Same insert/displace
+    logic, same soonest-by-time tiebreaker.
+    """
+    in_window = [
+        p for p in launch_pass_entries
+        if timedelta(0) < (
+            datetime.fromisoformat(p["closest_approach"].replace("Z", "+00:00")) - now
+        ) < timedelta(minutes=queue_horizon_minutes)
+    ]
+    return _insert_soonest_if_missing(next_90, in_window, DEFAULT_TOP_QUEUE)
+
+
+def _insert_soonest_if_missing(
+    target_list: list[dict[str, Any]],
+    in_window: list[dict[str, Any]],
+    max_size: int,
+) -> list[dict[str, Any]]:
+    """Shared helper for both reserve-slot paths. Picks the soonest qualifying
+    entry, inserts if not already present, displaces the lowest-scoring entry
+    to keep `target_list` at `max_size`, returns score-sorted result."""
+    if not in_window:
+        return target_list
+    already = {(p["target_id"], p["closest_approach"]) for p in target_list}
+    missing = [p for p in in_window if (p["target_id"], p["closest_approach"]) not in already]
+    if not missing:
+        return target_list
+    next_launch = min(missing, key=lambda p: p["closest_approach"])
+    if len(target_list) >= max_size:
+        target_list = target_list[:-1] + [next_launch]
+    else:
+        target_list = list(target_list) + [next_launch]
+    return sorted(target_list, key=lambda p: p["score"], reverse=True)
+
+
 @contextmanager
 def _tick_lock(out_dir: Path) -> Iterator[None]:
     """Hold an exclusive flock for the duration of a tick.
@@ -464,6 +560,58 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
             ))
     log.info("found %d passes across %d targets", len(all_passes), len(targets))
 
+    # 5b. Launch pipeline (V3.0). Treat each upcoming launch's site as a
+    # synthetic target with a ±5min window around T-0; reuse find_passes +
+    # score_pass_for_target. Per the eng review:
+    #   ARCH-1: launches health folds into status.json (no separate artifact)
+    #   ARCH-2: card render gets a `launch` field for the 🚀 LAUNCH tag
+    #   ARCH-4: reserved-slot guarantee — at least one qualifying launch
+    #           always lands in upcoming, even if score loses to ground passes
+    #
+    # Failure mode: if LL2 is down, fetch_upcoming_launches returns an empty
+    # FetchResult and we publish without launches. status.json reflects the
+    # last_successful_fetch so the frontend can show the stale-launches
+    # banner overlay (V4 work; not in this lane).
+    launches_cache = settings.cache_dir / "launches.json"
+    launch_fetch = fetch_upcoming_launches(launches_cache, ttl_hours=1.0, now=n)
+    actionable_launches = filter_launches(launch_fetch.launches)
+    launch_pass_entries: list[dict[str, Any]] = []
+    for la in actionable_launches:
+        site_target = _synthesize_launch_target(la)
+        # Narrower window than ground targets because the launch has a hard
+        # T-0 — there's no point asking for passes 4 hours after a 5-min
+        # launch event.
+        l_passes = find_passes(
+            tle=tle,
+            target=site_target,
+            window_start=la.t0 - timedelta(seconds=LAUNCH_PASS_WINDOW_SECONDS),
+            window_end=la.t0 + timedelta(seconds=LAUNCH_PASS_WINDOW_SECONDS),
+            step_seconds=PASS_SAMPLE_STEP_SECONDS,
+            max_distance_km=PASS_MAX_DISTANCE_KM,
+        )
+        for p in l_passes:
+            entry = score_pass_for_target(
+                site_target, p, sampler, fresh,
+                forecast_sampler=forecast_sampler,
+                now=n,
+                composite_hour=composite_hour,
+            )
+            entry["launch"] = {
+                "name": la.name,
+                "rocket_type": la.rocket_type,
+                "geometry": "overhead",
+                "site_name": la.site_name,
+                "net_window_seconds": la.net_window_seconds,
+                "t0": utcnow_iso(la.t0),
+            }
+            launch_pass_entries.append(entry)
+    if launch_pass_entries:
+        log.info(
+            "found %d launch-pass opportunities (out of %d actionable launches)",
+            len(launch_pass_entries), len(actionable_launches),
+        )
+    all_passes.extend(launch_pass_entries)
+
     # 5. Write versioned artifacts
     version = version_id(n)
     v_dir = settings.out_dir / "v" / version
@@ -476,6 +624,17 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         key=lambda p: p["score"],
         reverse=True,
     )[:DEFAULT_TOP_QUEUE]
+
+    # ARCH-4 extension (review 2026-05-10): same reserved-slot logic for the
+    # Queue. The original eng-review locked ARCH-4 to Upcoming only on the
+    # assumption that imminent launches would naturally outscore ground
+    # targets; adversarial review caught that a mid-day Falcon 9 with average
+    # cloud forecast (~50) routinely loses to 5 priority-5 ground passes
+    # (~80+). The Queue is the operator's PRIMARY action surface — burying a
+    # launch there is the worst-case product failure for V3.
+    next_90 = _reserve_launch_slot_in_queue(
+        next_90, launch_pass_entries, n, queue_horizon_minutes=90,
+    )
 
     top25 = top_n(all_passes, DEFAULT_TOP_MAP)
 
@@ -491,6 +650,16 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         key=lambda p: p["score"],
         reverse=True,
     )[:DEFAULT_TOP_UPCOMING]
+
+    # ARCH-4 (eng review 2026-05-05): reserve one slot in upcoming for the
+    # next qualifying launch. Without this, a mid-day Falcon 9 with average
+    # cloud forecast can score lower than 25 priority-5 ground targets and
+    # never appear — defeating the entire V3 feature for the user. The
+    # reserved-slot logic guarantees the operator sees the next photographable
+    # launch even if its score loses on pure merit.
+    upcoming = _reserve_launch_slot(
+        upcoming, launch_pass_entries, n, OBSERVED_CLOUD_HORIZON_MINUTES,
+    )
 
     # Polynomial (120 min) drives the precise live ISS marker.
     # track_points (200 min ≈ 2 ISS orbits) drives the map's ground-track
@@ -540,6 +709,17 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         "passes_with_no_observation": len(all_passes) - observed_count,
         "version": version,
         "build_version": __version__,
+        # V3.0 launches health (per ARCH-1 — folded into status.json
+        # rather than a separate launches-health.json artifact). Frontend
+        # surfaces the stale-launches banner overlay when
+        # `launches_last_successful_fetch` ages past 24 h.
+        "launches_last_successful_fetch": (
+            utcnow_iso(launch_fetch.last_successful_fetch)
+            if launch_fetch.last_successful_fetch is not None else None
+        ),
+        "launches_count_upcoming": len(actionable_launches),
+        "launches_count_pass_opportunities": len(launch_pass_entries),
+        "launches_schema_hash": launch_fetch.schema_hash,
     }
 
     (v_dir / "passes.json").write_text(json.dumps(top25, indent=2))
