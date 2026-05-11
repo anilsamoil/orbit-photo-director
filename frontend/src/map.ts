@@ -24,6 +24,28 @@ let currentTrack: Track | null = null;
 // 0 = "Now" (live position); 90 = "+90 min" (preview future ISS position).
 let lookaheadMinutes = 0;
 
+/** Bearing mode for the map. 'north' = standard north-up. 'iss-up' = rotate
+ *  the map so the ISS direction-of-travel points up — matches Chris's
+ *  mental model in WORF: "I'm looking down, this is what's coming next."
+ *  Persisted to localStorage so the operator's preference survives reload. */
+type BearingMode = 'north' | 'iss-up';
+const BEARING_PREF_KEY = 'opd-map-bearing-mode';
+function readBearingMode(): BearingMode {
+  try {
+    const v = localStorage.getItem(BEARING_PREF_KEY);
+    return v === 'iss-up' ? 'iss-up' : 'north';
+  } catch {
+    return 'north';  // localStorage unavailable (private mode, etc.)
+  }
+}
+let bearingMode: BearingMode = readBearingMode();
+
+/** Test-only: reset module-level state between vitest runs. */
+export function _resetMapStateForTest(): void {
+  bearingMode = 'north';
+  try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
+}
+
 /** GIBS true-color tile URL pattern. {date} is replaced per render. Daily layer
  *  — captures cloud cover visually (you can SEE clouds, not derive them).
  */
@@ -269,9 +291,19 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     if (!map || !issMarker || !currentTrack) return;
     const pos = markerPositionFor(currentTrack);
     if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
+    // Re-apply bearing each tick when ISS-up is on. ISS heading drifts ~1°
+    // per minute so 1Hz is overkill but harmless; the alternative (only
+    // update on toggle) leaves the map mis-oriented after a few minutes.
+    // setBearing (no animate) — micro-rotations every 1s would jitter.
+    if (bearingMode === 'iss-up') applyBearing(false);
   }, 1000);
 
   bindTimeToggle();
+  bindBearingToggle();
+  // Apply persisted bearing preference on first map render. Animate so the
+  // user sees the rotation kick in (helps establish the visual model that
+  // it's intentional, not a glitch).
+  applyBearing(true);
 }
 
 /** Return the position the ISS marker should occupy given the current
@@ -287,6 +319,53 @@ function markerPositionFor(track: Track): { lat: number; lon: number } | null {
   if (Number.isNaN(startMs)) return null;
   const endMs = startMs + track.iss_polynomial.duration_seconds * 1000;
   return liveIssPosition(track, Math.min(targetMs, endMs - 1000));
+}
+
+/** Great-circle initial bearing from (lat1, lon1) to (lat2, lon2), in degrees
+ *  clockwise from true north (0..360). Standard formula; ISS travels along
+ *  great circles so this is the correct way to read direction-of-travel
+ *  vs flat-Earth atan2(Δlat, Δlon). At ISS speed (~7.7 km/s, 30s spacing)
+ *  the great-circle vs rhumb-line difference is negligible, but using the
+ *  right formula means antimeridian + polar passes don't blow up.
+ */
+export function greatCircleBearingDeg(
+  lat1: number, lon1: number, lat2: number, lon2: number,
+): number {
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+/** Compute the ISS heading (degrees clockwise from north) by sampling the
+ *  polynomial fit at `nowMs` and `nowMs + 30s`. Returns null if either
+ *  sample is outside the polynomial window or the sample positions are
+ *  identical (degenerate case). */
+function computeIssHeading(track: Track, nowMs: number): number | null {
+  const here = liveIssPosition(track, nowMs);
+  const ahead = liveIssPosition(track, nowMs + 30_000);
+  if (!here || !ahead) return null;
+  if (here.lat === ahead.lat && here.lon === ahead.lon) return null;
+  return greatCircleBearingDeg(here.lat, here.lon, ahead.lat, ahead.lon);
+}
+
+/** Apply the current bearing mode to the map. ISS-up sets bearing to the
+ *  current heading so direction-of-travel points up; north resets to 0.
+ *  Smooth animation via easeTo; no-op if heading can't be computed. */
+function applyBearing(animate: boolean): void {
+  if (!map) return;
+  if (bearingMode === 'north') {
+    if (animate) map.easeTo({ bearing: 0, duration: 600 });
+    else map.setBearing(0);
+    return;
+  }
+  if (!currentTrack) return;
+  const heading = computeIssHeading(currentTrack, Date.now() + lookaheadMinutes * 60_000);
+  if (heading === null) return;
+  if (animate) map.easeTo({ bearing: heading, duration: 600 });
+  else map.setBearing(heading);
 }
 
 let toggleBound = false;
@@ -315,6 +394,33 @@ function bindTimeToggle(): void {
   nowBtn.addEventListener('click', () => setMode(0));
   plus90Btn.addEventListener('click', () => setMode(90));
   toggleBound = true;
+}
+
+let bearingToggleBound = false;
+function bindBearingToggle(): void {
+  if (bearingToggleBound) return;
+  const northBtn = document.getElementById('bearing-north');
+  const issBtn = document.getElementById('bearing-iss');
+  if (!northBtn || !issBtn) return;
+
+  // Restore the persisted pref to the button's active state on first bind.
+  const reflectActive = () => {
+    northBtn.classList.toggle('active', bearingMode === 'north');
+    issBtn.classList.toggle('active', bearingMode === 'iss-up');
+  };
+  reflectActive();
+
+  const setBearingMode = (mode: BearingMode) => {
+    if (mode === bearingMode) return;
+    bearingMode = mode;
+    try { localStorage.setItem(BEARING_PREF_KEY, mode); } catch { /* noop */ }
+    reflectActive();
+    applyBearing(true);  // animate the rotation on user toggle
+  };
+
+  northBtn.addEventListener('click', () => setBearingMode('north'));
+  issBtn.addEventListener('click', () => setBearingMode('iss-up'));
+  bearingToggleBound = true;
 }
 
 function upsertGeoJson(
