@@ -2,6 +2,21 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.1.1] - 2026-05-11
+
+### Map zoom-in for terrain detail (no more blank tiles past z20).
+
+Chris (operator, 2026-05-05) asked: "can you allow it to zoom in a bit more for detail (and maybe even orient the map relative to ISS track)? The use case is to help you zero in on the target — I will sometimes have Google Maps up when I'm in WORF to try to pick out mountains or features that can lead me to my desired shot."
+
+Root cause: the carto basemap source had no explicit `maxzoom`. MapLibre defaults to fetching tiles at every zoom up to the map's max (22). Carto's `dark_all` retina raster only serves up to z20; above that the requests 404 and MapLibre rendered blank squares. From the operator's POV: try to zoom in past a certain point, the map goes black.
+
+### Fixed
+
+- `carto-dark` source: `maxzoom: 20`. MapLibre now overzooms the z20 tile beyond that (slightly pixelated, but always shows terrain rather than blanks). Operator can zoom freely without hitting black tiles.
+- `gibs-clouds` source: `maxzoom: 9`. GIBS true-color VIIRS at GoogleMapsCompatible_Level9 caps at z9. Same overzoom logic — cloud overlay stays visible (pixelated) above z9 instead of going blank.
+
+Two-line config change. Pairs with v1.2.1.0's ISS-up toggle as the V4-P2 map polish round informed by Chris's WhatsApp feedback.
+
 ## [1.2.1.0] - 2026-05-11
 
 ### ISS-up toggle on the map: rotate so direction-of-travel points up.

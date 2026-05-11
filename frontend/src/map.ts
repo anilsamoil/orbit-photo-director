@@ -74,6 +74,14 @@ function buildStyle(): maplibregl.StyleSpecification {
           'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
         ],
         tileSize: 256,
+        // Carto dark_all serves up to z20 for retina (@2x). Without an
+        // explicit maxzoom MapLibre tries to fetch tiles at every requested
+        // zoom — z21+ returns 404 → blank squares. Setting maxzoom=20
+        // tells MapLibre to overzoom the z20 tile beyond that (slightly
+        // pixelated, but always shows terrain rather than blanks). Chris
+        // (operator, 2026-05-05) asked for more zoom for terrain detail
+        // (mountains / coastline / man-made features as WORF reference).
+        maxzoom: 20,
         attribution:
           '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
       },
@@ -81,6 +89,10 @@ function buildStyle(): maplibregl.StyleSpecification {
         type: 'raster',
         tiles: [gibsTrueColorUrl(dateIso)],
         tileSize: 256,
+        // GIBS true-color VIIRS at GoogleMapsCompatible_Level9 caps at z9.
+        // Same overzoom logic as carto: explicit maxzoom keeps the cloud
+        // overlay visible (pixelated) above z9 instead of going blank.
+        maxzoom: 9,
         attribution:
           'Imagery from <a href="https://earthdata.nasa.gov">NASA GIBS</a>',
       },
