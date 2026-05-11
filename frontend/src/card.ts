@@ -198,6 +198,28 @@ export function formatLaunchWindow(netWindowSeconds: number): string {
   return `Window: ±${h.toFixed(h < 10 ? 1 : 0)}h`;
 }
 
+/** Module-level state: which cards (by target_id + closest_approach) have
+ *  their score breakdown panel currently open. The `rerenderCountdowns`
+ *  tick blows away the entire card DOM every 1 second (TODOS:111-119),
+ *  which would otherwise close any panel the user just opened. We keep an
+ *  external Set so re-renders can restore the open state without churn.
+ *
+ *  Key: `${target_id}|${closest_approach}` matches `card.dataset.targetId`
+ *  + `card.dataset.passTime` exactly. Same precondition the per-card
+ *  Shoot/Skip handlers use to identify a card after re-render. */
+const OPEN_BREAKDOWNS = new Set<string>();
+
+function breakdownKey(p: PassEntry): string {
+  return `${p.target_id}|${p.closest_approach}`;
+}
+
+/** Test-only: clear the open-breakdown registry between tests so module
+ *  state from one test doesn't leak into the next. Production code never
+ *  calls this — the registry naturally drains as the user closes panels. */
+export function _resetOpenBreakdownsForTest(): void {
+  OPEN_BREAKDOWNS.clear();
+}
+
 /** Render the score line with a click-to-expand breakdown panel.
  *  Chris (2026-05-10): "I think I don't fully understand the queue vs
  *  upcoming and the scoring." This makes the formula transparent — tap the
@@ -207,15 +229,20 @@ export function formatLaunchWindow(netWindowSeconds: number): string {
  *
  *  The data already exists in PassEntry.score_components — we're not
  *  recomputing anything, just exposing what the generator already published.
+ *
+ *  Open state survives the 1Hz card re-render via OPEN_BREAKDOWNS — see
+ *  the comment on that Set for why it's tracked external to the DOM.
  */
 export function renderScoreWithBreakdown(p: PassEntry): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'card-score-wrap';
+  const key = breakdownKey(p);
+  const initiallyOpen = OPEN_BREAKDOWNS.has(key);
 
   const line = document.createElement('button');
   line.type = 'button';
-  line.className = 'card-score';
-  line.setAttribute('aria-expanded', 'false');
+  line.className = initiallyOpen ? 'card-score open' : 'card-score';
+  line.setAttribute('aria-expanded', String(initiallyOpen));
   line.title = 'Tap to see the score breakdown';
 
   const label = document.createElement('span');
@@ -235,7 +262,7 @@ export function renderScoreWithBreakdown(p: PassEntry): HTMLElement {
 
   const panel = document.createElement('div');
   panel.className = 'score-breakdown';
-  panel.hidden = true;
+  panel.hidden = !initiallyOpen;
   panel.appendChild(buildBreakdownTable(p));
 
   line.addEventListener('click', () => {
@@ -243,6 +270,11 @@ export function renderScoreWithBreakdown(p: PassEntry): HTMLElement {
     panel.hidden = !open;
     line.setAttribute('aria-expanded', String(open));
     line.classList.toggle('open', open);
+    if (open) {
+      OPEN_BREAKDOWNS.add(key);
+    } else {
+      OPEN_BREAKDOWNS.delete(key);
+    }
   });
 
   wrap.append(line, panel);

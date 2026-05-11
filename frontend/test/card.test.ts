@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { formatObsAge, renderCard, renderCards } from '../src/card';
+import { _resetOpenBreakdownsForTest, formatObsAge, renderCard, renderCards } from '../src/card';
 import type { PassEntry } from '../src/types';
 
 const samplePass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -206,6 +206,10 @@ describe('renderCard', () => {
 });
 
 describe('renderCard score breakdown (V4-P2 explainer)', () => {
+  beforeEach(() => {
+    _resetOpenBreakdownsForTest();
+  });
+
   it('renders the score line as a button (clickable)', () => {
     const el = renderCard(samplePass(), NOW, false, () => undefined);
     const score = el.querySelector('.card-score');
@@ -267,6 +271,50 @@ describe('renderCard score breakdown (V4-P2 explainer)', () => {
     );
     const noteCells = Array.from(el.querySelectorAll('.sb-note')).map((c) => c.textContent);
     expect(noteCells.some((t) => t?.includes('any lighting'))).toBe(true);
+  });
+
+  it('open state survives a re-render of the same card (1Hz tick guard)', () => {
+    // The rerenderCountdowns tick blows away the card DOM every second.
+    // Without a persistence layer, every panel the user opened would close
+    // on the next tick. We track open state in a module-level Set keyed by
+    // (target_id, closest_approach) and re-apply on render.
+    const p = samplePass({ target_id: 'persistent-1' });
+    const el1 = renderCard(p, NOW, false, () => undefined);
+    (el1.querySelector('.card-score') as HTMLButtonElement).click();
+    expect((el1.querySelector('.score-breakdown') as HTMLElement).hidden).toBe(false);
+
+    // Simulate the 1Hz tick: render the same PassEntry again, get a new DOM node.
+    const el2 = renderCard(p, NOW + 1000, false, () => undefined);
+    const score2 = el2.querySelector('.card-score') as HTMLButtonElement;
+    const panel2 = el2.querySelector('.score-breakdown') as HTMLElement;
+    expect(panel2.hidden).toBe(false);
+    expect(score2.getAttribute('aria-expanded')).toBe('true');
+    expect(score2.classList.contains('open')).toBe(true);
+  });
+
+  it('closing a panel removes the persistent open state', () => {
+    const p = samplePass({ target_id: 'closeable-1' });
+    const el1 = renderCard(p, NOW, false, () => undefined);
+    const score1 = el1.querySelector('.card-score') as HTMLButtonElement;
+    score1.click();  // open
+    score1.click();  // close
+
+    // Re-render: panel should be closed.
+    const el2 = renderCard(p, NOW + 1000, false, () => undefined);
+    expect((el2.querySelector('.score-breakdown') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('open state is per-card (different target_id keeps its own panel state)', () => {
+    const a = samplePass({ target_id: 'card-a', closest_approach: '2024-10-17T12:00:00Z' });
+    const b = samplePass({ target_id: 'card-b', closest_approach: '2024-10-17T13:00:00Z' });
+    const elA = renderCard(a, NOW, false, () => undefined);
+    (elA.querySelector('.card-score') as HTMLButtonElement).click();  // open A only
+
+    // Re-render both — A should remember open, B should remember closed.
+    const elA2 = renderCard(a, NOW + 1000, false, () => undefined);
+    const elB2 = renderCard(b, NOW + 1000, false, () => undefined);
+    expect((elA2.querySelector('.score-breakdown') as HTMLElement).hidden).toBe(false);
+    expect((elB2.querySelector('.score-breakdown') as HTMLElement).hidden).toBe(true);
   });
 });
 
