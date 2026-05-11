@@ -152,6 +152,16 @@ async function doRefresh(): Promise<void> {
         savedAt: Date.now(),
       });
       lastSavedManifestVersion = manifest.version;
+      // V4-P2 (Chris 2026-05-05): pre-cache basemap + cloud tiles for the
+      // top-3 Queue targets at z6/z8/z10. Fire-and-forget; SW's CacheFirst
+      // rules write to the tile caches automatically. Skipped when offline.
+      // GATED on `isNewer` (same as saveSnapshot): refresh() runs every
+      // 60s but the manifest only republishes hourly. Without the gate
+      // we'd fire 18 tiles × 60 polls/h = 1080 fetches/h instead of 18 —
+      // 60× over the budgeted carto rate limit, plus pointless because
+      // the same tile bytes are already in the SW cache from the previous
+      // version. Top-3 targets only change when the manifest does.
+      precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
     }
 
     renderQueue();
@@ -163,13 +173,6 @@ async function doRefresh(): Promise<void> {
       launchesStaleHours(status, Date.now()),
     ));
     updatePendingSyncBadge();
-    // V4-P2 (Chris 2026-05-05): pre-cache basemap + cloud tiles for the
-    // top-3 Queue targets at z6/z8/z10. Fire-and-forget; SW's CacheFirst
-    // rules write to the tile caches automatically. Skipped when offline
-    // (no point hitting the network when it's unreachable). When the
-    // operator next opens Map during LOS over one of those targets, the
-    // wider-context tiles are already there.
-    precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
   } catch (e) {
     // Refresh failed — keep showing whatever the snapshot path rendered and
     // surface the failure in the banner. currentManifest/Top5/etc still hold

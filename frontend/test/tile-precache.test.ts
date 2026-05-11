@@ -13,8 +13,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import {
+  GIBS_MAX_ZOOM,
   PRECACHE_TARGET_COUNT,
   PRECACHE_ZOOM_LEVELS,
+  _resetPrecacheInflightForTest,
   buildPrecacheUrls,
   fillTileUrl,
   gibsTrueColorUrl,
@@ -127,14 +129,14 @@ describe('buildPrecacheUrls', () => {
     expect(gibsCount).toBe(PRECACHE_ZOOM_LEVELS.length);
   });
 
-  it('clamps GIBS zoom to 9 (matches map.ts maxzoom)', () => {
+  it('clamps GIBS zoom to GIBS_MAX_ZOOM (matches map.ts maxzoom)', () => {
     // PRECACHE_ZOOM_LEVELS includes 10. GIBS only serves z9, so the z10
     // request should be clamped to z9.
     const urls = buildPrecacheUrls([samplePass({ target_lat: 28.6, target_lon: -80.6 })], gibsPattern);
     const gibsZooms = urls
       .filter((u) => u.includes('gibs.earthdata'))
       .map((u) => Number(u.match(/Level9\/(\d+)\//)?.[1]));
-    expect(Math.max(...gibsZooms)).toBe(9);  // clamped from 10
+    expect(Math.max(...gibsZooms)).toBe(GIBS_MAX_ZOOM);  // clamped from 10
   });
 
   it('returns empty array for no passes', () => {
@@ -146,9 +148,35 @@ describe('buildPrecacheUrls', () => {
       [samplePass({ target_lat: 28.6082, target_lon: -80.6041 })],
       gibsPattern,
     );
-    const cartoZ8 = urls.find((u) => u.includes('cartocdn') && u.includes('/8/'));
     // KSC at z=8 → tile (70, 106); carto pattern is /{z}/{x}/{y}@2x.png
+    // Subdomain is (x+y)%4 = (70+106)%4 = 176%4 = 0 → 'a'
+    const cartoZ8 = urls.find((u) => u.includes('cartocdn') && u.includes('/8/'));
     expect(cartoZ8).toContain('/8/70/106@2x.png');
+    expect(cartoZ8).toContain('https://a.basemaps.cartocdn.com/');
+  });
+
+  it('rotates carto subdomain via (x+y)%4 to match MapLibre', () => {
+    // Tokyo at z=10 → tile (909, 403); (909+403)%4 = 1312%4 = 0 → 'a'
+    const tokyo = buildPrecacheUrls(
+      [samplePass({ target_lat: 35.68, target_lon: 139.69 })],
+      gibsPattern,
+    );
+    const tokyoZ10 = tokyo.find((u) => u.includes('cartocdn') && u.includes('/10/'));
+    expect(tokyoZ10).toContain('https://a.basemaps.cartocdn.com/');
+    // Z=8 for Tokyo: tile (227, 100); (227+100)%4 = 327%4 = 3 → 'd'
+    const tokyoZ8 = tokyo.find((u) => u.includes('cartocdn') && u.includes('/8/'));
+    expect(tokyoZ8).toContain('https://d.basemaps.cartocdn.com/');
+  });
+
+  it('skips targets with non-finite lat/lon', () => {
+    const passes = [
+      samplePass({ target_id: 'good', target_lat: 0, target_lon: 0 }),
+      samplePass({ target_id: 'bad-lat', target_lat: NaN, target_lon: 0 }),
+      samplePass({ target_id: 'bad-lon', target_lat: 0, target_lon: Infinity }),
+    ];
+    const urls = buildPrecacheUrls(passes, gibsPattern);
+    // Only 1 valid target × 3 zooms × 2 sources = 6 URLs.
+    expect(urls.length).toBe(PRECACHE_ZOOM_LEVELS.length * 2);
   });
 });
 
@@ -156,12 +184,16 @@ describe('precacheTilesForTargets', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
+    _resetPrecacheInflightForTest();
+    fetchSpy = vi.fn().mockImplementation(
+      () => Promise.resolve(new Response('', { status: 200 })),
+    );
     vi.stubGlobal('fetch', fetchSpy);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    _resetPrecacheInflightForTest();
   });
 
   it('skips entirely when offline', () => {
@@ -188,14 +220,18 @@ describe('precacheTilesForTargets', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2 * PRECACHE_ZOOM_LEVELS.length * 2);
   });
 
-  it('uses no-cors mode so cross-origin SW caching works', () => {
+  it('uses default CORS mode so SW sees real status codes', () => {
+    // Opaque (no-cors) responses have status 0, which the Lane F SW
+    // route's cacheableResponse:[0,200] would treat as cacheable for
+    // ALL outcomes including 429/5xx. CORS gives us real statuses so
+    // bad responses get filtered out instead of bricking the map.
     precacheTilesForTargets(
       [samplePass()],
       gibsTrueColorUrl('2026-05-10'),
       () => true,
     );
     const firstCall = fetchSpy.mock.calls[0];
-    expect(firstCall?.[1]).toEqual({ mode: 'no-cors' });
+    expect(firstCall?.[1]).toBeUndefined();
   });
 
   it('swallows individual fetch failures (no thrown error)', async () => {
@@ -213,11 +249,41 @@ describe('precacheTilesForTargets', () => {
   });
 
   it('caps at PRECACHE_TARGET_COUNT even with many passes', () => {
+    // Spread coords across continents so the in-flight dedup doesn't
+    // collapse adjacent targets onto the same low-zoom tile (e.g. two
+    // targets 1° apart share a z6 tile — that's a real cache win, but
+    // it'd mask the cap-at-N assertion this test is checking).
+    const lats = [40, -30, 60, 0, 25, -45, 35, -10, 55, 15,
+      -20, 50, 5, -40, 45, -25, 30, -50, 20, -5];
+    const lons = [-100, 30, 120, -75, 60, -150, 0, 90, -60, 150,
+      -120, 45, 80, -90, 15, -45, 100, -180, 75, -30];
     const passes = Array.from({ length: 20 }, (_, i) =>
-      samplePass({ target_id: `p${i}`, target_lat: i, target_lon: i }));
+      samplePass({ target_id: `p${i}`, target_lat: lats[i]!, target_lon: lons[i]! }));
     precacheTilesForTargets(passes, gibsTrueColorUrl('2026-05-10'), () => true);
     expect(fetchSpy).toHaveBeenCalledTimes(
       PRECACHE_TARGET_COUNT * PRECACHE_ZOOM_LEVELS.length * 2,
     );
+  });
+
+  it('dedupes in-flight URLs across overlapping calls', async () => {
+    // Use a deferred promise so the first call's fetches stay in-flight
+    // when the second call fires. Without dedup, the second call would
+    // double-fire all 6 URLs.
+    let resolveAll: () => void = () => { /* noop */ };
+    const block = new Promise<Response>((resolve) => {
+      resolveAll = () => resolve(new Response('', { status: 200 }));
+    });
+    fetchSpy.mockImplementation(() => block);
+
+    const pass = samplePass({ target_lat: 28.6, target_lon: -80.6 });
+    precacheTilesForTargets([pass], gibsTrueColorUrl('2026-05-10'), () => true);
+    const firstCount = fetchSpy.mock.calls.length;
+    // Second call before the first call's fetches resolve.
+    precacheTilesForTargets([pass], gibsTrueColorUrl('2026-05-10'), () => true);
+    expect(fetchSpy).toHaveBeenCalledTimes(firstCount);
+
+    resolveAll();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 });

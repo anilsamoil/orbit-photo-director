@@ -52,14 +52,24 @@ export const PRECACHE_TARGET_COUNT = 3;
  *  GIBS caps at z9 so z10 GIBS will overzoom from z9 (still cached). */
 export const PRECACHE_ZOOM_LEVELS = [6, 8, 10];
 
-/** Carto subdomain rotation matches the rotation in map.ts (tiles[]).
- *  The browser will use whichever subdomain happens; pre-caching to ANY
- *  of them populates the same SW cache (the cache is keyed by URL
- *  including subdomain — but we just pick one for pre-caching, and the
- *  user's natural panning may hit a different subdomain. That's a known
- *  small inefficiency; the alternative is to pre-fetch all 4 subdomains
- *  per tile, which 4xs the request budget for marginal benefit). */
-const CARTO_TILE_URL = 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png';
+/** Carto subdomain rotation must MATCH MapLibre's deterministic subdomain
+ *  pick or the precache is wasted: the SW Cache API keys by full URL
+ *  including hostname, so a tile pre-cached as `a.basemaps...` is a cache
+ *  MISS when MapLibre asks for `b.basemaps...` for the same (x, y).
+ *  MapLibre's source impl picks subdomain via `(x + y) % subdomains.length`
+ *  — we compute the same subdomain when building precache URLs.
+ *  Reviewed 2026-05-11; CARTO_SUBDOMAINS must stay in sync with the
+ *  tiles[] array in map.ts buildStyle(). */
+const CARTO_SUBDOMAINS = ['a', 'b', 'c', 'd'] as const;
+function cartoTileUrl(z: number, x: number, y: number): string {
+  const sub = CARTO_SUBDOMAINS[(x + y) % CARTO_SUBDOMAINS.length];
+  return `https://${sub}.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}@2x.png`;
+}
+
+/** GIBS maxzoom matches the source's `maxzoom` in map.ts buildStyle().
+ *  Exported so map.ts (and any future consumer) can reference the same
+ *  value rather than hardcoding 9 in two places. */
+export const GIBS_MAX_ZOOM = 9;
 
 /** Convert (lon, lat) to (x, y) tile coordinates at zoom `z` using the
  *  Web Mercator (EPSG:3857) projection. Standard slippy-map formula —
@@ -93,18 +103,22 @@ export function fillTileUrl(pattern: string, z: number, x: number, y: number): s
 
 /** Build the full set of tile URLs to pre-cache for the given passes.
  *  Exposed for testing — production code uses `precacheTilesForTargets`
- *  which also performs the fetches. */
+ *  which also performs the fetches. Targets with non-finite coords are
+ *  skipped (defensive guard against future schema drift / bad LL2 data;
+ *  produces 'NaN' URLs that bypass the SW cache write but still consume
+ *  fetch slots). */
 export function buildPrecacheUrls(passes: PassEntry[], gibsTileUrlPattern: string): string[] {
   const urls: string[] = [];
   const top = passes.slice(0, PRECACHE_TARGET_COUNT);
   for (const p of top) {
+    if (!Number.isFinite(p.target_lat) || !Number.isFinite(p.target_lon)) continue;
     for (const z of PRECACHE_ZOOM_LEVELS) {
       const { x, y } = lonLatToTile(p.target_lon, p.target_lat, z);
-      urls.push(fillTileUrl(CARTO_TILE_URL, z, x, y));
-      // GIBS tiles at z>9 overzoom from z9 (we set maxzoom=9 in map.ts).
-      // Pre-caching the source-zoom tile means the overzoom path during
-      // LOS finds it cached. So clamp gibs zoom to 9 max.
-      const gibsZ = Math.min(z, 9);
+      urls.push(cartoTileUrl(z, x, y));
+      // GIBS tiles at z>maxzoom overzoom from the maxzoom tile (we set
+      // the same maxzoom in map.ts). Pre-caching the source-zoom tile
+      // means the overzoom path during LOS finds it cached.
+      const gibsZ = Math.min(z, GIBS_MAX_ZOOM);
       const gibsTile = lonLatToTile(p.target_lon, p.target_lat, gibsZ);
       urls.push(fillTileUrl(gibsTileUrlPattern, gibsZ, gibsTile.x, gibsTile.y));
     }
@@ -117,9 +131,25 @@ export function buildPrecacheUrls(passes: PassEntry[], gibsTileUrlPattern: strin
  *  the responses to the tile caches automatically.
  *
  *  Skipped entirely when offline (no point hitting the network when it's
- *  unreachable; the SW would 404 anyway). The fetch() promises are
- *  swallowed — we don't care about individual failures because the
- *  natural pan path will retry on demand. */
+ *  unreachable; the SW would 404 anyway). The fetch() promises swallow
+ *  individual failures — the natural pan path will retry on demand.
+ *
+ *  In-flight dedup: simultaneous refresh ticks (visibility-resume + the
+ *  poll interval can stack) would otherwise issue duplicate fetches for
+ *  the same URL. PRECACHE_INFLIGHT tracks active URLs and skips repeats.
+ *
+ *  Default mode (`cors`, not `no-cors`): both cartocdn and gibs.earthdata
+ *  serve `Access-Control-Allow-Origin: *`. With CORS the SW sees real
+ *  status codes (not opaque 0), so cacheableResponse:[200] correctly
+ *  filters out 404/429/5xx — opaque responses would have status 0 for
+ *  ALL outcomes and a 429 from carto would get cached as a "valid" tile
+ *  for 7 days, bricking the map.
+ *
+ *  Body cancellation: opaque/cors response bodies aren't read here, so
+ *  without explicit `.body.cancel()` the buffer is held until GC. With
+ *  18 tiles × 25 KB per refresh that's ~450 KB held for no benefit. */
+const PRECACHE_INFLIGHT = new Set<string>();
+
 export function precacheTilesForTargets(
   passes: PassEntry[],
   gibsTileUrlPattern: string,
@@ -129,13 +159,26 @@ export function precacheTilesForTargets(
   if (passes.length === 0) return;
   const urls = buildPrecacheUrls(passes, gibsTileUrlPattern);
   for (const url of urls) {
-    // mode: 'no-cors' lets the SW intercept + cache cross-origin tiles
-    // even when CORS isn't configured upstream. Same posture MapLibre
-    // uses for these raster sources. We don't need the response body —
-    // just the side effect of the SW caching it.
-    fetch(url, { mode: 'no-cors' }).catch(() => {
-      // Swallow individual fetch failures; the natural pan path will
-      // retry on demand. Logging would spam the console during LOS.
-    });
+    if (PRECACHE_INFLIGHT.has(url)) continue;
+    PRECACHE_INFLIGHT.add(url);
+    fetch(url)
+      .then((r) => {
+        // Cancel the body stream so the buffer is freed immediately
+        // instead of waiting on GC. We never read the body — the SW has
+        // already had its chance to intercept and cache.
+        r.body?.cancel?.().catch(() => { /* noop */ });
+      })
+      .catch(() => {
+        // Swallow individual fetch failures; the natural pan path will
+        // retry on demand. Logging would spam the console during LOS.
+      })
+      .finally(() => {
+        PRECACHE_INFLIGHT.delete(url);
+      });
   }
+}
+
+/** Test-only: clear in-flight tracking between vitest runs. */
+export function _resetPrecacheInflightForTest(): void {
+  PRECACHE_INFLIGHT.clear();
 }

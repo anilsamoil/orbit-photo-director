@@ -53,7 +53,7 @@ export function _resetMapStateForTest(): void {
 // import them without pulling the heavy MapLibre bundle. Re-exported from
 // here so this module's existing internal callers (buildStyle below) don't
 // have to change.
-import { gibsTrueColorUrl, yesterdayIso } from './tile-precache';
+import { GIBS_MAX_ZOOM, gibsTrueColorUrl, yesterdayIso } from './tile-precache';
 
 function buildStyle(): maplibregl.StyleSpecification {
   const dateIso = yesterdayIso();
@@ -87,7 +87,9 @@ function buildStyle(): maplibregl.StyleSpecification {
         // GIBS true-color VIIRS at GoogleMapsCompatible_Level9 caps at z9.
         // Same overzoom logic as carto: explicit maxzoom keeps the cloud
         // overlay visible (pixelated) above z9 instead of going blank.
-        maxzoom: 9,
+        // GIBS_MAX_ZOOM lives in tile-precache.ts so the precache zoom
+        // clamp stays in sync with the map source's maxzoom.
+        maxzoom: GIBS_MAX_ZOOM,
         attribution:
           'Imagery from <a href="https://earthdata.nasa.gov">NASA GIBS</a>',
       },
