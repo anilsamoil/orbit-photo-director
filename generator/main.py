@@ -50,6 +50,8 @@ from .config import (
 )
 from .launch_data import (
     PASS_WINDOW_SECONDS as LAUNCH_PASS_WINDOW_SECONDS,
+)
+from .launch_data import (
     Launch,
     fetch_upcoming_launches,
     filter_launches,

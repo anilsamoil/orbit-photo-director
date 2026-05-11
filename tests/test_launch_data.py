@@ -17,8 +17,6 @@ import requests
 
 from generator.launch_data import (
     NET_WINDOW_MAX_SECONDS,
-    FetchResult,
-    Launch,
     compute_schema_hash,
     fetch_upcoming_launches,
     filter_launches,
