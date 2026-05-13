@@ -164,7 +164,7 @@ Same for the score components (p_unobstructed × regime_fit × nadir_proximity
 
 ~45 min CC for both. Highest leverage operator-clarity win after queue-filter.
 
-### V4-P3 — "Why empty?" hint when Queue is empty
+### V4-P3 — "Why empty?" hint when Queue is empty (SHIPPED v1.2.2.1, 2026-05-13)
 Once v1.1.0.2 hides past cards, an empty Queue could be either "no passes
 in the next 90 min" (orbital geometry) or "manifest is so stale every pick
 elapsed" (generator lag). Today both show the same "No passes in the next
@@ -172,6 +172,10 @@ elapsed" (generator lag). Today both show the same "No passes in the next
 empty: "Showing a 1h 42m old manifest — generator has been slow. Next
 update in N min." Avoids confusion about whether to wait or whether
 nothing's happening. ~15 min CC.
+
+Shipped: `src/empty-hint.ts` exports `emptyQueueHint(manifest, nowMs)`.
+90-min threshold (vs banner's 60). Hourly tick projection via modulo.
+8 unit tests. Wired into `renderQueue()` empty-state branch.
 
 ### V2-P2 — sha256 verification of artifact fetches
 Generator already ships sha256 for every artifact in manifest.json.
