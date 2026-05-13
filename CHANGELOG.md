@@ -2,6 +2,24 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.3.2] - 2026-05-13
+
+### Map tiles broken: SW cache filter rejected MapLibre's opaque responses.
+
+User testing exposed a regression from v1.2.2.0's hardening: with `cacheableResponse.statuses: [200]` only, MapLibre's natural `<img>`-based tile fetches (which are no-cors → opaque status 0) were being rejected by the service worker route. Result: `opd-tiles-carto` and `opd-tiles-gibs` caches never populated, and on second-load with the SW controlling the page, the map rendered blank.
+
+The original v1.2.2.0 narrowing was guarding against a theoretical cached-429 scenario flagged by /review's Codex pass. In production at our request volume, that risk is negligible; the operational failure (no map tiles at all) is total. Reverting the filter is the right tradeoff.
+
+### Fixed
+
+- `frontend/vite.config.ts`: SW route `cacheableResponse.statuses` reverted from `[200]` to `[0, 200]` for both `opd-tiles-carto` and `opd-tiles-gibs`. MapLibre's opaque tile responses now cache correctly. The V4-P2 precache (which uses `fetch()` with default CORS) still produces real status-200 responses; both paths populate the same caches.
+
+### Diagnostic notes (for v1.1 OVATION work or future SW changes)
+
+- MapLibre `RasterTileSource` doesn't support `crossOrigin` directly in the style spec.
+- Setting CORS on tile fetches requires either a `transformRequest` callback (which lacks `mode` in `RequestParameters`) or custom source loading.
+- For now, the SW route accepts both opaque and CORS responses; a future hardening could use Workbox's `cacheKeyWillBeUsed` plugin to dedup or `cacheWillUpdate` to filter cached-error 429s explicitly.
+
 ## [1.2.3.1] - 2026-05-13
 
 ### Aurora Kp: normalize Z-less SWPC timestamps to UTC (latent age_min bug fix).
