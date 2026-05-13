@@ -99,7 +99,7 @@ it "incredible" + sent four observations via WhatsApp. None block V3.0;
 they reshape what "polish" looks like once V3.0 is in flight. Source:
 WhatsApp screenshot 2026-05-05 17:00 (archive in `docs/MISSION_LOG.md`).
 
-### V4-P2 — Map zoom-in for terrain detail
+### V4-P2 — Map zoom-in for terrain detail (SHIPPED v1.2.1.1, 2026-05-11)
 Chris uses Google Maps as a secondary reference in WORF to pick out
 mountains / shoreline shapes / man-made features that orient him to the
 target. The current map view caps at a relatively shallow zoom; Chris
@@ -109,7 +109,7 @@ the deeper tiles (it does up to z19, possibly z22 with retina). GIBS
 true-color caps lower (~z9) so deeper zooms drop GIBS overlay
 gracefully. ~15 min CC.
 
-### V4-P2 — Rotate map to ISS track ("ISS-up" toggle)
+### V4-P2 — Rotate map to ISS track ("ISS-up" toggle) (SHIPPED v1.2.1.0, 2026-05-11)
 Chris's mental model in WORF: "I'm looking down, this is what's coming
 next." Rotating the map so ISS direction-of-travel points up matches
 that model exactly (currently north-up). Implementation: derive ISS
@@ -184,7 +184,7 @@ SW Cache API doesn't miss on subdomain rotation. CORS mode (not no-cors)
 so the SW route's `cacheableResponse.statuses: [200]` filter actually
 excludes 429/5xx instead of caching them as "valid" tiles for 7 days.
 
-### V4-P2 — Queue vs Upcoming + scoring explainer
+### V4-P2 — Queue vs Upcoming + scoring explainer (SHIPPED v1.2.0.1, 2026-05-11)
 Chris reported (2026-05-10): "I think I don't fully understand the queue
 vs upcoming and the scoring, but it generally makes sense!" The two-tab
 distinction (Queue = next 90 min observed-cloud passes; Upcoming = next
@@ -233,11 +233,16 @@ use SGP4 client-side for the 1Hz live dot. Path 2 is simpler but blocks
 on confirming SGP4 is cheap enough for sustained 1Hz on the unattended
 Mac. Documented in `frontend/test/iss-sgp4.test.ts:96-101`.
 
-### V2-P3 — Forecast-horizon obs-age tag
+### V2-P3 — Forecast-horizon obs-age tag (SHIPPED v1.2.3.3, 2026-05-13)
 `formatObsAge` silently hides the tag for forecast (future-dated) cloud
 samples — the user can't tell a 1h-ahead forecast from a 23h-ahead one.
 Detect `cloud_source === 'gfs-forecast'` in card.ts and render
 "forecast +Nh" instead of suppressing.
+
+Shipped: new `formatForecastHorizon()` helper in card.ts renders "+Nm /
++Nh / +Nd" alongside the existing "forecast" tag. Upcoming cards now
+show "forecast +6h" / "forecast +18h" instead of just "forecast" so
+the operator can weight near-term vs far-out predictions.
 
 ### V2-P3 — Periodic satrec re-parse
 satellite.js mutates `satrec.error` per propagate call. Over an 8-month
@@ -276,7 +281,7 @@ leaves open for 8 months. Either diff or update only the countdown
 text node in place. V3 work — not breaking anything today, just
 more wattage than necessary on the unattended Mac.
 
-### SVG pulse animation runs 24/7
+### SVG pulse animation runs 24/7 (SHIPPED v1.2.3.3, 2026-05-13)
 **Priority:** P3
 
 iss-pulse keyframes infinite-loop while the marker is alive,
@@ -284,6 +289,10 @@ including when the Map tab is hidden. Browsers usually pause
 hidden-tab animations but MapLibre keeps the marker DOM live.
 Pause on tab change, OR use IntersectionObserver to suspend.
 V3 polish.
+
+Shipped: CSS rule pauses `.iss-pulse animation: none` when `#view`
+class is view-queue / view-upcoming / view-log. The map-pane DOM
+stays alive (MapLibre's choice) but the animation no longer ticks.
 
 ### Cloud sampler re-fetches every tick (no inter-tick cache)
 **Priority:** P3
