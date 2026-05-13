@@ -1,16 +1,20 @@
 /**
  * Orbit Photo Director — Cloudflare Worker.
  *
- * Two endpoints:
+ * Three endpoints:
  *   POST /api/log     — calibration ingest. Requires X-Calib-Token header. Appends one
  *                        JSONL record per request to r2:CALIB/log/<yyyymm>/<random>.jsonl.
  *                        Idempotent on a client-supplied dedupe_key.
  *   GET  /api/health  — reads manifest.json from r2:SITE; returns 200 if last_run is
  *                        within STALE_THRESHOLD_SECONDS, else 503. UptimeRobot polls this.
+ *   GET  /api/kp      — proxies SWPC's planetary K-index, edge-cached 5min. V4-P2 aurora
+ *                        indicator. See worker/src/aurora.ts.
  *
  * Static assets (manifest.json, /v/.../*) are NOT served by this Worker — they're served
  * directly from the R2 bucket bound to the custom domain. The Worker only handles /api/*.
  */
+
+import { handleKpRequest } from './aurora';
 
 export interface Env {
   SITE: R2Bucket;
@@ -456,7 +460,7 @@ async function handleHealth(env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (!ALLOWED_METHODS.has(request.method)) {
       return new Response('method not allowed', { status: 405 });
     }
@@ -483,6 +487,15 @@ export default {
       (request.method === 'GET' || request.method === 'HEAD')
     ) {
       response = await handleHealth(env);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+    } else if (
+      url.pathname === '/api/kp' &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      // V4-P2 aurora indicator: SWPC Kp-index proxy with edge cache.
+      response = await handleKpRequest(request, env, ctx);
       if (request.method === 'HEAD') {
         response = new Response(null, { status: response.status, headers: response.headers });
       }
