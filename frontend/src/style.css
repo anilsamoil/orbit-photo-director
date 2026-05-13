@@ -73,6 +73,34 @@ body {
   margin-left: 0.4rem;
 }
 
+/* Aurora Kp badge in the topbar — V4-P2 v1. Operator-visible Kp number
+ * with click-through to NOAA SWPC. Color-coded by Kp range so a glance
+ * tells Chris whether to bother looking out the cupola. Hidden when
+ * /api/kp returns no data (worker hides itself rather than rendering
+ * a fake reading). */
+.kp-badge {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  user-select: none;
+  transition: filter 0.15s ease;
+}
+.kp-badge[hidden] { display: none; }
+.kp-badge:hover { filter: brightness(1.15); }
+.kp-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.kp-badge.kp-quiet  { background: rgba(40, 120, 60, 0.25);  color: #7cd398; border-color: rgba(40, 120, 60, 0.5); }
+.kp-badge.kp-active { background: rgba(180, 140, 30, 0.25); color: #e8c75b; border-color: rgba(180, 140, 30, 0.5); }
+.kp-badge.kp-storm  { background: rgba(200, 100, 30, 0.25); color: #ec9650; border-color: rgba(200, 100, 30, 0.5); }
+.kp-badge.kp-severe { background: rgba(200, 50, 50, 0.3);   color: #f87171; border-color: rgba(200, 50, 50, 0.6); }
+
 /* Toast: brief inline confirmation for Shoot/Skip clicks. Replaces the
  * previous "dim the card 1.5s" feedback that was easy to miss. */
 .toast {

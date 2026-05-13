@@ -2,6 +2,39 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.3.0] - 2026-05-13
+
+### V4-P2 aurora indicator: Kp index in the topbar with click-through to SWPC.
+
+Chris visits NOAA SWPC's experimental aurora dashboard daily to check the Kp index (geomagnetic activity, 0-9 quasi-log scale; Kp 5+ = storm worth knowing about). This release surfaces Kp on map.astroanil.dev so he doesn't have to open a tab. Topbar widget shows "Kp 4.2" color-coded by storm level — green/yellow/orange/red — and clicks through to SWPC for the full oval map when the number is interesting.
+
+### Architecture (locked down via /plan-eng-review + Codex outside voice)
+
+The original plan included consuming the full OVATION oval (899KB) + computing "is aurora visible from ISS right now?" via look-angle geometry to 150km altitude. Codex's review flagged the visibility math as wrong — naive ISS-subpoint lookup ignores limb visibility (ISS sees auroras hundreds of km off-nadir) and daylight/twilight. Honest visibility math is a 6h project with a real test burden; the headline Kp number alone solves 80% of Chris's "save me a tab" need. v1 ships Kp-only. The oval + visibility prediction is deferred to v1.1 with Codex's findings baked in as known requirements (see TODOS.md V4-P2 entry).
+
+### Added
+
+- New `worker/src/aurora.ts` — `/api/kp` route handler. Proxies SWPC's `planetary_k_index_1m.json`, parses the latest valid row, edge-caches the response 5 minutes. ~80-byte JSON body (`{kp, timestamp, age_min}`).
+- New `frontend/src/aurora.ts` — `fetchKpData()` + `kpToColorClass()` + `renderKpWidget()` + `initKpWidget()`. Pure module, fully unit-testable.
+- New `worker/test/aurora.test.ts` (13 tests): parseKp schema-drift tolerance, edge-cache hit/miss, SWPC outage/parse/empty-array failure modes.
+- New `frontend/test/aurora.test.ts` (21 tests): fetch failure modes, all 4 color-class boundaries, render null-state, tooltip age formatting (minute / hour-minute), click + keyboard activation, a11y attributes.
+
+### How it's wired
+
+- Worker route `/api/kp` registers next to the existing `/api/log` + `/api/health` handlers. CORS open (`access-control-allow-origin: *`) since Kp is public data.
+- Edge cache TTL 300s for `200-299`; `400-599` capped at 60s so SWPC blips don't lock the edge for 5 minutes.
+- Frontend fetches `/api/kp` from inside `refresh()`'s `if (isNewer)` block — same gate as tile-precache. Kp is a 3-hour smoothed value so hourly cadence is well over-spec on freshness. Worker's edge cache is the real freshness budget.
+- Widget hides itself when `/api/kp` returns null (network error, SWPC outage past TTL, malformed JSON, parse failure). It's optional UI — never load-bearing, never throws a banner.
+- Click and keyboard (Enter / Space) open `https://www.swpc.noaa.gov/communities/aurora-dashboard-experimental` in a new tab. `role="button"` + `tabindex="0"` for screen readers.
+- Color thresholds match NOAA G-scale: 0-3 quiet (green), 3-5 active (yellow), 5-7 storm (orange), 7+ severe (red).
+
+### Architectural decisions (recorded in design doc)
+
+- **Data fetch path:** Cloudflare Worker proxy (not generator hourly cron, not frontend-direct). Decouples aurora's natural cadence from the existing hourly manifest tick.
+- **Response shape:** Server-computed summary only (~80 bytes/refresh) — not the 10KB compact grid or 899KB raw OVATION. v1.1 will need the grid for live LOS-tolerant visibility lookups; v1 doesn't.
+- **Failure mode:** Hide widget. Static SWPC link in HTML is the fallback. No banner, no toast.
+- **ISS link budget:** ~80 bytes per hourly refresh ≈ 2KB/day. Negligible on Chris's Ku-band uplink.
+
 ## [1.2.2.1] - 2026-05-13
 
 ### Empty-Queue disambiguator: "why empty?" hint when the manifest is stale.

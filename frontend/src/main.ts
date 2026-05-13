@@ -20,6 +20,7 @@ import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { emptyQueueHint } from './empty-hint';
+import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
@@ -163,6 +164,16 @@ async function doRefresh(): Promise<void> {
       // the same tile bytes are already in the SW cache from the previous
       // version. Top-3 targets only change when the manifest does.
       precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
+      // V4-P2 aurora indicator: fetch latest Kp from the Worker proxy and
+      // render the topbar badge. Gated on isNewer for the same reason as
+      // precache — the manifest tick is hourly, Kp is a 3h smoothed value,
+      // so once-per-manifest is well over-spec on freshness. The worker's
+      // edge cache (5min TTL) is the real freshness budget. Fire-and-forget;
+      // a null result from the fetch hides the widget rather than throwing.
+      void fetchKpData().then((kp) => {
+        const widget = document.getElementById('kp-widget');
+        if (widget) renderKpWidget(kp, widget);
+      });
     }
 
     renderQueue();
@@ -614,6 +625,10 @@ async function loadMapPane(): Promise<void> {
 
 async function init(): Promise<void> {
   bindTabs();
+  // V4-P2 aurora widget: attach the click handler once. Widget content is
+  // rendered later by refresh() once /api/kp resolves.
+  const kpWidget = document.getElementById('kp-widget');
+  if (kpWidget) initKpWidget(kpWidget);
   // Restore the previous-known-good UI synchronously BEFORE the network call
   // so the user sees their queue + map within ms of the page loading. If the
   // refresh below succeeds, snapshot is overwritten transactionally; if it

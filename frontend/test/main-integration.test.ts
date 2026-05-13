@@ -41,6 +41,18 @@ vi.mock('../src/tile-precache', async () => {
   };
 });
 
+// Mock aurora module so refresh() doesn't fire real /api/kp fetches during
+// test runs. Same isolation concern as tile-precache above.
+vi.mock('../src/aurora', async () => {
+  const actual = await vi.importActual<typeof import('../src/aurora')>('../src/aurora');
+  return {
+    ...actual,
+    fetchKpData: vi.fn(() => Promise.resolve(null)),
+    renderKpWidget: vi.fn(),
+    initKpWidget: vi.fn(),
+  };
+});
+
 // Inline minimal DOM that main.ts queries against. Mirrors the structure
 // in frontend/index.html — only the IDs main.ts touches.
 const DOM = `

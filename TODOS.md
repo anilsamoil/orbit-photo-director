@@ -118,17 +118,55 @@ call `map.setBearing(heading)` on each tick. Toggle between north-up and
 ISS-up via a small button in the map controls. ~45 min CC. Cheap, high
 operator-impact change.
 
-### V4-P2 — Aurora forecast / current-level indicator
+### V4-P2 — Aurora forecast / current-level indicator (v1 SHIPPED v1.2.3.0, 2026-05-13)
 Chris visits NOAA SWPC daily (`https://www.swpc.noaa.gov/communities/aurora-dashboard-experimental`).
-Adding an aurora indicator to the page — either as a topbar widget
-("Kp 4 · auroral oval visible from ISS") or as a card category — would
-save him a tab. Shape: new generator pipeline (`generator/aurora.py`)
-fetching SWPC's 30-min Kp + ovation product + auroral-electrojet feeds,
-publishing as a new artifact (or as fields in `status.json` per the V3
-ARCH-1 pattern). Frontend renders. New data source = its own
-`/plan-eng-review` cycle when picked up (architecture decisions: data
-shape, refresh cadence, banner integration, card vs topbar). Estimate
-deferred to that planning round.
+
+**v1 shipped (v1.2.3.0):** Topbar Kp badge color-coded by NOAA G-scale,
+click-through to SWPC dashboard. Cloudflare Worker route `/api/kp` proxies
+SWPC's `planetary_k_index_1m.json` with 5-min edge cache. No visibility
+math, no oval overlay, no card integration — intentionally minimal v1
+gated on operator feedback before spending the bigger budget on v1.1.
+
+**v1.1 — "Is the aurora visible from ISS right now?" (DEFERRED)**
+
+Wait for Chris's feedback on v1 before starting. If he asks for more than
+the headline number, the design doc at
+`~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-aurora-v1-design-2026-05-13.md`
+covers the architecture decisions. Codex's outside-voice review surfaced
+real correctness requirements that must be in v1.1:
+
+- **Honest visibility math** (not naive ISS-subpoint lookup). ISS sees
+  toward the limb hundreds of km, not just nadir. Real visibility test
+  needs: ISS terminator state (night side or twilight), look-angle ray
+  cast from ISS toward 150km aurora altitude across the visible
+  hemisphere, sample OVATION probability at intersection points,
+  threshold the max.
+- **Day/night gating.** Aurora is invisible in daylight regardless of
+  oval position. Sun-elevation check at ISS subpoint must gate "visible"
+  copy.
+- **Trust-calibrated copy.** A false "visible" is worse than honest
+  "aurora nearby." Match copy precision to math precision.
+- **OVATION consumption.** Worker downsamples 899KB raw → ~10KB compact
+  grid (5° quantized 0-100 probability) for LOS resilience. FE runs
+  visibility lookups against cached grid + live ISS pos when worker is
+  unreachable.
+- **Durable last-good storage.** Cloudflare KV-backed fallback for cold
+  colo + SWPC outage scenario (edge cache alone can evict).
+- **Source-age display, not response-age.** UI must show how old the
+  SWPC reading is, not which cache layer answered. Stack: SW cache +
+  CF edge cache + worker fallback cache + SWPC sample timestamp.
+- **Schema-drift tolerance for OVATION** (SWPC product is experimental).
+- **Observability:** log source age, payload size, parse failures,
+  fallback usage, response status.
+- **Pre-flight check:** verify SWPC OVATION reachable from Cloudflare
+  before implementation (different rate limits / redirects than other
+  SWPC endpoints).
+- **Polling cadence:** fetch on page-open + visibility-change, not
+  continuous 5-min poll. Saves ~$0 but is the right shape.
+
+Estimate revision: 4-6h CC for honest v1.1 (not 2h as originally
+scoped). Reserved innovation token: yes (geometric math). Do this only
+after Chris confirms the Kp-only widget isn't enough.
 
 ### V4-P2 — Pre-cache tiles for upcoming-queue targets (SHIPPED v1.2.2.0, 2026-05-13)
 Chris reported (2026-05-05): "the map doesn't work when you are LOS but
