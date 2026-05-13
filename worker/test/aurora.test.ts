@@ -12,6 +12,18 @@ import { describe, expect, it, beforeEach } from 'vitest';
 
 import { handleKpRequest, parseKp } from '../src/aurora';
 
+/** Shape of the JSON bodies our handler emits. Success path returns
+ *  KpResponse fields; error path returns an `error` discriminator plus
+ *  optional context fields. Tests use this to type-narrow `res.json()`,
+ *  which returns `unknown` under strict TS. */
+type KpBody = {
+  kp?: number;
+  timestamp?: string;
+  age_min?: number;
+  error?: string;
+  status?: number;
+};
+
 // ----- Mock infrastructure ---------------------------------------------------
 
 class MockCache implements Pick<Cache, 'match' | 'put'> {
@@ -132,7 +144,7 @@ describe('handleKpRequest', () => {
       cache as unknown as Cache,
     );
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as KpBody;
     expect(body.kp).toBe(4.2);
     expect(body.timestamp).toBe('2026-05-13T11:55:00Z');
     expect(typeof body.age_min).toBe('number');
@@ -177,7 +189,7 @@ describe('handleKpRequest', () => {
       cache as unknown as Cache,
     );
     expect(res.status).toBe(502);
-    const body = await res.json();
+    const body = (await res.json()) as KpBody;
     expect(body.error).toBe('swpc_unreachable');
   });
 
@@ -191,7 +203,7 @@ describe('handleKpRequest', () => {
       cache as unknown as Cache,
     );
     expect(res.status).toBe(502);
-    const body = await res.json();
+    const body = (await res.json()) as KpBody;
     expect(body.error).toBe('swpc_status');
     expect(body.status).toBe(503);
   });
@@ -206,7 +218,7 @@ describe('handleKpRequest', () => {
       cache as unknown as Cache,
     );
     expect(res.status).toBe(502);
-    const body = await res.json();
+    const body = (await res.json()) as KpBody;
     expect(body.error).toBe('swpc_parse');
   });
 
@@ -220,7 +232,7 @@ describe('handleKpRequest', () => {
       cache as unknown as Cache,
     );
     expect(res.status).toBe(502);
-    const body = await res.json();
+    const body = (await res.json()) as KpBody;
     expect(body.error).toBe('swpc_no_data');
   });
 
