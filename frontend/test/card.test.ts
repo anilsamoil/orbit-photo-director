@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _resetOpenBreakdownsForTest, formatObsAge, renderCard, renderCards } from '../src/card';
+import { _resetOpenBreakdownsForTest, formatForecastHorizon, formatObsAge, renderCard, renderCards } from '../src/card';
 import type { PassEntry } from '../src/types';
 
 const samplePass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -378,6 +378,39 @@ describe('formatObsAge', () => {
 
   it('returns empty string for future-dated samples (clock skew)', () => {
     expect(formatObsAge('2024-10-17T12:30:00Z', now)).toBe('');
+  });
+});
+
+describe('formatForecastHorizon', () => {
+  const now = Date.parse('2024-10-17T12:00:00Z');
+
+  it('returns empty string for past-dated samples (caller uses formatObsAge)', () => {
+    expect(formatForecastHorizon('2024-10-17T11:00:00Z', now)).toBe('');
+  });
+
+  it('returns empty string for the exact-now boundary', () => {
+    // 0 minutes ahead is not a forecast — fall back to obs path.
+    expect(formatForecastHorizon('2024-10-17T12:00:00Z', now)).toBe('');
+  });
+
+  it('returns minutes for sub-hour horizons', () => {
+    expect(formatForecastHorizon('2024-10-17T12:42:00Z', now)).toBe('+42m');
+  });
+
+  it('returns hours (1 decimal) for horizons under 10h', () => {
+    expect(formatForecastHorizon('2024-10-17T18:00:00Z', now)).toBe('+6.0h');
+  });
+
+  it('returns hours (whole) for horizons 10h–24h', () => {
+    expect(formatForecastHorizon('2024-10-18T05:00:00Z', now)).toBe('+17h');
+  });
+
+  it('returns days for multi-day forecasts', () => {
+    expect(formatForecastHorizon('2024-10-20T12:00:00Z', now)).toBe('+3d');
+  });
+
+  it('returns empty string for malformed timestamps', () => {
+    expect(formatForecastHorizon('not a date', now)).toBe('');
   });
 });
 

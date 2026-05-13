@@ -2,6 +2,24 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.3.3] - 2026-05-13
+
+### Cheap-wins batch: forecast-horizon tag + pulse-animation pause + TODOS hygiene.
+
+Three small operator-facing polish items bundled into one release.
+
+### Added
+
+- **Forecast horizon tag.** Upcoming cards used to show a generic `forecast` tag for GFS-sourced cloud predictions, dropping the "obs Nh ago" tag because the sample time was future-dated. Operator couldn't tell a 1h-ahead forecast from a 23h-ahead one. New `formatForecastHorizon()` helper in `card.ts` renders the lookahead as `+Nm` / `+Nh` / `+Nd`, so the card shows e.g. `forecast +6h` or `forecast +18h`. 7 unit tests covering boundaries (sub-hour, 10h-decimal switch, multi-day) + clock-skew defenses.
+
+### Changed
+
+- **Pulse animation pauses when Map pane is hidden.** The ISS marker's `.iss-pulse` halo animation infinite-looped while the marker DOM was alive, including when the user was on Queue/Upcoming/Log tabs. MapLibre keeps the marker DOM in memory even with `#map-pane` `display: none`, so the browser's "display-none pauses animations" optimization didn't kick in. CSS rule now explicitly forces `animation: none` on `.iss-pulse` when `#view` is not `.view-map`. Belt-and-suspenders; tiny CPU/battery win on Chris's ISS laptop.
+
+### Internal
+
+- TODOS.md hygiene: annotated 3 previously-shipped items (V4-P2 map zoom v1.2.1.1, ISS-up toggle v1.2.1.0, scoring explainer v1.2.0.1) that had been completed but not marked.
+
 ## [1.2.3.2] - 2026-05-13
 
 ### Map tiles broken: SW cache filter rejected MapLibre's opaque responses.

@@ -102,9 +102,15 @@ export function renderCard(
   }
   // Forecast variant: tag the pass so the user knows the cloud number came
   // from GFS (forward-looking) not a current observation. Less certain by
-  // design — the badge sets the expectation.
+  // design — the badge sets the expectation. Include the lookahead horizon
+  // ("forecast +6h") so the user can weight 1h-ahead vs 23h-ahead samples;
+  // the prior "forecast" tag alone hid that distinction.
   if (variant === 'forecast' || p.cloud_source === 'gfs-forecast') {
-    meta.appendChild(makeTag('forecast-tag', 'forecast'));
+    const horizon = p.sample_time ? formatForecastHorizon(p.sample_time, nowMs) : '';
+    meta.appendChild(makeTag(
+      'forecast-tag',
+      horizon ? `forecast ${horizon}` : 'forecast',
+    ));
   }
 
   const score = renderScoreWithBreakdown(p);
@@ -157,6 +163,24 @@ export function formatObsAge(sampleTimeIso: string, nowMs: number): string {
   const h = ageMin / 60;
   if (h < 24) return `${h.toFixed(h < 10 ? 1 : 0)}h ago`;
   return `${Math.round(h / 24)}d ago`;
+}
+
+/** Format the lookahead of a GFS forecast sample. Counterpart to
+ *  formatObsAge for future-dated cloud readings — "obs N ago" would render
+ *  as nothing (formatObsAge returns '' for negative age), leaving the user
+ *  blind to whether the forecast is 1h ahead or 23h ahead. Returns
+ *  "+Nh" / "+Nd" / "" for malformed timestamps. Past-dated samples return
+ *  '' so the caller falls back to formatObsAge.
+ */
+export function formatForecastHorizon(sampleTimeIso: string, nowMs: number): string {
+  const t = Date.parse(sampleTimeIso);
+  if (Number.isNaN(t)) return '';
+  const aheadMin = (t - nowMs) / 60_000;
+  if (aheadMin <= 0) return '';  // not a forecast
+  if (aheadMin < 60) return `+${Math.round(aheadMin)}m`;
+  const h = aheadMin / 60;
+  if (h < 24) return `+${h.toFixed(h < 10 ? 1 : 0)}h`;
+  return `+${Math.round(h / 24)}d`;
 }
 
 function obstructionClass(c: string): string {

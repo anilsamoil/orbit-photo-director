@@ -497,6 +497,16 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .iss-pulse { animation: none; opacity: 0.4; }
 }
+/* Battery/CPU saver: pause the pulse halo when the map pane is hidden.
+ * MapLibre keeps the marker DOM alive even with #map-pane display:none,
+ * and on Chris's ISS laptop those background animation ticks aren't
+ * free. The view-* class on #view propagates here because .iss-pulse
+ * lives inside #map-pane → #view. */
+.view-queue .iss-pulse,
+.view-upcoming .iss-pulse,
+.view-log .iss-pulse {
+  animation: none;
+}
 
 .map-controls {
   position: absolute;
