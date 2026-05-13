@@ -27,6 +27,20 @@ vi.mock('../src/manifest', () => ({
   fetchStatus: vi.fn(),
 }));
 
+// Mock tile-precache so refresh() doesn't fire real cross-origin tile
+// fetches against carto/gibs CDNs during the test run. Without this mock
+// the integration suite makes ~18 network requests per "newer manifest"
+// scenario, which is slow + flaky + violates the test-isolation contract.
+vi.mock('../src/tile-precache', async () => {
+  const actual = await vi.importActual<typeof import('../src/tile-precache')>(
+    '../src/tile-precache',
+  );
+  return {
+    ...actual,
+    precacheTilesForTargets: vi.fn(),
+  };
+});
+
 // Inline minimal DOM that main.ts queries against. Mirrors the structure
 // in frontend/index.html — only the IDs main.ts touches.
 const DOM = `

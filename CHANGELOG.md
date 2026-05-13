@@ -2,6 +2,29 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.2.0] - 2026-05-13
+
+### Tile pre-cache: the map works during LOS over Queue targets.
+
+Chris (operator, 2026-05-05) reported the dropout: "the map doesn't work when you are LOS but you still get the upcoming targets." Loss-of-signal blacks out networking on the ISS side for stretches between passes, and the existing service-worker tile cache only held tiles the operator had already panned to. So a fresh target the operator hadn't looked at yet = blank map exactly when it matters.
+
+This release pre-caches basemap and cloud tiles for the top-3 Queue targets at z6/z8/z10 (continent → region → metro) on every manifest version change. Eighteen tiles per refresh, fire-and-forget. When the operator next opens Map during LOS over one of those targets, the wider-context tiles are already in the service-worker cache.
+
+### Added
+
+- New `src/tile-precache.ts` module owning the precache logic + the GIBS/yesterday URL helpers (moved out of `map.ts` so `main.ts` doesn't drag the MapLibre vendor chunk into the main bundle).
+- 23 unit tests covering slippy-map projection, top-N capping, GIBS zoom clamp, subdomain match, NaN guards, offline-skip, and in-flight dedup.
+
+### How it's wired
+
+- Pre-cache fires inside `refresh()`'s `if (isNewer)` branch — same gate that protects `saveSnapshot`. Manifests republish hourly, but the poll runs every 60s, so without the gate the precache would fire 60× more than budgeted. Now it fires once per version change, ~hourly.
+- Carto subdomain matches MapLibre's deterministic `(x+y) % 4` pick. The service-worker Cache API keys by full URL including hostname, so a tile pre-cached as `a.basemaps...` would be a miss when MapLibre rotates to `b/c/d`. Now they agree, ~100% hit rate instead of ~25%.
+- CORS mode (not `no-cors`) so the service worker sees real HTTP status codes. With opaque responses, status is always 0 — a 429 rate-limit from carto would have been cached as a "valid" tile for 7 days, blanking the map. The Lane F service-worker route's `cacheableResponse.statuses` is also tightened to `[200]` only.
+- In-flight Set dedupes concurrent refresh ticks (visibility-resume can stack with the poll interval). Response bodies are explicitly cancelled to release ~450 KB of buffer per refresh instead of waiting on GC.
+- `Number.isFinite` guard on lat/lon skips targets with bad coords. Tests in `main-integration.test.ts` mock the precache module so they don't fire real cross-origin fetches during CI.
+
+The behavior change is invisible to the operator until they hit LOS over an imminent target — then the map renders instead of staying black. The risk surfaces caught by the multi-specialist /review (subdomain mismatch, 60× polling, opaque-cache failures) would all have defeated the feature within day one of deployment.
+
 ## [1.2.1.1] - 2026-05-11
 
 ### Map zoom-in for terrain detail (no more blank tiles past z20).

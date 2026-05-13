@@ -22,6 +22,7 @@ import { createPollScheduler, isOnline, type PollScheduler } from './network-sta
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
+import { gibsTrueColorUrl, precacheTilesForTargets, yesterdayIso } from './tile-precache';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
@@ -151,6 +152,16 @@ async function doRefresh(): Promise<void> {
         savedAt: Date.now(),
       });
       lastSavedManifestVersion = manifest.version;
+      // V4-P2 (Chris 2026-05-05): pre-cache basemap + cloud tiles for the
+      // top-3 Queue targets at z6/z8/z10. Fire-and-forget; SW's CacheFirst
+      // rules write to the tile caches automatically. Skipped when offline.
+      // GATED on `isNewer` (same as saveSnapshot): refresh() runs every
+      // 60s but the manifest only republishes hourly. Without the gate
+      // we'd fire 18 tiles × 60 polls/h = 1080 fetches/h instead of 18 —
+      // 60× over the budgeted carto rate limit, plus pointless because
+      // the same tile bytes are already in the SW cache from the previous
+      // version. Top-3 targets only change when the manifest does.
+      precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
     }
 
     renderQueue();

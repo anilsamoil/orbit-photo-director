@@ -130,7 +130,7 @@ ARCH-1 pattern). Frontend renders. New data source = its own
 shape, refresh cadence, banner integration, card vs topbar). Estimate
 deferred to that planning round.
 
-### V4-P2 — Pre-cache tiles for upcoming-queue targets
+### V4-P2 — Pre-cache tiles for upcoming-queue targets (SHIPPED v1.2.2.0, 2026-05-13)
 Chris reported (2026-05-05): "the map doesn't work when you are LOS but
 you still get the upcoming targets." Expected: Lane F SW caches tiles
 the user has previously panned over; new regions during LOS get blank
@@ -138,6 +138,13 @@ tiles. Improvement: when online, pre-fetch the carto + GIBS tiles for
 each upcoming target's lat/lon at z6-z10. Adds ~50-100 KB per target to
 the SW cache (negligible vs the 100/200 LRU caps). Limit to top-N
 upcoming. ~30 min CC.
+
+Shipped: top-3 targets × {z6, z8, z10} × {carto, GIBS} = 18 tiles
+fire-and-forget per manifest version change. Lives in
+`src/tile-precache.ts`. Subdomain-matched to MapLibre's `(x+y) % 4` so
+SW Cache API doesn't miss on subdomain rotation. CORS mode (not no-cors)
+so the SW route's `cacheableResponse.statuses: [200]` filter actually
+excludes 429/5xx instead of caching them as "valid" tiles for 7 days.
 
 ### V4-P2 — Queue vs Upcoming + scoring explainer
 Chris reported (2026-05-10): "I think I don't fully understand the queue
