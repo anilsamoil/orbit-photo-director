@@ -100,12 +100,21 @@ export default defineConfig({
           },
           {
             // Carto basemap tiles: CacheFirst LRU bounded.
-            // statuses [200] only (not [0, 200]): MapLibre fetches with
-            // CORS so tiles arrive with real status codes. The V4-P2
-            // precache also uses CORS. Allowing status 0 (opaque) would
-            // let an opaque 429/5xx — which has status 0 to JS — get
-            // cached as a "valid" tile for 7 days, blanking the map
-            // until the entry expires. Tighter filter, no behavior loss.
+            // statuses [0, 200] — both opaque (status 0) and real-CORS
+            // (status 200) responses cache. MapLibre's tile <img> fetches
+            // are no-cors → opaque status 0; the V4-P2 precache uses
+            // fetch() with default CORS → real status 200. Both code
+            // paths need to populate this cache.
+            //
+            // Earlier v1.2.2.0 narrowed to [200] only to avoid caching
+            // opaque 429/5xx as "valid" tiles. In production that
+            // regressed both paths: precache fires before the SW takes
+            // control on first load (so opd-tiles-* never seeds), and
+            // MapLibre's natural pan path is the only fallback — and
+            // its opaque responses were being rejected, leaving the map
+            // blank on subsequent loads. The cached-error risk is
+            // theoretical at our request volume; the broken-tile
+            // operational failure was observed. Revert to [0, 200].
             urlPattern: /^https:\/\/[a-d]\.basemaps\.cartocdn\.com\//,
             handler: 'CacheFirst',
             options: {
@@ -114,13 +123,13 @@ export default defineConfig({
                 maxEntries: 100,
                 maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
               },
-              cacheableResponse: { statuses: [200] },
+              cacheableResponse: { statuses: [0, 200] },
             },
           },
           {
             // GIBS true-color tiles: CacheFirst with shorter TTL (imagery
             // is daily; the imagery-date badge surfaces staleness in the UI).
-            // statuses [200] only — see carto rationale above.
+            // statuses [0, 200] — see carto rationale above.
             urlPattern: /^https:\/\/gibs\.earthdata\.nasa\.gov\//,
             handler: 'CacheFirst',
             options: {
@@ -129,7 +138,7 @@ export default defineConfig({
                 maxEntries: 200,
                 maxAgeSeconds: 60 * 60 * 24, // 24h
               },
-              cacheableResponse: { statuses: [200] },
+              cacheableResponse: { statuses: [0, 200] },
             },
           },
           {
