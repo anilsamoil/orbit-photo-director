@@ -19,6 +19,7 @@ import { buildPayload, clearToken, drainQueue, getToken, postCalib, queuedCalibC
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
+import { emptyQueueHint } from './empty-hint';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
@@ -209,6 +210,13 @@ function renderQueue(): void {
   const visible = upcomingPasses(currentTop5, now);
   if (visible.length === 0) {
     cards.replaceChildren();
+    // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
+    // by generator lag (every pick has aged out of the 90-min window),
+    // not orbital geometry. Surface a specific hint so the operator
+    // knows to wait for the next tick rather than wondering whether
+    // there are simply no passes coming.
+    const hint = emptyQueueHint(currentManifest, now);
+    empty.textContent = hint ?? 'No passes in the next 90 minutes.';
     empty.hidden = false;
   } else {
     empty.hidden = true;

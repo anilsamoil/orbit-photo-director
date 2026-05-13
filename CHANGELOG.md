@@ -2,6 +2,25 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.2.1] - 2026-05-13
+
+### Empty-Queue disambiguator: "why empty?" hint when the manifest is stale.
+
+An empty Queue can mean two very different things to the operator: there genuinely are no qualifying passes in the next 90 minutes (orbital geometry), OR the manifest is so stale that every pick it once contained has aged past the Queue's 90-min window (generator lag). Before this release both showed the same "No passes in the next 90 minutes." copy, leaving Chris guessing whether to wait or check if the page is broken.
+
+Now, when the manifest is 90+ minutes old AND the Queue is empty, the empty-state copy switches to: "Manifest is 1h 42m stale — generator has been slow. Next update due in 18m." Age + next-tick projection both surface, so the operator knows exactly what's happening and when to retry.
+
+### Added
+
+- New `src/empty-hint.ts` module with pure `emptyQueueHint(manifest, nowMs)` function. Returns the hint string when staleness is the unambiguous cause, else null.
+- 8 unit tests covering threshold edges, hour-boundary formatting (`2h` not `2h 0m`), multi-hour ages, NaN-tolerance on `generated_at`, and clock-skew (future-dated manifest) cases.
+
+### How it's wired
+
+- 90-min threshold is intentionally higher than the existing `isStaleManifest` banner (60 min). The banner says "data may be slightly stale"; this hint says "Queue emptiness is BECAUSE of staleness, not geometry." Picks have a max 90-min Queue lifetime, so 90+ min old manifests have by definition outlived every pick they could serve.
+- Next-tick projection assumes hourly generator cadence (`GENERATOR_TICK_INTERVAL_MIN = 60`). Computes `60 - (ageMin % 60)` so the figure is meaningful even at 2h+ ages — wraps to the next expected boundary instead of going negative.
+- `renderQueue()` sets `empty.textContent` on every render, so the message updates live as the manifest ages or refreshes.
+
 ## [1.2.2.0] - 2026-05-13
 
 ### Tile pre-cache: the map works during LOS over Queue targets.
