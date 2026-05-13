@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.3.1] - 2026-05-13
+
+### Aurora Kp: normalize Z-less SWPC timestamps to UTC (latent age_min bug fix).
+
+SWPC's `planetary_k_index_1m.json` returns timestamps without a `Z` suffix (`2026-05-13T15:51:00`). ECMAScript's behavior for parsing date-time strings without a timezone offset is engine-defined: V8 (Cloudflare's runtime) happens to treat it as UTC, but Safari and older engines treat it as local time, which would shift `age_min` by the runtime's UTC offset.
+
+Today on Cloudflare this is fine; the bug surfaces if Cloudflare ever migrates the worker to a non-UTC runtime, or if a future caller re-parses the returned timestamp on a different engine.
+
+### Fixed
+
+- `worker/src/aurora.ts`: new `normalizeSwpcTimestamp()` helper appends `Z` when no offset is present. Z-suffixed and `+HH:MM` / `-HHMM` offsets pass through unchanged.
+- Returned `KpResponse.timestamp` is now always UTC-explicit, so frontend tooltip text (and any future caller) can re-parse safely.
+- 4 new unit tests covering pass-through, Z-append, and offset preservation.
+
 ## [1.2.3.0] - 2026-05-13
 
 ### V4-P2 aurora indicator: Kp index in the topbar with click-through to SWPC.

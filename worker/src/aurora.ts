@@ -50,13 +50,27 @@ export interface KpResponse {
   age_min: number;
 }
 
+/** SWPC's planetary_k_index_1m.json returns timestamps without a timezone
+ *  suffix (e.g., "2026-05-13T15:51:00"). ECMAScript's behavior for parsing
+ *  date-time strings without offset is engine-defined: V8 happens to treat
+ *  it as UTC (matching SWPC's intent), but Safari and older engines treat
+ *  it as local time, which would shift age_min by the runtime's UTC offset.
+ *  Cloudflare Workers run on V8 so today this is correct; the explicit Z
+ *  guards against future runtime changes and any frontend re-parse. */
+export function normalizeSwpcTimestamp(ts: string): string {
+  // Already has Z, +HH:MM, +HHMM, -HH:MM, or -HHMM offset → leave alone.
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(ts)) return ts;
+  return ts + 'Z';
+}
+
 /** Parse SWPC's planetary_k_index_1m.json response into our compact shape.
  *  Returns null on malformed input (empty array, missing fields, NaN Kp,
  *  bad timestamps) so callers can fail soft instead of crashing.
  *
  *  Schema-drift tolerance: SWPC's "experimental" endpoints have changed
  *  field names in the past. We accept either `kp_index` or `kp` (string
- *  form), and skip rows missing both. */
+ *  form), and skip rows missing both. Timestamps are normalized to UTC
+ *  via normalizeSwpcTimestamp() so age_min is portable across runtimes. */
 export function parseKp(payload: unknown, nowMs: number): KpResponse | null {
   if (!Array.isArray(payload) || payload.length === 0) return null;
   // Walk from the end (newest) and return the first valid row. Defensive
@@ -66,7 +80,8 @@ export function parseKp(payload: unknown, nowMs: number): KpResponse | null {
     if (!row || typeof row !== 'object') continue;
     const ts = row.time_tag;
     if (typeof ts !== 'string') continue;
-    const tsMs = Date.parse(ts);
+    const normalizedTs = normalizeSwpcTimestamp(ts);
+    const tsMs = Date.parse(normalizedTs);
     if (Number.isNaN(tsMs)) continue;
     let kp: number = NaN;
     if (typeof row.kp_index === 'number' && Number.isFinite(row.kp_index)) {
@@ -77,7 +92,9 @@ export function parseKp(payload: unknown, nowMs: number): KpResponse | null {
     }
     if (!Number.isFinite(kp) || kp < 0 || kp > 9) continue;
     const age_min = Math.max(0, Math.floor((nowMs - tsMs) / 60_000));
-    return { kp, timestamp: ts, age_min };
+    // Return the NORMALIZED timestamp so any consumer (frontend tooltip,
+    // log aggregator, future caller) gets an unambiguous UTC instant.
+    return { kp, timestamp: normalizedTs, age_min };
   }
   return null;
 }

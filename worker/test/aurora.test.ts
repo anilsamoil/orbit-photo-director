@@ -10,7 +10,7 @@
  */
 import { describe, expect, it, beforeEach } from 'vitest';
 
-import { handleKpRequest, parseKp } from '../src/aurora';
+import { handleKpRequest, normalizeSwpcTimestamp, parseKp } from '../src/aurora';
 
 /** Shape of the JSON bodies our handler emits. Success path returns
  *  KpResponse fields; error path returns an `error` discriminator plus
@@ -57,6 +57,23 @@ function makeFetch(impl: (url: string) => Promise<Response>): typeof fetch {
 
 // ----- parseKp unit tests ----------------------------------------------------
 
+describe('normalizeSwpcTimestamp', () => {
+  it('passes through Z-suffixed timestamps unchanged', () => {
+    expect(normalizeSwpcTimestamp('2026-05-13T15:51:00Z')).toBe('2026-05-13T15:51:00Z');
+  });
+
+  it('appends Z to timestamps with no offset (real SWPC format)', () => {
+    // SWPC's planetary_k_index_1m.json publishes timestamps in this exact
+    // shape — no Z, no offset. Verified via curl on 2026-05-13.
+    expect(normalizeSwpcTimestamp('2026-05-13T15:51:00')).toBe('2026-05-13T15:51:00Z');
+  });
+
+  it('preserves explicit +HH:MM and -HHMM offsets', () => {
+    expect(normalizeSwpcTimestamp('2026-05-13T15:51:00+00:00')).toBe('2026-05-13T15:51:00+00:00');
+    expect(normalizeSwpcTimestamp('2026-05-13T15:51:00-0500')).toBe('2026-05-13T15:51:00-0500');
+  });
+});
+
 describe('parseKp', () => {
   const NOW = Date.parse('2026-05-13T12:00:00Z');
 
@@ -71,6 +88,17 @@ describe('parseKp', () => {
       timestamp: '2026-05-13T11:55:00Z',
       age_min: 5,
     });
+  });
+
+  it('normalizes Z-less SWPC timestamps to UTC (real SWPC format)', () => {
+    // SWPC actually publishes timestamps without Z. Without normalization,
+    // Date.parse treats this as local time in Safari/older engines,
+    // shifting age_min by the runtime's UTC offset.
+    const payload = [{ time_tag: '2026-05-13T11:55:00', kp_index: 4.2 }];
+    const result = parseKp(payload, NOW);
+    expect(result?.kp).toBe(4.2);
+    expect(result?.timestamp).toBe('2026-05-13T11:55:00Z'); // returned with Z appended
+    expect(result?.age_min).toBe(5);
   });
 
   it('returns null for empty array', () => {
