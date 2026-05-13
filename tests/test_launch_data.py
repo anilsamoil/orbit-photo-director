@@ -91,7 +91,9 @@ def test_parse_response_skips_malformed_row_silently() -> None:
             },
         ]
     }
-    launches = parse_response(payload)
+    # Pin now to before the fixture's t0 (2026-05-12) so the past-t0
+    # filter doesn't drop the well-formed row once wall-clock advances.
+    launches = parse_response(payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     assert len(launches) == 1
     assert launches[0].id == "ok-1"
 
@@ -190,7 +192,9 @@ def test_fetch_uses_fresh_cache_without_network(
     cache_path: Path, fixture_text: str
 ) -> None:
     cache_path.write_text(fixture_text)
-    n = datetime.now(tz=UTC)
+    # Pin n to before any fixture launch date so the past-t0 filter
+    # doesn't drop launches as wall-clock advances past the fixture.
+    n = datetime(2026, 5, 11, tzinfo=UTC)
 
     with patch("generator.launch_data.requests.get") as mock_get:
         result = fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
@@ -206,10 +210,11 @@ def test_fetch_hits_network_when_cache_stale(
     # Pre-write cache with an old mtime so the TTL gate fails.
     cache_path.write_text(fixture_text)
     import os
-    old = (datetime.now(tz=UTC) - timedelta(hours=2)).timestamp()
+    # Pin n before any fixture launch date; mtime is relative to n so
+    # the staleness test stays deterministic across wall-clock drift.
+    n = datetime(2026, 5, 11, tzinfo=UTC)
+    old = (n - timedelta(hours=2)).timestamp()
     os.utime(cache_path, (old, old))
-
-    n = datetime.now(tz=UTC)
 
     class FakeResp:
         text = fixture_text
@@ -227,9 +232,9 @@ def test_fetch_falls_back_to_cache_on_network_error(
 ) -> None:
     cache_path.write_text(fixture_text)
     import os
-    old = (datetime.now(tz=UTC) - timedelta(hours=2)).timestamp()
+    n = datetime(2026, 5, 11, tzinfo=UTC)
+    old = (n - timedelta(hours=2)).timestamp()
     os.utime(cache_path, (old, old))
-    n = datetime.now(tz=UTC)
 
     with patch(
         "generator.launch_data.requests.get",
@@ -247,9 +252,9 @@ def test_fetch_falls_back_to_cache_on_parse_error(
 ) -> None:
     cache_path.write_text(fixture_text)
     import os
-    old = (datetime.now(tz=UTC) - timedelta(hours=2)).timestamp()
+    n = datetime(2026, 5, 11, tzinfo=UTC)
+    old = (n - timedelta(hours=2)).timestamp()
     os.utime(cache_path, (old, old))
-    n = datetime.now(tz=UTC)
 
     class HtmlErrorResp:
         text = "<html><body>503 Bad Gateway</body></html>"
