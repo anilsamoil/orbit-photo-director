@@ -22,6 +22,7 @@ import { createPollScheduler, isOnline, type PollScheduler } from './network-sta
 import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
+import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { gibsTrueColorUrl, precacheTilesForTargets, yesterdayIso } from './tile-precache';
@@ -231,7 +232,11 @@ function renderQueue(): void {
     empty.hidden = false;
   } else {
     empty.hidden = true;
-    renderCards(cards, visible, now, stale, onCardAction, { tokenSet: !!getToken() });
+    // Operator preference governs display order. Generator emits
+    // score-descending; we re-sort here without changing the SELECTION
+    // (top-5-by-score within 90 min stays the pool of candidates).
+    const sorted = sortPassesByOrder(visible, getSortOrder());
+    renderCards(cards, sorted, now, stale, onCardAction, { tokenSet: !!getToken() });
   }
   renderUpcoming(now, stale);
 }
@@ -306,7 +311,8 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
     return;
   }
   empty.hidden = true;
-  renderCards(cards, visible, nowMs, stale, onCardAction, { variant: 'forecast' });
+  const sorted = sortPassesByOrder(visible, getSortOrder());
+  renderCards(cards, sorted, nowMs, stale, onCardAction, { variant: 'forecast' });
 }
 
 function rerenderCountdowns(): void {
@@ -446,6 +452,30 @@ function roughRegion(lat: number, lon: number): string {
   if (lon > -30 && lon < 25) return 'Atlantic Ocean';
   if (lon >= 25 && lon < 110) return 'Indian Ocean';
   return 'Pacific Ocean';
+}
+
+/** Wire the Time / Score sort toggle on Queue + Upcoming panes.
+ *  Single preference applies to both. Click flips the persisted order,
+ *  updates the visual active state on BOTH panes (so they stay in sync),
+ *  and re-renders the cards via renderQueue() which routes through
+ *  sortPassesByOrder. */
+function bindSortToggles(): void {
+  const buttons = document.querySelectorAll<HTMLButtonElement>('.sort-btn');
+  if (buttons.length === 0) return;
+  const syncActiveState = (order: SortOrder) => {
+    buttons.forEach((b) => {
+      b.classList.toggle('active', b.dataset.order === order);
+    });
+  };
+  syncActiveState(getSortOrder());
+  buttons.forEach((b) => {
+    b.addEventListener('click', () => {
+      const order = (b.dataset.order as SortOrder | undefined) ?? 'time';
+      setSortOrder(order);
+      syncActiveState(order);
+      renderQueue();
+    });
+  });
 }
 
 function bindTabs(): void {
@@ -625,6 +655,7 @@ async function loadMapPane(): Promise<void> {
 
 async function init(): Promise<void> {
   bindTabs();
+  bindSortToggles();
   // V4-P2 aurora widget: attach the click handler once. Widget content is
   // rendered later by refresh() once /api/kp resolves.
   const kpWidget = document.getElementById('kp-widget');

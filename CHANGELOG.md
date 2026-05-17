@@ -2,6 +2,26 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.4.0] - 2026-05-16
+
+### Queue + Upcoming sort toggle: chronological by default, score as opt-in.
+
+Operator feedback while testing on an iPhone in-flight (2026-05-16): "the order to shoot it is interesting, the Blue Origin was first up in queue but next was something 14 minutes away. It wasn't chronological. It seems like chronological in queue would be better." First-time operator intuition for a list of upcoming passes is timeline order, not score-descending. Generator-side selection still picks best-by-score within the 90-min window; only the display order changes.
+
+Both Queue and Upcoming panes now show a **Time / Score** pill toggle in their headers. Default is Time. Preference persists across reloads in `localStorage`. When scoring is well-tuned and the operator wants "best opportunities first" behavior, one tap switches to Score and stays there.
+
+### Added
+
+- New `src/sort-pref.ts` module with `getSortOrder() / setSortOrder() / sortPassesByOrder()`. Pure functions, fully testable, defensive on `localStorage` failure modes (private-mode Safari, quota exceeded) and malformed input.
+- 15 new unit tests covering: default, round-trip, malformed values, storage exceptions, immutability, time-asc / score-desc orderings, NaN-timestamp sinking, missing-score = 0 fallback, empty/single-element edge cases.
+
+### How it's wired
+
+- Generator continues to emit `top5.json` (next 90 min) and `top_24h.json` score-descending — selection logic unchanged.
+- Frontend re-sorts the already-filtered pool at render time based on `getSortOrder()`. The SELECTION (which passes appear in Queue at all) is preserved; only the DISPLAY ORDER changes.
+- Single preference applies to both panes since they share the same scoring model and operator mental model. Toggling on one pane updates the other.
+- Toggle pill mirrors the visual treatment of the existing Now / +90min map control for consistency.
+
 ## [1.2.3.3] - 2026-05-13
 
 ### Cheap-wins batch: forecast-horizon tag + pulse-animation pause + TODOS hygiene.
