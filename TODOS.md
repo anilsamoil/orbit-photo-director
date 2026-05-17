@@ -271,6 +271,28 @@ breaking the live dot if SGP4 has unknown edge cases.
 
 ## Open
 
+### iPhone topbar overlap on Safari + Chrome
+**Priority:** P2 — directly visible to operator on iPhone today
+
+Reported by anilsamoilenko while testing on iPhone in-flight 2026-05-17:
+the Queue/Upcoming/Map/Log tab nav bar overlays text content. Sits
+on top of and to the right of some text. Reproduces on both mobile
+Safari and mobile Chrome on iPhone. Almost certainly a viewport /
+flex-shrink / position issue in the `.topbar` styling — likely the
+ISS-now indicator or the new Kp badge (v1.2.3.0+) is pushing the
+tabs into the title area at iPhone widths.
+
+Reproduce: open https://map.astroanil.dev on iPhone. The tabs visually
+collide with the brand title or the iss-now indicator string.
+
+Fix candidates (try in order):
+1. `flex-wrap: wrap` on `.topbar` so tabs drop to a second row on narrow viewports
+2. Container queries on the topbar so tabs/brand/iss-now/kp re-stack below ~430px wide
+3. Hide the brand text (keep brand-mark emoji only) below ~500px wide
+
+Quick win: test in Chrome DevTools responsive mode at iPhone 14 / 12 / SE widths and
+fix the smallest viewport first. Should be 30-45 min CC including responsive QA.
+
 ### Per-second full re-render of all cards
 **Priority:** P3
 
