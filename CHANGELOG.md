@@ -2,6 +2,38 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.5.0] - 2026-05-17
+
+### Card scores show as 5★ instead of 0-100 — aligns with the calibration rating scale.
+
+Operator feedback (anilsamoilenko, in-flight 2026-05-16): "the score 26 on Blue Origin … is low better? It might be better to convert the score to a five-star rating so it corresponds to the set token rating we give it, then if it learns from that the final ratings are comparable and five-star is easier to understand."
+
+Three problems the 0-100 score had: direction ambiguous (is high or low better?), mismatched with the 1-5 calibration rating scale the operator uses after shooting, and no intuitive anchor ("is 26 good?"). This release converts the card headline to 5★ display. The raw 0-100 score stays in the artifact and the calibration log; only the display layer changes.
+
+### Added
+
+- New `src/score-stars.ts` module: `scoreToStars()`, `renderStarBlock()`, `starsToLabel()`, threshold constants. Pure functions, defensive on invalid input (NaN, null, negative, >100 all collapse safely).
+- 17 new unit tests in `test/score-stars.test.ts` covering threshold boundaries, defensive guards, glyph composition, aria-label, role=img, custom maxStars.
+- Breakdown panel header (visible on expand) now shows `★★★★☆ solid · score 65` so the operator gets the verbal anchor + raw score for diagnostic use. Component percentages stay in the table below.
+
+### Changed
+
+- Card headline: numeric `Score 26` → `★★☆☆☆` block. Tap still expands the breakdown panel.
+- The `· P(unobstructed) 50` suffix stays in the headline for an at-a-glance read on the dominant component.
+
+### How it's wired
+
+- **Thresholds** (locked via /plan-eng-review 2026-05-17): score ≥ 75 → 5★, [50, 75) → 4★, [30, 50) → 3★, [15, 30) → 2★, < 15 → 1★. Named constants in `score-stars.ts`, tunable as calibration data accumulates.
+- **Render-time conversion**: generator continues to emit `.score` (0-100) and `.score_components` unchanged. Frontend calls `scoreToStars(p.score)` at render. Re-tuning thresholds requires no artifact regeneration. Calibration log keeps `score_at_time` in 0-100 for full historical resolution.
+- **Accessibility**: every star block has `aria-label="N of 5 stars"` and `role="img"` so screen readers don't read the unicode glyphs literally.
+- **Sort behavior unchanged**: v1.2.4.0's Score sort continues to use raw 0-100 under the hood. Tiers are monotonic buckets of raw score, so sort-by-tier with raw tiebreaker = sort-by-raw (visual grouping comes for free since the headline shows stars).
+
+### Phased rollout (per design doc)
+
+- **v1.2.5.0** (this release): 5★ alignment + collect aligned data. Predicted and rated are now both 1-5★.
+- **v1.2.5.1** (after ≥10 rated entries): comparison banner in Log tab — "you rate X higher than predicted at terminator passes."
+- **v1.3.0.0** (after ≥50 rated entries): server-side weight adjustment with minimum-N gate, bounded adjustment, reset-to-defaults, diagnostic surface.
+
 ## [1.2.4.2] - 2026-05-17
 
 ### Aurora Kp badge: render on every page load, not only on manifest version change.

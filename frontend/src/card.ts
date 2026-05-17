@@ -1,5 +1,6 @@
 import type { PassEntry } from './types';
 import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
+import { renderStarBlock, scoreToStars, starsToLabel } from './score-stars';
 
 /** Variant marker for cards: 'observed' uses Queue styling (Shoot/Skip on
  *  the imminent pass), 'forecast' uses Upcoming styling (no actions; soft
@@ -269,12 +270,13 @@ export function renderScoreWithBreakdown(p: PassEntry): HTMLElement {
   line.setAttribute('aria-expanded', String(initiallyOpen));
   line.title = 'Tap to see the score breakdown';
 
-  const label = document.createElement('span');
-  label.className = 'score-label';
-  label.textContent = 'Score';
-  const value = document.createElement('span');
-  value.className = 'score-value';
-  value.textContent = formatScore(p.score);
+  // Stars replaced the numeric "Score 47" headline in v1.2.5.0 — aligns
+  // the predicted-score scale (1-5★) with the operator's calibration
+  // rating scale (1-5★) so prediction-vs-rating comparisons in v1.2.5.1+
+  // can compare aligned scales. Raw 0-100 stays in the artifact and is
+  // surfaced in the breakdown panel for diagnostic use.
+  const stars = scoreToStars(p.score);
+  const starBlock = renderStarBlock(stars);
   const sep = document.createElement('span');
   sep.className = 'score-label';
   sep.textContent = `· P(unobstructed) ${formatScore(p.p_unobstructed)}`;
@@ -282,11 +284,18 @@ export function renderScoreWithBreakdown(p: PassEntry): HTMLElement {
   chev.className = 'score-chev';
   chev.textContent = '▾';  // rotates to ▴ when open via CSS
   chev.setAttribute('aria-hidden', 'true');
-  line.append(label, value, sep, chev);
+  line.append(starBlock, sep, chev);
 
   const panel = document.createElement('div');
   panel.className = 'score-breakdown';
   panel.hidden = !initiallyOpen;
+  // Breakdown header surfaces the raw score + word anchor ("solid",
+  // "marginal", etc.) — diagnostics for "why is this rated this way".
+  // Stars alone in the headline lack a verbal anchor (Codex review
+  // 2026-05-17 flagged "3 stars doesn't say usable / marginal /
+  // excellent"); attaching it here resolves that without cluttering
+  // the card's compact title row.
+  panel.appendChild(buildBreakdownHeader(stars, p.score));
   panel.appendChild(buildBreakdownTable(p));
 
   line.addEventListener('click', () => {
@@ -303,6 +312,22 @@ export function renderScoreWithBreakdown(p: PassEntry): HTMLElement {
 
   wrap.append(line, panel);
   return wrap;
+}
+
+/** Header row for the breakdown panel — combines the star tier, raw
+ *  composite score, and a word anchor so the operator gets both the
+ *  visual signal (stars) and the verbal anchor ("solid", "marginal")
+ *  on expand. The headline outside the panel stays star-only to keep
+ *  the card compact. */
+function buildBreakdownHeader(stars: number, rawScore: number): HTMLElement {
+  const header = document.createElement('div');
+  header.className = 'score-breakdown-header';
+  header.appendChild(renderStarBlock(stars));
+  const text = document.createElement('span');
+  text.className = 'score-breakdown-header-text';
+  text.textContent = ` ${starsToLabel(stars)} · score ${formatScore(rawScore)}`;
+  header.appendChild(text);
+  return header;
 }
 
 function buildBreakdownTable(p: PassEntry): HTMLElement {
