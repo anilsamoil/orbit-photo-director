@@ -541,6 +541,41 @@ main {
   font-weight: 600;
 }
 
+/* Time / Score sort toggle in Queue + Upcoming pane headers.
+ * Defaults to Time per operator feedback (anilsamoilenko 2026-05-16):
+ * "chronological in queue would be better." Score-sort stays available
+ * for when scoring is trusted. Mirrors the .time-btn styling used in
+ * the map's Now / +90min toggle so the pill UI feels native. */
+.sort-toggle {
+  display: inline-flex;
+  gap: 0.15rem;
+  margin-top: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem;
+}
+.sort-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  padding: 0.3rem 0.85rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  border-radius: 999px;
+  user-select: none;
+}
+.sort-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+.sort-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* View toggle: each view-* class hides everything BUT the active pane.
  * We pair each "view" with the panes that should be hidden in that state. */
 .view-queue #upcoming-pane,

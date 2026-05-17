@@ -34,6 +34,10 @@
         <div class="pane-header">
           <h2 class="pane-title">Next 90 min &mdash; what to shoot now</h2>
           <p class="pane-sub">Cloud: observed (MODIS / GOES-IR / Meteosat / Himawari). Score sorts by p(unobstructed) &times; lighting fit &times; nadir proximity &times; priority. Tap any score to see the breakdown.</p>
+          <div class="sort-toggle" role="group" aria-label="Sort order">
+            <button id="sort-time-queue" class="sort-btn active" type="button" data-order="time">Time</button>
+            <button id="sort-score-queue" class="sort-btn" type="button" data-order="score">Score</button>
+          </div>
         </div>
         <div id="cards" class="cards" aria-live="polite"></div>
         <div id="empty" class="empty" hidden>No passes in the next 90 minutes.</div>
@@ -43,6 +47,10 @@
         <div class="pane-header">
           <h2 class="pane-title">Next 24 hours &mdash; what to plan for</h2>
           <p class="pane-sub">Cloud: forecast (GFS, hourly). Same score formula as Queue but uses forecast cloud at each pass time; less certain by design. Tap any score for the breakdown.</p>
+          <div class="sort-toggle" role="group" aria-label="Sort order">
+            <button id="sort-time-upcoming" class="sort-btn active" type="button" data-order="time">Time</button>
+            <button id="sort-score-upcoming" class="sort-btn" type="button" data-order="score">Score</button>
+          </div>
         </div>
         <div id="upcoming-cards" class="cards" aria-live="polite"></div>
         <div id="upcoming-empty" class="empty" hidden>No upcoming passes in the next 24 hours.</div>
