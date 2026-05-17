@@ -2,6 +2,19 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.4.2] - 2026-05-17
+
+### Aurora Kp badge: render on every page load, not only on manifest version change.
+
+Reported by anilsamoilenko on iPhone 2026-05-17: the Kp badge wasn't visible despite `/api/kp` returning valid data. Root cause from v1.2.3.0: I gated `fetchKpData()` inside the `if (isNewer)` block in `refresh()` along with the tile precache. That meant Kp only fetched when the manifest version changed (~hourly). On any return visit within the same manifest hour, the widget stayed hidden in its HTML-default state until the next generator tick — sometimes up to an hour away.
+
+Wrong call originally. Precache makes sense gated (same tiles for same manifest version, no need to re-fetch). The Kp badge is different — it's a live indicator the operator expects to see on every page load.
+
+### Fixed
+
+- Moved `fetchKpData()` out of the `if (isNewer)` block in `main.ts:refresh()`. Now fires on every refresh tick (~60s), regardless of manifest version. The worker's edge cache (5-min TTL) bounds upstream SWPC load to ~12 fetches/hour. Cost: ~80 bytes per refresh on the operator's link.
+- Precache stays gated on `isNewer` (correct behavior; same top-3 tiles for same manifest version).
+
 ## [1.2.4.1] - 2026-05-17
 
 ### iPhone topbar overlap fix.

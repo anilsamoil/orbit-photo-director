@@ -165,17 +165,28 @@ async function doRefresh(): Promise<void> {
       // the same tile bytes are already in the SW cache from the previous
       // version. Top-3 targets only change when the manifest does.
       precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
-      // V4-P2 aurora indicator: fetch latest Kp from the Worker proxy and
-      // render the topbar badge. Gated on isNewer for the same reason as
-      // precache — the manifest tick is hourly, Kp is a 3h smoothed value,
-      // so once-per-manifest is well over-spec on freshness. The worker's
-      // edge cache (5min TTL) is the real freshness budget. Fire-and-forget;
-      // a null result from the fetch hides the widget rather than throwing.
-      void fetchKpData().then((kp) => {
-        const widget = document.getElementById('kp-widget');
-        if (widget) renderKpWidget(kp, widget);
-      });
     }
+
+    // V4-P2 aurora indicator: fetch + render on EVERY refresh, not just
+    // when the manifest version changes. Originally gated inside the
+    // `if (isNewer)` block above on the same hourly-cadence reasoning as
+    // tile precache; that was wrong for a live UI element.
+    //
+    // Bug it caused (anilsamoilenko, iPhone, 2026-05-17): on a return
+    // visit within the same manifest hour, isNewer=false, fetchKpData
+    // never fires, and the widget stays hidden in its HTML-default
+    // `hidden` state. Operator sees no Kp number until the next manifest
+    // tick, which can be up to an hour away.
+    //
+    // Precache stays gated (same tiles for same manifest version, no
+    // need to re-fetch). Kp is different — it's a live indicator the
+    // operator expects to see on every page load. Worker's edge cache
+    // (5min TTL) bounds the upstream load to ~12 SWPC fetches/hour
+    // regardless of how many refresh ticks happen client-side.
+    void fetchKpData().then((kp) => {
+      const widget = document.getElementById('kp-widget');
+      if (widget) renderKpWidget(kp, widget);
+    });
 
     renderQueue();
     setBanner(bannerWithLaunchesOverlay(
