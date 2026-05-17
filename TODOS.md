@@ -64,10 +64,15 @@ Remaining: kill-switch recovery (blocks on Lane G), tile-cache budget,
 banner escalation, snapshot corruption.
 
 ### V3-P2 — V3.1 ASCENT geometry (rocket climbing through atmosphere)
-After V3.0 (OVERHEAD-only) has run for 4+ weeks against real launches and
-the OVERHEAD pipeline is validated, V3.1 adds ASCENT geometry. Both
-/autoplan voices required these additions before approving ASCENT:
+**Plan locked 2026-05-13** via /plan-eng-review. Design doc:
+`~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-v3p2-ascent-eng-review-2026-05-13.md`
 
+The 4-week OVERHEAD prereq is **DROPPED** (D1): Chris likely won't
+provide rated-outcome feedback from ISS, so Anil self-validates from
+Earth on a 1-week soak window behind a feature flag. See
+`feedback_chris_no_feedback.md` in user memory.
+
+7 locked requirements (carried from prior /autoplan):
 1. Per-rocket ascent profile tables for top 10 rocket families (Falcon 9,
    Falcon Heavy, Atlas V, Vulcan, Soyuz, Long March 5/7, SLS, New Glenn,
    Ariane 6, Starship)
@@ -75,14 +80,42 @@ the OVERHEAD pipeline is validated, V3.1 adds ASCENT geometry. Both
    sun-illuminated AND ISS is in Earth shadow or twilight
 3. Slant-range cap at ~1500 km (rocket subtends useful angular size)
 4. Ascent azimuth modeling — polar vs equatorial launches differ
-5. Confidence labels on cards: "candidate ascent" / "trajectory approximate"
-   / "low confidence" vs OVERHEAD's "confirmed"
+5. Confidence stays hidden (folded into star count); **`launch.kind`
+   itself is visible** as an "ASCENT plume" / "OVERHEAD pass" tag in
+   the card meta row (D5 reversed twice: original /autoplan said
+   visible, plan-eng-review D5 hid it, then Codex review 2026-05-13
+   said hiding it is operationally bad because Chris needs to know
+   the photographic setup — different lens / exposure / look angle)
 6. `|lat|>52°` filter relaxed for ASCENT (ISS has a horizon, can see
    beyond subpoint latitude)
 7. Multi-point cloud sampling along ISS→rocket sight line
 
-V3.1 plan should be its own /office-hours + /autoplan cycle when V3.0 has
-shipped and run for a month. Restore point at design doc lines 251-262.
+Architecture (D2-D7, see design doc):
+- `generator/ascent_profiles.py` — Python module, top-10 rocket dataclass constants
+- `generator/ascent.py` — new module for geometry math
+- Same `passes.json`; add `launch.kind` field (`"overhead"` / `"ascent"`)
+- Same launch → show both ASCENT + OVERHEAD as separate cards (D7)
+- `OPD_ENABLE_ASCENT` feature flag, default off; 1-week Anil soak then flip
+
+Implementation: 3 parallelizable slices, ~10.5h CC sequential / ~7h
+with two worktrees (Slice 2 grew from 4h→6h after Codex physics
+revisions). Slice 1 (profiles + data) and Slice 2 (geometry) are
+independent; Slice 3 (main.py integration + plist + card tag) depends
+on both.
+
+Codex outside-voice review **DONE 2026-05-13**, transcript at
+`/tmp/codex-ascent-review.log`. Five findings, four physics fixes
+adopted into design doc:
+- Cloud sampling split into obstruction (low-alt corridor) + background
+- Sun illumination uses ECI Sun-vector ray-Earth intersection
+  (sunlit/penumbra/umbra), NOT surface elevation
+- 1500km hard cap dropped → apparent-plume-angle score
+- Real launch azimuth from inclination + pad lat (not guessed mode)
+- High-lat |lat|>52° hack dropped → real tangent-clearance geometry
+- Profile interpolated at 15s cadence (was sparse 30s+ gaps)
+
+**Next:** Start Slice 1 (research top-10 rocket families + write
+`generator/ascent_profiles.py` + tests).
 
 ### V3-P3 — `make ll2-diff` for LL2 schema-drift diagnosis
 When `status.launches_schema_hash` differs from the pinned fixture (LL2
