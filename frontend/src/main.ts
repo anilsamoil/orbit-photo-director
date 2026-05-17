@@ -7,6 +7,7 @@
  */
 
 import { renderCards } from './card';
+import { formatCountdown } from './countdown';
 import {
   bannerError,
   bannerFromManifest,
@@ -330,15 +331,52 @@ function rerenderCountdowns(): void {
   updateIssNow();
   if (!currentManifest) return;
   const now = Date.now();
-  const stale = isStaleManifest(currentManifest, now);
-  // Re-route through renderQueue so the past-filter + empty-state toggle stay
-  // in one place. The 1Hz tick is the moment a pass transitions from imminent
-  // to past, so we MUST re-evaluate the filter here, not just the countdown text.
-  renderQueue();
+  // V2-P3 perf fix (TODOS.md, 2026-05-17). Fast path: just update the
+  // countdown text node in each existing card, no DOM rebuild. The
+  // slow path (renderQueue) only fires when a pass crosses the
+  // past-boundary, the data-passTime attribute is missing, or any
+  // other unexpected DOM state — full rebuild fixes empty-state copy
+  // and the upcomingPasses filter in one go.
+  //
+  // Why: rerenderCountdowns runs at 1Hz, so the prior `renderQueue()`
+  // every tick = 86,400 full DOM rebuilds/day × 8 months unattended
+  // = ~21M wasted re-renders. Same correctness for the Queue + Upcoming
+  // panes; the fast path preserves the score-breakdown panel state
+  // (OPEN_BREAKDOWNS) which would otherwise need a separate restore.
+  if (!tryUpdateCountdownsInPlace(now)) {
+    renderQueue();
+  }
   setBanner(bannerWithLaunchesOverlay(
     bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now),
     launchesStaleHours(currentStatus, now),
   ));
+}
+
+/** Walk both card containers, update each card's countdown text in
+ *  place. Return false if any card has crossed the past-boundary
+ *  (caller should renderQueue to re-run upcomingPasses + the empty-
+ *  state messaging). Returns false on unexpected DOM state too —
+ *  caller's fallback is the safe path. */
+function tryUpdateCountdownsInPlace(now: number): boolean {
+  for (const containerId of ['cards', 'upcoming-cards']) {
+    const container = document.getElementById(containerId);
+    if (!container) continue;
+    // Snapshot children — we don't remove anything in the fast path
+    // but defensive against future code changes.
+    for (const child of Array.from(container.children)) {
+      const card = child as HTMLElement;
+      const passTime = card.dataset.passTime;
+      if (!passTime) return false;  // unexpected DOM shape; safe path
+      const t = Date.parse(passTime);
+      if (Number.isNaN(t)) return false;  // bad timestamp; safe path
+      if (t <= now) return false;  // crossed past boundary; needs re-filter
+      const countdownEl = card.querySelector('.card-countdown');
+      if (countdownEl) {
+        countdownEl.textContent = formatCountdown(passTime, now);
+      }
+    }
+  }
+  return true;
 }
 
 /** How many hours since the generator's last successful LL2 fetch. Returns

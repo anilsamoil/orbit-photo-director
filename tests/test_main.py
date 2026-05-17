@@ -378,6 +378,37 @@ def test_fetch_tle_logs_reboost_when_mean_motion_jumps(
     assert any("reboost" in r.message.lower() for r in caplog.records)
 
 
+def test_fetch_tle_logs_when_prior_cache_corrupted(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Corrupted prior cache → warning logged + reboost detection silently
+    skipped this tick. V2-P3 fix (TODOS.md, 2026-05-17). Previously the
+    ValueError/OSError was swallowed without a peep, so a real reboost
+    coinciding with a partial-write cache corruption would go undetected
+    with no operator signal."""
+    cache = tmp_path / "iss.tle"
+    # Write garbage that TLE.from_text can't parse, force stale.
+    cache.write_text("not a tle, just garbage\nthat will not parse\n")
+    old_mtime = time.time() - 7200
+    import os as _os
+    _os.utime(cache, (old_mtime, old_mtime))
+
+    import logging
+    with (
+        caplog.at_level(logging.WARNING, logger="generator.main"),
+        patch("generator.main.requests.get", return_value=_FakeResponse(SAMPLE_TLE_TEXT)),
+    ):
+        fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
+
+    # Warning that ground support can grep on. Specifically should
+    # mention "cache parse failed" so it's distinguishable from upstream
+    # fetch failures.
+    assert any(
+        "cache parse failed" in r.message.lower() and "reboost detection skipped" in r.message.lower()
+        for r in caplog.records
+    ), "expected 'cache parse failed ... reboost detection skipped' warning"
+
+
 # --------------------------------------------------------------------------
 # select_cloud_sampler — picks the right sampler based on availability
 # --------------------------------------------------------------------------

@@ -293,7 +293,7 @@ Fix candidates (try in order):
 Quick win: test in Chrome DevTools responsive mode at iPhone 14 / 12 / SE widths and
 fix the smallest viewport first. Should be 30-45 min CC including responsive QA.
 
-### Per-second full re-render of all cards
+### Per-second full re-render of all cards (SHIPPED v1.2.5.1, 2026-05-17)
 **Priority:** P3
 
 `frontend/src/main.ts:rerenderCountdowns` runs every 1s and calls
@@ -326,7 +326,7 @@ egress from third-party WMS / CDN over the mission. Fine today,
 worth caching to disk between ticks if upstream rate-limits become
 a real problem.
 
-### Reboost detection skipped when prior cache parse fails
+### Reboost detection skipped when prior cache parse fails (SHIPPED v1.2.5.1, 2026-05-17)
 **Priority:** P3
 
 `main.py:86-90` swallows ValueError/OSError parsing prior cache. If
@@ -345,7 +345,7 @@ Fix when needed: prefix keys with a sortable timestamp
 (e.g., `log/YYYYMM/<isoZ>-<dedupe>.json`) so list() lex order matches
 recency. Belongs with the V3 calibration-log denormalization work.
 
-### sun_glint heuristic flags Hawaii as water
+### sun_glint heuristic flags Hawaii as water (SHIPPED v1.2.5.1, 2026-05-17)
 **Priority:** P3
 
 `cloud.py:151` — Pacific band catches lat 21, lon -157 (Hawaii). Real
@@ -353,7 +353,7 @@ mid-Pacific water targets get appropriate glint flags, but island
 targets in the band get over-flagged. Documented as V2 (real GSHHG
 mask).
 
-### sun_glint heuristic flags coastal launch sites as water
+### sun_glint heuristic flags coastal launch sites as water (SHIPPED v1.2.5.1, 2026-05-17)
 **Priority:** P3
 
 V3.0 review (2026-05-10) caught: `cloud.py:138-162` `is_water` heuristic
@@ -370,7 +370,7 @@ itself). One-line override in `_synthesize_launch_target` to pass a
 "skip water heuristic" flag, OR just give launch sites a known-correct
 land/water classification. Same root cause as the Hawaii flag.
 
-### sun_subpoint missing Equation of Time
+### sun_subpoint missing Equation of Time (SHIPPED v1.2.5.1, 2026-05-17)
 **Priority:** P3
 
 Up to ±16 min error → ±4° in sub_lon. With sun-glint proximity 5°,
