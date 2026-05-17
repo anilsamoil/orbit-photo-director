@@ -271,7 +271,7 @@ breaking the live dot if SGP4 has unknown edge cases.
 
 ## Open
 
-### iPhone topbar overlap on Safari + Chrome
+### iPhone topbar overlap on Safari + Chrome (SHIPPED v1.2.4.1, 2026-05-17)
 **Priority:** P2 — directly visible to operator on iPhone today
 
 Reported by anilsamoilenko while testing on iPhone in-flight 2026-05-17:
