@@ -47,11 +47,26 @@ describe('renderCard', () => {
     expect(title).toContain('UTC');
   });
 
-  it('displays the score as an integer with no percent sign', () => {
+  it('renders the score as a 5-star block in the headline (v1.2.5.0)', () => {
+    // Score 64.7 → 4★ tier (50 ≤ score < 75).
     const el = renderCard(samplePass({ score: 64.7 }), NOW, false, () => undefined);
-    const value = el.querySelector('.score-value')!.textContent;
-    expect(value).toBe('65');
-    expect(value!.includes('%')).toBe(false);
+    const stars = el.querySelector('.score-stars')!;
+    expect(stars.textContent).toBe('★★★★☆');
+    expect(stars.getAttribute('aria-label')).toBe('4 of 5 stars');
+    // Raw score doesn't appear in the headline — it lives in the
+    // breakdown panel (visible on expand) and in the artifact.
+    expect(el.querySelector('.score-value')).toBeNull();
+  });
+
+  it('exposes the raw score and word anchor in the breakdown panel header', () => {
+    // Tap to open the panel, then verify the header content.
+    const el = renderCard(samplePass({ score: 64.7 }), NOW, false, () => undefined);
+    const trigger = el.querySelector<HTMLButtonElement>('.card-score')!;
+    trigger.click();  // expand
+    const header = el.querySelector('.score-breakdown-header')!;
+    expect(header.querySelector('.score-stars')!.textContent).toBe('★★★★☆');
+    // Header text combines word anchor + raw score for diagnosis.
+    expect(header.querySelector('.score-breakdown-header-text')!.textContent).toBe(' solid · score 65');
   });
 
   it('disables the Shoot button when stale', () => {
