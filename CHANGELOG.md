@@ -2,6 +2,23 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.5.1] - 2026-05-17
+
+### Cheap-wins batch 2: scoring correctness fixes + frontend perf.
+
+Four P3 items from TODOS.md bundled. None changes user-facing UI; all improve the data flowing INTO the UI or the wattage burned rendering it.
+
+### Fixed
+
+- **Hawaii no longer flagged as sun-glint risk.** `cloud.py:is_water` Pacific band (lat -70 to 70, lon 140-180 or -180 to -110) was catching the Hawaiian Islands and triggering `sun_glint_risk` evaluation on land. Added explicit Hawaii exception (lat 18-23, lon -161 to -154). 4 new tests.
+- **Vandenberg launch site no longer flagged as sun-glint risk.** Same Pacific band caught Vandenberg SLC-4E (lat 34.6, lon -120.6), causing asymmetric scoring vs Kennedy LC-39A (sits outside band). Pacific east boundary shrunk from -110 to -125 — excludes CA coast + Baja, keeps deep Pacific coverage. ARCH-4's reserved-slot logic was masking the symptom; this removes the underlying asymmetry.
+- **`sun_subpoint` now applies Equation of Time.** Previous formula used mean solar time and had up to ±4° error in sub_lon, enough to flip the ±5° sun-glint proximity check across its boundary near the threshold. Added Spencer's approximation (~30 sec accuracy across the year). 2 new tests covering Feb (EoT negative) and Nov (EoT positive).
+- **TLE cache corruption now logs a warning.** `fetch_tle` was silently swallowing `ValueError`/`OSError` when parsing the prior cache; if a real reboost coincided with a partial-write corruption, the reboost would go undetected with no operator signal. Now logs "TLE cache parse failed … reboost detection skipped for this tick" so ground support sees the signal.
+
+### Performance
+
+- **Card re-render fast path on the 1Hz countdown tick.** `rerenderCountdowns` used to call `renderQueue()` every second, rebuilding every Queue + Upcoming card DOM (`replaceChildren` + full rebuild). On Chris's 8-month unattended mission that's ~21M wasted DOM rebuilds. Now updates the countdown text node in place; only falls back to full rebuild when a card crosses the past-boundary (every ~15-30 min) or unexpected DOM state appears. Score-breakdown panel state (OPEN_BREAKDOWNS) is preserved naturally since cards aren't replaced.
+
 ## [1.2.5.0] - 2026-05-17
 
 ### Card scores show as 5★ instead of 0-100 — aligns with the calibration rating scale.

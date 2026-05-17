@@ -93,10 +93,30 @@ def test_sun_subpoint_rejects_naive() -> None:
         sun_subpoint(datetime(2024, 10, 17))
 
 
-def test_sun_subpoint_utc_noon_zero_meridian() -> None:
-    when = datetime(2024, 3, 20, 12, 0, 0, tzinfo=UTC)
+def test_sun_subpoint_utc_noon_eot_zero_date() -> None:
+    # 2024-04-15 is one of the four annual EoT zero-crossings (others
+    # around June 13, Sep 1, Dec 25). At UTC noon on a zero-EoT date,
+    # sub_lon should be ≈ 0. EoT correction shipped 2026-05-17 along
+    # with sun_subpoint's ±4° error fix.
+    when = datetime(2024, 4, 15, 12, 0, 0, tzinfo=UTC)
     _lat, lon = sun_subpoint(when)
-    assert abs(lon) < 1.0  # sub-solar at ~0° lon at UTC noon
+    assert abs(lon) < 1.0  # sub-solar at ~0° lon at UTC noon (EoT ≈ 0)
+
+
+def test_sun_subpoint_applies_equation_of_time() -> None:
+    # Mid-February EoT is ~-14 min (sun "slow") → sub_lon at UTC noon
+    # should be west of Greenwich by ~3.5°. Without EoT this returned 0.
+    when = datetime(2024, 2, 11, 12, 0, 0, tzinfo=UTC)
+    _lat, lon = sun_subpoint(when)
+    # EoT on day 42 ≈ -14.1 min → sub_lon = -15 * (-14.1/60) ≈ +3.5°.
+    # Allow ±0.5° tolerance for the approximation.
+    assert 3.0 < lon < 4.0
+
+    # Early November EoT is ~+16 min (sun "fast") → sub_lon at UTC
+    # noon should be east of Greenwich by ~4°. Sign flips from Feb case.
+    when2 = datetime(2024, 11, 3, 12, 0, 0, tzinfo=UTC)
+    _lat2, lon2 = sun_subpoint(when2)
+    assert -4.5 < lon2 < -3.0
 
 
 # --------------------------------------------------------------------------
@@ -198,6 +218,33 @@ def test_is_water_tokyo() -> None:
 def test_is_water_sahara() -> None:
     # Northern Africa, well inland
     assert is_water(20.0, 10.0) is False
+
+
+def test_is_water_hawaii_not_flagged() -> None:
+    # Reported by anilsamoilenko 2026-05-17 (V2-P3 TODOS.md): Hawaiian
+    # Islands fall inside the V1 Pacific band and were getting
+    # sun_glint_risk evaluated on them. Big Island ~lat 19.5, lon -155.5.
+    # Diamond Head (Oahu) ~lat 21.3, lon -157.8. Kauai ~lat 22, lon -159.5.
+    assert is_water(19.5, -155.5) is False, "Hawaii Big Island"
+    assert is_water(21.3, -157.8) is False, "Honolulu / Diamond Head"
+    assert is_water(22.0, -159.5) is False, "Kauai"
+    # But genuine open Pacific around Hawaii stays flagged as water.
+    assert is_water(25.0, -160.0) is True, "Pacific NW of Hawaiian chain"
+
+
+def test_is_water_vandenberg_not_flagged() -> None:
+    # V3.0 review found Vandenberg SLC-4E at lat 34.6, lon -120.6 was
+    # flagged as Pacific water, asymmetric vs Kennedy LC-39A
+    # (lat 28.6, lon -80.6, outside band). Pacific east boundary shrunk
+    # from -110 to -125 to fix.
+    assert is_water(34.6, -120.6) is False, "Vandenberg SLC-4E (CA coast)"
+    assert is_water(28.6, -80.6) is False, "KSC LC-39A (FL coast, sanity)"
+    # Open Pacific further west stays flagged.
+    assert is_water(34.0, -140.0) is True, "Open Pacific west of CA"
+
+
+# (existing test_is_water_with_explicit_mask coverage already exists at
+# line ~529 below — kept the more thorough named-callable version)
 
 
 # --------------------------------------------------------------------------

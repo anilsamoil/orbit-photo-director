@@ -98,11 +98,21 @@ def fetch_tle(
             return TLE.from_text(cache_path.read_text())
 
     # Snapshot prior TLE for reboost comparison BEFORE overwriting.
+    # If the cache is corrupted (partial write, disk hiccup), `prior` is
+    # None and detect_reboost returns False — any real reboost in this
+    # tick goes silently undetected. Log a warning so ground-side
+    # support sees the corruption signal even if the next reboost is
+    # missed. V2-P3 fix from TODOS.md (anilsamoilenko 2026-05-17).
     prior: TLE | None = None
     if cache_path.exists():
         try:
             prior = TLE.from_text(cache_path.read_text())
-        except (ValueError, OSError):
+        except (ValueError, OSError) as exc:
+            log.warning(
+                "TLE cache parse failed (%s); reboost detection skipped for this tick. "
+                "Cache will be overwritten on successful upstream fetch below.",
+                exc,
+            )
             prior = None
 
     try:

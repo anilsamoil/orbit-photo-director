@@ -89,15 +89,40 @@ def assess_obstruction(
     return ObstructionAssessment(p_unobstructed=100.0 - cf, obstruction_class="cloudy")
 
 
+def _equation_of_time_minutes(day_of_year: float) -> float:
+    """Equation of Time in minutes — the difference between apparent solar
+    time and mean solar time. Positive when apparent noon is BEFORE mean
+    noon (sun is "fast" / ahead). Two-component approximation (obliquity
+    + eccentricity), accurate to ~30 seconds across the year. That's well
+    within the precision we need for the ±5° sun-glint proximity check
+    in sun_glint_risk; absolute error in sub_lon is bounded at ±0.13°.
+
+    Without this correction, sub_lon has up to ±16 min ≈ ±4° error,
+    which can flip glint-risk on/off near the proximity boundary
+    (V2-P3 TODOS.md item, fixed 2026-05-17).
+    """
+    b = math.radians(360.0 * (day_of_year - 81) / 365.0)
+    return 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
+
+
 def sun_subpoint(when: datetime) -> tuple[float, float]:
     """Sub-solar point at UTC time. Approximate (Cooper's declination + UTC noon hour angle).
-    Sufficient for sun-glint check; not for precise solar geometry."""
+    Sufficient for sun-glint check; not for precise solar geometry.
+
+    Includes Equation of Time correction (added 2026-05-17): sub_lon is
+    shifted by EoT × 15°/h to reflect apparent solar time vs mean solar
+    time. Without EoT, sub_lon has ±4° error which could flip the ±5°
+    sun-glint proximity check across its boundary."""
     if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
         raise ValueError("when must be UTC-aware")
     n = when.timetuple().tm_yday + (when.hour + when.minute / 60.0) / 24.0
     dec = 23.44 * math.sin(math.radians(360.0 * (284.0 + n) / 365.0))
     utc_h = when.hour + when.minute / 60.0 + when.second / 3600.0
-    sub_lon = -15.0 * (utc_h - 12.0)
+    eot_min = _equation_of_time_minutes(n)
+    # sub_lon = -15 * (mean solar time offset from noon).
+    # mean noon at sub_lon meridian → apparent noon at sub_lon meridian + EoT
+    # → for a given utc_h, the apparent-noon meridian is EoT/60 hours westward.
+    sub_lon = -15.0 * (utc_h - 12.0 + eot_min / 60.0)
     while sub_lon > 180:
         sub_lon -= 360
     while sub_lon < -180:
@@ -143,12 +168,27 @@ def is_water(lat: float, lon: float, mask: Any | None = None) -> bool:
     """
     if mask is not None:
         return bool(mask(lat, lon))
+    # Explicit land exceptions inside the ocean bands. V1 stop-gap until a
+    # real GSHHG binary mask replaces this whole heuristic. Each exception
+    # was added because the V1 band was triggering false sun-glint flags on
+    # known land targets (Hawaii has a non-trivial photography priority
+    # for ISS operators; Vandenberg is a launch site whose score was
+    # asymmetric vs Kennedy because KSC sits outside the band).
+    if _is_known_land_in_ocean_band(lat, lon):
+        return False
     # V1 heuristic. Lat band extended to ±70 so polar/sub-polar coastal targets
     # (Iceland ~65, Norway ~61, southern Patagonia ~-50) get a glint check.
     # V2 swaps in a real GSHHG-derived binary mask so coastlines are precise.
     if -70 < lat < 70:
-        # Pacific - large central band
-        if 140 < lon < 180 or -180 < lon < -110:
+        # Pacific - large central band. East boundary shrunk from -110 to
+        # -125 (2026-05-17): -110 caught Vandenberg SLC-4E (-120.6) and
+        # most of the US West Coast, triggering sun_glint_risk on land
+        # launch sites. -125 keeps deep Pacific coverage while excluding
+        # the CA / Baja coastal strip. Trade: some real Pacific water
+        # off Mexico (-125 to -110) is no longer flagged. Per the V3.0
+        # review note, ARCH-4's reserved-slot logic masks the user-visible
+        # symptom for launches; this fix removes the underlying asymmetry.
+        if 140 < lon < 180 or -180 < lon < -125:
             return True
         # Atlantic - includes north Atlantic to capture Iceland approaches
         if -60 < lon < -10 and -50 < lat < 65:
@@ -159,6 +199,22 @@ def is_water(lat: float, lon: float, mask: Any | None = None) -> bool:
         # Norwegian/Arctic-fringe Atlantic
         if -10 < lon < 20 and 55 < lat < 70:
             return True
+    return False
+
+
+def _is_known_land_in_ocean_band(lat: float, lon: float) -> bool:
+    """Explicit exception list for known land masses that fall inside the
+    V1 ocean-band heuristic. V2 GSHHG mask makes this list obsolete.
+
+    Each entry is a bounding box (lat_min, lat_max, lon_min, lon_max).
+    Keep entries narrow — overly wide boxes will reintroduce the
+    over-flag problem from the other direction (water targets in the
+    box would be wrongly classified as land).
+    """
+    # Hawaiian Islands (Kauai through Big Island, ~lat 18.9-22.2, lon -160 to -154.8).
+    # Reported by anilsamoilenko 2026-05-17 (V2-P3 TODOS.md item).
+    if 18 < lat < 23 and -161 < lon < -154:
+        return True
     return False
 
 
