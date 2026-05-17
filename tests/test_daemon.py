@@ -72,6 +72,54 @@ def test_supervisor_loop_runs_max_iterations(settings_in_tmp: Settings) -> None:
     assert call_count["n"] == 2
 
 
+def test_supervisor_loop_exits_when_generator_code_changes(
+    settings_in_tmp: Settings,
+) -> None:
+    """The mtime-check hook (added 2026-05-17 P1) should exit non-zero
+    when any generator/*.py is newer than process start. This is the
+    self-restart mechanism that lets launchd respawn with fresh modules
+    after a git pull / editor save / code deploy."""
+    cache = settings_in_tmp.cache_dir
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "iss.tle").write_text(SAMPLE_TLE_TEXT)
+
+    # Patch the mtime-at-start to a low value, force _max_generator_mtime
+    # to return a higher value → simulates a code change since startup.
+    with (
+        patch("generator.daemon._GENERATOR_MTIME_AT_START", 0.0),
+        patch("generator.daemon._max_generator_mtime", return_value=999.0),
+        patch("generator.daemon.run_tick_with_watchdog", return_value=True),
+        patch("generator.daemon.deploy_to_r2", return_value=True),
+        patch("time.sleep"),  # safety: prevent any real sleep if exit path fails
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        supervisor_loop(settings_in_tmp, max_iterations=10)
+
+    # Non-zero exit so launchd KeepAlive.SuccessfulExit=false restarts us.
+    assert exc_info.value.code == 1
+
+
+def test_supervisor_loop_does_not_exit_when_code_unchanged(
+    settings_in_tmp: Settings,
+) -> None:
+    """No mtime change → no self-restart. Regression guard: don't make
+    the daemon flap on every tick."""
+    cache = settings_in_tmp.cache_dir
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "iss.tle").write_text(SAMPLE_TLE_TEXT)
+
+    with (
+        patch("generator.daemon._GENERATOR_MTIME_AT_START", 999.0),
+        patch("generator.daemon._max_generator_mtime", return_value=999.0),
+        patch("generator.daemon.run_tick_with_watchdog", return_value=True),
+        patch("generator.daemon.deploy_to_r2", return_value=True),
+        patch("time.sleep"),
+    ):
+        # max_iterations=2 means loop exits normally; SystemExit would mean bug.
+        supervisor_loop(settings_in_tmp, max_iterations=2)
+    # No assertion needed beyond "didn't raise SystemExit".
+
+
 def test_supervisor_loop_backs_off_on_failure(settings_in_tmp: Settings) -> None:
     """Consecutive failures should trigger exponential backoff."""
     sleep_durations: list[float] = []
