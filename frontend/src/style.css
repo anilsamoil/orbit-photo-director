@@ -36,9 +36,37 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+/* iPhone topbar overlap fix (reported anilsamoilenko 2026-05-17). With
+ * 4 flex children (brand + iss-now + kp-badge + tabs), iPhone widths
+ * (375-430px) couldn't fit the unwrapped content, causing the tabs to
+ * visually overlap the iss-now coordinates string. Stepwise narrow-
+ * viewport rules:
+ *
+ * < 500px (iPhone landscape + smaller): hide the verbose ISS region
+ *   suffix ("over Pacific Ocean"); keep the coordinates. Shrink
+ *   horizontal padding so every pixel counts for content.
+ * < 430px (iPhone portrait, the common case): hide the brand text
+ *   ("Orbit Photo Director"); keep the 🛰️ emoji as a visual anchor.
+ *   Tab buttons get tighter padding so the four-tab row stays one line.
+ *
+ * The flex-wrap: wrap on .topbar above gives us a graceful fallback
+ * even at unanticipated widths: if anything still doesn't fit, the
+ * tabs row drops to a second line rather than overlapping. */
+@media (max-width: 500px) {
+  .iss-now .iss-region { display: none; }
+  .topbar { padding: 0.6rem 0.7rem; }
+}
+@media (max-width: 430px) {
+  .brand-name { display: none; }
+  .tab { padding: 0.4rem 0.6rem; }
+  .topbar { gap: 0.35rem; }
 }
 
 .brand {

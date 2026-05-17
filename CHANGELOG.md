@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.4.1] - 2026-05-17
+
+### iPhone topbar overlap fix.
+
+Reported by anilsamoilenko while testing in-flight 2026-05-17: the Queue/Upcoming/Map/Log tab nav bar overlaid text content on iPhone Safari and Chrome. Root cause: 4 inflexible flex children (brand, iss-now coordinates, Kp badge added in v1.2.3.0, tabs row) couldn't fit in 375–430px iPhone viewports because `.topbar` was `flex-wrap: nowrap`. The Kp badge from v1.2.3.0 made the squeeze worse — there was no headroom left.
+
+### Fixed
+
+- `.topbar` now allows `flex-wrap: wrap` with a gap, so the tabs row drops to a second line gracefully on any narrow viewport rather than overlapping siblings.
+- New media query at `max-width: 500px`: hides the verbose ISS region suffix ("over Pacific Ocean"); keeps the coordinates. Tightens padding.
+- New media query at `max-width: 430px`: hides the brand text ("Orbit Photo Director"); keeps the 🛰️ emoji as a visual anchor. Tightens tab padding so all four tabs stay on one row.
+
+Verified across iPhone SE (375px), iPhone 14 (390px), iPhone Pro Max (430px), and desktop (1280px regression check). No JS changes; no test regressions.
+
 ## [1.2.4.0] - 2026-05-16
 
 ### Queue + Upcoming sort toggle: chronological by default, score as opt-in.
