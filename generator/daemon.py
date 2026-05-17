@@ -31,6 +31,35 @@ MAX_BACKOFF_SECONDS = 3600  # 1h
 # (e.g., to use scripts/deploy_wrangler.sh when R2 keys aren't available).
 DEPLOY_SCRIPT_DEFAULT = Path("scripts") / "deploy.sh"
 
+# Snapshot of the max mtime across generator/*.py files at process
+# start. supervisor_loop polls this between ticks to detect when code
+# on disk has changed (e.g., git pull, editor save), then exits non-
+# zero so launchd's KeepAlive=Crashed/SuccessfulExit=false restarts
+# the daemon with fresh modules.
+#
+# Why this exists: Python imports modules ONCE on process startup.
+# The OS daemon ran for 13 days (2026-05-04 → 2026-05-17) with stale
+# pre-V3.0 code while frontend redeploys happened constantly via R2
+# upload. WatchPaths in the launchd plist registers FSEvents but does
+# NOT restart a running job (it only STARTS on-demand jobs).
+# Polling mtimes in the loop is the only mechanism that actually
+# applies to a long-running daemon. P1 fix from TODOS.md, 2026-05-17.
+_GENERATOR_DIR = Path(__file__).parent
+def _max_generator_mtime() -> float:
+    try:
+        return max(p.stat().st_mtime for p in _GENERATOR_DIR.glob("*.py"))
+    except (OSError, ValueError):
+        return 0.0
+_GENERATOR_MTIME_AT_START = _max_generator_mtime()
+
+
+def _generator_code_changed() -> bool:
+    """Return True if any generator/*.py file has been modified since
+    the process started. Best-effort: stat failures (transient disk
+    issues, missing file briefly during git swap) return False so
+    we don't false-positive an exit on noise."""
+    return _max_generator_mtime() > _GENERATOR_MTIME_AT_START
+
 
 class StallWatchdog:
     """Best-effort watchdog: after `seconds`, raise SIGINT in this process to break the tick.
@@ -224,6 +253,21 @@ def supervisor_loop(settings: Settings, *, max_iterations: int | None = None) ->
 
         if max_iterations is not None and iteration >= max_iterations:
             return
+
+        # Self-restart hook: if generator/*.py was modified since this
+        # process started, exit non-zero so launchd respawns with the
+        # new code on disk. Check AFTER the tick (so the current tick
+        # completes with whatever module state was in memory) and
+        # BEFORE the long sleep (so we don't wait an hour to restart).
+        # SuccessfulExit=false in the launchd plist makes the non-zero
+        # exit trigger a restart.
+        if _generator_code_changed():
+            log.warning(
+                "generator code changed on disk (max mtime > %.0f); "
+                "exiting non-zero so launchd restarts with fresh modules",
+                _GENERATOR_MTIME_AT_START,
+            )
+            sys.exit(1)
 
         try:
             time.sleep(sleep_s)

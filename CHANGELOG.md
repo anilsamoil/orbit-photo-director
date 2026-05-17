@@ -2,6 +2,24 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.5.2] - 2026-05-17
+
+### Generator daemon now auto-restarts when code on disk changes.
+
+Validation 2026-05-17 caught a silent 13-day operational gap: the launchd daemon was a long-lived Python process that imported generator.* modules ONCE on startup, then looped forever. V3.0 launches integration (PR #5, 2026-05-10) and the v1.2.5.1 scoring fixes (PR #20, 2026-05-17) had been sitting on disk doing nothing. Frontend redeployed constantly via R2 upload; generator never restarted.
+
+### Fixed
+
+- `generator/daemon.py`: `supervisor_loop` now polls `generator/*.py` mtimes after each tick. If any file is newer than the process's start-time snapshot, exits non-zero so launchd's `KeepAlive.SuccessfulExit=false` triggers a respawn. New code gets loaded automatically on the next launchd-managed start.
+- `ops/com.astroanil.orbit-photo-director.plist`: added `WatchPaths` array listing all generator/*.py files (belt-and-suspenders for crash/manual-kill scenarios; the in-process mtime check is the primary mechanism since launchd's WatchPaths only **starts** on-demand jobs, doesn't **restart** running ones).
+- 2 new daemon tests covering the exit-on-change and no-exit-on-stable paths.
+
+### Operational notes
+
+- Adding new `generator/*.py` files requires updating the WatchPaths array in the plist (launchd doesn't watch recursively or auto-discover). The in-process mtime check picks up new files automatically because it globs `*.py` at runtime.
+- ThrottleInterval=30s in the plist prevents thrashing if many files change in quick succession (e.g., a `git pull` touching 10 files restarts the daemon at most once per 30 s).
+- Verified live: edited `generator/config.py`, daemon completed its current tick, logged "generator code changed on disk … exiting non-zero so launchd restarts with fresh modules", launchd respawned. Total time from edit to new process: ~52 s.
+
 ## [1.2.5.1] - 2026-05-17
 
 ### Cheap-wins batch 2: scoring correctness fixes + frontend perf.

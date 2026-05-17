@@ -17,6 +17,20 @@ EDIT BEFORE INSTALL:
   - Replace REPO_PATH below with the absolute path to your orbit-photo-director repo
     (e.g., /Users/astroanil/orbit-photo-director)
   - Confirm the Python interpreter path (use the venv's python: REPO_PATH/.venv/bin/python)
+
+WatchPaths (added 2026-05-17, fixes 13-day stale-module bug):
+  The daemon is a long-lived Python process that imports generator.* modules
+  ONCE on startup, then loops forever. Without WatchPaths, file edits to
+  generator/*.py on disk do not take effect until the process restarts.
+  Adding WatchPaths makes launchd kill + restart the job whenever any
+  watched file is modified — including via git pull, editor save, or
+  branch checkout. Combined with KeepAlive.Crashed=true, restarts are
+  automatic. ThrottleInterval=30 prevents thrashing if many files change
+  in quick succession (e.g., a `git pull` touching 10 files restarts the
+  daemon at most once per 30 s).
+
+  Adding new generator/*.py files? Add a WatchPaths entry for them too —
+  launchd does not watch recursively or auto-discover.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -55,6 +69,21 @@ EDIT BEFORE INSTALL:
 
     <key>ThrottleInterval</key>
     <integer>30</integer>
+
+    <!-- Restart the daemon when any generator module changes on disk.
+         See the long comment at the top of this file for context. -->
+    <key>WatchPaths</key>
+    <array>
+        <string>REPO_PATH/generator/__init__.py</string>
+        <string>REPO_PATH/generator/cloud.py</string>
+        <string>REPO_PATH/generator/config.py</string>
+        <string>REPO_PATH/generator/daemon.py</string>
+        <string>REPO_PATH/generator/launch_data.py</string>
+        <string>REPO_PATH/generator/main.py</string>
+        <string>REPO_PATH/generator/manifest.py</string>
+        <string>REPO_PATH/generator/orbit.py</string>
+        <string>REPO_PATH/generator/score.py</string>
+    </array>
 
     <key>StandardOutPath</key>
     <string>REPO_PATH/data/logs/launchd.out</string>

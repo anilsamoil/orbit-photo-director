@@ -271,7 +271,7 @@ breaking the live dot if SGP4 has unknown edge cases.
 
 ## Open
 
-### Auto-restart launchd daemon when generator code changes
+### Auto-restart launchd daemon when generator code changes (SHIPPED v1.2.5.2, 2026-05-17)
 **Priority:** P1 — caught us silently 2026-05-04 → 2026-05-17
 
 Validation discovered 2026-05-17: the launchd daemon
