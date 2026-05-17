@@ -243,10 +243,8 @@ def test_is_water_vandenberg_not_flagged() -> None:
     assert is_water(34.0, -140.0) is True, "Open Pacific west of CA"
 
 
-def test_is_water_with_explicit_mask() -> None:
-    # The mask parameter should bypass the heuristic entirely.
-    assert is_water(0.0, 0.0, mask=lambda lat, lon: True) is True
-    assert is_water(0.0, 170.0, mask=lambda lat, lon: False) is False
+# (existing test_is_water_with_explicit_mask coverage already exists at
+# line ~529 below — kept the more thorough named-callable version)
 
 
 # --------------------------------------------------------------------------
