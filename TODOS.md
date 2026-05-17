@@ -271,6 +271,47 @@ breaking the live dot if SGP4 has unknown edge cases.
 
 ## Open
 
+### Auto-restart launchd daemon when generator code changes
+**Priority:** P1 — caught us silently 2026-05-04 → 2026-05-17
+
+Validation discovered 2026-05-17: the launchd daemon
+`com.astroanil.orbit-photo-director` is a long-lived Python process
+that imports `generator.daemon` + transitively all generator modules
+ONCE on startup, then loops forever calling `supervisor_loop()`.
+Updates to generator/*.py on disk are NOT picked up until the process
+restarts.
+
+This silently broke production for 13 days:
+- Daemon started 2026-05-04
+- V3.0 launches integration committed 2026-05-10 (PR #5)
+- v1.2.5.1 scoring fixes committed 2026-05-17 (PR #20)
+- None of it was running until manual `launchctl kickstart` on 2026-05-17
+
+Symptoms when it bites:
+- New code lands on main, frontend redeploys via `./scripts/upload_frontend.sh`
+- Generator-side features (new artifact fields, scoring fixes, new
+  data sources) are invisible to operator
+- Hard to diagnose because status.json `build_version` matches
+  `__version__` in __init__.py, but the loaded modules are stale
+
+Fix candidates (pick one):
+1. Add `launchctl kickstart` step to a `make deploy-generator` Makefile
+   target. Document in CLAUDE.md as part of the release procedure.
+2. Add a Makefile target `make restart-daemon` and have the
+   `./scripts/upload_frontend.sh` script also call it (or a sibling
+   `./scripts/restart_daemon.sh`).
+3. Add a file-mtime check inside `supervisor_loop`: poll `generator/`
+   mtimes between ticks; if any newer than process start, exit cleanly
+   so launchd's KeepAlive auto-restarts with fresh modules.
+4. Switch launchd plist to `ThrottleInterval` short + add a
+   `Watchpaths` key on the generator/ directory so any file change
+   triggers restart.
+
+Option 3 or 4 is the cleanest — zero discipline required. Option 1 is
+the simplest if discipline is acceptable. Either way needs to land
+before V3-P2 ASCENT or any other generator-side feature so we don't
+lose another 2 weeks of validation. ~30-60 min CC.
+
 ### iPhone topbar overlap on Safari + Chrome (SHIPPED v1.2.4.1, 2026-05-17)
 **Priority:** P2 — directly visible to operator on iPhone today
 
