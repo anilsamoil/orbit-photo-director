@@ -103,11 +103,14 @@ describe('formatLaunchWindow', () => {
 });
 
 describe('renderCard with launch field', () => {
-  it('renders the 🚀 LAUNCH tag when launch field is present', () => {
+  it('renders the launch tag (OVERHEAD pass for geometry=overhead)', () => {
+    // V3-P2: the tag is now kind-aware. Old PassEntries with geometry='overhead'
+    // (no `kind` field yet) fall back to geometry, rendering "🚀 OVERHEAD pass".
     const card = renderCard(baseLaunchPass(), NOW, false, () => {});
     const tags = Array.from(card.querySelectorAll('.tag'));
-    const launchTag = tags.find((t) => t.textContent === '🚀 LAUNCH');
+    const launchTag = tags.find((t) => t.textContent?.startsWith('🚀'));
     expect(launchTag).toBeTruthy();
+    expect(launchTag?.textContent).toBe('🚀 OVERHEAD pass');
     expect(launchTag?.classList.contains('launch-overhead')).toBe(true);
   });
 
@@ -144,7 +147,7 @@ describe('renderCard with launch field', () => {
   it('places launch tags BEFORE regime + obstruction tags (left-to-right scan)', () => {
     const card = renderCard(baseLaunchPass(), NOW, false, () => {});
     const tagTexts = Array.from(card.querySelectorAll('.tag')).map((t) => t.textContent);
-    const launchIdx = tagTexts.indexOf('🚀 LAUNCH');
+    const launchIdx = tagTexts.findIndex((t) => t?.startsWith('🚀'));
     const regimeIdx = tagTexts.findIndex((t) => t === 'night' || t === 'day' || t === 'terminator');
     expect(launchIdx).toBeLessThan(regimeIdx);
   });

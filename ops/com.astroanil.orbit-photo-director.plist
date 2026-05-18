@@ -75,6 +75,8 @@ WatchPaths (added 2026-05-17, fixes 13-day stale-module bug):
     <key>WatchPaths</key>
     <array>
         <string>REPO_PATH/generator/__init__.py</string>
+        <string>REPO_PATH/generator/ascent.py</string>
+        <string>REPO_PATH/generator/ascent_profiles.py</string>
         <string>REPO_PATH/generator/cloud.py</string>
         <string>REPO_PATH/generator/config.py</string>
         <string>REPO_PATH/generator/daemon.py</string>

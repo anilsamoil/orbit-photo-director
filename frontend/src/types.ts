@@ -61,10 +61,16 @@ export interface PassEntry {
   launch?: {
     name: string;
     rocket_type: string;
-    /** Currently always 'overhead' (V3.0 OVERHEAD-only scope per /autoplan
-     *  D4=B). V3.1 will add 'ascent' when terminator + slant-range modeling
-     *  lands. Discriminator lets the card render differently per geometry. */
-    geometry: 'overhead';
+    /** V3.0 legacy field. Stays 'overhead' for OVERHEAD entries; will be
+     *  'ascent' for V3-P2 ASCENT entries. Kept for older readers; new
+     *  code should prefer `kind`. */
+    geometry: 'overhead' | 'ascent';
+    /** V3-P2 discriminator. 'overhead' = rocket already in orbit passing
+     *  under ISS (V3.0). 'ascent' = rocket climbing through atmosphere
+     *  (V3-P2). Drives the card tag — different photographic setup per
+     *  kind, so the operator needs to see it (per Codex review of the
+     *  design doc). Optional for back-compat with v1.2.6.x manifests. */
+    kind?: 'overhead' | 'ascent';
     site_name: string;
     /** Half-width of the LL2 NET window in seconds. 0 = precisely scheduled.
      *  Card renders "Window: ±N min" so the operator can weight a "T-0

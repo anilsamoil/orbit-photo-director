@@ -43,6 +43,11 @@ class Settings:
     rclone_remote: str
     tick_minutes: int = DEFAULT_TICK_MINUTES
     pass_window_hours: int = DEFAULT_PASS_WINDOW_HOURS
+    # V3-P2 ASCENT geometry feature flag. When False (default), the
+    # generator only emits OVERHEAD launch passes (existing V3.0 behavior).
+    # When True, also emits ASCENT predictions (rocket-during-climb) per
+    # the design doc. Off-by-default for a 1-week Anil soak before flip.
+    enable_ascent: bool = False
 
     @classmethod
     def from_env(cls, repo_root: Path | None = None) -> Settings:
@@ -68,6 +73,8 @@ class Settings:
             pass_window_hours=int(
                 os.environ.get("OPD_PASS_WINDOW_HOURS", DEFAULT_PASS_WINDOW_HOURS)
             ),
+            enable_ascent=os.environ.get("OPD_ENABLE_ASCENT", "0").strip().lower()
+                in ("1", "true", "yes", "on"),
         )
 
     def ensure_dirs(self) -> None:

@@ -14,6 +14,7 @@ from generator.config import Settings
 from generator.main import (
     TLE_HARD_FAIL_HOURS,
     CombinedCloudSampler,
+    _build_ascent_pass_entry,
     fetch_tle,
     main,
     run_tick,
@@ -966,3 +967,123 @@ def test_reserve_launch_slot_in_queue_preserves_score_descending_order() -> None
     result = _reserve_launch_slot_in_queue(next_90, [launch], now, queue_horizon_minutes=90)
     scores = [p["score"] for p in result]
     assert scores == sorted(scores, reverse=True)
+
+
+# --------------------------------------------------------------------------
+# V3-P2 ASCENT integration — _build_ascent_pass_entry shape
+# --------------------------------------------------------------------------
+
+
+def test_build_ascent_pass_entry_shape() -> None:
+    """The dict returned by _build_ascent_pass_entry must be valid PassEntry
+    shape so the existing sort/render pipeline can consume it."""
+    from generator.ascent import AscentPrediction, SunState
+    from generator.launch_data import Launch
+
+    la = Launch(
+        id="abc",
+        name="Falcon 9 Block 5 | Starlink 11-X",
+        rocket_type="Falcon 9 Block 5",
+        site_name="LC-39A",
+        site_lat=28.6,
+        site_lon=-80.6,
+        t0=datetime(2024, 10, 17, 12, 0, tzinfo=UTC),
+        net_window_seconds=0,
+        status_abbrev="Go",
+    )
+    pred = AscentPrediction(
+        rocket_name="Falcon 9 Block 5",
+        profile_name="Falcon 9",
+        t0_utc=la.t0,
+        t_offset_seconds=180,
+        iss_position=Position(lat=29.0, lon=-79.0, alt_km=408.0, when=la.t0),
+        rocket_lat=29.5,
+        rocket_lon=-78.5,
+        rocket_alt_km=85.0,
+        pad_lat=la.site_lat,
+        pad_lon=la.site_lon,
+        launch_azimuth_deg=45.0,
+        slant_range_km=600.0,
+        apparent_plume_angle_mrad=3.5,
+        rocket_sun_state=SunState.SUNLIT,
+        background_dark_score=1.0,
+        obstruction_cloud_score=1.0,
+        background_cloud_score=1.0,
+        profile_confidence=0.85,
+    )
+    now = datetime(2024, 10, 17, 11, 55, tzinfo=UTC)
+    entry = _build_ascent_pass_entry(la, pred, now)
+    assert entry["target_id"] == "launch:abc:ascent"
+    assert entry["target_name"] == "🚀 Falcon 9 Block 5 | Starlink 11-X"
+    assert entry["target_lat"] == 29.5
+    assert entry["target_lon"] == -78.5
+    assert entry["launch"]["kind"] == "ascent"
+    # `geometry` legacy field also carries 'ascent' so older readers don't
+    # silently misread an ascent entry as overhead.
+    assert entry["launch"]["geometry"] == "ascent"
+    # Score reflects the multiplier (perfect inputs × profile_conf=0.85 → 85).
+    assert 80.0 <= entry["score"] <= 90.0
+    # All five score_components present so the frontend's breakdown panel works.
+    for k in ("p_unobstructed", "regime_fit", "nadir_proximity",
+              "priority_weight", "tle_freshness"):
+        assert k in entry["score_components"]
+
+
+def test_build_ascent_pass_entry_floors_score_for_poor_conditions() -> None:
+    """A bad-conditions prediction folds to the MULTIPLIER_FLOOR (0.3 × 100 = 30)."""
+    from generator.ascent import (
+        MULTIPLIER_FLOOR,
+        AscentPrediction,
+        SunState,
+    )
+    from generator.launch_data import Launch
+
+    la = Launch(
+        id="bad",
+        name="Test",
+        rocket_type="Falcon 9 Block 5",
+        site_name="X",
+        site_lat=0.0,
+        site_lon=0.0,
+        t0=datetime(2024, 10, 17, 12, 0, tzinfo=UTC),
+        net_window_seconds=0,
+        status_abbrev="Go",
+    )
+    pred = AscentPrediction(
+        rocket_name="Falcon 9",
+        profile_name="Falcon 9",
+        t0_utc=la.t0,
+        t_offset_seconds=120,
+        iss_position=Position(lat=0.0, lon=0.0, alt_km=408.0, when=la.t0),
+        rocket_lat=0.0,
+        rocket_lon=0.0,
+        rocket_alt_km=40.0,
+        pad_lat=0.0,
+        pad_lon=0.0,
+        launch_azimuth_deg=90.0,
+        slant_range_km=2500.0,
+        apparent_plume_angle_mrad=0.4,  # below NO_CREDIT
+        rocket_sun_state=SunState.SUNLIT,
+        background_dark_score=0.0,
+        obstruction_cloud_score=1.0,
+        background_cloud_score=1.0,
+        profile_confidence=0.7,
+    )
+    entry = _build_ascent_pass_entry(la, pred, la.t0)
+    assert entry["score"] == 100.0 * MULTIPLIER_FLOOR
+
+
+def test_run_tick_does_not_emit_ascent_when_flag_off(
+    settings_in_tmp: Settings, cached_tle: Path,
+) -> None:
+    """Default settings (enable_ascent=False) → no entries with kind=='ascent'."""
+    from generator.manifest import write_manifest  # noqa: F401 — exercise the same path
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    assert settings_in_tmp.enable_ascent is False
+    run_tick(settings_in_tmp, now=now)
+    passes_dirs = list((settings_in_tmp.out_dir / "v").iterdir())
+    assert passes_dirs, "expected at least one versioned dir"
+    passes = json.loads((passes_dirs[0] / "passes.json").read_text())
+    for p in passes:
+        if "launch" in p:
+            assert p["launch"].get("kind") != "ascent"
