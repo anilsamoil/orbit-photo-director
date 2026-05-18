@@ -123,6 +123,13 @@ class Pass:
     closest_approach: datetime
     nadir_distance_km: float
     iss_position: Position
+    # Direction the target sits in relative to ISS's direction of travel,
+    # measured clockwise from forward. 0 = ahead, 90 = starboard, 180 = aft,
+    # 270 = port. Lets the operator orient the shot ("90° starboard, look
+    # right of travel"). Computed in find_passes when an ISS heading sample
+    # is available; None when find_passes is called outside that path
+    # (some legacy tests pass synthetic data).
+    iss_relative_bearing_deg: float | None = None
 
 
 def great_circle_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -134,6 +141,30 @@ def great_circle_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float
         + math.cos(rl1) * math.cos(rl2) * math.sin(dl / 2) ** 2
     )
     return 2 * EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(a)))
+
+
+def great_circle_bearing_deg(
+    lat1: float, lon1: float, lat2: float, lon2: float,
+) -> float:
+    """Great-circle initial bearing from (lat1, lon1) to (lat2, lon2),
+    in degrees clockwise from true north [0, 360).
+
+    ISS travels along great circles so this is the correct formula for
+    direction-of-travel; flat-Earth atan2(Δlat, Δlon) blows up near the
+    poles and across the antimeridian.
+    """
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+    y = math.sin(dlambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def relative_bearing_deg(iss_heading_deg: float, target_bearing_deg: float) -> float:
+    """Bearing of target relative to ISS direction-of-travel, clockwise from
+    forward [0, 360). 0 = fore, 90 = starboard, 180 = aft, 270 = port."""
+    return (target_bearing_deg - iss_heading_deg + 360.0) % 360.0
 
 
 def angle_off_nadir_deg(ground_distance_km: float, altitude_km: float) -> float:
@@ -190,6 +221,20 @@ def find_passes(
         curr_d = samples[i][2]
         next_d = samples[i + 1][2]
         if curr_d < prev_d and curr_d < next_d and curr_d < max_distance_km:
+            # ISS heading at closest approach: bearing from this sample to
+            # the next. The next sample is `step_seconds` ahead, plenty for
+            # a stable heading at ISS orbital speeds (~7.7 km/s → ~230 km
+            # in 30s, far above noise). The relative bearing tells the
+            # operator which way to look (forward/starboard/aft/port).
+            iss_here = samples[i][1]
+            iss_next = samples[i + 1][1]
+            heading = great_circle_bearing_deg(
+                iss_here.lat, iss_here.lon, iss_next.lat, iss_next.lon,
+            )
+            target_bearing = great_circle_bearing_deg(
+                iss_here.lat, iss_here.lon, lat_t, lon_t,
+            )
+            rel = relative_bearing_deg(heading, target_bearing)
             passes.append(
                 Pass(
                     target_id=target_id,
@@ -197,7 +242,8 @@ def find_passes(
                     target_lon=lon_t,
                     closest_approach=samples[i][0],
                     nadir_distance_km=curr_d,
-                    iss_position=samples[i][1],
+                    iss_position=iss_here,
+                    iss_relative_bearing_deg=rel,
                 )
             )
     return passes

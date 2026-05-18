@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _resetOpenBreakdownsForTest, formatForecastHorizon, formatObsAge, renderCard, renderCards } from '../src/card';
+import { _resetOpenBreakdownsForTest, formatForecastHorizon, formatObsAge, formatRelativeBearing, renderCard, renderCards } from '../src/card';
 import type { PassEntry } from '../src/types';
 
 const samplePass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -457,5 +457,83 @@ describe('renderCard obs-age tag', () => {
       now, false, () => undefined,
     );
     expect(card.querySelector('.tag.obs-age')).toBeNull();
+  });
+});
+
+describe('formatRelativeBearing', () => {
+  it('returns "fore" when target is directly ahead', () => {
+    expect(formatRelativeBearing(0)).toBe('fore');
+    expect(formatRelativeBearing(5)).toBe('fore');
+    expect(formatRelativeBearing(355)).toBe('fore');
+  });
+
+  it('returns "aft" when target is directly behind', () => {
+    expect(formatRelativeBearing(180)).toBe('aft');
+    expect(formatRelativeBearing(175)).toBe('aft');
+    expect(formatRelativeBearing(185)).toBe('aft');
+  });
+
+  it('returns "starboard" near 90°', () => {
+    expect(formatRelativeBearing(90)).toBe('starboard');
+    expect(formatRelativeBearing(85)).toBe('starboard');
+  });
+
+  it('returns "port" near 270°', () => {
+    expect(formatRelativeBearing(270)).toBe('port');
+    expect(formatRelativeBearing(275)).toBe('port');
+  });
+
+  it('formats fore-starboard quadrant with degrees off forward', () => {
+    expect(formatRelativeBearing(45)).toBe('45° starboard');
+    expect(formatRelativeBearing(30)).toBe('30° starboard');
+  });
+
+  it('formats fore-port quadrant with degrees off forward', () => {
+    expect(formatRelativeBearing(315)).toBe('45° port');
+    expect(formatRelativeBearing(330)).toBe('30° port');
+  });
+
+  it('formats aft-starboard quadrant as degrees off aft', () => {
+    expect(formatRelativeBearing(135)).toBe('45° starboard aft');
+  });
+
+  it('formats aft-port quadrant as degrees off aft', () => {
+    expect(formatRelativeBearing(225)).toBe('45° port aft');
+  });
+
+  it('normalizes out-of-range input', () => {
+    expect(formatRelativeBearing(360)).toBe('fore');
+    expect(formatRelativeBearing(-5)).toBe('fore');
+    expect(formatRelativeBearing(720)).toBe('fore');
+  });
+});
+
+describe('renderCard direction-of-look tag', () => {
+  it('appends the direction word when iss_relative_bearing_deg is present', () => {
+    const card = renderCard(
+      samplePass({ angle_off_nadir_deg: 35, iss_relative_bearing_deg: 90 }),
+      NOW, false, () => undefined,
+    );
+    const tag = card.querySelector('.tag.window-cupola');
+    expect(tag?.textContent).toContain('starboard');
+    expect(tag?.textContent).toContain('35°');
+  });
+
+  it('omits direction silently when iss_relative_bearing_deg missing', () => {
+    const card = renderCard(
+      samplePass({ angle_off_nadir_deg: 35 }),
+      NOW, false, () => undefined,
+    );
+    const tag = card.querySelector('.tag.window-cupola');
+    expect(tag?.textContent).toBe('35° · Cupola');
+  });
+
+  it('shows "fore" for a directly-ahead pass', () => {
+    const card = renderCard(
+      samplePass({ angle_off_nadir_deg: 35, iss_relative_bearing_deg: 0 }),
+      NOW, false, () => undefined,
+    );
+    const tag = card.querySelector('.tag.window-cupola');
+    expect(tag?.textContent).toContain('fore');
   });
 });

@@ -28,6 +28,12 @@ export interface PassEntry {
    *  <30° → WORF (Destiny lab nadir window). ≥30° → Cupola (panoramic dome).
    *  Older builds may not include this field; treat as optional. */
   angle_off_nadir_deg?: number;
+  /** Direction the target sits relative to ISS direction of travel,
+   *  measured clockwise from forward [0, 360). 0=ahead/fore, 90=starboard,
+   *  180=aft, 270=port. Lets the card render "35° starboard" so the
+   *  operator knows which window/side to point the camera. Added v1.2.6.0;
+   *  older manifests will omit it. */
+  iss_relative_bearing_deg?: number;
   pass_regime: 'day' | 'night' | 'terminator';
   obstruction_class: 'clear' | 'cloudy' | 'sun-glint risk';
   p_unobstructed: number;

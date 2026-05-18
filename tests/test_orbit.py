@@ -16,8 +16,10 @@ from generator.orbit import (
     find_passes,
     fit_iss_polynomial,
     freshness_factor,
+    great_circle_bearing_deg,
     great_circle_km,
     propagate,
+    relative_bearing_deg,
     sample_track_points,
     teme_to_geodetic,
     tle_age_hours,
@@ -461,3 +463,99 @@ def test_sample_track_points_payload_size_under_15kb(
     pts = sample_track_points(sample_tle, now_utc, minutes=200, step_seconds=30)
     encoded = json.dumps(pts)
     assert len(encoded) < 15_000, f"track_points JSON {len(encoded)} bytes > 15 KB cap"
+
+
+# --------------------------------------------------------------------------
+# great_circle_bearing_deg + relative_bearing_deg (operator direction hint)
+# --------------------------------------------------------------------------
+
+
+def test_bearing_due_north_is_zero() -> None:
+    # From equator at lon 0 to north pole, bearing should be 0° (north).
+    assert great_circle_bearing_deg(0.0, 0.0, 89.9, 0.0) == pytest.approx(0.0, abs=0.1)
+
+
+def test_bearing_due_east_is_ninety() -> None:
+    # From equator (0, 0) to a nearby east point — bearing 90°.
+    assert great_circle_bearing_deg(0.0, 0.0, 0.0, 0.1) == pytest.approx(90.0, abs=0.1)
+
+
+def test_bearing_due_south_is_one_eighty() -> None:
+    assert great_circle_bearing_deg(0.0, 0.0, -0.1, 0.0) == pytest.approx(180.0, abs=0.1)
+
+
+def test_bearing_due_west_is_two_seventy() -> None:
+    assert great_circle_bearing_deg(0.0, 0.0, 0.0, -0.1) == pytest.approx(270.0, abs=0.1)
+
+
+def test_bearing_antimeridian_crossing() -> None:
+    """Going east from lon=179 to lon=-179 (crosses dateline) should still be ~east."""
+    b = great_circle_bearing_deg(0.0, 179.0, 0.0, -179.0)
+    assert 85.0 <= b <= 95.0
+
+
+def test_relative_bearing_target_dead_ahead() -> None:
+    """ISS heading east + target due east → relative 0° (fore)."""
+    assert relative_bearing_deg(iss_heading_deg=90.0, target_bearing_deg=90.0) == 0.0
+
+
+def test_relative_bearing_target_starboard() -> None:
+    """ISS heading north + target due east → 90° (starboard)."""
+    assert relative_bearing_deg(iss_heading_deg=0.0, target_bearing_deg=90.0) == 90.0
+
+
+def test_relative_bearing_target_aft() -> None:
+    """ISS heading north + target due south → 180° (aft)."""
+    assert relative_bearing_deg(iss_heading_deg=0.0, target_bearing_deg=180.0) == 180.0
+
+
+def test_relative_bearing_target_port() -> None:
+    """ISS heading north + target due west → 270° (port)."""
+    assert relative_bearing_deg(iss_heading_deg=0.0, target_bearing_deg=270.0) == 270.0
+
+
+def test_relative_bearing_wraps_correctly() -> None:
+    """If target bearing < heading, the modulo math should still give [0, 360)."""
+    assert relative_bearing_deg(iss_heading_deg=350.0, target_bearing_deg=10.0) == 20.0
+
+
+# --------------------------------------------------------------------------
+# find_passes populates iss_relative_bearing_deg
+# --------------------------------------------------------------------------
+
+
+def test_find_passes_includes_relative_bearing(sample_tle: TLE) -> None:
+    """A real find_passes call should attach a relative-bearing field to
+    every returned Pass (lets the frontend render "look starboard")."""
+    target = {
+        "id": "test",
+        "name": "Test",
+        "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+        "priority": 5,
+        "regime": "any",
+    }
+    # Search a long enough window that we hit at least one near pass over
+    # (0, 0). The ISS visits the equator twice per orbit; over 24h we'll
+    # see several near passes within 800km.
+    start = datetime(2024, 10, 17, 0, 0, tzinfo=UTC)
+    end = start + timedelta(hours=24)
+    passes = find_passes(sample_tle, target, start, end, step_seconds=60)
+    assert len(passes) > 0, "expected at least one near-equator pass in 24h"
+    for p in passes:
+        assert p.iss_relative_bearing_deg is not None
+        assert 0.0 <= p.iss_relative_bearing_deg < 360.0
+
+
+def test_pass_dataclass_relative_bearing_defaults_none() -> None:
+    """The field is optional so unit tests that construct Pass directly
+    (without a TLE/heading context) still work after the schema bump."""
+    p = Pass(
+        target_id="x",
+        target_lat=0.0,
+        target_lon=0.0,
+        closest_approach=datetime(2024, 10, 17, 12, 0, tzinfo=UTC),
+        nadir_distance_km=100.0,
+        iss_position=Position(lat=0.0, lon=0.0, alt_km=408.0,
+                              when=datetime(2024, 10, 17, 12, 0, tzinfo=UTC)),
+    )
+    assert p.iss_relative_bearing_deg is None
