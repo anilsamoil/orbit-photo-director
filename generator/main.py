@@ -23,6 +23,10 @@ from typing import Any
 import requests
 
 from . import __version__
+from .ascent import (
+    ascent_score_multiplier,
+    predict_ascent_pass,
+)
 from .cloud import (
     CloudSample,
     CloudSampler,
@@ -64,6 +68,9 @@ from .orbit import (
     find_passes,
     fit_iss_polynomial,
     freshness_factor,
+    great_circle_bearing_deg,
+    great_circle_km,
+    relative_bearing_deg,
     sample_track_points,
     tle_age_hours,
 )
@@ -410,6 +417,96 @@ def _synthesize_launch_target(la: Launch) -> dict[str, Any]:
     }
 
 
+def _build_ascent_pass_entry(
+    la: Launch, pred: Any, now: datetime,
+) -> dict[str, Any]:
+    """Shape an AscentPrediction into a PassEntry dict the existing
+    sort/render pipeline can consume.
+
+    Important shape decisions:
+    - target_lat/lon are the ROCKET position at best instant (not the pad).
+      The card's "look here" is the rocket, not the launch site.
+    - nadir_distance_km uses the great-circle distance from ISS subpoint
+      to the rocket's subpoint. Not a true "nadir distance" (rocket is at
+      altitude) but the existing card layout reads it as "how close
+      laterally," which is what the operator wants for an ascent shot.
+    - score = 100 × ascent_score_multiplier so it integrates cleanly with
+      the existing 0-100 score scale (OVERHEAD scores live in same range).
+    - launch.kind = "ascent" drives the frontend's "ASCENT plume" tag.
+    """
+    rocket_subpoint_dist = great_circle_km(
+        pred.iss_position.lat, pred.iss_position.lon,
+        pred.rocket_lat, pred.rocket_lon,
+    )
+    iss_heading = great_circle_bearing_deg(
+        pred.iss_position.lat, pred.iss_position.lon,
+        # Bearing computed across +30s of ISS travel via the recorded ISS
+        # position alone isn't possible here (we have one sample, not two).
+        # Approximate using bearing-to-rocket as a proxy direction-of-look
+        # since the operator's main use of this is "which way to face,"
+        # not aircraft-navigation precision.
+        pred.rocket_lat, pred.rocket_lon,
+    )
+    target_bearing = great_circle_bearing_deg(
+        pred.iss_position.lat, pred.iss_position.lon,
+        pred.rocket_lat, pred.rocket_lon,
+    )
+    # For ASCENT, the "relative bearing" of the target is its bearing
+    # relative to ISS direction of travel — but we lack a heading sample
+    # here, so we just use the absolute bearing as a placeholder direction
+    # indicator. Soak data will tell us if this needs refinement.
+    rel_bearing = relative_bearing_deg(iss_heading, target_bearing)
+    multiplier = ascent_score_multiplier(pred)
+    return {
+        "target_id": f"launch:{la.id}:ascent",
+        "target_name": f"🚀 {la.name}",
+        "target_regime": "any",
+        "target_priority": 5,
+        "target_lat": round(pred.rocket_lat, 4),
+        "target_lon": round(pred.rocket_lon, 4),
+        "closest_approach": utcnow_iso(pred.best_instant_utc),
+        "nadir_distance_km": round(rocket_subpoint_dist, 2),
+        "angle_off_nadir_deg": round(
+            angle_off_nadir_deg(rocket_subpoint_dist, pred.iss_position.alt_km), 1
+        ),
+        "iss_relative_bearing_deg": round(rel_bearing, 1),
+        "pass_regime": "night" if pred.background_dark_score > 0.5 else (
+            "terminator" if pred.background_dark_score > 0.1 else "day"
+        ),
+        "obstruction_class": (
+            "clear" if pred.obstruction_cloud_score > 0.7 else "cloudy"
+        ),
+        "p_unobstructed": round(pred.obstruction_cloud_score * 100.0, 2),
+        "cloud_fraction": round(100.0 * (1.0 - pred.obstruction_cloud_score), 2),
+        "cloud_source": "ascent-derived",
+        "sample_time": utcnow_iso(now),
+        "score": round(100.0 * multiplier, 3),
+        "score_components": {
+            "p_unobstructed": round(pred.obstruction_cloud_score * 100.0, 2),
+            "regime_fit": 100.0,
+            "nadir_proximity": round(100.0 * multiplier, 2),
+            "priority_weight": 100.0,
+            "tle_freshness": 1.0,
+        },
+        "iss_at_closest": {
+            "lat": round(pred.iss_position.lat, 4),
+            "lon": round(pred.iss_position.lon, 4),
+            "alt_km": round(pred.iss_position.alt_km, 1),
+        },
+        "launch": {
+            "name": la.name,
+            "rocket_type": la.rocket_type,
+            # `geometry` kept for v1.2.6.x reader compat; will retire when
+            # all stored snapshots have rolled past kind-aware versions.
+            "geometry": "ascent",
+            "kind": "ascent",
+            "site_name": la.site_name,
+            "net_window_seconds": la.net_window_seconds,
+            "t0": utcnow_iso(la.t0),
+        },
+    }
+
+
 def _reserve_launch_slot(
     upcoming: list[dict[str, Any]],
     launch_pass_entries: list[dict[str, Any]],
@@ -621,7 +718,11 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
             entry["launch"] = {
                 "name": la.name,
                 "rocket_type": la.rocket_type,
+                # `geometry` is the V3.0 legacy field; `kind` is the V3-P2
+                # discriminator (overhead vs ascent). Both written for now;
+                # frontend reads `kind` with fallback to `geometry`.
                 "geometry": "overhead",
+                "kind": "overhead",
                 "site_name": la.site_name,
                 "net_window_seconds": la.net_window_seconds,
                 "t0": utcnow_iso(la.t0),
@@ -633,6 +734,49 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
             len(launch_pass_entries), len(actionable_launches),
         )
     all_passes.extend(launch_pass_entries)
+
+    # 5c. ASCENT pipeline (V3-P2). Gated by OPD_ENABLE_ASCENT (default off
+    # for the 1-week Anil soak per D6 in the design doc). For each
+    # actionable launch with a matched rocket profile, predict the single
+    # best photographable instant during climb and append it as a separate
+    # PassEntry with launch.kind="ascent". The OVERHEAD + ASCENT entries
+    # for the same launch coexist per D7 (different photo opportunities).
+    ascent_pass_entries: list[dict[str, Any]] = []
+    if settings.enable_ascent and actionable_launches:
+        for la in actionable_launches:
+            pred = predict_ascent_pass(
+                launch={
+                    "rocket": {"configuration": {
+                        # match_rocket uses these strings to resolve a profile;
+                        # we only have la.rocket_type (the LL2 `full_name`).
+                        "full_name": la.rocket_type,
+                    }},
+                    # Inclination unknown at launch_data layer (LL2 stores it
+                    # under mission.orbit.inclination but we don't surface it
+                    # in Launch yet). Default to ISS-rendezvous inclination
+                    # 51.6° — most ISS-photographable launches target that or
+                    # similar; SSO/polar will be slightly off but the soak
+                    # will surface any cases that need real inclination data.
+                    "mission": {"orbit": {"inclination": 51.6}},
+                },
+                pad_lat_deg=la.site_lat,
+                pad_lon_deg=la.site_lon,
+                t0_utc=la.t0,
+                iss_tle=tle,
+                cloud_sampler=sampler,
+            )
+            if pred is None:
+                continue
+            ascent_pass_entries.append(_build_ascent_pass_entry(la, pred, n))
+        if ascent_pass_entries:
+            log.info(
+                "found %d ASCENT opportunities (OPD_ENABLE_ASCENT=1)",
+                len(ascent_pass_entries),
+            )
+        all_passes.extend(ascent_pass_entries)
+    # Reserved-slot logic (ARCH-4) treats both kinds as launch passes for
+    # the slot guarantee. Combine for that step.
+    launch_pass_entries = launch_pass_entries + ascent_pass_entries
 
     # 5. Write versioned artifacts
     version = version_id(n)

@@ -508,6 +508,61 @@ describe('formatRelativeBearing', () => {
   });
 });
 
+describe('renderCard launch.kind tag (V3-P2 ASCENT)', () => {
+  const launchOverhead = samplePass({
+    launch: {
+      name: 'Falcon 9 | Starlink 11-X',
+      rocket_type: 'Falcon 9 Block 5',
+      geometry: 'overhead',
+      kind: 'overhead',
+      site_name: 'LC-39A',
+      net_window_seconds: 0,
+      t0: '2024-10-17T12:23:00Z',
+    },
+  });
+  const launchAscent = samplePass({
+    launch: {
+      name: 'Falcon 9 | Starlink 11-X',
+      rocket_type: 'Falcon 9 Block 5',
+      geometry: 'ascent',
+      kind: 'ascent',
+      site_name: 'LC-39A',
+      net_window_seconds: 0,
+      t0: '2024-10-17T12:23:00Z',
+    },
+  });
+  const launchOlderManifest = samplePass({
+    launch: {
+      name: 'Falcon 9 | Starlink 11-X',
+      rocket_type: 'Falcon 9 Block 5',
+      geometry: 'overhead',
+      // no `kind` — manifest predates V3-P2
+      site_name: 'LC-39A',
+      net_window_seconds: 0,
+      t0: '2024-10-17T12:23:00Z',
+    },
+  });
+
+  it('renders "OVERHEAD pass" for kind=overhead', () => {
+    const card = renderCard(launchOverhead, NOW, false, () => undefined);
+    const tag = card.querySelector('.tag.launch-overhead');
+    expect(tag?.textContent).toBe('🚀 OVERHEAD pass');
+  });
+
+  it('renders "ASCENT plume" for kind=ascent + uses launch-ascent class', () => {
+    const card = renderCard(launchAscent, NOW, false, () => undefined);
+    expect(card.querySelector('.tag.launch-ascent')?.textContent).toBe('🚀 ASCENT plume');
+    // Must NOT also have the launch-overhead tag.
+    expect(card.querySelector('.tag.launch-overhead')).toBeNull();
+  });
+
+  it('falls back to geometry when kind missing (older manifest)', () => {
+    const card = renderCard(launchOlderManifest, NOW, false, () => undefined);
+    const tag = card.querySelector('.tag.launch-overhead');
+    expect(tag?.textContent).toBe('🚀 OVERHEAD pass');
+  });
+});
+
 describe('renderCard direction-of-look tag', () => {
   it('appends the direction word when iss_relative_bearing_deg is present', () => {
     const card = renderCard(

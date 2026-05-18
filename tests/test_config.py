@@ -43,6 +43,40 @@ def test_from_env_honors_environment_variables(
 
 
 # --------------------------------------------------------------------------
+# enable_ascent flag (V3-P2 ASCENT)
+# --------------------------------------------------------------------------
+
+
+def test_enable_ascent_defaults_false(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Default off so the 1-week Anil soak doesn't surprise the operator."""
+    monkeypatch.delenv("OPD_ENABLE_ASCENT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env()
+    assert s.enable_ascent is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "True", "TRUE", "yes", "on"])
+def test_enable_ascent_truthy_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str,
+) -> None:
+    """Accept the common ways an operator might set 'true' in a plist."""
+    monkeypatch.setenv("OPD_ENABLE_ASCENT", value)
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env()
+    assert s.enable_ascent is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "", "garbage"])
+def test_enable_ascent_falsy_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str,
+) -> None:
+    monkeypatch.setenv("OPD_ENABLE_ASCENT", value)
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env()
+    assert s.enable_ascent is False
+
+
+# --------------------------------------------------------------------------
 # load_targets — validation paths
 # --------------------------------------------------------------------------
 

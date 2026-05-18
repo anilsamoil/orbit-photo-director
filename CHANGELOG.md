@@ -2,6 +2,33 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.7.0] - 2026-05-17
+
+### V3-P2 ASCENT geometry — integration slice (gated by feature flag).
+
+Completes the V3-P2 ASCENT work after slices 1 (#22, profile data) and 2 (#24, geometry math). Wires the ASCENT pipeline into `run_tick` behind a feature flag, adds the operator-visible `🚀 ASCENT plume` tag, and includes new files in the daemon's WatchPaths so on-disk code changes auto-restart the daemon.
+
+### Added
+
+- **`OPD_ENABLE_ASCENT` flag in `generator/config.py`.** Off by default for the 1-week Anil self-test soak (D6 in the design doc). Accepts `1`/`true`/`yes`/`on`.
+- **ASCENT loop in `generator/main.py:run_tick`.** When `settings.enable_ascent` is True, calls `predict_ascent_pass()` for every actionable launch with a matched rocket profile and appends the best-instant prediction as a separate `PassEntry` with `launch.kind="ascent"`. Reuses the existing reserved-slot guarantee (ARCH-4) so ASCENT entries can also be slotted into the upcoming/queue if score loses to ground passes.
+- **`_build_ascent_pass_entry()` helper.** Shapes an `AscentPrediction` into a `PassEntry` dict the existing sort/render pipeline consumes. Score = `100 × ascent_score_multiplier(prediction)` so it integrates cleanly with the existing 0-100 scale. The "target" coordinates are the rocket's projected position at the best instant, not the launch pad.
+- **`launch.kind` field on PassEntry.** New discriminator (`"overhead"` | `"ascent"`); the existing `geometry` field is kept for backward-compat with v1.2.6.x readers and also receives the same value.
+- **Frontend `🚀 OVERHEAD pass` / `🚀 ASCENT plume` tag.** `card.ts` reads `launch.kind` (falls back to `geometry` for older manifests). ASCENT tag gets its own warm-yellow color (`launch-ascent` CSS class) so the operator can visually distinguish the two photo opportunities for the same launch (per D7: show both as separate cards).
+- **`ops/com.astroanil.orbit-photo-director.plist`: `ascent.py` + `ascent_profiles.py`** added to the WatchPaths array. New generator files now trigger the same daemon-restart flow when modified.
+
+### Operational notes
+
+- ASCENT is dead-code in production until `OPD_ENABLE_ASCENT=1` is set in the launchd plist environment. Set it locally for the 1-week Anil self-test, then promote default-on by changing `enable_ascent: bool = False` → `True` in `generator/config.py` once geometry sanity is confirmed.
+- One known approximation in the integration: the ASCENT mission inclination is currently hardcoded to 51.6° (ISS rendezvous default) because `Launch` doesn't yet surface LL2's `mission.orbit.inclination`. Polar/SSO launches will compute a slightly off launch azimuth → slightly off rocket lat/lon projection. Surfacing inclination from LL2 is deferred to V3-P3 or beyond; the 1-week soak data will tell us if it matters in practice.
+
+### Tests
+
+- 9 new `tests/test_config.py` tests covering the flag's truthy/falsy parsing.
+- 3 new `tests/test_main.py` tests covering `_build_ascent_pass_entry` shape + the disabled-by-default path through `run_tick`.
+- 3 new `frontend/test/card.test.ts` tests covering the kind-aware tag (ascent class, overhead label, fallback to geometry on older manifests).
+- 2 existing `launch-card.test.ts` tests updated to the new `🚀 OVERHEAD pass` literal.
+
 ## [1.2.6.0] - 2026-05-17
 
 ### Operator-feedback batch from iPhone in-flight testing.

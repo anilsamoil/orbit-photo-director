@@ -72,7 +72,17 @@ export function renderCard(
   // load-bearing thing they can know about a card. Rocket name + window
   // confidence follow as adjacent tags so the visual cluster stays tight.
   if (p.launch) {
-    meta.appendChild(makeTag('launch-overhead', '🚀 LAUNCH'));
+    // Kind-aware tag (V3-P2): ASCENT and OVERHEAD are different photo
+    // opportunities for the same launch — different lens, look angle, and
+    // timing. Operator needs to see which one this card represents.
+    // Fall back to generic LAUNCH tag for older manifests that don't yet
+    // carry the `kind` field.
+    const kind = p.launch.kind ?? p.launch.geometry;
+    const launchLabel = kind === 'ascent' ? '🚀 ASCENT plume' :
+                        kind === 'overhead' ? '🚀 OVERHEAD pass' :
+                        '🚀 LAUNCH';
+    const launchClass = kind === 'ascent' ? 'launch-ascent' : 'launch-overhead';
+    meta.appendChild(makeTag(launchClass, launchLabel));
     meta.appendChild(makeTag('launch-rocket', p.launch.rocket_type));
     meta.appendChild(makeTag('launch-window', formatLaunchWindow(p.launch.net_window_seconds)));
   }

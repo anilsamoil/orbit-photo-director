@@ -293,6 +293,18 @@ main {
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+/* ASCENT plume tag: warmer / yellower than OVERHEAD's orange so the two
+ * are visually distinct in the queue at a glance. Same shape + weight to
+ * read as siblings (both are 🚀 launch tags), different hue to signal
+ * "different photo opportunity" without requiring the operator to
+ * read the words on a fast scan. */
+.tag.launch-ascent {
+  color: #ffd45c;
+  background: rgba(255, 212, 92, 0.18);
+  border-color: rgba(255, 212, 92, 0.55);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
 .tag.launch-rocket {
   color: #ffb37a;
   border-color: rgba(255, 179, 122, 0.4);
