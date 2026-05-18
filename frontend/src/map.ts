@@ -93,6 +93,20 @@ function buildStyle(): maplibregl.StyleSpecification {
         attribution:
           'Imagery from <a href="https://earthdata.nasa.gov">NASA GIBS</a>',
       },
+      'ne-coastline': {
+        // Natural Earth 110m coastlines, served from frontend/public/.
+        // 94KB raw / ~31KB gzipped. Used to draw thin outlines on top of
+        // the 55%-opacity cloud overlay so the operator can still pick
+        // out continents when clouds are thick (reported 2026-05-17 —
+        // without an explicit outline, the Carto basemap's coastlines
+        // are washed out by the GIBS cloud layer's opacity). 110m is
+        // intentionally coarse: at world-zoom this map shows orbital
+        // geometry, not navigation-grade detail.
+        type: 'geojson',
+        data: '/ne_110m_coastline.geojson',
+        attribution:
+          'Coastlines: <a href="https://www.naturalearthdata.com/">Natural Earth</a>',
+      },
     },
     layers: [
       {
@@ -106,6 +120,20 @@ function buildStyle(): maplibregl.StyleSpecification {
         type: 'raster',
         source: 'gibs-clouds',
         paint: { 'raster-opacity': 0.55 }, // semi-transparent so basemap shows through
+      },
+      {
+        // Coastline overlay ABOVE the cloud layer (renders order is
+        // bottom-up in the array). Thin warm-toned line stays visible
+        // through dense cloud cover; opacity tapered so it doesn't
+        // overpower the cloud signal where clouds are light.
+        id: 'ne-coastline-layer',
+        type: 'line',
+        source: 'ne-coastline',
+        paint: {
+          'line-color': '#f4d27a',
+          'line-width': 0.6,
+          'line-opacity': 0.75,
+        },
       },
     ],
   };
@@ -177,13 +205,25 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   const track = await fetchArtifact<Track>(manifest, 'track');
   currentTrack = track;
 
+  const isFirstInit = !map;
   if (!map) {
     map = new maplibregl.Map({
       container,
       style: buildStyle(),
       center: [0, 0],
-      zoom: 1.5,
+      // z=1.5 fit the whole world but made panning feel like a no-op (you
+      // were already at the edge of the visible tile space). z=2 leaves
+      // room to drag without losing the "see the orbit at a glance"
+      // affordance. Operator reported 2026-05-17 pan felt locked at z=1.5.
+      zoom: 2,
       attributionControl: { compact: true },
+      // Explicit gesture defaults. Defending against a future MapLibre
+      // major bump silently flipping a default to false.
+      dragPan: true,
+      dragRotate: true,
+      scrollZoom: true,
+      touchZoomRotate: true,
+      touchPitch: true,
     });
     map.addControl(new maplibregl.NavigationControl(), 'top-left');
     await new Promise<void>((resolve) => {
@@ -309,10 +349,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
 
   bindTimeToggle();
   bindBearingToggle();
-  // Apply persisted bearing preference on first map render. Animate so the
-  // user sees the rotation kick in (helps establish the visual model that
-  // it's intentional, not a glitch).
-  applyBearing(true);
+  // Apply persisted bearing preference ONLY on first map creation. Calling
+  // easeTo on every Map-tab click (which re-runs renderMap) was eating
+  // user pan/zoom gestures that landed in the 600ms animation window —
+  // contributed to the "map feels locked" report (2026-05-17). The live
+  // timer's setBearing(heading) every 1s already keeps iss-up in sync; no
+  // need to re-animate on each tab visit.
+  if (isFirstInit) applyBearing(true);
 }
 
 /** Return the position the ISS marker should occupy given the current
@@ -362,10 +405,16 @@ function computeIssHeading(track: Track, nowMs: number): number | null {
 
 /** Apply the current bearing mode to the map. ISS-up sets bearing to the
  *  current heading so direction-of-travel points up; north resets to 0.
- *  Smooth animation via easeTo; no-op if heading can't be computed. */
+ *  Smooth animation via easeTo; no-op if bearing already matches target
+ *  (calling easeTo with same value still starts a 0-duration animation
+ *  that can interrupt in-flight pan/zoom gestures). */
+const BEARING_NOOP_THRESHOLD_DEG = 0.5;
+
 function applyBearing(animate: boolean): void {
   if (!map) return;
+  const current = map.getBearing();
   if (bearingMode === 'north') {
+    if (Math.abs(current) < BEARING_NOOP_THRESHOLD_DEG) return;
     if (animate) map.easeTo({ bearing: 0, duration: 600 });
     else map.setBearing(0);
     return;
@@ -373,6 +422,9 @@ function applyBearing(animate: boolean): void {
   if (!currentTrack) return;
   const heading = computeIssHeading(currentTrack, Date.now() + lookaheadMinutes * 60_000);
   if (heading === null) return;
+  // Smallest angle between current and target, accounting for the 0=360 wrap.
+  const delta = Math.abs(((heading - current + 540) % 360) - 180);
+  if (delta < BEARING_NOOP_THRESHOLD_DEG) return;
   if (animate) map.easeTo({ bearing: heading, duration: 600 });
   else map.setBearing(heading);
 }

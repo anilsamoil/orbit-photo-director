@@ -343,6 +343,18 @@ def score_pass_for_target(
         "angle_off_nadir_deg": round(
             angle_off_nadir_deg(pass_obj.nadir_distance_km, iss.alt_km), 1
         ),
+        # Direction the target sits relative to ISS travel: 0 = ahead,
+        # 90 = starboard, 180 = aft, 270 = port. Lets the frontend tell
+        # the operator "look 35° to starboard" instead of just "shoot 35°"
+        # (operator feedback 2026-05-17 — without this, the angle is
+        # ambiguous between forward/port/starboard/aft directions).
+        # Always present in V3 manifests (find_passes always computes it);
+        # frontend treats absent as "old manifest, hide the tag."
+        "iss_relative_bearing_deg": (
+            round(pass_obj.iss_relative_bearing_deg, 1)
+            if pass_obj.iss_relative_bearing_deg is not None
+            else None
+        ),
         "pass_regime": regime,
         "obstruction_class": obs.obstruction_class,
         "p_unobstructed": round(p_unobs_adjusted, 2),

@@ -2,6 +2,26 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.6.0] - 2026-05-17
+
+### Operator-feedback batch from iPhone in-flight testing.
+
+Three pieces of feedback from Anil's in-flight testing today, bundled.
+
+### Fixed
+
+- **Map pan/zoom no longer feels locked.** Operator reported the map was hard to pan/zoom in north-up mode but worked in ISS-up. Pragmatic defensive fixes: `touch-action: none` on `.map` so iOS Safari stops stealing two-finger gestures; explicit `dragPan/dragRotate/scrollZoom/touchZoomRotate/touchPitch: true` in the MapLibre constructor (defense against silent default changes); `applyBearing()` is now idempotent (skips the 600ms `easeTo` animation when bearing already matches target, which had been eating in-flight pan/zoom gestures); initial zoom bumped from 1.5 to 2 so panning has visible effect; bearing only re-animated on first map creation, not on every Map-tab click.
+
+### Added
+
+- **Direction-of-look on the angle/window tag.** Operator asked: "when it says 35° I need to know if that's forward, starboard, port, or aft." Card meta now renders `35° · Cupola · 90° starboard` (or `fore` / `aft` / `port` / `starboard` for cardinal directions within ±15°). Backed by a new `iss_relative_bearing_deg` field on PassEntry — generator samples ISS heading at closest_approach from the existing pass-detection loop (one extra great-circle bearing call per pass, no new propagations) and computes the target's bearing relative to direction-of-travel. `find_passes` now attaches the field automatically; old manifests gracefully omit the tag.
+- **Coastline outlines on the map** so continents stay visible under thick cloud cover. Natural Earth 110m coastlines shipped as a static asset (~94KB raw / ~31KB gzipped), drawn as a thin warm-toned line layer above the 55%-opacity GIBS cloud overlay. The existing Carto basemap's coastlines were getting washed out by the cloud overlay; the new dedicated layer survives.
+
+### Tests
+
+- 11 new generator tests covering `great_circle_bearing_deg` (cardinal directions, antimeridian crossing), `relative_bearing_deg` (all four quadrants + wrap), and `find_passes` attaching the new field on real ISS TLE data.
+- 13 new frontend tests covering `formatRelativeBearing` (cardinal collapsing, off-cardinal degree formatting, quadrant naming, input normalization) and `renderCard` direction-tag rendering.
+
 ## [1.2.5.2] - 2026-05-17
 
 ### Generator daemon now auto-restarts when code on disk changes.

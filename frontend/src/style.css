@@ -507,6 +507,12 @@ main {
   height: calc(100vh - 130px);
   border-radius: 12px;
   overflow: hidden;
+  /* iOS Safari steals two-finger gestures (pinch-zoom-the-page, swipe-back)
+   * unless we explicitly hand them to MapLibre. Without this, the map can
+   * feel "locked" on iPhone — operator reported 2026-05-17 that pan/zoom
+   * was inconsistent depending on bearing mode. Hand all touch handling to
+   * the map so MapLibre owns pinch + drag exclusively. */
+  touch-action: none;
 }
 
 /* ISS marker: silhouette icon + pulsing halo. Wrap is 40×16 px (matches
