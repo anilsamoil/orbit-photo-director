@@ -88,6 +88,38 @@ def test_enable_ascent_falsy_values(
 
 
 # --------------------------------------------------------------------------
+# enable_weather flag (Weather v1.3 — Dominick/Pettit feedback 2026-05-19)
+# --------------------------------------------------------------------------
+
+
+def test_enable_weather_defaults_false(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("OPD_ENABLE_WEATHER", raising=False)
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env()
+    assert s.enable_weather is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "True", "yes", "on"])
+def test_enable_weather_truthy_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str,
+) -> None:
+    monkeypatch.setenv("OPD_ENABLE_WEATHER", value)
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env()
+    assert s.enable_weather is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "", "garbage"])
+def test_enable_weather_falsy_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str,
+) -> None:
+    monkeypatch.setenv("OPD_ENABLE_WEATHER", value)
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env()
+    assert s.enable_weather is False
+
+
+# --------------------------------------------------------------------------
 # load_targets — validation paths
 # --------------------------------------------------------------------------
 

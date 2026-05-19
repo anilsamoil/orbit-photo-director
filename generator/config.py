@@ -57,6 +57,13 @@ class Settings:
     # When True, also emits ASCENT predictions (rocket-during-climb) per
     # the design doc. Off-by-default for a 1-week Anil soak before flip.
     enable_ascent: bool = False
+    # Weather v1.3 feature flag (lightning + hurricane on cards).
+    # Plan locked 2026-05-19. When False (default), score_pass_for_target
+    # emits passes without lightning_potential, hurricane_nearby, or
+    # lightning_bonus fields. When True, the lightning sampler runs and
+    # the NHC hurricane tracker checks proximity per pass. v1.3.1 ships
+    # framework + NHC; real GLM/CAPE/Blitzortung samplers come in v1.3.2.
+    enable_weather: bool = False
 
     @classmethod
     def from_env(cls, repo_root: Path | None = None) -> Settings:
@@ -83,6 +90,8 @@ class Settings:
                 os.environ.get("OPD_PASS_WINDOW_HOURS", DEFAULT_PASS_WINDOW_HOURS)
             ),
             enable_ascent=os.environ.get("OPD_ENABLE_ASCENT", "0").strip().lower()
+                in ("1", "true", "yes", "on"),
+            enable_weather=os.environ.get("OPD_ENABLE_WEATHER", "0").strip().lower()
                 in ("1", "true", "yes", "on"),
         )
 
