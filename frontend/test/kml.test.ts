@@ -113,10 +113,10 @@ describe('downloadKml', () => {
     const clickSpy = vi.fn();
     const origAppend = document.body.appendChild.bind(document.body);
     const origRemove = document.body.removeChild.bind(document.body);
-    let lastAnchor: HTMLAnchorElement | null = null;
+    const seen: HTMLAnchorElement[] = [];
     document.body.appendChild = ((node: Node) => {
       if (node instanceof HTMLAnchorElement) {
-        lastAnchor = node;
+        seen.push(node);
         node.click = clickSpy;
       }
       return origAppend(node);
@@ -126,7 +126,12 @@ describe('downloadKml', () => {
 
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(clickSpy).toHaveBeenCalledTimes(1);
-    expect(lastAnchor?.download).toBe('iss-position-20241017-122300.kml');
+    expect(seen.length).toBeGreaterThan(0);
+    const lastAnchor = seen[seen.length - 1];
+    expect(lastAnchor).toBeDefined();
+    if (lastAnchor) {
+      expect(lastAnchor.download).toBe('iss-position-20241017-122300.kml');
+    }
 
     // Restore
     document.body.appendChild = origAppend as typeof document.body.appendChild;
