@@ -2,6 +2,36 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.3.0.0] - 2026-05-19
+
+### Photo-timestamp reverse lookup — Pettit's "where was I when I shot this?" feature.
+
+Don Pettit (Expeditions 6/30/31/35/36, the most-published ISS photographer in NASA history) emailed 2026-05-19: *"Showing where station was from a photo time stamp is really handy to figure out what your photo is of (you will have a lot of these). Linking any time stamp/location to Google Earth for perhaps a better eval would be great. (I have trained Claude on my desk computer so I type in a photo time stamp and get a .kml pin straight to Google Earth)."* Pettit built a private version on his desk Claude — strongest possible validation.
+
+Architecture locked 2026-05-19 in `/plan-eng-review`. Design doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-photo-lookup-v1-eng-review-2026-05-19.md`.
+
+### Added
+
+- **New "Lookup" tab** (5th tab next to Queue / Upcoming / Map / Log). Single-shot timestamp resolution.
+- **Two input paths:** paste a UTC timestamp (ISO 8601 with or without Z, space-separated also works) OR drag and drop a photo with EXIF `DateTimeOriginal`. EXIF parsing via the `exifr/lite` ESM bundle (~8KB gz).
+- **Three output paths:** (1) pin auto-drops on the Map tab with the operator switched there immediately; (2) "Download .kml" button generates a KML 2.2 doc with `altitudeMode=relativeToGround` for Google Earth Desktop; (3) "Open in Google Earth" link opens Google Earth Web at the same lat/lon. All three live on the result card.
+- **Confidence chip** based on TLE age at lookup time: high (< 24h), medium (24-72h), low (> 72h). SGP4 accuracy degrades past ~3 days from TLE epoch; the chip surfaces the trade-off honestly.
+- **`issPositionWithAltSGP4()`** sibling to existing `liveIssPositionSGP4()` in `iss-sgp4.ts` — same propagation but also returns altitude in km for the KML render.
+- **`dropLookupPin()`** in `map.ts` — magenta pin distinct from the existing red-yellow-green target gradient. Auto-centers + ensures zoom ≥ 4. Popup shows timestamp + altitude.
+
+### Implementation
+
+- New: `frontend/src/photo-lookup.ts` (parseTimestamp, extractExifTimestamp, resolveTimestampToIssPosition, renderLookupTab) and `frontend/src/kml.ts` (buildKml, googleEarthWebUrl, kmlFilename, downloadKml). Photo-lookup module lazy-imported via `import('./photo-lookup')` so the exifr dependency only loads when the operator opens the Lookup tab.
+- Stateless by design: each lookup is fresh. The downloaded `.kml` is the durable per-photo record.
+- 29 new tests (`photo-lookup.test.ts` + `kml.test.ts`). Full suite: 369 frontend tests passing.
+
+### NOT in scope (deferred to V4-P3)
+
+- Historical TLE archive (Space-Track or CelesTrak archive for photos older than ~3-4 days from the cached TLE epoch). V4-P3 in TODOS.md.
+- Batch upload (multiple photos in one drop) — single-shot per session matches Pettit's described workflow.
+- Lookup history / persistence — the `.kml` file is the persistence.
+- Camera-attitude solve (where was ISS *looking*) — needs orientation telemetry we don't have.
+
 ## [1.2.9.0] - 2026-05-19
 
 ### Tier A bundle from Don Pettit's feedback.
