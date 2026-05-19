@@ -3,6 +3,36 @@
 Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 (must fix before mission start), P2 (nice to have), P3+ (future).
 
+## V4 — Photo lookup v1 (Pettit Tier B #1)
+
+### V4-P2 — Photo-timestamp reverse lookup v1 (plan locked 2026-05-19)
+
+**Design doc:** `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-photo-lookup-v1-eng-review-2026-05-19.md`
+
+**Origin:** Don Pettit's literal workflow: "I have trained Claude on my desk computer so I type in a photo time stamp and get a .kml pin straight to Google Earth." Strongest possible validation — he built a private version. Memory: `project_pettit_feedback_2026_05_19.md`.
+
+**Architecture (D1-D6):**
+- D1: New "Lookup" tab (5th tab next to Queue/Upcoming/Map/Log)
+- D2: Both paste-ISO 8601 AND drag/drop photo with EXIF auto-extract (`exifr/lite`, ~8KB gz)
+- D3: Walking-window — TLE from `track.json` (~3-4 days accuracy); confidence chip degrades with TLE age. Full Space-Track archive deferred to v1.1 (V4-P3 below).
+- D4: All three outputs — pin on Map tab + .kml download + Google Earth Web deep-link
+- D5: Single lookup per session (no batch)
+- D6: Stateless — .kml file is the persistence
+
+**Implementation:** Single sequential slice, ~6h CC. New module `photo-lookup.ts` + minimal wiring in `main.ts`, `map.ts`, `index.html`, `style.css` + 29 new tests. No feature flag (no soak risk; stateless feature).
+
+**Reuses:** existing `iss-sgp4.ts` (V2 Lane B), `track.tle` (V2 Lane A), MapLibre pin/popup primitives, tab nav from `main.ts`.
+
+### V4-P3 — Photo lookup v1.1 (historical TLE archive)
+
+**Deferred from v1.** Add Space-Track or CelesTrak historical TLE retrieval so photos older than ~3-4 days resolve to high-accuracy pins. Requires:
+- Space-Track auth flow + secret manage
+- Cloudflare Worker proxy for archive fetches
+- R2 / KV cache layer keyed by timestamp
+- Lookup index (timestamp → nearest archived TLE within ±12h)
+
+~1-2 days CC. Revisit if v1 soak shows operators routinely want lookups past the 3-4 day window. The .kml file generated during the 3-day window is durable per-photo, so this is a power-user "I'm doing archival research" use case more than the "I shot this Monday, reviewing Tuesday" base case.
+
 ## V4 — Weather v1.3 (lightning + hurricane on cards)
 
 ### V4-P0 — Weather v1.3 implementation (plan locked 2026-05-19)

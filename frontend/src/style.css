@@ -696,17 +696,142 @@ main {
  * We pair each "view" with the panes that should be hidden in that state. */
 .view-queue #upcoming-pane,
 .view-queue #map-pane,
+.view-queue #lookup-pane,
 .view-queue #log-pane,
 .view-upcoming #queue-pane,
 .view-upcoming #map-pane,
+.view-upcoming #lookup-pane,
 .view-upcoming #log-pane,
 .view-map #queue-pane,
 .view-map #upcoming-pane,
+.view-map #lookup-pane,
 .view-map #log-pane,
+.view-lookup #queue-pane,
+.view-lookup #upcoming-pane,
+.view-lookup #map-pane,
+.view-lookup #log-pane,
 .view-log #queue-pane,
 .view-log #upcoming-pane,
-.view-log #map-pane {
+.view-log #map-pane,
+.view-log #lookup-pane {
   display: none;
+}
+
+/* Photo-lookup tab — Pettit feedback 2026-05-19 (v1.3.0.0). */
+.lookup-form {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.lookup-form label {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.lookup-input-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.lookup-input-row input {
+  flex: 1;
+  padding: 0.55rem 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}
+.lookup-input-row input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.lookup-btn {
+  padding: 0.55rem 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: filter 0.15s ease;
+}
+.lookup-btn:hover { filter: brightness(1.15); }
+.lookup-btn-primary {
+  background: var(--accent);
+  color: #0b0d12;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.lookup-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 1.5rem 1rem;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.lookup-dropzone-active {
+  border-color: var(--accent);
+  background: rgba(92, 208, 255, 0.08);
+  color: var(--text);
+}
+.lookup-result {
+  max-width: 720px;
+  margin: 1rem auto 0;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.lookup-pos {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+.lookup-chip {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+.lookup-confidence-high {
+  background: rgba(40, 120, 60, 0.25);
+  color: #7cd398;
+  border-color: rgba(40, 120, 60, 0.5);
+}
+.lookup-confidence-medium {
+  background: rgba(180, 140, 30, 0.25);
+  color: #e8c75b;
+  border-color: rgba(180, 140, 30, 0.5);
+}
+.lookup-confidence-low {
+  background: rgba(200, 100, 30, 0.25);
+  color: #ec9650;
+  border-color: rgba(200, 100, 30, 0.5);
+}
+.lookup-error {
+  padding: 0.55rem 0.75rem;
+  background: rgba(200, 50, 50, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(200, 50, 50, 0.5);
+  border-radius: 6px;
+  font-size: 0.88rem;
+}
+.lookup-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 /* Pane headers (Queue + Upcoming both use the same shape).

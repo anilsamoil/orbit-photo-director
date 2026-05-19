@@ -598,6 +598,78 @@ export function resizeMap(): void {
   if (map) map.resize();
 }
 
+/** Drop a single "photo lookup" pin on the map at the supplied lat/lon, replacing
+ *  any prior lookup pin. Distinct color from the regular target pins (magenta
+ *  vs the existing red-yellow-green target gradient). Auto-pans the map to
+ *  center the pin and zooms to z=4 if the current zoom is lower.
+ *
+ *  Lazy: if the map hasn't initialized yet (user clicked the Lookup tab before
+ *  ever visiting Map), the pin is queued and rendered when the map is next
+ *  created. (Not implemented in v1 — main.ts ensures the Map tab is activated
+ *  before this is called, so the map is always live by the time we drop a pin.)
+ *
+ *  Used by photo-lookup.ts (Pettit feedback 2026-05-19).
+ */
+export function dropLookupPin(result: {
+  lat: number; lon: number; alt_km: number; timestamp_utc: Date;
+}): void {
+  if (!map) return;
+  const fc: GeoJSON.FeatureCollection = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: {
+        timestamp_iso: result.timestamp_utc.toISOString(),
+        alt_km: result.alt_km,
+      },
+      geometry: { type: 'Point', coordinates: [result.lon, result.lat] },
+    }],
+  };
+  upsertGeoJson(map, 'lookup-pin', fc);
+  if (!map.getLayer('lookup-pin-layer')) {
+    map.addLayer({
+      id: 'lookup-pin-layer',
+      type: 'circle',
+      source: 'lookup-pin',
+      paint: {
+        'circle-radius': 10,
+        'circle-color': '#ff5cbb',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2.5,
+        'circle-opacity': 0.9,
+      },
+    });
+    map.on('click', 'lookup-pin-layer', (e) => {
+      const f = e.features?.[0];
+      if (!f || f.geometry.type !== 'Point') return;
+      const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
+      const props = f.properties as { timestamp_iso?: string; alt_km?: number };
+      const body = document.createElement('div');
+      body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12';
+      const title = document.createElement('strong');
+      title.textContent = '🛰️ ISS position';
+      const ts = document.createElement('div');
+      ts.textContent = props.timestamp_iso ?? 'unknown time';
+      const alt = document.createElement('div');
+      alt.textContent = `Altitude: ${(props.alt_km ?? 0).toFixed(1)} km`;
+      body.append(title, ts, alt);
+      new maplibregl.Popup()
+        .setLngLat(coords)
+        .setDOMContent(body)
+        .addTo(map!);
+    });
+    map.on('mouseenter', 'lookup-pin-layer', () => {
+      if (map) map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'lookup-pin-layer', () => {
+      if (map) map.getCanvas().style.cursor = '';
+    });
+  }
+  // Center + ensure visible zoom. Don't override the user's bearing/tilt.
+  const targetZoom = Math.max(map.getZoom(), 4);
+  map.easeTo({ center: [result.lon, result.lat], zoom: targetZoom, duration: 800 });
+}
+
 /** Build the ISS marker DOM: a stylized ISS silhouette (central truss + two
  *  long solar arrays) with a pulsing halo behind it. The whole thing is
  *  ~40 × 16 px so the truss center sits exactly on the lat/lon point.

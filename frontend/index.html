@@ -24,6 +24,7 @@
         <button id="tab-queue" class="tab active" type="button">Queue</button>
         <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
         <button id="tab-map" class="tab" type="button">Map</button>
+        <button id="tab-lookup" class="tab" type="button">Lookup</button>
         <button id="tab-log" class="tab" type="button">Log<span id="pending-sync-badge" class="pending-badge" hidden></span></button>
       </nav>
     </header>
@@ -70,6 +71,22 @@
         <div class="map-controls map-controls-overlay">
           <button id="toggle-clouds" class="time-btn active" type="button" title="Toggle GIBS cloud overlay">&#9729;</button>
         </div>
+      </section>
+
+      <section id="lookup-pane" class="pane">
+        <div class="pane-header">
+          <h2 class="pane-title">Photo lookup &mdash; where was ISS?</h2>
+          <p class="pane-sub">Paste a UTC timestamp or drop a photo with EXIF. Get a pin on the map plus a .kml for Google Earth.</p>
+        </div>
+        <div class="lookup-form">
+          <label for="lookup-input">Timestamp (UTC)</label>
+          <div class="lookup-input-row">
+            <input id="lookup-input" type="text" placeholder="2024-10-17T12:23:00Z" autocomplete="off" />
+            <button id="lookup-resolve" class="lookup-btn lookup-btn-primary" type="button">Resolve</button>
+          </div>
+          <div id="lookup-dropzone" class="lookup-dropzone">Drop a photo with EXIF DateTimeOriginal here</div>
+        </div>
+        <div id="lookup-result" class="lookup-result" hidden></div>
       </section>
 
       <section id="log-pane" class="pane">

@@ -533,12 +533,13 @@ function bindTabs(): void {
   const tabQueue = document.getElementById('tab-queue');
   const tabUpcoming = document.getElementById('tab-upcoming');
   const tabMap = document.getElementById('tab-map');
+  const tabLookup = document.getElementById('tab-lookup');
   const tabLog = document.getElementById('tab-log');
-  if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLog) return;
+  if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLookup || !tabLog) return;
 
   const setActive = (className: string, activeTab: HTMLElement) => {
     view.className = className;
-    [tabQueue, tabUpcoming, tabMap, tabLog].forEach((t) => t.classList.toggle('active', t === activeTab));
+    [tabQueue, tabUpcoming, tabMap, tabLookup, tabLog].forEach((t) => t.classList.toggle('active', t === activeTab));
   };
 
   tabQueue.addEventListener('click', () => setActive('view-queue', tabQueue));
@@ -547,9 +548,36 @@ function bindTabs(): void {
     void loadMapPane();
     setActive('view-map', tabMap);
   });
+  tabLookup.addEventListener('click', () => {
+    setActive('view-lookup', tabLookup);
+    loadLookupPane();
+  });
   tabLog.addEventListener('click', () => {
     setActive('view-log', tabLog);
     void loadLogPane();
+  });
+}
+
+let lookupPaneBound = false;
+function loadLookupPane(): void {
+  if (lookupPaneBound) return;
+  const pane = document.getElementById('lookup-pane');
+  if (!pane) return;
+  // Lazy-import the photo-lookup module so the exifr dependency only
+  // loads when the operator actually opens the Lookup tab.
+  void import('./photo-lookup').then(({ renderLookupTab }) => {
+    renderLookupTab(pane, () => currentTrack, async (result) => {
+      // Switch to Map tab + drop the lookup pin. Lazy-import map.ts (same
+      // pattern as loadMapPane) so the MapLibre bundle stays gated.
+      const tabMap = document.getElementById('tab-map') as HTMLElement | null;
+      if (tabMap) tabMap.click();
+      if (!mapModule) {
+        mapModule = await import('./map');
+      }
+      // dropLookupPin re-uses MapLibre primitives; defined in map.ts.
+      mapModule.dropLookupPin?.(result);
+    });
+    lookupPaneBound = true;
   });
 }
 
