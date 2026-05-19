@@ -129,6 +129,39 @@ body {
 .kp-badge.kp-storm  { background: rgba(200, 100, 30, 0.25); color: #ec9650; border-color: rgba(200, 100, 30, 0.5); }
 .kp-badge.kp-severe { background: rgba(200, 50, 50, 0.3);   color: #f87171; border-color: rgba(200, 50, 50, 0.6); }
 
+/* Sun widget — Pettit feedback 2026-05-19. Small live thumbnail of the
+ * SDO HMI continuum image (visible-light sun, sunspots visible). Sits
+ * next to the Kp badge in the topbar; click opens the SWPC dashboard. */
+.sun-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  user-select: none;
+  transition: filter 0.15s ease;
+  flex-shrink: 0;
+}
+.sun-badge[hidden] { display: none; }
+.sun-badge:hover { filter: brightness(1.15); }
+.sun-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sun-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* Drop the sun thumbnail below 430px viewport — topbar gets crowded
+ * (same threshold as the brand-name hide rule from v1.2.4.1). */
+@media (max-width: 430px) {
+  .sun-badge { display: none; }
+}
+
 /* Toast: brief inline confirmation for Shoot/Skip clicks. Replaces the
  * previous "dim the card 1.5s" feedback that was easy to miss. */
 .toast {
@@ -594,6 +627,18 @@ main {
 /* Bearing toggle sits below the time toggle on the same right edge. */
 .map-controls.map-controls-bearing {
   top: 130px;
+}
+
+/* Cloud-overlay toggle sits below the bearing toggle on the same right
+ * edge. Single-button row (Pettit feedback 2026-05-19 — make cloud
+ * overlay toggleable). The cloud icon (☁) sits centered on a square. */
+.map-controls.map-controls-overlay {
+  top: 180px;
+}
+.map-controls.map-controls-overlay .time-btn {
+  font-size: 1.05rem;
+  padding: 0.3rem 0.55rem;
+  line-height: 1.0;
 }
 
 .time-btn {

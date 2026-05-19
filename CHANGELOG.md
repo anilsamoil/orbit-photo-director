@@ -2,6 +2,29 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.9.0] - 2026-05-19
+
+### Tier A bundle from Don Pettit's feedback.
+
+Don Pettit (Expeditions 6/30/31/35/36, the most celebrated ISS photographer in NASA history) emailed 2026-05-19 with 12 asks. This bundle ships the three lowest-friction items as quick wins; Tier B (multi-orbit display, photo-timestamp reverse lookup, multi-satellite) goes through `/plan-eng-review` next.
+
+### Added
+
+- **Sun + sunspots topbar widget.** Small circular thumbnail of the latest NASA SDO HMI continuum image (visible-light sun disk; sunspots clearly visible). Click opens NOAA SWPC's solar dashboard. Mirrors the v1.2.3.0 Kp widget pattern: graceful hide on fetch error, no banner spam. 7 new tests. Direct image embed in v1 (no Worker proxy); add Worker caching if the operator needs offline access. Hidden below 430px viewport (same threshold as the brand-name hide rule).
+- **Cloud overlay toggle button on the map.** Third control row below the bearing toggle. Click to hide/show the GIBS cloud raster layer. Persisted to `localStorage` so the preference is sticky across reloads. Default = visible (matches v1.0+ behavior). Pettit asked specifically for this.
+
+### Fixed
+
+- **Ground track now renders continuously across world copies.** Pettit reported the orbit clips at the antimeridian: *"if near right hand side map not to have orbit clipped where you have to piece together with the left hand side."* MapLibre's `renderWorldCopies: true` (now made explicit) only repeats tile layers, not GeoJSON line features. Fix: `groundTrackFeatures()` now duplicates each polyline segment at lon ±360 offsets so the line spans all visible world copies when the user pans east/west past the antimeridian.
+
+### Changed
+
+- **"Next 24 hours" → "Next 36 hours" copy** on the Upcoming pane header. The v1.2.8.0 bump extended the actual horizon; this catches the copy up to match the reality the operator sees.
+
+### Cross-astronaut tension noted
+
+Pettit explicitly refutes Dominick's OPTIMIS-timeline overlay (the V4-P3 stretch goal). `TODOS.md` now flags the 1-1 split — defer the eng-review until a third operator votes either way. If built, must be opt-in.
+
 ## [1.2.8.0] - 2026-05-19
 
 ### Upcoming horizon bumped 24 → 36 hours (operator feedback from astronaut).

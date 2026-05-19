@@ -22,6 +22,7 @@ import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
+import { initSunWidget } from './sun';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
@@ -709,6 +710,11 @@ async function init(): Promise<void> {
   // rendered later by refresh() once /api/kp resolves.
   const kpWidget = document.getElementById('kp-widget');
   if (kpWidget) initKpWidget(kpWidget);
+  // V4-P3 sun widget (Pettit feedback 2026-05-19): direct SDO HMI image
+  // embed (no worker proxy in v1). Init fires the fetch immediately; if
+  // SWPC is reachable the widget reveals itself, otherwise stays hidden.
+  const sunWidget = document.getElementById('sun-widget');
+  if (sunWidget) initSunWidget(sunWidget);
   // Restore the previous-known-good UI synchronously BEFORE the network call
   // so the user sees their queue + map within ms of the page loading. If the
   // refresh below succeeds, snapshot is overwritten transactionally; if it
