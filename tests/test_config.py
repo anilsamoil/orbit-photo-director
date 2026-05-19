@@ -23,6 +23,17 @@ def test_from_env_uses_cwd_when_no_root(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert s.out_dir == tmp_path.resolve() / "out"
 
 
+def test_default_pass_window_hours_is_36(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Bumped from 24 to 36 (2026-05-19, Dominick feedback). Guarantees
+    tomorrow's passes are visible regardless of check time."""
+    monkeypatch.delenv("OPD_PASS_WINDOW_HOURS", raising=False)
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env()
+    assert s.pass_window_hours == 36
+
+
 def test_from_env_honors_environment_variables(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
