@@ -24,6 +24,20 @@ let currentTrack: Track | null = null;
 // 0 = "Now" (live position); 90 = "+90 min" (preview future ISS position).
 let lookaheadMinutes = 0;
 
+/** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
+ *  "make so can turn off/on as needed" stays sticky across reloads. Default
+ *  on (clouds visible) matches v1.0+ behavior. */
+const CLOUDS_PREF_KEY = 'opd-map-clouds-visible';
+function readCloudsVisible(): boolean {
+  try {
+    const v = localStorage.getItem(CLOUDS_PREF_KEY);
+    return v === null ? true : v === '1';
+  } catch {
+    return true;
+  }
+}
+let cloudsVisible: boolean = readCloudsVisible();
+
 /** Bearing mode for the map. 'north' = standard north-up. 'iss-up' = rotate
  *  the map so the ISS direction-of-travel points up — matches Chris's
  *  mental model in WORF: "I'm looking down, this is what's coming next."
@@ -190,11 +204,36 @@ function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
   }
   if (current.length > 1) segments.push(current);
 
-  return segments.map((coords) => ({
-    type: 'Feature',
+  const segmentFeatures = segments.map((coords) => ({
+    type: 'Feature' as const,
     properties: {},
-    geometry: { type: 'LineString', coordinates: coords },
+    geometry: { type: 'LineString' as const, coordinates: coords },
   }));
+  // Duplicate every segment at lon ±360 so the ground track renders
+  // continuously when the user pans across world copies (Pettit
+  // feedback 2026-05-19 — orbit clipping at antimeridian).
+  // MapLibre's `renderWorldCopies: true` repeats tile layers but does
+  // NOT repeat geojson line features without explicit duplication.
+  const duplicated: GeoJSON.Feature[] = [];
+  for (const f of segmentFeatures) {
+    const coords = f.geometry.coordinates as [number, number][];
+    duplicated.push(f);
+    duplicated.push({
+      ...f,
+      geometry: {
+        type: 'LineString',
+        coordinates: coords.map(([lon, lat]) => [lon + 360, lat]),
+      },
+    });
+    duplicated.push({
+      ...f,
+      geometry: {
+        type: 'LineString',
+        coordinates: coords.map(([lon, lat]) => [lon - 360, lat]),
+      },
+    });
+  }
+  return duplicated;
 }
 
 export async function renderMap(manifest: Manifest): Promise<void> {
@@ -217,6 +256,15 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       // affordance. Operator reported 2026-05-17 pan felt locked at z=1.5.
       zoom: 2,
       attributionControl: { compact: true },
+      // Pettit feedback 2026-05-19: "Having the map view scroll left and
+      // right so that ISS location can be placed where you want (so if
+      // near right hand side map not to have orbit clipped where you
+      // have to piece together with the left hand side)." Explicit
+      // renderWorldCopies (default true; pin it so MapLibre majors
+      // can't silently flip it) + below in groundTrackFeatures we
+      // duplicate the ground track at lon ±360 offsets so the polyline
+      // renders continuously across world copies.
+      renderWorldCopies: true,
       // Explicit gesture defaults. Defending against a future MapLibre
       // major bump silently flipping a default to false.
       dragPan: true,
@@ -349,6 +397,9 @@ export async function renderMap(manifest: Manifest): Promise<void> {
 
   bindTimeToggle();
   bindBearingToggle();
+  bindCloudToggle();
+  // Apply persisted cloud-visibility preference on first map render.
+  applyCloudsVisibility();
   // Apply persisted bearing preference ONLY on first map creation. Calling
   // easeTo on every Map-tab click (which re-runs renderMap) was eating
   // user pan/zoom gestures that landed in the 600ms animation window —
@@ -455,6 +506,47 @@ function bindTimeToggle(): void {
   nowBtn.addEventListener('click', () => setMode(0));
   plus90Btn.addEventListener('click', () => setMode(90));
   toggleBound = true;
+}
+
+/** Show / hide both the GIBS cloud raster layer AND the coastline overlay's
+ *  toggle target. Pettit asked for cloud-toggle specifically; coastline
+ *  stays on because it doesn't compete with the cloud signal. Idempotent —
+ *  safe to call before MapLibre has loaded the layers. */
+function applyCloudsVisibility(): void {
+  if (!map) return;
+  const vis = cloudsVisible ? 'visible' : 'none';
+  try {
+    if (map.getLayer('gibs-clouds-layer')) {
+      map.setLayoutProperty('gibs-clouds-layer', 'visibility', vis);
+    }
+  } catch {
+    /* layer may not be loaded yet on the first call — applyCloudsVisibility
+       runs again after renderMap binds */
+  }
+}
+
+let cloudToggleBound = false;
+function bindCloudToggle(): void {
+  if (cloudToggleBound) return;
+  const btn = document.getElementById('toggle-clouds');
+  if (!btn) return;
+  const reflect = () => {
+    btn.classList.toggle('active', cloudsVisible);
+    btn.setAttribute(
+      'aria-pressed', cloudsVisible ? 'true' : 'false',
+    );
+    btn.title = cloudsVisible
+      ? 'Clouds shown — click to hide GIBS overlay'
+      : 'Clouds hidden — click to show GIBS overlay';
+  };
+  reflect();
+  btn.addEventListener('click', () => {
+    cloudsVisible = !cloudsVisible;
+    try { localStorage.setItem(CLOUDS_PREF_KEY, cloudsVisible ? '1' : '0'); } catch { /* noop */ }
+    reflect();
+    applyCloudsVisibility();
+  });
+  cloudToggleBound = true;
 }
 
 let bearingToggleBound = false;

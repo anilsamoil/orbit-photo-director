@@ -3,6 +3,39 @@
 Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 (must fix before mission start), P2 (nice to have), P3+ (future).
 
+## V4 — Weather v1.3 (lightning + hurricane on cards)
+
+### V4-P0 — Weather v1.3 implementation (plan locked 2026-05-19)
+
+**Design doc:** `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-weather-v1.3-eng-review-2026-05-19.md`
+
+**Origin:** NASA astronaut Matthew Dominick (Crew-8) emailed 2026-05-19, bullet 2: "Lightning predictions/probability." Loral O'Hara CC'd as "earth obs photo machine." Memory: `feedback/project_dominick_feedback_2026_05_19.md`.
+
+**Locked architecture (D1-D6):**
+- D1: Full lake — observed lightning + forecast + named-hurricane in one release
+- D2: GLM (NOAA S3) + Blitzortung (WebSocket) — MTG-LI deferred
+- D3: Additive +30 score bonus (not multiplicative); preserves existing score_components convention
+- D4: NHC active storms (named-storm tag, Atlantic + East Pacific) — JTWC deferred
+- D5: Flex-wrap stack; all weather tags visible; existing layout primitive
+- D6: `OPD_ENABLE_WEATHER` feature flag, 1-week Anil soak (matches V3-P2 ASCENT pattern)
+
+**Implementation:** 3 parallelizable slices, ~10h CC sequential / ~7h with worktree parallel:
+- Slice 1: `generator/lightning.py` (4 samplers + Combined) + tests (~5h)
+- Slice 2: NHC hurricane tracker + tests (~2h)
+- Slice 3: integration into `main.py:score_pass_for_target` + `types.ts` + `card.ts` + `style.css` + tests (~3h)
+
+**Start after:** V3-P2 ASCENT soak concludes (~May 24-25, when current `OPD_ENABLE_ASCENT=1` soak has 1 week of data).
+
+**Codex outside-voice review:** deferred to post-implementation (per D7 — code + design together yields higher signal).
+
+### V4-P3 — Deferred from weather v1.3 scope
+
+- **MTG-LI integration** (EUMETSAT Meteosat lightning imager for Europe/Africa). Skipped in D2 due to auth complexity. Revisit if soak shows the GLM coverage gap matters in practice.
+- **JTWC integration** (W.Pacific / Indian Ocean tropical systems). Skipped in D4 — text-bulletin parsing is fragile. Revisit if Pacific typhoons are visibly missed during a typhoon season.
+- **Vaisala GLD360** (commercial lightning network) — declined permanently; paid product.
+- **Volcano / wildfire / aurora row integration** — different data domains; aurora already has its own widget (v1.2.3.0).
+- **OPTIMIS timeline overlay** (Dominick 2026-05-19 bullet 3) — Pettit explicitly refutes 2026-05-19: *"I leave it up to me to figure out targets and how to work these into my work schedule... I find you can take a break to photo a target when needed. Just tell ground you need a bio-break. I keep an egg timer on my kneeboard and set reminder alarms."* Cross-astronaut tension: Dominick (mid-mission Crew-8) wants it; Pettit (4 missions, longest cumulative ISS time among Americans pre-2024) does not. If built, must be **opt-in** with sensible default-off. Defer eng-review until a third operator either votes for or against; current 1-1 split is no signal.
+
 ## V2 — offline-resilient frontend (in progress)
 
 Plan: `~/Desktop/orbit-photo-director-offline-v2-plan.md`
