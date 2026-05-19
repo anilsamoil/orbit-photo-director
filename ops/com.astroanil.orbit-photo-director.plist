@@ -81,6 +81,7 @@ WatchPaths (added 2026-05-17, fixes 13-day stale-module bug):
         <string>REPO_PATH/generator/config.py</string>
         <string>REPO_PATH/generator/daemon.py</string>
         <string>REPO_PATH/generator/launch_data.py</string>
+        <string>REPO_PATH/generator/lightning.py</string>
         <string>REPO_PATH/generator/main.py</string>
         <string>REPO_PATH/generator/manifest.py</string>
         <string>REPO_PATH/generator/orbit.py</string>

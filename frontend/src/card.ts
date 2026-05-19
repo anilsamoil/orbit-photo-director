@@ -92,6 +92,25 @@ export function renderCard(
   meta.appendChild(makeTag('', `nadir ${Math.round(p.nadir_distance_km)} km`));
   // Angle off nadir → WORF window vs Cupola hint. Older manifests may not
   // include the field; only render the badge when the generator shipped one.
+  // Weather v1.3 tags (Dominick + Pettit feedback 2026-05-19). Render
+  // BEFORE the angle/window tag so the most-load-bearing operator signal
+  // sits in the eye-scan band right after the launch-kind tag.
+  // ⚡ lightning tag: only when potential > 0.05 (placeholder sampler in
+  // v1.3.1 always returns 0; this short-circuits silently). Source text
+  // differentiates observed vs forecast.
+  if (typeof p.lightning_potential === 'number' && p.lightning_potential > 0.05) {
+    const obs = p.lightning_source === 'glm' || p.lightning_source === 'blitzortung';
+    const label = obs ? '⚡ lightning observed' : '⚡ lightning forecast';
+    meta.appendChild(makeTag('weather-lightning', label));
+  }
+  // 🌀 hurricane tag: real-data even in v1.3.1 (NHC tracker is shipped).
+  if (p.hurricane_nearby) {
+    const h = p.hurricane_nearby;
+    meta.appendChild(makeTag(
+      'weather-hurricane',
+      `🌀 ${h.classification} ${h.name}`,
+    ));
+  }
   if (typeof p.angle_off_nadir_deg === 'number') {
     const deg = p.angle_off_nadir_deg;
     const isWorf = deg < 30;

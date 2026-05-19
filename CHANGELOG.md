@@ -2,6 +2,42 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.3.1.0] - 2026-05-19
+
+### Weather v1.3 framework + NHC hurricane tracker.
+
+Dominick (NASA Crew-8) emailed 2026-05-19 asking for lightning predictions on cards. Pettit's Tier B feedback the same day added "major storms or weather events" for the iconic ISS hurricane shot (e.g., Christina Koch's Hurricane Dorian 2019, Loral O'Hara's Hurricane Lee 2023).
+
+Architecture locked 2026-05-19 in `/plan-eng-review`. Design doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-weather-v1.3-eng-review-2026-05-19.md`. Pragmatic staged ship: v1.3.1 (this release) ships the integration framework + real NHC hurricane tracker; v1.3.2 will replace the placeholder lightning sampler with real GLM (NOAA S3) + Blitzortung (WebSocket) + GFS CAPE samplers.
+
+### Added
+
+- **`OPD_ENABLE_WEATHER` feature flag** in `generator/config.py`. Off by default for the 1-week Anil soak (D6 in the design doc). Same parsing as `OPD_ENABLE_ASCENT`.
+- **`generator/lightning.py`** — new module with `LightningSampler` Protocol, `PlaceholderLightningSampler` (always returns 0.0 potential), `lightning_bonus()` helper for the additive +30 score bonus path, and `NHCHurricaneTracker` that fetches NHC `CurrentStorms.json` hourly + checks per-pass proximity within 1500km. NHC payload parsing handles lat/lon strings (`"26.5N"`, `"78.2W"`), Saffir-Simpson category derivation from intensity in knots, and graceful degradation when NHC API is down (uses cached storms).
+- **PassEntry weather fields** (all optional — emitted only when `enable_weather=True`): `lightning_potential` (0-1), `flash_rate_per_min` (observed-only), `lightning_source` (`placeholder` | `glm` | `blitzortung` | `gfs-cape`), `lightning_bonus` (0-30 raw points), `hurricane_nearby` (`{name, classification, distance_km, nhc_id}`).
+- **Score model:** `final = min(100, multiplicative_base + 30 * lightning_potential)`. Cap at 100 prevents star overflow. v1.3.1 placeholder always returns 0 so the bonus is 0 in production; the wiring exists for v1.3.2.
+- **Frontend tags** in `frontend/src/card.ts`: `⚡ lightning observed` / `⚡ lightning forecast` (only when potential > 0.05; silent in v1.3.1 since placeholder always returns 0) + `🌀 Hurricane Dorian Cat 4` style tag (real-data even in v1.3.1 from NHC). Both sit between the launch-kind tag and regime/obstruction tags in the eye-scan band. Yellow for lightning, purple for hurricane.
+
+### Implementation
+
+- New: `generator/lightning.py` (~280 lines) + `tests/test_lightning.py` (37 tests covering placeholder, bonus, NHC parsing, tracker proximity, cache fallback, stale-cache fetch path).
+- Modified: `generator/config.py` (flag), `generator/main.py` (instantiate samplers + thread into `score_pass_for_target`), `ops/com.astroanil.orbit-photo-director.plist` (WatchPaths includes lightning.py), `frontend/src/types.ts` (optional fields), `frontend/src/card.ts` (tag rendering), `frontend/src/style.css` (`.weather-lightning` + `.weather-hurricane`).
+- Tests: 531 Python (+37 new) and 369 frontend pass.
+
+### NOT in this release (deferred to v1.3.2 + V4-P3)
+
+- Real GLM (NOAA S3 + NetCDF) lightning sampler — Slice 1 part 1
+- Real Blitzortung WebSocket lightning sampler — Slice 1 part 2
+- GFS CAPE forecast sampler — Slice 1 part 3 (extends existing `GFSForecastSampler`)
+- MTG-LI, JTWC, classification-tiered proximity — V4-P3 in TODOS.md
+
+The placeholder sampler in v1.3.1 means `lightning_potential` always reports 0 and the `⚡` tag never renders. The named-storm `🌀` tag is real and active from this release. Soak this week to validate the hurricane integration before v1.3.2 lights up the lightning samplers.
+
+### Operational
+
+- Anil enables locally via `OPD_ENABLE_WEATHER=1` in the launchd plist's `EnvironmentVariables`. Daemon picks it up via the v1.2.5.2 mtime hook or a `launchctl bootout`/`bootstrap`.
+- NHC API is freely accessible (no auth). Hourly tick fetches with a 1-hour TTL cache; matches NHC's advisory cycle.
+
 ## [1.3.0.0] - 2026-05-19
 
 ### Photo-timestamp reverse lookup — Pettit's "where was I when I shot this?" feature.

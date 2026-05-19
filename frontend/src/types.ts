@@ -34,6 +34,35 @@ export interface PassEntry {
    *  operator knows which window/side to point the camera. Added v1.2.6.0;
    *  older manifests will omit it. */
   iss_relative_bearing_deg?: number;
+  /** Lightning probability at the pass target_lat/lon at closest_approach.
+   *  Range [0.0, 1.0]. Added v1.3.1 (weather v1.3). v1.3.1 ships a
+   *  placeholder sampler that returns 0.0 for every query — real GLM /
+   *  Blitzortung / GFS CAPE samplers slot in for v1.3.2. Cards render
+   *  the ⚡ tag only when potential > 0.05. */
+  lightning_potential?: number;
+  /** Observed flash rate near the target at pass time, flashes per minute.
+   *  Observed sources (GLM, Blitzortung) populate; forecast sources (CAPE)
+   *  report 0. v1.3.1 placeholder always reports 0. */
+  flash_rate_per_min?: number;
+  /** Which sampler produced lightning_potential. Drives the
+   *  "observed" vs "forecast" subtext on the ⚡ tag. */
+  lightning_source?: 'placeholder' | 'glm' | 'blitzortung' | 'gfs-cape' | 'combined-no-data';
+  /** Additive score bonus from lightning_potential, in 0-30 range
+   *  (capped per the locked D3 architecture decision). Lets the score
+   *  breakdown panel show "lightning: +12" alongside the multiplicative
+   *  components, so the operator understands how the bonus moved the
+   *  star count. */
+  lightning_bonus?: number;
+  /** Named tropical system within ~1500km of the pass target. NHC
+   *  Atlantic + East Pacific basins only in v1.3.1; JTWC deferred to
+   *  V4-P3. When present, the card renders a 🌀 tag with the storm
+   *  name + classification (e.g., "🌀 Hurricane Dorian Cat 4"). */
+  hurricane_nearby?: {
+    name: string;            // e.g., "Dorian"
+    classification: string;  // e.g., "Hurricane Cat 4", "Tropical Storm"
+    distance_km: number;     // great-circle from storm center to target
+    nhc_id: string;          // NHC storm ID, e.g., "AL052024"
+  };
   pass_regime: 'day' | 'night' | 'terminator';
   obstruction_class: 'clear' | 'cloudy' | 'sun-glint risk';
   p_unobstructed: number;

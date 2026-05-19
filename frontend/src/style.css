@@ -349,6 +349,23 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Weather v1.3 tags — Dominick + Pettit feedback 2026-05-19. Lightning
+ * + hurricane sit between launch-kind tag and regime/obstruction tags
+ * so the storm signal lands in the operator's left-to-right eye scan. */
+.tag.weather-lightning {
+  color: #ffd45c;
+  background: rgba(255, 212, 92, 0.22);
+  border-color: rgba(255, 212, 92, 0.55);
+  font-weight: 600;
+}
+.tag.weather-hurricane {
+  color: #c8a4ff;
+  background: rgba(170, 130, 255, 0.22);
+  border-color: rgba(170, 130, 255, 0.55);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .card-score-wrap {
   grid-area: score;
 }

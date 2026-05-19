@@ -304,6 +304,8 @@ def score_pass_for_target(
     now: datetime | None = None,
     observed_horizon_minutes: float = OBSERVED_CLOUD_HORIZON_MINUTES,
     composite_hour: datetime | None = None,
+    lightning_sampler: Any | None = None,
+    hurricane_tracker: Any | None = None,
 ) -> dict[str, Any]:
     when = pass_obj.closest_approach
     iss = pass_obj.iss_position
@@ -336,7 +338,45 @@ def score_pass_for_target(
         distance_km=pass_obj.nadir_distance_km,
         priority=target["priority"],
     )
-    return {
+
+    # Weather v1.3 fields. Both samplers/trackers are passed in (not
+    # instantiated here) so tests can inject mocks and the flag-off path
+    # in run_tick can pass None to mean "no lightning/hurricane work."
+    # When None, the resulting PassEntry omits the fields entirely so
+    # older readers don't see undefined dict keys.
+    lightning_potential: float | None = None
+    flash_rate_per_min: float | None = None
+    lightning_source: str | None = None
+    lightning_bonus_value: float = 0.0
+    hurricane_dict: dict[str, Any] | None = None
+    if lightning_sampler is not None:
+        lsample = lightning_sampler.sample(
+            pass_obj.target_lat, pass_obj.target_lon, when,
+        )
+        lightning_potential = round(lsample.lightning_potential, 3)
+        flash_rate_per_min = round(lsample.flash_rate_per_min, 2)
+        lightning_source = lsample.source
+        # Local import to keep top-of-file deps minimal; lightning is a
+        # leaf module without circular-import risk.
+        from .lightning import lightning_bonus as _lightning_bonus
+        lightning_bonus_value = _lightning_bonus(lsample.lightning_potential)
+    if hurricane_tracker is not None:
+        near = hurricane_tracker.check_proximity(
+            pass_obj.target_lat, pass_obj.target_lon,
+        )
+        if near is not None:
+            hurricane_dict = {
+                "name": near.name,
+                "classification": near.classification,
+                "distance_km": round(near.distance_km, 1),
+                "nhc_id": near.nhc_id,
+            }
+
+    # Lightning bonus is additive and capped at 100 (D3 — preserves the
+    # operator-visible 0-100 score range without overflowing into >5-star).
+    final_score_value = min(100.0, sc.final + lightning_bonus_value)
+
+    out = {
         "target_id": target["id"],
         "target_name": target["name"],
         "target_regime": target["regime"],
@@ -383,7 +423,7 @@ def score_pass_for_target(
             if sample.source == "gfs-forecast" or composite_hour is None
             else composite_hour
         ),
-        "score": round(sc.final, 3),
+        "score": round(final_score_value, 3),
         "score_components": {
             "p_unobstructed": round(sc.p_unobstructed, 2),
             "regime_fit": round(sc.regime_fit, 2),
@@ -397,6 +437,18 @@ def score_pass_for_target(
             "alt_km": round(iss.alt_km, 1),
         },
     }
+    # Weather v1.3 fields are optional — only attach them when the
+    # samplers/trackers were supplied (i.e., enable_weather=True). Keeps
+    # the PassEntry shape unchanged for the flag-off path so existing
+    # tests + the production manifest schema are byte-stable.
+    if lightning_potential is not None:
+        out["lightning_potential"] = lightning_potential
+        out["flash_rate_per_min"] = flash_rate_per_min
+        out["lightning_source"] = lightning_source
+        out["lightning_bonus"] = round(lightning_bonus_value, 3)
+    if hurricane_dict is not None:
+        out["hurricane_nearby"] = hurricane_dict
+    return out
 
 
 def _synthesize_launch_target(la: Launch) -> dict[str, Any]:
@@ -658,6 +710,28 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("GFS forecast init failed (%s); upcoming passes will use fallback", exc)
 
+    # 4b. Weather v1.3 samplers (lightning + hurricane). Both gated on
+    # settings.enable_weather. v1.3.1 ships a placeholder lightning
+    # sampler (always 0 potential) so the integration path is exercised
+    # without committing to GLM/Blitzortung yet; real samplers slot in
+    # for v1.3.2. NHC hurricane tracker is real and refreshed each tick.
+    lightning_sampler_obj = None
+    hurricane_tracker_obj = None
+    if settings.enable_weather:
+        from .lightning import NHCHurricaneTracker, PlaceholderLightningSampler
+        lightning_sampler_obj = PlaceholderLightningSampler()
+        hurricane_tracker_obj = NHCHurricaneTracker(
+            cache_path=settings.cache_dir / "nhc-storms.json",
+            ttl_hours=1.0,
+        )
+        try:
+            hurricane_tracker_obj.refresh(now=n)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "NHC refresh raised (%s); proceeding without hurricane proximity this tick",
+                exc,
+            )
+
     # 5. Find + score passes
     window_end = n + timedelta(hours=settings.pass_window_hours)
     all_passes: list[dict[str, Any]] = []
@@ -676,6 +750,8 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 forecast_sampler=forecast_sampler,
                 now=n,
                 composite_hour=composite_hour,
+                lightning_sampler=lightning_sampler_obj,
+                hurricane_tracker=hurricane_tracker_obj,
             ))
     log.info("found %d passes across %d targets", len(all_passes), len(targets))
 
@@ -714,6 +790,8 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 forecast_sampler=forecast_sampler,
                 now=n,
                 composite_hour=composite_hour,
+                lightning_sampler=lightning_sampler_obj,
+                hurricane_tracker=hurricane_tracker_obj,
             )
             entry["launch"] = {
                 "name": la.name,
