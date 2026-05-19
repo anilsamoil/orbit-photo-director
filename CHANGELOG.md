@@ -2,6 +2,23 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.2.8.0] - 2026-05-19
+
+### Upcoming horizon bumped 24 → 36 hours (operator feedback from astronaut).
+
+Matthew Dominick (NASA Crew-8) emailed 2026-05-19 asking for *"lookahead for the entire next OPTIMIS window — more than 90 minute orbit lookahead"* so the operator can plan their next day before bed. Loral O'Hara CC'd as *"an earth obs photo machine."*
+
+Old behavior: `OPD_PASS_WINDOW_HOURS=24` meant the upcoming-passes window could fall short of "all of tomorrow" depending on when the operator checked. Checking at 11pm Pacific (06:00 UTC) showed tomorrow's passes 1-25h out — fine — but checking at 8am Pacific (15:00 UTC) only covered through ~07:00 UTC tomorrow, missing tomorrow night.
+
+### Changed
+
+- `generator/config.py:DEFAULT_PASS_WINDOW_HOURS` bumped from 24 to 36. Guarantees the full next OPTIMIS shift is always in the Upcoming queue regardless of check time.
+- The `top_24h.json` artifact filename is kept as a stable identifier — its horizon is now wider than its label. Renaming is deferred (would break stored snapshots + existing clients).
+
+### Tests
+
+- New `test_default_pass_window_hours_is_36` in `tests/test_config.py`.
+
 ## [1.2.7.0] - 2026-05-17
 
 ### V3-P2 ASCENT geometry — integration slice (gated by feature flag).

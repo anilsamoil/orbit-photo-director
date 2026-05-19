@@ -8,7 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_TICK_MINUTES = 60  # 1h — geostationary IR refreshes every 10-15 min upstream
-DEFAULT_PASS_WINDOW_HOURS = 24  # 1 full day so the Upcoming view can plan tonight + tomorrow
+# 36h covers "tomorrow night" planning in every check-time scenario:
+#   - Anil checks at 11pm Pacific (06:00 UTC) → tomorrow's passes 1-25h out, fits
+#   - Anil checks at 8am Pacific (15:00 UTC) → all of tomorrow runs ~16-40h out
+# Astronaut Matthew Dominick (NASA Crew-8) emailed 2026-05-19 asking
+# for "lookahead for the entire next OPTIMIS window — more than 90 min."
+# Bumped from 24 to 36 to guarantee tomorrow's passes are always visible.
+# The "top_24h.json" artifact name is kept as a stable identifier; the
+# horizon it represents is now wider than its label. Renaming is a
+# separate concern (breaks stored snapshots + existing clients).
+DEFAULT_PASS_WINDOW_HOURS = 36
 DEFAULT_TLE_CACHE_TTL_HOURS = 1
 DEFAULT_CLOUD_CACHE_TTL_MINUTES = 55
 DEFAULT_TOP_QUEUE = 5
