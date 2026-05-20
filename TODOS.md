@@ -3,6 +3,28 @@
 Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 (must fix before mission start), P2 (nice to have), P3+ (future).
 
+## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
+
+### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub
+
+**Origin:** Operator question 2026-05-20 after v1.4.0.0 (orbit time-scrub) shipped: when scrubbing forward on the map, the colored pin scores ARE future predictions (they already use GFS forecast cloud at each pass's `closest_approach`), but the visual cloud raster underneath is yesterday's MODIS composite. Mismatch between pin-color truth and visual-layer truth.
+
+**Goal:** when the operator scrubs to T+N hours, the cloud raster shifts to show **predicted** cloud cover for T+N. Closes the loop — the visual layer agrees with the pin scoring.
+
+**Design space (capture before scoping):**
+
+| Approach | Effort | Notes |
+|---|---|---|
+| GFS forecast → on-the-fly tile rendering via Cloudflare Worker | ~2-3 days CC | Most accurate. Worker proxies GFS GRIB2 from NOMADS / AWS, renders to PNG tiles per hour, caches. New `gfs-forecast-clouds` MapLibre raster source that subs out for `gibs-clouds` when lookahead > 0. |
+| Per-pin tooltip with predicted cloud-fraction number | ~2h CC | Quick win — no global raster, just expose what's already in `score_components.p_unobstructed`. Pin tooltip: "predicted cloud at pass time: 18%". Doesn't fix the global raster, but answers the operator's question for any specific pin in one click. |
+| Look for an existing forecast-tile provider | research first | EUMETSAT / OpenMeteo / DWD all publish forecast clouds but not always as tiles. Verify before committing to building our own pipeline. |
+
+**Recommended sequencing:**
+- Ship the per-pin tooltip first (~2h CC). Low risk; gives the operator the forecast-cloud-at-pass-time number on demand.
+- Run `/plan-eng-review` on the full Worker-rendered tile overlay after. Material new feature (forecast tile pipeline, scrub-aware layer switching, cache strategy).
+
+**Not blocking:** v1.4.0.0 time-scrub still gives correct pin-color predictions. This is a "make the visual layer agree" polish, not a correctness fix.
+
 ## V4 — Photo lookup v1 (Pettit Tier B #1)
 
 ### V4-P2 — Photo-timestamp reverse lookup v1 (plan locked 2026-05-19)
