@@ -16,8 +16,13 @@
  *  click through to the SWPC sun page if they want it directly.
  */
 
+// NASA SDO publishes the HMI continuum image (visible-light sun disk
+// with sunspots) at this stable path. The SWPC mirror that previously
+// served the same image at /animations/sdo-hmiif/latest.jpg started
+// returning 404 (confirmed via QA 2026-05-20 + curl); switching to
+// the NASA source directly. CORS doesn't matter for <img> rendering.
 export const SWPC_SUN_IMAGE_URL =
-  'https://services.swpc.noaa.gov/images/animations/sdo-hmiif/latest.jpg';
+  'https://sdo.gsfc.nasa.gov/assets/img/latest/latest_512_HMIIC.jpg';
 
 /** SWPC's sun-imagery dashboard page. Clicking the widget opens this so the
  *  operator can see the live image larger + browse other wavelengths. */
