@@ -48,7 +48,12 @@ export default defineConfig({
         // Precache the app shell at install time. Hashed assets (index-X.js,
         // index-X.css, etc.) get content-hash filenames from Vite, so they're
         // safe to precache aggressively.
-        globPatterns: ['**/*.{js,css,html,svg,ico,woff2}'],
+        // v1.4.3.0: added `geojson` so the coastline overlay
+        // (ne_110m_coastline.geojson, ~80KB) is part of the offline shell.
+        // Without this, the world-map outline goes missing as soon as the
+        // operator loses connectivity, even though the basemap tiles and
+        // ground track already work offline.
+        globPatterns: ['**/*.{js,css,html,svg,ico,woff2,geojson}'],
 
         // skipWaiting: new SW activates as soon as installed (doesn't sit in
         // 'waiting' state). clientsClaim=false: existing tabs keep their old
