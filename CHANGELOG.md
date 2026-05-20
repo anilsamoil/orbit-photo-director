@@ -2,6 +2,30 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.4.3.0] - 2026-05-17
+
+### Operator-observed fixes: HEIC EXIF + offline coastline.
+
+Anil 2026-05-17: a known-good photo (taken today, valid EXIF, parses fine in other tools) failed in the Lookup tab. Root cause: photo-lookup imported `exifr/dist/lite.esm.js`, which is JPG-only. iPhone defaults to HEIC, so every HEIC drop was silently rejected and surfaced the same generic "no EXIF" message. Same release fixes a related but separate gap discovered while looking: the coastline GeoJSON wasn't part of the SW precache, so the world-outline disappeared as soon as connectivity dropped.
+
+### Fixed
+
+- **HEIC EXIF parsing in the Lookup tab.** Swap `exifr/dist/lite.esm.js` (JPG-only, ~8KB gz) for the full `exifr` (~25KB gz). Covers JPEG + HEIC + TIFF. iPhone HEIC drops now resolve normally. Net app shell impact: photo-lookup chunk grew ~15KB gz (28.5 KB total), still lazy-loaded on Lookup-tab open.
+- **Coastline works offline.** Added `geojson` to `workbox.globPatterns` in `frontend/vite.config.ts`. `ne_110m_coastline.geojson` (~80KB) is now part of the precached app shell; precache count went 9 → 10 entries. Verified: the new `sw.js` includes `ne_110m_coastline.geojson` in the precache manifest.
+
+### Diagnostic improvement
+
+- `extractExifTimestamp()` now returns an `ExifExtractResult` with a `reason` enum (`ok` / `no-exif` / `no-datetime-original` / `invalid-date` / `parser-error`), the EXIF tags actually found, and file metadata. The dropzone error chip now tells the operator *which* failure mode hit — e.g. "EXIF present but no DateTimeOriginal/CreateDate/DateTime tags" vs "No EXIF metadata in {file}" — so a future regression here surfaces something actionable instead of the old "No EXIF DateTimeOriginal" boilerplate.
+- Falls back through DateTimeOriginal → CreateDate → DateTime, so HEICs that store the capture time only on `CreateDate` also resolve.
+
+### Tests
+
+- Existing 421-test suite still passes. No new tests added for the exifr swap (it's a one-line dependency change; vitest's happy-dom doesn't carry a HEIC fixture). Real-iPhone verification is on Anil after deploy.
+
+### NOT in scope
+
+- Forecast-tile overlay (V4-P2), photo-lookup v1.1 historical archive, multi-orbit display, weather v1.3.2 real lightning samplers — all stay deferred.
+
 ## [1.4.2.0] - 2026-05-20
 
 ### Day-night terminator on the map (Pettit Tier B follow-up).

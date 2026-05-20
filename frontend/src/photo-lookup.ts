@@ -13,13 +13,13 @@
  *  ~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-photo-lookup-v1-eng-review-2026-05-19.md
  */
 
-// exifr/lite is the smaller (~8KB gz) ESM bundle that parses just the EXIF
-// date fields we need. No TypeScript types are shipped for the /dist/lite
-// path so we declare a minimal shape inline. The full exifr package has
-// types but pulls ~25KB more code we don't use.
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-expect-error — exifr ships no types for the /dist/lite ESM bundle
-import exifr from 'exifr/dist/lite.esm.js';
+// Full exifr (~25KB gz) — covers JPG + HEIC + TIFF + ICC. The previous
+// `exifr/dist/lite.esm.js` import (v1.3.0.0 - v1.4.2.0) was JPG-only and
+// silently rejected iPhone HEIC photos. The ~17KB gz extra is worth
+// covering the dominant operator-side camera output (Nikon D5/D6 ship
+// JPG but iPhone Photos defaults to HEIC, which is what Anil's Earth-
+// side validation uses).
+import exifr from 'exifr';
 
 import type { Track } from './types';
 import { issPositionWithAltSGP4 } from './iss-sgp4';
@@ -51,37 +51,96 @@ export function parseTimestamp(s: string): Date | null {
   return new Date(ms);
 }
 
-/** Extract EXIF DateTimeOriginal from a File. Returns null on no EXIF /
- *  no DateTimeOriginal / unparseable date / corrupt file.
+/** Diagnostic result of an EXIF extraction attempt. Lets the UI surface
+ *  *why* a photo's timestamp couldn't be read (so the operator can fix
+ *  the input or fall back to paste). v1.4.3.0 — replaces the prior
+ *  null-only return that silently swallowed every failure.
+ */
+export interface ExifExtractResult {
+  /** Successfully parsed UTC timestamp from DateTimeOriginal. */
+  date: Date | null;
+  /** Diagnostic state for the UI / console. */
+  reason:
+    | 'ok'
+    | 'no-exif'
+    | 'no-datetime-original'
+    | 'invalid-date'
+    | 'parser-error';
+  /** When non-null, lists EXIF tags that WERE found in the file —
+   *  helpful diagnostic ("we read EXIF but DateTimeOriginal wasn't one
+   *  of the present tags"). */
+  fieldsFound: string[];
+  /** File metadata captured for the error chip (size + type). */
+  fileMeta: { name: string; type: string; size: number };
+}
+
+/** Extract EXIF DateTimeOriginal from a File. Returns a result object
+ *  (not just `Date | null`) so the UI can render an honest error chip.
+ *
+ *  Format coverage as of v1.4.3.0: JPEG, HEIC, TIFF (full `exifr`).
  *
  *  EXIF timestamps from cameras are typically in local time without
  *  timezone metadata unless OffsetTimeOriginal is set. ISS cameras
- *  (Nikon D5/D6) are set to UTC, so we assume the bare DateTimeOriginal
- *  IS UTC unless OffsetTimeOriginal explicitly says otherwise. */
-export async function extractExifTimestamp(file: File): Promise<Date | null> {
+ *  (Nikon D5/D6) are set to UTC. iPhone (operator's testing device)
+ *  embeds a local datetime + `OffsetTimeOriginal` like "+00:00" or
+ *  "-04:00"; exifr applies the offset to produce a UTC Date.
+ */
+export async function extractExifTimestamp(file: File): Promise<ExifExtractResult> {
+  const fileMeta = { name: file.name, type: file.type, size: file.size };
+  let exifData: Record<string, unknown> | undefined;
   try {
-    // exifr/lite parses just the EXIF date fields without pulling in the
-    // full parser. We pass an options object instead of a fields array so
-    // we don't get TS overload errors with the lite build.
-    const exifData = await exifr.parse(file, { pick: ['DateTimeOriginal', 'OffsetTimeOriginal'] });
-    if (!exifData || !exifData.DateTimeOriginal) return null;
-    const raw = exifData.DateTimeOriginal;
-    // exifr returns DateTimeOriginal as a Date object already (parsed using
-    // OffsetTimeOriginal if present, else assumed UTC by our convention).
-    if (raw instanceof Date) {
-      if (!Number.isFinite(raw.getTime())) return null;
-      return raw;
+    // Read a broader set of date / datetime tags. Some HEIC photos store
+    // the original capture time in DateTimeOriginal; others use the
+    // CreateDate tag. exifr returns whichever are present.
+    exifData = await exifr.parse(file, {
+      pick: [
+        'DateTimeOriginal',
+        'OffsetTimeOriginal',
+        'CreateDate',
+        'ModifyDate',
+        'DateTime',
+      ],
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[photo-lookup] EXIF parser threw:', err, fileMeta);
+    return { date: null, reason: 'parser-error', fieldsFound: [], fileMeta };
+  }
+
+  if (!exifData || Object.keys(exifData).length === 0) {
+    // eslint-disable-next-line no-console
+    console.warn('[photo-lookup] no EXIF found in file:', fileMeta);
+    return { date: null, reason: 'no-exif', fieldsFound: [], fileMeta };
+  }
+
+  const fieldsFound = Object.keys(exifData);
+  // eslint-disable-next-line no-console
+  console.info('[photo-lookup] EXIF fields found:', fieldsFound, 'file:', fileMeta);
+
+  // Try DateTimeOriginal first; fall back to CreateDate, then DateTime.
+  // Each can be a Date (exifr's preferred return) or a string fallback.
+  const candidates = ['DateTimeOriginal', 'CreateDate', 'DateTime'] as const;
+  for (const key of candidates) {
+    const raw = exifData[key];
+    if (!raw) continue;
+    if (raw instanceof Date && Number.isFinite(raw.getTime())) {
+      return { date: raw, reason: 'ok', fieldsFound, fileMeta };
     }
-    // Defensive: if exifr returned a string (older versions), try Date.parse.
     if (typeof raw === 'string') {
       const ms = Date.parse(raw);
-      if (!Number.isFinite(ms)) return null;
-      return new Date(ms);
+      if (Number.isFinite(ms)) {
+        return { date: new Date(ms), reason: 'ok', fieldsFound, fileMeta };
+      }
     }
-    return null;
-  } catch {
-    return null;
   }
+
+  // EXIF present but no usable datetime tag.
+  if (fieldsFound.includes('DateTimeOriginal')
+      || fieldsFound.includes('CreateDate')
+      || fieldsFound.includes('DateTime')) {
+    return { date: null, reason: 'invalid-date', fieldsFound, fileMeta };
+  }
+  return { date: null, reason: 'no-datetime-original', fieldsFound, fileMeta };
 }
 
 /** Resolve a timestamp to an ISS LookupResult using the supplied track's TLE.
@@ -248,11 +307,33 @@ export function renderLookupTab(
     if (!files || files.length === 0) return;
     const file = files.item(0);
     if (!file) return;
-    const ts = await extractExifTimestamp(file);
-    if (!ts) {
-      showError('No EXIF DateTimeOriginal in this image. Paste the timestamp manually instead.');
+    const exif = await extractExifTimestamp(file);
+    if (!exif.date) {
+      // v1.4.3.0: surface *why* EXIF parsing failed so the operator can
+      // decide whether to retry, re-export, or paste manually. Previously
+      // every failure showed the same generic message.
+      const fileLabel = `${exif.fileMeta.name} (${exif.fileMeta.type || 'unknown type'}, ${Math.round(exif.fileMeta.size / 1024)} KB)`;
+      let msg: string;
+      switch (exif.reason) {
+        case 'no-exif':
+          msg = `No EXIF metadata in ${fileLabel}. The file may have been stripped of EXIF (some upload pipelines do this) or it's not a photo format we can read. Paste the timestamp manually.`;
+          break;
+        case 'no-datetime-original':
+          msg = `EXIF present but no DateTimeOriginal/CreateDate/DateTime tags in ${fileLabel}. Tags found: ${exif.fieldsFound.join(', ') || '(none)'}. Paste the timestamp manually.`;
+          break;
+        case 'invalid-date':
+          msg = `EXIF datetime tag(s) present in ${fileLabel} but couldn't be parsed as a valid date. Tags found: ${exif.fieldsFound.join(', ')}. Paste the timestamp manually.`;
+          break;
+        case 'parser-error':
+          msg = `EXIF parser threw an error reading ${fileLabel}. The file may be corrupt or in a format we don't support. See browser console for details. Paste the timestamp manually.`;
+          break;
+        default:
+          msg = `Couldn't read EXIF from ${fileLabel}. Paste the timestamp manually.`;
+      }
+      showError(msg);
       return;
     }
+    const ts = exif.date;
     const track = getTrack();
     if (!track) {
       showError('Track data not loaded yet — wait a moment and try again.');
