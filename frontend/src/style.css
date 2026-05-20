@@ -641,16 +641,54 @@ main {
   z-index: 10;
 }
 
-/* Bearing toggle sits below the time toggle on the same right edge. */
+/* Time-scrub control (v1.4.0.0). 5 buttons + UTC chips. Wider than the
+ * old 2-button toggle; on narrow viewports flex-wrap pushes them to a
+ * second row but they keep working. */
+.map-controls.map-controls-time {
+  flex-wrap: wrap;
+  max-width: calc(100vw - 2rem);
+}
+.time-step-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  padding: 0.3rem 0.5rem;
+  min-width: 64px;
+}
+.time-step-label {
+  font-size: 0.75rem;
+  line-height: 1.0;
+  font-weight: 600;
+}
+.time-step-utc {
+  font-size: 0.65rem;
+  line-height: 1.0;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.time-step-btn.active .time-step-label,
+.time-step-btn.active .time-step-utc {
+  color: inherit;
+}
+.time-step-btn.time-step-noop {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Bearing toggle sits below the time toggle on the same right edge.
+ * v1.4.0.0 bumped from 130 → 170 because the new 5-button time-scrub
+ * row is taller (UTC chip + label per button = ~50px) and can wrap on
+ * narrow viewports. */
 .map-controls.map-controls-bearing {
-  top: 130px;
+  top: 170px;
 }
 
 /* Cloud-overlay toggle sits below the bearing toggle on the same right
  * edge. Single-button row (Pettit feedback 2026-05-19 — make cloud
  * overlay toggleable). The cloud icon (☁) sits centered on a square. */
 .map-controls.map-controls-overlay {
-  top: 180px;
+  top: 220px;
 }
 .map-controls.map-controls-overlay .time-btn {
   font-size: 1.05rem;

@@ -2,6 +2,43 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.4.0.0] - 2026-05-20
+
+### Orbit time-scrub on the Map view (Pettit Tier B).
+
+Pettit asked 2026-05-19: *"Being able to jump ahead or behind in time/date is really handy."* The old `[Now] [+90 min]` two-button toggle covered "what about the next orbit" but nothing past that. This release replaces it with a 5-button orbit scrubber:
+
+```
+[← T-90 08:30Z]  [← T-45 09:15Z]  [Now 10:00Z]  [T+45 → 10:45Z]  [T+90 → 11:30Z]
+```
+
+Each button shows the UTC time you would land at if you clicked. Hit `T+90 →` three times and the chip on the next-up `T+90 →` button shows three orbits ahead. The chips refresh every 30s so the time stays accurate as the wall clock advances.
+
+### Added
+
+- **45- and 90-minute step sizes**: half-orbit (`T-45` / `T+45`) and full-orbit (`T-90` / `T+90`).
+- **Forward bound**: 36 hours = the upcoming-passes horizon set in v1.2.8.0. Past that we'd be scrubbing into orbits with no target data, so the buttons disable themselves with a dimmed `time-step-noop` style.
+- **Back floor at Now**: clicking back from the current orbit stays at Now (per the 2026-05-20 spec decision). The buttons render dimmed when they would be a no-op.
+- **Future-orbit ground track**: at lookahead > 0 the map renders ONLY a ±45min track centered on the future time, SGP4-derived from the cached TLE. The current 2-orbit polynomial track only shows at Now.
+- **Frozen ISS marker at the future time**: at lookahead > 0 the marker stops updating per second and parks at where ISS will be at the start of that orbit (Q2 → A).
+- **Pin filter + dim**: target pins outside ±45min of the current view time dim to 25% opacity; in-window pins stay at 95%. Operator can still see "there's a great target 2 orbits later" at a glance (Q3 → C).
+
+### Implementation
+
+- `frontend/src/map.ts` — new `clampLookahead()`, `formatUtcHm()`, `futureOrbitGroundTrackFeatures()`, `refreshGroundTrackSource()`, `refreshTargetsSource()`, `updateTimeStepLabels()`. Old `bindTimeToggle()` rewritten to scan all `.time-step-btn` elements and apply delta clamping.
+- `frontend/src/map.ts` — `markerPositionFor()` now uses `issPositionWithAltSGP4()` when lookahead > 0 (polynomial only covers ~120min; future orbits need SGP4 directly).
+- `frontend/src/style.css` — `.time-step-btn` with stacked label + UTC chip, `.time-step-noop` dim state for out-of-bounds buttons.
+- `frontend/index.html` — 5 button elements (one per step) with `data-step` + `data-time-utc` chips.
+
+### Tests
+
+- `frontend/test/time-scrub.test.ts` — 15 new tests covering clamp semantics, UTC formatting, and step-from-current logic. Full suite: 384 frontend tests passing.
+
+### NOT in scope
+
+- Sliding scrub (drag a slider). Stepwise buttons are honest about orbit boundaries and match operator mental model better.
+- Date input (jump to "next Tuesday morning"). The 36h horizon is mostly tomorrow already; full date picker becomes interesting once v1.1 historical TLE archive lands.
+
 ## [1.3.1.0] - 2026-05-19
 
 ### Weather v1.3 framework + NHC hurricane tracker.
