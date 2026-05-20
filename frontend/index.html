@@ -60,9 +60,27 @@
 
       <section id="map-pane" class="pane">
         <div id="map" class="map"></div>
-        <div class="map-controls">
-          <button id="time-now" class="time-btn active" type="button">Now</button>
-          <button id="time-plus90" class="time-btn" type="button">+90 min</button>
+        <div class="map-controls map-controls-time">
+          <button id="time-back-90" class="time-btn time-step-btn" type="button" data-step="-90" title="Step back 90 minutes (one orbit)">
+            <span class="time-step-label">&larr; T-90</span>
+            <span class="time-step-utc" data-time-utc>--:--Z</span>
+          </button>
+          <button id="time-back-45" class="time-btn time-step-btn" type="button" data-step="-45" title="Step back 45 minutes (half orbit)">
+            <span class="time-step-label">&larr; T-45</span>
+            <span class="time-step-utc" data-time-utc>--:--Z</span>
+          </button>
+          <button id="time-now" class="time-btn time-step-btn active" type="button" data-step="0" title="Now (current orbit)">
+            <span class="time-step-label">Now</span>
+            <span class="time-step-utc" data-time-utc>--:--Z</span>
+          </button>
+          <button id="time-fwd-45" class="time-btn time-step-btn" type="button" data-step="45" title="Step forward 45 minutes (half orbit)">
+            <span class="time-step-label">T+45 &rarr;</span>
+            <span class="time-step-utc" data-time-utc>--:--Z</span>
+          </button>
+          <button id="time-fwd-90" class="time-btn time-step-btn" type="button" data-step="90" title="Step forward 90 minutes (one orbit)">
+            <span class="time-step-label">T+90 &rarr;</span>
+            <span class="time-step-utc" data-time-utc>--:--Z</span>
+          </button>
         </div>
         <div class="map-controls map-controls-bearing">
           <button id="bearing-north" class="time-btn active" type="button" title="North up (default)">N&uarr;</button>

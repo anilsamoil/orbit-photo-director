@@ -16,13 +16,47 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
 import { liveIssPosition, wrapLon } from './iss';
+import { issPositionWithAltSGP4 } from './iss-sgp4';
 
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
 let liveTimer: number | null = null;
+// Refreshes the UTC time chips on the time-step buttons every 30s so
+// labels stay accurate as the wall clock advances.
+let timeLabelTimer: number | null = null;
 let currentTrack: Track | null = null;
-// 0 = "Now" (live position); 90 = "+90 min" (preview future ISS position).
+// Cached most-recently-fetched passes list — kept so when the operator
+// hits a time-scrub button we can re-derive the target-pin opacity (and
+// future-orbit ground track) without re-fetching the manifest.
+let currentPasses: PassEntry[] = [];
+// Orbit time-scrub: 0 = "Now" (live ISS marker + current 2-orbit track).
+// Positive values move forward by 45- or 90-minute steps; the map then
+// shows ONLY the orbit centered at +N min and freezes the ISS marker
+// at the start of that orbit (per Q2 → A in the 2026-05-20 decision).
+// Capped at 36h = 2160 min via clampLookahead() — matches the upcoming
+// passes.json horizon so we don't scrub into orbits with no target data.
+// Cannot go negative (Q3 — "back" is relative-to-current; floor at 0).
 let lookaheadMinutes = 0;
+
+const LOOKAHEAD_MAX_MINUTES = 36 * 60;  // 2160; matches passes.json horizon
+
+function clampLookahead(m: number): number {
+  if (!Number.isFinite(m) || m < 0) return 0;
+  if (m > LOOKAHEAD_MAX_MINUTES) return LOOKAHEAD_MAX_MINUTES;
+  return Math.round(m);
+}
+
+/** UTC ISO 8601 time portion at minute precision, e.g., "12:34Z". */
+function formatUtcHm(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+/** "Pass window" half-width: a pass with closest_approach within ±45 min
+ *  of the current view time is considered in-orbit and rendered full
+ *  opacity. Outside that window the pin dims to 0.3 alpha (Q3 → C). */
+const PASS_WINDOW_HALF_MINUTES = 45;
 
 /** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
  *  "make so can turn off/on as needed" stays sticky across reloads. Default
@@ -153,48 +187,24 @@ function buildStyle(): maplibregl.StyleSpecification {
   };
 }
 
-/** Render the ground track polyline. Prefers `track_points` (raw SGP4
- *  samples covering 2 orbits, no fit drift) when present. Falls back to
- *  evaluating the polynomial across its full duration for older manifests
- *  that don't ship `track_points` yet.
+/** Convert a flat list of [lat, lon] samples into MapLibre LineString
+ *  features, splitting at antimeridian crossings (so the line doesn't
+ *  drag across the whole map) and duplicating at lon ±360 (so the line
+ *  renders continuously when the user pans across world copies — see
+ *  Pettit feedback 2026-05-19).
  *
- *  Splits at antimeridian crossings so the line doesn't drag across the
- *  whole map.
+ *  Factored out so both the live-orbit (`groundTrackFeatures`) and
+ *  future-orbit (`futureOrbitGroundTrackFeatures`) paths share the
+ *  same antimeridian + world-copy handling.
  */
-function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
+function buildLineFeatures(samples: [number, number][]): GeoJSON.Feature[] {
   type Pt = [number, number];
-
-  // Source 1: explicit SGP4 samples. Each entry: [t_sec, lat, lon].
-  // Always preferred when available — drift-free over 2 orbits.
-  const samples: [number, number][] = (() => {
-    if (track.track_points && track.track_points.length > 0) {
-      return track.track_points.map(([, lat, lon]) => [lat, lon] as [number, number]);
-    }
-    // Source 2 (fallback): polynomial-derived samples over the polynomial's
-    // own window. Used only when the manifest predates track_points.
-    const dur = track.iss_polynomial.duration_seconds;
-    const stepSec = 30;
-    const evalPoly = (coeffs: number[], t: number): number => {
-      let acc = 0;
-      for (const c of coeffs) acc = acc * t + c;
-      return acc;
-    };
-    const out: [number, number][] = [];
-    for (let t = 0; t <= dur; t += stepSec) {
-      const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
-      const lon = evalPoly(track.iss_polynomial.lon_coeffs, t);
-      out.push([lat, lon]);
-    }
-    return out;
-  })();
-
   const segments: Pt[][] = [];
   let current: Pt[] = [];
   let prevLon: number | null = null;
 
   for (const [lat, lonRaw] of samples) {
     const lon = wrapLon(lonRaw);
-    // Detect antimeridian crossing: previous lon and current lon differ by > 180°
     if (prevLon !== null && Math.abs(lon - prevLon) > 180) {
       if (current.length > 1) segments.push(current);
       current = [];
@@ -209,11 +219,6 @@ function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
     properties: {},
     geometry: { type: 'LineString' as const, coordinates: coords },
   }));
-  // Duplicate every segment at lon ±360 so the ground track renders
-  // continuously when the user pans across world copies (Pettit
-  // feedback 2026-05-19 — orbit clipping at antimeridian).
-  // MapLibre's `renderWorldCopies: true` repeats tile layers but does
-  // NOT repeat geojson line features without explicit duplication.
   const duplicated: GeoJSON.Feature[] = [];
   for (const f of segmentFeatures) {
     const coords = f.geometry.coordinates as [number, number][];
@@ -234,6 +239,60 @@ function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
     });
   }
   return duplicated;
+}
+
+/** Render the ground track polyline for the CURRENT orbit window.
+ *  Prefers `track_points` (raw SGP4 samples covering 2 orbits) when
+ *  present. Falls back to evaluating the polynomial across its full
+ *  duration for older manifests.
+ */
+function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
+  const samples: [number, number][] = (() => {
+    if (track.track_points && track.track_points.length > 0) {
+      return track.track_points.map(([, lat, lon]) => [lat, lon] as [number, number]);
+    }
+    const dur = track.iss_polynomial.duration_seconds;
+    const stepSec = 30;
+    const evalPoly = (coeffs: number[], t: number): number => {
+      let acc = 0;
+      for (const c of coeffs) acc = acc * t + c;
+      return acc;
+    };
+    const out: [number, number][] = [];
+    for (let t = 0; t <= dur; t += stepSec) {
+      const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
+      const lon = evalPoly(track.iss_polynomial.lon_coeffs, t);
+      out.push([lat, lon]);
+    }
+    return out;
+  })();
+  return buildLineFeatures(samples);
+}
+
+/** Render a SINGLE orbit's ground track at a future time, SGP4-derived.
+ *
+ *  Used by the time-scrub buttons (v1.4.0.0). For lookaheadMinutes > 0,
+ *  we sample the ISS ground track in a ±45-min window centered on
+ *  (nowMs + lookahead*60s) at 30s resolution. The result is exactly
+ *  one orbit's worth of polyline — the visual answer to "what would
+ *  ISS be flying over at that future time?"
+ *
+ *  Returns empty list if the track has no usable TLE (older manifest).
+ */
+function futureOrbitGroundTrackFeatures(
+  track: Track, lookaheadMinutes: number, nowMs: number,
+): GeoJSON.Feature[] {
+  if (lookaheadMinutes <= 0) return groundTrackFeatures(track);
+  const centerMs = nowMs + lookaheadMinutes * 60_000;
+  const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
+  const stepMs = 30_000;
+  const samples: [number, number][] = [];
+  for (let t = centerMs - halfWindowMs; t <= centerMs + halfWindowMs; t += stepMs) {
+    const pos = issPositionWithAltSGP4(track, t);
+    if (!pos) continue;
+    samples.push([pos.lat, pos.lon]);
+  }
+  return buildLineFeatures(samples);
 }
 
 export async function renderMap(manifest: Manifest): Promise<void> {
@@ -284,12 +343,14 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // GIBS tiles cached past day-roll could otherwise read as today's clouds.
   ensureImageryDateBadge(container, manifest);
 
-  // Ground track layer
-  const trackFc: GeoJSON.FeatureCollection = {
-    type: 'FeatureCollection',
-    features: groundTrackFeatures(track),
-  };
-  upsertGeoJson(map, 'iss-track', trackFc);
+  // Stash for the time-scrub refresh path (v1.4.0.0). The buttons rebuild
+  // the track + target sources from this cached list without re-fetching.
+  currentPasses = passes;
+
+  // Ground track layer — lookahead-aware. At Now (lookahead=0) shows the
+  // standard track_points 2-orbit polyline; at +N>0 shows a single ±45min
+  // window centered on the future time, SGP4-derived.
+  refreshGroundTrackSource(track);
   if (!map.getLayer('iss-track-layer')) {
     map.addLayer({
       id: 'iss-track-layer',
@@ -304,20 +365,9 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
   }
 
-  // Targets layer
-  const targetFc: GeoJSON.FeatureCollection = {
-    type: 'FeatureCollection',
-    features: passes.map((p) => ({
-      type: 'Feature' as const,
-      properties: {
-        target_id: p.target_id,
-        target_name: p.target_name,
-        score: p.score,
-      },
-      geometry: { type: 'Point' as const, coordinates: [p.target_lon, p.target_lat] },
-    })),
-  };
-  upsertGeoJson(map, 'targets', targetFc);
+  // Targets layer — features carry closest_approach_ms so the paint
+  // expression can dim out-of-window passes per Q3 → C (filter+dim).
+  refreshTargetsSource();
   if (!map.getLayer('targets-layer')) {
     map.addLayer({
       id: 'targets-layer',
@@ -335,6 +385,21 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         ],
         'circle-stroke-color': '#0b0d12',
         'circle-stroke-width': 1.5,
+        // Data-driven opacity: pins for passes whose closest_approach
+        // falls within ±45 min of the current view time render full
+        // opacity; out-of-window pins dim to 0.25 (Q3 → C from the
+        // 2026-05-20 decision). The per-feature `in_window` property
+        // is set in refreshTargetsSource() based on lookaheadMinutes.
+        'circle-opacity': [
+          'case',
+          ['==', ['get', 'in_window'], true], 0.95,
+          0.25,
+        ],
+        'circle-stroke-opacity': [
+          'case',
+          ['==', ['get', 'in_window'], true], 1.0,
+          0.3,
+        ],
       },
     });
     // Click handler: popup with target name + score. Uses setDOMContent +
@@ -386,14 +451,23 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
   liveTimer = window.setInterval(() => {
     if (!map || !issMarker || !currentTrack) return;
-    const pos = markerPositionFor(currentTrack);
-    if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
-    // Re-apply bearing each tick when ISS-up is on. ISS heading drifts ~1°
-    // per minute so 1Hz is overkill but harmless; the alternative (only
-    // update on toggle) leaves the map mis-oriented after a few minutes.
-    // setBearing (no animate) — micro-rotations every 1s would jitter.
+    // Live ISS marker updates every 1s ONLY at Now (lookahead=0). When
+    // the operator has scrubbed forward, the marker is frozen at the
+    // future orbit's start (Q2 → A) — no point recomputing every second
+    // since the target time isn't moving.
+    if (lookaheadMinutes === 0) {
+      const pos = markerPositionFor(currentTrack);
+      if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
+    }
     if (bearingMode === 'iss-up') applyBearing(false);
   }, 1000);
+
+  // Refresh the UTC labels on the time-step buttons every 30s so the
+  // displayed "click would take you to HH:MMZ" stays accurate without
+  // a per-second redraw on the unattended Mac.
+  if (timeLabelTimer !== null) clearInterval(timeLabelTimer);
+  timeLabelTimer = window.setInterval(() => updateTimeStepLabels(), 30_000);
+  updateTimeStepLabels();
 
   bindTimeToggle();
   bindBearingToggle();
@@ -415,6 +489,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
  */
 function markerPositionFor(track: Track): { lat: number; lon: number } | null {
   const targetMs = Date.now() + lookaheadMinutes * 60_000;
+  // For lookahead > 0 the polynomial likely doesn't cover the target time
+  // (only ~120 min). Use SGP4 directly so the frozen marker lands at the
+  // future orbit's start (Q2 → A in the 2026-05-20 decision).
+  if (lookaheadMinutes > 0) {
+    const sgp4 = issPositionWithAltSGP4(track, targetMs);
+    if (sgp4) return { lat: sgp4.lat, lon: sgp4.lon };
+  }
   const pos = liveIssPosition(track, targetMs);
   if (pos) return pos;
   // Fallback: clamp to last point in the polynomial window
@@ -422,6 +503,47 @@ function markerPositionFor(track: Track): { lat: number; lon: number } | null {
   if (Number.isNaN(startMs)) return null;
   const endMs = startMs + track.iss_polynomial.duration_seconds * 1000;
   return liveIssPosition(track, Math.min(targetMs, endMs - 1000));
+}
+
+/** Rebuild the iss-track geojson source based on the current lookahead.
+ *  At Now (lookahead=0) renders the standard 2-orbit polynomial track;
+ *  at +N>0 renders just the ±45min window around (now + N min) via SGP4. */
+function refreshGroundTrackSource(track: Track): void {
+  if (!map) return;
+  const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutes, Date.now());
+  upsertGeoJson(map, 'iss-track', {
+    type: 'FeatureCollection',
+    features,
+  });
+}
+
+/** Rebuild the targets geojson source. Each feature carries `in_window`
+ *  derived from its closest_approach vs the current view time. The
+ *  data-driven opacity expression on the targets-layer paint reads this
+ *  property — full opacity for in-window passes, dimmed for the rest. */
+function refreshTargetsSource(): void {
+  if (!map) return;
+  const viewMs = Date.now() + lookaheadMinutes * 60_000;
+  const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
+  const features = currentPasses.map((p) => {
+    const closestMs = Date.parse(p.closest_approach);
+    const inWindow = Number.isFinite(closestMs)
+      && Math.abs(closestMs - viewMs) <= halfWindowMs;
+    return {
+      type: 'Feature' as const,
+      properties: {
+        target_id: p.target_id,
+        target_name: p.target_name,
+        score: p.score,
+        in_window: inWindow,
+      },
+      geometry: { type: 'Point' as const, coordinates: [p.target_lon, p.target_lat] },
+    };
+  });
+  upsertGeoJson(map, 'targets', {
+    type: 'FeatureCollection',
+    features,
+  });
 }
 
 /** Great-circle initial bearing from (lat1, lon1) to (lat2, lon2), in degrees
@@ -480,31 +602,100 @@ function applyBearing(animate: boolean): void {
   else map.setBearing(heading);
 }
 
+/** Refresh the UTC time chips on each time-step button.
+ *
+ *  Each button's chip shows the UTC time the operator would land at if
+ *  they clicked it from the CURRENT lookahead state. So at Now, the
+ *  [T+90 →] chip shows now+90min; at +180, the same [T+90 →] chip
+ *  shows now+270min (the +90 would jump to). The Now button always
+ *  shows the actual current wall clock.
+ */
+function updateTimeStepLabels(): void {
+  const nowMs = Date.now();
+  const viewMs = nowMs + lookaheadMinutes * 60_000;
+  // Map button id → step in minutes relative to CURRENT view.
+  const steps: Array<[string, number]> = [
+    ['time-back-90', -90],
+    ['time-back-45', -45],
+    ['time-now', 0],
+    ['time-fwd-45', 45],
+    ['time-fwd-90', 90],
+  ];
+  for (const [id, step] of steps) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    const chip = btn.querySelector<HTMLElement>('[data-time-utc]');
+    if (!chip) continue;
+    let targetMinutes: number;
+    if (id === 'time-now') {
+      // Now button always shows the real wall-clock UTC, not lookahead-adjusted.
+      targetMinutes = 0;
+    } else {
+      // Back buttons clamp at 0; forward buttons clamp at LOOKAHEAD_MAX_MINUTES.
+      targetMinutes = clampLookahead(lookaheadMinutes + step);
+    }
+    const targetMs = nowMs + targetMinutes * 60_000;
+    chip.textContent = formatUtcHm(targetMs);
+    // Disabled-look when the button would be a no-op (already at floor/ceiling).
+    const wouldBeNoop = (id !== 'time-now') &&
+      clampLookahead(lookaheadMinutes + step) === lookaheadMinutes;
+    btn.classList.toggle('time-step-noop', wouldBeNoop);
+  }
+}
+
 let toggleBound = false;
 function bindTimeToggle(): void {
   if (toggleBound) return;
-  const nowBtn = document.getElementById('time-now');
-  const plus90Btn = document.getElementById('time-plus90');
-  if (!nowBtn || !plus90Btn) return;
+  const stepBtns = document.querySelectorAll<HTMLButtonElement>('.time-step-btn');
+  if (stepBtns.length === 0) return;
 
-  const setMode = (minutes: 0 | 90) => {
-    lookaheadMinutes = minutes;
-    nowBtn.classList.toggle('active', minutes === 0);
-    plus90Btn.classList.toggle('active', minutes === 90);
-    if (map && issMarker && currentTrack) {
-      const pos = markerPositionFor(currentTrack);
-      if (pos) {
-        issMarker.setLngLat([pos.lon, pos.lat]);
-        // On +90, recenter so the user can see where ISS will be
-        if (minutes === 90) {
-          map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+  const setLookahead = (newMinutes: number, recenter: boolean) => {
+    const clamped = clampLookahead(newMinutes);
+    if (clamped === lookaheadMinutes && lookaheadMinutes === 0) {
+      // Clicking Now while already at Now is a no-op; same for clicking
+      // back at floor. Skip the visual churn.
+      updateTimeStepLabels();
+      return;
+    }
+    lookaheadMinutes = clamped;
+    // Update active state — only the Now button has an "active" state
+    // (it's the only one that represents a specific lookahead value);
+    // the +/- step buttons are pure delta buttons that flash on click.
+    stepBtns.forEach((b) => {
+      const isNow = b.id === 'time-now';
+      b.classList.toggle('active', isNow && clamped === 0);
+    });
+
+    // Rebuild track + targets with the new lookahead.
+    if (currentTrack) {
+      refreshGroundTrackSource(currentTrack);
+      refreshTargetsSource();
+      // Move + freeze marker at the new view time.
+      if (map && issMarker) {
+        const pos = markerPositionFor(currentTrack);
+        if (pos) {
+          issMarker.setLngLat([pos.lon, pos.lat]);
+          if (recenter) {
+            map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+          }
         }
       }
     }
+    updateTimeStepLabels();
   };
 
-  nowBtn.addEventListener('click', () => setMode(0));
-  plus90Btn.addEventListener('click', () => setMode(90));
+  stepBtns.forEach((btn) => {
+    const step = Number(btn.dataset.step);
+    if (!Number.isFinite(step)) return;
+    btn.addEventListener('click', () => {
+      if (step === 0) {
+        // Now: reset to live current orbit
+        setLookahead(0, /*recenter=*/false);
+      } else {
+        setLookahead(lookaheadMinutes + step, /*recenter=*/true);
+      }
+    });
+  });
   toggleBound = true;
 }
 
