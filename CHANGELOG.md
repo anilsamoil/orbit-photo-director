@@ -2,6 +2,28 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.4.1.0] - 2026-05-20
+
+### Forecast-cloud tooltip on map pin clicks.
+
+Operator question 2026-05-20 after v1.4.0.0 shipped: *"If I skip forward on the map and look forward in time and it shows a green dot for something to shoot, will that represent potentially things that are good shots based on future probability?"* The answer is yes — the pin colors are already pre-computed forecast scores. This release surfaces the underlying forecast number on demand.
+
+### Added
+
+- **Click any map pin and see:** target name + score + UTC pass time (with relative "in 6h 20m" suffix) + predicted cloud percentage with the data source labeled (e.g., "Cloud: 18% (GFS forecast)" for future passes, "Cloud: 35% (GOES16 observed)" for imminent ones) + pass regime + obstruction class.
+- **`cloudSourceLabel()`** helper translates the generator's technical source strings (`gfs-forecast`, `geo-ir-goes16`, `gibs`, `meteosat-ir108`, `himawari-nict`, `combined-no-coverage`) into operator-facing labels.
+
+### Implementation
+
+- `frontend/src/map.ts` — new exported `buildTargetPopupContent()` + `cloudSourceLabel()` + `TargetPopupProps` interface. Old inline click handler replaced with a 2-line call to the helper.
+- `refreshTargetsSource()` now carries `closest_approach`, `cloud_fraction`, `cloud_source`, `pass_regime`, `obstruction_class`, `sample_time` through to each feature's GeoJSON properties so the click handler can read them without re-fetching `passes.json`.
+- 20 new tests in `frontend/test/map-popup.test.ts` covering each source label translation, relative-time formatting, XSS defense (target names with HTML-meta characters render as literal text via `textContent`), and graceful handling of missing optional fields.
+- Full suite: 404 frontend tests passing.
+
+### Why this and not the full forecast-tile overlay?
+
+The full Worker-rendered GFS forecast tile overlay (cloud raster that shifts when you scrub forward) is queued as V4-P2 in `TODOS.md` — ~2-3 days CC of new infrastructure. This release ships the lower-effort half: surface the forecast number that ALREADY exists in `passes.json` so the operator can validate any specific pin in one click. The full raster overlay can come as a dedicated `/plan-eng-review` cycle later.
+
 ## [1.4.0.0] - 2026-05-20
 
 ### Orbit time-scrub on the Map view (Pettit Tier B).
