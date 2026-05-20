@@ -2,6 +2,34 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.4.2.0] - 2026-05-20
+
+### Day-night terminator on the map (Pettit Tier B follow-up).
+
+Pettit 2026-05-19: *"day-night shading"* as part of his map-first workflow. v1.4.0.0 time-scrub answered "what's happening at +6h?" but the operator couldn't visually tell if that future orbit was day-side or night-side. This closes that loop.
+
+### Added
+
+- **Terminator line** drawn as a warm-gold dashed great circle that updates with the operator's time-scrub. Scrub to T+6h → the terminator shifts to where day/night sit at that future moment.
+- **Subsolar dot** (gold-filled circle) marks where the sun is directly overhead at the current view time. Operator can read at a glance which hemisphere is in sunlight.
+- **Toggle button (☀)** next to the cloud-overlay toggle. Persisted to `localStorage` like the cloud toggle. Default ON.
+- **Auto-refresh:** at Now (lookahead=0) the terminator updates every 30s as the wall clock advances. Scrubbed views update on each click.
+
+### Implementation
+
+- `frontend/src/terminator.ts` — new module with `subsolarPoint()`, `equationOfTimeMinutes()`, `terminatorLonAtLat()`, `terminatorFeatures()`, `subsolarFeature()`. Math is a TypeScript port of the existing `generator/cloud.py:sun_subpoint` + `_equation_of_time_minutes` — kept in sync so the JS terminator agrees with the Python `lighting_regime` that drives pin scoring.
+- `frontend/src/map.ts` — new `terminator-line-layer` (dashed gold line) + `subsolar-point-layer` (gold dot). `refreshTerminatorSources()` called from `setLookahead()` (scrub) and the 30s wall-clock tick.
+- `frontend/index.html` — new ☀ toggle button next to the ☁ cloud toggle.
+
+### Tests
+
+- `frontend/test/terminator.test.ts` — 17 new tests: EoT zero-crossings, solstice/equinox subsolar latitudes (±23.4° at solstices, ~0° at equinoxes), subsolar longitude vs UTC hour, polar-day/night detection, terminator-feature shape + world-copy duplication.
+- Full suite: 421 frontend tests passing.
+
+### NOT in scope
+
+- Full polygon fill (semi-transparent dark over the night hemisphere). Requires antimeridian + pole crossings handling that doesn't fit a one-evening implementation. Captured as a follow-up in TODOS.
+
 ## [1.4.1.0] - 2026-05-20
 
 ### Forecast-cloud tooltip on map pin clicks.
