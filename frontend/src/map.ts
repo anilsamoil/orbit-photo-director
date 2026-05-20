@@ -402,23 +402,19 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         ],
       },
     });
-    // Click handler: popup with target name + score. Uses setDOMContent +
-    // textContent (NOT setHTML) so target names with HTML-meta characters
-    // can't render as markup. personal-targets.csv is user-controlled, so
-    // a name like "<img onerror=...>" must not become a script-injection
-    // surface inside the popup.
+    // Click handler: popup with target name + score + forecast conditions.
+    // Uses setDOMContent + textContent (NOT setHTML) so target names with
+    // HTML-meta characters can't render as markup. personal-targets.csv is
+    // user-controlled, so a name like "<img onerror=...>" must not become
+    // a script-injection surface inside the popup.
     map.on('click', 'targets-layer', (e) => {
       const f = e.features?.[0];
       if (!f || f.geometry.type !== 'Point') return;
-      const props = f.properties as { target_name?: string; score?: number };
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
-      const popupBody = document.createElement('div');
-      popupBody.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12';
-      const name = document.createElement('strong');
-      name.textContent = props.target_name ?? 'unknown';
-      const score = document.createElement('div');
-      score.textContent = `score ${Math.round(props.score ?? 0)}`;
-      popupBody.append(name, score);
+      const popupBody = buildTargetPopupContent(
+        f.properties as TargetPopupProps,
+        Date.now(),
+      );
       new maplibregl.Popup()
         .setLngLat(coords)
         .setDOMContent(popupBody)
@@ -529,6 +525,12 @@ function refreshTargetsSource(): void {
     const closestMs = Date.parse(p.closest_approach);
     const inWindow = Number.isFinite(closestMs)
       && Math.abs(closestMs - viewMs) <= halfWindowMs;
+    // Carry the forecast-cloud + regime + obstruction fields through to
+    // the geojson properties so the click-popup can render the predicted
+    // conditions for THIS pass time without re-fetching passes.json.
+    // (v1.4.1.0 — operator question 2026-05-20: "if I see a green dot
+    // at +6h does that mean predicted-good?" Yes — and now you can tap
+    // the dot to see the predicted cloud number.)
     return {
       type: 'Feature' as const,
       properties: {
@@ -536,6 +538,12 @@ function refreshTargetsSource(): void {
         target_name: p.target_name,
         score: p.score,
         in_window: inWindow,
+        closest_approach: p.closest_approach,
+        cloud_fraction: p.cloud_fraction,
+        cloud_source: p.cloud_source,
+        pass_regime: p.pass_regime,
+        obstruction_class: p.obstruction_class,
+        sample_time: p.sample_time ?? null,
       },
       geometry: { type: 'Point' as const, coordinates: [p.target_lon, p.target_lat] },
     };
@@ -798,6 +806,125 @@ function upsertGeoJson(
  */
 export function resizeMap(): void {
   if (map) map.resize();
+}
+
+/** Shape of MapLibre feature properties on a target pin. Mirrors the
+ *  fields populated in refreshTargetsSource(); kept inline so the popup
+ *  builder is self-contained and testable without importing PassEntry. */
+export interface TargetPopupProps {
+  target_name?: string;
+  score?: number;
+  closest_approach?: string;
+  cloud_fraction?: number;
+  cloud_source?: string;
+  pass_regime?: string;
+  obstruction_class?: string;
+  sample_time?: string | null;
+}
+
+/** Translate the generator's cloud_source string into an operator-facing
+ *  label. The generator's source values are technical (e.g., "gfs-forecast",
+ *  "geo-ir-goes16"); we surface "Forecast" vs "Observed" + the underlying
+ *  satellite so the operator instantly knows what kind of prediction
+ *  drove the score.
+ */
+export function cloudSourceLabel(source: string | undefined): string {
+  if (!source) return 'unknown';
+  if (source === 'gfs-forecast') return 'GFS forecast';
+  if (source === 'gibs') return 'MODIS observed';
+  if (source.startsWith('geo-ir-')) {
+    const sat = source.slice('geo-ir-'.length);
+    return `${sat.toUpperCase()} observed`;
+  }
+  if (source === 'meteosat-ir108') return 'Meteosat observed';
+  if (source === 'himawari-nict') return 'Himawari observed';
+  if (source === 'mock') return 'mock (no obs)';
+  if (source.endsWith('-no-coverage') || source === 'combined-no-coverage') return 'no obs';
+  return source;
+}
+
+/** Build the popup body for a target pin click. Includes target name,
+ *  pass time (UTC + relative), score, forecast/observed cloud number,
+ *  regime, and obstruction class. Exported for unit testing — the click
+ *  handler in renderMap() just calls this and hands the result to
+ *  MapLibre's Popup.setDOMContent.
+ *
+ *  Safety: every text node uses textContent (never innerHTML), so a
+ *  user-supplied target name with HTML-meta characters can never escape
+ *  into markup.
+ */
+export function buildTargetPopupContent(
+  props: TargetPopupProps,
+  nowMs: number,
+): HTMLElement {
+  const body = document.createElement('div');
+  body.className = 'map-target-popup';
+  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:200px';
+
+  const nameEl = document.createElement('strong');
+  nameEl.textContent = props.target_name ?? 'unknown';
+  body.appendChild(nameEl);
+
+  const scoreEl = document.createElement('div');
+  scoreEl.className = 'map-popup-score';
+  scoreEl.style.cssText = 'font-weight:600;color:#0b0d12;margin-top:2px';
+  scoreEl.textContent = `score ${Math.round(props.score ?? 0)}`;
+  body.appendChild(scoreEl);
+
+  // Pass time row.
+  if (props.closest_approach) {
+    const passMs = Date.parse(props.closest_approach);
+    if (Number.isFinite(passMs)) {
+      const row = document.createElement('div');
+      row.className = 'map-popup-row';
+      row.style.cssText = 'margin-top:6px;color:#444';
+      const utc = props.closest_approach.replace('T', ' ').replace(/:\d{2}(\.\d+)?Z$/, 'Z');
+      const deltaMin = Math.round((passMs - nowMs) / 60_000);
+      const rel = formatRelativeMinutes(deltaMin);
+      row.textContent = `Pass: ${utc}${rel ? ` (${rel})` : ''}`;
+      body.appendChild(row);
+    }
+  }
+
+  // Forecast / observed cloud row.
+  if (typeof props.cloud_fraction === 'number') {
+    const row = document.createElement('div');
+    row.className = 'map-popup-row';
+    row.style.cssText = 'margin-top:2px;color:#444';
+    const label = cloudSourceLabel(props.cloud_source);
+    row.textContent = `Cloud: ${Math.round(props.cloud_fraction)}% (${label})`;
+    body.appendChild(row);
+  }
+
+  // Regime + obstruction row.
+  const regimeBits: string[] = [];
+  if (props.pass_regime) regimeBits.push(props.pass_regime);
+  if (props.obstruction_class) regimeBits.push(props.obstruction_class);
+  if (regimeBits.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'map-popup-row';
+    row.style.cssText = 'margin-top:2px;color:#444';
+    row.textContent = regimeBits.join(' · ');
+    body.appendChild(row);
+  }
+
+  return body;
+}
+
+/** Compact human-friendly relative-time string for the popup pass row.
+ *  Returns "" when the pass is within ±1 min (rendered as just the UTC
+ *  time — relative-now adds no signal). */
+function formatRelativeMinutes(deltaMinutes: number): string {
+  const abs = Math.abs(deltaMinutes);
+  if (abs < 1) return '';
+  const past = deltaMinutes < 0;
+  const suffix = past ? ' ago' : '';
+  const prefix = past ? '' : 'in ';
+  if (abs < 60) return `${prefix}${abs}m${suffix}`;
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  if (m === 0) return `${prefix}${h}h${suffix}`;
+  return `${prefix}${h}h ${m}m${suffix}`;
 }
 
 /** Drop a single "photo lookup" pin on the map at the supplied lat/lon, replacing
