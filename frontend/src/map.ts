@@ -564,13 +564,24 @@ export function greatCircleBearingDeg(
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
-/** Compute the ISS heading (degrees clockwise from north) by sampling the
- *  polynomial fit at `nowMs` and `nowMs + 30s`. Returns null if either
- *  sample is outside the polynomial window or the sample positions are
- *  identical (degenerate case). */
+/** Compute the ISS heading (degrees clockwise from north) by sampling
+ *  ISS position at `nowMs` and `nowMs + 30s`. Returns null if either
+ *  sample fails or the two are identical (degenerate case).
+ *
+ *  Picks the propagation path based on whether the requested time is
+ *  inside the polynomial window:
+ *    - In window (~120 min from polynomial start): polynomial — cheap
+ *      evaluation, used for the 1Hz live-bearing path.
+ *    - Past window OR lookahead-scrubbed: SGP4 directly. v1.4.0.0 fix
+ *      — previously this used the polynomial only, so ISS-up did nothing
+ *      whenever the operator scrubbed forward past the 120-min window
+ *      (which is most of the time, since +90 already lands at ~90min).
+ */
 function computeIssHeading(track: Track, nowMs: number): number | null {
-  const here = liveIssPosition(track, nowMs);
-  const ahead = liveIssPosition(track, nowMs + 30_000);
+  const here = liveIssPosition(track, nowMs)
+    ?? issPositionWithAltSGP4(track, nowMs);
+  const ahead = liveIssPosition(track, nowMs + 30_000)
+    ?? issPositionWithAltSGP4(track, nowMs + 30_000);
   if (!here || !ahead) return null;
   if (here.lat === ahead.lat && here.lon === ahead.lon) return null;
   return greatCircleBearingDeg(here.lat, here.lon, ahead.lat, ahead.lon);
