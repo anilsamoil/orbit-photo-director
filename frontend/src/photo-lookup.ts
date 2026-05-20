@@ -207,8 +207,10 @@ export function renderLookupTab(
   const input = container.querySelector<HTMLInputElement>('#lookup-input');
   const resolveBtn = container.querySelector<HTMLButtonElement>('#lookup-resolve');
   const dropzone = container.querySelector<HTMLElement>('#lookup-dropzone');
+  const fileBtn = container.querySelector<HTMLButtonElement>('#lookup-file-btn');
+  const fileInput = container.querySelector<HTMLInputElement>('#lookup-file-input');
   const resultEl = container.querySelector<HTMLElement>('#lookup-result');
-  if (!input || !resolveBtn || !dropzone || !resultEl) return;
+  if (!input || !resolveBtn || !dropzone || !fileBtn || !fileInput || !resultEl) return;
 
   const showError = (msg: string) => {
     resultEl.hidden = false;
@@ -290,23 +292,11 @@ export function renderLookupTab(
     if (e.key === 'Enter') doResolveFromText();
   });
 
-  // Drag/drop handling. Use dragover for visual hover state, drop for
-  // the actual file ingestion. preventDefault on dragover is required
-  // by the HTML5 DnD spec to allow drop events.
-  dropzone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropzone.classList.add('lookup-dropzone-active');
-  });
-  dropzone.addEventListener('dragleave', () => {
-    dropzone.classList.remove('lookup-dropzone-active');
-  });
-  dropzone.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    dropzone.classList.remove('lookup-dropzone-active');
-    const files = e.dataTransfer?.files;
-    if (!files || files.length === 0) return;
-    const file = files.item(0);
-    if (!file) return;
+  // Shared file-ingestion path used by both drag/drop and the file-picker
+  // button (v1.4.4.0). Factoring this out lets the two entry points share
+  // a single source of truth for EXIF errors, track-not-loaded handling,
+  // and the resolve→pin flow.
+  const ingestFile = async (file: File) => {
     const exif = await extractExifTimestamp(file);
     if (!exif.date) {
       // v1.4.3.0: surface *why* EXIF parsing failed so the operator can
@@ -345,5 +335,42 @@ export function renderLookupTab(
       return;
     }
     showResult(result);
+  };
+
+  // Drag/drop handling. Use dragover for visual hover state, drop for
+  // the actual file ingestion. preventDefault on dragover is required
+  // by the HTML5 DnD spec to allow drop events.
+  dropzone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropzone.classList.add('lookup-dropzone-active');
+  });
+  dropzone.addEventListener('dragleave', () => {
+    dropzone.classList.remove('lookup-dropzone-active');
+  });
+  dropzone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('lookup-dropzone-active');
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const file = files.item(0);
+    if (!file) return;
+    await ingestFile(file);
+  });
+
+  // File-picker button (v1.4.4.0). For on-orbit iPad/iPhone workflow:
+  // tapping a button beats trying to drag from Files into a web page,
+  // and gives access to camera-roll directly. The hidden <input
+  // type="file"> is the standard pattern — click the button, the
+  // OS picker opens, the change event fires once a file is chosen.
+  fileBtn.addEventListener('click', () => {
+    fileInput.click();
+  });
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    await ingestFile(file);
+    // Reset value so picking the SAME file twice still fires `change`
+    // (browsers suppress change when the new value equals the old).
+    fileInput.value = '';
   });
 }

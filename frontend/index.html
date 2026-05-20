@@ -103,7 +103,12 @@
             <input id="lookup-input" type="text" placeholder="2024-10-17T12:23:00Z" autocomplete="off" />
             <button id="lookup-resolve" class="lookup-btn lookup-btn-primary" type="button">Resolve</button>
           </div>
-          <div id="lookup-dropzone" class="lookup-dropzone">Drop a photo with EXIF DateTimeOriginal here</div>
+          <div id="lookup-dropzone" class="lookup-dropzone">
+            <p class="lookup-dropzone-hint">Drop a photo here, or</p>
+            <button id="lookup-file-btn" class="lookup-btn" type="button">Choose file…</button>
+            <input id="lookup-file-input" type="file" accept="image/*,.heic,.heif,.nef,.cr2,.cr3,.arw,.dng,.tif,.tiff,.raf,.orf,.rw2" hidden />
+            <p class="lookup-dropzone-formats">JPG &middot; HEIC &middot; NEF &middot; CR2/CR3 &middot; ARW &middot; DNG &middot; TIFF</p>
+          </div>
         </div>
         <div id="lookup-result" class="lookup-result" hidden></div>
       </section>
