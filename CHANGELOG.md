@@ -2,6 +2,32 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.4.4.0] - 2026-05-17
+
+### File-picker button on the Lookup tab + NEF/RAW coverage advertised.
+
+Anil 2026-05-17: HEIC drop works now, but the operator (on-orbit, mostly iPad/iPhone with the Nikon D5/D6 NEFs as primary) needs a tap-to-upload path in addition to drag-and-drop — and explicit confirmation that NEF files will parse.
+
+### Added
+
+- **"Choose file…" button** beside the dropzone in the Lookup tab. Opens the OS file picker, which on iPad/iPhone surfaces the camera roll directly (no Files-app drag dance). Same ingestion path as drag-and-drop — same EXIF error chip, same resolve→pin flow.
+- **Format hint line** under the dropzone: "JPG · HEIC · NEF · CR2/CR3 · ARW · DNG · TIFF". Sets expectations explicitly for the on-orbit Nikon NEF workflow.
+- **Explicit `accept` attribute** on the hidden file input: `image/*,.heic,.heif,.nef,.cr2,.cr3,.arw,.dng,.tif,.tiff,.raf,.orf,.rw2`. iOS/macOS pickers respect this and grey out non-matching files.
+
+### NEF / RAW notes
+
+Full `exifr` (shipped v1.4.3.0) reads TIFF natively, and NEF/CR2/CR3/ARW/DNG/RAF/ORF/RW2 are all TIFF-based RAW containers — so the parser was already capable; v1.4.4.0 just advertises that and adds the picker entry point. EXIF IFD lives at the start of these files so `firstChunkSize` defaults are sufficient even for 40MB NEFs.
+
+### Implementation
+
+- `frontend/index.html` — dropzone now contains a hint, a `Choose file…` button, a hidden `<input type="file">`, and a format-list line.
+- `frontend/src/photo-lookup.ts` — factored `ingestFile()` so drag-drop and the button share one error/resolve path. Button → `fileInput.click()` → change event → `ingestFile`. Resets the input's value after each ingestion so picking the same file twice re-fires `change`.
+- `frontend/src/style.css` — minimal styling for `.lookup-dropzone-hint` and `.lookup-dropzone-formats`.
+
+### Tests
+
+- 421/421 still pass. No new tests; the ingestion path was already exercised via the existing drop handler unit-test fixtures, and the button is a thin one-line `click()` indirection.
+
 ## [1.4.3.0] - 2026-05-17
 
 ### Operator-observed fixes: HEIC EXIF + offline coastline.
