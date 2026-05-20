@@ -17,6 +17,7 @@ import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
 import { liveIssPosition, wrapLon } from './iss';
 import { issPositionWithAltSGP4 } from './iss-sgp4';
+import { subsolarFeature, terminatorFeatures } from './terminator';
 
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
@@ -57,6 +58,22 @@ function formatUtcHm(ms: number): string {
  *  of the current view time is considered in-orbit and rendered full
  *  opacity. Outside that window the pin dims to 0.3 alpha (Q3 → C). */
 const PASS_WINDOW_HALF_MINUTES = 45;
+
+/** Day-night terminator visibility preference. Same pattern as the cloud
+ *  toggle (v1.2.9.0) — persisted to localStorage. Default ON because
+ *  Pettit explicitly asked for day-night shading; it complements the
+ *  time-scrub naturally (without it, operator can't tell day-side from
+ *  night-side at +6h scrubbed views). */
+const TERMINATOR_PREF_KEY = 'opd-map-terminator-visible';
+function readTerminatorVisible(): boolean {
+  try {
+    const v = localStorage.getItem(TERMINATOR_PREF_KEY);
+    return v === null ? true : v === '1';
+  } catch {
+    return true;
+  }
+}
+let terminatorVisible: boolean = readTerminatorVisible();
 
 /** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
  *  "make so can turn off/on as needed" stays sticky across reloads. Default
@@ -428,6 +445,39 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
   }
 
+  // Day-night terminator overlay (v1.4.2.0 — Pettit feedback 2026-05-19).
+  // Line + subsolar-point icon. Updates when the operator scrubs the
+  // time controls (refreshTerminatorSources is called from setLookahead).
+  refreshTerminatorSources();
+  if (!map.getLayer('terminator-line-layer')) {
+    map.addLayer({
+      id: 'terminator-line-layer',
+      type: 'line',
+      source: 'terminator-line',
+      paint: {
+        'line-color': '#ffd45c',  // warm gold; reads clearly over both
+        'line-width': 1.4,         // dark basemap and bright cloud overlay
+        'line-opacity': 0.7,
+        'line-dasharray': [3, 2],
+      },
+    });
+  }
+  if (!map.getLayer('subsolar-point-layer')) {
+    map.addLayer({
+      id: 'subsolar-point-layer',
+      type: 'circle',
+      source: 'subsolar-point',
+      paint: {
+        'circle-radius': 8,
+        'circle-color': '#ffd45c',
+        'circle-stroke-color': '#0b0d12',
+        'circle-stroke-width': 1.5,
+        'circle-opacity': 0.95,
+      },
+    });
+  }
+  applyTerminatorVisibility();
+
   // ISS marker: ISS-silhouette icon + pulsing halo. Replaces the prior
   // cyan dot which blended into the cloud overlay at world-zoom and was
   // hard to spot.
@@ -462,14 +512,22 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // displayed "click would take you to HH:MMZ" stays accurate without
   // a per-second redraw on the unattended Mac.
   if (timeLabelTimer !== null) clearInterval(timeLabelTimer);
-  timeLabelTimer = window.setInterval(() => updateTimeStepLabels(), 30_000);
+  timeLabelTimer = window.setInterval(() => {
+    updateTimeStepLabels();
+    // Refresh terminator + subsolar point with the new wall-clock time
+    // (at lookahead=0; if scrubbed, the terminator follows lookahead
+    // already and won't drift). Cheap — terminatorFeatures is ~10ms.
+    if (lookaheadMinutes === 0) refreshTerminatorSources();
+  }, 30_000);
   updateTimeStepLabels();
 
   bindTimeToggle();
   bindBearingToggle();
   bindCloudToggle();
-  // Apply persisted cloud-visibility preference on first map render.
+  bindTerminatorToggle();
+  // Apply persisted cloud + terminator preferences on first map render.
   applyCloudsVisibility();
+  applyTerminatorVisibility();
   // Apply persisted bearing preference ONLY on first map creation. Calling
   // easeTo on every Map-tab click (which re-runs renderMap) was eating
   // user pan/zoom gestures that landed in the 600ms animation window —
@@ -511,6 +569,36 @@ function refreshGroundTrackSource(track: Track): void {
     type: 'FeatureCollection',
     features,
   });
+}
+
+/** Rebuild the terminator line + subsolar point sources at the current
+ *  view time (now + lookaheadMinutes). Called from renderMap on first
+ *  render and from setLookahead on every time-scrub click. */
+function refreshTerminatorSources(): void {
+  if (!map) return;
+  const when = new Date(Date.now() + lookaheadMinutes * 60_000);
+  upsertGeoJson(map, 'terminator-line', {
+    type: 'FeatureCollection',
+    features: terminatorFeatures(when),
+  });
+  upsertGeoJson(map, 'subsolar-point', {
+    type: 'FeatureCollection',
+    features: [subsolarFeature(when)],
+  });
+}
+
+/** Show / hide the terminator overlay (line + subsolar dot). Idempotent. */
+function applyTerminatorVisibility(): void {
+  if (!map) return;
+  const vis = terminatorVisible ? 'visible' : 'none';
+  try {
+    if (map.getLayer('terminator-line-layer')) {
+      map.setLayoutProperty('terminator-line-layer', 'visibility', vis);
+    }
+    if (map.getLayer('subsolar-point-layer')) {
+      map.setLayoutProperty('subsolar-point-layer', 'visibility', vis);
+    }
+  } catch { /* layers not loaded yet */ }
 }
 
 /** Rebuild the targets geojson source. Each feature carries `in_window`
@@ -689,6 +777,9 @@ function bindTimeToggle(): void {
     if (currentTrack) {
       refreshGroundTrackSource(currentTrack);
       refreshTargetsSource();
+      // Terminator + subsolar follow the time-scrub so day/night
+      // reflects the view time, not real-time-now (v1.4.2.0).
+      refreshTerminatorSources();
       // Move + freeze marker at the new view time.
       if (map && issMarker) {
         const pos = markerPositionFor(currentTrack);
@@ -757,6 +848,30 @@ function bindCloudToggle(): void {
     applyCloudsVisibility();
   });
   cloudToggleBound = true;
+}
+
+let terminatorToggleBound = false;
+function bindTerminatorToggle(): void {
+  if (terminatorToggleBound) return;
+  const btn = document.getElementById('toggle-terminator');
+  if (!btn) return;
+  const reflect = () => {
+    btn.classList.toggle('active', terminatorVisible);
+    btn.setAttribute(
+      'aria-pressed', terminatorVisible ? 'true' : 'false',
+    );
+    btn.title = terminatorVisible
+      ? 'Day-night terminator shown — click to hide'
+      : 'Day-night terminator hidden — click to show';
+  };
+  reflect();
+  btn.addEventListener('click', () => {
+    terminatorVisible = !terminatorVisible;
+    try { localStorage.setItem(TERMINATOR_PREF_KEY, terminatorVisible ? '1' : '0'); } catch { /* noop */ }
+    reflect();
+    applyTerminatorVisibility();
+  });
+  terminatorToggleBound = true;
 }
 
 let bearingToggleBound = false;
