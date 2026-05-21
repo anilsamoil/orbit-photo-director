@@ -2,6 +2,25 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.3.1] - 2026-05-21
+
+### Patch: follow-ISS dead button + illumination legend.
+
+Chris 2026-05-21 (post-v1.5.3.0): clicking 🛰 doesn't highlight or pan toward ISS. And: "is there a smart way to add a legend for magenta?"
+
+### Fixed
+
+- **Follow-ISS button now binds unconditionally.** `bindFollowToggle()` had `if (!btn || !map) return;` — if `map` happened to be null at bind time (shouldn't be, but apparently was for Chris), the click handler never attached and the button was permanently dead. Removed the `!map` guard. Click handler attaches as long as the DOM button exists; the dragstart/zoomstart listeners are now wrapped in their own `if (map)` block. Other toggles (clouds, multi-orbit) never had this guard — that's why they worked while follow didn't.
+- Added `console.info('[follow-iss] click', ...)` + `console.info('[follow-iss] easeTo', ...)` for live-browser diagnostics in case the button still doesn't behave after this fix.
+
+### Added
+
+- **ISS-illumination legend** under the cloud/terminator/multi-orbit toggle row. Three colored dots + labels (day / twilight / eclipse) so the magenta "twilight" warning state is interpretable at a glance. Tucked into the bottom-left of the map pane, semi-transparent background, `pointer-events: none` so clicks pass through to the map underneath.
+
+### Tests
+
+- 455/455 still passing.
+
 ## [1.5.3.0] - 2026-05-21
 
 ### ISS-illumination-aware track coloring (Chris ask 3 of 3).
