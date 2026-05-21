@@ -1181,9 +1181,22 @@ let followToggleBound = false;
 function bindFollowToggle(): void {
   if (followToggleBound) return;
   const btn = document.getElementById('toggle-follow-iss');
-  if (!btn || !map) return;
+  if (!btn) return;
+  // v1.5.3.1: removed the `!map` guard that prevented click binding when
+  // map happened to be null at bind time. Chris reported 2026-05-21 that
+  // the button didn't highlight on click — the guard was attaching no
+  // event listener, leaving the button dead. The click handler does its
+  // own map-presence check internally; only the dragstart/zoomstart
+  // listeners genuinely require map (and they're attached defensively
+  // below).
   reflectFollowButton();
   btn.addEventListener('click', () => {
+    // eslint-disable-next-line no-console
+    console.info('[follow-iss] click', {
+      followISS,
+      hasTrack: !!currentTrack,
+      hasMap: !!map,
+    });
     if (followISS) {
       // Already following → exit follow.
       followISS = false;
@@ -1200,20 +1213,24 @@ function bindFollowToggle(): void {
     const pos = liveIssPositionSGP4(currentTrack, Date.now())
       ?? liveIssPosition(currentTrack, Date.now());
     if (pos && map) {
+      // eslint-disable-next-line no-console
+      console.info('[follow-iss] easeTo', pos);
       map.easeTo({ center: [pos.lon, pos.lat], duration: 500 });
     }
   });
-  // User-initiated drag breaks follow. Programmatic setCenter (from
-  // applyFollowISS) does NOT fire dragstart so this is safe.
-  map.on('dragstart', () => { exitFollowISS(); });
-  // User-initiated zoom also breaks follow — operator is zooming for
-  // a reason that conflicts with auto-recenter. Programmatic
-  // setCenter doesn't trigger zoomstart, so this is safe too.
-  map.on('zoomstart', (e: unknown) => {
-    // Only respect zoomstart that came from a real user event.
-    const orig = (e as { originalEvent?: unknown } | undefined)?.originalEvent;
-    if (orig) exitFollowISS();
-  });
+  if (map) {
+    // User-initiated drag breaks follow. Programmatic setCenter (from
+    // applyFollowISS) does NOT fire dragstart so this is safe.
+    map.on('dragstart', () => { exitFollowISS(); });
+    // User-initiated zoom also breaks follow — operator is zooming for
+    // a reason that conflicts with auto-recenter. Programmatic
+    // setCenter doesn't trigger zoomstart, so this is safe too.
+    map.on('zoomstart', (e: unknown) => {
+      // Only respect zoomstart that came from a real user event.
+      const orig = (e as { originalEvent?: unknown } | undefined)?.originalEvent;
+      if (orig) exitFollowISS();
+    });
+  }
   followToggleBound = true;
 }
 

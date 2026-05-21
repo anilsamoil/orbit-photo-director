@@ -696,6 +696,43 @@ main {
   line-height: 1.0;
 }
 
+/* ISS-illumination legend (v1.5.3.1 — Chris feedback 2026-05-21).
+ * Tucked into the bottom-left of the map pane. Names the track-line
+ * colors (cyan/magenta/grey-blue) so the magenta "twilight" warning
+ * state is interpretable at a glance. Non-interactive overlay; clicks
+ * pass through to the map underneath. */
+.map-legend {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  gap: 0.7rem;
+  background: rgba(11, 13, 18, 0.72);
+  padding: 0.25rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.map-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.map-legend-day { background: #5cd0ff; }
+.map-legend-twilight { background: #d65cff; }
+.map-legend-eclipse { background: #7a8aa8; }
+
 .time-btn {
   background: transparent;
   border: 0;
