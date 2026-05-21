@@ -147,6 +147,22 @@ export default defineConfig({
             },
           },
           {
+            // Esri World Imagery tiles (v1.5.1.0 — clouds-off basemap for
+            // Chris's "feature picking" workflow). CacheFirst LRU bounded
+            // same as Carto. Tile size ~100KB vs Carto's ~30KB so total
+            // cache footprint stays well under quota.
+            urlPattern: /^https:\/\/server\.arcgisonline\.com\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opd-tiles-esri',
+              expiration: {
+                maxEntries: 100,
+                maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             // POST /api/log: NetworkOnly. The existing offline-queue logic in
             // calib.ts handles the "queue locally if network fails" path;
             // we don't want the SW to interfere with that.
