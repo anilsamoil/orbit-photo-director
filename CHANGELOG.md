@@ -2,6 +2,33 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.4.0] - 2026-05-21
+
+### Five bug fixes from Chris's iPhone/Chrome testing.
+
+Chris 2026-05-21 reported four real bugs + one cosmetic ask after testing v1.5.3.x:
+1. ☁ "Now" button doesn't recenter on ISS (intentional in original v1.4.0.0 design; flipped per operator mental model)
+2. Twilight/day color differentiation vanishes when scrubbing to T+45 and back to Now
+3. Multi-orbit display vanishes when scrubbing future and back
+4. Per-orbit color shifts would help tell orbits apart
+5. Follow-ISS button (🛰) still doesn't appear clickable — possible confusion with the brand mark 🛰️ in the topbar
+
+### Fixed
+
+- **`Now` button now recenters on ISS** (`recenter=true`). Original v1.4.0.0 design passed `recenter=false` to "not disrupt the operator's pan," but operator expectation is "Now = back to current ISS view." Matches T+/T- button behavior.
+- **Future view (T+45/T+90) is illumination-aware.** Previously `futureOrbitGroundTrackFeatures` returned plain `LineString` features without illumination tagging → fell back to default cyan at 0.85 opacity, losing the day/twilight/eclipse signal. Now the future-window samples are tagged with `[t_seconds, lat, lon]` triples and run through `splitByIllumination` so cyan/magenta/grey-blue persists at any lookahead.
+- **Per-orbit color shift** stacked on top of illumination signal. Layer paint is now a 3 × 4 matrix (3 illumination states × 4 orbit indices = 12 cells). Day orbits shift cyan → cyan-teal → soft-green → yellow-green from orbit 0 to orbit 3. Twilight orbits shift magenta → soft-pink → muted-mauve → dusty-pink. Eclipse orbits shift grey-blue → cooler → teal → dusty-teal. Combined with the existing opacity ramp, orbits are now distinguishable both by hue and brightness.
+- **Follow button icon** changed from 🛰 (matched the brand mark 🛰️ in the topbar) to 📍 (pin) — visually distinct from the brand decoration. Reduces clicker-confusion ("which one is the recenter button?").
+- **`refreshGroundTrackSource` now logs** `[track]` diagnostic to the browser console showing `{lookahead, multiOrbitVisible, feature_count, orbit_indices, illumination_states}`. If multi-orbit or illumination is missing after a scrub-back-to-Now, the log will tell us exactly what's bailing. Remove after Chris's bug report is resolved.
+
+### NOT yet diagnosed
+
+- Follow toggle (📍) still not clickable in Chris's report. The v1.5.3.1 fix removed the `!map` guard but Chris reports the button still does nothing on Chrome AND Safari AND computer. Possibilities: (a) Chris was clicking the brand mark 🛰️ in the topbar mistaking it for the follow button — addressed by the icon change above. (b) Stale SW cache serving v1.5.3.0 — addressed by reload. (c) Real bug we haven't isolated — `console.info('[follow-iss] click', ...)` will surface what's bailing if it still misbehaves.
+
+### Tests
+
+- 455/455 still passing.
+
 ## [1.5.3.1] - 2026-05-21
 
 ### Patch: follow-ISS dead button + illumination legend.
