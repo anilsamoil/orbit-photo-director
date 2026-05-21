@@ -499,13 +499,30 @@ function futureOrbitGroundTrackFeatures(
   const centerMs = nowMs + lookaheadMinutes * 60_000;
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
   const stepMs = 30_000;
-  const samples: [number, number][] = [];
+  // v1.5.4.0 (Chris feedback 2026-05-21): also tag the future-window
+  // samples with their illumination state so the cyan/magenta/grey-blue
+  // coloring persists when the operator scrubs T+45/T+90. Previously
+  // future view returned plain LineString features → fell back to default
+  // cyan at 0.85, losing the illumination signal.
+  //
+  // Sample tuples are [t_seconds_since_track_start, lat, lon] so
+  // splitByIllumination can derive the wall-clock time at each sample
+  // (matches the groundTrackFeatures Now-view path).
+  const trackStartMs = Date.parse(track.iss_polynomial.start);
+  const samples: [number, number, number][] = [];
   for (let t = centerMs - halfWindowMs; t <= centerMs + halfWindowMs; t += stepMs) {
     const pos = issPositionWithAltSGP4(track, t);
     if (!pos) continue;
-    samples.push([pos.lat, pos.lon]);
+    const tSec = (t - trackStartMs) / 1000;
+    samples.push([tSec, pos.lat, pos.lon]);
   }
-  return buildLineFeatures(samples);
+  const illumSegments = splitByIllumination(samples, trackStartMs);
+  const out: GeoJSON.Feature[] = [];
+  for (const seg of illumSegments) {
+    if (seg.coords.length < 2) continue;
+    out.push(...buildOrbitLineFeatures(seg.coords, 0, seg.illumination));
+  }
+  return out;
 }
 
 export async function renderMap(manifest: Manifest): Promise<void> {
@@ -584,20 +601,44 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       type: 'line',
       source: 'iss-track',
       paint: {
-        // v1.5.3.0 (Chris ask): track color reflects ISS illumination
-        // state. Cyan for daylight passes (ISS sunlit AND ground sunlit),
-        // magenta for the "twilight" warning state (ISS sunlit but ground
-        // dark — reflected glare from cabin, poor for photos), grey-blue
-        // for night passes (ISS in Earth's shadow). Falls through to the
-        // legacy cyan when no illumination property is set (older code
-        // path / pre-v1.5.3.0 cached features).
+        // v1.5.4.0 (Chris ask 2026-05-21): each orbit gets a slightly
+        // different color hue layered on top of the illumination signal.
+        // Hue family is determined by illumination state (cyan=day,
+        // magenta=twilight, grey-blue=eclipse); per-orbit sub-shade
+        // shifts the color so the operator can also tell orbits apart
+        // visually (not just by opacity).
+        //
+        // Matrix is 3 illumination × 4 orbit_index = 12 cells. Default
+        // (no illumination property) falls through to cyan day orbit-0
+        // so legacy code paths still render correctly.
         'line-color': [
           'match',
           ['coalesce', ['get', 'illumination'], 'iss-day'],
-          'iss-day', '#5cd0ff',       // cyan — daylight pass
-          'iss-twilight', '#d65cff',  // magenta — "poor photo" warning
-          'iss-eclipse', '#7a8aa8',   // grey-blue — night pass
-          '#5cd0ff',                  // fallback
+          'iss-day', [
+            'match', ['coalesce', ['get', 'orbit_index'], 0],
+            0, '#5cd0ff',  // cyan
+            1, '#5ce0c8',  // cyan-teal
+            2, '#7cd99c',  // soft green
+            3, '#a8d680',  // yellow-green
+            '#5cd0ff',
+          ],
+          'iss-twilight', [
+            'match', ['coalesce', ['get', 'orbit_index'], 0],
+            0, '#d65cff',  // magenta
+            1, '#d680e0',  // soft pink-magenta
+            2, '#cc94c8',  // muted mauve
+            3, '#bca0a8',  // dusty pink
+            '#d65cff',
+          ],
+          'iss-eclipse', [
+            'match', ['coalesce', ['get', 'orbit_index'], 0],
+            0, '#7a8aa8',  // grey-blue
+            1, '#7392ac',  // slightly cooler
+            2, '#6c9aac',  // more teal
+            3, '#65a0a0',  // dusty teal
+            '#7a8aa8',
+          ],
+          '#5cd0ff',  // fallback
         ],
         'line-width': 2,
         // v1.5.0.0: data-driven opacity. With multi-orbit OFF every
@@ -804,6 +845,22 @@ function markerPositionFor(track: Track): { lat: number; lon: number } | null {
 function refreshGroundTrackSource(track: Track): void {
   if (!map) return;
   const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutes, Date.now());
+  // v1.5.4.0 diagnostic — surfaces multi-orbit/illumination state to the
+  // browser console so we can verify scrub-back-to-Now is producing the
+  // expected feature set. Remove (or downgrade to console.debug) after
+  // Chris's bug report is resolved.
+  // eslint-disable-next-line no-console
+  console.info('[track]', {
+    lookahead: lookaheadMinutes,
+    multiOrbitVisible,
+    feature_count: features.length,
+    orbit_indices: Array.from(new Set(
+      features.map((f) => (f.properties as { orbit_index?: number } | null)?.orbit_index ?? -1),
+    )).sort(),
+    illumination_states: Array.from(new Set(
+      features.map((f) => (f.properties as { illumination?: string } | null)?.illumination ?? 'none'),
+    )),
+  });
   upsertGeoJson(map, 'iss-track', {
     type: 'FeatureCollection',
     features,
@@ -1038,8 +1095,15 @@ function bindTimeToggle(): void {
     if (!Number.isFinite(step)) return;
     btn.addEventListener('click', () => {
       if (step === 0) {
-        // Now: reset to live current orbit
-        setLookahead(0, /*recenter=*/false);
+        // Now: reset to live current orbit AND recenter on ISS.
+        // v1.5.4.0 (Chris feedback 2026-05-21): the original v1.4.0.0
+        // design passed recenter=false here to "not disrupt the operator's
+        // pan." But the operator's mental model is "Now = back to current
+        // ISS view," and the recenter button (🛰 / 📍 follow toggle) was
+        // unreliable enough that Now had to fill that role. Flipping to
+        // recenter=true matches the T+/T- behavior and the operator's
+        // expectation.
+        setLookahead(0, /*recenter=*/true);
       } else {
         setLookahead(lookaheadMinutes + step, /*recenter=*/true);
       }
