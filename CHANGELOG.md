@@ -2,6 +2,28 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.4.5.0] - 2026-05-21
+
+### Tier 1 hardening: sha256 verify on artifacts + `make ll2-diff` diagnostic.
+
+Two small ops-hardening items from the V2-P2 / V3-P3 backlog. Both individually cheap but they close real "silently wrong data" failure modes that would be painful to debug mid-mission.
+
+### Added
+
+- **`fetchArtifact()` now verifies sha256** against the value declared in `manifest.json`. `crypto.subtle.digest('SHA-256')` runs on the response bytes; mismatch throws `artifact <name> sha256 mismatch`. The existing transactional refresh in `main.ts` catches the exception and keeps the prior snapshot, so a poisoned fetch degrades to last-good instead of feeding wrong scoring into the UI. Covers: partial R2 deploy where manifest is uploaded before artifacts settle, force-cache holding a corrupted body for a republished version slug, path-level tampering at the artifact URL.
+- **`make ll2-diff`** Makefile target diffs the live LL2 (`https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=1`) jq-path set against `tests/fixtures/ll2-response-2026-05.json`. Prints removed/renamed paths with `-`, new paths with `+`. Saves full live response to `/tmp/ll2-live.json` for deeper inspection. Fires manually when the frontend's stale-launches banner appears (driven by `status.launches_schema_hash` ≠ pinned hash).
+
+### Tests
+
+- 3 new `manifest.test.ts` cases: sha256 match → parses normally, mismatch → throws `/sha256 mismatch/`, missing-hash entry → skips verification defensively (older manifests / third-party artifacts).
+- 423 frontend tests total passing (was 421, swapped one stub-hash test for three real-hash tests).
+
+### TODOS marked shipped
+
+- V2-P2 sha256 verification → shipped
+- V3-P3 `make ll2-diff` → shipped
+- V4-P2 per-pin forecast tooltip → noted as already shipped v1.4.1.0 (`buildTargetPopupContent` in `map.ts:971`)
+
 ## [1.4.4.0] - 2026-05-17
 
 ### File-picker button on the Lookup tab + NEF/RAW coverage advertised.
