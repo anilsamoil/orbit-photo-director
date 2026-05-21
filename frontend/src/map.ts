@@ -17,7 +17,12 @@ import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
 import { liveIssPosition, wrapLon } from './iss';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
-import { subsolarFeature, terminatorFeatures } from './terminator';
+import {
+  classifyIssIllumination,
+  subsolarFeature,
+  terminatorFeatures,
+  type IssIllumination,
+} from './terminator';
 
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
@@ -322,17 +327,23 @@ function buildLineFeatures(samples: [number, number][]): GeoJSON.Feature[] {
  *  a separate feature with its own `orbit_index` property, enabling a
  *  data-driven opacity ramp in the MapLibre layer paint.
  *
+ *  v1.5.3.0: return type widened from `[lat, lon][]` to `[t, lat, lon][]`
+ *  so downstream illumination-state splitting has access to the sample
+ *  time. Existing callers extract `[lat, lon]` at the line-feature
+ *  build step.
+ *
  *  Exported for unit testing.
  */
 export function splitTrackByOrbit(
   trackPoints: [number, number, number][],
   periodSeconds: number = ISS_ORBIT_PERIOD_SECONDS,
-): [number, number][][] {
-  const buckets: [number, number][][] = [];
-  for (const [t, lat, lon] of trackPoints) {
+): [number, number, number][][] {
+  const buckets: [number, number, number][][] = [];
+  for (const point of trackPoints) {
+    const t = point[0];
     const idx = Math.floor(t / periodSeconds);
     if (!buckets[idx]) buckets[idx] = [];
-    buckets[idx].push([lat, lon]);
+    buckets[idx].push(point);
   }
   // Replace any holes (no samples for an orbit) with empty arrays to
   // keep indices stable when callers map across the array.
@@ -342,17 +353,71 @@ export function splitTrackByOrbit(
   return buckets;
 }
 
+/** Split a run of [t_seconds, lat, lon] samples into contiguous runs of
+ *  the same ISS-illumination state (v1.5.3.0 — Chris ask). Each output
+ *  segment carries its illumination value so the caller can build line
+ *  features tagged with that property.
+ *
+ *  Why this matters: the iss-track layer's paint uses a data-driven
+ *  `match` on `illumination` to color cyan for day passes, magenta for
+ *  the "twilight" warning state (ISS sunlit + ground dark — bad for
+ *  photos), and grey-blue for night passes. Splitting at the boundary
+ *  produces clean color transitions instead of trying to interpolate.
+ *
+ *  Each segment includes a 1-sample OVERLAP with the next segment so
+ *  the rendered lines visually connect at the boundary (otherwise a
+ *  tiny gap shows up between segments of different colors).
+ *
+ *  Exported for unit testing.
+ */
+export function splitByIllumination(
+  samples: [number, number, number][],
+  trackStartMs: number,
+): { illumination: IssIllumination; coords: [number, number][] }[] {
+  if (samples.length === 0) return [];
+  const out: { illumination: IssIllumination; coords: [number, number][] }[] = [];
+  let cur: { illumination: IssIllumination; coords: [number, number][] } | null = null;
+  for (const [t, lat, lon] of samples) {
+    const when = new Date(trackStartMs + t * 1000);
+    const illum = classifyIssIllumination(when, lat, lon);
+    if (cur === null || cur.illumination !== illum) {
+      // Boundary crossed (or first sample). Close current segment if it
+      // has samples by also appending this boundary sample to it — the
+      // 1-sample overlap stitches the visual at the color transition.
+      if (cur && cur.coords.length > 0) {
+        cur.coords.push([lat, lon]);
+        out.push(cur);
+      } else if (cur) {
+        out.push(cur);
+      }
+      cur = { illumination: illum, coords: [[lat, lon]] };
+    } else {
+      cur.coords.push([lat, lon]);
+    }
+  }
+  if (cur && cur.coords.length > 0) out.push(cur);
+  return out;
+}
+
 /** Wrap line features for one orbit's samples with an `orbit_index`
- *  property. Re-uses `buildLineFeatures` for antimeridian + world-copy
- *  handling, then stamps every feature with its orbit index so the
- *  layer paint expression can drive opacity per orbit. */
+ *  property AND an optional `illumination` property. Re-uses
+ *  `buildLineFeatures` for antimeridian + world-copy handling, then
+ *  stamps every feature with the orbit index + illumination so the
+ *  layer paint expression can drive opacity per orbit (v1.5.0.0) AND
+ *  color per ISS-illumination state (v1.5.3.0).
+ */
 function buildOrbitLineFeatures(
   samples: [number, number][],
   orbitIndex: number,
+  illumination: IssIllumination = 'iss-day',
 ): GeoJSON.Feature[] {
   return buildLineFeatures(samples).map((f) => ({
     ...f,
-    properties: { ...(f.properties ?? {}), orbit_index: orbitIndex },
+    properties: {
+      ...(f.properties ?? {}),
+      orbit_index: orbitIndex,
+      illumination,
+    },
   }));
 }
 
@@ -368,23 +433,39 @@ function buildOrbitLineFeatures(
  */
 function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
   if (track.track_points && track.track_points.length > 0) {
+    // v1.5.3.0: track_start_ms anchors the illumination math. track_points
+    // t_seconds are offsets from iss_polynomial.start (the generator
+    // computes both from the same reference time).
+    const trackStartMs = Date.parse(track.iss_polynomial.start);
     if (multiOrbitVisible) {
       const orbits = splitTrackByOrbit(track.track_points);
       const out: GeoJSON.Feature[] = [];
       for (let k = 0; k < orbits.length; k++) {
-        const samples = orbits[k];
-        if (!samples || samples.length < 2) continue;
-        out.push(...buildOrbitLineFeatures(samples, k));
+        const orbitSamples = orbits[k];
+        if (!orbitSamples || orbitSamples.length < 2) continue;
+        const illumSegments = splitByIllumination(orbitSamples, trackStartMs);
+        for (const seg of illumSegments) {
+          if (seg.coords.length < 2) continue;
+          out.push(...buildOrbitLineFeatures(seg.coords, k, seg.illumination));
+        }
       }
       return out;
     }
-    // Single-orbit (legacy) view: only the first orbit's samples.
-    const firstOrbit = (track.track_points
-      .filter(([t]) => t < ISS_ORBIT_PERIOD_SECONDS)
-      .map(([, lat, lon]) => [lat, lon] as [number, number]));
-    return buildOrbitLineFeatures(firstOrbit, 0);
+    // Single-orbit (legacy) view: only the first orbit's samples,
+    // still illumination-aware.
+    const firstOrbit = track.track_points.filter(([t]) => t < ISS_ORBIT_PERIOD_SECONDS);
+    const illumSegments = splitByIllumination(firstOrbit, trackStartMs);
+    const out: GeoJSON.Feature[] = [];
+    for (const seg of illumSegments) {
+      if (seg.coords.length < 2) continue;
+      out.push(...buildOrbitLineFeatures(seg.coords, 0, seg.illumination));
+    }
+    return out;
   }
   // Polynomial fallback for older manifests without track_points.
+  // No illumination split here — older manifests pre-date this feature;
+  // legacy snapshots show cyan-only track. The Track type guarantees
+  // iss_polynomial is present in this branch.
   const dur = track.iss_polynomial.duration_seconds;
   const stepSec = 30;
   const evalPoly = (coeffs: number[], t: number): number => {
@@ -503,7 +584,21 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       type: 'line',
       source: 'iss-track',
       paint: {
-        'line-color': '#5cd0ff',
+        // v1.5.3.0 (Chris ask): track color reflects ISS illumination
+        // state. Cyan for daylight passes (ISS sunlit AND ground sunlit),
+        // magenta for the "twilight" warning state (ISS sunlit but ground
+        // dark — reflected glare from cabin, poor for photos), grey-blue
+        // for night passes (ISS in Earth's shadow). Falls through to the
+        // legacy cyan when no illumination property is set (older code
+        // path / pre-v1.5.3.0 cached features).
+        'line-color': [
+          'match',
+          ['coalesce', ['get', 'illumination'], 'iss-day'],
+          'iss-day', '#5cd0ff',       // cyan — daylight pass
+          'iss-twilight', '#d65cff',  // magenta — "poor photo" warning
+          'iss-eclipse', '#7a8aa8',   // grey-blue — night pass
+          '#5cd0ff',                  // fallback
+        ],
         'line-width': 2,
         // v1.5.0.0: data-driven opacity. With multi-orbit OFF every
         // feature has orbit_index=0 and renders at 0.85 (the prior

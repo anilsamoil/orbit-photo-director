@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyIssIllumination,
   equationOfTimeMinutes,
   subsolarFeature,
   subsolarPoint,
@@ -140,5 +141,60 @@ describe('subsolarFeature', () => {
     expect(coords[0]).toBeLessThanOrEqual(180);
     expect(coords[1]).toBeGreaterThanOrEqual(-25);  // declination bounds
     expect(coords[1]).toBeLessThanOrEqual(25);
+  });
+});
+
+describe('classifyIssIllumination (v1.5.3.0 — Chris ask)', () => {
+  // Vernal equinox at 12:00 UTC: subsolar point is approximately (0°, 0°).
+  // EoT correction near equinox is small (<1 min) and declination near
+  // equinox is near 0°. Picking this time gives predictable classifications.
+  const equinoxNoon = new Date('2026-03-20T12:00:00Z');
+
+  it('returns iss-day at the subsolar point itself (θ=0)', () => {
+    expect(classifyIssIllumination(equinoxNoon, 0, 0)).toBe('iss-day');
+  });
+
+  it('returns iss-day within ~89° of subsolar (ground sunlit)', () => {
+    // 80° west of subsolar, on equator → θ=80°, ground sunlit.
+    expect(classifyIssIllumination(equinoxNoon, 0, -80)).toBe('iss-day');
+  });
+
+  it('returns iss-twilight in the 90-110° band (ground dark, ISS sunlit)', () => {
+    // ~95° from subsolar — well past terminator but ISS still sees sun.
+    expect(classifyIssIllumination(equinoxNoon, 0, 95)).toBe('iss-twilight');
+    expect(classifyIssIllumination(equinoxNoon, 0, -95)).toBe('iss-twilight');
+  });
+
+  it('returns iss-eclipse antipodal to subsolar', () => {
+    expect(classifyIssIllumination(equinoxNoon, 0, 180)).toBe('iss-eclipse');
+  });
+
+  it('returns iss-eclipse past the ~110° threshold', () => {
+    // 115° from subsolar — past ISS horizon, in Earth's shadow.
+    expect(classifyIssIllumination(equinoxNoon, 0, 115)).toBe('iss-eclipse');
+  });
+
+  it('twilight band width is ~20° (90° to ~110°)', () => {
+    // Sweep from 89° to 111° east of subsolar and count state changes.
+    const states = new Set<string>();
+    for (let lon = 88; lon <= 112; lon += 1) {
+      states.add(classifyIssIllumination(equinoxNoon, 0, lon));
+    }
+    expect(states.has('iss-day')).toBe(true);
+    expect(states.has('iss-twilight')).toBe(true);
+    expect(states.has('iss-eclipse')).toBe(true);
+  });
+
+  it('classifies the exact 90° terminator as iss-day (A7 boundary policy)', () => {
+    // Per A7 from /plan-eng-review 2026-05-21, use `<=` at the day
+    // boundary so consecutive samples crossing don't flicker.
+    expect(classifyIssIllumination(equinoxNoon, 0, 90)).toBe('iss-day');
+  });
+
+  it('high-latitude sub-points classify by sun-angle, not lat directly', () => {
+    // Near the north pole (lat=80°) at equinox noon: sun is at the
+    // equator, so θ ≈ 80°. That's still day-side. (Polar day in summer
+    // would be similar; polar night in winter would be eclipse.)
+    expect(classifyIssIllumination(equinoxNoon, 80, 0)).toBe('iss-day');
   });
 });

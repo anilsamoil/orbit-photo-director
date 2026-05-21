@@ -176,3 +176,77 @@ export function subsolarFeature(when: Date): GeoJSON.Feature {
     geometry: { type: 'Point', coordinates: [lon, lat] },
   };
 }
+
+/** ISS illumination state at a (when, lat, lon) tuple — used by v1.5.3.0
+ *  (Chris feedback 2026-05-21) to color the ground-track line by whether
+ *  the ISS itself is in sunlight, in Earth's shadow, or in the "twilight"
+ *  band where ISS is sunlit but the ground below is dark (poor for
+ *  photos — reflected glare from cabin against dark backdrop).
+ *
+ *  Three states:
+ *    'iss-day'      — ground sub-point sunlit AND ISS sunlit (daytime pass)
+ *    'iss-twilight' — ground sub-point dark, ISS sunlit (warning state)
+ *    'iss-eclipse'  — ground sub-point dark AND ISS in Earth's shadow (night pass)
+ *
+ *  The 4th combination (ground sunlit + ISS eclipsed) is geometrically
+ *  impossible — Sun is always on the same side of Earth as a sub-point
+ *  in daylight.
+ *
+ *  Math: angle θ between (Earth-center → Sun) and (Earth-center → point).
+ *    θ < 90°               → ground sunlit (and ISS sunlit, since ISS is higher).
+ *    90° ≤ θ < 90° + α     → ground dark, ISS still sunlit.
+ *    θ ≥ 90° + α           → ISS in shadow.
+ *  where α = arccos(R / (R + h)) is the half-angle from Earth's center
+ *  to ISS's local horizon. For R=6378.14 km, h=408 km: α ≈ 19.9°,
+ *  so the twilight band runs 90°-109.9°.
+ *
+ *  v1.5.3.0 — frontend-only math; NOT computed in generator/cloud.py
+ *  (yet). If/when generator-side ascent or scoring needs it, port this
+ *  to Python and keep the two in sync the same way subsolarPoint /
+ *  terminator math is synced today.
+ */
+export type IssIllumination = 'iss-day' | 'iss-twilight' | 'iss-eclipse';
+
+const EARTH_RADIUS_KM = 6378.137;
+const ISS_ALT_KM = 408;
+/** Cached arccos(R/(R+h)) in degrees — ~19.9° for ISS. */
+const ISS_HORIZON_HALF_ANGLE_DEG =
+  Math.acos(EARTH_RADIUS_KM / (EARTH_RADIUS_KM + ISS_ALT_KM)) * 180 / Math.PI;
+/** Sun-from-zenith angle (at Earth center) above which ISS is eclipsed.
+ *  ~109.9° for ISS altitude. */
+const ISS_ECLIPSE_THRESHOLD_DEG = 90 + ISS_HORIZON_HALF_ANGLE_DEG;
+
+/** Great-circle angle (in degrees) between two points on a unit sphere
+ *  given (lat, lon) in degrees. Used to find the angle from the Sun's
+ *  subsolar point to an arbitrary sub-point. */
+function greatCircleAngleDeg(
+  lat1: number, lon1: number,
+  lat2: number, lon2: number,
+): number {
+  const p1 = lat1 * Math.PI / 180;
+  const p2 = lat2 * Math.PI / 180;
+  const dl = (lon2 - lon1) * Math.PI / 180;
+  let c = Math.sin(p1) * Math.sin(p2) + Math.cos(p1) * Math.cos(p2) * Math.cos(dl);
+  // Clamp to [-1, 1] to defend against floating-point drift past the
+  // arccos domain (A7 from /plan-eng-review 2026-05-21).
+  if (c > 1) c = 1;
+  if (c < -1) c = -1;
+  return Math.acos(c) * 180 / Math.PI;
+}
+
+/** Classify the ISS illumination state at a given UTC time and ground
+ *  sub-point (lat, lon). Exported for unit tests. */
+export function classifyIssIllumination(
+  when: Date,
+  lat: number,
+  lon: number,
+): IssIllumination {
+  const sub = subsolarPoint(when);
+  const theta = greatCircleAngleDeg(sub.lat, sub.lon, lat, lon);
+  // A7 from /plan-eng-review: use `<=` for the day boundary to avoid
+  // flicker at exact 90° (consecutive 30s samples crossing the
+  // terminator land on the same side deterministically).
+  if (theta <= 90) return 'iss-day';
+  if (theta < ISS_ECLIPSE_THRESHOLD_DEG) return 'iss-twilight';
+  return 'iss-eclipse';
+}

@@ -2,6 +2,49 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.3.0] - 2026-05-21
+
+### ISS-illumination-aware track coloring (Chris ask 3 of 3).
+
+Chris 2026-05-21: *"One thing that our GOISSWatch app does that is nice is that it changes our ISS track line for when the ISS is illuminated by the sun versus not (which is slightly different than when the ground is illuminated by the sun versus not). When the ISS is still in sun, but it is dark on the ground, it is generally a very poor time for photos."*
+
+The ground-track polyline now colors three different ways depending on whether ISS itself is in sunlight, in Earth's shadow, or in the in-between "twilight" zone where ISS is sunlit but the ground below is dark (cabin glare against a dark backdrop — the "poor photo" warning Chris flagged):
+
+| Color | State | Photo conditions |
+|---|---|---|
+| Cyan `#5cd0ff` | `iss-day` — ISS sunlit + ground sunlit | Daylight pass — best for general earth-obs |
+| **Magenta `#d65cff`** | `iss-twilight` — ISS sunlit + ground dark | **Cabin glare reflections; poor for photos** |
+| Grey-blue `#7a8aa8` | `iss-eclipse` — ISS in Earth's shadow + ground dark | Night pass — best for city lights, aurora |
+
+The fourth combination (ground sunlit + ISS eclipsed) is geometrically impossible.
+
+### Implementation
+
+- **`frontend/src/terminator.ts`**: new `classifyIssIllumination(when, lat, lon)` returns the illumination state. Math: great-circle angle θ between subsolar point and (lat, lon). θ ≤ 90° → day; 90° < θ < 110° → twilight (the ~19.9° band between ground-terminator and ISS-horizon-from-Earth-center); θ ≥ 110° → eclipse. The 110° threshold is `arccos(R/(R+h)) + 90°` with R=6378.137 km and h=408 km. Frontend-only math; not ported to generator/cloud.py (yet).
+- **`frontend/src/map.ts`**:
+  - `splitTrackByOrbit()` return type widened to keep `[t, lat, lon]` triples so the illumination split has access to sample times.
+  - New `splitByIllumination(samples, trackStartMs)` walks sample times and groups consecutive same-state samples into segments. 1-sample boundary overlap stitches the visual at color transitions (no gap).
+  - `buildOrbitLineFeatures()` now stamps both `orbit_index` AND `illumination` on each feature.
+  - `iss-track-layer` paint adds a second data-driven `match` expression on `illumination` for line color, alongside the existing `orbit_index` opacity ramp.
+- **A7 from /plan-eng-review:** the 90° day-boundary uses `<=` so consecutive samples crossing the terminator land deterministically on the day side. No flicker.
+
+### Tests
+
+- `frontend/test/terminator.test.ts` — 7 new cases for `classifyIssIllumination`: subsolar = day, antipodal = eclipse, 95° = twilight, boundary policy, polar sub-point at equinox, twilight band width sweep.
+- `frontend/test/map-orbit-split.test.ts` — 6 new cases for `splitByIllumination` + updated to new `splitTrackByOrbit` return type. Multi-state run, boundary overlap, antipodal eclipse.
+- 455/455 tests passing (was 441; +14 new).
+
+### Composition with v1.5.0.0 multi-orbit display
+
+Both data-driven expressions compose. Orbit 0 daylight = solid cyan; orbit 2 twilight = dim magenta; orbit 3 eclipse = very-dim grey-blue. 4 orbits × 3 illumination states = 12 possible visual treatments per track sample.
+
+### NOT in scope
+
+- Generator-side illumination tag on `score_components` (defer until scoring needs it)
+- Card-side "twilight pass" badge alongside the track coloring (TODO follow-up if Chris asks)
+- Custom colorblind-friendly palette (default magenta is the warning color; iterate if Chris notes contrast issues)
+- Per-illumination-state opacity (we use orbit_index for opacity, illumination for color — independent dimensions)
+
 ## [1.5.2.0] - 2026-05-21
 
 ### Recenter / follow-ISS toggle (Chris ask 2 of 3).

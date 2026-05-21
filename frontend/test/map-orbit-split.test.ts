@@ -7,6 +7,8 @@ describe('splitTrackByOrbit (v1.5.0.0 multi-orbit display)', () => {
   });
 
   it('buckets samples by orbit index using the period', () => {
+    // v1.5.3.0: return type widened to keep `[t, lat, lon]` triples so
+    // downstream illumination-state splitting has access to sample time.
     const period = 5568; // ISS_ORBIT_PERIOD_SECONDS
     const pts: [number, number, number][] = [
       [0, 0, 0],
@@ -21,9 +23,9 @@ describe('splitTrackByOrbit (v1.5.0.0 multi-orbit display)', () => {
     expect(buckets[0]).toHaveLength(3);
     expect(buckets[1]).toHaveLength(2);
     expect(buckets[2]).toHaveLength(1);
-    expect(buckets[0]?.[0]).toEqual([0, 0]);
-    expect(buckets[1]?.[0]).toEqual([-10, 50]);
-    expect(buckets[2]?.[0]).toEqual([-20, 70]);
+    expect(buckets[0]?.[0]).toEqual([0, 0, 0]);
+    expect(buckets[1]?.[0]).toEqual([period, -10, 50]);
+    expect(buckets[2]?.[0]).toEqual([period * 2, -20, 70]);
   });
 
   it('uses a custom period when provided', () => {
@@ -87,5 +89,81 @@ describe('splitTrackByOrbit (v1.5.0.0 multi-orbit display)', () => {
     expect(buckets[0]?.length).toBe(1);
     expect(buckets[1]?.length).toBe(0); // empty bucket kept for index stability
     expect(buckets[2]?.length).toBe(1);
+  });
+});
+
+import { splitByIllumination } from '../src/map';
+
+describe('splitByIllumination (v1.5.3.0 — ISS illumination-aware track)', () => {
+  // We use a known epoch where the subsolar point is near (0°, 0°) for
+  // predictable classification. 2026-03-20T12:00:00Z is near the vernal
+  // equinox at noon UTC, so subsolar is approximately (0°, 0°). Points
+  // near the equator and prime meridian are 'iss-day'; antipodal points
+  // are 'iss-eclipse'; the band ~90-110° away from subsolar is twilight.
+  const equinoxStart = Date.parse('2026-03-20T12:00:00Z');
+
+  it('returns empty for no samples', () => {
+    expect(splitByIllumination([], equinoxStart)).toEqual([]);
+  });
+
+  it('classifies sub-point at subsolar as iss-day', () => {
+    const segs = splitByIllumination([[0, 0, 0]], equinoxStart);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]?.illumination).toBe('iss-day');
+  });
+
+  it('classifies antipodal sub-point as iss-eclipse', () => {
+    // Subsolar near (0°, 0°) at vernal equinox noon UTC. Antipode = (0°, 180°).
+    const segs = splitByIllumination([[0, 0, 180]], equinoxStart);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]?.illumination).toBe('iss-eclipse');
+  });
+
+  it('produces a twilight segment in the ~90-110° band from subsolar', () => {
+    // ~100° angular distance from (0°, 0°) → on the equator, lon ~= 100°.
+    // Should classify as twilight (ISS sunlit, ground dark).
+    const segs = splitByIllumination([[0, 0, 100]], equinoxStart);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]?.illumination).toBe('iss-twilight');
+  });
+
+  it('splits a multi-state run into contiguous segments', () => {
+    // A run that walks from day → twilight → eclipse.
+    const samples: [number, number, number][] = [
+      [0, 0, 0],    // day
+      [10, 0, 30],  // day
+      [20, 0, 95],  // twilight
+      [30, 0, 100], // twilight
+      [40, 0, 175], // eclipse
+    ];
+    const segs = splitByIllumination(samples, equinoxStart);
+    expect(segs.length).toBeGreaterThanOrEqual(3);
+    // First segment is day, last is eclipse, twilight is in between.
+    expect(segs[0]?.illumination).toBe('iss-day');
+    expect(segs[segs.length - 1]?.illumination).toBe('iss-eclipse');
+    const states = segs.map((s) => s.illumination);
+    expect(states).toContain('iss-twilight');
+  });
+
+  it('boundary overlap: consecutive segments share a point for visual continuity', () => {
+    // When the line color changes between segments, the rendered features
+    // should connect at the transition (no visible gap). splitByIllumination
+    // implements this by appending the boundary sample to BOTH segments.
+    const samples: [number, number, number][] = [
+      [0, 0, 80],   // day
+      [10, 0, 95],  // twilight (boundary crossing here)
+    ];
+    const segs = splitByIllumination(samples, equinoxStart);
+    expect(segs).toHaveLength(2);
+    // The day segment ends with the twilight sample's coords (overlap)
+    // The twilight segment starts with itself.
+    const daySeg = segs[0];
+    const twilightSeg = segs[1];
+    expect(daySeg?.illumination).toBe('iss-day');
+    expect(twilightSeg?.illumination).toBe('iss-twilight');
+    // Day segment should end with the boundary coords.
+    expect(daySeg?.coords[daySeg.coords.length - 1]).toEqual([0, 95]);
+    // Twilight segment starts at boundary.
+    expect(twilightSeg?.coords[0]).toEqual([0, 95]);
   });
 });
