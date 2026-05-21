@@ -31,15 +31,27 @@ export function liveIssPosition(track: Track, nowMs: number): { lat: number; lon
   return { lat, lon };
 }
 
-/** Best-effort live ISS position with SGP4 fall-through.
- *  - In window: polynomial (cheap to evaluate every second).
- *  - Past window OR polynomial-malformed: SGP4 from track.tle (slower but
- *    accurate for hours-to-days past the polynomial's 120-min cap).
- *  - Track has no TLE (older manifests pre-V2): polynomial only; returns
- *    null past the window.
+/** Best-effort live ISS position. SGP4 first (accurate), polynomial only
+ *  as a legacy fallback for pre-V2 snapshots that don't carry a TLE.
+ *
+ *  v1.4.6.0 inverted the priority. Previously polynomial was the primary
+ *  path because it was "cheap"; SGP4 was the past-window fall-through.
+ *  /review measured the order-11 polynomial at up to 1.1° lat error vs
+ *  SGP4 truth — about 120 km on the map. The live dot was visibly off
+ *  truth INSIDE the 120-min window. satellite.js's `propagate` is
+ *  sub-millisecond per call once the satrec is cached (we cache by
+ *  TLE-string equality in iss-sgp4.ts), so 1Hz SGP4 in the browser is
+ *  free in practice. The "expensive SGP4" framing applied to the
+ *  Python generator daemon's per-tick load, not the browser.
+ *
+ *  - Track has TLE → SGP4 (accurate, ~km-level for fresh TLE).
+ *  - Track has no TLE OR SGP4 returns null (malformed TLE, epoch
+ *    mismatch, decayed object) → polynomial fallback inside its window.
+ *  - Both null → returns null; caller renders the "live track expired"
+ *    state.
  */
 export function liveIssNow(track: Track, nowMs: number): { lat: number; lon: number } | null {
-  const poly = liveIssPosition(track, nowMs);
-  if (poly) return poly;
-  return liveIssPositionSGP4(track, nowMs);
+  const sgp4 = liveIssPositionSGP4(track, nowMs);
+  if (sgp4) return sgp4;
+  return liveIssPosition(track, nowMs);
 }

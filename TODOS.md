@@ -339,14 +339,14 @@ mismatch. Existing transactional refresh treats the exception as
 instead of feeding wrong data into the UI. Three new tests:
 match success, mismatch throws, missing-hash entry skipped defensively.
 
-### V2-P2 — Tighten polynomial fit (or drop it for SGP4-only)
-/review discovered the order-11 polynomial fit has up to 1.1° lat error
-vs SGP4 truth — about 120 km on the map. Live dot is visibly off-truth
-even inside the 120-min window. Two paths: (1) split into two shorter
-polynomial fits (<90 min each), or (2) drop the polynomial entirely and
-use SGP4 client-side for the 1Hz live dot. Path 2 is simpler but blocks
-on confirming SGP4 is cheap enough for sustained 1Hz on the unattended
-Mac. Documented in `frontend/test/iss-sgp4.test.ts:96-101`.
+### V2-P2 — Tighten polynomial fit (or drop it for SGP4-only) (SHIPPED v1.4.6.0, 2026-05-21)
+Path 2 taken. `liveIssNow` now tries SGP4 first; polynomial is the
+legacy fallback for pre-V2 snapshots without a TLE. satellite.js's
+`propagate` is sub-ms per call once the satrec is cached (which it
+already was by TLE-string equality), so 1Hz SGP4 in the browser is
+free — the "SGP4 is expensive" framing only applied to the Python
+generator daemon. Live ISS dot now agrees with the SGP4-driven
+ground-track and pin geometry to ~km accuracy.
 
 ### V2-P3 — Forecast-horizon obs-age tag (SHIPPED v1.2.3.3, 2026-05-13)
 `formatObsAge` silently hides the tag for forecast (future-dated) cloud

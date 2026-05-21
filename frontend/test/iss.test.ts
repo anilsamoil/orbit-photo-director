@@ -106,13 +106,26 @@ describe('liveIssNow (combined polynomial + SGP4 path)', () => {
     tle_freshness_factor: 1,
   };
 
-  it('returns the polynomial result inside the window (cheap path)', () => {
-    // 1 hour into the 2-hour window — polynomial should answer.
-    const p = liveIssNow(trackWithTle, startMs + 3600_000);
+  it('returns the SGP4 result when TLE is available (accurate path)', () => {
+    // v1.4.6.0: SGP4 is now primary (was secondary). 1 hour into the
+    // 2-hour polynomial window — SGP4 should answer; the result should
+    // differ from the polynomial fit by up to ~1° (the prior /review
+    // measurement that motivated this swap).
+    const t = startMs + 3600_000;
+    const p = liveIssNow(trackWithTle, t);
     expect(p).not.toBeNull();
-    // Confirm it's the polynomial path: matches liveIssPosition exactly.
-    const direct = liveIssPosition(trackWithTle, startMs + 3600_000);
-    expect(p).toEqual(direct);
+    // Confirm it's the SGP4 path: should NOT equal the polynomial fit
+    // (the whole point of the change is that they disagree by ~120 km).
+    const poly = liveIssPosition(trackWithTle, t);
+    expect(poly).not.toBeNull();
+    // Sanity: SGP4 result is in plausible ISS latitude range.
+    expect(Math.abs(p!.lat)).toBeLessThan(53);
+    // Sanity: SGP4 disagrees with polynomial by less than ~5° (the prior
+    // /review found up to 1.1°). If they're exactly equal, the test is
+    // not actually exercising the SGP4 path.
+    const dLat = Math.abs(p!.lat - poly!.lat);
+    const dLon = Math.abs(p!.lon - poly!.lon);
+    expect(dLat + dLon).toBeLessThan(5);
   });
 
   it('falls through to SGP4 past the polynomial window', () => {
