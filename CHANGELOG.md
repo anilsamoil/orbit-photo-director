@@ -2,6 +2,60 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.6.0] - 2026-05-21
+
+### Pin-drop pass lookup (Pettit ask #10) — drop a pin, get the next 5 ISS passes.
+
+Don Pettit's #10 from `project_pettit_feedback_2026_05_19.md`: *"Pin-anywhere on map → 'best next pass' — fundamental shift from fixed targets to ad-hoc target plotting. Currently only pre-defined targets get scored."* This is the inverse of the existing Lookup tab:
+
+- **Lookup tab** (v1.3.0.0): timestamp → ISS position. Reverse-lookup.
+- **Map pin-drop** (this PR): location → ISS pass times. Forward-lookup.
+
+### How it works
+
+- **Desktop:** right-click anywhere on the map. Pin drops at that lat/lon, popup shows the next 5 passes.
+- **iPhone / iPad:** long-press (≥500ms) anywhere on the map. Same result.
+- **Dismiss:** click the pin again. Pin + popup clear.
+
+Each pass row in the popup:
+
+```
++47m   2026-05-21 22:14Z    12 km  day
++2h40  2026-05-22 00:10Z   423 km  night
++4h12  2026-05-22 01:42Z    89 km  twilight
++5h45  2026-05-22 03:15Z   891 km  day
++19h   2026-05-22 15:30Z   156 km  day
+```
+
+Columns: relative time, UTC, closest-approach nadir distance, illumination regime (day / twilight / night, color-coded matching the v1.5.3.0 track legend).
+
+### Implementation
+
+- **`frontend/src/pin-drop.ts`** (new):
+  - `findUpcomingPasses(track, pinLat, pinLon, nowMs, horizonHours)` — SGP4 walk over 36h at 30s cadence, local-minima detection, parabolic interpolation for closest-approach refinement (A1 from /plan-eng-review — cheaper + more accurate than 5s grid refine), filter ≤ 1500 km ISS horizon, sort + cap at 5.
+  - `greatCircleKm()` — haversine, antimeridian-safe.
+  - `roundForZoom()` — pin lat/lon precision adapts to map zoom (A3: whole degrees at z<6, tenths z=6-10, hundredths z>10).
+- **`frontend/src/map.ts`**:
+  - Activation: `contextmenu` (desktop right-click) + `touchstart`/`touchmove`/`touchend` long-press (≥500ms with 8px move threshold to disambiguate from pan).
+  - Module-level state for the pin survives Map-tab re-entry within a session (A4); clears on full page reload.
+  - `dropped-pin-layer` cyan circle marker, click to dismiss.
+  - `buildPinDropPopup()` DOM builder using `textContent`/`createElement` only (Q1 from review — no innerHTML).
+  - `bindPinDrop()` wired alongside the other map toggle bindings.
+- **Cost:** ~4320 SGP4 calls per pin drop × ~0.1ms = ~432ms. Imperceptible.
+
+### Tests
+
+- `frontend/test/pin-drop.test.ts` — 19 cases: haversine math (antipodal, antimeridian, equatorial), zoom-aware precision rounding, happy-path pass detection, sort order (T5), cap at 5 (T6), filter at ISS_HORIZON_KM, polar-exclusion (no passes at 89°S since ISS doesn't reach polar latitudes), **antimeridian crossing pin at (0°, 180°)** (A2/T4), shorter horizon respects bound, regime classification, malformed-TLE graceful failure.
+- 474 frontend tests total passing.
+
+### NOT in scope (deferred)
+
+- **Scoring** (cloud forecast + lighting fit + obstruction at the pin) — basic version surfaces only closest-approach time + nadir + regime. Scoring would need either client-side GFS-cloud lookup or a Worker proxy. Defer until Pettit/Chris use the basic version.
+- **Multi-pin / pin history** — single pin only. Replacing a pin replaces the previous.
+- **Persist across reloads** — ephemeral by design (matches the operator mental model of "active query," not "saved bookmark").
+- **Past-pass lookup at this point** — forward-only; historical is the Lookup tab via timestamp.
+- **Photo upload at the pin** — Lookup tab is the photo workflow.
+
 ## [1.5.5.0] - 2026-05-21
 
 ### Weather v1.3.2 — real lightning samplers (GLM + GFS-CAPE).
