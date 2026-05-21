@@ -2,6 +2,56 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.5.0] - 2026-05-21
+
+### Weather v1.3.2 — real lightning samplers (GLM + GFS-CAPE).
+
+v1.3.1 shipped the framework with a `PlaceholderLightningSampler` returning 0.0. v1.3.2 wires real data sources. **Live smoke test confirmed working** — `make glm-smoke` returned 22,297 flashes ingested from 116 spatial buckets across the last 60 min of GOES-East + GOES-West coverage.
+
+### Added
+
+- **`GLMSampler`** (`generator/lightning.py`) — observed-lightning sampler via NOAA GLM L2 LCFA NetCDF granules on AWS S3 public buckets (`noaa-goes16` + `noaa-goes18`). Per /plan-eng-review 2026-05-21:
+  - A1: 60-min window per tick (~18MB/tick total egress)
+  - A2: skip targets outside GOES coverage (lat∈[-60,60], lon∈[-180,-25]) — returns `lightning_source="glm-out-of-coverage"` immediately
+  - A4: granule age in source attribution (e.g., `"glm-45m"`) so operator sees freshness
+  - A5: warns to log when listing returns 0 results in a window where data is expected
+  - P2: 5°×5° spatial bucket index — per-target lookup is O(1) bucket retrieval + O(k) flash-distance check across ≤9 adjacent buckets
+  - Direct HTTPS + `netCDF4.Dataset.fromMemory` (no new deps)
+- **`GFSCAPELightningSampler`** — wraps the existing `GFSForecastSampler` to extract CAPE (J/kg) and convert to lightning_potential. Saturates at 2500 J/kg = potential 1.0 (severe-thunderstorm threshold per D5).
+- **`CombinedLightningSampler`** — fuses observed + forecast per the D5 rule (`max(observed, forecast × 0.7)`). Observed-zero is REAL DATA (Q3: don't fall back to forecast just because GLM reports no flashes nearby). Cascading-failure fallback to placeholder when both samplers have no data.
+- **`scripts/glm_smoke.py`** + **`make glm-smoke`** — live-S3 verification hook. Builds a GLMSampler at "now" and reports flash ingestion, age, and sample lookups across 4 test targets. Used to validate the live path; passes existing unit-test mocks.
+- **`GFSForecastSampler.cape_at(lat, lon, when)`** in `generator/cloud.py` — new public method returning forecast CAPE J/kg or None.
+
+### Wired
+
+- `generator/main.py:select_lightning_sampler` now builds `GFSCAPELightningSampler` + `GLMSampler` + `CombinedLightningSampler` when `OPD_ENABLE_WEATHER=1`. `PlaceholderLightningSampler` remains the final fallback when both real samplers fail.
+
+### Tests
+
+- 11 new cases in `tests/test_lightning.py`: GOES coverage envelope, no-data path, synthetic flash aggregation + spatial indexing, GFS-CAPE conversion + clamping, observed-zero-is-real-data (T2), cascading failure → placeholder (T3), exception isolation, observed-high-wins-over-forecast (D5).
+- 542 generator tests total passing (was 531).
+
+### Live validation
+
+`make glm-smoke` against NOAA S3 — real-time check:
+
+```
+GLM-SMOKE @ 2026-05-21T18:51:50+00:00
+  total flashes ingested: 22297
+  oldest granule age: 59 min
+  spatial buckets populated: 116
+
+  New Orleans                  ( 30.00,  -90.00): source=glm-59m, potential=0.011, flashes/min=0.33
+  New York                     ( 40.70,  -74.00): source=glm-59m, potential=0.000, flashes/min=0.00
+  Santiago                     (-33.00,  -70.00): source=glm-59m, potential=0.000, flashes/min=0.00
+  London (outside coverage)    ( 51.50,    0.00): source=glm-out-of-coverage, potential=0.000, flashes/min=0.00
+```
+
+### NOT in scope (deferred to v1.3.3)
+
+- Blitzortung WebSocket sampler (long-lived connection doesn't fit hourly batch architecture)
+- MTG-LI, JTWC, Vaisala GLD360 — see plan doc for rationale
+
 ## [1.5.4.0] - 2026-05-21
 
 ### Five bug fixes from Chris's iPhone/Chrome testing.

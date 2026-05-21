@@ -711,15 +711,49 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         log.warning("GFS forecast init failed (%s); upcoming passes will use fallback", exc)
 
     # 4b. Weather v1.3 samplers (lightning + hurricane). Both gated on
-    # settings.enable_weather. v1.3.1 ships a placeholder lightning
-    # sampler (always 0 potential) so the integration path is exercised
-    # without committing to GLM/Blitzortung yet; real samplers slot in
-    # for v1.3.2. NHC hurricane tracker is real and refreshed each tick.
+    # settings.enable_weather. v1.5.5.0 (weather v1.3.2) replaces the
+    # placeholder lightning sampler with the real CombinedLightningSampler
+    # fusing GLM (observed) + GFS-CAPE (forecast). PlaceholderLightning
+    # is still the final fallback if both real samplers fail.
     lightning_sampler_obj = None
     hurricane_tracker_obj = None
     if settings.enable_weather:
-        from .lightning import NHCHurricaneTracker, PlaceholderLightningSampler
-        lightning_sampler_obj = PlaceholderLightningSampler()
+        from .lightning import (
+            CombinedLightningSampler,
+            GFSCAPELightningSampler,
+            GLMSampler,
+            NHCHurricaneTracker,
+            PlaceholderLightningSampler,
+        )
+        # Build a GFS sampler that includes CAPE alongside cloud_cover.
+        # Same Open-Meteo endpoint as the existing GFSForecastSampler —
+        # zero extra HTTP calls.
+        cape_sampler_obj: Any = None
+        if targets:
+            try:
+                from .cloud import GFSForecastSampler as _GFS
+                cape_sampler_obj = _GFS(
+                    targets=[(t["geom"]["lat"], t["geom"]["lon"]) for t in targets],
+                    forecast_days=settings.pass_window_hours // 24 + 1,
+                    include_cape=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("GFS-CAPE sampler init failed (%s)", exc)
+        # GLM is constructed once per tick — fetches the last 60 min of
+        # granules from GOES-East+West, decodes into a spatial index.
+        glm_obj: Any = None
+        try:
+            glm_obj = GLMSampler(when=n)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("GLM sampler init failed (%s); falling back to forecast-only", exc)
+        gfs_lightning_obj = GFSCAPELightningSampler(cape_sampler_obj) if cape_sampler_obj else None
+        if glm_obj is not None or gfs_lightning_obj is not None:
+            lightning_sampler_obj = CombinedLightningSampler(
+                observed=glm_obj,
+                forecast=gfs_lightning_obj,
+            )
+        else:
+            lightning_sampler_obj = PlaceholderLightningSampler()
         hurricane_tracker_obj = NHCHurricaneTracker(
             cache_path=settings.cache_dir / "nhc-storms.json",
             ttl_hours=1.0,
