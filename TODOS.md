@@ -57,7 +57,21 @@ Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 
 ## V4 — Weather v1.3 (lightning + hurricane on cards)
 
-### V4-P0 — Weather v1.3 implementation (plan locked 2026-05-19)
+### V4-P0 — Weather v1.3 implementation — PARTIALLY SHIPPED (v1.3.1 framework + NHC; v1.3.2 real samplers pending)
+
+**Shipped:**
+- `generator/lightning.py` — `LightningSample` + `LightningSampler` Protocol, `PlaceholderLightningSampler` (produces 0.0 values for the current "schema in place, real data pending" state), `lightning_bonus()` scoring. Plus `HurricaneNearby` + `NHCHurricaneTracker` (NHC CurrentStorms.json polling, named-storm proximity check).
+- Every pass now carries `lightning_potential`, `flash_rate_per_min`, `lightning_source`, `lightning_bonus` fields. NHC tracker fires the named-storm tag when an active Atlantic / East Pacific storm sits within 1500 km of a target.
+
+**Pending — v1.3.2 (real samplers):**
+- GLM (NOAA S3 buckets) sampler
+- Blitzortung WebSocket sampler
+- GFS CAPE forecast sampler
+- Combined sampler wiring (4 inputs → unified `lightning_potential`)
+
+Soak status 2026-05-21: lightning fields visible on every pass but `lightning_source: "placeholder"` until v1.3.2 lands. NHC tracker is live; Atlantic season starts June 1, so no hurricane tags yet (consistent with "tracker working, no active storms"). Estimated v1.3.2 effort: ~5h CC.
+
+### V4-P0 — Weather v1.3 implementation (original plan — kept below for history)
 
 **Design doc:** `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-weather-v1.3-eng-review-2026-05-19.md`
 
@@ -148,7 +162,17 @@ shipping with V3.0) covers the SW upgrade lifecycle (~6 of the 15 items).
 Remaining: kill-switch recovery (blocks on Lane G), tile-cache budget,
 banner escalation, snapshot corruption.
 
-### V3-P2 — V3.1 ASCENT geometry (rocket climbing through atmosphere)
+### V3-P2 — V3.1 ASCENT geometry (rocket climbing through atmosphere) — SHIPPED (Slices 1+2+3, soaking 2026-05-21)
+
+All three slices are shipped:
+- Slice 1: `generator/ascent_profiles.py` (285 lines) — 11 rocket family profiles (Falcon 9, Falcon Heavy, Atlas V, Vulcan, Soyuz-2, CZ-5, CZ-7, SLS, New Glenn, Ariane 6, Starship). `AscentSample` + `AscentProfile` dataclasses, `ALL_PROFILES` constant, `match_rocket()` LL2 lookup.
+- Slice 2: `generator/ascent.py` (619 lines) — `predict_ascent_pass()` with sun-illumination + tangent-clearance + apparent-plume-angle geometry. `rocket_position_at()`, `slant_range_km()`, `rocket_sun_state()`, `apparent_plume_angle_mrad()`, `plume_angle_score()`.
+- Slice 3: wired into `generator/main.py:822` behind `settings.enable_ascent` (`OPD_ENABLE_ASCENT=1` flag). Produces `launch.kind="ascent"` PassEntry rows alongside OVERHEAD rows.
+- Tests: `tests/test_ascent_profiles.py` + `tests/test_ascent.py` exist.
+
+**Soak status 2026-05-21:** flag is ON; daemon healthy at PID 36988. `launches_count_pass_opportunities: 0` in status.json because the single upcoming LL2 launch in the next 36h doesn't have ISS-photographable geometry — that's data, not a bug. The pipeline will produce ASCENT entries when an eligible rocket flies through the viewing cone. No further work needed unless soak surfaces a defect.
+
+### V3-P2 — V3.1 ASCENT geometry (original plan — kept below for history)
 **Plan locked 2026-05-13** via /plan-eng-review. Design doc:
 `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-v3p2-ascent-eng-review-2026-05-13.md`
 
