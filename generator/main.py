@@ -731,8 +731,8 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         cape_sampler_obj: Any = None
         if targets:
             try:
-                from .cloud import GFSForecastSampler as _GFS
-                cape_sampler_obj = _GFS(
+                # GFSForecastSampler is already imported at module scope (line 34).
+                cape_sampler_obj = GFSForecastSampler(
                     targets=[(t["geom"]["lat"], t["geom"]["lon"]) for t in targets],
                     forecast_days=settings.pass_window_hours // 24 + 1,
                     include_cape=True,

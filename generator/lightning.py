@@ -409,7 +409,8 @@ class GLMSampler:
         # (active-storm threshold). Per D5.
         potential = min(1.0, flash_rate_per_min / 30.0)
         # A4: surface granule age in source so operator sees freshness.
-        age_suffix = f"-{self._oldest_granule_age_min}m" if self._oldest_granule_age_min is not None else ""
+        age = self._oldest_granule_age_min
+        age_suffix = f"-{age}m" if age is not None else ""
         return LightningSample(
             lightning_potential=potential,
             flash_rate_per_min=flash_rate_per_min,

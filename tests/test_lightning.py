@@ -398,7 +398,7 @@ def test_gfs_cape_lightning_sampler_clamps_above_max() -> None:
     assert result.lightning_potential == 1.0
 
 
-def test_combined_observed_zero_with_forecast_nonzero_T2() -> None:
+def test_combined_observed_zero_with_forecast_nonzero_t2() -> None:
     """T2: observed=0 IS real data (no lightning observed). Forecast
     must NOT win when observed has data, even if observed value is 0."""
     class _ObsZero:
@@ -428,7 +428,7 @@ def test_combined_observed_zero_with_forecast_nonzero_T2() -> None:
     assert result.lightning_potential == pytest.approx(0.56)
 
 
-def test_combined_cascading_failure_falls_back_to_placeholder_T3() -> None:
+def test_combined_cascading_failure_falls_back_to_placeholder_t3() -> None:
     """T3: GLM AND GFS-CAPE both return no-data → fallback to placeholder."""
     class _ObsNoData:
         def sample(self, lat, lon, when):
