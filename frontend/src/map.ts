@@ -18,6 +18,11 @@ import { fetchArtifact } from './manifest';
 import { liveIssPosition, wrapLon } from './iss';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import {
+  findUpcomingPasses,
+  roundForZoom,
+  type UpcomingPass,
+} from './pin-drop';
+import {
   classifyIssIllumination,
   subsolarFeature,
   terminatorFeatures,
@@ -805,6 +810,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindTerminatorToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
+  bindPinDrop();
   // Apply persisted cloud + terminator preferences on first map render.
   applyCloudsVisibility();
   applyTerminatorVisibility();
@@ -1659,4 +1665,241 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
   const date = new Date(t).toISOString().slice(0, 10);
   badge.textContent = `Imagery: ${date}`;
   badge.hidden = false;
+}
+
+// ---------------------------------------------------------------------------
+// Pin-drop pass lookup (v1.5.6.0 — Pettit feedback #10)
+// ---------------------------------------------------------------------------
+//
+// Operator long-presses (touch) or right-clicks (desktop) anywhere on the
+// map. We drop a cyan pin at that lat/lon and surface a popup listing the
+// next 5 upcoming ISS passes over that point. All client-side via SGP4 +
+// the existing iss-sgp4 satrec cache.
+//
+// State: module-level so the pin survives renderMap re-runs (i.e., Map tab
+// re-entry within the same page session). Cleared on full page reload.
+
+let droppedPinPopup: maplibregl.Popup | null = null;
+let pinDropBound = false;
+// Long-press tracking for touch devices.
+let longPressTimer: number | null = null;
+let longPressStartXY: { x: number; y: number } | null = null;
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_THRESHOLD_PX = 8;
+
+function bindPinDrop(): void {
+  if (pinDropBound || !map) return;
+
+  // Desktop: right-click (contextmenu). Suppress the browser menu.
+  map.on('contextmenu', (e) => {
+    e.preventDefault();
+    handlePinDrop(e.lngLat.lng, e.lngLat.lat);
+  });
+
+  // Touch: long-press. MapLibre's `touchstart` fires before MapLibre decides
+  // it's a drag vs a tap; we start a 500ms timer and cancel it on touchmove
+  // beyond an 8px threshold (treated as a pan).
+  map.on('touchstart', (e) => {
+    if (!e.originalEvent || e.originalEvent.touches.length !== 1) return;
+    const touch = e.originalEvent.touches[0];
+    if (!touch) return;
+    longPressStartXY = { x: touch.clientX, y: touch.clientY };
+    const lng = e.lngLat.lng;
+    const lat = e.lngLat.lat;
+    longPressTimer = window.setTimeout(() => {
+      longPressTimer = null;
+      handlePinDrop(lng, lat);
+    }, LONG_PRESS_MS);
+  });
+  map.on('touchmove', (e) => {
+    if (longPressTimer === null || !longPressStartXY) return;
+    const touch = e.originalEvent.touches[0];
+    if (!touch) return;
+    const dx = touch.clientX - longPressStartXY.x;
+    const dy = touch.clientY - longPressStartXY.y;
+    if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_THRESHOLD_PX) {
+      window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  });
+  map.on('touchend', () => {
+    if (longPressTimer !== null) {
+      window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    longPressStartXY = null;
+  });
+
+  pinDropBound = true;
+}
+
+/** Drop a pin at (lng, lat), compute upcoming passes, show popup. */
+function handlePinDrop(lng: number, lat: number): void {
+  if (!map || !currentTrack) return;
+  // Round to zoom-appropriate precision (A3 from /plan-eng-review).
+  const rounded = roundForZoom(lat, lng, map.getZoom());
+  const pinLat = rounded.lat;
+  const pinLon = rounded.lon;
+
+  // Single-pin model: replace previous source.
+  const fc: GeoJSON.FeatureCollection = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: {
+        lat: pinLat,
+        lon: pinLon,
+        precision: rounded.precision,
+      },
+      geometry: { type: 'Point', coordinates: [pinLon, pinLat] },
+    }],
+  };
+  upsertGeoJson(map, 'dropped-pin', fc);
+
+  // Add layer on first drop. Distinct cyan color + downward-triangle-with-dot
+  // style differentiates from target pins (score-colored) and lookup pin
+  // (magenta).
+  if (!map.getLayer('dropped-pin-layer')) {
+    map.addLayer({
+      id: 'dropped-pin-layer',
+      type: 'circle',
+      source: 'dropped-pin',
+      paint: {
+        'circle-radius': 11,
+        'circle-color': '#5cd0ff',
+        'circle-stroke-color': '#0b0d12',
+        'circle-stroke-width': 3,
+        'circle-opacity': 1.0,
+      },
+    });
+    map.on('click', 'dropped-pin-layer', () => {
+      // Clicking the pin dismisses (matches the "active query" mental model).
+      dismissDroppedPin();
+    });
+    map.on('mouseenter', 'dropped-pin-layer', () => {
+      if (map) map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'dropped-pin-layer', () => {
+      if (map) map.getCanvas().style.cursor = '';
+    });
+  }
+
+  // Compute the passes. Pure-frontend SGP4 walk — see pin-drop.ts.
+  const passes = findUpcomingPasses(currentTrack, pinLat, pinLon, Date.now());
+
+  // Build popup body via DOM (Q1: no innerHTML).
+  const body = buildPinDropPopup(pinLat, pinLon, rounded.precision, passes);
+
+  // Replace any prior popup.
+  if (droppedPinPopup) droppedPinPopup.remove();
+  droppedPinPopup = new maplibregl.Popup({ maxWidth: '340px' })
+    .setLngLat([pinLon, pinLat])
+    .setDOMContent(body)
+    .addTo(map);
+}
+
+/** Remove the dropped pin + popup. */
+function dismissDroppedPin(): void {
+  if (!map) return;
+  if (droppedPinPopup) {
+    droppedPinPopup.remove();
+    droppedPinPopup = null;
+  }
+  upsertGeoJson(map, 'dropped-pin', { type: 'FeatureCollection', features: [] });
+}
+
+/** Build the pin-drop popup DOM. textContent throughout — no innerHTML.
+ *  Exported for unit testing. */
+export function buildPinDropPopup(
+  pinLat: number,
+  pinLon: number,
+  precision: number,
+  passes: UpcomingPass[],
+): HTMLElement {
+  const body = document.createElement('div');
+  body.className = 'dropped-pin-popup';
+  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:280px';
+
+  // Title: 📍 lat°N/S, lon°E/W
+  const title = document.createElement('strong');
+  const latStr = `${Math.abs(pinLat).toFixed(precision)}°${pinLat >= 0 ? 'N' : 'S'}`;
+  const lonStr = `${Math.abs(pinLon).toFixed(precision)}°${pinLon >= 0 ? 'E' : 'W'}`;
+  title.textContent = `📍 ${latStr}, ${lonStr}`;
+  body.appendChild(title);
+
+  if (passes.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'margin-top:8px;color:#444';
+    empty.textContent = 'No ISS passes within 1500 km in the next 36 hours.';
+    body.appendChild(empty);
+    const hint = document.createElement('div');
+    hint.style.cssText = 'margin-top:6px;color:#888;font-size:0.78rem';
+    hint.textContent = 'ISS orbit inclination is 51.6° — points within ±51° latitude get regular passes.';
+    body.appendChild(hint);
+    return body;
+  }
+
+  const subtitle = document.createElement('div');
+  subtitle.style.cssText = 'margin:6px 0 4px;color:#444';
+  subtitle.textContent = `Next ${passes.length} pass${passes.length === 1 ? '' : 'es'} over this point:`;
+  body.appendChild(subtitle);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace;color:#0b0d12';
+  const nowMs = Date.now();
+  for (const p of passes) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:55px 1fr 65px 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee';
+    const rel = document.createElement('span');
+    rel.style.fontWeight = '600';
+    rel.textContent = formatRelative(p.closestApproachMs - nowMs);
+    const utc = document.createElement('span');
+    utc.textContent = formatUtc(p.closestApproachMs);
+    const nadir = document.createElement('span');
+    nadir.style.textAlign = 'right';
+    nadir.textContent = `${Math.round(p.nadirKm)} km`;
+    const regime = document.createElement('span');
+    regime.style.textAlign = 'right';
+    regime.style.color = regimeColor(p.regime);
+    regime.textContent = regimeLabel(p.regime);
+    row.append(rel, utc, nadir, regime);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+
+  const footer = document.createElement('div');
+  footer.style.cssText = 'margin-top:6px;color:#888;font-size:0.72rem';
+  footer.textContent = 'Closest-approach within 1500 km ISS horizon. Click pin to dismiss.';
+  body.appendChild(footer);
+
+  return body;
+}
+
+function formatUtc(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+function formatRelative(deltaMs: number): string {
+  const totalMin = Math.round(deltaMs / 60000);
+  if (totalMin < 60) return `+${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h < 24) return m === 0 ? `+${h}h` : `+${h}h${m}m`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh === 0 ? `+${d}d` : `+${d}d${rh}h`;
+}
+
+function regimeLabel(r: import('./terminator').IssIllumination): string {
+  if (r === 'iss-day') return 'day';
+  if (r === 'iss-twilight') return 'twilight';
+  return 'night';
+}
+
+function regimeColor(r: import('./terminator').IssIllumination): string {
+  if (r === 'iss-day') return '#0a8acc';      // cyan-ish, photo-friendly
+  if (r === 'iss-twilight') return '#a8389a';  // magenta — warning
+  return '#5b6b8a';                            // grey-blue — night
 }
