@@ -471,3 +471,210 @@ def test_combined_observed_high_wins_over_forecast() -> None:
     assert result.source == "glm-20m"
     assert result.lightning_potential == pytest.approx(0.9)
     assert result.flash_rate_per_min == 5.0
+
+
+# --------------------------------------------------------------------------
+# v1.5.5.0 coverage gap fillers: _glm_granule_urls + _decode_glm_granule
+# --------------------------------------------------------------------------
+
+from generator.lightning import (  # noqa: E402
+    _decode_glm_granule,
+    _glm_granule_urls,
+)
+
+
+def _make_s3_listing_xml(keys: list[str]) -> str:
+    """Synthesize an S3 list-type=2 XML response."""
+    contents = "".join(
+        f"<Contents><Key>{k}</Key><Size>50000</Size></Contents>" for k in keys
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<ListBucketResult>'
+        f'{contents}'
+        '</ListBucketResult>'
+    )
+
+
+def test_glm_granule_urls_empty_window_returns_empty() -> None:
+    assert _glm_granule_urls("noaa-goes16", datetime.now(tz=UTC), 0) == []
+    assert _glm_granule_urls("noaa-goes16", datetime.now(tz=UTC), -10) == []
+
+
+def test_glm_granule_urls_parses_keys_within_window() -> None:
+    """Mock S3 list-type=2 response with one in-window granule, one
+    too-old, and one malformed. Only the in-window one returns."""
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+    doy = when.timetuple().tm_yday
+    # Within last 60 min: at 12:15 (15 min ago)
+    in_window_key = (
+        f"GLM-L2-LCFA/2026/{doy:03d}/12/"
+        f"OR_GLM-L2-LCFA_G16_s2026{doy:03d}121500_e2026{doy:03d}121520_c2026{doy:03d}121530.nc"
+    )
+    # Older than 60 min: at 10:30 (2 hours ago)
+    too_old_key = (
+        f"GLM-L2-LCFA/2026/{doy:03d}/10/"
+        f"OR_GLM-L2-LCFA_G16_s2026{doy:03d}103000_e2026{doy:03d}103020_c2026{doy:03d}103030.nc"
+    )
+    # Malformed timestamp
+    malformed_key = (
+        f"GLM-L2-LCFA/2026/{doy:03d}/12/"
+        f"OR_GLM-L2-LCFA_G16_sBADTIME000000_e2026{doy:03d}121520_c2026{doy:03d}121530.nc"
+    )
+    xml = _make_s3_listing_xml([in_window_key, too_old_key, malformed_key])
+
+    class MockResp:
+        text = xml
+
+        def raise_for_status(self):
+            pass
+
+    with patch("generator.lightning.requests.get", return_value=MockResp()):
+        urls = _glm_granule_urls("noaa-goes16", when, 60)
+    # Only the in-window key should be retained; deduplicated across hours.
+    assert any(in_window_key in u for u in urls)
+    assert not any(too_old_key in u for u in urls)
+    assert not any("BADTIME" in u for u in urls)
+
+
+def test_glm_granule_urls_handles_request_exception() -> None:
+    """Network failure → return empty list + log warning, no crash."""
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+    with patch(
+        "generator.lightning.requests.get",
+        side_effect=__import__("requests").RequestException("network down"),
+    ):
+        urls = _glm_granule_urls("noaa-goes16", when, 60)
+    assert urls == []
+
+
+def test_glm_granule_urls_handles_no_keys() -> None:
+    """S3 returns an empty listing XML — function returns empty list."""
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+
+    class MockResp:
+        text = '<?xml version="1.0"?><ListBucketResult></ListBucketResult>'
+
+        def raise_for_status(self):
+            pass
+
+    with patch("generator.lightning.requests.get", return_value=MockResp()):
+        urls = _glm_granule_urls("noaa-goes16", when, 60)
+    assert urls == []
+
+
+def test_decode_glm_granule_handles_corrupt_buffer() -> None:
+    """Invalid NetCDF bytes → empty list, no crash."""
+    flashes = _decode_glm_granule(b"not a NetCDF file")
+    assert flashes == []
+
+
+def test_decode_glm_granule_empty_bytes() -> None:
+    assert _decode_glm_granule(b"") == []
+
+
+def test_decode_glm_granule_synthesizes_in_memory_netcdf() -> None:
+    """Build a minimal in-memory NetCDF file with the expected GLM-L2-LCFA
+    structure and verify the decoder reads it correctly. Validates the
+    real parse path against a synthetic but schema-correct file."""
+    try:
+        import netCDF4
+    except ImportError:
+        pytest.skip("netCDF4 not available")
+    import io
+    import tempfile
+
+    # netCDF4 doesn't easily write to a BytesIO in all versions — use a
+    # tmp file then read it back as bytes for the in-memory decode test.
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        path = tmp.name
+    try:
+        ds = netCDF4.Dataset(path, "w", format="NETCDF4")
+        ds.createDimension("number_of_flashes", 3)
+        lat = ds.createVariable("flash_lat", "f4", ("number_of_flashes",))
+        lon = ds.createVariable("flash_lon", "f4", ("number_of_flashes",))
+        offset = ds.createVariable(
+            "flash_time_offset_of_first_event", "f4", ("number_of_flashes",)
+        )
+        lat[:] = [30.0, 31.0, 32.0]
+        lon[:] = [-90.0, -91.0, -92.0]
+        offset[:] = [0.0, 10.0, 20.0]
+        ds.time_coverage_start = "2026-05-21T12:00:00Z"
+        ds.close()
+
+        with open(path, "rb") as f:
+            buf = f.read()
+        flashes = _decode_glm_granule(buf)
+        assert len(flashes) == 3
+        # Sorted by index — first flash is (30.0, -90.0) at t+0s
+        assert flashes[0].lat == pytest.approx(30.0, abs=0.01)
+        assert flashes[0].lon == pytest.approx(-90.0, abs=0.01)
+        assert flashes[0].t.year == 2026
+    finally:
+        Path(path).unlink(missing_ok=True)
+    _ = io  # silence unused-import
+
+
+def test_glm_sampler_full_construction_with_mocked_fetch() -> None:
+    """End-to-end GLMSampler construction with a mocked lister + fetcher
+    that returns a synthetic NetCDF buffer. Exercises the constructor
+    loop including spatial bucket indexing."""
+    try:
+        import netCDF4
+    except ImportError:
+        pytest.skip("netCDF4 not available")
+    import tempfile
+
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+    # Build a synthetic granule with 5 flashes near (30, -90).
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        path = tmp.name
+    try:
+        ds = netCDF4.Dataset(path, "w", format="NETCDF4")
+        ds.createDimension("n", 5)
+        lat = ds.createVariable("flash_lat", "f4", ("n",))
+        lon = ds.createVariable("flash_lon", "f4", ("n",))
+        offset = ds.createVariable("flash_time_offset_of_first_event", "f4", ("n",))
+        lat[:] = [30.0, 30.1, 30.2, 30.3, 30.4]
+        lon[:] = [-90.0, -90.1, -90.2, -90.3, -90.4]
+        offset[:] = [0.0, 1.0, 2.0, 3.0, 4.0]
+        ds.time_coverage_start = "2026-05-21T12:15:00Z"
+        ds.close()
+        with open(path, "rb") as f:
+            buf = f.read()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+    sampler = GLMSampler(
+        when=when,
+        window_minutes=60,
+        lister=lambda _bucket: ["https://fake/granule.nc"] if _bucket == "noaa-goes16" else [],
+        fetcher=lambda _url: buf,
+    )
+    # 5 flashes ingested.
+    total = sum(len(v) for v in sampler._flashes_by_bucket.values())
+    assert total == 5
+    # Looking up (30, -90) within 100km should match most or all 5 flashes.
+    result = sampler.sample(30.0, -90.0, when)
+    assert result.lightning_potential > 0
+    assert result.flash_rate_per_min > 0
+    assert result.source.startswith("glm-")
+    # Age suffix is computed from when - 12:15Z = 15 min.
+    assert "15m" in result.source
+
+
+def test_glm_sampler_fetcher_raises_then_continues() -> None:
+    """One bad fetch shouldn't crash the constructor — it skips and goes on."""
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+
+    def _bad_fetcher(_url: str) -> bytes:
+        raise __import__("requests").RequestException("S3 down")
+
+    sampler = GLMSampler(
+        when=when,
+        lister=lambda _bucket: ["https://fake/g1.nc", "https://fake/g2.nc"],
+        fetcher=_bad_fetcher,
+    )
+    # No flashes ingested, but constructor didn't crash.
+    total = sum(len(v) for v in sampler._flashes_by_bucket.values())
+    assert total == 0
