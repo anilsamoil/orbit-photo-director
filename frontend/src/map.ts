@@ -16,7 +16,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
 import { liveIssPosition, wrapLon } from './iss';
-import { issPositionWithAltSGP4 } from './iss-sgp4';
+import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { subsolarFeature, terminatorFeatures } from './terminator';
 
 let map: maplibregl.Map | null = null;
@@ -668,6 +668,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindCloudToggle();
   bindTerminatorToggle();
   bindMultiOrbitToggle();
+  bindFollowToggle();
   // Apply persisted cloud + terminator preferences on first map render.
   applyCloudsVisibility();
   applyTerminatorVisibility();
@@ -962,6 +963,19 @@ function bindTimeToggle(): void {
  *  from ending up on a blank map when Esri's CDN is down. */
 let esriTilesFailed = false;
 
+/** Follow-ISS state (v1.5.2.0 — Chris feedback 2026-05-21). When true, the
+ *  1Hz live-position tick re-centers the map on the ISS sub-point. NOT
+ *  persisted — ephemeral by design (a session-local view mode, not a
+ *  preference). Most map sessions start by surveying the broader orbit
+ *  envelope, then narrowing to a target; persisting "follow" would force
+ *  the operator to manually break it every page load.
+ *
+ *  User-initiated `dragstart` or `zoomstart` silently exits follow.
+ *  Programmatic `setCenter` calls from applyFollowISS do NOT fire
+ *  dragstart, so the recurring follow tick won't break itself.
+ */
+let followISS = false;
+
 function applyCloudsVisibility(): void {
   if (!map) return;
   const cloudsLayerVis = cloudsVisible ? 'visible' : 'none';
@@ -1036,6 +1050,81 @@ function bindTerminatorToggle(): void {
     applyTerminatorVisibility();
   });
   terminatorToggleBound = true;
+}
+
+/** Apply the follow-ISS pan if active. Called from main.ts's 1Hz live-
+ *  position tick (`updateIssNow`). No-op when follow is off or the map
+ *  isn't ready yet. Uses `setCenter` (instant) not `easeTo` (animated)
+ *  per A5 from /plan-eng-review 2026-05-21: 1Hz easeTo calls queue
+ *  animations and jitter. setCenter for recurring; easeTo only on the
+ *  one-shot toggle click below.
+ */
+export function applyFollowISS(pos: { lat: number; lon: number }): void {
+  if (!followISS || !map) return;
+  map.setCenter([pos.lon, pos.lat]);
+}
+
+/** Exit follow silently. Called by user dragstart/zoomstart handlers and
+ *  reflected to the button without firing applyFollowISS again. */
+function exitFollowISS(): void {
+  if (!followISS) return;
+  followISS = false;
+  reflectFollowButton();
+}
+
+function reflectFollowButton(): void {
+  const btn = document.getElementById('toggle-follow-iss');
+  if (!btn) return;
+  btn.classList.toggle('active', followISS);
+  btn.setAttribute('aria-pressed', followISS ? 'true' : 'false');
+  btn.title = followISS
+    ? 'Following ISS — click again or pan/zoom to release'
+    : 'Recenter on ISS — click again or pan to release';
+}
+
+let followToggleBound = false;
+function bindFollowToggle(): void {
+  if (followToggleBound) return;
+  const btn = document.getElementById('toggle-follow-iss');
+  if (!btn || !map) return;
+  reflectFollowButton();
+  btn.addEventListener('click', () => {
+    if (followISS) {
+      // Already following → exit follow.
+      followISS = false;
+      reflectFollowButton();
+      return;
+    }
+    // Entering follow. Animate-ease to current ISS pos on first click
+    // (gives the operator a visual cue that the map jumped to ISS).
+    // Subsequent recurring updates go through applyFollowISS which uses
+    // setCenter (instant) — see A5 in /plan-eng-review 2026-05-21.
+    followISS = true;
+    reflectFollowButton();
+    if (!currentTrack) return;
+    const pos = liveIssPositionSGP4(currentTrack, Date.now())
+      ?? liveIssPosition(currentTrack, Date.now());
+    if (pos && map) {
+      map.easeTo({ center: [pos.lon, pos.lat], duration: 500 });
+    }
+  });
+  // User-initiated drag breaks follow. Programmatic setCenter (from
+  // applyFollowISS) does NOT fire dragstart so this is safe.
+  map.on('dragstart', () => { exitFollowISS(); });
+  // User-initiated zoom also breaks follow — operator is zooming for
+  // a reason that conflicts with auto-recenter. Programmatic
+  // setCenter doesn't trigger zoomstart, so this is safe too.
+  map.on('zoomstart', (e: unknown) => {
+    // Only respect zoomstart that came from a real user event.
+    const orig = (e as { originalEvent?: unknown } | undefined)?.originalEvent;
+    if (orig) exitFollowISS();
+  });
+  followToggleBound = true;
+}
+
+/** Test-only: reset follow state between vitest runs. */
+export function _resetFollowStateForTest(): void {
+  followISS = false;
 }
 
 let multiOrbitToggleBound = false;

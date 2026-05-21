@@ -2,6 +2,38 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.2.0] - 2026-05-21
+
+### Recenter / follow-ISS toggle (Chris ask 2 of 3).
+
+Chris 2026-05-21: *"On the map page, have a button to re-center your view on the ISS (and maybe a button to lock to follow the ISS if you are zoomed in)."*
+
+Single toggle button 🛰 next to the N↑/ISS↑ bearing controls. Click once → ease-pan to the ISS sub-point AND enter follow mode (the 1Hz live-position tick keeps re-centering). Click again, or pan, or zoom, → exit follow silently.
+
+### Added
+
+- **`#toggle-follow-iss` button** in `.map-controls-bearing` (frontend/index.html). Active-state styling reuses `.time-btn` so it matches the rest of the toggle row.
+- **`applyFollowISS(pos)`** exported from `frontend/src/map.ts`. Called from the existing 1Hz `updateIssNow()` tick in `frontend/src/main.ts`. No-op when follow is off OR the map module hasn't been loaded yet (Map tab never opened) — preserves the lazy MapLibre bundle load.
+- **`bindFollowToggle()`** in map.ts:
+  - First click: enters follow + calls `map.easeTo({ duration: 500 })` for a visible jump animation.
+  - Subsequent 1Hz updates: `map.setCenter()` (instant, no animation queue) per A5 from /plan-eng-review — easeTo at 1Hz queues animations and jitters.
+  - `map.on('dragstart', ...)` and `map.on('zoomstart', ...)` listeners exit follow silently when the user interacts. Only user-initiated zooms (with `originalEvent`) break follow; programmatic moves don't.
+
+### Ephemeral by design (not persisted)
+
+Follow state is NOT saved to localStorage. Other map toggles (clouds, terminator, multi-orbit) persist because they're preferences; follow is a session-local view mode. Most map sessions start by surveying the broader orbit envelope then narrowing to a target; auto-resuming follow would force the operator to manually break it every reload.
+
+### Tests
+
+- `frontend/test/map-follow.test.ts` — 7 cases including the **T2 race test** from /plan-eng-review (dragstart fires before pending tick → tick is a no-op), instant-vs-animated assertion (setCenter not easeTo on recurring), and the user-vs-programmatic zoomstart distinction.
+- 441/441 tests passing.
+
+### NOT in scope
+
+- Persisting follow across reloads (ephemeral by design — see above)
+- Auto-zoom adjustments while following (operator chose their zoom intentionally)
+- Special handling when follow + ISS-up-bearing are both on (compose naturally; user can disable either if it's too busy)
+
 ## [1.5.1.0] - 2026-05-21
 
 ### Satellite imagery basemap when clouds are hidden (Chris ask 1 of 3).
