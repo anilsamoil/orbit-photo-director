@@ -184,6 +184,22 @@ function buildStyle(): maplibregl.StyleSpecification {
         attribution:
           'Imagery from <a href="https://earthdata.nasa.gov">NASA GIBS</a>',
       },
+      // Esri World Imagery (v1.5.1.0 — Chris feedback 2026-05-21).
+      // When clouds toggle is OFF, this basemap swaps in instead of the
+      // dark Carto basemap so the operator can see real satellite imagery
+      // for feature picking (shoreline / mountain / pad coordinates).
+      // Free, no auth, ~17m global resolution with sub-meter in many
+      // regions. Esri ToS allows non-commercial use with attribution.
+      'esri-imagery': {
+        type: 'raster',
+        tiles: [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        ],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution:
+          'Imagery © <a href="https://www.esri.com">Esri</a> &mdash; Source: Esri, Maxar, GeoEye, Earthstar Geographics, CNES/Airbus DS, USDA, USGS, AeroGRID, IGN, and the GIS User Community',
+      },
       'ne-coastline': {
         // Natural Earth 110m coastlines, served from frontend/public/.
         // 94KB raw / ~31KB gzipped. Used to draw thin outlines on top of
@@ -200,6 +216,22 @@ function buildStyle(): maplibregl.StyleSpecification {
       },
     },
     layers: [
+      {
+        // Esri imagery basemap. Visibility is initially 'none' (Carto Dark
+        // is the default). bindCloudToggle flips this to 'visible' when
+        // clouds are toggled OFF, and Carto to 'none'. Order matters: this
+        // sits BELOW Carto in the stack so a tile failure on Esri falls
+        // through visually to the Carto layer underneath (A2 fallback).
+        // Wait — actually we want the opposite. Carto BELOW Esri, with
+        // both layers present in the stack; visibility toggles which one
+        // shows. The "fallback on Esri error" is handled by an error
+        // listener that flips visibility, not by stacking order.
+        id: 'esri-imagery-layer',
+        type: 'raster',
+        source: 'esri-imagery',
+        layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 1.0 },
+      },
       {
         id: 'carto-dark-layer',
         type: 'raster',
@@ -433,6 +465,20 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       touchPitch: true,
     });
     map.addControl(new maplibregl.NavigationControl(), 'top-left');
+    // A2 from /plan-eng-review 2026-05-21: silent fallback to Carto Dark
+    // if Esri imagery tiles fail to load. Listens for source-data errors;
+    // if the failing source is the Esri basemap, flip the session flag
+    // and re-apply visibility (which will keep Carto visible). One-way:
+    // once Esri has failed in this session, we don't retry until reload.
+    map.on('error', (e) => {
+      const errSource = (e as { sourceId?: string } | undefined)?.sourceId;
+      if (errSource === 'esri-imagery' && !esriTilesFailed) {
+        esriTilesFailed = true;
+        // eslint-disable-next-line no-console
+        console.warn('[map] Esri imagery tile load failed; falling back to Carto Dark basemap for the rest of this session');
+        applyCloudsVisibility();
+      }
+    });
     await new Promise<void>((resolve) => {
       map!.once('load', () => resolve());
     });
@@ -910,15 +956,36 @@ function bindTimeToggle(): void {
  *  toggle target. Pettit asked for cloud-toggle specifically; coastline
  *  stays on because it doesn't compete with the cloud signal. Idempotent —
  *  safe to call before MapLibre has loaded the layers. */
+/** Track whether Esri tiles have failed to load. If they have, we never
+ *  swap to the Esri basemap again this session — fall back to Carto Dark
+ *  silently (A2 from /plan-eng-review 2026-05-21). Prevents the operator
+ *  from ending up on a blank map when Esri's CDN is down. */
+let esriTilesFailed = false;
+
 function applyCloudsVisibility(): void {
   if (!map) return;
-  const vis = cloudsVisible ? 'visible' : 'none';
+  const cloudsLayerVis = cloudsVisible ? 'visible' : 'none';
+  // v1.5.1.0: when clouds are OFF, swap from Carto Dark to Esri World Imagery
+  // so the operator can see real satellite/feature data (Chris ask 2026-05-21).
+  // Carto Dark stays as the basemap when clouds are ON because the dark
+  // background makes the 55%-opacity GIBS cloud overlay legible.
+  // P1 from review: source-swap via setLayoutProperty visibility, not
+  // setStyle rebuild — keeps all overlays + layer state intact.
+  const useEsri = !cloudsVisible && !esriTilesFailed;
+  const esriVis = useEsri ? 'visible' : 'none';
+  const cartoVis = useEsri ? 'none' : 'visible';
   try {
     if (map.getLayer('gibs-clouds-layer')) {
-      map.setLayoutProperty('gibs-clouds-layer', 'visibility', vis);
+      map.setLayoutProperty('gibs-clouds-layer', 'visibility', cloudsLayerVis);
+    }
+    if (map.getLayer('esri-imagery-layer')) {
+      map.setLayoutProperty('esri-imagery-layer', 'visibility', esriVis);
+    }
+    if (map.getLayer('carto-dark-layer')) {
+      map.setLayoutProperty('carto-dark-layer', 'visibility', cartoVis);
     }
   } catch {
-    /* layer may not be loaded yet on the first call — applyCloudsVisibility
+    /* layers may not be loaded yet on the first call — applyCloudsVisibility
        runs again after renderMap binds */
   }
 }
@@ -934,8 +1001,8 @@ function bindCloudToggle(): void {
       'aria-pressed', cloudsVisible ? 'true' : 'false',
     );
     btn.title = cloudsVisible
-      ? 'Clouds shown — click to hide GIBS overlay'
-      : 'Clouds hidden — click to show GIBS overlay';
+      ? 'Clouds shown (dark basemap) — click to hide clouds and show satellite imagery'
+      : 'Clouds hidden (satellite imagery) — click to show clouds and dark basemap';
   };
   reflect();
   btn.addEventListener('click', () => {

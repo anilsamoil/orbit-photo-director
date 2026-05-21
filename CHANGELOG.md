@@ -2,6 +2,37 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.1.0] - 2026-05-21
+
+### Satellite imagery basemap when clouds are hidden (Chris ask 1 of 3).
+
+Chris 2026-05-21 (post-v1.5.0.0): *"When you hide the 'clouds' layer, have it show the Google Maps satellite data (or even just detailed Google Maps map data). This is super useful for picking out features that can guide you on to the right spot for your photo."*
+
+When the ☁ cloud toggle is OFF, the map now swaps from the dark Carto basemap to **Esri World Imagery** — free, no auth, sub-meter resolution in many regions. The operator can now zoom in on a target's predicted overflight area, switch off clouds, and see actual shoreline / mountain / pad geography to orient by.
+
+### Added
+
+- **Esri World Imagery** raster source in `frontend/src/map.ts` (`buildStyle()`). URL: `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`. Attribution: Esri, Maxar, GeoEye, Earthstar Geographics, CNES/Airbus DS, USDA, USGS, AeroGRID, IGN, GIS User Community.
+- New `esri-imagery-layer` (initially hidden) under the existing `carto-dark-layer`. Both basemap layers stay in the style at all times; visibility toggles based on cloud state — no `setStyle()` rebuild required (P1 from /plan-eng-review).
+- **`vite.config.ts` runtime cache rule** for `server.arcgisonline.com` — CacheFirst, 100 entries × 7 days, `statuses: [0, 200]`. Matches existing Carto/GIBS pattern.
+- **Silent fallback to Carto Dark** if Esri tiles fail to load (A2 from review). One-shot session flag `esriTilesFailed` flips on the first `error` event whose `sourceId === 'esri-imagery'`. After that, clouds-off shows Carto Dark instead of leaving the operator on a blank map. Resets on page reload.
+
+### Changed
+
+- Cloud toggle (☁) tooltip text now describes the basemap swap: *"Clouds shown (dark basemap) — click to hide clouds and show satellite imagery"* and vice versa.
+- `applyCloudsVisibility()` now flips three layers per toggle (carto / esri / gibs) instead of just gibs.
+
+### Tests
+
+- `frontend/test/map-basemap.test.ts` — 5 cases: clouds-on visibility, clouds-off visibility, **clouds-off + Esri-failed → Carto fallback** (T3 from review), toggle-clouds-back-on-after-Esri-failed, and error-event source discrimination.
+- 434/434 tests passing.
+
+### NOT in scope
+
+- Tile precache for Esri imagery (defer to follow-up if LOS soak surfaces slowness)
+- Custom track / pin outlines for higher contrast on bright Esri imagery (cyan track + pin colors are still legible at zoom levels Chris uses; iterate if he reports contrast issues)
+- Esri tile error UX (silent fallback was the explicit ship decision)
+
 ## [1.5.0.0] - 2026-05-21
 
 ### Multi-orbit ground-track display (Pettit Tier B follow-up).
