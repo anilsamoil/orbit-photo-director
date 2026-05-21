@@ -77,18 +77,51 @@ describe('fetchManifest', () => {
   });
 });
 
+// Compute the real sha256 hex of a body string. Used by fetchArtifact tests
+// so they can build a manifest whose declared hash matches the response.
+async function sha256Hex(body: string): Promise<string> {
+  const bytes = new TextEncoder().encode(body);
+  const buf = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 describe('fetchArtifact', () => {
-  it('dereferences manifest path and parses JSON', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify([{ x: 1 }]), { status: 200 }))
-    );
-    const r = await fetchArtifact<{ x: number }[]>(SAMPLE_MANIFEST, 'passes');
+  it('dereferences manifest path and parses JSON when sha256 matches', async () => {
+    const body = JSON.stringify([{ x: 1 }]);
+    const hash = await sha256Hex(body);
+    const manifest: Manifest = {
+      ...SAMPLE_MANIFEST,
+      artifacts: { passes: { path: 'v/2024/passes.json', sha256: hash, bytes: body.length } },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })));
+    const r = await fetchArtifact<{ x: number }[]>(manifest, 'passes');
     expect(r[0]!.x).toBe(1);
   });
 
   it('propagates fetch errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('err', { status: 500 })));
     await expect(fetchArtifact(SAMPLE_MANIFEST, 'passes')).rejects.toThrow();
+  });
+
+  it('throws when the response body sha256 does not match the manifest', async () => {
+    // SAMPLE_MANIFEST declares sha256: 'aaaa…' but the body hash is different.
+    const body = JSON.stringify([{ x: 1 }]);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })));
+    await expect(fetchArtifact(SAMPLE_MANIFEST, 'passes')).rejects.toThrow(/sha256 mismatch/);
+  });
+
+  it('skips verification when the manifest entry has no sha256 (defensive)', async () => {
+    // Older manifests or third-party-published artifacts might omit sha256.
+    // The verify step should treat missing-hash as "trust", not crash.
+    const body = JSON.stringify([{ x: 1 }]);
+    const manifest: Manifest = {
+      ...SAMPLE_MANIFEST,
+      artifacts: { passes: { path: 'v/2024/passes.json', sha256: '', bytes: body.length } },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })));
+    const r = await fetchArtifact<{ x: number }[]>(manifest, 'passes');
+    expect(r[0]!.x).toBe(1);
   });
 });

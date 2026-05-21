@@ -1,4 +1,4 @@
-.PHONY: help install test test-py test-worker test-frontend lint tick watch deploy soak clean
+.PHONY: help install test test-py test-worker test-frontend lint tick watch deploy soak clean ll2-diff
 
 PYTHON ?= python3
 BUN ?= bun
@@ -16,6 +16,7 @@ help:
 	@echo "  watch          Run generator daemon (30-min loop)"
 	@echo "  deploy         rclone sync out/ to Cloudflare R2"
 	@echo "  soak SCENARIO  Inject a failure scenario (network-kill, daemon-kill, ...)"
+	@echo "  ll2-diff       Diff live LL2 schema against tests/fixtures/ll2-response-2026-05.json"
 	@echo "  clean          Remove build artifacts + out/"
 
 install:
@@ -53,6 +54,32 @@ deploy:
 soak:
 	@test -n "$(SCENARIO)" || (echo "Usage: make soak SCENARIO=network-kill"; exit 1)
 	bash scripts/soak/inject_failure.sh $(SCENARIO)
+
+LL2_URL ?= https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=1
+LL2_FIXTURE ?= tests/fixtures/ll2-response-2026-05.json
+
+# Diff the live LL2 (Launch Library 2) API response shape against the pinned
+# fixture. Fires when status.json's `launches_schema_hash` differs from the
+# fixture hash and the frontend shows the stale-launches banner — operator
+# needs to see WHAT changed (added / removed / renamed keys) without
+# manually running jq. Compares the set of jq paths in the first result.
+ll2-diff:
+	@command -v jq >/dev/null 2>&1 || (echo "ll2-diff: jq not installed (brew install jq)"; exit 1)
+	@test -f $(LL2_FIXTURE) || (echo "ll2-diff: fixture missing: $(LL2_FIXTURE)"; exit 1)
+	@echo "ll2-diff: fetching $(LL2_URL)"
+	@curl -sS -H 'User-Agent: orbit-photo-director/ll2-diff' "$(LL2_URL)" > /tmp/ll2-live.json \
+	  || (echo "ll2-diff: curl failed (LL2 down or rate-limited?)"; exit 1)
+	@jq -e '.results | length > 0' /tmp/ll2-live.json >/dev/null \
+	  || (echo "ll2-diff: live response has no .results[0] — schema may have changed at the top level"; jq 'keys' /tmp/ll2-live.json; exit 1)
+	@jq '.results[0] | [paths(scalars)] | map(map(tostring) | join(".")) | sort | unique | .[]' /tmp/ll2-live.json | sed 's/^"//;s/"$$//' | sort -u > /tmp/ll2-live-paths.txt
+	@jq '.results[0] | [paths(scalars)] | map(map(tostring) | join(".")) | sort | unique | .[]' $(LL2_FIXTURE) | sed 's/^"//;s/"$$//' | sort -u > /tmp/ll2-fixture-paths.txt
+	@echo "ll2-diff: schema paths in fixture but NOT in live (potentially removed/renamed):"
+	@comm -23 /tmp/ll2-fixture-paths.txt /tmp/ll2-live-paths.txt | sed 's/^/  - /' || true
+	@echo ""
+	@echo "ll2-diff: schema paths in live but NOT in fixture (new):"
+	@comm -13 /tmp/ll2-fixture-paths.txt /tmp/ll2-live-paths.txt | sed 's/^/  + /' || true
+	@echo ""
+	@echo "ll2-diff: full live first-result saved to /tmp/ll2-live.json"
 
 clean:
 	rm -rf out/ build/ dist/ .pytest_cache/ .coverage htmlcov/

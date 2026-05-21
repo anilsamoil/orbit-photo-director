@@ -16,7 +16,7 @@ Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 | Approach | Effort | Notes |
 |---|---|---|
 | GFS forecast → on-the-fly tile rendering via Cloudflare Worker | ~2-3 days CC | Most accurate. Worker proxies GFS GRIB2 from NOMADS / AWS, renders to PNG tiles per hour, caches. New `gfs-forecast-clouds` MapLibre raster source that subs out for `gibs-clouds` when lookahead > 0. |
-| Per-pin tooltip with predicted cloud-fraction number | ~2h CC | Quick win — no global raster, just expose what's already in `score_components.p_unobstructed`. Pin tooltip: "predicted cloud at pass time: 18%". Doesn't fix the global raster, but answers the operator's question for any specific pin in one click. |
+| ✅ Per-pin tooltip with predicted cloud-fraction number (SHIPPED v1.4.1.0) | ~2h CC | `buildTargetPopupContent` in `frontend/src/map.ts:971` renders "Cloud: 18% (GFS forecast)" on every pin click. |
 | Look for an existing forecast-tile provider | research first | EUMETSAT / OpenMeteo / DWD all publish forecast clouds but not always as tiles. Verify before committing to building our own pipeline. |
 
 **Recommended sequencing:**
@@ -202,13 +202,11 @@ adopted into design doc:
 **Next:** Start Slice 1 (research top-10 rocket families + write
 `generator/ascent_profiles.py` + tests).
 
-### V3-P3 — `make ll2-diff` for LL2 schema-drift diagnosis
-When `status.launches_schema_hash` differs from the pinned fixture (LL2
-changed shape), the user sees a stale-launches banner but has to manually
-run jq against the live LL2 response to see what changed. Add a Makefile
-target that fetches current LL2, compares against
-`tests/fixtures/ll2-response-2026-05.json`, prints diff. ~15 min CC. Zero
-cost when it never fires (LL2 schema is stable for years at a time).
+### V3-P3 — `make ll2-diff` for LL2 schema-drift diagnosis (SHIPPED v1.4.5.0, 2026-05-21)
+Makefile target fetches live LL2 (`?limit=1`), extracts the jq-path set
+of the first result, and diffs against `tests/fixtures/ll2-response-2026-05.json`.
+Prints removed/renamed paths with `-` prefix and added paths with `+`.
+Saves the full live response to `/tmp/ll2-live.json` for deeper inspection.
 
 ## V4 — Operator feedback (Chris Williams, ISS, 2026-05-05)
 
@@ -333,14 +331,13 @@ Shipped: `src/empty-hint.ts` exports `emptyQueueHint(manifest, nowMs)`.
 90-min threshold (vs banner's 60). Hourly tick projection via modulo.
 8 unit tests. Wired into `renderQueue()` empty-state branch.
 
-### V2-P2 — sha256 verification of artifact fetches
-Generator already ships sha256 for every artifact in manifest.json.
-Frontend fetches and parses without checking. A partial R2 deploy
-(manifest pointing at a not-yet-uploaded artifact) or CF compromise would
-silently feed wrong data. Add SubtleCrypto.digest('SHA-256') in
-`frontend/src/manifest.ts:fetchArtifact` and throw on mismatch — the
-existing transactional refresh already shields against the resulting
-exception. ~30 min CC.
+### V2-P2 — sha256 verification of artifact fetches (SHIPPED v1.4.5.0, 2026-05-21)
+Generator ships sha256 for every artifact; `fetchArtifact` now hashes
+the response bytes via `crypto.subtle.digest('SHA-256')` and throws on
+mismatch. Existing transactional refresh treats the exception as
+"stay on previous snapshot," so a poisoned fetch degrades to last-good
+instead of feeding wrong data into the UI. Three new tests:
+match success, mismatch throws, missing-hash entry skipped defensively.
 
 ### V2-P2 — Tighten polynomial fit (or drop it for SGP4-only)
 /review discovered the order-11 polynomial fit has up to 1.1° lat error
