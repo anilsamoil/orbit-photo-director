@@ -113,6 +113,452 @@ class PlaceholderLightningSampler:
         )
 
 
+# ---------------------------------------------------------------------------
+# GLM (NOAA Geostationary Lightning Mapper) sampler — v1.5.5.0 (weather v1.3.2)
+# ---------------------------------------------------------------------------
+#
+# Source: NOAA Big Data on AWS S3, anonymous public bucket
+#   noaa-goes16 (GOES-East, lon -75.2°) — Americas + Atlantic
+#   noaa-goes18 (GOES-West, lon -137.0°) — E.Pacific + Americas
+# Format: GLM-L2-LCFA NetCDF granules, ~20s cadence, ~30-100KB each.
+# Path: GLM-L2-LCFA/YYYY/DOY/HH/OR_GLM-L2-LCFA_G{16,18}_s{...}_e{...}_c{...}.nc
+#
+# v1.5.5.0 design (per /plan-eng-review 2026-05-21):
+# - A1: 60-min window per tick (matches tick cadence; ~18MB/tick total)
+# - A2: skip targets outside GOES coverage (lat outside [-60, 60] or lon
+#       outside [-180, -25]) — no point fetching for Europe/Africa/Asia
+# - A3: companion `make glm-smoke` target for live-S3 verification
+# - A4: granule age carried in lightning_source (e.g., "glm-45m")
+# - A5: log warning when expected listing is empty (silent-degrade detection)
+# - P2: 5° × 5° spatial bucket index for O(1) per-target lookup
+#
+# Sim-env caveat: NOAA S3 only has data through 2025; in this dev
+# environment the sampler returns 0-potential for "today's" date.
+# Tests use mocked fixtures + the live path is verified only via
+# `make glm-smoke` after real-world deployment.
+#
+# Structural similarity to GFSForecastSampler.fetch_batches: both list
+# URLs in a time window, fetch each, parse, aggregate. Different formats
+# (NetCDF vs JSON) and different cadences (20s vs 1h), so the
+# generalization isn't worth a shared abstraction.
+
+GLM_S3_BUCKETS = ("noaa-goes16", "noaa-goes18")
+GLM_LISTING_TIMEOUT_SECONDS = 30
+GLM_GRANULE_TIMEOUT_SECONDS = 30
+# Window of GLM granules to fetch per tick (60 min — matches default
+# tick interval). ~3 granules/min × 60 min × 2 sats = ~360 files × ~50KB
+# = ~18MB egress per tick. Well within budget; bandwidth note in P1.
+GLM_WINDOW_MINUTES = 60
+# Per-target lookup radius. 100km is "visible from a single ISS frame"
+# (~3° lat at 408km altitude); matches operator's mental model of
+# "lightning near my photo target."
+GLM_LOOKUP_RADIUS_KM = 100.0
+# Coarse spatial-index bucket size (P2). 5° lat/lon ≈ 555km × 555km at
+# the equator; a 100km lookup radius always lands within at most 4
+# adjacent buckets, so the per-target retrieval is O(1) bucket fetch
+# followed by an O(k) distance check across ≤4 buckets.
+GLM_SPATIAL_BUCKET_DEG = 5.0
+# GOES nominal full-disk coverage envelope. Real coverage is a circle
+# centered on each satellite's sub-point; using a lat/lon box gates the
+# work without over-fetching. Outside this envelope, GLM has nothing
+# to say and the sampler skips immediately.
+GLM_COVERAGE_LAT_MIN = -60.0
+GLM_COVERAGE_LAT_MAX = 60.0
+GLM_COVERAGE_LON_MIN = -180.0
+GLM_COVERAGE_LON_MAX = -25.0
+
+
+def _in_glm_coverage(lat: float, lon: float) -> bool:
+    """A2: return False for points outside the combined GOES-East+West disk."""
+    return (
+        GLM_COVERAGE_LAT_MIN <= lat <= GLM_COVERAGE_LAT_MAX
+        and GLM_COVERAGE_LON_MIN <= lon <= GLM_COVERAGE_LON_MAX
+    )
+
+
+def _glm_granule_urls(bucket: str, when: datetime, window_minutes: int) -> list[str]:
+    """List GLM granule URLs from S3 covering the last `window_minutes`
+    minutes ending at `when`. Uses S3's `list-type=2` XML endpoint.
+
+    Returns absolute HTTPS URLs (one per granule). Empty list on listing
+    failure — the caller logs a warning per A5 if a window where we
+    expect data comes back empty.
+    """
+    if window_minutes <= 0:
+        return []
+    cutoff = when.timestamp() - window_minutes * 60
+    out: list[str] = []
+    # Walk hour-by-hour back from `when` until we've covered the window.
+    hours_to_walk = (window_minutes // 60) + 2
+    for hour_offset in range(hours_to_walk):
+        t = datetime.fromtimestamp(when.timestamp() - hour_offset * 3600, tz=UTC)
+        year = t.year
+        doy = t.timetuple().tm_yday
+        hour = t.hour
+        prefix = f"GLM-L2-LCFA/{year}/{doy:03d}/{hour:02d}/"
+        list_url = (
+            f"https://{bucket}.s3.amazonaws.com/?prefix={prefix}&list-type=2"
+        )
+        try:
+            resp = requests.get(list_url, timeout=GLM_LISTING_TIMEOUT_SECONDS)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            log.warning("GLM listing failed for %s/%s: %s", bucket, prefix, exc)
+            continue
+        # XML response — extract <Key>...</Key>. Avoid an XML-parser dep.
+        body = resp.text
+        idx = 0
+        while True:
+            start = body.find("<Key>", idx)
+            if start < 0:
+                break
+            end = body.find("</Key>", start)
+            if end < 0:
+                break
+            key = body[start + 5 : end]
+            idx = end + 6
+            # Filter granules whose start-time is within our window.
+            # Key pattern: OR_GLM-L2-LCFA_G{N}_sYYYYDOYHHMMSSS_e...nc
+            # The `s` timestamp marks granule start. Parse just enough.
+            s_pos = key.find("_s")
+            if s_pos < 0:
+                continue
+            try:
+                stamp = key[s_pos + 2 : s_pos + 16]  # YYYYDOYHHMMSSS (14 chars)
+                stamp_year = int(stamp[0:4])
+                stamp_doy = int(stamp[4:7])
+                stamp_h = int(stamp[7:9])
+                stamp_m = int(stamp[9:11])
+                stamp_s = int(stamp[11:13])
+                granule_dt = datetime(stamp_year, 1, 1, tzinfo=UTC).replace(
+                    month=1, day=1
+                )
+                from datetime import timedelta as _td
+                granule_dt = granule_dt + _td(days=stamp_doy - 1, hours=stamp_h,
+                                              minutes=stamp_m, seconds=stamp_s)
+            except (ValueError, IndexError):
+                continue
+            if granule_dt.timestamp() < cutoff:
+                continue
+            out.append(f"https://{bucket}.s3.amazonaws.com/{key}")
+    return out
+
+
+@dataclass(frozen=True)
+class _GLMFlash:
+    """One decoded lightning flash from a GLM granule."""
+    lat: float
+    lon: float
+    t: datetime
+
+
+def _decode_glm_granule(buf: bytes) -> list[_GLMFlash]:
+    """Parse one GLM-L2-LCFA NetCDF buffer; return list of (lat, lon, time)
+    for each flash. Returns empty list on parse failure (caller silently
+    skips and tries the next granule).
+
+    GLM-L2-LCFA schema (per NOAA GOES-R Product Definition):
+      variables: flash_lat[N], flash_lon[N],
+                 flash_time_offset_of_first_event[N] (float seconds)
+      attribute: time_coverage_start ISO 8601 string
+    """
+    try:
+        import netCDF4
+    except ImportError:
+        log.warning("netCDF4 not available; cannot decode GLM granules")
+        return []
+    try:
+        ds = netCDF4.Dataset("inmemory.nc", mode="r", memory=buf)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("GLM granule decode failed: %s", exc)
+        return []
+    try:
+        if "flash_lat" not in ds.variables:
+            return []
+        flash_lat = ds.variables["flash_lat"][:]
+        flash_lon = ds.variables["flash_lon"][:]
+        if "flash_time_offset_of_first_event" in ds.variables:
+            flash_offsets = ds.variables["flash_time_offset_of_first_event"][:]
+        else:
+            flash_offsets = [0.0] * len(flash_lat)
+        ref_str = getattr(ds, "time_coverage_start", None)
+        if ref_str:
+            try:
+                ref = datetime.fromisoformat(str(ref_str).replace("Z", "+00:00"))
+                if ref.tzinfo is None:
+                    ref = ref.replace(tzinfo=UTC)
+            except ValueError:
+                ref = datetime.now(tz=UTC)
+        else:
+            ref = datetime.now(tz=UTC)
+        from datetime import timedelta as _td
+        flashes: list[_GLMFlash] = []
+        for i in range(len(flash_lat)):
+            try:
+                lat = float(flash_lat[i])
+                lon = float(flash_lon[i])
+                offset = float(flash_offsets[i]) if i < len(flash_offsets) else 0.0
+                t = ref + _td(seconds=offset)
+                flashes.append(_GLMFlash(lat=lat, lon=lon, t=t))
+            except (ValueError, TypeError):
+                continue
+        return flashes
+    finally:
+        ds.close()
+
+
+def _bucket_key(lat: float, lon: float) -> tuple[int, int]:
+    """5° × 5° lat/lon bucket key for the GLM spatial index (P2)."""
+    return (
+        int(lat // GLM_SPATIAL_BUCKET_DEG),
+        int(lon // GLM_SPATIAL_BUCKET_DEG),
+    )
+
+
+class GLMSampler:
+    """Observed-lightning sampler via NOAA GLM AWS S3 buckets.
+
+    Construction is once-per-tick: fetches GLM-L2-LCFA granules from
+    GOES-East + GOES-West for the last GLM_WINDOW_MINUTES, decodes them
+    into a 5°×5° spatial index, caches the result. Subsequent .sample()
+    calls are O(1) bucket lookup + O(k) flashes-in-bucket distance check.
+
+    Returns lightning_source="glm-{N}m" where N is the age in minutes
+    of the OLDEST granule that contributed flashes (per A4 — operator
+    visibility into freshness).
+    """
+
+    def __init__(
+        self,
+        when: datetime,
+        window_minutes: int = GLM_WINDOW_MINUTES,
+        fetcher: Any | None = None,
+        lister: Any | None = None,
+    ):
+        if when.tzinfo is None:
+            raise ValueError("when must be UTC-aware")
+        self._when = when
+        self._window_minutes = window_minutes
+        self._flashes_by_bucket: dict[tuple[int, int], list[_GLMFlash]] = {}
+        # Track the oldest granule we contributed from, for the lightning_source
+        # age suffix.
+        self._oldest_granule_age_min: int | None = None
+
+        if fetcher is None:
+            def _fetch_bytes(url: str) -> bytes:
+                resp = requests.get(url, timeout=GLM_GRANULE_TIMEOUT_SECONDS)
+                resp.raise_for_status()
+                return resp.content
+            fetcher = _fetch_bytes
+        if lister is None:
+            def _list_urls(bucket: str) -> list[str]:
+                return _glm_granule_urls(bucket, when, window_minutes)
+            lister = _list_urls
+
+        all_urls: list[str] = []
+        for bucket in GLM_S3_BUCKETS:
+            urls = lister(bucket)
+            if not urls:
+                # A5: log warning when a window where we expect data is empty.
+                log.info(
+                    "GLM listing for %s in last %dm returned 0 granules — "
+                    "expected ~%d. Either NOAA is having an issue or this "
+                    "environment's wall-clock is ahead of the bucket's data.",
+                    bucket, window_minutes, window_minutes * 3,
+                )
+            all_urls.extend(urls)
+
+        for url in all_urls:
+            try:
+                buf = fetcher(url)
+            except requests.RequestException as exc:
+                log.warning("GLM granule fetch failed for %s: %s", url, exc)
+                continue
+            flashes = _decode_glm_granule(buf)
+            for flash in flashes:
+                key = _bucket_key(flash.lat, flash.lon)
+                self._flashes_by_bucket.setdefault(key, []).append(flash)
+                age_min = int((when - flash.t).total_seconds() / 60)
+                if self._oldest_granule_age_min is None or age_min > self._oldest_granule_age_min:
+                    self._oldest_granule_age_min = age_min
+
+    def sample(self, lat: float, lon: float, when: datetime) -> LightningSample:
+        # A2: skip GLM lookup for targets outside GOES coverage envelope.
+        if not _in_glm_coverage(lat, lon):
+            return LightningSample(
+                lightning_potential=0.0,
+                flash_rate_per_min=0.0,
+                sample_time=when,
+                source="glm-out-of-coverage",
+            )
+        # Lookup the 4 adjacent buckets (handles the 5°×5° grid + the 100km
+        # lookup radius landing across bucket boundaries).
+        candidates: list[_GLMFlash] = []
+        center_key = _bucket_key(lat, lon)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                key = (center_key[0] + dy, center_key[1] + dx)
+                candidates.extend(self._flashes_by_bucket.get(key, []))
+        # Filter by distance + the window.
+        nearby = 0
+        for flash in candidates:
+            if great_circle_km(lat, lon, flash.lat, flash.lon) <= GLM_LOOKUP_RADIUS_KM:
+                nearby += 1
+        flash_rate_per_min = nearby / max(1.0, self._window_minutes)
+        # Convert flashes/min → potential. Saturate at 30 flashes/min
+        # (active-storm threshold). Per D5.
+        potential = min(1.0, flash_rate_per_min / 30.0)
+        # A4: surface granule age in source so operator sees freshness.
+        age = self._oldest_granule_age_min
+        age_suffix = f"-{age}m" if age is not None else ""
+        return LightningSample(
+            lightning_potential=potential,
+            flash_rate_per_min=flash_rate_per_min,
+            sample_time=when,
+            source=f"glm{age_suffix}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# GFS-CAPE forecast lightning sampler — v1.5.5.0 (weather v1.3.2)
+# ---------------------------------------------------------------------------
+
+
+class GFSCAPELightningSampler:
+    """Forecast-side lightning potential from GFS CAPE via Open-Meteo.
+
+    Wraps a `cloud.GFSForecastSampler` constructed with `include_cape=True`.
+    Converts CAPE (J/kg) into a 0.0-1.0 lightning_potential using the
+    severe-thunderstorm threshold of 2500 J/kg (per D5).
+
+    Use case: when the pass is >20 min in the future (out of GLM
+    observation range) OR the target is outside GOES coverage.
+    """
+
+    def __init__(self, gfs_sampler: Any):
+        # `gfs_sampler` is a cloud.GFSForecastSampler instance built with
+        # include_cape=True. We don't import to avoid circular imports.
+        self._gfs = gfs_sampler
+
+    def sample(self, lat: float, lon: float, when: datetime) -> LightningSample:
+        cape = None
+        cape_at = getattr(self._gfs, "cape_at", None)
+        if cape_at is not None:
+            try:
+                cape = cape_at(lat, lon, when)
+            except ValueError:
+                cape = None
+        if cape is None:
+            return LightningSample(
+                lightning_potential=0.0,
+                flash_rate_per_min=0.0,
+                sample_time=when,
+                source="gfs-cape-no-data",
+            )
+        # CAPE saturates at 2500 J/kg per D5.
+        potential = min(1.0, cape / 2500.0)
+        return LightningSample(
+            lightning_potential=potential,
+            flash_rate_per_min=0.0,  # forecast doesn't predict flash count
+            sample_time=when,
+            source="gfs-cape",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Combined sampler — fuses observed (GLM) + forecast (GFS-CAPE) — v1.5.5.0
+# ---------------------------------------------------------------------------
+
+
+class CombinedLightningSampler:
+    """Fuses observed + forecast lightning into a single potential per pass.
+
+    Per /plan-eng-review 2026-05-21 D5 + Q3:
+    - `max(observed, forecast * 0.7)` — observed always wins. Forecast
+      scaled to 70% to express forecast uncertainty.
+    - Observed-zero is REAL DATA ("no lightning observed in 100km radius
+      over the last hour"), NOT a missing-source signal. Don't fall back
+      to forecast just because observed=0; do fall back when observed
+      returns "no-data" / "out-of-coverage" source attributions.
+    - Failure cascade (A3 + D7): if BOTH samplers return error states
+      (network failure, parse failure, no-data), fall back to placeholder
+      (lightning_bonus = 0).
+
+    Attribution:
+    - "glm-{N}m" — observed contributed (whether or not forecast also did)
+    - "gfs-cape" — only forecast contributed
+    - "placeholder" — both samplers had no data
+    """
+
+    FORECAST_WEIGHT = 0.7
+
+    def __init__(
+        self,
+        observed: Any | None = None,
+        forecast: Any | None = None,
+    ):
+        self._observed = observed
+        self._forecast = forecast
+
+    def sample(self, lat: float, lon: float, when: datetime) -> LightningSample:
+        obs: LightningSample | None = None
+        fcst: LightningSample | None = None
+        if self._observed is not None:
+            try:
+                obs = self._observed.sample(lat, lon, when)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("GLM sample failed for (%.2f, %.2f): %s", lat, lon, exc)
+        if self._forecast is not None:
+            try:
+                fcst = self._forecast.sample(lat, lon, when)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("GFS-CAPE sample failed for (%.2f, %.2f): %s", lat, lon, exc)
+
+        # Determine which samplers contributed REAL data (Q3: distinguish
+        # "real zero" from "no data").
+        def _has_data(s: LightningSample | None) -> bool:
+            if s is None:
+                return False
+            return not s.source.endswith(("-no-data", "-out-of-coverage"))
+
+        obs_has_data = _has_data(obs)
+        fcst_has_data = _has_data(fcst)
+
+        # All failed → placeholder.
+        if not obs_has_data and not fcst_has_data:
+            return LightningSample(
+                lightning_potential=0.0,
+                flash_rate_per_min=0.0,
+                sample_time=when,
+                source="placeholder",
+            )
+
+        # Apply fusion rule. Observed always wins when present (D5).
+        obs_potential = obs.lightning_potential if obs_has_data else 0.0
+        fcst_potential = fcst.lightning_potential if fcst_has_data else 0.0
+        combined_potential = max(obs_potential, fcst_potential * self.FORECAST_WEIGHT)
+
+        # Attribution: observed wins; if observed-has-data, source carries
+        # its age suffix from GLMSampler (e.g., "glm-45m"). Otherwise fall
+        # back to forecast attribution.
+        if obs_has_data and obs is not None:
+            source = obs.source
+            flash_rate = obs.flash_rate_per_min
+        elif fcst is not None:
+            source = fcst.source
+            flash_rate = 0.0
+        else:
+            source = "placeholder"
+            flash_rate = 0.0
+
+        return LightningSample(
+            lightning_potential=combined_potential,
+            flash_rate_per_min=flash_rate,
+            sample_time=when,
+            source=source,
+        )
+
+
 def lightning_bonus(potential: float) -> float:
     """Convert a 0.0-1.0 potential into an additive score bonus [0, 30].
 

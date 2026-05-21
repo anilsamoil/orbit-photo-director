@@ -820,9 +820,18 @@ class GFSForecastSampler:
         targets: list[tuple[float, float]],
         forecast_days: int = 2,
         fetcher: Any | None = None,
+        include_cape: bool = False,
     ):
+        # v1.5.5.0 (weather v1.3.2): added optional `include_cape` to also
+        # fetch CAPE (Convective Available Potential Energy) alongside
+        # cloud_cover. CAPE > 1000 J/kg indicates strong thunderstorm
+        # potential — the LightningCAPEForecastSampler reads this for the
+        # forecast-side lightning_potential when GLM has no recent data
+        # for the target's region.
+        self._include_cape = include_cape
         if not targets:
             self._by_coord: dict[tuple[float, float], list[tuple[datetime, float]]] = {}
+            self._cape_by_coord: dict[tuple[float, float], list[tuple[datetime, float]]] = {}
             return
         if fetcher is None:
             import requests
@@ -847,19 +856,26 @@ class GFSForecastSampler:
                 rounded.append(key)
 
         self._by_coord = {}
+        self._cape_by_coord = {}
         for batch_start in range(0, len(rounded), OPEN_METEO_BATCH_SIZE):
             batch = rounded[batch_start : batch_start + OPEN_METEO_BATCH_SIZE]
             self._fetch_batch(batch, forecast_days, fetcher)
 
     @staticmethod
     def _build_url(
-        batch: list[tuple[float, float]], forecast_days: int
+        batch: list[tuple[float, float]],
+        forecast_days: int,
+        include_cape: bool = False,
     ) -> str:
         lats = ",".join(f"{lat:.4f}" for lat, _ in batch)
         lons = ",".join(f"{lon:.4f}" for _, lon in batch)
+        # v1.5.5.0: optionally include CAPE in the hourly variable list.
+        # Open-Meteo supports `cape` as a free hourly variable on the GFS
+        # endpoint — zero extra HTTP calls.
+        hourly = "cloud_cover,cape" if include_cape else "cloud_cover"
         return (
             f"{OPEN_METEO_GFS_BASE}?latitude={lats}&longitude={lons}"
-            f"&hourly=cloud_cover&forecast_days={forecast_days}"
+            f"&hourly={hourly}&forecast_days={forecast_days}"
         )
 
     def _fetch_batch(
@@ -868,7 +884,7 @@ class GFSForecastSampler:
         forecast_days: int,
         fetcher: Any,
     ) -> None:
-        url = self._build_url(batch, forecast_days)
+        url = self._build_url(batch, forecast_days, self._include_cape)
         try:
             payload = fetcher(url)
         except Exception as exc:  # noqa: BLE001
@@ -887,21 +903,35 @@ class GFSForecastSampler:
                 hourly = item.get("hourly") or {}
                 times = hourly.get("time") or []
                 covers = hourly.get("cloud_cover") or []
+                capes = hourly.get("cape") or [] if self._include_cape else []
             except (AttributeError, TypeError):
                 continue
             series: list[tuple[datetime, float]] = []
-            for t_str, cf in zip(times, covers, strict=False):
-                if cf is None:
-                    continue
+            cape_series: list[tuple[datetime, float]] = []
+            for idx, t_str in enumerate(times):
+                cf = covers[idx] if idx < len(covers) else None
                 try:
                     # Open-Meteo defaults to UTC ISO8601 without timezone suffix
                     dt = datetime.fromisoformat(t_str)
                     if dt.tzinfo is None:
                         dt = dt.replace(tzinfo=UTC)
-                    series.append((dt, float(cf)))
                 except (ValueError, TypeError):
                     continue
+                if cf is not None:
+                    try:
+                        series.append((dt, float(cf)))
+                    except (ValueError, TypeError):
+                        pass
+                if self._include_cape and idx < len(capes):
+                    cape = capes[idx]
+                    if cape is not None:
+                        try:
+                            cape_series.append((dt, float(cape)))
+                        except (ValueError, TypeError):
+                            pass
             self._by_coord[(lat, lon)] = series
+            if self._include_cape:
+                self._cape_by_coord[(lat, lon)] = cape_series
 
     def sample(self, lat: float, lon: float, when: datetime) -> CloudSample:
         """Return forecast cloud-fraction at the hour bucket containing `when`.
@@ -927,3 +957,25 @@ class GFSForecastSampler:
                 )
         # `when` is past the forecast horizon — surface honestly.
         return CloudSample(50.0, when, "gfs-forecast-out-of-horizon")
+
+    def cape_at(self, lat: float, lon: float, when: datetime) -> float | None:
+        """Return forecast CAPE (J/kg) at the hour bucket containing `when`,
+        or None when CAPE wasn't fetched / `when` is past the horizon /
+        no data for the (lat, lon) cell. v1.5.5.0 — weather v1.3.2.
+
+        Only meaningful when the sampler was constructed with
+        `include_cape=True`. Otherwise always returns None.
+        """
+        if not self._include_cape:
+            return None
+        if when.tzinfo is None or when.tzinfo.utcoffset(when) != timedelta(0):
+            raise ValueError("when must be UTC-aware")
+        key = (round(lat * 4) / 4.0, round(lon * 4) / 4.0)
+        series = self._cape_by_coord.get(key)
+        if not series:
+            return None
+        target_hour = when.replace(minute=0, second=0, microsecond=0)
+        for dt, cape in series:
+            if dt == target_hour:
+                return max(0.0, cape)
+        return None
