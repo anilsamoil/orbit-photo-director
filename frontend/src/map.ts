@@ -75,6 +75,32 @@ function readTerminatorVisible(): boolean {
 }
 let terminatorVisible: boolean = readTerminatorVisible();
 
+/** Multi-orbit display preference (v1.5.0.0 — Pettit feedback 2026-05-19:
+ *  "multi-orbit display"). When ON, the ground-track polyline splits
+ *  track_points into 4 per-orbit segments and renders each with
+ *  progressively reduced opacity (current orbit solid, +1/+2/+3 fading
+ *  out) so the operator sees the full ~6h forward envelope, not just
+ *  the next 95-min orbit. Default OFF — explicit opt-in so existing
+ *  users keep the familiar single-orbit look until they reach for the
+ *  toggle. */
+const MULTI_ORBIT_PREF_KEY = 'opd-map-multi-orbit-visible';
+function readMultiOrbitVisible(): boolean {
+  try {
+    const v = localStorage.getItem(MULTI_ORBIT_PREF_KEY);
+    return v === '1';
+  } catch {
+    return false;
+  }
+}
+let multiOrbitVisible: boolean = readMultiOrbitVisible();
+
+/** ISS orbital period in seconds. Used to split track_points into
+ *  per-orbit segments. 92.8 min ≈ 5568s; SGP4 mean motion varies
+ *  ±0.1% over the mission so a fixed constant is fine for visual
+ *  segmentation (the segments don't need to be exactly orbit-aligned,
+ *  just visually distinguishable). */
+const ISS_ORBIT_PERIOD_SECONDS = 5568;
+
 /** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
  *  "make so can turn off/on as needed" stays sticky across reloads. Default
  *  on (clouds visible) matches v1.0+ behavior. */
@@ -258,32 +284,89 @@ function buildLineFeatures(samples: [number, number][]): GeoJSON.Feature[] {
   return duplicated;
 }
 
+/** Split `track_points` (each `[t_seconds, lat, lon]`) into per-orbit
+ *  buckets. Bucket `k` holds samples with `t in [k*period, (k+1)*period)`.
+ *  Used by the multi-orbit display (v1.5.0.0) to render each orbit as
+ *  a separate feature with its own `orbit_index` property, enabling a
+ *  data-driven opacity ramp in the MapLibre layer paint.
+ *
+ *  Exported for unit testing.
+ */
+export function splitTrackByOrbit(
+  trackPoints: [number, number, number][],
+  periodSeconds: number = ISS_ORBIT_PERIOD_SECONDS,
+): [number, number][][] {
+  const buckets: [number, number][][] = [];
+  for (const [t, lat, lon] of trackPoints) {
+    const idx = Math.floor(t / periodSeconds);
+    if (!buckets[idx]) buckets[idx] = [];
+    buckets[idx].push([lat, lon]);
+  }
+  // Replace any holes (no samples for an orbit) with empty arrays to
+  // keep indices stable when callers map across the array.
+  for (let i = 0; i < buckets.length; i++) {
+    if (!buckets[i]) buckets[i] = [];
+  }
+  return buckets;
+}
+
+/** Wrap line features for one orbit's samples with an `orbit_index`
+ *  property. Re-uses `buildLineFeatures` for antimeridian + world-copy
+ *  handling, then stamps every feature with its orbit index so the
+ *  layer paint expression can drive opacity per orbit. */
+function buildOrbitLineFeatures(
+  samples: [number, number][],
+  orbitIndex: number,
+): GeoJSON.Feature[] {
+  return buildLineFeatures(samples).map((f) => ({
+    ...f,
+    properties: { ...(f.properties ?? {}), orbit_index: orbitIndex },
+  }));
+}
+
 /** Render the ground track polyline for the CURRENT orbit window.
- *  Prefers `track_points` (raw SGP4 samples covering 2 orbits) when
- *  present. Falls back to evaluating the polynomial across its full
- *  duration for older manifests.
+ *  Prefers `track_points` (raw SGP4 samples covering ~4 orbits as of
+ *  v1.5.0.0) when present. Falls back to evaluating the polynomial
+ *  across its full duration for older manifests.
+ *
+ *  When `multiOrbitVisible` is true, splits track_points into per-orbit
+ *  features so the layer paint can apply a fading-opacity ramp. When
+ *  false, returns the full track as a single segment (the legacy
+ *  one-feature path with `orbit_index: 0` on everything).
  */
 function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
-  const samples: [number, number][] = (() => {
-    if (track.track_points && track.track_points.length > 0) {
-      return track.track_points.map(([, lat, lon]) => [lat, lon] as [number, number]);
+  if (track.track_points && track.track_points.length > 0) {
+    if (multiOrbitVisible) {
+      const orbits = splitTrackByOrbit(track.track_points);
+      const out: GeoJSON.Feature[] = [];
+      for (let k = 0; k < orbits.length; k++) {
+        const samples = orbits[k];
+        if (!samples || samples.length < 2) continue;
+        out.push(...buildOrbitLineFeatures(samples, k));
+      }
+      return out;
     }
-    const dur = track.iss_polynomial.duration_seconds;
-    const stepSec = 30;
-    const evalPoly = (coeffs: number[], t: number): number => {
-      let acc = 0;
-      for (const c of coeffs) acc = acc * t + c;
-      return acc;
-    };
-    const out: [number, number][] = [];
-    for (let t = 0; t <= dur; t += stepSec) {
-      const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
-      const lon = evalPoly(track.iss_polynomial.lon_coeffs, t);
-      out.push([lat, lon]);
-    }
-    return out;
-  })();
-  return buildLineFeatures(samples);
+    // Single-orbit (legacy) view: only the first orbit's samples.
+    const firstOrbit = (track.track_points
+      .filter(([t]) => t < ISS_ORBIT_PERIOD_SECONDS)
+      .map(([, lat, lon]) => [lat, lon] as [number, number]));
+    return buildOrbitLineFeatures(firstOrbit, 0);
+  }
+  // Polynomial fallback for older manifests without track_points.
+  const dur = track.iss_polynomial.duration_seconds;
+  const stepSec = 30;
+  const evalPoly = (coeffs: number[], t: number): number => {
+    let acc = 0;
+    for (const c of coeffs) acc = acc * t + c;
+    return acc;
+  };
+  const out: [number, number][] = [];
+  for (let t = 0; t <= dur; t += stepSec) {
+    const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
+    const lon = evalPoly(track.iss_polynomial.lon_coeffs, t);
+    out.push([lat, lon]);
+  }
+  return buildOrbitLineFeatures(out, 0);
 }
 
 /** Render a SINGLE orbit's ground track at a future time, SGP4-derived.
@@ -376,7 +459,20 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       paint: {
         'line-color': '#5cd0ff',
         'line-width': 2,
-        'line-opacity': 0.85,
+        // v1.5.0.0: data-driven opacity. With multi-orbit OFF every
+        // feature has orbit_index=0 and renders at 0.85 (the prior
+        // single-orbit look). With multi-orbit ON, orbit 0 is solid,
+        // +1/+2/+3 fade out so the operator sees current is dominant
+        // and future orbits are context, not noise.
+        'line-opacity': [
+          'match',
+          ['coalesce', ['get', 'orbit_index'], 0],
+          0, 0.85,
+          1, 0.55,
+          2, 0.35,
+          3, 0.2,
+          0.12,
+        ],
         'line-dasharray': [2, 1],
       },
     });
@@ -525,6 +621,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindBearingToggle();
   bindCloudToggle();
   bindTerminatorToggle();
+  bindMultiOrbitToggle();
   // Apply persisted cloud + terminator preferences on first map render.
   applyCloudsVisibility();
   applyTerminatorVisibility();
@@ -872,6 +969,32 @@ function bindTerminatorToggle(): void {
     applyTerminatorVisibility();
   });
   terminatorToggleBound = true;
+}
+
+let multiOrbitToggleBound = false;
+function bindMultiOrbitToggle(): void {
+  if (multiOrbitToggleBound) return;
+  const btn = document.getElementById('toggle-multi-orbit');
+  if (!btn) return;
+  const reflect = () => {
+    btn.classList.toggle('active', multiOrbitVisible);
+    btn.setAttribute('aria-pressed', multiOrbitVisible ? 'true' : 'false');
+    btn.title = multiOrbitVisible
+      ? 'Showing 4 future orbits — click to show just the current orbit'
+      : 'Showing current orbit only — click to show next 4 orbits';
+  };
+  reflect();
+  btn.addEventListener('click', () => {
+    multiOrbitVisible = !multiOrbitVisible;
+    try { localStorage.setItem(MULTI_ORBIT_PREF_KEY, multiOrbitVisible ? '1' : '0'); } catch { /* noop */ }
+    reflect();
+    // Rebuild the iss-track source with the new orbit-segmentation.
+    // refreshGroundTrackSource reads `multiOrbitVisible` via the closure
+    // chain into groundTrackFeatures (when lookahead=0; the time-scrub
+    // path uses a single ±45min window so the toggle is a no-op there).
+    if (currentTrack) refreshGroundTrackSource(currentTrack);
+  });
+  multiOrbitToggleBound = true;
 }
 
 let bearingToggleBound = false;

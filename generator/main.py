@@ -905,13 +905,17 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         upcoming, launch_pass_entries, n, OBSERVED_CLOUD_HORIZON_MINUTES,
     )
 
-    # Polynomial (120 min) drives the precise live ISS marker.
-    # track_points (200 min ≈ 2 ISS orbits) drives the map's ground-track
-    # polyline — same SGP4 source as the polynomial but no fit drift past
-    # the polynomial's window. ~9.6 KB JSON, ~3 KB gzipped.
+    # Polynomial (120 min) — kept for legacy boot snapshots; v1.4.6.0
+    # switched the live dot to SGP4-first so this no longer drives the
+    # primary path.
+    # track_points (372 min ≈ 4 ISS orbits @ 92.8 min) drives the map's
+    # ground-track polyline. v1.5.0.0 (Pettit feedback 2026-05-19,
+    # "multi-orbit display") extended the window from 200 → 372 min so
+    # the frontend can render 4 future orbits with progressive opacity
+    # under a single toggle. ~17.8 KB JSON, ~5 KB gzipped.
     track_data = {
         "iss_polynomial": fit_iss_polynomial(tle, n, minutes=120),
-        "track_points": sample_track_points(tle, n, minutes=200, step_seconds=30),
+        "track_points": sample_track_points(tle, n, minutes=372, step_seconds=30),
         "tle": {"line1": tle.line1, "line2": tle.line2},
         "tle_epoch": utcnow_iso(tle.epoch),
         "tle_age_hours": round(age_h, 2),

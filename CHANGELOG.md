@@ -2,6 +2,34 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.5.0.0] - 2026-05-21
+
+### Multi-orbit ground-track display (Pettit Tier B follow-up).
+
+Pettit 2026-05-19 asked for a "multi-orbit display" — show the next 3–4 future ISS orbits on the map simultaneously, not just the next 95-min orbit. Operator gets the full ~6h forward envelope at a glance; pin colors at scrubbed-forward times now sit on visible ground-track lines instead of empty space.
+
+### Added
+
+- **Toggle button ↻ next to ☁ and ☀** in the map control row. Default OFF (existing single-orbit look is preserved for users who haven't reached for it). Persisted to `localStorage['opd-map-multi-orbit-visible']`. Title text flips between "Showing 4 future orbits — click to show just the current orbit" and the reverse.
+- **Generator now emits 372 min of track_points** (was 200 min). 372 ≈ 4 × ISS orbital period (92.8 min). Payload grows from ~9.6 KB JSON / ~3 KB gzipped to ~17.8 KB JSON / ~5 KB gzipped — still tiny.
+- **Frontend splits track_points into per-orbit segments** via the new `splitTrackByOrbit()` helper. Each segment becomes a separate MapLibre Feature with an `orbit_index` property. The `iss-track-layer` paint uses a data-driven `'line-opacity': ['match', ['coalesce', ['get', 'orbit_index'], 0], 0, 0.85, 1, 0.55, 2, 0.35, 3, 0.2, 0.12]` so orbit 0 stays solid and +1/+2/+3 fade out progressively. Current orbit dominates; future orbits are context, not noise.
+
+### Implementation
+
+- `generator/main.py:914` — `minutes=200` → `minutes=372`. The existing `sample_track_points()` function is unchanged; only the call site widens.
+- `frontend/src/map.ts` — new `MULTI_ORBIT_PREF_KEY`, `multiOrbitVisible` state, `ISS_ORBIT_PERIOD_SECONDS = 5568`, exported `splitTrackByOrbit()`, refactored `groundTrackFeatures()` to optionally bucket by orbit, `buildOrbitLineFeatures()` helper, new `bindMultiOrbitToggle()`. Layer paint switched to a data-driven `match` expression.
+- `frontend/index.html` — new `<button id="toggle-multi-orbit">↻</button>` after the terminator toggle.
+
+### Tests
+
+- `frontend/test/map-orbit-split.test.ts` — 6 new unit tests covering empty input, exact-period bucketing, custom period, single-orbit input, realistic 4-orbit synthetic input, and index-stability across sparse samples.
+- 429 frontend tests total passing (was 423).
+- Python: existing 5 `sample_track_points` tests still pass (they parameterize their own `minutes=200`; not coupled to main.py's caller).
+
+### NOT in scope
+
+- ISS-up bearing rotation with multi-orbit display can get visually busy near the poles. v1 ships north-up as the only fully-tested combination; if multi-orbit + ISS-up reveals confusion we'll iterate. The bearing toggle continues to work; the visual interaction is just untested as a combination.
+
 ## [1.4.6.0] - 2026-05-21
 
 ### Live ISS dot now SGP4-first (fixes ~120 km drift inside the polynomial window).
