@@ -2,6 +2,25 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.4.6.0] - 2026-05-21
+
+### Live ISS dot now SGP4-first (fixes ~120 km drift inside the polynomial window).
+
+`/review` measured the order-11 polynomial fit at up to 1.1° lat error vs SGP4 truth — about 120 km on the map. The live ISS dot was visibly off-truth INSIDE the 120-min polynomial window, even though the ground-track polyline (SGP4-driven) and pin geometry agreed. v1.4.6.0 inverts the priority: SGP4 is now the primary path, polynomial is the legacy fallback for pre-V2 snapshots without a TLE.
+
+### Changed
+
+- `frontend/src/iss.ts:liveIssNow()` — tries `liveIssPositionSGP4()` first; only falls back to `liveIssPosition()` (polynomial) when SGP4 returns null (track has no TLE, TLE is malformed, or epoch mismatch).
+- Test `frontend/test/iss.test.ts` — "returns the polynomial result inside the window (cheap path)" replaced with "returns the SGP4 result when TLE is available (accurate path)", which also asserts SGP4 disagrees with the polynomial (proves we're actually exercising the new primary path).
+
+### Why SGP4 was the "expensive" framing before
+
+`satellite.js`'s `propagate()` is sub-millisecond per call once the satrec is cached — and we already cache it by `(line1, line2)` string equality in `iss-sgp4.ts`. The "SGP4 is too expensive for 1Hz" caveat in the V2 plan was about the Python generator daemon on the unattended Mac, where the cost framing was speculative. In the browser, 1Hz SGP4 is free.
+
+### TODOS marked shipped
+
+- V2-P2 polynomial fit fix → shipped (Path 2 taken: drop poly, use SGP4)
+
 ## [1.4.5.0] - 2026-05-21
 
 ### Tier 1 hardening: sha256 verify on artifacts + `make ll2-diff` diagnostic.
