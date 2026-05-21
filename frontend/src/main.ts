@@ -477,6 +477,14 @@ function updateIssNow(): void {
     `<span class="iss-label">ISS</span>` +
     `${Math.abs(pos.lat).toFixed(1)}°${ns}, ${Math.abs(pos.lon).toFixed(1)}°${ew}` +
     `<span class="iss-region">over ${region}</span>`;
+  // v1.5.2.0 — Chris feedback 2026-05-21. If the map's follow-ISS toggle is
+  // on, recenter the map on this fresh sub-point. Only fires when the map
+  // module has already been loaded (Map tab opened at least once) — we
+  // reuse the existing lazy-loaded `mapModule` cache rather than triggering
+  // a dynamic import per tick. Follow-ISS is a map-only feature, so if the
+  // operator never opened the Map tab, this is a no-op (and shouldn't
+  // force-download MapLibre).
+  if (mapModule?.applyFollowISS) mapModule.applyFollowISS(pos);
 }
 
 /** Coarse ocean / continent label for an ISS sub-point. Intentionally crude
