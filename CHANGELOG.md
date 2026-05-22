@@ -2,6 +2,81 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.0.0] - 2026-05-22
+
+### Multi-satellite tracking (Pettit ask #6) — finishes the Pettit wishlist (12/12).
+
+Don Pettit's #6 from `project_pettit_feedback_2026_05_19.md`: *"Multi-satellite tracking — Starship, Chinese station (Tiangong), others. Architectural — affects TLE fetch + target picking + scoring."*
+
+Operator picks satellites beyond ISS via a new 🛰 picker button. Each selected satellite gets:
+- Distinct-colored ground-track polyline (~1 orbit, refreshed every 60s)
+- Live marker at current sub-point (1Hz refresh, SGP4-propagated)
+- Section in the pin-drop popup with next 5 passes over the pinned point
+
+### Curated hot-list
+
+| Pick | NORAD ID | Track color |
+|---|---|---|
+| 🛰️ ISS (Zarya) | 25544 | cyan `#5cd0ff` (existing, always-on, drives scoring) |
+| 🇨🇳 Tiangong (CSS) | 48274 | orange `#ff9e2c` |
+| 🔭 Hubble (HST) | 20580 | lime `#b0ff5c` |
+| 🪐 X-37B | name-resolved | gold `#ffd45c` |
+| 🚀 Starship | name-resolved | red `#ff5c5c` |
+
+**+ "Other…" input** for any custom NORAD ID or name fragment. Resolves via CelesTrak.
+
+### Data source: CelesTrak GP API
+
+Free, CORS-enabled, no auth. 6h localStorage cache with stale-fallback on network failure. Never blocks map render (A1 from /plan-eng-review — initial fetch is lazy on selection).
+
+### Implementation
+
+- **`frontend/src/satellites.ts`** (new): `CURATED_SATELLITES`, `SatelliteMeta` with discriminated union `Resolution` (Q1 — explicit over sentinel), `parseCelestrakTLE` 3-line parser (A3) with multi-match count (A4), `fetchSatelliteTLE` with cache + stale-fallback, custom CATNR/name resolvers.
+- **`frontend/src/map.ts`**:
+  - Multi-satellite state (Map keyed by `metaKey()`)
+  - Picker UI with checkboxes + custom-input + multi-match badge
+  - Per-satellite track source/layer (sequential 30s polyline samples over 1 orbit)
+  - Live markers (CSS-styled circles, color per-satellite)
+  - `buildPinDropPopup` refactored to take `PinDropSection[]` (Q2)
+  - Pin-drop popup now iterates over ISS + all selected satellites
+  - `max-height: 60vh; overflow-y: auto` on popup body (A2)
+  - 60s track polyline refresh ticker (P1)
+  - 1Hz marker refresh via existing `updateIssNow` tick (P1)
+- **`frontend/src/main.ts`** — 1Hz tick now also calls `mapModule.tickSatelliteMarkers()`.
+- **`frontend/index.html`** — new 🛰 button + picker panel.
+- **`frontend/src/style.css`** — picker panel layout, satellite marker style.
+
+### Pettit's 12 wishlist asks — final tally
+
+| # | Ask | Status |
+|---|---|---|
+| 1 | Multi-orbit display | ✅ v1.5.0.0 |
+| 2 | Day-night terminator | ✅ v1.4.2.0 |
+| 3 | Cloud overlay toggle | ✅ existing |
+| 4 | Validated Kp aurora widget | ✅ v1.2.3.0 |
+| 5 | Sun/sunspot widget | ✅ v1.4.x |
+| 6 | **Multi-satellite tracking** | ✅ **v1.6.0.0 (this PR)** |
+| 7 | Country boundaries | ✅ v1.2.6.0 |
+| 8 | Photo timestamp reverse lookup | ✅ v1.3.0.0 |
+| 9 | Offline mode | ✅ Lane F SW |
+| 10 | Pin-anywhere → best next pass | ✅ v1.5.6.0 |
+| 11 | Map pan/scroll continuity | ✅ existing renderWorldCopies |
+| 12 | Time scrubbing | ✅ v1.4.0.0 |
+
+### Tests
+
+- `frontend/test/satellites.test.ts` (new) — 24 cases: TLE parser (2-line + 3-line + multi-result), cache hit / miss / 6h expiry / stale-fallback, CelesTrak 404/5xx/timeout/corrupt-body, custom CATNR validation, custom name search, metaKey discriminated union.
+- 498 frontend tests total passing (was 474; +24).
+
+### NOT in scope (deferred)
+
+- Per-satellite pass scoring (different Cupola direction / lighting / photographer windows per crewed station). MVP keeps ISS as the canonical scoring path; Queue / Upcoming tabs still ISS-only.
+- Multi-orbit display for non-ISS satellites — single-orbit track only.
+- Sub-orbital Starship tracking (no stable TLE during the ~10min ascent).
+- Vast Haven-1, Blue Origin Orbital Reef — not yet launched; will work via name-search the moment CelesTrak indexes them.
+- Generator-side TLE integration — all client-side. Daemon stays as-is.
+- Space-Track auth fallback — CelesTrak is good enough.
+
 ## [1.5.6.0] - 2026-05-21
 
 ### Pin-drop pass lookup (Pettit ask #10) — drop a pin, get the next 5 ISS passes.

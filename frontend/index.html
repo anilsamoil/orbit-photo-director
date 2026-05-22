@@ -91,6 +91,17 @@
           <button id="toggle-clouds" class="time-btn active" type="button" title="Toggle GIBS cloud overlay">&#9729;</button>
           <button id="toggle-terminator" class="time-btn active" type="button" title="Toggle day-night terminator + subsolar point">&#9728;</button>
           <button id="toggle-multi-orbit" class="time-btn" type="button" title="Toggle multi-orbit display (4 future ISS orbits)">&#x21BB;</button>
+          <button id="toggle-satellite-picker" class="time-btn" type="button" title="Track other satellites (Tiangong, Hubble, Starship, ...)">&#x1F6F0;</button>
+        </div>
+        <div id="satellite-picker-panel" class="satellite-picker-panel" hidden>
+          <div class="satellite-picker-header">TRACKING</div>
+          <div id="satellite-picker-list" class="satellite-picker-list"></div>
+          <div class="satellite-picker-custom">
+            <label for="satellite-picker-input">Add by NORAD ID or name:</label>
+            <input id="satellite-picker-input" type="text" placeholder="48274 or 'TIANGONG'" autocomplete="off" />
+            <button id="satellite-picker-add" class="lookup-btn" type="button">Add</button>
+            <div id="satellite-picker-status" class="satellite-picker-status"></div>
+          </div>
         </div>
         <div class="map-legend" aria-label="ISS illumination legend">
           <span class="map-legend-item"><span class="map-legend-dot map-legend-day"></span>day</span>

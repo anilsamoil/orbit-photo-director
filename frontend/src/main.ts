@@ -485,6 +485,8 @@ function updateIssNow(): void {
   // operator never opened the Map tab, this is a no-op (and shouldn't
   // force-download MapLibre).
   if (mapModule?.applyFollowISS) mapModule.applyFollowISS(pos);
+  // v1.6.0.0: also tick non-ISS satellite live markers at 1Hz.
+  if (mapModule?.tickSatelliteMarkers) mapModule.tickSatelliteMarkers();
 }
 
 /** Coarse ocean / continent label for an ISS sub-point. Intentionally crude
