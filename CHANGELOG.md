@@ -2,6 +2,18 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.0.2] - 2026-05-22
+
+### Housekeeping round 2 — topbar multi-sat readouts + dead-code + log noise.
+
+End-of-marathon polish surfaced by self-QA:
+
+- **Topbar multi-sat readouts** wired (was an unused export from v1.6.0.0). When you select Tiangong / Hubble / etc. via 🛰, the topbar now shows compact `Tg 32.5°N, 118.3°E` next to the existing ISS readout, each in the satellite's track color. Hidden on iPhone-width (<430px) to keep the topbar tight.
+- **Removed `export` from `tickSatelliteTracks`** in `map.ts` — only called internally via the 60s setInterval.
+- **Downgraded `console.info('[photo-lookup] EXIF fields found:')`** → `console.debug`. Was firing on every photo drop; not useful at the default log level.
+
+Live QA spot-check (browse on prod): zero console messages, picker + follow buttons present, ISS-now showing live SGP4 position.
+
 ## [1.6.0.1] - 2026-05-22
 
 ### Housekeeping pass.

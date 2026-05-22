@@ -114,8 +114,11 @@ export async function extractExifTimestamp(file: File): Promise<ExifExtractResul
   }
 
   const fieldsFound = Object.keys(exifData);
+  // Diagnostic — downgraded to console.debug 2026-05-22 so it doesn't
+  // spam the operator's console on every successful photo drop. Still
+  // available in DevTools "Verbose" log level when EXIF debugging is needed.
   // eslint-disable-next-line no-console
-  console.info('[photo-lookup] EXIF fields found:', fieldsFound, 'file:', fileMeta);
+  console.debug('[photo-lookup] EXIF fields found:', fieldsFound, 'file:', fileMeta);
 
   // Try DateTimeOriginal first; fall back to CreateDate, then DateTime.
   // Each can be a Date (exifr's preferred return) or a string fallback.

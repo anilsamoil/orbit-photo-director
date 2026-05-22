@@ -2282,11 +2282,9 @@ export function tickSatelliteMarkers(): void {
   refreshSatelliteMarkers();
 }
 
-/** Hook for the 60s polyline refresh (called from the existing 30s
- *  cloud-overlay tick or its own setInterval). Per /plan-eng-review P1. */
-export function tickSatelliteTracks(): void {
-  refreshSatelliteTracks();
-}
+// tickSatelliteTracks was previously exported but is now only invoked
+// internally via the 60s setInterval set up in renderMap (P1). No need
+// for an external entrypoint.
 
 /** Lookup currently-selected satellites for the pin-drop popup (Q2):
  *  the popup needs to iterate per satellite to compute passes. */
