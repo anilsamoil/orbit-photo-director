@@ -978,46 +978,46 @@ function refreshTerminatorSources(): void {
   });
 }
 
-/** Rebuild the ascent-trajectory geojson sources from currentPasses.
- *  Walks every PassEntry whose launch.kind === "ascent" and whose
- *  trajectory is populated, emits one line feature per ascent (color
- *  expressions handle per-segment altitude shading), plus a pad-pin
- *  point feature. No-op when there are no ascents to draw — the
- *  sources still exist but contain empty FeatureCollections so the
- *  layer renders nothing.
+/** Build the ascent-trajectory geojson features from a pass list.
+ *  Exported for unit testing — refreshAscentTrajectorySource is the
+ *  side-effecting wrapper that calls this and pushes to the map sources.
+ *
+ *  For every PassEntry whose launch.kind === "ascent" and whose
+ *  trajectory has ≥2 points, emits:
+ *  - Line features split into consecutive segments, each carrying the
+ *    midpoint altitude as `alt_km` so the paint expression colors per
+ *    segment (red at surface → cyan at orbit insertion).
+ *  - One pad-pin point feature at the first trajectory point.
+ *
+ *  Antimeridian + world-copy split inherited from buildLineFeatures.
  */
-function refreshAscentTrajectorySource(): void {
-  if (!map) return;
-  const lineFeatures: GeoJSON.Feature[] = [];
-  const padFeatures: GeoJSON.Feature[] = [];
-  for (const p of currentPasses) {
+export function buildAscentFeatures(passes: PassEntry[]): {
+  lines: GeoJSON.Feature[];
+  pads: GeoJSON.Feature[];
+} {
+  const lines: GeoJSON.Feature[] = [];
+  const pads: GeoJSON.Feature[] = [];
+  for (const p of passes) {
     const traj = p.launch?.trajectory;
     if (!traj || traj.length < 2) continue;
     if (p.launch?.kind !== 'ascent') continue;
-    // Build line segments at antimeridian + world-copy split, attaching
-    // alt_km as a midpoint property on each segment so the paint
-    // expression can color by altitude. We split traj into consecutive
-    // pairs so each segment carries its own altitude (otherwise the
-    // whole polyline gets one color).
     for (let i = 0; i < traj.length - 1; i++) {
       const a = traj[i];
       const b = traj[i + 1];
       if (!a || !b) continue;
       const segMidAlt = (a.alt_km + b.alt_km) / 2;
-      // Reuse the existing antimeridian splitter for each segment.
       const segs = buildLineFeatures([
         [a.lat, a.lon],
         [b.lat, b.lon],
       ]);
       for (const s of segs) {
         s.properties = { alt_km: segMidAlt, launch_name: p.launch?.name ?? '' };
-        lineFeatures.push(s);
+        lines.push(s);
       }
     }
-    // Pad pin = first trajectory point.
     const pad = traj[0];
     if (!pad) continue;
-    padFeatures.push({
+    pads.push({
       type: 'Feature' as const,
       properties: {
         launch_name: p.launch?.name ?? '',
@@ -1030,13 +1030,22 @@ function refreshAscentTrajectorySource(): void {
       },
     });
   }
+  return { lines, pads };
+}
+
+/** Rebuild the ascent-trajectory geojson sources from currentPasses.
+ *  Side-effecting wrapper around buildAscentFeatures — pushes the
+ *  features to the map sources. */
+function refreshAscentTrajectorySource(): void {
+  if (!map) return;
+  const { lines, pads } = buildAscentFeatures(currentPasses);
   upsertGeoJson(map, 'ascent-trajectory', {
     type: 'FeatureCollection',
-    features: lineFeatures,
+    features: lines,
   });
   upsertGeoJson(map, 'ascent-pad', {
     type: 'FeatureCollection',
-    features: padFeatures,
+    features: pads,
   });
 }
 
