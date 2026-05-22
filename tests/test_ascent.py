@@ -14,11 +14,13 @@ from generator.ascent import (
     PLUME_ANGLE_FULL_CREDIT_MRAD,
     PLUME_ANGLE_NO_CREDIT_MRAD,
     AscentPrediction,
+    AscentTrajectoryPoint,
     SunState,
     apparent_plume_angle_mrad,
     ascent_score_multiplier,
     background_cloud_score,
     background_dark_score,
+    build_ascent_trajectory,
     obstruction_cloud_score,
     plume_angle_score,
     predict_ascent_pass,
@@ -478,3 +480,71 @@ def test_multiplier_always_in_bounds() -> None:
 def test_best_instant_utc() -> None:
     p = _prediction()
     assert p.best_instant_utc == p.t0_utc + timedelta(seconds=120)
+
+
+# --------------------------------------------------------------------------
+# build_ascent_trajectory (v1.6.1.0 ascent map layer)
+# --------------------------------------------------------------------------
+
+
+def test_build_ascent_trajectory_starts_at_pad() -> None:
+    """T+0 point equals the pad coordinates regardless of profile."""
+    traj = build_ascent_trajectory(
+        FALCON_9, pad_lat_deg=28.5, pad_lon_deg=-80.6, azimuth_deg=90.0,
+    )
+    assert traj
+    first = traj[0]
+    assert first.t_offset_seconds == 0
+    assert first.alt_km == 0.0
+    assert first.lat == pytest.approx(28.5, abs=1e-6)
+    assert first.lon == pytest.approx(-80.6, abs=1e-6)
+
+
+def test_build_ascent_trajectory_walks_to_insertion() -> None:
+    """Last point is at or past insertion_t_seconds at higher altitude."""
+    traj = build_ascent_trajectory(
+        FALCON_9, pad_lat_deg=28.5, pad_lon_deg=-80.6, azimuth_deg=90.0,
+    )
+    last = traj[-1]
+    # Walks at INTERPOLATION_CADENCE_SECONDS, so the last bucket equals
+    # insertion_t_seconds when (insertion % cadence == 0). Falcon-9 insertion
+    # at 540s and cadence 15s → 540 / 15 = 36, last t_offset = 540.
+    assert last.t_offset_seconds == FALCON_9.insertion_t_seconds
+    assert last.alt_km >= 100.0
+
+
+def test_build_ascent_trajectory_cadence_is_fixed() -> None:
+    """Every consecutive sample steps by exactly INTERPOLATION_CADENCE_SECONDS."""
+    traj = build_ascent_trajectory(
+        FALCON_9, pad_lat_deg=28.5, pad_lon_deg=-80.6, azimuth_deg=90.0,
+    )
+    for i in range(len(traj) - 1):
+        delta = traj[i + 1].t_offset_seconds - traj[i].t_offset_seconds
+        assert delta == INTERPOLATION_CADENCE_SECONDS
+
+
+def test_build_ascent_trajectory_due_east_keeps_latitude() -> None:
+    """Azimuth=90° (due east) from equator-adjacent pad should not drift in lat."""
+    traj = build_ascent_trajectory(
+        FALCON_9, pad_lat_deg=0.0, pad_lon_deg=0.0, azimuth_deg=90.0,
+    )
+    # Near-equator, due-east great-circle stays within ~1° of the equator
+    # across F9's ~1400km downrange (small but nonzero spherical bowing).
+    for p in traj:
+        assert abs(p.lat) < 1.5
+
+
+def test_build_ascent_trajectory_returns_dataclasses() -> None:
+    """Output is a list of AscentTrajectoryPoint, all fields populated."""
+    traj = build_ascent_trajectory(
+        FALCON_9, pad_lat_deg=28.5, pad_lon_deg=-80.6, azimuth_deg=90.0,
+    )
+    for p in traj:
+        assert isinstance(p, AscentTrajectoryPoint)
+        assert isinstance(p.t_offset_seconds, int)
+        assert isinstance(p.lat, float)
+        assert isinstance(p.lon, float)
+        assert isinstance(p.alt_km, float)
+        assert -90.0 <= p.lat <= 90.0
+        assert -180.0 <= p.lon <= 180.0
+        assert p.alt_km >= 0.0
