@@ -109,6 +109,22 @@ export interface PassEntry {
      *  `closest_approach` (when ISS is overhead) — the two should agree
      *  within ±5 min. */
     t0: string;
+    /** Pad coordinates. Added v1.6.1.0 to anchor the ascent-trajectory
+     *  map layer's "pad" marker. Older manifests omit. */
+    pad_lat?: number;
+    pad_lon?: number;
+    /** Real launch azimuth (deg from north, computed from mission
+     *  inclination + pad latitude). v1.6.1.0. */
+    launch_azimuth_deg?: number;
+    /** ASCENT trajectory polyline for the map layer. Walked at 15s
+     *  cadence from T+0 to nominal orbit insertion (~9 min). Only
+     *  present when kind="ascent" and a profile matched. */
+    trajectory?: Array<{
+      t_offset_s: number;
+      lat: number;
+      lon: number;
+      alt_km: number;
+    }>;
   };
 }
 

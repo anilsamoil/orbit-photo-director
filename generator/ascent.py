@@ -598,6 +598,47 @@ def predict_ascent_pass(
     return best
 
 
+@dataclass(frozen=True)
+class AscentTrajectoryPoint:
+    """One sample along the rocket's predicted ground track."""
+
+    t_offset_seconds: int
+    lat: float
+    lon: float
+    alt_km: float
+
+
+def build_ascent_trajectory(
+    profile: AscentProfile,
+    pad_lat_deg: float,
+    pad_lon_deg: float,
+    azimuth_deg: float,
+) -> list[AscentTrajectoryPoint]:
+    """Walk the profile at INTERPOLATION_CADENCE_SECONDS and return the
+    full ground-track polyline from T+0 to nominal orbit insertion.
+
+    Used by the frontend ascent-trajectory map layer to draw the predicted
+    climb path. Independent of ISS visibility — the line is the rocket's
+    nominal trajectory regardless of whether ISS can see it.
+    """
+    points: list[AscentTrajectoryPoint] = []
+    for t_offset in range(
+        0, profile.insertion_t_seconds + 1, INTERPOLATION_CADENCE_SECONDS
+    ):
+        lat, lon, alt_km, _ = rocket_position_at(
+            profile, t_offset, pad_lat_deg, pad_lon_deg, azimuth_deg,
+        )
+        points.append(
+            AscentTrajectoryPoint(
+                t_offset_seconds=t_offset,
+                lat=lat,
+                lon=lon,
+                alt_km=alt_km,
+            )
+        )
+    return points
+
+
 def ascent_score_multiplier(prediction: AscentPrediction) -> float:
     """Convert an AscentPrediction to a [MULTIPLIER_FLOOR, MULTIPLIER_CEILING]
     score multiplier for the existing PassEntry scoring pipeline.

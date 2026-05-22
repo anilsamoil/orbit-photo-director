@@ -2,6 +2,41 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.1.0] - 2026-05-22
+
+### ASCENT trajectory map layer + plist drift fix.
+
+User reported Starship launched and asked whether the map captured it / showed an ascent trajectory toggle. Investigation found two gaps:
+
+1. `OPD_ENABLE_ASCENT=1` was set in the installed launchd plist (active since 2026-05-17 soak) but the repo template still showed it off — config drift.
+2. The ASCENT pipeline produced photo-card entries but no map layer; no visual indication of a launching rocket's predicted ground track.
+
+This ships both fixes.
+
+### Added
+
+- **`generator/ascent.py:build_ascent_trajectory()`** — walks a matched rocket profile at 15s cadence from T+0 to nominal orbit insertion (~9 min). Returns `list[AscentTrajectoryPoint(t_offset_seconds, lat, lon, alt_km)]`.
+- **`generator/main.py:_build_ascent_pass_entry()`** — emits the trajectory polyline + pad coords + launch azimuth into the PassEntry's `launch` field. ~35 points × 4 floats ≈ 1KB per ascent entry.
+- **`frontend/src/types.ts`** — `PassEntry.launch.trajectory?` typed as `Array<{t_offset_s, lat, lon, alt_km}>`, plus `pad_lat`, `pad_lon`, `launch_azimuth_deg` optionals for back-compat with v1.6.0.x manifests.
+- **`frontend/src/map.ts:refreshAscentTrajectorySource()`** — builds two geojson sources (`ascent-trajectory` line + `ascent-pad` point) from every PassEntry with `launch.kind === 'ascent'`. Segments are split antimeridian-safe; per-segment `alt_km` drives the color expression.
+- **`frontend/src/map.ts:ascent-trajectory-layer`** — altitude-coded polyline: red at surface (pre-Max-Q), orange through stratosphere, yellow at stage-sep regime, cyan near orbit insertion. Line-width 3, opacity 0.9.
+- **`frontend/src/map.ts:ascent-pad-layer`** — red pad-pin circle at T+0. Click opens a popup with launch name, site, and T-0 time.
+- **`frontend/index.html`** — new 🚀 toggle button in the topbar overlay-controls row (between the multi-orbit and satellite-picker buttons). Persisted to `localStorage`, default ON.
+
+### Sync (was drifted)
+
+- **`ops/com.astroanil.orbit-photo-director.plist`** — added `OPD_ENABLE_ASCENT=1` and `OPD_ENABLE_WEATHER=1` to the repo template plist. Both were already in the installed copy at `~/Library/LaunchAgents/...`, set during the 2026-05-17 / 2026-05-19 soaks respectively. Template was lagging the live config.
+
+### Operator notes
+
+When a launch with a matched ASCENT profile is upcoming (Falcon 9, Falcon Heavy, Atlas V, Vulcan, Soyuz 2, Long March 5/7, SLS, New Glenn, Ariane 6, Starship) AND the generator's ascent pipeline finds at least one viewable instant, the map shows:
+
+- A red pad-pin at liftoff coordinates.
+- A polyline of the predicted climb path, color-coded by altitude (red→orange→yellow→cyan).
+- Click the pad pin for a popup with launch details.
+
+If you don't see anything for a launch you expected: either the rocket type doesn't have a profile in `generator/ascent_profiles.py`, the trajectory was rejected by visibility gates (e.g., ISS in shadow throughout the climb), or LL2 hasn't published the launch yet.
+
 ## [1.6.0.2] - 2026-05-22
 
 ### Housekeeping round 2 — topbar multi-sat readouts + dead-code + log noise.
