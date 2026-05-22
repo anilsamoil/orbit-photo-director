@@ -2,6 +2,28 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.0.1] - 2026-05-22
+
+### Housekeeping pass.
+
+Strip the v1.5.4.0 diagnostic `console.info` logs added during Chris's follow-ISS bug debug session. They're no longer needed and were leaking to the browser console on every click + every track refresh.
+
+### Changed
+
+- `frontend/src/map.ts`:
+  - Removed `console.info('[track]', ...)` from `refreshGroundTrackSource` (was firing on every Now/scrub/multi-orbit toggle).
+  - Removed `console.info('[follow-iss] click', ...)` from the follow toggle click handler.
+  - Removed `console.info('[follow-iss] easeTo', ...)` from the first-click easeTo path.
+- `TODOS.md` — synced to reflect the recent shipping spree:
+  - Pettit's 12-ask wishlist now shows 12/12 SHIPPED ✅ (added v1.5.6.0 pin-drop + v1.6.0.0 multi-satellite)
+  - Dominick's 3 asks tracker (2/3 — OPTIMIS deferred on cross-astronaut tension)
+  - Chris's asks summary (all shipped)
+  - Weather v1.3.2 marked SHIPPED with the GLM + GFS-CAPE wiring details
+
+### NOT in scope
+
+- No behavior change. No new feature. No bug fix. Strictly cleanup.
+
 ## [1.6.0.0] - 2026-05-22
 
 ### Multi-satellite tracking (Pettit ask #6) — finishes the Pettit wishlist (12/12).
