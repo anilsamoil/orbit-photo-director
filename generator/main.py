@@ -25,8 +25,10 @@ import requests
 from . import __version__
 from .ascent import (
     ascent_score_multiplier,
+    build_ascent_trajectory,
     predict_ascent_pass,
 )
+from .ascent_profiles import match_rocket
 from .cloud import (
     CloudSample,
     CloudSampler,
@@ -509,6 +511,27 @@ def _build_ascent_pass_entry(
     # indicator. Soak data will tell us if this needs refinement.
     rel_bearing = relative_bearing_deg(iss_heading, target_bearing)
     multiplier = ascent_score_multiplier(pred)
+    # Trajectory polyline for the frontend ascent-trajectory map layer.
+    # Recomputed from the matched profile + pad + real launch azimuth so
+    # the frontend doesn't need to know about ascent_profiles or the
+    # great-circle math. ~35 points × 4 floats ≈ 1KB per launch.
+    # The same {"full_name": la.rocket_type} resolver lookup that
+    # predict_ascent_pass used to find the profile in the first place.
+    profile = match_rocket({"full_name": la.rocket_type})
+    trajectory_payload: list[dict[str, float]] = []
+    if profile is not None:
+        traj = build_ascent_trajectory(
+            profile, pred.pad_lat, pred.pad_lon, pred.launch_azimuth_deg,
+        )
+        trajectory_payload = [
+            {
+                "t_offset_s": p.t_offset_seconds,
+                "lat": round(p.lat, 4),
+                "lon": round(p.lon, 4),
+                "alt_km": round(p.alt_km, 1),
+            }
+            for p in traj
+        ]
     return {
         "target_id": f"launch:{la.id}:ascent",
         "target_name": f"🚀 {la.name}",
@@ -555,6 +578,10 @@ def _build_ascent_pass_entry(
             "site_name": la.site_name,
             "net_window_seconds": la.net_window_seconds,
             "t0": utcnow_iso(la.t0),
+            "pad_lat": round(pred.pad_lat, 4),
+            "pad_lon": round(pred.pad_lon, 4),
+            "launch_azimuth_deg": round(pred.launch_azimuth_deg, 1),
+            "trajectory": trajectory_payload,
         },
     }
 

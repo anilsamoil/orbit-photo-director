@@ -54,6 +54,20 @@ WatchPaths (added 2026-05-17, fixes 13-day stale-module bug):
         <string>REPO_PATH</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- V3-P2 ASCENT (enabled 2026-05-17 soak, kept on 2026-05-22).
+             Off by default in generator/config.py; this flag turns on
+             ASCENT predictions (rocket plume captures during launch
+             climb phase). Produces PassEntry with launch.kind="ascent"
+             plus per-launch trajectory polylines for the ascent map
+             layer. Remove this entry to roll back to OVERHEAD-only. -->
+        <key>OPD_ENABLE_ASCENT</key>
+        <string>1</string>
+        <!-- Weather v1.3 (enabled 2026-05-19). Off by default in
+             generator/config.py; turns on NHC hurricane tracker +
+             real lightning sampler (GLM observed + GFS CAPE forecast,
+             v1.3.2). Remove this entry to roll back to weather-off. -->
+        <key>OPD_ENABLE_WEATHER</key>
+        <string>1</string>
     </dict>
 
     <key>RunAtLoad</key>

@@ -58,7 +58,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) for ground-side support procedures.
 
 ## Status
 
-V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0 + Lane F SW at v1.1.0.1 + past-pass Queue filter at v1.1.0.2. V3.0 rocket-launch photography (OVERHEAD geometry) at v1.2.0.0 — 🚀 LAUNCH cards in Queue + Upcoming with reserved-slot guarantee, stale-launches banner overlay, LL2 schema-drift detection, operator-facing copy renamed Offline → LOS. V3.1 ASCENT geometry deferred; kill-switch DNS (Lane G) still deferred; pre-launch e2e checklist (Lane H) partial via `scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md` — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
+V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0 + Lane F SW at v1.1.0.1 + past-pass Queue filter at v1.1.0.2. V3.0 rocket-launch photography (OVERHEAD geometry) at v1.2.0.0 — 🚀 LAUNCH cards in Queue + Upcoming with reserved-slot guarantee, stale-launches banner overlay, LL2 schema-drift detection, operator-facing copy renamed Offline → LOS. V3-P2 ASCENT geometry shipped (2026-05-17 soak) — rocket-plume capture cards with `launch.kind="ascent"`; v1.6.1.0 adds the on-map trajectory layer (🚀 topbar toggle, altitude-coded polyline + pad pin). Kill-switch DNS (Lane G) still deferred; pre-launch e2e checklist (Lane H) partial via `scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md` — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
 
 ## License
 

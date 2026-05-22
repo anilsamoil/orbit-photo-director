@@ -120,6 +120,22 @@ let multiOrbitVisible: boolean = readMultiOrbitVisible();
  *  just visually distinguishable). */
 const ISS_ORBIT_PERIOD_SECONDS = 5568;
 
+/** ASCENT trajectory overlay (v1.6.1.0). When ON and a PassEntry with
+ *  launch.kind="ascent" and a non-empty trajectory exists, the layer
+ *  draws the rocket's predicted ground track (T+0 → orbit insertion,
+ *  ~9 min) as an altitude-colored polyline plus a pad pin. Default ON
+ *  — when an ascent is actionable, you want to see it. */
+const ASCENT_PREF_KEY = 'opd-map-ascent-visible';
+function readAscentVisible(): boolean {
+  try {
+    const v = localStorage.getItem(ASCENT_PREF_KEY);
+    return v === null ? true : v === '1';
+  } catch {
+    return true;
+  }
+}
+let ascentVisible: boolean = readAscentVisible();
+
 /** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
  *  "make so can turn off/on as needed" stays sticky across reloads. Default
  *  on (clouds visible) matches v1.0+ behavior. */
@@ -770,6 +786,77 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
   applyTerminatorVisibility();
 
+  // ASCENT trajectory layer (v1.6.1.0). Polyline colored by altitude:
+  // red near surface (early climb / max-Q), orange mid-climb,
+  // cyan near orbital altitude (~200km). Plus a pad pin at T+0.
+  refreshAscentTrajectorySource();
+  if (!map.getLayer('ascent-trajectory-layer')) {
+    map.addLayer({
+      id: 'ascent-trajectory-layer',
+      type: 'line',
+      source: 'ascent-trajectory',
+      paint: {
+        'line-color': [
+          'interpolate', ['linear'], ['get', 'alt_km'],
+          0, '#ff4d4d',     // red: pre-Max-Q (0-10km)
+          50, '#ffa64d',    // orange: through stratosphere
+          120, '#ffe14d',   // yellow: stage sep regime
+          200, '#5cd0ff',   // cyan: orbit insertion
+        ],
+        'line-width': 3,
+        'line-opacity': 0.9,
+      },
+    });
+  }
+  if (!map.getLayer('ascent-pad-layer')) {
+    map.addLayer({
+      id: 'ascent-pad-layer',
+      type: 'circle',
+      source: 'ascent-pad',
+      paint: {
+        'circle-radius': 7,
+        'circle-color': '#ff4d4d',
+        'circle-stroke-color': '#0b0d12',
+        'circle-stroke-width': 2,
+        'circle-opacity': 0.95,
+      },
+    });
+    map.on('click', 'ascent-pad-layer', (e) => {
+      const f = e.features?.[0];
+      if (!f || f.geometry.type !== 'Point') return;
+      const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
+      const props = f.properties ?? {};
+      const body = document.createElement('div');
+      body.className = 'target-popup';
+      const name = String(props.launch_name ?? 'Launch');
+      const site = String(props.site_name ?? '');
+      const t0 = String(props.t0 ?? '');
+      body.textContent = '';
+      const h = document.createElement('div');
+      h.style.fontWeight = '600';
+      h.textContent = `🚀 ${name}`;
+      const s = document.createElement('div');
+      s.textContent = site;
+      const t = document.createElement('div');
+      t.style.opacity = '0.75';
+      t.textContent = `T-0: ${t0}`;
+      body.appendChild(h);
+      body.appendChild(s);
+      body.appendChild(t);
+      new maplibregl.Popup()
+        .setLngLat(coords)
+        .setDOMContent(body)
+        .addTo(map!);
+    });
+    map.on('mouseenter', 'ascent-pad-layer', () => {
+      if (map) map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'ascent-pad-layer', () => {
+      if (map) map.getCanvas().style.cursor = '';
+    });
+  }
+  applyAscentVisibility();
+
   // ISS marker: ISS-silhouette icon + pulsing halo. Replaces the prior
   // cyan dot which blended into the cloud overlay at world-zoom and was
   // hard to spot.
@@ -817,6 +904,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindBearingToggle();
   bindCloudToggle();
   bindTerminatorToggle();
+  bindAscentToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
   bindPinDrop();
@@ -888,6 +976,91 @@ function refreshTerminatorSources(): void {
     type: 'FeatureCollection',
     features: [subsolarFeature(when)],
   });
+}
+
+/** Build the ascent-trajectory geojson features from a pass list.
+ *  Exported for unit testing — refreshAscentTrajectorySource is the
+ *  side-effecting wrapper that calls this and pushes to the map sources.
+ *
+ *  For every PassEntry whose launch.kind === "ascent" and whose
+ *  trajectory has ≥2 points, emits:
+ *  - Line features split into consecutive segments, each carrying the
+ *    midpoint altitude as `alt_km` so the paint expression colors per
+ *    segment (red at surface → cyan at orbit insertion).
+ *  - One pad-pin point feature at the first trajectory point.
+ *
+ *  Antimeridian + world-copy split inherited from buildLineFeatures.
+ */
+export function buildAscentFeatures(passes: PassEntry[]): {
+  lines: GeoJSON.Feature[];
+  pads: GeoJSON.Feature[];
+} {
+  const lines: GeoJSON.Feature[] = [];
+  const pads: GeoJSON.Feature[] = [];
+  for (const p of passes) {
+    const traj = p.launch?.trajectory;
+    if (!traj || traj.length < 2) continue;
+    if (p.launch?.kind !== 'ascent') continue;
+    for (let i = 0; i < traj.length - 1; i++) {
+      const a = traj[i];
+      const b = traj[i + 1];
+      if (!a || !b) continue;
+      const segMidAlt = (a.alt_km + b.alt_km) / 2;
+      const segs = buildLineFeatures([
+        [a.lat, a.lon],
+        [b.lat, b.lon],
+      ]);
+      for (const s of segs) {
+        s.properties = { alt_km: segMidAlt, launch_name: p.launch?.name ?? '' };
+        lines.push(s);
+      }
+    }
+    const pad = traj[0];
+    if (!pad) continue;
+    pads.push({
+      type: 'Feature' as const,
+      properties: {
+        launch_name: p.launch?.name ?? '',
+        site_name: p.launch?.site_name ?? '',
+        t0: p.launch?.t0 ?? '',
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [pad.lon, pad.lat],
+      },
+    });
+  }
+  return { lines, pads };
+}
+
+/** Rebuild the ascent-trajectory geojson sources from currentPasses.
+ *  Side-effecting wrapper around buildAscentFeatures — pushes the
+ *  features to the map sources. */
+function refreshAscentTrajectorySource(): void {
+  if (!map) return;
+  const { lines, pads } = buildAscentFeatures(currentPasses);
+  upsertGeoJson(map, 'ascent-trajectory', {
+    type: 'FeatureCollection',
+    features: lines,
+  });
+  upsertGeoJson(map, 'ascent-pad', {
+    type: 'FeatureCollection',
+    features: pads,
+  });
+}
+
+/** Show / hide the ascent-trajectory layers (polyline + pad pin). */
+function applyAscentVisibility(): void {
+  if (!map) return;
+  const vis = ascentVisible ? 'visible' : 'none';
+  try {
+    if (map.getLayer('ascent-trajectory-layer')) {
+      map.setLayoutProperty('ascent-trajectory-layer', 'visibility', vis);
+    }
+    if (map.getLayer('ascent-pad-layer')) {
+      map.setLayoutProperty('ascent-pad-layer', 'visibility', vis);
+    }
+  } catch { /* layers not loaded yet */ }
 }
 
 /** Show / hide the terminator overlay (line + subsolar dot). Idempotent. */
@@ -1192,6 +1365,28 @@ function bindCloudToggle(): void {
     applyCloudsVisibility();
   });
   cloudToggleBound = true;
+}
+
+let ascentToggleBound = false;
+function bindAscentToggle(): void {
+  if (ascentToggleBound) return;
+  const btn = document.getElementById('toggle-ascent');
+  if (!btn) return;
+  const reflect = () => {
+    btn.classList.toggle('active', ascentVisible);
+    btn.setAttribute('aria-pressed', ascentVisible ? 'true' : 'false');
+    btn.title = ascentVisible
+      ? 'ASCENT trajectory shown — click to hide'
+      : 'ASCENT trajectory hidden — click to show';
+  };
+  reflect();
+  btn.addEventListener('click', () => {
+    ascentVisible = !ascentVisible;
+    try { localStorage.setItem(ASCENT_PREF_KEY, ascentVisible ? '1' : '0'); } catch { /* noop */ }
+    reflect();
+    applyAscentVisibility();
+  });
+  ascentToggleBound = true;
 }
 
 let terminatorToggleBound = false;
