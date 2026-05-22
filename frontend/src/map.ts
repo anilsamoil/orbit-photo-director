@@ -23,6 +23,15 @@ import {
   type UpcomingPass,
 } from './pin-drop';
 import {
+  CURATED_SATELLITES,
+  fetchSatelliteTLE,
+  fetchTLEByCATNR,
+  fetchTLEByName,
+  metaKey,
+  type SatelliteMeta,
+  type TLEPair,
+} from './satellites';
+import {
   classifyIssIllumination,
   subsolarFeature,
   terminatorFeatures,
@@ -811,6 +820,14 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindMultiOrbitToggle();
   bindFollowToggle();
   bindPinDrop();
+  bindSatellitePicker();
+  // Restore persisted satellite selections (fire-and-forget; UI updates
+  // as each fetch resolves). Also kick off the 60s track refresh tick.
+  void restorePersistedSatellites();
+  if (!_satTrackTickerStarted) {
+    _satTrackTickerStarted = true;
+    window.setInterval(() => { try { refreshSatelliteTracks(); } catch { /* noop */ } }, 60_000);
+  }
   // Apply persisted cloud + terminator preferences on first map render.
   applyCloudsVisibility();
   applyTerminatorVisibility();
@@ -1785,10 +1802,26 @@ function handlePinDrop(lng: number, lat: number): void {
   }
 
   // Compute the passes. Pure-frontend SGP4 walk — see pin-drop.ts.
-  const passes = findUpcomingPasses(currentTrack, pinLat, pinLon, Date.now());
+  // v1.6.0.0: also compute passes for any selected non-ISS satellites
+  // (Pettit #6 — multi-satellite). Each satellite gets its own section
+  // in the popup; ISS is the default.
+  const sectionsForPopup: { name: string; color: string; passes: UpcomingPass[] }[] = [
+    {
+      name: 'ISS',
+      color: '#5cd0ff',
+      passes: findUpcomingPasses(currentTrack, pinLat, pinLon, Date.now()),
+    },
+  ];
+  for (const sat of getSelectedSatellitesForPasses()) {
+    sectionsForPopup.push({
+      name: sat.name,
+      color: sat.color,
+      passes: findUpcomingPasses(sat.track, pinLat, pinLon, Date.now()),
+    });
+  }
 
   // Build popup body via DOM (Q1: no innerHTML).
-  const body = buildPinDropPopup(pinLat, pinLon, rounded.precision, passes);
+  const body = buildPinDropPopup(pinLat, pinLon, rounded.precision, sectionsForPopup);
 
   // Replace any prior popup.
   if (droppedPinPopup) droppedPinPopup.remove();
@@ -1808,17 +1841,30 @@ function dismissDroppedPin(): void {
   upsertGeoJson(map, 'dropped-pin', { type: 'FeatureCollection', features: [] });
 }
 
+/** One satellite's passes for the pin-drop popup. v1.6.0.0 — Q2 from
+ *  /plan-eng-review: builder is generic over multiple satellites, so
+ *  the multi-satellite feature surfaces ISS + Tiangong + ... sections. */
+export interface PinDropSection {
+  name: string;
+  color: string;
+  passes: UpcomingPass[];
+}
+
 /** Build the pin-drop popup DOM. textContent throughout — no innerHTML.
- *  Exported for unit testing. */
+ *  Multi-section: one section per selected satellite (ISS is always first).
+ *  Exported for unit testing.
+ *
+ *  Per A2 from /plan-eng-review: popup body is `max-height: 60vh; overflow-y: auto`
+ *  so it scrolls on mobile when many satellites × passes are listed. */
 export function buildPinDropPopup(
   pinLat: number,
   pinLon: number,
   precision: number,
-  passes: UpcomingPass[],
+  sections: PinDropSection[],
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'dropped-pin-popup';
-  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:280px';
+  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:280px;max-height:60vh;overflow-y:auto';
 
   // Title: 📍 lat°N/S, lon°E/W
   const title = document.createElement('strong');
@@ -1827,49 +1873,54 @@ export function buildPinDropPopup(
   title.textContent = `📍 ${latStr}, ${lonStr}`;
   body.appendChild(title);
 
-  if (passes.length === 0) {
+  const nowMs = Date.now();
+  let anyPasses = false;
+
+  for (const section of sections) {
+    if (section.passes.length === 0) continue;
+    anyPasses = true;
+    const heading = document.createElement('div');
+    heading.style.cssText = `margin:8px 0 2px;color:${section.color};font-weight:600;font-size:0.82rem`;
+    heading.textContent = `${section.name} — next ${section.passes.length} pass${section.passes.length === 1 ? '' : 'es'}`;
+    body.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace;color:#0b0d12';
+    for (const p of section.passes) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:55px 1fr 65px 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee';
+      const rel = document.createElement('span');
+      rel.style.fontWeight = '600';
+      rel.textContent = formatRelative(p.closestApproachMs - nowMs);
+      const utc = document.createElement('span');
+      utc.textContent = formatUtc(p.closestApproachMs);
+      const nadir = document.createElement('span');
+      nadir.style.textAlign = 'right';
+      nadir.textContent = `${Math.round(p.nadirKm)} km`;
+      const regime = document.createElement('span');
+      regime.style.textAlign = 'right';
+      regime.style.color = regimeColor(p.regime);
+      regime.textContent = regimeLabel(p.regime);
+      row.append(rel, utc, nadir, regime);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+  }
+
+  if (!anyPasses) {
     const empty = document.createElement('div');
     empty.style.cssText = 'margin-top:8px;color:#444';
-    empty.textContent = 'No ISS passes within 1500 km in the next 36 hours.';
+    empty.textContent = 'No passes from any tracked satellite within 1500 km in the next 36 hours.';
     body.appendChild(empty);
     const hint = document.createElement('div');
     hint.style.cssText = 'margin-top:6px;color:#888;font-size:0.78rem';
-    hint.textContent = 'ISS orbit inclination is 51.6° — points within ±51° latitude get regular passes.';
+    hint.textContent = 'Most low-Earth-orbit satellites have inclinations 27-65°; points near the poles see few passes.';
     body.appendChild(hint);
-    return body;
   }
-
-  const subtitle = document.createElement('div');
-  subtitle.style.cssText = 'margin:6px 0 4px;color:#444';
-  subtitle.textContent = `Next ${passes.length} pass${passes.length === 1 ? '' : 'es'} over this point:`;
-  body.appendChild(subtitle);
-
-  const list = document.createElement('div');
-  list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace;color:#0b0d12';
-  const nowMs = Date.now();
-  for (const p of passes) {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:grid;grid-template-columns:55px 1fr 65px 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee';
-    const rel = document.createElement('span');
-    rel.style.fontWeight = '600';
-    rel.textContent = formatRelative(p.closestApproachMs - nowMs);
-    const utc = document.createElement('span');
-    utc.textContent = formatUtc(p.closestApproachMs);
-    const nadir = document.createElement('span');
-    nadir.style.textAlign = 'right';
-    nadir.textContent = `${Math.round(p.nadirKm)} km`;
-    const regime = document.createElement('span');
-    regime.style.textAlign = 'right';
-    regime.style.color = regimeColor(p.regime);
-    regime.textContent = regimeLabel(p.regime);
-    row.append(rel, utc, nadir, regime);
-    list.appendChild(row);
-  }
-  body.appendChild(list);
 
   const footer = document.createElement('div');
   footer.style.cssText = 'margin-top:6px;color:#888;font-size:0.72rem';
-  footer.textContent = 'Closest-approach within 1500 km ISS horizon. Click pin to dismiss.';
+  footer.textContent = 'Closest-approach within 1500 km horizon. Click pin to dismiss.';
   body.appendChild(footer);
 
   return body;
@@ -1902,4 +1953,395 @@ function regimeColor(r: import('./terminator').IssIllumination): string {
   if (r === 'iss-day') return '#0a8acc';      // cyan-ish, photo-friendly
   if (r === 'iss-twilight') return '#a8389a';  // magenta — warning
   return '#5b6b8a';                            // grey-blue — night
+}
+
+// ---------------------------------------------------------------------------
+// Multi-satellite tracking (v1.6.0.0 — Pettit feedback #6)
+// ---------------------------------------------------------------------------
+//
+// Operator picks satellites to track beyond ISS via the 🛰 picker button.
+// Each selected non-ISS satellite gets:
+//  - Ground-track polyline (color per satellite, refreshed every 60s)
+//  - Live marker at current sub-point (1Hz refresh — uses SGP4 propagator)
+//  - Pin-drop popup section with next 5 passes over the pinned point
+//
+// All client-side. TLEs from CelesTrak (cached 6h in localStorage).
+// Per /plan-eng-review 2026-05-22 P1: track polyline at 60s, markers at 1s.
+
+/** Per-satellite state. ISS is the canonical existing path and is NOT
+ *  represented here — selectedSatellites only holds non-ISS picks. */
+interface SatelliteState {
+  meta: SatelliteMeta;
+  tle: TLEPair;
+  matchCount: number;
+  stale: boolean;
+  marker: maplibregl.Marker | null;
+}
+
+const selectedSatellites = new Map<string, SatelliteState>();
+let pickerOpen = false;
+let satellitePickerBound = false;
+let _satTrackTickerStarted = false;
+const SATELLITE_SELECTION_KEY = 'opd-selected-satellites';
+
+/** Synthetic Track for a non-ISS satellite. Wraps the TLE so the existing
+ *  `findUpcomingPasses` (which expects a `Track`) and `liveIssPositionSGP4`
+ *  callsites work without modification. */
+function trackFromTLE(tle: TLEPair): Track {
+  return {
+    tle: { line1: tle.line1, line2: tle.line2 },
+    tle_epoch: '', // SGP4 parses epoch from the TLE itself
+    tle_age_hours: 0,
+    tle_freshness_factor: 1,
+    iss_polynomial: {
+      start: new Date().toISOString(),
+      duration_seconds: 0,
+      lat_coeffs: [],
+      lon_coeffs: [],
+      polynomial_order: 0,
+    },
+  } as Track;
+}
+
+function readSelectedKeys(): string[] {
+  try {
+    const v = localStorage.getItem(SATELLITE_SELECTION_KEY);
+    if (!v) return [];
+    const arr = JSON.parse(v);
+    return Array.isArray(arr) ? arr.filter((k) => typeof k === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSelectedKeys(): void {
+  try {
+    const keys = Array.from(selectedSatellites.keys());
+    localStorage.setItem(SATELLITE_SELECTION_KEY, JSON.stringify(keys));
+  } catch { /* noop */ }
+}
+
+/** Build the ground-track polyline samples for a non-ISS satellite over
+ *  one full orbit (~95min default) at 30s cadence. Returns features
+ *  ready for upsertGeoJson — already split at antimeridian + world-copy
+ *  duplicated. */
+function buildSatelliteTrackFeatures(state: SatelliteState): GeoJSON.Feature[] {
+  const track = trackFromTLE(state.tle);
+  const stepSec = 30;
+  const orbitSec = ISS_ORBIT_PERIOD_SECONDS; // close enough for LEO; HST/Tiangong are similar
+  const samples: [number, number][] = [];
+  const startMs = Date.now();
+  for (let t = 0; t <= orbitSec; t += stepSec) {
+    const pos = liveIssPositionSGP4(track, startMs + t * 1000);
+    if (!pos) continue;
+    samples.push([pos.lat, pos.lon]);
+  }
+  return buildLineFeatures(samples);
+}
+
+function refreshSatelliteTracks(): void {
+  if (!map) return;
+  for (const [key, state] of selectedSatellites.entries()) {
+    const sourceId = `sat-track-${key}`;
+    const layerId = `sat-track-layer-${key}`;
+    const features = buildSatelliteTrackFeatures(state);
+    upsertGeoJson(map, sourceId, { type: 'FeatureCollection', features });
+    if (!map.getLayer(layerId)) {
+      map.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        paint: {
+          'line-color': state.meta.track_color,
+          'line-width': 1.6,
+          'line-opacity': 0.7,
+          'line-dasharray': [3, 2],
+        },
+      });
+    }
+  }
+}
+
+function refreshSatelliteMarkers(): void {
+  if (!map) return;
+  const nowMs = Date.now();
+  for (const state of selectedSatellites.values()) {
+    const track = trackFromTLE(state.tle);
+    const pos = liveIssPositionSGP4(track, nowMs);
+    if (!pos) continue;
+    if (!state.marker) {
+      const el = document.createElement('div');
+      el.className = 'sat-marker';
+      el.style.background = state.meta.track_color;
+      el.title = `${state.meta.icon} ${state.meta.name}`;
+      state.marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([pos.lon, pos.lat])
+        .addTo(map);
+    } else {
+      state.marker.setLngLat([pos.lon, pos.lat]);
+    }
+  }
+}
+
+function removeSatelliteVisuals(key: string): void {
+  if (!map) return;
+  const state = selectedSatellites.get(key);
+  if (state?.marker) {
+    state.marker.remove();
+    state.marker = null;
+  }
+  const layerId = `sat-track-layer-${key}`;
+  const sourceId = `sat-track-${key}`;
+  try {
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+  } catch { /* noop */ }
+}
+
+async function addSatelliteByMeta(meta: SatelliteMeta): Promise<{ ok: boolean; message: string }> {
+  const key = metaKey(meta);
+  if (selectedSatellites.has(key)) {
+    return { ok: true, message: 'Already tracking' };
+  }
+  const result = await fetchSatelliteTLE(meta);
+  if (!result) {
+    return {
+      ok: false,
+      message: meta.resolution.kind === 'name'
+        ? `No satellite found for "${meta.resolution.query}"`
+        : `Couldn't fetch TLE for NORAD ${meta.resolution.catnr}`,
+    };
+  }
+  selectedSatellites.set(key, {
+    meta,
+    tle: result.tle,
+    matchCount: result.match_count,
+    stale: result.stale,
+    marker: null,
+  });
+  refreshSatelliteTracks();
+  refreshSatelliteMarkers();
+  persistSelectedKeys();
+  return { ok: true, message: 'Tracking added' };
+}
+
+function removeSatellite(key: string): void {
+  if (!selectedSatellites.has(key)) return;
+  removeSatelliteVisuals(key);
+  selectedSatellites.delete(key);
+  persistSelectedKeys();
+}
+
+/** Render the picker panel's curated satellite list. Called on open
+ *  AND on every selection change so checkboxes + match-count labels stay
+ *  in sync. */
+function renderSatellitePickerList(): void {
+  const list = document.getElementById('satellite-picker-list');
+  if (!list) return;
+  list.textContent = '';
+  for (const meta of CURATED_SATELLITES) {
+    if (metaKey(meta) === '25544') continue; // ISS is always-on; not in picker
+    const key = metaKey(meta);
+    const state = selectedSatellites.get(key);
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!state;
+    cb.addEventListener('change', async () => {
+      if (cb.checked) {
+        const status = document.getElementById('satellite-picker-status');
+        if (status) status.textContent = `Fetching ${meta.name}…`;
+        const result = await addSatelliteByMeta(meta);
+        if (status) {
+          status.textContent = result.message;
+          status.className = `satellite-picker-status ${result.ok ? 'success' : 'error'}`;
+        }
+        if (!result.ok) cb.checked = false;
+        renderSatellitePickerList();
+      } else {
+        removeSatellite(key);
+        renderSatellitePickerList();
+      }
+    });
+    const icon = document.createElement('span');
+    icon.className = 'sat-icon';
+    icon.textContent = meta.icon;
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = meta.name;
+    label.append(cb, icon, nameSpan);
+    if (state) {
+      if (state.stale) {
+        const badge = document.createElement('span');
+        badge.className = 'sat-stale';
+        badge.textContent = 'stale TLE';
+        label.appendChild(badge);
+      } else if (state.matchCount > 1) {
+        const badge = document.createElement('span');
+        badge.className = 'sat-multi-match';
+        badge.textContent = `1 of ${state.matchCount}`;
+        label.appendChild(badge);
+      }
+    }
+    list.appendChild(label);
+  }
+}
+
+function bindSatellitePicker(): void {
+  if (satellitePickerBound) return;
+  const btn = document.getElementById('toggle-satellite-picker');
+  const panel = document.getElementById('satellite-picker-panel');
+  const input = document.getElementById('satellite-picker-input') as HTMLInputElement | null;
+  const addBtn = document.getElementById('satellite-picker-add');
+  const status = document.getElementById('satellite-picker-status');
+  if (!btn || !panel || !input || !addBtn) return;
+
+  const closePicker = () => {
+    pickerOpen = false;
+    panel.hidden = true;
+    btn.classList.remove('active');
+  };
+  const openPicker = () => {
+    pickerOpen = true;
+    panel.hidden = false;
+    btn.classList.add('active');
+    renderSatellitePickerList();
+  };
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    pickerOpen ? closePicker() : openPicker();
+  });
+  // Outside-click closes the panel.
+  document.addEventListener('click', (e) => {
+    if (!pickerOpen) return;
+    const target = e.target as Node | null;
+    if (target && (panel.contains(target) || btn.contains(target))) return;
+    closePicker();
+  });
+
+  const handleAdd = async () => {
+    const q = input.value.trim();
+    if (!q) return;
+    if (status) {
+      status.textContent = 'Searching…';
+      status.className = 'satellite-picker-status';
+    }
+    const isNumeric = /^\d+$/.test(q);
+    const meta: SatelliteMeta = isNumeric
+      ? {
+        name: `NORAD ${q}`,
+        short_label: q.slice(-3),
+        track_color: '#888',
+        icon: '🛰',
+        resolution: { kind: 'catnr', catnr: Number(q) },
+      }
+      : {
+        name: q.toUpperCase(),
+        short_label: q.slice(0, 3).toUpperCase(),
+        track_color: '#aaa',
+        icon: '🔍',
+        resolution: { kind: 'name', query: q.toUpperCase() },
+      };
+    const result = await addSatelliteByMeta(meta);
+    if (status) {
+      status.textContent = result.message;
+      status.className = `satellite-picker-status ${result.ok ? 'success' : 'error'}`;
+    }
+    if (result.ok) {
+      input.value = '';
+      renderSatellitePickerList();
+    }
+  };
+  addBtn.addEventListener('click', handleAdd);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleAdd();
+  });
+
+  satellitePickerBound = true;
+}
+
+/** Restore selected satellites from localStorage on map init. Best-effort:
+ *  fetches each cached selection's TLE; failures are silent (operator
+ *  can re-add). */
+async function restorePersistedSatellites(): Promise<void> {
+  const keys = readSelectedKeys();
+  for (const key of keys) {
+    // Find the SatelliteMeta — either a curated entry, a CATNR, or a name search.
+    let meta: SatelliteMeta | null = null;
+    for (const c of CURATED_SATELLITES) {
+      if (metaKey(c) === key) {
+        meta = c;
+        break;
+      }
+    }
+    if (!meta) {
+      if (key.startsWith('name:')) {
+        const q = key.slice(5);
+        meta = {
+          name: q,
+          short_label: q.slice(0, 3),
+          track_color: '#aaa',
+          icon: '🔍',
+          resolution: { kind: 'name', query: q },
+        };
+      } else if (/^\d+$/.test(key)) {
+        const catnr = Number(key);
+        meta = {
+          name: `NORAD ${catnr}`,
+          short_label: String(catnr).slice(-3),
+          track_color: '#888',
+          icon: '🛰',
+          resolution: { kind: 'catnr', catnr },
+        };
+      }
+    }
+    if (meta) await addSatelliteByMeta(meta);
+  }
+}
+
+/** Hook called from the existing 1Hz tick (applyFollowISS or
+ *  updateIssNow) — drives non-ISS satellite live markers. Cheap: 1
+ *  SGP4 call per satellite × ~5 satellites max = ~0.5ms. */
+export function tickSatelliteMarkers(): void {
+  refreshSatelliteMarkers();
+}
+
+/** Hook for the 60s polyline refresh (called from the existing 30s
+ *  cloud-overlay tick or its own setInterval). Per /plan-eng-review P1. */
+export function tickSatelliteTracks(): void {
+  refreshSatelliteTracks();
+}
+
+/** Lookup currently-selected satellites for the pin-drop popup (Q2):
+ *  the popup needs to iterate per satellite to compute passes. */
+export function getSelectedSatellitesForPasses(): { name: string; color: string; track: Track }[] {
+  const out: { name: string; color: string; track: Track }[] = [];
+  for (const state of selectedSatellites.values()) {
+    out.push({
+      name: state.meta.name,
+      color: state.meta.track_color,
+      track: trackFromTLE(state.tle),
+    });
+  }
+  return out;
+}
+
+/** Compact short-labels + sub-points for the topbar multi-sat row.
+ *  Returns "Tg 32.5°N, 118.3°E" style strings. */
+export function getSatelliteTopbarReadouts(): { label: string; text: string; color: string }[] {
+  const nowMs = Date.now();
+  const out: { label: string; text: string; color: string }[] = [];
+  for (const state of selectedSatellites.values()) {
+    const track = trackFromTLE(state.tle);
+    const pos = liveIssPositionSGP4(track, nowMs);
+    if (!pos) continue;
+    const ns = pos.lat >= 0 ? 'N' : 'S';
+    const ew = pos.lon >= 0 ? 'E' : 'W';
+    out.push({
+      label: state.meta.short_label,
+      text: `${Math.abs(pos.lat).toFixed(1)}°${ns}, ${Math.abs(pos.lon).toFixed(1)}°${ew}`,
+      color: state.meta.track_color,
+    });
+  }
+  return out;
 }
