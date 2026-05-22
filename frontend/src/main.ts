@@ -473,10 +473,24 @@ function updateIssNow(): void {
   const ew = pos.lon >= 0 ? 'E' : 'W';
   const region = roughRegion(pos.lat, pos.lon);
   el.classList.add('ready');
-  el.innerHTML =
+  let html =
     `<span class="iss-label">ISS</span>` +
     `${Math.abs(pos.lat).toFixed(1)}°${ns}, ${Math.abs(pos.lon).toFixed(1)}°${ew}` +
     `<span class="iss-region">over ${region}</span>`;
+  // v1.6.0.2: append compact sub-point readouts for any non-ISS selected
+  // satellites. Each in its track color. Empty array when no extras are
+  // selected → existing single-ISS layout is unchanged.
+  if (mapModule?.getSatelliteTopbarReadouts) {
+    for (const r of mapModule.getSatelliteTopbarReadouts()) {
+      // r.label and r.text contain only ASCII / formatted numerics (no
+      // user-controlled strings) — safe to interpolate. Color is from
+      // the curated SatelliteMeta list.
+      html += `<span class="sat-sep">|</span>`
+        + `<span class="sat-readout" style="color:${r.color}">`
+        + `<span class="sat-readout-label">${r.label}</span>${r.text}</span>`;
+    }
+  }
+  el.innerHTML = html;
   // v1.5.2.0 — Chris feedback 2026-05-21. If the map's follow-ISS toggle is
   // on, recenter the map on this fresh sub-point. Only fires when the map
   // module has already been loaded (Map tab opened at least once) — we
