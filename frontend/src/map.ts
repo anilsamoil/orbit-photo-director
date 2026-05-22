@@ -868,22 +868,6 @@ function markerPositionFor(track: Track): { lat: number; lon: number } | null {
 function refreshGroundTrackSource(track: Track): void {
   if (!map) return;
   const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutes, Date.now());
-  // v1.5.4.0 diagnostic — surfaces multi-orbit/illumination state to the
-  // browser console so we can verify scrub-back-to-Now is producing the
-  // expected feature set. Remove (or downgrade to console.debug) after
-  // Chris's bug report is resolved.
-  // eslint-disable-next-line no-console
-  console.info('[track]', {
-    lookahead: lookaheadMinutes,
-    multiOrbitVisible,
-    feature_count: features.length,
-    orbit_indices: Array.from(new Set(
-      features.map((f) => (f.properties as { orbit_index?: number } | null)?.orbit_index ?? -1),
-    )).sort(),
-    illumination_states: Array.from(new Set(
-      features.map((f) => (f.properties as { illumination?: string } | null)?.illumination ?? 'none'),
-    )),
-  });
   upsertGeoJson(map, 'iss-track', {
     type: 'FeatureCollection',
     features,
@@ -1278,12 +1262,6 @@ function bindFollowToggle(): void {
   // below).
   reflectFollowButton();
   btn.addEventListener('click', () => {
-    // eslint-disable-next-line no-console
-    console.info('[follow-iss] click', {
-      followISS,
-      hasTrack: !!currentTrack,
-      hasMap: !!map,
-    });
     if (followISS) {
       // Already following → exit follow.
       followISS = false;
@@ -1300,8 +1278,6 @@ function bindFollowToggle(): void {
     const pos = liveIssPositionSGP4(currentTrack, Date.now())
       ?? liveIssPosition(currentTrack, Date.now());
     if (pos && map) {
-      // eslint-disable-next-line no-console
-      console.info('[follow-iss] easeTo', pos);
       map.easeTo({ center: [pos.lon, pos.lat], duration: 500 });
     }
   });

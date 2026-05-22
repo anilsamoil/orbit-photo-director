@@ -3,6 +3,37 @@
 Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 (must fix before mission start), P2 (nice to have), P3+ (future).
 
+## Operator-feedback tracker
+
+### Pettit's 12-ask wishlist (2026-05-19) — 12/12 SHIPPED ✅
+
+| # | Ask | Shipped |
+|---|---|---|
+| 1 | Multi-orbit display | v1.5.0.0 |
+| 2 | Day-night terminator | v1.4.2.0 |
+| 3 | Cloud overlay toggle | existing |
+| 4 | Validated Kp aurora widget | v1.2.3.0 |
+| 5 | Sun/sunspot widget | v1.4.x |
+| 6 | Multi-satellite tracking | v1.6.0.0 |
+| 7 | Country boundaries | v1.2.6.0 |
+| 8 | Photo timestamp reverse lookup | v1.3.0.0 |
+| 9 | Validated offline mode | Lane F SW |
+| 10 | Pin-anywhere → best next pass | v1.5.6.0 |
+| 11 | Map pan/scroll continuity | existing renderWorldCopies |
+| 12 | Time scrubbing | v1.4.0.0 |
+
+### Dominick's 3 asks (Crew-8, 2026-05-19) — 2/3 SHIPPED
+
+| # | Ask | Status |
+|---|---|---|
+| 1 | 24h+ lookahead | ✅ existing 36h Upcoming tab |
+| 2 | Lightning predictions/probability | ✅ v1.5.5.0 (Weather v1.3.2 — GLM + GFS-CAPE) |
+| 3 | OPTIMIS timeline overlay | ❌ DEFERRED — Pettit explicitly refutes; 1-1 cross-astronaut tension; defer until a 3rd operator votes |
+
+### Chris's asks (ISS operator) — all shipped
+
+Map zoom (v1.2.1.1), ISS-up bearing (v1.2.1.0), aurora (v1.2.3.0), pre-cache tiles (v1.2.2.0), Queue/Upcoming explainer (v1.2.0.1), empty-hint (v1.2.2.1), iPhone topbar overlap (v1.2.4.1), Esri satellite basemap (v1.5.1.0), follow-ISS toggle (v1.5.2.0), illumination-aware track (v1.5.3.0), bug-fix patches (v1.5.3.1, v1.5.4.0).
+
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
 ### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub
@@ -57,19 +88,21 @@ Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 
 ## V4 — Weather v1.3 (lightning + hurricane on cards)
 
-### V4-P0 — Weather v1.3 implementation — PARTIALLY SHIPPED (v1.3.1 framework + NHC; v1.3.2 real samplers pending)
+### V4-P0 — Weather v1.3 implementation — SHIPPED (v1.3.1 framework + NHC, v1.3.2 GLM + GFS-CAPE, 2026-05-21)
 
-**Shipped:**
-- `generator/lightning.py` — `LightningSample` + `LightningSampler` Protocol, `PlaceholderLightningSampler` (produces 0.0 values for the current "schema in place, real data pending" state), `lightning_bonus()` scoring. Plus `HurricaneNearby` + `NHCHurricaneTracker` (NHC CurrentStorms.json polling, named-storm proximity check).
-- Every pass now carries `lightning_potential`, `flash_rate_per_min`, `lightning_source`, `lightning_bonus` fields. NHC tracker fires the named-storm tag when an active Atlantic / East Pacific storm sits within 1500 km of a target.
+**v1.3.1 shipped (framework + placeholder + NHC):**
+- `generator/lightning.py` — `LightningSample` + `LightningSampler` Protocol, `PlaceholderLightningSampler`, `lightning_bonus()` scoring, `HurricaneNearby` + `NHCHurricaneTracker` (NHC CurrentStorms.json polling).
+- Every pass carries `lightning_potential`, `flash_rate_per_min`, `lightning_source`, `lightning_bonus` fields.
 
-**Pending — v1.3.2 (real samplers):**
-- GLM (NOAA S3 buckets) sampler
-- Blitzortung WebSocket sampler
-- GFS CAPE forecast sampler
-- Combined sampler wiring (4 inputs → unified `lightning_potential`)
+**v1.3.2 shipped (real samplers, v1.5.5.0 2026-05-21):**
+- `GLMSampler` — NOAA GLM L2 LCFA via AWS S3 (direct HTTPS + netCDF4 in-memory, no new deps). 60-min window, 5°×5° spatial bucket index. Skip targets outside GOES coverage (lat outside [-60,60] or lon outside [-180,-25]).
+- `GFSCAPELightningSampler` — wraps the existing `GFSForecastSampler` with `include_cape=True` Open-Meteo extension. CAPE J/kg → potential, saturates at 2500 J/kg.
+- `CombinedLightningSampler` — fuses observed + forecast via `max(observed, forecast × 0.7)`. Observed-zero is real data (not "missing source").
+- `make glm-smoke` + `scripts/glm_smoke.py` for live-S3 verification.
+- Live smoke test 2026-05-21: 22,297 flashes ingested from GOES-East+West in last 60 min.
 
-Soak status 2026-05-21: lightning fields visible on every pass but `lightning_source: "placeholder"` until v1.3.2 lands. NHC tracker is live; Atlantic season starts June 1, so no hurricane tags yet (consistent with "tracker working, no active storms"). Estimated v1.3.2 effort: ~5h CC.
+**v1.3.3 (Blitzortung) — DEFERRED:**
+- Blitzortung WebSocket sampler doesn't fit hourly-tick batch architecture (needs persistent listener process). Defer until GLM-coverage gap (Europe/Africa/Asia) is reported as a real problem.
 
 ### V4-P0 — Weather v1.3 implementation (original plan — kept below for history)
 
