@@ -19,7 +19,7 @@
  *    P1: ~4320 SGP4 calls per drop @ ~0.1ms = ~432ms (acceptable for one-shot)
  */
 
-import { liveIssPositionSGP4 } from './iss-sgp4';
+import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { classifyIssIllumination, type IssIllumination } from './terminator';
 import type { Track } from './types';
 
@@ -32,6 +32,18 @@ export interface UpcomingPass {
    *  iss-day = ground sunlit; iss-twilight = ground dark + ISS still sunlit;
    *  iss-eclipse = both ISS and ground in shadow. */
   regime: IssIllumination;
+  /** ISS altitude at closest approach (km). Used to compute angle off nadir.
+   *  Optional for back-compat — older builds without window/bearing surface
+   *  this field as undefined and the popup omits the column. */
+  issAltKm?: number;
+  /** Angle from ISS-nadir vector to the line-of-sight to the pin (degrees).
+   *  <30° → WORF (Destiny nadir window). ≥30° → Cupola (panoramic dome).
+   *  Mirrors generator/orbit.py:angle_off_nadir_deg semantics. */
+  angleOffNadirDeg?: number;
+  /** Bearing of the pin relative to ISS direction-of-travel, clockwise
+   *  from forward [0, 360). 0 = fore, 90 = starboard, 180 = aft, 270 = port.
+   *  Formatted via card.ts:formatRelativeBearing for the popup. */
+  relativeBearingDeg?: number;
 }
 
 /** Earth radius matching the Python generator's value (orbit.py:8). */
@@ -91,6 +103,42 @@ function parabolicMinimumTime(
   // three sample times (assumed roughly uniform around t1).
   const halfStep = (t2 - t0) / 2;
   return t1 + offset * halfStep;
+}
+
+/** Great-circle initial bearing from (lat1, lon1) to (lat2, lon2), in
+ *  degrees clockwise from true north [0, 360). Standard formula. Inlined
+ *  (not imported from map.ts) to avoid a pin-drop ↔ map import cycle.
+ *  Exported for unit testing. */
+export function greatCircleBearingDeg(
+  lat1: number, lon1: number,
+  lat2: number, lon2: number,
+): number {
+  const toRad = Math.PI / 180;
+  const phi1 = lat1 * toRad;
+  const phi2 = lat2 * toRad;
+  const dlam = (lon2 - lon1) * toRad;
+  const y = Math.sin(dlam) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2)
+    - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dlam);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+/** Angle from ISS-nadir vector to the line-of-sight to a surface target,
+ *  in degrees. Spherical geometry (matches generator/orbit.py at ISS
+ *  altitudes the flat-Earth approximation is wrong past a few hundred km).
+ *  Exported for unit testing. */
+export function angleOffNadirDeg(
+  groundDistanceKm: number,
+  altitudeKm: number,
+): number {
+  if (groundDistanceKm <= 0.0) return 0.0;
+  const R = EARTH_RADIUS_KM;
+  const theta = groundDistanceKm / R;
+  const sinT = Math.sin(theta);
+  const cosT = Math.cos(theta);
+  // tan(alpha) = R sin θ / (R + h − R cos θ)
+  const alpha = Math.atan2(R * sinT, R + altitudeKm - R * cosT);
+  return alpha * 180 / Math.PI;
 }
 
 /** Find the next N upcoming ISS passes over (pinLat, pinLon).
@@ -155,10 +203,41 @@ export function findUpcomingPasses(
         refinedNadir = greatCircleKm(refinedIss.lat, refinedIss.lon, pinLat, pinLon);
       }
       if (refinedNadir <= ISS_HORIZON_KM) {
+        // Window + direction enrichment (v1.6.1.2). One extra
+        // issPositionWithAltSGP4 call for the altitude, plus a +30s sample
+        // for the ISS heading. Both null-tolerant — if SGP4 returns null
+        // for either, the optional fields stay undefined and the popup
+        // renders the legacy 4-column layout for that row.
+        const refinedIssAlt = issPositionWithAltSGP4(track, refinedTimeMs);
+        let issAltKm: number | undefined;
+        let angleOffNadir: number | undefined;
+        let relativeBearing: number | undefined;
+        if (refinedIssAlt) {
+          issAltKm = refinedIssAlt.alt_km;
+          angleOffNadir = angleOffNadirDeg(refinedNadir, refinedIssAlt.alt_km);
+          // Heading from two SGP4 samples 30s apart. 30s × 7.7km/s ≈ 230km,
+          // small enough that the great-circle bearing is the local heading
+          // to within tenths of a degree even at high latitudes.
+          const ahead = liveIssPositionSGP4(track, refinedTimeMs + 30_000);
+          if (ahead) {
+            const headingDeg = greatCircleBearingDeg(
+              refinedIssAlt.lat, refinedIssAlt.lon,
+              ahead.lat, ahead.lon,
+            );
+            const targetBearing = greatCircleBearingDeg(
+              refinedIssAlt.lat, refinedIssAlt.lon,
+              pinLat, pinLon,
+            );
+            relativeBearing = (targetBearing - headingDeg + 360) % 360;
+          }
+        }
         passes.push({
           closestApproachMs: refinedTimeMs,
           nadirKm: refinedNadir,
           regime: classifyIssIllumination(new Date(refinedTimeMs), pinLat, pinLon),
+          issAltKm,
+          angleOffNadirDeg: angleOffNadir,
+          relativeBearingDeg: relativeBearing,
         });
       }
     }

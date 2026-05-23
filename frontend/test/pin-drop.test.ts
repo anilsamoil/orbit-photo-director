@@ -3,7 +3,9 @@ import { _resetSatrecCacheForTests } from '../src/iss-sgp4';
 import {
   DEFAULT_HORIZON_HOURS,
   ISS_HORIZON_KM,
+  angleOffNadirDeg,
   findUpcomingPasses,
+  greatCircleBearingDeg,
   greatCircleKm,
   roundForZoom,
 } from '../src/pin-drop';
@@ -170,3 +172,102 @@ describe('findUpcomingPasses (v1.5.6.0 — Pettit #10)', () => {
 
 // vitest auto-imports describe/it/expect; explicit beforeEach for clarity.
 import { beforeEach } from 'vitest';
+
+// ---------------------------------------------------------------------------
+// v1.6.1.2: window + direction enrichment (Anil request 2026-05-23)
+// ---------------------------------------------------------------------------
+
+describe('greatCircleBearingDeg', () => {
+  it('returns ~90° (east) for a due-east point on the equator', () => {
+    const b = greatCircleBearingDeg(0, 0, 0, 1);
+    expect(b).toBeCloseTo(90, 0);
+  });
+
+  it('returns ~0° (north) for a point directly north', () => {
+    const b = greatCircleBearingDeg(0, 0, 10, 0);
+    expect(b).toBeCloseTo(0, 0);
+  });
+
+  it('returns ~180° (south) for a point directly south', () => {
+    const b = greatCircleBearingDeg(10, 0, -10, 0);
+    expect(b).toBeCloseTo(180, 0);
+  });
+
+  it('returns ~270° (west) for a westward point on the equator', () => {
+    const b = greatCircleBearingDeg(0, 0, 0, -1);
+    expect(b).toBeCloseTo(270, 0);
+  });
+
+  it('result is always in [0, 360)', () => {
+    for (const [lat1, lon1, lat2, lon2] of [
+      [45, -120, 45, 120],
+      [-30, 170, 30, -170],
+      [89, 0, -89, 180],
+    ]) {
+      const b = greatCircleBearingDeg(lat1!, lon1!, lat2!, lon2!);
+      expect(b).toBeGreaterThanOrEqual(0);
+      expect(b).toBeLessThan(360);
+    }
+  });
+});
+
+describe('angleOffNadirDeg', () => {
+  it('returns 0° for zero ground distance (directly underneath)', () => {
+    expect(angleOffNadirDeg(0, 408)).toBe(0);
+  });
+
+  it('matches the spherical-Earth formula at small distances', () => {
+    // 100 km ground distance at 408 km alt:
+    // theta = 100 / 6378.137 ≈ 0.01568 rad
+    // tan(alpha) = R sin θ / (R + h − R cos θ)
+    //            ≈ 6378.137 × 0.01568 / (6378.137 + 408 − 6378.137 × 0.9999)
+    //            ≈ 100 / 408.785 ≈ 0.2447
+    // alpha ≈ 13.75°
+    const a = angleOffNadirDeg(100, 408);
+    expect(a).toBeCloseTo(13.75, 1);
+  });
+
+  it('crosses 30° between 220 and 250 km ground distance (WORF/Cupola boundary)', () => {
+    // Empirical crossover at ISS alt (~408km): ~240km ground distance.
+    const a220 = angleOffNadirDeg(220, 408);
+    const a250 = angleOffNadirDeg(250, 408);
+    expect(a220).toBeLessThan(30);
+    expect(a250).toBeGreaterThan(30);
+  });
+
+  it('matches generator/orbit.py at the horizon (~70° at ground_dist ≈ 1500 km)', () => {
+    // Python implementation gives ~67° at 1500km, 408km alt.
+    const a = angleOffNadirDeg(1500, 408);
+    expect(a).toBeGreaterThan(60);
+    expect(a).toBeLessThan(75);
+  });
+});
+
+describe('findUpcomingPasses enriched with window + direction (v1.6.1.2)', () => {
+  beforeEach(() => _resetSatrecCacheForTests());
+
+  it('populates issAltKm, angleOffNadirDeg, relativeBearingDeg on every pass', () => {
+    const passes = findUpcomingPasses(fixtureTrack(), 35, -100, FIXTURE_EPOCH_MS);
+    expect(passes.length).toBeGreaterThan(0);
+    for (const p of passes) {
+      expect(p.issAltKm).toBeDefined();
+      expect(p.issAltKm).toBeGreaterThan(350);
+      expect(p.issAltKm).toBeLessThan(500);
+      expect(p.angleOffNadirDeg).toBeDefined();
+      expect(p.angleOffNadirDeg).toBeGreaterThanOrEqual(0);
+      expect(p.angleOffNadirDeg).toBeLessThan(90);
+      expect(p.relativeBearingDeg).toBeDefined();
+      expect(p.relativeBearingDeg).toBeGreaterThanOrEqual(0);
+      expect(p.relativeBearingDeg).toBeLessThan(360);
+    }
+  });
+
+  it('angle off nadir is correlated with nadir distance (closer = smaller angle)', () => {
+    const passes = findUpcomingPasses(fixtureTrack(), 35, -100, FIXTURE_EPOCH_MS);
+    // For two passes from the same orbit altitude, smaller nadir → smaller angle.
+    for (const p of passes) {
+      const expected = angleOffNadirDeg(p.nadirKm, p.issAltKm!);
+      expect(p.angleOffNadirDeg).toBeCloseTo(expected, 1);
+    }
+  });
+});
