@@ -62,6 +62,16 @@ PASS_WINDOW_SECONDS = 300
 # allowing 30-min-uncertain launches to publish bogus pass entries.
 NET_WINDOW_MAX_SECONDS = PASS_WINDOW_SECONDS
 
+# ASCENT pipeline (V3-P2) uses a much looser NET window. The trajectory shape
+# is fixed by the pad + rocket profile + mission inclination — slippage in t0
+# doesn't change WHERE the rocket flies, only WHEN. A Falcon 9 with a 2-hour
+# launch window has the same Florida-to-Atlantic ground track whether it goes
+# up at the top of the window or the bottom. So we surface every actionable
+# launch within ~6h, which catches all SpaceX / ULA windows even before they
+# narrow on the day-of. The single best ISS-viewing instant within that window
+# is still picked by predict_ascent_pass() at 15s cadence.
+ASCENT_NET_WINDOW_MAX_SECONDS = 21600  # 6 hours
+
 log = logging.getLogger(__name__)
 
 
@@ -172,15 +182,36 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
 
 
 def filter_launches(launches: list[Launch]) -> list[Launch]:
-    """Apply the actionable-status + tight-NET filters. Inclination filter
-    happens later (find_passes returns no opportunities for sites the ISS
-    can't pass over, which is the right encoding — no need to pre-filter
-    here)."""
+    """Apply the actionable-status + tight-NET filters for OVERHEAD geometry.
+    Inclination filter happens later (find_passes returns no opportunities
+    for sites the ISS can't pass over, which is the right encoding — no need
+    to pre-filter here)."""
     out: list[Launch] = []
     for la in launches:
         if la.status_abbrev not in LL2_GO_STATUS_ABBREVS:
             continue
         if la.net_window_seconds > NET_WINDOW_MAX_SECONDS:
+            continue
+        out.append(la)
+    return out
+
+
+def filter_ascent_launches(launches: list[Launch]) -> list[Launch]:
+    """Like filter_launches but with the looser ASCENT_NET_WINDOW threshold.
+
+    OVERHEAD geometry needs a tight NET window because we predict the exact
+    ISS-overhead instant; if t0 slips outside the 5-min search window, the
+    prediction is meaningless. ASCENT geometry doesn't have that constraint —
+    the trajectory's ground track is the same regardless of t0 slip, so we
+    can surface launches with multi-hour NET windows and still draw a useful
+    climb path on the map. predict_ascent_pass walks the profile at 15s
+    cadence and picks the single best viewable instant within the window.
+    """
+    out: list[Launch] = []
+    for la in launches:
+        if la.status_abbrev not in LL2_GO_STATUS_ABBREVS:
+            continue
+        if la.net_window_seconds > ASCENT_NET_WINDOW_MAX_SECONDS:
             continue
         out.append(la)
     return out

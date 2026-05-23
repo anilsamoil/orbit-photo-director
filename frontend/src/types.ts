@@ -170,6 +170,11 @@ export interface Status {
    *  stale-launches banner overlay when >24h old. */
   launches_last_successful_fetch?: string | null;
   launches_count_upcoming?: number;
+  /** v1.6.1.1+: launches that passed the looser ASCENT NET-window filter
+   *  (≤6h vs OVERHEAD's ≤5min). Always ≥ launches_count_upcoming. Lets
+   *  the operator tell "we have data for the trajectory layer" apart from
+   *  "we have data for an exact-time pass." Optional for back-compat. */
+  launches_count_ascent_eligible?: number;
   launches_count_pass_opportunities?: number;
   launches_schema_hash?: string | null;
 }
