@@ -60,6 +60,7 @@ from .launch_data import (
 from .launch_data import (
     Launch,
     fetch_upcoming_launches,
+    filter_ascent_launches,
     filter_launches,
 )
 from .manifest import cleanup_old_versions, utcnow_iso, version_id, write_manifest
@@ -874,15 +875,17 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         )
     all_passes.extend(launch_pass_entries)
 
-    # 5c. ASCENT pipeline (V3-P2). Gated by OPD_ENABLE_ASCENT (default off
-    # for the 1-week Anil soak per D6 in the design doc). For each
-    # actionable launch with a matched rocket profile, predict the single
-    # best photographable instant during climb and append it as a separate
-    # PassEntry with launch.kind="ascent". The OVERHEAD + ASCENT entries
-    # for the same launch coexist per D7 (different photo opportunities).
+    # 5c. ASCENT pipeline (V3-P2). Gated by OPD_ENABLE_ASCENT (on in prod
+    # since 2026-05-17). Uses a much looser NET window than OVERHEAD —
+    # filter_ascent_launches accepts up to 6h of t0 uncertainty because
+    # the trajectory's ground track shape is t0-independent (only WHEN it
+    # flies shifts, not WHERE). predict_ascent_pass walks the profile at
+    # 15s cadence and picks the best viewable instant within the window.
+    # The OVERHEAD + ASCENT entries for the same launch coexist per D7.
+    ascent_actionable = filter_ascent_launches(launch_fetch.launches)
     ascent_pass_entries: list[dict[str, Any]] = []
-    if settings.enable_ascent and actionable_launches:
-        for la in actionable_launches:
+    if settings.enable_ascent and ascent_actionable:
+        for la in ascent_actionable:
             pred = predict_ascent_pass(
                 launch={
                     "rocket": {"configuration": {
@@ -909,8 +912,9 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
             ascent_pass_entries.append(_build_ascent_pass_entry(la, pred, n))
         if ascent_pass_entries:
             log.info(
-                "found %d ASCENT opportunities (OPD_ENABLE_ASCENT=1)",
-                len(ascent_pass_entries),
+                "found %d ASCENT opportunities out of %d ascent-eligible launches "
+                "(OPD_ENABLE_ASCENT=1)",
+                len(ascent_pass_entries), len(ascent_actionable),
             )
         all_passes.extend(ascent_pass_entries)
     # Reserved-slot logic (ARCH-4) treats both kinds as launch passes for
@@ -1027,6 +1031,10 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
             if launch_fetch.last_successful_fetch is not None else None
         ),
         "launches_count_upcoming": len(actionable_launches),
+        # v1.6.1.1: ASCENT pipeline uses a looser NET window than OVERHEAD,
+        # so its eligible count is reported separately. The OVERHEAD count
+        # above stays compatible with v1.6.0.x readers.
+        "launches_count_ascent_eligible": len(ascent_actionable),
         "launches_count_pass_opportunities": len(launch_pass_entries),
         "launches_schema_hash": launch_fetch.schema_hash,
     }

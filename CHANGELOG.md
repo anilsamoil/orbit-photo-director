@@ -2,6 +2,29 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.1.1] - 2026-05-23
+
+### Loosen ASCENT NET-window filter so the new map layer has launches to render.
+
+Day-after v1.6.1.0 ship: tested the new ascent-trajectory layer on the live site and found `launches_count_upcoming: 0` despite LL2 returning 7+ Falcon 9 / Atlas V / Long March launches in the next week. Cause: `filter_launches()` uses `NET_WINDOW_MAX_SECONDS = 300` (5 min), and every "Go" launch in LL2 right now has a NET window of 15min–2h — they all get rejected. The 5-min cap was correct for OVERHEAD (the geometry depends on knowing the exact ISS-overhead instant) but wrong for ASCENT (the trajectory's ground track shape is t0-independent).
+
+### Added
+
+- `generator/launch_data.py:ASCENT_NET_WINDOW_MAX_SECONDS = 21600` (6h) — covers all SpaceX / ULA pre-day-of windows.
+- `generator/launch_data.py:filter_ascent_launches()` — same status gate as `filter_launches`, but with the looser NET window.
+- `generator/main.py` — ASCENT pipeline now uses `filter_ascent_launches(launch_fetch.launches)` instead of sharing the tight-filtered `actionable_launches` list. The reserved-slot logic + log line + the new `status.json:launches_count_ascent_eligible` field were updated to match.
+- `frontend/src/types.ts` — `Status.launches_count_ascent_eligible?` typed (optional back-compat).
+- `tests/test_launch_data.py` — 4 new tests covering constant value, status gate parity, OVERHEAD-vs-ASCENT divergence on a wide-NET fixture, and the 6h boundary.
+
+### Backward-compatibility
+
+- `launches_count_upcoming` keeps its v1.6.0.x semantics (overhead-eligible count). Older readers see no change.
+- OVERHEAD pipeline is unchanged — 5-min NET filter still gates the find_passes window.
+
+### Operator impact
+
+After the daemon's next tick, `passes.json` should include ascent entries for the upcoming Falcon 9 / Atlas V launches, and the 🚀 map layer will finally have data to render. Test with the **Atlas V Amazon Leo LA-07** launch at **2026-05-29 23:33 UTC** (NET ±15min, well inside the new 6h window) or any of the Falcon 9 Starlinks in the same window.
+
 ## [1.6.1.0] - 2026-05-22
 
 ### ASCENT trajectory map layer + plist drift fix.

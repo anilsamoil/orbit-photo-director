@@ -16,9 +16,11 @@ import pytest
 import requests
 
 from generator.launch_data import (
+    ASCENT_NET_WINDOW_MAX_SECONDS,
     NET_WINDOW_MAX_SECONDS,
     compute_schema_hash,
     fetch_upcoming_launches,
+    filter_ascent_launches,
     filter_launches,
     parse_response,
 )
@@ -136,6 +138,64 @@ def test_filter_keeps_clean_falcon9(fixture_payload: dict) -> None:
     filtered = filter_launches(launches)
     assert len(filtered) == 1
     assert filtered[0].id == "f9-starlink-2026-05-test-1"
+
+
+# -------- filter_ascent_launches: looser NET window (v1.6.1.1) --------------
+
+
+def test_ascent_filter_constant_is_6_hours() -> None:
+    """6 hours covers all SpaceX / ULA pre-day-of windows. If this changes,
+    re-derive from real LL2 traffic; don't bump it casually."""
+    assert ASCENT_NET_WINDOW_MAX_SECONDS == 21600
+    assert ASCENT_NET_WINDOW_MAX_SECONDS > NET_WINDOW_MAX_SECONDS
+
+
+def test_ascent_filter_drops_tbd_status(fixture_payload: dict) -> None:
+    """Same status gate as OVERHEAD — TBD launches stay out."""
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
+    filtered = filter_ascent_launches(launches)
+    ids = {la.id for la in filtered}
+    assert "vulcan-tbd-2026-test-3" not in ids
+    assert "soyuz-progress-baikonur-2026-05-test-2" not in ids
+
+
+def test_ascent_filter_keeps_wide_net_window(fixture_payload: dict) -> None:
+    """The Vandy fixture (1h half-window = 3600s) is dropped by OVERHEAD but
+    kept by ASCENT — trajectory shape doesn't depend on tight t0."""
+    launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
+    overhead = {la.id for la in filter_launches(launches)}
+    ascent = {la.id for la in filter_ascent_launches(launches)}
+    assert "f9-cap-vandy-2026-test-4" not in overhead
+    assert "f9-cap-vandy-2026-test-4" in ascent
+
+
+def test_ascent_filter_rejects_beyond_6h() -> None:
+    """A launch with NET window > 6h is still TBD-territory — reject."""
+    from generator.launch_data import Launch
+    too_wide = Launch(
+        id="too-wide",
+        name="Test",
+        t0=datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
+        net_window_seconds=ASCENT_NET_WINDOW_MAX_SECONDS + 1,
+        site_lat=28.5,
+        site_lon=-80.6,
+        site_name="LC-39A",
+        rocket_type="Falcon 9 Block 5",
+        status_abbrev="Go",
+    )
+    just_under = Launch(
+        id="just-under",
+        name="Test 2",
+        t0=datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
+        net_window_seconds=ASCENT_NET_WINDOW_MAX_SECONDS,
+        site_lat=28.5,
+        site_lon=-80.6,
+        site_name="LC-39A",
+        rocket_type="Falcon 9 Block 5",
+        status_abbrev="Go",
+    )
+    out = filter_ascent_launches([too_wide, just_under])
+    assert [la.id for la in out] == ["just-under"]
 
 
 # -------- compute_schema_hash: stability + drift ----------------------------
