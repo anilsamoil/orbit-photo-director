@@ -17,6 +17,7 @@ import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
 import { liveIssPosition, wrapLon } from './iss';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
+import { formatRelativeBearing } from './card';
 import {
   findUpcomingPasses,
   roundForZoom,
@@ -2035,7 +2036,7 @@ export function buildPinDropPopup(
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'dropped-pin-popup';
-  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:280px;max-height:60vh;overflow-y:auto';
+  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:320px;max-height:60vh;overflow-y:auto';
 
   // Title: 📍 lat°N/S, lon°E/W
   const title = document.createElement('strong');
@@ -2059,20 +2060,26 @@ export function buildPinDropPopup(
     list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace;color:#0b0d12';
     for (const p of section.passes) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:grid;grid-template-columns:55px 1fr 65px 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee';
+      // v1.6.1.2: 5 cols (was 4). Dropped UTC date portion (kept HH:MMZ
+      // only — relative "+12m" already implies the day). Added shoot-from
+      // column with "angle · window · direction" matching the card render.
+      row.style.cssText = 'display:grid;grid-template-columns:55px 50px 55px 1fr 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee;align-items:baseline';
       const rel = document.createElement('span');
       rel.style.fontWeight = '600';
       rel.textContent = formatRelative(p.closestApproachMs - nowMs);
       const utc = document.createElement('span');
-      utc.textContent = formatUtc(p.closestApproachMs);
+      utc.textContent = formatUtcClock(p.closestApproachMs);
       const nadir = document.createElement('span');
       nadir.style.textAlign = 'right';
       nadir.textContent = `${Math.round(p.nadirKm)} km`;
+      const shoot = document.createElement('span');
+      shoot.style.cssText = 'font-size:0.72rem;color:#444';
+      shoot.textContent = formatShootHint(p);
       const regime = document.createElement('span');
       regime.style.textAlign = 'right';
       regime.style.color = regimeColor(p.regime);
       regime.textContent = regimeLabel(p.regime);
-      row.append(rel, utc, nadir, regime);
+      row.append(rel, utc, nadir, shoot, regime);
       list.appendChild(row);
     }
     body.appendChild(list);
@@ -2101,6 +2108,29 @@ function formatUtc(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+/** Clock-only UTC for the pin-drop popup. v1.6.1.2 dropped the date
+ *  portion to free up a column for the angle/window/direction hint —
+ *  the relative "+12m" / "+1d3h" already implies which day. */
+export function formatUtcClock(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+/** Format the "where do I point the camera" hint for one pass row.
+ *  Returns "" if the pass has no window/bearing data (older builds).
+ *  Format mirrors the card render: "35° · WORF · 35° starboard".
+ *  Exported for unit testing. */
+export function formatShootHint(p: UpcomingPass): string {
+  if (typeof p.angleOffNadirDeg !== 'number') return '';
+  const deg = Math.round(p.angleOffNadirDeg);
+  const win = p.angleOffNadirDeg < 30 ? 'WORF' : 'Cupola';
+  if (typeof p.relativeBearingDeg !== 'number') {
+    return `${deg}° · ${win}`;
+  }
+  return `${deg}° · ${win} · ${formatRelativeBearing(p.relativeBearingDeg)}`;
 }
 
 function formatRelative(deltaMs: number): string {

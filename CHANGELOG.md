@@ -2,6 +2,46 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.2.0] - 2026-05-23
+
+### Pin-drop popup now tells you where to point the camera.
+
+Drop a dot anywhere on the map; the popup gains a "shoot from" hint for every upcoming pass — the angle off ISS nadir, which window to use (WORF vs Cupola), and which direction relative to ISS direction-of-travel (fore / aft / port / starboard). Matches the same hint format the score-sorted cards already use.
+
+Old popup:
+```
++12m  2026-05-29 23:33Z  450 km  twilight
+```
+
+New popup:
+```
++12m  23:33Z  450 km  28° · WORF · starboard  twilight
+```
+
+### Added
+
+- `frontend/src/pin-drop.ts`:
+  - `UpcomingPass` now carries optional `issAltKm`, `angleOffNadirDeg`, `relativeBearingDeg`. Older builds without these render the legacy 4-column layout.
+  - `angleOffNadirDeg()` — spherical-Earth formula matching `generator/orbit.py`. <30° → WORF (Destiny lab nadir window). ≥30° → Cupola (panoramic dome).
+  - `greatCircleBearingDeg()` — inlined to avoid a pin-drop ↔ map import cycle.
+  - `findUpcomingPasses()` now computes the new fields at closest approach: one extra `issPositionWithAltSGP4` for the altitude + a +30s sample for the ISS heading; falls back to optional-undefined when SGP4 returns null.
+- `frontend/src/map.ts`:
+  - `formatShootHint(pass)` — formats `28° · WORF · starboard`, omits direction when bearing missing, returns "" for legacy passes (graceful back-compat).
+  - `formatUtcClock(ms)` — clock-only formatter (`23:33Z` instead of `2026-05-29 23:33Z`).
+  - Pin-drop popup grid is now 5-column (was 4): rel-time, UTC clock, distance, shoot hint, regime.
+  - Popup min-width 280 → 320px to fit the new column.
+
+### Changed
+
+- Pin-drop popup row layout. The UTC column now shows clock-time only (HH:MMZ) — the leading `+12m` / `+1d3h` relative-time chip already implies the day, so the date portion was redundant. This frees the space for the new shoot-hint column without overall popup growth.
+
+### Tests
+
+- `frontend/test/pin-drop.test.ts`: +11 tests covering greatCircleBearingDeg (5 cardinals + range check), angleOffNadirDeg (zero, small-distance formula, WORF/Cupola boundary, horizon), enriched findUpcomingPasses (every pass populates new fields, angle correlates with formula).
+- `frontend/test/pin-drop-popup.test.ts`: +12 new tests covering formatShootHint (missing data, WORF, Cupola, boundary, rounding, all 4 directions, no-bearing fallback) and formatUtcClock (example, zero-padding, midnight, no date components).
+
+Suite count: 504 → **527 frontend tests pass** (+23).
+
 ## [1.6.1.1] - 2026-05-23
 
 ### Loosen ASCENT NET-window filter so the new map layer has launches to render.
