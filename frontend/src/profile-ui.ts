@@ -32,6 +32,7 @@ import {
   type Profile,
 } from './profile';
 import { subscribeProfileChanged } from './profile-events';
+import { buildCrudSection } from './profile-crud';
 
 /** Min/max for the distance threshold slider (km). Range chosen to span
  *  "tight nadir only" (100 km) through "well past ISS horizon" (2000 km).
@@ -86,6 +87,11 @@ export function renderProfilePane(): void {
   container.replaceChildren();
   container.appendChild(buildPickerSection());
   container.appendChild(buildThresholdSection());
+  // Slot 6 — CRUD UI (add target form + personal list + curated hide).
+  // Lives in profile-crud.ts so the file stays scoped per slot; mounted
+  // here so the Profile tab is the single home for per-astronaut config.
+  const activeName = readActiveProfileName();
+  container.appendChild(buildCrudSection(activeName));
   // Subscribe once so subsequent cross-tab edits or other-pane edits
   // refresh the picker dropdown without requiring the user to re-open
   // the Profile tab.
