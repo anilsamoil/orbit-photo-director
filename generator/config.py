@@ -23,6 +23,24 @@ DEFAULT_CLOUD_CACHE_TTL_MINUTES = 55
 DEFAULT_TOP_QUEUE = 5
 DEFAULT_TOP_MAP = 25
 DEFAULT_TOP_UPCOMING = 10
+
+# Profiles the daemon multiplexes per tick. Static-config because:
+#  - The daemon needs to know names BEFORE fetching (no `list profiles`
+#    endpoint exists yet — design rev 2 deferred that to v2).
+#  - 5 names max in foreseeable mission staffing; manual config is fine.
+#  - Adding a new astronaut = one-line PR (matches existing curated
+#    target curation pattern).
+# When empty, the multiplexer is a no-op and the canonical single-tenant
+# output (passes.json + friends) is the only thing written — useful for
+# rollback or local dev where the Worker API isn't reachable.
+PROFILE_NAMES: tuple[str, ...] = ("anil", "chris", "jack")
+# Base URL of the Cloudflare Worker exposing /api/profiles/<name>/targets
+# (see worker/src/profiles.ts). Overridable in tests + local dev.
+PROFILE_API_BASE = "https://map.astroanil.dev"
+# Profile fetch deadline. Worker is co-located with R2 so first byte
+# typically <300ms; 10s gives plenty of head-room for transient
+# Cloudflare edge slowness without making a stuck call wedge the tick.
+PROFILE_FETCH_TIMEOUT_SECONDS = 10
 # Passes within this horizon use observed cloud sources (MODIS / GOES-IR /
 # Himawari). Beyond it, observation is irrelevant — the GFS forecast governs.
 OBSERVED_CLOUD_HORIZON_MINUTES = 90
