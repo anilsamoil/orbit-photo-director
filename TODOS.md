@@ -50,7 +50,7 @@ Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-
 | 7 — Distance threshold slider | ✅ | v1.6.5.0 |
 | 8 — `/api/log` gains `profile` field (backend) | ✅ | v1.6.4.0 |
 | 8 — Log tab `?profile=` filter on read (frontend) | ✅ | vNEXT |
-| 9 — CSV import → API push | ⏳ pending | — |
+| 9 — CSV import → API push | ✅ | vNEXT |
 | 10 — JSON export/import + schema migration | ⏳ pending | — |
 | 11 — Event bus + cross-tab `storage` event sync | ✅ | v1.6.5.0 |
 | — Photo lookup moved under Profile tab | ✅ | v1.6.6.0 |
