@@ -665,7 +665,10 @@ async function loadLogPane(): Promise<void> {
   const statsEl = document.getElementById('log-stats');
   if (!listEl || !emptyEl || !statsEl) return;
   renderTokenStatus();
-  const entries = await fetchLog();
+  // Pass the active profile name so the Log tab shows the current
+  // astronaut's records — without this, the Worker's legacy-default
+  // filter returns Anil's records to anyone with a token (e.g. Jack).
+  const entries = await fetchLog('', 100, getCurrentProfile()?.name);
   const merged = mergeLogEntries(entries);
   renderLog(listEl, emptyEl, statsEl, merged, async (row: MergedRow) => {
     const ok = await openRateModal(row);

@@ -2,6 +2,32 @@
 
 All notable changes to Orbit Photo Director.
 
+## [Unreleased] Slot 8 — Per-profile Log tab filter
+
+The Log tab now reflects the active astronaut's records, not Anil's. The backend half of slot 8 shipped in v1.6.4.0 (worker validates + filters by `profile`); the frontend was still calling `/api/log?limit=100` without a `profile` query, so Jack's Log tab fell through to the Worker's legacy-default filter (`profile === 'anil' OR missing`) and showed Anil's records.
+
+### Added
+
+- **`frontend/src/log.ts`** — `fetchLog(baseUrl, limit, profileName?)` gains an optional `profileName` argument. When supplied, the helper appends `&profile=<encoded-name>` to the URL. When omitted, the URL is unchanged (back-compat — the Worker's legacy-default filter handles pre-v1.6.3.0 records). Defensive `encodeURIComponent` mirrors the slot 6 precedent in `profile-api.ts`.
+- **`frontend/src/main.ts:loadLogPane()`** — passes `getCurrentProfile()?.name` as the third arg to `fetchLog()`. One-line change. Mirrors the `buildPayload()` discipline in `calib.ts`.
+- **`frontend/test/log.test.ts`** — four new tests cover the per-profile branch + back-compat + URL-encoding + custom-baseUrl-and-limit interaction.
+
+### Tests
+
+- Frontend: **675 → 679 vitest pass (+4)** in `test/log.test.ts`
+- `tsc --noEmit && vite build` clean
+- Backend: untouched (worker shipped in v1.6.4.0)
+
+### Deferred to slot 8b
+
+- "Mark shot" / "got it" status badge on Profile tab personal-target rows (read-side aggregation from `fetchLog(profileName)`). Skipped to keep this slot tight; the calib-log POST plumbing already records the data, so the badge is purely a read-time UI add when a future slot picks it up.
+
+### How to manually test
+
+1. Open `https://map.astroanil.dev/?u=jack` with `opd-calib-token` set in localStorage. Click **Shoot** on any pass card. DevTools → Network → `/api/log` POST shows `"profile": "jack"` in the body (already true since v1.6.4.0).
+2. Switch to the **Log** tab. The GET request is now `/api/log?limit=100&profile=jack` (not `/api/log?limit=100`). The list shows ONLY Jack's records — Anil's shoots from `?u=anil` no longer leak in.
+3. Open `?u=anil` in another tab. The Log tab there issues `/api/log?limit=100&profile=anil` and shows Anil's records (including legacy records missing a `profile` field — the worker's filter accepts both). Cross-confirm Jack's and Anil's lists are disjoint.
+
 ## [1.6.9.0] - 2026-05-26
 
 ### Slot 6 — Profile tab CRUD with optimistic UI + API sync

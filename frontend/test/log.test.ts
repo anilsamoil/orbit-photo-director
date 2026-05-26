@@ -98,6 +98,47 @@ describe('fetchLog', () => {
     const entries = await fetchLog();
     expect(entries).toEqual([]);
   });
+
+  it('appends &profile=<name> when profileName is supplied (slot 8)', async () => {
+    setToken('abc');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchLog('', 100, 'jack');
+    const calls = fetchMock.mock.calls as unknown[][];
+    expect(calls[0]?.[0]).toBe('/api/log?limit=100&profile=jack');
+  });
+
+  it('omits &profile= when profileName is undefined (back-compat)', async () => {
+    setToken('abc');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchLog('', 100);
+    const calls = fetchMock.mock.calls as unknown[][];
+    expect(calls[0]?.[0]).toBe('/api/log?limit=100');
+  });
+
+  it('URL-encodes the profile name defensively (worker re-validates shape)', async () => {
+    setToken('abc');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    // Pass a string that would break the query if not encoded. The worker
+    // 400s on invalid shapes; this test just verifies the helper escapes
+    // the value rather than splicing it raw into the URL.
+    await fetchLog('', 50, 'has space&u=evil');
+    const calls = fetchMock.mock.calls as unknown[][];
+    expect(calls[0]?.[0]).toBe(
+      `/api/log?limit=50&profile=${encodeURIComponent('has space&u=evil')}`,
+    );
+  });
+
+  it('honors baseUrl + custom limit alongside profileName', async () => {
+    setToken('abc');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchLog('https://api.example.com', 25, 'jack');
+    const calls = fetchMock.mock.calls as unknown[][];
+    expect(calls[0]?.[0]).toBe('https://api.example.com/api/log?limit=25&profile=jack');
+  });
 });
 
 describe('renderLog', () => {

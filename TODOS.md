@@ -48,7 +48,8 @@ Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-
 | 5b — Browser-Worker SGP4 instant-buffer | ⏳ deferred | — |
 | 6 — Profile tab add/remove with API sync | ✅ | v1.6.9.0 |
 | 7 — Distance threshold slider | ✅ | v1.6.5.0 |
-| 8 — `/api/log` gains `profile` field | ✅ (backend) | v1.6.4.0 |
+| 8 — `/api/log` gains `profile` field (backend) | ✅ | v1.6.4.0 |
+| 8 — Log tab `?profile=` filter on read (frontend) | ✅ | vNEXT |
 | 9 — CSV import → API push | ⏳ pending | — |
 | 10 — JSON export/import + schema migration | ⏳ pending | — |
 | 11 — Event bus + cross-tab `storage` event sync | ✅ | v1.6.5.0 |
