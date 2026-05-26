@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] Slot 6 — Profile tab CRUD with optimistic UI + API sync
+## [1.6.9.0] - 2026-05-26
+
+### Slot 6 — Profile tab CRUD with optimistic UI + API sync
 
 The Profile tab gains add/remove/hide controls. Each mutation goes optimistic-local first (`saveProfile()` → re-render), then fires the corresponding `/api/profiles/<name>/targets` call in the background; failures roll back the local change and surface a toast. Curated-removal toggles stay local-only — the daemon multiplexer (slot 4) already reads `removedCuratedIds` from the profile JSON it fetches, so no second API surface is needed for that path.
 
