@@ -1123,6 +1123,36 @@ main {
   border-top: 1px solid var(--border);
 }
 
+/* Slot 10 — JSON export/import section. */
+.profile-crud-jsonio {
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+.profile-json-preview {
+  margin-top: 0.4rem;
+}
+.profile-json-summary {
+  font-weight: 600;
+  margin: 0.3rem 0;
+}
+.profile-json-errors {
+  list-style: none;
+  padding: 0;
+  margin: 0.4rem 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.profile-json-error-row {
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.profile-json-error-name {
+  display: block;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
 /* Photo-lookup tab — Pettit feedback 2026-05-19 (v1.3.0.0). */
 .lookup-form {
   max-width: 720px;

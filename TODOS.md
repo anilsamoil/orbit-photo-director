@@ -51,7 +51,7 @@ Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-
 | 8 — `/api/log` gains `profile` field (backend) | ✅ | v1.6.4.0 |
 | 8 — Log tab `?profile=` filter on read (frontend) | ✅ | vNEXT |
 | 9 — CSV import → API push | ✅ | vNEXT |
-| 10 — JSON export/import + schema migration | ⏳ pending | — |
+| 10 — JSON export/import + schema migration | ✅ | vNEXT |
 | 11 — Event bus + cross-tab `storage` event sync | ✅ | v1.6.5.0 |
 | — Photo lookup moved under Profile tab | ✅ | v1.6.6.0 |
 | — Jack's 39 targets bootstrapped from xlsx | ✅ data, ⏳ upload | data committed v1.6.6.0; `scripts/bootstrap_profile.py jack` posts to live |

@@ -2,6 +2,42 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.12.0] - 2026-05-26
+
+### Slot 10 — JSON export/import with schema migration framework
+
+The Profile tab gains Export (download as JSON) and Import (file → preview → Replace all). Schema versioning is formalized: a `MIGRATIONS` table indexed by source version drives `runMigrationChain`, which the import flow calls to upgrade older exports to the current schema. v2+ exports are rejected with an "upgrade the app" message; older schemas (when a migrator is registered) flow through cleanly.
+
+### Added
+
+- **`frontend/src/profile-json-io.ts`** (new, ~290 lines) — pure module. `exportProfileJson(name, appVersion, now?)` returns a pretty-printed envelope `{format: "orbit-photo-director-profile", schemaVersion, exportedAt, appVersion, profile}`. `parseProfileImport(text, {migrations?, currentVersion?})` returns a discriminated `ImportResult` with stable error codes (`malformed_json`, `wrong_format`, `future_schema`, `missing_schema_version`, `missing_profile`, `invalid_profile_name`, `migration_failed`) plus `targetErrors[]` for per-target validation failures. `downloadProfileJson(name, appVersion)` is the DOM-side helper (Blob + anchor click + revoke); `readProfileImportFile(file)` wraps `File.text()` + `parseProfileImport`.
+- **`frontend/src/profile.ts`** — `MIGRATIONS` map + `runMigrationChain(working, from, to, migrations?)` + `ProfileMigrator` type are now exported. `migrate()` accepts an optional `migrations` arg for test injection. Existing behavior unchanged at v1 (no migrators in the production map yet).
+- **`frontend/src/profile-crud.ts`** — `buildJsonIoSection(profileName)` is appended inside `buildCrudSection` under the CSV import section. Renders Export button + Import file picker + preview area + Replace / Cancel buttons. `handleJsonImportReplace` does optimistic local save + PUT-replace-server + rollback-on-failure (reuses slot 6's `putProfileTargets` — no new API surface).
+- **`frontend/src/style.css`** — `.profile-crud-jsonio` / `.profile-json-preview` / `.profile-json-summary` / `.profile-json-errors` styles, matching the existing CSV section's visual rhythm.
+- **`frontend/test/profile-json-io.test.ts`** (new, 25 tests): export envelope shape, malformed JSON / wrong format / future schema rejection, hypothetical v0 → v1 migration via injected migrator, target validation (valid + invalid split), `downloadProfileJson` blob URL + anchor click, `readProfileImportFile` happy + reject paths.
+- **`frontend/test/profile-json-import.test.ts`** (new, 13 tests): DOM rendering, Export button click → blob URL, import preview shows count + cross-profile warning, future-schema preview error, malformed JSON preview error, Replace triggers PUT, Replace rollback on 5xx, cross-profile name handling (active name preserved), distanceThresholdKm + removedCuratedIds adoption, Cancel resets preview.
+
+### Tests
+
+- Frontend: **729 → 767 vitest pass (+38)**
+- `tsc --noEmit && vite build` clean
+- No new dependencies (native `Blob` + `URL.createObjectURL` + `FileReader`/`File.text`).
+
+### Decisions
+
+- **Export source is localStorage, not the API.** The design doc said "pull from API" but localStorage holds the operator's actual view (including `removedCuratedIds` and `distanceThresholdKm`, neither of which the API stores). Operators backing up their view want what they see; "wipe local + re-pull from server" is a recovery path the slot 6 API already covers.
+- **Cross-profile import KEEPS the active profile name.** Importing Jack's file into Anil's profile copies Jack's targets / hidden curated / threshold into Anil's bucket; the active profile's `name` is preserved. A warning surfaces in the preview so the operator can cancel if that's not what they meant.
+- **Replace semantics for the server side.** PUT replaces the entire server list rather than diff-merging, matching the existing `putProfileTargets` contract. The local save is also a full replace (with current name preserved).
+- **v0 schema is hypothetical/testing-only.** v0 → v1 migrator lives in the test fixture, not the production `MIGRATIONS` map. Production today has no migrators; the framework is in place so the next schema bump (v2) plugs in as a single map entry.
+
+### How to manually test
+
+1. Open `https://map.astroanil.dev/?u=jack` with `opd-calib-token` set in localStorage. Add 2-3 personal targets via the Profile tab.
+2. Scroll to **Backup / Restore (JSON)**. Click **Export profile**. Browser downloads `jack-profile.json`. Open it in a text editor — verify the envelope (`format`, `schemaVersion`, `exportedAt`, `appVersion`, `profile`) and that the profile contents match what you see in the Profile tab.
+3. Edit the downloaded file: change one target's `name` field (e.g., "Boston" → "Boston Edited"). Save.
+4. Back in the app, **Import file** → pick the edited file. Preview shows "N valid targets" + "REPLACES all personal targets" warning + the meta line (schema v1, exported timestamp). Click **Replace personal targets**. Toast confirms the import; the personal-targets list re-renders with the edited name.
+5. Negative path: download the export, then edit the file to set `"schemaVersion": 999`. Re-import. Preview shows "This export needs app v999+. You have v1." with the action row hidden — no Replace button.
+
 ## [1.6.11.0] - 2026-05-26
 
 ### Slot 9 — CSV import to Profile tab

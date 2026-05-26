@@ -66,6 +66,11 @@ export interface PersonalTarget {
  *  shape. Add a migrator to MIGRATIONS so older profiles roundtrip. */
 export const CURRENT_PROFILE_VERSION = 1;
 
+/** Schema migrator step function. Takes the profile at version N, returns
+ *  it at version N+1. Must be pure (same input → same output, no side
+ *  effects), since it runs on every page load for stale profiles. */
+export type ProfileMigrator = (profile: Record<string, unknown>) => Record<string, unknown>;
+
 /** Schema migrators. Indexed by source version → next version. Composed
  *  in `migrate()` until `version === CURRENT_PROFILE_VERSION`. Empty in
  *  v1; populates as the schema evolves. Example future entry:
@@ -75,7 +80,51 @@ export const CURRENT_PROFILE_VERSION = 1;
  *  Migrators must be pure functions: same input → same output. They run
  *  every page load for stale profiles, so they cannot have side effects.
  */
-const MIGRATIONS: Record<number, (profile: Record<string, unknown>) => Record<string, unknown>> = {};
+export const MIGRATIONS: Record<number, ProfileMigrator> = {};
+
+/** Run the migration chain on `working` from `fromVersion` until `toVersion`
+ *  (inclusive of the final shape, exclusive of the next step). Returns the
+ *  migrated record; throws if a step is missing or the target is unreachable.
+ *
+ *  Exposed for slot 10's JSON-import flow, which needs to migrate an
+ *  imported profile that may carry a different `version` field than what
+ *  localStorage currently holds. Tests can also register a step function
+ *  via the exported `MIGRATIONS` map and exercise the chain end-to-end. */
+export function runMigrationChain(
+  working: Record<string, unknown>,
+  fromVersion: number,
+  toVersion: number,
+  migrations: Record<number, ProfileMigrator> = MIGRATIONS,
+): Record<string, unknown> {
+  let current = { ...working };
+  let version = fromVersion;
+  while (version < toVersion) {
+    const migrator = migrations[version];
+    if (!migrator) {
+      throw new Error(
+        `no migration from profile version ${version}; ` +
+        `current=${CURRENT_PROFILE_VERSION}. ` +
+        `Delete the localStorage entry and let it auto-recreate.`,
+      );
+    }
+    current = migrator(current);
+    // Trust the migrator to set the next version field; if it doesn't,
+    // advance by one defensively so an unwritten step can't loop forever.
+    const next = typeof current.version === 'number' ? current.version : version + 1;
+    if (next <= version) {
+      throw new Error(
+        `migrator from version ${version} did not advance the version field`,
+      );
+    }
+    version = next;
+  }
+  if (version > toVersion) {
+    throw new Error(
+      `migration overshot: ended at ${version}, expected ${toVersion}`,
+    );
+  }
+  return current;
+}
 
 /** localStorage key prefix. Each profile lives at `opd-profile-<name>`.
  *  The picker reads `opd-profile-names` as the list of known profiles. */
@@ -148,22 +197,15 @@ export function createDefaultProfile(name: string): Profile {
  *  one version step. If the input is already at CURRENT_PROFILE_VERSION,
  *  it's returned unchanged. If the version is unknown (corrupted or from
  *  a future build), the migrator throws with a clear message so the
- *  caller can decide whether to discard + recreate. */
-export function migrate(raw: Record<string, unknown>): Profile {
-  let working = { ...raw };
-  let version = typeof working.version === 'number' ? working.version : 0;
-  while (version < CURRENT_PROFILE_VERSION) {
-    const migrator = MIGRATIONS[version];
-    if (!migrator) {
-      throw new Error(
-        `no migration from profile version ${version}; ` +
-        `current=${CURRENT_PROFILE_VERSION}. ` +
-        `Delete the localStorage entry and let it auto-recreate.`,
-      );
-    }
-    working = migrator(working);
-    version = typeof working.version === 'number' ? working.version : version + 1;
-  }
+ *  caller can decide whether to discard + recreate.
+ *
+ *  Optional `migrations` arg lets slot 10 tests register a hypothetical
+ *  v0 → v1 step without polluting the production MIGRATIONS map. */
+export function migrate(
+  raw: Record<string, unknown>,
+  migrations: Record<number, ProfileMigrator> = MIGRATIONS,
+): Profile {
+  const version = typeof raw.version === 'number' ? raw.version : 0;
   if (version > CURRENT_PROFILE_VERSION) {
     throw new Error(
       `profile version ${version} is newer than this build's ` +
@@ -171,10 +213,11 @@ export function migrate(raw: Record<string, unknown>): Profile {
       `Refusing to downgrade; the operator should upgrade the app.`,
     );
   }
+  const migrated = runMigrationChain(raw, version, CURRENT_PROFILE_VERSION, migrations);
   // After migration the working object should match Profile shape.
   // Cast is safe because each migrator is responsible for producing
   // a structurally-valid Profile at its target version.
-  return working as unknown as Profile;
+  return migrated as unknown as Profile;
 }
 
 /** Load a profile from localStorage. Three outcomes:
