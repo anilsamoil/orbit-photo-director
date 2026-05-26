@@ -579,14 +579,15 @@ function bindTabs(): void {
   const tabQueue = document.getElementById('tab-queue');
   const tabUpcoming = document.getElementById('tab-upcoming');
   const tabMap = document.getElementById('tab-map');
-  const tabLookup = document.getElementById('tab-lookup');
   const tabProfile = document.getElementById('tab-profile');
   const tabLog = document.getElementById('tab-log');
-  if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLookup || !tabLog) return;
+  if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLog) return;
 
   // tabProfile may be missing in older integration-test DOM fixtures; we
   // still want the rest of the dispatcher to wire up cleanly.
-  const allTabs = [tabQueue, tabUpcoming, tabMap, tabLookup, tabProfile, tabLog]
+  // tab-lookup was removed in v1.6.6.0 — photo lookup now lives INSIDE
+  // the Profile pane. Operators reach it via tab-profile.
+  const allTabs = [tabQueue, tabUpcoming, tabMap, tabProfile, tabLog]
     .filter((t): t is HTMLElement => t !== null);
   const setActive = (className: string, activeTab: HTMLElement) => {
     view.className = className;
@@ -599,14 +600,14 @@ function bindTabs(): void {
     void loadMapPane();
     setActive('view-map', tabMap);
   });
-  tabLookup.addEventListener('click', () => {
-    setActive('view-lookup', tabLookup);
-    loadLookupPane();
-  });
   if (tabProfile) {
     tabProfile.addEventListener('click', () => {
       setActive('view-profile', tabProfile);
       void loadProfilePane();
+      // Photo lookup widget lives inside the Profile pane now. Bind on
+      // first Profile-tab visit so the exifr import only fires once and
+      // matches the lazy-load convention.
+      loadLookupPane();
     });
   }
   tabLog.addEventListener('click', () => {

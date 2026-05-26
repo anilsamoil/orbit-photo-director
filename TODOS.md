@@ -34,6 +34,45 @@ Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 
 Map zoom (v1.2.1.1), ISS-up bearing (v1.2.1.0), aurora (v1.2.3.0), pre-cache tiles (v1.2.2.0), Queue/Upcoming explainer (v1.2.0.1), empty-hint (v1.2.2.1), iPhone topbar overlap (v1.2.4.1), Esri satellite basemap (v1.5.1.0), follow-ISS toggle (v1.5.2.0), illumination-aware track (v1.5.3.0), bug-fix patches (v1.5.3.1, v1.5.4.0).
 
+### Jack (new astronaut, joined 2026-05-26) — per-astronaut profile layer IN PROGRESS
+
+Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-main-design-20260526-083510.md`. Architecture: daemon-side multi-tenant + Cloudflare Worker API + browser-Worker instant-buffer.
+
+| Slot | Status | Ship version |
+|---|---|---|
+| 1 — profile.ts data model + URL routing | ✅ | v1.6.3.0 |
+| 2 — Profile tab UI + picker + URL sync | ✅ | v1.6.5.0 |
+| 3 — Worker `/api/profiles/<name>/targets` CRUD | ✅ | v1.6.4.0 |
+| 4 — Daemon multiplexer (per-astronaut passes.json) | ⏳ pending | — |
+| 5 — Frontend dual-source + browser-Worker SGP4 instant-buffer | ⏳ pending | — |
+| 6 — Profile tab add/remove with API sync | ⏳ pending | — |
+| 7 — Distance threshold slider | ✅ | v1.6.5.0 |
+| 8 — `/api/log` gains `profile` field | ✅ (backend) | v1.6.4.0 |
+| 9 — CSV import → API push | ⏳ pending | — |
+| 10 — JSON export/import + schema migration | ⏳ pending | — |
+| 11 — Event bus + cross-tab `storage` event sync | ✅ | v1.6.5.0 |
+| — Photo lookup moved under Profile tab | ✅ | v1.6.6.0 |
+| — Jack's 39 targets bootstrapped from xlsx | ✅ data, ⏳ upload | data committed v1.6.6.0; `scripts/bootstrap_profile.py jack` posts to live |
+
+#### Jack feedback queue (intake 2026-05-26)
+
+- **v2 — Rating mechanism for "shot but needs rephoto" vs "shot well"** (Jack's existing xlsx already encodes this as Rough/Great + notes; 39 entries preserved in `data/profiles/jack/bootstrap.json` `_v2_rating` + `_v2_notes` fields). Three options for v2 UX:
+  - **A) 3-state enum** `unshot | rough | great` — matches Jack's existing mental model exactly. Simple radio-style UI per target row. RECOMMENDED.
+  - **B) 1-5 stars** (classic) — finer-grained but requires interpretation per-star.
+  - **C) Two booleans** `got_it` (already shipped via /api/log) + `good_enough` — composable, easy to filter ("show me my rough shots") but requires two clicks per target.
+  Open question: does Jack want a free-text `notes` field per target alongside the rating? His xlsx has them (e.g. "Need a worf shot", "At the edge of the frame"). Probably yes — premise 12 of design rev 2 doc covers schema versioning so adding a `notes` field is a v2 migration.
+
+- **v2 — CEO target sheets feature** (Jack 2026-05-26): CEO target sheets update daily on ISS and the operator can't look into the past, so the integration must happen day-of. Format per Jack: "a set of zoomed-in pictures, with ISS track up, that help you pick out the actual site. The CEO people sometimes notate big lakes or ground features that are easy to identify to help find harder-to-identify places." Jack notes this might be challenging for AI. Waiting on a screenshot of an actual CEO target sheet for spec; revisit when received. Likely needs:
+  - Image upload from iPad
+  - OCR + landmark identification (vision model — Claude or GPT-4o)
+  - Match to known targets in `targets.json` or `profiles/<name>/targets.json`
+  - Surface as a "CEO target alert" in the queue with a "find it on the map" CTA
+
+- **v2 — Spreadsheet column improvements per Jack 2026-05-26 (first paragraph of his email)**:
+  - Add an optional `priority` column (sortable)
+  - More flexible "coordinates" column: accept lat/long OR city/state/country OR google-search-term for famous places (the bootstrap script already does this via Nominatim — formalize it as the import contract for slot 9)
+  - Add a `name` column (hometown, "Ben's house") separate from the location field
+
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
 ### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub

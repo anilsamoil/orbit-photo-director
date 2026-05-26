@@ -1,0 +1,408 @@
+{
+  "version": 1,
+  "profile": "jack",
+  "targets": [
+    {
+      "id": "personal:jack:d3f3c8cd3a0c",
+      "name": "121 North Main Street, Mechanicville,",
+      "lat": 42.9065,
+      "lon": -73.6849,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:34fafad5703b",
+      "name": "570 Gifford Road Johnsonville",
+      "lat": 42.9459,
+      "lon": -73.5198,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:88b5ed37d376",
+      "name": "Amesbury, UK",
+      "lat": 51.1707,
+      "lon": -1.7706,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:09963f796d2e",
+      "name": "Annapolis, MD",
+      "lat": 38.9786,
+      "lon": -76.4928,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:edb778160e57",
+      "name": "Boston, MA",
+      "lat": 42.3588,
+      "lon": -71.0578,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Zoomed out"
+    },
+    {
+      "id": "personal:jack:4e99182f719e",
+      "name": "Boynton Beach, FL",
+      "lat": 26.5289,
+      "lon": -80.0581,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:128919c7b9b0",
+      "name": "Cary, NC",
+      "lat": 35.7883,
+      "lon": -78.7812,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "A little blury"
+    },
+    {
+      "id": "personal:jack:c41af62d3702",
+      "name": "Chester, CT",
+      "lat": 41.4032,
+      "lon": -72.4509,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Need a worf shot"
+    },
+    {
+      "id": "personal:jack:a6f3f53ec8d5",
+      "name": "Columbus, OH (Janine)",
+      "lat": 39.9623,
+      "lon": -83.0007,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:766657a13469",
+      "name": "Corpus Cristi, TX",
+      "lat": 27.7635,
+      "lon": -97.4033,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "A little blurry"
+    },
+    {
+      "id": "personal:jack:b911ad8e5804",
+      "name": "Cranfield, Bedfordshire, UK",
+      "lat": 52.069,
+      "lon": -0.6079,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:8575e2c8f026",
+      "name": "Hampton Beach, NH",
+      "lat": 42.912,
+      "lon": -70.8174,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:907fdd447ab5",
+      "name": "Houston, TX",
+      "lat": 29.7589,
+      "lon": -95.3677,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Need a worf shot"
+    },
+    {
+      "id": "personal:jack:3d5ba1cf1033",
+      "name": "Hudson, OH",
+      "lat": 41.2401,
+      "lon": -81.4407,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:7df8915a4a89",
+      "name": "Lake Gaston",
+      "lat": 36.5441,
+      "lon": -78.113,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "A little blury"
+    },
+    {
+      "id": "personal:jack:f50e301b6543",
+      "name": "Lebanon, OH",
+      "lat": 39.4353,
+      "lon": -84.203,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:c76efe5f33e6",
+      "name": "Lemoore, CA",
+      "lat": 36.3006,
+      "lon": -119.7827,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:0636cee4e450",
+      "name": "Lexington Park, MD",
+      "lat": 38.2494,
+      "lon": -76.447,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:aff3f5154501",
+      "name": "Ludlow, VT (Okemo)",
+      "lat": 43.3961,
+      "lon": -72.7012,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Need a worf shot"
+    },
+    {
+      "id": "personal:jack:c08f479a722a",
+      "name": "Mainburg, Germany",
+      "lat": 48.6411,
+      "lon": 11.7864,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:cb8044984afc",
+      "name": "Mercersburg, PA  (Whitetail)",
+      "lat": 39.8282,
+      "lon": -77.9037,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:924181cc7342",
+      "name": "Meridian, MS",
+      "lat": 32.3643,
+      "lon": -88.7037,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:198652897b4e",
+      "name": "Naples, Italy",
+      "lat": 40.8359,
+      "lon": 14.2488,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:fd9b9f9ce5f4",
+      "name": "Newport RI",
+      "lat": 41.49,
+      "lon": -71.3138,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "A little blury"
+    },
+    {
+      "id": "personal:jack:594a7a1d2635",
+      "name": "Pensaolca, FL",
+      "lat": 30.4213,
+      "lon": -87.2169,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:93be04cffee1",
+      "name": "Queenstown, MD",
+      "lat": 38.9907,
+      "lon": -76.1577,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:e37844647d10",
+      "name": "Richmond. VA",
+      "lat": 37.5385,
+      "lon": -77.4343,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": "A little off angle"
+    },
+    {
+      "id": "personal:jack:eebd1f9ba42e",
+      "name": "Rome Italy",
+      "lat": 41.8933,
+      "lon": 12.4829,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:9f45cfd54a2a",
+      "name": "Salem, NH",
+      "lat": 42.7885,
+      "lon": -71.2009,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "At the edge of the frame"
+    },
+    {
+      "id": "personal:jack:1241254ec06e",
+      "name": "Salisbury, UK",
+      "lat": 51.0691,
+      "lon": -1.7954,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:ae5e75beaa46",
+      "name": "San Diego, CA",
+      "lat": 32.7174,
+      "lon": -117.1628,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Artsy marine layer photo"
+    },
+    {
+      "id": "personal:jack:c9cff2bb2059",
+      "name": "Saratoga Springs, NY",
+      "lat": 43.0822,
+      "lon": -73.7854,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Need a worf shot"
+    },
+    {
+      "id": "personal:jack:c155a1aa30e2",
+      "name": "Scarsdale, NY",
+      "lat": 40.9885,
+      "lon": -73.8086,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:790f42c0a181",
+      "name": "Sorengo, Ticino, Switzerland",
+      "lat": 45.9982,
+      "lon": 8.937,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Thought I had a better one, maybe I emailed it to Katie and didn\u2019t save?"
+    },
+    {
+      "id": "personal:jack:f0101b2ebb79",
+      "name": "South Windsor, CT",
+      "lat": 41.8352,
+      "lon": -72.5563,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:ee275ecd7261",
+      "name": "Syosset, NY",
+      "lat": 40.8149,
+      "lon": -73.5018,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:9f9e543d6833",
+      "name": "Venice Italy",
+      "lat": 45.4046,
+      "lon": 12.3105,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "rough",
+      "_v2_notes": "Meh"
+    },
+    {
+      "id": "personal:jack:8078ce5069cf",
+      "name": "Virigina Beach, VA",
+      "lat": 36.8497,
+      "lon": -75.9761,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:jack:736cd24f8071",
+      "name": "Washington DC",
+      "lat": 38.8951,
+      "lon": -77.0364,
+      "priority": 5,
+      "createdAt": "2026-05-26T15:00:00Z",
+      "_v2_rating": "great",
+      "_v2_notes": "Maybe another shot at  Arlington, but pretty good"
+    }
+  ],
+  "skipped": [
+    [
+      39,
+      "Socal op area/VA beach/gulf of oman (Carrier)",
+      "ambiguous location, manual entry needed"
+    ],
+    [
+      42,
+      "Wine country Italy?",
+      "ambiguous location, manual entry needed"
+    ]
+  ]
+}
