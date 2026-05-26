@@ -31,6 +31,7 @@ import {
   DEFAULT_PROFILE_NAME,
   type Profile,
 } from './profile';
+import { subscribeProfileChanged } from './profile-events';
 
 /** Min/max for the distance threshold slider (km). Range chosen to span
  *  "tight nadir only" (100 km) through "well past ISS horizon" (2000 km).
@@ -61,6 +62,20 @@ let pendingThresholdKm: number | null = null;
  *  switch-profile reload path. */
 let suppressPickerChange = false;
 
+/** One-time bind for the cross-tab + in-tab profile-changed subscriber.
+ *  Bound the first time the Profile pane renders. Slot 11 — debounced
+ *  150ms + cross-tab storage event automatically handled by the bus. */
+let profileChangedBound = false;
+function bindProfileChangedSubscriber(): void {
+  if (profileChangedBound) return;
+  subscribeProfileChanged(() => {
+    // The pane may be torn down or unmounted; refreshPickerFromExternalChange
+    // is a no-op when #profile-picker-select doesn't exist.
+    refreshPickerFromExternalChange();
+  });
+  profileChangedBound = true;
+}
+
 /** Pane render is idempotent. Tab dispatcher calls renderProfilePane()
  *  every time the Profile tab is activated; that's fine — rebuilding the
  *  pane is cheap and ensures picker contents reflect the latest
@@ -71,6 +86,10 @@ export function renderProfilePane(): void {
   container.replaceChildren();
   container.appendChild(buildPickerSection());
   container.appendChild(buildThresholdSection());
+  // Subscribe once so subsequent cross-tab edits or other-pane edits
+  // refresh the picker dropdown without requiring the user to re-open
+  // the Profile tab.
+  bindProfileChangedSubscriber();
 }
 
 /** Build the picker section: dropdown of known profiles + add/delete CTAs.
@@ -414,8 +433,10 @@ export function renderProfileBadge(name: string | null): void {
 }
 
 /** Test-only state reset. Clears the suppress-recursion flag + the
- *  threshold debounce timer + pending value so consecutive tests don't
- *  inherit a poisoned state. */
+ *  threshold debounce timer + pending value + the one-time subscriber
+ *  guard so consecutive tests don't inherit a poisoned state. Tests
+ *  that need the subscriber bound must call renderProfilePane() again
+ *  after this reset. */
 export function _resetProfileUiForTests(): void {
   suppressPickerChange = false;
   if (thresholdTimer !== null) {
@@ -423,4 +444,5 @@ export function _resetProfileUiForTests(): void {
     thresholdTimer = null;
   }
   pendingThresholdKm = null;
+  profileChangedBound = false;
 }

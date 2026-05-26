@@ -24,6 +24,7 @@ import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, type Profile } from './profile';
+import { subscribeProfileChanged } from './profile-events';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
@@ -856,15 +857,11 @@ async function init(): Promise<void> {
     }
   }
   renderTopbarProfileBadge(currentProfile?.name ?? null);
-  // Subscribe to 'profile-changed' so the badge + queue/upcoming filter
-  // stay in sync as the operator drags the threshold slider or other
-  // tabs save the profile. Slot 11 refines this to the
-  // subscribeProfileChanged event bus (with debounce + storage event).
-  //
-  // Re-read currentProfile from localStorage on the event so the slot 7
-  // distance filter reflects the just-saved value. Then re-render the
-  // queue + upcoming panes so dropped/restored passes appear immediately.
-  window.addEventListener('profile-changed', () => {
+  // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
+  // cross-tab storage event, debounced 150ms). Re-read currentProfile on
+  // each fire so the slot 7 distance filter reflects the just-saved
+  // value, then re-render the queue so dropped/restored passes appear.
+  subscribeProfileChanged(() => {
     try {
       currentProfile = loadOrCreateProfileFromURL(window.location.href);
     } catch {

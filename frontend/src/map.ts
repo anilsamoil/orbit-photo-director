@@ -39,6 +39,7 @@ import {
   type IssIllumination,
 } from './terminator';
 import { loadProfile, parseProfileFromURL } from './profile';
+import { subscribeProfileChanged } from './profile-events';
 
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
@@ -143,12 +144,12 @@ export function applyDistanceThreshold(): void {
 
 /** Threshold-changed subscriber bookkeeping. Bound once at the first
  *  renderMap call so a tab-switch round-trip doesn't accumulate
- *  listeners. Slot 11 refactors this to subscribeProfileChanged (with
- *  150ms debounce + cross-tab storage event). */
+ *  listeners. Slot 11 wires this through the central event bus so the
+ *  150ms debounce + cross-tab storage event story is automatic. */
 let profileChangedBound = false;
 function bindProfileChangedListener(): void {
   if (profileChangedBound) return;
-  window.addEventListener('profile-changed', () => {
+  subscribeProfileChanged(() => {
     applyDistanceThreshold();
   });
   profileChangedBound = true;
