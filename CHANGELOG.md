@@ -2,6 +2,51 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.5.0] - 2026-05-26
+
+### Per-astronaut profile layer — Profile tab UI + picker + distance slider + event bus (Lane A: slots 2 + 7 + 11).
+
+Frontend half of the multi-astronaut feature. Adds the **Profile** tab to the topbar nav with a profile picker (dropdown to switch between Anil/Chris/Jack/etc.), a distance threshold slider, and a profile-changed event bus that subscribers debounce at 150ms + auto-syncs across tabs via `storage` events.
+
+Backend half (`/api/profiles/<name>/targets` Worker API + `/api/log` profile scoping) shipped in v1.6.4.0 (Lane B, PR #56). Together these unblock slots 5 + 6 (frontend dual-source + Profile tab CRUD with API sync).
+
+### Added
+
+- **`frontend/src/profile-ui.ts`** (new module): Profile pane renderer
+  - Profile picker dropdown (lists `listProfiles()`, selected = `getCurrentProfile()?.name`)
+  - "New profile" button + name input with `isValidProfileName` validation
+  - "Delete this profile" with confirm
+  - Distance threshold slider (100-2000 km, default 1500, `oninput` debounced 150ms)
+  - Switching profile mutates URL via `history.pushState` then `location.reload()`
+- **`frontend/src/profile-events.ts`** (new module): `subscribeProfileChanged(handler)`
+  - Wraps `addEventListener('profile-changed')` AND `addEventListener('storage')` (filtered to `opd-profile-*` keys)
+  - 150ms leading-edge + trailing-coalesce debounce
+  - Returns an unsubscribe function
+- **`frontend/index.html`**: new Profile tab button + pane container + topbar profile badge (`👤 Jack`)
+- **`frontend/src/style.css`**: Profile pane styles, badge, slider, view-profile hide rules
+- **`frontend/src/main.ts`**: `loadProfilePane()` lazy-imports profile-ui, `renderTopbarProfileBadge()` updates on 'profile-changed', `applyDistanceFilter()` applied to queue/upcoming list builders
+- **`frontend/src/map.ts`**: `filterPassesByDistance()`, `readActiveDistanceThresholdKm()` (reads profile fresh from localStorage to avoid circular import), `applyDistanceThreshold()`, `bindProfileChangedListener()` one-time bind in `renderMap()`. `refreshTargetsSource()` honors the threshold.
+
+### Tests
+
+- Frontend: **562 → 610 (+48)** across three new test files
+  - `profile-ui.test.ts`: 22 + 7 = 29 tests (picker, new/delete, slider integration)
+  - `map-distance-filter.test.ts`: 8 tests (filter pure logic + map integration)
+  - `profile-events.test.ts`: 11 tests (local event, cross-tab storage, debounce coalesce, unsubscribe)
+- `tsc --noEmit` + `vitest run` green per slot
+
+### Decisions
+
+- Threshold reader uses `loadProfile(parseProfileFromURL(href))` directly instead of calling `main.ts:getCurrentProfile()`. Avoids a circular import and keeps the map authoritative on every render (the in-memory `currentProfile` in main.ts only refreshes on the bus subscriber's fire).
+- Topbar badge shipped in slot 2 (a one-liner in `init()`) instead of slot 11 — kept the diff focused.
+
+### Not in this drop
+
+- Personal-target compute via browser-Worker SGP4 (slot 5)
+- Profile tab add/remove with API sync (slot 6) — picker only manages profile identity in v1.6.5.0, not target lists
+- gotIt UI (slot 8 backend exists in v1.6.4.0; UI lands later)
+- CSV / JSON import (slots 9 + 10)
+
 ## [1.6.4.0] - 2026-05-26
 
 ### Per-astronaut profile layer — Worker API + calib scoping (Lane B: slots 3 + 8).
