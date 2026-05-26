@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] Slot 10 — JSON export/import with schema migration framework
+## [1.6.12.0] - 2026-05-26
+
+### Slot 10 — JSON export/import with schema migration framework
 
 The Profile tab gains Export (download as JSON) and Import (file → preview → Replace all). Schema versioning is formalized: a `MIGRATIONS` table indexed by source version drives `runMigrationChain`, which the import flow calls to upgrade older exports to the current schema. v2+ exports are rejected with an "upgrade the app" message; older schemas (when a migrator is registered) flow through cleanly.
 
