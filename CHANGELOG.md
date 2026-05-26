@@ -45,6 +45,45 @@ The Profile tab gains add/remove/hide controls. Each mutation goes optimistic-lo
 2. Click **Delete** on a personal target row → row disappears immediately (optimistic), DELETE fires, toast confirms. Open DevTools → Network and throttle to Offline before clicking Delete: the row vanishes, the API call fails, the row REAPPEARS (rollback) + the toast says "Delete failed: network unreachable".
 3. In the **Hidden curated targets** input, type `aurora-scandinavia` → click **Hide**. Chip appears. Click **Restore** on the chip → chip vanishes. Verify in DevTools → Application → localStorage → `opd-profile-jack` that `removedCuratedIds` reflects each click.
 
+## [1.6.8.0] - 2026-05-26
+
+### Frontend dual-source manifest fetch — Jack sees Jack's scoring (slot 5).
+
+The v1.6.7.0 daemon writes per-profile `passes/status/top5/top_24h` to `artifacts.profiles.<name>.*` in the manifest. This release teaches the frontend to read them: when `?u=jack` is set, the manifest resolver prefers the per-profile variant for `passes`, `status`, `top5`, `top_24h` and falls back to the canonical top-level entry when the variant is missing. Together with the v1.6.7.0 daemon, Jack now sees his Boston targets scored by the FULL pipeline (weather, clouds, lightning, regime, freshness) instead of the curated 137. `track` stays canonical (the ISS orbit is profile-agnostic).
+
+### Added
+
+- **`frontend/src/manifest.ts`**:
+  - `resolveArtifactEntry(manifest, name, profileName?)` — central dual-source resolver. Per-profile variant wins when present; falls back to canonical. Used by every fetch helper.
+  - `isArtifactEntry()` type guard — disambiguates `ArtifactEntry` (flat) from `ProfileArtifactsBlock` (nested) in the widened `Record<string, ArtifactEntry | ProfileArtifactsBlock | undefined>` value type. Includes an explicit `!== null` guard so a hand-edited `profiles: null` falls through to canonical instead of throwing (JS `typeof null === 'object'` quirk).
+  - `fetchArtifact`, `fetchPasses`, `fetchTop5`, `fetchTop24h`, `fetchStatus` now accept an optional `profileName` and thread it through `resolveArtifactEntry`. SHA-256 verification automatically targets the variant's hash (not the canonical's) because the resolver returns the right entry.
+  - `fetchTrack` is explicitly profile-agnostic (no `profileName` parameter) — the ISS ground-track polynomial + raw SGP4 samples + TLE are the same regardless of which astronaut is looking.
+- **`frontend/src/types.ts`**:
+  - `Manifest.artifacts` widened to `Record<string, ArtifactEntry | ProfileArtifactsBlock | undefined>` so the `profiles` key can hold the nested per-astronaut block without breaking flat consumers.
+  - `ProfileArtifactsBlock` type alias for the `Record<profileName, Record<artifactName, ArtifactEntry>>` shape.
+- **`frontend/src/main.ts`**:
+  - `doRefresh()` passes `currentProfile?.name` to `fetchPasses` / `fetchTop24h` / `fetchStatus` so Jack's refresh path pulls Jack's variant.
+- **`frontend/src/map.ts`**:
+  - `renderMap()` reads `parseProfileFromURL(window.location.href)` and threads the profile name through `fetchArtifact<PassEntry[]>(manifest, 'passes', '', profileName)`.
+
+### Tests
+
+- **`frontend/test/manifest.test.ts`**: +17 tests covering the resolver:
+  - Variant precedence when present
+  - Canonical fallback when variant is missing
+  - Pre-v1.6.7 manifest compatibility (no `profiles` key)
+  - Mixed manifests (some artifacts have variants, some don't)
+  - SHA-256 verification against the variant's hash, not the canonical's
+  - Plus 2 regression tests added during /review for the null-guard bug:
+    - `tolerates manifest.artifacts.profiles === null without throwing`
+    - `tolerates a profile entry that is not an object (corrupted block)`
+- Frontend suite: 612 → 629 passing. typecheck clean.
+
+### Notes
+
+- Pre-v1.6.7 manifests (no `profiles` block) and v1.6.7+ manifests without `OPD_CALIB_TOKEN` set on the daemon (empty `profiles` block) both fall through cleanly to canonical — no flag, no migration. The frontend is forward-and-backward compatible.
+- This completes the dual-source read path. Slot 6 (Profile tab CRUD with API sync) is next; slot 7+ are deferred to the next batch.
+
 ## [1.6.7.0] - 2026-05-26
 
 ### Daemon multiplexer — per-astronaut passes/status/top5/top_24h (Lane C: slot 4).

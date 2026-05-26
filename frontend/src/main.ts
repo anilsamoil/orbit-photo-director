@@ -117,15 +117,23 @@ async function doRefresh(): Promise<void> {
     // launches_last_successful_fetch field to drive the stale-launches
     // banner overlay. Older manifests without status in the artifacts map
     // would 404; we tolerate it (the launches overlay simply doesn't fire).
+    //
+    // v1.6.7.0+ slot 5: per-profile manifest variant selection. When the
+    // operator is on `?u=jack` (or any non-default profile), fetch the
+    // per-profile variant of passes/status/top5/top_24h if the manifest
+    // declares one. Falls back to canonical when no variant exists.
+    // Track is profile-agnostic (ISS orbit is universal) and stays
+    // canonical-only.
+    const profileName = currentProfile?.name;
     const [top5, top24h, track, status] = await Promise.all([
-      fetchTop5(manifest),
-      fetchTop24h(manifest),
+      fetchTop5(manifest, '', profileName),
+      fetchTop24h(manifest, '', profileName),
       fetchTrack(manifest),
       // Promise.resolve() defends against synchronous undefined returns
       // (test mocks default to undefined; the real fetchStatus is async).
       // .catch() then handles the actual fetch-rejection case for older
       // manifests that don't have status.json in the artifacts map.
-      Promise.resolve(fetchStatus(manifest)).catch(() => null),
+      Promise.resolve(fetchStatus(manifest, '', profileName)).catch(() => null),
     ]);
     currentManifest = manifest;
     currentTop5 = top5;
