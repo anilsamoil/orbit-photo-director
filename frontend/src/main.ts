@@ -559,12 +559,17 @@ function bindTabs(): void {
   const tabUpcoming = document.getElementById('tab-upcoming');
   const tabMap = document.getElementById('tab-map');
   const tabLookup = document.getElementById('tab-lookup');
+  const tabProfile = document.getElementById('tab-profile');
   const tabLog = document.getElementById('tab-log');
   if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLookup || !tabLog) return;
 
+  // tabProfile may be missing in older integration-test DOM fixtures; we
+  // still want the rest of the dispatcher to wire up cleanly.
+  const allTabs = [tabQueue, tabUpcoming, tabMap, tabLookup, tabProfile, tabLog]
+    .filter((t): t is HTMLElement => t !== null);
   const setActive = (className: string, activeTab: HTMLElement) => {
     view.className = className;
-    [tabQueue, tabUpcoming, tabMap, tabLookup, tabLog].forEach((t) => t.classList.toggle('active', t === activeTab));
+    allTabs.forEach((t) => t.classList.toggle('active', t === activeTab));
   };
 
   tabQueue.addEventListener('click', () => setActive('view-queue', tabQueue));
@@ -577,10 +582,28 @@ function bindTabs(): void {
     setActive('view-lookup', tabLookup);
     loadLookupPane();
   });
+  if (tabProfile) {
+    tabProfile.addEventListener('click', () => {
+      setActive('view-profile', tabProfile);
+      void loadProfilePane();
+    });
+  }
   tabLog.addEventListener('click', () => {
     setActive('view-log', tabLog);
     void loadLogPane();
   });
+}
+
+/** Lazy-load the Profile tab. Same pattern as loadMapPane / loadLogPane —
+ *  the profile-ui module imports nothing heavy, but lazy-importing keeps
+ *  it out of the initial boot bundle and matches the "tab modules
+ *  initialize on first visit" convention. */
+let profilePaneModule: typeof import('./profile-ui') | null = null;
+async function loadProfilePane(): Promise<void> {
+  if (!profilePaneModule) {
+    profilePaneModule = await import('./profile-ui');
+  }
+  profilePaneModule.renderProfilePane();
 }
 
 let lookupPaneBound = false;
@@ -769,6 +792,28 @@ export function getCurrentProfile(): Profile | null {
   return currentProfile;
 }
 
+/** Update the topbar profile badge ("👤 Jack") to reflect the active
+ *  profile name. textContent only (no innerHTML) — premise 12 of design
+ *  rev 2 forbids new XSS surfaces, and profile names are user-influenced
+ *  (URL ?u=<name>) even though isValidProfileName already constrains them.
+ *
+ *  Subscribers in Slot 11 call this on 'profile-changed' events; init()
+ *  calls it once at boot. Stays a thin DOM-only function here so the
+ *  profile-ui lazy module isn't forced into the boot bundle.
+ */
+export function renderTopbarProfileBadge(name: string | null): void {
+  const el = document.getElementById('profile-badge');
+  if (!el) return;
+  if (!name) {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  el.hidden = false;
+  el.textContent = `👤 ${name}`;
+  el.title = `Active profile: ${name}`;
+}
+
 async function init(): Promise<void> {
   // Resolve the profile from the URL FIRST. Future slots make the
   // manifest fetch profile-aware; today this just stamps the topbar
@@ -790,6 +835,15 @@ async function init(): Promise<void> {
       currentProfile = null;
     }
   }
+  renderTopbarProfileBadge(currentProfile?.name ?? null);
+  // Subscribe to 'profile-changed' so the badge follows in-tab + cross-tab
+  // updates. Slot 11 refines this to the subscribeProfileChanged event bus
+  // (with debounce + storage-event); in slot 2 a thin direct listener is
+  // enough to keep the badge in sync for in-tab picker switches.
+  window.addEventListener('profile-changed', () => {
+    const name = currentProfile?.name ?? null;
+    renderTopbarProfileBadge(name);
+  });
   bindTabs();
   bindSortToggles();
   // V4-P2 aurora widget: attach the click handler once. Widget content is

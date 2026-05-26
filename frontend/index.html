@@ -20,11 +20,13 @@
       <div id="iss-now" class="iss-now" title="Live ISS sub-point from polynomial fit"></div>
       <div id="kp-widget" class="kp-badge" hidden></div>
       <div id="sun-widget" class="sun-badge" hidden></div>
+      <span id="profile-badge" class="profile-badge" title="Active astronaut profile" hidden></span>
       <nav class="tabs">
         <button id="tab-queue" class="tab active" type="button">Queue</button>
         <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
         <button id="tab-map" class="tab" type="button">Map</button>
         <button id="tab-lookup" class="tab" type="button">Lookup</button>
+        <button id="tab-profile" class="tab" type="button">Profile</button>
         <button id="tab-log" class="tab" type="button">Log<span id="pending-sync-badge" class="pending-badge" hidden></span></button>
       </nav>
     </header>
@@ -130,6 +132,14 @@
           </div>
         </div>
         <div id="lookup-result" class="lookup-result" hidden></div>
+      </section>
+
+      <section id="profile-pane" class="pane">
+        <div class="pane-header">
+          <h2 class="pane-title">Profile &mdash; per-astronaut settings</h2>
+          <p class="pane-sub">Each astronaut has their own URL (e.g., <code>?u=jack</code>). Switching profiles reloads the page so per-profile caches stay clean.</p>
+        </div>
+        <div id="profile-body" class="profile-body"></div>
       </section>
 
       <section id="log-pane" class="pane">
