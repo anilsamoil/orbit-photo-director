@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] Slot 8 — Per-profile Log tab filter
+## [1.6.10.0] - 2026-05-26
+
+### Slot 8 — Per-profile Log tab filter (frontend half)
 
 The Log tab now reflects the active astronaut's records, not Anil's. The backend half of slot 8 shipped in v1.6.4.0 (worker validates + filters by `profile`); the frontend was still calling `/api/log?limit=100` without a `profile` query, so Jack's Log tab fell through to the Worker's legacy-default filter (`profile === 'anil' OR missing`) and showed Anil's records.
 
