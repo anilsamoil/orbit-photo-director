@@ -38,6 +38,7 @@ import {
   terminatorFeatures,
   type IssIllumination,
 } from './terminator';
+import { loadProfile, parseProfileFromURL } from './profile';
 
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
@@ -78,6 +79,80 @@ function formatUtcHm(ms: number): string {
  *  of the current view time is considered in-orbit and rendered full
  *  opacity. Outside that window the pin dims to 0.3 alpha (Q3 → C). */
 const PASS_WINDOW_HALF_MINUTES = 45;
+
+/** Fallback distance threshold (km) used when no profile is present or
+ *  the profile is corrupted. Matches the existing ISS_HORIZON_KM used by
+ *  the generator's scoring loop, so the v1 default behavior is unchanged
+ *  for first-launchers. */
+const DEFAULT_DISTANCE_THRESHOLD_KM = 1500;
+
+/** Read the active profile's distanceThresholdKm from localStorage. Slot
+ *  7 of design rev 2 — the threshold is per-profile, settable from the
+ *  Profile tab slider, and filters out long-range passes from the queue,
+ *  upcoming list, and map.
+ *
+ *  We re-read every refresh (cheap; localStorage reads are sync + O(1))
+ *  so cross-tab + in-tab edits flow through without a separate state
+ *  cache. Returns the fallback when:
+ *    - no profile exists yet (first launch)
+ *    - loadProfile throws (corrupted localStorage; safer to render than
+ *      crash the map)
+ *    - the profile's distanceThresholdKm is not a finite number (data
+ *      corruption / mid-migration state)
+ */
+function readActiveDistanceThresholdKm(): number {
+  try {
+    const name = parseProfileFromURL(window.location.href);
+    const profile = loadProfile(name);
+    const v = profile?.distanceThresholdKm;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+  } catch {
+    /* fallthrough to default */
+  }
+  return DEFAULT_DISTANCE_THRESHOLD_KM;
+}
+
+/** Apply the distance threshold filter to a passes array. Exported for
+ *  the queue/upcoming list builders in main.ts so the entire view stays
+ *  consistent (same passes in the queue + upcoming + map). Pure function
+ *  — no I/O, takes the threshold as an arg so callers can pass the value
+ *  they just read. */
+export function filterPassesByDistance(
+  passes: PassEntry[],
+  thresholdKm: number,
+): PassEntry[] {
+  if (!Number.isFinite(thresholdKm) || thresholdKm <= 0) return passes;
+  return passes.filter((p) => {
+    const d = p.nadir_distance_km;
+    // Defensive: missing / non-finite distance means the generator
+    // couldn't compute it. Don't filter those out — they'll still render
+    // (and the operator will see the missing-distance state on the card).
+    if (typeof d !== 'number' || !Number.isFinite(d)) return true;
+    return d <= thresholdKm;
+  });
+}
+
+/** Re-read the threshold + re-render the targets source. Called from
+ *  the 'profile-changed' subscriber so map pins drop in/out as the
+ *  operator drags the slider in the Profile tab. Pure DOM effect — no
+ *  network. Exported so main.ts can drive it too when needed. */
+export function applyDistanceThreshold(): void {
+  if (!map) return;
+  refreshTargetsSource();
+}
+
+/** Threshold-changed subscriber bookkeeping. Bound once at the first
+ *  renderMap call so a tab-switch round-trip doesn't accumulate
+ *  listeners. Slot 11 refactors this to subscribeProfileChanged (with
+ *  150ms debounce + cross-tab storage event). */
+let profileChangedBound = false;
+function bindProfileChangedListener(): void {
+  if (profileChangedBound) return;
+  window.addEventListener('profile-changed', () => {
+    applyDistanceThreshold();
+  });
+  profileChangedBound = true;
+}
 
 /** Day-night terminator visibility preference. Same pattern as the cloud
  *  toggle (v1.2.9.0) — persisted to localStorage. Default ON because
@@ -910,6 +985,10 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindFollowToggle();
   bindPinDrop();
   bindSatellitePicker();
+  // Slot 7: re-filter the targets layer when the active profile's
+  // distance threshold changes. Slot 11 refactors this to the debounced
+  // event-bus subscriber.
+  bindProfileChangedListener();
   // Restore persisted satellite selections (fire-and-forget; UI updates
   // as each fetch resolves). Also kick off the 60s track refresh tick.
   void restorePersistedSatellites();
@@ -1081,12 +1160,19 @@ function applyTerminatorVisibility(): void {
 /** Rebuild the targets geojson source. Each feature carries `in_window`
  *  derived from its closest_approach vs the current view time. The
  *  data-driven opacity expression on the targets-layer paint reads this
- *  property — full opacity for in-window passes, dimmed for the rest. */
+ *  property — full opacity for in-window passes, dimmed for the rest.
+ *
+ *  Slot 7: distance-threshold filter excludes passes whose
+ *  nadir_distance_km exceeds the active profile's threshold. Re-reads
+ *  the threshold on every refresh so 'profile-changed' subscribers can
+ *  call this without staging a separate threshold cache. */
 function refreshTargetsSource(): void {
   if (!map) return;
   const viewMs = Date.now() + lookaheadMinutes * 60_000;
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
-  const features = currentPasses.map((p) => {
+  const thresholdKm = readActiveDistanceThresholdKm();
+  const visible = filterPassesByDistance(currentPasses, thresholdKm);
+  const features = visible.map((p) => {
     const closestMs = Date.parse(p.closest_approach);
     const inWindow = Number.isFinite(closestMs)
       && Math.abs(closestMs - viewMs) <= halfWindowMs;

@@ -125,9 +125,29 @@ describe('renderProfilePane', () => {
     expect(document.getElementById('profile-delete-btn')).toBeTruthy();
   });
 
-  it('renders the threshold section scaffold (slot 2 — empty pre-slot-7)', () => {
+  it('renders the threshold section with slider + display (slot 7)', () => {
     renderProfilePane();
     expect(document.getElementById('profile-threshold-section')).toBeTruthy();
+    expect(document.getElementById('profile-threshold-slider')).toBeTruthy();
+    expect(document.getElementById('profile-threshold-display')).toBeTruthy();
+  });
+
+  it('renders the threshold slider with the active profile value', () => {
+    const p = createDefaultProfile('anil');
+    p.distanceThresholdKm = 800;
+    saveProfile(p);
+    renderProfilePane();
+    const slider = document.getElementById('profile-threshold-slider') as HTMLInputElement;
+    expect(slider.value).toBe('800');
+    const display = document.getElementById('profile-threshold-display') as HTMLElement;
+    expect(display.textContent).toBe('800 km');
+  });
+
+  it('falls back to 1500 km when no profile is loaded', () => {
+    setLocation('/?u=newbie');
+    renderProfilePane();
+    const slider = document.getElementById('profile-threshold-slider') as HTMLInputElement;
+    expect(slider.value).toBe('1500');
   });
 
   it('uses textContent (no innerHTML) for option labels — XSS defense', () => {
@@ -355,6 +375,82 @@ describe('renderProfileBadge', () => {
 // ---------------------------------------------------------------------------
 // External profile-changed refresh (suppress recursion guard).
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Threshold slider (Slot 7) — debounced persist + display.
+// ---------------------------------------------------------------------------
+
+describe('threshold slider', () => {
+  it('persists the value to the profile after the 150ms debounce', () => {
+    vi.useFakeTimers();
+    saveProfile(createDefaultProfile('anil'));
+    renderProfilePane();
+    const slider = document.getElementById('profile-threshold-slider') as HTMLInputElement;
+    slider.value = '900';
+    slider.dispatchEvent(new Event('input'));
+    // Before debounce fires, profile is unchanged.
+    expect(loadProfile('anil')?.distanceThresholdKm).toBe(1500);
+    vi.advanceTimersByTime(160);
+    expect(loadProfile('anil')?.distanceThresholdKm).toBe(900);
+  });
+
+  it('coalesces rapid drags into one persist (150ms window)', () => {
+    vi.useFakeTimers();
+    saveProfile(createDefaultProfile('anil'));
+    renderProfilePane();
+    const slider = document.getElementById('profile-threshold-slider') as HTMLInputElement;
+    for (const v of ['800', '900', '1000', '1100', '1200']) {
+      slider.value = v;
+      slider.dispatchEvent(new Event('input'));
+      vi.advanceTimersByTime(10);
+    }
+    // All within debounce window — still nothing persisted yet.
+    expect(loadProfile('anil')?.distanceThresholdKm).toBe(1500);
+    vi.advanceTimersByTime(200);
+    expect(loadProfile('anil')?.distanceThresholdKm).toBe(1200);
+  });
+
+  it('updates the display label immediately on input (before debounce)', () => {
+    vi.useFakeTimers();
+    saveProfile(createDefaultProfile('anil'));
+    renderProfilePane();
+    const slider = document.getElementById('profile-threshold-slider') as HTMLInputElement;
+    const display = document.getElementById('profile-threshold-display') as HTMLElement;
+    slider.value = '750';
+    slider.dispatchEvent(new Event('input'));
+    expect(display.textContent).toBe('750 km');
+    // Profile not yet persisted (still in debounce window).
+    expect(loadProfile('anil')?.distanceThresholdKm).toBe(1500);
+  });
+
+  it('auto-creates a profile when the slider is moved before any save', () => {
+    vi.useFakeTimers();
+    setLocation('/?u=newbie');
+    renderProfilePane();
+    const slider = document.getElementById('profile-threshold-slider') as HTMLInputElement;
+    slider.value = '600';
+    slider.dispatchEvent(new Event('input'));
+    vi.advanceTimersByTime(160);
+    const p = loadProfile('newbie');
+    expect(p).not.toBeNull();
+    expect(p!.distanceThresholdKm).toBe(600);
+  });
+
+  it('fires the profile-changed event after persisting', () => {
+    vi.useFakeTimers();
+    saveProfile(createDefaultProfile('anil'));
+    renderProfilePane();
+    const slider = document.getElementById('profile-threshold-slider') as HTMLInputElement;
+    const listener = vi.fn();
+    window.addEventListener('profile-changed', listener);
+    slider.value = '500';
+    slider.dispatchEvent(new Event('input'));
+    expect(listener).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(200);
+    expect(listener).toHaveBeenCalled();
+    window.removeEventListener('profile-changed', listener);
+  });
+});
 
 describe('refreshPickerFromExternalChange', () => {
   it('repopulates the picker without firing the change handler', () => {

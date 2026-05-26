@@ -224,6 +224,26 @@ function upcomingPasses(passes: PassEntry[], nowMs: number): PassEntry[] {
   return passes.filter((p) => Date.parse(p.closest_approach) > nowMs);
 }
 
+/** Apply the active profile's distance threshold to a passes array
+ *  (Slot 7 of design rev 2). Falls back to 1500 km when no profile is
+ *  loaded — matches the existing ISS_HORIZON_KM behavior so first-launch
+ *  users see no behavioral change. Re-reads the threshold from the
+ *  in-memory profile each call; the 'profile-changed' subscriber below
+ *  refreshes currentProfile so this stays in sync with slider edits.
+ *
+ *  Pure function — same input → same output. Tested via the
+ *  filterPassesByDistance helper in map.ts which this delegates to.
+ */
+function applyDistanceFilter(passes: PassEntry[]): PassEntry[] {
+  const threshold = currentProfile?.distanceThresholdKm ?? 1500;
+  if (!Number.isFinite(threshold) || threshold <= 0) return passes;
+  return passes.filter((p) => {
+    const d = p.nadir_distance_km;
+    if (typeof d !== 'number' || !Number.isFinite(d)) return true;
+    return d <= threshold;
+  });
+}
+
 /** Render the Queue + Upcoming panes from current module state. Extracted so
  *  both the snapshot boot and a normal refresh share one render path. */
 function renderQueue(): void {
@@ -233,7 +253,7 @@ function renderQueue(): void {
   if (!cards || !empty) return;
   const now = Date.now();
   const stale = isStaleManifest(currentManifest, now);
-  const visible = upcomingPasses(currentTop5, now);
+  const visible = applyDistanceFilter(upcomingPasses(currentTop5, now));
   if (visible.length === 0) {
     cards.replaceChildren();
     // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
@@ -318,7 +338,7 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const cards = document.getElementById('upcoming-cards');
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;
-  const visible = upcomingPasses(currentTop24h, nowMs);
+  const visible = applyDistanceFilter(upcomingPasses(currentTop24h, nowMs));
   if (visible.length === 0) {
     cards.replaceChildren();
     empty.hidden = false;
@@ -836,13 +856,22 @@ async function init(): Promise<void> {
     }
   }
   renderTopbarProfileBadge(currentProfile?.name ?? null);
-  // Subscribe to 'profile-changed' so the badge follows in-tab + cross-tab
-  // updates. Slot 11 refines this to the subscribeProfileChanged event bus
-  // (with debounce + storage-event); in slot 2 a thin direct listener is
-  // enough to keep the badge in sync for in-tab picker switches.
+  // Subscribe to 'profile-changed' so the badge + queue/upcoming filter
+  // stay in sync as the operator drags the threshold slider or other
+  // tabs save the profile. Slot 11 refines this to the
+  // subscribeProfileChanged event bus (with debounce + storage event).
+  //
+  // Re-read currentProfile from localStorage on the event so the slot 7
+  // distance filter reflects the just-saved value. Then re-render the
+  // queue + upcoming panes so dropped/restored passes appear immediately.
   window.addEventListener('profile-changed', () => {
-    const name = currentProfile?.name ?? null;
-    renderTopbarProfileBadge(name);
+    try {
+      currentProfile = loadOrCreateProfileFromURL(window.location.href);
+    } catch {
+      /* keep existing currentProfile on load failure */
+    }
+    renderTopbarProfileBadge(currentProfile?.name ?? null);
+    if (currentManifest) renderQueue();
   });
   bindTabs();
   bindSortToggles();
