@@ -45,10 +45,19 @@ def write_manifest(
     build_version: str,
     artifacts: dict[str, Path],
     extra: dict[str, Any] | None = None,
+    profile_artifacts: dict[str, dict[str, Path]] | None = None,
 ) -> Path:
     """Write manifest.json (top-level, atomic-swap pointer) describing this version's artifacts.
 
     Each entry in `artifacts` is {logical_name: absolute_path_within_out_dir}.
+
+    `profile_artifacts` (Slot 4 — design rev 2): {profile_name: {logical_name: path}}.
+    When non-empty, the manifest gains an `artifacts.profiles` block keyed by
+    profile name, each holding the same shape as the top-level artifact map
+    (path / sha256 / bytes). Frontend slot 5 reads this to fetch the right
+    per-astronaut variant. Empty / missing → legacy single-tenant manifest
+    (no `profiles` block at all), which keeps pre-v1.6.7 frontends working.
+
     Returns path to the written manifest.json.
     """
     if (
@@ -60,7 +69,7 @@ def write_manifest(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    artifact_block: dict[str, dict[str, Any]] = {}
+    artifact_block: dict[str, Any] = {}
     for name, path in artifacts.items():
         if not path.exists():
             raise FileNotFoundError(f"artifact {name!r} not found at {path}")
@@ -70,6 +79,28 @@ def write_manifest(
             "sha256": hash_file(path),
             "bytes": path.stat().st_size,
         }
+
+    # Slot 4: per-profile artifact pointers under artifacts.profiles. Each
+    # profile contributes the same logical names (passes/top5/top_24h/status)
+    # at distinct paths (passes_<name>.json etc.). Track + targets are
+    # profile-agnostic and stay only at the top level.
+    if profile_artifacts:
+        profiles_block: dict[str, dict[str, Any]] = {}
+        for name, paths in profile_artifacts.items():
+            per_profile: dict[str, Any] = {}
+            for logical_name, path in paths.items():
+                if not path.exists():
+                    raise FileNotFoundError(
+                        f"profile {name!r} artifact {logical_name!r} not found at {path}"
+                    )
+                rel = path.relative_to(out_dir)
+                per_profile[logical_name] = {
+                    "path": str(rel).replace("\\", "/"),
+                    "sha256": hash_file(path),
+                    "bytes": path.stat().st_size,
+                }
+            profiles_block[name] = per_profile
+        artifact_block["profiles"] = profiles_block
 
     freshness = {
         "tle_hours": (generated_at - tle_epoch).total_seconds() / 3600.0,

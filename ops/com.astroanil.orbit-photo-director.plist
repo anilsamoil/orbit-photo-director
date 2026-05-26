@@ -68,6 +68,21 @@ WatchPaths (added 2026-05-17, fixes 13-day stale-module bug):
              v1.3.2). Remove this entry to roll back to weather-off. -->
         <key>OPD_ENABLE_WEATHER</key>
         <string>1</string>
+        <!-- Slot 4 / design rev 2 (v1.6.7-series): per-astronaut profile
+             multiplex. Must match the wrangler secret `CALIB_TOKEN` in
+             worker/wrangler.toml so the daemon can call
+             GET /api/profiles/<name>/targets with the same shared secret
+             the frontend already uses for /api/calib.
+             Plist files cannot hold secrets safely, so the operator MUST
+             export OPD_CALIB_TOKEN before bootstrapping launchd:
+                 launchctl setenv OPD_CALIB_TOKEN "<token>"
+             then re-bootstrap the agent. Without the token, the daemon
+             logs a warning at tick start and falls through to canonical
+             single-tenant mode — passes.json + friends still publish so
+             readers don't 404, but per-profile artifacts (passes_jack.json
+             etc.) are not generated. -->
+        <!--<key>OPD_CALIB_TOKEN</key>
+             <string>SET-VIA-LAUNCHCTL-SETENV</string>-->
     </dict>
 
     <key>RunAtLoad</key>
@@ -98,6 +113,7 @@ WatchPaths (added 2026-05-17, fixes 13-day stale-module bug):
         <string>REPO_PATH/generator/lightning.py</string>
         <string>REPO_PATH/generator/main.py</string>
         <string>REPO_PATH/generator/manifest.py</string>
+        <string>REPO_PATH/generator/multiplex.py</string>
         <string>REPO_PATH/generator/orbit.py</string>
         <string>REPO_PATH/generator/score.py</string>
     </array>

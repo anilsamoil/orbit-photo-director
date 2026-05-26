@@ -64,6 +64,12 @@ from .launch_data import (
     filter_launches,
 )
 from .manifest import cleanup_old_versions, utcnow_iso, version_id, write_manifest
+from .multiplex import (
+    build_profile_target_list,
+    fetch_profile_targets,
+    multiplex_enabled,
+    profile_names,
+)
 from .orbit import (
     TLE,
     angle_off_nadir_deg,
@@ -926,48 +932,27 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     v_dir = settings.out_dir / "v" / version
     v_dir.mkdir(parents=True, exist_ok=True)
 
-    next_90 = sorted(
-        [p for p in all_passes if datetime.fromisoformat(
-            p["closest_approach"].replace("Z", "+00:00")
-        ) - n < timedelta(minutes=90)],
-        key=lambda p: p["score"],
-        reverse=True,
-    )[:DEFAULT_TOP_QUEUE]
-
-    # ARCH-4 extension (review 2026-05-10): same reserved-slot logic for the
-    # Queue. The original eng-review locked ARCH-4 to Upcoming only on the
-    # assumption that imminent launches would naturally outscore ground
-    # targets; adversarial review caught that a mid-day Falcon 9 with average
-    # cloud forecast (~50) routinely loses to 5 priority-5 ground passes
-    # (~80+). The Queue is the operator's PRIMARY action surface — burying a
-    # launch there is the worst-case product failure for V3.
-    next_90 = _reserve_launch_slot_in_queue(
-        next_90, launch_pass_entries, n, queue_horizon_minutes=90,
-    )
-
-    top25 = top_n(all_passes, DEFAULT_TOP_MAP)
-
-    # Upcoming view: top forecast-scored passes spanning the full pass window
-    # (defaults to 24h). Excludes the next-90-min passes already in `next_90`
-    # so the two views don't double up.
-    upcoming = sorted(
-        [
-            p for p in all_passes
-            if (datetime.fromisoformat(p["closest_approach"].replace("Z", "+00:00")) - n)
-                >= timedelta(minutes=OBSERVED_CLOUD_HORIZON_MINUTES)
-        ],
-        key=lambda p: p["score"],
-        reverse=True,
-    )[:DEFAULT_TOP_UPCOMING]
-
-    # ARCH-4 (eng review 2026-05-05): reserve one slot in upcoming for the
-    # next qualifying launch. Without this, a mid-day Falcon 9 with average
-    # cloud forecast can score lower than 25 priority-5 ground targets and
-    # never appear — defeating the entire V3 feature for the user. The
-    # reserved-slot logic guarantees the operator sees the next photographable
-    # launch even if its score loses on pure merit.
-    upcoming = _reserve_launch_slot(
-        upcoming, launch_pass_entries, n, OBSERVED_CLOUD_HORIZON_MINUTES,
+    # 5a. Build the canonical (curated-only) views + status + write them
+    # to the legacy artifact paths (passes.json, top5.json, top_24h.json,
+    # status.json). These are kept untouched for back-compat with
+    # pre-v1.6.7 frontend builds — the slot 5 dual-source merge consumes
+    # the new per-profile variants instead.
+    canonical_artifacts = _write_view_artifacts(
+        v_dir=v_dir,
+        all_passes=all_passes,
+        launch_pass_entries=launch_pass_entries,
+        n=n,
+        settings=settings,
+        source_label=source_label,
+        composite_hour=composite_hour,
+        age_h=age_h,
+        fresh=fresh,
+        target_count=len(targets),
+        launch_fetch=launch_fetch,
+        actionable_launches=actionable_launches,
+        ascent_actionable=ascent_actionable,
+        version=version,
+        profile_name=None,
     )
 
     # Polynomial (120 min) — kept for legacy boot snapshots; v1.4.6.0
@@ -986,17 +971,152 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         "tle_age_hours": round(age_h, 2),
         "tle_freshness_factor": round(fresh, 3),
     }
+    (v_dir / "track.json").write_text(json.dumps(track_data, indent=2))
 
-    # "Real observation" = any source that gave a real measurement, not a fallback:
-    #   gibs            (MODIS direct cloud fraction, 1-100)
-    #   geo-ir-{tag}    (GOES-East/-West IR converted via brightness threshold)
-    #   himawari-nict   (NICT Himawari true-color RGB; daytime Asia/W.Pacific only)
-    #   satcorps        (SatCORPS NetCDF when wired up)
-    #   gfs-forecast    (GFS forecast for passes >90 min ahead — different
-    #                   confidence band but still a real signal, not a guess)
+    # Targets snapshot for the frontend
+    target_data_version = "v1"
+    (v_dir / "targets.json").write_text(json.dumps(targets, indent=2))
+
+    # 5b. Per-profile multiplex (Slot 4, design rev 2). For each profile
+    # name in config.PROFILE_NAMES, fetch their personal targets from the
+    # Worker, union them with the curated 137, and run the existing
+    # scoring pipeline a second time against the per-profile target list.
+    # Writes `passes_<name>.json` + friends; the canonical artifacts above
+    # are untouched. Fetch failures fall through to curated-only per
+    # profile (still writes per-profile artifacts so the frontend can
+    # render that profile's view, just without their personal additions).
+    profile_artifacts: dict[str, dict[str, Path]] = {}
+    if multiplex_enabled():
+        for name in profile_names():
+            try:
+                profile_artifacts[name] = _run_profile_multiplex(
+                    profile_name=name,
+                    curated_targets=targets,
+                    tle=tle,
+                    fresh=fresh,
+                    sampler=sampler,
+                    forecast_sampler=forecast_sampler,
+                    composite_hour=composite_hour,
+                    lightning_sampler_obj=lightning_sampler_obj,
+                    hurricane_tracker_obj=hurricane_tracker_obj,
+                    launch_pass_entries=launch_pass_entries,
+                    n=n,
+                    settings=settings,
+                    v_dir=v_dir,
+                    source_label=source_label,
+                    age_h=age_h,
+                    launch_fetch=launch_fetch,
+                    actionable_launches=actionable_launches,
+                    ascent_actionable=ascent_actionable,
+                    version=version,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Per-profile failure must not fail the whole tick. The
+                # multiplex helpers already catch fetch errors; this is a
+                # belt-and-braces guard for anything unexpected in
+                # find_passes/scoring/write under a profile target list.
+                log.exception(
+                    "profile multiplex failed for %s: %s — skipping this profile this tick",
+                    name,
+                    exc,
+                )
+
+    # 6. Manifest
+    artifacts_block: dict[str, Path] = {
+        "passes": canonical_artifacts["passes"],
+        "top5": canonical_artifacts["top5"],
+        "top_24h": canonical_artifacts["top_24h"],
+        "track": v_dir / "track.json",
+        "status": canonical_artifacts["status"],
+        "targets": v_dir / "targets.json",
+    }
+    manifest_path = write_manifest(
+        out_dir=settings.out_dir,
+        version=version,
+        generated_at=n,
+        tle_epoch=tle.epoch,
+        cloud_composite_hour=composite_hour,
+        target_data_version=target_data_version,
+        build_version=__version__,
+        artifacts=artifacts_block,
+        profile_artifacts=profile_artifacts,
+    )
+
+    deleted = cleanup_old_versions(settings.out_dir, keep_minutes=60)
+    if deleted:
+        log.info("cleaned %d old versions", len(deleted))
+
+    log.info("tick complete: version=%s passes=%d profiles=%d", version,
+             len(all_passes), len(profile_artifacts))
+    return json.loads(manifest_path.read_text())
+
+
+def _write_view_artifacts(
+    *,
+    v_dir: Path,
+    all_passes: list[dict[str, Any]],
+    launch_pass_entries: list[dict[str, Any]],
+    n: datetime,
+    settings: Settings,
+    source_label: str,
+    composite_hour: datetime,
+    age_h: float,
+    fresh: float,
+    target_count: int,
+    launch_fetch: Any,
+    actionable_launches: list[Any],
+    ascent_actionable: list[Any],
+    version: str,
+    profile_name: str | None,
+) -> dict[str, Path]:
+    """Compute the next-90-min queue, top-25 map list, upcoming window,
+    status block from a given `all_passes` set, and write the per-view
+    JSON artifacts to disk.
+
+    When `profile_name` is None: writes the canonical files
+    (passes.json / top5.json / top_24h.json / status.json) — preserves
+    the existing pre-Slot-4 output paths.
+
+    When `profile_name` is set: writes the per-profile files
+    (passes_<name>.json / top5_<name>.json / top_24h_<name>.json /
+    status_<name>.json) — new Slot 4 output. Returns the four artifact
+    paths so the manifest builder can reference them.
+    """
+    next_90 = sorted(
+        [p for p in all_passes if datetime.fromisoformat(
+            p["closest_approach"].replace("Z", "+00:00")
+        ) - n < timedelta(minutes=90)],
+        key=lambda p: p["score"],
+        reverse=True,
+    )[:DEFAULT_TOP_QUEUE]
+
+    # ARCH-4 extension (review 2026-05-10): same reserved-slot logic for the
+    # Queue. Adversarial review caught that a mid-day Falcon 9 with average
+    # cloud forecast routinely loses to 5 priority-5 ground passes — the
+    # Queue is the operator's PRIMARY action surface, so burying a launch
+    # there is the worst-case product failure for V3.
+    next_90 = _reserve_launch_slot_in_queue(
+        next_90, launch_pass_entries, n, queue_horizon_minutes=90,
+    )
+
+    top25 = top_n(all_passes, DEFAULT_TOP_MAP)
+
+    upcoming = sorted(
+        [
+            p for p in all_passes
+            if (datetime.fromisoformat(p["closest_approach"].replace("Z", "+00:00")) - n)
+                >= timedelta(minutes=OBSERVED_CLOUD_HORIZON_MINUTES)
+        ],
+        key=lambda p: p["score"],
+        reverse=True,
+    )[:DEFAULT_TOP_UPCOMING]
+
+    upcoming = _reserve_launch_slot(
+        upcoming, launch_pass_entries, n, OBSERVED_CLOUD_HORIZON_MINUTES,
+    )
+
+    # "Real observation" = any source that gave a real measurement.
     # Match the frontend's no-observation set in card.ts:NO_OBSERVATION_SOURCES.
-    # `startswith("geo-ir-")` alone would over-count: geo-ir-nodata and
-    # geo-ir-no-coverage are fallback cf=50 placeholders, not real observations.
     observed_count = sum(
         1 for p in all_passes
         if p["cloud_source"] == "gibs"
@@ -1009,71 +1129,144 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         or p["cloud_source"] == "satcorps"
         or p["cloud_source"] == "gfs-forecast"
     )
-    status_data = {
+    status_data: dict[str, Any] = {
         "last_run": utcnow_iso(n),
         "tick_minutes": settings.tick_minutes,
         "tle_age_hours": round(age_h, 2),
         "tle_freshness_factor": round(fresh, 3),
         "cloud_source": source_label,
         "cloud_composite_hour": utcnow_iso(composite_hour),
-        "target_count": len(targets),
+        "target_count": target_count,
         "pass_count": len(all_passes),
         "passes_with_real_observation": observed_count,
         "passes_with_no_observation": len(all_passes) - observed_count,
         "version": version,
         "build_version": __version__,
-        # V3.0 launches health (per ARCH-1 — folded into status.json
-        # rather than a separate launches-health.json artifact). Frontend
-        # surfaces the stale-launches banner overlay when
-        # `launches_last_successful_fetch` ages past 24 h.
         "launches_last_successful_fetch": (
             utcnow_iso(launch_fetch.last_successful_fetch)
             if launch_fetch.last_successful_fetch is not None else None
         ),
         "launches_count_upcoming": len(actionable_launches),
-        # v1.6.1.1: ASCENT pipeline uses a looser NET window than OVERHEAD,
-        # so its eligible count is reported separately. The OVERHEAD count
-        # above stays compatible with v1.6.0.x readers.
         "launches_count_ascent_eligible": len(ascent_actionable),
         "launches_count_pass_opportunities": len(launch_pass_entries),
         "launches_schema_hash": launch_fetch.schema_hash,
     }
+    if profile_name is not None:
+        # New field — surfaces which profile this status describes when a
+        # status_<name>.json is fetched out of band (debugging, logs).
+        status_data["profile"] = profile_name
 
-    (v_dir / "passes.json").write_text(json.dumps(top25, indent=2))
-    (v_dir / "top5.json").write_text(json.dumps(next_90, indent=2))
-    (v_dir / "top_24h.json").write_text(json.dumps(upcoming, indent=2))
-    (v_dir / "track.json").write_text(json.dumps(track_data, indent=2))
-    (v_dir / "status.json").write_text(json.dumps(status_data, indent=2))
+    suffix = f"_{profile_name}" if profile_name else ""
+    passes_path = v_dir / f"passes{suffix}.json"
+    top5_path = v_dir / f"top5{suffix}.json"
+    top_24h_path = v_dir / f"top_24h{suffix}.json"
+    status_path = v_dir / f"status{suffix}.json"
 
-    # Targets snapshot for the frontend
-    target_data_version = "v1"
-    (v_dir / "targets.json").write_text(json.dumps(targets, indent=2))
+    passes_path.write_text(json.dumps(top25, indent=2))
+    top5_path.write_text(json.dumps(next_90, indent=2))
+    top_24h_path.write_text(json.dumps(upcoming, indent=2))
+    status_path.write_text(json.dumps(status_data, indent=2))
 
-    # 6. Manifest
-    manifest_path = write_manifest(
-        out_dir=settings.out_dir,
-        version=version,
-        generated_at=n,
-        tle_epoch=tle.epoch,
-        cloud_composite_hour=composite_hour,
-        target_data_version=target_data_version,
-        build_version=__version__,
-        artifacts={
-            "passes": v_dir / "passes.json",
-            "top5": v_dir / "top5.json",
-            "top_24h": v_dir / "top_24h.json",
-            "track": v_dir / "track.json",
-            "status": v_dir / "status.json",
-            "targets": v_dir / "targets.json",
-        },
+    return {
+        "passes": passes_path,
+        "top5": top5_path,
+        "top_24h": top_24h_path,
+        "status": status_path,
+    }
+
+
+def _run_profile_multiplex(
+    *,
+    profile_name: str,
+    curated_targets: list[dict[str, Any]],
+    tle: TLE,
+    fresh: float,
+    sampler: CloudSampler,
+    forecast_sampler: Any,
+    composite_hour: datetime,
+    lightning_sampler_obj: Any,
+    hurricane_tracker_obj: Any,
+    launch_pass_entries: list[dict[str, Any]],
+    n: datetime,
+    settings: Settings,
+    v_dir: Path,
+    source_label: str,
+    age_h: float,
+    launch_fetch: Any,
+    actionable_launches: list[Any],
+    ascent_actionable: list[Any],
+    version: str,
+) -> dict[str, Path]:
+    """Run one profile's multiplex slice. Fetches the profile's targets,
+    unions with curated, runs the existing pass-finding + scoring loop,
+    and writes the four per-profile artifacts. Returns the artifact paths
+    for the manifest.
+
+    Launches are scored once globally (no per-profile launch list — every
+    profile sees the same launches), so we reuse `launch_pass_entries`
+    from the caller verbatim.
+    """
+    profile_data = fetch_profile_targets(profile_name)
+    profile_target_list = build_profile_target_list(
+        curated=curated_targets,
+        personal=profile_data["targets"],
+        removed_curated_ids=profile_data["removed_curated_ids"],
     )
 
-    deleted = cleanup_old_versions(settings.out_dir, keep_minutes=60)
-    if deleted:
-        log.info("cleaned %d old versions", len(deleted))
+    # Compute ground-target passes for the per-profile target list. We
+    # iterate ALL targets here (not just personal): curated targets'
+    # scores are deterministic given (target, TLE, sampler, n), so they
+    # match the canonical run byte-for-byte. Re-running them costs ~tens
+    # of ms per target — acceptable for v1; v2 can memoize curated
+    # scores across profiles if tick time becomes a problem.
+    window_end = n + timedelta(hours=settings.pass_window_hours)
+    profile_passes: list[dict[str, Any]] = []
+    for target in profile_target_list:
+        passes = find_passes(
+            tle=tle,
+            target=target,
+            window_start=n,
+            window_end=window_end,
+            step_seconds=PASS_SAMPLE_STEP_SECONDS,
+            max_distance_km=PASS_MAX_DISTANCE_KM,
+        )
+        for p in passes:
+            profile_passes.append(score_pass_for_target(
+                target, p, sampler, fresh,
+                forecast_sampler=forecast_sampler,
+                now=n,
+                composite_hour=composite_hour,
+                lightning_sampler=lightning_sampler_obj,
+                hurricane_tracker=hurricane_tracker_obj,
+            ))
 
-    log.info("tick complete: version=%s passes=%d", version, len(all_passes))
-    return json.loads(manifest_path.read_text())
+    # Launches are shared across all profiles (Anil curates the launch
+    # list, like the curated targets). Append the already-scored launch
+    # entries to this profile's pass list before view building.
+    all_passes = profile_passes + launch_pass_entries
+    log.info(
+        "profile %s: %d targets → %d ground passes (+%d launch entries)",
+        profile_name, len(profile_target_list), len(profile_passes),
+        len(launch_pass_entries),
+    )
+
+    return _write_view_artifacts(
+        v_dir=v_dir,
+        all_passes=all_passes,
+        launch_pass_entries=launch_pass_entries,
+        n=n,
+        settings=settings,
+        source_label=source_label,
+        composite_hour=composite_hour,
+        age_h=age_h,
+        fresh=fresh,
+        target_count=len(profile_target_list),
+        launch_fetch=launch_fetch,
+        actionable_launches=actionable_launches,
+        ascent_actionable=ascent_actionable,
+        version=version,
+        profile_name=profile_name,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
