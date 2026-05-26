@@ -399,6 +399,26 @@ export function addPersonalTarget(profile: Profile, target: PersonalTarget): Pro
   return { ...profile, additions: [...profile.additions, target] };
 }
 
+/** Append a batch of personal targets to a profile (immutable). Used by
+ *  the slot 9 CSV importer — the operator pastes a spreadsheet's worth
+ *  of rows and we add them all in one mutation before kicking off the
+ *  parallel API POSTs. Rejects the batch on duplicate id (within the
+ *  batch OR against existing additions) so partial-batch corruption
+ *  can't happen.
+ *
+ *  Returns a new Profile; caller must `saveProfile(next)` to persist. */
+export function addPersonalTargetsBatch(profile: Profile, targets: PersonalTarget[]): Profile {
+  if (targets.length === 0) return profile;
+  const existing = new Set(profile.additions.map((t) => t.id));
+  const seenInBatch = new Set<string>();
+  for (const t of targets) {
+    if (existing.has(t.id)) throw new Error(`duplicate target id: ${t.id}`);
+    if (seenInBatch.has(t.id)) throw new Error(`duplicate id within batch: ${t.id}`);
+    seenInBatch.add(t.id);
+  }
+  return { ...profile, additions: [...profile.additions, ...targets] };
+}
+
 /** Remove a personal target by id. Idempotent — missing id returns the
  *  profile unchanged. Caller must `saveProfile(next)` to persist. */
 export function removePersonalTarget(profile: Profile, targetId: string): Profile {

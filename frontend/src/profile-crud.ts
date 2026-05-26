@@ -22,6 +22,7 @@
 
 import {
   addPersonalTarget,
+  addPersonalTargetsBatch,
   isValidProfileName,
   loadProfile,
   makePersonalTargetId,
@@ -33,6 +34,7 @@ import {
   type Profile,
 } from './profile';
 import { deleteProfileTarget, postProfileTarget } from './profile-api';
+import { parseTargetCsv, type ParsedValidRow, type ParseTargetCsvResult } from './csv-parse';
 
 /** Per-error-code human-readable message. Mirrors worker validation
  *  codes from validatePersonalTargetInput. */
@@ -49,6 +51,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_id: 'Target id is malformed.',
   id_profile_mismatch: 'Target id does not match the active profile.',
   invalid_createdAt: 'Created-at timestamp is invalid.',
+  // CSV-import-specific codes
+  wrong_column_count: 'Wrong number of columns (expected name, lat, lon[, priority]).',
+  invalid_header: 'CSV must have a header row: name,lat,lon (or name,lat,lon,priority).',
 };
 
 /** Show an inline toast (success / error). Reuses the existing #toast
@@ -88,6 +93,7 @@ export function buildCrudSection(profileName: string): HTMLElement {
   section.appendChild(buildAddForm(profileName));
   section.appendChild(buildPersonalList(profileName));
   section.appendChild(buildCuratedRemovedSection(profileName));
+  section.appendChild(buildCsvImportSection(profileName));
 
   return section;
 }
@@ -492,10 +498,327 @@ function apiSyncErrorMessage(reason: string, detail?: string): string {
   return detail ?? reason;
 }
 
+// ---------------------------------------------------------------------------
+// Slot 9 — CSV import. File picker + paste textarea + preview + bulk POST.
+// ---------------------------------------------------------------------------
+
+/** Build the CSV import section. Layout:
+ *    - File input (.csv) + paste textarea
+ *    - Preview button
+ *    - Preview area: "N valid, M errors" + scrollable error list
+ *    - Import / Cancel buttons (Import disabled when valid.length === 0)
+ *
+ *  No fancy table virtualisation — operators rarely paste 5000+ rows,
+ *  and a scrollable container handles the rare big paste.
+ */
+export function buildCsvImportSection(profileName: string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'profile-crud-csv';
+  wrap.id = 'profile-csv-import';
+
+  const h = document.createElement('h4');
+  h.className = 'profile-crud-subhead';
+  h.textContent = 'Bulk import from CSV';
+  wrap.appendChild(h);
+
+  const desc = document.createElement('p');
+  desc.className = 'profile-crud-empty';
+  desc.textContent = 'Paste a CSV (name,lat,lon[,priority]) or choose a .csv file. Preview shows which rows will import.';
+  wrap.appendChild(desc);
+
+  // File picker
+  const fileRow = document.createElement('div');
+  fileRow.className = 'profile-row';
+  const fileLabel = document.createElement('label');
+  fileLabel.htmlFor = 'profile-csv-file';
+  fileLabel.textContent = 'CSV file:';
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.id = 'profile-csv-file';
+  fileInput.accept = '.csv,text/csv';
+  fileRow.append(fileLabel, fileInput);
+  wrap.appendChild(fileRow);
+
+  // Paste textarea
+  const taRow = document.createElement('div');
+  taRow.className = 'profile-row';
+  const taLabel = document.createElement('label');
+  taLabel.htmlFor = 'profile-csv-paste';
+  taLabel.textContent = 'Or paste:';
+  const ta = document.createElement('textarea');
+  ta.id = 'profile-csv-paste';
+  ta.className = 'profile-input';
+  ta.rows = 6;
+  ta.placeholder = 'name,lat,lon,priority\nBoston Aerial,42.3601,-71.0589,8';
+  ta.spellcheck = false;
+  taRow.append(taLabel, ta);
+  wrap.appendChild(taRow);
+
+  // Preview button + import / cancel buttons (Import disabled by default)
+  const btnRow = document.createElement('div');
+  btnRow.className = 'profile-row';
+  const previewBtn = document.createElement('button');
+  previewBtn.type = 'button';
+  previewBtn.className = 'profile-btn';
+  previewBtn.id = 'profile-csv-preview-btn';
+  previewBtn.textContent = 'Preview';
+  const importBtn = document.createElement('button');
+  importBtn.type = 'button';
+  importBtn.className = 'profile-btn';
+  importBtn.id = 'profile-csv-import-btn';
+  importBtn.textContent = 'Import';
+  importBtn.disabled = true;
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'profile-btn';
+  cancelBtn.id = 'profile-csv-cancel-btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.disabled = true;
+  btnRow.append(previewBtn, importBtn, cancelBtn);
+  wrap.appendChild(btnRow);
+
+  // Preview area — populated lazily after Preview click
+  const previewArea = document.createElement('div');
+  previewArea.className = 'profile-csv-preview';
+  previewArea.id = 'profile-csv-preview-area';
+  wrap.appendChild(previewArea);
+
+  // Mutable closure-state: the most recent parse result (set on Preview,
+  // consumed on Import). Reset on Cancel and after a successful import.
+  let lastParse: ParseTargetCsvResult | null = null;
+
+  const resetPreview = () => {
+    lastParse = null;
+    previewArea.replaceChildren();
+    importBtn.disabled = true;
+    cancelBtn.disabled = true;
+    importBtn.textContent = 'Import';
+  };
+
+  // File reader: when the operator picks a file, slurp its text into the
+  // textarea so they can still see / edit before previewing.
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      ta.value = typeof reader.result === 'string' ? reader.result : '';
+      resetPreview();
+    };
+    reader.onerror = () => {
+      showToast(`Could not read file: ${reader.error?.message ?? 'unknown'}`, 'error');
+    };
+    reader.readAsText(file);
+  });
+
+  previewBtn.addEventListener('click', () => {
+    const parsed = parseTargetCsv(ta.value);
+    lastParse = parsed;
+    renderPreview(previewArea, parsed);
+    const hasValid = parsed.valid.length > 0 && !parsed.topLevelError;
+    importBtn.disabled = !hasValid;
+    cancelBtn.disabled = false;
+    if (hasValid) {
+      importBtn.textContent = `Import ${parsed.valid.length} valid`;
+    } else {
+      importBtn.textContent = 'Import';
+    }
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    resetPreview();
+  });
+
+  importBtn.addEventListener('click', () => {
+    if (!lastParse || lastParse.valid.length === 0) return;
+    importBtn.disabled = true;
+    cancelBtn.disabled = true;
+    void handleCsvImport(profileName, lastParse.valid).then(() => {
+      ta.value = '';
+      fileInput.value = '';
+      resetPreview();
+    });
+  });
+
+  return wrap;
+}
+
+/** Render the parse result into the preview area. Shows "N valid, M
+ *  errors" + the error rows in a scrollable container. The valid rows
+ *  are summarised (count) — we trust the operator paste matches their
+ *  spreadsheet; surfacing the errors is what they actually need to triage.
+ *
+ *  All operator-controlled strings (raw row content, error codes) go
+ *  through textContent — never innerHTML. */
+function renderPreview(host: HTMLElement, parsed: ParseTargetCsvResult): void {
+  host.replaceChildren();
+
+  if (parsed.topLevelError) {
+    const err = document.createElement('div');
+    err.className = 'profile-error';
+    err.textContent = ERROR_MESSAGES[parsed.topLevelError.code]
+      ?? `CSV header is invalid (${parsed.topLevelError.code}).`;
+    host.appendChild(err);
+    return;
+  }
+
+  const summary = document.createElement('p');
+  summary.className = 'profile-csv-summary';
+  summary.textContent = `${parsed.valid.length} valid, ${parsed.errors.length} errors`;
+  host.appendChild(summary);
+
+  if (parsed.valid.length === 0 && parsed.errors.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'profile-crud-empty';
+    empty.textContent = 'No rows found. Paste a CSV with a header row.';
+    host.appendChild(empty);
+    return;
+  }
+
+  if (parsed.valid.length === 0) {
+    const hint = document.createElement('p');
+    hint.className = 'profile-error';
+    hint.textContent = 'Fix the errors and re-paste.';
+    host.appendChild(hint);
+  }
+
+  if (parsed.errors.length > 0) {
+    const errH = document.createElement('h5');
+    errH.className = 'profile-crud-subhead';
+    errH.textContent = 'Errors';
+    host.appendChild(errH);
+
+    const errList = document.createElement('ul');
+    errList.className = 'profile-csv-errors';
+    for (const e of parsed.errors) {
+      const li = document.createElement('li');
+      li.className = 'profile-csv-error-row';
+      const lineEl = document.createElement('span');
+      lineEl.className = 'profile-csv-error-line';
+      lineEl.textContent = `Line ${e.line}: `;
+      const codeEl = document.createElement('span');
+      codeEl.className = 'profile-csv-error-code';
+      codeEl.textContent = ERROR_MESSAGES[e.code] ?? e.code;
+      const rawEl = document.createElement('code');
+      rawEl.className = 'profile-csv-error-raw';
+      rawEl.textContent = e.raw;
+      li.append(lineEl, codeEl, document.createElement('br'), rawEl);
+      errList.appendChild(li);
+    }
+    host.appendChild(errList);
+  }
+}
+
+/** Optimistic bulk-import flow. Builds PersonalTarget objects from the
+ *  parsed valid rows, adds them all to local profile, then fires
+ *  per-row POSTs in parallel via Promise.allSettled. Per-row failures
+ *  roll back ONLY the failed rows — successful rows stay persisted.
+ *
+ *  This is the slot 9 "transactional preview" flow with partial-success
+ *  semantics: operator sees one summary toast at the end, but the
+ *  on-disk state matches what the server actually accepted. */
+async function handleCsvImport(profileName: string, valid: ParsedValidRow[]): Promise<void> {
+  const before = safeLoadProfile(profileName);
+  if (!before) {
+    showToast('Could not load active profile.', 'error');
+    return;
+  }
+
+  // Mint id + createdAt for each row. We do this once here so the local
+  // copy and the POST body carry the same identifiers (no drift).
+  const stamp = new Date().toISOString();
+  const targets: PersonalTarget[] = [];
+  for (const row of valid) {
+    const id = makePersonalTargetId(profileName);
+    const validated = validatePersonalTargetInput({
+      id,
+      profileName,
+      name: row.name,
+      lat: row.lat,
+      lon: row.lon,
+      priority: row.priority,
+      createdAt: stamp,
+    });
+    if (!validated.ok) {
+      // Shouldn't happen — the parser already ran the same validator. But
+      // guard defensively rather than POSTing a malformed row.
+      showToast(`Skipped a row that re-failed validation (${validated.error}).`, 'warn');
+      continue;
+    }
+    targets.push(validated.target);
+  }
+
+  if (targets.length === 0) {
+    showToast('No importable rows after re-validation.', 'warn');
+    return;
+  }
+
+  // Optimistic local apply
+  let optimistic: Profile;
+  try {
+    optimistic = addPersonalTargetsBatch(before, targets);
+    saveProfile(optimistic);
+  } catch (e) {
+    showToast(`Could not save locally: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    return;
+  }
+  rerenderCrudSection(profileName);
+
+  // Fire all POSTs in parallel.
+  const settled = await Promise.allSettled(
+    targets.map((t) => postProfileTarget(profileName, t)),
+  );
+
+  // Tally outcomes
+  const failedIds: string[] = [];
+  let okCount = 0;
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i]!;
+    const t = targets[i]!;
+    if (s.status === 'fulfilled' && s.value.ok) {
+      okCount += 1;
+      continue;
+    }
+    failedIds.push(t.id);
+  }
+
+  if (failedIds.length === 0) {
+    showToast(`Imported ${okCount} target${okCount === 1 ? '' : 's'}.`, 'success');
+    return;
+  }
+
+  // Roll back ONLY the failed rows. Re-load (don't reuse `optimistic`)
+  // in case another tab mutated the profile mid-flight.
+  const current = safeLoadProfile(profileName);
+  if (!current) {
+    showToast(
+      `Imported ${okCount}, ${failedIds.length} failed (could not reload profile to roll back).`,
+      'error',
+    );
+    return;
+  }
+  const failedSet = new Set(failedIds);
+  const reconciled: Profile = {
+    ...current,
+    additions: current.additions.filter((t) => !failedSet.has(t.id)),
+  };
+  try {
+    saveProfile(reconciled);
+  } catch {
+    // Surface the network failure, not the save failure.
+  }
+  rerenderCrudSection(profileName);
+  showToast(
+    `Imported ${okCount}, ${failedIds.length} failed.`,
+    okCount > 0 ? 'warn' : 'error',
+  );
+}
+
 /** Test-only handles. Exported so unit tests can drive the optimistic
  *  + rollback flow directly without going through DOM-click simulation. */
 export const _test = {
   handleAdd,
   handleDelete,
   handleToggleCurated,
+  handleCsvImport,
 };

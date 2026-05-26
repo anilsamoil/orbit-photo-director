@@ -2,6 +2,43 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.11.0] - 2026-05-26
+
+### Slot 9 — CSV import to Profile tab
+
+The Profile tab gains a bulk-import surface. Operators paste a CSV (or pick a `.csv` file), preview row-by-row outcomes with line numbers, and import all valid rows in one shot. The flow is transactional in the UX sense (preview-then-confirm) but uses per-row POSTs under the hood so partial network failures degrade gracefully: successful rows persist, failed rows roll back locally to keep the operator's view consistent with what the server actually accepted.
+
+### Added
+
+- **`frontend/src/csv-parse.ts`** — new pure parser (no DOM, no localStorage, no async). State-machine implementation handles double-quoted fields with embedded commas, escaped quotes (`""`), and embedded newlines. Format spec lives in the header comment. Reuses slot 6's `validatePersonalTargetInput` row-by-row so the error codes match the rest of the validation surface (`lat_out_of_range`, `name_empty`, `priority_out_of_range`, …). Returns `{ valid, errors, topLevelError? }`.
+- **`frontend/src/profile.ts`** — `addPersonalTargetsBatch(profile, targets)` helper for the optimistic bulk-add. Immutable, rejects duplicate ids within the batch or against existing additions.
+- **`frontend/src/profile-crud.ts`** — `buildCsvImportSection(profileName)` renders the file picker + paste textarea + Preview/Import/Cancel buttons + preview area. Mounted under "Hidden curated targets" inside `buildCrudSection`. Bulk-import flow saves locally first, fires `postProfileTarget` per row via `Promise.allSettled`, then reconciles: successful rows stay, failed rows roll back, one summary toast at the end.
+- **`frontend/test/csv-parse.test.ts`** — 33 new parser tests: happy path, quoting (embedded commas, escaped quotes, embedded newlines), per-row validation (lat/lon/name/priority/column-count) with line numbers preserved, top-level header errors, edge cases (empty input, CRLF, blank-line + `#` comment skipping, tab-separated rejection).
+- **`frontend/test/profile-csv-import.test.ts`** — 17 new integration tests covering `addPersonalTargetsBatch`, the DOM rendering for the new section, Preview button parsing, Import-disabled state when no valid rows, top-level header error rendering, XSS-via-textContent discipline, bulk POST + per-row rollback, mixed success/failure paths, optimistic-before-settle ordering.
+
+### Tests
+
+- Frontend: **679 → 729 vitest pass (+50)**
+- `tsc --noEmit && vite build` clean
+- No new dependencies (state-machine parser in ~280 lines beats pulling in `papaparse`)
+
+### CSV format spec
+
+Header row REQUIRED. First non-blank, non-comment row must be `name,lat,lon` or `name,lat,lon,priority`. Body rows match the header column count; priority is per-row-optional and defaults to 5 (matches the slot 6 add form). Double-quoted fields support embedded commas, embedded newlines, and `""` to escape a literal quote. Lines starting with `#` are comments; blank lines are skipped. LF and CRLF line endings both work. Tab-separated is NOT supported. `id` and `createdAt` are minted client-side (the operator's Excel paste won't have them).
+
+### How to manually test
+
+1. Open `https://map.astroanil.dev/?u=jack` with `opd-calib-token` set in localStorage. Switch to the **Profile** tab.
+2. Scroll to **Bulk import from CSV**. Paste:
+   ```
+   name,lat,lon,priority
+   Boston Aerial,42.3601,-71.0589,8
+   Bad Row,999,0,5
+   Lago di Como,46.0,9.25
+   ```
+3. Click **Preview**. Summary reads `2 valid, 1 errors`, and the error list shows `Line 3: Latitude must be between -90 and 90` with the raw row content rendered as `<code>`.
+4. Click **Import 2 valid**. Toast shows `Imported 2 targets.` and the **Your targets** list above gains both rows. Reload the page → the rows persist (localStorage + `/api/profiles/jack/targets` POST went through for each).
+
 ## [1.6.10.0] - 2026-05-26
 
 ### Slot 8 — Per-profile Log tab filter (frontend half)
