@@ -299,3 +299,122 @@ export function _resetForTests(): void {
   // wipe their own localStorage. Provided so callers don't have to
   // import a no-op stub.
 }
+
+// ---------------------------------------------------------------------------
+// Slot 6 — Profile tab CRUD helpers (locked 2026-05-26).
+//
+// Small, additive helpers for the Profile-tab UI. The optimistic-UI flow
+// in profile-crud.ts is:
+//   1. operator clicks Add/Delete/Toggle
+//   2. client-side validation runs (mirrors worker/src/profiles.ts)
+//   3. local profile is mutated + persisted via saveProfile()
+//   4. API call goes out in the background
+//   5. on API failure, the local mutation is rolled back + a toast fires
+//
+// These helpers own step 3 only. They take + return a Profile so the UI
+// layer can hold the "previous" copy for rollback in its caller frame.
+// ---------------------------------------------------------------------------
+
+/** Validation result for a personal-target payload. Mirrors the worker
+ *  field names so error messages can be surfaced uniformly. */
+export type PersonalTargetValidationResult =
+  | { ok: true; target: PersonalTarget }
+  | { ok: false; error: string };
+
+const TARGET_NAME_MAX_LEN = 200;
+// Match the worker's ID_RE exactly. The token portion is generated below.
+const PERSONAL_ID_RE = /^personal:[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9_-]{1,128}$/;
+
+/** Mint a stable personal-target id. Format `personal:<profile>:<token>`
+ *  with the token from crypto.randomUUID() (32 hex chars + dashes — fits
+ *  the worker's `[A-Za-z0-9_-]{1,128}` bound). Falls back to a Math.random
+ *  hex string when randomUUID is unavailable (very old browsers, some
+ *  test envs) so the function is never the failure point. */
+export function makePersonalTargetId(profileName: string): string {
+  const token = (() => {
+    try {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+    } catch { /* fall through */ }
+    // Fallback: 16 random hex chars. Not crypto-strong but the token is
+    // a uniqueness key inside one profile's bucket, not a secret.
+    let s = '';
+    for (let i = 0; i < 16; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return s;
+  })();
+  return `personal:${profileName}:${token}`;
+}
+
+/** Build + validate a PersonalTarget from raw operator input. Mirrors the
+ *  worker's `validateTarget()` field-by-field (lat ∈ [-90,90], lon ∈
+ *  [-180,180], name 1-200 chars, priority 1-10). On success, returns a
+ *  normalized PersonalTarget with id minted (or carried forward) and
+ *  createdAt stamped. On failure, returns a per-field error code that the
+ *  UI can surface inline. */
+export function validatePersonalTargetInput(input: {
+  id?: string;
+  profileName: string;
+  name: string;
+  lat: number;
+  lon: number;
+  priority?: number;
+  createdAt?: string;
+}): PersonalTargetValidationResult {
+  const profileName = input.profileName;
+  if (!isValidProfileName(profileName)) {
+    return { ok: false, error: 'invalid_profile_name' };
+  }
+  const name = (input.name ?? '').trim();
+  if (name.length === 0) return { ok: false, error: 'name_empty' };
+  if (name.length > TARGET_NAME_MAX_LEN) return { ok: false, error: 'name_too_long' };
+  const lat = Number(input.lat);
+  if (!Number.isFinite(lat)) return { ok: false, error: 'lat_must_be_finite_number' };
+  if (lat < -90 || lat > 90) return { ok: false, error: 'lat_out_of_range' };
+  const lon = Number(input.lon);
+  if (!Number.isFinite(lon)) return { ok: false, error: 'lon_must_be_finite_number' };
+  if (lon < -180 || lon > 180) return { ok: false, error: 'lon_out_of_range' };
+  const priority = input.priority === undefined ? 5 : Number(input.priority);
+  if (!Number.isInteger(priority)) return { ok: false, error: 'priority_must_be_integer' };
+  if (priority < 1 || priority > 10) return { ok: false, error: 'priority_out_of_range' };
+  const id = input.id ?? makePersonalTargetId(profileName);
+  if (!PERSONAL_ID_RE.test(id)) return { ok: false, error: 'invalid_id' };
+  if (id.split(':')[1] !== profileName) return { ok: false, error: 'id_profile_mismatch' };
+  // createdAt: stamp now if missing; otherwise validate ISO-Z shape so the
+  // worker's regex accepts it on PUT/POST.
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(createdAt)) {
+    return { ok: false, error: 'invalid_createdAt' };
+  }
+  return { ok: true, target: { id, name, lat, lon, priority, createdAt } };
+}
+
+/** Append a personal target to a profile (immutable — returns a NEW
+ *  profile object so the caller can hold the previous one for rollback).
+ *  Caller must `saveProfile(next)` to persist. Rejects duplicate ids. */
+export function addPersonalTarget(profile: Profile, target: PersonalTarget): Profile {
+  if (profile.additions.some((t) => t.id === target.id)) {
+    throw new Error(`duplicate target id: ${target.id}`);
+  }
+  return { ...profile, additions: [...profile.additions, target] };
+}
+
+/** Remove a personal target by id. Idempotent — missing id returns the
+ *  profile unchanged. Caller must `saveProfile(next)` to persist. */
+export function removePersonalTarget(profile: Profile, targetId: string): Profile {
+  const next = profile.additions.filter((t) => t.id !== targetId);
+  if (next.length === profile.additions.length) return profile;
+  return { ...profile, additions: next };
+}
+
+/** Flip the "removed for this profile" marker on a curated target id.
+ *  Toggle semantics: present → remove from removedCuratedIds (un-hide);
+ *  absent → append (hide). Caller must `saveProfile(next)` to persist. */
+export function toggleCuratedRemoved(profile: Profile, curatedId: string): Profile {
+  if (typeof curatedId !== 'string' || curatedId.length === 0) return profile;
+  const isRemoved = profile.removedCuratedIds.includes(curatedId);
+  const next = isRemoved
+    ? profile.removedCuratedIds.filter((id) => id !== curatedId)
+    : [...profile.removedCuratedIds, curatedId];
+  return { ...profile, removedCuratedIds: next };
+}

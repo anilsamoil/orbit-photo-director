@@ -2,6 +2,49 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.9.0] - 2026-05-26
+
+### Slot 6 — Profile tab CRUD with optimistic UI + API sync
+
+The Profile tab gains add/remove/hide controls. Each mutation goes optimistic-local first (`saveProfile()` → re-render), then fires the corresponding `/api/profiles/<name>/targets` call in the background; failures roll back the local change and surface a toast. Curated-removal toggles stay local-only — the daemon multiplexer (slot 4) already reads `removedCuratedIds` from the profile JSON it fetches, so no second API surface is needed for that path.
+
+### Added
+
+- **`frontend/src/profile.ts`** — new pure helpers (don't touch existing exports):
+  - `validatePersonalTargetInput()` — mirrors `worker/src/profiles.ts:validateTarget` field-by-field (lat ∈ [-90,90], lon ∈ [-180,180], name 1-200 chars, priority integer 1-10, id matches the worker's `^personal:[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9_-]{1,128}$` pattern). Runs BEFORE the optimistic write so invalid input never reaches localStorage or the network.
+  - `makePersonalTargetId(profileName)` — mints `personal:<profile>:<crypto.randomUUID()>` with a Math.random fallback for ancient browsers.
+  - `addPersonalTarget` / `removePersonalTarget` / `toggleCuratedRemoved` — immutable profile mutators (return NEW profile so caller can hold the previous copy for rollback).
+- **`frontend/src/profile-api.ts`** (new, ~130 lines) — thin wrapper over the Worker CRUD routes. `putProfileTargets` / `postProfileTarget` / `deleteProfileTarget`. Reads `opd-calib-token` from localStorage (same shared secret as `/api/log`); returns `{ok:true, data}` or `{ok:false, reason, status?, detail?}` with stable `reason` discriminant (`token_missing` / `network` / `validation` / `http`).
+- **`frontend/src/profile-crud.ts`** (new, ~380 lines) — Profile-tab CRUD UI. Three sub-sections: add-target form (name + lat + lon + priority), personal-targets list (delete per row), and curated-hidden chip list (paste-id-to-hide + restore-per-chip). All operator strings flow through `textContent` — premise 12, no new XSS surfaces.
+- **`frontend/src/profile-ui.ts`** — single line: `container.appendChild(buildCrudSection(activeName))` inside `renderProfilePane()`. CRUD section lives below the picker + threshold sections, same `.profile-section` scaffolding.
+- **`frontend/src/style.css`** — ~50 lines of styling for the CRUD form (matches existing `.profile-row` / `.profile-btn` scaffolding; adds `.profile-crud-row` / `.profile-crud-chip` / `.profile-input-coord`).
+- **`frontend/test/profile-crud.test.ts`** (new, 46 tests):
+  - `validatePersonalTargetInput`: 17 tests covering happy + every error code (name_empty, name_too_long, lat/lon out_of_range, priority not_integer / out_of_range, id_profile_mismatch, invalid_id, invalid_profile_name, invalid_createdAt)
+  - Pure mutators: 5 tests (add immutable, add duplicate-throws, remove + idempotent no-op, toggle round-trip)
+  - API client: 7 tests (token_missing short-circuit, header + body shape, 400/validation, 503/http, network throw, DELETE URL-encoding, PUT payload shape)
+  - Optimistic UI: 7 tests (add persists BEFORE fetch resolves, rollback on 5xx / offline / 401, delete persists then DELETE, delete rollback, curated toggle round-trip without API call)
+  - DOM: 6 tests (add form inputs present, empty-state copy, one row per personal target, chip per `removedCuratedIds`, textContent-XSS-escape, rerender swaps node in place)
+
+### Tests
+
+- Frontend: **612 → 658 vitest pass (+46)** in `test/profile-crud.test.ts`
+- `tsc --noEmit && vite build` clean
+- Backend: 595 pytest unchanged (no worker code in this slot)
+
+### Decisions
+
+- **`profile-crud.ts` as a new file** (not extending `profile-ui.ts`). The picker + threshold sections are tightly coupled (both subscribe to `profile-changed`); the CRUD section has its own optimistic+rollback discipline. Splitting keeps each file scoped per design-doc slot and matches the precedent set by `photo-lookup.ts` living separately from `profile-ui.ts`.
+- **Curated-toggle UI is paste-id-then-hide rather than per-row-toggle.** The frontend doesn't currently load the full curated catalog (slot 5 dual-source will expose it). Rather than gold-plate a fetch path that's about to land, the v1 surface exposes the raw `removedCuratedIds` interface the daemon already consumes. Restore-per-chip + paste-id-to-hide covers the operator workflow (Anil knows the ids; astronauts hit Restore on chips). Slot 5 can swap in a per-row picker once curated metadata is client-side.
+- **Curated removal makes NO API call.** It's a profile-local setting; the daemon multiplexer (slot 4) reads `removedCuratedIds` from the profile JSON it pulls from the Worker. saveProfile() is the persistence boundary; the daemon picks the change up on the next tick.
+- **No event-bus emission** — `saveProfile()` already dispatches `'profile-changed'` (slot 11 will gain debouncing). When the debounced bus lands, this module benefits for free.
+- **Toast reuse** — calls into the existing `#toast` element from index.html rather than building a parallel toast system.
+
+### How to manually test
+
+1. Open `https://map.astroanil.dev/?u=jack`, click **Profile** tab → Personal targets → fill in name + lat + lon + priority → click **Add target**. Toast says "Added target ...". Refresh the page; the row persists (localStorage) AND the daemon scoring picks it up on the next tick (Worker R2).
+2. Click **Delete** on a personal target row → row disappears immediately (optimistic), DELETE fires, toast confirms. Open DevTools → Network and throttle to Offline before clicking Delete: the row vanishes, the API call fails, the row REAPPEARS (rollback) + the toast says "Delete failed: network unreachable".
+3. In the **Hidden curated targets** input, type `aurora-scandinavia` → click **Hide**. Chip appears. Click **Restore** on the chip → chip vanishes. Verify in DevTools → Application → localStorage → `opd-profile-jack` that `removedCuratedIds` reflects each click.
+
 ## [1.6.8.0] - 2026-05-26
 
 ### Frontend dual-source manifest fetch — Jack sees Jack's scoring (slot 5).

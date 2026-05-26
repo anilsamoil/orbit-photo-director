@@ -1055,6 +1055,74 @@ main {
   max-width: 360px;
 }
 
+/* Slot 6 — Profile-tab CRUD: add form + personal list + curated chips.
+ * Mirrors the .profile-section / .profile-row scaffolding above. */
+.profile-crud-add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.profile-input-coord { min-width: 5rem; max-width: 7rem; }
+.profile-crud-subhead {
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.profile-crud-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+.profile-crud-ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.profile-crud-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.88rem;
+}
+.profile-crud-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.profile-crud-coord {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.profile-crud-btn {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+}
+.profile-crud-chip code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+}
+.profile-crud-curated {
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
 /* Photo-lookup tab — Pettit feedback 2026-05-19 (v1.3.0.0). */
 .lookup-form {
   max-width: 720px;

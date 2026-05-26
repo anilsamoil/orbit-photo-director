@@ -46,7 +46,7 @@ Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-
 | 4 — Daemon multiplexer (per-astronaut passes.json) | ✅ | v1.6.7.0 |
 | 5 — Frontend dual-source manifest fetch (per-profile variant resolver) | ✅ | v1.6.8.0 |
 | 5b — Browser-Worker SGP4 instant-buffer | ⏳ deferred | — |
-| 6 — Profile tab add/remove with API sync | ⏳ pending | — |
+| 6 — Profile tab add/remove with API sync | ✅ | v1.6.9.0 |
 | 7 — Distance threshold slider | ✅ | v1.6.5.0 |
 | 8 — `/api/log` gains `profile` field | ✅ (backend) | v1.6.4.0 |
 | 9 — CSV import → API push | ⏳ pending | — |
