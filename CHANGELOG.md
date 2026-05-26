@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] — Slot 9: CSV import to Profile tab
+## [1.6.11.0] - 2026-05-26
+
+### Slot 9 — CSV import to Profile tab
 
 The Profile tab gains a bulk-import surface. Operators paste a CSV (or pick a `.csv` file), preview row-by-row outcomes with line numbers, and import all valid rows in one shot. The flow is transactional in the UX sense (preview-then-confirm) but uses per-row POSTs under the hood so partial network failures degrade gracefully: successful rows persist, failed rows roll back locally to keep the operator's view consistent with what the server actually accepted.
 
