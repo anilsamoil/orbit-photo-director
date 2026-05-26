@@ -15,6 +15,7 @@
  */
 
 import { handleKpRequest } from './aurora';
+import { handleProfilesRequest } from './profiles';
 
 export interface Env {
   SITE: R2Bucket;
@@ -45,7 +46,8 @@ interface Manifest {
   freshness: ManifestFreshness;
 }
 
-const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'OPTIONS']);
+// PUT + DELETE added in Slot 3 for /api/profiles/<name>/targets CRUD.
+const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']);
 
 const ALLOWED_ORIGINS = new Set([
   'https://map.astroanil.dev',
@@ -73,7 +75,7 @@ function corsHeaders(origin: string | null): HeadersInit {
   // Only echo trusted origins; otherwise omit ACAO entirely (browser blocks).
   const allowed = origin && ALLOWED_ORIGINS.has(origin) ? origin : null;
   const headers: Record<string, string> = {
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'access-control-allow-headers': 'content-type, x-calib-token',
     'access-control-max-age': '86400',
     vary: 'origin',
@@ -499,6 +501,25 @@ export default {
       if (request.method === 'HEAD') {
         response = new Response(null, { status: response.status, headers: response.headers });
       }
+    } else if (url.pathname.startsWith('/api/profiles/')) {
+      // Slot 3: per-astronaut profile target CRUD. Auth + per-method routing
+      // lives inside handleProfilesRequest so this dispatcher stays thin.
+      response = await handleProfilesRequest(request, env);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+    } else if (
+      // Known /api/* paths returning 405 on unsupported verbs. PUT + DELETE
+      // were added to ALLOWED_METHODS for /api/profiles in Slot 3; the
+      // legacy /api/log + /api/health + /api/kp endpoints must still
+      // surface "405 method not allowed" rather than fall through to the
+      // static R2 handler (which would 404). Preserves the existing
+      // contract verified by routing tests.
+      url.pathname === '/api/log' ||
+      url.pathname === '/api/health' ||
+      url.pathname === '/api/kp'
+    ) {
+      response = new Response('method not allowed', { status: 405 });
     } else if (request.method === 'GET' || request.method === 'HEAD') {
       // Static fallback: serve any non-/api GET from the SITE bucket. Maps
       // `/` to `index.html`. Returns 404 if the object doesn't exist in R2.
