@@ -24,6 +24,7 @@ import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, type Profile } from './profile';
+import { subscribeProfileChanged } from './profile-events';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
@@ -224,6 +225,26 @@ function upcomingPasses(passes: PassEntry[], nowMs: number): PassEntry[] {
   return passes.filter((p) => Date.parse(p.closest_approach) > nowMs);
 }
 
+/** Apply the active profile's distance threshold to a passes array
+ *  (Slot 7 of design rev 2). Falls back to 1500 km when no profile is
+ *  loaded — matches the existing ISS_HORIZON_KM behavior so first-launch
+ *  users see no behavioral change. Re-reads the threshold from the
+ *  in-memory profile each call; the 'profile-changed' subscriber below
+ *  refreshes currentProfile so this stays in sync with slider edits.
+ *
+ *  Pure function — same input → same output. Tested via the
+ *  filterPassesByDistance helper in map.ts which this delegates to.
+ */
+function applyDistanceFilter(passes: PassEntry[]): PassEntry[] {
+  const threshold = currentProfile?.distanceThresholdKm ?? 1500;
+  if (!Number.isFinite(threshold) || threshold <= 0) return passes;
+  return passes.filter((p) => {
+    const d = p.nadir_distance_km;
+    if (typeof d !== 'number' || !Number.isFinite(d)) return true;
+    return d <= threshold;
+  });
+}
+
 /** Render the Queue + Upcoming panes from current module state. Extracted so
  *  both the snapshot boot and a normal refresh share one render path. */
 function renderQueue(): void {
@@ -233,7 +254,7 @@ function renderQueue(): void {
   if (!cards || !empty) return;
   const now = Date.now();
   const stale = isStaleManifest(currentManifest, now);
-  const visible = upcomingPasses(currentTop5, now);
+  const visible = applyDistanceFilter(upcomingPasses(currentTop5, now));
   if (visible.length === 0) {
     cards.replaceChildren();
     // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
@@ -318,7 +339,7 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const cards = document.getElementById('upcoming-cards');
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;
-  const visible = upcomingPasses(currentTop24h, nowMs);
+  const visible = applyDistanceFilter(upcomingPasses(currentTop24h, nowMs));
   if (visible.length === 0) {
     cards.replaceChildren();
     empty.hidden = false;
@@ -559,12 +580,17 @@ function bindTabs(): void {
   const tabUpcoming = document.getElementById('tab-upcoming');
   const tabMap = document.getElementById('tab-map');
   const tabLookup = document.getElementById('tab-lookup');
+  const tabProfile = document.getElementById('tab-profile');
   const tabLog = document.getElementById('tab-log');
   if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLookup || !tabLog) return;
 
+  // tabProfile may be missing in older integration-test DOM fixtures; we
+  // still want the rest of the dispatcher to wire up cleanly.
+  const allTabs = [tabQueue, tabUpcoming, tabMap, tabLookup, tabProfile, tabLog]
+    .filter((t): t is HTMLElement => t !== null);
   const setActive = (className: string, activeTab: HTMLElement) => {
     view.className = className;
-    [tabQueue, tabUpcoming, tabMap, tabLookup, tabLog].forEach((t) => t.classList.toggle('active', t === activeTab));
+    allTabs.forEach((t) => t.classList.toggle('active', t === activeTab));
   };
 
   tabQueue.addEventListener('click', () => setActive('view-queue', tabQueue));
@@ -577,10 +603,28 @@ function bindTabs(): void {
     setActive('view-lookup', tabLookup);
     loadLookupPane();
   });
+  if (tabProfile) {
+    tabProfile.addEventListener('click', () => {
+      setActive('view-profile', tabProfile);
+      void loadProfilePane();
+    });
+  }
   tabLog.addEventListener('click', () => {
     setActive('view-log', tabLog);
     void loadLogPane();
   });
+}
+
+/** Lazy-load the Profile tab. Same pattern as loadMapPane / loadLogPane —
+ *  the profile-ui module imports nothing heavy, but lazy-importing keeps
+ *  it out of the initial boot bundle and matches the "tab modules
+ *  initialize on first visit" convention. */
+let profilePaneModule: typeof import('./profile-ui') | null = null;
+async function loadProfilePane(): Promise<void> {
+  if (!profilePaneModule) {
+    profilePaneModule = await import('./profile-ui');
+  }
+  profilePaneModule.renderProfilePane();
 }
 
 let lookupPaneBound = false;
@@ -769,6 +813,28 @@ export function getCurrentProfile(): Profile | null {
   return currentProfile;
 }
 
+/** Update the topbar profile badge ("👤 Jack") to reflect the active
+ *  profile name. textContent only (no innerHTML) — premise 12 of design
+ *  rev 2 forbids new XSS surfaces, and profile names are user-influenced
+ *  (URL ?u=<name>) even though isValidProfileName already constrains them.
+ *
+ *  Subscribers in Slot 11 call this on 'profile-changed' events; init()
+ *  calls it once at boot. Stays a thin DOM-only function here so the
+ *  profile-ui lazy module isn't forced into the boot bundle.
+ */
+export function renderTopbarProfileBadge(name: string | null): void {
+  const el = document.getElementById('profile-badge');
+  if (!el) return;
+  if (!name) {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  el.hidden = false;
+  el.textContent = `👤 ${name}`;
+  el.title = `Active profile: ${name}`;
+}
+
 async function init(): Promise<void> {
   // Resolve the profile from the URL FIRST. Future slots make the
   // manifest fetch profile-aware; today this just stamps the topbar
@@ -790,6 +856,20 @@ async function init(): Promise<void> {
       currentProfile = null;
     }
   }
+  renderTopbarProfileBadge(currentProfile?.name ?? null);
+  // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
+  // cross-tab storage event, debounced 150ms). Re-read currentProfile on
+  // each fire so the slot 7 distance filter reflects the just-saved
+  // value, then re-render the queue so dropped/restored passes appear.
+  subscribeProfileChanged(() => {
+    try {
+      currentProfile = loadOrCreateProfileFromURL(window.location.href);
+    } catch {
+      /* keep existing currentProfile on load failure */
+    }
+    renderTopbarProfileBadge(currentProfile?.name ?? null);
+    if (currentManifest) renderQueue();
+  });
   bindTabs();
   bindSortToggles();
   // V4-P2 aurora widget: attach the click handler once. Widget content is

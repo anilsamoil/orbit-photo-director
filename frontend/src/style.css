@@ -913,24 +913,127 @@ main {
 .view-queue #upcoming-pane,
 .view-queue #map-pane,
 .view-queue #lookup-pane,
+.view-queue #profile-pane,
 .view-queue #log-pane,
 .view-upcoming #queue-pane,
 .view-upcoming #map-pane,
 .view-upcoming #lookup-pane,
+.view-upcoming #profile-pane,
 .view-upcoming #log-pane,
 .view-map #queue-pane,
 .view-map #upcoming-pane,
 .view-map #lookup-pane,
+.view-map #profile-pane,
 .view-map #log-pane,
 .view-lookup #queue-pane,
 .view-lookup #upcoming-pane,
 .view-lookup #map-pane,
+.view-lookup #profile-pane,
 .view-lookup #log-pane,
+.view-profile #queue-pane,
+.view-profile #upcoming-pane,
+.view-profile #map-pane,
+.view-profile #lookup-pane,
+.view-profile #log-pane,
 .view-log #queue-pane,
 .view-log #upcoming-pane,
 .view-log #map-pane,
-.view-log #lookup-pane {
+.view-log #lookup-pane,
+.view-log #profile-pane {
   display: none;
+}
+
+/* Topbar profile badge — small chip identifying the active astronaut.
+ * Same compact style family as the Kp / sun badges. textContent only;
+ * Slot 2 (premise 12 of design rev 2) — no innerHTML, no XSS surface. */
+.profile-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(91, 208, 255, 0.12);
+  border: 1px solid rgba(91, 208, 255, 0.4);
+  color: var(--accent, #5cd0ff);
+  font-size: 0.8rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.profile-badge[hidden] { display: none; }
+
+/* Profile pane scaffolding. Mirrors .lookup-form / .log-* sizing so the
+ * pane reads consistently with the other "settings-like" tabs. */
+.profile-body {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+.profile-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.profile-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.profile-section p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.profile-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.profile-row label {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.profile-select,
+.profile-input {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  min-width: 10rem;
+}
+.profile-btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font: inherit;
+  cursor: pointer;
+}
+.profile-btn:hover { filter: brightness(1.15); }
+.profile-btn.danger { color: var(--red, #ff6464); border-color: rgba(255, 100, 100, 0.5); }
+.profile-error {
+  color: var(--red, #ff6464);
+  font-size: 0.85rem;
+  min-height: 1.1em;
+}
+.profile-threshold-display {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--accent, #5cd0ff);
+}
+.profile-threshold-slider {
+  width: 100%;
+  max-width: 360px;
 }
 
 /* Photo-lookup tab — Pettit feedback 2026-05-19 (v1.3.0.0). */
