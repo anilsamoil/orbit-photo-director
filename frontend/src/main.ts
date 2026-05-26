@@ -23,6 +23,7 @@ import { createPollScheduler, isOnline, type PollScheduler } from './network-sta
 import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
+import { loadOrCreateProfileFromURL, type Profile } from './profile';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
@@ -755,7 +756,40 @@ async function loadMapPane(): Promise<void> {
   requestAnimationFrame(() => mapModule!.resizeMap());
 }
 
+/** Selected profile for this page load. Resolved from the URL before any
+ *  manifest fetch (per design rev 2, premise 4 — URL is authoritative).
+ *  Slot 1 of design rev 2 ships this as foundation; Slot 5 wires
+ *  per-profile manifest fetches that consume `currentProfile.name`.
+ *
+ *  Modules that need to read the active profile import this getter
+ *  instead of re-parsing the URL on demand. Initialized in init() before
+ *  any UI render so downstream callers can rely on a non-null value. */
+let currentProfile: Profile | null = null;
+export function getCurrentProfile(): Profile | null {
+  return currentProfile;
+}
+
 async function init(): Promise<void> {
+  // Resolve the profile from the URL FIRST. Future slots make the
+  // manifest fetch profile-aware; today this just stamps the topbar
+  // and primes localStorage. Failure (e.g., corrupted profile JSON in
+  // localStorage from an older build) is non-fatal — we log + discard +
+  // recreate so the page never bricks on profile errors alone.
+  try {
+    currentProfile = loadOrCreateProfileFromURL(window.location.href);
+  } catch (e) {
+    console.warn('[profile] failed to load, recreating default:', e);
+    // The loadOrCreate path already catches most issues, but a
+    // future-versioned profile would throw. Recreate the default.
+    try {
+      const url = new URL(window.location.href);
+      const name = url.searchParams.get('u') ?? 'anil';
+      localStorage.removeItem(`opd-profile-${name}`);
+      currentProfile = loadOrCreateProfileFromURL(window.location.href);
+    } catch {
+      currentProfile = null;
+    }
+  }
   bindTabs();
   bindSortToggles();
   // V4-P2 aurora widget: attach the click handler once. Widget content is
