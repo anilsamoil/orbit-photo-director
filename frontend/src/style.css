@@ -909,38 +909,57 @@ main {
 }
 
 /* View toggle: each view-* class hides everything BUT the active pane.
- * We pair each "view" with the panes that should be hidden in that state. */
+ * We pair each "view" with the panes that should be hidden in that state.
+ *
+ * v1.6.6.0: #lookup-pane moved INSIDE #profile-pane as a sub-section.
+ * It no longer needs its own view-* state — it's visible whenever the
+ * Profile tab is active, and hidden whenever Profile is hidden (because
+ * its parent #profile-pane is hidden by these rules). */
 .view-queue #upcoming-pane,
 .view-queue #map-pane,
-.view-queue #lookup-pane,
 .view-queue #profile-pane,
 .view-queue #log-pane,
 .view-upcoming #queue-pane,
 .view-upcoming #map-pane,
-.view-upcoming #lookup-pane,
 .view-upcoming #profile-pane,
 .view-upcoming #log-pane,
 .view-map #queue-pane,
 .view-map #upcoming-pane,
-.view-map #lookup-pane,
 .view-map #profile-pane,
 .view-map #log-pane,
-.view-lookup #queue-pane,
-.view-lookup #upcoming-pane,
-.view-lookup #map-pane,
-.view-lookup #profile-pane,
-.view-lookup #log-pane,
 .view-profile #queue-pane,
 .view-profile #upcoming-pane,
 .view-profile #map-pane,
-.view-profile #lookup-pane,
 .view-profile #log-pane,
 .view-log #queue-pane,
 .view-log #upcoming-pane,
 .view-log #map-pane,
-.view-log #lookup-pane,
 .view-log #profile-pane {
   display: none;
+}
+
+/* Photo lookup as a Profile sub-section (v1.6.6.0). Visually separated
+ * from the profile picker/slider above with a thin border + a smaller
+ * heading. Same input/dropzone styles as before — only the wrapping
+ * <section.lookup-section> is new. */
+.lookup-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.lookup-section-header {
+  margin-bottom: 1rem;
+}
+.lookup-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+  color: #d8dde8;
+}
+.lookup-section-sub {
+  font-size: 0.8rem;
+  color: #7a8194;
+  margin: 0;
 }
 
 /* Topbar profile badge — small chip identifying the active astronaut.

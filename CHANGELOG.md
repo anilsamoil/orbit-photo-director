@@ -2,6 +2,32 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.6.0] - 2026-05-26
+
+### Photo Lookup moves under Profile + Jack's 39 targets bootstrapped + v2 TODOs captured.
+
+Three things in one drop, all small. The big work happens earlier in the day with slots 1-3, 7-8, 11; this is operator-feedback cleanup before Anil takes a break.
+
+### Changed
+
+- **Photo Lookup moved under Profile tab** (Anil 2026-05-26: *"photo look up can be moved to under profile to save some space on top bar. it's kind of a side feature or extra setting."*). Topbar now has 5 tabs (Queue / Upcoming / Map / Profile / Log) instead of 6. The lookup widget renders inside the Profile pane as a sub-section, separated by a thin border. Lazy-load behavior preserved — the `exifr` bundle still only loads when the operator opens the Profile tab. CSS view-state rules simplified (lookup-pane no longer needs its own view-class because it inherits visibility from its parent #profile-pane).
+
+### Added
+
+- **`data/profiles/jack/bootstrap.json`** — 39 of Jack's 42 personal targets, geocoded from his xlsx (`example earth obs table.xlsx`) via Nominatim. Each entry has the v1 API fields (id, name, lat, lon, priority, createdAt) PLUS `_v2_rating` (`unshot` | `rough` | `great`) and `_v2_notes` for v2 rating-UX migration. 2 entries skipped (ambiguous: "Wine country Italy?" and the carrier op zone); 1 entry was a blank row.
+- **`scripts/bootstrap_profile.py`** — one-shot uploader. Reads `data/profiles/<name>/bootstrap.json`, strips `_v2_*` fields, PUTs to `/api/profiles/<name>/targets` on the live Worker. Requires `OPD_CALIB_TOKEN` env var (same shared secret as `/api/log`). Has a `--dry-run` flag for sanity-checking before the network call.
+- **`TODOS.md` updates**:
+  - Jack section added under operator-feedback tracker (slot status, v2 rating options A/B/C with recommendation, v2 CEO targets feature stub awaiting screenshot, spreadsheet column improvements from Jack's first paragraph)
+  - CEO targets captured per Jack's note: "set of zoomed-in pictures, with ISS track up, with notated landmarks. Updates daily on ISS, no historical look-back." Implementation likely needs vision model + landmark matching against curated targets. Spec waits on a real screenshot.
+
+### How to upload Jack's targets to the live profile
+
+```
+OPD_CALIB_TOKEN=<the-wrangler-secret> python scripts/bootstrap_profile.py jack
+```
+
+This PUTs all 39 targets to `https://map.astroanil.dev/api/profiles/jack/targets`. After that, opening `https://map.astroanil.dev/?u=jack` will show Jack's queue scored by the daemon once slot 4 (daemon multiplexer) ships. In the meantime, the Worker API stores the data and Jack's profile is ready for slot 5 + 6 integration.
+
 ## [1.6.5.0] - 2026-05-26
 
 ### Per-astronaut profile layer — Profile tab UI + picker + distance slider + event bus (Lane A: slots 2 + 7 + 11).

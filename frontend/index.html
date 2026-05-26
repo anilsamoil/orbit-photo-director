@@ -25,7 +25,6 @@
         <button id="tab-queue" class="tab active" type="button">Queue</button>
         <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
         <button id="tab-map" class="tab" type="button">Map</button>
-        <button id="tab-lookup" class="tab" type="button">Lookup</button>
         <button id="tab-profile" class="tab" type="button">Profile</button>
         <button id="tab-log" class="tab" type="button">Log<span id="pending-sync-badge" class="pending-badge" hidden></span></button>
       </nav>
@@ -113,33 +112,37 @@
         </div>
       </section>
 
-      <section id="lookup-pane" class="pane">
-        <div class="pane-header">
-          <h2 class="pane-title">Photo lookup &mdash; where was ISS?</h2>
-          <p class="pane-sub">Paste a UTC timestamp or drop a photo with EXIF. Get a pin on the map plus a .kml for Google Earth.</p>
-        </div>
-        <div class="lookup-form">
-          <label for="lookup-input">Timestamp (UTC)</label>
-          <div class="lookup-input-row">
-            <input id="lookup-input" type="text" placeholder="2024-10-17T12:23:00Z" autocomplete="off" />
-            <button id="lookup-resolve" class="lookup-btn lookup-btn-primary" type="button">Resolve</button>
-          </div>
-          <div id="lookup-dropzone" class="lookup-dropzone">
-            <p class="lookup-dropzone-hint">Drop a photo here, or</p>
-            <button id="lookup-file-btn" class="lookup-btn" type="button">Choose file…</button>
-            <input id="lookup-file-input" type="file" accept="image/*,.heic,.heif,.nef,.cr2,.cr3,.arw,.dng,.tif,.tiff,.raf,.orf,.rw2" hidden />
-            <p class="lookup-dropzone-formats">JPG &middot; HEIC &middot; NEF &middot; CR2/CR3 &middot; ARW &middot; DNG &middot; TIFF</p>
-          </div>
-        </div>
-        <div id="lookup-result" class="lookup-result" hidden></div>
-      </section>
-
       <section id="profile-pane" class="pane">
         <div class="pane-header">
           <h2 class="pane-title">Profile &mdash; per-astronaut settings</h2>
           <p class="pane-sub">Each astronaut has their own URL (e.g., <code>?u=jack</code>). Switching profiles reloads the page so per-profile caches stay clean.</p>
         </div>
         <div id="profile-body" class="profile-body"></div>
+        <!-- Photo lookup lives under Profile (v1.6.6.0). It's a side
+             feature — paste a timestamp or drop a photo with EXIF and
+             get a pin on the map. Was its own tab; the move keeps the
+             topbar tight (5 tabs vs 6) and groups operator-tools under
+             Profile where they belong. -->
+        <div id="lookup-pane" class="lookup-section">
+          <div class="lookup-section-header">
+            <h3 class="lookup-section-title">Photo lookup &mdash; where was ISS?</h3>
+            <p class="lookup-section-sub">Paste a UTC timestamp or drop a photo with EXIF. Get a pin on the map plus a .kml for Google Earth.</p>
+          </div>
+          <div class="lookup-form">
+            <label for="lookup-input">Timestamp (UTC)</label>
+            <div class="lookup-input-row">
+              <input id="lookup-input" type="text" placeholder="2024-10-17T12:23:00Z" autocomplete="off" />
+              <button id="lookup-resolve" class="lookup-btn lookup-btn-primary" type="button">Resolve</button>
+            </div>
+            <div id="lookup-dropzone" class="lookup-dropzone">
+              <p class="lookup-dropzone-hint">Drop a photo here, or</p>
+              <button id="lookup-file-btn" class="lookup-btn" type="button">Choose file…</button>
+              <input id="lookup-file-input" type="file" accept="image/*,.heic,.heif,.nef,.cr2,.cr3,.arw,.dng,.tif,.tiff,.raf,.orf,.rw2" hidden />
+              <p class="lookup-dropzone-formats">JPG &middot; HEIC &middot; NEF &middot; CR2/CR3 &middot; ARW &middot; DNG &middot; TIFF</p>
+            </div>
+          </div>
+          <div id="lookup-result" class="lookup-result" hidden></div>
+        </div>
       </section>
 
       <section id="log-pane" class="pane">
