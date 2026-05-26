@@ -33,8 +33,18 @@ import {
   type PersonalTarget,
   type Profile,
 } from './profile';
-import { deleteProfileTarget, postProfileTarget } from './profile-api';
+import { deleteProfileTarget, postProfileTarget, putProfileTargets } from './profile-api';
 import { parseTargetCsv, type ParsedValidRow, type ParseTargetCsvResult } from './csv-parse';
+import {
+  downloadProfileJson,
+  readProfileImportFile,
+  type ImportResult,
+} from './profile-json-io';
+
+/** App version stamped into export envelopes. Kept as a constant rather
+ *  than imported from package.json so the build doesn't need to resolve a
+ *  JSON import; bumped on each release. */
+const APP_VERSION = '1.6.12.0';
 
 /** Per-error-code human-readable message. Mirrors worker validation
  *  codes from validatePersonalTargetInput. */
@@ -94,6 +104,7 @@ export function buildCrudSection(profileName: string): HTMLElement {
   section.appendChild(buildPersonalList(profileName));
   section.appendChild(buildCuratedRemovedSection(profileName));
   section.appendChild(buildCsvImportSection(profileName));
+  section.appendChild(buildJsonIoSection(profileName));
 
   return section;
 }
@@ -814,6 +825,305 @@ async function handleCsvImport(profileName: string, valid: ParsedValidRow[]): Pr
   );
 }
 
+// ---------------------------------------------------------------------------
+// Slot 10 — JSON export / import section.
+//
+// Operator gets two buttons + a file picker:
+//   - Export → downloads `{profileName}-profile.json`
+//   - Import → file picker → preview (target count + warnings) →
+//     Replace personal targets / Cancel
+//
+// The Replace path calls `putProfileTargets` (slot 6's API client) to
+// REPLACE the entire server-side list. Local profile gets the imported
+// `additions`, `removedCuratedIds`, `distanceThresholdKm` adopted but
+// keeps the current profile's `name` (cross-profile imports merge by
+// design — operator can copy Jack's targets into Anil's profile).
+// ---------------------------------------------------------------------------
+
+/** Per-import-error human-readable copy. Keyed by `ImportResult.code`. */
+const IMPORT_ERROR_MESSAGES: Record<string, string> = {
+  malformed_json: 'File is not valid JSON',
+  wrong_format: 'Not an orbit-photo-director profile export',
+  future_schema: 'This export was made by a newer app version',
+  missing_schema_version: 'Export envelope is missing schemaVersion',
+  missing_profile: 'Export envelope is missing the profile object',
+  invalid_profile_name: 'Imported profile name is invalid',
+  migration_failed: 'Could not migrate older schema to current version',
+};
+
+/** Build the JSON IO section. Layout:
+ *    - Export button
+ *    - Import file input (.json,application/json)
+ *    - Preview area (target count, warnings, validation errors)
+ *    - Replace personal targets / Cancel buttons
+ */
+export function buildJsonIoSection(profileName: string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'profile-crud-jsonio';
+  wrap.id = 'profile-json-io';
+
+  const h = document.createElement('h4');
+  h.className = 'profile-crud-subhead';
+  h.textContent = 'Backup / Restore (JSON)';
+  wrap.appendChild(h);
+
+  const desc = document.createElement('p');
+  desc.className = 'profile-crud-empty';
+  desc.textContent = 'Export your profile as JSON for backup or transfer. Import replaces all personal targets on this profile.';
+  wrap.appendChild(desc);
+
+  // Export row
+  const exportRow = document.createElement('div');
+  exportRow.className = 'profile-row';
+  const exportBtn = document.createElement('button');
+  exportBtn.type = 'button';
+  exportBtn.className = 'profile-btn';
+  exportBtn.id = 'profile-export-btn';
+  exportBtn.textContent = 'Export profile';
+  exportRow.appendChild(exportBtn);
+  wrap.appendChild(exportRow);
+
+  // Import row
+  const importRow = document.createElement('div');
+  importRow.className = 'profile-row';
+  const importLabel = document.createElement('label');
+  importLabel.htmlFor = 'profile-import-file';
+  importLabel.textContent = 'Import file:';
+  const importInput = document.createElement('input');
+  importInput.type = 'file';
+  importInput.id = 'profile-import-file';
+  importInput.accept = '.json,application/json';
+  importRow.append(importLabel, importInput);
+  wrap.appendChild(importRow);
+
+  // Preview area
+  const previewArea = document.createElement('div');
+  previewArea.className = 'profile-json-preview';
+  previewArea.id = 'profile-json-preview-area';
+  wrap.appendChild(previewArea);
+
+  // Replace / Cancel row (hidden until a successful parse)
+  const actionRow = document.createElement('div');
+  actionRow.className = 'profile-row';
+  actionRow.style.display = 'none';
+  const replaceBtn = document.createElement('button');
+  replaceBtn.type = 'button';
+  replaceBtn.className = 'profile-btn';
+  replaceBtn.id = 'profile-json-replace-btn';
+  replaceBtn.textContent = 'Replace personal targets';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'profile-btn';
+  cancelBtn.id = 'profile-json-cancel-btn';
+  cancelBtn.textContent = 'Cancel';
+  actionRow.append(replaceBtn, cancelBtn);
+  wrap.appendChild(actionRow);
+
+  let lastParse: ImportResult | null = null;
+
+  const resetPreview = () => {
+    lastParse = null;
+    previewArea.replaceChildren();
+    actionRow.style.display = 'none';
+  };
+
+  exportBtn.addEventListener('click', () => {
+    try {
+      downloadProfileJson(profileName, APP_VERSION);
+      showToast(`Exported ${profileName}-profile.json`, 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast(`Export failed: ${msg}`, 'error');
+    }
+  });
+
+  importInput.addEventListener('change', () => {
+    const file = importInput.files?.[0];
+    if (!file) {
+      resetPreview();
+      return;
+    }
+    void readProfileImportFile(file).then((result) => {
+      lastParse = result;
+      renderImportPreview(previewArea, profileName, result);
+      // Show the Replace / Cancel buttons only when there's something to
+      // import (at least the envelope parsed; per-target errors are
+      // surfaced but the operator can still click Replace).
+      if (result.ok) {
+        actionRow.style.display = '';
+        replaceBtn.disabled = result.profile.additions.length === 0;
+        replaceBtn.textContent =
+          result.targetErrors.length > 0
+            ? `Import only valid (${result.profile.additions.length} of ${result.profile.additions.length + result.targetErrors.length})`
+            : 'Replace personal targets';
+      } else {
+        actionRow.style.display = 'none';
+      }
+    });
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    importInput.value = '';
+    resetPreview();
+  });
+
+  replaceBtn.addEventListener('click', () => {
+    if (!lastParse || !lastParse.ok) return;
+    replaceBtn.disabled = true;
+    cancelBtn.disabled = true;
+    void handleJsonImportReplace(profileName, lastParse).then(() => {
+      importInput.value = '';
+      resetPreview();
+      cancelBtn.disabled = false;
+    });
+  });
+
+  return wrap;
+}
+
+/** Render the import preview. Surfaces:
+ *  - Source schema version + exportedAt + appVersion
+ *  - Target count (valid + invalid breakdown)
+ *  - Cross-profile name warning (imported profile.name !== current)
+ *  - Per-target validation errors (if any)
+ *  - Top-level error code + detail (if !ok)
+ *
+ *  All operator-controlled strings (profile name, raw target name) flow
+ *  through textContent — no innerHTML. */
+function renderImportPreview(
+  host: HTMLElement,
+  currentProfileName: string,
+  result: ImportResult,
+): void {
+  host.replaceChildren();
+
+  if (!result.ok) {
+    const err = document.createElement('div');
+    err.className = 'profile-error';
+    const head = IMPORT_ERROR_MESSAGES[result.code] ?? 'Import failed';
+    err.textContent = `${head}: ${result.detail}`;
+    host.appendChild(err);
+    return;
+  }
+
+  // Summary
+  const summary = document.createElement('p');
+  summary.className = 'profile-json-summary';
+  const total = result.profile.additions.length + result.targetErrors.length;
+  summary.textContent =
+    `${result.profile.additions.length} valid target${result.profile.additions.length === 1 ? '' : 's'}` +
+    (result.targetErrors.length > 0 ? `, ${result.targetErrors.length} invalid` : '') +
+    ` (${total} total in file).`;
+  host.appendChild(summary);
+
+  // Meta line
+  const meta = document.createElement('p');
+  meta.className = 'profile-crud-empty';
+  const metaParts: string[] = [];
+  if (result.appVersion) metaParts.push(`from app v${result.appVersion}`);
+  if (result.exportedAt) metaParts.push(`exported ${result.exportedAt}`);
+  metaParts.push(`schema v${result.sourceSchemaVersion}`);
+  meta.textContent = metaParts.join(' · ');
+  host.appendChild(meta);
+
+  // Cross-profile name warning
+  if (result.profile.name !== currentProfileName) {
+    const warn = document.createElement('p');
+    warn.className = 'profile-error';
+    // Use textContent to defang the imported name (operator-controlled).
+    const span = document.createElement('span');
+    span.textContent = `File is from "${result.profile.name}" profile. Import into "${currentProfileName}"?`;
+    warn.appendChild(span);
+    host.appendChild(warn);
+  }
+
+  // Replacement warning (always shown — Replace REPLACES all)
+  const replaceWarn = document.createElement('p');
+  replaceWarn.className = 'profile-error';
+  replaceWarn.textContent = 'This REPLACES all personal targets on this profile, both locally and on the server.';
+  host.appendChild(replaceWarn);
+
+  // Per-target validation errors
+  if (result.targetErrors.length > 0) {
+    const errH = document.createElement('h5');
+    errH.className = 'profile-crud-subhead';
+    errH.textContent = 'Skipped targets';
+    host.appendChild(errH);
+    const errList = document.createElement('ul');
+    errList.className = 'profile-json-errors';
+    for (const e of result.targetErrors) {
+      const li = document.createElement('li');
+      li.className = 'profile-json-error-row';
+      const idxEl = document.createElement('span');
+      idxEl.className = 'profile-json-error-idx';
+      idxEl.textContent = `Target ${e.index + 1}: `;
+      const codeEl = document.createElement('span');
+      codeEl.className = 'profile-json-error-code';
+      codeEl.textContent = ERROR_MESSAGES[e.code] ?? e.code;
+      const nameEl = document.createElement('code');
+      nameEl.className = 'profile-json-error-name';
+      nameEl.textContent = e.rawName || '(unnamed)';
+      li.append(idxEl, codeEl, document.createElement('br'), nameEl);
+      errList.appendChild(li);
+    }
+    host.appendChild(errList);
+  }
+}
+
+/** Optimistic Replace: write the imported profile locally, fire
+ *  `putProfileTargets` to REPLACE the server list, roll back local
+ *  state on API failure. Surfaces a toast either way. */
+async function handleJsonImportReplace(
+  currentProfileName: string,
+  parse: Extract<ImportResult, { ok: true }>,
+): Promise<void> {
+  const before = safeLoadProfile(currentProfileName);
+  if (!before) {
+    showToast('Could not load active profile.', 'error');
+    return;
+  }
+
+  // Build the merged Profile: keep current name (operator imports INTO this
+  // profile), adopt imported additions / removedCuratedIds /
+  // distanceThresholdKm. `instantBuffer` stays empty (slot 5b territory).
+  const merged: Profile = {
+    version: parse.profile.version,
+    name: currentProfileName,
+    additions: parse.profile.additions,
+    removedCuratedIds: parse.profile.removedCuratedIds,
+    distanceThresholdKm: parse.profile.distanceThresholdKm,
+    instantBuffer: [],
+  };
+
+  try {
+    saveProfile(merged);
+  } catch (e) {
+    showToast(`Could not save locally: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    return;
+  }
+  rerenderCrudSection(currentProfileName);
+
+  // Server-side replace via PUT
+  const apiResult = await putProfileTargets(currentProfileName, merged.additions);
+  if (apiResult.ok) {
+    showToast(
+      `Imported ${merged.additions.length} target${merged.additions.length === 1 ? '' : 's'}.`,
+      'success',
+    );
+    return;
+  }
+
+  // Rollback locally so the operator's view matches what the server has.
+  try {
+    saveProfile(before);
+  } catch { /* surface the API failure instead */ }
+  rerenderCrudSection(currentProfileName);
+  showToast(
+    `Import failed (server): ${apiSyncErrorMessage(apiResult.reason, apiResult.detail)}`,
+    'error',
+  );
+}
+
 /** Test-only handles. Exported so unit tests can drive the optimistic
  *  + rollback flow directly without going through DOM-click simulation. */
 export const _test = {
@@ -821,4 +1131,5 @@ export const _test = {
   handleDelete,
   handleToggleCurated,
   handleCsvImport,
+  handleJsonImportReplace,
 };
