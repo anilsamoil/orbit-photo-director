@@ -28,12 +28,50 @@ describe('token helpers', () => {
 });
 
 describe('buildPayload', () => {
+  beforeEach(() => {
+    // Slot 8: buildPayload reads getCurrentProfile() via the main.ts
+    // module. We can't rely on init() having run in tests, so the active
+    // profile is null and buildPayload falls back to DEFAULT_PROFILE_NAME.
+    // Tests that need a non-default profile can stash one in localStorage
+    // (loadOrCreateProfileFromURL caches it via the picker) — but since
+    // calib.ts's getCurrentProfile import lazily resolves the live
+    // module-scope `currentProfile` variable in main.ts (which is null
+    // until init() runs), the default-fallback branch is what we exercise
+    // here.
+    localStorage.clear();
+  });
+
   it('packs an action correctly', () => {
     const p = buildPayload('shoot', 'tokyo-night', '2024-10-17T12:00:00Z', 87);
     expect(p.target_id).toBe('tokyo-night');
     expect(p.action).toBe('shoot');
     expect(p.score_at_time).toBe(87);
     expect(p.pass_time.endsWith('Z')).toBe(true);
+  });
+
+  it('defaults profile to "anil" when no current profile is set', () => {
+    // In unit tests main.ts.init() has not run; getCurrentProfile()
+    // returns null and buildPayload falls back to DEFAULT_PROFILE_NAME.
+    // Mirrors the Worker's legacy-default behavior for back-compat.
+    const p = buildPayload('shoot', 'tokyo-night', '2024-10-17T12:00:00Z', 87);
+    expect(p.profile).toBe('anil');
+  });
+
+  it('sends profile field in the POST body', async () => {
+    setToken('s');
+    const captured: Array<{ profile?: string }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, opts: RequestInit) => {
+        captured.push(JSON.parse(opts.body as string) as { profile?: string });
+        return new Response('{}', { status: 200 });
+      }),
+    );
+    const payload = buildPayload('shoot', 'tokyo-night', '2024-10-17T12:00:00Z', 87);
+    await postCalib(payload);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.profile).toBe('anil');
+    vi.restoreAllMocks();
   });
 });
 

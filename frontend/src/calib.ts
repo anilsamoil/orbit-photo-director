@@ -1,4 +1,11 @@
 import type { CalibAction, CalibPayload } from './types';
+// Slot 8 (design rev 2): include the active profile name in every calib
+// payload so the Worker can scope reads/writes per astronaut. Imported via
+// the function to avoid an eager-binding circular dep — main.ts also imports
+// from this file, but the ES-module cycle is benign as long as we resolve
+// `getCurrentProfile` lazily (call-site, not module-load).
+import { getCurrentProfile } from './main';
+import { DEFAULT_PROFILE_NAME } from './profile';
 
 const TOKEN_KEY = 'opd-calib-token';
 const QUEUE_KEY = 'opd-calib-queue';
@@ -115,11 +122,18 @@ export function buildPayload(
   passTimeIso: string,
   scoreAtTime: number
 ): CalibPayload {
+  // Stamp the active profile so the Worker can route reads per astronaut.
+  // Null profile (boot not yet complete, or main.ts has not set it) falls
+  // back to DEFAULT_PROFILE_NAME ("anil") — matches the Worker's legacy
+  // default so a pre-v1.6.3.0 read of these payloads still surfaces them
+  // in the unfiltered list.
+  const profile = getCurrentProfile()?.name ?? DEFAULT_PROFILE_NAME;
   return {
     target_id: targetId,
     pass_time: passTimeIso,
     action,
     score_at_time: scoreAtTime,
+    profile,
   };
 }
 

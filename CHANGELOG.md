@@ -2,6 +2,42 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.4.0] - 2026-05-26
+
+### Per-astronaut profile layer — Worker API + calib scoping (Lane B: slots 3 + 8).
+
+Second drop in the multi-astronaut feature. Backend half of the personal-target storage + photo-log scoping. No visible UI change yet — Lane A (slots 2 + 7 + 11) lands the frontend tabs/picker/slider in the next PR.
+
+### Added
+
+- **`worker/src/profiles.ts`** (new): CRUD handlers for `/api/profiles/<name>/targets`
+  - `GET` returns the profile's `PersonalTarget[]` from R2 at `profiles/<name>/targets.json`; empty list for missing object (the "no targets yet" state, NOT 404)
+  - `PUT` replaces the entire list; validates each entry (name, lat/lon in bounds, priority 1-10, id format `personal:<name>:<token>`)
+  - `POST` appends one target; 409 on duplicate id
+  - `DELETE /api/profiles/<name>/targets/<id>` removes one entry; 200 idempotent on non-existent id (retry-safe)
+  - Per-profile cap of 500 targets (`too_many_targets` 400 on overflow)
+- **`worker/src/shared.ts`** (new): hoisted helpers — `constantTimeEqual`, `jsonResponse`, `isValidProfileName` (regex matches `frontend/src/profile.ts:isValidProfileName` exactly, single source of truth)
+- **`worker/src/index.ts`**: profiles route wired in; PUT/DELETE added to CORS + allowed methods; legacy endpoints keep 405 on unsupported verbs
+- **`/api/log` (slot 8)**: payload gains optional `profile` field. Stored with each log entry; GET supports `?profile=<name>` query filter; backward-compat: missing field defaults to `"anil"` so pre-v1.6.4.0 entries surface for the canonical operator
+- **`frontend/src/calib.ts`**: `buildPayload()` stamps `profile` from `getCurrentProfile()?.name`, default `"anil"`
+- **`frontend/src/types.ts`**: `CalibPayload.profile?: string` typed (optional for back-compat)
+
+### Auth
+
+All `/api/profiles/*` routes require the existing `x-calib-token` header validated against `CALIB_TOKEN` env via `constantTimeEqual`. Single shared secret for all astronauts (locked in eng review premise 12 — trust model justifies; per-profile HMAC tokens deferred to v2 TODO).
+
+### Tests
+
+- Worker: 68 → 109 (+41). Profiles: 33 new in `worker/test/profiles.test.ts`. Calib: 8 new in `worker/test/index.test.ts` for slot 8.
+- Frontend: 562 → 564 (+2) in `calib.test.ts` covering the profile field in payload.
+
+### Decisions (deviations from the design doc, all matching existing repo conventions)
+
+- **R2 binding**: reused existing `CALIB` bucket (no new `R2_BUCKET` binding needed in v1; profiles share the operator-mutable bucket with calib).
+- **Endpoint name**: extended `/api/log` (the actual existing endpoint) instead of `/api/calib` (which doesn't exist in this repo). Design doc had the wrong name.
+- **DELETE idempotency**: chose 200 + `{ok:true, removed:false}` over 404 on non-existent id (retry-safe under network flake).
+- **id format**: accepts `personal:<profile-name>:<token>` where token is 1-128 chars of `[A-Za-z0-9_-]` (less strict than UUID-v4 to avoid rejecting legitimate client variants; tenant isolation still enforced via the profile segment).
+
 ## [1.6.3.0] - 2026-05-26
 
 ### Per-astronaut profile foundation (slot 1 of 11).

@@ -189,4 +189,10 @@ export interface CalibPayload {
   rating?: number;
   observed_obstruction?: string;
   dedupe_key?: string;
+  /** Slot 8 (design rev 2): per-astronaut log scoping. Stamped by
+   *  buildPayload() from getCurrentProfile()?.name; defaults to "anil"
+   *  when no profile is active so legacy reads return naturally. The
+   *  Worker validates the regex + falls back to the same default when
+   *  the field is missing. */
+  profile?: string;
 }
