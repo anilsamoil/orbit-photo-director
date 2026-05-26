@@ -1,5 +1,23 @@
 /** Shared type definitions matching the generator's output schema. */
 
+/** One artifact's location + integrity metadata. Daemon emits one of
+ *  these per logical artifact name (passes, status, top5, top_24h,
+ *  track, targets). */
+export interface ArtifactEntry {
+  path: string;
+  sha256: string;
+  bytes: number;
+}
+
+/** v1.6.7.0+ per-astronaut artifact block. Slot 4 daemon multiplexer
+ *  emits this when `OPD_CALIB_TOKEN` is set in the daemon env. Each
+ *  named profile (e.g., "jack", "chris", "anil") gets its own variant
+ *  set of `passes`, `status`, `top5`, `top_24h` artifacts. Track and
+ *  targets are profile-agnostic and stay at the top level only. Older
+ *  manifests omit this entirely; the resolver falls back to top-level
+ *  canonical artifacts in that case. */
+export type ProfileArtifactsBlock = Record<string, Record<string, ArtifactEntry>>;
+
 export interface Manifest {
   version: string;
   generated_at: string;
@@ -12,7 +30,11 @@ export interface Manifest {
     cloud_hours: number;
     ok: boolean;
   };
-  artifacts: Record<string, { path: string; sha256: string; bytes: number }>;
+  /** The artifacts map. Most entries are flat `ArtifactEntry` records,
+   *  but the special `profiles` key (when present) holds a nested
+   *  per-astronaut map of variant artifacts. Use `resolveArtifactEntry()`
+   *  from `manifest.ts` to access either kind safely. */
+  artifacts: Record<string, ArtifactEntry | ProfileArtifactsBlock | undefined>;
 }
 
 export interface PassEntry {

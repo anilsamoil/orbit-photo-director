@@ -1,4 +1,11 @@
-import type { Manifest, PassEntry, Status, Track } from './types';
+import type {
+  ArtifactEntry,
+  Manifest,
+  PassEntry,
+  ProfileArtifactsBlock,
+  Status,
+  Track,
+} from './types';
 
 /** Fetch manifest.json from the site root and dereference an artifact by logical name. */
 export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
@@ -14,8 +21,82 @@ export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
   return (await resp.json()) as Manifest;
 }
 
-export function artifactUrl(manifest: Manifest, name: string, baseUrl = ''): string {
-  const entry = manifest.artifacts[name];
+/** Type guard: is this an ArtifactEntry (flat) vs a ProfilesBlock (nested)?
+ *  Used by the resolver to disambiguate `manifest.artifacts.<key>` at
+ *  runtime since TypeScript can't narrow on the union without help. */
+function isArtifactEntry(
+  v: ArtifactEntry | ProfileArtifactsBlock | undefined,
+): v is ArtifactEntry {
+  return typeof v === 'object' && v !== null && 'path' in v && 'sha256' in v;
+}
+
+/** Resolve an artifact entry to its canonical or per-profile variant.
+ *  Order of precedence (Slot 5 of the design rev 2 — 2026-05-26):
+ *    1. If `profileName` is supplied AND the manifest has a `profiles`
+ *       block AND that profile has the named artifact → return the
+ *       per-profile variant (gets full daemon scoring).
+ *    2. Otherwise fall back to the top-level canonical entry.
+ *    3. If nothing matches, return null. Callers throw a clear error
+ *       at the URL-building / fetch step.
+ *
+ *  Why the fallback chain: pre-v1.6.7 manifests don't have `profiles`.
+ *  v1.6.7 manifests have `profiles` ONLY when the daemon has
+ *  `OPD_CALIB_TOKEN` set (the multiplex env-gate). So one operator
+ *  could ship a manifest with the block, another without, and the
+ *  same frontend code reads either cleanly. The variant is preferred
+ *  when present so Jack sees daemon-scored Boston; the canonical is
+ *  the safety net so the page never breaks on a missing variant.
+ *
+ *  Track + targets are profile-agnostic — they always live at top
+ *  level only. The resolver still falls through correctly because the
+ *  `profiles.<name>` block doesn't contain them.
+ *
+ *  Exported for testing. Most callers should use the typed fetch
+ *  helpers (fetchPasses / fetchStatus / etc.) which thread profile
+ *  name + this resolver internally. */
+export function resolveArtifactEntry(
+  manifest: Manifest,
+  name: string,
+  profileName?: string,
+): ArtifactEntry | null {
+  if (profileName) {
+    const profilesValue = manifest.artifacts.profiles;
+    // profilesValue is `undefined | ArtifactEntry | ProfileArtifactsBlock`
+    // because `profiles` shares the same Record value type as every other
+    // artifact key. The block is "nested" — its values are themselves
+    // objects keyed by profile name. Narrow with `!isArtifactEntry`.
+    // Defense: a hand-edited or attacker-tampered manifest might set
+    // `profiles: null`. JS quirk: `typeof null === 'object'`, so we need
+    // an explicit `!== null` guard before treating it as a block, or
+    // the `(profilesValue as ProfileArtifactsBlock)[profileName]` access
+    // below would throw TypeError instead of falling through to canonical.
+    if (
+      profilesValue !== undefined &&
+      profilesValue !== null &&
+      !isArtifactEntry(profilesValue) &&
+      typeof profilesValue === 'object'
+    ) {
+      const block = (profilesValue as ProfileArtifactsBlock)[profileName];
+      if (block && typeof block === 'object' && block[name] && isArtifactEntry(block[name])) {
+        return block[name];
+      }
+    }
+  }
+  const top = manifest.artifacts[name];
+  return isArtifactEntry(top) ? top : null;
+}
+
+/** Build the URL for an artifact, preferring per-profile variant when
+ *  available. Accepts an optional `profileName`; pass
+ *  `getCurrentProfile()?.name` from `main.ts` to get Jack's variant
+ *  when on `?u=jack`. */
+export function artifactUrl(
+  manifest: Manifest,
+  name: string,
+  baseUrl = '',
+  profileName?: string,
+): string {
+  const entry = resolveArtifactEntry(manifest, name, profileName);
   if (!entry) {
     throw new Error(`manifest has no artifact "${name}"`);
   }
@@ -33,8 +114,17 @@ function hexDigest(buf: ArrayBuffer): string {
   return hex;
 }
 
-export async function fetchArtifact<T>(manifest: Manifest, name: string, baseUrl = ''): Promise<T> {
-  const url = artifactUrl(manifest, name, baseUrl);
+export async function fetchArtifact<T>(
+  manifest: Manifest,
+  name: string,
+  baseUrl = '',
+  profileName?: string,
+): Promise<T> {
+  const entry = resolveArtifactEntry(manifest, name, profileName);
+  if (!entry) {
+    throw new Error(`manifest has no artifact "${name}"`);
+  }
+  const url = `${baseUrl}/${entry.path}`;
   const resp = await fetch(url, { cache: 'force-cache' }); // versioned path → safe to cache long
   if (!resp.ok) {
     throw new Error(`artifact ${name} fetch failed: ${resp.status}`);
@@ -48,8 +138,13 @@ export async function fetchArtifact<T>(manifest: Manifest, name: string, baseUrl
   // refresh in main.ts treats fetchArtifact failures as "stay on previous
   // snapshot," so a hash mismatch degrades gracefully to the prior good
   // state rather than poisoning the UI with wrong data.
+  //
+  // v1.6.7.0+ slot 5: when profileName is supplied, the entry is the
+  // per-profile variant, so the sha256 we check against is the variant's
+  // sha256 — not the canonical's. resolveArtifactEntry already returned
+  // the right entry, so the verification is automatic.
   const buf = await resp.arrayBuffer();
-  const expected = manifest.artifacts[name]?.sha256;
+  const expected = entry.sha256;
   if (expected) {
     // SubtleCrypto requires HTTPS / localhost. map.astroanil.dev is HTTPS;
     // tests run in happy-dom where crypto.subtle is provided.
@@ -65,27 +160,50 @@ export async function fetchArtifact<T>(manifest: Manifest, name: string, baseUrl
   return JSON.parse(text) as T;
 }
 
-export async function fetchTop5(manifest: Manifest, baseUrl = ''): Promise<PassEntry[]> {
-  return fetchArtifact<PassEntry[]>(manifest, 'top5', baseUrl);
+export async function fetchTop5(
+  manifest: Manifest,
+  baseUrl = '',
+  profileName?: string,
+): Promise<PassEntry[]> {
+  return fetchArtifact<PassEntry[]>(manifest, 'top5', baseUrl, profileName);
 }
 
 /** Top forecast-scored passes for the next ~24 h, excluding ones already in
  *  top5 (the immediate-now queue). Newer manifests (v1.1+) include this; older
  *  ones won't. Returns an empty array if the artifact is missing — callers
- *  should treat absence as "nothing to render," not an error. */
-export async function fetchTop24h(manifest: Manifest, baseUrl = ''): Promise<PassEntry[]> {
-  if (!manifest.artifacts.top_24h) return [];
-  return fetchArtifact<PassEntry[]>(manifest, 'top_24h', baseUrl);
+ *  should treat absence as "nothing to render," not an error.
+ *
+ *  v1.6.7.0+ slot 5: when profileName is supplied and the per-profile
+ *  variant exists, fetches that one; falls back to canonical otherwise. */
+export async function fetchTop24h(
+  manifest: Manifest,
+  baseUrl = '',
+  profileName?: string,
+): Promise<PassEntry[]> {
+  if (!resolveArtifactEntry(manifest, 'top_24h', profileName)) return [];
+  return fetchArtifact<PassEntry[]>(manifest, 'top_24h', baseUrl, profileName);
 }
 
-export async function fetchPasses(manifest: Manifest, baseUrl = ''): Promise<PassEntry[]> {
-  return fetchArtifact<PassEntry[]>(manifest, 'passes', baseUrl);
+export async function fetchPasses(
+  manifest: Manifest,
+  baseUrl = '',
+  profileName?: string,
+): Promise<PassEntry[]> {
+  return fetchArtifact<PassEntry[]>(manifest, 'passes', baseUrl, profileName);
 }
 
+/** Track (ISS ground-track polynomial + raw SGP4 samples + TLE) is
+ *  profile-agnostic — the ISS orbit is the same regardless of which
+ *  astronaut is looking. Stays at canonical top-level; no profileName
+ *  parameter on this helper. */
 export async function fetchTrack(manifest: Manifest, baseUrl = ''): Promise<Track> {
   return fetchArtifact<Track>(manifest, 'track', baseUrl);
 }
 
-export async function fetchStatus(manifest: Manifest, baseUrl = ''): Promise<Status> {
-  return fetchArtifact<Status>(manifest, 'status', baseUrl);
+export async function fetchStatus(
+  manifest: Manifest,
+  baseUrl = '',
+  profileName?: string,
+): Promise<Status> {
+  return fetchArtifact<Status>(manifest, 'status', baseUrl, profileName);
 }

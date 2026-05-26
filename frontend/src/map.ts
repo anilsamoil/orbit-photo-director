@@ -636,7 +636,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   const container = document.getElementById('map');
   if (!container) return;
 
-  const passes = await fetchArtifact<PassEntry[]>(manifest, 'passes');
+  // v1.6.7.0+ slot 5: per-profile passes variant fetch. Track stays
+  // canonical (ISS orbit is profile-agnostic). Reads the active profile
+  // from the URL on every renderMap call, matching the pattern Lane A
+  // used for the distance threshold — keeps the map authoritative on
+  // every render without coupling to main.ts's in-memory currentProfile.
+  const profileName = parseProfileFromURL(window.location.href);
+  const passes = await fetchArtifact<PassEntry[]>(manifest, 'passes', '', profileName);
   const track = await fetchArtifact<Track>(manifest, 'track');
   currentTrack = track;
 
