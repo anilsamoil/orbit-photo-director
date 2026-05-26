@@ -41,12 +41,29 @@ const OBSTRUCTION_OPTIONS = [
   'other',
 ] as const;
 
-/** Fetch the recent log from the Worker. Returns [] if unauthenticated. */
-export async function fetchLog(baseUrl = '', limit = 100): Promise<LogEntry[]> {
+/** Fetch the recent log from the Worker. Returns [] if unauthenticated.
+ *
+ *  When `profileName` is provided, appends `&profile=<name>` so the Worker
+ *  returns ONLY that profile's records. When omitted, the Worker falls back
+ *  to its legacy-default filter (records tagged 'anil' OR missing a profile
+ *  field) — preserves back-compat for callers that don't yet know about
+ *  per-astronaut filtering. See `worker/src/index.ts` GET `/api/log`.
+ *
+ *  The name is URL-encoded defensively; the Worker re-validates shape and
+ *  400s on garbage so the helper trusts the caller for shape validation.
+ */
+export async function fetchLog(
+  baseUrl = '',
+  limit = 100,
+  profileName?: string,
+): Promise<LogEntry[]> {
   const token = getToken();
   if (!token) return [];
+  const profileQuery = profileName
+    ? `&profile=${encodeURIComponent(profileName)}`
+    : '';
   try {
-    const resp = await fetch(`${baseUrl}/api/log?limit=${limit}`, {
+    const resp = await fetch(`${baseUrl}/api/log?limit=${limit}${profileQuery}`, {
       headers: { 'x-calib-token': token },
       cache: 'no-cache',
     });
