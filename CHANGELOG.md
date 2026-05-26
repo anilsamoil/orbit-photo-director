@@ -2,6 +2,74 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.7.0] - 2026-05-26
+
+### Daemon multiplexer — per-astronaut passes/status/top5/top_24h (Lane C: slot 4).
+
+The daemon now produces per-profile pass artifacts so Jack and Chris see their own scored views. Jack's personal targets (uploaded to R2 via `/api/profiles/jack/targets` in v1.6.4.0 + v1.6.6.0) finally get the FULL daemon scoring: weather, clouds, lightning, regime, freshness — same pipeline that scores the curated 137.
+
+This is the slot that makes Jack's personal targets useful instead of just stored. Together with slot 5 (frontend dual-source, pending) and slot 6 (Profile tab CRUD, pending), it completes the per-astronaut feature.
+
+### Added
+
+- **`generator/multiplex.py`** (new, 340 lines):
+  - `fetch_profile_targets(name)` — GETs `/api/profiles/<name>/targets` from the Worker with `x-calib-token` from `OPD_CALIB_TOKEN`. Validates each row (id pattern, lat/lon bounds, priority 1-10, name length, profile match) mirroring `worker/src/profiles.ts` validation. Drops malformed rows with per-row warnings. Falls through to empty list on any fetch failure (network/HTTP/JSON/shape error) so one bad profile doesn't fail the tick.
+  - `build_profile_target_list(curated, personal, removed_curated_ids)` — union math. Personal targets win on id collision (defense in depth).
+  - `multiplex_enabled()` — env gate. Returns False if `OPD_CALIB_TOKEN` is unset, with a clear warning.
+  - `validate_personal_target(raw)` — exported for tests.
+- **`generator/main.py`**:
+  - Extracted `_write_view_artifacts(...)` — handles next-90 / top25 / upcoming / status build + write for any target set
+  - Extracted `_run_profile_multiplex(...)` — fetch → union → find_passes + score → write
+  - Canonical pipeline (`passes.json` + friends at top-level) is unchanged for back-compat
+  - Multiplex loop runs after the canonical write, per profile in `PROFILE_NAMES`
+  - Launches are scored once and shared across all profiles (cheap)
+  - Each `_run_profile_multiplex` wrapped in try/except — one bad profile fails locally, the tick still completes
+- **`generator/manifest.py`**:
+  - `write_manifest()` gains optional `profile_artifacts: dict[str, dict[str, Path]]` kwarg
+  - When provided, emits `artifacts.profiles.<name>.{passes,top5,top_24h,status}` block
+  - Empty/missing → legacy single-tenant manifest (no `profiles` key) — pre-v1.6.7 frontends keep working unchanged
+- **`generator/config.py`**:
+  - `PROFILE_NAMES: tuple[str, ...] = ("anil", "chris", "jack")` — static config, intentional. Add a 4th name → one-line PR.
+  - `PROFILE_API_BASE = "https://map.astroanil.dev"`
+  - `PROFILE_FETCH_TIMEOUT_SECONDS = 10`
+- **`ops/com.astroanil.orbit-photo-director.plist`**:
+  - `multiplex.py` added to `WatchPaths` (matches existing pattern for generator/*.py — file change triggers launchd restart with fresh modules)
+  - Commented-out `OPD_CALIB_TOKEN` block with operator instructions: `launchctl setenv OPD_CALIB_TOKEN <secret>` then reload the daemon. Token can't safely live in the plist (committed to repo).
+- **`tests/test_multiplex.py`** (new, 35 tests):
+  - `validate_personal_target` happy + 10 parametrized malformed mutations + non-dict rejection
+  - `build_profile_target_list` union + removedCuratedIds exclude + personal-wins-on-collision
+  - `fetch_profile_targets` no-token / ConnectionError / HTTP-500 / malformed-row-skipped / removedCuratedIds parse / non-object body / missing-targets-key
+  - `multiplex_enabled` env gate
+  - Integration via `run_tick`: 0 profiles → no per-profile artifacts (single-tenant unchanged); 1 profile + 0 personals → `passes_jack.json == passes.json`; 2 profiles with distinct personals → both in manifest; Worker unreachable → still writes per-profile artifacts (curated-only fallback); malformed target → dropped, others survive; score parity for curated targets across canonical vs per-profile; `removedCuratedIds` excludes targets
+
+### Tests
+
+- Backend: **560 → 595 pytest pass (+35)** in `tests/test_multiplex.py`
+- `ruff check` clean
+- Frontend: 612 vitest pass unchanged (no frontend code in this slot)
+
+### Decisions / deviations
+
+- **Priority clamp 6-10 → 5**: Worker accepts 1-10 but curated scoring uses 1-5. Daemon collapses 6-10 → 5 at the validation boundary so existing scoring math stays untouched. Documented in `validate_personal_target`.
+- **Test mocking strategy**: integration tests patch `generator.main.fetch_profile_targets` (not `requests.get`) to avoid polluting other `requests.get` callers like `fetch_upcoming_launches`. Unit tests for `fetch_profile_targets` itself still patch at the module level.
+- **OPD_CALIB_TOKEN unset**: daemon logs clear warning + falls through to single-tenant mode. Existing single-profile output stays the canonical fallback. Operator MUST set it via `launchctl setenv` to enable multiplex.
+- **Path A vs Path B for profile storage**: chose Path A (daemon calls Worker API for profile data). Path B (daemon talks to R2 directly via rclone/boto3) deferred — Worker is the system of record.
+
+### Operator action required after deploy
+
+```bash
+# 1. Set the CALIB_TOKEN in the daemon's launchctl env (one-time)
+launchctl setenv OPD_CALIB_TOKEN <the-secret>
+
+# 2. Reload the daemon so it picks up the env var
+launchctl bootout gui/$UID/com.astroanil.orbit-photo-director
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.astroanil.orbit-photo-director.plist
+```
+
+After this, the next tick produces `passes_jack.json` + `passes_chris.json` + `passes_anil.json` alongside the existing `passes.json`. Frontend slot 5 will consume them.
+
+If `OPD_CALIB_TOKEN` is NOT set, the daemon logs a one-line warning per tick and produces only the canonical single-profile artifacts. Site keeps working in single-tenant mode.
+
 ## [1.6.6.0] - 2026-05-26
 
 ### Photo Lookup moves under Profile + Jack's 39 targets bootstrapped + v2 TODOs captured.
