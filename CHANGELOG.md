@@ -2,6 +2,30 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.3.0] - 2026-05-26
+
+### Per-astronaut profile foundation (slot 1 of 11).
+
+First slot of the per-astronaut profile layer designed during /office-hours and /plan-eng-review on 2026-05-26 (see `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-main-design-20260526-083510.md`). This slot ships data model + URL routing only — no UI change, no behavior change. Foundation for Jack's onboarding.
+
+The full feature lets a new astronaut (Jack) pick up the tool with his own targets + photo log isolated from Chris's view, via `map.astroanil.dev/?u=jack`. Architecture: daemon-side overlay (per-astronaut `passes_<name>.json`) with browser-Worker instant-buffer for additions between ticks. Hybrid auth via existing `CALIB_TOKEN`.
+
+### Added
+
+- **`frontend/src/profile.ts`** (new module, 230 lines): `Profile` + `PersonalTarget` types with schema version field; `parseProfileFromURL()` reads `?u=jack` or `/jack` path with strict name validation (lowercase + digits + hyphens, length 1-32, no path traversal); `loadProfile(name)`, `saveProfile(profile)`, `listProfiles()` with sorted ASCII order; `migrate(raw)` chain framework (no migrators yet at v1); `createDefaultProfile(name)`; `loadOrCreateProfileFromURL(urlHref)` one-call boot entry; fires `'profile-changed'` CustomEvent on every save with `{detail: {name}}` so future subscribers (Map tab refresh, topbar badge, Queue list builder) can react.
+- **`frontend/src/main.ts`**: `init()` resolves the active profile from the URL before any manifest fetch. Exports `getCurrentProfile()` for downstream modules. Failure path (corrupted localStorage from a future-versioned profile) auto-recreates the default.
+- **`frontend/test/profile.test.ts`** (35 new tests): URL parsing across `?u=`, path segment, malformed URLs, validation patterns; save/load roundtrip + namespace isolation between two profiles; corruption + future-version handling; `listProfiles()` filtering corrupt entries; `'profile-changed'` event dispatch contract.
+
+### Not in this slot
+
+- No UI surface yet (Profile tab + picker land in slot 2)
+- No daemon multiplex yet (slot 4)
+- No Worker API for personal targets (slot 3)
+- No browser-Worker pass computation (slot 5)
+- No `/api/calib` profile field (slot 8)
+
+Existing single-profile manifest fetch is unchanged — slot 5 makes it profile-aware.
+
 ## [1.6.2.0] - 2026-05-23
 
 ### Pin-drop popup now tells you where to point the camera.
