@@ -822,3 +822,169 @@ describe('rate limit', () => {
     expect(getCalls).toBeGreaterThan(0);
   });
 });
+
+// --------------------------------------------------------------------------
+// Slot 8: /api/log gets a `profile` field
+// --------------------------------------------------------------------------
+
+describe('Slot 8: /api/log profile field', () => {
+  let env: TestEnv;
+  const headers = {
+    'content-type': 'application/json',
+    'x-calib-token': 'test-secret-123',
+  };
+
+  beforeEach(() => {
+    env = makeEnv();
+  });
+
+  it('POST stores the profile field when present', async () => {
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 't',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+        profile: 'jack',
+      }),
+      headers,
+    });
+    expect(r.status).toBe(200);
+    // Find the stored key
+    const stored = Array.from(env.CALIB['store'].keys()).filter(
+      (k) => k.startsWith('log/') && k.endsWith('.json'),
+    );
+    expect(stored).toHaveLength(1);
+    const obj = await env.CALIB.get(stored[0]!);
+    expect(obj).toBeTruthy();
+    const parsed = (await obj!.json()) as { profile: string };
+    expect(parsed.profile).toBe('jack');
+  });
+
+  it('POST defaults missing profile field to "anil"', async () => {
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 't',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+      }),
+      headers,
+    });
+    expect(r.status).toBe(200);
+    const stored = Array.from(env.CALIB['store'].keys()).filter(
+      (k) => k.startsWith('log/') && k.endsWith('.json'),
+    );
+    const obj = await env.CALIB.get(stored[0]!);
+    const parsed = (await obj!.json()) as { profile: string };
+    expect(parsed.profile).toBe('anil');
+  });
+
+  it('POST rejects malformed profile name with 400', async () => {
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 't',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+        profile: 'Jack/Evil',
+      }),
+      headers,
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('POST rejects profile name with uppercase', async () => {
+    const r = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 't',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+        profile: 'Jack',
+      }),
+      headers,
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('GET ?profile=jack filters to only jack entries', async () => {
+    const now = new Date();
+    const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    await env.CALIB.put(`log/${yyyymm}/a.json`, JSON.stringify({
+      target_id: 't1', pass_time: '2024-10-17T12:00:00Z', action: 'shoot',
+      profile: 'jack', received_at: '2024-10-17T12:00:30Z',
+    }));
+    await env.CALIB.put(`log/${yyyymm}/b.json`, JSON.stringify({
+      target_id: 't2', pass_time: '2024-10-17T12:00:00Z', action: 'shoot',
+      profile: 'chris', received_at: '2024-10-17T13:00:00Z',
+    }));
+    await env.CALIB.put(`log/${yyyymm}/c.json`, JSON.stringify({
+      target_id: 't3', pass_time: '2024-10-17T12:00:00Z', action: 'shoot',
+      profile: 'anil', received_at: '2024-10-17T14:00:00Z',
+    }));
+    const r = await fetchWorker(env, '/api/log?profile=jack', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { entries: Array<{ target_id: string; profile: string }> };
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0]?.target_id).toBe('t1');
+    expect(body.entries[0]?.profile).toBe('jack');
+  });
+
+  it('GET without ?profile returns anil-or-missing entries (backward compat)', async () => {
+    const now = new Date();
+    const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    // Pre-v1.6.3.0 entry: no profile field at all.
+    await env.CALIB.put(`log/${yyyymm}/legacy.json`, JSON.stringify({
+      target_id: 'old', pass_time: '2024-10-17T12:00:00Z', action: 'shoot',
+      received_at: '2024-10-17T12:00:30Z',
+    }));
+    // Anil entry stamped by Slot 8 default.
+    await env.CALIB.put(`log/${yyyymm}/anil.json`, JSON.stringify({
+      target_id: 'a', pass_time: '2024-10-17T12:00:00Z', action: 'shoot',
+      profile: 'anil', received_at: '2024-10-17T13:00:00Z',
+    }));
+    // Jack entry — should NOT appear in unfiltered read.
+    await env.CALIB.put(`log/${yyyymm}/jack.json`, JSON.stringify({
+      target_id: 'j', pass_time: '2024-10-17T12:00:00Z', action: 'shoot',
+      profile: 'jack', received_at: '2024-10-17T14:00:00Z',
+    }));
+    const r = await fetchWorker(env, '/api/log', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { entries: Array<{ target_id: string }> };
+    const ids = body.entries.map((e) => e.target_id).sort();
+    expect(ids).toEqual(['a', 'old']);
+  });
+
+  it('GET ?profile=<malformed> returns 400', async () => {
+    const r = await fetchWorker(env, '/api/log?profile=Jack/Evil', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('roundtrip: POST with profile then GET ?profile=name returns it', async () => {
+    const post = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        target_id: 'boston',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+        profile: 'jack',
+      }),
+      headers,
+    });
+    expect(post.status).toBe(200);
+    const get = await fetchWorker(env, '/api/log?profile=jack', {
+      headers: { 'x-calib-token': 'test-secret-123' },
+    });
+    const body = (await get.json()) as { entries: Array<{ target_id: string; profile: string }> };
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0]?.target_id).toBe('boston');
+    expect(body.entries[0]?.profile).toBe('jack');
+  });
+});

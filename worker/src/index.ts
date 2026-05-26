@@ -16,6 +16,7 @@
 
 import { handleKpRequest } from './aurora';
 import { handleProfilesRequest } from './profiles';
+import { isValidProfileName } from './shared';
 
 export interface Env {
   SITE: R2Bucket;
@@ -32,7 +33,18 @@ interface LogRequest {
   rating?: number; // 1-5, present when action === 'rate'
   observed_obstruction?: 'clear' | 'cloudy' | 'sun-glint' | 'thin cirrus' | 'haze' | 'other';
   dedupe_key?: string;
+  /** Slot 8 (design rev 2): per-astronaut log scoping. Missing on legacy
+   *  records (pre-v1.6.3.0 frontends) — those are read back as belonging
+   *  to the implicit "anil" profile. Same regex as /api/profiles/<name>.
+   *  Rejected with 400 if present but malformed. */
+  profile?: string;
 }
+
+/** Default profile assigned to records that lack the `profile` field.
+ *  Mirrors `frontend/src/profile.ts:DEFAULT_PROFILE_NAME`. Pre-v1.6.3.0
+ *  records were all Anil's calibration data; treat them as `anil` so
+ *  per-profile reads return them naturally when filtering for `anil`. */
+const LEGACY_DEFAULT_PROFILE = 'anil';
 
 interface ManifestFreshness {
   tle_hours: number;
@@ -196,6 +208,11 @@ function isLogRequest(value: unknown): value is LogRequest {
   if (v.dedupe_key !== undefined) {
     if (typeof v.dedupe_key !== 'string' || v.dedupe_key.length > MAX_FIELD_LEN) return false;
   }
+  if (v.profile !== undefined) {
+    // Slot 8: optional per-astronaut tag. Reuses the same regex as profile
+    // identifiers everywhere else so the namespace stays consistent.
+    if (typeof v.profile !== 'string' || !isValidProfileName(v.profile)) return false;
+  }
   return true;
 }
 
@@ -258,8 +275,14 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
     //
     // R2 returns null on conditional-put miss (key already exists with any
     // etag); we surface that as `deduped: true` to the client.
+    // Slot 8: stamp every stored record with a profile name. Frontends
+    // pre-v1.6.3.0 didn't send the field — we default to LEGACY_DEFAULT_PROFILE
+    // ("anil") so historical reads return naturally when scoped to that
+    // profile. Per-profile reads filter on this field; multi-tenant
+    // isolation depends on it being on every record.
     const record = {
       ...payload,
+      profile: payload.profile ?? LEGACY_DEFAULT_PROFILE,
       received_at: now.toISOString().replace(/\.\d+Z$/, 'Z'),
     };
     const result = await env.CALIB.put(objectKey, JSON.stringify(record), {
@@ -373,6 +396,18 @@ async function handleLogList(request: Request, env: Env): Promise<Response> {
   const limitRaw = Number(url.searchParams.get('limit') ?? '50');
   const limit = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50));
 
+  // Slot 8: optional ?profile=<name> filter for per-astronaut log scoping.
+  //   - When present: validate the name + filter to records whose profile
+  //     field matches exactly.
+  //   - When absent: return entries with profile === LEGACY_DEFAULT_PROFILE
+  //     OR missing (legacy pre-v1.6.3.0 records). This preserves the v1.6.x
+  //     reader contract — when Anil opens the calib panel without a profile
+  //     query he sees his own data, not Jack's.
+  const profileFilter = url.searchParams.get('profile');
+  if (profileFilter !== null && !isValidProfileName(profileFilter)) {
+    return jsonResponse({ error: 'invalid_profile' }, 400);
+  }
+
   const now = new Date();
   const monthKeys = [
     `log/${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}/`,
@@ -382,6 +417,23 @@ async function handleLogList(request: Request, env: Env): Promise<Response> {
   monthKeys.push(
     `log/${prev.getUTCFullYear()}${String(prev.getUTCMonth() + 1).padStart(2, '0')}/`,
   );
+
+  /** Profile match — applied after read but before pushing to the result.
+   *  When the operator passes ?profile=jack we return only records with
+   *  profile === "jack". When the operator omits it, legacy reader
+   *  contract returns LEGACY_DEFAULT_PROFILE-or-missing. */
+  const matchesProfileFilter = (entry: Record<string, unknown>): boolean => {
+    const p = typeof entry.profile === 'string' ? entry.profile : undefined;
+    if (profileFilter === null) {
+      // No filter → default-or-missing for backward compat with pre-v1.6.3.0
+      // reads. Records written under Slot 8 default to LEGACY_DEFAULT_PROFILE
+      // server-side, so both branches collapse to one match in practice; the
+      // explicit `undefined` check keeps us safe if a future code path ever
+      // writes a record without stamping the profile field.
+      return p === undefined || p === LEGACY_DEFAULT_PROFILE;
+    }
+    return p === profileFilter;
+  };
 
   const entries: Array<Record<string, unknown>> = [];
   try {
@@ -397,6 +449,7 @@ async function handleLogList(request: Request, env: Env): Promise<Response> {
         if (!body) continue;
         try {
           const json = (await body.json()) as Record<string, unknown>;
+          if (!matchesProfileFilter(json)) continue;
           entries.push(json);
         } catch {
           // skip unparseable entries
