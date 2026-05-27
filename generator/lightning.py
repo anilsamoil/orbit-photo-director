@@ -32,8 +32,10 @@ Architecture decisions (D1-D6 locked 2026-05-19):
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -145,6 +147,13 @@ class PlaceholderLightningSampler:
 GLM_S3_BUCKETS = ("noaa-goes16", "noaa-goes18")
 GLM_LISTING_TIMEOUT_SECONDS = 30
 GLM_GRANULE_TIMEOUT_SECONDS = 30
+# Parallelism for the per-tick granule fetch. NOAA S3 reliably handles 16
+# parallel anonymous GETs; no 429 backoff in v1 — revisit if observed.
+GLM_FETCH_MAX_WORKERS = 16
+# Overall budget for the entire granule-fetch phase, in seconds. Any
+# granule still pending when the budget expires is dropped (graceful
+# degradation — partial lightning data is better than a stalled tick).
+GLM_FETCH_BUDGET_SECONDS = 120
 # Window of GLM granules to fetch per tick (60 min — matches default
 # tick interval). ~3 granules/min × 60 min × 2 sats = ~360 files × ~50KB
 # = ~18MB egress per tick. Well within budget; bandwidth note in P1.
@@ -368,19 +377,72 @@ class GLMSampler:
                 )
             all_urls.extend(urls)
 
-        for url in all_urls:
-            try:
-                buf = fetcher(url)
-            except requests.RequestException as exc:
-                log.warning("GLM granule fetch failed for %s: %s", url, exc)
-                continue
-            flashes = _decode_glm_granule(buf)
-            for flash in flashes:
-                key = _bucket_key(flash.lat, flash.lon)
-                self._flashes_by_bucket.setdefault(key, []).append(flash)
-                age_min = int((when - flash.t).total_seconds() / 60)
-                if self._oldest_granule_age_min is None or age_min > self._oldest_granule_age_min:
-                    self._oldest_granule_age_min = age_min
+        # Parallel granule fetch. NOAA S3 is the per-tick latency hot-path:
+        # when one of the two GOES buckets is empty and the other returns
+        # ~180 granules at ~30s timeout each, the previous serial loop
+        # could take 4-7+ minutes and push tick time past the daemon
+        # watchdog. Fan-out + an overall budget caps the phase at
+        # GLM_FETCH_BUDGET_SECONDS regardless of NOAA flakes.
+        #
+        # Decode runs in the main thread after as_completed; this is the
+        # "decode is cheap, fetch dominates" assumption. The decode_seconds
+        # log line below lets us verify that against real production data;
+        # if aggregate decode is ever observed >30s, fold _decode_glm_granule
+        # into the worker callable.
+        decode_seconds = 0.0
+        decoded_granules = 0
+        # Note: not using `with ThreadPoolExecutor()` because its __exit__
+        # blocks waiting for in-flight workers — `time.sleep` (or a stuck
+        # socket recv) can't be cancelled, so a hung S3 worker would
+        # negate the 120s budget. Use shutdown(wait=False, cancel_futures=True)
+        # to ensure the budget actually bounds wall-clock time. Lingering
+        # stuck workers continue in the background but are bounded by
+        # `GLM_GRANULE_TIMEOUT_SECONDS` inside the default fetcher and
+        # don't block tick completion.
+        ex = concurrent.futures.ThreadPoolExecutor(
+            max_workers=GLM_FETCH_MAX_WORKERS
+        )
+        futures = {ex.submit(fetcher, url): url for url in all_urls}
+        try:
+            for fut in concurrent.futures.as_completed(
+                futures, timeout=GLM_FETCH_BUDGET_SECONDS
+            ):
+                url = futures[fut]
+                try:
+                    buf = fut.result()
+                except requests.RequestException as exc:
+                    log.warning("GLM granule fetch failed for %s: %s", url, exc)
+                    continue
+                decode_start = time.monotonic()
+                flashes = _decode_glm_granule(buf)
+                decode_seconds += time.monotonic() - decode_start
+                decoded_granules += 1
+                for flash in flashes:
+                    key = _bucket_key(flash.lat, flash.lon)
+                    self._flashes_by_bucket.setdefault(key, []).append(flash)
+                    age_min = int((when - flash.t).total_seconds() / 60)
+                    if self._oldest_granule_age_min is None or age_min > self._oldest_granule_age_min:
+                        self._oldest_granule_age_min = age_min
+        except concurrent.futures.TimeoutError:
+            completed = sum(1 for f in futures if f.done())
+            log.warning(
+                "GLM granule fetch budget exceeded (%ds); %d of %d "
+                "granules completed; dropping rest",
+                GLM_FETCH_BUDGET_SECONDS, completed, len(futures),
+            )
+        finally:
+            # cancel_futures=True drops not-yet-started work; wait=False
+            # returns immediately even if workers are stuck in a socket
+            # read (the daemon's `GLM_GRANULE_TIMEOUT_SECONDS` request
+            # timeout still bounds those threads to ≤30s background drain).
+            ex.shutdown(wait=False, cancel_futures=True)
+        if decoded_granules > 0:
+            log.info(
+                "GLM granule decode: %d granules in %.2fs (%.1fms/granule avg)",
+                decoded_granules,
+                decode_seconds,
+                (decode_seconds * 1000.0) / decoded_granules,
+            )
 
     def sample(self, lat: float, lon: float, when: datetime) -> LightningSample:
         # A2: skip GLM lookup for targets outside GOES coverage envelope.

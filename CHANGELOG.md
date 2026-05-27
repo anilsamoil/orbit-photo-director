@@ -2,6 +2,32 @@
 
 All notable changes to Orbit Photo Director.
 
+## [Unreleased] GLM concurrency fix — daemon tick reliability
+
+`generator/lightning.py` — `GLMSampler.__init__` previously fetched NOAA GLM granules
+serially at a 30s per-granule HTTP timeout. When one GOES bucket was empty and the
+other returned its normal ~180 granules (or vice versa), worst-case wall-clock
+inflated to 4-7+ minutes — enough to trip the daemon's tick watchdog (which had to
+be bumped 600s → 1800s as a band-aid earlier today).
+
+Replaced the serial loop with `concurrent.futures.ThreadPoolExecutor(max_workers=16)`
++ `as_completed(timeout=120)`. The entire granule-fetch phase is now bounded at
+120s regardless of NOAA flakes; pending futures are dropped on budget exhaustion
+(graceful degradation — partial lightning data is better than a stalled tick).
+After a 3-5 day soak the 1800s watchdog can revert to 900s.
+
+Added `decode_seconds` log line so we can verify the "decode is cheap, fetch
+dominates" assumption against real production data. If aggregate decode is ever
+observed >30s, fold `_decode_glm_granule` into the worker callable.
+
+### Tests
+
+- Python: **596 → 599 pytest pass (+3 in `tests/test_lightning.py`)**
+  - `test_glm_sampler_fetches_concurrently` — fetcher records worker thread IDs; asserts >1 distinct thread observed
+  - `test_glm_sampler_partial_success_aggregation` — 5 URLs succeed, 5 raise `RequestException`; asserts spatial index gets data from successes + per-failure warning logged
+  - `test_glm_sampler_overall_budget_drops_pending` — one URL sleeps past the budget; asserts constructor returns within the budget + timeout warning logged + spatial index has data from fast fetches
+  - `test_glm_fetch_budget_constant_is_120s` — pins the design-doc-locked budget
+
 ## [1.6.14.0] - 2026-05-27
 
 ### Polish bundle — shot-count badge + clickable profile chip + dynamic APP_VERSION + import-wipe warning

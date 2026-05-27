@@ -678,3 +678,198 @@ def test_glm_sampler_fetcher_raises_then_continues() -> None:
     # No flashes ingested, but constructor didn't crash.
     total = sum(len(v) for v in sampler._flashes_by_bucket.values())
     assert total == 0
+
+
+# --------------------------------------------------------------------------
+# GLM concurrency fix (v1.6.x) — ThreadPoolExecutor + 120s overall budget.
+# Protects the daemon tick from NOAA S3 worst-case latency: previously a
+# serial loop at 30s timeout × ~180 granules could run 4-7+ min and trip
+# the watchdog. Fix fans the fetch out to 16 workers and caps the entire
+# phase at GLM_FETCH_BUDGET_SECONDS.
+# --------------------------------------------------------------------------
+
+import logging  # noqa: E402
+import threading  # noqa: E402
+
+from generator.lightning import (  # noqa: E402
+    GLM_FETCH_BUDGET_SECONDS,
+)
+
+
+def test_glm_sampler_fetches_concurrently() -> None:
+    """Stub fetcher records the thread it ran on; >1 distinct thread observed."""
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+    seen_threads: set[int] = set()
+    lock = threading.Lock()
+
+    def _slow_fetcher(_url: str) -> bytes:
+        # Hold the thread briefly so the executor has to spin up multiple
+        # workers in parallel to drain the queue.
+        time_mod = __import__("time")
+        with lock:
+            seen_threads.add(threading.get_ident())
+        time_mod.sleep(0.05)
+        return b"not a netcdf"  # decode returns [] silently
+
+    urls = [f"https://fake/g{i}.nc" for i in range(8)]
+    GLMSampler(
+        when=when,
+        lister=lambda _bucket: urls if _bucket == "noaa-goes16" else [],
+        fetcher=_slow_fetcher,
+    )
+    # With 8 URLs × 50ms each, a serial loop would take 400ms and use 1
+    # thread. ThreadPoolExecutor(max_workers=16) puts them all in flight
+    # so we observe many distinct worker threads.
+    assert len(seen_threads) > 1, f"only saw threads: {seen_threads}"
+
+
+def test_glm_sampler_partial_success_aggregation(caplog: Any) -> None:
+    """5 URLs succeed (return real flashes), 5 raise RequestException.
+    Sampler ends up with the 5 successful granules' flashes indexed and
+    logs a warning for each failure."""
+    try:
+        import netCDF4
+    except ImportError:
+        pytest.skip("netCDF4 not available")
+    import tempfile
+
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+
+    # Build one synthetic granule reused for all 5 successful URLs.
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        path = tmp.name
+    try:
+        ds = netCDF4.Dataset(path, "w", format="NETCDF4")
+        ds.createDimension("n", 2)
+        lat = ds.createVariable("flash_lat", "f4", ("n",))
+        lon = ds.createVariable("flash_lon", "f4", ("n",))
+        offset = ds.createVariable("flash_time_offset_of_first_event", "f4", ("n",))
+        lat[:] = [30.0, 30.05]
+        lon[:] = [-90.0, -90.05]
+        offset[:] = [0.0, 1.0]
+        ds.time_coverage_start = "2026-05-21T12:15:00Z"
+        ds.close()
+        with open(path, "rb") as f:
+            buf = f.read()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+    good_urls = {f"https://fake/good{i}.nc" for i in range(5)}
+    bad_urls = {f"https://fake/bad{i}.nc" for i in range(5)}
+
+    def _mixed_fetcher(url: str) -> bytes:
+        if url in good_urls:
+            return buf
+        raise __import__("requests").RequestException(f"S3 said no for {url}")
+
+    with caplog.at_level(logging.WARNING, logger="generator.lightning"):
+        sampler = GLMSampler(
+            when=when,
+            lister=lambda _bucket: (
+                list(good_urls) + list(bad_urls)
+                if _bucket == "noaa-goes16"
+                else []
+            ),
+            fetcher=_mixed_fetcher,
+        )
+
+    # 5 good granules × 2 flashes each = 10 flashes ingested.
+    total = sum(len(v) for v in sampler._flashes_by_bucket.values())
+    assert total == 10
+    # One warning per failed URL.
+    failure_warnings = [
+        r for r in caplog.records
+        if "GLM granule fetch failed" in r.getMessage()
+    ]
+    assert len(failure_warnings) == 5
+    # Spatial index is queryable.
+    result = sampler.sample(30.0, -90.0, when)
+    assert result.lightning_potential > 0
+
+
+def test_glm_sampler_overall_budget_drops_pending(caplog: Any,
+                                                  monkeypatch: Any) -> None:
+    """One URL sleeps past the budget; the others are fast. Constructor
+    must return shortly after the budget expires (NOT block on the slow
+    fetcher's full sleep), log the timeout warning, cancel pending
+    futures, and still have data from the fast fetches."""
+    try:
+        import netCDF4
+    except ImportError:
+        pytest.skip("netCDF4 not available")
+    import tempfile
+
+    # Squash the budget to keep the test fast while still exercising the
+    # exact code path (the only thing that matters is fetcher-runtime >
+    # budget, with at least one pending future at the deadline).
+    monkeypatch.setattr(
+        "generator.lightning.GLM_FETCH_BUDGET_SECONDS", 1
+    )
+
+    when = datetime(2026, 5, 21, 12, 30, tzinfo=UTC)
+
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        path = tmp.name
+    try:
+        ds = netCDF4.Dataset(path, "w", format="NETCDF4")
+        ds.createDimension("n", 1)
+        lat = ds.createVariable("flash_lat", "f4", ("n",))
+        lon = ds.createVariable("flash_lon", "f4", ("n",))
+        offset = ds.createVariable("flash_time_offset_of_first_event", "f4", ("n",))
+        lat[:] = [30.0]
+        lon[:] = [-90.0]
+        offset[:] = [0.0]
+        ds.time_coverage_start = "2026-05-21T12:15:00Z"
+        ds.close()
+        with open(path, "rb") as f:
+            buf = f.read()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+    slow_url = "https://fake/slow.nc"
+    fast_urls = [f"https://fake/fast{i}.nc" for i in range(5)]
+    time_mod = __import__("time")
+
+    def _mixed_fetcher(url: str) -> bytes:
+        if url == slow_url:
+            # Sleep well past the budget so it can't possibly complete
+            # before as_completed raises TimeoutError.
+            time_mod.sleep(10)
+            return buf
+        return buf
+
+    start = time_mod.monotonic()
+    with caplog.at_level(logging.WARNING, logger="generator.lightning"):
+        sampler = GLMSampler(
+            when=when,
+            lister=lambda _bucket: (
+                [slow_url] + fast_urls
+                if _bucket == "noaa-goes16"
+                else []
+            ),
+            fetcher=_mixed_fetcher,
+        )
+    elapsed = time_mod.monotonic() - start
+
+    # Constructor must return shortly after the 1s budget — generous
+    # slack accounts for Python+threadpool teardown, but the bound is
+    # nowhere near the slow fetcher's 10s sleep.
+    assert elapsed < 5.0, f"constructor took {elapsed:.2f}s; budget was 1s"
+
+    # The timeout warning was logged.
+    timeout_warnings = [
+        r for r in caplog.records
+        if "GLM granule fetch budget exceeded" in r.getMessage()
+    ]
+    assert len(timeout_warnings) == 1
+
+    # The 5 fast fetches contributed real flashes to the spatial index.
+    total = sum(len(v) for v in sampler._flashes_by_bucket.values())
+    assert total >= 5
+
+
+def test_glm_fetch_budget_constant_is_120s() -> None:
+    """Design-doc-locked budget. Changing this requires re-reading the
+    design doc — 120s gives ~3-4 min total tick budget headroom over the
+    900s post-soak watchdog target."""
+    assert GLM_FETCH_BUDGET_SECONDS == 120
