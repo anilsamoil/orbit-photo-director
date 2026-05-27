@@ -38,6 +38,34 @@ export type ApiResult<T = unknown> =
   | { ok: true; data: T }
   | { ok: false; reason: 'token_missing' | 'network' | 'http' | 'validation'; status?: number; detail?: string };
 
+/** Fetch the current personal-target list for a profile (GET).
+ *  Slot 6b — used by the Profile pane's first-render hydration so that
+ *  a fresh device (empty localStorage) sees the targets the server
+ *  already holds. The Worker handler (worker/src/profiles.ts) returns
+ *  `{ ok: true, targets: PersonalTarget[] }`. */
+export async function getProfileTargets(
+  profileName: string,
+  baseUrl = '',
+): Promise<ApiResult<{ targets: PersonalTarget[] }>> {
+  const token = readCalibToken();
+  if (!token) return { ok: false, reason: 'token_missing' };
+  try {
+    const resp = await fetch(`${baseUrl}/api/profiles/${profileName}/targets`, {
+      method: 'GET',
+      headers: { 'x-calib-token': token },
+    });
+    const parsed = await parseJsonResult<{ targets: PersonalTarget[] }>(resp);
+    if (!parsed.ok) return parsed;
+    // Defensive shape check — the parse helper only enforces resp.ok, so
+    // a 200 with the wrong body shape would still come back as ok:true.
+    // Normalise `data.targets` to an array regardless.
+    const targets = Array.isArray(parsed.data?.targets) ? parsed.data.targets : [];
+    return { ok: true, data: { targets } };
+  } catch (e) {
+    return { ok: false, reason: 'network', detail: errMsg(e) };
+  }
+}
+
 /** Replace the entire target list for a profile (PUT). Used by
  *  bootstrap-style flows + as a recovery path. */
 export async function putProfileTargets(

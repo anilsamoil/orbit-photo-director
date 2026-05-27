@@ -47,6 +47,7 @@ Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-
 | 5 — Frontend dual-source manifest fetch (per-profile variant resolver) | ✅ | v1.6.8.0 |
 | 5b — Browser-Worker SGP4 instant-buffer | ⏳ deferred | — |
 | 6 — Profile tab add/remove with API sync | ✅ | v1.6.9.0 |
+| 6b — API hydration on Profile pane render (hot-fix) | ✅ | vNEXT |
 | 7 — Distance threshold slider | ✅ | v1.6.5.0 |
 | 8 — `/api/log` gains `profile` field (backend) | ✅ | v1.6.4.0 |
 | 8 — Log tab `?profile=` filter on read (frontend) | ✅ | vNEXT |
