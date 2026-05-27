@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] Polish bundle
+## [1.6.14.0] - 2026-05-27
+
+### Polish bundle — shot-count badge + clickable profile chip + dynamic APP_VERSION + import-wipe warning
 
 Four small UX/quality fixes bundled into one branch because they're tightly scoped and partially co-located in `frontend/src/profile-crud.ts`.
 
