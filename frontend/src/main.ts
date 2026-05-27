@@ -24,7 +24,7 @@ import { createPollScheduler, isOnline, type PollScheduler } from './network-sta
 import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
-import { loadOrCreateProfileFromURL, loadProfile, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
+import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { subscribeProfileChanged } from './profile-events';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
@@ -497,32 +497,43 @@ async function onCardAction(action: CardAction, p: PassEntry): Promise<void> {
 }
 
 /** v3 — Hide-from-card handler (Anil 2026-05-26). The card emits 'hide';
- *  we mutate the active profile's removedCuratedIds list, persist, and
- *  pull the card out of the DOM by data-targetId match. The Profile
- *  tab's slot 11 'profile-changed' subscriber re-renders the queue too,
- *  so the operator's persisted "hide" state survives the next refresh.
+ *  we mutate the active profile, persist, and pull the card out of the
+ *  DOM by data-targetId match. The Profile tab's slot 11
+ *  'profile-changed' subscriber re-renders the queue too, so the
+ *  operator's persisted change survives the next refresh.
+ *
+ *  v3.2 — Hide now applies to BOTH curated and personal cards with
+ *  different semantics per type:
+ *  - curated id → toggleCuratedRemoved (adds to removedCuratedIds;
+ *    restorable via the Profile-tab Hidden-curated typeahead)
+ *  - personal id (`personal:` prefix) → removePersonalTarget (deletes
+ *    the target outright; restorable by re-adding via the Profile-tab
+ *    CRUD form). This matches the per-row Delete already in the Profile
+ *    tab — Hide-from-card is the queue-side shortcut to the same op.
  *
  *  Defensive no-ops:
  *  - no active profile (shouldn't happen — init() always creates one)
- *  - id already in removedCuratedIds (daemon multiplex would have
- *    filtered it before render — if we still see it, just no-op the
- *    save but still remove from DOM so the operator's tap does something)
- *  - personal-target id (card.ts already skips the Hide button — this
- *    is belt-and-braces defense against a future code change)
+ *  - id already-removed (curated: daemon multiplex would have filtered
+ *    it before render; personal: target already gone from additions) —
+ *    we still remove the card from DOM so the operator's tap does
+ *    something.
  */
 function handleHideAction(p: PassEntry): void {
-  if (p.target_id.startsWith('personal:')) {
-    // card.ts shouldn't even render the button for personal targets;
-    // bail silently rather than corrupt the profile.
-    return;
-  }
   const profile = currentProfile ? loadProfile(currentProfile.name) : null;
   if (!profile) {
     showToast(`Could not hide — profile unavailable`, 'error');
     return;
   }
-  if (!profile.removedCuratedIds.includes(p.target_id)) {
-    const next = toggleCuratedRemoved(profile, p.target_id);
+  const isPersonal = p.target_id.startsWith('personal:');
+  let next: Profile = profile;
+  if (isPersonal) {
+    // removePersonalTarget is idempotent — returns the profile unchanged
+    // if the id isn't in additions, so we can call it unconditionally.
+    next = removePersonalTarget(profile, p.target_id);
+  } else if (!profile.removedCuratedIds.includes(p.target_id)) {
+    next = toggleCuratedRemoved(profile, p.target_id);
+  }
+  if (next !== profile) {
     try {
       saveProfile(next);
     } catch (e) {
@@ -542,7 +553,17 @@ function handleHideAction(p: PassEntry): void {
       el.remove();
     }
   }
-  showToast(`Hidden "${p.target_name}" — restore in Profile tab`, 'success');
+  if (isPersonal) {
+    showToast(
+      `Removed personal target "${p.target_name}" — re-add in Profile tab`,
+      'success',
+    );
+  } else {
+    showToast(
+      `Hidden "${p.target_name}" — restore in Profile tab`,
+      'success',
+    );
+  }
 }
 
 let toastFadeTimer: number | null = null;

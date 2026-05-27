@@ -2,6 +2,34 @@
 
 All notable changes to Orbit Photo Director.
 
+## [Unreleased] v3.2 — Universal card buttons
+
+Same-day Anil follow-up to v3.1. One surgical change in two related
+spots; frontend-only, no daemon / worker changes.
+
+- **🌍 zoom button on EVERY card** (was personal-only in v2). Curated
+  cards (Etna, Aurora — Scandinavia, etc.) benefit equally from the
+  zoomed satellite + ISS-track overlay — same operator context that
+  Jack asked for on personal targets. `pass-thumbnail.ts` is already
+  coord-driven via `target_lat` / `target_lon`, so no upstream changes
+  were needed; the v3.2 diff just removes the `isPersonalTarget` gate
+  in `frontend/src/card.ts`.
+- **Hide button on EVERY card** (was curated-only in v3). Personal-card
+  Hide deletes the target via `removePersonalTarget` and shows a
+  personal-flavored toast ("Removed personal target 'X' — re-add in
+  Profile tab"); restorable by re-adding via the Profile-tab CRUD
+  form. Curated-card Hide is unchanged (`toggleCuratedRemoved`,
+  restorable via the Hidden-curated typeahead). `frontend/src/card.ts`
+  always renders the button; `frontend/src/main.ts:handleHideAction`
+  branches on the `personal:` prefix at click time.
+- **CSS — 4-button card row.** Cards now show Shoot · Skip · Hide · 🌍.
+  `.card-actions` gets `flex-wrap: wrap` + an explicit `min-height:
+  44px` / `min-width: 44px` on every action button so iOS Safari tap
+  targets stay ≥ 44pt even when the row wraps to 2 lines on narrow
+  viewports. `frontend/src/style.css`.
+
+5 new tests; 919 existing tests still pass.
+
 ## [1.6.19.0] - 2026-05-27
 
 ### v3.1 — Layer-order fix + Day-polygon mask

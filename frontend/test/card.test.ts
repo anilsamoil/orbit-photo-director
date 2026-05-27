@@ -593,10 +593,12 @@ describe('renderCard direction-of-look tag', () => {
   });
 });
 
-// v2 — 🌍 CEO zoom imagery toggle (Jack feedback 2026-05-27). Personal-target
-// cards offer a thumbnail toggle that calls the caller-injected
-// `renderThumbnail` factory lazily. Non-personal cards never show the button.
-describe('renderCard — 🌍 thumbnail toggle (v2)', () => {
+// v2 — 🌍 CEO zoom imagery toggle (Jack feedback 2026-05-27). v3.2 — the
+// thumbnail toggle now renders on EVERY card (curated AND personal) when
+// the caller injects a `renderThumbnail` factory. pass-thumbnail.ts is
+// coord-driven via target_lat/lon, so curated cards work without any
+// upstream changes.
+describe('renderCard — 🌍 thumbnail toggle (v2 / v3.2)', () => {
   beforeEach(() => { _resetOpenThumbnailsForTest(); });
 
   const personalPass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -606,14 +608,18 @@ describe('renderCard — 🌍 thumbnail toggle (v2)', () => {
     ...overrides,
   });
 
-  it('does NOT add the 🌍 button on a non-personal target card', () => {
+  // v3.2 regression — the 🌍 button now appears on curated cards too
+  // (was gated to `personal:` ids in v2). Coord-driven pass-thumbnail
+  // means no upstream change was needed.
+  it('adds the 🌍 button on a CURATED target card too (v3.2)', () => {
     const renderStub = vi.fn(() => document.createElement('div'));
     const el = renderCard(
       samplePass({ target_id: 'tokyo-night' }),
       NOW, false, () => undefined,
       { renderThumbnail: renderStub },
     );
-    expect(el.querySelector('.btn-thumbnail')).toBeNull();
+    expect(el.querySelector('.btn-thumbnail')).not.toBeNull();
+    // Render is still deferred until the operator clicks.
     expect(renderStub).not.toHaveBeenCalled();
   });
 
@@ -695,10 +701,11 @@ describe('renderCard — 🌍 thumbnail toggle (v2)', () => {
   });
 });
 
-// v3 — Hide button (Anil 2026-05-26). One-tap dismiss for curated cards in
-// the Queue / Upcoming panes so the operator doesn't have to remember the
-// exact id and paste it into the Profile tab's Hidden list.
-describe('renderCard — Hide button (v3)', () => {
+// v3 — Hide button (Anil 2026-05-26). v3.2 — Hide now renders on EVERY
+// card (curated AND personal). card.ts is profile-agnostic and just
+// emits 'hide'; main.ts:handleHideAction branches on the `personal:`
+// prefix at click time to pick the right delete semantics.
+describe('renderCard — Hide button (v3 / v3.2)', () => {
   const personalPass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
     ...samplePass(),
     target_id: 'personal:anil:abc123',
@@ -713,12 +720,23 @@ describe('renderCard — Hide button (v3)', () => {
     expect(hide!.textContent).toBe('Hide');
   });
 
-  it('does NOT render the Hide button on a personal-target card', () => {
+  // v3.2 regression — Hide now renders on personal-target cards (was
+  // skipped in v3). Click semantics differ (handled in main.ts), but
+  // card.ts always emits the same 'hide' action.
+  it('ALSO renders the Hide button on a personal-target card (v3.2)', () => {
     const el = renderCard(personalPass(), NOW, false, () => undefined);
-    expect(el.querySelector('.btn-hide')).toBeNull();
+    const hide = el.querySelector<HTMLButtonElement>('.btn-hide');
+    expect(hide).not.toBeNull();
+    expect(hide!.textContent).toBe('Hide');
   });
 
-  it('emits the hide action on click', () => {
+  it('uses a personal-flavored title hint on personal-target cards (v3.2)', () => {
+    const el = renderCard(personalPass(), NOW, false, () => undefined);
+    const hide = el.querySelector<HTMLButtonElement>('.btn-hide')!;
+    expect(hide.title).toContain('Remove this personal target');
+  });
+
+  it('emits the hide action on click (curated card)', () => {
     const onAction = vi.fn();
     const el = renderCard(samplePass(), NOW, false, onAction);
     el.querySelector<HTMLButtonElement>('.btn-hide')!.click();
@@ -727,9 +745,27 @@ describe('renderCard — Hide button (v3)', () => {
     expect((onAction.mock.calls[0]![1] as PassEntry).target_id).toBe('tokyo-night');
   });
 
+  it('emits the hide action on click (personal card) (v3.2)', () => {
+    const onAction = vi.fn();
+    const el = renderCard(personalPass(), NOW, false, onAction);
+    el.querySelector<HTMLButtonElement>('.btn-hide')!.click();
+    expect(onAction).toHaveBeenCalledOnce();
+    expect(onAction.mock.calls[0]![0]).toBe('hide');
+    expect((onAction.mock.calls[0]![1] as PassEntry).target_id).toBe('personal:anil:abc123');
+  });
+
   it('renders Hide on forecast-variant curated cards too (no Shoot/Skip row)', () => {
     const el = renderCard(
       samplePass(), NOW, false, () => undefined, 'forecast',
+    );
+    expect(el.querySelector('.btn-hide')).not.toBeNull();
+    expect(el.querySelector('.btn-shoot')).toBeNull();
+    expect(el.querySelector('.btn-skip')).toBeNull();
+  });
+
+  it('renders Hide on forecast-variant personal cards too (v3.2)', () => {
+    const el = renderCard(
+      personalPass(), NOW, false, () => undefined, 'forecast',
     );
     expect(el.querySelector('.btn-hide')).not.toBeNull();
     expect(el.querySelector('.btn-shoot')).toBeNull();

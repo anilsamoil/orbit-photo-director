@@ -465,18 +465,87 @@ describe('main.ts: hide-from-card (v3)', () => {
     expect(toast.textContent).toContain('Profile tab');
   });
 
-  it('handleHideAction is a defensive no-op on a personal-target id', async () => {
+  // v3.2 — personal-target Hide flow now DELETES the target from
+  // profile.additions instead of being a defensive no-op. Restorable via
+  // the Profile-tab CRUD form ("re-add"). This matches the per-row
+  // Delete already shown on the Profile tab — Hide-from-card is the
+  // queue-side shortcut to the same op.
+  it('handleHideAction on a personal-target removes it from additions (v3.2)', async () => {
     const { init, handleHideAction } = await import('../src/main');
+    const profileModule = await import('../src/profile');
     await init();
+    // Seed a personal target on the active profile so handleHideAction
+    // has something to delete.
+    const raw = profileModule.loadProfile('anil')!;
+    const seeded = profileModule.addPersonalTarget(raw, {
+      id: 'personal:anil:abc',
+      name: 'My personal',
+      lat: 0,
+      lon: 0,
+      priority: 3,
+      createdAt: '2026-05-26T00:00:00Z',
+    });
+    profileModule.saveProfile(seeded);
     handleHideAction(buildPass({
       target_id: 'personal:anil:abc',
       target_name: 'My personal',
     }));
     const profile = JSON.parse(localStorage.getItem('opd-profile-anil')!);
-    // Personal id MUST NOT have been added to removedCuratedIds (that's
-    // a curated-id concept). The hide button isn't even rendered for
-    // personal targets; this guard catches future code changes.
+    // Target gone from additions.
+    expect(profile.additions.find((t: { id: string }) => t.id === 'personal:anil:abc')).toBeUndefined();
+    // And NOT added to removedCuratedIds — that's a curated-only list.
     expect(profile.removedCuratedIds).toEqual([]);
+  });
+
+  it('handleHideAction on a personal-target fires the "Removed personal target" toast (v3.2)', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    const profileModule = await import('../src/profile');
+    await init();
+    const raw = profileModule.loadProfile('anil')!;
+    const seeded = profileModule.addPersonalTarget(raw, {
+      id: 'personal:anil:xyz',
+      name: 'Backyard observatory',
+      lat: 10,
+      lon: 20,
+      priority: 3,
+      createdAt: '2026-05-26T00:00:00Z',
+    });
+    profileModule.saveProfile(seeded);
+    handleHideAction(buildPass({
+      target_id: 'personal:anil:xyz',
+      target_name: 'Backyard observatory',
+    }));
+    const toast = document.getElementById('toast')!;
+    expect(toast.hidden).toBe(false);
+    expect(toast.textContent).toContain('Removed personal target');
+    expect(toast.textContent).toContain('Backyard observatory');
+    expect(toast.textContent).toContain('re-add in Profile tab');
+  });
+
+  it('handleHideAction on a personal-target removes the card from DOM immediately (v3.2)', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    const profileModule = await import('../src/profile');
+    await init();
+    const raw = profileModule.loadProfile('anil')!;
+    const seeded = profileModule.addPersonalTarget(raw, {
+      id: 'personal:anil:dom',
+      name: 'DOM test target',
+      lat: 0,
+      lon: 0,
+      priority: 3,
+      createdAt: '2026-05-26T00:00:00Z',
+    });
+    profileModule.saveProfile(seeded);
+    const cardsHost = document.getElementById('cards')!;
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.dataset.targetId = 'personal:anil:dom';
+    cardsHost.appendChild(card);
+    handleHideAction(buildPass({
+      target_id: 'personal:anil:dom',
+      target_name: 'DOM test target',
+    }));
+    expect(document.querySelector('.card[data-target-id="personal:anil:dom"]')).toBeNull();
   });
 
   it('handleHideAction is idempotent when the id is already hidden', async () => {
