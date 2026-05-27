@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] Slot 6b — API hydration on Profile pane render
+## [1.6.13.0] - 2026-05-26
+
+### Slot 6b — API hydration on Profile pane render
 
 Hot-fix follow-up to slot 6. When the Profile pane mounts for the first time per session, it now fires a one-shot GET to `/api/profiles/<name>/targets` and merges the server's list into localStorage when the local additions list is empty. Closes the "open `?u=jack` on a fresh device and see 0 targets even though the server has 39" UX gap surfaced during smoke testing of v1.6.9.0.
 
