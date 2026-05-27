@@ -2,6 +2,19 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.21.0] - 2026-05-27
+
+### v3.3 — Drop day-mask, lower VIIRS opacity
+
+- **Fix**: Day side no longer goes black when both terminator + night-lights toggles are on.
+  - Root cause: v3.1's `terminator-day-mask-layer` painted opaque `#0b0d12` over the day polygon, which hid the basemap, clouds, AND the raster (not just the lights as intended).
+  - Verified via curl that GIBS `VIIRS_Black_Marble` PNG is RGB-no-alpha with dark-navy backgrounds (~rgb 4,5,15), so the v2 assumption that PNG transparency would handle the day side was wrong from the start.
+- **Fix**: Cloud toggle now has a visible effect everywhere (was hidden by the day-mask on the sun side and washed out by the 0.95-opacity raster on the night side).
+- VIIRS raster opacity 0.95 → 0.55 so basemap/clouds show through everywhere; city lights remain legible against the dimmed night-fill backdrop.
+- Removed: `terminator-day-mask-layer` + source, `applyDayMaskVisibility`, `terminatorDayPolygonFeatures` (no callers remained).
+- Tests: 924 → 910 (−14): −16 day-mask/day-polygon tests, +2 v3.3 regression tests (raster opacity = 0.55, day-mask absent).
+
+
 ## [1.6.20.0] - 2026-05-27
 
 ### v3.2 — Universal card buttons
