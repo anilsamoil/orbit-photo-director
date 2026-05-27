@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] v3 Operator Ergonomics
+## [1.6.18.0] - 2026-05-27
+
+### v3 Operator Ergonomics
 
 Three operator-ergonomics features bundled (same-day Anil feedback after
 v1.6.17.0). All frontend-only; no daemon / worker changes.
