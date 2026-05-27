@@ -23,7 +23,7 @@ from .main import run_tick
 
 log = logging.getLogger(__name__)
 
-HARD_TIMEOUT_SECONDS = 600  # 10 min
+HARD_TIMEOUT_SECONDS = 1800  # 30 min (was 600; bumped 2026-05-27 hotfix during NASA GIBS outage — multiplex+slow-cloud ticks need headroom)
 DEPLOY_TIMEOUT_SECONDS = 300  # 5 min
 INITIAL_BACKOFF_SECONDS = 30
 MAX_BACKOFF_SECONDS = 3600  # 1h
