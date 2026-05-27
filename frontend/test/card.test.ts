@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _resetOpenBreakdownsForTest, formatForecastHorizon, formatObsAge, formatRelativeBearing, renderCard, renderCards } from '../src/card';
+import { _resetOpenBreakdownsForTest, _resetOpenThumbnailsForTest, formatForecastHorizon, formatObsAge, formatRelativeBearing, renderCard, renderCards } from '../src/card';
 import type { PassEntry } from '../src/types';
 
 const samplePass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -590,5 +590,107 @@ describe('renderCard direction-of-look tag', () => {
     );
     const tag = card.querySelector('.tag.window-cupola');
     expect(tag?.textContent).toContain('fore');
+  });
+});
+
+// v2 — 🌍 CEO zoom imagery toggle (Jack feedback 2026-05-27). Personal-target
+// cards offer a thumbnail toggle that calls the caller-injected
+// `renderThumbnail` factory lazily. Non-personal cards never show the button.
+describe('renderCard — 🌍 thumbnail toggle (v2)', () => {
+  beforeEach(() => { _resetOpenThumbnailsForTest(); });
+
+  const personalPass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
+    ...samplePass(),
+    target_id: 'personal:anil:abc123',
+    target_name: 'My personal target',
+    ...overrides,
+  });
+
+  it('does NOT add the 🌍 button on a non-personal target card', () => {
+    const renderStub = vi.fn(() => document.createElement('div'));
+    const el = renderCard(
+      samplePass({ target_id: 'tokyo-night' }),
+      NOW, false, () => undefined,
+      { renderThumbnail: renderStub },
+    );
+    expect(el.querySelector('.btn-thumbnail')).toBeNull();
+    expect(renderStub).not.toHaveBeenCalled();
+  });
+
+  it('does NOT add the 🌍 button when no renderThumbnail factory is passed', () => {
+    const el = renderCard(personalPass(), NOW, false, () => undefined);
+    expect(el.querySelector('.btn-thumbnail')).toBeNull();
+  });
+
+  it('adds the 🌍 button on a personal-target card when renderThumbnail is provided', () => {
+    const renderStub = vi.fn(() => {
+      const d = document.createElement('div');
+      d.className = 'stub-thumbnail';
+      return d;
+    });
+    const el = renderCard(
+      personalPass(), NOW, false, () => undefined,
+      { renderThumbnail: renderStub },
+    );
+    const btn = el.querySelector<HTMLButtonElement>('.btn-thumbnail');
+    expect(btn).not.toBeNull();
+    expect(btn!.textContent).toBe('🌍');
+    expect(btn!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('defers thumbnail render until the operator clicks the 🌍 button', () => {
+    const renderStub = vi.fn(() => {
+      const d = document.createElement('div');
+      d.className = 'stub-thumbnail';
+      return d;
+    });
+    const el = renderCard(
+      personalPass(), NOW, false, () => undefined,
+      { renderThumbnail: renderStub },
+    );
+    expect(renderStub).not.toHaveBeenCalled();
+    el.querySelector<HTMLButtonElement>('.btn-thumbnail')!.click();
+    expect(renderStub).toHaveBeenCalledOnce();
+    expect(el.querySelector('.stub-thumbnail')).not.toBeNull();
+  });
+
+  it('toggles hidden state on click', () => {
+    const el = renderCard(
+      personalPass(), NOW, false, () => undefined,
+      { renderThumbnail: () => document.createElement('div') },
+    );
+    const btn = el.querySelector<HTMLButtonElement>('.btn-thumbnail')!;
+    const container = el.querySelector<HTMLElement>('.pass-thumbnail-container')!;
+    expect(container.hidden).toBe(true);
+    btn.click();
+    expect(container.hidden).toBe(false);
+    expect(btn.classList.contains('open')).toBe(true);
+    btn.click();
+    expect(container.hidden).toBe(true);
+    expect(btn.classList.contains('open')).toBe(false);
+  });
+
+  it('preserves open state across re-renders via the OPEN_THUMBNAILS registry', () => {
+    const pass = personalPass();
+    const renderStub = vi.fn(() => document.createElement('div'));
+    // First render + open.
+    const el1 = renderCard(pass, NOW, false, () => undefined, { renderThumbnail: renderStub });
+    el1.querySelector<HTMLButtonElement>('.btn-thumbnail')!.click();
+    // Second render of the SAME pass — open state should persist.
+    const el2 = renderCard(pass, NOW, false, () => undefined, { renderThumbnail: renderStub });
+    expect(el2.querySelector<HTMLButtonElement>('.btn-thumbnail')!
+      .getAttribute('aria-expanded')).toBe('true');
+    const container = el2.querySelector<HTMLElement>('.pass-thumbnail-container')!;
+    expect(container.hidden).toBe(false);
+  });
+
+  it('offers the thumbnail on forecast variant cards too (no Shoot/Skip row)', () => {
+    const el = renderCard(
+      personalPass(), NOW, false, () => undefined,
+      { variant: 'forecast', renderThumbnail: () => document.createElement('div') },
+    );
+    expect(el.querySelector('.btn-thumbnail')).not.toBeNull();
+    // Forecast cards have no shoot button.
+    expect(el.querySelector('.btn-shoot')).toBeNull();
   });
 });

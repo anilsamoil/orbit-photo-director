@@ -13,6 +13,39 @@ export interface RenderOptions {
    *  so first-time users understand why their clicks aren't persisting
    *  to the calibration log. Click still queues to localStorage. */
   tokenSet?: boolean;
+  /** v2 — CEO zoom imagery (Jack feedback 2026-05-27). When provided AND
+   *  the pass's target_id is a personal-target id (`personal:…`), the card
+   *  adds a 🌍 icon-button that toggles an inline thumbnail under the
+   *  card. The factory returns the thumbnail DOM (renderPassThumbnail
+   *  from pass-thumbnail.ts); we pass it as a callback so card.ts doesn't
+   *  need to import the thumbnail module (keeps the test surface clean —
+   *  thumbnail tests run in isolation, card tests don't need to stub
+   *  satellite.js or Esri tiles). */
+  renderThumbnail?: (pass: PassEntry) => HTMLElement;
+}
+
+/** Personal-target ids are minted as `personal:<profile>:<token>` by
+ *  profile.ts:makePersonalTargetId. The 🌍 thumbnail button is offered
+ *  ONLY on these cards (per design doc: "Each personal-target pass card
+ *  gets a 🌍 icon-button"). */
+function isPersonalTarget(targetId: string): boolean {
+  return targetId.startsWith('personal:');
+}
+
+/** Per-session per-card expansion state for the 🌍 thumbnail. Module-local
+ *  Set keyed by (target_id + closest_approach) so re-renders preserve
+ *  open state. Same pattern as OPEN_BREAKDOWNS for score panels. Not
+ *  persisted — refresh / tab-close collapses everything. */
+const OPEN_THUMBNAILS = new Set<string>();
+
+function thumbnailKey(p: PassEntry): string {
+  return `${p.target_id}|${p.closest_approach}`;
+}
+
+/** Test-only: clear the open-thumbnail registry between tests so module
+ *  state from one test doesn't leak into the next. */
+export function _resetOpenThumbnailsForTest(): void {
+  OPEN_THUMBNAILS.clear();
 }
 
 /** Render the card list into the cards container.
@@ -155,6 +188,53 @@ export function renderCard(
 
   const score = renderScoreWithBreakdown(p);
 
+  // v2 — 🌍 CEO zoom imagery button (Jack feedback 2026-05-27). Offered on
+  // personal-target pass cards only. Tap toggles an inline thumbnail under
+  // the card; per-session per-card state. Renderer is injected by the
+  // caller (main.ts) to keep card.ts free of satellite/tile deps.
+  let thumbnailToggle: HTMLButtonElement | null = null;
+  let thumbnailContainer: HTMLDivElement | null = null;
+  if (opts.renderThumbnail && isPersonalTarget(p.target_id)) {
+    const key = thumbnailKey(p);
+    const initiallyOpen = OPEN_THUMBNAILS.has(key);
+    thumbnailToggle = document.createElement('button');
+    thumbnailToggle.type = 'button';
+    thumbnailToggle.className = initiallyOpen
+      ? 'btn btn-thumbnail open'
+      : 'btn btn-thumbnail';
+    thumbnailToggle.setAttribute('aria-expanded', String(initiallyOpen));
+    thumbnailToggle.setAttribute(
+      'aria-label', 'Toggle satellite imagery thumbnail',
+    );
+    thumbnailToggle.title = 'Show / hide satellite imagery + ISS track for this pass';
+    thumbnailToggle.textContent = '🌍';
+    thumbnailContainer = document.createElement('div');
+    thumbnailContainer.className = 'pass-thumbnail-container';
+    thumbnailContainer.hidden = !initiallyOpen;
+    if (initiallyOpen) {
+      // Eagerly render on initial open — the per-render path is what the
+      // user-click does too, just deferred until the click.
+      thumbnailContainer.appendChild(opts.renderThumbnail(p));
+    }
+    thumbnailToggle.addEventListener('click', () => {
+      const opening = thumbnailContainer!.hidden;
+      thumbnailContainer!.hidden = !opening;
+      thumbnailToggle!.setAttribute('aria-expanded', String(opening));
+      thumbnailToggle!.classList.toggle('open', opening);
+      if (opening) {
+        OPEN_THUMBNAILS.add(key);
+        // Render lazily on first open. Subsequent opens reuse the
+        // already-mounted thumbnail (browser HTTP cache serves the tile
+        // instantly on re-show; SVG overlay is cheap to keep around).
+        if (thumbnailContainer!.children.length === 0) {
+          thumbnailContainer!.appendChild(opts.renderThumbnail!(p));
+        }
+      } else {
+        OPEN_THUMBNAILS.delete(key);
+      }
+    });
+  }
+
   // Forecast cards omit Shoot/Skip — passes that far out aren't actionable
   // yet, and the user submits a Shoot record only when actually shooting.
   if (variant === 'observed') {
@@ -174,9 +254,21 @@ export function renderCard(
     if (!tokenSet) skip.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
     skip.addEventListener('click', () => onAction('skip', p));
     actions.append(shoot, skip);
+    if (thumbnailToggle) actions.appendChild(thumbnailToggle);
     card.append(name, countdown, meta, score, actions);
+    if (thumbnailContainer) card.appendChild(thumbnailContainer);
   } else {
     card.append(name, countdown, meta, score);
+    // Forecast variants offer the 🌍 too — same value for the operator,
+    // just without the Shoot/Skip row to attach it to. Append directly
+    // to the card.
+    if (thumbnailToggle) {
+      const fcActions = document.createElement('div');
+      fcActions.className = 'card-actions card-actions-forecast';
+      fcActions.appendChild(thumbnailToggle);
+      card.appendChild(fcActions);
+    }
+    if (thumbnailContainer) card.appendChild(thumbnailContainer);
   }
   return card;
 }

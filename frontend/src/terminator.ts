@@ -177,6 +177,277 @@ export function subsolarFeature(when: Date): GeoJSON.Feature {
   };
 }
 
+/** Build night-side shading polygon features (v2 — Chris feedback 2026-05-27).
+ *  Returns a small set of GeoJSON Polygon features that cover the night-side
+ *  hemisphere at the given UTC time. Rendered as a 0.55-opacity black fill
+ *  under the terminator-line layer so the day/night boundary reads at a glance
+ *  the way GoISSWatch's "clean dark night-side" does.
+ *
+ *  Strategy: for each latitude in 1° steps, sample the two terminator
+ *  longitudes (dawn + dusk). The night arc between them is whichever
+ *  longitude span is FARTHER from the subsolar longitude. We emit a thin
+ *  polygon per pair of adjacent latitudes (so we cleanly avoid the
+ *  antimeridian + pole sagas the v1 module deferred): the polygon is a
+ *  quadrilateral [lat_i_night_west, lat_i_night_east, lat_i+1_night_east,
+ *  lat_i+1_night_west]. Splits at antimeridian crossings by emitting two
+ *  quads (the western part and the eastern part).
+ *
+ *  Polar regions (full day or full night per `terminatorLonAtLat` returning
+ *  null) handled at the calling boundary: when a latitude has no terminator
+ *  AND the subsolar point is on the OPPOSITE hemisphere → polar night → emit
+ *  a full-width slab. When the subsolar point is on the SAME hemisphere →
+ *  polar day → emit nothing for that latitude band.
+ *
+ *  Performance: ~180 latitude steps × constant work per step → renders in
+ *  ~5ms. Called from map.ts's refreshTerminatorSources, same cadence as the
+ *  line (30s tick + lookahead-scrub).
+ */
+export function terminatorNightPolygonFeatures(when: Date): GeoJSON.Feature[] {
+  const subsolar = subsolarPoint(when);
+  const LAT_STEP = 2; // 2° step is plenty for visual fill; halves polygon count vs 1° step
+  const features: GeoJSON.Feature[] = [];
+
+  // Build per-latitude night-arc descriptors: either a [west_lon, east_lon]
+  // pair where the arc is "from west going east (possibly across the
+  // antimeridian)" — that arc is on the night side — or 'all' for polar
+  // night or null for polar day.
+  type NightArc = { west: number; east: number } | 'all' | null;
+  const arcs: NightArc[] = [];
+  // Sample one extra latitude on each end to ensure top/bottom polygons close.
+  const lats: number[] = [];
+  for (let lat = -90; lat <= 90; lat += LAT_STEP) lats.push(lat);
+
+  for (const lat of lats) {
+    const lons = terminatorLonAtLat(lat, subsolar.lat, subsolar.lon);
+    if (lons === null) {
+      // Polar day or polar night. Same-hemisphere as subsolar → polar day.
+      // Opposite hemisphere → polar night. (At |lat| ≈ 90, sin(lat)*sin(dec)
+      // signs determine which.)
+      const sameHemi = (lat >= 0) === (subsolar.lat >= 0);
+      arcs.push(sameHemi ? null : 'all');
+      continue;
+    }
+    // Two terminator crossings; the night arc is the one farther from the
+    // subsolar longitude. Compute which lon is "evening" (west of subsolar
+    // going east, into night) vs "morning" (east of subsolar going east,
+    // out of night). Use angular distance to the antisolar meridian.
+    const antisolar = wrapLon(subsolar.lon + 180);
+    const [a, b] = lons;
+    // The night arc goes from one terminator-lon through the antisolar
+    // meridian to the other terminator-lon. We name it "west → east" walking
+    // east; if the arc crosses the antimeridian, downstream code splits it.
+    // The terminator longitudes are symmetric ±H about subsolar; the one
+    // closer to subsolar+180 going one way is the "evening" boundary, the
+    // other is "morning".
+    // Simpler: pick the arc that CONTAINS the antisolar longitude.
+    const arcContains = (west: number, east: number, lon: number): boolean => {
+      // Walk east from west to east, possibly across antimeridian.
+      let span = east - west;
+      while (span < 0) span += 360;
+      let off = lon - west;
+      while (off < 0) off += 360;
+      return off <= span;
+    };
+    if (arcContains(a, b, antisolar)) {
+      arcs.push({ west: a, east: b });
+    } else {
+      arcs.push({ west: b, east: a });
+    }
+  }
+
+  // Emit one quad per adjacent latitude band.
+  for (let i = 0; i < lats.length - 1; i++) {
+    const latS = lats[i]!;
+    const latN = lats[i + 1]!;
+    const arcS = arcs[i]!;
+    const arcN = arcs[i + 1]!;
+    // Both polar day → skip.
+    if (arcS === null && arcN === null) continue;
+    // Either all-night → emit full-width slab.
+    if (arcS === 'all' || arcN === 'all') {
+      // Full-width slab covers the world-copy too via duplication below.
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[
+            [-180, latS], [180, latS], [180, latN], [-180, latN], [-180, latS],
+          ]],
+        },
+      });
+      continue;
+    }
+    // If one side is polar-day, use the other side's arc on both rows
+    // (the band is tiny — 2° at most — and the visual approximation is
+    // imperceptible vs the math complexity).
+    const safeS = arcS === null ? arcN as { west: number; east: number } : arcS;
+    const safeN = arcN === null ? arcS as { west: number; east: number } : arcN;
+
+    // Walk from safeS.west → safeS.east going east; same for north row.
+    // To produce clean quads that never span > 180° of longitude (which
+    // would cause MapLibre to render the polygon across the wrong side
+    // of the antimeridian), parameterize the eastward walk in [0, 360)
+    // for both rows in their own continuous space, then split at the
+    // first +180-crossing the band as a whole encounters.
+    const buildQuads = (
+      sw: number, se: number, nw: number, ne: number,
+    ): [number, number][][] => {
+      // Normalize so each row's east >= west; track each row's offset
+      // so we can map back to wrapped lons after computing quad bounds.
+      let seN = se, neN = ne;
+      if (seN < sw) seN += 360;
+      if (neN < nw) neN += 360;
+      // Convert each row's [west, east] into a continuous parametric
+      // range expressed as raw eastward-walk lons (possibly > 180).
+      // Then unify: take the unioned start = min(sw, nw), unioned end
+      // = max(seN, neN). This guarantees both row endpoints lie inside
+      // the unified band, so the resulting quads enclose the night arc
+      // without spanning the wrong way around the globe.
+      //
+      // The unified band's total width is bounded by max(seN-sw, neN-nw)
+      // — both row widths are independently < 180° (night arcs at one
+      // latitude can be at most 360° - 2H_min which is ≤ 180° at extreme
+      // latitudes; the geometry guarantees this). The union widens at
+      // most by the latitude-to-latitude wobble of the terminator lon,
+      // which is small per 2° step.
+      const startN = Math.min(sw, nw);
+      const endN = Math.max(seN, neN);
+      // If the unified band fits in [startN, startN+180], single quad;
+      // otherwise split it at the antimeridian (lon = 180 in absolute).
+      // Express the antimeridian crossing as the first multiple of 180
+      // strictly greater than startN.
+      const totalSpan = endN - startN;
+      if (totalSpan <= 0) return [];
+      // Find the antimeridian crossing inside the unioned walk (the lon
+      // value that's congruent to 180 mod 360 and falls in (startN, endN)).
+      let crossing: number | null = null;
+      // Try +180 and +180+360 — startN ∈ [-180, 540] practically; the
+      // crossing of interest is the smallest 180+k*360 > startN.
+      for (let k = -1; k <= 2; k++) {
+        const c = 180 + k * 360;
+        if (c > startN && c < endN) { crossing = c; break; }
+      }
+      const wrapBackToWorld = (lon: number): number => {
+        // Wrap into [-180, 180]. The "world-copy duplication" loop later
+        // emits the +360 / -360 copies separately, so we keep the quad
+        // ring in the canonical world here.
+        let v = lon;
+        while (v > 180) v -= 360;
+        while (v <= -180) v += 360;
+        return v;
+      };
+      // Build per-row endpoint lons in the unioned coordinate frame, then
+      // wrap back. The polygon ring uses the unioned-frame values for the
+      // interior calculation (no wrap), then we wrap_back when emitting
+      // the final coordinates — but the wrap-back can re-introduce the
+      // 180-bleed. Easier: emit the quad in the UNIONED frame (lons may
+      // exceed 180), then split at the crossing, then wrap each split
+      // piece back to world coords.
+      const quadsRaw: [number, number][][] = [];
+      if (crossing === null) {
+        // Single quad in unioned frame.
+        quadsRaw.push([
+          [sw, latS], [seN, latS], [neN, latN], [nw, latN], [sw, latS],
+        ]);
+      } else {
+        // Split at `crossing` (= 180 + k*360). Piece-1: [startN, crossing].
+        // Piece-2: [crossing, endN]. For each row, clip the [west, east]
+        // segment at `crossing` and emit either or both pieces depending
+        // on which side the row's lons fall.
+        // West piece (row segments restricted to <= crossing):
+        const piece1 = (
+          rowWest: number, rowEast: number,
+        ): [number, number] | null => {
+          if (rowEast <= crossing!) return [rowWest, rowEast];
+          if (rowWest >= crossing!) return null;
+          return [rowWest, crossing!];
+        };
+        // East piece (row segments restricted to >= crossing):
+        const piece2 = (
+          rowWest: number, rowEast: number,
+        ): [number, number] | null => {
+          if (rowWest >= crossing!) return [rowWest, rowEast];
+          if (rowEast <= crossing!) return null;
+          return [crossing!, rowEast];
+        };
+        const s1 = piece1(sw, seN), n1 = piece1(nw, neN);
+        if (s1 && n1) {
+          quadsRaw.push([
+            [s1[0], latS], [s1[1], latS],
+            [n1[1], latN], [n1[0], latN],
+            [s1[0], latS],
+          ]);
+        }
+        const s2 = piece2(sw, seN), n2 = piece2(nw, neN);
+        if (s2 && n2) {
+          quadsRaw.push([
+            [s2[0], latS], [s2[1], latS],
+            [n2[1], latN], [n2[0], latN],
+            [s2[0], latS],
+          ]);
+        }
+      }
+      // Wrap each raw quad as a WHOLE: compute a single offset (multiple
+      // of 360) that brings the quad's MIDPOINT into [-180, 180], then
+      // apply that offset to every vertex. This keeps the quad's lons
+      // monotonic across the antimeridian rather than wrapping individual
+      // vertices independently (which would tear a [180, 250] piece into
+      // [180, -110]).
+      return quadsRaw.map((q) => {
+        const lons = q.map(([lon]) => lon);
+        const mid = (Math.min(...lons) + Math.max(...lons)) / 2;
+        let offset = 0;
+        while (mid + offset > 180) offset -= 360;
+        while (mid + offset <= -180) offset += 360;
+        return q.map(([lon, lat]) => [lon + offset, lat] as [number, number]);
+      });
+    };
+    const quads = buildQuads(safeS.west, safeS.east, safeN.west, safeN.east);
+    for (const q of quads) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [q] },
+      });
+    }
+  }
+
+  // World-copy duplication so the night shading renders continuously when
+  // the operator pans east/west across world copies. Mirrors the line
+  // duplication pattern above.
+  const duplicated: GeoJSON.Feature[] = [];
+  for (const f of features) {
+    duplicated.push(f);
+    const g = f.geometry as GeoJSON.Polygon;
+    duplicated.push({
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'Polygon',
+        coordinates: g.coordinates.map((ring) =>
+          (ring as [number, number][]).map(
+            ([lon, lat]) => [lon + 360, lat] as [number, number],
+          ),
+        ),
+      },
+    });
+    duplicated.push({
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'Polygon',
+        coordinates: g.coordinates.map((ring) =>
+          (ring as [number, number][]).map(
+            ([lon, lat]) => [lon - 360, lat] as [number, number],
+          ),
+        ),
+      },
+    });
+  }
+  return duplicated;
+}
+
 /** ISS illumination state at a (when, lat, lon) tuple — used by v1.5.3.0
  *  (Chris feedback 2026-05-21) to color the ground-track line by whether
  *  the ISS itself is in sunlight, in Earth's shadow, or in the "twilight"

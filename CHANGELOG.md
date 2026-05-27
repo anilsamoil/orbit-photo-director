@@ -2,6 +2,95 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.16.0] - 2026-05-27
+
+### v2 Operator Unlock
+
+Bundled v2 batch addressing first-round feedback from both ISS operators after v1.6.14.0:
+CEO zoom imagery (Jack's third missing primitive), token-bug fix (Chris's auth footgun),
+Chris's three map-polish asks, and a structured Web Push design parked for the next batch.
+
+### Component 1 — CEO zoom imagery on pass cards (Jack feedback 2026-05-27)
+
+Each personal-target pass card now carries a `🌍` icon-button that expands an inline
+satellite thumbnail under the card. Tap again to collapse; per-session per-card state
+(not persisted). The thumbnail:
+
+- Renders a single Esri World Imagery tile at z=12 (~9.5 km tile-width) centered on
+  the target — matches the main Map tab's basemap for visual consistency.
+- Overlays the ISS ground-track polyline sampled at 30s intervals across the pass
+  AOS → LOS window (closest_approach ± 5 min). Polynomial first (`liveIssPosition`),
+  SGP4 fallback (`liveIssPositionSGP4`) for samples past the polynomial window.
+- Shows the ISS marker at `iss_at_closest`, target crosshair at the thumbnail center,
+  and a caption with "N km nadir · M° off · in P min".
+- On Esri tile failure: gray placeholder + "Imagery unavailable — {error}" caption.
+  Polyline overlay still renders (orbital geometry is the most load-bearing context).
+- Browser HTTP cache only for v1 — no SW pre-cache, no prefetch on card mount.
+- "© Esri, Maxar, Earthstar Geographics" attribution per Esri free-tier ToS.
+
+New file `frontend/src/pass-thumbnail.ts`. Wired into `card.ts` via an injected
+`renderThumbnail` factory so the card module stays free of satellite/tile dependencies.
+
+### Component 2 — Token-bug fix (Chris feedback 2026-05-27)
+
+`postCalib` no longer calls `clearToken()` on a 401 response. The token field now
+stays populated (so the operator can see what they pasted and correct it), the
+payload is queued for retry, and a distinct toast surfaces:
+`Token rejected — re-paste in Log tab (your current token was not accepted by the server)`.
+The per-call 401 handling lives inside `postCalib` itself, NOT in the global
+`shouldQueueOnStatus` helper — other endpoints (profile-api, etc.) keep their
+existing fail-fast-on-auth behavior. `shouldQueueOnStatus` is now exported so the
+scoping guard is testable.
+
+Pre-existing footgun, not a regression from v1.6.14.0 — `calib.ts:71-79`. Today's
+CALIB_TOKEN rotation invalidated every previously-pasted token and surfaced it.
+
+### Component 3 — Map polish bundle (Chris feedback 2026-05-27)
+
+Three bundled changes to the map view, all addressing Chris's same-day asks:
+
+- **3a Terminator polish:** Added a night-side polygon fill (`terminator-night-fill-layer`,
+  `rgba(0, 0, 0, 0.55)`) plus a 40px line-blur on the existing terminator line so the
+  day/night boundary is a soft gradient instead of a hard edge. Matches GoISSWatch's
+  clean dark night-side reference. New `terminatorNightPolygonFeatures` helper in
+  `terminator.ts` handles antimeridian + polar-night cases.
+- **3b VIIRS night lights overlay:** Toggleable map control (default off) sourcing
+  NASA GIBS `VIIRS_Black_Marble` annual composite. PNG-transparent on the day side
+  so the basemap shows through; renders above the terminator night-fill so city
+  lights stay visible. Year fallback: if last year's composite 404/5xx's, walks
+  back one year; if both fail, hides the layer silently with one console.warn.
+- **3c Esri labels overlay:** New toggleable `Reference/World_Boundaries_and_Places`
+  overlay (default on) rendered as the topmost layer so country/state/city/road
+  labels stay legible regardless of which basemap is active. No API key.
+
+Two new HTML controls: `toggle-night-lights` and `toggle-labels`. Three new
+preference keys persisted to localStorage following the existing cloud/terminator
+pattern.
+
+### Component 4 — Real Web Push deferred to TODOs.md
+
+Full architectural spec for next batch (VAPID + Worker push endpoint + daemon
+scheduler + frontend opt-in UX) added to `TODOS.md` as a self-contained section.
+5-7 days estimated. Refuted: in-app reminders (iPad isn't always app-focused).
+
+### Tests
+
+- Frontend: **795 → 847 vitest pass (+52)**
+  - 21 new tests in `test/pass-thumbnail.test.ts` (URL build, lonLat-to-tile,
+    projection, polynomial sampling, countdown, DOM scaffold, tile-failure
+    placeholder, XSS guard)
+  - 9 new tests in `test/calib.test.ts` (3 for the 401 keep-token-and-queue
+    behavior, 5 for the `shouldQueueOnStatus` scoping guard, 1 import addition)
+  - 7 new tests in `test/card.test.ts` (🌍 gating on personal-target,
+    lazy thumbnail render, toggle state, open-across-rerender, forecast variant)
+  - 5 new tests in `test/terminator.test.ts` (`terminatorNightPolygonFeatures`
+    coverage, antisolar containment, antimeridian handling, polar-night slabs,
+    world-copy duplication)
+  - 6 new tests in `test/map-night-lights.test.ts` (GIBS Black Marble URL,
+    max-zoom constant, year-fallback policy)
+  - 6 new tests in `test/map-labels.test.ts` (visibility toggle, persistence
+    default-on)
+
 ## [1.6.15.0] - 2026-05-27
 
 ### GLM concurrency fix — daemon tick reliability

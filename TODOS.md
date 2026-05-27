@@ -76,6 +76,33 @@ Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-
   - More flexible "coordinates" column: accept lat/long OR city/state/country OR google-search-term for famous places (the bootstrap script already does this via Nominatim — formalize it as the import contract for slot 9)
   - Add a `name` column (hometown, "Ben's house") separate from the location field
 
+### V2.5 — Real Web Push notifications (deferred from v2 batch 2026-05-27)
+
+Goal: Jack's iPad fires a notification when an opted-in target's pass is within N minutes,
+even when the PWA is not in focus.
+
+Architecture:
+- VAPID keypair generated via `web-push` CLI; private key stored as Wrangler secret
+  (PUSH_VAPID_PRIVATE_KEY), public key exposed as PUSH_VAPID_PUBLIC_KEY env on the Worker
+- Worker endpoint POST /api/push/subscribe accepts PushSubscription JSON + profile name +
+  per-target alarm config; persists to R2 at `push-subscriptions/<profile>/<endpoint-hash>.json`
+- Daemon's per-tick loop computes upcoming passes (already does), checks active subscriptions,
+  enqueues push payloads (target name, time, score) to a Worker /api/push/dispatch endpoint
+- Worker /api/push/dispatch sends via web-push library to all matching subscriptions, with
+  per-pass dedupe to avoid duplicate fires
+- Frontend: profile-crud.ts gains a "Notifications" section with global "alert me N min before"
+  + per-target toggle. Uses Notification.requestPermission() + navigator.serviceWorker.ready
+  + PushManager.subscribe() with VAPID public key
+- Service worker: extend dist/sw.js to register a push event handler that calls
+  registration.showNotification() with the payload
+
+Effort: 5-7 days. Dependencies: this v2 batch must be live + stable; iOS Safari 16.4+ required
+for iPad PWA push (confirmed Jack is on a recent iOS).
+
+Refuted alternatives:
+- In-app reminders only (rejected: iPad isn't always app-focused during shifts, would train
+  operators to distrust the feature)
+
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
 ### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub

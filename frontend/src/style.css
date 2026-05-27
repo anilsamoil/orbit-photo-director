@@ -537,6 +537,116 @@ main {
 
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* v2 — 🌍 thumbnail toggle (Jack feedback 2026-05-27).
+ * Small flex-shrink button sitting next to Shoot/Skip on personal-target
+ * cards. Forecast variant gets its own .card-actions-forecast row.
+ */
+.btn-thumbnail {
+  flex: 0 0 auto;
+  width: 2.4rem;
+  padding: 0.45rem 0.4rem;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+.btn-thumbnail.open {
+  background: var(--accent, #5cd0ff);
+  color: var(--bg);
+  border-color: transparent;
+}
+.card-actions-forecast {
+  margin-top: 0.4rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* v2 — pass thumbnail (inline satellite imagery + ISS track overlay).
+ * Container sits below the pass card's actions row; hidden by default,
+ * shown when the operator taps 🌍. Per-session per-card state (not
+ * persisted) — fresh page-load collapses everything.
+ */
+.pass-thumbnail-container {
+  grid-column: 1 / -1;
+  margin-top: 0.5rem;
+}
+.pass-thumbnail {
+  position: relative;
+  display: inline-block;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  max-width: 100%;
+}
+.pass-thumbnail-image {
+  display: block;
+  /* Logical size; the browser scales the 256px tile on retina screens. */
+  width: 256px;
+  height: 256px;
+  object-fit: cover;
+}
+.pass-thumbnail-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 256px;
+  height: 256px;
+  pointer-events: none;
+}
+.pass-thumbnail-iss-track {
+  fill: none;
+  stroke: #5cd0ff;        /* matches the main map's iss-track color */
+  stroke-width: 2;
+  stroke-opacity: 0.9;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
+}
+.pass-thumbnail-target-marker {
+  fill: #ffd45c;          /* matches subsolar dot color in the main map */
+  stroke: #0b0d12;
+  stroke-width: 1.5;
+  opacity: 0.95;
+}
+.pass-thumbnail-iss-marker {
+  fill: #5cd0ff;
+  stroke: #0b0d12;
+  stroke-width: 1.5;
+  opacity: 0.95;
+}
+.pass-thumbnail-caption {
+  padding: 0.35rem 0.6rem 0.15rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  background: rgba(11, 13, 18, 0.85);
+  position: absolute;
+  bottom: 1.2rem;  /* sits above the attribution row */
+  left: 0;
+  right: 0;
+}
+.pass-thumbnail-attribution {
+  padding: 0.15rem 0.6rem 0.25rem;
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  background: rgba(11, 13, 18, 0.85);
+  text-align: right;
+}
+.pass-thumbnail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 1rem;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  font-size: 0.8rem;
+}
+.pass-thumbnail-tile-failed .pass-thumbnail-overlay {
+  /* When the tile fails, the SVG overlay still shows the orbital
+   * geometry on top of the gray placeholder — operator gets the most
+   * load-bearing context (ISS track + target marker) even offline. */
+  opacity: 0.85;
+}
+
 .empty {
   text-align: center;
   color: var(--text-dim);

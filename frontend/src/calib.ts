@@ -39,9 +39,14 @@ export function clearToken(): void {
  *
  *  Queue: network errors, 429, 5xx — recoverable.
  *  Drop:  4xx (except 429) — not recoverable; retrying floods the queue with junk.
- *  401:   special — also clear the token so the user gets the setup banner.
- */
-function shouldQueueOnStatus(status: number): boolean {
+ *
+ *  Note (v2 token-bug fix 2026-05-27): 401 is intentionally NOT included here.
+ *  This helper stays "drop on 401" so other endpoints (profile-api, etc.) keep
+ *  their existing fail-fast-on-auth behavior. The calib path has its own
+ *  per-call 401 handling inside `postCalib` (queue + distinct toast) — that
+ *  scoping is deliberate. Don't add 401 here without also auditing every
+ *  caller of `shouldQueueOnStatus`. */
+export function shouldQueueOnStatus(status: number): boolean {
   if (status === 429) return true;
   if (status >= 500) return true;
   return false; // 4xx (other than 429) — drop
@@ -69,9 +74,16 @@ export async function postCalib(
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
+      // v2 token-bug fix (Chris feedback 2026-05-27): on 401, KEEP the token
+      // (so the operator can see what's in their field and re-paste/edit) AND
+      // queue the payload (well-formed; will succeed once token is corrected).
+      // Surfaced as `server_401` so the UI shows a distinct "Token rejected"
+      // toast instead of the generic "Server rejected …" message. Per-call
+      // scoping: we do NOT add 401 to `shouldQueueOnStatus` — other endpoints
+      // (profile-api etc.) should still fail-fast on auth errors.
       if (resp.status === 401) {
-        // Token rejected; clear it so the next page load surfaces the setup banner.
-        clearToken();
+        enqueue(body);
+        return { ok: false, reason: 'server_401' };
       }
       if (shouldQueueOnStatus(resp.status)) {
         enqueue(body);
