@@ -2,6 +2,35 @@
 
 All notable changes to Orbit Photo Director.
 
+## [Unreleased] v2 Hotfix Bundle
+
+Same-day operator feedback after v1.6.16.0 (Anil). Four surgical fixes, one PR:
+
+- **Terminator night-fill opacity 0.55 → 0.30.** The v2-spec bump to 0.55 obscured
+  the basemap too aggressively — labels, coastlines, and city lights vanished under
+  the dim layer. 0.30 still reads as "night side" at a glance without smothering
+  the underlying features. (`frontend/src/map.ts` + comment in `terminator.ts`.)
+- **VIIRS Black Marble: hardcode 2016-01-01.** GIBS publishes `VIIRS_Black_Marble`
+  for only two discrete dates — 2012-01-01 and 2016-01-01 — verified via live HTTP
+  + GetCapabilities XML. The prior `currentYear - 1` URL with a one-year fallback
+  walk silently 404'd and killed the night-lights toggle. We now hardcode 2016 as
+  the canonical date and replace the year-fallback machinery with a one-shot
+  console.warn for the (now only possible) GIBS-down case. Follow-up if more recent
+  imagery is wanted: switch to the daily `VIIRS_SNPP_DayNightBand_ENCC` layer.
+- **Pin-to-ISS: `easeTo({duration:500})` → `flyTo({duration:800, essential:true})`.**
+  At high zoom, the 500ms linear pan looked frozen because MapLibre couldn't load
+  tiles fast enough across the traversal. `flyTo` zooms out, pans, zooms back in,
+  which handles any zoom level gracefully. The toggle-off-while-following branch
+  is preserved unchanged (no camera op on exit). `essential:true` bypasses
+  `prefers-reduced-motion` — the operator explicitly clicked.
+- **Profile picker: belt-and-braces self-heal.** The picker now scans
+  `localStorage` for `opd-profile-<name>` keys in addition to reading the
+  `opd-profile-names` cache list. Profiles that exist on disk but aren't in the
+  cache (operator devtools-wipe, fresh device that only visited one URL, partial
+  import) now appear in the dropdown. Names are validated via `isValidProfileName`
+  before inclusion (defense against hand-edited keys with uppercase / underscores
+  / empty segments).
+
 ## [1.6.16.0] - 2026-05-27
 
 ### v2 Operator Unlock

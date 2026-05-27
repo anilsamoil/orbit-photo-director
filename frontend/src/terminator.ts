@@ -179,7 +179,7 @@ export function subsolarFeature(when: Date): GeoJSON.Feature {
 
 /** Build night-side shading polygon features (v2 — Chris feedback 2026-05-27).
  *  Returns a small set of GeoJSON Polygon features that cover the night-side
- *  hemisphere at the given UTC time. Rendered as a 0.55-opacity black fill
+ *  hemisphere at the given UTC time. Rendered as a 0.30-opacity black fill
  *  under the terminator-line layer so the day/night boundary reads at a glance
  *  the way GoISSWatch's "clean dark night-side" does.
  *

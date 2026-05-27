@@ -98,6 +98,35 @@ export function renderProfilePane(): void {
   bindProfileChangedSubscriber();
 }
 
+/** Scan localStorage for `opd-profile-<name>` keys and return the validated
+ *  profile names. Defense against the names-list cache (`opd-profile-names`)
+ *  drifting from reality — e.g., operator wiped the cache via devtools,
+ *  fresh device visited only one URL, or partial import left stranded
+ *  profile blobs. v2 hotfix (Anil same-day feedback after v1.6.16.0).
+ *
+ *  Validates each extracted name via isValidProfileName so hand-edited
+ *  weirdness (uppercase, trailing junk, empty after the prefix) is filtered
+ *  out — they wouldn't load successfully anyway, no point showing them
+ *  in the picker.
+ *
+ *  Returns [] on any localStorage exception (Safari private-mode etc). */
+function discoverProfileKeys(): string[] {
+  const out: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      const m = key.match(/^opd-profile-([a-z0-9][a-z0-9-]{0,31})$/);
+      if (m && m[1] && isValidProfileName(m[1])) {
+        out.push(m[1]);
+      }
+    }
+  } catch {
+    // Safari private mode throws on localStorage access; degrade gracefully.
+  }
+  return out;
+}
+
 /** Build the picker section: dropdown of known profiles + add/delete CTAs.
  *  Returns the section element ready to be inserted; caller decides
  *  parent layout. */
@@ -130,8 +159,16 @@ function buildPickerSection(): HTMLElement {
   // listProfiles() reads the persisted name list, but the first-launch
   // profile is added to that list on save. Belt-and-braces: union of
   // listProfiles + active name so the dropdown is never empty.
+  //
+  // v2 hotfix (Anil same-day feedback after v1.6.16.0): also scan
+  // localStorage directly for `opd-profile-<name>` keys. The names-list
+  // cache (`opd-profile-names`) can drift from reality — operator
+  // devtools wipe, fresh device that only visited one URL, partial
+  // import — leaving profiles that EXIST hidden from the picker. The
+  // scan self-heals the dropdown.
   const currentName = readActiveProfileName();
   const names = new Set<string>(listProfiles());
+  for (const n of discoverProfileKeys()) names.add(n);
   names.add(currentName);
   // Always include the default so first-launchers see a sensible row.
   names.add(DEFAULT_PROFILE_NAME);
@@ -404,6 +441,8 @@ export function refreshPickerFromExternalChange(): void {
   try {
     select.replaceChildren();
     const names = new Set<string>(listProfiles());
+    // v2 hotfix: belt-and-braces self-heal (see discoverProfileKeys).
+    for (const n of discoverProfileKeys()) names.add(n);
     names.add(currentName);
     names.add(DEFAULT_PROFILE_NAME);
     for (const name of Array.from(names).sort()) {

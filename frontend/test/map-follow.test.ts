@@ -17,6 +17,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 class FakeMap {
   centerCalls: [number, number][] = [];
   easeCalls: [number, number][] = [];
+  flyCalls: { center: [number, number]; duration: number; essential?: boolean }[] = [];
   dragHandler: (() => void) | null = null;
   zoomHandler: ((e: unknown) => void) | null = null;
 
@@ -25,6 +26,9 @@ class FakeMap {
   }
   easeTo(opts: { center: [number, number] }): void {
     this.easeCalls.push(opts.center);
+  }
+  flyTo(opts: { center: [number, number]; duration: number; essential?: boolean }): void {
+    this.flyCalls.push(opts);
   }
   on(event: string, handler: (e?: unknown) => void): void {
     if (event === 'dragstart') this.dragHandler = handler as () => void;
@@ -53,6 +57,18 @@ function setupFollow(state: FollowState, map: FakeMap): void {
     const orig = (e as { originalEvent?: unknown } | undefined)?.originalEvent;
     if (orig) state.followISS = false;
   });
+}
+
+/** Mirror of the one-shot toggle-on click handler in map.ts (v2 hotfix).
+ *  Toggle-OFF (already following) leaves state false, no camera op.
+ *  Toggle-ON (not yet following) enters follow + flyTo's the camera. */
+function clickFollowToggle(state: FollowState, map: FakeMap, pos: { lat: number; lon: number }): void {
+  if (state.followISS) {
+    state.followISS = false;
+    return;
+  }
+  state.followISS = true;
+  map.flyTo({ center: [pos.lon, pos.lat], duration: 800, essential: true });
 }
 
 describe('follow-ISS contract (v1.5.2.0)', () => {
@@ -118,6 +134,42 @@ describe('follow-ISS contract (v1.5.2.0)', () => {
     for (let i = 0; i < 10; i++) {
       applyFollowISS(state, map, { lat: 30 + i, lon: 50 + i });
     }
+    expect(map.centerCalls).toHaveLength(0);
+  });
+});
+
+describe('follow-ISS one-shot click contract (v2 hotfix)', () => {
+  // v2 hotfix (Anil same-day feedback after v1.6.16.0): the toggle-on
+  // click now flies the camera to the ISS via flyTo({duration:800,
+  // essential:true}) instead of easeTo({duration:500}). easeTo's linear
+  // pan looked frozen at high zoom; flyTo zooms out + pans + zooms in.
+  let state: FollowState;
+  let map: FakeMap;
+
+  beforeEach(() => {
+    state = { followISS: false };
+    map = new FakeMap();
+    setupFollow(state, map);
+  });
+
+  it('toggle-ON click enters follow + flies to ISS pos (NOT easeTo)', () => {
+    clickFollowToggle(state, map, { lat: 30, lon: 50 });
+    expect(state.followISS).toBe(true);
+    expect(map.flyCalls).toHaveLength(1);
+    expect(map.easeCalls).toHaveLength(0);
+    expect(map.flyCalls[0]?.center).toEqual([50, 30]);
+    expect(map.flyCalls[0]?.duration).toBe(800);
+    expect(map.flyCalls[0]?.essential).toBe(true);
+  });
+
+  it('toggle-OFF click (already following) exits follow with no camera op', () => {
+    // Preserve the existing semantics: clicking while followISS=true
+    // just sets it false; no flyTo, no easeTo, no setCenter.
+    state.followISS = true;
+    clickFollowToggle(state, map, { lat: 30, lon: 50 });
+    expect(state.followISS).toBe(false);
+    expect(map.flyCalls).toHaveLength(0);
+    expect(map.easeCalls).toHaveLength(0);
     expect(map.centerCalls).toHaveLength(0);
   });
 });

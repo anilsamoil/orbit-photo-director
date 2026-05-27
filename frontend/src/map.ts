@@ -371,13 +371,22 @@ function buildStyle(): maplibregl.StyleSpecification {
       // toggle-night-lights button. The PNG product has transparent
       // day-side pixels so the basemap shows through cleanly.
       //
-      // Initial date is last year's Jan-1 composite (annual cadence; the
-      // current year's product publishes mid-year). If both last year AND
-      // the year before 404, applyNightLightsVisibility silently hides the
-      // layer (one console.warn, no toast — operator can re-toggle).
+      // v2 hotfix (Anil same-day feedback after v1.6.16.0): GIBS only
+      // publishes VIIRS_Black_Marble for two discrete dates — 2012-01-01
+      // and 2016-01-01 — verified via live HTTP + GetCapabilities XML. The
+      // prior `currentYear - 1` assumption (with a one-year fallback walk)
+      // 404'd silently and killed the toggle. Hardcoding 2016-01-01 as the
+      // canonical date. If GIBS itself goes down, the error handler logs
+      // one console.warn (no toast, no walk-back — there's nowhere to
+      // walk to).
+      //
+      // Follow-up if more recent imagery is needed: switch to the daily
+      // VIIRS_SNPP_DayNightBand_ENCC layer (daily cadence; different
+      // visual character — single-orbit composite instead of cloud-free
+      // annual). DON'T implement here — separate feature, not a hotfix.
       'viirs-night-lights': {
         type: 'raster',
-        tiles: [gibsBlackMarbleUrl(`${new Date().getUTCFullYear() - 1}-01-01`)],
+        tiles: [gibsBlackMarbleUrl('2016-01-01')],
         tileSize: 256,
         maxzoom: VIIRS_BLACK_MARBLE_MAX_ZOOM,
         attribution:
@@ -924,11 +933,12 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       source: 'terminator-night-fill',
       paint: {
         'fill-color': '#000000',
-        // v2 spec: night-side opacity bumped 0.35 → 0.55. The prior shipped
-        // overlay was line-only (no fill at all); 0.55 is the new operator-
-        // visible baseline. Dark enough to read at-a-glance as "night side"
-        // against the basemap without obscuring underlying features.
-        'fill-opacity': 0.55,
+        // v2 hotfix (Anil same-day feedback after v1.6.16.0): opacity
+        // bumped to 0.55 obscured the underlying basemap too aggressively.
+        // Drop to 0.30 — still reads as "night side" at a glance, but
+        // labels, coastlines, and city lights stay legible underneath.
+        // Prior journey: 0.35 (initial) → 0.55 (v2 spec) → 0.30 (this fix).
+        'fill-opacity': 0.30,
         'fill-antialias': true,
       },
     });
@@ -1635,57 +1645,36 @@ function applyNightLightsVisibility(): void {
   } catch { /* layer not loaded yet */ }
 }
 
-/** Track per-session VIIRS year fallback state. The annual composite's
- *  publication cadence means "current year" 404s for most of the calendar
- *  year. We initialize to last year and walk back further only if last-year
- *  also fails. Resets on page reload (acceptable — annual cadence). */
-let viirsTriedYears = new Set<number>();
-let viirsFailedSilently = false;
-
-/** Test-only: reset VIIRS year-fallback state between vitest runs. */
+/** Test-only: no-op stub kept for source compatibility with the prior
+ *  year-fallback machinery (removed in the v2 hotfix). Other test files
+ *  may still import this; keep the symbol so they don't break.
+ *  TODO: remove once no test imports it. */
 export function _resetViirsFallbackForTest(): void {
-  viirsTriedYears = new Set<number>();
-  viirsFailedSilently = false;
+  // Year-fallback removed: GIBS publishes VIIRS_Black_Marble for only
+  // 2012-01-01 + 2016-01-01. We hardcode 2016 — nothing to reset.
 }
 
-/** Set up the GIBS-flake fallback: if the VIIRS night-lights source 404/5xx's
- *  for the current year, swap in the prior year's annual composite. If that
- *  also fails, silently hide the layer (one console.warn — operator can
- *  re-toggle later). Bound once per map; re-arms after each successful
- *  fallback. */
-function armNightLightsErrorFallback(): void {
+/** Arm a minimal error listener for the VIIRS night-lights source. With
+ *  the year-fallback gone (v2 hotfix — 2016-01-01 is hardcoded), there's
+ *  no walk-back logic; if the canonical date fails it means GIBS itself
+ *  is down. Log once per session and hide the layer so the operator can
+ *  re-toggle later. */
+let nightLightsErrorLogged = false;
+function armNightLightsErrorHandler(): void {
   if (!map) return;
   map.on('error', (e) => {
-    // MapLibre's error event fires for tile load failures with sourceId set
-    // to 'viirs-night-lights'. We don't want to react to errors from other
-    // sources, so guard tightly.
     const sourceId = (e as { sourceId?: string }).sourceId;
     if (sourceId !== 'viirs-night-lights') return;
-    if (viirsFailedSilently) return;
-    if (!map) return;
-    // Try walking back one more year.
-    const tried = Array.from(viirsTriedYears);
-    const oldestTried = tried.length > 0 ? Math.min(...tried) : new Date().getUTCFullYear();
-    const fallbackYear = oldestTried - 1;
-    // Cap the walk-back at 2 years total (current-1 and current-2). Beyond
-    // that, give up and hide the layer.
-    if (viirsTriedYears.size >= 2) {
-      console.warn(
-        '[map] VIIRS Black Marble unavailable for last 2 annual composites; ' +
-        'hiding night-lights layer. Operator can re-toggle later.',
-      );
-      viirsFailedSilently = true;
-      nightLightsVisible = false;
-      try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, '0'); } catch { /* noop */ }
-      applyNightLightsVisibility();
-      reflectNightLightsButton();
-      return;
-    }
-    viirsTriedYears.add(fallbackYear);
-    const src = map.getSource('viirs-night-lights') as maplibregl.RasterTileSource | undefined;
-    if (src && 'setTiles' in src) {
-      src.setTiles([gibsBlackMarbleUrl(`${fallbackYear}-01-01`)]);
-    }
+    if (nightLightsErrorLogged) return;
+    nightLightsErrorLogged = true;
+    console.warn(
+      '[map] VIIRS Black Marble 2016-01-01 tiles failed to load; ' +
+      'GIBS may be down. Hiding night-lights layer — operator can re-toggle.',
+    );
+    nightLightsVisible = false;
+    try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, '0'); } catch { /* noop */ }
+    applyNightLightsVisibility();
+    reflectNightLightsButton();
   });
 }
 
@@ -1703,26 +1692,19 @@ function bindNightLightsToggle(): void {
   if (nightLightsToggleBound) return;
   const btn = document.getElementById('toggle-night-lights');
   if (!btn) return;
-  // Seed the initial-year tracker so the fallback logic knows we've already
-  // tried last year (the buildStyle initial value).
-  if (viirsTriedYears.size === 0) {
-    viirsTriedYears.add(new Date().getUTCFullYear() - 1);
-  }
-  // Arm the error listener once, immediately — MapLibre may emit tile errors
-  // even before the operator toggles the layer on (the layer is "visible"
-  // semantically; only `layout.visibility` is none).
-  armNightLightsErrorFallback();
+  // Arm the error listener once — if the 2016 canonical date 404s we log
+  // a single warning and hide the layer (no walk-back to attempt).
+  armNightLightsErrorHandler();
   reflectNightLightsButton();
   btn.addEventListener('click', () => {
-    if (viirsFailedSilently) {
-      // Allow re-arming if the operator explicitly tries again — maybe
-      // NASA's back up. Reset the year tracker and start fresh.
-      _resetViirsFallbackForTest();
-      viirsTriedYears.add(new Date().getUTCFullYear() - 1);
+    // Allow re-arming the warn-once gate on explicit re-toggle — maybe
+    // GIBS is back up after a transient outage.
+    if (nightLightsErrorLogged) {
+      nightLightsErrorLogged = false;
       if (map) {
         const src = map.getSource('viirs-night-lights') as maplibregl.RasterTileSource | undefined;
         if (src && 'setTiles' in src) {
-          src.setTiles([gibsBlackMarbleUrl(`${new Date().getUTCFullYear() - 1}-01-01`)]);
+          src.setTiles([gibsBlackMarbleUrl('2016-01-01')]);
         }
       }
     }
@@ -1842,17 +1824,26 @@ function bindFollowToggle(): void {
       reflectFollowButton();
       return;
     }
-    // Entering follow. Animate-ease to current ISS pos on first click
-    // (gives the operator a visual cue that the map jumped to ISS).
-    // Subsequent recurring updates go through applyFollowISS which uses
-    // setCenter (instant) — see A5 in /plan-eng-review 2026-05-21.
+    // Entering follow. Fly to current ISS pos on first click (gives the
+    // operator a visual cue that the map jumped to ISS). Subsequent
+    // recurring updates go through applyFollowISS which uses setCenter
+    // (instant) — see A5 in /plan-eng-review 2026-05-21.
+    //
+    // v2 hotfix (Anil same-day feedback after v1.6.16.0): switched from
+    // easeTo({duration:500}) to flyTo({duration:800, essential:true}).
+    // easeTo does a linear pan at the current zoom; at high zoom the
+    // re-center looked frozen because MapLibre couldn't load tiles fast
+    // enough across the long pan. flyTo zooms out, pans, zooms back in,
+    // which handles any zoom level gracefully. essential:true bypasses
+    // prefers-reduced-motion (the operator clicked the button — they
+    // expect the camera to move).
     followISS = true;
     reflectFollowButton();
     if (!currentTrack) return;
     const pos = liveIssPositionSGP4(currentTrack, Date.now())
       ?? liveIssPosition(currentTrack, Date.now());
     if (pos && map) {
-      map.easeTo({ center: [pos.lon, pos.lat], duration: 500 });
+      map.flyTo({ center: [pos.lon, pos.lat], duration: 800, essential: true });
     }
   });
   if (map) {

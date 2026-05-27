@@ -161,6 +161,41 @@ describe('renderProfilePane', () => {
       expect(opt.textContent).toBe(opt.value);
     }
   });
+
+  // v2 hotfix (Anil same-day feedback after v1.6.16.0): the picker self-heals
+  // by scanning localStorage for opd-profile-<name> keys, so profiles that
+  // exist but aren't in the names-list cache still appear in the dropdown.
+  it('discovers profiles from localStorage even when names-list cache is stale', () => {
+    // Simulate operator devtools-wipe of the names cache: opd-profile-jack
+    // exists but opd-profile-names says only ['anil'] knows about it.
+    saveProfile(createDefaultProfile('anil'));
+    saveProfile(createDefaultProfile('jack'));
+    localStorage.setItem('opd-profile-names', JSON.stringify(['anil']));
+    expect(listProfiles()).toEqual(['anil']); // cache really is stale
+    renderProfilePane();
+    const select = document.getElementById('profile-picker-select') as HTMLSelectElement;
+    const opts = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(opts).toContain('anil');
+    expect(opts).toContain('jack'); // self-healed from localStorage scan
+  });
+
+  it('filters malformed opd-profile-* keys via isValidProfileName', () => {
+    // Hand-edited / corrupted localStorage shouldn't pollute the dropdown.
+    // The regex in discoverProfileKeys requires lowercase a-z0-9 start +
+    // up to 31 more lowercase/digit/hyphen chars; uppercase, underscore,
+    // and empty-after-prefix all get filtered.
+    saveProfile(createDefaultProfile('anil'));
+    localStorage.setItem('opd-profile-WITH_CAPS', '{}');
+    localStorage.setItem('opd-profile-', '{}');
+    localStorage.setItem('opd-profile-has_underscore', '{}');
+    renderProfilePane();
+    const select = document.getElementById('profile-picker-select') as HTMLSelectElement;
+    const opts = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(opts).toContain('anil');
+    expect(opts).not.toContain('WITH_CAPS');
+    expect(opts).not.toContain('');
+    expect(opts).not.toContain('has_underscore');
+  });
 });
 
 // ---------------------------------------------------------------------------
