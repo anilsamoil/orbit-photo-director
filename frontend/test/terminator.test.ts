@@ -4,7 +4,6 @@ import {
   equationOfTimeMinutes,
   subsolarFeature,
   subsolarPoint,
-  terminatorDayPolygonFeatures,
   terminatorFeatures,
   terminatorLonAtLat,
   terminatorNightPolygonFeatures,
@@ -305,136 +304,9 @@ describe('terminatorNightPolygonFeatures (v2)', () => {
   });
 });
 
-// v3.1 (Anil same-day feedback 2026-05-26): day-side complement polygon.
-// Drives the terminator-day-mask-layer that hides the VIIRS night-lights
-// raster on the sun side when both terminator + night-lights are on.
-describe('terminatorDayPolygonFeatures (v3.1)', () => {
-  /** Test helper: simple ray-cast point-in-polygon. Robust enough for the
-   *  test fixtures (axis-aligned-ish quads), not for arbitrary geometry. */
-  function pointInPolygon(
-    lon: number, lat: number, ring: [number, number][],
-  ): boolean {
-    let inside = false;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const [xi, yi] = ring[i]!;
-      const [xj, yj] = ring[j]!;
-      const intersect = ((yi > lat) !== (yj > lat))
-        && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-      if (intersect) inside = !inside;
-    }
-    return inside;
-  }
-
-  it('emits at least one polygon feature', () => {
-    const when = new Date('2024-09-21T12:00:00Z');
-    const features = terminatorDayPolygonFeatures(when);
-    expect(features.length).toBeGreaterThan(0);
-    for (const f of features) {
-      expect(f.geometry.type).toBe('Polygon');
-    }
-  });
-
-  it('covers the SUBSOLAR longitude on the equator (sun side, not antisolar)', () => {
-    // At 12:00 UTC near equinox, subsolar is near (0, 0). The day polygon
-    // should COVER the equatorial subsolar point and NOT cover the antisolar
-    // point at (180, 0) — that's the night polygon's job.
-    const when = new Date('2024-09-22T12:00:00Z');
-    const features = terminatorDayPolygonFeatures(when);
-    // Restrict to base features (skip world-copy duplicates which have
-    // |lon| > 180) for the in-range point-in-polygon test.
-    const baseFeatures = features.filter((f) => {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      return ring.every(([lon]) => lon >= -180 && lon <= 180);
-    });
-    const coversSubsolar = baseFeatures.some((f) => {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      return pointInPolygon(0, 0, ring);
-    });
-    expect(coversSubsolar).toBe(true);
-  });
-
-  it('day + night polygons are complements at the equator (no overlap)', () => {
-    // Pick a few equatorial sample points and assert each falls in exactly
-    // ONE of (day base polygons, night base polygons). World-copy duplicates
-    // are skipped so the test stays in the canonical [-180, 180] frame.
-    const when = new Date('2024-09-22T12:00:00Z');
-    const dayBase = terminatorDayPolygonFeatures(when).filter((f) => {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      return ring.every(([lon]) => lon >= -180 && lon <= 180);
-    });
-    const nightBase = terminatorNightPolygonFeatures(when).filter((f) => {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      return ring.every(([lon]) => lon >= -180 && lon <= 180);
-    });
-    // Equatorial sample lons; lat=1 to land cleanly inside the 0..2 lat band
-    // (LAT_STEP=2 means polygon rows are [0,2], [2,4], ...). At equinox the
-    // subsolar point is near lat 0, lon 0 — sample lons spread across the
-    // globe to cover both day and night arcs.
-    const sampleLons = [-150, -90, -45, 0, 45, 90, 150];
-    for (const lon of sampleLons) {
-      const inDay = dayBase.some((f) => {
-        const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-        return pointInPolygon(lon, 1, ring);
-      });
-      const inNight = nightBase.some((f) => {
-        const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-        return pointInPolygon(lon, 1, ring);
-      });
-      // Exactly one side should cover the point. (Boundary cases at the
-      // exact terminator longitude are not tested — they're measure-zero.)
-      expect(inDay).toBe(!inNight);
-    }
-  });
-
-  it('does not mix +179° and -179° lons in the same polygon (clean antimeridian)', () => {
-    // Same bleed-pattern guard as the night-polygon test. At 18:00 UTC the
-    // subsolar point is near -90°, so the day arc crosses both the prime
-    // meridian and (further west) the antimeridian — antimeridian-handling
-    // matters here.
-    const when = new Date('2024-09-22T18:00:00Z');
-    const features = terminatorDayPolygonFeatures(when);
-    for (const f of features) {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      const lons = ring.map(([lon]) => lon);
-      const hasNearPos180 = lons.some((l) => l > 178 && l < 181);
-      const hasNearNeg180 = lons.some((l) => l < -178 && l > -181);
-      const hasInteriorWest = lons.some((l) => l > -178 && l < 0);
-      const hasInteriorEast = lons.some((l) => l < 178 && l > 0);
-      const isBleed =
-        hasNearPos180 && hasNearNeg180 && hasInteriorEast && hasInteriorWest;
-      expect(isBleed).toBe(false);
-    }
-  });
-
-  it('emits polar-DAY slabs in the summer hemisphere (June solstice → north pole)', () => {
-    // June solstice: north pole is in polar DAY. Day polygon should include
-    // at least one full-width [-180, 180] slab in the high-northern latitudes.
-    // This is the inverse of the night-polygon's polar-night-slab test.
-    const when = new Date('2024-06-21T12:00:00Z');
-    const features = terminatorDayPolygonFeatures(when);
-    const hasNorthernPolarDay = features.some((f) => {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      const lats = ring.map((p) => p[1]);
-      const lons = ring.map((p) => p[0]);
-      const minLat = Math.min(...lats);
-      const minLon = Math.min(...lons), maxLon = Math.max(...lons);
-      return minLat > 70 && minLon <= -179 && maxLon >= 179;
-    });
-    expect(hasNorthernPolarDay).toBe(true);
-  });
-
-  it('includes world-copy duplicates for continuous east/west panning', () => {
-    const when = new Date('2024-09-22T12:00:00Z');
-    const features = terminatorDayPolygonFeatures(when);
-    const hasEastDup = features.some((f) => {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      return ring.some(([lon]) => lon > 180);
-    });
-    const hasWestDup = features.some((f) => {
-      const ring = (f.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
-      return ring.some(([lon]) => lon < -180);
-    });
-    expect(hasEastDup).toBe(true);
-    expect(hasWestDup).toBe(true);
-  });
-});
+// v3.1's terminatorDayPolygonFeatures + its 6-test describe block were
+// removed in v3.3 (2026-05-27). The day-mask layer they drove was dropped —
+// see frontend/src/terminator.ts for the removal notice and frontend/src/
+// map.ts:viirs-night-lights-layer for the replacement (lowered opacity 0.55).
+// Layer-absence + opacity regression coverage now lives in
+// frontend/test/map-night-lights.test.ts.
