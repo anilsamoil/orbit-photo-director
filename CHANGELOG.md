@@ -2,6 +2,36 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.19.0] - 2026-05-27
+
+### v3.1 — Layer-order fix + Day-polygon mask
+
+Same-day Anil feedback after v1.6.18.0. Two small frontend-only surgical
+changes; no daemon / worker / data changes.
+
+- **Bug fix — ISS ground-track stays above the night-light layers.** In
+  v1.6.18.0 the `viirs-night-lights-layer` and `terminator-night-fill-layer`
+  were added via `map.addLayer` with no `beforeId`, so MapLibre stacked them
+  ABOVE the cyan `iss-track-layer` polyline. The 0.95-opacity Black Marble
+  raster fully occluded the track whenever the 🌃 toggle was on, and the
+  0.30-opacity night-fill dimmed it whenever the terminator was on. Both
+  addLayer calls now pass `beforeId='iss-track-layer'` so the track stays
+  topmost over the night/day raster + fill layers. `frontend/src/map.ts`.
+
+- **Feature — day-polygon overlay masks night-lights on the sun side.** When
+  the day-night terminator AND VIIRS night-lights are BOTH on, a new
+  `terminator-day-mask-layer` (solid `#0b0d12` fill, complement of the
+  existing night polygon) covers the sun side so the city-lights raster
+  only renders in the current shadow. When the terminator is OFF + night-
+  lights ON, the mask hides and lights render across the whole globe
+  (v1.6.18.0 behavior preserved). New `terminatorDayPolygonFeatures` export
+  in `frontend/src/terminator.ts` mirrors the night-polygon arc-walk
+  (antimeridian + polar-cap handling); features are refreshed every 30s by
+  the existing `refreshTerminatorSources` tick. `frontend/src/terminator.ts`
+  + `frontend/src/map.ts`.
+
+16 new tests; 903 existing tests still pass.
+
 ## [1.6.18.0] - 2026-05-27
 
 ### v3 Operator Ergonomics
