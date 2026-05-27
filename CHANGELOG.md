@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] v3.2 — Universal card buttons
+## [1.6.20.0] - 2026-05-27
+
+### v3.2 — Universal card buttons
 
 Same-day Anil follow-up to v3.1. One surgical change in two related
 spots; frontend-only, no daemon / worker changes.
