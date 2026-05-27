@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] GLM concurrency fix — daemon tick reliability
+## [1.6.15.0] - 2026-05-27
+
+### GLM concurrency fix — daemon tick reliability
 
 `generator/lightning.py` — `GLMSampler.__init__` previously fetched NOAA GLM granules
 serially at a 30s per-granule HTTP timeout. When one GOES bucket was empty and the
