@@ -1,7 +1,22 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// Read the repo-root VERSION file at build time so the app version stamped
+// into JSON export envelopes (and any other operator-visible build marker)
+// tracks the slot/ship pipeline automatically. Previously hardcoded into
+// `profile-crud.ts` as `APP_VERSION = '1.6.12.0'` — stale on every ship.
+const APP_VERSION = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
+
 export default defineConfig({
+  define: {
+    // Substituted as a string literal everywhere `__APP_VERSION__` appears
+    // in src/. Vitest does NOT run vite's define pass; modules that read
+    // this must provide a runtime fallback for the test environment.
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   plugins: [
     VitePWA({
       // registerType: 'prompt' — vite-plugin-pwa's 'autoUpdate' silently

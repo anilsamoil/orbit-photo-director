@@ -279,13 +279,21 @@ describe('buildCrudSection hydration wiring', () => {
       createDefaultProfile(PROFILE),
       makeServerTarget('Already local'),
     ));
-    const fetchMock = vi.fn();
+    // Default-resolving stub: slot 8b also fires a `/api/log` fetch on
+    // first mount for shot-count badges. We're asserting only that the
+    // *targets* endpoint isn't called — filter on URL below.
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ entries: [] }), { status: 200 }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     document.getElementById('profile-body')!.appendChild(buildCrudSection(PROFILE));
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    const targetsCalls = (fetchMock.mock.calls as unknown[][]).filter((c) =>
+      String(c[0]).includes('/api/profiles/'),
+    );
+    expect(targetsCalls).toHaveLength(0);
   });
 });

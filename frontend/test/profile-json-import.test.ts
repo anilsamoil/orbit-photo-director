@@ -234,6 +234,150 @@ describe('Import preview', () => {
     expect(err?.textContent).toMatch(/not valid JSON/i);
   });
 
+  // -------------------------------------------------------------------------
+  // Item 4 — wipe warning when imported additions count < current count.
+  // -------------------------------------------------------------------------
+
+  it('shows a wipe warning when the import would delete existing targets', async () => {
+    // Seed the active profile with 12 existing targets.
+    const current = createDefaultProfile(PROFILE);
+    for (let i = 0; i < 12; i++) {
+      current.additions.push({
+        id: `personal:${PROFILE}:cur${i}`,
+        name: `Existing ${i}`,
+        lat: i,
+        lon: -i,
+        priority: 5,
+        createdAt: '2026-05-26T00:00:00Z',
+      });
+    }
+    saveProfile(current);
+
+    // Import file carries 5 targets — a net wipe of 7.
+    const imported = createDefaultProfile(PROFILE);
+    for (let i = 0; i < 5; i++) {
+      imported.additions.push({
+        id: `personal:${PROFILE}:new${i}`,
+        name: `Imported ${i}`,
+        lat: i,
+        lon: i,
+        priority: 5,
+        createdAt: '2026-05-26T00:00:00Z',
+      });
+    }
+    const exportText = JSON.stringify({
+      format: PROFILE_EXPORT_FORMAT,
+      schemaVersion: CURRENT_PROFILE_VERSION,
+      profile: imported,
+    });
+
+    const section = mountCrud(PROFILE);
+    const input = section.querySelector('#profile-import-file') as HTMLInputElement;
+    const file = new File([exportText], 'shrink.json', { type: 'application/json' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const wipe = section.querySelector('.profile-json-wipe-warn');
+    expect(wipe).not.toBeNull();
+    expect(wipe!.textContent).toMatch(/delete 7 existing personal targets/);
+    expect(wipe!.textContent).toMatch(/current: 12/);
+    expect(wipe!.textContent).toMatch(/after import: 5/);
+  });
+
+  it('does NOT warn when the import has the same target count as current', async () => {
+    const current = createDefaultProfile(PROFILE);
+    for (let i = 0; i < 12; i++) {
+      current.additions.push({
+        id: `personal:${PROFILE}:cur${i}`,
+        name: `Existing ${i}`,
+        lat: i,
+        lon: -i,
+        priority: 5,
+        createdAt: '2026-05-26T00:00:00Z',
+      });
+    }
+    saveProfile(current);
+    const imported = createDefaultProfile(PROFILE);
+    for (let i = 0; i < 12; i++) {
+      imported.additions.push({
+        id: `personal:${PROFILE}:new${i}`,
+        name: `Imported ${i}`,
+        lat: i,
+        lon: i,
+        priority: 5,
+        createdAt: '2026-05-26T00:00:00Z',
+      });
+    }
+    const exportText = JSON.stringify({
+      format: PROFILE_EXPORT_FORMAT,
+      schemaVersion: CURRENT_PROFILE_VERSION,
+      profile: imported,
+    });
+    const section = mountCrud(PROFILE);
+    const input = section.querySelector('#profile-import-file') as HTMLInputElement;
+    const file = new File([exportText], 'equal.json', { type: 'application/json' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(section.querySelector('.profile-json-wipe-warn')).toBeNull();
+  });
+
+  it('does NOT warn when the import grows the target count', async () => {
+    const current = createDefaultProfile(PROFILE);
+    for (let i = 0; i < 12; i++) {
+      current.additions.push({
+        id: `personal:${PROFILE}:cur${i}`,
+        name: `Existing ${i}`,
+        lat: i,
+        lon: -i,
+        priority: 5,
+        createdAt: '2026-05-26T00:00:00Z',
+      });
+    }
+    saveProfile(current);
+    const imported = createDefaultProfile(PROFILE);
+    for (let i = 0; i < 20; i++) {
+      imported.additions.push({
+        id: `personal:${PROFILE}:new${i}`,
+        name: `Imported ${i}`,
+        lat: i,
+        lon: i,
+        priority: 5,
+        createdAt: '2026-05-26T00:00:00Z',
+      });
+    }
+    const exportText = JSON.stringify({
+      format: PROFILE_EXPORT_FORMAT,
+      schemaVersion: CURRENT_PROFILE_VERSION,
+      profile: imported,
+    });
+    const section = mountCrud(PROFILE);
+    const input = section.querySelector('#profile-import-file') as HTMLInputElement;
+    const file = new File([exportText], 'grow.json', { type: 'application/json' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(section.querySelector('.profile-json-wipe-warn')).toBeNull();
+  });
+
+  it('does NOT warn when the active profile has no targets to lose', async () => {
+    // Default profile has additions=[]; import an empty one.
+    const imported = createDefaultProfile(PROFILE);
+    const exportText = JSON.stringify({
+      format: PROFILE_EXPORT_FORMAT,
+      schemaVersion: CURRENT_PROFILE_VERSION,
+      profile: imported,
+    });
+    const section = mountCrud(PROFILE);
+    const input = section.querySelector('#profile-import-file') as HTMLInputElement;
+    const file = new File([exportText], 'empty.json', { type: 'application/json' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(section.querySelector('.profile-json-wipe-warn')).toBeNull();
+  });
+
   it('escapes operator-controlled profile name in cross-profile warning (no innerHTML)', async () => {
     // The validator rejects `<script>` as an invalid profile name, so we
     // use a still-valid-but-conspicuous name that survives the regex.

@@ -23,7 +23,10 @@ from .main import run_tick
 
 log = logging.getLogger(__name__)
 
-HARD_TIMEOUT_SECONDS = 1800  # 30 min (was 600; bumped 2026-05-27 hotfix during NASA GIBS outage — multiplex+slow-cloud ticks need headroom)
+# 30 min cap. Was 600s; bumped 2026-05-27 during a NASA GIBS outage when
+# multiplex(3 profiles) + slow-cloud-sampling ticks were exceeding 10 min.
+# Still bounded — KeepAlive still catches genuine deadlocks.
+HARD_TIMEOUT_SECONDS = 1800
 DEPLOY_TIMEOUT_SECONDS = 300  # 5 min
 INITIAL_BACKOFF_SECONDS = 30
 MAX_BACKOFF_SECONDS = 3600  # 1h

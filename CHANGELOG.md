@@ -2,6 +2,53 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.14.0] - 2026-05-27
+
+### Polish bundle — shot-count badge + clickable profile chip + dynamic APP_VERSION + import-wipe warning
+
+Four small UX/quality fixes bundled into one branch because they're tightly scoped and partially co-located in `frontend/src/profile-crud.ts`.
+
+### Slot 8b — per-target shot-count badge in Profile tab
+
+Each personal target row in the Profile tab now carries a small `✓ N` badge when the operator has shot that target at least once. Aggregated from `/api/log` filtered to the active profile. One log fetch fires per profile per session (re-renders consult an in-memory cache); failure paths are silent so a log-fetch glitch can never kill target rendering.
+
+### Bug 1 — topbar profile chip is now a profile switcher
+
+The `👤 jack` chip in the topbar used to be inert. It now carries `role="button" tabindex="0" aria-label="Switch profile"` and a `cursor: pointer` style, and click / Enter / Space all activate the Profile tab + smooth-scroll the picker section into view. The badge bind-once guard prevents stacked listeners across the every-150ms re-renders the `profile-changed` event bus fires.
+
+### app-version — VERSION file wired to JSON export envelope
+
+`frontend/src/profile-crud.ts` no longer hardcodes `APP_VERSION = '1.6.12.0'` (a slot 10 leftover that was already stale by v1.6.13.0). Vite's `define` config injects the repo-root `VERSION` file contents at build time via `__APP_VERSION__`; a `typeof` guard provides a `1.6.x.dev` fallback for vitest (where the define pass does not run). Production export envelopes now stamp the actual shipped version automatically.
+
+### import-wipe-warn — explicit warning when JSON import would shrink the target list
+
+The JSON import preview in `buildJsonIoSection` previously only showed a generic "REPLACES all" notice. It now also surfaces a dedicated `⚠ This import will delete N existing personal targets (your current: M → after import: K).` warning when the imported additions count is strictly less than the active profile's current additions count. Equal-count imports (data churn but no net loss) and net-add imports do not warn. Empty current profile suppresses the warning regardless.
+
+### Tests
+
+- Frontend: **781 → 795 vitest pass (+14)**
+  - 4 new tests in `test/profile-shot-badge.test.ts` (shot-count aggregation, silent failure, token-missing, cache reuse on rerender)
+  - 4 new tests appended to `test/profile-json-import.test.ts` (wipe-warning shrink + equal + grow + empty branches)
+  - 6 new tests in `test/main-profile-chip.test.ts` (a11y attributes, click activation, Enter/Space activation, scroll-into-view, no duplicate listeners)
+  - 1 existing test in `test/profile-hydration.test.ts` updated — its assertion was "no fetch fires when local is populated" but slot 8b legitimately fires `/api/log` on the same mount. Narrowed to "no `/api/profiles/` fetch" with a default-resolving stub.
+- `tsc --noEmit && vite build` clean; `__APP_VERSION__` substitution verified in `dist/assets/profile-ui-*.js` (literal `1.6.13.0` present, no `__APP_VERSION__` token leaked).
+- No new dependencies.
+
+### Decisions
+
+- **Shot-count fetch is independent from the targets hydrate.** Both fire fire-and-forget on `buildCrudSection` first mount with their own once-per-session guard sets (`hydratedProfiles` vs `shotCountsFetched`). If one fails (token missing, 4xx, network), the other still runs. The CRUD section's mount path never blocks on either.
+- **`fetchLog(profile=jack, limit=500)` for the shot-count fetch.** Reuses the existing helper (it already swallows token-missing / non-200 / network failures and returns `[]`). Limit raised from the default 100 to 500 so the badge accurately reflects the operator's full history rather than the last 100 calibration events.
+- **Wipe warning is strict-less-than, not less-than-or-equal.** An equal count might still churn rows (different ids, different names), but it isn't a net deletion — the existing "REPLACES all" notice already covers the churn case. Adding a warning to equal-count imports would cry wolf.
+- **Profile-chip activation uses two `requestAnimationFrame` deferrals before scrolling.** The Profile pane is lazy-loaded via dynamic import, so the picker section may not exist on the same tick as the tab click. Two rAF ticks consistently land after the import + initial render in every fixture; `scrollIntoView` is then a no-op-safe call via `?.` if the picker still hasn't mounted.
+- **APP_VERSION fallback is `'1.6.x.dev'`.** Tests don't assert the value of `APP_VERSION` directly (they pass their own string to `exportProfileJson`), so the sentinel is purely operator-facing in any test-harness export. Cleaner than wiring vitest's `define` config to mirror Vite's.
+
+### How to manually test
+
+1. **Shot-count badge:** open `?u=jack` with `opd-calib-token` set. Switch to Profile tab. Personal targets that you've previously shot via the Queue's Shoot button show a small green `✓ N` pill between the coord span and the Delete button. Targets you've never shot have no badge.
+2. **Profile chip:** click the `👤 jack` chip in the topbar from any tab. The Profile tab activates and the page scrolls smoothly to the "Active profile" picker. Hover shows `cursor: pointer` and tooltip "Active profile: jack — click to switch". Tab+Enter on the chip from keyboard does the same.
+3. **APP_VERSION:** click Export profile. Open the downloaded `.json` in a text editor. `appVersion` field reads `1.6.13.0` (or whatever VERSION currently holds), not `1.6.12.0`.
+4. **Import wipe warning:** with a profile that has 12+ targets, click Import and pick a JSON file that has 0–11 targets. Preview shows `⚠ This import will delete N existing personal targets (your current: 12 → after import: K).` above the "REPLACES all" notice. Re-pick a file with 12+ targets — the wipe warning disappears.
+
 ## [1.6.13.0] - 2026-05-26
 
 ### Slot 6b — API hydration on Profile pane render

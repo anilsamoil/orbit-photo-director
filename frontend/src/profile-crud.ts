@@ -45,11 +45,16 @@ import {
   readProfileImportFile,
   type ImportResult,
 } from './profile-json-io';
+import { fetchLog } from './log';
 
-/** App version stamped into export envelopes. Kept as a constant rather
- *  than imported from package.json so the build doesn't need to resolve a
- *  JSON import; bumped on each release. */
-const APP_VERSION = '1.6.12.0';
+/** App version stamped into export envelopes. Injected by Vite's `define`
+ *  at build time from the repo-root VERSION file (see vite.config.ts) so
+ *  /ship's automatic version bump flows here without a manual edit. The
+ *  `typeof` guard provides a `1.6.x.dev` fallback under vitest, where the
+ *  define pass does not run. Tests that assert on the envelope shape
+ *  should match either a real four-segment slug or this sentinel. */
+const APP_VERSION: string =
+  typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.6.x.dev';
 
 /** Per-error-code human-readable message. Mirrors worker validation
  *  codes from validatePersonalTargetInput. */
@@ -125,6 +130,16 @@ export function buildCrudSection(profileName: string): HTMLElement {
     void hydratePersonalTargets(profileName);
   }
 
+  // Slot 8b — independent fire-and-forget log fetch for shot-count
+  // badges. Independent from the targets hydrate above so a log-fetch
+  // failure (token missing, 4xx, network) can never kill target
+  // rendering. Once-per-session per profile; re-renders consult the
+  // module-scope cache rather than refetching.
+  if (!shotCountsFetched.has(profileName)) {
+    shotCountsFetched.add(profileName);
+    void hydrateShotCounts(profileName);
+  }
+
   return section;
 }
 
@@ -132,6 +147,18 @@ export function buildCrudSection(profileName: string): HTMLElement {
  *  only on full page reload — that's the operator behaviour we care
  *  about (open the URL on a fresh device → hydrate once). */
 const hydratedProfiles = new Set<string>();
+
+/** Slot 8b — session cache of `target_id → shoot count` per profile.
+ *  Populated by `hydrateShotCounts` on the FIRST CRUD-section mount per
+ *  profile. Re-reads on rerender consult this cache; they do NOT refetch
+ *  /api/log (rerenders fire after every add/delete/toggle and would
+ *  otherwise spam the worker). */
+const shotCountsByProfile = new Map<string, Map<string, number>>();
+
+/** Per-profile guard mirroring `hydratedProfiles` for the shot-count
+ *  fetch. Independent from the targets hydrate so a log-fetch failure
+ *  cannot prevent targets from hydrating (and vice versa). */
+const shotCountsFetched = new Set<string>();
 
 /** Slot 6b — one-shot GET on Profile-pane render that pulls the server's
  *  personal-target list into localStorage when the local copy is empty.
@@ -190,6 +217,35 @@ export async function hydratePersonalTargets(profileName: string): Promise<void>
     );
     return;
   }
+  rerenderCrudSection(profileName);
+}
+
+/** Slot 8b — one-shot GET against `/api/log` filtered to the active
+ *  profile. Aggregates `action === 'shoot'` entries by `target_id` and
+ *  caches the resulting count map in `shotCountsByProfile`. Re-renders
+ *  the CRUD section so the personal-target rows pick up the badge.
+ *
+ *  Independent from `hydratePersonalTargets`: a log fetch failure is
+ *  silent (the underlying `fetchLog` already swallows network + 4xx and
+ *  returns `[]`), and a return of `[]` simply means "no badges to show"
+ *  — never a crash. The shot-count cache stays empty for that profile
+ *  for the remainder of the session. */
+export async function hydrateShotCounts(profileName: string): Promise<void> {
+  let entries: Awaited<ReturnType<typeof fetchLog>>;
+  try {
+    entries = await fetchLog('', 500, profileName);
+  } catch {
+    // Defensive: fetchLog already catches its own throws but a future
+    // refactor (or a test stub that throws) shouldn't blow up the CRUD
+    // mount. Treat as "no data" rather than letting the error escape.
+    return;
+  }
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    if (e.action !== 'shoot') continue;
+    counts.set(e.target_id, (counts.get(e.target_id) ?? 0) + 1);
+  }
+  shotCountsByProfile.set(profileName, counts);
   rerenderCrudSection(profileName);
 }
 
@@ -367,14 +423,22 @@ function buildPersonalList(profileName: string): HTMLElement {
 
   const ul = document.createElement('ul');
   ul.className = 'profile-crud-ul';
+  // Slot 8b — pull the cached shot-count map (if any) once per render so
+  // each row lookup is O(1) without re-checking the outer Map.
+  const counts = shotCountsByProfile.get(profileName) ?? null;
   for (const t of targets) {
-    ul.appendChild(buildPersonalRow(profileName, t));
+    const n = counts?.get(t.id) ?? 0;
+    ul.appendChild(buildPersonalRow(profileName, t, n));
   }
   wrap.appendChild(ul);
   return wrap;
 }
 
-function buildPersonalRow(profileName: string, target: PersonalTarget): HTMLElement {
+function buildPersonalRow(
+  profileName: string,
+  target: PersonalTarget,
+  shotCount: number,
+): HTMLElement {
   const li = document.createElement('li');
   li.className = 'profile-crud-row';
   li.dataset.targetId = target.id;
@@ -388,6 +452,19 @@ function buildPersonalRow(profileName: string, target: PersonalTarget): HTMLElem
   coordEl.className = 'profile-crud-coord';
   coordEl.textContent = `${target.lat.toFixed(3)}, ${target.lon.toFixed(3)} · p${target.priority}`;
 
+  // Slot 8b — shot-count badge. Only rendered when the operator has
+  // actually shot this target at least once (count > 0). Sits between
+  // the coord span and the delete button so it reads as part of the
+  // target's metadata rather than a control.
+  const children: HTMLElement[] = [nameEl, coordEl];
+  if (shotCount > 0) {
+    const badge = document.createElement('span');
+    badge.className = 'profile-crud-shot-badge';
+    badge.textContent = `✓ ${shotCount}`;
+    badge.title = `Shot ${shotCount} time${shotCount === 1 ? '' : 's'}`;
+    children.push(badge);
+  }
+
   const delBtn = document.createElement('button');
   delBtn.type = 'button';
   delBtn.className = 'profile-btn danger profile-crud-btn';
@@ -395,8 +472,9 @@ function buildPersonalRow(profileName: string, target: PersonalTarget): HTMLElem
   delBtn.addEventListener('click', () => {
     void handleDelete(profileName, target);
   });
+  children.push(delBtn);
 
-  li.append(nameEl, coordEl, delBtn);
+  li.append(...children);
   return li;
 }
 
@@ -1121,6 +1199,25 @@ function renderImportPreview(
     host.appendChild(warn);
   }
 
+  // Item 4 — wipe warning. Surfaces BEFORE the generic "REPLACES all"
+  // notice when the import would *reduce* the personal-target count
+  // (e.g., importing an empty profile or one with fewer targets than
+  // currently saved). Strict-less-than: an equal count might still
+  // churn rows but isn't a net wipe. Empty current means nothing to
+  // lose, so no warning regardless of import size.
+  const currentProfile = safeLoadProfile(currentProfileName);
+  const currentCount = currentProfile?.additions.length ?? 0;
+  const importCount = result.profile.additions.length;
+  if (currentCount > 0 && importCount < currentCount) {
+    const wipeWarn = document.createElement('p');
+    wipeWarn.className = 'profile-error profile-json-wipe-warn';
+    const lost = currentCount - importCount;
+    wipeWarn.textContent =
+      `⚠ This import will delete ${lost} existing personal target${lost === 1 ? '' : 's'} ` +
+      `(your current: ${currentCount} → after import: ${importCount}).`;
+    host.appendChild(wipeWarn);
+  }
+
   // Replacement warning (always shown — Replace REPLACES all)
   const replaceWarn = document.createElement('p');
   replaceWarn.className = 'profile-error';
@@ -1217,7 +1314,12 @@ export const _test = {
   handleCsvImport,
   handleJsonImportReplace,
   hydratePersonalTargets,
+  hydrateShotCounts,
   /** Reset the per-session hydrated-profiles set. Tests use this to
    *  simulate "fresh page load" between assertions. */
-  resetHydrationState: (): void => { hydratedProfiles.clear(); },
+  resetHydrationState: (): void => {
+    hydratedProfiles.clear();
+    shotCountsFetched.clear();
+    shotCountsByProfile.clear();
+  },
 };

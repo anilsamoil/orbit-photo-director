@@ -844,7 +844,50 @@ export function renderTopbarProfileBadge(name: string | null): void {
   }
   el.hidden = false;
   el.textContent = `👤 ${name}`;
-  el.title = `Active profile: ${name}`;
+  el.title = `Active profile: ${name} — click to switch`;
+  // Bug 1 — make the chip discoverable as a profile switcher. Click
+  // (or Enter / Space when focused) activates the Profile tab and
+  // scrolls the picker section into view. a11y: role=button + tabindex
+  // so screen-readers + keyboard users can reach it.
+  bindProfileBadgeAffordance(el);
+}
+
+/** Track whether the badge has been wired for click/keyboard switching
+ *  yet — `renderTopbarProfileBadge` runs on every `profile-changed` event
+ *  (which fires per slider tick + per cross-tab storage event) so we must
+ *  not stack duplicate listeners. */
+let profileBadgeBound = false;
+
+function bindProfileBadgeAffordance(el: HTMLElement): void {
+  el.setAttribute('role', 'button');
+  el.setAttribute('aria-label', 'Switch profile');
+  el.setAttribute('tabindex', '0');
+  el.style.cursor = 'pointer';
+  if (profileBadgeBound) return;
+  profileBadgeBound = true;
+  const activate = () => {
+    const tabProfile = document.getElementById('tab-profile') as HTMLElement | null;
+    if (tabProfile) tabProfile.click();
+    // Defer the scroll one frame — the Profile pane is loaded lazily via
+    // `loadProfilePane`, so the picker section may not exist on the same
+    // tick that the tab click fires. Two requestAnimationFrame ticks
+    // is enough to land after the dynamic import + initial render in
+    // every test we tried; setTimeout 0 also works but rAF aligns with
+    // the browser's paint cycle.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const picker = document.getElementById('profile-picker-section');
+        picker?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  };
+  el.addEventListener('click', activate);
+  el.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      activate();
+    }
+  });
 }
 
 async function init(): Promise<void> {
