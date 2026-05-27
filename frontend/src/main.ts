@@ -6,7 +6,7 @@
  * refreshes every 60s. The map view is loaded lazily when the user toggles to it.
  */
 
-import { renderCards } from './card';
+import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { formatCountdown } from './countdown';
 import {
@@ -24,7 +24,7 @@ import { createPollScheduler, isOnline, type PollScheduler } from './network-sta
 import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
-import { loadOrCreateProfileFromURL, type Profile } from './profile';
+import { loadOrCreateProfileFromURL, loadProfile, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { subscribeProfileChanged } from './profile-events';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
@@ -438,7 +438,17 @@ function launchesStaleHours(status: Status | null, nowMs: number): number | unde
   return Math.max(0, (nowMs - t) / 3_600_000);
 }
 
-async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<void> {
+async function onCardAction(action: CardAction, p: PassEntry): Promise<void> {
+  // v3 — Hide path (Anil 2026-05-26). One-tap dismiss for curated cards.
+  // We MUTATE the profile + save synchronously and rip the card from the
+  // DOM immediately so the operator sees instant feedback rather than
+  // waiting for the next manifest refresh (~1 min away). The daemon
+  // multiplex (slot 4) will filter the id out on the next tick so the
+  // hide persists across refreshes.
+  if (action === 'hide') {
+    handleHideAction(p);
+    return;
+  }
   const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);
   const result = await postCalib(payload);
   // postCalib may have queued the action (offline / token missing / 5xx);
@@ -484,6 +494,55 @@ async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<voi
   } else {
     showToast(`${verb} queued — server unreachable`, 'warn');
   }
+}
+
+/** v3 — Hide-from-card handler (Anil 2026-05-26). The card emits 'hide';
+ *  we mutate the active profile's removedCuratedIds list, persist, and
+ *  pull the card out of the DOM by data-targetId match. The Profile
+ *  tab's slot 11 'profile-changed' subscriber re-renders the queue too,
+ *  so the operator's persisted "hide" state survives the next refresh.
+ *
+ *  Defensive no-ops:
+ *  - no active profile (shouldn't happen — init() always creates one)
+ *  - id already in removedCuratedIds (daemon multiplex would have
+ *    filtered it before render — if we still see it, just no-op the
+ *    save but still remove from DOM so the operator's tap does something)
+ *  - personal-target id (card.ts already skips the Hide button — this
+ *    is belt-and-braces defense against a future code change)
+ */
+function handleHideAction(p: PassEntry): void {
+  if (p.target_id.startsWith('personal:')) {
+    // card.ts shouldn't even render the button for personal targets;
+    // bail silently rather than corrupt the profile.
+    return;
+  }
+  const profile = currentProfile ? loadProfile(currentProfile.name) : null;
+  if (!profile) {
+    showToast(`Could not hide — profile unavailable`, 'error');
+    return;
+  }
+  if (!profile.removedCuratedIds.includes(p.target_id)) {
+    const next = toggleCuratedRemoved(profile, p.target_id);
+    try {
+      saveProfile(next);
+    } catch (e) {
+      showToast(
+        `Could not hide: ${e instanceof Error ? e.message : String(e)}`,
+        'error',
+      );
+      return;
+    }
+  }
+  // Remove the matching card(s) from BOTH containers — the same id can
+  // appear in Queue + Upcoming. dataset comparison (not querySelector
+  // interpolation) avoids the same quoting hazard onCardAction defends
+  // against above.
+  for (const el of document.querySelectorAll<HTMLElement>('.card')) {
+    if (el.dataset.targetId === p.target_id) {
+      el.remove();
+    }
+  }
+  showToast(`Hidden "${p.target_name}" — restore in Profile tab`, 'success');
 }
 
 let toastFadeTimer: number | null = null;
@@ -852,6 +911,17 @@ export function getCurrentProfile(): Profile | null {
   return currentProfile;
 }
 
+/** Getter for the latest-fetched manifest. v3 — exposed so the
+ *  Profile-tab typeahead (Component C, Anil 2026-05-26) can resolve the
+ *  curated `targets.json` artifact through the same manifest the queue
+ *  is reading from. Snapshot-restored manifests also flow through here,
+ *  so the typeahead works offline / on cold boot. Returns null when no
+ *  manifest has been loaded yet (first-launch + cold-cache); callers
+ *  fall back to the paste-id flow in that case. */
+export function getCurrentManifest(): Manifest | null {
+  return currentManifest;
+}
+
 /** Update the topbar profile badge ("👤 Jack") to reflect the active
  *  profile name. textContent only (no innerHTML) — premise 12 of design
  *  rev 2 forbids new XSS surfaces, and profile names are user-influenced
@@ -1026,4 +1096,10 @@ export {
   renderOfflineBanner,
   renderQueue,
   updatePendingSyncBadge,
+  // v3 — exposed so the hide-from-card flow can be tested at the
+  // handler boundary (DOM removal + profile save + toast) without
+  // simulating the full Queue render path. Card-test side covers
+  // the button-renders-the-event surface.
+  handleHideAction,
+  onCardAction,
 };

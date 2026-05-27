@@ -534,6 +534,18 @@ main {
 
 .btn-shoot { background: var(--green); color: var(--bg); border: 0; }
 .btn-skip { background: var(--surface-2); color: var(--text); }
+/* v3 — Hide button (Anil 2026-05-26). One-tap dismiss for curated cards.
+ * Visually subordinate to Shoot/Skip — no color fill, just an outlined
+ * button. The operator should glance, see Shoot/Skip as the primary
+ * actions, and use Hide deliberately. */
+.btn-hide {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 500;
+  opacity: 0.8;
+}
+.btn-hide:hover { opacity: 1; }
 
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
@@ -1246,6 +1258,170 @@ main {
 .profile-crud-curated {
   padding-top: 0.4rem;
   border-top: 1px solid var(--border);
+}
+
+/* v3 — curated catalog typeahead (Anil 2026-05-26). */
+.profile-curated-typeahead {
+  margin-top: 0.3rem;
+}
+.profile-curated-results {
+  margin-top: 0.4rem;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.profile-curated-results:empty {
+  display: none;
+}
+.profile-curated-result-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.profile-curated-result {
+  border-bottom: 1px solid var(--border);
+}
+.profile-curated-result:last-child { border-bottom: 0; }
+.profile-curated-result-btn {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.1rem 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.profile-curated-result-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.profile-curated-result-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.profile-curated-result-name {
+  grid-column: 1;
+  font-weight: 600;
+}
+.profile-curated-result-id {
+  grid-column: 2;
+  grid-row: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+}
+.profile-curated-result-meta {
+  grid-column: 1;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.profile-curated-result-indicator {
+  grid-column: 2;
+  grid-row: 2;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.profile-curated-result.already-hidden .profile-curated-result-indicator {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.profile-crud-count {
+  margin: 0.4rem 0 0.2rem 0;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.profile-curated-paste-fallback {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+.profile-curated-paste-fallback summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 0.2rem 0;
+}
+
+/* v3 — geocoding search panel (Component B, Anil 2026-05-26). */
+.profile-geocode-mode-toggle {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.profile-geocode-mode-toggle button {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.7rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+}
+.profile-geocode-mode-toggle button.active {
+  background: var(--accent, #5cd0ff);
+  color: var(--bg);
+  border-color: transparent;
+  font-weight: 700;
+}
+.profile-geocode-results {
+  margin-top: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.profile-geocode-results:empty { display: none; }
+.profile-geocode-result-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.profile-geocode-result {
+  border-bottom: 1px solid var(--border);
+}
+.profile-geocode-result:last-child { border-bottom: 0; }
+.profile-geocode-result-btn {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.profile-geocode-result-btn:hover { background: var(--surface-2); }
+.profile-geocode-result-name {
+  font-weight: 600;
+  display: block;
+}
+.profile-geocode-result-meta {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  display: block;
+  margin-top: 0.1rem;
+}
+.profile-geocode-attribution {
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-align: right;
+}
+.profile-geocode-attribution a {
+  color: inherit;
+  text-decoration: underline;
+}
+.profile-geocode-status {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
 }
 
 /* Slot 10 — JSON export/import section. */

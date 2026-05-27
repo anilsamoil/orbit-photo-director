@@ -48,17 +48,28 @@ export function _resetOpenThumbnailsForTest(): void {
   OPEN_THUMBNAILS.clear();
 }
 
+/** Card action callback. v3 added 'hide' (Anil 2026-05-26): operator can
+ *  one-tap dismiss a curated card from their queue without having to
+ *  remember the exact id and paste it into the Profile-tab Hidden input.
+ *  'hide' is only emitted from curated-target cards — personal-target
+ *  cards never render the Hide button (their Delete lives in Profile-tab
+ *  list and is too destructive for a one-tap on the queue). */
+export type CardAction = 'shoot' | 'skip' | 'hide';
+
 /** Render the card list into the cards container.
- *  Each card emits Shoot/Skip events via the provided `onAction` callback.
- *  When `variant === 'forecast'`, action buttons are omitted (a pass 6 h
- *  away isn't actionable yet — the user sets an alarm, doesn't tap Shoot).
+ *  Each card emits Shoot/Skip/Hide events via the provided `onAction`
+ *  callback. When `variant === 'forecast'`, Shoot/Skip are omitted (a
+ *  pass 6 h away isn't actionable yet — the user sets an alarm, doesn't
+ *  tap Shoot). Hide IS rendered on forecast cards — the operator wants
+ *  to dismiss "Aurora Scandinavia" out of both the Queue AND the
+ *  Upcoming pane in one click.
  */
 export function renderCards(
   container: HTMLElement,
   passes: PassEntry[],
   nowMs: number,
   isStale: boolean,
-  onAction: (action: 'shoot' | 'skip', p: PassEntry) => void,
+  onAction: (action: CardAction, p: PassEntry) => void,
   options: RenderOptions | CardVariant = {},
 ): void {
   const opts = typeof options === 'string' ? { variant: options } : options;
@@ -75,7 +86,7 @@ export function renderCard(
   p: PassEntry,
   nowMs: number,
   isStale: boolean,
-  onAction: (action: 'shoot' | 'skip', p: PassEntry) => void,
+  onAction: (action: CardAction, p: PassEntry) => void,
   options: RenderOptions | CardVariant = {},
 ): HTMLElement {
   const opts = typeof options === 'string' ? { variant: options } : options;
@@ -235,6 +246,26 @@ export function renderCard(
     });
   }
 
+  // v3 — Hide button (Anil 2026-05-26). One-tap dismiss for curated
+  // cards the operator doesn't care about (e.g., "Aurora Scandinavia"
+  // showing up in someone who shoots only oceans). Personal-target
+  // cards never get Hide — they have a Delete in the Profile-tab CRUD
+  // list, and one-tap delete from the queue is too destructive without
+  // a confirm step. Hide is rendered on BOTH observed and forecast
+  // variants so the operator can dismiss from either pane.
+  const hideBtn: HTMLButtonElement | null = isPersonalTarget(p.target_id)
+    ? null
+    : (() => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-hide';
+        b.textContent = 'Hide';
+        b.title = 'Hide this curated target from your view (restore in Profile tab)';
+        b.setAttribute('aria-label', `Hide "${p.target_name}" from your view`);
+        b.addEventListener('click', () => onAction('hide', p));
+        return b;
+      })();
+
   // Forecast cards omit Shoot/Skip — passes that far out aren't actionable
   // yet, and the user submits a Shoot record only when actually shooting.
   if (variant === 'observed') {
@@ -254,18 +285,20 @@ export function renderCard(
     if (!tokenSet) skip.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
     skip.addEventListener('click', () => onAction('skip', p));
     actions.append(shoot, skip);
+    if (hideBtn) actions.appendChild(hideBtn);
     if (thumbnailToggle) actions.appendChild(thumbnailToggle);
     card.append(name, countdown, meta, score, actions);
     if (thumbnailContainer) card.appendChild(thumbnailContainer);
   } else {
     card.append(name, countdown, meta, score);
-    // Forecast variants offer the 🌍 too — same value for the operator,
-    // just without the Shoot/Skip row to attach it to. Append directly
-    // to the card.
-    if (thumbnailToggle) {
+    // Forecast variants get a single trailing action row when there's
+    // anything to put in it (Hide + / or 🌍 thumbnail toggle). Both are
+    // optional; only mount the row if at least one is present.
+    if (hideBtn || thumbnailToggle) {
       const fcActions = document.createElement('div');
       fcActions.className = 'card-actions card-actions-forecast';
-      fcActions.appendChild(thumbnailToggle);
+      if (hideBtn) fcActions.appendChild(hideBtn);
+      if (thumbnailToggle) fcActions.appendChild(thumbnailToggle);
       card.appendChild(fcActions);
     }
     if (thumbnailContainer) card.appendChild(thumbnailContainer);

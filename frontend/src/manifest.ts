@@ -1,5 +1,6 @@
 import type {
   ArtifactEntry,
+  CuratedTarget,
   Manifest,
   PassEntry,
   ProfileArtifactsBlock,
@@ -206,4 +207,19 @@ export async function fetchStatus(
   profileName?: string,
 ): Promise<Status> {
   return fetchArtifact<Status>(manifest, 'status', baseUrl, profileName);
+}
+
+/** Fetch the curated targets catalog (`targets.json`) via the manifest.
+ *  v3 — Component C (Anil 2026-05-26): the Profile-tab "Hidden curated"
+ *  typeahead needs the catalog to search by name. Curated targets are
+ *  profile-agnostic (Anil curates the master list for everyone), so we
+ *  don't thread profileName through. Returns [] if the artifact is
+ *  missing from the manifest — callers should fall back to the
+ *  paste-id flow rather than break the section. */
+export async function fetchCuratedTargets(
+  manifest: Manifest,
+  baseUrl = '',
+): Promise<CuratedTarget[]> {
+  if (!resolveArtifactEntry(manifest, 'targets')) return [];
+  return fetchArtifact<CuratedTarget[]>(manifest, 'targets', baseUrl);
 }

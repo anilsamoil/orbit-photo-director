@@ -46,6 +46,10 @@ import {
   type ImportResult,
 } from './profile-json-io';
 import { fetchLog } from './log';
+import { fetchCuratedTargets } from './manifest';
+import type { CuratedTarget, Manifest } from './types';
+import { getCurrentManifest } from './main';
+import { geocode, type GeocodeResult } from './profile-geocode';
 
 /** App version stamped into export envelopes. Injected by Vite's `define`
  *  at build time from the repo-root VERSION file (see vite.config.ts) so
@@ -147,6 +151,20 @@ export function buildCrudSection(profileName: string): HTMLElement {
  *  only on full page reload — that's the operator behaviour we care
  *  about (open the URL on a fresh device → hydrate once). */
 const hydratedProfiles = new Set<string>();
+
+/** v3 — module-scope cache of the curated targets catalog. The Profile-tab
+ *  typeahead (Component C, Anil 2026-05-26) consults this on every
+ *  keystroke; fetching once per Profile-pane mount keeps the network
+ *  cost bounded to one hashed JSON pull per page load. State machine:
+ *    null  → never attempted (initial render shows "Loading…")
+ *    []    → fetch attempted but returned empty / failed (fall back
+ *            to paste-id flow with "catalog unavailable" hint)
+ *    [...] → ready for search
+ *  Re-mounting the Profile pane refetches; rerenderCrudSection (post
+ *  mutation) reuses the cache. */
+let cachedCuratedTargets: CuratedTarget[] | null = null;
+let curatedFetchInFlight: Promise<CuratedTarget[]> | null = null;
+let curatedFetchFailed = false;
 
 /** Slot 8b — session cache of `target_id → shoot count` per profile.
  *  Populated by `hydrateShotCounts` on the FIRST CRUD-section mount per
@@ -267,6 +285,24 @@ function buildAddForm(profileName: string): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'profile-crud-add';
 
+  // v3 — mode toggle (Anil 2026-05-26). "Manual lat/lon" (the existing
+  // surface) + "Search by name" (Nominatim geocoder). Search-by-name
+  // populates the existing lat/lon fields, then auto-switches back to
+  // Manual mode so the operator can review/tweak before clicking Add.
+  const modeToggle = document.createElement('div');
+  modeToggle.className = 'profile-geocode-mode-toggle';
+  const modeManualBtn = document.createElement('button');
+  modeManualBtn.type = 'button';
+  modeManualBtn.id = 'profile-add-mode-manual';
+  modeManualBtn.textContent = 'Manual lat/lon';
+  modeManualBtn.classList.add('active');
+  const modeSearchBtn = document.createElement('button');
+  modeSearchBtn.type = 'button';
+  modeSearchBtn.id = 'profile-add-mode-search';
+  modeSearchBtn.textContent = 'Search by name';
+  modeToggle.append(modeManualBtn, modeSearchBtn);
+  wrap.appendChild(modeToggle);
+
   const nameRow = document.createElement('div');
   nameRow.className = 'profile-row';
   const nameLabel = document.createElement('label');
@@ -280,6 +316,56 @@ function buildAddForm(profileName: string): HTMLElement {
   nameInput.autocomplete = 'off';
   nameInput.maxLength = 200;
   nameRow.append(nameLabel, nameInput);
+
+  // Search-mode panel. Hidden by default; revealed when the operator
+  // toggles to "Search by name." Holds its own input + Search button
+  // + results pane + attribution caption. Clicking a result autofills
+  // the lat/lon row above + switches back to Manual.
+  const searchPanel = document.createElement('div');
+  searchPanel.className = 'profile-geocode-search-panel';
+  searchPanel.id = 'profile-add-search-panel';
+  searchPanel.hidden = true;
+
+  const searchRow = document.createElement('div');
+  searchRow.className = 'profile-row';
+  const searchLabel = document.createElement('label');
+  searchLabel.htmlFor = 'profile-add-search-input';
+  searchLabel.textContent = 'Search:';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.id = 'profile-add-search-input';
+  searchInput.className = 'profile-input';
+  searchInput.placeholder = 'e.g., San Diego, Mount Etna';
+  searchInput.autocomplete = 'off';
+  const searchBtn = document.createElement('button');
+  searchBtn.type = 'button';
+  searchBtn.className = 'profile-btn';
+  searchBtn.id = 'profile-add-search-btn';
+  searchBtn.textContent = '🔎 Search';
+  searchRow.append(searchLabel, searchInput, searchBtn);
+  searchPanel.appendChild(searchRow);
+
+  const searchStatus = document.createElement('div');
+  searchStatus.className = 'profile-geocode-status';
+  searchStatus.id = 'profile-add-search-status';
+  searchPanel.appendChild(searchStatus);
+
+  const searchResults = document.createElement('div');
+  searchResults.className = 'profile-geocode-results';
+  searchResults.id = 'profile-add-search-results';
+  searchPanel.appendChild(searchResults);
+
+  // Required Nominatim attribution. ToS demands visible attribution
+  // wherever results are shown — renders even on empty / error states
+  // because the operator may have seen the API logo or the network tab
+  // and we want to be unambiguous about the upstream.
+  const attribution = document.createElement('div');
+  attribution.className = 'profile-geocode-attribution';
+  attribution.id = 'profile-add-search-attribution';
+  attribution.textContent = 'Geocoding © OpenStreetMap contributors via Nominatim';
+  searchPanel.appendChild(attribution);
+
+  wrap.appendChild(searchPanel);
 
   const latRow = document.createElement('div');
   latRow.className = 'profile-row';
@@ -332,6 +418,94 @@ function buildAddForm(profileName: string): HTMLElement {
   errorEl.id = 'profile-add-error';
   errorEl.setAttribute('role', 'alert');
 
+  // v3 — mode-toggle handler. Hide/show the search panel; gray out
+  // the inactive toggle button. The name + lat/lon row stays visible
+  // in BOTH modes so the operator can preview a search result before
+  // committing it.
+  const setMode = (mode: 'manual' | 'search') => {
+    if (mode === 'search') {
+      searchPanel.hidden = false;
+      modeSearchBtn.classList.add('active');
+      modeManualBtn.classList.remove('active');
+      searchInput.focus();
+    } else {
+      searchPanel.hidden = true;
+      modeManualBtn.classList.add('active');
+      modeSearchBtn.classList.remove('active');
+    }
+  };
+  modeManualBtn.addEventListener('click', () => setMode('manual'));
+  modeSearchBtn.addEventListener('click', () => setMode('search'));
+
+  // Debounced search trigger — both the Search button click and pressing
+  // Enter in the search input route through here. Debounce 1000ms (one
+  // request per second per Nominatim ToS); rapid clicks coalesce into
+  // one network call.
+  let lastSearchAt = 0;
+  let pendingSearchHandle: number | null = null;
+  const runGeocodeSearch = () => {
+    const q = searchInput.value.trim();
+    if (q.length === 0) {
+      searchStatus.textContent = 'Enter a place name above.';
+      searchResults.replaceChildren();
+      return;
+    }
+    const now = Date.now();
+    const wait = Math.max(0, 1000 - (now - lastSearchAt));
+    if (pendingSearchHandle !== null) window.clearTimeout(pendingSearchHandle);
+    if (wait > 0) {
+      searchStatus.textContent = 'Searching…';
+      pendingSearchHandle = window.setTimeout(() => {
+        pendingSearchHandle = null;
+        void executeGeocodeSearch();
+      }, wait);
+    } else {
+      void executeGeocodeSearch();
+    }
+  };
+
+  const executeGeocodeSearch = async () => {
+    const q = searchInput.value.trim();
+    if (q.length === 0) return;
+    lastSearchAt = Date.now();
+    searchStatus.textContent = 'Searching…';
+    searchResults.replaceChildren();
+    searchBtn.disabled = true;
+    const result = await geocode(q);
+    searchBtn.disabled = false;
+    if (!result.ok) {
+      searchStatus.textContent = geocodeErrorMessage(result.reason, result.detail, q);
+      return;
+    }
+    if (result.data.length === 0) {
+      searchStatus.textContent =
+        `No matches found for "${q}" — try a more specific name or use Manual mode.`;
+      return;
+    }
+    searchStatus.textContent = `${result.data.length} match${result.data.length === 1 ? '' : 'es'}.`;
+    renderGeocodeResults(searchResults, result.data, (picked) => {
+      // Autofill lat/lon + optionally pre-fill name; switch back to
+      // Manual so operator reviews before Add.
+      latInput.value = picked.lat.toFixed(4);
+      lonInput.value = picked.lon.toFixed(4);
+      if (nameInput.value.trim().length === 0) {
+        nameInput.value = picked.shortName || picked.displayName.slice(0, 80);
+      }
+      setMode('manual');
+      // Subtle visual nudge: focus the priority field so the operator
+      // tabs through the autofilled rows naturally.
+      prioInput.focus();
+    });
+  };
+
+  searchBtn.addEventListener('click', runGeocodeSearch);
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runGeocodeSearch();
+    }
+  });
+
   addBtn.addEventListener('click', () => {
     errorEl.textContent = '';
     const id = makePersonalTargetId(profileName);
@@ -353,6 +527,9 @@ function buildAddForm(profileName: string): HTMLElement {
         latInput.value = '';
         lonInput.value = '';
         prioInput.value = '5';
+        searchInput.value = '';
+        searchStatus.textContent = '';
+        searchResults.replaceChildren();
       } else {
         errorEl.textContent = feedback;
       }
@@ -361,6 +538,55 @@ function buildAddForm(profileName: string): HTMLElement {
 
   wrap.append(nameRow, latRow, btnRow, errorEl);
   return wrap;
+}
+
+/** Render geocode result tiles. Each tile is a button that calls
+ *  `onPick` with the chosen result. Operator-controlled strings
+ *  (display_name, country) flow through textContent only. */
+function renderGeocodeResults(
+  host: HTMLElement,
+  results: GeocodeResult[],
+  onPick: (r: GeocodeResult) => void,
+): void {
+  host.replaceChildren();
+  const ul = document.createElement('ul');
+  ul.className = 'profile-geocode-result-list';
+  for (const r of results) {
+    const li = document.createElement('li');
+    li.className = 'profile-geocode-result';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-geocode-result-btn';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'profile-geocode-result-name';
+    nameEl.textContent = r.displayName.length > 110
+      ? r.displayName.slice(0, 107) + '…'
+      : r.displayName;
+    const metaEl = document.createElement('span');
+    metaEl.className = 'profile-geocode-result-meta';
+    const metaParts: string[] = [];
+    if (r.country) metaParts.push(r.country);
+    metaParts.push(`${r.lat.toFixed(3)}, ${r.lon.toFixed(3)}`);
+    metaEl.textContent = metaParts.join(' · ');
+    btn.append(nameEl, metaEl);
+    btn.addEventListener('click', () => onPick(r));
+    li.appendChild(btn);
+    ul.appendChild(li);
+  }
+  host.appendChild(ul);
+}
+
+function geocodeErrorMessage(
+  reason: string,
+  detail: string | undefined,
+  query: string,
+): string {
+  if (reason === 'timeout') return `Search timed out for "${query}" — try again or use Manual mode.`;
+  if (reason === 'network') return `Geocoding failed: network unreachable. Try again or use Manual mode.`;
+  if (reason === 'http') return `Geocoding failed: ${detail ?? 'server error'}. Try again later.`;
+  if (reason === 'bad_json') return `Geocoding failed: ${detail ?? 'invalid response'}.`;
+  if (reason === 'empty_query') return 'Enter a place name above.';
+  return `Geocoding failed: ${detail ?? reason}`;
 }
 
 /** Optimistic add: persist locally, re-render, fire API, rollback on
@@ -527,52 +753,24 @@ function buildCuratedRemovedSection(profileName: string): HTMLElement {
 
   const desc = document.createElement('p');
   desc.className = 'profile-crud-empty';
-  desc.textContent = 'Curated target IDs you want excluded from your scored view. Paste the id (e.g., aurora-scandinavia) and click Hide.';
+  desc.textContent = 'Exclude curated targets from your scored view. Type to search by name; pick a match to hide. The daemon picks the change up on its next tick.';
   wrap.appendChild(desc);
 
-  const row = document.createElement('div');
-  row.className = 'profile-row';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.id = 'profile-curated-input';
-  input.className = 'profile-input';
-  input.placeholder = 'curated target id';
-  input.autocomplete = 'off';
-  input.spellcheck = false;
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'profile-btn';
-  btn.id = 'profile-curated-hide-btn';
-  btn.textContent = 'Hide';
-  row.append(input, btn);
-  wrap.appendChild(row);
+  // v3 — typeahead UI (Anil 2026-05-26). Replaces the paste-exact-id
+  // input as the primary surface; the paste-id flow stays below as a
+  // fallback for catalog-fetch failures.
+  wrap.appendChild(buildCuratedTypeahead(profileName));
 
-  const errEl = document.createElement('div');
-  errEl.className = 'profile-error';
-  errEl.id = 'profile-curated-error';
-  errEl.setAttribute('role', 'alert');
-  wrap.appendChild(errEl);
-
-  btn.addEventListener('click', () => {
-    errEl.textContent = '';
-    const id = (input.value || '').trim();
-    if (!id) {
-      errEl.textContent = 'Enter a curated target id.';
-      return;
-    }
-    // Curated ids are operator-chosen ASCII slugs (see targets.json). Cap
-    // length + character set defensively so a paste of random binary
-    // doesn't poison localStorage.
-    if (id.length > 64 || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-      errEl.textContent = 'Curated id must be lowercase a-z, 0-9, hyphen.';
-      return;
-    }
-    void handleToggleCurated(profileName, id, true);
-    input.value = '';
-  });
-
+  // Chip list of currently-hidden ids + summary count.
   const profile = safeLoadProfile(profileName);
   const removed = profile?.removedCuratedIds ?? [];
+
+  const count = document.createElement('p');
+  count.className = 'profile-crud-count';
+  count.id = 'profile-curated-count';
+  count.textContent = `${removed.length} curated target${removed.length === 1 ? '' : 's'} hidden`;
+  wrap.appendChild(count);
+
   if (removed.length > 0) {
     const list = document.createElement('ul');
     list.className = 'profile-crud-ul profile-crud-chiplist';
@@ -582,7 +780,308 @@ function buildCuratedRemovedSection(profileName: string): HTMLElement {
     wrap.appendChild(list);
   }
 
+  // Paste-exact-id fallback. Kept (spec preference) so an operator
+  // isn't stuck if a NASA tile flake takes down the catalog fetch — the
+  // daemon multiplexer reads removedCuratedIds regardless of how the
+  // id got in there, so this path stays correct.
+  wrap.appendChild(buildPasteIdFallback(profileName));
+
   return wrap;
+}
+
+/** v3 — Component C: curated-catalog typeahead. Input + results dropdown
+ *  populated on each keystroke (debounced 200ms). Click a result → adds
+ *  to removedCuratedIds + rerenders the CRUD section. Result tiles show
+ *  name, id pill, region/category, and an "(already hidden)" indicator
+ *  for ids already in removedCuratedIds (click is a no-op in that case).
+ *  Substring + case-insensitive match against `target.name` AND
+ *  `target.id` so operators can keep using partial ids if they prefer.
+ *
+ *  Fetch lifecycle:
+ *    - first call kicks off ensureCatalogLoaded() (async, non-blocking)
+ *    - while pending, results pane shows "Loading curated catalog…"
+ *    - on success, cachedCuratedTargets populates + results render
+ *    - on failure, the paste-id fallback below the chip list stays the
+ *      operator's escape hatch; the typeahead shows
+ *      "Curated catalog unavailable — use Or paste an exact id below."
+ */
+function buildCuratedTypeahead(profileName: string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'profile-curated-typeahead';
+  wrap.id = 'profile-curated-typeahead';
+
+  const inputRow = document.createElement('div');
+  inputRow.className = 'profile-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'profile-curated-search';
+  input.className = 'profile-input';
+  input.placeholder = 'Search curated targets (e.g., aurora, etna)';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  inputRow.appendChild(input);
+  wrap.appendChild(inputRow);
+
+  const results = document.createElement('div');
+  results.className = 'profile-curated-results';
+  results.id = 'profile-curated-results';
+  wrap.appendChild(results);
+
+  // Initial empty-state hint.
+  renderTypeaheadEmpty(results);
+
+  // Wire the search. Debounce keystrokes at 200ms — fast enough that
+  // the operator's intent ("they typed all 4 letters") gets reflected,
+  // slow enough that holding down Backspace doesn't shred the result
+  // pane mid-render. Cache-only after the first fetch resolves; no
+  // network beyond ensureCatalogLoaded().
+  let debounceHandle: number | null = null;
+  const runSearch = () => {
+    const q = input.value.trim();
+    if (q.length === 0) {
+      renderTypeaheadEmpty(results);
+      return;
+    }
+    if (cachedCuratedTargets === null) {
+      renderTypeaheadLoading(results);
+      return;
+    }
+    if (curatedFetchFailed && cachedCuratedTargets.length === 0) {
+      renderTypeaheadFetchFailed(results);
+      return;
+    }
+    const matches = searchCuratedTargets(cachedCuratedTargets, q, 8);
+    renderTypeaheadResults(results, matches, q, profileName);
+  };
+
+  input.addEventListener('input', () => {
+    if (debounceHandle !== null) window.clearTimeout(debounceHandle);
+    debounceHandle = window.setTimeout(runSearch, 200);
+  });
+
+  // Kick off the catalog fetch on first mount per session. ensureCatalog
+  // returns the cached array if already loaded; otherwise it fetches once,
+  // memoizes, and re-runs the current search so the operator's
+  // already-typed query immediately reflects the just-arrived catalog.
+  void ensureCatalogLoaded().then(() => {
+    // If the operator typed before the fetch resolved, re-run the search
+    // now that we have data.
+    if (input.value.trim().length > 0) runSearch();
+    else if (curatedFetchFailed && cachedCuratedTargets?.length === 0) {
+      renderTypeaheadFetchFailed(results);
+    }
+  });
+
+  return wrap;
+}
+
+/** Pure: filter curated targets by substring + return up to `limit`
+ *  matches. Match priority: name-match before id-match; within each,
+ *  preserve catalog order (curated tier ordering already prioritizes
+ *  the high-value targets). Case-insensitive. Operator-controlled `q`
+ *  is never interpolated into a selector or regex. */
+export function searchCuratedTargets(
+  catalog: CuratedTarget[],
+  q: string,
+  limit: number,
+): CuratedTarget[] {
+  const needle = q.toLowerCase();
+  if (needle.length === 0) return [];
+  const nameMatches: CuratedTarget[] = [];
+  const idMatches: CuratedTarget[] = [];
+  for (const t of catalog) {
+    if (t.name.toLowerCase().includes(needle)) {
+      nameMatches.push(t);
+    } else if (t.id.toLowerCase().includes(needle)) {
+      idMatches.push(t);
+    }
+    if (nameMatches.length + idMatches.length >= limit * 2) break;
+  }
+  return [...nameMatches, ...idMatches].slice(0, limit);
+}
+
+function renderTypeaheadEmpty(host: HTMLElement): void {
+  host.replaceChildren();
+  const p = document.createElement('p');
+  p.className = 'profile-crud-empty';
+  p.textContent = 'Type to search curated targets.';
+  host.appendChild(p);
+}
+
+function renderTypeaheadLoading(host: HTMLElement): void {
+  host.replaceChildren();
+  const p = document.createElement('p');
+  p.className = 'profile-crud-empty';
+  p.textContent = 'Loading curated catalog…';
+  host.appendChild(p);
+}
+
+function renderTypeaheadFetchFailed(host: HTMLElement): void {
+  host.replaceChildren();
+  const p = document.createElement('p');
+  p.className = 'profile-error';
+  p.textContent = 'Curated catalog unavailable — use "Or paste an exact id" below.';
+  host.appendChild(p);
+}
+
+function renderTypeaheadResults(
+  host: HTMLElement,
+  matches: CuratedTarget[],
+  query: string,
+  profileName: string,
+): void {
+  host.replaceChildren();
+  if (matches.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'profile-crud-empty';
+    p.textContent = `No curated targets match "${query}".`;
+    host.appendChild(p);
+    return;
+  }
+  const profile = safeLoadProfile(profileName);
+  const alreadyHidden = new Set(profile?.removedCuratedIds ?? []);
+  const ul = document.createElement('ul');
+  ul.className = 'profile-curated-result-list';
+  for (const t of matches) {
+    ul.appendChild(buildTypeaheadResult(profileName, t, alreadyHidden.has(t.id)));
+  }
+  host.appendChild(ul);
+}
+
+function buildTypeaheadResult(
+  profileName: string,
+  target: CuratedTarget,
+  alreadyHidden: boolean,
+): HTMLElement {
+  const li = document.createElement('li');
+  li.className = 'profile-curated-result';
+  li.dataset.curatedId = target.id;
+  if (alreadyHidden) li.classList.add('already-hidden');
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'profile-curated-result-btn';
+  btn.disabled = alreadyHidden;
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'profile-curated-result-name';
+  nameEl.textContent = target.name;
+
+  const idEl = document.createElement('code');
+  idEl.className = 'profile-curated-result-id';
+  idEl.textContent = target.id;
+
+  // Region/category subtext (best-effort — both fields are optional in
+  // the schema; older targets.json snapshots may not include them).
+  const meta = document.createElement('span');
+  meta.className = 'profile-curated-result-meta';
+  const parts: string[] = [];
+  if (target.category) parts.push(target.category);
+  if (target.notes) parts.push(target.notes.slice(0, 80));
+  if (parts.length > 0) meta.textContent = parts.join(' · ');
+
+  const indicator = document.createElement('span');
+  indicator.className = 'profile-curated-result-indicator';
+  indicator.textContent = alreadyHidden ? '(already hidden)' : 'Hide';
+
+  btn.append(nameEl, idEl, meta, indicator);
+
+  if (!alreadyHidden) {
+    btn.addEventListener('click', () => {
+      void handleToggleCurated(profileName, target.id, true);
+    });
+  }
+
+  li.appendChild(btn);
+  return li;
+}
+
+/** Paste-exact-id fallback. Kept (spec preference) so an operator isn't
+ *  stuck if the catalog fetch fails. Compact: collapsed-by-default
+ *  details block so it doesn't visually compete with the typeahead. */
+function buildPasteIdFallback(profileName: string): HTMLElement {
+  const details = document.createElement('details');
+  details.className = 'profile-curated-paste-fallback';
+  details.id = 'profile-curated-paste-fallback';
+
+  const summary = document.createElement('summary');
+  summary.textContent = 'Or paste an exact id';
+  details.appendChild(summary);
+
+  const row = document.createElement('div');
+  row.className = 'profile-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'profile-curated-input';
+  input.className = 'profile-input';
+  input.placeholder = 'curated target id (e.g., aurora-scandinavia)';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'profile-btn';
+  btn.id = 'profile-curated-hide-btn';
+  btn.textContent = 'Hide';
+  row.append(input, btn);
+  details.appendChild(row);
+
+  const errEl = document.createElement('div');
+  errEl.className = 'profile-error';
+  errEl.id = 'profile-curated-error';
+  errEl.setAttribute('role', 'alert');
+  details.appendChild(errEl);
+
+  btn.addEventListener('click', () => {
+    errEl.textContent = '';
+    const id = (input.value || '').trim();
+    if (!id) {
+      errEl.textContent = 'Enter a curated target id.';
+      return;
+    }
+    if (id.length > 64 || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+      errEl.textContent = 'Curated id must be lowercase a-z, 0-9, hyphen.';
+      return;
+    }
+    void handleToggleCurated(profileName, id, true);
+    input.value = '';
+  });
+
+  return details;
+}
+
+/** Lazy-load the curated catalog. Memoizes the in-flight Promise so
+ *  concurrent calls from multiple typeahead instances (multi-tab during
+ *  testing) share a single fetch. On failure, sets `curatedFetchFailed`
+ *  + leaves the cache as [] so the next caller short-circuits to the
+ *  fallback UI. */
+export async function ensureCatalogLoaded(
+  manifestOverride?: Manifest | null,
+): Promise<CuratedTarget[]> {
+  if (cachedCuratedTargets !== null) return cachedCuratedTargets;
+  if (curatedFetchInFlight) return curatedFetchInFlight;
+  const manifest = manifestOverride ?? getCurrentManifest();
+  if (!manifest) {
+    // No manifest available yet — cold boot / first launch with no
+    // snapshot. Defer: leave cache null so the next call (typically
+    // after refresh() resolves) tries again.
+    return [];
+  }
+  curatedFetchInFlight = fetchCuratedTargets(manifest)
+    .then((targets) => {
+      cachedCuratedTargets = targets;
+      curatedFetchFailed = targets.length === 0;
+      return targets;
+    })
+    .catch((e) => {
+      console.warn('profile-crud: curated catalog fetch failed:', e);
+      cachedCuratedTargets = [];
+      curatedFetchFailed = true;
+      return [];
+    })
+    .finally(() => {
+      curatedFetchInFlight = null;
+    });
+  return curatedFetchInFlight;
 }
 
 function buildRemovedChip(profileName: string, id: string): HTMLElement {
@@ -1321,5 +1820,19 @@ export const _test = {
     hydratedProfiles.clear();
     shotCountsFetched.clear();
     shotCountsByProfile.clear();
+  },
+  /** v3 — reset curated-catalog cache between tests so a stub catalog
+   *  from one test doesn't leak into the next. Production code never
+   *  calls this — the cache naturally invalidates on page reload. */
+  resetCuratedCatalog: (): void => {
+    cachedCuratedTargets = null;
+    curatedFetchInFlight = null;
+    curatedFetchFailed = false;
+  },
+  /** v3 — seed the curated cache directly. Used by tests to skip the
+   *  ensureCatalogLoaded()/fetchCuratedTargets() path. */
+  seedCuratedCatalog: (targets: CuratedTarget[]): void => {
+    cachedCuratedTargets = targets;
+    curatedFetchFailed = false;
   },
 };

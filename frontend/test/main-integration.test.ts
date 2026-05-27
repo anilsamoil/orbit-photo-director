@@ -401,6 +401,97 @@ describe('main.ts: past-pass filter on Queue + Upcoming render', () => {
   });
 });
 
+// v3 — Hide-from-card flow (Anil 2026-05-26). Component A of the v3
+// operator-ergonomics batch. Tested through the exposed `handleHideAction`
+// + `onCardAction` since the click handler in main.ts mutates module state
+// (currentProfile via loadOrCreateProfileFromURL during init()).
+describe('main.ts: hide-from-card (v3)', () => {
+  // Init() boots from URL, so we seed window.location.search via
+  // history.replaceState. Default-profile path keeps the test surface
+  // minimal — same code path the operator hits on a fresh `?u=anil` open.
+  beforeEach(() => {
+    history.replaceState(null, '', '/?u=anil');
+    // Drive refresh to fail fast so init() returns instead of awaiting
+    // a real network call — we just need init() to set currentProfile.
+    vi.mocked(manifestModule.fetchManifest).mockRejectedValue(new Error('test'));
+  });
+
+  it('handleHideAction adds the target_id to removedCuratedIds', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    const pass = buildPass({ target_id: 'aurora-scandinavia', target_name: 'Aurora — Scandinavia' });
+    handleHideAction(pass);
+    const profileRaw = localStorage.getItem('opd-profile-anil');
+    const profile = JSON.parse(profileRaw!);
+    expect(profile.removedCuratedIds).toContain('aurora-scandinavia');
+  });
+
+  it('handleHideAction removes the matching card from the DOM immediately', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    // Mount a card by target_id matching what we're about to hide.
+    const cardsHost = document.getElementById('cards')!;
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.dataset.targetId = 'etna-volcano';
+    card.dataset.passTime = '2026-05-26T12:00:00Z';
+    cardsHost.appendChild(card);
+    handleHideAction(buildPass({ target_id: 'etna-volcano', target_name: 'Etna' }));
+    expect(document.querySelector('.card[data-target-id="etna-volcano"]')).toBeNull();
+  });
+
+  it('handleHideAction removes the same id from BOTH Queue and Upcoming containers', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    for (const containerId of ['cards', 'upcoming-cards']) {
+      const host = document.getElementById(containerId)!;
+      const card = document.createElement('article');
+      card.className = 'card';
+      card.dataset.targetId = 'patagonia-glaciers';
+      host.appendChild(card);
+    }
+    handleHideAction(buildPass({ target_id: 'patagonia-glaciers', target_name: 'Patagonia' }));
+    expect(document.querySelectorAll('.card[data-target-id="patagonia-glaciers"]').length).toBe(0);
+  });
+
+  it('handleHideAction fires the "Hidden ..." toast with the target name', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    handleHideAction(buildPass({ target_id: 'tokyo-night', target_name: 'Tokyo at night' }));
+    const toast = document.getElementById('toast')!;
+    expect(toast.hidden).toBe(false);
+    expect(toast.textContent).toContain('Tokyo at night');
+    expect(toast.textContent).toContain('Hidden');
+    expect(toast.textContent).toContain('Profile tab');
+  });
+
+  it('handleHideAction is a defensive no-op on a personal-target id', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    handleHideAction(buildPass({
+      target_id: 'personal:anil:abc',
+      target_name: 'My personal',
+    }));
+    const profile = JSON.parse(localStorage.getItem('opd-profile-anil')!);
+    // Personal id MUST NOT have been added to removedCuratedIds (that's
+    // a curated-id concept). The hide button isn't even rendered for
+    // personal targets; this guard catches future code changes.
+    expect(profile.removedCuratedIds).toEqual([]);
+  });
+
+  it('handleHideAction is idempotent when the id is already hidden', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    handleHideAction(buildPass({ target_id: 'aurora-scandinavia' }));
+    handleHideAction(buildPass({ target_id: 'aurora-scandinavia' }));
+    const profile = JSON.parse(localStorage.getItem('opd-profile-anil')!);
+    const matches = profile.removedCuratedIds.filter(
+      (id: string) => id === 'aurora-scandinavia',
+    );
+    expect(matches).toHaveLength(1);
+  });
+});
+
 describe('main.ts: updatePendingSyncBadge', () => {
   it('hides the badge when the calib queue is empty', async () => {
     localStorage.removeItem('opd-calib-queue');

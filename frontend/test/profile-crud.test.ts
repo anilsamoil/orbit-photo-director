@@ -530,3 +530,381 @@ describe('buildCrudSection DOM', () => {
     expect(second).not.toBe(first);
   });
 });
+
+// ---------------------------------------------------------------------------
+// v3 — Component C: curated-catalog typeahead in Hidden section
+// ---------------------------------------------------------------------------
+
+describe('curated catalog typeahead (v3)', () => {
+  beforeEach(() => {
+    saveProfile(createDefaultProfile(PROFILE));
+    _test.resetCuratedCatalog();
+    _test.seedCuratedCatalog([
+      {
+        id: 'aurora-scandinavia',
+        name: 'Aurora oval — Scandinavia/Baltic',
+        geom: { type: 'point', lat: 65, lon: 20 },
+        priority: 5,
+        regime: 'night',
+        tier: 1,
+        category: 'aurora',
+        notes: 'Aurora + Baltic city lights at the edge of ISS lat reach.',
+      },
+      {
+        id: 'aurora-northern-canada',
+        name: 'Aurora oval — Canada/northern US oblique',
+        geom: { type: 'point', lat: 60, lon: -100 },
+        priority: 5,
+        regime: 'night',
+        category: 'aurora',
+      },
+      {
+        id: 'etna-volcano',
+        name: 'Mt. Etna',
+        geom: { type: 'point', lat: 37.75, lon: 14.99 },
+        priority: 3,
+        regime: 'day',
+        category: 'volcanoes',
+      },
+      {
+        id: 'patagonia-glaciers',
+        name: 'Patagonia glaciers',
+        geom: { type: 'point', lat: -50, lon: -73 },
+        priority: 4,
+        regime: 'day',
+        category: 'glaciers',
+      },
+    ]);
+  });
+
+  afterEach(() => {
+    _test.resetCuratedCatalog();
+  });
+
+  it('renders the typeahead input + empty hint by default', () => {
+    const section = mountSection(PROFILE);
+    expect(section.querySelector('#profile-curated-search')).not.toBeNull();
+    const results = section.querySelector('#profile-curated-results');
+    expect(results?.textContent).toContain('Type to search');
+  });
+
+  it('matches by partial name (case-insensitive) and shows the result list', async () => {
+    const section = mountSection(PROFILE);
+    const input = section.querySelector<HTMLInputElement>('#profile-curated-search')!;
+    input.value = 'aurora';
+    input.dispatchEvent(new Event('input'));
+    // Wait past the 200ms debounce.
+    await new Promise((r) => setTimeout(r, 250));
+    const results = section.querySelectorAll('.profile-curated-result');
+    expect(results.length).toBe(2);
+    const names = Array.from(results).map((r) =>
+      r.querySelector('.profile-curated-result-name')?.textContent,
+    );
+    expect(names.some((n) => n?.includes('Scandinavia'))).toBe(true);
+    expect(names.some((n) => n?.includes('Canada'))).toBe(true);
+  });
+
+  it('matches by partial id when the name does not match', async () => {
+    const section = mountSection(PROFILE);
+    const input = section.querySelector<HTMLInputElement>('#profile-curated-search')!;
+    input.value = 'patagonia';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 250));
+    const results = section.querySelectorAll('.profile-curated-result');
+    expect(results.length).toBe(1);
+  });
+
+  it('shows "No matches" when nothing matches the query', async () => {
+    const section = mountSection(PROFILE);
+    const input = section.querySelector<HTMLInputElement>('#profile-curated-search')!;
+    input.value = 'antarctica-spaceport';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 250));
+    const empty = section.querySelector('.profile-curated-results .profile-crud-empty');
+    expect(empty?.textContent).toContain('No curated targets match');
+    expect(empty?.textContent).toContain('antarctica-spaceport');
+  });
+
+  it('clicking a result calls toggleCuratedRemoved + persists the id', async () => {
+    const section = mountSection(PROFILE);
+    const input = section.querySelector<HTMLInputElement>('#profile-curated-search')!;
+    input.value = 'etna';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 250));
+    const btn = section.querySelector<HTMLButtonElement>('.profile-curated-result-btn');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    // handleToggleCurated is async; flush one microtask + one macrotask.
+    await new Promise((r) => setTimeout(r, 10));
+    const profile = loadProfile(PROFILE)!;
+    expect(profile.removedCuratedIds).toContain('etna-volcano');
+  });
+
+  it('marks already-hidden ids and disables their click button', async () => {
+    let p = createDefaultProfile(PROFILE);
+    p = toggleCuratedRemoved(p, 'aurora-scandinavia');
+    saveProfile(p);
+    const section = mountSection(PROFILE);
+    const input = section.querySelector<HTMLInputElement>('#profile-curated-search')!;
+    input.value = 'aurora';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 250));
+    const hidden = section.querySelector(
+      '.profile-curated-result[data-curated-id="aurora-scandinavia"]',
+    );
+    expect(hidden?.classList.contains('already-hidden')).toBe(true);
+    const btn = hidden?.querySelector<HTMLButtonElement>('.profile-curated-result-btn');
+    expect(btn?.disabled).toBe(true);
+    const indicator = hidden?.querySelector('.profile-curated-result-indicator');
+    expect(indicator?.textContent).toBe('(already hidden)');
+  });
+
+  it('renders the "N hidden" count and updates after re-render', () => {
+    let p = createDefaultProfile(PROFILE);
+    p = toggleCuratedRemoved(p, 'aurora-scandinavia');
+    p = toggleCuratedRemoved(p, 'etna-volcano');
+    saveProfile(p);
+    const section = mountSection(PROFILE);
+    const count = section.querySelector('#profile-curated-count');
+    expect(count?.textContent).toBe('2 curated targets hidden');
+  });
+
+  it('keeps the paste-id fallback for catalog-failure recovery', () => {
+    const section = mountSection(PROFILE);
+    const fallback = section.querySelector('#profile-curated-paste-fallback');
+    expect(fallback).not.toBeNull();
+    expect(section.querySelector('#profile-curated-input')).not.toBeNull();
+    expect(section.querySelector('#profile-curated-hide-btn')).not.toBeNull();
+  });
+
+  it('paste-id fallback still works when typed + clicked', async () => {
+    const section = mountSection(PROFILE);
+    const input = section.querySelector<HTMLInputElement>('#profile-curated-input')!;
+    const btn = section.querySelector<HTMLButtonElement>('#profile-curated-hide-btn')!;
+    input.value = 'patagonia-glaciers';
+    btn.click();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(loadProfile(PROFILE)!.removedCuratedIds).toContain('patagonia-glaciers');
+  });
+
+  it('escapes operator-controlled match results via textContent only', async () => {
+    _test.resetCuratedCatalog();
+    _test.seedCuratedCatalog([
+      {
+        id: 'xss-test',
+        name: '<script>alert(1)</script>',
+        geom: { type: 'point', lat: 0, lon: 0 },
+        priority: 5,
+        regime: 'any',
+      },
+    ]);
+    const section = mountSection(PROFILE);
+    const input = section.querySelector<HTMLInputElement>('#profile-curated-search')!;
+    input.value = 'script';
+    input.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 250));
+    expect(section.querySelector('script')).toBeNull();
+    const name = section.querySelector('.profile-curated-result-name');
+    expect(name?.textContent).toBe('<script>alert(1)</script>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v3 — Component B: name-based geocoding mode for Add Target form
+// ---------------------------------------------------------------------------
+
+describe('Add Target form — search by name (v3)', () => {
+  beforeEach(() => {
+    saveProfile(createDefaultProfile(PROFILE));
+    // Clear geocoding cache so each test starts fresh.
+    try { localStorage.removeItem('opd-geocode-cache-v1'); } catch { /* noop */ }
+  });
+
+  it('renders the mode-toggle with Manual active by default', () => {
+    const section = mountSection(PROFILE);
+    const manual = section.querySelector<HTMLButtonElement>('#profile-add-mode-manual');
+    const search = section.querySelector<HTMLButtonElement>('#profile-add-mode-search');
+    expect(manual).not.toBeNull();
+    expect(search).not.toBeNull();
+    expect(manual!.classList.contains('active')).toBe(true);
+    expect(search!.classList.contains('active')).toBe(false);
+    expect(section.querySelector<HTMLElement>('#profile-add-search-panel')!.hidden).toBe(true);
+  });
+
+  it('clicking "Search by name" reveals the search panel + flips active', () => {
+    const section = mountSection(PROFILE);
+    const search = section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!;
+    search.click();
+    expect(section.querySelector<HTMLElement>('#profile-add-search-panel')!.hidden).toBe(false);
+    expect(search.classList.contains('active')).toBe(true);
+  });
+
+  it('attribution caption is always rendered (Nominatim ToS)', () => {
+    const section = mountSection(PROFILE);
+    const attr = section.querySelector('#profile-add-search-attribution');
+    expect(attr).not.toBeNull();
+    expect(attr?.textContent).toContain('OpenStreetMap');
+    expect(attr?.textContent).toContain('Nominatim');
+  });
+
+  it('searching populates results when fetch resolves', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([
+      {
+        lat: '32.7157', lon: '-117.1611',
+        display_name: 'San Diego, California, USA',
+        address: { city: 'San Diego', country: 'United States' },
+      },
+    ]), { status: 200 })));
+    const section = mountSection(PROFILE);
+    section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!.click();
+    const input = section.querySelector<HTMLInputElement>('#profile-add-search-input')!;
+    input.value = 'San Diego';
+    section.querySelector<HTMLButtonElement>('#profile-add-search-btn')!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const results = section.querySelectorAll('.profile-geocode-result');
+    expect(results.length).toBe(1);
+    const status = section.querySelector('#profile-add-search-status');
+    expect(status?.textContent).toContain('match');
+  });
+
+  it('clicking a result autofills lat/lon + switches back to Manual', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([
+      {
+        lat: '32.7157', lon: '-117.1611',
+        display_name: 'San Diego, California, USA',
+        address: { city: 'San Diego', country: 'United States' },
+      },
+    ]), { status: 200 })));
+    const section = mountSection(PROFILE);
+    section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!.click();
+    const input = section.querySelector<HTMLInputElement>('#profile-add-search-input')!;
+    input.value = 'San Diego';
+    section.querySelector<HTMLButtonElement>('#profile-add-search-btn')!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const resultBtn = section.querySelector<HTMLButtonElement>('.profile-geocode-result-btn')!;
+    resultBtn.click();
+    const latInput = section.querySelector<HTMLInputElement>('#profile-add-lat')!;
+    const lonInput = section.querySelector<HTMLInputElement>('#profile-add-lon')!;
+    const nameInput = section.querySelector<HTMLInputElement>('#profile-add-name')!;
+    expect(Number(latInput.value)).toBeCloseTo(32.7157, 3);
+    expect(Number(lonInput.value)).toBeCloseTo(-117.1611, 3);
+    expect(nameInput.value).toBe('San Diego');
+    // Mode flipped back to Manual.
+    expect(section.querySelector<HTMLElement>('#profile-add-search-panel')!.hidden).toBe(true);
+  });
+
+  it('renders no-matches message when Nominatim returns []', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify([]), { status: 200 }),
+    ));
+    const section = mountSection(PROFILE);
+    section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!.click();
+    const input = section.querySelector<HTMLInputElement>('#profile-add-search-input')!;
+    input.value = 'antarctica-spaceport';
+    section.querySelector<HTMLButtonElement>('#profile-add-search-btn')!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const status = section.querySelector('#profile-add-search-status');
+    expect(status?.textContent).toContain('No matches found');
+    expect(status?.textContent).toContain('Manual mode');
+  });
+
+  it('renders an error message on geocode failure (HTTP)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response('Service Unavailable', { status: 503 }),
+    ));
+    const section = mountSection(PROFILE);
+    section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!.click();
+    const input = section.querySelector<HTMLInputElement>('#profile-add-search-input')!;
+    input.value = 'San Diego';
+    section.querySelector<HTMLButtonElement>('#profile-add-search-btn')!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const status = section.querySelector('#profile-add-search-status');
+    expect(status?.textContent).toMatch(/Geocoding failed/);
+  });
+
+  it('renders an error message on network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    const section = mountSection(PROFILE);
+    section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!.click();
+    const input = section.querySelector<HTMLInputElement>('#profile-add-search-input')!;
+    input.value = 'San Diego';
+    section.querySelector<HTMLButtonElement>('#profile-add-search-btn')!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    const status = section.querySelector('#profile-add-search-status');
+    expect(status?.textContent).toContain('network unreachable');
+  });
+
+  it('escapes geocode results via textContent (XSS)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([
+      {
+        lat: '0', lon: '0',
+        display_name: '<script>alert(1)</script>',
+        address: { country: '<img src=x onerror=1>' },
+      },
+    ]), { status: 200 })));
+    const section = mountSection(PROFILE);
+    section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!.click();
+    const input = section.querySelector<HTMLInputElement>('#profile-add-search-input')!;
+    input.value = 'xss-test';
+    section.querySelector<HTMLButtonElement>('#profile-add-search-btn')!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(section.querySelector('script')).toBeNull();
+    expect(section.querySelector('img')).toBeNull();
+    const name = section.querySelector('.profile-geocode-result-name');
+    expect(name?.textContent).toContain('<script>');
+  });
+
+  it('pressing Enter in the search input triggers the search', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify([]), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const section = mountSection(PROFILE);
+    section.querySelector<HTMLButtonElement>('#profile-add-mode-search')!.click();
+    const input = section.querySelector<HTMLInputElement>('#profile-add-search-input')!;
+    input.value = 'Etna';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+// Pure helper — searchCuratedTargets — needs its own block since it
+// doesn't require any DOM mount.
+describe('searchCuratedTargets (v3)', () => {
+  const catalog = [
+    { id: 'aurora-scandinavia', name: 'Aurora Scandinavia',
+      geom: { type: 'point' as const, lat: 65, lon: 20 }, priority: 5, regime: 'night' as const },
+    { id: 'patagonia', name: 'Patagonia',
+      geom: { type: 'point' as const, lat: -50, lon: -73 }, priority: 4, regime: 'day' as const },
+    { id: 'etna', name: 'Mount Etna',
+      geom: { type: 'point' as const, lat: 37, lon: 15 }, priority: 3, regime: 'day' as const },
+  ];
+
+  it('returns empty array for empty query', async () => {
+    const { searchCuratedTargets } = await import('../src/profile-crud');
+    expect(searchCuratedTargets(catalog, '', 8)).toEqual([]);
+  });
+
+  it('matches case-insensitively', async () => {
+    const { searchCuratedTargets } = await import('../src/profile-crud');
+    expect(searchCuratedTargets(catalog, 'AURORA', 8)).toHaveLength(1);
+    expect(searchCuratedTargets(catalog, 'aurora', 8)).toHaveLength(1);
+  });
+
+  it('puts name-matches before id-only matches', async () => {
+    const { searchCuratedTargets } = await import('../src/profile-crud');
+    const mixed = [
+      ...catalog,
+      { id: 'etna-similar-id', name: 'Some Other Volcano',
+        geom: { type: 'point' as const, lat: 0, lon: 0 }, priority: 3, regime: 'day' as const },
+    ];
+    const results = searchCuratedTargets(mixed, 'etna', 8);
+    expect(results[0]?.name).toBe('Mount Etna'); // name match first
+  });
+
+  it('caps results at the limit', async () => {
+    const { searchCuratedTargets } = await import('../src/profile-crud');
+    expect(searchCuratedTargets(catalog, 'a', 2)).toHaveLength(2);
+  });
+});
