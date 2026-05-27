@@ -7,6 +7,7 @@
  */
 
 import { renderCards } from './card';
+import { renderPassThumbnail } from './pass-thumbnail';
 import { formatCountdown } from './countdown';
 import {
   bannerError,
@@ -279,9 +280,21 @@ function renderQueue(): void {
     // score-descending; we re-sort here without changing the SELECTION
     // (top-5-by-score within 90 min stays the pool of candidates).
     const sorted = sortPassesByOrder(visible, getSortOrder());
-    renderCards(cards, sorted, now, stale, onCardAction, { tokenSet: !!getToken() });
+    renderCards(cards, sorted, now, stale, onCardAction, {
+      tokenSet: !!getToken(),
+      renderThumbnail: thumbnailRenderer(),
+    });
   }
   renderUpcoming(now, stale);
+}
+
+/** Build a thumbnail-renderer that closes over the current track. Returns
+ *  undefined when no track is available (suppresses the 🌍 button on the
+ *  Queue until track.json has resolved). v2 — Component 1. */
+function thumbnailRenderer(): ((p: PassEntry) => HTMLElement) | undefined {
+  if (!currentTrack) return undefined;
+  const t = currentTrack;
+  return (p: PassEntry) => renderPassThumbnail(p, t, Date.now());
 }
 
 /** Boot the queue from localStorage before the first network round-trip
@@ -355,7 +368,10 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   }
   empty.hidden = true;
   const sorted = sortPassesByOrder(visible, getSortOrder());
-  renderCards(cards, sorted, nowMs, stale, onCardAction, { variant: 'forecast' });
+  renderCards(cards, sorted, nowMs, stale, onCardAction, {
+    variant: 'forecast',
+    renderThumbnail: thumbnailRenderer(),
+  });
 }
 
 function rerenderCountdowns(): void {
@@ -455,6 +471,14 @@ async function onCardAction(action: 'shoot' | 'skip', p: PassEntry): Promise<voi
     showToast(`Saved offline — set token in Log tab to sync`, 'warn');
   } else if (result.reason === 'network') {
     showToast(`Offline — ${verb.toLowerCase()} queued for next visit`, 'warn');
+  } else if (result.reason === 'server_401') {
+    // v2 token-bug fix (Chris feedback 2026-05-27): the payload has been
+    // queued; the operator's token field still shows what they pasted so
+    // they can correct it without re-typing the whole thing.
+    showToast(
+      'Token rejected — re-paste in Log tab (your current token was not accepted by the server)',
+      'error',
+    );
   } else if (result.reason?.startsWith('server_4')) {
     showToast(`Server rejected ${verb.toLowerCase()} (${result.reason})`, 'error');
   } else {
@@ -714,7 +738,10 @@ function renderTokenStatus(): void {
       if (cards) {
         const now = Date.now();
         const stale = isStaleManifest(currentManifest, now);
-        renderCards(cards, currentTop5, now, stale, onCardAction, { tokenSet: !!getToken() });
+        renderCards(cards, currentTop5, now, stale, onCardAction, {
+          tokenSet: !!getToken(),
+          renderThumbnail: thumbnailRenderer(),
+        });
       }
     }
   });

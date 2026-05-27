@@ -36,6 +36,7 @@ import {
   classifyIssIllumination,
   subsolarFeature,
   terminatorFeatures,
+  terminatorNightPolygonFeatures,
   type IssIllumination,
 } from './terminator';
 import { loadProfile, parseProfileFromURL } from './profile';
@@ -155,6 +156,33 @@ function bindProfileChangedListener(): void {
   profileChangedBound = true;
 }
 
+/** VIIRS Black Marble night-lights overlay preference. Default OFF — this is
+ *  a heavy, niche layer (asks the operator to opt in). v2 (Chris feedback
+ *  2026-05-27). Same persistence pattern as cloud + terminator. */
+const NIGHT_LIGHTS_PREF_KEY = 'opd-map-night-lights-visible';
+function readNightLightsVisible(): boolean {
+  try {
+    return localStorage.getItem(NIGHT_LIGHTS_PREF_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+let nightLightsVisible: boolean = readNightLightsVisible();
+
+/** Esri Reference labels overlay preference. Default ON — country / city
+ *  labels are a near-universal-utility overlay (Chris feedback 2026-05-27);
+ *  operators who don't want them can toggle off. */
+const LABELS_PREF_KEY = 'opd-map-labels-visible';
+function readLabelsVisible(): boolean {
+  try {
+    const v = localStorage.getItem(LABELS_PREF_KEY);
+    return v === null ? true : v === '1';
+  } catch {
+    return true;
+  }
+}
+let labelsVisible: boolean = readLabelsVisible();
+
 /** Day-night terminator visibility preference. Same pattern as the cloud
  *  toggle (v1.2.9.0) — persisted to localStorage. Default ON because
  *  Pettit explicitly asked for day-night shading; it complements the
@@ -246,7 +274,12 @@ let bearingMode: BearingMode = readBearingMode();
 /** Test-only: reset module-level state between vitest runs. */
 export function _resetMapStateForTest(): void {
   bearingMode = 'north';
+  nightLightsVisible = false;
+  labelsVisible = true;
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
+  try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
+  try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
+  _resetViirsFallbackForTest();
 }
 
 /** GIBS true-color tile URL pattern. {date} is replaced per render. Daily layer
@@ -256,7 +289,13 @@ export function _resetMapStateForTest(): void {
 // import them without pulling the heavy MapLibre bundle. Re-exported from
 // here so this module's existing internal callers (buildStyle below) don't
 // have to change.
-import { GIBS_MAX_ZOOM, gibsTrueColorUrl, yesterdayIso } from './tile-precache';
+import {
+  GIBS_MAX_ZOOM,
+  VIIRS_BLACK_MARBLE_MAX_ZOOM,
+  gibsBlackMarbleUrl,
+  gibsTrueColorUrl,
+  yesterdayIso,
+} from './tile-precache';
 
 function buildStyle(): maplibregl.StyleSpecification {
   const dateIso = yesterdayIso();
@@ -326,6 +365,38 @@ function buildStyle(): maplibregl.StyleSpecification {
         attribution:
           'Coastlines: <a href="https://www.naturalearthdata.com/">Natural Earth</a>',
       },
+      // VIIRS Black Marble annual night-lights composite (v2 — Chris
+      // feedback 2026-05-27). Renders city lights on the night-side of the
+      // terminator. Default visibility is 'none' — toggled on via the
+      // toggle-night-lights button. The PNG product has transparent
+      // day-side pixels so the basemap shows through cleanly.
+      //
+      // Initial date is last year's Jan-1 composite (annual cadence; the
+      // current year's product publishes mid-year). If both last year AND
+      // the year before 404, applyNightLightsVisibility silently hides the
+      // layer (one console.warn, no toast — operator can re-toggle).
+      'viirs-night-lights': {
+        type: 'raster',
+        tiles: [gibsBlackMarbleUrl(`${new Date().getUTCFullYear() - 1}-01-01`)],
+        tileSize: 256,
+        maxzoom: VIIRS_BLACK_MARBLE_MAX_ZOOM,
+        attribution:
+          'Night lights: <a href="https://earthdata.nasa.gov">NASA GIBS VIIRS Black Marble</a>',
+      },
+      // Esri Reference labels overlay (v2 — Chris feedback 2026-05-27).
+      // Country / state / city / road labels on a transparent background,
+      // rendered ABOVE all other layers so labels remain legible regardless
+      // of which basemap is active. No API key, attribution-clean.
+      'esri-labels-reference': {
+        type: 'raster',
+        tiles: [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        ],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution:
+          'Labels © <a href="https://www.esri.com">Esri</a> &mdash; Source: Esri, HERE, Garmin, FAO, NOAA, USGS, OpenStreetMap contributors',
+      },
     },
     layers: [
       {
@@ -370,6 +441,9 @@ function buildStyle(): maplibregl.StyleSpecification {
           'line-opacity': 0.75,
         },
       },
+      // Esri Reference labels layer is added later in renderMap (rather
+      // than here) so it remains the TOPMOST layer above all later overlays
+      // (terminator night-fill, ground track, ISS marker, targets, etc.).
     ],
   };
 }
@@ -837,9 +911,41 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
 
   // Day-night terminator overlay (v1.4.2.0 — Pettit feedback 2026-05-19).
-  // Line + subsolar-point icon. Updates when the operator scrubs the
-  // time controls (refreshTerminatorSources is called from setLookahead).
+  // v2 (Chris feedback 2026-05-27): added a night-side polygon fill at 55%
+  // opacity (was previously line-only, which was visually subtle vs GoISSWatch's
+  // clean dark night-side). The fill goes UNDER the line (added first → bottom
+  // of stack), and the line gains a 40px line-blur halo so the day/night
+  // boundary is a soft gradient rather than a hard edge.
   refreshTerminatorSources();
+  if (!map.getLayer('terminator-night-fill-layer')) {
+    map.addLayer({
+      id: 'terminator-night-fill-layer',
+      type: 'fill',
+      source: 'terminator-night-fill',
+      paint: {
+        'fill-color': '#000000',
+        // v2 spec: night-side opacity bumped 0.35 → 0.55. The prior shipped
+        // overlay was line-only (no fill at all); 0.55 is the new operator-
+        // visible baseline. Dark enough to read at-a-glance as "night side"
+        // against the basemap without obscuring underlying features.
+        'fill-opacity': 0.55,
+        'fill-antialias': true,
+      },
+    });
+  }
+  // VIIRS Black Marble night-lights overlay (v2 — Chris feedback 2026-05-27).
+  // Added AFTER the night-side dim fill so city lights render on top of (not
+  // under) the dimming, staying visible. Default visibility 'none' — operator
+  // opts in via toggle-night-lights button.
+  if (!map.getLayer('viirs-night-lights-layer')) {
+    map.addLayer({
+      id: 'viirs-night-lights-layer',
+      type: 'raster',
+      source: 'viirs-night-lights',
+      layout: { visibility: 'none' },
+      paint: { 'raster-opacity': 0.95 },
+    });
+  }
   if (!map.getLayer('terminator-line-layer')) {
     map.addLayer({
       id: 'terminator-line-layer',
@@ -850,6 +956,12 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         'line-width': 1.4,         // dark basemap and bright cloud overlay
         'line-opacity': 0.7,
         'line-dasharray': [3, 2],
+        // v2 (Chris 2026-05-27): 40px line-blur softens the day/night
+        // boundary — instead of a hard line between the satellite imagery
+        // and the 55%-opacity night fill, the operator sees a gentle
+        // gradient over ~40 device pixels. Pairs visually with the
+        // terminatorNightPolygonFeatures fill below.
+        'line-blur': 40,
       },
     });
   }
@@ -983,10 +1095,25 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }, 30_000);
   updateTimeStepLabels();
 
+  // Esri Reference labels overlay (v2 — Chris feedback 2026-05-27). Added
+  // at the END of renderMap so it remains TOPMOST above all later overlays
+  // (terminator, ground track, ISS marker, targets, etc.). Default visibility
+  // is governed by labelsVisible preference (default ON), applied below.
+  if (!map.getLayer('esri-labels-reference-layer')) {
+    map.addLayer({
+      id: 'esri-labels-reference-layer',
+      type: 'raster',
+      source: 'esri-labels-reference',
+      paint: { 'raster-opacity': 0.85 },
+    });
+  }
+
   bindTimeToggle();
   bindBearingToggle();
   bindCloudToggle();
   bindTerminatorToggle();
+  bindNightLightsToggle();
+  bindLabelsToggle();
   bindAscentToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
@@ -1006,6 +1133,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // Apply persisted cloud + terminator preferences on first map render.
   applyCloudsVisibility();
   applyTerminatorVisibility();
+  applyNightLightsVisibility();
+  applyLabelsVisibility();
   // Apply persisted bearing preference ONLY on first map creation. Calling
   // easeTo on every Map-tab click (which re-runs renderMap) was eating
   // user pan/zoom gestures that landed in the 600ms animation window —
@@ -1062,6 +1191,12 @@ function refreshTerminatorSources(): void {
   upsertGeoJson(map, 'subsolar-point', {
     type: 'FeatureCollection',
     features: [subsolarFeature(when)],
+  });
+  // v2 (Chris 2026-05-27): night-side polygon fill paired with the line.
+  // Same upsert pattern as the line — refreshed every 30s + on time-scrub.
+  upsertGeoJson(map, 'terminator-night-fill', {
+    type: 'FeatureCollection',
+    features: terminatorNightPolygonFeatures(when),
   });
 }
 
@@ -1160,6 +1295,10 @@ function applyTerminatorVisibility(): void {
     }
     if (map.getLayer('subsolar-point-layer')) {
       map.setLayoutProperty('subsolar-point-layer', 'visibility', vis);
+    }
+    // v2: night-side fill toggles with the same control as line + dot.
+    if (map.getLayer('terminator-night-fill-layer')) {
+      map.setLayoutProperty('terminator-night-fill-layer', 'visibility', vis);
     }
   } catch { /* layers not loaded yet */ }
 }
@@ -1481,6 +1620,152 @@ function bindAscentToggle(): void {
     applyAscentVisibility();
   });
   ascentToggleBound = true;
+}
+
+/** Show / hide the VIIRS Black Marble night-lights overlay. Idempotent —
+ *  safe to call before MapLibre has finished loading the layer. v2
+ *  (Chris feedback 2026-05-27). */
+function applyNightLightsVisibility(): void {
+  if (!map) return;
+  const vis = nightLightsVisible ? 'visible' : 'none';
+  try {
+    if (map.getLayer('viirs-night-lights-layer')) {
+      map.setLayoutProperty('viirs-night-lights-layer', 'visibility', vis);
+    }
+  } catch { /* layer not loaded yet */ }
+}
+
+/** Track per-session VIIRS year fallback state. The annual composite's
+ *  publication cadence means "current year" 404s for most of the calendar
+ *  year. We initialize to last year and walk back further only if last-year
+ *  also fails. Resets on page reload (acceptable — annual cadence). */
+let viirsTriedYears = new Set<number>();
+let viirsFailedSilently = false;
+
+/** Test-only: reset VIIRS year-fallback state between vitest runs. */
+export function _resetViirsFallbackForTest(): void {
+  viirsTriedYears = new Set<number>();
+  viirsFailedSilently = false;
+}
+
+/** Set up the GIBS-flake fallback: if the VIIRS night-lights source 404/5xx's
+ *  for the current year, swap in the prior year's annual composite. If that
+ *  also fails, silently hide the layer (one console.warn — operator can
+ *  re-toggle later). Bound once per map; re-arms after each successful
+ *  fallback. */
+function armNightLightsErrorFallback(): void {
+  if (!map) return;
+  map.on('error', (e) => {
+    // MapLibre's error event fires for tile load failures with sourceId set
+    // to 'viirs-night-lights'. We don't want to react to errors from other
+    // sources, so guard tightly.
+    const sourceId = (e as { sourceId?: string }).sourceId;
+    if (sourceId !== 'viirs-night-lights') return;
+    if (viirsFailedSilently) return;
+    if (!map) return;
+    // Try walking back one more year.
+    const tried = Array.from(viirsTriedYears);
+    const oldestTried = tried.length > 0 ? Math.min(...tried) : new Date().getUTCFullYear();
+    const fallbackYear = oldestTried - 1;
+    // Cap the walk-back at 2 years total (current-1 and current-2). Beyond
+    // that, give up and hide the layer.
+    if (viirsTriedYears.size >= 2) {
+      console.warn(
+        '[map] VIIRS Black Marble unavailable for last 2 annual composites; ' +
+        'hiding night-lights layer. Operator can re-toggle later.',
+      );
+      viirsFailedSilently = true;
+      nightLightsVisible = false;
+      try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, '0'); } catch { /* noop */ }
+      applyNightLightsVisibility();
+      reflectNightLightsButton();
+      return;
+    }
+    viirsTriedYears.add(fallbackYear);
+    const src = map.getSource('viirs-night-lights') as maplibregl.RasterTileSource | undefined;
+    if (src && 'setTiles' in src) {
+      src.setTiles([gibsBlackMarbleUrl(`${fallbackYear}-01-01`)]);
+    }
+  });
+}
+
+let nightLightsToggleBound = false;
+function reflectNightLightsButton(): void {
+  const btn = document.getElementById('toggle-night-lights');
+  if (!btn) return;
+  btn.classList.toggle('active', nightLightsVisible);
+  btn.setAttribute('aria-pressed', nightLightsVisible ? 'true' : 'false');
+  btn.title = nightLightsVisible
+    ? 'VIIRS night lights shown — click to hide'
+    : 'VIIRS night lights hidden — click to show (annual composite, slow first load)';
+}
+function bindNightLightsToggle(): void {
+  if (nightLightsToggleBound) return;
+  const btn = document.getElementById('toggle-night-lights');
+  if (!btn) return;
+  // Seed the initial-year tracker so the fallback logic knows we've already
+  // tried last year (the buildStyle initial value).
+  if (viirsTriedYears.size === 0) {
+    viirsTriedYears.add(new Date().getUTCFullYear() - 1);
+  }
+  // Arm the error listener once, immediately — MapLibre may emit tile errors
+  // even before the operator toggles the layer on (the layer is "visible"
+  // semantically; only `layout.visibility` is none).
+  armNightLightsErrorFallback();
+  reflectNightLightsButton();
+  btn.addEventListener('click', () => {
+    if (viirsFailedSilently) {
+      // Allow re-arming if the operator explicitly tries again — maybe
+      // NASA's back up. Reset the year tracker and start fresh.
+      _resetViirsFallbackForTest();
+      viirsTriedYears.add(new Date().getUTCFullYear() - 1);
+      if (map) {
+        const src = map.getSource('viirs-night-lights') as maplibregl.RasterTileSource | undefined;
+        if (src && 'setTiles' in src) {
+          src.setTiles([gibsBlackMarbleUrl(`${new Date().getUTCFullYear() - 1}-01-01`)]);
+        }
+      }
+    }
+    nightLightsVisible = !nightLightsVisible;
+    try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, nightLightsVisible ? '1' : '0'); } catch { /* noop */ }
+    reflectNightLightsButton();
+    applyNightLightsVisibility();
+  });
+  nightLightsToggleBound = true;
+}
+
+/** Show / hide the Esri Reference labels overlay. v2 (Chris feedback
+ *  2026-05-27). Default ON. Idempotent. */
+function applyLabelsVisibility(): void {
+  if (!map) return;
+  const vis = labelsVisible ? 'visible' : 'none';
+  try {
+    if (map.getLayer('esri-labels-reference-layer')) {
+      map.setLayoutProperty('esri-labels-reference-layer', 'visibility', vis);
+    }
+  } catch { /* layer not loaded yet */ }
+}
+
+let labelsToggleBound = false;
+function bindLabelsToggle(): void {
+  if (labelsToggleBound) return;
+  const btn = document.getElementById('toggle-labels');
+  if (!btn) return;
+  const reflect = () => {
+    btn.classList.toggle('active', labelsVisible);
+    btn.setAttribute('aria-pressed', labelsVisible ? 'true' : 'false');
+    btn.title = labelsVisible
+      ? 'Country/city labels shown — click to hide'
+      : 'Country/city labels hidden — click to show';
+  };
+  reflect();
+  btn.addEventListener('click', () => {
+    labelsVisible = !labelsVisible;
+    try { localStorage.setItem(LABELS_PREF_KEY, labelsVisible ? '1' : '0'); } catch { /* noop */ }
+    reflect();
+    applyLabelsVisibility();
+  });
+  labelsToggleBound = true;
 }
 
 let terminatorToggleBound = false;

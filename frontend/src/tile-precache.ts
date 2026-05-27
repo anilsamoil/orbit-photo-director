@@ -42,6 +42,26 @@ export function yesterdayIso(): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** VIIRS Black Marble annual night-lights composite (v2 — Chris feedback
+ *  2026-05-27). GIBS layer ID `VIIRS_Black_Marble` is published as an annual
+ *  composite — date convention is YYYY-01-01 for the year's image. PNG (the
+ *  Black Marble product has transparent night-side regions; JPG would force
+ *  a black background that would override our terminator's night fill).
+ *
+ *  Max zoom for this layer per GIBS catalog: GoogleMapsCompatible_Level8
+ *  (i.e., z8). MapLibre overzooms above that.
+ *
+ *  yearIso = "YYYY-01-01"; the caller picks current year and walks back if
+ *  the annual product hasn't published yet. */
+export function gibsBlackMarbleUrl(yearIso: string): string {
+  const layer = 'VIIRS_Black_Marble';
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer}/default/${yearIso}/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`;
+}
+
+/** Maxzoom for the VIIRS Black Marble annual composite (GIBS).
+ *  Source caps at Level8; MapLibre overzooms above this with no extra fetch. */
+export const VIIRS_BLACK_MARBLE_MAX_ZOOM = 8;
+
 /** Number of top Queue targets to pre-cache. Higher = more coverage but
  *  more LRU eviction of user-pan tiles. 3 = the imminent passes that are
  *  visible on a single Queue screen. */

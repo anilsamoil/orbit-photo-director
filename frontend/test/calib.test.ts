@@ -10,6 +10,7 @@ import {
   queuedCalibCount,
   readQueue,
   setToken,
+  shouldQueueOnStatus,
 } from '../src/calib';
 
 describe('token helpers', () => {
@@ -129,6 +130,74 @@ describe('postCalib', () => {
     );
     expect(r.ok).toBe(false);
     expect(readQueue()).toHaveLength(1);
+  });
+
+  // v2 token-bug fix (Chris feedback 2026-05-27): 401 used to clearToken()
+  // and drop the payload (silent footgun — the next page load wiped the
+  // operator's token field AND lost the shoot/skip entirely). New behavior:
+  // KEEP the token, queue the payload, surface a distinct reason so the UI
+  // can show a "Token rejected — re-paste" toast.
+  describe('401 handling (v2 token-bug fix)', () => {
+    it('does NOT call clearToken on 401', async () => {
+      setToken('wrong-token');
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('Unauthorized', { status: 401 })),
+      );
+      const r = await postCalib(
+        { target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' },
+      );
+      expect(r.ok).toBe(false);
+      // Token must still be present so the operator can see/edit what they pasted.
+      expect(getToken()).toBe('wrong-token');
+    });
+
+    it('queues the payload on 401', async () => {
+      setToken('wrong-token');
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('Unauthorized', { status: 401 })),
+      );
+      await postCalib(
+        { target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' },
+      );
+      expect(readQueue()).toHaveLength(1);
+    });
+
+    it('returns distinct reason "server_401" so the UI can show a unique toast', async () => {
+      setToken('wrong-token');
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('Unauthorized', { status: 401 })),
+      );
+      const r = await postCalib(
+        { target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' },
+      );
+      expect(r.ok).toBe(false);
+      if (r.ok) return; // type narrow
+      expect(r.reason).toBe('server_401');
+    });
+  });
+
+  // Scoping guard: the per-call 401 fix lives INSIDE postCalib, not in the
+  // global shouldQueueOnStatus helper. Other endpoints (profile-api, etc.)
+  // should still fail-fast on auth errors instead of queuing junk forever.
+  describe('shouldQueueOnStatus (global helper)', () => {
+    it('still returns false for 401 (other endpoints unchanged)', () => {
+      expect(shouldQueueOnStatus(401)).toBe(false);
+    });
+    it('returns true for 429', () => {
+      expect(shouldQueueOnStatus(429)).toBe(true);
+    });
+    it('returns true for 5xx', () => {
+      expect(shouldQueueOnStatus(500)).toBe(true);
+      expect(shouldQueueOnStatus(503)).toBe(true);
+    });
+    it('returns false for other 4xx', () => {
+      expect(shouldQueueOnStatus(400)).toBe(false);
+      expect(shouldQueueOnStatus(403)).toBe(false);
+      expect(shouldQueueOnStatus(404)).toBe(false);
+    });
   });
 });
 

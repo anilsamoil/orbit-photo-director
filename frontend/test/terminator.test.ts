@@ -6,6 +6,7 @@ import {
   subsolarPoint,
   terminatorFeatures,
   terminatorLonAtLat,
+  terminatorNightPolygonFeatures,
 } from '../src/terminator';
 
 describe('equationOfTimeMinutes', () => {
@@ -196,5 +197,109 @@ describe('classifyIssIllumination (v1.5.3.0 — Chris ask)', () => {
     // equator, so θ ≈ 80°. That's still day-side. (Polar day in summer
     // would be similar; polar night in winter would be eclipse.)
     expect(classifyIssIllumination(equinoxNoon, 80, 0)).toBe('iss-day');
+  });
+});
+
+// v2 (Chris feedback 2026-05-27): night-side polygon fill for the map
+// terminator overlay. Validates that the polygons are non-empty, cover
+// the antisolar longitude, and split cleanly at the antimeridian.
+describe('terminatorNightPolygonFeatures (v2)', () => {
+  it('emits at least one polygon feature', () => {
+    const when = new Date('2024-09-21T12:00:00Z');  // near equinox noon UTC
+    const features = terminatorNightPolygonFeatures(when);
+    expect(features.length).toBeGreaterThan(0);
+    for (const f of features) {
+      expect(f.geometry.type).toBe('Polygon');
+    }
+  });
+
+  it('night-side polygons cover the antisolar longitude on the equator', () => {
+    // At 12:00 UTC near equinox, subsolar is near (0, 0); antisolar is
+    // near (180, 0). A test point at (180, 0) should fall inside at
+    // least one night polygon.
+    const when = new Date('2024-09-22T12:00:00Z');
+    const features = terminatorNightPolygonFeatures(when);
+    // Find a polygon whose latitude band brackets 0° and whose lons span
+    // somewhere near the antimeridian.
+    const containsEquatorialAntisolar = features.some((f) => {
+      const g = f.geometry as GeoJSON.Polygon;
+      const ring = g.coordinates[0] as [number, number][];
+      const lats = ring.map((p) => p[1]);
+      const lons = ring.map((p) => p[0]);
+      const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+      if (minLat > 0 || maxLat < 0) return false;
+      // Antisolar lon ≈ +180 (close to ±180 since UTC noon puts subsolar near 0).
+      return (maxLon >= 170 || minLon <= -170);
+    });
+    expect(containsEquatorialAntisolar).toBe(true);
+  });
+
+  it('does not mix +179° and -179° lons in the same polygon (clean antimeridian handling)', () => {
+    // The "antimeridian-bleed" bug looks like a single polygon with one
+    // vertex at lon=+179 and another at lon=-179 — MapLibre would draw a
+    // line across most of the globe to connect them. The fix is to either
+    // (a) split at exactly lon=180 (vertices at +180 are fine because the
+    // polygon's east edge IS the antimeridian), or (b) shift the polygon
+    // to a single world-copy frame so all lons stay on one side.
+    //
+    // Wide polygons (spans up to ~220°) at high latitudes are LEGITIMATE
+    // and not the bug — the night arc at lat=84 in winter is genuinely
+    // >180° wide. As long as the polygon's east edge sits on +180 (or
+    // its west edge on -180), MapLibre renders it correctly.
+    const when = new Date('2024-09-22T18:00:00Z');  // subsolar near -90°
+    const features = terminatorNightPolygonFeatures(when);
+    for (const f of features) {
+      const g = f.geometry as GeoJSON.Polygon;
+      const ring = g.coordinates[0] as [number, number][];
+      const lons = ring.map((p) => p[0]);
+      const hasNearPos180 = lons.some((l) => l > 178 && l < 181);
+      const hasNearNeg180 = lons.some((l) => l < -178 && l > -181);
+      const hasInteriorWest = lons.some((l) => l > -178 && l < 0);
+      const hasInteriorEast = lons.some((l) => l < 178 && l > 0);
+      // Bleed pattern: polygon contains both near-+180 and near--180 AND
+      // interior-east-of-prime AND interior-west-of-prime. That's the
+      // shape that wraps the wrong way.
+      const isBleed =
+        hasNearPos180 && hasNearNeg180 && hasInteriorEast && hasInteriorWest;
+      expect(isBleed).toBe(false);
+    }
+  });
+
+  it('emits polar-night slabs in winter hemisphere', () => {
+    // December solstice: north pole is in polar night. There should be
+    // at least one full-width [-180, 180] slab in the high-northern
+    // latitude band.
+    const when = new Date('2024-12-21T12:00:00Z');
+    const features = terminatorNightPolygonFeatures(when);
+    const hasNorthernPolarNight = features.some((f) => {
+      const g = f.geometry as GeoJSON.Polygon;
+      const ring = g.coordinates[0] as [number, number][];
+      const lats = ring.map((p) => p[1]);
+      const lons = ring.map((p) => p[0]);
+      const minLat = Math.min(...lats);
+      const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+      return minLat > 70 && minLon <= -179 && maxLon >= 179;
+    });
+    expect(hasNorthernPolarNight).toBe(true);
+  });
+
+  it('includes world-copy duplicates for continuous east/west panning', () => {
+    const when = new Date('2024-09-22T12:00:00Z');
+    const features = terminatorNightPolygonFeatures(when);
+    // Some features should have coordinates beyond the natural [-180, 180]
+    // range (the +360 / -360 duplicates).
+    const hasEastDup = features.some((f) => {
+      const g = f.geometry as GeoJSON.Polygon;
+      const ring = g.coordinates[0] as [number, number][];
+      return ring.some(([lon]) => lon > 180);
+    });
+    const hasWestDup = features.some((f) => {
+      const g = f.geometry as GeoJSON.Polygon;
+      const ring = g.coordinates[0] as [number, number][];
+      return ring.some(([lon]) => lon < -180);
+    });
+    expect(hasEastDup).toBe(true);
+    expect(hasWestDup).toBe(true);
   });
 });
