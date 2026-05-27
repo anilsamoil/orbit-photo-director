@@ -2,6 +2,37 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.13.0] - 2026-05-26
+
+### Slot 6b — API hydration on Profile pane render
+
+Hot-fix follow-up to slot 6. When the Profile pane mounts for the first time per session, it now fires a one-shot GET to `/api/profiles/<name>/targets` and merges the server's list into localStorage when the local additions list is empty. Closes the "open `?u=jack` on a fresh device and see 0 targets even though the server has 39" UX gap surfaced during smoke testing of v1.6.9.0.
+
+### Added
+
+- **`frontend/src/profile-api.ts`** — new `getProfileTargets(profileName, baseUrl?)` helper. Same shape as the existing POST/PUT/DELETE wrappers: reads `opd-calib-token` from localStorage, sends `x-calib-token` header on GET, returns the discriminated `ApiResult` with stable `reason` codes. Normalises a missing `targets` field on a 200 response to `[]` defensively.
+- **`frontend/src/profile-crud.ts`** — new exported `hydratePersonalTargets(profileName)` function with a **"preserve local" guard**: only hydrates when local additions are empty. `buildCrudSection` fires the hydrate fire-and-forget on the FIRST mount per profile per session (a small module-scope `Set<string>` tracks which profiles already hydrated). Re-renders after mutations skip the GET — the operator's local state IS the truth after slot 6's optimistic POST/DELETE flows land. Failure modes (token_missing / network / http / validation) are silent no-ops with `console.warn` for debugging; no toast.
+- **`frontend/test/profile-hydration.test.ts`** (new, 14 tests): `getProfileTargets` URL/headers/parse paths, all four failure surfaces; `hydratePersonalTargets` populate-when-empty, preserve-local guard, silent fail on token_missing/5xx/network, mid-flight optimistic-add re-check; `buildCrudSection` hydration wiring (fires on mount when empty, suppressed when populated).
+
+### Tests
+
+- Frontend: **767 → 781 vitest pass (+14)**
+- `tsc --noEmit && vite build` clean
+- No new dependencies
+
+### Decisions
+
+- **"Preserve local" guard is `additions.length === 0`, not a union-merge.** Two reasons: (a) it solves the original bug fully (the fresh-device case has empty local by definition), and (b) a union-merge by id risks deleting in-flight optimistic adds whose id is local-only because POST hasn't completed yet. Operators rarely edit the same profile from two devices simultaneously; when they do, a localStorage clear forces a clean re-hydrate. Trade-off documented in the code comment.
+- **Once per profile per session.** A module-scope `Set<string>` (`hydratedProfiles`) tracks which profiles have already hydrated. Without this, every `rerenderCrudSection` call (fired after every add/delete/toggle) would re-fire the GET. Re-renders are local state propagation; the GET is a session-startup concern. `_test.resetHydrationState()` exposes a clear for the test harness.
+- **Re-check local state after fetch resolves.** Between firing the GET and the response arriving, the operator might have added a target. The hydrate path re-reads `loadProfile` and bails if local is no longer empty — defends against clobbering an in-flight optimistic add when the network round-trip is slow.
+- **Silent on failure.** Spec called for no toast on hydrate failure. We `console.warn` so the failure is debuggable from devtools, but the operator never sees an error from first-render hydration.
+
+### How to manually test
+
+1. On a fresh device with no `opd-profile-jack` in localStorage (or after `localStorage.clear()` in devtools), set the calib token: `localStorage.setItem('opd-calib-token', '<TOKEN>')`. Open `https://map.astroanil.dev/?u=jack`.
+2. Switch to the Profile tab. On first render the personal-targets list briefly shows "No personal targets yet" then re-renders with the server's 39 targets within ~200ms. Toast: nothing pops (silent success).
+3. Negative path: clear the token (`localStorage.removeItem('opd-calib-token')`), then reload `?u=jack`. Profile tab still renders cleanly with the empty-state message. Open devtools console — verify a single `profile-crud: hydrate failed for "jack" (token_missing)` warn line. No toast.
+
 ## [1.6.12.0] - 2026-05-26
 
 ### Slot 10 — JSON export/import with schema migration framework

@@ -33,7 +33,12 @@ import {
   type PersonalTarget,
   type Profile,
 } from './profile';
-import { deleteProfileTarget, postProfileTarget, putProfileTargets } from './profile-api';
+import {
+  deleteProfileTarget,
+  getProfileTargets,
+  postProfileTarget,
+  putProfileTargets,
+} from './profile-api';
 import { parseTargetCsv, type ParsedValidRow, type ParseTargetCsvResult } from './csv-parse';
 import {
   downloadProfileJson,
@@ -106,7 +111,86 @@ export function buildCrudSection(profileName: string): HTMLElement {
   section.appendChild(buildCsvImportSection(profileName));
   section.appendChild(buildJsonIoSection(profileName));
 
+  // Slot 6b — fire-and-forget hydration from the server on the FIRST
+  // mount per profile per session. Closes the "first open on a fresh
+  // device shows 0 targets even though server has N" UX gap.
+  // Intentionally not awaited: render must not block on the network,
+  // and a failed hydrate is silent (see hydratePersonalTargets).
+  // Re-renders after mutations (via rerenderCrudSection) reuse this
+  // same code path but the once-per-session guard suppresses redundant
+  // GETs — the operator's local state IS the truth after slot 6's
+  // optimistic mutations land.
+  if (!hydratedProfiles.has(profileName)) {
+    hydratedProfiles.add(profileName);
+    void hydratePersonalTargets(profileName);
+  }
+
   return section;
+}
+
+/** Per-session record of which profiles we've already hydrated. Reset
+ *  only on full page reload — that's the operator behaviour we care
+ *  about (open the URL on a fresh device → hydrate once). */
+const hydratedProfiles = new Set<string>();
+
+/** Slot 6b — one-shot GET on Profile-pane render that pulls the server's
+ *  personal-target list into localStorage when the local copy is empty.
+ *
+ *  GUARD ("preserve local"): we only hydrate when local additions are
+ *  empty. This is intentional — if the operator has any local targets,
+ *  some of them may be in-flight optimistic adds whose POST hasn't
+ *  resolved yet (slot 6 pattern). Clobbering them with the server's
+ *  view would lose the just-added entry. The trade-off: a stale local
+ *  cache won't pick up cross-device adds until the operator clears
+ *  localStorage. For v1 this is the right call because:
+ *    - the original bug (fresh device shows 0) is fully fixed
+ *    - the alternative (union-merge by id) risks deleting in-flight
+ *      adds whose id is local-only because POST hasn't completed
+ *    - operators rarely edit the same profile from two devices at once
+ *
+ *  On any failure (token_missing / network / http / validation) this
+ *  silently no-ops with a console.warn — first-render hydration should
+ *  never pop a toast at the operator. */
+export async function hydratePersonalTargets(profileName: string): Promise<void> {
+  const current = safeLoadProfile(profileName);
+  if (!current) return;
+  if (current.additions.length > 0) {
+    // "Preserve local" guard — see comment above.
+    return;
+  }
+
+  const apiResult = await getProfileTargets(profileName);
+  if (!apiResult.ok) {
+    console.warn(
+      `profile-crud: hydrate failed for "${profileName}" (${apiResult.reason}${
+        apiResult.detail ? `: ${apiResult.detail}` : ''
+      })`,
+    );
+    return;
+  }
+
+  // Re-check local state — another tab / the operator may have added a
+  // target between when we fired the GET and when it resolved. Only
+  // overwrite when the local copy is still empty.
+  const fresh = safeLoadProfile(profileName);
+  if (!fresh) return;
+  if (fresh.additions.length > 0) return;
+
+  const merged: Profile = {
+    ...fresh,
+    additions: apiResult.data.targets,
+  };
+  try {
+    saveProfile(merged);
+  } catch (e) {
+    console.warn(
+      `profile-crud: hydrate save failed for "${profileName}": ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+    return;
+  }
+  rerenderCrudSection(profileName);
 }
 
 /** Replace the existing CRUD section in the DOM (if mounted) with a
@@ -1132,4 +1216,8 @@ export const _test = {
   handleToggleCurated,
   handleCsvImport,
   handleJsonImportReplace,
+  hydratePersonalTargets,
+  /** Reset the per-session hydrated-profiles set. Tests use this to
+   *  simulate "fresh page load" between assertions. */
+  resetHydrationState: (): void => { hydratedProfiles.clear(); },
 };
