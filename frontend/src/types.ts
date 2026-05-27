@@ -201,6 +201,33 @@ export interface Status {
   launches_schema_hash?: string | null;
 }
 
+/** A curated target as published by the generator in `targets.json`.
+ *  v3 — Component C (operator ergonomics, 2026-05-26): the Profile-tab
+ *  "Hidden curated targets" section needs the catalog so the typeahead
+ *  can search by name instead of forcing the operator to paste an
+ *  exact id. Shape matches `generator/config.py:_validate_target` —
+ *  `geom.lat/lon` (nested), priority int 1-5, and optional metadata
+ *  fields the typeahead surfaces if present.
+ *
+ *  Defensive: every render path that touches `tier` / `category` /
+ *  `notes` / `caption_hook` must handle the absent case — older
+ *  targets.json snapshots predate those fields. */
+export interface CuratedTarget {
+  id: string;
+  name: string;
+  geom: {
+    type: 'point';
+    lat: number;
+    lon: number;
+  };
+  priority: number;
+  regime: 'day' | 'night' | 'terminator' | 'any';
+  tier?: number;
+  category?: string;
+  notes?: string;
+  caption_hook?: string;
+}
+
 export type CalibAction = 'shoot' | 'skip' | 'rate';
 
 export interface CalibPayload {

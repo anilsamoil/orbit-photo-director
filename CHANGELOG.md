@@ -2,6 +2,41 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.18.0] - 2026-05-27
+
+### v3 Operator Ergonomics
+
+Three operator-ergonomics features bundled (same-day Anil feedback after
+v1.6.17.0). All frontend-only; no daemon / worker changes.
+
+- **Component A — Hide-from-card button.** Every Queue / Upcoming pass card
+  for a curated target now gets a "Hide" button next to Shoot / Skip.
+  One tap adds the `target_id` to the active profile's `removedCuratedIds`,
+  rips the card from the DOM immediately, and surfaces a toast
+  ("Hidden 'X' — restore in Profile tab"). Personal-target cards do NOT
+  render Hide — the Profile-tab CRUD list already exposes Delete, and
+  one-tap delete from the queue is too destructive without a confirm.
+  `frontend/src/card.ts` + `frontend/src/main.ts`.
+- **Component B — Name-based geocoding for Add Target.** The Profile-tab
+  Add form gains a "Search by name" mode toggle. Type "San Diego" → click
+  Search → pick from a Nominatim result list → lat/lon fields autofill
+  + mode flips back to Manual for review. Solves the
+  lat-typed-into-the-name-field UX hazard ("(0,0)" pin Anil hit on his
+  first add). 1000ms ToS-compliant debounce, 24-hour localStorage cache
+  (LRU, 100 entries), 3-second AbortController timeout, Nominatim
+  attribution caption rendered on every result / error state.
+  `frontend/src/profile-geocode.ts` (new) + `frontend/src/profile-crud.ts`.
+- **Component C — Curated catalog typeahead.** The "Hidden curated targets"
+  section now has a typeahead that searches `targets.json` by name +
+  partial id (200ms debounce). Operator no longer needs to remember
+  `aurora-scandinavia` and paste it exactly — type "aurora" and pick.
+  Catalog fetched once per Profile-pane mount via the existing manifest;
+  paste-exact-id flow kept as a fallback for catalog-fetch failures so
+  the operator is never stuck. `frontend/src/profile-crud.ts` + new
+  `fetchCuratedTargets` helper in `frontend/src/manifest.ts`.
+
+51 new tests; 852 → 903 total.
+
 ## [1.6.17.0] - 2026-05-27
 
 ### v2 Hotfix Bundle

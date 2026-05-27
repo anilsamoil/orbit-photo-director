@@ -694,3 +694,51 @@ describe('renderCard — 🌍 thumbnail toggle (v2)', () => {
     expect(el.querySelector('.btn-shoot')).toBeNull();
   });
 });
+
+// v3 — Hide button (Anil 2026-05-26). One-tap dismiss for curated cards in
+// the Queue / Upcoming panes so the operator doesn't have to remember the
+// exact id and paste it into the Profile tab's Hidden list.
+describe('renderCard — Hide button (v3)', () => {
+  const personalPass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
+    ...samplePass(),
+    target_id: 'personal:anil:abc123',
+    target_name: 'My personal target',
+    ...overrides,
+  });
+
+  it('renders the Hide button on a curated-target card', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    const hide = el.querySelector<HTMLButtonElement>('.btn-hide');
+    expect(hide).not.toBeNull();
+    expect(hide!.textContent).toBe('Hide');
+  });
+
+  it('does NOT render the Hide button on a personal-target card', () => {
+    const el = renderCard(personalPass(), NOW, false, () => undefined);
+    expect(el.querySelector('.btn-hide')).toBeNull();
+  });
+
+  it('emits the hide action on click', () => {
+    const onAction = vi.fn();
+    const el = renderCard(samplePass(), NOW, false, onAction);
+    el.querySelector<HTMLButtonElement>('.btn-hide')!.click();
+    expect(onAction).toHaveBeenCalledOnce();
+    expect(onAction.mock.calls[0]![0]).toBe('hide');
+    expect((onAction.mock.calls[0]![1] as PassEntry).target_id).toBe('tokyo-night');
+  });
+
+  it('renders Hide on forecast-variant curated cards too (no Shoot/Skip row)', () => {
+    const el = renderCard(
+      samplePass(), NOW, false, () => undefined, 'forecast',
+    );
+    expect(el.querySelector('.btn-hide')).not.toBeNull();
+    expect(el.querySelector('.btn-shoot')).toBeNull();
+    expect(el.querySelector('.btn-skip')).toBeNull();
+  });
+
+  it('exposes a useful aria-label naming the target', () => {
+    const el = renderCard(samplePass({ target_name: 'Etna' }), NOW, false, () => undefined);
+    const hide = el.querySelector<HTMLButtonElement>('.btn-hide')!;
+    expect(hide.getAttribute('aria-label')).toContain('Etna');
+  });
+});
