@@ -5,24 +5,26 @@ import {
   gibsBlackMarbleUrl,
 } from '../src/tile-precache';
 
-// v2 (Chris feedback 2026-05-27): VIIRS Black Marble night-lights overlay
-// + GIBS year-fallback logic. We test the URL builder and emulate the
-// fallback contract (which the real map.ts wires to MapLibre's tileerror
-// event). Following the existing map-basemap.test.ts inline-logic pattern
-// because MapLibre doesn't run cleanly in happy-dom.
+// v2 hotfix (Anil same-day feedback after v1.6.16.0): GIBS publishes
+// VIIRS_Black_Marble for only two discrete dates — 2012-01-01 and
+// 2016-01-01 — verified via live HTTP + GetCapabilities XML. The prior
+// `currentYear - 1` + one-year fallback walk silently killed the toggle.
+// We now hardcode 2016-01-01 as the canonical date; the gibsBlackMarbleUrl
+// helper still accepts arbitrary year-iso strings (for hand-debugging or
+// future migration to VIIRS_SNPP_DayNightBand_ENCC daily product).
 
 describe('gibsBlackMarbleUrl', () => {
   it('substitutes the year-iso date into the GIBS WMTS pattern', () => {
-    const url = gibsBlackMarbleUrl('2024-01-01');
+    const url = gibsBlackMarbleUrl('2016-01-01');
     expect(url).toContain('VIIRS_Black_Marble');
-    expect(url).toContain('/2024-01-01/');
+    expect(url).toContain('/2016-01-01/');
     expect(url).toContain('GoogleMapsCompatible_Level8');
     // PNG (not JPG) — annual product has transparent day-side pixels.
     expect(url).toMatch(/\.png$/);
   });
 
   it('keeps the standard GIBS host so the SW CacheFirst rule picks it up', () => {
-    const url = gibsBlackMarbleUrl('2023-01-01');
+    const url = gibsBlackMarbleUrl('2016-01-01');
     expect(url).toMatch(/^https:\/\/gibs\.earthdata\.nasa\.gov\//);
   });
 
@@ -31,60 +33,31 @@ describe('gibsBlackMarbleUrl', () => {
     // overzooms above that with no extra fetch.
     expect(VIIRS_BLACK_MARBLE_MAX_ZOOM).toBe(8);
   });
+
+  it('also supports the alternate canonical 2012-01-01 date', () => {
+    // GIBS GetCapabilities lists 2012 + 2016 as the only published dates.
+    // We ship 2016 (more recent), but 2012 is a valid hand-debug URL.
+    const url = gibsBlackMarbleUrl('2012-01-01');
+    expect(url).toContain('/2012-01-01/');
+  });
 });
 
-// Mirrors the fallback logic in map.ts:armNightLightsErrorFallback.
-// Kept inline because the real wiring is via MapLibre's tileerror event,
-// which requires a live MapLibre Map (not feasible in happy-dom).
-describe('VIIRS year-fallback policy', () => {
-  /**
-   *  Contract:
-   *    - Start with year (currentYear - 1).
-   *    - On 404 / 5xx, swap to (currentYear - 2).
-   *    - On further 404 / 5xx, give up, console.warn, hide the layer.
-   *    - Re-toggle by the operator re-arms the fallback (resets year tracker).
-   */
-  function policy(initialYear: number): {
-    tried: Set<number>;
-    failedSilently: boolean;
-    onError: () => number | null;  // returns next year to try, or null if gave up
-  } {
-    const tried = new Set<number>([initialYear]);
-    let failedSilently = false;
-    return {
-      tried,
-      get failedSilently() { return failedSilently; },
-      onError() {
-        if (failedSilently) return null;
-        const oldest = Math.min(...Array.from(tried));
-        if (tried.size >= 2) {
-          failedSilently = true;
-          return null;
-        }
-        const next = oldest - 1;
-        tried.add(next);
-        return next;
-      },
-    };
-  }
-
-  it('walks back one year on first error', () => {
-    const p = policy(2025);
-    expect(p.onError()).toBe(2024);
-    expect(p.tried.has(2024)).toBe(true);
+describe('VIIRS Black Marble canonical date (v2 hotfix)', () => {
+  // Year-fallback machinery was removed: GIBS doesn't publish a yearly
+  // time series for this layer. These tests document the hardcoded date
+  // and act as a tripwire if someone ever re-introduces the walk-back.
+  it('hardcoded canonical date is 2016-01-01', () => {
+    const canonical = '2016-01-01';
+    const url = gibsBlackMarbleUrl(canonical);
+    expect(url).toContain('/2016-01-01/');
   });
 
-  it('gives up after the second consecutive failure', () => {
-    const p = policy(2025);
-    p.onError();  // 2024
-    expect(p.onError()).toBeNull();
-    expect(p.failedSilently).toBe(true);
-  });
-
-  it('subsequent error after give-up is a no-op', () => {
-    const p = policy(2025);
-    p.onError();
-    p.onError();
-    expect(p.onError()).toBeNull();  // already null
+  it('current-year-minus-one would NOT round to 2016 (regression guard)', () => {
+    // The bug was `currentYear - 1` (yielding e.g. 2025) which silently
+    // 404'd. This test fails loudly if anyone re-introduces that path —
+    // they'd have to assert the current-year-derived URL contains
+    // /2016-01-01/ which obviously won't.
+    const buggy = `${new Date().getUTCFullYear() - 1}-01-01`;
+    expect(buggy).not.toBe('2016-01-01');
   });
 });

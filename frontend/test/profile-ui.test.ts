@@ -161,6 +161,58 @@ describe('renderProfilePane', () => {
       expect(opt.textContent).toBe(opt.value);
     }
   });
+
+  // v2 hotfix (Anil same-day feedback after v1.6.16.0): the picker self-heals
+  // by scanning localStorage for opd-profile-<name> keys, so profiles that
+  // exist but aren't in the names-list cache still appear in the dropdown.
+  it('discovers profiles from localStorage even when names-list cache is stale', () => {
+    // Simulate operator devtools-wipe of the names cache: opd-profile-jack
+    // exists but opd-profile-names says only ['anil'] knows about it.
+    saveProfile(createDefaultProfile('anil'));
+    saveProfile(createDefaultProfile('jack'));
+    localStorage.setItem('opd-profile-names', JSON.stringify(['anil']));
+    expect(listProfiles()).toEqual(['anil']); // cache really is stale
+    renderProfilePane();
+    const select = document.getElementById('profile-picker-select') as HTMLSelectElement;
+    const opts = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(opts).toContain('anil');
+    expect(opts).toContain('jack'); // self-healed from localStorage scan
+  });
+
+  // Regression: the regex `^opd-profile-([a-z0-9][a-z0-9-]{0,31})$` matches
+  // `opd-profile-names` (the names-list KEY, not a profile blob). v2 hotfix
+  // initial QA caught the picker showing a phantom "names" option. Fixed by
+  // validating that the value parses as a Profile-shaped JSON before adding.
+  it('does NOT surface the names-list key as a profile named "names"', () => {
+    saveProfile(createDefaultProfile('anil'));
+    // opd-profile-names exists (the names-list cache itself). Without the
+    // value-shape guard, discoverProfileKeys would have matched it and added
+    // 'names' to the dropdown.
+    expect(localStorage.getItem('opd-profile-names')).not.toBeNull();
+    renderProfilePane();
+    const select = document.getElementById('profile-picker-select') as HTMLSelectElement;
+    const opts = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(opts).toContain('anil');
+    expect(opts).not.toContain('names');
+  });
+
+  it('filters malformed opd-profile-* keys via isValidProfileName', () => {
+    // Hand-edited / corrupted localStorage shouldn't pollute the dropdown.
+    // The regex in discoverProfileKeys requires lowercase a-z0-9 start +
+    // up to 31 more lowercase/digit/hyphen chars; uppercase, underscore,
+    // and empty-after-prefix all get filtered.
+    saveProfile(createDefaultProfile('anil'));
+    localStorage.setItem('opd-profile-WITH_CAPS', '{}');
+    localStorage.setItem('opd-profile-', '{}');
+    localStorage.setItem('opd-profile-has_underscore', '{}');
+    renderProfilePane();
+    const select = document.getElementById('profile-picker-select') as HTMLSelectElement;
+    const opts = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(opts).toContain('anil');
+    expect(opts).not.toContain('WITH_CAPS');
+    expect(opts).not.toContain('');
+    expect(opts).not.toContain('has_underscore');
+  });
 });
 
 // ---------------------------------------------------------------------------
