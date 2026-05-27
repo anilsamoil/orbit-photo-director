@@ -35,7 +35,6 @@ import {
 import {
   classifyIssIllumination,
   subsolarFeature,
-  terminatorDayPolygonFeatures,
   terminatorFeatures,
   terminatorNightPolygonFeatures,
   type IssIllumination,
@@ -957,39 +956,31 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // Added AFTER the night-side dim fill so city lights render on top of (not
   // under) the dimming, staying visible. Default visibility 'none' — operator
   // opts in via toggle-night-lights button.
+  //
+  // Opacity journey:
+  //   v2 (1.6.16.0): 0.95 — assumed PNG had alpha so dark areas would be
+  //     transparent. WRONG — verified via curl 2026-05-27 that the GIBS
+  //     VIIRS_Black_Marble PNG is RGB with no alpha channel and a dark navy
+  //     background (~rgb 4,5,15). At 0.95 the raster's background obscured
+  //     the basemap, clouds, and the entire day side.
+  //   v3.1 (1.6.19.0): added an opaque #0b0d12 day-mask polygon ABOVE the
+  //     raster to hide lights on the sun side. Regressed: day side went
+  //     fully black (mask hid basemap+clouds+raster) and clouds appeared
+  //     "inactive" because the 0.95 raster on the night side left only ~5%
+  //     cloud signal visible.
+  //   v3.3 (this commit): drop the day-mask entirely and lower the raster to
+  //     0.55. At 0.55 the raster's dark-navy background is dim enough that
+  //     the basemap (Carto Dark or Esri imagery) and the GIBS cloud overlay
+  //     show through everywhere, while city lights — which are much brighter
+  //     than the background — remain clearly visible. Compromise between
+  //     light legibility and seeing what's underneath.
   if (!map.getLayer('viirs-night-lights-layer')) {
     map.addLayer({
       id: 'viirs-night-lights-layer',
       type: 'raster',
       source: 'viirs-night-lights',
       layout: { visibility: 'none' },
-      paint: { 'raster-opacity': 0.95 },
-    }, beforeTrack);
-  }
-  // v3.1: day-polygon mask. Solid fill matching the basemap dark tone, drawn
-  // ABOVE the night-lights raster but BELOW the ISS track. Visibility is
-  // tied to (nightLightsVisible && terminatorVisible) — when both are on,
-  // the mask hides the VIIRS city lights on the SUN side so the operator
-  // only sees lights in the actual shadow. When terminator is off + night-
-  // lights on, the mask hides (default 'none') and lights render full-globe
-  // (v1.6.18.0 behavior preserved). Source features come from
-  // terminatorDayPolygonFeatures (complement of the night polygon).
-  if (!map.getLayer('terminator-day-mask-layer')) {
-    map.addLayer({
-      id: 'terminator-day-mask-layer',
-      type: 'fill',
-      source: 'terminator-day-mask',
-      layout: { visibility: 'none' },
-      paint: {
-        // Match the app's canonical dark slate (matches style.css --bg and
-        // the marker stroke color used throughout). Carto Dark's basemap
-        // tone is close enough that the mask reads as "basemap" on the day
-        // side rather than as a separate overlay. Solid (opacity 1.0) so
-        // the night-lights raster is fully hidden where the day side falls.
-        'fill-color': '#0b0d12',
-        'fill-opacity': 1.0,
-        'fill-antialias': true,
-      },
+      paint: { 'raster-opacity': 0.55 },
     }, beforeTrack);
   }
   if (!map.getLayer('terminator-line-layer')) {
@@ -1244,14 +1235,12 @@ function refreshTerminatorSources(): void {
     type: 'FeatureCollection',
     features: terminatorNightPolygonFeatures(when),
   });
-  // v3.1 (Anil 2026-05-26): day-side complement polygon. The day-mask layer
-  // (terminator-day-mask-layer) only renders when night-lights AND terminator
-  // are both on, but we recompute the features unconditionally so the source
-  // is fresh whenever the operator flips the toggle. Cheap (~5ms).
-  upsertGeoJson(map, 'terminator-day-mask', {
-    type: 'FeatureCollection',
-    features: terminatorDayPolygonFeatures(when),
-  });
+  // v3.3 (2026-05-27): the day-mask source + layer were removed. The mask
+  // (terminator-day-mask-layer) was added in v3.1 to hide VIIRS night-lights
+  // on the sun side, but its opaque #0b0d12 fill also hid the basemap and
+  // clouds. v3.3 instead lowers the raster opacity to 0.55 so the basemap +
+  // clouds show through everywhere, with lights still legible on the night
+  // side. terminatorDayPolygonFeatures is no longer called from anywhere.
 }
 
 /** Build the ascent-trajectory geojson features from a pass list.
@@ -1355,27 +1344,10 @@ function applyTerminatorVisibility(): void {
       map.setLayoutProperty('terminator-night-fill-layer', 'visibility', vis);
     }
   } catch { /* layers not loaded yet */ }
-  // v3.1: day-mask depends on BOTH terminator AND night-lights being on.
-  // Recompute its visibility whenever the terminator toggle flips.
-  applyDayMaskVisibility();
-}
-
-/** Show / hide the day-side polygon mask (v3.1 — Anil same-day feedback
- *  2026-05-26). The mask hides the VIIRS night-lights raster on the SUN
- *  side, so the operator only sees city lights in the current shadow. The
- *  mask is only useful when BOTH the terminator overlay AND night-lights
- *  are on; otherwise it would either (a) hide lights with no shadow context
- *  visible (terminator off) or (b) have nothing to mask (lights off).
- *  Idempotent. */
-function applyDayMaskVisibility(): void {
-  if (!map) return;
-  const dayMaskVisible = nightLightsVisible && terminatorVisible;
-  const vis = dayMaskVisible ? 'visible' : 'none';
-  try {
-    if (map.getLayer('terminator-day-mask-layer')) {
-      map.setLayoutProperty('terminator-day-mask-layer', 'visibility', vis);
-    }
-  } catch { /* layer not loaded yet */ }
+  // v3.3 (2026-05-27): the day-mask wiring used to live here. The mask was
+  // removed because its opaque fill hid the basemap and clouds on the sun
+  // side. Night-lights opacity (0.55) now handles the day/night blend on
+  // its own.
 }
 
 /** Rebuild the targets geojson source. Each feature carries `in_window`
@@ -1708,9 +1680,9 @@ function applyNightLightsVisibility(): void {
       map.setLayoutProperty('viirs-night-lights-layer', 'visibility', vis);
     }
   } catch { /* layer not loaded yet */ }
-  // v3.1: day-mask visibility depends on both this AND the terminator toggle.
-  // Whenever night-lights flips, recompute the mask's visibility too.
-  applyDayMaskVisibility();
+  // v3.3 (2026-05-27): day-mask wiring was removed. The raster's 0.55
+  // opacity now does the day/night blend on its own — no companion layer
+  // to toggle.
 }
 
 /** Test-only: no-op stub kept for source compatibility with the prior

@@ -61,3 +61,60 @@ describe('VIIRS Black Marble canonical date (v2 hotfix)', () => {
     expect(buggy).not.toBe('2016-01-01');
   });
 });
+
+// v3.3 (2026-05-27) regression coverage. Two concerns from PR #71's
+// regressions:
+//   1. The day-mask layer (added in v3.1) and its source upsert MUST NOT
+//      exist anywhere in the renderMap layer/source bring-up. The mask's
+//      opaque #0b0d12 fill hid the basemap, clouds, AND the raster on the
+//      sun side — operator wanted the day side to look like normal daytime.
+//   2. The viirs-night-lights-layer raster-opacity must be 0.55, NOT 0.95.
+//      The 0.95 value (v2) assumed PNG alpha — verified false via curl;
+//      the GIBS PNG is RGB with a dark navy background. At 0.55 the
+//      basemap + clouds show through everywhere while lights remain
+//      legible against the dim night-fill backdrop.
+//
+// Both tests grep the rendered source of map.ts (read at runtime) for the
+// invariants. This is the same approach as map-imagery-date.test.ts and is
+// resilient to refactors as long as the property names stay literal.
+describe('v3.3 night-lights regressions', () => {
+  it('viirs-night-lights-layer raster-opacity is 0.55 (was 0.95 in v2)', async () => {
+    // Read the source of map.ts and assert the opacity literal. We use
+    // import.meta.url so the test works in both vitest+happy-dom and node.
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const mapSrc = await fs.readFile(
+      path.resolve(__dirname, '../src/map.ts'),
+      'utf-8',
+    );
+    // The literal must appear with the raster-opacity key for the
+    // viirs-night-lights-layer. Match the addLayer block's paint clause.
+    expect(mapSrc).toMatch(/'raster-opacity':\s*0\.55/);
+    // And the prior 0.95 must NOT appear in a raster-opacity context.
+    // (Comments mentioning the 0.95 → 0.55 journey are fine; a stray
+    // `'raster-opacity': 0.95` would fail this guard.)
+    expect(mapSrc).not.toMatch(/'raster-opacity':\s*0\.95/);
+  });
+
+  it('terminator-day-mask layer + source are absent from the style (v3.3 drop)', async () => {
+    // The day-mask was the v3.1 fix that regressed in two ways (hid
+    // basemap/clouds, made clouds appear "inactive"). v3.3 drops it
+    // entirely. Pin its absence so a future refactor doesn't sneak it
+    // back in unnoticed.
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const mapSrc = await fs.readFile(
+      path.resolve(__dirname, '../src/map.ts'),
+      'utf-8',
+    );
+    // No addLayer block declaring the day-mask layer.
+    expect(mapSrc).not.toMatch(/id:\s*'terminator-day-mask-layer'/);
+    // No upsertGeoJson call for the day-mask source.
+    expect(mapSrc).not.toMatch(/upsertGeoJson\([^,]+,\s*'terminator-day-mask'/);
+    // No applyDayMaskVisibility function or calls.
+    expect(mapSrc).not.toMatch(/applyDayMaskVisibility\s*\(/);
+    // No import or call of the day-polygon helper (matches identifier
+    // followed by `(` for calls or by `,` / `}` for named-import lists).
+    expect(mapSrc).not.toMatch(/terminatorDayPolygonFeatures\s*[(,}]/);
+  });
+});
