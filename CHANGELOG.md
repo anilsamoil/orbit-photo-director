@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] v2 Hotfix Bundle
+## [1.6.17.0] - 2026-05-27
+
+### v2 Hotfix Bundle
 
 Same-day operator feedback after v1.6.16.0 (Anil). Four surgical fixes, one PR:
 

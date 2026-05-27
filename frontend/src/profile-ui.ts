@@ -117,8 +117,21 @@ function discoverProfileKeys(): string[] {
       const key = localStorage.key(i);
       if (!key) continue;
       const m = key.match(/^opd-profile-([a-z0-9][a-z0-9-]{0,31})$/);
-      if (m && m[1] && isValidProfileName(m[1])) {
+      if (!m || !m[1] || !isValidProfileName(m[1])) continue;
+      // Skip the reserved `opd-profile-names` key (the names-list itself) —
+      // matches the regex but is NOT a profile blob. Validate the value
+      // shape so any future reserved-key collision is caught the same way.
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const blob = JSON.parse(raw) as { version?: unknown; name?: unknown };
+        if (typeof blob !== 'object' || blob === null) continue;
+        if (typeof blob.version !== 'number') continue;
+        if (typeof blob.name !== 'string' || blob.name !== m[1]) continue;
         out.push(m[1]);
+      } catch {
+        // Not a JSON profile blob; skip (handles the names-list array case +
+        // any future non-Profile value at an opd-profile-* key).
       }
     }
   } catch {

@@ -179,6 +179,23 @@ describe('renderProfilePane', () => {
     expect(opts).toContain('jack'); // self-healed from localStorage scan
   });
 
+  // Regression: the regex `^opd-profile-([a-z0-9][a-z0-9-]{0,31})$` matches
+  // `opd-profile-names` (the names-list KEY, not a profile blob). v2 hotfix
+  // initial QA caught the picker showing a phantom "names" option. Fixed by
+  // validating that the value parses as a Profile-shaped JSON before adding.
+  it('does NOT surface the names-list key as a profile named "names"', () => {
+    saveProfile(createDefaultProfile('anil'));
+    // opd-profile-names exists (the names-list cache itself). Without the
+    // value-shape guard, discoverProfileKeys would have matched it and added
+    // 'names' to the dropdown.
+    expect(localStorage.getItem('opd-profile-names')).not.toBeNull();
+    renderProfilePane();
+    const select = document.getElementById('profile-picker-select') as HTMLSelectElement;
+    const opts = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(opts).toContain('anil');
+    expect(opts).not.toContain('names');
+  });
+
   it('filters malformed opd-profile-* keys via isValidProfileName', () => {
     // Hand-edited / corrupted localStorage shouldn't pollute the dropdown.
     // The regex in discoverProfileKeys requires lowercase a-z0-9 start +
