@@ -421,7 +421,10 @@ class GLMSampler:
                     key = _bucket_key(flash.lat, flash.lon)
                     self._flashes_by_bucket.setdefault(key, []).append(flash)
                     age_min = int((when - flash.t).total_seconds() / 60)
-                    if self._oldest_granule_age_min is None or age_min > self._oldest_granule_age_min:
+                    if (
+                        self._oldest_granule_age_min is None
+                        or age_min > self._oldest_granule_age_min
+                    ):
                         self._oldest_granule_age_min = age_min
         except concurrent.futures.TimeoutError:
             completed = sum(1 for f in futures if f.done())
