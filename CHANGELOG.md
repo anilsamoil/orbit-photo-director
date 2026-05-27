@@ -2,7 +2,9 @@
 
 All notable changes to Orbit Photo Director.
 
-## [Unreleased] v3.1 — Layer-order fix + Day-polygon mask
+## [1.6.19.0] - 2026-05-27
+
+### v3.1 — Layer-order fix + Day-polygon mask
 
 Same-day Anil feedback after v1.6.18.0. Two small frontend-only surgical
 changes; no daemon / worker / data changes.
