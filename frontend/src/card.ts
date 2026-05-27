@@ -13,21 +13,28 @@ export interface RenderOptions {
    *  so first-time users understand why their clicks aren't persisting
    *  to the calibration log. Click still queues to localStorage. */
   tokenSet?: boolean;
-  /** v2 — CEO zoom imagery (Jack feedback 2026-05-27). When provided AND
-   *  the pass's target_id is a personal-target id (`personal:…`), the card
-   *  adds a 🌍 icon-button that toggles an inline thumbnail under the
+  /** v2 — CEO zoom imagery (Jack feedback 2026-05-27). When provided, the
+   *  card adds a 🌍 icon-button that toggles an inline thumbnail under the
    *  card. The factory returns the thumbnail DOM (renderPassThumbnail
    *  from pass-thumbnail.ts); we pass it as a callback so card.ts doesn't
    *  need to import the thumbnail module (keeps the test surface clean —
    *  thumbnail tests run in isolation, card tests don't need to stub
-   *  satellite.js or Esri tiles). */
+   *  satellite.js or Esri tiles).
+   *
+   *  v3.2 (Anil 2026-05-26 batch): the 🌍 button is rendered on EVERY
+   *  card, not just personal targets. Curated cards (e.g. "Etna",
+   *  "Aurora — Scandinavia") benefit equally from the zoomed satellite +
+   *  ISS track overlay. renderPassThumbnail is coord-driven via
+   *  target_lat/target_lon, so no upstream changes were needed. */
   renderThumbnail?: (pass: PassEntry) => HTMLElement;
 }
 
 /** Personal-target ids are minted as `personal:<profile>:<token>` by
- *  profile.ts:makePersonalTargetId. The 🌍 thumbnail button is offered
- *  ONLY on these cards (per design doc: "Each personal-target pass card
- *  gets a 🌍 icon-button"). */
+ *  profile.ts:makePersonalTargetId. v3.2 — exposed (no longer gates the
+ *  🌍 / Hide button render). Both buttons now appear on every card; the
+ *  caller (main.ts:handleHideAction) branches on the prefix at click time
+ *  to pick the right delete semantics (removePersonalTarget for personal,
+ *  toggleCuratedRemoved for curated). */
 function isPersonalTarget(targetId: string): boolean {
   return targetId.startsWith('personal:');
 }
@@ -49,11 +56,15 @@ export function _resetOpenThumbnailsForTest(): void {
 }
 
 /** Card action callback. v3 added 'hide' (Anil 2026-05-26): operator can
- *  one-tap dismiss a curated card from their queue without having to
- *  remember the exact id and paste it into the Profile-tab Hidden input.
- *  'hide' is only emitted from curated-target cards — personal-target
- *  cards never render the Hide button (their Delete lives in Profile-tab
- *  list and is too destructive for a one-tap on the queue). */
+ *  one-tap dismiss a card from their queue without having to remember the
+ *  exact id and paste it into the Profile-tab Hidden input.
+ *
+ *  v3.2 — 'hide' is now emitted from EVERY card (curated AND personal).
+ *  The semantics differ per card type — curated cards add the id to
+ *  removedCuratedIds (restorable via the curated typeahead), personal
+ *  cards delete the target outright (restorable by re-adding in the
+ *  Profile tab). The branch lives in main.ts:handleHideAction; card.ts
+ *  is profile-agnostic and just emits the action. */
 export type CardAction = 'shoot' | 'skip' | 'hide';
 
 /** Render the card list into the cards container.
@@ -199,13 +210,16 @@ export function renderCard(
 
   const score = renderScoreWithBreakdown(p);
 
-  // v2 — 🌍 CEO zoom imagery button (Jack feedback 2026-05-27). Offered on
-  // personal-target pass cards only. Tap toggles an inline thumbnail under
-  // the card; per-session per-card state. Renderer is injected by the
-  // caller (main.ts) to keep card.ts free of satellite/tile deps.
+  // v2 — 🌍 CEO zoom imagery button (Jack feedback 2026-05-27). v3.2
+  // (Anil 2026-05-26) — offered on EVERY card, not just personal targets:
+  // curated cards benefit from the zoomed Esri + ISS track context too,
+  // and pass-thumbnail.ts is already coord-driven (target_lat/lon) so it
+  // works regardless of target_id prefix. Tap toggles an inline thumbnail
+  // under the card; per-session per-card state. Renderer is injected by
+  // the caller (main.ts) to keep card.ts free of satellite/tile deps.
   let thumbnailToggle: HTMLButtonElement | null = null;
   let thumbnailContainer: HTMLDivElement | null = null;
-  if (opts.renderThumbnail && isPersonalTarget(p.target_id)) {
+  if (opts.renderThumbnail) {
     const key = thumbnailKey(p);
     const initiallyOpen = OPEN_THUMBNAILS.has(key);
     thumbnailToggle = document.createElement('button');
@@ -246,25 +260,29 @@ export function renderCard(
     });
   }
 
-  // v3 — Hide button (Anil 2026-05-26). One-tap dismiss for curated
-  // cards the operator doesn't care about (e.g., "Aurora Scandinavia"
-  // showing up in someone who shoots only oceans). Personal-target
-  // cards never get Hide — they have a Delete in the Profile-tab CRUD
-  // list, and one-tap delete from the queue is too destructive without
-  // a confirm step. Hide is rendered on BOTH observed and forecast
-  // variants so the operator can dismiss from either pane.
-  const hideBtn: HTMLButtonElement | null = isPersonalTarget(p.target_id)
-    ? null
-    : (() => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'btn btn-hide';
-        b.textContent = 'Hide';
-        b.title = 'Hide this curated target from your view (restore in Profile tab)';
-        b.setAttribute('aria-label', `Hide "${p.target_name}" from your view`);
-        b.addEventListener('click', () => onAction('hide', p));
-        return b;
-      })();
+  // v3 — Hide button (Anil 2026-05-26). v3.2 — rendered on EVERY card
+  // (was curated-only). The semantics differ at click time:
+  //   - curated → toggleCuratedRemoved (restorable via Profile tab
+  //     Hidden-curated typeahead)
+  //   - personal (`personal:` prefix) → removePersonalTarget (deletes the
+  //     target; restorable by re-adding via the Profile tab CRUD form)
+  // The branch lives in main.ts:handleHideAction; card.ts is
+  // profile-agnostic and just emits 'hide'. Hide is rendered on BOTH
+  // observed and forecast variants so the operator can dismiss from
+  // either pane.
+  const personal = isPersonalTarget(p.target_id);
+  const hideBtn: HTMLButtonElement = (() => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn btn-hide';
+    b.textContent = 'Hide';
+    b.title = personal
+      ? 'Remove this personal target (restore by re-adding in Profile tab)'
+      : 'Hide this curated target from your view (restore in Profile tab)';
+    b.setAttribute('aria-label', `Hide "${p.target_name}" from your view`);
+    b.addEventListener('click', () => onAction('hide', p));
+    return b;
+  })();
 
   // Forecast cards omit Shoot/Skip — passes that far out aren't actionable
   // yet, and the user submits a Shoot record only when actually shooting.
@@ -285,22 +303,20 @@ export function renderCard(
     if (!tokenSet) skip.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
     skip.addEventListener('click', () => onAction('skip', p));
     actions.append(shoot, skip);
-    if (hideBtn) actions.appendChild(hideBtn);
+    actions.appendChild(hideBtn);
     if (thumbnailToggle) actions.appendChild(thumbnailToggle);
     card.append(name, countdown, meta, score, actions);
     if (thumbnailContainer) card.appendChild(thumbnailContainer);
   } else {
     card.append(name, countdown, meta, score);
-    // Forecast variants get a single trailing action row when there's
-    // anything to put in it (Hide + / or 🌍 thumbnail toggle). Both are
-    // optional; only mount the row if at least one is present.
-    if (hideBtn || thumbnailToggle) {
-      const fcActions = document.createElement('div');
-      fcActions.className = 'card-actions card-actions-forecast';
-      if (hideBtn) fcActions.appendChild(hideBtn);
-      if (thumbnailToggle) fcActions.appendChild(thumbnailToggle);
-      card.appendChild(fcActions);
-    }
+    // Forecast variants get a trailing action row with Hide + (when a
+    // renderThumbnail factory was provided) the 🌍 toggle. Hide always
+    // renders in v3.2.
+    const fcActions = document.createElement('div');
+    fcActions.className = 'card-actions card-actions-forecast';
+    fcActions.appendChild(hideBtn);
+    if (thumbnailToggle) fcActions.appendChild(thumbnailToggle);
+    card.appendChild(fcActions);
     if (thumbnailContainer) card.appendChild(thumbnailContainer);
   }
   return card;

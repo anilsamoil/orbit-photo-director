@@ -516,8 +516,17 @@ main {
 .card-actions {
   grid-area: actions;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.4rem;
+}
+/* v3.2 — every card now shows Shoot · Skip · Hide · 🌍 (4 buttons).
+ * On the narrowest viewports (iPhone Safari ≤ 380px) the row can wrap
+ * to a second line; the explicit min-height on .btn keeps each button's
+ * tap target above the iOS 44pt minimum even when shrunk. */
+.card-actions .btn {
+  min-height: 44px;
+  min-width: 44px;
 }
 
 .btn {
