@@ -196,6 +196,14 @@ Refuted alternatives:
 
 **Codex outside-voice review:** deferred to post-implementation (per D7 — code + design together yields higher signal).
 
+### V4-P3 — VIIRS night-lights day-side suppression (deferred from v3.3 — 2026-05-27)
+
+Spec was "lights only in shadow when terminator on; full globe when off." v3.3 ships approximate-only — lights are visible everywhere at 0.55 opacity. True day-side suppression of the VIIRS raster is not possible in MapLibre's basic style spec with a 3-band RGB PNG source (no native polygon-clip on raster tiles; `raster-color` requires single-band `raster-array` sources). Options if Anil wants the spec-perfect behavior:
+
+- Switch to `VIIRS_SNPP_DayNightBand_ENCC` (daily cadence, different visual character — single-orbit composite, less cloud-free than Black Marble annual). Still RGB PNG so same polygon-clip limitation, but daily so more recent. Doesn't actually fix the clip problem.
+- Add a `maplibregl.addProtocol` tile transformer that luminance-keys each tile (rewrites low-luminance pixels to alpha=0). Once the raster has alpha, the dark background no longer obscures the basemap and 0.95 opacity becomes viable again. The lights themselves would still paint over the day side, but on a daylight basemap they're a minor visual artifact (faint pinpricks over bright clouds), not the current "dim wash everywhere." This is the cleanest fix and is ~50 lines of code. Defer until Anil explicitly asks.
+- Custom tile server that returns alpha-keyed PNGs — same outcome as addProtocol, more infrastructure. Don't do this.
+
 ### V4-P3 — Deferred from weather v1.3 scope
 
 - **MTG-LI integration** (EUMETSAT Meteosat lightning imager for Europe/Africa). Skipped in D2 due to auth complexity. Revisit if soak shows the GLM coverage gap matters in practice.

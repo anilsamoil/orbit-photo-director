@@ -448,17 +448,6 @@ export function terminatorNightPolygonFeatures(when: Date): GeoJSON.Feature[] {
   return duplicated;
 }
 
-// REMOVED in v3.3 (2026-05-27): terminatorDayPolygonFeatures.
-// Lived here from v3.1 (1.6.19.0) to v3.2 (1.6.20.0). It drove the
-// terminator-day-mask-layer that hid VIIRS night-lights on the sun side
-// with an opaque #0b0d12 fill. Verified via curl that the GIBS VIIRS
-// Black Marble PNG has no alpha channel and a dark navy background, so
-// the mask also hid the basemap and cloud overlay — operator wanted the
-// day side to look like normal daytime. v3.3 drops the mask entirely and
-// lowers the raster opacity to 0.55 (see map.ts:viirs-night-lights-layer)
-// so basemap + clouds show through everywhere. To restore the day-polygon
-// helper, see git history at commit 51b836e (v1.6.19.0).
-
 /** ISS illumination state at a (when, lat, lon) tuple — used by v1.5.3.0
  *  (Chris feedback 2026-05-21) to color the ground-track line by whether
  *  the ISS itself is in sunlight, in Earth's shadow, or in the "twilight"

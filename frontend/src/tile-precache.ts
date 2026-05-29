@@ -44,9 +44,19 @@ export function yesterdayIso(): string {
 
 /** VIIRS Black Marble annual night-lights composite (v2 — Chris feedback
  *  2026-05-27). GIBS layer ID `VIIRS_Black_Marble` is published as an annual
- *  composite — date convention is YYYY-01-01 for the year's image. PNG (the
- *  Black Marble product has transparent night-side regions; JPG would force
- *  a black background that would override our terminator's night fill).
+ *  composite — date convention is YYYY-01-01 for the year's image.
+ *
+ *  Tile format: 8-bit RGB PNG, NO alpha channel. Non-illuminated areas
+ *  render as opaque dark navy (~rgb 4,5,15), NOT transparent. Verified via
+ *  curl + Pillow 2026-05-27. This matters: any layer above the basemap that
+ *  uses this raster at high opacity will darken the entire scene, not just
+ *  paint lights. The opacity of `viirs-night-lights-layer` in map.ts is
+ *  sized accordingly (currently 0.55 — low enough that the dark background
+ *  reads as a dim wash and the basemap/clouds show through).
+ *
+ *  If you ever need true alpha (lights opaque, dark areas transparent), use
+ *  a `maplibregl.addProtocol` tile transformer to luminance-key each PNG.
+ *  Don't change the opacity assuming the PNG is transparent.
  *
  *  Max zoom for this layer per GIBS catalog: GoogleMapsCompatible_Level8
  *  (i.e., z8). MapLibre overzooms above that.
