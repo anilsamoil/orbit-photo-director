@@ -292,10 +292,16 @@ export function _resetMapStateForTest(): void {
 import {
   GIBS_MAX_ZOOM,
   VIIRS_BLACK_MARBLE_MAX_ZOOM,
-  gibsBlackMarbleUrl,
   gibsTrueColorUrl,
   yesterdayIso,
 } from './tile-precache';
+import { registerViirsAlphaProtocol, viirsAlphaUrl } from './viirs-alpha-protocol';
+
+// Register the viirs-alpha:// MapLibre protocol once at module load. The
+// handler luminance-keys VIIRS Black Marble tiles so dark areas become
+// transparent (v3.5 — ends the opacity-tuning saga; see
+// frontend/src/viirs-alpha-protocol.ts for the full why). Idempotent.
+registerViirsAlphaProtocol(maplibregl);
 
 function buildStyle(): maplibregl.StyleSpecification {
   const dateIso = yesterdayIso();
@@ -386,7 +392,7 @@ function buildStyle(): maplibregl.StyleSpecification {
       // annual). DON'T implement here — separate feature, not a hotfix.
       'viirs-night-lights': {
         type: 'raster',
-        tiles: [gibsBlackMarbleUrl('2016-01-01')],
+        tiles: [viirsAlphaUrl('2016-01-01')],
         tileSize: 256,
         maxzoom: VIIRS_BLACK_MARBLE_MAX_ZOOM,
         attribution:
@@ -968,19 +974,25 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   //     fully black (mask hid basemap+clouds+raster) and clouds appeared
   //     "inactive" because the 0.95 raster on the night side left only ~5%
   //     cloud signal visible.
-  //   v3.3 (this commit): drop the day-mask entirely and lower the raster to
+  //   v3.3 (1.6.21.0): drop the day-mask entirely and lower the raster to
   //     0.55. At 0.55 the raster's dark-navy background is dim enough that
   //     the basemap (Carto Dark or Esri imagery) and the GIBS cloud overlay
   //     show through everywhere, while city lights — which are much brighter
   //     than the background — remain clearly visible. Compromise between
   //     light legibility and seeing what's underneath.
+  //   v3.4 (1.6.22.0): stale-comment cleanup; opacity unchanged at 0.55.
+  //   v3.5 (this commit): added viirs-alpha protocol that luminance-keys the
+  //     tile to transparent for dark background pixels. With the dark
+  //     background gone, 0.95 opacity paints bright city lights cleanly
+  //     without darkening basemap or clouds. Solves the saga that started
+  //     in v2.
   if (!map.getLayer('viirs-night-lights-layer')) {
     map.addLayer({
       id: 'viirs-night-lights-layer',
       type: 'raster',
       source: 'viirs-night-lights',
       layout: { visibility: 'none' },
-      paint: { 'raster-opacity': 0.55 },
+      paint: { 'raster-opacity': 0.95 },
     }, beforeTrack);
   }
   if (!map.getLayer('terminator-line-layer')) {
@@ -1744,7 +1756,7 @@ function bindNightLightsToggle(): void {
       if (map) {
         const src = map.getSource('viirs-night-lights') as maplibregl.RasterTileSource | undefined;
         if (src && 'setTiles' in src) {
-          src.setTiles([gibsBlackMarbleUrl('2016-01-01')]);
+          src.setTiles([viirsAlphaUrl('2016-01-01')]);
         }
       }
     }

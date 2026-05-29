@@ -57,6 +57,7 @@ export function yesterdayIso(): string {
  *  If you ever need true alpha (lights opaque, dark areas transparent), use
  *  a `maplibregl.addProtocol` tile transformer to luminance-key each PNG.
  *  Don't change the opacity assuming the PNG is transparent.
+ *  v3.5 (1.6.23.0) did exactly this — see frontend/src/viirs-alpha-protocol.ts.
  *
  *  Max zoom for this layer per GIBS catalog: GoogleMapsCompatible_Level8
  *  (i.e., z8). MapLibre overzooms above that.

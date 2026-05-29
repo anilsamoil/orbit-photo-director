@@ -62,23 +62,23 @@ describe('VIIRS Black Marble canonical date (v2 hotfix)', () => {
   });
 });
 
-// v3.3 (2026-05-27) regression coverage. Two concerns from PR #71's
-// regressions:
+// v3.5 (2026-05-29) regression coverage. Updated from v3.3:
 //   1. The day-mask layer (added in v3.1) and its source upsert MUST NOT
 //      exist anywhere in the renderMap layer/source bring-up. The mask's
 //      opaque #0b0d12 fill hid the basemap, clouds, AND the raster on the
 //      sun side — operator wanted the day side to look like normal daytime.
-//   2. The viirs-night-lights-layer raster-opacity must be 0.55, NOT 0.95.
-//      The 0.95 value (v2) assumed PNG alpha — verified false via curl;
-//      the GIBS PNG is RGB with a dark navy background. At 0.55 the
-//      basemap + clouds show through everywhere while lights remain
-//      legible against the dim night-fill backdrop.
+//   2. The viirs-night-lights-layer raster-opacity must be 0.95 (was 0.55
+//      in v3.3/v3.4). v3.5 introduced the viirs-alpha:// MapLibre protocol
+//      that luminance-keys the tile so dark background pixels become
+//      transparent. With the dark background gone the layer can paint at
+//      0.95 without darkening basemap/clouds, and bright city lights are
+//      no longer muted.
 //
 // Both tests grep the rendered source of map.ts (read at runtime) for the
 // invariants. This is the same approach as map-imagery-date.test.ts and is
 // resilient to refactors as long as the property names stay literal.
-describe('v3.3 night-lights regressions', () => {
-  it('viirs-night-lights-layer raster-opacity is 0.55 (was 0.95 in v2)', async () => {
+describe('v3.5 night-lights regressions', () => {
+  it('viirs-night-lights-layer raster-opacity is 0.95 (was 0.55 in v3.3/v3.4)', async () => {
     // Read the source of map.ts and assert the opacity literal. We use
     // import.meta.url so the test works in both vitest+happy-dom and node.
     const fs = await import('node:fs/promises');
@@ -87,13 +87,19 @@ describe('v3.3 night-lights regressions', () => {
       path.resolve(__dirname, '../src/map.ts'),
       'utf-8',
     );
-    // The literal must appear with the raster-opacity key for the
-    // viirs-night-lights-layer. Match the addLayer block's paint clause.
-    expect(mapSrc).toMatch(/'raster-opacity':\s*0\.55/);
-    // And the prior 0.95 must NOT appear in a raster-opacity context.
-    // (Comments mentioning the 0.95 → 0.55 journey are fine; a stray
-    // `'raster-opacity': 0.95` would fail this guard.)
-    expect(mapSrc).not.toMatch(/'raster-opacity':\s*0\.95/);
+    // Find the addLayer block for viirs-night-lights-layer and assert its
+    // paint.raster-opacity is 0.95. The gibs-clouds-layer also uses 0.55
+    // (correctly, for cloud-overlay translucency), so we must scope the
+    // assertion to the viirs-night-lights addLayer block.
+    const block = mapSrc.match(
+      /id:\s*'viirs-night-lights-layer'[\s\S]*?'raster-opacity':\s*([\d.]+)/,
+    );
+    expect(block).not.toBeNull();
+    expect(block && block[1]).toBe('0.95');
+    // And the prior 0.55 must NOT appear in the viirs-night-lights block.
+    // (Comments mentioning the 0.55 → 0.95 journey are fine; a stray
+    // `'raster-opacity': 0.55` inside that block would fail this guard.)
+    expect(block && block[0]).not.toMatch(/'raster-opacity':\s*0\.55/);
   });
 
   it('terminator-day-mask layer + source are absent from the style (v3.3 drop)', async () => {
