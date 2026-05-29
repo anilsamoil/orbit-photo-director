@@ -2,6 +2,16 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.24.0] - 2026-05-29
+
+### v3.6 — Global dim for lights-only mode
+
+Anil follow-up after v3.5: with the alpha protocol making lights honest about what's underneath, the "night world" feel was gone when night-lights was toggled alone — pinpoint lights had to compete with bright basemap + clouds, hard to make out.
+
+- **New**: `night-lights-global-dim-layer` (MapLibre `background` type, `#000000` @ 0.30). Activates only when night-lights is ON **and** terminator is OFF. Restores the "world goes dark, lights pop" effect that the dark-navy raster background used to provide accidentally.
+- When terminator is ON, the global dim hides — the existing `terminator-night-fill-layer` handles night-side dimming and we don't want to also dim the day side.
+- Tests: 918 → 919 (+1 regression assertion for the new layer + visibility logic).
+
 ## [1.6.23.0] - 2026-05-29
 
 ### v3.5 — VIIRS alpha protocol (true day-side suppression)
