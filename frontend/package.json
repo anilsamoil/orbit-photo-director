@@ -1,6 +1,6 @@
 {
   "name": "@orbit-photo-director/frontend",
-  "version": "1.6.23.0",
+  "version": "1.6.24.0",
   "private": true,
   "type": "module",
   "scripts": {

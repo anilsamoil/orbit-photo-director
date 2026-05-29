@@ -102,6 +102,30 @@ describe('v3.5 night-lights regressions', () => {
     expect(block && block[0]).not.toMatch(/'raster-opacity':\s*0\.55/);
   });
 
+  it('global-dim layer exists with visibility tied to lights ON + terminator OFF (v3.6)', async () => {
+    // v3.6 (2026-05-29): when night-lights is on alone, the alpha-keyed
+    // lights paint over a bright basemap/clouds and pinpoint lights are
+    // hard to make out. A global background dim restores the "night world"
+    // feel. The dim hides when the terminator is on (the existing night-
+    // fill handles per-side dimming in that case — otherwise the day side
+    // would also be dimmed).
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const mapSrc = await fs.readFile(
+      path.resolve(__dirname, '../src/map.ts'),
+      'utf-8',
+    );
+    // Layer is declared with type 'background'.
+    const block = mapSrc.match(
+      /id:\s*'night-lights-global-dim-layer'[\s\S]*?type:\s*'background'/,
+    );
+    expect(block).not.toBeNull();
+    // Visibility logic: visible only when lights ON AND terminator OFF.
+    expect(mapSrc).toMatch(/nightLightsVisible\s*&&\s*!terminatorVisible/);
+    // Wired into both visibility toggles so flipping either updates the dim.
+    expect(mapSrc).toMatch(/applyGlobalDimVisibility\s*\(/);
+  });
+
   it('terminator-day-mask layer + source are absent from the style (v3.3 drop)', async () => {
     // The day-mask was the v3.1 fix that regressed in two ways (hid
     // basemap/clouds, made clouds appear "inactive"). v3.3 drops it

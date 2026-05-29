@@ -941,6 +941,23 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // night/day raster + fill layers so the operator can always see where the
   // ISS is going.
   const beforeTrack = map.getLayer('iss-track-layer') ? 'iss-track-layer' : undefined;
+  // v3.6 (Anil 2026-05-29): global dim for lights-only mode. When night-lights
+  // is ON but terminator is OFF, this background fill darkens the whole map
+  // so bright pinpoint lights pop. When terminator is ON, the existing
+  // terminator-night-fill handles night-side dimming and this layer hides
+  // (otherwise the day side would also be dimmed). Inserted first among the
+  // night-related layers so it sits below terminator-night-fill + the raster.
+  if (!map.getLayer('night-lights-global-dim-layer')) {
+    map.addLayer({
+      id: 'night-lights-global-dim-layer',
+      type: 'background',
+      layout: { visibility: 'none' },
+      paint: {
+        'background-color': '#000000',
+        'background-opacity': 0.30,
+      },
+    }, beforeTrack);
+  }
   if (!map.getLayer('terminator-night-fill-layer')) {
     map.addLayer({
       id: 'terminator-night-fill-layer',
@@ -1356,10 +1373,25 @@ function applyTerminatorVisibility(): void {
       map.setLayoutProperty('terminator-night-fill-layer', 'visibility', vis);
     }
   } catch { /* layers not loaded yet */ }
-  // v3.3 (2026-05-27): the day-mask wiring used to live here. The mask was
-  // removed because its opaque fill hid the basemap and clouds on the sun
-  // side. Night-lights opacity (0.55) now handles the day/night blend on
-  // its own.
+  // v3.6: when terminator state changes, the global-dim layer may also need
+  // to toggle (it's visible only when lights ON + terminator OFF).
+  applyGlobalDimVisibility();
+}
+
+/** Show / hide the global dim layer (v3.6 — 2026-05-29). Visible only when
+ *  night-lights is on AND the terminator is off — restores the "night world"
+ *  feel when lights are toggled alone, without dimming the day side when
+ *  the terminator overlay is active (the existing terminator-night-fill
+ *  handles night-side dimming in that case). Idempotent. */
+function applyGlobalDimVisibility(): void {
+  if (!map) return;
+  const dimVisible = nightLightsVisible && !terminatorVisible;
+  const vis = dimVisible ? 'visible' : 'none';
+  try {
+    if (map.getLayer('night-lights-global-dim-layer')) {
+      map.setLayoutProperty('night-lights-global-dim-layer', 'visibility', vis);
+    }
+  } catch { /* layer not loaded yet */ }
 }
 
 /** Rebuild the targets geojson source. Each feature carries `in_window`
@@ -1692,9 +1724,9 @@ function applyNightLightsVisibility(): void {
       map.setLayoutProperty('viirs-night-lights-layer', 'visibility', vis);
     }
   } catch { /* layer not loaded yet */ }
-  // v3.3 (2026-05-27): day-mask wiring was removed. The raster's 0.55
-  // opacity now does the day/night blend on its own — no companion layer
-  // to toggle.
+  // v3.6: night-lights flip may toggle the global-dim layer (active only
+  // when lights ON + terminator OFF).
+  applyGlobalDimVisibility();
 }
 
 /** Test-only: no-op stub kept for source compatibility with the prior
