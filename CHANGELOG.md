@@ -2,6 +2,18 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.23.0] - 2026-05-29
+
+### v3.5 — VIIRS alpha protocol (true day-side suppression)
+
+End of the v2 → v3.1 → v3.3 → v3.4 → v3.5 opacity-tuning saga. Lights now visible at full brightness without darkening the day side.
+
+- **New**: `frontend/src/viirs-alpha-protocol.ts` registers a `viirs-alpha://` MapLibre custom protocol that luminance-keys VIIRS Black Marble tiles at fetch time. Dark navy background pixels (luminance < 30, the GIBS PNG's opaque ~rgb 4,5,15 backdrop) become fully transparent; a 10-unit linear ramp above the threshold soft-keys cluster edges so they fade smoothly instead of aliasing. ~150 LoC including comments and tests.
+- **Fix**: `viirs-night-lights-layer` `raster-opacity` bumped from 0.55 back to 0.95. With the dark background now keyed to alpha 0, the layer paints city lights at full brightness without darkening basemap, clouds, or the day side. Operator (Anil) reported v3.3/v3.4's 0.55 made lights too dim when zoomed out.
+- **Refactor**: `map.ts` swaps `gibsBlackMarbleUrl(...)` for `viirsAlphaUrl(...)` in both the source definition and the error-retry path. `registerViirsAlphaProtocol(maplibregl)` fires once at module load (idempotent).
+- **Docs**: `tile-precache.ts` comment block now points at `viirs-alpha-protocol.ts` as the implementation of the previously-suggested luminance-key path.
+- Tests: 910 → 918 (+8): +8 viirs-alpha tests (pure-function pixel walk + URL builder). The pre-existing v3.3 raster-opacity assert was retargeted (rather than added/removed) to scope at the viirs-night-lights addLayer block — `gibs-clouds-layer` correctly retains 0.55, so the old global regex was already overbroad.
+
 ## [1.6.22.0] - 2026-05-29
 
 ### v3.4 — Stale-comment cleanup + day-side suppression deferred
