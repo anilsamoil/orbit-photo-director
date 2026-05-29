@@ -304,9 +304,3 @@ describe('terminatorNightPolygonFeatures (v2)', () => {
   });
 });
 
-// v3.1's terminatorDayPolygonFeatures + its 6-test describe block were
-// removed in v3.3 (2026-05-27). The day-mask layer they drove was dropped —
-// see frontend/src/terminator.ts for the removal notice and frontend/src/
-// map.ts:viirs-night-lights-layer for the replacement (lowered opacity 0.55).
-// Layer-absence + opacity regression coverage now lives in
-// frontend/test/map-night-lights.test.ts.

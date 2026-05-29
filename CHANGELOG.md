@@ -2,6 +2,16 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.6.22.0] - 2026-05-29
+
+### v3.4 — Stale-comment cleanup + day-side suppression deferred
+
+Post-v3.3 review caught three rot items and one tracked deferral.
+
+- **Fix**: Replaced wrong comment in `tile-precache.ts:47-49` claiming VIIRS PNG has transparent night-side regions. The actual format (8-bit RGB, no alpha, dark navy background) is now documented, with a guard against the next person assuming transparency and re-introducing high opacity.
+- **Cleanup**: Removed 10-line tombstone in `terminator.ts` and 6-line tombstone in `terminator.test.ts` for the deleted `terminatorDayPolygonFeatures`. Git blame is the canonical history; tombstones rot.
+- **Tracked**: Added V4-P3 entry to TODOS.md for true day-side VIIRS suppression — `maplibregl.addProtocol` luminance-key approach (~50 LoC) is the cleanest fix when Anil asks for it.
+
 ## [1.6.21.0] - 2026-05-27
 
 ### v3.3 — Drop day-mask, lower VIIRS opacity
