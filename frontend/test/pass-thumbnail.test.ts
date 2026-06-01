@@ -49,12 +49,10 @@ describe('esriReferenceTileUrl', () => {
 });
 
 describe('THUMBNAIL_ZOOM', () => {
-  it('stays at z=12 — the tile is target-CONTAINING, not target-centered', () => {
-    // The marker is drawn at canvas center but the target sits at a
-    // fractional position in its tile, so widening the zoom multiplies the
-    // off-center error and lets the labels overlay name the wrong feature.
-    // Keep z=12 until a target-centered tile composition lands.
-    expect(THUMBNAIL_ZOOM).toBe(12);
+  it('is widened to z=11 now that the tile layer is target-centered', () => {
+    // appendCenteredTileLayer puts the target at the canvas center, so the
+    // marker is accurate and we can widen the zoom for ocean/remote context.
+    expect(THUMBNAIL_ZOOM).toBe(11);
   });
 });
 
@@ -226,13 +224,14 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(labels!.src).toContain(`/${THUMBNAIL_ZOOM}/`);
   });
 
-  it('removes the labels overlay if its tile fails, leaving the imagery intact', () => {
+  it('removes failed label tiles, leaving the imagery intact', () => {
     const el = renderPassThumbnail(samplePass, null, NOW);
-    const labels = el.querySelector<HTMLImageElement>('img.pass-thumbnail-labels')!;
-    expect(labels).not.toBeNull();
-    labels.dispatchEvent(new Event('error'));
+    const labelTiles = [...el.querySelectorAll<HTMLImageElement>('img.pass-thumbnail-labels')];
+    expect(labelTiles.length).toBeGreaterThan(0);
+    // Each label tile self-removes on failure (gap beats a broken icon).
+    labelTiles.forEach((t) => t.dispatchEvent(new Event('error')));
     expect(el.querySelector('img.pass-thumbnail-labels')).toBeNull();
-    // The imagery tile must survive a labels failure.
+    // The imagery tiles must survive a labels failure.
     expect(el.querySelector('img.pass-thumbnail-image')).not.toBeNull();
   });
 
@@ -273,10 +272,12 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
 
   it('shows the placeholder when the Esri tile load fires "error"', async () => {
     const el = renderPassThumbnail(samplePass, null, NOW);
-    const img = el.querySelector<HTMLImageElement>('img.pass-thumbnail-image')!;
-    // Synthesize a load failure.
-    img.dispatchEvent(new Event('error'));
-    // After the handler runs, the image should be swapped for the placeholder.
+    // Only the center (target-containing) tile carries the placeholder handler;
+    // fire 'error' on every imagery tile so the center one reacts regardless
+    // of its position in the layout order.
+    [...el.querySelectorAll<HTMLImageElement>('img.pass-thumbnail-image')]
+      .forEach((t) => t.dispatchEvent(new Event('error')));
+    // After the handler runs, the center image is swapped for the placeholder.
     const placeholder = el.querySelector('.pass-thumbnail-placeholder');
     expect(placeholder).not.toBeNull();
     expect(placeholder!.textContent).toContain('Imagery unavailable');
@@ -287,5 +288,30 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
   it('omits the polyline when no track is available', () => {
     const el = renderPassThumbnail(samplePass, null, NOW);
     expect(el.querySelector('path.pass-thumbnail-iss-track')).toBeNull();
+  });
+
+  it('lays out 1-4 absolutely-positioned tiles with the target at canvas center', () => {
+    const el = renderPassThumbnail(samplePass, null, NOW);
+    const tiles = [...el.querySelectorAll<HTMLImageElement>('img.pass-thumbnail-image')];
+    expect(tiles.length).toBeGreaterThanOrEqual(1);
+    expect(tiles.length).toBeLessThanOrEqual(4);
+    expect(tiles.every((t) => t.style.position === 'absolute')).toBe(true);
+
+    // The center tile (containing the target) must be positioned so the
+    // target's exact fractional position maps to the canvas center (128,128).
+    const t = lonLatToTileXY(samplePass.target_lon, samplePass.target_lat, THUMBNAIL_ZOOM);
+    const cx = Math.floor(t.x);
+    const cy = Math.floor(t.y);
+    const expectedLeft = Math.round(cx * 256 - (t.x * 256 - 128));
+    const expectedTop = Math.round(cy * 256 - (t.y * 256 - 128));
+    const centerTile = tiles.find(
+      (im) => Math.round(parseFloat(im.style.left)) === expectedLeft
+        && Math.round(parseFloat(im.style.top)) === expectedTop,
+    );
+    expect(centerTile).toBeTruthy();
+    const targetX = parseFloat(centerTile!.style.left) + (t.x - cx) * 256;
+    const targetY = parseFloat(centerTile!.style.top) + (t.y - cy) * 256;
+    expect(targetX).toBeCloseTo(128, 0);
+    expect(targetY).toBeCloseTo(128, 0);
   });
 });

@@ -32,19 +32,14 @@ import type { PassEntry, Track } from './types';
 import { liveIssPosition } from './iss';
 import { liveIssPositionSGP4 } from './iss-sgp4';
 
-/** Thumbnail tile zoom level. z=12 → ~9.5 km tile-width at equator.
- *  NOTE: the thumbnail renders the single slippy tile that CONTAINS the
- *  target, but the overlay draws the target marker at the canvas center —
- *  so the target can sit off-center by up to ~half a tile. At z=12 that's
- *  ~9.5 km (accepted since v1). Do NOT widen this zoom to add context
- *  without ALSO centering the tile composition on the target: a wider tile
- *  multiplies the off-center error and lets the reference-labels overlay
- *  confidently name a feature tens of km from the real target. The labels
- *  overlay below names whatever is in this tight, target-adjacent frame —
- *  the safe identifiability win. A properly target-centered wider view
- *  (2×2 grid offset so the target is the canvas center) is the follow-up
- *  that would let us zoom out for open-ocean targets without lying. */
-export const THUMBNAIL_ZOOM = 12;
+/** Thumbnail tile zoom level. z=11 → ~19 km tile-width at equator.
+ *  Widened from z=12 (~9.5 km) for more context (a coastline / city / lake
+ *  in frame for offshore + remote targets). This is only safe because the
+ *  tile layer is now CENTERED on the target (appendCenteredTileLayer): the
+ *  marker at canvas center sits exactly on the target, and the labels name
+ *  what's actually around it. Before centering, widening would have
+ *  multiplied the off-center error and let labels name the wrong feature. */
+export const THUMBNAIL_ZOOM = 11;
 
 /** Base pixel size of the thumbnail (before devicePixelRatio scaling).
  *  256×256 is one Web Mercator tile at the chosen zoom. */
@@ -175,6 +170,57 @@ export function formatThumbnailCountdown(closestApproachIso: string, nowMs: numb
   return `in ${Math.round(m / 60)} h`;
 }
 
+/** Lay out the slippy tiles that fill the basePx×basePx thumbnail with the
+ *  target at the canvas CENTER. Positions the 1-4 tiles that intersect the
+ *  centered view by pixel offset (target's exact fractional position maps to
+ *  the canvas center), so the marker drawn at center sits on the target and
+ *  the labels name what's actually around it. Returns the img whose tile
+ *  CONTAINS the target (the center tile) so the caller can attach offline
+ *  handling to the one that matters; null if the target tile is off-grid.
+ *
+ *  `removeOnError`: when true, each tile removes itself on load failure
+ *  (used for the decorative labels layer, where a gap beats a broken icon).
+ */
+function appendCenteredTileLayer(
+  wrap: HTMLElement,
+  urlFor: (z: number, x: number, y: number) => string,
+  className: string,
+  lon: number,
+  lat: number,
+  z: number = THUMBNAIL_ZOOM,
+  basePx: number = THUMBNAIL_PIXEL_SIZE,
+  removeOnError = false,
+): HTMLImageElement | null {
+  const t = lonLatToTileXY(lon, lat, z);
+  const half = basePx / 2;
+  // Canvas top-left in world-tile-pixels, chosen so the target → canvas center.
+  const originX = t.x * 256 - half;
+  const originY = t.y * 256 - half;
+  const n = 2 ** z;
+  const centerTileX = Math.floor(t.x);
+  const centerTileY = Math.floor(t.y);
+  let centerImg: HTMLImageElement | null = null;
+  for (let tx = Math.floor(originX / 256); tx <= Math.floor((originX + basePx - 1) / 256); tx++) {
+    for (let ty = Math.floor(originY / 256); ty <= Math.floor((originY + basePx - 1) / 256); ty++) {
+      if (ty < 0 || ty >= n) continue;  // no tiles past the poles
+      const img = document.createElement('img');
+      img.className = className;
+      img.width = 256;
+      img.height = 256;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.style.position = 'absolute';
+      img.style.left = `${Math.round(tx * 256 - originX)}px`;
+      img.style.top = `${Math.round(ty * 256 - originY)}px`;
+      if (removeOnError) img.addEventListener('error', () => img.remove());
+      img.src = urlFor(z, ((tx % n) + n) % n, ty);  // wrap x for the antimeridian
+      wrap.appendChild(img);
+      if (tx === centerTileX && ty === centerTileY) centerImg = img;
+    }
+  }
+  return centerImg;
+}
+
 /** Render the pass thumbnail as a self-contained DOM subtree. Caller
  *  appends this element below the pass card; the returned element is
  *  un-styled beyond the .pass-thumbnail class (styles in style.css).
@@ -198,56 +244,30 @@ export function renderPassThumbnail(
   const wrap = document.createElement('div');
   wrap.className = 'pass-thumbnail';
 
-  // Compute the tile containing the target. We render a single tile for
-  // the v1 simple-case (one 256×256 image); the polyline overlay is what
-  // gives the spatial context.
-  const tile = lonLatToTileXY(pass.target_lon, pass.target_lat, THUMBNAIL_ZOOM);
-  const tileX = Math.floor(tile.x);
-  const tileY = Math.floor(tile.y);
+  // Imagery tiles, laid out so the TARGET is at the canvas center (not just
+  // the containing tile, which left the target off-center by up to half a
+  // tile). The marker at canvas center then sits exactly on the target.
+  const centerImg = appendCenteredTileLayer(
+    wrap, esriImageryTileUrl, 'pass-thumbnail-image', pass.target_lon, pass.target_lat,
+  );
+  // The center tile carries the offline placeholder — its failure swaps the
+  // thumbnail for a gray placeholder (the SVG overlay still renders on top).
+  if (centerImg) {
+    let tileLoaded = false;
+    centerImg.addEventListener('load', () => { tileLoaded = true; });
+    centerImg.addEventListener('error', () => {
+      if (tileLoaded) return;
+      showTileFailurePlaceholder(wrap, centerImg, 'network error');
+    });
+  }
 
-  // The target is at fractional (tile.x - tileX, tile.y - tileY) within the
-  // tile; if the target sits near a tile edge, the thumbnail will show the
-  // target off-center. v1 accepts this — single-tile fetch keeps the
-  // dependency simple. A v2 enhancement could fetch a 2×2 grid.
-
-  // Esri tile <img>. devicePixelRatio scaling: the underlying tile is
-  // always 256 px, but we set the CSS size to logical THUMBNAIL_PIXEL_SIZE
-  // and let the browser scale up on retina (slight blur is acceptable for
-  // the operator UX; the alternative — fetching higher-zoom tiles — would
-  // need a 2×2 grid).
-  const img = document.createElement('img');
-  img.className = 'pass-thumbnail-image';
-  img.width = THUMBNAIL_PIXEL_SIZE;
-  img.height = THUMBNAIL_PIXEL_SIZE;
-  img.alt = '';  // decorative; the card's name is the screen-reader anchor
-  img.loading = 'lazy';
-  // Set the src ONLY after the load/error handlers are attached so a
-  // synchronously-cached image doesn't fire before we can listen.
-  let tileLoaded = false;
-  img.addEventListener('load', () => { tileLoaded = true; });
-  img.addEventListener('error', () => {
-    if (tileLoaded) return;  // already swapped to placeholder
-    showTileFailurePlaceholder(wrap, img, 'network error');
-  });
-  img.src = esriImageryTileUrl(THUMBNAIL_ZOOM, tileX, tileY);
-
-  wrap.appendChild(img);
-
-  // Reference-labels overlay: place names, boundaries, and coastlines from
-  // the same Esri service the Map tab's 🏷️ toggle uses. Transparent PNG
-  // composited over the imagery so the operator can identify the site by
-  // its surroundings ("that's the lake north of the city") instead of
-  // staring at unlabelled terrain. Decorative + best-effort: if it fails to
-  // load we just leave it out (no placeholder), the imagery still stands.
-  const labels = document.createElement('img');
-  labels.className = 'pass-thumbnail-labels';
-  labels.width = THUMBNAIL_PIXEL_SIZE;
-  labels.height = THUMBNAIL_PIXEL_SIZE;
-  labels.alt = '';
-  labels.loading = 'lazy';
-  labels.addEventListener('error', () => { labels.remove(); });
-  labels.src = esriReferenceTileUrl(THUMBNAIL_ZOOM, tileX, tileY);
-  wrap.appendChild(labels);
+  // Reference-labels (place names / boundaries / coastlines) — the same
+  // centered grid over the imagery so the operator can identify the site by
+  // its surroundings. Best-effort: each label tile removes itself on failure.
+  appendCenteredTileLayer(
+    wrap, esriReferenceTileUrl, 'pass-thumbnail-labels', pass.target_lon, pass.target_lat,
+    THUMBNAIL_ZOOM, THUMBNAIL_PIXEL_SIZE, true,
+  );
 
   // Overlay SVG: ISS polyline + marker + nadir-distance label. Position
   // absolute over the image. Sized to the same logical pixels.
