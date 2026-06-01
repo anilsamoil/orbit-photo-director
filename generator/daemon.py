@@ -23,10 +23,16 @@ from .main import run_tick
 
 log = logging.getLogger(__name__)
 
-# 30 min cap. Was 600s; bumped 2026-05-27 during a NASA GIBS outage when
-# multiplex(3 profiles) + slow-cloud-sampling ticks were exceeding 10 min.
+# 15 min cap. Was 600s; bumped to 1800s on 2026-05-27 during a NASA GIBS
+# outage when multiplex(3 profiles) + slow-cloud-sampling ticks were exceeding
+# 10 min. Settled at 900s on 2026-05-31 after a 4-day soak: 600s was too tight
+# for legit multiplex ticks, 1800s too loose for the silent-worker-death case.
+# Validated at 4 profiles (josh added 2026-06-01): a normal 4-profile tick runs
+# ~3.6-6 min (each profile adds ~50-70s of find_passes+score), so 900s keeps
+# ~2.5-4x headroom; an outage that inflated shared cloud-sampler setup to
+# ~10-12 min at 3 profiles still clears 15 min with the 4th profile's ~70s.
 # Still bounded — KeepAlive still catches genuine deadlocks.
-HARD_TIMEOUT_SECONDS = 1800
+HARD_TIMEOUT_SECONDS = 900
 DEPLOY_TIMEOUT_SECONDS = 300  # 5 min
 INITIAL_BACKOFF_SECONDS = 30
 MAX_BACKOFF_SECONDS = 3600  # 1h
