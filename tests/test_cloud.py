@@ -488,6 +488,42 @@ def test_gfs_forecast_add_targets_skips_already_cached_cells() -> None:
     assert len(calls) == calls_after_init + 1
 
 
+def test_gfs_forecast_add_targets_populates_cape_for_new_coords() -> None:
+    """add_targets also indexes CAPE when include_cape=True, so personal
+    targets get forecast-CAPE lightning, not just cloud (the lightning
+    sampler had the same curated-only seeding as the cloud sampler).
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from generator.cloud import GFSForecastSampler
+
+    def cape_fetcher(url: str) -> Any:
+        q = parse_qs(urlparse(url).query)
+        lats = [float(x) for x in q["latitude"][0].split(",")]
+        lons = [float(x) for x in q["longitude"][0].split(",")]
+        items = [
+            {
+                "latitude": lat,
+                "longitude": lon,
+                "hourly": {
+                    "time": ["2026-05-03T12:00"],
+                    "cloud_cover": [40.0],
+                    "cape": [1500.0],
+                },
+            }
+            for lat, lon in zip(lats, lons, strict=False)
+        ]
+        return items[0] if len(items) == 1 else items
+
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = GFSForecastSampler(targets=[(35.75, 139.75)], fetcher=cape_fetcher, include_cape=True)
+
+    # Personal coord not in the curated-seeded index → no CAPE.
+    assert s.cape_at(53.5, -111.5, when) is None
+    s.add_targets([(53.5, -111.5)])
+    assert s.cape_at(53.5, -111.5, when) == 1500.0
+
+
 def test_gfs_forecast_returns_cloud_cover_at_target_hour() -> None:
     from generator.cloud import GFSForecastSampler
 
