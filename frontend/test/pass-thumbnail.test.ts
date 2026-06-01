@@ -6,6 +6,7 @@ import {
   THUMBNAIL_PIXEL_SIZE,
   THUMBNAIL_ZOOM,
   esriImageryTileUrl,
+  esriReferenceTileUrl,
   formatThumbnailCountdown,
   lonLatToTileXY,
   projectSampleToThumbnail,
@@ -35,6 +36,25 @@ describe('esriImageryTileUrl', () => {
     expect(url).toBe(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/200/100',
     );
+  });
+});
+
+describe('esriReferenceTileUrl', () => {
+  it('builds the reference labels tile URL with z/y/x in Esri order', () => {
+    const url = esriReferenceTileUrl(10, 100, 200);
+    expect(url).toBe(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/10/200/100',
+    );
+  });
+});
+
+describe('THUMBNAIL_ZOOM', () => {
+  it('stays at z=12 — the tile is target-CONTAINING, not target-centered', () => {
+    // The marker is drawn at canvas center but the target sits at a
+    // fractional position in its tile, so widening the zoom multiplies the
+    // off-center error and lets the labels overlay name the wrong feature.
+    // Keep z=12 until a target-centered tile composition lands.
+    expect(THUMBNAIL_ZOOM).toBe(12);
   });
 });
 
@@ -194,6 +214,26 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(img!.src).toMatch(/server\.arcgisonline\.com\/ArcGIS\/rest\/services\/World_Imagery/);
     // z=12 in the URL (the thumbnail zoom).
     expect(img!.src).toContain(`/${THUMBNAIL_ZOOM}/`);
+  });
+
+  it('composites a reference-labels tile over the imagery so the site is identifiable', () => {
+    const el = renderPassThumbnail(samplePass, null, NOW);
+    const labels = el.querySelector<HTMLImageElement>('img.pass-thumbnail-labels');
+    expect(labels).not.toBeNull();
+    expect(labels!.src).toMatch(
+      /server\.arcgisonline\.com\/ArcGIS\/rest\/services\/Reference\/World_Boundaries_and_Places/,
+    );
+    expect(labels!.src).toContain(`/${THUMBNAIL_ZOOM}/`);
+  });
+
+  it('removes the labels overlay if its tile fails, leaving the imagery intact', () => {
+    const el = renderPassThumbnail(samplePass, null, NOW);
+    const labels = el.querySelector<HTMLImageElement>('img.pass-thumbnail-labels')!;
+    expect(labels).not.toBeNull();
+    labels.dispatchEvent(new Event('error'));
+    expect(el.querySelector('img.pass-thumbnail-labels')).toBeNull();
+    // The imagery tile must survive a labels failure.
+    expect(el.querySelector('img.pass-thumbnail-image')).not.toBeNull();
   });
 
   it('shows the Esri attribution per ToS', () => {

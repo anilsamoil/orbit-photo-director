@@ -39,7 +39,8 @@ import {
   terminatorNightPolygonFeatures,
   type IssIllumination,
 } from './terminator';
-import { loadProfile, parseProfileFromURL } from './profile';
+import { loadProfile, parseProfileFromURL, type PersonalTarget } from './profile';
+import { applyTargetFilter, getTargetFilter } from './target-filter-pref';
 import { subscribeProfileChanged } from './profile-events';
 
 let map: maplibregl.Map | null = null;
@@ -136,11 +137,14 @@ export function filterPassesByDistance(
 
 /** Re-read the threshold + re-render the targets source. Called from
  *  the 'profile-changed' subscriber so map pins drop in/out as the
- *  operator drags the slider in the Profile tab. Pure DOM effect — no
+ *  operator drags the slider in the Profile tab. Also refreshes the
+ *  my-targets ring layer so a target added in the Profile tab shows as a
+ *  pin immediately (no wait for a daemon tick). Pure DOM effect — no
  *  network. Exported so main.ts can drive it too when needed. */
 export function applyDistanceThreshold(): void {
   if (!map) return;
   refreshTargetsSource();
+  refreshMyTargetsSource();
 }
 
 /** Threshold-changed subscriber bookkeeping. Bound once at the first
@@ -862,6 +866,46 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
   }
 
+  // "My targets" ring layer (Jack feedback 2026-06-01) — every personal
+  // target as a hollow white ring, independent of whether it has a pass.
+  // Added BEFORE the score-dot layer so a personal target that DOES have a
+  // pass renders its filled score-dot on top of its ring (reads as "yours,
+  // and it has an upcoming pass").
+  refreshMyTargetsSource();
+  // Dark casing under the white ring so it doesn't wash out over bright
+  // basemap regions (clouds, snow, desert, day-side). Mirrors how the
+  // score-dot layer pairs every dot with a dark #0b0d12 stroke. Wider dark
+  // stroke under a narrower white one reads as a haloed ring on any
+  // luminance. Added first so it sits beneath the white ring.
+  if (!map.getLayer('my-targets-casing')) {
+    map.addLayer({
+      id: 'my-targets-casing',
+      type: 'circle',
+      source: 'my-targets',
+      paint: {
+        'circle-radius': 9,
+        'circle-color': 'rgba(0,0,0,0)',
+        'circle-stroke-color': '#0b0d12',
+        'circle-stroke-width': 4,
+        'circle-stroke-opacity': 0.7,
+      },
+    });
+  }
+  if (!map.getLayer('my-targets-layer')) {
+    map.addLayer({
+      id: 'my-targets-layer',
+      type: 'circle',
+      source: 'my-targets',
+      paint: {
+        'circle-radius': 9,
+        'circle-color': 'rgba(0,0,0,0)',  // hollow — stroke-only ring
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-stroke-opacity': 0.95,
+      },
+    });
+  }
+
   // Targets layer — features carry closest_approach_ms so the paint
   // expression can dim out-of-window passes per Q3 → C (filter+dim).
   refreshTargetsSource();
@@ -1408,7 +1452,11 @@ function refreshTargetsSource(): void {
   const viewMs = Date.now() + lookaheadMinutes * 60_000;
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
   const thresholdKm = readActiveDistanceThresholdKm();
-  const visible = filterPassesByDistance(currentPasses, thresholdKm);
+  const distanceVisible = filterPassesByDistance(currentPasses, thresholdKm);
+  // Honor the global "All / Mine" filter: 'mine' drops curated score-dots so
+  // the map matches the Queue/Upcoming view. The always-on my-targets ring
+  // layer still shows every personal target regardless of this filter.
+  const visible = applyTargetFilter(distanceVisible, getTargetFilter());
   const features = visible.map((p) => {
     const closestMs = Date.parse(p.closest_approach);
     const inWindow = Number.isFinite(closestMs)
@@ -1440,6 +1488,37 @@ function refreshTargetsSource(): void {
     type: 'FeatureCollection',
     features,
   });
+}
+
+/** Rebuild the "my targets" pin source from the active profile's personal
+ *  targets (localStorage), independent of passes. The score-dot layer only
+ *  plots targets that have a computed pass, so a freshly-added target — or
+ *  one with no pass in the next 36h — was invisible (Jack feedback
+ *  2026-06-01: "nice to see my targets visually too"). This always-on ring
+ *  layer fixes that: every personal target gets a pin the moment it's saved
+ *  locally, even before the next daemon tick produces passes for it. */
+function refreshMyTargetsSource(): void {
+  if (!map) return;
+  let additions: PersonalTarget[] = [];
+  try {
+    const profile = loadProfile(parseProfileFromURL(window.location.href));
+    // migrate() blind-casts a current-version profile, so a corrupted
+    // localStorage with a non-array `additions` would slip through and make
+    // `.filter` below throw — breaking the whole Map tab. Guard explicitly.
+    additions = Array.isArray(profile?.additions) ? profile!.additions : [];
+  } catch {
+    additions = [];  // corrupted localStorage — render the map without pins
+  }
+  const features = additions
+    .filter((t) =>
+      Number.isFinite(t.lat) && Number.isFinite(t.lon)
+      && Math.abs(t.lat) <= 90 && Math.abs(t.lon) <= 180)
+    .map((t) => ({
+      type: 'Feature' as const,
+      properties: { target_id: t.id, target_name: t.name },
+      geometry: { type: 'Point' as const, coordinates: [t.lon, t.lat] },
+    }));
+  upsertGeoJson(map, 'my-targets', { type: 'FeatureCollection', features });
 }
 
 /** Great-circle initial bearing from (lat1, lon1) to (lat2, lon2), in degrees

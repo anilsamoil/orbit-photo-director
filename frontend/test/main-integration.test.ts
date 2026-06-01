@@ -593,3 +593,118 @@ describe('main.ts: updatePendingSyncBadge', () => {
     expect(el.title).toContain('3 calibration entries queued');
   });
 });
+
+// DOM variant that includes the All/Mine filter toggles (mirrors the
+// pane-header markup in index.html). Used by the target-filter tests below.
+const DOM_WITH_FILTER = `
+  <header>
+    <div id="iss-now"></div>
+    <button id="tab-queue"></button>
+    <button id="tab-upcoming"></button>
+    <button id="tab-map"></button>
+    <button id="tab-log">Log<span id="pending-sync-badge" hidden></span></button>
+  </header>
+  <div id="status-banner"></div>
+  <div id="toast" hidden></div>
+  <main id="view">
+    <section>
+      <div class="filter-toggle">
+        <button id="filter-all-queue" class="filter-btn active" data-filter="all"></button>
+        <button id="filter-mine-queue" class="filter-btn" data-filter="mine"></button>
+      </div>
+      <div id="cards"></div><div id="empty" hidden></div>
+    </section>
+    <section>
+      <div class="filter-toggle">
+        <button id="filter-all-upcoming" class="filter-btn active" data-filter="all"></button>
+        <button id="filter-mine-upcoming" class="filter-btn" data-filter="mine"></button>
+      </div>
+      <div id="upcoming-cards"></div><div id="upcoming-empty" hidden></div>
+    </section>
+  </main>
+`;
+
+function seedSnapshot(top5: PassEntry[], top24h: PassEntry[] = []): void {
+  localStorage.setItem('opd-snapshot', JSON.stringify({
+    manifest: buildManifest(),
+    top5,
+    top_24h: top24h,
+    track: buildTrack(),
+    status: null,
+    savedAt: Date.now(),
+  }));
+}
+
+describe('main.ts: All/Mine target filter', () => {
+  it('renderQueue shows both shared and personal passes under "all"', async () => {
+    document.body.innerHTML = DOM_WITH_FILTER;
+    const mine = buildPass({ target_id: 'personal:josh:abc', target_name: 'Josh Farm' });
+    const shared = buildPass({ target_id: 'tokyo-night', target_name: 'Tokyo at night' });
+    seedSnapshot([mine, shared]);
+
+    const { bootFromSnapshot } = await import('../src/main');
+    bootFromSnapshot();  // sets state + renders once (filter defaults to 'all')
+
+    const names = [...document.querySelectorAll('#cards .card-name')].map((n) => n.textContent);
+    expect(names).toContain('Josh Farm');
+    expect(names).toContain('Tokyo at night');
+  });
+
+  it('renderQueue shows only personal passes under "mine"', async () => {
+    document.body.innerHTML = DOM_WITH_FILTER;
+    localStorage.setItem('opd_target_filter_v1', 'mine');
+    const mine = buildPass({ target_id: 'personal:josh:abc', target_name: 'Josh Farm' });
+    const shared = buildPass({ target_id: 'tokyo-night', target_name: 'Tokyo at night' });
+    seedSnapshot([mine, shared]);
+
+    const { bootFromSnapshot } = await import('../src/main');
+    bootFromSnapshot();
+
+    const names = [...document.querySelectorAll('#cards .card-name')].map((n) => n.textContent);
+    expect(names).toContain('Josh Farm');
+    expect(names).not.toContain('Tokyo at night');
+  });
+
+  it('shows the mine-specific empty message when no personal pass is in the queue window', async () => {
+    document.body.innerHTML = DOM_WITH_FILTER;
+    localStorage.setItem('opd_target_filter_v1', 'mine');
+    // Only a shared pass — under 'mine' the queue filters to empty.
+    seedSnapshot([buildPass({ target_id: 'tokyo-night' })]);
+
+    const { bootFromSnapshot } = await import('../src/main');
+    bootFromSnapshot();
+
+    const empty = document.getElementById('empty')!;
+    expect(empty.hidden).toBe(false);
+    expect(empty.textContent).toContain('None of your targets');
+    expect(empty.textContent).toContain('Switch to All');
+  });
+
+  it('clicking the Mine toggle re-filters the queue and syncs both panes active state', async () => {
+    document.body.innerHTML = DOM_WITH_FILTER;
+    const mine = buildPass({ target_id: 'personal:josh:abc', target_name: 'Josh Farm' });
+    const shared = buildPass({ target_id: 'tokyo-night', target_name: 'Tokyo at night' });
+    seedSnapshot([mine, shared]);
+    // Hang the network so init() binds toggles then awaits without resolving.
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise(() => {}));
+
+    const { init } = await import('../src/main');
+    void init();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Both panes start showing both passes.
+    expect([...document.querySelectorAll('#cards .card-name')].map((n) => n.textContent))
+      .toContain('Tokyo at night');
+
+    document.getElementById('filter-mine-queue')!.click();
+
+    const names = [...document.querySelectorAll('#cards .card-name')].map((n) => n.textContent);
+    expect(names).toContain('Josh Farm');
+    expect(names).not.toContain('Tokyo at night');
+    // Active state syncs across BOTH panes' Mine buttons (global pref).
+    expect(document.getElementById('filter-mine-queue')!.classList.contains('active')).toBe(true);
+    expect(document.getElementById('filter-mine-upcoming')!.classList.contains('active')).toBe(true);
+    expect(document.getElementById('filter-all-queue')!.classList.contains('active')).toBe(false);
+  });
+});
