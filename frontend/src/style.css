@@ -1860,13 +1860,21 @@ main {
 }
 
 /* Help modal: wider than the rating modal, with a scrollable body so the
- * full feature list fits on a phone without pushing the close button off. */
+ * full feature list fits on a phone without pushing the close button off.
+ * Flex column (overriding .modal's grid) so the header stays fixed and the
+ * body is the single bounded scroll area. The body needs min-height: 0 to
+ * shrink below its content height — without it the body stays at full
+ * content height, overflows the capped modal, and runs off-screen with no
+ * scroll (the implicit min-height: auto on a grid/flex item). */
 .modal.help-modal {
+  display: flex;
+  flex-direction: column;
   max-width: 460px;
   max-height: 80vh;
   gap: 0.6rem;
 }
 .help-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1890,6 +1898,8 @@ main {
 .help-close:hover { color: var(--text); background: var(--surface-2); }
 .help-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .help-body {
+  flex: 1 1 auto;
+  min-height: 0;       /* lets the flex child shrink below content so overflow-y scrolls */
   overflow-y: auto;
   display: grid;
   gap: 0.5rem;
