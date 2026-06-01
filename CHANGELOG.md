@@ -2,6 +2,23 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.4.0] - 2026-06-01
+
+## **Filter from the Map, scroll the tabs on iPhone, and pass thumbnails now center on the target.**
+
+Three refinements. The Map tab gets its own All/Mine toggle so you can filter to your targets without leaving the map. The tab row was overflowing off the side on iPhone (the responsive shrink was silently dead) and now fits. And the 🌍 pass-card thumbnail now centers the satellite frame on the target and zooms out a touch, so a coastline or city is in view instead of an off-center crop, with the place labels naming what's actually there.
+
+### Itemized changes
+
+#### Added
+- An All/Mine target filter on the Map tab (top-left), sharing the same setting as the Queue/Upcoming toggles.
+
+#### Fixed
+- The tab row (Queue/Upcoming/Map/Profile/Log) no longer runs off the side of the screen on iPhone — it fits on one line at phone widths.
+
+#### Changed
+- Pass-card satellite thumbnails are now centered on the target and slightly wider (~19 km), so the marker sits exactly on the target and a coastline/city/lake lands in frame for offshore and remote targets.
+
 ## [1.7.3.0] - 2026-06-01
 
 ## **Forecast lightning for your own targets, and the Sort/Show controls finally say what they do.**
