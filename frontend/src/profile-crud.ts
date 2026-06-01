@@ -200,7 +200,9 @@ export async function hydratePersonalTargets(profileName: string): Promise<void>
   const current = safeLoadProfile(profileName);
   if (!current) return;
   if (current.additions.length > 0) {
-    // "Preserve local" guard — see comment above.
+    // "Preserve local" guard — see comment above. Also makes this function
+    // idempotent for the success case: once additions are populated, a later
+    // call (init + Profile-pane) returns here before re-fetching.
     return;
   }
 

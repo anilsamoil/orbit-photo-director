@@ -26,6 +26,7 @@ import { emptyQueueHint } from './empty-hint';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
+import { hydratePersonalTargets } from './profile-crud';
 import { subscribeProfileChanged } from './profile-events';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
@@ -1091,6 +1092,12 @@ async function init(): Promise<void> {
   bindSortToggles();
   bindFilterToggles();
   bindHelp();
+  // Hydrate this profile's server-side targets into localStorage on load so
+  // the my-targets map rings (and the Profile list) reflect them without
+  // needing a Profile-tab visit first. No-ops without a calibration token and
+  // stays retryable until one is set. saveProfile fires 'profile-changed', so
+  // an already-open map picks the rings up. Fire-and-forget.
+  if (currentProfile) void hydratePersonalTargets(currentProfile.name);
   // V4-P2 aurora widget: attach the click handler once. Widget content is
   // rendered later by refresh() once /api/kp resolves.
   const kpWidget = document.getElementById('kp-widget');

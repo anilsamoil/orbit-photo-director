@@ -2,6 +2,17 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.1.0] - 2026-06-01
+
+## **Your targets ring the map the moment you open it, no Profile-tab detour.**
+
+The my-targets rings (from v1.7.0.0) draw from your saved targets, which only loaded after you opened the Profile tab once. Now they load on first page open, so when you switch to the Map your targets are already ringed. Needs your calibration token set (same as before); without it the rings fill in when you next open Profile.
+
+### Itemized changes
+
+#### Fixed
+- Personal targets hydrate from the server at page load (when a calibration token is set), so the my-targets map rings and the Profile list populate without first visiting the Profile tab.
+
 ## [1.7.0.0] - 2026-06-01
 
 ## **A "?" button that explains the whole app, a one-tap filter to just your targets, and every target you add now shows on the map.**
