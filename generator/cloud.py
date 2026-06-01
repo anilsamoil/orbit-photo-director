@@ -829,10 +829,7 @@ class GFSForecastSampler:
         # forecast-side lightning_potential when GLM has no recent data
         # for the target's region.
         self._include_cape = include_cape
-        if not targets:
-            self._by_coord: dict[tuple[float, float], list[tuple[datetime, float]]] = {}
-            self._cape_by_coord: dict[tuple[float, float], list[tuple[datetime, float]]] = {}
-            return
+        self._forecast_days = forecast_days
         if fetcher is None:
             import requests
 
@@ -842,24 +839,35 @@ class GFSForecastSampler:
                 return resp.json()
 
             fetcher = _get
+        # Stored so add_targets() can top up the index later (the per-profile
+        # multiplex reuses one sampler and adds each profile's personal coords).
+        self._fetcher = fetcher
+        self._by_coord: dict[tuple[float, float], list[tuple[datetime, float]]] = {}
+        self._cape_by_coord: dict[tuple[float, float], list[tuple[datetime, float]]] = {}
+        if targets:
+            self.add_targets(targets)
 
-        # Round target coords to the GFS grid step (0.25°) so duplicate
-        # nearby targets share a single forecast time-series. This also
-        # cuts batch size when many targets cluster (e.g., a city plus
-        # its airport).
+    def add_targets(self, targets: list[tuple[float, float]]) -> None:
+        """Prefetch + index forecasts for additional coords, incrementally.
+
+        Only 0.25° grid cells not already cached are fetched, so calling this
+        per profile with personal-target coords is cheap (curated cells are
+        skipped). Without it, personal targets fall back to the cf=50.0
+        "gfs-forecast-no-data" placeholder in sample() — they were never in
+        the curated-seeded index. Rounds to the GFS grid step so nearby
+        targets share one time-series.
+        """
         rounded: list[tuple[float, float]] = []
         seen: set[tuple[float, float]] = set()
         for lat, lon in targets:
             key = (round(lat * 4) / 4.0, round(lon * 4) / 4.0)
-            if key not in seen:
-                seen.add(key)
-                rounded.append(key)
-
-        self._by_coord = {}
-        self._cape_by_coord = {}
+            if key in self._by_coord or key in seen:
+                continue
+            seen.add(key)
+            rounded.append(key)
         for batch_start in range(0, len(rounded), OPEN_METEO_BATCH_SIZE):
             batch = rounded[batch_start : batch_start + OPEN_METEO_BATCH_SIZE]
-            self._fetch_batch(batch, forecast_days, fetcher)
+            self._fetch_batch(batch, self._forecast_days, self._fetcher)
 
     @staticmethod
     def _build_url(

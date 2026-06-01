@@ -440,6 +440,54 @@ def test_gfs_forecast_snaps_lat_lon_to_grid() -> None:
     assert r.cloud_fraction == 60.0
 
 
+def test_gfs_forecast_add_targets_indexes_new_coords() -> None:
+    """Regression: personal targets added after construction get real forecast
+    cloud, not the cf=50 "gfs-forecast-no-data" placeholder. The per-profile
+    multiplex reuses one curated-seeded sampler and tops it up via add_targets.
+    """
+    from generator.cloud import GFSForecastSampler
+
+    fetcher = _make_fake_gfs_fetcher({
+        (35.75, 139.75): [("2026-05-03T12:00", 60.0)],   # curated (Tokyo)
+        (53.5, -111.5): [("2026-05-03T12:00", 20.0)],    # personal (remote farm)
+    })
+    when = datetime(2026, 5, 3, 12, 0, 0, tzinfo=UTC)
+    s = GFSForecastSampler(targets=[(35.75, 139.75)], fetcher=fetcher)
+
+    # Before add_targets: the personal coord isn't in the curated-seeded index.
+    assert s.sample(53.5, -111.5, when).source == "gfs-forecast-no-data"
+
+    # After: the personal coord gets real forecast cloud.
+    s.add_targets([(53.5, -111.5)])
+    r = s.sample(53.5, -111.5, when)
+    assert r.source == "gfs-forecast"
+    assert r.cloud_fraction == 20.0
+
+
+def test_gfs_forecast_add_targets_skips_already_cached_cells() -> None:
+    """add_targets only fetches 0.25° cells not already cached, so topping up
+    per profile with the (curated + personal) list costs one batch for the
+    genuinely new personal cells, not a re-fetch of curated coords.
+    """
+    from generator.cloud import GFSForecastSampler
+
+    base = _make_fake_gfs_fetcher({
+        (35.75, 139.75): [("2026-05-03T12:00", 60.0)],
+        (53.5, -111.5): [("2026-05-03T12:00", 20.0)],
+    })
+    calls: list[str] = []
+
+    def counting_fetcher(url: str) -> Any:
+        calls.append(url)
+        return base(url)
+
+    s = GFSForecastSampler(targets=[(35.75, 139.75)], fetcher=counting_fetcher)
+    calls_after_init = len(calls)
+    # Curated cell already cached → skipped; only the new personal cell fetches.
+    s.add_targets([(35.75, 139.75), (53.5, -111.5)])
+    assert len(calls) == calls_after_init + 1
+
+
 def test_gfs_forecast_returns_cloud_cover_at_target_hour() -> None:
     from generator.cloud import GFSForecastSampler
 
