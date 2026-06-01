@@ -68,3 +68,6 @@ worker/test/*.js
 # frontend/public/ holds Vite static assets (served verbatim under /).
 # We do want these in git — they're source, not build output. Ignore only
 # specific known-generated paths inside if/when we add them.
+
+# gstack local worktrees / skill artifacts
+.claude/

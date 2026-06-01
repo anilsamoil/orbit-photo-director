@@ -8,6 +8,7 @@
 
 import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
+import { bindHelp } from './help';
 import { formatCountdown } from './countdown';
 import {
   bannerError,
@@ -28,6 +29,7 @@ import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProf
 import { subscribeProfileChanged } from './profile-events';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
+import { applyTargetFilter, getTargetFilter, setTargetFilter, type TargetFilter } from './target-filter-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { gibsTrueColorUrl, precacheTilesForTargets, yesterdayIso } from './tile-precache';
@@ -263,7 +265,11 @@ function renderQueue(): void {
   if (!cards || !empty) return;
   const now = Date.now();
   const stale = isStaleManifest(currentManifest, now);
-  const visible = applyDistanceFilter(upcomingPasses(currentTop5, now));
+  const filter = getTargetFilter();
+  const visible = applyTargetFilter(
+    applyDistanceFilter(upcomingPasses(currentTop5, now)),
+    filter,
+  );
   if (visible.length === 0) {
     cards.replaceChildren();
     // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
@@ -271,8 +277,14 @@ function renderQueue(): void {
     // not orbital geometry. Surface a specific hint so the operator
     // knows to wait for the next tick rather than wondering whether
     // there are simply no passes coming.
-    const hint = emptyQueueHint(currentManifest, now);
-    empty.textContent = hint ?? 'No passes in the next 90 minutes.';
+    // 'mine' filter empties differently — it's a filter choice, not lag —
+    // so name that cause instead of the generator-lag hint.
+    if (filter === 'mine') {
+      empty.textContent = 'None of your targets pass in the next 90 minutes. Switch to All to see shared targets.';
+    } else {
+      const hint = emptyQueueHint(currentManifest, now);
+      empty.textContent = hint ?? 'No passes in the next 90 minutes.';
+    }
     empty.hidden = false;
   } else {
     empty.hidden = true;
@@ -360,9 +372,16 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const cards = document.getElementById('upcoming-cards');
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;
-  const visible = applyDistanceFilter(upcomingPasses(currentTop24h, nowMs));
+  const filter = getTargetFilter();
+  const visible = applyTargetFilter(
+    applyDistanceFilter(upcomingPasses(currentTop24h, nowMs)),
+    filter,
+  );
   if (visible.length === 0) {
     cards.replaceChildren();
+    empty.textContent = filter === 'mine'
+      ? 'None of your targets have an upcoming pass. Switch to All to see shared targets.'
+      : 'No upcoming passes in the next 36 hours.';
     empty.hidden = false;
     return;
   }
@@ -681,6 +700,31 @@ function bindSortToggles(): void {
       const order = (b.dataset.order as SortOrder | undefined) ?? 'time';
       setSortOrder(order);
       syncActiveState(order);
+      renderQueue();
+    });
+  });
+}
+
+/** Wire the "All / Mine" target-filter toggles on Queue + Upcoming. The
+ *  preference is global (the Map reads it too), so a click syncs the active
+ *  state across every .filter-btn, persists the choice, and re-renders the
+ *  card panes. The Map picks up the change on its next render (tab switch /
+ *  refresh tick) — the toggles only live in the card panes, so there's no
+ *  way to flip the filter while the Map is on screen. Mirrors bindSortToggles. */
+function bindFilterToggles(): void {
+  const buttons = document.querySelectorAll<HTMLButtonElement>('.filter-btn');
+  if (buttons.length === 0) return;
+  const syncActiveState = (filter: TargetFilter) => {
+    buttons.forEach((b) => {
+      b.classList.toggle('active', b.dataset.filter === filter);
+    });
+  };
+  syncActiveState(getTargetFilter());
+  buttons.forEach((b) => {
+    b.addEventListener('click', () => {
+      const filter = (b.dataset.filter as TargetFilter | undefined) ?? 'all';
+      setTargetFilter(filter);
+      syncActiveState(filter);
       renderQueue();
     });
   });
@@ -1045,6 +1089,8 @@ async function init(): Promise<void> {
   });
   bindTabs();
   bindSortToggles();
+  bindFilterToggles();
+  bindHelp();
   // V4-P2 aurora widget: attach the click handler once. Widget content is
   // rendered later by refresh() once /api/kp resolves.
   const kpWidget = document.getElementById('kp-widget');

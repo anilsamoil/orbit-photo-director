@@ -607,6 +607,18 @@ main {
   height: 256px;
   object-fit: cover;
 }
+/* Reference-labels tile (place names / boundaries / coastlines) composited
+ * over the imagery. Same footprint as the image; the SVG track overlay and
+ * caption append after it in source order so they stay on top. */
+.pass-thumbnail-labels {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 256px;
+  height: 256px;
+  object-fit: cover;
+  pointer-events: none;
+}
 .pass-thumbnail-overlay {
   position: absolute;
   top: 0;
@@ -1035,6 +1047,40 @@ main {
   font-weight: 600;
 }
 .sort-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Target filter ("All / Mine") — same pill as the sort toggle, sits beside
+ * it in the pane header. Lets an astronaut collapse the list to just their
+ * own targets when the shared set is burying them. */
+.filter-toggle {
+  display: inline-flex;
+  gap: 0.15rem;
+  margin-top: 0.5rem;
+  margin-left: 0.4rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem;
+}
+.filter-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  padding: 0.3rem 0.85rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  border-radius: 999px;
+  user-select: none;
+}
+.filter-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+.filter-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -1782,3 +1828,81 @@ main {
 }
 .modal-actions { display: flex; gap: 0.5rem; }
 .modal-actions .btn { flex: 1; }
+
+/* Help "?" floating button (bottom-right corner) + help modal.
+ * The corner is clear of the map controls (right edge, top-down) and the
+ * illumination legend (bottom-left), so the button never overlaps them. */
+.help-fab {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 90;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.help-fab:hover { background: var(--surface); }
+.help-fab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Sit above the iOS home-indicator / safe-area inset when present. */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .help-fab { bottom: calc(1rem + env(safe-area-inset-bottom)); }
+}
+
+/* Help modal: wider than the rating modal, with a scrollable body so the
+ * full feature list fits on a phone without pushing the close button off. */
+.modal.help-modal {
+  max-width: 460px;
+  max-height: 80vh;
+  gap: 0.6rem;
+}
+.help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.help-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  /* 44px min hit area (touch-target guideline) — matches .help-fab and the
+   * rating modal's star buttons. */
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+.help-close:hover { color: var(--text); background: var(--surface-2); }
+.help-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.help-body {
+  overflow-y: auto;
+  display: grid;
+  gap: 0.5rem;
+}
+.help-section-title {
+  margin: 0.5rem 0 0.1rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.help-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; }
+.help-item { display: flex; gap: 0.5rem; align-items: baseline; font-size: 0.85rem; line-height: 1.35; }
+.help-item-icon { flex: 0 0 1.6rem; text-align: center; }
+.help-item-text { flex: 1; color: var(--text); }
+.help-item-text strong { color: var(--text); }

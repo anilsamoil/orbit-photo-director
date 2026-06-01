@@ -2,6 +2,47 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.0.0] - 2026-06-01
+
+## **A "?" button that explains the whole app, a one-tap filter to just your targets, and every target you add now shows on the map.**
+
+New astronauts stop needing a walkthrough. Tap the "?" in the corner and the app explains itself: the five tabs, how to read a pass card, every map overlay, the photo-lookup tool. Queue, Upcoming, and the Map gained an All / Mine toggle, so when the shared target list buries yours, one tap collapses the view to just the targets you added. The map now draws every one of your personal targets as a ring the moment you save it, even before it has a pass, so "where are my targets" has an answer you can see. Pass thumbnails pick up place-name labels so you can tell what you are looking at instead of staring at unlabeled coastline. Josh joins as the fourth astronaut on the project.
+
+### The numbers that matter
+
+From the shipped diff and the test suites (`npx vitest run`, `pytest tests/`):
+
+| Metric | Before | After | Δ |
+|--------|--------|-------|---|
+| Frontend tests | 919 | 947 | +28 |
+| Astronaut profiles | 3 | 4 | +1 (josh) |
+| Finding your own targets | list only, often buried | All/Mine filter + always-on map pins | — |
+| Pass-thumbnail context | imagery only | imagery + place labels | — |
+
+Josh's 14 targets are live now at map.astroanil.dev/?u=josh.
+
+### What this means for you
+
+Hand the link to a new astronaut and they can figure it out without a call. When the shared targets push yours down the list, "Mine" pulls them back. And the map finally shows what you added the instant you add it, no waiting for a pass. Tap the "?" any time.
+
+### Itemized changes
+
+#### Added
+- "?" help button (bottom-right corner) opening an in-app guide to the five tabs, reading a pass card, the map overlays, and photo lookup.
+- "All / Mine" target filter on Queue, Upcoming, and the Map. Your choice persists across visits.
+- My-targets ring layer on the map: every personal target shows as a haloed ring whether or not it has a pass, sourced live from your saved targets.
+- Place-name and boundary labels composited over each pass-card satellite thumbnail.
+- Josh profile (fourth astronaut), seeded with 14 targets.
+
+#### Changed
+- Add-target and import confirmations now say the target appears after the next hourly update, so you know it saved and is on its way.
+- Daemon watchdog timeout settled at 900s, validated at four profiles (a normal tick runs about 4-6 minutes).
+
+#### Fixed
+- Upcoming empty-state now reads "36 hours" to match the actual window.
+- The my-targets map ring carries a dark casing so it stays visible over bright basemap regions.
+- The help-panel close button meets the 44px touch-target size on mobile.
+
 ## [1.6.24.0] - 2026-05-29
 
 ### v3.6 — Global dim for lights-only mode

@@ -41,6 +41,10 @@
             <button id="sort-time-queue" class="sort-btn active" type="button" data-order="time">Time</button>
             <button id="sort-score-queue" class="sort-btn" type="button" data-order="score">Score</button>
           </div>
+          <div class="filter-toggle" role="group" aria-label="Target filter">
+            <button id="filter-all-queue" class="filter-btn active" type="button" data-filter="all" title="Show all targets (shared + yours)">All</button>
+            <button id="filter-mine-queue" class="filter-btn" type="button" data-filter="mine" title="Show only your targets">Mine</button>
+          </div>
         </div>
         <div id="cards" class="cards" aria-live="polite"></div>
         <div id="empty" class="empty" hidden>No passes in the next 90 minutes.</div>
@@ -54,9 +58,13 @@
             <button id="sort-time-upcoming" class="sort-btn active" type="button" data-order="time">Time</button>
             <button id="sort-score-upcoming" class="sort-btn" type="button" data-order="score">Score</button>
           </div>
+          <div class="filter-toggle" role="group" aria-label="Target filter">
+            <button id="filter-all-upcoming" class="filter-btn active" type="button" data-filter="all" title="Show all targets (shared + yours)">All</button>
+            <button id="filter-mine-upcoming" class="filter-btn" type="button" data-filter="mine" title="Show only your targets">Mine</button>
+          </div>
         </div>
         <div id="upcoming-cards" class="cards" aria-live="polite"></div>
-        <div id="upcoming-empty" class="empty" hidden>No upcoming passes in the next 24 hours.</div>
+        <div id="upcoming-empty" class="empty" hidden>No upcoming passes in the next 36 hours.</div>
       </section>
 
       <section id="map-pane" class="pane">
@@ -161,6 +169,8 @@
     <footer id="status-banner" class="banner banner-loading" role="status" aria-live="polite">
       Loading…
     </footer>
+
+    <button id="help-fab" class="help-fab" type="button" aria-label="Help — how to use Orbit Photo Director" title="Help">?</button>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

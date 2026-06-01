@@ -32,8 +32,18 @@ import type { PassEntry, Track } from './types';
 import { liveIssPosition } from './iss';
 import { liveIssPositionSGP4 } from './iss-sgp4';
 
-/** Thumbnail tile zoom level. z=12 → ~9.5 km tile-width at equator;
- *  perfect for the operator's "what does my target look like" zoom. */
+/** Thumbnail tile zoom level. z=12 → ~9.5 km tile-width at equator.
+ *  NOTE: the thumbnail renders the single slippy tile that CONTAINS the
+ *  target, but the overlay draws the target marker at the canvas center —
+ *  so the target can sit off-center by up to ~half a tile. At z=12 that's
+ *  ~9.5 km (accepted since v1). Do NOT widen this zoom to add context
+ *  without ALSO centering the tile composition on the target: a wider tile
+ *  multiplies the off-center error and lets the reference-labels overlay
+ *  confidently name a feature tens of km from the real target. The labels
+ *  overlay below names whatever is in this tight, target-adjacent frame —
+ *  the safe identifiability win. A properly target-centered wider view
+ *  (2×2 grid offset so the target is the canvas center) is the follow-up
+ *  that would let us zoom out for open-ocean targets without lying. */
 export const THUMBNAIL_ZOOM = 12;
 
 /** Base pixel size of the thumbnail (before devicePixelRatio scaling).
@@ -52,6 +62,14 @@ export const PASS_SAMPLE_STEP_SECONDS = 30;
  *  Same source as the main Map tab's clouds-off basemap (visual consistency). */
 export function esriImageryTileUrl(z: number, x: number, y: number): string {
   return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+}
+
+/** Build the Esri reference-labels tile URL (place names + boundaries +
+ *  coastlines) for a (z, x, y) triple. Same source as the main Map tab's
+ *  🏷️ labels overlay. Composited as a transparent layer over the imagery
+ *  tile so the operator can name what they're looking at. */
+export function esriReferenceTileUrl(z: number, x: number, y: number): string {
+  return `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`;
 }
 
 /** Convert (lon, lat) → fractional (x, y) tile coordinates at zoom z.
@@ -214,6 +232,22 @@ export function renderPassThumbnail(
   img.src = esriImageryTileUrl(THUMBNAIL_ZOOM, tileX, tileY);
 
   wrap.appendChild(img);
+
+  // Reference-labels overlay: place names, boundaries, and coastlines from
+  // the same Esri service the Map tab's 🏷️ toggle uses. Transparent PNG
+  // composited over the imagery so the operator can identify the site by
+  // its surroundings ("that's the lake north of the city") instead of
+  // staring at unlabelled terrain. Decorative + best-effort: if it fails to
+  // load we just leave it out (no placeholder), the imagery still stands.
+  const labels = document.createElement('img');
+  labels.className = 'pass-thumbnail-labels';
+  labels.width = THUMBNAIL_PIXEL_SIZE;
+  labels.height = THUMBNAIL_PIXEL_SIZE;
+  labels.alt = '';
+  labels.loading = 'lazy';
+  labels.addEventListener('error', () => { labels.remove(); });
+  labels.src = esriReferenceTileUrl(THUMBNAIL_ZOOM, tileX, tileY);
+  wrap.appendChild(labels);
 
   // Overlay SVG: ISS polyline + marker + nadir-distance label. Position
   // absolute over the image. Sized to the same logical pixels.

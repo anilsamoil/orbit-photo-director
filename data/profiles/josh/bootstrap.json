@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "profile": "josh",
+  "targets": [
+    {
+      "id": "personal:josh:48448b6cbaab",
+      "name": "Farm",
+      "lat": 53.58662,
+      "lon": -111.37908,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:eec567ca0665",
+      "name": "RMC",
+      "lat": 44.22974,
+      "lon": -76.4681,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:9bcbb6cf6634",
+      "name": "Kilimanjaro",
+      "lat": -3.06495,
+      "lon": 37.35767,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:62c10e884a08",
+      "name": "Aconcagua",
+      "lat": -32.65315,
+      "lon": -70.01086,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:9ef3b6647081",
+      "name": "Denali",
+      "lat": 63.06917,
+      "lon": -151.00698,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:773f0cb9efb0",
+      "name": "Elephant Island",
+      "lat": -61.13388,
+      "lon": -55.19664,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:415884a84c30",
+      "name": "Ottawa",
+      "lat": 45.41721,
+      "lon": -75.69944,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:924b0f7714e0",
+      "name": "Bagotville",
+      "lat": 48.33492,
+      "lon": -70.99207,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:39a2c289d9f8",
+      "name": "Cold Lake",
+      "lat": 54.40725,
+      "lon": -110.27874,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:9f7e3d35e815",
+      "name": "Trapani Airfield",
+      "lat": 37.91327,
+      "lon": 12.48444,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:34092c409433",
+      "name": "Goose Bay",
+      "lat": 53.31825,
+      "lon": -60.40875,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:d5e2cbd7fdd9",
+      "name": "Mistastin",
+      "lat": 55.88988,
+      "lon": -63.31817,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:2c000b83d618",
+      "name": "Nassau Bay",
+      "lat": 29.5398,
+      "lon": -95.08529,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    },
+    {
+      "id": "personal:josh:13d1cbb8c55e",
+      "name": "CSA HQ",
+      "lat": 45.52001,
+      "lon": -73.39352,
+      "priority": 5,
+      "createdAt": "2026-06-01T00:00:00Z",
+      "_v2_rating": "unshot",
+      "_v2_notes": null
+    }
+  ],
+  "skipped": []
+}

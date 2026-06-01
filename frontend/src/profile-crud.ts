@@ -610,7 +610,10 @@ async function handleAdd(profileName: string, target: PersonalTarget): Promise<'
 
   const apiResult = await postProfileTarget(profileName, target);
   if (apiResult.ok) {
-    showToast(`Added target "${target.name}"`, 'success');
+    showToast(
+      `Added "${target.name}" — appears on the map & queue after the next hourly update`,
+      'success',
+    );
     return 'ok';
   }
   // Rollback: restore the pre-mutation profile + re-render. The toast
@@ -1455,7 +1458,10 @@ async function handleCsvImport(profileName: string, valid: ParsedValidRow[]): Pr
   }
 
   if (failedIds.length === 0) {
-    showToast(`Imported ${okCount} target${okCount === 1 ? '' : 's'}.`, 'success');
+    showToast(
+      `Imported ${okCount} target${okCount === 1 ? '' : 's'} — they appear on the map & queue after the next hourly update.`,
+      'success',
+    );
     return;
   }
 
