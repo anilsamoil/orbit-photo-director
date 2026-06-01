@@ -66,16 +66,12 @@ body {
  *
  * The flex-wrap: wrap on .topbar above gives us a graceful fallback
  * even at unanticipated widths: if anything still doesn't fit, the
- * tabs row drops to a second line rather than overlapping. */
-@media (max-width: 500px) {
-  .iss-now .iss-region { display: none; }
-  .topbar { padding: 0.6rem 0.7rem; }
-}
-@media (max-width: 430px) {
-  .brand-name { display: none; }
-  .tab { padding: 0.4rem 0.6rem; }
-  .topbar { gap: 0.35rem; }
-}
+ * tabs row drops to a second line rather than overlapping.
+ *
+ * The actual @media rules live AFTER the .tabs/.tab base rules below.
+ * A same-specificity rule placed BEFORE the base it overrides is dead on
+ * source order — that bug (media block here, base .tab 150 lines later) is
+ * why the tab row overflowed on iPhone despite the "shrink" rule existing. */
 
 .brand {
   display: flex;
@@ -241,6 +237,22 @@ body {
   background: var(--accent);
   color: var(--bg);
   font-weight: 600;
+}
+
+/* Responsive topbar — placed AFTER the base .topbar/.tabs/.tab rules so the
+ * overrides win on source order (see the note above the .topbar rule). */
+@media (max-width: 500px) {
+  .iss-now .iss-region { display: none; }
+  .topbar { padding: 0.6rem 0.7rem; }
+}
+@media (max-width: 430px) {
+  .brand-name { display: none; }
+  /* 5 tabs (Queue/Upcoming/Map/Profile/Log) fit one line at iPhone widths.
+   * Tighten horizontal padding + font; keep vertical padding for the tap
+   * target. */
+  .tab { padding: 0.5rem 0.4rem; font-size: 0.82rem; }
+  .tabs { gap: 0.12rem; }
+  .topbar { gap: 0.35rem; }
 }
 
 main {
@@ -602,6 +614,10 @@ main {
 .pass-thumbnail {
   position: relative;
   display: inline-block;
+  /* Explicit size: the tile layer is now absolutely-positioned (centered on
+   * the target), so there's no in-flow child to size the box. */
+  width: 256px;
+  height: 256px;
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface-2);
@@ -857,6 +873,19 @@ main {
  * narrow viewports. */
 .map-controls.map-controls-bearing {
   top: 170px;
+}
+
+/* All/Mine filter on the Map (top-left, clear of the right-edge control
+ * stack and the bottom-left legend). Honors the same global pref as the
+ * Queue/Upcoming toggles. Pill look matches the .filter-toggle in the lists. */
+.map-controls.map-controls-filter {
+  top: 80px;          /* clear the topbar, same as .map-controls-time */
+  left: 1rem;
+  right: auto;
+  gap: 0.15rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
 }
 
 /* Cloud-overlay toggle sits below the bearing toggle on the same right
