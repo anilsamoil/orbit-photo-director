@@ -727,6 +727,10 @@ function bindFilterToggles(): void {
       setTargetFilter(filter);
       syncActiveState(filter);
       renderQueue();
+      // If the map is loaded, refresh its score-dots so toggling from the
+      // Map tab's own All/Mine control updates the dots immediately (the
+      // pref is global; the Queue/Upcoming toggles drive this too).
+      if (mapModule) void mapModule.applyDistanceThreshold();
     });
   });
 }

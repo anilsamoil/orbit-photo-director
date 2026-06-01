@@ -73,6 +73,10 @@
 
       <section id="map-pane" class="pane">
         <div id="map" class="map"></div>
+        <div class="map-controls map-controls-filter" role="group" aria-label="Target filter">
+          <button id="filter-all-map" class="filter-btn active" type="button" data-filter="all" title="Show all targets (shared + yours)">All</button>
+          <button id="filter-mine-map" class="filter-btn" type="button" data-filter="mine" title="Show only your targets">Mine</button>
+        </div>
         <div class="map-controls map-controls-time">
           <button id="time-back-90" class="time-btn time-step-btn" type="button" data-step="-90" title="Step back 90 minutes (one orbit)">
             <span class="time-step-label">&larr; T-90</span>
