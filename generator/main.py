@@ -1213,6 +1213,21 @@ def _run_profile_multiplex(
         removed_curated_ids=profile_data["removed_curated_ids"],
     )
 
+    # Top up the (curated-seeded) forecast sampler with this profile's coords
+    # so personal targets get real GFS forecast cloud in Upcoming instead of
+    # the cf=50 "gfs-forecast-no-data" placeholder. add_targets only fetches
+    # 0.25° grid cells not already cached, so curated coords are skipped —
+    # the cost is one batched call per profile for genuinely new personal
+    # cells. Without this, personal-target Upcoming scores run on a flat 50%
+    # cloud guess, silently mis-ranking exactly the targets the operator added.
+    if forecast_sampler is not None:
+        try:
+            forecast_sampler.add_targets(
+                [(t["geom"]["lat"], t["geom"]["lon"]) for t in profile_target_list]
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("forecast add_targets failed for %s (%s)", profile_name, exc)
+
     # Compute ground-target passes for the per-profile target list. We
     # iterate ALL targets here (not just personal): curated targets'
     # scores are deterministic given (target, TLE, sampler, n), so they

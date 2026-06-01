@@ -2,6 +2,18 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.2.0] - 2026-06-01
+
+## **The help panel scrolls now, and your own targets get real cloud forecasts.**
+
+Two fixes. The "?" help panel was running off the bottom of the screen with no way to reach the lower sections; it now scrolls inside a fixed-height card. And your personal targets were being scored in the next-36h view against a flat 50% cloud guess instead of the real forecast, which quietly mis-ranked them; they now pull the same GFS forecast cloud the shared targets do.
+
+### Itemized changes
+
+#### Fixed
+- The "?" help panel scrolls instead of overflowing off-screen on shorter windows, so every section (map overlays, photo lookup) is reachable.
+- Personal/profile targets now get real GFS forecast cloud in the Upcoming view instead of the cf=50 "no-data" placeholder. The forecast sampler is topped up with each profile's coordinates before scoring, so your targets are ranked on the same forecast quality as the shared set.
+
 ## [1.7.1.0] - 2026-06-01
 
 ## **Your targets ring the map the moment you open it, no Profile-tab detour.**
