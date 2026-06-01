@@ -19,6 +19,14 @@
   box-sizing: border-box;
 }
 
+/* Form controls don't inherit font-family by default — without this they
+ * fall back to the UA default (Arial), breaking the app's type consistency
+ * (seen on .lookup-btn / .satellite-picker-input). Class-scoped overrides
+ * like .token-input's monospace still win on specificity. */
+button, input, select, textarea {
+  font-family: inherit;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -1058,12 +1066,24 @@ main {
   display: inline-flex;
   gap: 0.15rem;
   margin-top: 0.5rem;
-  margin-left: 0.4rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.15rem;
 }
+/* "Sort" / "Show" labels distinguish the two adjacent pill groups so the
+ * filter toggle isn't mistaken for more sort options. */
+.toggle-label {
+  display: inline-block;
+  vertical-align: middle;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin: 0.5rem 0.35rem 0 0;
+}
+.toggle-label-show { margin-left: 0.7rem; }   /* separate the Sort group from the Show group */
+.sort-toggle, .filter-toggle { vertical-align: middle; }
 .filter-btn {
   background: transparent;
   border: 0;

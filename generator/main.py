@@ -751,6 +751,10 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # is still the final fallback if both real samplers fail.
     lightning_sampler_obj = None
     hurricane_tracker_obj = None
+    # Function-scoped so the per-profile multiplex can top it up with personal
+    # coords (same fix as the cloud forecast_sampler). None when weather is
+    # disabled or CAPE init fails.
+    cape_sampler_obj: Any = None
     if settings.enable_weather:
         from .lightning import (
             CombinedLightningSampler,
@@ -762,7 +766,6 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         # Build a GFS sampler that includes CAPE alongside cloud_cover.
         # Same Open-Meteo endpoint as the existing GFSForecastSampler —
         # zero extra HTTP calls.
-        cape_sampler_obj: Any = None
         if targets:
             try:
                 # GFSForecastSampler is already imported at module scope (line 34).
@@ -996,6 +999,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                     fresh=fresh,
                     sampler=sampler,
                     forecast_sampler=forecast_sampler,
+                    cape_sampler_obj=cape_sampler_obj,
                     composite_hour=composite_hour,
                     lightning_sampler_obj=lightning_sampler_obj,
                     hurricane_tracker_obj=hurricane_tracker_obj,
@@ -1183,6 +1187,7 @@ def _run_profile_multiplex(
     fresh: float,
     sampler: CloudSampler,
     forecast_sampler: Any,
+    cape_sampler_obj: Any = None,
     composite_hour: datetime,
     lightning_sampler_obj: Any,
     hurricane_tracker_obj: Any,
@@ -1213,20 +1218,21 @@ def _run_profile_multiplex(
         removed_curated_ids=profile_data["removed_curated_ids"],
     )
 
-    # Top up the (curated-seeded) forecast sampler with this profile's coords
-    # so personal targets get real GFS forecast cloud in Upcoming instead of
-    # the cf=50 "gfs-forecast-no-data" placeholder. add_targets only fetches
-    # 0.25° grid cells not already cached, so curated coords are skipped —
-    # the cost is one batched call per profile for genuinely new personal
-    # cells. Without this, personal-target Upcoming scores run on a flat 50%
-    # cloud guess, silently mis-ranking exactly the targets the operator added.
-    if forecast_sampler is not None:
-        try:
-            forecast_sampler.add_targets(
-                [(t["geom"]["lat"], t["geom"]["lon"]) for t in profile_target_list]
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("forecast add_targets failed for %s (%s)", profile_name, exc)
+    # Top up the (curated-seeded) forecast + CAPE samplers with this profile's
+    # coords so personal targets get real GFS forecast cloud (and forecast-CAPE
+    # lightning) in Upcoming instead of the cf=50 "gfs-forecast-no-data"
+    # placeholder. add_targets only fetches 0.25° grid cells not already cached,
+    # so curated coords are skipped — the cost is one batched call per profile
+    # for genuinely new personal cells. Without this, personal-target Upcoming
+    # scores run on a flat 50% cloud guess, silently mis-ranking exactly the
+    # targets the operator added.
+    profile_coords = [(t["geom"]["lat"], t["geom"]["lon"]) for t in profile_target_list]
+    for label, smp in (("forecast", forecast_sampler), ("cape", cape_sampler_obj)):
+        if smp is not None:
+            try:
+                smp.add_targets(profile_coords)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("%s add_targets failed for %s (%s)", label, profile_name, exc)
 
     # Compute ground-target passes for the per-profile target list. We
     # iterate ALL targets here (not just personal): curated targets'

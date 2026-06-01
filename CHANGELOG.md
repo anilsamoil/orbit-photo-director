@@ -2,6 +2,21 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.3.0] - 2026-06-01
+
+## **Forecast lightning for your own targets, and the Sort/Show controls finally say what they do.**
+
+The personal-target forecast fix from v1.7.2.0 covered cloud; this extends it to lightning (forecast-CAPE), so your targets get the full forecast treatment the shared set does. And the two pill rows above the queue — one sorts, one filters — were unlabeled and easy to confuse; they now read SORT and SHOW.
+
+### Itemized changes
+
+#### Fixed
+- Personal/profile targets now get real forecast-CAPE lightning in Upcoming (the lightning sampler had the same curated-only seeding the cloud sampler did; both are now topped up per profile).
+
+#### Changed
+- The Sort (Time/Score) and Show (All/Mine) toggles above the Queue and Upcoming lists are now labeled, so the filter isn't mistaken for more sort options.
+- Form controls (photo-lookup buttons, the satellite search box) use the app's typeface instead of falling back to the browser default.
+
 ## [1.7.2.0] - 2026-06-01
 
 ## **The help panel scrolls now, and your own targets get real cloud forecasts.**
