@@ -56,6 +56,18 @@ export interface PassEntry {
    *  operator knows which window/side to point the camera. Added v1.2.6.0;
    *  older manifests will omit it. */
   iss_relative_bearing_deg?: number;
+  /** Initial-encounter geometry — when the target first becomes frameable
+   *  (off-nadir ≤45°, scanning back from closest approach) and the look
+   *  angle/side at that moment. The look angle sweeps fore→nadir→aft across a
+   *  pass, so these differ from the closest-approach values and tell the
+   *  operator where the target first appears. Added v1.7.5.0 (Jack feedback
+   *  2026-06-02). Absent for grazing/distant passes that never get frameable,
+   *  and for older manifests — every render path must tolerate absent. */
+  encounter?: {
+    time: string;            // ISO 8601 Z — initial-encounter moment
+    off_nadir_deg: number;   // off-nadir angle at encounter (≤45°)
+    rel_bearing_deg: number; // 0=fore, 90=starboard, 180=aft, 270=port
+  } | null;                  // generator serializes explicit null when absent
   /** Lightning probability at the pass target_lat/lon at closest_approach.
    *  Range [0.0, 1.0]. Added v1.3.1 (weather v1.3). v1.3.1 ships a
    *  placeholder sampler that returns 0.0 for every query — real GLM /

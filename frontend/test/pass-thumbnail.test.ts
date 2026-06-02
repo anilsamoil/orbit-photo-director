@@ -7,11 +7,13 @@ import {
   THUMBNAIL_ZOOM,
   esriImageryTileUrl,
   esriReferenceTileUrl,
+  formatLookSide,
   formatThumbnailCountdown,
   lonLatToTileXY,
   projectSampleToThumbnail,
   renderPassThumbnail,
   sampleIssTrackForPass,
+  thumbnailWindowLabel,
 } from '../src/pass-thumbnail';
 import { _resetSatrecCacheForTests } from '../src/iss-sgp4';
 import type { PassEntry, Track } from '../src/types';
@@ -175,6 +177,53 @@ describe('formatThumbnailCountdown', () => {
   });
 });
 
+describe('formatLookSide (15° fore/aft band, matching card.ts CARDINAL_THRESHOLD)', () => {
+  it('maps the clear starboard half to R', () => {
+    expect(formatLookSide(90)).toBe('R');
+    expect(formatLookSide(45)).toBe('R');
+    expect(formatLookSide(160)).toBe('R');   // 20° shy of aft → still a right look
+  });
+  it('maps the clear port half to L', () => {
+    expect(formatLookSide(270)).toBe('L');
+    expect(formatLookSide(225)).toBe('L');
+    expect(formatLookSide(200)).toBe('L');   // 20° past aft → still a left look
+  });
+  it('names fore within 15° of straight ahead (so "R" never misleads near the nose)', () => {
+    expect(formatLookSide(0)).toBe('fore');
+    expect(formatLookSide(360)).toBe('fore');
+    expect(formatLookSide(10)).toBe('fore');
+    expect(formatLookSide(350)).toBe('fore');
+    expect(formatLookSide(15)).toBe('fore');   // inclusive cutoff, matches card.ts
+    expect(formatLookSide(345)).toBe('fore');  // inclusive cutoff
+  });
+  it('names aft within 15° of straight behind', () => {
+    expect(formatLookSide(180)).toBe('aft');
+    expect(formatLookSide(170)).toBe('aft');
+    expect(formatLookSide(190)).toBe('aft');
+    expect(formatLookSide(165)).toBe('aft');   // inclusive cutoff
+    expect(formatLookSide(195)).toBe('aft');   // inclusive cutoff
+  });
+  it('switches to a side just outside the 15° band', () => {
+    expect(formatLookSide(16)).toBe('R');
+    expect(formatLookSide(344)).toBe('L');
+  });
+  it('normalizes out-of-range bearings', () => {
+    expect(formatLookSide(450)).toBe('R');   // 450 → 90
+    expect(formatLookSide(-90)).toBe('L');    // -90 → 270
+  });
+});
+
+describe('thumbnailWindowLabel', () => {
+  it('picks WORF below 30° off-nadir (Destiny nadir window)', () => {
+    expect(thumbnailWindowLabel(0)).toBe('WORF');
+    expect(thumbnailWindowLabel(29.9)).toBe('WORF');
+  });
+  it('picks Cupola at/above 30° off-nadir (oblique)', () => {
+    expect(thumbnailWindowLabel(30)).toBe('Cupola');
+    expect(thumbnailWindowLabel(60)).toBe('Cupola');
+  });
+});
+
 describe('renderPassThumbnail (DOM scaffold)', () => {
   const samplePass: PassEntry = {
     target_id: 'personal:anil:abc',
@@ -244,13 +293,88 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(attr!.textContent).toContain('Earthstar Geographics');
   });
 
-  it('renders the caption with nadir-distance + angle-off-nadir + countdown', () => {
+  it('renders a CLOSEST row + nadir/window context line', () => {
     const el = renderPassThumbnail(samplePass, null, NOW);
     const cap = el.querySelector('.pass-thumbnail-caption');
     expect(cap).not.toBeNull();
-    expect(cap!.textContent).toContain('87 km nadir');
-    expect(cap!.textContent).toContain('22° off');
+    // CLOSEST row: countdown + off-nadir angle.
+    expect(cap!.textContent).toContain('CLOSEST');
     expect(cap!.textContent).toContain('in 30 min');
+    expect(cap!.textContent).toContain('22°');
+    // Context line: nadir distance + WORF (22° < 30° → Destiny nadir window).
+    const ctx = el.querySelector('.pass-thumbnail-caption-context');
+    expect(ctx).not.toBeNull();
+    expect(ctx!.textContent).toContain('87 km nadir');
+    expect(ctx!.textContent).toContain('WORF');
+  });
+
+  it('renders an ENCOUNTER row with look side when encounter is present', () => {
+    // rel_bearing 90 = starboard → "R"; off-nadir 41° at the encounter moment.
+    const withEnc: PassEntry = {
+      ...samplePass,
+      encounter: {
+        time: '2024-10-17T12:27:00Z',  // 3 min before closest → "in 27 min" @ NOW
+        off_nadir_deg: 41,
+        rel_bearing_deg: 90,
+      },
+    };
+    const el = renderPassThumbnail(withEnc, null, NOW);
+    const rows = [...el.querySelectorAll('.pass-thumbnail-caption-row')];
+    const labels = rows.map((r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent);
+    expect(labels).toContain('ENCOUNTER');
+    expect(labels).toContain('CLOSEST');
+    const encRow = rows.find(
+      (r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent === 'ENCOUNTER',
+    )!;
+    expect(encRow.querySelector('.pass-thumbnail-caption-value')!.textContent).toContain('in 27 min');
+    expect(encRow.querySelector('.pass-thumbnail-caption-value')!.textContent).toContain('41° R');
+  });
+
+  it('omits the ENCOUNTER row when encounter is absent (grazing pass / old manifest)', () => {
+    const el = renderPassThumbnail(samplePass, null, NOW);  // no encounter field
+    const labels = [...el.querySelectorAll('.pass-thumbnail-caption-label')]
+      .map((l) => l.textContent);
+    expect(labels).not.toContain('ENCOUNTER');
+    expect(labels).toContain('CLOSEST');  // closest-only render, no error
+  });
+
+  it('renders the angle with no R/L side when rel_bearing is absent', () => {
+    // samplePass has angle_off_nadir_deg=22 but no iss_relative_bearing_deg —
+    // a realistic manifest shape. The CLOSEST value shows the angle, no side.
+    const el = renderPassThumbnail(samplePass, null, NOW);
+    const closestRow = [...el.querySelectorAll('.pass-thumbnail-caption-row')]
+      .find((r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent === 'CLOSEST')!;
+    const val = closestRow.querySelector('.pass-thumbnail-caption-value')!.textContent!;
+    expect(val).toContain('22°');
+    expect(val).not.toMatch(/[RL]/);  // no side letter when bearing is missing
+  });
+
+  it('omits the ENCOUNTER row when encounter.time is unparseable (defensive)', () => {
+    const badEnc: PassEntry = {
+      ...samplePass,
+      encounter: { time: 'not-a-date', off_nadir_deg: 40, rel_bearing_deg: 90 },
+    };
+    const el = renderPassThumbnail(badEnc, null, NOW);
+    const labels = [...el.querySelectorAll('.pass-thumbnail-caption-label')]
+      .map((l) => l.textContent);
+    expect(labels).not.toContain('ENCOUNTER');  // unparseable time → skipped, no crash
+    expect(labels).toContain('CLOSEST');
+  });
+
+  it('drops a row whose value is fully empty (unparseable closest + no angle)', () => {
+    // closest_approach unparseable → countdown ''; angle NaN → no angle part →
+    // rowValue '' → addRow skips it. No CLOSEST row, no context line, no crash.
+    const empty: PassEntry = {
+      ...samplePass,
+      closest_approach: 'garbage',
+      angle_off_nadir_deg: NaN,
+      nadir_distance_km: NaN,
+    };
+    const el = renderPassThumbnail(empty, null, NOW);
+    expect(el.querySelector('.pass-thumbnail-caption-row')).toBeNull();
+    expect(el.querySelector('.pass-thumbnail-caption-context')).toBeNull();
+    // The thumbnail itself still renders (caption just has no rows).
+    expect(el.className).toBe('pass-thumbnail');
   });
 
   it('uses textContent for the caption (XSS discipline)', () => {

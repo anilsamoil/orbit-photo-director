@@ -115,6 +115,29 @@ def freshness_factor(age_hours: float) -> float:
     return max(0.5, 1.0 - decay)
 
 
+# Off-nadir angle (deg) at/under which a target is "realistically frameable"
+# — the photographic horizon for the initial-encounter scan. ≤45° keeps the
+# target inside a usable oblique framing; past it the look is too grazing to
+# compose. Tunable. (Jack feedback 2026-06-02: "time of initial encounter".)
+ENCOUNTER_MAX_OFF_NADIR_DEG = 45.0
+
+
+@dataclass(frozen=True)
+class Encounter:
+    """Initial-encounter geometry for a pass — the first moment (scanning back
+    from closest approach) the target crosses inside ENCOUNTER_MAX_OFF_NADIR_DEG,
+    i.e. when the operator could first realistically frame the shot. Distinct
+    from closest approach: the look angle sweeps fore → nadir → aft across a
+    pass, so the encounter look angle/side differ from the closest one and tell
+    the operator where the target will first appear."""
+
+    time: datetime
+    off_nadir_deg: float
+    # Same convention as Pass.iss_relative_bearing_deg: clockwise from forward,
+    # 0 = ahead, 90 = starboard, 180 = aft, 270 = port.
+    rel_bearing_deg: float
+
+
 @dataclass(frozen=True)
 class Pass:
     target_id: str
@@ -130,6 +153,11 @@ class Pass:
     # is available; None when find_passes is called outside that path
     # (some legacy tests pass synthetic data).
     iss_relative_bearing_deg: float | None = None
+    # Initial-encounter geometry (off-nadir ≤45° scan-back from closest
+    # approach). None when the pass never gets frameable (closest approach
+    # itself > 45° off-nadir — a distant/grazing pass) or when find_passes
+    # is called outside the heading-sample path. See Encounter.
+    encounter: Encounter | None = None
 
 
 def great_circle_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -190,6 +218,87 @@ def angle_off_nadir_deg(ground_distance_km: float, altitude_km: float) -> float:
     return math.degrees(alpha)
 
 
+def _relative_bearing_at(
+    samples: list[tuple[datetime, Position, float]],
+    idx: int,
+    lat_t: float,
+    lon_t: float,
+) -> float:
+    """ISS-relative target bearing at sample `idx`, reusing the heading from
+    `idx` → `idx+1` (one step ahead). Caller guarantees `idx + 1` is in range
+    (encounter index is always ≤ the closest-approach index, which is < last)."""
+    iss_here = samples[idx][1]
+    iss_next = samples[idx + 1][1]
+    heading = great_circle_bearing_deg(
+        iss_here.lat, iss_here.lon, iss_next.lat, iss_next.lon,
+    )
+    target_bearing = great_circle_bearing_deg(
+        iss_here.lat, iss_here.lon, lat_t, lon_t,
+    )
+    return relative_bearing_deg(heading, target_bearing)
+
+
+def _find_encounter(
+    samples: list[tuple[datetime, Position, float]],
+    closest_idx: int,
+    lat_t: float,
+    lon_t: float,
+    max_off_nadir_deg: float = ENCOUNTER_MAX_OFF_NADIR_DEG,
+) -> Encounter | None:
+    """Initial encounter for the pass whose closest approach is at
+    `closest_idx`: scan back to the sample where the target crossed INTO the
+    `max_off_nadir_deg` frameable cone. Returns None when:
+      - closest approach itself is already past the threshold (never frameable);
+      - the target only becomes frameable at closest approach (no earlier moment);
+      - the crossing is never observed — the target was already framed when the
+        window opened, or stayed framed across a previous approach. We do NOT
+        fabricate a boundary time when the true crossing predates our samples.
+
+    The scan stops at the off-nadir crossing OR at a local distance maximum
+    (where earlier samples belong to a separate approach), whichever comes
+    first. Only an *observed* crossing yields an encounter."""
+    iss_c = samples[closest_idx][1]
+    if angle_off_nadir_deg(samples[closest_idx][2], iss_c.alt_km) > max_off_nadir_deg:
+        return None  # never realistically frameable
+
+    enc_idx = closest_idx
+    saw_crossing = False
+    j = closest_idx - 1
+    while j >= 0:
+        iss_j = samples[j][1]
+        d_j = samples[j][2]
+        # Stop if ground distance stops increasing as we scan back. Within one
+        # close approach, distance rises monotonically away from the local
+        # minimum; the moment it stops rising we've reached a local maximum and
+        # the earlier samples belong to a *separate* approach. Guards against
+        # attaching a previous pass's time to THIS pass (a silent wrong-result),
+        # insurance for a retuned threshold or the multi-satellite roadmap.
+        if d_j <= samples[j + 1][2]:
+            break
+        if angle_off_nadir_deg(d_j, iss_j.alt_km) > max_off_nadir_deg:
+            # Observed the target crossing INTO the frameable cone — enc_idx
+            # (the next sample inward) is the genuine initial encounter.
+            saw_crossing = True
+            break
+        enc_idx = j
+        j -= 1
+
+    if not saw_crossing or enc_idx == closest_idx:
+        # No observed crossing → the target was already frameable when the
+        # window opened (scan reached the edge / a local max without seeing
+        # off-nadir exceed the threshold), or it only becomes frameable at
+        # closest itself. Either way there's no honest *earlier* encounter time
+        # to report — render closest-only rather than fabricate one.
+        return None
+
+    iss_e = samples[enc_idx][1]
+    return Encounter(
+        time=samples[enc_idx][0],
+        off_nadir_deg=angle_off_nadir_deg(samples[enc_idx][2], iss_e.alt_km),
+        rel_bearing_deg=_relative_bearing_at(samples, enc_idx, lat_t, lon_t),
+    )
+
+
 def find_passes(
     tle: TLE,
     target: dict[str, Any],
@@ -227,14 +336,10 @@ def find_passes(
             # in 30s, far above noise). The relative bearing tells the
             # operator which way to look (forward/starboard/aft/port).
             iss_here = samples[i][1]
-            iss_next = samples[i + 1][1]
-            heading = great_circle_bearing_deg(
-                iss_here.lat, iss_here.lon, iss_next.lat, iss_next.lon,
-            )
-            target_bearing = great_circle_bearing_deg(
-                iss_here.lat, iss_here.lon, lat_t, lon_t,
-            )
-            rel = relative_bearing_deg(heading, target_bearing)
+            rel = _relative_bearing_at(samples, i, lat_t, lon_t)
+            # Initial-encounter geometry: scan back to where the target first
+            # crossed inside the frameable off-nadir threshold (Jack 2026-06-02).
+            encounter = _find_encounter(samples, i, lat_t, lon_t)
             passes.append(
                 Pass(
                     target_id=target_id,
@@ -244,6 +349,7 @@ def find_passes(
                     nadir_distance_km=curr_d,
                     iss_position=iss_here,
                     iss_relative_bearing_deg=rel,
+                    encounter=encounter,
                 )
             )
     return passes
