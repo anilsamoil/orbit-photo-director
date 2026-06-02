@@ -222,6 +222,42 @@ def test_score_pass_for_target_handles_glint_path(sample_tle: TLE) -> None:
     assert result["pass_regime"] in ("day", "night", "terminator")
     assert result["closest_approach"].endswith("Z")
     assert result["nadir_distance_km"] == 100.0
+    # No encounter on this directly-constructed Pass → serialized as None.
+    assert result["encounter"] is None
+
+
+def test_score_pass_for_target_serializes_encounter(sample_tle: TLE) -> None:
+    """A Pass carrying an Encounter serializes a rounded encounter object
+    (Jack 2026-06-02); absent encounter serializes None."""
+    from generator.cloud import MockCloudSampler
+    from generator.orbit import Encounter
+
+    when = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    enc_time = when - timedelta(minutes=3)
+    target = {
+        "id": "test",
+        "name": "Test",
+        "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+        "priority": 4,
+        "regime": "any",
+    }
+    pass_obj = Pass(
+        target_id="test",
+        target_lat=0.0,
+        target_lon=0.0,
+        closest_approach=when,
+        nadir_distance_km=100.0,
+        iss_position=Position(lat=0.5, lon=0.5, alt_km=410, when=when),
+        iss_relative_bearing_deg=92.0,
+        encounter=Encounter(time=enc_time, off_nadir_deg=41.234, rel_bearing_deg=33.567),
+    )
+    sampler = MockCloudSampler(default_cf=10.0)
+    result = score_pass_for_target(target, pass_obj, sampler, tle_freshness=1.0)
+    enc = result["encounter"]
+    assert enc is not None
+    assert enc["time"].endswith("Z")
+    assert enc["off_nadir_deg"] == 41.2   # rounded to 1 dp
+    assert enc["rel_bearing_deg"] == 33.6  # rounded to 1 dp
 
 
 def test_run_tick_skips_targets_with_no_passes(

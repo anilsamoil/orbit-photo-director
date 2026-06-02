@@ -8,9 +8,13 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from generator.orbit import (
+    ENCOUNTER_MAX_OFF_NADIR_DEG,
     TLE,
+    Encounter,
     Pass,
     Position,
+    _find_encounter,
+    _relative_bearing_at,
     angle_off_nadir_deg,
     detect_reboost,
     find_passes,
@@ -559,3 +563,144 @@ def test_pass_dataclass_relative_bearing_defaults_none() -> None:
                               when=datetime(2024, 10, 17, 12, 0, tzinfo=UTC)),
     )
     assert p.iss_relative_bearing_deg is None
+    assert p.encounter is None  # encounter also defaults None for direct construction
+
+
+# --------------------------------------------------------------------------
+# Initial-encounter scan (_find_encounter / find_passes encounter field)
+# Jack feedback 2026-06-02. 45° off-nadir boundary ≈ 420 km ground distance
+# at 408 km altitude (400 km → 43.5°, 450 km → 46.7°).
+# --------------------------------------------------------------------------
+
+
+def _enc_samples(
+    distances_km: list[float],
+    *,
+    alt_km: float = 408.0,
+    step_s: int = 30,
+) -> list[tuple[datetime, Position, float]]:
+    """Build a synthetic (time, Position, ground_distance) sample list. The ISS
+    walks east along the equator (so headings are well-defined); only the
+    ground distances drive the off-nadir scan, so they're set directly."""
+    base = datetime(2024, 10, 17, 12, 0, tzinfo=UTC)
+    out: list[tuple[datetime, Position, float]] = []
+    for k, d in enumerate(distances_km):
+        when = base + timedelta(seconds=step_s * k)
+        out.append((when, Position(lat=0.0, lon=0.1 * k, alt_km=alt_km, when=when), d))
+    return out
+
+
+def test_find_encounter_precedes_closest_and_within_threshold() -> None:
+    """Encounter is the earliest contiguous sample still within 45° off-nadir,
+    so it precedes closest approach and the sample just before it exceeds 45°."""
+    # idx:        0    1    2    3    4(closest)
+    # dist km:   700  450  300  200  100
+    # off-nadir: 58   46.7 35.8 25.9 14    → 450 km (idx1) is the first >45 break
+    samples = _enc_samples([700, 450, 300, 200, 100])
+    enc = _find_encounter(samples, 4, lat_t=0.0, lon_t=2.0)
+    assert enc is not None
+    assert enc.off_nadir_deg <= ENCOUNTER_MAX_OFF_NADIR_DEG
+    assert enc.time < samples[4][0]  # strictly before closest approach
+    # The encounter sample is idx 2 (300 km); idx 1 (450 km) is the break point.
+    assert enc.time == samples[2][0]
+    assert 0.0 <= enc.rel_bearing_deg < 360.0
+    # Invariant: the sample one step earlier than the encounter exceeds 45°.
+    enc_idx = next(i for i, s in enumerate(samples) if s[0] == enc.time)
+    assert enc_idx == 0 or angle_off_nadir_deg(
+        samples[enc_idx - 1][2], samples[enc_idx - 1][1].alt_km
+    ) > ENCOUNTER_MAX_OFF_NADIR_DEG
+
+
+def test_find_encounter_none_when_closest_never_frameable() -> None:
+    """A distant/grazing pass whose closest approach is itself past 45°
+    off-nadir never becomes frameable — no encounter."""
+    # closest 500 km → 49.4° off-nadir, already > 45°.
+    samples = _enc_samples([900, 700, 500])
+    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0) is None
+
+
+def test_find_encounter_none_when_only_frameable_at_closest() -> None:
+    """If the target crosses inside 45° only within the final step before
+    closest approach, there's no meaningful earlier encounter → None (avoids a
+    redundant ENCOUNTER row duplicating the closest moment)."""
+    # idx0 700 (58°, >45), idx1 450 (46.7°, >45), idx2 400 (43.5°, ≤45 closest)
+    samples = _enc_samples([700, 450, 400])
+    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0) is None
+
+
+def test_find_encounter_none_at_local_max_without_observed_crossing() -> None:
+    """When the target stays inside 45° across a local distance maximum (framed
+    continuously, e.g. spanning a previous approach), the crossing is never
+    observed, so no honest initial-encounter time exists → None. The scan also
+    stops at the local max rather than walking into the separate previous lobe."""
+    # idx:        0    1(local max)  2    3(closest)
+    # dist km:   200      350       300   100
+    # off-nadir: 25.9     40.0     35.8   14    → all <45, no crossing observed
+    samples = _enc_samples([200, 350, 300, 100])
+    assert _find_encounter(samples, 3, lat_t=0.0, lon_t=1.0) is None
+
+
+def test_find_encounter_none_when_already_frameable_at_window_start() -> None:
+    """If the window opens with the target already inside 45° and it only gets
+    closer (no observed crossing before sample[0]), the true initial encounter
+    predates our samples — return None rather than fabricate the window-edge
+    time as the encounter (Codex review P2)."""
+    # all within 45°, monotonically closing: 300→35.8, 200→25.9, 100→14
+    samples = _enc_samples([300, 200, 100])
+    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0) is None
+
+
+def test_relative_bearing_at_returns_valid_bearing() -> None:
+    """Direct unit for the shared bearing helper (used by both find_passes and
+    _find_encounter). Reuses the idx→idx+1 heading; caller guarantees idx+1 is
+    in range. Pin a valid [0,360) result on a tiny eastward synthetic track."""
+    samples = _enc_samples([300, 200, 100])  # ISS walks east along the equator
+    b = _relative_bearing_at(samples, 0, lat_t=0.0, lon_t=1.0)
+    assert 0.0 <= b < 360.0
+
+
+def test_find_encounter_threshold_is_inclusive_at_exact_boundary() -> None:
+    """The off-nadir gate is `> max` (strict), so a sample sitting EXACTLY on
+    the threshold is still frameable (included), not excluded. Pin the `>` vs
+    `>=` discrimination by setting the threshold to a sample's exact angle."""
+    samples = _enc_samples([700, 450, 300, 100])  # closest at idx3
+    boundary = angle_off_nadir_deg(samples[1][2], samples[1][1].alt_km)  # idx1 angle
+    enc = _find_encounter(samples, 3, lat_t=0.0, lon_t=1.0, max_off_nadir_deg=boundary)
+    assert enc is not None
+    # idx1's angle == threshold, and `> threshold` is False, so the scan does
+    # NOT break at idx1 — the encounter reaches idx1 (or earlier if idx0 also
+    # qualifies; here idx0=700km is well past, so idx1 is the earliest).
+    assert enc.time == samples[1][0]
+
+
+def test_find_passes_attaches_encounter(sample_tle: TLE) -> None:
+    """Real find_passes attaches an Encounter to frameable passes; when present
+    it precedes closest approach, sits within the threshold, and looks more
+    forward than the closest-approach bearing (the look angle sweeps
+    fore → nadir → aft across a pass)."""
+    target = {
+        "id": "test",
+        "name": "Test",
+        "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+        "priority": 5,
+        "regime": "any",
+    }
+    start = datetime(2024, 10, 17, 0, 0, tzinfo=UTC)
+    end = start + timedelta(hours=24)
+    passes = find_passes(sample_tle, target, start, end, step_seconds=30)
+    assert len(passes) > 0
+    framed = [p for p in passes if p.encounter is not None]
+    assert framed, "expected at least one frameable pass with an encounter"
+    for p in framed:
+        assert isinstance(p.encounter, Encounter)
+        assert p.encounter.off_nadir_deg <= ENCOUNTER_MAX_OFF_NADIR_DEG + 1e-6
+        # Encounter is always strictly before closest (equal-index is suppressed).
+        assert p.encounter.time < p.closest_approach
+        assert 0.0 <= p.encounter.rel_bearing_deg < 360.0
+        # Forwardness = cos(bearing): +1 fore, 0 abeam, -1 aft. As the ISS
+        # approaches and passes, forwardness decreases monotonically, so the
+        # earlier encounter is at least as forward as the closest moment.
+        assert p.iss_relative_bearing_deg is not None
+        fwd_enc = math.cos(math.radians(p.encounter.rel_bearing_deg))
+        fwd_closest = math.cos(math.radians(p.iss_relative_bearing_deg))
+        assert fwd_enc >= fwd_closest - 0.05
