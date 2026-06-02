@@ -2,6 +2,22 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.5.0] - 2026-06-02
+
+## **The pass thumbnail now tells you when the target first comes into view and which way to look.**
+
+The 🌍 expanded thumbnail used to show one line about the closest moment. Now it shows two labeled rows: ENCOUNTER, when the target first comes within framing range as the station approaches, and CLOSEST, the overhead moment your shot is anchored to. Each row gives the off-nadir angle and a left/right-of-track look cue, so you know the target will appear off to your right at 35° before sweeping to 22° at closest, not just that the pass is in eight minutes. A recommended-window line (WORF for near-nadir, Cupola for oblique) sits underneath. The look cue says "fore" or "aft" when the target is within 15° of straight ahead or behind, so "look right" never points you the wrong way near the nose.
+
+### Itemized changes
+
+#### Added
+- An ENCOUNTER row in the 🌍 expanded pass thumbnail: when the target first becomes shootable (first within 45° off-nadir as the station approaches), with its off-nadir angle and a right/left-of-track look side.
+- A recommended-window line under the rows — WORF (Destiny nadir window) below 30° off-nadir, Cupola above.
+
+#### Changed
+- The pass-thumbnail caption is now two aligned labeled rows (ENCOUNTER / CLOSEST) plus a nadir-distance + window line, replacing the single summary line. The compact pass card is unchanged — the extra detail lives only in the expanded thumbnail.
+- The look cue names "fore"/"aft" within 15° of straight ahead/behind (matching the card's direction labels) instead of always saying left/right.
+
 ## [1.7.4.0] - 2026-06-01
 
 ## **Filter from the Map, scroll the tabs on iPhone, and pass thumbnails now center on the target.**
