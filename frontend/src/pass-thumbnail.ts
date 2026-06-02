@@ -170,6 +170,35 @@ export function formatThumbnailCountdown(closestApproachIso: string, nowMs: numb
   return `in ${Math.round(m / 60)} h`;
 }
 
+/** Half-width (deg) of the fore/aft poles where "right/left" is meaningless.
+ *  Within this band of 0° (fore) or 180° (aft) we name the direction instead
+ *  of a side — otherwise a target a few degrees off the nose would render
+ *  "R" ("look right") when it's effectively dead ahead. Matches card.ts's
+ *  CARDINAL_THRESHOLD (15°) so the thumbnail's fore/aft agrees with the card's. */
+const POLE_TOLERANCE_DEG = 15;
+
+/** Map an ISS-relative bearing (0=fore, 90=starboard, 180=aft, 270=port) to a
+ *  short look-side cue for the operator. The starboard half → "R" (look right
+ *  of travel); the port half → "L". The fore/aft poles get explicit words —
+ *  "right/left" is meaningless when the target is dead ahead or behind. Mirrors
+ *  the generator's iss_relative_bearing_deg convention. */
+export function formatLookSide(relBearingDeg: number): string {
+  const b = ((relBearingDeg % 360) + 360) % 360;
+  // Inclusive bounds (<=/>=) so the pole band agrees with card.ts exactly at
+  // the cutoff — the generator rounds bearings to 1 dp, so 15.0°/345.0°/165.0°
+  // are emittable and must classify the same in both the card and the thumbnail.
+  if (b <= POLE_TOLERANCE_DEG || b >= 360 - POLE_TOLERANCE_DEG) return 'fore';
+  if (Math.abs(b - 180) <= POLE_TOLERANCE_DEG) return 'aft';
+  return b < 180 ? 'R' : 'L';
+}
+
+/** Recommended window from off-nadir angle: <30° → WORF (Destiny nadir
+ *  window), ≥30° → Cupola (panoramic dome handles obliques). Mirrors the
+ *  generator's angle_off_nadir_deg docstring threshold. */
+export function thumbnailWindowLabel(offNadirDeg: number): string {
+  return offNadirDeg < 30 ? 'WORF' : 'Cupola';
+}
+
 /** Lay out the slippy tiles that fill the basePx×basePx thumbnail with the
  *  target at the canvas CENTER. Positions the 1-4 tiles that intersect the
  *  centered view by pixel offset (target's exact fractional position maps to
@@ -340,19 +369,78 @@ export function renderPassThumbnail(
 
   wrap.appendChild(overlay);
 
-  // Caption: nadir distance + countdown. textContent only (operator-safe).
+  // Caption: two labeled rows (ENCOUNTER / CLOSEST) + a context line. The
+  // look angle sweeps fore→nadir→aft across a pass, so the encounter and
+  // closest rows carry different angles/sides — the operator sees where the
+  // target first appears AND where it sits at the anchor moment. Labeled rows
+  // (dim uppercase, matching the SORT/SHOW control style) keep the four extra
+  // numbers scannable instead of TMI. textContent only (operator-safe).
   const caption = document.createElement('div');
   caption.className = 'pass-thumbnail-caption';
-  const captionParts: string[] = [];
+
+  // One labeled row: dim uppercase label + value span. Skips empty values.
+  const addRow = (label: string, value: string): void => {
+    if (!value) return;
+    const row = document.createElement('div');
+    row.className = 'pass-thumbnail-caption-row';
+    const l = document.createElement('span');
+    l.className = 'pass-thumbnail-caption-label';
+    l.textContent = label;
+    const v = document.createElement('span');
+    v.className = 'pass-thumbnail-caption-value';
+    v.textContent = value;
+    row.append(l, v);
+    caption.appendChild(row);
+  };
+
+  // "{countdown} · {off}° {side}", dropping pieces that aren't available.
+  const rowValue = (timeIso: string, offNadirDeg?: number, relBearingDeg?: number): string => {
+    const parts: string[] = [];
+    const cd = formatThumbnailCountdown(timeIso, nowMs);
+    if (cd) parts.push(cd);
+    if (typeof offNadirDeg === 'number' && Number.isFinite(offNadirDeg)) {
+      const side = typeof relBearingDeg === 'number' && Number.isFinite(relBearingDeg)
+        ? ` ${formatLookSide(relBearingDeg)}`
+        : '';
+      parts.push(`${Math.round(offNadirDeg)}°${side}`);
+    }
+    return parts.join(' · ');
+  };
+
+  // ENCOUNTER row — only when the generator computed an initial encounter
+  // (off-nadir ≤45° scan-back). Absent for grazing/distant passes and older
+  // manifests; we render closest-only in that case (no error, no empty row).
+  if (pass.encounter && Number.isFinite(Date.parse(pass.encounter.time))) {
+    addRow('ENCOUNTER', rowValue(
+      pass.encounter.time, pass.encounter.off_nadir_deg, pass.encounter.rel_bearing_deg,
+    ));
+  }
+
+  // CLOSEST row — always present (anchor moment of the shot).
+  addRow('CLOSEST', rowValue(
+    pass.closest_approach, pass.angle_off_nadir_deg, pass.iss_relative_bearing_deg,
+  ));
+
+  // Context line — nadir distance + recommended window (WORF/Cupola). The
+  // window is computed from the CLOSEST-approach angle (the shot anchor), not
+  // the encounter angle — same convention as card.ts/map.ts. So a pass can
+  // show an oblique ENCOUNTER angle (30-45°) above a WORF window label; that's
+  // intentional (you frame it obliquely as it appears, then shoot at closest
+  // from the nadir window). Plain, no label; supporting detail under the rows.
+  const ctxParts: string[] = [];
   if (Number.isFinite(pass.nadir_distance_km)) {
-    captionParts.push(`${Math.round(pass.nadir_distance_km)} km nadir`);
+    ctxParts.push(`${Math.round(pass.nadir_distance_km)} km nadir`);
   }
-  if (typeof pass.angle_off_nadir_deg === 'number') {
-    captionParts.push(`${Math.round(pass.angle_off_nadir_deg)}° off`);
+  if (typeof pass.angle_off_nadir_deg === 'number' && Number.isFinite(pass.angle_off_nadir_deg)) {
+    ctxParts.push(thumbnailWindowLabel(pass.angle_off_nadir_deg));
   }
-  const countdown = formatThumbnailCountdown(pass.closest_approach, nowMs);
-  if (countdown) captionParts.push(countdown);
-  caption.textContent = captionParts.join(' · ');
+  if (ctxParts.length) {
+    const ctx = document.createElement('div');
+    ctx.className = 'pass-thumbnail-caption-context';
+    ctx.textContent = ctxParts.join(' · ');
+    caption.appendChild(ctx);
+  }
+
   wrap.appendChild(caption);
 
   // Esri attribution (ToS requirement; free-tier non-commercial use).
