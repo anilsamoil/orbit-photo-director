@@ -153,9 +153,11 @@ export function projectSampleToThumbnail(
   return { px, py };
 }
 
-/** Format the countdown to closest_approach (or "now" / "passed") for the
- *  thumbnail caption. Short form — the card's primary countdown carries
- *  the full label; this is a contextual reminder inside the thumbnail. */
+/** Format the countdown to closest_approach (or "now") for the thumbnail
+ *  caption. Compact form ("in 8m" / "3m ago" / "in 2h") — the card's primary
+ *  countdown carries the full "in 8 min" label; this is a contextual reminder
+ *  inside the thumbnail, kept short so the three-part value row (countdown ·
+ *  tilt · aim) fits the 256px width even with an "aft" qualifier. */
 export function formatThumbnailCountdown(closestApproachIso: string, nowMs: number): string {
   const t = Date.parse(closestApproachIso);
   if (!Number.isFinite(t)) return '';
@@ -163,40 +165,31 @@ export function formatThumbnailCountdown(closestApproachIso: string, nowMs: numb
   if (Math.abs(deltaSec) < 30) return 'now';
   if (deltaSec < 0) {
     const m = Math.round(-deltaSec / 60);
-    return `${m} min ago`;
+    return `${m}m ago`;
   }
   const m = Math.round(deltaSec / 60);
-  if (m < 60) return `in ${m} min`;
-  return `in ${Math.round(m / 60)} h`;
+  if (m < 60) return `in ${m}m`;
+  return `in ${Math.round(m / 60)}h`;
 }
-
-/** Half-width (deg) of the fore/aft poles where "right/left" is meaningless.
- *  Within this band of 0° (fore) or 180° (aft) we name the direction instead
- *  of a side — otherwise a target a few degrees off the nose would render
- *  "R" ("look right") when it's effectively dead ahead. Matches card.ts's
- *  CARDINAL_THRESHOLD (15°) so the thumbnail's fore/aft agrees with the card's. */
-const POLE_TOLERANCE_DEG = 15;
 
 /** Map an ISS-relative bearing (0=fore, 90=starboard, 180=aft, 270=port) to a
- *  short look-side cue for the operator. The starboard half → "R" (look right
- *  of travel); the port half → "L". The fore/aft poles get explicit words —
- *  "right/left" is meaningless when the target is dead ahead or behind. Mirrors
- *  the generator's iss_relative_bearing_deg convention. */
-export function formatLookSide(relBearingDeg: number): string {
+ *  spelled aim cue with the degrees-off-forward magnitude — the AIM direction
+ *  (where to point), distinct from the off-nadir camera tilt shown alongside.
+ *  Collapses to "ahead"/"behind" only within 1° of the fore/aft axis, so a
+ *  target a few degrees off the nose still reads "14° right" (not a bare
+ *  "right"). Past abeam (>90° off forward) the magnitude is capped at 90 and
+ *  an "aft" qualifier is added — this keeps the magnitude in agreement with the
+ *  card's formatRelativeBearing (card "60° starboard aft" → "60° right aft")
+ *  and avoids the non-intuitive "look 120° right" for a behind-the-shoulder
+ *  target. right ↔ starboard, left ↔ port. */
+export function formatLookDirection(relBearingDeg: number): string {
   const b = ((relBearingDeg % 360) + 360) % 360;
-  // Inclusive bounds (<=/>=) so the pole band agrees with card.ts exactly at
-  // the cutoff — the generator rounds bearings to 1 dp, so 15.0°/345.0°/165.0°
-  // are emittable and must classify the same in both the card and the thumbnail.
-  if (b <= POLE_TOLERANCE_DEG || b >= 360 - POLE_TOLERANCE_DEG) return 'fore';
-  if (Math.abs(b - 180) <= POLE_TOLERANCE_DEG) return 'aft';
-  return b < 180 ? 'R' : 'L';
-}
-
-/** Recommended window from off-nadir angle: <30° → WORF (Destiny nadir
- *  window), ≥30° → Cupola (panoramic dome handles obliques). Mirrors the
- *  generator's angle_off_nadir_deg docstring threshold. */
-export function thumbnailWindowLabel(offNadirDeg: number): string {
-  return offNadirDeg < 30 ? 'WORF' : 'Cupola';
+  if (b <= 1 || b >= 359) return 'ahead';
+  if (Math.abs(b - 180) <= 1) return 'behind';
+  if (b <= 90) return `${Math.round(b)}° right`;          // fore → abeam, starboard side
+  if (b < 180) return `${Math.round(180 - b)}° right aft`; // past abeam, starboard
+  if (b < 270) return `${Math.round(b - 180)}° left aft`;  // past abeam, port
+  return `${Math.round(360 - b)}° left`;                   // fore → abeam, port side
 }
 
 /** Lay out the slippy tiles that fill the basePx×basePx thumbnail with the
@@ -393,53 +386,44 @@ export function renderPassThumbnail(
     caption.appendChild(row);
   };
 
-  // "{countdown} · {off}° {side}", dropping pieces that aren't available.
+  // "{countdown} · {tilt}° · {aim}" — tilt is the off-nadir camera angle (how
+  // oblique), aim is the bearing off straight-ahead (where to point). Two
+  // distinct axes, matching the operator's "25° camera, 14° off forward" model.
+  // Each piece is dropped when unavailable.
   const rowValue = (timeIso: string, offNadirDeg?: number, relBearingDeg?: number): string => {
     const parts: string[] = [];
     const cd = formatThumbnailCountdown(timeIso, nowMs);
     if (cd) parts.push(cd);
     if (typeof offNadirDeg === 'number' && Number.isFinite(offNadirDeg)) {
-      const side = typeof relBearingDeg === 'number' && Number.isFinite(relBearingDeg)
-        ? ` ${formatLookSide(relBearingDeg)}`
-        : '';
-      parts.push(`${Math.round(offNadirDeg)}°${side}`);
+      parts.push(`${Math.round(offNadirDeg)}°`);
+    }
+    if (typeof relBearingDeg === 'number' && Number.isFinite(relBearingDeg)) {
+      parts.push(formatLookDirection(relBearingDeg));
     }
     return parts.join(' · ');
   };
 
-  // ENCOUNTER row — only when the generator computed an initial encounter
-  // (off-nadir ≤45° scan-back). Absent for grazing/distant passes and older
-  // manifests; we render closest-only in that case (no error, no empty row).
+  // INITIAL row — when the target first enters the frameable cone (off-nadir
+  // ≤60° scan-back). Absent for grazing passes whose closest approach is itself
+  // past 60°, for the window-edge case, and for older manifests; closest-only
+  // render then (no error, no empty row). Labeled INITIAL (not ENCOUNTER) so it
+  // reads distinctly from CLOSEST below.
   if (pass.encounter && Number.isFinite(Date.parse(pass.encounter.time))) {
-    addRow('ENCOUNTER', rowValue(
+    addRow('INITIAL', rowValue(
       pass.encounter.time, pass.encounter.off_nadir_deg, pass.encounter.rel_bearing_deg,
     ));
   }
 
-  // CLOSEST row — always present (anchor moment of the shot).
+  // CLOSEST row — always present (anchor moment of the shot). Read together with
+  // INITIAL it shows the sweep: appears high+ahead, ends near-nadir+abeam.
   addRow('CLOSEST', rowValue(
     pass.closest_approach, pass.angle_off_nadir_deg, pass.iss_relative_bearing_deg,
   ));
 
-  // Context line — nadir distance + recommended window (WORF/Cupola). The
-  // window is computed from the CLOSEST-approach angle (the shot anchor), not
-  // the encounter angle — same convention as card.ts/map.ts. So a pass can
-  // show an oblique ENCOUNTER angle (30-45°) above a WORF window label; that's
-  // intentional (you frame it obliquely as it appears, then shoot at closest
-  // from the nadir window). Plain, no label; supporting detail under the rows.
-  const ctxParts: string[] = [];
-  if (Number.isFinite(pass.nadir_distance_km)) {
-    ctxParts.push(`${Math.round(pass.nadir_distance_km)} km nadir`);
-  }
-  if (typeof pass.angle_off_nadir_deg === 'number' && Number.isFinite(pass.angle_off_nadir_deg)) {
-    ctxParts.push(thumbnailWindowLabel(pass.angle_off_nadir_deg));
-  }
-  if (ctxParts.length) {
-    const ctx = document.createElement('div');
-    ctx.className = 'pass-thumbnail-caption-context';
-    ctx.textContent = ctxParts.join(' · ');
-    caption.appendChild(ctx);
-  }
+  // No nadir/window context line: the pass card directly above the expanded
+  // thumbnail already shows "nadir N km" and the WORF/Cupola tag, so repeating
+  // them here was pure duplication. The timed rows are the thumbnail's unique
+  // contribution (countdown + the initial encounter the card lacks).
 
   wrap.appendChild(caption);
 

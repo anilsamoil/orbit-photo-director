@@ -567,9 +567,11 @@ def test_pass_dataclass_relative_bearing_defaults_none() -> None:
 
 
 # --------------------------------------------------------------------------
-# Initial-encounter scan (_find_encounter / find_passes encounter field)
-# Jack feedback 2026-06-02. 45° off-nadir boundary ≈ 420 km ground distance
-# at 408 km altitude (400 km → 43.5°, 450 km → 46.7°).
+# Initial-encounter scan (_find_encounter / find_passes encounter field).
+# Production threshold is ENCOUNTER_MAX_OFF_NADIR_DEG (60°). The scan-mechanics
+# unit tests below pass an explicit max_off_nadir_deg=45.0 so their synthetic
+# fixtures (which straddle the 45° ≈ 420 km boundary: 400 km → 43.5°, 450 km →
+# 46.7°) stay valid independent of the production default.
 # --------------------------------------------------------------------------
 
 
@@ -597,9 +599,9 @@ def test_find_encounter_precedes_closest_and_within_threshold() -> None:
     # dist km:   700  450  300  200  100
     # off-nadir: 58   46.7 35.8 25.9 14    → 450 km (idx1) is the first >45 break
     samples = _enc_samples([700, 450, 300, 200, 100])
-    enc = _find_encounter(samples, 4, lat_t=0.0, lon_t=2.0)
+    enc = _find_encounter(samples, 4, lat_t=0.0, lon_t=2.0, max_off_nadir_deg=45.0)
     assert enc is not None
-    assert enc.off_nadir_deg <= ENCOUNTER_MAX_OFF_NADIR_DEG
+    assert enc.off_nadir_deg <= 45.0
     assert enc.time < samples[4][0]  # strictly before closest approach
     # The encounter sample is idx 2 (300 km); idx 1 (450 km) is the break point.
     assert enc.time == samples[2][0]
@@ -608,7 +610,7 @@ def test_find_encounter_precedes_closest_and_within_threshold() -> None:
     enc_idx = next(i for i, s in enumerate(samples) if s[0] == enc.time)
     assert enc_idx == 0 or angle_off_nadir_deg(
         samples[enc_idx - 1][2], samples[enc_idx - 1][1].alt_km
-    ) > ENCOUNTER_MAX_OFF_NADIR_DEG
+    ) > 45.0
 
 
 def test_find_encounter_none_when_closest_never_frameable() -> None:
@@ -616,7 +618,7 @@ def test_find_encounter_none_when_closest_never_frameable() -> None:
     off-nadir never becomes frameable — no encounter."""
     # closest 500 km → 49.4° off-nadir, already > 45°.
     samples = _enc_samples([900, 700, 500])
-    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0) is None
+    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0, max_off_nadir_deg=45.0) is None
 
 
 def test_find_encounter_none_when_only_frameable_at_closest() -> None:
@@ -625,7 +627,7 @@ def test_find_encounter_none_when_only_frameable_at_closest() -> None:
     redundant ENCOUNTER row duplicating the closest moment)."""
     # idx0 700 (58°, >45), idx1 450 (46.7°, >45), idx2 400 (43.5°, ≤45 closest)
     samples = _enc_samples([700, 450, 400])
-    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0) is None
+    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0, max_off_nadir_deg=45.0) is None
 
 
 def test_find_encounter_none_at_local_max_without_observed_crossing() -> None:
@@ -637,7 +639,7 @@ def test_find_encounter_none_at_local_max_without_observed_crossing() -> None:
     # dist km:   200      350       300   100
     # off-nadir: 25.9     40.0     35.8   14    → all <45, no crossing observed
     samples = _enc_samples([200, 350, 300, 100])
-    assert _find_encounter(samples, 3, lat_t=0.0, lon_t=1.0) is None
+    assert _find_encounter(samples, 3, lat_t=0.0, lon_t=1.0, max_off_nadir_deg=45.0) is None
 
 
 def test_find_encounter_none_when_already_frameable_at_window_start() -> None:
@@ -647,7 +649,7 @@ def test_find_encounter_none_when_already_frameable_at_window_start() -> None:
     time as the encounter (Codex review P2)."""
     # all within 45°, monotonically closing: 300→35.8, 200→25.9, 100→14
     samples = _enc_samples([300, 200, 100])
-    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0) is None
+    assert _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0, max_off_nadir_deg=45.0) is None
 
 
 def test_relative_bearing_at_returns_valid_bearing() -> None:
@@ -671,6 +673,29 @@ def test_find_encounter_threshold_is_inclusive_at_exact_boundary() -> None:
     # NOT break at idx1 — the encounter reaches idx1 (or earlier if idx0 also
     # qualifies; here idx0=700km is well past, so idx1 is the earliest).
     assert enc.time == samples[1][0]
+
+
+def test_encounter_default_threshold_is_60_degrees() -> None:
+    """Production threshold widened 45°→60° (operator feedback 2026-06-03): 45°
+    put the crossing only ~30-60s before closest (minute-rounded countdowns
+    collapsed) and excluded every Cupola-range pass. 60° ≈ the 800 km search
+    cone — ~2 min lead and oblique passes get an initial."""
+    assert ENCOUNTER_MAX_OFF_NADIR_DEG == 60.0
+
+
+def test_find_encounter_covers_cupola_range_pass() -> None:
+    """A Cupola-range pass (closest 45-60° off-nadir, e.g. Rome at ~57°) now gets
+    an initial encounter at the 60° default — the old 45° threshold returned
+    None for these (the 'no initial row on oblique targets' the operator saw)."""
+    samples = _enc_samples([900, 700, 680])
+    closest_off = angle_off_nadir_deg(samples[2][2], samples[2][1].alt_km)
+    crossing_off = angle_off_nadir_deg(samples[0][2], samples[0][1].alt_km)
+    assert 45.0 < closest_off < 60.0   # genuinely Cupola-range (45° would exclude)
+    assert crossing_off > 60.0          # idx0 is the observed >60° crossing
+    enc = _find_encounter(samples, 2, lat_t=0.0, lon_t=1.0)  # default 60°
+    assert enc is not None
+    assert enc.time < samples[2][0]
+    assert enc.off_nadir_deg <= 60.0
 
 
 def test_find_passes_attaches_encounter(sample_tle: TLE) -> None:
