@@ -671,8 +671,8 @@ main {
   opacity: 0.95;
 }
 .pass-thumbnail-caption {
-  padding: 0.35rem 0.6rem 0.15rem;
-  font-size: 0.78rem;
+  padding: 0.35rem 0.5rem 0.15rem;
+  font-size: 0.76rem;
   color: var(--text-dim);
   background: rgba(11, 13, 18, 0.85);
   position: absolute;
@@ -680,30 +680,30 @@ main {
   left: 0;
   right: 0;
 }
-/* Two labeled rows (ENCOUNTER / CLOSEST) inside the caption. The label is
+/* Two labeled rows (INITIAL / CLOSEST) inside the caption. The label is
  * dim uppercase (matching the SORT/SHOW toggle labels) and fixed-width so the
- * values align into a scannable column; the value is brighter for contrast. */
+ * values align into a scannable column; the value is brighter for contrast.
+ * Label column is kept narrow + value forced single-line (nowrap) so the
+ * three-part value (countdown · tilt · aim) fits the 256 px width. */
 .pass-thumbnail-caption-row {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  line-height: 1.4;
+  gap: 0.4rem;
+  line-height: 1.45;
 }
 .pass-thumbnail-caption-label {
-  flex: 0 0 5.2rem;
-  font-size: 0.66rem;  /* legible dim label, close to the .toggle-label (0.7rem) pattern it mirrors */
+  flex: 0 0 4rem;
+  font-size: 0.64rem;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   color: var(--text-dim);
 }
 .pass-thumbnail-caption-value {
   color: var(--text);
   font-variant-numeric: tabular-nums;
-}
-/* Supporting line under the two rows: nadir distance + recommended window. */
-.pass-thumbnail-caption-context {
-  margin-top: 0.1rem;
-  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;  /* worst-case value fits 256px; ellipsize, never spill outside the tile */
 }
 .pass-thumbnail-attribution {
   padding: 0.15rem 0.6rem 0.25rem;
