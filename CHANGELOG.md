@@ -2,6 +2,21 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.6.0] - 2026-06-03
+
+## **The pass thumbnail's initial-encounter line is now actually useful, and reads clearly.**
+
+The 🌍 thumbnail's two-row caption got fixed after seeing it on real passes. The INITIAL line used to land at almost the same minute as CLOSEST (it fired only ~30-60s ahead) and never showed up at all for oblique targets like Italy. The encounter now fires when the target enters the wider shooting cone, so it gives a real two-minute heads-up with a distinct countdown, and oblique Cupola passes get an initial line too. The rows are relabeled INITIAL / CLOSEST so they don't read as the same word, the duplicated nadir/window line is gone (the card right above already shows it), and the cryptic "R" is now a spelled, useful aim: "45° right" tells you both which way and how far off the nose to point, agreeing with the card's "starboard" reading.
+
+### Itemized changes
+
+#### Changed
+- The 🌍 thumbnail's initial-encounter now fires when the target first enters the shootable cone (~2 minutes before closest, was ~30-60s), so the INITIAL and CLOSEST countdowns are distinct and oblique (Cupola) passes get an initial line instead of none.
+- Caption rows relabeled ENCOUNTER → INITIAL, so INITIAL / CLOSEST read as two different words.
+- The look cue is now a spelled aim with the off-forward angle ("45° right", "14° right", "ahead") instead of a bare "R" / "L" — past abeam it reads "60° right aft" to match how the pass card names the same bearing.
+- Removed the duplicated "N km nadir · WORF/Cupola" line from the thumbnail — the pass card directly above already shows both.
+- The thumbnail countdown is compact ("in 8m") so the richer aim text fits on one line.
+
 ## [1.7.5.0] - 2026-06-02
 
 ## **The pass thumbnail now tells you when the target first comes into view and which way to look.**
