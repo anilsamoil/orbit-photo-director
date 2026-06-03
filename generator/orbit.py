@@ -115,11 +115,15 @@ def freshness_factor(age_hours: float) -> float:
     return max(0.5, 1.0 - decay)
 
 
-# Off-nadir angle (deg) at/under which a target is "realistically frameable"
-# — the photographic horizon for the initial-encounter scan. ≤45° keeps the
-# target inside a usable oblique framing; past it the look is too grazing to
-# compose. Tunable. (Jack feedback 2026-06-02: "time of initial encounter".)
-ENCOUNTER_MAX_OFF_NADIR_DEG = 45.0
+# Off-nadir angle (deg) at/under which a target is "realistically frameable" —
+# the photographic horizon for the initial-encounter scan. ~60° corresponds to
+# roughly the 800 km pass-search cone (max_distance_km), i.e. "the target enters
+# the working area." 45° was too tight on two counts: the crossing landed only
+# ~30-60s before closest (so minute-rounded countdowns collapsed to the same
+# value) and it excluded every oblique Cupola pass (closest > 45°) from getting
+# an initial at all. 60° gives ~2 min of lead (distinct countdown) and includes
+# Cupola-range passes. Tunable. (Operator feedback 2026-06-03.)
+ENCOUNTER_MAX_OFF_NADIR_DEG = 60.0
 
 
 @dataclass(frozen=True)
@@ -153,9 +157,9 @@ class Pass:
     # is available; None when find_passes is called outside that path
     # (some legacy tests pass synthetic data).
     iss_relative_bearing_deg: float | None = None
-    # Initial-encounter geometry (off-nadir ≤45° scan-back from closest
+    # Initial-encounter geometry (off-nadir ≤60° scan-back from closest
     # approach). None when the pass never gets frameable (closest approach
-    # itself > 45° off-nadir — a distant/grazing pass) or when find_passes
+    # itself > 60° off-nadir — a distant/grazing pass) or when find_passes
     # is called outside the heading-sample path. See Encounter.
     encounter: Encounter | None = None
 
@@ -338,7 +342,7 @@ def find_passes(
             iss_here = samples[i][1]
             rel = _relative_bearing_at(samples, i, lat_t, lon_t)
             # Initial-encounter geometry: scan back to where the target first
-            # crossed inside the frameable off-nadir threshold (Jack 2026-06-02).
+            # crossed inside the frameable off-nadir threshold (see Encounter).
             encounter = _find_encounter(samples, i, lat_t, lon_t)
             passes.append(
                 Pass(

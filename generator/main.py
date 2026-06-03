@@ -411,10 +411,10 @@ def score_pass_for_target(
             if pass_obj.iss_relative_bearing_deg is not None
             else None
         ),
-        # Initial-encounter geometry (Jack 2026-06-02): when the target first
-        # becomes frameable (off-nadir ≤45° scan-back from closest approach),
-        # plus the look angle/side at that moment. None for grazing/distant
-        # passes that never get frameable; frontend renders closest-only then.
+        # Initial-encounter geometry: when the target first becomes frameable
+        # (off-nadir ≤60° scan-back from closest approach), plus the look
+        # angle/side at that moment. None for grazing passes whose closest
+        # approach is itself past 60°; frontend renders closest-only then.
         "encounter": (
             {
                 "time": utcnow_iso(pass_obj.encounter.time),
