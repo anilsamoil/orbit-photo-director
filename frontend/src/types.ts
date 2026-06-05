@@ -52,9 +52,10 @@ export interface PassEntry {
   angle_off_nadir_deg?: number;
   /** Direction the target sits relative to ISS direction of travel,
    *  measured clockwise from forward [0, 360). 0=ahead/fore, 90=starboard,
-   *  180=aft, 270=port. Lets the card render "35° starboard" so the
-   *  operator knows which window/side to point the camera. Added v1.2.6.0;
-   *  older manifests will omit it. */
+   *  180=aft, 270=port. Its HALF (left/right of track) feeds
+   *  track-offset.ts:formatTrackOffset → "35° right/left of track" (off-nadir
+   *  = degrees off track at closest, where the target is abeam). Added
+   *  v1.2.6.0; older manifests will omit it. */
   iss_relative_bearing_deg?: number;
   /** Initial-encounter geometry — when the target first becomes frameable
    *  (off-nadir ≤60°, scanning back from closest approach) and the look

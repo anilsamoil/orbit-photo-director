@@ -31,6 +31,7 @@
 import type { PassEntry, Track } from './types';
 import { liveIssPosition } from './iss';
 import { liveIssPositionSGP4 } from './iss-sgp4';
+import { formatTrackOffset } from './track-offset';
 
 /** Thumbnail tile zoom level. z=11 → ~19 km tile-width at equator.
  *  Widened from z=12 (~9.5 km) for more context (a coastline / city / lake
@@ -172,25 +173,6 @@ export function formatThumbnailCountdown(closestApproachIso: string, nowMs: numb
   return `in ${Math.round(m / 60)}h`;
 }
 
-/** Map an ISS-relative bearing (0=fore, 90=starboard, 180=aft, 270=port) to a
- *  spelled aim cue with the degrees-off-forward magnitude — the AIM direction
- *  (where to point), distinct from the off-nadir camera tilt shown alongside.
- *  Collapses to "ahead"/"behind" only within 1° of the fore/aft axis, so a
- *  target a few degrees off the nose still reads "14° right" (not a bare
- *  "right"). Past abeam (>90° off forward) the magnitude is capped at 90 and
- *  an "aft" qualifier is added — this keeps the magnitude in agreement with the
- *  card's formatRelativeBearing (card "60° starboard aft" → "60° right aft")
- *  and avoids the non-intuitive "look 120° right" for a behind-the-shoulder
- *  target. right ↔ starboard, left ↔ port. */
-export function formatLookDirection(relBearingDeg: number): string {
-  const b = ((relBearingDeg % 360) + 360) % 360;
-  if (b <= 1 || b >= 359) return 'ahead';
-  if (Math.abs(b - 180) <= 1) return 'behind';
-  if (b <= 90) return `${Math.round(b)}° right`;          // fore → abeam, starboard side
-  if (b < 180) return `${Math.round(180 - b)}° right aft`; // past abeam, starboard
-  if (b < 270) return `${Math.round(b - 180)}° left aft`;  // past abeam, port
-  return `${Math.round(360 - b)}° left`;                   // fore → abeam, port side
-}
 
 /** Lay out the slippy tiles that fill the basePx×basePx thumbnail with the
  *  target at the canvas CENTER. Positions the 1-4 tiles that intersect the
@@ -386,39 +368,38 @@ export function renderPassThumbnail(
     caption.appendChild(row);
   };
 
-  // "{countdown} · {tilt}° · {aim}" — tilt is the off-nadir camera angle (how
-  // oblique), aim is the bearing off straight-ahead (where to point). Two
-  // distinct axes, matching the operator's "25° camera, 14° off forward" model.
-  // Each piece is dropped when unavailable.
-  const rowValue = (timeIso: string, offNadirDeg?: number, relBearingDeg?: number): string => {
-    const parts: string[] = [];
-    const cd = formatThumbnailCountdown(timeIso, nowMs);
-    if (cd) parts.push(cd);
-    if (typeof offNadirDeg === 'number' && Number.isFinite(offNadirDeg)) {
-      parts.push(`${Math.round(offNadirDeg)}°`);
-    }
-    if (typeof relBearingDeg === 'number' && Number.isFinite(relBearingDeg)) {
-      parts.push(formatLookDirection(relBearingDeg));
-    }
-    return parts.join(' · ');
-  };
-
   // INITIAL row — when the target first enters the frameable cone (off-nadir
-  // ≤60° scan-back). Absent for grazing passes whose closest approach is itself
-  // past 60°, for the window-edge case, and for older manifests; closest-only
-  // render then (no error, no empty row). Labeled INITIAL (not ENCOUNTER) so it
-  // reads distinctly from CLOSEST below.
+  // ≤60° scan-back). The target rises AHEAD of the abeam point (the look sweeps
+  // fore → abeam), so the row is a lead-time heads-up: "in Nm · rising ahead".
+  // The direction (degrees right/left of track) is the same cross-track as
+  // CLOSEST — constant across the pass — and is shown on the CLOSEST row, not
+  // repeated here. Absent for grazing/window-edge/older-manifest passes
+  // (closest-only render, no error, no empty row).
+  // "rising ahead" is safe to hardcode: the generator's _find_encounter scans
+  // BACK from closest and only emits an encounter that is fore of (earlier than)
+  // the closest sample (returns None when enc_idx == closest_idx), so the target
+  // is always rising and ahead at the INITIAL moment by construction.
   if (pass.encounter && Number.isFinite(Date.parse(pass.encounter.time))) {
-    addRow('INITIAL', rowValue(
-      pass.encounter.time, pass.encounter.off_nadir_deg, pass.encounter.rel_bearing_deg,
-    ));
+    const cd = formatThumbnailCountdown(pass.encounter.time, nowMs);
+    addRow('INITIAL', [cd, 'rising ahead'].filter(Boolean).join(' · '));
   }
 
-  // CLOSEST row — always present (anchor moment of the shot). Read together with
-  // INITIAL it shows the sweep: appears high+ahead, ends near-nadir+abeam.
-  addRow('CLOSEST', rowValue(
-    pass.closest_approach, pass.angle_off_nadir_deg, pass.iss_relative_bearing_deg,
-  ));
+  // CLOSEST row — the shot, abeam. "in Nm · x° right/left of track" — at closest
+  // the target is directly abeam, so off-nadir IS the degrees right/left of the
+  // ground track (CEO-target-sheet convention; operator feedback 2026-06-04).
+  // Side from the bearing half (robust); magnitude from off-nadir (the bearing
+  // magnitude is a 30s-sampling artifact at the closest sample).
+  {
+    const cd = formatThumbnailCountdown(pass.closest_approach, nowMs);
+    let dir = '';
+    if (typeof pass.angle_off_nadir_deg === 'number' && Number.isFinite(pass.angle_off_nadir_deg)) {
+      dir = typeof pass.iss_relative_bearing_deg === 'number'
+        && Number.isFinite(pass.iss_relative_bearing_deg)
+        ? formatTrackOffset(pass.angle_off_nadir_deg, pass.iss_relative_bearing_deg)
+        : `${Math.round(pass.angle_off_nadir_deg)}°`;
+    }
+    addRow('CLOSEST', [cd, dir].filter(Boolean).join(' · '));
+  }
 
   // No nadir/window context line: the pass card directly above the expanded
   // thumbnail already shows "nadir N km" and the WORF/Cupola tag, so repeating

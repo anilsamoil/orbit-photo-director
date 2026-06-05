@@ -17,7 +17,7 @@ import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
 import { liveIssPosition, wrapLon } from './iss';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
-import { formatRelativeBearing } from './card';
+import { formatTrackOffset } from './track-offset';
 import {
   findUpcomingPasses,
   roundForZoom,
@@ -2653,8 +2653,8 @@ export function formatUtcClock(ms: number): string {
 
 /** Format the "where do I point the camera" hint for one pass row.
  *  Returns "" if the pass has no window/bearing data (older builds).
- *  Format mirrors the card render: "35° · WORF · 35° starboard".
- *  Exported for unit testing. */
+ *  Format mirrors the card render: "35° right of track · WORF" (CEO convention,
+ *  off-nadir = degrees right/left of track at closest). Exported for unit testing. */
 export function formatShootHint(p: UpcomingPass): string {
   if (typeof p.angleOffNadirDeg !== 'number') return '';
   const deg = Math.round(p.angleOffNadirDeg);
@@ -2662,7 +2662,7 @@ export function formatShootHint(p: UpcomingPass): string {
   if (typeof p.relativeBearingDeg !== 'number') {
     return `${deg}° · ${win}`;
   }
-  return `${deg}° · ${win} · ${formatRelativeBearing(p.relativeBearingDeg)}`;
+  return `${formatTrackOffset(p.angleOffNadirDeg, p.relativeBearingDeg)} · ${win}`;
 }
 
 function formatRelative(deltaMs: number): string {

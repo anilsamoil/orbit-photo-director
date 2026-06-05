@@ -1,6 +1,7 @@
 import type { PassEntry } from './types';
 import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
 import { renderStarBlock, scoreToStars, starsToLabel } from './score-stars';
+import { formatTrackOffset } from './track-offset';
 
 /** Variant marker for cards: 'observed' uses Queue styling (Shoot/Skip on
  *  the imminent pass), 'forecast' uses Upcoming styling (no actions; soft
@@ -170,15 +171,12 @@ export function renderCard(
     const deg = p.angle_off_nadir_deg;
     const isWorf = deg < 30;
     const window = isWorf ? 'WORF' : 'Cupola';
-    // Append direction-of-look so the operator knows which side to point
-    // the camera. Without this, "35° · Cupola" is ambiguous between
-    // fore/aft/port/starboard. Drops gracefully on older manifests that
-    // don't include iss_relative_bearing_deg.
-    const direction = typeof p.iss_relative_bearing_deg === 'number'
-      ? formatRelativeBearing(p.iss_relative_bearing_deg)
-      : null;
-    const label = direction
-      ? `${Math.round(deg)}° · ${window} · ${direction}`
+    // Direction in the CEO-target-sheet convention "x° right/left of track"
+    // (x = off-nadir): at closest the target is abeam, so off-nadir IS the
+    // degrees right/left of track — one number. Drops to a bare angle on older
+    // manifests without iss_relative_bearing_deg.
+    const label = typeof p.iss_relative_bearing_deg === 'number'
+      ? `${formatTrackOffset(deg, p.iss_relative_bearing_deg)} · ${window}`
       : `${Math.round(deg)}° · ${window}`;
     meta.appendChild(makeTag(
       isWorf ? 'window-worf' : 'window-cupola',
@@ -401,33 +399,6 @@ export function formatLaunchWindow(netWindowSeconds: number): string {
   }
   const h = netWindowSeconds / 3600;
   return `Window: ±${h.toFixed(h < 10 ? 1 : 0)}h`;
-}
-
-/** Convert relative bearing (0=fore, 90=starboard, 180=aft, 270=port) to a
- *  short operator-friendly direction label.
- *
- *  Within ±15° of a cardinal, use just the cardinal word ("fore", "aft",
- *  "port", "starboard"). Otherwise report degrees off forward on the
- *  closer side: 35° → "35° starboard"; 220° → "40° port" (since
- *  360-220=140 off forward is closer measured port-side as 220-180=40
- *  off aft, so we use the smaller-magnitude port representation).
- *
- *  Always describes the smallest reachable angle so the operator's mental
- *  arc is never > 90° from a cardinal.
- */
-export function formatRelativeBearing(rel: number): string {
-  // Normalize to [0, 360).
-  const r = ((rel % 360) + 360) % 360;
-  const CARDINAL_THRESHOLD = 15;
-  if (r <= CARDINAL_THRESHOLD || r >= 360 - CARDINAL_THRESHOLD) return 'fore';
-  if (Math.abs(r - 180) <= CARDINAL_THRESHOLD) return 'aft';
-  if (Math.abs(r - 90) <= CARDINAL_THRESHOLD) return 'starboard';
-  if (Math.abs(r - 270) <= CARDINAL_THRESHOLD) return 'port';
-  // Off-cardinal: name the side, then degrees-off-nearest-cardinal.
-  if (r < 90) return `${Math.round(r)}° starboard`;           // fore-starboard
-  if (r < 180) return `${Math.round(180 - r)}° starboard aft`; // aft-starboard
-  if (r < 270) return `${Math.round(r - 180)}° port aft`;      // aft-port
-  return `${Math.round(360 - r)}° port`;                       // fore-port
 }
 
 /** Module-level state: which cards (by target_id + closest_approach) have
