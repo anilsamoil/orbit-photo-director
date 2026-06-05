@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _resetOpenBreakdownsForTest, _resetOpenThumbnailsForTest, formatForecastHorizon, formatObsAge, formatRelativeBearing, renderCard, renderCards } from '../src/card';
+import { _resetOpenBreakdownsForTest, _resetOpenThumbnailsForTest, formatForecastHorizon, formatObsAge, renderCard, renderCards } from '../src/card';
 import type { PassEntry } from '../src/types';
 
 const samplePass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -460,53 +460,9 @@ describe('renderCard obs-age tag', () => {
   });
 });
 
-describe('formatRelativeBearing', () => {
-  it('returns "fore" when target is directly ahead', () => {
-    expect(formatRelativeBearing(0)).toBe('fore');
-    expect(formatRelativeBearing(5)).toBe('fore');
-    expect(formatRelativeBearing(355)).toBe('fore');
-  });
-
-  it('returns "aft" when target is directly behind', () => {
-    expect(formatRelativeBearing(180)).toBe('aft');
-    expect(formatRelativeBearing(175)).toBe('aft');
-    expect(formatRelativeBearing(185)).toBe('aft');
-  });
-
-  it('returns "starboard" near 90°', () => {
-    expect(formatRelativeBearing(90)).toBe('starboard');
-    expect(formatRelativeBearing(85)).toBe('starboard');
-  });
-
-  it('returns "port" near 270°', () => {
-    expect(formatRelativeBearing(270)).toBe('port');
-    expect(formatRelativeBearing(275)).toBe('port');
-  });
-
-  it('formats fore-starboard quadrant with degrees off forward', () => {
-    expect(formatRelativeBearing(45)).toBe('45° starboard');
-    expect(formatRelativeBearing(30)).toBe('30° starboard');
-  });
-
-  it('formats fore-port quadrant with degrees off forward', () => {
-    expect(formatRelativeBearing(315)).toBe('45° port');
-    expect(formatRelativeBearing(330)).toBe('30° port');
-  });
-
-  it('formats aft-starboard quadrant as degrees off aft', () => {
-    expect(formatRelativeBearing(135)).toBe('45° starboard aft');
-  });
-
-  it('formats aft-port quadrant as degrees off aft', () => {
-    expect(formatRelativeBearing(225)).toBe('45° port aft');
-  });
-
-  it('normalizes out-of-range input', () => {
-    expect(formatRelativeBearing(360)).toBe('fore');
-    expect(formatRelativeBearing(-5)).toBe('fore');
-    expect(formatRelativeBearing(720)).toBe('fore');
-  });
-});
+// formatRelativeBearing was removed in v1.7.7.0 — the card/map/thumbnail now
+// share track-offset.ts:formatTrackOffset ("x° right/left of track"), tested in
+// track-offset.test.ts. The card-render assertions below cover the integration.
 
 describe('renderCard launch.kind tag (V3-P2 ASCENT)', () => {
   const launchOverhead = samplePass({
@@ -564,14 +520,22 @@ describe('renderCard launch.kind tag (V3-P2 ASCENT)', () => {
 });
 
 describe('renderCard direction-of-look tag', () => {
-  it('appends the direction word when iss_relative_bearing_deg is present', () => {
+  it('renders "x° right of track · window" when bearing is on the starboard half', () => {
     const card = renderCard(
       samplePass({ angle_off_nadir_deg: 35, iss_relative_bearing_deg: 90 }),
       NOW, false, () => undefined,
     );
     const tag = card.querySelector('.tag.window-cupola');
-    expect(tag?.textContent).toContain('starboard');
-    expect(tag?.textContent).toContain('35°');
+    expect(tag?.textContent).toBe('35° right of track · Cupola');  // off-nadir = degrees off track
+  });
+
+  it('renders "x° left of track" when bearing is on the port half', () => {
+    const card = renderCard(
+      samplePass({ angle_off_nadir_deg: 35, iss_relative_bearing_deg: 270 }),
+      NOW, false, () => undefined,
+    );
+    const tag = card.querySelector('.tag.window-cupola');
+    expect(tag?.textContent).toBe('35° left of track · Cupola');
   });
 
   it('omits direction silently when iss_relative_bearing_deg missing', () => {
@@ -581,15 +545,6 @@ describe('renderCard direction-of-look tag', () => {
     );
     const tag = card.querySelector('.tag.window-cupola');
     expect(tag?.textContent).toBe('35° · Cupola');
-  });
-
-  it('shows "fore" for a directly-ahead pass', () => {
-    const card = renderCard(
-      samplePass({ angle_off_nadir_deg: 35, iss_relative_bearing_deg: 0 }),
-      NOW, false, () => undefined,
-    );
-    const tag = card.querySelector('.tag.window-cupola');
-    expect(tag?.textContent).toContain('fore');
   });
 });
 

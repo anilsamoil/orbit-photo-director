@@ -42,7 +42,7 @@ export interface UpcomingPass {
   angleOffNadirDeg?: number;
   /** Bearing of the pin relative to ISS direction-of-travel, clockwise
    *  from forward [0, 360). 0 = fore, 90 = starboard, 180 = aft, 270 = port.
-   *  Formatted via card.ts:formatRelativeBearing for the popup. */
+   *  The side feeds track-offset.ts:formatTrackOffset ("x° right/left of track"). */
   relativeBearingDeg?: number;
 }
 

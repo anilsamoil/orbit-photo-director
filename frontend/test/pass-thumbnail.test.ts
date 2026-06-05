@@ -7,7 +7,6 @@ import {
   THUMBNAIL_ZOOM,
   esriImageryTileUrl,
   esriReferenceTileUrl,
-  formatLookDirection,
   formatThumbnailCountdown,
   lonLatToTileXY,
   projectSampleToThumbnail,
@@ -176,41 +175,10 @@ describe('formatThumbnailCountdown', () => {
   });
 });
 
-describe('formatLookDirection (off-forward magnitude + spelled side, capped at 90 + aft)', () => {
-  it('shows degrees-off-forward to the right from fore to abeam', () => {
-    expect(formatLookDirection(45)).toBe('45° right');
-    expect(formatLookDirection(71)).toBe('71° right');   // magnitude matches card's "71° starboard"
-    expect(formatLookDirection(14)).toBe('14° right');   // the "14° off forward" the operator wanted
-    expect(formatLookDirection(90)).toBe('90° right');   // exactly abeam-right
-  });
-  it('shows degrees-off-forward to the left from fore to abeam', () => {
-    expect(formatLookDirection(315)).toBe('45° left');   // 360-315
-    expect(formatLookDirection(346)).toBe('14° left');
-    expect(formatLookDirection(270)).toBe('90° left');   // exactly abeam-left
-  });
-  it('caps past-abeam bearings at 90 and adds "aft" (agrees with card magnitude)', () => {
-    expect(formatLookDirection(120)).toBe('60° right aft');  // card: "60° starboard aft"
-    expect(formatLookDirection(91)).toBe('89° right aft');
-    expect(formatLookDirection(200)).toBe('20° left aft');   // card: "20° port aft"
-    expect(formatLookDirection(269)).toBe('89° left aft');
-  });
-  it('collapses to ahead/behind only within 1° of the fore/aft axis', () => {
-    expect(formatLookDirection(0)).toBe('ahead');
-    expect(formatLookDirection(360)).toBe('ahead');
-    expect(formatLookDirection(0.5)).toBe('ahead');
-    expect(formatLookDirection(359.5)).toBe('ahead');
-    expect(formatLookDirection(180)).toBe('behind');
-    expect(formatLookDirection(179.5)).toBe('behind');
-  });
-  it('still shows a small angle just outside the 1° pole (not collapsed)', () => {
-    expect(formatLookDirection(2)).toBe('2° right');     // 2° off forward stays visible
-    expect(formatLookDirection(358)).toBe('2° left');
-  });
-  it('normalizes out-of-range bearings', () => {
-    expect(formatLookDirection(450)).toBe('90° right');  // 450 → 90
-    expect(formatLookDirection(-90)).toBe('90° left');    // -90 → 270 → 90 left
-  });
-});
+// formatLookDirection (the off-forward "tilt · aim" formatter) was removed in
+// v1.7.7.0. The thumbnail's CLOSEST row now uses track-offset.ts:formatTrackOffset
+// ("x° right/left of track"), tested in track-offset.test.ts; the INITIAL row is
+// a lead-time "rising ahead" heads-up. Render integration is covered below.
 
 describe('renderPassThumbnail (DOM scaffold)', () => {
   const samplePass: PassEntry = {
@@ -296,8 +264,7 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(cap!.textContent).not.toContain('WORF');
   });
 
-  it('renders an INITIAL row with tilt + off-forward direction when encounter present', () => {
-    // rel_bearing 90 = abeam-starboard → "90° right"; tilt 41° at the encounter.
+  it('renders an INITIAL "rising ahead" lead-time row when encounter present', () => {
     const withEnc: PassEntry = {
       ...samplePass,
       encounter: {
@@ -315,9 +282,22 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
       (r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent === 'INITIAL',
     )!;
     const v = initRow.querySelector('.pass-thumbnail-caption-value')!.textContent!;
-    expect(v).toContain('in 27m');
-    expect(v).toContain('41°');         // camera tilt
-    expect(v).toContain('90° right');   // off-forward aim, spelled out
+    expect(v).toBe('in 27m · rising ahead');  // lead time + heads-up; direction is on CLOSEST
+  });
+
+  it('renders CLOSEST as "x° right/left of track" when off-nadir + bearing present', () => {
+    // off-nadir 22° + bearing 90 (starboard) → "22° right of track" (CEO convention).
+    const right: PassEntry = { ...samplePass, iss_relative_bearing_deg: 90 };
+    const closestVal = (p: PassEntry): string | null => {
+      const el = renderPassThumbnail(p, null, NOW);
+      return [...el.querySelectorAll('.pass-thumbnail-caption-row')]
+        .find((r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent === 'CLOSEST')!
+        .querySelector('.pass-thumbnail-caption-value')!.textContent;
+    };
+    expect(closestVal(right)).toBe('in 30m · 22° right of track');
+    // port half (bearing 270) → "left of track" at the DOM integration layer too.
+    const left: PassEntry = { ...samplePass, iss_relative_bearing_deg: 270 };
+    expect(closestVal(left)).toBe('in 30m · 22° left of track');
   });
 
   it('omits the INITIAL row when encounter is absent (grazing pass / old manifest)', () => {
@@ -328,42 +308,36 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(labels).toContain('CLOSEST');  // closest-only render, no error
   });
 
-  it('shows the tilt with no aim part when rel_bearing is absent', () => {
+  it('shows a bare off-nadir on CLOSEST when rel_bearing is absent (no track side)', () => {
     // samplePass has angle_off_nadir_deg=22 but no iss_relative_bearing_deg —
-    // a realistic manifest shape. The CLOSEST value shows the tilt, no aim.
+    // older manifest shape. Degrades to a bare angle, no "of track".
     const el = renderPassThumbnail(samplePass, null, NOW);
     const closestRow = [...el.querySelectorAll('.pass-thumbnail-caption-row')]
       .find((r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent === 'CLOSEST')!;
     const val = closestRow.querySelector('.pass-thumbnail-caption-value')!.textContent!;
-    expect(val).toContain('22°');
-    expect(val).not.toMatch(/right|left|ahead|behind/);  // no aim part without bearing
+    expect(val).toBe('in 30m · 22°');
+    expect(val).not.toContain('of track');
   });
 
-  it('shows the aim with no tilt part when off-nadir is absent', () => {
-    // Independent rowValue branch: bearing present, angle absent → countdown + aim.
-    const noTilt: PassEntry = {
+  it('drops the direction when off-nadir is absent (no angle → no track offset)', () => {
+    const noAngle: PassEntry = {
       ...samplePass, angle_off_nadir_deg: NaN, iss_relative_bearing_deg: 71,
     };
-    const el = renderPassThumbnail(noTilt, null, NOW);
+    const el = renderPassThumbnail(noAngle, null, NOW);
     const closestRow = [...el.querySelectorAll('.pass-thumbnail-caption-row')]
       .find((r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent === 'CLOSEST')!;
-    const val = closestRow.querySelector('.pass-thumbnail-caption-value')!.textContent!;
-    expect(val).toContain('in 30m');
-    expect(val).toContain('71° right');
-    expect(val).not.toContain('°  ·');  // no orphan tilt segment
+    expect(closestRow.querySelector('.pass-thumbnail-caption-value')!.textContent).toBe('in 30m');
   });
 
-  it('renders tilt + aim with no leading countdown when the time is unparseable', () => {
-    // Past/unparseable countdown ('') but finite tilt+aim → "22° · 71° right",
-    // no leading "· " (the empty countdown piece is dropped, row still renders).
+  it('renders the track offset with no leading countdown when the time is unparseable', () => {
     const noTime: PassEntry = {
-      ...samplePass, closest_approach: 'garbage', iss_relative_bearing_deg: 71,
+      ...samplePass, closest_approach: 'garbage', iss_relative_bearing_deg: 90,
     };
     const el = renderPassThumbnail(noTime, null, NOW);
     const closestRow = [...el.querySelectorAll('.pass-thumbnail-caption-row')]
       .find((r) => r.querySelector('.pass-thumbnail-caption-label')!.textContent === 'CLOSEST')!;
-    const val = closestRow.querySelector('.pass-thumbnail-caption-value')!.textContent!;
-    expect(val).toBe('22° · 71° right');  // no leading separator, no countdown
+    expect(closestRow.querySelector('.pass-thumbnail-caption-value')!.textContent)
+      .toBe('22° right of track');  // no leading separator, no countdown
   });
 
   it('omits the INITIAL row when encounter.time is unparseable (defensive)', () => {

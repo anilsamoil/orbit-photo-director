@@ -2,6 +2,22 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.7.0] - 2026-06-05
+
+## **Direction labels now read "26° right of track" everywhere — the operator's own convention, and one number instead of two.**
+
+The cards, the map's shoot-from box, and the 🌍 thumbnail used to name the look direction two different ways: an off-nadir tilt plus a separate bearing like "71° starboard". Chris (ISS operator) pointed out that at the closest pass the target is always directly abeam — straight off the left or right — so the bearing is really just a side, and its magnitude was a 30-second sampling artifact that scattered (29°, 127°) when the geometry says ~90°. The CEO target sheets the crew shoots from phrase it as "x degrees Right/Left of track", where that x is the same number as the off-nadir angle. So all three surfaces now say exactly that — "26° right of track" — one number that carries both how oblique the shot is and how far off the ground track to aim. The thumbnail's INITIAL row drops the redundant angle for a clean "rising ahead" heads-up, and the CLOSEST row carries the aim.
+
+### Itemized changes
+
+#### Changed
+- Card direction tags, the map/pin-drop "shoot from" hint, and the 🌍 thumbnail's CLOSEST row now read "x° right/left of track" (the CEO-target-sheet convention) instead of an off-nadir angle plus a separate "starboard/port/fore/aft" bearing. The side comes from which half of the track the target is on; the magnitude is the off-nadir angle, since at closest the target is abeam and the two collapse to one number.
+- The 🌍 thumbnail's INITIAL row now reads "in Nm · rising ahead" — the cross-track aim is identical to CLOSEST (constant across the pass) and is shown there, so it isn't repeated on INITIAL.
+- A target rounding to straight-down now reads "nadir" instead of "overhead", matching the app's WORF/nadir vocabulary and avoiding collision with the launch "OVERHEAD pass" tag.
+
+#### Internal
+- Consolidated two divergent direction formatters (`formatRelativeBearing`, `formatLookDirection`) into one shared `track-offset.ts:formatTrackOffset`, removing a class of bug where the card and thumbnail disagreed on the same bearing (net −126 lines).
+
 ## [1.7.6.0] - 2026-06-03
 
 ## **The pass thumbnail's initial-encounter line is now actually useful, and reads clearly.**

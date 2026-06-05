@@ -44,26 +44,26 @@ describe('formatUtcClock (v1.6.1.2 — dropped date, kept HH:MMZ)', () => {
   });
 });
 
-describe('formatShootHint (v1.6.1.2 — angle · window · direction)', () => {
+describe('formatShootHint (v1.7.7.0 — "x° right/left of track · window")', () => {
   it('returns "" when angle data is missing (legacy 4-col layout)', () => {
     const p = makePass({ angleOffNadirDeg: undefined });
     expect(formatShootHint(p)).toBe('');
   });
 
-  it('returns angle · WORF for narrow-angle passes (<30°)', () => {
+  it('returns "x° right of track · WORF" for narrow-angle starboard passes (<30°)', () => {
     const p = makePass({
       angleOffNadirDeg: 25,
       relativeBearingDeg: 90,
     });
-    expect(formatShootHint(p)).toBe('25° · WORF · starboard');
+    expect(formatShootHint(p)).toBe('25° right of track · WORF');
   });
 
-  it('returns angle · Cupola for wide-angle passes (≥30°)', () => {
+  it('returns "x° right of track · Cupola" for wide-angle passes (≥30°)', () => {
     const p = makePass({
       angleOffNadirDeg: 45,
       relativeBearingDeg: 90,
     });
-    expect(formatShootHint(p)).toBe('45° · Cupola · starboard');
+    expect(formatShootHint(p)).toBe('45° right of track · Cupola');
   });
 
   it('uses Cupola at exactly 30° (the boundary)', () => {
@@ -89,18 +89,14 @@ describe('formatShootHint (v1.6.1.2 — angle · window · direction)', () => {
       angleOffNadirDeg: 27.6,
       relativeBearingDeg: 90,
     });
-    expect(formatShootHint(p)).toBe('28° · WORF · starboard');
+    expect(formatShootHint(p)).toBe('28° right of track · WORF');
   });
 
-  it('formats fore-aft directions correctly', () => {
-    expect(formatShootHint(makePass({
-      angleOffNadirDeg: 40, relativeBearingDeg: 0,
-    }))).toContain('fore');
-    expect(formatShootHint(makePass({
-      angleOffNadirDeg: 40, relativeBearingDeg: 180,
-    }))).toContain('aft');
-    expect(formatShootHint(makePass({
-      angleOffNadirDeg: 40, relativeBearingDeg: 270,
-    }))).toContain('port');
+  it('picks the side from the bearing half (starboard → right, port → left)', () => {
+    // off-nadir is the magnitude ("x° of track"); the bearing only picks the side.
+    expect(formatShootHint(makePass({ angleOffNadirDeg: 40, relativeBearingDeg: 90 })))
+      .toBe('40° right of track · Cupola');
+    expect(formatShootHint(makePass({ angleOffNadirDeg: 40, relativeBearingDeg: 270 })))
+      .toBe('40° left of track · Cupola');
   });
 });
