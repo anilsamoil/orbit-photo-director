@@ -14,8 +14,48 @@ from generator.orbit import TLE
 
 @pytest.fixture(autouse=True)
 def _force_mock_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tests force the mock cloud sampler so they don't hit the real GIBS API."""
+    """Tests force the mock cloud sampler so they don't hit the real GIBS API.
+
+    Two distinct cloud code paths reach the network and both must be neutered:
+
+    1. Observed cloud (GIBS) — gated by OPD_CLOUD_SOURCE, set to "mock" here.
+    2. Forecast cloud (GFS via Open-Meteo) — a SEPARATE path that ignores
+       OPD_CLOUD_SOURCE and does a live requests.get to api.open-meteo.com
+       whenever GFSForecastSampler is built without a fetcher (run_tick does
+       exactly this). A transient open-meteo timeout made run_tick
+       non-deterministic: the canonical pass-set would get a "no-data" cloud
+       attribution while the per-profile pass-set re-fetched the same coords,
+       succeeded, and got "out-of-horizon" — breaking byte-equality assertions
+       like `jack == canonical`. Inject an offline fetcher on the default
+       (no-fetcher) path so run_tick tests are hermetic and deterministic.
+       Tests that pass an explicit fetcher (test_cloud.py, test_lightning.py)
+       are untouched — only the live-network default is replaced.
+    """
     monkeypatch.setenv("OPD_CLOUD_SOURCE", "mock")
+
+    from generator import cloud as _cloud
+
+    _orig_init = _cloud.GFSForecastSampler.__init__
+
+    def _offline_init(
+        self: object,
+        targets: list[tuple[float, float]],
+        forecast_days: int = 2,
+        fetcher: object | None = None,
+        include_cape: bool = False,
+    ) -> None:
+        if fetcher is None:
+            def fetcher(_url: str) -> object:  # noqa: ANN401
+                raise RuntimeError(
+                    "open-meteo is disabled in tests; pass an explicit "
+                    "fetcher= to exercise GFSForecastSampler against canned data"
+                )
+        _orig_init(
+            self, targets, forecast_days=forecast_days,
+            fetcher=fetcher, include_cape=include_cape,
+        )
+
+    monkeypatch.setattr(_cloud.GFSForecastSampler, "__init__", _offline_init)
 
 # A real ISS TLE (epoch 2024-10-16). For tests we just need sgp4 to propagate
 # and produce sane lat/lon. Accuracy versus real ISS is irrelevant here.
