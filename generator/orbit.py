@@ -310,8 +310,16 @@ def find_passes(
     window_end: datetime,
     step_seconds: int = 30,
     max_distance_km: float = 800.0,
+    preroll_seconds: int = 0,
 ) -> list[Pass]:
-    """Sample ground track at step_seconds; return local minima within max_distance_km of target."""
+    """Sample ground track at step_seconds; return local minima within max_distance_km of target.
+
+    `preroll_seconds` extends sampling BACKWARD before `window_start` so the
+    initial-encounter scan can observe a cone crossing that happens before the
+    window opens (see _find_encounter). Pre-roll samples are context only:
+    passes whose closest approach falls before `window_start` are never emitted,
+    so a pre-roll never surfaces an already-past pass.
+    """
     _ensure_utc(window_start, "window_start")
     _ensure_utc(window_end, "window_end")
     if window_end <= window_start:
@@ -320,8 +328,9 @@ def find_passes(
     lon_t = target["geom"]["lon"]
     target_id = target["id"]
 
+    scan_start = window_start - timedelta(seconds=preroll_seconds)
     samples: list[tuple[datetime, Position, float]] = []
-    t = window_start
+    t = scan_start
     while t < window_end:
         pos = propagate(tle, t)
         d = great_circle_km(lat_t, lon_t, pos.lat, pos.lon)
@@ -330,6 +339,10 @@ def find_passes(
 
     passes: list[Pass] = []
     for i in range(1, len(samples) - 1):
+        # Pre-roll samples are encounter context only — a local minimum before
+        # `window_start` is an already-past approach and must not be emitted.
+        if samples[i][0] < window_start:
+            continue
         prev_d = samples[i - 1][2]
         curr_d = samples[i][2]
         next_d = samples[i + 1][2]

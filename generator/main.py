@@ -48,6 +48,7 @@ from .config import (
     DEFAULT_TOP_MAP,
     DEFAULT_TOP_QUEUE,
     DEFAULT_TOP_UPCOMING,
+    ENCOUNTER_PREROLL_SECONDS,
     OBSERVED_CLOUD_HORIZON_MINUTES,
     PASS_MAX_DISTANCE_KM,
     PASS_SAMPLE_STEP_SECONDS,
@@ -827,6 +828,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
             window_end=window_end,
             step_seconds=PASS_SAMPLE_STEP_SECONDS,
             max_distance_km=PASS_MAX_DISTANCE_KM,
+            preroll_seconds=ENCOUNTER_PREROLL_SECONDS,
         )
         for p in passes:
             all_passes.append(score_pass_for_target(
@@ -1263,6 +1265,7 @@ def _run_profile_multiplex(
             window_end=window_end,
             step_seconds=PASS_SAMPLE_STEP_SECONDS,
             max_distance_km=PASS_MAX_DISTANCE_KM,
+            preroll_seconds=ENCOUNTER_PREROLL_SECONDS,
         )
         for p in passes:
             profile_passes.append(score_pass_for_target(
