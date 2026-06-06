@@ -2,6 +2,24 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.9.0] - 2026-06-06
+
+## **Offline now says "you're offline" instead of blaming the generator, and the map renders at world view during LOS.**
+
+Two fixes from opening the app on an iPhone in airplane mode after two days away. The empty queue and the banner read "generator has been slow" even though the real problem was the phone being offline — `navigator.onLine` reports online in iOS Airplane Mode, and the service worker serves the last cached manifest, so the app couldn't tell. It now runs a cache-busting reachability probe (only when the data is already stale) and, when that fails, frames it correctly as a loss-of-signal: "you're offline — last synced Nh ago." The map was also fully black offline: tiles were precached only around the top-3 targets at close zoom, but the map opens at world view, so the default screen was always a cache miss. The world-view basemap (zoom 0-3) is now precached into a dedicated cache that survives panning, and cloud tiles are kept for 7 days instead of 1, so the planet is there when you open the map LOS.
+
+### Itemized changes
+
+#### Fixed
+- The empty-queue hint and the staleness banner now distinguish "you're offline (LOS)" from "the generator is behind." A connectivity probe to a dedicated non-cached path disambiguates the two when data is stale; the fresh-data path never probes. Previously both cases blamed the generator, which is wrong and erodes trust during a real loss-of-signal window.
+- The map renders at world view while offline. The default z2 view was a service-worker cache miss because the tile precache only covered z6/8/10 around the top-3 targets. The world basemap (z0-3, ~85 tiles) is now precached once per session into a dedicated `opd-tiles-carto-base` cache that natural-pan eviction never touches.
+
+#### Changed
+- GIBS cloud-tile cache lifetime raised from 24h to 7 days, so the cloud overlay survives offline past a day (a day-stale cloud layer beats a blank one; the imagery-date badge already shows staleness).
+
+#### Internal
+- New `network-probe.ts` (cache-busting reachability probe on a dedicated `/__opd_probe` path that matches no service-worker route, so it can't poison the manifest cache). Extracted a shared `fireAndForgetPrecache` used by both the per-target and world-base precachers.
+
 ## [1.7.8.0] - 2026-06-06
 
 ## **The most imminent passes keep their INITIAL heads-up again — the encounter scan now pre-rolls before the tick.**
