@@ -37,13 +37,29 @@ export const EMPTY_HINT_THRESHOLD_MIN = 90;
  *  staleness rather than orbital geometry. Returns null in the normal
  *  fresh-manifest case so the default copy fires.
  *
+ *  `offline` distinguishes the two staleness CAUSES the operator cares about:
+ *    - offline=false → the device is online but the generator hasn't ticked
+ *      recently (genuine generator lag): "generator has been slow".
+ *    - offline=true  → the device is offline (LOS) and serving a cached
+ *      manifest; blaming the generator would be wrong: "you're offline".
+ *  The caller decides which via a connectivity probe (network-probe.ts) —
+ *  navigator.onLine alone can't tell, since iOS reports online in Airplane
+ *  Mode and the SW serves the stale manifest from cache.
+ *
  *  Pure function. Time-independent (takes `nowMs` rather than reading
  *  Date.now()) so tests can pin time. NaN-tolerant on `generated_at`. */
-export function emptyQueueHint(manifest: Manifest, nowMs: number): string | null {
+export function emptyQueueHint(
+  manifest: Manifest,
+  nowMs: number,
+  offline = false,
+): string | null {
   const generated = Date.parse(manifest.generated_at);
   if (Number.isNaN(generated)) return null;
   const ageMin = Math.floor((nowMs - generated) / 60000);
   if (ageMin < EMPTY_HINT_THRESHOLD_MIN) return null;
+  if (offline) {
+    return `You're offline — last synced ${formatAge(ageMin)} ago. Showing cached passes; check back when you're back online.`;
+  }
   // Next tick projection: hourly cadence from generated_at. If we're
   // already past the expected next tick (ageMin > 60), the modulo wraps
   // to the next expected boundary — i.e. how long until the GENERATOR's

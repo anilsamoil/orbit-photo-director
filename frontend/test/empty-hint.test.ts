@@ -85,4 +85,31 @@ describe('emptyQueueHint', () => {
   it('exports the threshold constant for callers', () => {
     expect(EMPTY_HINT_THRESHOLD_MIN).toBe(90);
   });
+
+  // offline param (v1.7.9.0): when the device is offline (LOS), the cause of
+  // the empty queue is the device, not the generator — blaming the generator
+  // misleads the operator during a real loss-of-signal window.
+  describe('offline framing', () => {
+    it('blames the device (not the generator) when offline=true', () => {
+      const hint = emptyQueueHint(manifestAgedBy(2923, NOW), NOW, true);
+      expect(hint).not.toBeNull();
+      expect(hint).toContain("You're offline");
+      expect(hint).toContain('last synced');
+      expect(hint).not.toContain('generator has been slow');
+    });
+
+    it('keeps the generator framing when offline=false (regression)', () => {
+      const hint = emptyQueueHint(manifestAgedBy(102, NOW), NOW, false);
+      expect(hint).toContain('generator has been slow');
+      expect(hint).not.toContain("You're offline");
+    });
+
+    it('defaults to the generator framing when offline is omitted', () => {
+      expect(emptyQueueHint(manifestAgedBy(102, NOW), NOW)).toContain('generator has been slow');
+    });
+
+    it('returns null below the threshold regardless of offline state', () => {
+      expect(emptyQueueHint(manifestAgedBy(45, NOW), NOW, true)).toBeNull();
+    });
+  });
 });

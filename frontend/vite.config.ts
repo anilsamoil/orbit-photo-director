@@ -119,6 +119,27 @@ export default defineConfig({
             },
           },
           {
+            // World-view basemap tiles (z0-3): a SEPARATE long-lived cache from
+            // opd-tiles-carto below. The map opens at z2 (world view), but the
+            // per-target precache only covers z6/8/10 — so the default view was
+            // a cache miss → black map offline (observed 2026-06-06). These ~85
+            // tiles (z0:1+z1:4+z2:16+z3:64) are static (the dark basemap never
+            // changes), so 30d TTL and a dedicated cache that natural-pan LRU
+            // eviction can never touch. MUST be registered BEFORE the general
+            // carto rule below — Workbox matches routes in registration order,
+            // and z0-3 URLs also match the general /cartocdn\.com\// pattern.
+            urlPattern: /^https:\/\/[a-d]\.basemaps\.cartocdn\.com\/dark_all\/[0-3]\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opd-tiles-carto-base',
+              expiration: {
+                maxEntries: 90,
+                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days — static basemap
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             // Carto basemap tiles: CacheFirst LRU bounded.
             // statuses [0, 200] — both opaque (status 0) and real-CORS
             // (status 200) responses cache. MapLibre's tile <img> fetches
@@ -156,7 +177,9 @@ export default defineConfig({
               cacheName: 'opd-tiles-gibs',
               expiration: {
                 maxEntries: 200,
-                maxAgeSeconds: 60 * 60 * 24, // 24h
+                // 7 days (was 24h). A day-stale cloud layer beats a BLANK one
+                // offline; the imagery-date badge already surfaces staleness.
+                maxAgeSeconds: 60 * 60 * 24 * 7,
               },
               cacheableResponse: { statuses: [0, 200] },
             },

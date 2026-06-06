@@ -16,12 +16,15 @@ import {
   GIBS_MAX_ZOOM,
   PRECACHE_TARGET_COUNT,
   PRECACHE_ZOOM_LEVELS,
+  WORLD_BASE_ZOOM_LEVELS,
   _resetPrecacheInflightForTest,
   buildPrecacheUrls,
+  buildWorldBaseUrls,
   fillTileUrl,
   gibsTrueColorUrl,
   lonLatToTile,
   precacheTilesForTargets,
+  precacheWorldBaseTiles,
 } from '../src/tile-precache';
 import type { PassEntry } from '../src/types';
 
@@ -177,6 +180,80 @@ describe('buildPrecacheUrls', () => {
     const urls = buildPrecacheUrls(passes, gibsPattern);
     // Only 1 valid target × 3 zooms × 2 sources = 6 URLs.
     expect(urls.length).toBe(PRECACHE_ZOOM_LEVELS.length * 2);
+  });
+});
+
+describe('buildWorldBaseUrls (z0-3 world-view basemap)', () => {
+  it('produces exactly 85 tiles: z0(1)+z1(4)+z2(16)+z3(64)', () => {
+    const urls = buildWorldBaseUrls();
+    const expected = WORLD_BASE_ZOOM_LEVELS.reduce<number>((sum, z) => sum + 4 ** z, 0);
+    expect(expected).toBe(85);
+    expect(urls.length).toBe(85);
+  });
+
+  it('covers every tile at each zoom (z2 → all 16)', () => {
+    const urls = buildWorldBaseUrls();
+    const z2 = urls.filter((u) => /\/dark_all\/2\//.test(u));
+    expect(z2.length).toBe(16);
+    // Every (x,y) in the 4×4 z2 grid is present.
+    for (let x = 0; x < 4; x++) {
+      for (let y = 0; y < 4; y++) {
+        expect(z2.some((u) => u.includes(`/2/${x}/${y}@2x.png`))).toBe(true);
+      }
+    }
+  });
+
+  it('only emits carto dark_all base tiles (matches the SW base-cache route)', () => {
+    for (const u of buildWorldBaseUrls()) {
+      expect(u).toMatch(/^https:\/\/[a-d]\.basemaps\.cartocdn\.com\/dark_all\/[0-3]\/\d+\/\d+@2x\.png$/);
+    }
+  });
+
+  it('rotates subdomain via (x+y)%4 (same as the per-target precache)', () => {
+    const urls = buildWorldBaseUrls();
+    // z3 tile (2,1): (2+1)%4 = 3 → 'd'
+    expect(urls).toContain('https://d.basemaps.cartocdn.com/dark_all/3/2/1@2x.png');
+    // z3 tile (0,0): (0+0)%4 = 0 → 'a'
+    expect(urls).toContain('https://a.basemaps.cartocdn.com/dark_all/3/0/0@2x.png');
+  });
+});
+
+describe('precacheWorldBaseTiles', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    _resetPrecacheInflightForTest();
+    fetchSpy = vi.fn().mockImplementation(() => Promise.resolve(new Response('', { status: 200 })));
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    _resetPrecacheInflightForTest();
+  });
+
+  it('skips entirely when offline', () => {
+    precacheWorldBaseTiles(() => false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('fires one fetch per world tile (85) when online', () => {
+    precacheWorldBaseTiles(() => true);
+    expect(fetchSpy).toHaveBeenCalledTimes(85);
+  });
+
+  it('dedupes against in-flight URLs from a prior call', async () => {
+    let resolveAll: () => void = () => { /* noop */ };
+    const block = new Promise<Response>((resolve) => {
+      resolveAll = () => resolve(new Response('', { status: 200 }));
+    });
+    fetchSpy.mockImplementation(() => block);
+    precacheWorldBaseTiles(() => true);
+    const firstCount = fetchSpy.mock.calls.length;
+    precacheWorldBaseTiles(() => true);  // before the first batch resolves
+    expect(fetchSpy).toHaveBeenCalledTimes(firstCount);
+    resolveAll();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 });
 
