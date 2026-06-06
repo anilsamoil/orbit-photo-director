@@ -50,6 +50,16 @@ PASS_SAMPLE_STEP_SECONDS = 30
 PASS_MAX_DISTANCE_KM = 800.0
 NADIR_HORIZON_KM = 500.0  # camera-friendly horizon at ISS altitude
 
+# Encounter pre-roll. The initial-encounter scan (orbit._find_encounter) needs
+# to see the moment the target crosses INTO the frameable off-nadir cone, which
+# at the 60° threshold lands ~2-4 min before closest approach. The main pass
+# window starts at `now`, so a pass whose closest approach lands in the first
+# minutes of a tick has its crossing BEFORE the window — _find_encounter never
+# observes it and the INITIAL row is silently dropped for the most imminent
+# passes. find_passes samples this far before `now` for encounter context only;
+# passes whose closest approach predates `now` are still never emitted.
+ENCOUNTER_PREROLL_SECONDS = 600  # 10 min — generous vs the ~2-4 min crossing
+
 # TLE freshness
 TLE_WARN_AGE_HOURS = 24.0
 TLE_FLOOR_FRESHNESS = 0.5

@@ -729,3 +729,93 @@ def test_find_passes_attaches_encounter(sample_tle: TLE) -> None:
         fwd_enc = math.cos(math.radians(p.encounter.rel_bearing_deg))
         fwd_closest = math.cos(math.radians(p.iss_relative_bearing_deg))
         assert fwd_enc >= fwd_closest - 0.05
+
+
+# --------------------------------------------------------------------------
+# Encounter pre-roll (find_passes preroll_seconds). Restores the INITIAL row
+# for passes whose closest approach lands in the first minutes of a tick (whose
+# cone crossing predates window_start) while never surfacing an already-past
+# pass. Tests anchor on a real pass so they survive ephemeris changes.
+# --------------------------------------------------------------------------
+
+_PREROLL_TARGET = {
+    "id": "preroll-test",
+    "name": "Preroll",
+    "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+    "priority": 5,
+    "regime": "any",
+}
+
+
+def _anchor_pass_with_lead(
+    tle: TLE, start: datetime, end: datetime, min_lead_s: float,
+) -> Pass:
+    """The framed pass with the LARGEST encounter→closest lead, so the emit
+    window can open between the crossing and closest with room to spare."""
+    framed = [
+        p for p in find_passes(tle, _PREROLL_TARGET, start, end, step_seconds=30)
+        if p.encounter is not None
+    ]
+    assert framed, "expected at least one framed pass to anchor on"
+    best = max(framed, key=lambda p: (p.closest_approach - p.encounter.time).total_seconds())
+    lead = (best.closest_approach - best.encounter.time).total_seconds()
+    assert lead >= min_lead_s, f"best encounter lead {lead}s < required {min_lead_s}s"
+    return best
+
+
+def test_preroll_recovers_encounter_lost_when_window_opens_after_crossing(
+    sample_tle: TLE,
+) -> None:
+    start = datetime(2024, 10, 17, 0, 0, tzinfo=UTC)
+    anchor = _anchor_pass_with_lead(sample_tle, start, start + timedelta(hours=24), 60.0)
+    assert anchor.encounter is not None
+
+    # Open the emit window AFTER the crossing but before closest, so the scan
+    # cannot see the crossing from window_start alone.
+    window_start = anchor.encounter.time + timedelta(seconds=30)
+    assert window_start < anchor.closest_approach  # the pass still emits
+    window_end = anchor.closest_approach + timedelta(minutes=5)
+
+    def _the_pass(passes: list[Pass]) -> Pass | None:
+        for p in passes:
+            if abs((p.closest_approach - anchor.closest_approach).total_seconds()) < 1:
+                return p
+        return None
+
+    # Without pre-roll: crossing predates the window → no encounter.
+    no_pre = _the_pass(find_passes(sample_tle, _PREROLL_TARGET, window_start, window_end, step_seconds=30))
+    assert no_pre is not None, "the pass itself should still emit without pre-roll"
+    assert no_pre.encounter is None
+
+    # With pre-roll reaching back past the crossing: encounter recovered, and it
+    # matches the originally-observed crossing time (grids align on the 30s step).
+    pre = _the_pass(find_passes(
+        sample_tle, _PREROLL_TARGET, window_start, window_end,
+        step_seconds=30, preroll_seconds=600,
+    ))
+    assert pre is not None and pre.encounter is not None
+    assert abs((pre.encounter.time - anchor.encounter.time).total_seconds()) < 1
+
+
+def test_preroll_never_emits_a_pass_whose_closest_is_before_window_start(
+    sample_tle: TLE,
+) -> None:
+    start = datetime(2024, 10, 17, 0, 0, tzinfo=UTC)
+    anchor = _anchor_pass_with_lead(sample_tle, start, start + timedelta(hours=24), 60.0)
+
+    # window_start AFTER this pass's closest, with a pre-roll that reaches back
+    # past it — the now-past pass sits squarely in the pre-roll region.
+    window_start = anchor.closest_approach + timedelta(seconds=60)
+    window_end = window_start + timedelta(hours=2)
+
+    passes = find_passes(
+        sample_tle, _PREROLL_TARGET, window_start, window_end,
+        step_seconds=30, preroll_seconds=900,
+    )
+    # Pre-roll is context only: nothing before the emit window may surface.
+    for p in passes:
+        assert p.closest_approach >= window_start
+    assert all(
+        abs((p.closest_approach - anchor.closest_approach).total_seconds()) > 1
+        for p in passes
+    ), "the past pass in the pre-roll region must not be emitted"
