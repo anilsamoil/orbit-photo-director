@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.8.0] - 2026-06-06
+
+## **The most imminent passes keep their INITIAL heads-up again — the encounter scan now pre-rolls before the tick.**
+
+The 🌍 thumbnail's INITIAL row tells you when the target first enters the shooting cone, which lands ~2-4 minutes before closest approach. But the pass-finder started sampling at `now`, so a pass whose closest approach falls in the first couple minutes of a generator tick had its cone-crossing happen *before* the window opened — the scan never saw it and silently dropped the INITIAL row for exactly the passes you have the least time to react to. (The v1.7.6.0 widening to a 60° cone pushed the crossing further out, so this bit a wider sliver of imminent passes than before.) The pass-finder now samples a 10-minute pre-roll before the tick purely for encounter context, so those crossings are observed and the INITIAL row comes back. Pre-roll is context only: a pass whose closest approach is already in the past is never surfaced.
+
+### Itemized changes
+
+#### Changed
+- `find_passes` gains an opt-in `preroll_seconds` (the two main pass scans use 10 min); the initial-encounter scan can now observe a cone crossing that predates the tick, restoring the INITIAL row for passes whose closest approach lands in the first minutes of a tick.
+
+#### Internal
+- Pre-roll samples are emit-filtered: any local-minimum (closest approach) before the window start is skipped, so a pre-roll never surfaces an already-past pass. Launch-pass scanning is unchanged (no pre-roll). Two new orbit tests pin both the recovery and the never-emit-past-passes invariant.
+
 ## [1.7.7.0] - 2026-06-05
 
 ## **Direction labels now read "26° right of track" everywhere — the operator's own convention, and one number instead of two.**
