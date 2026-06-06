@@ -416,6 +416,30 @@ def test_run_tick_worker_unreachable_falls_through_to_curated(
     assert "jack" in manifest["artifacts"]["profiles"]
 
 
+def test_forecast_sampler_default_path_is_offline_in_tests() -> None:
+    """Regression: the autouse conftest fixture must neuter the GFS forecast
+    sampler's live-network default.
+
+    Before the fix, `GFSForecastSampler(coords)` with no injected fetcher did a
+    live requests.get to api.open-meteo.com. A transient timeout made run_tick
+    non-deterministic — the canonical pass-set got a "gfs-forecast-no-data"
+    cloud attribution while the per-profile pass-set re-fetched the same coords,
+    succeeded, and got "gfs-forecast-out-of-horizon", breaking the
+    `jack == canonical` byte-equality assertion above. This pins the invariant
+    that the default (no-fetcher) path never reaches the network in tests, so
+    every sample is the deterministic no-data placeholder.
+    """
+    from generator.cloud import GFSForecastSampler
+
+    sampler = GFSForecastSampler([(35.68, 139.69)])  # no fetcher → offline stub
+    sample = sampler.sample(
+        35.68, 139.69, datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC),
+    )
+    # A live fetch would have yielded "gfs-forecast" or "...out-of-horizon";
+    # offline it is deterministically the no-data placeholder.
+    assert sample.source == "gfs-forecast-no-data"
+
+
 def test_run_tick_worker_returns_malformed_target_skips_only_that_one(
     settings_in_tmp: Settings, cached_tle: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
