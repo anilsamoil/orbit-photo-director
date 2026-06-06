@@ -22,7 +22,8 @@ import { buildPayload, clearToken, drainQueue, getToken, postCalib, queuedCalibC
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
-import { emptyQueueHint } from './empty-hint';
+import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
+import { probeConnectivity } from './network-probe';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
@@ -33,7 +34,7 @@ import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from '.
 import { applyTargetFilter, getTargetFilter, setTargetFilter, type TargetFilter } from './target-filter-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
-import { gibsTrueColorUrl, precacheTilesForTargets, yesterdayIso } from './tile-precache';
+import { gibsTrueColorUrl, precacheTilesForTargets, precacheWorldBaseTiles, yesterdayIso } from './tile-precache';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 
@@ -48,6 +49,15 @@ let currentTrack: Track | null = null;
 // `launches_last_successful_fetch` field on status.json is the source of
 // truth for "is the launches feature degraded?").
 let currentStatus: Status | null = null;
+// True when the device is offline (LOS) — drives "you're offline" framing on
+// the banner AND the empty-queue hint instead of blaming the generator. Set by
+// doRefresh: navigator.onLine===false, a thrown fetch, or (the iOS case) a
+// connectivity probe that fails when data is stale-from-SW-cache. See
+// network-probe.ts for why navigator.onLine alone isn't enough.
+let currentlyOffline = false;
+// World-view basemap tiles (z0-3) are static, so precache them once per session
+// rather than every manifest tick. Latches true after the first online refresh.
+let worldBasePrecached = false;
 // Held to keep the scheduler's listeners alive and reachable. Production
 // code never tears down (single-page lifetime); reserved for future SW
 // upgrade flow that may want pollScheduler.stop() before reload.
@@ -106,8 +116,12 @@ async function refresh(): Promise<void> {
 async function doRefresh(): Promise<void> {
   // Skip the network round-trip entirely when the OS says we're offline —
   // saves a doomed fetch + the error banner flash on every poll while LOS.
+  // (navigator.onLine===false is reliable; the unreliable case is iOS reporting
+  // online in Airplane Mode, handled by the probe in the success path below.)
   if (!isOnline()) {
+    currentlyOffline = true;
     renderOfflineBanner();
+    renderQueue();
     return;
   }
   try {
@@ -145,8 +159,26 @@ async function doRefresh(): Promise<void> {
     currentTrack = track;
     currentStatus = status ?? null;
 
+    // Disambiguate "stale data" → offline (LOS) vs genuine generator lag.
+    // fetchManifest can SUCCEED while offline because the SW serves the last
+    // manifest from cache, and iOS reports navigator.onLine===true in Airplane
+    // Mode — so a successful fetch of STALE data does NOT prove we're online.
+    // When the data is stale, probe the network (cache-busting) to tell which
+    // it is. Fresh data is itself proof of connectivity, so the happy path
+    // skips the probe entirely. NaN generated_at → treat as online (no claim).
+    // NaN generated_at → not-offline ("no claim"). Note this intentionally
+    // diverges from isStaleManifest, which treats NaN as stale=true; a malformed
+    // timestamp is a generator bug, not an offline signal, so we don't claim LOS.
+    const ageMin = (Date.now() - Date.parse(manifest.generated_at)) / 60_000;
+    currentlyOffline = Number.isFinite(ageMin) && ageMin >= EMPTY_HINT_THRESHOLD_MIN
+      ? !(await probeConnectivity())  // dedicated /__opd_probe path — never SW-cached
+      : false;
+
     // Persist atomically AFTER all artifacts loaded successfully — but ONLY
-    // when the manifest version is STRICTLY NEWER than what's on disk. Two
+    // when the manifest version is STRICTLY NEWER than what's on disk AND we're
+    // online. The !offline guard prevents a cache-served stale manifest from
+    // resetting the snapshot's savedAt (which drives the LOS age) during LOS.
+    // Two more protections in one check:
     // protections in one check:
     //   1. Skip identical-version writes (the poll fires every 60s; the
     //      generator only ticks every 60 min, so 59 of 60 polls return the
@@ -159,7 +191,7 @@ async function doRefresh(): Promise<void> {
     const onDiskVersion = readSnapshot()?.manifest.version ?? null;
     const isNewer = manifest.version !== lastSavedManifestVersion
       && (onDiskVersion === null || manifest.version > onDiskVersion);
-    if (isNewer) {
+    if (isNewer && !currentlyOffline) {
       saveSnapshot({
         manifest,
         top5,
@@ -181,6 +213,16 @@ async function doRefresh(): Promise<void> {
       // the same tile bytes are already in the SW cache from the previous
       // version. Top-3 targets only change when the manifest does.
       precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
+    }
+
+    // World-view basemap (z0-3) precache — once per session, online only. The
+    // per-target precache above only covers z6/8/10 around the top-3 targets;
+    // without the world tiles the default z2 map view is a cache miss → black
+    // map offline. Static tiles, so a single fire seeds the dedicated
+    // opd-tiles-carto-base cache for the whole session.
+    if (!currentlyOffline && !worldBasePrecached) {
+      precacheWorldBaseTiles();
+      worldBasePrecached = true;
     }
 
     // V4-P2 aurora indicator: fetch + render on EVERY refresh, not just
@@ -205,13 +247,19 @@ async function doRefresh(): Promise<void> {
     });
 
     renderQueue();
-    setBanner(bannerWithLaunchesOverlay(
-      bannerWithTleOverlay(
-        bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
-        track.tle_age_hours,
-      ),
-      launchesStaleHours(status, Date.now()),
-    ));
+    if (currentlyOffline) {
+      // Stale data + failed probe = LOS. Show the "LOS" framing (snapshot-age
+      // based, via renderOfflineBanner) rather than blaming the generator.
+      renderOfflineBanner();
+    } else {
+      setBanner(bannerWithLaunchesOverlay(
+        bannerWithTleOverlay(
+          bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
+          track.tle_age_hours,
+        ),
+        launchesStaleHours(status, Date.now()),
+      ));
+    }
     updatePendingSyncBadge();
   } catch (e) {
     // Refresh failed — keep showing whatever the snapshot path rendered and
@@ -220,7 +268,10 @@ async function doRefresh(): Promise<void> {
     // resolved. A snapshot-restored manifest counts as "has data" here, so
     // transient fetch errors get the offline banner rather than a red toast.
     if (currentManifest) {
+      // A thrown fetch with data already on screen is the offline/LOS case.
+      currentlyOffline = true;
       renderOfflineBanner();
+      renderQueue();
     } else {
       setBanner(bannerError((e as Error).message));
     }
@@ -283,7 +334,7 @@ function renderQueue(): void {
     if (filter === 'mine') {
       empty.textContent = 'None of your targets pass in the next 90 minutes. Switch to All to see shared targets.';
     } else {
-      const hint = emptyQueueHint(currentManifest, now);
+      const hint = emptyQueueHint(currentManifest, now, currentlyOffline);
       empty.textContent = hint ?? 'No passes in the next 90 minutes.';
     }
     empty.hidden = false;

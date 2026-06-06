@@ -181,6 +181,22 @@ export function buildPrecacheUrls(passes: PassEntry[], gibsTileUrlPattern: strin
  *  18 tiles × 25 KB per refresh that's ~450 KB held for no benefit. */
 const PRECACHE_INFLIGHT = new Set<string>();
 
+/** Fire-and-forget fetch of a tile-URL set. The SW's CacheFirst rules write
+ *  the responses to the tile caches; we never read the body (cancel it to free
+ *  the buffer immediately), swallow per-URL failures (natural pan retries on
+ *  demand), and dedup in-flight URLs so stacked refresh ticks don't double-fetch.
+ *  Shared by the per-target and world-base precachers (DRY). */
+function fireAndForgetPrecache(urls: string[]): void {
+  for (const url of urls) {
+    if (PRECACHE_INFLIGHT.has(url)) continue;
+    PRECACHE_INFLIGHT.add(url);
+    fetch(url)
+      .then((r) => { r.body?.cancel?.().catch(() => { /* noop */ }); })
+      .catch(() => { /* swallow; pan path retries on demand */ })
+      .finally(() => { PRECACHE_INFLIGHT.delete(url); });
+  }
+}
+
 export function precacheTilesForTargets(
   passes: PassEntry[],
   gibsTileUrlPattern: string,
@@ -188,25 +204,42 @@ export function precacheTilesForTargets(
 ): void {
   if (!isOnlineFn()) return;
   if (passes.length === 0) return;
-  const urls = buildPrecacheUrls(passes, gibsTileUrlPattern);
-  for (const url of urls) {
-    if (PRECACHE_INFLIGHT.has(url)) continue;
-    PRECACHE_INFLIGHT.add(url);
-    fetch(url)
-      .then((r) => {
-        // Cancel the body stream so the buffer is freed immediately
-        // instead of waiting on GC. We never read the body — the SW has
-        // already had its chance to intercept and cache.
-        r.body?.cancel?.().catch(() => { /* noop */ });
-      })
-      .catch(() => {
-        // Swallow individual fetch failures; the natural pan path will
-        // retry on demand. Logging would spam the console during LOS.
-      })
-      .finally(() => {
-        PRECACHE_INFLIGHT.delete(url);
-      });
+  fireAndForgetPrecache(buildPrecacheUrls(passes, gibsTileUrlPattern));
+}
+
+/** Zoom levels for the world-view base map. The map opens at z2 (center
+ *  [0,0]); z0-3 cover the default world view plus the first zoom-in steps.
+ *  Tile counts: z0=1, z1=4, z2=16, z3=64 = 85 carto tiles total. These are
+ *  precached once per session into the dedicated `opd-tiles-carto-base` SW
+ *  cache (30d TTL, never evicted by natural-pan LRU) so the default map ALWAYS
+ *  renders offline — the per-target precache only covers z6/8/10 around the
+ *  top-3 targets, never the world view the map actually opens at. */
+export const WORLD_BASE_ZOOM_LEVELS = [0, 1, 2, 3] as const;
+
+/** Build every carto basemap tile URL for the world-view zoom levels (z0-3).
+ *  Exposed for testing; production uses `precacheWorldBaseTiles`. */
+export function buildWorldBaseUrls(): string[] {
+  const urls: string[] = [];
+  for (const z of WORLD_BASE_ZOOM_LEVELS) {
+    const n = 2 ** z;
+    for (let x = 0; x < n; x++) {
+      for (let y = 0; y < n; y++) {
+        urls.push(cartoTileUrl(z, x, y));
+      }
+    }
   }
+  return urls;
+}
+
+/** Fire-and-forget pre-cache of the world-view basemap (z0-3). Skipped when
+ *  offline. Call once per session after a successful online refresh — the
+ *  world tiles are static (the dark basemap never changes), so re-firing per
+ *  manifest tick would be wasted work. */
+export function precacheWorldBaseTiles(
+  isOnlineFn: () => boolean = () => navigator.onLine,
+): void {
+  if (!isOnlineFn()) return;
+  fireAndForgetPrecache(buildWorldBaseUrls());
 }
 
 /** Test-only: clear in-flight tracking between vitest runs. */
