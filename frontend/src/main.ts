@@ -537,7 +537,7 @@ function handleRemindToggle(p: PassEntry): void {
       const btn = card.querySelector<HTMLButtonElement>('.btn-remind');
       if (btn) {
         btn.classList.toggle('on', nowSelected);
-        btn.textContent = nowSelected ? '🔔 Reminding' : '🔔 Remind';
+        btn.textContent = nowSelected ? '🔔 On' : '🔔 Remind';
         btn.setAttribute('aria-pressed', nowSelected ? 'true' : 'false');
       }
     }
@@ -597,7 +597,9 @@ function updateShotlistBar(): void {
 /** Build the .ics from the (pruned) shot list and hand it to the OS. Honest
  *  copy: shared/downloaded is NOT "reminded" — the alarms are only live once
  *  Calendar actually adds the events. */
-async function exportShotlist(): Promise<void> {
+// Synchronous: shareOrDownloadIcs opens a window, which iOS only allows inside
+// the click gesture — so no await between the tap and the open.
+function exportShotlist(): void {
   const nowMs = Date.now();
   const entries = pruneExpired(nowMs);
   updateShotlistBar();
@@ -606,20 +608,14 @@ async function exportShotlist(): Promise<void> {
     showToast('Nothing to add — selected passes are already in the past.', 'error');
     return;
   }
-  let result;
-  try {
-    result = await shareOrDownloadIcs(ics, 'orbit-shots.ics');
-  } catch {
-    result = 'failed' as const;
-  }
-  if (result === 'cancelled') return;
+  const result = shareOrDownloadIcs(ics, 'orbit-shots.ics');
   if (result === 'failed') {
     showToast("Couldn't open the calendar file — please try again.", 'error');
     return;
   }
   showToast(
-    result === 'shared'
-      ? 'Share → Add to Calendar. Reminders go live once Calendar adds them.'
+    result === 'opened'
+      ? 'Opening Calendar — tap Add. Reminders go live once Calendar adds them.'
       : 'Calendar file saved — open it and tap Add. Reminders go live once Calendar adds them.',
     'success',
   );

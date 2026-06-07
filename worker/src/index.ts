@@ -514,6 +514,38 @@ async function handleHealth(env: Env): Promise<Response> {
   );
 }
 
+/** Max .ics size accepted on /api/cal (URL query). Keeps us well under
+ *  browser/CF URL limits; the client falls back to a file download past this. */
+const MAX_ICS_BYTES = 32 * 1024;
+
+/** GET /api/cal?d=<ics> — echo a client-built .ics back with the text/calendar
+ *  content-type so iOS opens it into "Add All to Calendar". A shared or
+ *  downloaded .ics FILE does NOT trigger that flow on iOS (the share sheet
+ *  offers document apps, not Calendar — observed 2026-06-07); a URL served as
+ *  text/calendar does. Stateless: the .ics rides in the query (URL-decoded by
+ *  searchParams). We require it to look like a VCALENDAR so this endpoint can
+ *  only ever serve a calendar, never arbitrary content under that type. */
+function handleCalendar(url: URL): Response {
+  const ics = url.searchParams.get('d');
+  if (!ics || !ics.startsWith('BEGIN:VCALENDAR')) {
+    return new Response('invalid calendar', { status: 400 });
+  }
+  if (new TextEncoder().encode(ics).length > MAX_ICS_BYTES) {
+    return new Response('calendar too large', { status: 413 });
+  }
+  return new Response(ics, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': 'inline; filename="orbit-shots.ics"',
+      'Cache-Control': 'no-store',
+      // The body is echoed user input — pin the type so no browser sniffs it
+      // as HTML and a crafted payload can't execute.
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (!ALLOWED_METHODS.has(request.method)) {
@@ -551,6 +583,15 @@ export default {
     ) {
       // V4-P2 aurora indicator: SWPC Kp-index proxy with edge cache.
       response = await handleKpRequest(request, env, ctx);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+    } else if (
+      url.pathname === '/api/cal' &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      // Serve a client-built .ics as text/calendar so iOS offers "Add to Calendar".
+      response = handleCalendar(url);
       if (request.method === 'HEAD') {
         response = new Response(null, { status: response.status, headers: response.headers });
       }

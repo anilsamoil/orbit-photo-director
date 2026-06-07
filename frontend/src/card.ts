@@ -278,7 +278,7 @@ export function renderCard(
     const b = document.createElement('button');
     b.type = 'button';
     b.className = on ? 'btn btn-remind on' : 'btn btn-remind';
-    b.textContent = on ? '🔔 Reminding' : '🔔 Remind';
+    b.textContent = on ? '🔔 On' : '🔔 Remind';
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
     b.setAttribute(
       'aria-label',

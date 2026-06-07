@@ -988,3 +988,33 @@ describe('Slot 8: /api/log profile field', () => {
     expect(body.entries[0]?.profile).toBe('jack');
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/cal — serve a client-built .ics as text/calendar so iOS offers
+// "Add All to Calendar" (sharing/downloading the FILE does not, on iOS).
+// ---------------------------------------------------------------------------
+describe('GET /api/cal', () => {
+  const ICS = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nEND:VCALENDAR\r\n';
+
+  it('serves the ics verbatim as text/calendar with an inline filename', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, `/api/cal?d=${encodeURIComponent(ICS)}`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toContain('text/calendar');
+    expect(r.headers.get('content-disposition')).toContain('orbit-shots.ics');
+    expect(await r.text()).toBe(ICS);
+  });
+
+  it('400s when d is missing or not a VCALENDAR (no serving arbitrary content)', async () => {
+    const env = makeEnv();
+    expect((await fetchWorker(env, '/api/cal')).status).toBe(400);
+    expect((await fetchWorker(env, `/api/cal?d=${encodeURIComponent('hello')}`)).status).toBe(400);
+  });
+
+  it('413s when the calendar exceeds the size cap', async () => {
+    const env = makeEnv();
+    const big = 'BEGIN:VCALENDAR\r\n' + 'X'.repeat(33 * 1024);
+    const r = await fetchWorker(env, `/api/cal?d=${encodeURIComponent(big)}`);
+    expect(r.status).toBe(413);
+  });
+});

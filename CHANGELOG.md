@@ -2,6 +2,21 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.10.1] - 2026-06-07
+
+## **The calendar reminder now actually adds to the iPhone calendar, and the Remind button fits.**
+
+On-device testing surfaced two things. First, on iPhone, sharing or downloading the `.ics` file never offered "Add to Calendar" — iOS only showed document apps (Save to Files, Acrobat). iOS only triggers its native "Add All to Calendar" flow when the `.ics` is opened from a URL served as `text/calendar`, not from a shared file. So the app now opens the calendar file through a tiny new Worker route (`/api/cal`) that serves it with the right content type, and the import sheet appears. Second, the 🔔 Remind button's label ran off the right edge in the crowded card row; it's now a smaller, single-line label ("🔔 On" when selected) that fits.
+
+### Itemized changes
+
+#### Fixed
+- **"Add to Calendar" now works on iPhone.** The shot list opens its `.ics` via a new stateless `GET /api/cal` Worker route (serves the calendar with `Content-Type: text/calendar`), which is what makes iOS show "Add All to Calendar." A shared/downloaded file does not. Falls back to a file download on desktop or for very large selections.
+- The 🔔 Remind toggle label no longer overflows the button: smaller font, single line, and a short "🔔 On" selected state.
+
+#### Internal
+- New `worker/src/index.ts` `/api/cal` handler — stateless, validates the payload is a VCALENDAR, caps size at 32 KB, and pins `X-Content-Type-Options: nosniff`. `calendar-share.ts` now opens the hosted URL (synchronously, inside the tap gesture so iOS allows it) instead of `navigator.share`.
+
 ## [1.7.10.0] - 2026-06-07
 
 ## **Pick the passes you want to shoot and get a phone reminder 5 minutes before and at the moment of each.**
