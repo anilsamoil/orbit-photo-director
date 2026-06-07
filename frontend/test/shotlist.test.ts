@@ -112,9 +112,10 @@ describe('defensive storage', () => {
 });
 
 describe('nextSequence', () => {
-  it('increments and persists across calls', () => {
-    expect(nextSequence()).toBe(1);
-    expect(nextSequence()).toBe(2);
-    expect(nextSequence()).toBe(3);
+  it('is a monotonic, non-decreasing epoch-seconds value (no persisted counter to fail)', () => {
+    const a = nextSequence();
+    const b = nextSequence();
+    expect(a).toBeGreaterThan(1_700_000_000); // epoch seconds (2023+)
+    expect(b).toBeGreaterThanOrEqual(a);
   });
 });

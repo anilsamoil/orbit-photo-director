@@ -26,7 +26,7 @@ import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
 import { probeConnectivity } from './network-probe';
 import { buildIcs } from './ics';
 import { shareOrDownloadIcs } from './calendar-share';
-import { clearShotlist, nextSequence, pruneExpired, shotlistCount, toggleShotlist } from './shotlist';
+import { clearShotlist, isInShotlist, nextSequence, pruneExpired, shotlistCount, toggleShotlist } from './shotlist';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
@@ -526,6 +526,12 @@ let shotlistBarEl: HTMLElement | null = null;
  *  update avoids a full re-render that would collapse open thumbnails. */
 function handleRemindToggle(p: PassEntry): void {
   const nowSelected = toggleShotlist(p);
+  // If the write didn't persist (quota / private-mode Safari), the on-screen
+  // toggle would lie. Detect the mismatch and tell the operator rather than
+  // letting them think a reminder is queued when it isn't.
+  if (isInShotlist(p) !== nowSelected) {
+    showToast("Couldn't save your selection (private browsing?).", 'error');
+  }
   for (const card of document.querySelectorAll<HTMLElement>('.card')) {
     if (card.dataset.targetId === p.target_id && card.dataset.passTime === p.closest_approach) {
       const btn = card.querySelector<HTMLButtonElement>('.btn-remind');
@@ -600,8 +606,17 @@ async function exportShotlist(): Promise<void> {
     showToast('Nothing to add — selected passes are already in the past.', 'error');
     return;
   }
-  const result = await shareOrDownloadIcs(ics, 'orbit-shots.ics');
+  let result;
+  try {
+    result = await shareOrDownloadIcs(ics, 'orbit-shots.ics');
+  } catch {
+    result = 'failed' as const;
+  }
   if (result === 'cancelled') return;
+  if (result === 'failed') {
+    showToast("Couldn't open the calendar file — please try again.", 'error');
+    return;
+  }
   showToast(
     result === 'shared'
       ? 'Share → Add to Calendar. Reminders go live once Calendar adds them.'

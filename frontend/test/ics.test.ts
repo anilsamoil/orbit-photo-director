@@ -141,4 +141,16 @@ describe('buildIcs', () => {
     expect(veventCount(ics)).toBe(1);
     expect(ics).toContain('SUMMARY:📸 Tokyo'); // no direction suffix, still valid
   });
+
+  it('never emits "NaN" when the angle is NaN (guards Number.isFinite)', () => {
+    const ics = buildIcs([entry({ angle_off_nadir_deg: NaN, iss_relative_bearing_deg: 90 })], NOW, 0);
+    expect(veventCount(ics)).toBe(1);
+    expect(ics).not.toContain('NaN');
+    expect(ics).toContain('SUMMARY:📸 Tokyo');
+  });
+
+  it('percent-encodes the target_id in the deep link URL', () => {
+    const ics = buildIcs([entry({ target_id: 'personal:anil:a b' })], NOW, 0);
+    expect(ics).toContain('?target=personal%3Aanil%3Aa%20b');
+  });
 });

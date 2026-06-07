@@ -12,8 +12,10 @@
  *  thin and the correctness logic stays unit-tested.
  */
 
-/** Outcome of the handoff, so the caller can tailor the follow-up hint. */
-export type ShareResult = 'shared' | 'downloaded' | 'cancelled';
+/** Outcome of the handoff, so the caller can tailor the follow-up hint.
+ *  'failed' = both share and download paths errored — the caller must surface
+ *  an error so the operator isn't left thinking the reminder was set. */
+export type ShareResult = 'shared' | 'downloaded' | 'cancelled' | 'failed';
 
 function triggerDownload(ics: string, filename: string): void {
   const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
@@ -29,24 +31,36 @@ function triggerDownload(ics: string, filename: string): void {
 }
 
 export async function shareOrDownloadIcs(ics: string, filename: string): Promise<ShareResult> {
-  const file = new File([ics], filename, { type: 'text/calendar' });
+  // Build the File defensively: the File constructor is absent on some old
+  // Android WebViews / embedded browsers where the Blob download below still
+  // works, so a throw here must fall through to download, not dead-end.
+  let file: File | null = null;
+  try {
+    file = new File([ics], filename, { type: 'text/calendar' });
+  } catch {
+    file = null;
+  }
   // canShare with files is the feature test; it's false on desktop Chrome/
   // Firefox and on browsers without Web Share Level 2.
   const nav = navigator as Navigator & {
     canShare?: (data?: ShareData) => boolean;
   };
-  if (typeof nav.canShare === 'function' && nav.canShare({ files: [file] })) {
+  if (file && typeof nav.canShare === 'function' && nav.canShare({ files: [file] })) {
     try {
       await nav.share({ files: [file], title: 'Orbit shots' });
       return 'shared';
     } catch (err) {
       // User dismissed the share sheet — not an error, just nothing happened.
       if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled';
-      // Any other share failure: fall back to a download rather than dead-end.
-      triggerDownload(ics, filename);
-      return 'downloaded';
+      // Any other share failure: fall through to a download rather than dead-end.
     }
   }
-  triggerDownload(ics, filename);
-  return 'downloaded';
+  // Never throw — a locked-down DOM could make triggerDownload fail; surface it
+  // as 'failed' so the caller can warn instead of dead-ending silently.
+  try {
+    triggerDownload(ics, filename);
+    return 'downloaded';
+  } catch {
+    return 'failed';
+  }
 }

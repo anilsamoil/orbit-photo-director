@@ -90,19 +90,24 @@ function windowLabel(offNadirDeg: number): string {
 /** Direction phrase reused from the card ("26° right of track"), or '' when the
  *  manifest lacks the angle/bearing. */
 function direction(e: ShotlistEntry): string {
-  if (typeof e.angle_off_nadir_deg !== 'number') return '';
-  if (typeof e.iss_relative_bearing_deg !== 'number') {
-    return `${Math.round(e.angle_off_nadir_deg)}° off nadir`;
+  const off = e.angle_off_nadir_deg;
+  if (typeof off !== 'number' || !Number.isFinite(off)) return '';
+  const bearing = e.iss_relative_bearing_deg;
+  if (typeof bearing !== 'number' || !Number.isFinite(bearing)) {
+    return `${Math.round(off)}° off nadir`;
   }
-  return formatTrackOffset(e.angle_off_nadir_deg, e.iss_relative_bearing_deg);
+  return formatTrackOffset(off, bearing);
 }
 
 function buildVevent(e: ShotlistEntry, closestMs: number, nowMs: number, sequence: number): string[] {
   const dir = direction(e);
   const win =
-    typeof e.angle_off_nadir_deg === 'number' ? windowLabel(e.angle_off_nadir_deg) : '';
+    typeof e.angle_off_nadir_deg === 'number' && Number.isFinite(e.angle_off_nadir_deg)
+      ? windowLabel(e.angle_off_nadir_deg)
+      : '';
   const summary = `📸 ${e.target_name}${dir ? ` — ${dir}` : ''}`;
-  const descParts = [dir, win ? `${win} window` : '', `Open: ${APP_URL}?target=${e.target_id}`]
+  const deepLink = `${APP_URL}?target=${encodeURIComponent(e.target_id)}`;
+  const descParts = [dir, win ? `${win} window` : '', `Open: ${deepLink}`]
     .filter(Boolean)
     .join('. ');
 
@@ -115,7 +120,7 @@ function buildVevent(e: ShotlistEntry, closestMs: number, nowMs: number, sequenc
     `SEQUENCE:${sequence}`,
     `SUMMARY:${escapeText(summary)}`,
     `DESCRIPTION:${escapeText(descParts)}`,
-    `URL:${APP_URL}?target=${e.target_id}`,
+    `URL:${deepLink}`,
   ];
 
   // At-closest alarm always fires. The −5min alarm only when the pass is far

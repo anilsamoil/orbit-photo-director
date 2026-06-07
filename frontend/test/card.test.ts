@@ -96,6 +96,27 @@ describe('renderCard', () => {
     expect(onAction.mock.calls[0]![0]).toBe('skip');
   });
 
+  // Shot-list "remind" toggle must appear on BOTH card variants — Queue
+  // (observed) and Upcoming (forecast) — since the operator plans shots from
+  // either. Regression guard for the both-variants wiring (card.ts:326/338).
+  it('renders the remind toggle on the observed (Queue) variant', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    expect(el.querySelector('.btn-remind')).toBeTruthy();
+  });
+
+  it('renders the remind toggle on the forecast (Upcoming) variant', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined, { variant: 'forecast' });
+    expect(el.querySelector('.btn-remind')).toBeTruthy();
+  });
+
+  it('emits remind action on click', () => {
+    const onAction = vi.fn();
+    const el = renderCard(samplePass(), NOW, false, onAction);
+    el.querySelector<HTMLButtonElement>('.btn-remind')!.click();
+    expect(onAction).toHaveBeenCalledOnce();
+    expect(onAction.mock.calls[0]![0]).toBe('remind');
+  });
+
   it('tags pass regime correctly', () => {
     const el = renderCard(samplePass(), NOW, false, () => undefined);
     expect(el.querySelector('.tag.regime-night')).toBeTruthy();

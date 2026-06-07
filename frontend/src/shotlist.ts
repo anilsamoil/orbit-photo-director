@@ -13,7 +13,6 @@
 import type { PassEntry } from './types';
 
 const STORAGE_KEY = 'opd_shotlist_v1';
-const SEQ_KEY = 'opd_shotlist_seq_v1';
 
 /** The minimal pass data the .ics builder needs. Kept small — this is what we
  *  persist per selected pass. */
@@ -121,23 +120,12 @@ export function pruneExpired(nowMs: number): ShotlistEntry[] {
   return kept;
 }
 
-/** Monotonic export counter for VEVENT SEQUENCE — incremented and persisted on
- *  each export so a re-imported .ics UPDATES same-UID events rather than
- *  duplicating them. */
+/** Monotonic VEVENT SEQUENCE for re-export updates. Uses epoch SECONDS rather
+ *  than a persisted counter: a human never exports twice in the same second, so
+ *  this strictly increases across exports with NO localStorage to fail. (A
+ *  persisted counter whose write was swallowed — quota / private mode — would
+ *  repeat a SEQUENCE, and iOS silently treats a re-import with an equal sequence
+ *  as "no update", dropping the operator's changes. Review finding, 2026-06-07.) */
 export function nextSequence(): number {
-  let n = 0;
-  try {
-    const raw = localStorage.getItem(SEQ_KEY);
-    const parsed = raw ? Number.parseInt(raw, 10) : 0;
-    if (Number.isFinite(parsed) && parsed >= 0) n = parsed;
-  } catch {
-    /* default 0 */
-  }
-  const next = n + 1;
-  try {
-    localStorage.setItem(SEQ_KEY, String(next));
-  } catch {
-    /* best-effort */
-  }
-  return next;
+  return Math.floor(Date.now() / 1000);
 }
