@@ -578,6 +578,54 @@ main {
 
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* Shot-list "remind" toggle (2026-06-07). Outlined when off (subordinate, like
+ * Hide); accent-filled when the pass is in the shot list. Defaults pending a
+ * /design-review on the rendered UI. */
+.btn-remind {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 500;
+  opacity: 0.85;
+}
+.btn-remind:hover { opacity: 1; }
+.btn-remind.on {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+/* Sticky shot-list action bar — appears when >=1 pass is selected. */
+#shotlist-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: calc(100% - 2rem);
+  padding: 0.5rem 0.6rem 0.5rem 0.9rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+#shotlist-bar[hidden] { display: none; }
+.shotlist-count { font-weight: 600; white-space: nowrap; }
+#shotlist-bar .btn { flex: 0 0 auto; min-height: 40px; }
+.shotlist-add { background: var(--accent); color: var(--bg); border: 0; }
+.shotlist-clear {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 500;
+  opacity: 0.8;
+}
+.shotlist-clear:hover { opacity: 1; }
+
 /* v2 — 🌍 thumbnail toggle (Jack feedback 2026-05-27).
  * Small flex-shrink button sitting next to Shoot/Skip on personal-target
  * cards. Forecast variant gets its own .card-actions-forecast row.
