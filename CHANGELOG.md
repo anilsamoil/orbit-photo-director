@@ -2,6 +2,23 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.10.0] - 2026-06-07
+
+## **Pick the passes you want to shoot and get a phone reminder 5 minutes before and at the moment of each.**
+
+Tap **🔔 Remind** on any pass card (Queue or Upcoming) to build a shot list for the day, then hit **Add to Calendar**. It hands your phone a calendar file with one event per pass, each carrying two alarms — five minutes before and at closest approach — so your iPhone reminds you natively even with the app closed and the screen locked. The reminder is fired by the OS calendar, not our generator, so it works during a LOS window and doesn't depend on the daemon being up. We chose this over push notifications for exactly that reliability, plus it ships without any backend. Reminders go live the moment you tap Add in Calendar; the app is honest that "saved" is not yet "reminded."
+
+### Itemized changes
+
+#### Added
+- A **🔔 Remind** toggle on every pass card (Queue + Upcoming) that adds the pass to a shot list (persisted locally).
+- A bottom **"N selected · Add to Calendar"** bar that exports the shot list as a standards-compliant `.ics`: one event per pass with a −5-minute alarm and an at-closest-approach alarm. The event title reuses the card's direction label ("📸 Tokyo — 26° right of track") and notes the WORF/Cupola window.
+- iOS hand-off via the native share sheet (`navigator.share`) with a file-download fallback, so the calendar file reliably reaches Calendar on iPhone.
+
+#### Notes
+- A pass under 5 minutes out exports with only the at-time alarm. Passes already in the past are never exported. Re-exporting updates the same events rather than duplicating them.
+- The whole feature is client-side — no service worker, daemon, or Worker changes.
+
 ## [1.7.9.0] - 2026-06-06
 
 ## **Offline now says "you're offline" instead of blaming the generator, and the map renders at world view during LOS.**
