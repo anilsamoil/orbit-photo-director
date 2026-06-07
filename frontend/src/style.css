@@ -596,26 +596,44 @@ main {
   opacity: 1;
 }
 
-/* Sticky shot-list action bar — appears when >=1 pass is selected. */
+/* Shot-list action bar — full-width bottom bar (the standard mobile
+ * selection→action pattern), shown when >=1 pass is selected. Full-width (not
+ * a floating centered pill) so it never overflows a narrow phone or collides
+ * with the bottom-right help-fab; safe-area padding clears the iOS home
+ * indicator. /design-review 2026-06-07 (a centered pill clipped its own
+ * buttons + overlapped the fab on iPhone). */
 #shotlist-bar {
   position: fixed;
-  left: 50%;
-  bottom: 1rem;
-  transform: translateX(-50%);
-  z-index: 50;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  max-width: calc(100% - 2rem);
-  padding: 0.5rem 0.6rem 0.5rem 0.9rem;
+  padding: 0.6rem 0.9rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
   background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.35);
 }
 #shotlist-bar[hidden] { display: none; }
-.shotlist-count { font-weight: 600; white-space: nowrap; }
-#shotlist-bar .btn { flex: 0 0 auto; min-height: 40px; }
+/* Count takes the remaining width on the left; min-width:0 lets it ellipsize
+ * instead of overflowing, so the action buttons always fit on the right. */
+.shotlist-count {
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#shotlist-bar .btn { flex: 0 0 auto; min-height: 44px; }
+/* The bar owns the bottom edge while active — step the help-fab aside so they
+ * don't collide, and pad the scroll container so the last card clears the bar. */
+body.shotlist-bar-visible .help-fab { display: none; }
+body.shotlist-bar-visible main {
+  padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+}
 .shotlist-add { background: var(--accent); color: var(--bg); border: 0; }
 .shotlist-clear {
   background: transparent;

@@ -578,11 +578,14 @@ function updateShotlistBar(): void {
   const n = shotlistCount(Date.now());
   if (n === 0) {
     bar.hidden = true;
+    document.body.classList.remove('shotlist-bar-visible');
     return;
   }
   const count = bar.querySelector('.shotlist-count');
-  if (count) count.textContent = `🔔 ${n} pass${n === 1 ? '' : 'es'} selected`;
+  if (count) count.textContent = `🔔 ${n} selected`;
   bar.hidden = false;
+  // Pads the scroll container so the sticky bar can't hide the last card.
+  document.body.classList.add('shotlist-bar-visible');
 }
 
 /** Build the .ics from the (pruned) shot list and hand it to the OS. Honest
