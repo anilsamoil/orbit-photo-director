@@ -587,6 +587,12 @@ main {
   border: 1px solid var(--border);
   font-weight: 500;
   opacity: 0.85;
+  /* Keep the label on one line, sized so it never runs off the button edge in
+   * the crowded 5-button card-action row (design feedback 2026-06-07). */
+  font-size: 0.82rem;
+  white-space: nowrap;
+  padding-left: 0.45rem;
+  padding-right: 0.45rem;
 }
 .btn-remind:hover { opacity: 1; }
 .btn-remind.on {
