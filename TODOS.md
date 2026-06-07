@@ -86,6 +86,13 @@ Design rev 2 doc: `~/.gstack/projects/anilsamoil-orbit-photo-director/astroanil-
 
 ### V2.5 — Real Web Push notifications (deferred from v2 batch 2026-05-27)
 
+**Lightweight v1 shipped v1.7.10.0 (2026-06-07):** shot-list → `.ics` calendar export
+(🔔 Remind on cards → "Add to Calendar" → OS-native alarms at −5min + at closest
+approach). Chosen over Web Push for reliability (OS fires the alarm, not our infra),
+zero backend, and zero blast radius. Web Push below remains the heavier in-app-native /
+cancelable / auto-updating upgrade — revisit only if the calendar hand-off feels
+insufficient (it's a hand-off, not in-app; no in-app cancel; snapshot not live).
+
 Goal: Jack's iPad fires a notification when an opted-in target's pass is within N minutes,
 even when the PWA is not in focus.
 

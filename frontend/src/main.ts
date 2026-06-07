@@ -24,6 +24,9 @@ import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
 import { probeConnectivity } from './network-probe';
+import { buildIcs } from './ics';
+import { shareOrDownloadIcs } from './calendar-share';
+import { clearShotlist, isInShotlist, nextSequence, pruneExpired, shotlistCount, toggleShotlist } from './shotlist';
 import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
@@ -350,6 +353,8 @@ function renderQueue(): void {
     });
   }
   renderUpcoming(now, stale);
+  // Keep the shot-list bar count fresh + prune passes that have aged out.
+  updateShotlistBar();
 }
 
 /** Build a thumbnail-renderer that closes over the current track. Returns
@@ -509,6 +514,117 @@ function launchesStaleHours(status: Status | null, nowMs: number): number | unde
   return Math.max(0, (nowMs - t) / 3_600_000);
 }
 
+// ── Shot-list reminders (2026-06-07) ──────────────────────────────────────
+// The operator toggles passes into a shot list; "Add to Calendar" exports a
+// .ics whose alarms fire 5 min before + at closest approach (OS-native, app
+// closed). All client-side — no backend, no SW change. See ics.ts/shotlist.ts.
+
+let shotlistBarEl: HTMLElement | null = null;
+
+/** Toggle a pass in/out of the shot list, update its remind button(s) in place
+ *  (a pass can show in both Queue and Upcoming), and refresh the bar. In-place
+ *  update avoids a full re-render that would collapse open thumbnails. */
+function handleRemindToggle(p: PassEntry): void {
+  const nowSelected = toggleShotlist(p);
+  // If the write didn't persist (quota / private-mode Safari), the on-screen
+  // toggle would lie. Detect the mismatch and tell the operator rather than
+  // letting them think a reminder is queued when it isn't.
+  if (isInShotlist(p) !== nowSelected) {
+    showToast("Couldn't save your selection (private browsing?).", 'error');
+  }
+  for (const card of document.querySelectorAll<HTMLElement>('.card')) {
+    if (card.dataset.targetId === p.target_id && card.dataset.passTime === p.closest_approach) {
+      const btn = card.querySelector<HTMLButtonElement>('.btn-remind');
+      if (btn) {
+        btn.classList.toggle('on', nowSelected);
+        btn.textContent = nowSelected ? '🔔 Reminding' : '🔔 Remind';
+        btn.setAttribute('aria-pressed', nowSelected ? 'true' : 'false');
+      }
+    }
+  }
+  updateShotlistBar();
+}
+
+function ensureShotlistBar(): HTMLElement {
+  if (shotlistBarEl) return shotlistBarEl;
+  const bar = document.createElement('div');
+  bar.id = 'shotlist-bar';
+  bar.hidden = true;
+  const count = document.createElement('span');
+  count.className = 'shotlist-count';
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn shotlist-add';
+  addBtn.textContent = 'Add to Calendar';
+  addBtn.addEventListener('click', () => void exportShotlist());
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn shotlist-clear';
+  clearBtn.textContent = 'Clear';
+  clearBtn.setAttribute('aria-label', 'Clear the shot list');
+  clearBtn.addEventListener('click', () => {
+    clearShotlist();
+    for (const btn of document.querySelectorAll<HTMLButtonElement>('.btn-remind.on')) {
+      btn.classList.remove('on');
+      btn.textContent = '🔔 Remind';
+      btn.setAttribute('aria-pressed', 'false');
+    }
+    updateShotlistBar();
+  });
+  bar.append(count, addBtn, clearBtn);
+  document.body.appendChild(bar);
+  shotlistBarEl = bar;
+  return bar;
+}
+
+/** Show "N passes selected · Add to Calendar" when the shot list is non-empty
+ *  (after pruning past passes), hide it otherwise. */
+function updateShotlistBar(): void {
+  const bar = ensureShotlistBar();
+  const n = shotlistCount(Date.now());
+  if (n === 0) {
+    bar.hidden = true;
+    document.body.classList.remove('shotlist-bar-visible');
+    return;
+  }
+  const count = bar.querySelector('.shotlist-count');
+  if (count) count.textContent = `🔔 ${n} selected`;
+  bar.hidden = false;
+  // Pads the scroll container so the sticky bar can't hide the last card.
+  document.body.classList.add('shotlist-bar-visible');
+}
+
+/** Build the .ics from the (pruned) shot list and hand it to the OS. Honest
+ *  copy: shared/downloaded is NOT "reminded" — the alarms are only live once
+ *  Calendar actually adds the events. */
+async function exportShotlist(): Promise<void> {
+  const nowMs = Date.now();
+  const entries = pruneExpired(nowMs);
+  updateShotlistBar();
+  const ics = buildIcs(entries, nowMs, nextSequence());
+  if (!ics) {
+    showToast('Nothing to add — selected passes are already in the past.', 'error');
+    return;
+  }
+  let result;
+  try {
+    result = await shareOrDownloadIcs(ics, 'orbit-shots.ics');
+  } catch {
+    result = 'failed' as const;
+  }
+  if (result === 'cancelled') return;
+  if (result === 'failed') {
+    showToast("Couldn't open the calendar file — please try again.", 'error');
+    return;
+  }
+  showToast(
+    result === 'shared'
+      ? 'Share → Add to Calendar. Reminders go live once Calendar adds them.'
+      : 'Calendar file saved — open it and tap Add. Reminders go live once Calendar adds them.',
+    'success',
+  );
+}
+
 async function onCardAction(action: CardAction, p: PassEntry): Promise<void> {
   // v3 — Hide path (Anil 2026-05-26). One-tap dismiss for curated cards.
   // We MUTATE the profile + save synchronously and rip the card from the
@@ -518,6 +634,10 @@ async function onCardAction(action: CardAction, p: PassEntry): Promise<void> {
   // hide persists across refreshes.
   if (action === 'hide') {
     handleHideAction(p);
+    return;
+  }
+  if (action === 'remind') {
+    handleRemindToggle(p);
     return;
   }
   const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);

@@ -578,6 +578,72 @@ main {
 
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* Shot-list "remind" toggle (2026-06-07). Outlined when off (subordinate, like
+ * Hide); accent-filled when the pass is in the shot list. Defaults pending a
+ * /design-review on the rendered UI. */
+.btn-remind {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 500;
+  opacity: 0.85;
+}
+.btn-remind:hover { opacity: 1; }
+.btn-remind.on {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+/* Shot-list action bar — full-width bottom bar (the standard mobile
+ * selection→action pattern), shown when >=1 pass is selected. Full-width (not
+ * a floating centered pill) so it never overflows a narrow phone or collides
+ * with the bottom-right help-fab; safe-area padding clears the iOS home
+ * indicator. /design-review 2026-06-07 (a centered pill clipped its own
+ * buttons + overlapped the fab on iPhone). */
+#shotlist-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.35);
+}
+#shotlist-bar[hidden] { display: none; }
+/* Count takes the remaining width on the left; min-width:0 lets it ellipsize
+ * instead of overflowing, so the action buttons always fit on the right. */
+.shotlist-count {
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#shotlist-bar .btn { flex: 0 0 auto; min-height: 44px; }
+/* The bar owns the bottom edge while active — step the help-fab aside so they
+ * don't collide, and pad the scroll container so the last card clears the bar. */
+body.shotlist-bar-visible .help-fab { display: none; }
+body.shotlist-bar-visible main {
+  padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+}
+.shotlist-add { background: var(--accent); color: var(--bg); border: 0; }
+.shotlist-clear {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-weight: 500;
+  opacity: 0.8;
+}
+.shotlist-clear:hover { opacity: 1; }
+
 /* v2 — 🌍 thumbnail toggle (Jack feedback 2026-05-27).
  * Small flex-shrink button sitting next to Shoot/Skip on personal-target
  * cards. Forecast variant gets its own .card-actions-forecast row.

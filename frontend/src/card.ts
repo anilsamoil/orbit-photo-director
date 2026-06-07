@@ -2,6 +2,7 @@ import type { PassEntry } from './types';
 import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
 import { renderStarBlock, scoreToStars, starsToLabel } from './score-stars';
 import { formatTrackOffset } from './track-offset';
+import { isInShotlist } from './shotlist';
 
 /** Variant marker for cards: 'observed' uses Queue styling (Shoot/Skip on
  *  the imminent pass), 'forecast' uses Upcoming styling (no actions; soft
@@ -66,7 +67,7 @@ export function _resetOpenThumbnailsForTest(): void {
  *  cards delete the target outright (restorable by re-adding in the
  *  Profile tab). The branch lives in main.ts:handleHideAction; card.ts
  *  is profile-agnostic and just emits the action. */
-export type CardAction = 'shoot' | 'skip' | 'hide';
+export type CardAction = 'shoot' | 'skip' | 'hide' | 'remind';
 
 /** Render the card list into the cards container.
  *  Each card emits Shoot/Skip/Hide events via the provided `onAction`
@@ -268,6 +269,27 @@ export function renderCard(
   // profile-agnostic and just emits 'hide'. Hide is rendered on BOTH
   // observed and forecast variants so the operator can dismiss from
   // either pane.
+  // Shot-list "remind" toggle (2026-06-07). Picks this pass into the operator's
+  // shot list; "Add N to Calendar" then exports a .ics whose alarms fire 5 min
+  // before and at closest approach. Reflects current membership; click flips it
+  // (main.ts handles the toggle + re-render + bar update via onAction('remind')).
+  const remindBtn: HTMLButtonElement = (() => {
+    const on = isInShotlist(p);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = on ? 'btn btn-remind on' : 'btn btn-remind';
+    b.textContent = on ? '🔔 Reminding' : '🔔 Remind';
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    b.setAttribute(
+      'aria-label',
+      on
+        ? `Remove "${p.target_name}" from your calendar shot list`
+        : `Add "${p.target_name}" to your calendar shot list (remind 5 min before + at pass)`,
+    );
+    b.addEventListener('click', () => onAction('remind', p));
+    return b;
+  })();
+
   const personal = isPersonalTarget(p.target_id);
   const hideBtn: HTMLButtonElement = (() => {
     const b = document.createElement('button');
@@ -301,6 +323,7 @@ export function renderCard(
     if (!tokenSet) skip.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
     skip.addEventListener('click', () => onAction('skip', p));
     actions.append(shoot, skip);
+    actions.appendChild(remindBtn);
     actions.appendChild(hideBtn);
     if (thumbnailToggle) actions.appendChild(thumbnailToggle);
     card.append(name, countdown, meta, score, actions);
@@ -312,6 +335,7 @@ export function renderCard(
     // renders in v3.2.
     const fcActions = document.createElement('div');
     fcActions.className = 'card-actions card-actions-forecast';
+    fcActions.appendChild(remindBtn);
     fcActions.appendChild(hideBtn);
     if (thumbnailToggle) fcActions.appendChild(thumbnailToggle);
     card.appendChild(fcActions);
