@@ -2,6 +2,18 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.11.0] - 2026-06-08
+
+## **The map's clouds, satellite basemap, and night-lights now render offline at world view, and the Help explains everything.**
+
+Two things. First, offline coverage: v1.7.9.0 only precached the default dark basemap's world view, so going offline and switching to the satellite (clouds-off) basemap, or turning clouds or night-lights on over an area you hadn't already loaded, showed black. Now the app precaches the world view (zoom 0-3) of all of those layers while you're online, into caches that don't get evicted, so they're there during a LOS window. (Deep zooms and areas you never panned to online are still online-only — precaching every tile on Earth isn't feasible.) Second, the in-app Help ("?" button) now explains the calendar reminders, the look angle and distance, dropping a pin on the map, how offline caching actually behaves, and what the Shoot / Skip / Hide / Remind buttons and the calibration token do.
+
+### Itemized changes
+
+#### Added
+- **Offline world view for all map layers.** The once-per-session world-tile precache now also covers Esri satellite imagery (the clouds-off basemap), the GIBS true-color cloud overlay, and VIIRS night-lights at zoom 0-3 — each in a dedicated long-lived cache (`opd-tiles-esri-base`, `opd-tiles-gibs-base`) so natural panning never evicts them. Previously only the default dark basemap survived offline.
+- **Help expansion.** The "?" panel now documents: calendar reminders (🔔 Remind → Add to Calendar, alarms 5 min before + at closest approach, OS-fired); look angle and distance ("26° right of track", WORF vs Cupola); dropping a pin on the map (long-press / right-click → next passes over that spot); how offline caching works (what's cached vs what goes black); the Shoot / Skip / Hide / Remind buttons; and the calibration token.
+
 ## [1.7.10.1] - 2026-06-07
 
 ## **The calendar reminder now actually adds to the iPhone calendar, and the Remind button fits.**
