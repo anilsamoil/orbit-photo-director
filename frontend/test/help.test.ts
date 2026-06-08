@@ -35,6 +35,47 @@ describe('openHelpModal', () => {
     expect(text.toLowerCase()).toContain('exif');
   });
 
+  it('covers the calendar reminder alarm (5 min before + at pass)', () => {
+    openHelpModal();
+    const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();
+    expect(text).toContain('add to calendar');
+    expect(text).toContain('5 minutes before');
+    expect(text).toContain('closest approach');
+  });
+
+  it('covers the look angle/distance and the WORF/Cupola window', () => {
+    openHelpModal();
+    const text = document.querySelector('.help-body')?.textContent ?? '';
+    expect(text).toContain('off-nadir');
+    expect(text).toContain('right of track');
+    expect(text).toContain('WORF');
+    expect(text).toContain('Cupola');
+    expect(text).toContain('Nadir distance');
+  });
+
+  it('explains dropping a pin on the map', () => {
+    openHelpModal();
+    const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();
+    expect(text).toContain('long-press');
+    expect(text).toContain('right-click');
+  });
+
+  it('describes offline caching behavior', () => {
+    openHelpModal();
+    const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();
+    expect(text).toContain('offline');
+    expect(text).toContain('cache');
+    expect(text).toContain('black');
+  });
+
+  it('explains the token, shoot, and hide controls', () => {
+    openHelpModal();
+    const text = document.querySelector('.help-body')?.textContent ?? '';
+    expect(text).toContain('Shoot');
+    expect(text).toContain('Hide');
+    expect(text).toContain('calibration token');
+  });
+
   it('closes on the ✕ button', () => {
     openHelpModal();
     document.querySelector<HTMLButtonElement>('.help-close')?.click();
