@@ -168,6 +168,25 @@ export default defineConfig({
             },
           },
           {
+            // World-view GIBS tiles (z0-3) for BOTH the cloud overlay and VIIRS
+            // night-lights: a dedicated cache so the world view of those layers
+            // survives offline regardless of natural-pan LRU. Without it, a
+            // layer toggled on offline over an unvisited area shows nothing
+            // (a hidden layer never fetched its tiles). The `Level\d/[0-3]/`
+            // match pins it to z0-3 only (z10 etc. fall through to the general
+            // gibs rule below). MUST precede that rule (Workbox first-match).
+            urlPattern: /^https:\/\/gibs\.earthdata\.nasa\.gov\/.*GoogleMapsCompatible_Level\d\/[0-3]\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opd-tiles-gibs-base',
+              expiration: {
+                maxEntries: 200, // ~85 clouds + ~85 VIIRS at z0-3
+                maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             // GIBS true-color tiles: CacheFirst with shorter TTL (imagery
             // is daily; the imagery-date badge surfaces staleness in the UI).
             // statuses [0, 200] — see carto rationale above.
@@ -180,6 +199,22 @@ export default defineConfig({
                 // 7 days (was 24h). A day-stale cloud layer beats a BLANK one
                 // offline; the imagery-date badge already surfaces staleness.
                 maxAgeSeconds: 60 * 60 * 24 * 7,
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // World-view Esri imagery (z0-3): dedicated cache so the clouds-OFF
+            // basemap renders offline at world view, like opd-tiles-carto-base
+            // does for the clouds-ON basemap. /tile/[0-3]/ pins it to z0-3;
+            // deeper zooms fall through to the general esri rule. MUST precede it.
+            urlPattern: /^https:\/\/server\.arcgisonline\.com\/.*\/MapServer\/tile\/[0-3]\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opd-tiles-esri-base',
+              expiration: {
+                maxEntries: 90, // z0-3 = 85 tiles
+                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days — imagery is static
               },
               cacheableResponse: { statuses: [0, 200] },
             },
