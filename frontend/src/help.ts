@@ -112,6 +112,97 @@ const HELP_SECTIONS: HelpSection[] = [
           'How far the target sits from the point directly below the ISS. ' +
           'Smaller is a more straight-down, less oblique shot.',
       },
+      {
+        icon: '🧭',
+        label: 'Look angle & window',
+        text:
+          'The direction tag reads like the CEO target sheets: "26° right of ' +
+          'track" means aim the camera 26° off straight-down, to the right of ' +
+          'your ground path (at closest approach the target is abeam, so that ' +
+          'one number is both the tilt and how far off-track it is). Under ~30° ' +
+          'off-nadir you can shoot from the WORF (Destiny nadir window); beyond ' +
+          'that it is a Cupola shot.',
+      },
+    ],
+  },
+  {
+    title: 'Pass card buttons',
+    items: [
+      {
+        icon: '📸',
+        label: 'Shoot',
+        text:
+          'Log that you took the shot. Your shoot/skip history tunes which ' +
+          'passes get surfaced for you.',
+      },
+      {
+        icon: '⏭️',
+        label: 'Skip',
+        text: 'Log that you passed on it — also feeds the tuning, the other way.',
+      },
+      {
+        icon: '🔔',
+        label: 'Remind',
+        text:
+          'Add this pass to your shot list for a calendar reminder (see ' +
+          'Calendar reminders below). Tap again to remove it.',
+      },
+      {
+        icon: '🙈',
+        label: 'Hide',
+        text:
+          'Remove a target from your view. Curated (shared) targets are ' +
+          'restorable from the Profile tab; your own personal targets are ' +
+          'deleted, so re-add them in Profile if you change your mind.',
+      },
+      {
+        icon: '🔑',
+        label: 'Calibration token',
+        text:
+          'Shoot/Skip work offline and queue locally; they upload to the ' +
+          'server once you paste your calibration token in the Log tab. Until ' +
+          'then the buttons read "set token" and the pending count waits.',
+      },
+    ],
+  },
+  {
+    title: 'Calendar reminders (🔔)',
+    items: [
+      {
+        icon: '🔔',
+        label: 'Build a shot list',
+        text:
+          'Tap 🔔 Remind on any Queue or Upcoming pass to add it to a shot ' +
+          'list for the day. A bar appears at the bottom: "N selected — Add ' +
+          'to Calendar."',
+      },
+      {
+        icon: '📅',
+        label: 'Add to Calendar',
+        text:
+          'Tap Add to Calendar and your phone opens an "Add All to Calendar" ' +
+          'sheet. Each pass becomes an event with two alarms: 5 minutes before, ' +
+          'and at closest approach. They fire even with the app closed and the ' +
+          'phone locked, because the OS calendar handles them — not the app. ' +
+          'The reminders are only live once you tap Add in Calendar.',
+      },
+    ],
+  },
+  {
+    title: 'Sorting & filtering',
+    items: [
+      {
+        icon: '🔀',
+        label: 'Time / Score',
+        text:
+          'Order cards chronologically (what is next on the timeline) or by ' +
+          'score (best opportunity first).',
+      },
+      {
+        icon: '👥',
+        label: 'All / Mine',
+        text: 'Show every shared target, or just the ones in your profile.',
+      },
     ],
   },
   {
@@ -126,6 +217,45 @@ const HELP_SECTIONS: HelpSection[] = [
       { icon: '🛰️', label: 'Satellites', text: 'Track other craft — Tiangong, Hubble, Starship, and more.' },
       { icon: '📍', label: 'Follow ISS', text: 'Recenter on the station; pan away to release.' },
       { icon: 'N↑ / ISS↑', label: 'Bearing', text: 'North up, or rotate so the ISS direction of travel points up.' },
+    ],
+  },
+  {
+    title: 'Drop a pin on the map',
+    items: [
+      {
+        icon: '📌',
+        label: 'When is the ISS over here?',
+        text:
+          'Long-press anywhere on the map (or right-click on desktop) to drop ' +
+          'a pin. You get the next few passes over that exact spot in the ' +
+          'coming 36 hours, each with its time, off-nadir angle, and which ' +
+          'window to shoot from.',
+      },
+    ],
+  },
+  {
+    title: 'Working offline',
+    items: [
+      {
+        icon: '✈️',
+        label: 'What still works',
+        text:
+          'The app and your last-synced passes load with no connection. The ' +
+          'banner shows how long since the last sync ("LOS · 3h ago") and ' +
+          'flags stale data, because pass times drift as the clock advances.',
+      },
+      {
+        icon: '🗺️',
+        label: 'Map tiles are cached, not complete',
+        text:
+          'Offline, the map only has the imagery you already loaded online, ' +
+          'plus a world view. Zoom into a spot or pan to an area you did not ' +
+          'view online and the basemap can go black there. Cloud and ' +
+          'night-light layers only have tiles for places you viewed with that ' +
+          'layer turned ON while online — so toggling a layer on offline over ' +
+          'a fresh area may show nothing. That is the cache, not a fault: load ' +
+          'the areas you care about while you still have signal.',
+      },
     ],
   },
   {

@@ -231,6 +231,35 @@ export function buildWorldBaseUrls(): string[] {
   return urls;
 }
 
+/** Esri World Imagery tile template ({z}/{y}/{x}); matches map.ts buildStyle. */
+const ESRI_IMAGERY_TILE =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+
+/** Build z0-3 world tiles for the SWITCHABLE layers: Esri imagery (the
+ *  clouds-OFF basemap), the GIBS true-color cloud overlay, and VIIRS
+ *  night-lights. buildWorldBaseUrls only covers the default carto basemap, so
+ *  without these the world view goes black offline the moment the operator
+ *  turns clouds off, or toggles clouds/night-lights on over an area they hadn't
+ *  loaded online (a hidden layer never fetches tiles). 3 layers × 85 = 255.
+ *  Night-lights is fetched as its RAW GIBS Black Marble URL — the viirs-alpha
+ *  protocol fetches that same upstream, so the SW cache hit serves it offline. */
+export function buildWorldOverlayUrls(): string[] {
+  const cloudsPattern = gibsTrueColorUrl(yesterdayIso());
+  const viirsPattern = gibsBlackMarbleUrl('2016-01-01');
+  const urls: string[] = [];
+  for (const z of WORLD_BASE_ZOOM_LEVELS) {
+    const n = 2 ** z;
+    for (let x = 0; x < n; x++) {
+      for (let y = 0; y < n; y++) {
+        urls.push(fillTileUrl(ESRI_IMAGERY_TILE, z, x, y));
+        urls.push(fillTileUrl(cloudsPattern, z, x, y));
+        urls.push(fillTileUrl(viirsPattern, z, x, y));
+      }
+    }
+  }
+  return urls;
+}
+
 /** Fire-and-forget pre-cache of the world-view basemap (z0-3). Skipped when
  *  offline. Call once per session after a successful online refresh — the
  *  world tiles are static (the dark basemap never changes), so re-firing per
@@ -239,7 +268,9 @@ export function precacheWorldBaseTiles(
   isOnlineFn: () => boolean = () => navigator.onLine,
 ): void {
   if (!isOnlineFn()) return;
-  fireAndForgetPrecache(buildWorldBaseUrls());
+  // Default carto basemap + the switchable Esri/clouds/night-lights layers, so
+  // the world view renders offline whichever layers the operator turns on.
+  fireAndForgetPrecache([...buildWorldBaseUrls(), ...buildWorldOverlayUrls()]);
 }
 
 /** Test-only: clear in-flight tracking between vitest runs. */

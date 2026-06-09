@@ -20,6 +20,7 @@ import {
   _resetPrecacheInflightForTest,
   buildPrecacheUrls,
   buildWorldBaseUrls,
+  buildWorldOverlayUrls,
   fillTileUrl,
   gibsTrueColorUrl,
   lonLatToTile,
@@ -218,6 +219,31 @@ describe('buildWorldBaseUrls (z0-3 world-view basemap)', () => {
   });
 });
 
+describe('buildWorldOverlayUrls (z0-3 switchable layers)', () => {
+  it('produces 255 URLs: 85 tiles × 3 layers (Esri + clouds + VIIRS)', () => {
+    expect(buildWorldOverlayUrls()).toHaveLength(85 * 3);
+  });
+
+  it('covers all three switchable layers at z0-3 only', () => {
+    const urls = buildWorldOverlayUrls();
+    const esri = urls.filter((u) => u.includes('arcgisonline.com'));
+    const clouds = urls.filter((u) => u.includes('CorrectedReflectance_TrueColor'));
+    const viirs = urls.filter((u) => u.includes('VIIRS_Black_Marble'));
+    expect(esri).toHaveLength(85);
+    expect(clouds).toHaveLength(85);
+    expect(viirs).toHaveLength(85);
+    // z0-3 only — the SW base-cache routes match /tile/[0-3]/ and Level\d/[0-3]/.
+    expect(urls.some((u) => /\/MapServer\/tile\/[4-9]\//.test(u))).toBe(false);
+  });
+
+  it('emits the Esri {z}/{y}/{x} order and a real z3 tile', () => {
+    // z3 tile (x=2,y=1): Esri path is /tile/{z}/{y}/{x} → /tile/3/1/2
+    expect(buildWorldOverlayUrls()).toContain(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/3/1/2',
+    );
+  });
+});
+
 describe('precacheWorldBaseTiles', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
@@ -236,9 +262,9 @@ describe('precacheWorldBaseTiles', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('fires one fetch per world tile (85) when online', () => {
+  it('fires carto base (85) + Esri/clouds/VIIRS overlays (255) = 340 when online', () => {
     precacheWorldBaseTiles(() => true);
-    expect(fetchSpy).toHaveBeenCalledTimes(85);
+    expect(fetchSpy).toHaveBeenCalledTimes(85 + 255);
   });
 
   it('dedupes against in-flight URLs from a prior call', async () => {
