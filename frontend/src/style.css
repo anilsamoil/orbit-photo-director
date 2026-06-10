@@ -964,12 +964,76 @@ body.shotlist-bar-visible main {
   cursor: not-allowed;
 }
 
+/* Continuous time-slider (Chris feedback 2026-06-09, eng-review 1C). Full-
+ * width second row inside the time control: the steppers above keep the
+ * orbit-relative jumps (±45 = half orbit, ±90 ≈ one orbit) while the slider
+ * gives one-drag reach to any instant in the next 36h. */
+.time-slider-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.25rem 0.1rem;
+}
+.time-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 44px hit area for iOS touch (eng-review T3 QA item); the visual track
+   * stays thin — the input's box is what receives the finger. The negative
+   * margin keeps the row visually compact despite the tall hit area. */
+  height: 44px;
+  margin: -10px 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.time-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.time-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface-2);
+  margin-top: -9px; /* center the 22px thumb on the 4px track */
+}
+.time-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.time-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface-2);
+}
+.time-slider-readout {
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  min-width: 64px;
+  text-align: right;
+  white-space: nowrap;
+}
+.time-slider-readout.time-slider-scrubbed {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* Bearing toggle sits below the time toggle on the same right edge.
  * v1.4.0.0 bumped from 130 → 170 because the new 5-button time-scrub
  * row is taller (UTC chip + label per button = ~50px) and can wrap on
- * narrow viewports. */
+ * narrow viewports. v1.8.0.0 bumped 170 → 206 for the slider row
+ * (continuous time-slider, ~34px) inside the time control. */
 .map-controls.map-controls-bearing {
-  top: 170px;
+  top: 206px;
 }
 
 /* All/Mine filter on the Map (top-left, clear of the right-edge control
@@ -989,7 +1053,7 @@ body.shotlist-bar-visible main {
  * edge. Single-button row (Pettit feedback 2026-05-19 — make cloud
  * overlay toggleable). The cloud icon (☁) sits centered on a square. */
 .map-controls.map-controls-overlay {
-  top: 220px;
+  top: 256px; /* follows the bearing row, which moved for the slider row */
 }
 .map-controls.map-controls-overlay .time-btn {
   font-size: 1.05rem;

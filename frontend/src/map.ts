@@ -129,6 +129,36 @@ export function _getViewTimeMsForTest(): number | null {
   return viewTimeMs;
 }
 
+/** Day-aware UTC readout for the slider (eng-review T6a): "13:30Z" today,
+ *  "+1d 03:15Z" past midnight UTC. Bare HH:MMZ is ambiguous across the 36h
+ *  scrub range — pass planning around midnight needs the day. */
+export function formatViewTimeReadout(viewMs: number, nowMs: number): string {
+  const dayDiff = Math.floor(viewMs / 86_400_000) - Math.floor(nowMs / 86_400_000);
+  const prefix = dayDiff > 0 ? `+${dayDiff}d ` : '';
+  return `${prefix}${formatUtcHm(viewMs)}`;
+}
+
+/** rAF-gate factory (eng-review 7A): coalesce a ~60Hz event burst to at most
+ *  one apply() per animation frame; apply reads the LATEST value at fire
+ *  time. No trailing timer needed — 'input' keeps firing while the value
+ *  changes and 'change' fires once at release. The tiered light/heavy split
+ *  is the documented fallback ONLY if real-iPad QA measures jank with this.
+ *  Exported for tests (inject a manual raf). */
+export function rafCoalesce(
+  apply: () => void,
+  raf: (cb: () => void) => unknown = (cb) => requestAnimationFrame(cb),
+): () => void {
+  let pending = false;
+  return () => {
+    if (pending) return;
+    pending = true;
+    raf(() => {
+      pending = false;
+      apply();
+    });
+  };
+}
+
 /** "Pass window" half-width: a pass with closest_approach within ±45 min
  *  of the current view time is considered in-orbit and rendered full
  *  opacity. Outside that window the pin dims to 0.3 alpha (Q3 → C). */
@@ -332,6 +362,8 @@ export function _resetMapStateForTest(): void {
   nightLightsVisible = false;
   labelsVisible = true;
   viewTimeMs = null;
+  sliderBound = false;
+  sliderLastAppliedMinutes = -1;
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
@@ -1273,6 +1305,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
 
   bindTimeToggle();
+  bindTimeSlider();
   bindBearingToggle();
   bindCloudToggle();
   bindTerminatorToggle();
@@ -1720,6 +1753,9 @@ function updateTimeStepLabels(): void {
       clampLookahead(curMin + step) === curMin;
     btn.classList.toggle('time-step-noop', wouldBeNoop);
   }
+  // Slider thumb + readout ride the same refresh so the controls can
+  // never disagree about the view time.
+  syncTimeSliderControls(nowMs, curMin);
 }
 
 /** Move the map's view time to now + newMinutes (clamped 0..36h) and refresh
@@ -1768,6 +1804,61 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
     }
   }
   updateTimeStepLabels();
+}
+
+let sliderBound = false;
+// Last whole-minute value applied FROM the slider (or synced INTO it).
+// Guards re-pinning the same offset against a newer wall clock, which
+// would quietly reintroduce the relative-drift the absolute model kills.
+let sliderLastAppliedMinutes = -1;
+
+/** Wire the continuous time-slider (eng-review 1C — Chris 2026-06-09:
+ *  "slide time forward/backward... lets you see an arbitrary time later in
+ *  the day"). Augments the steppers: slider = reach, steppers = precise
+ *  orbit-relative jumps. Exported for tests; `raf` injectable. */
+export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
+  if (sliderBound) return;
+  const slider = document.getElementById('time-slider') as HTMLInputElement | null;
+  if (!slider) return;
+  // Bounds come from the clamp contract, not hand-kept HTML attributes.
+  slider.min = '0';
+  slider.max = String(LOOKAHEAD_MAX_MINUTES);
+  const applyFromSlider = (recenter: boolean): void => {
+    const minutes = Number(slider.value);
+    if (!Number.isFinite(minutes)) return;
+    // Value-unchanged no-op: re-applying the same minutes would pin the
+    // SAME offset to a NEW now (T1). syncTimeSliderControls keeps this
+    // tracker in lockstep when steppers / snap-to-live move the view.
+    if (minutes === sliderLastAppliedMinutes && !recenter) return;
+    setLookahead(minutes, recenter);
+  };
+  // Drag: rAF-coalesced full refresh; never recenter under the finger.
+  slider.addEventListener('input', rafCoalesce(() => applyFromSlider(false), raf));
+  // Release (or keyboard commit): one recenter ease onto the marker.
+  slider.addEventListener('change', () => applyFromSlider(true));
+  sliderBound = true;
+}
+
+/** Push the current view state into the slider + readout. Called from
+ *  updateTimeStepLabels, so every pathway that changes or re-labels time
+ *  (steppers, slider, snap-to-live, the 30s label tick) keeps the controls
+ *  in lockstep. Programmatic .value writes don't fire 'input', so this
+ *  never loops back into setLookahead. */
+function syncTimeSliderControls(nowMs: number, curMin: number): void {
+  const slider = document.getElementById('time-slider') as HTMLInputElement | null;
+  if (!slider) return;
+  slider.value = String(curMin);
+  sliderLastAppliedMinutes = curMin;
+  const scrubbed = isScrubbed();
+  const readoutText = scrubbed
+    ? formatViewTimeReadout(currentViewMs(nowMs), nowMs)
+    : 'Now';
+  slider.setAttribute('aria-valuetext', readoutText);
+  const readout = document.getElementById('time-slider-readout');
+  if (readout) {
+    readout.textContent = readoutText;
+    readout.classList.toggle('time-slider-scrubbed', scrubbed);
+  }
 }
 
 let toggleBound = false;
