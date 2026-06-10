@@ -1,27 +1,28 @@
 /** Tests for v1.4.0.0 time-scrub helpers (clamp, UTC label formatting,
- *  future-orbit ground track sampling). The interactive button + paint
- *  expression bits are exercised end-to-end during map smoke testing
- *  (Anil's iPhone in-flight QA); this file covers the pure functions. */
+ *  step semantics). The interactive button + paint expression bits are
+ *  exercised end-to-end during map smoke testing (Anil's iPhone in-flight
+ *  QA); this file covers the pure functions.
+ *
+ *  6A (2026-06-10): these tests previously ran against LOCAL COPIES of the
+ *  helpers, with a comment claiming the copies were "contract tests" that
+ *  would catch divergence — they couldn't (nothing ever compared the copy
+ *  to the real code; a real change kept these green). The real functions
+ *  are now exported from map.ts and tested directly, so the bounds the
+ *  slider's min/max/step depend on are actually guarded. */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// These constants + helpers are exported indirectly through the module
-// state in map.ts. We re-implement them here as a contract test — if
-// map.ts diverges from this expected behavior the test catches it.
-
-const LOOKAHEAD_MAX_MINUTES = 36 * 60;
-
-function clampLookahead(m: number): number {
-  if (!Number.isFinite(m) || m < 0) return 0;
-  if (m > LOOKAHEAD_MAX_MINUTES) return LOOKAHEAD_MAX_MINUTES;
-  return Math.round(m);
-}
-
-function formatUtcHm(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
-}
+import {
+  LOOKAHEAD_MAX_MINUTES,
+  _getViewTimeMsForTest,
+  _resetMapStateForTest,
+  bindTimeToggle,
+  clampLookahead,
+  formatUtcHm,
+  isScrubbed,
+  maybeSnapToLive,
+  setLookahead,
+} from '../src/map';
 
 describe('clampLookahead', () => {
   it('floors at 0 (no negative lookahead — back is relative-to-current)', () => {
@@ -107,5 +108,159 @@ describe('lookahead step semantics (back-from-current floor logic)', () => {
   it('combination of +45 / +90 reaches arbitrary multiples', () => {
     // +90, +90, +45 = 225
     expect(step(step(step(0, 90), 90), 45)).toBe(225);
+  });
+});
+
+describe('absolute view-time model (T1, eng-review 2026-06-10)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-10T12:00:00Z'));
+    _resetMapStateForTest();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('setLookahead pins an ABSOLUTE instant: now + N minutes', () => {
+    setLookahead(45, /*recenter=*/false);
+    expect(_getViewTimeMsForTest()).toBe(Date.parse('2026-06-10T12:45:00Z'));
+    expect(isScrubbed()).toBe(true);
+  });
+
+  it('the pinned instant does NOT drift as the wall clock advances', () => {
+    // The bug class this model kills: under the old relative
+    // lookaheadMinutes, a view parked at +6h re-resolved to a LATER
+    // instant on every refresh as "now" advanced.
+    setLookahead(360, false);
+    const pinned = _getViewTimeMsForTest();
+    vi.setSystemTime(new Date('2026-06-10T12:10:00Z'));
+    expect(_getViewTimeMsForTest()).toBe(pinned); // still 18:00Z, not 18:10Z
+  });
+
+  it('setLookahead(0) returns to live mode', () => {
+    setLookahead(90, false);
+    setLookahead(0, false);
+    expect(_getViewTimeMsForTest()).toBeNull();
+    expect(isScrubbed()).toBe(false);
+  });
+
+  it('negative / NaN input clamps to live mode, never into the past', () => {
+    setLookahead(90, false);
+    setLookahead(-45, false);
+    expect(_getViewTimeMsForTest()).toBeNull();
+    setLookahead(NaN, false);
+    expect(_getViewTimeMsForTest()).toBeNull();
+  });
+
+  it('caps at +36h (clamp applies before pinning)', () => {
+    setLookahead(99_999, false);
+    expect(_getViewTimeMsForTest())
+      .toBe(Date.now() + LOOKAHEAD_MAX_MINUTES * 60_000);
+  });
+
+  it('stepper semantics compose against the current offset-from-now', () => {
+    setLookahead(90, false); // pinned at 13:30Z
+    vi.setSystemTime(new Date('2026-06-10T12:30:00Z')); // offset is now 60
+    // What a +45 stepper click computes: lookaheadMinutesNow() + 45.
+    setLookahead(60 + 45, false);
+    expect(_getViewTimeMsForTest()).toBe(Date.parse('2026-06-10T14:15:00Z'));
+  });
+
+  describe('maybeSnapToLive', () => {
+    it('does not snap while the pinned instant is still in the future', () => {
+      setLookahead(5, false);
+      expect(maybeSnapToLive(Date.now())).toBe(false);
+      expect(isScrubbed()).toBe(true);
+    });
+
+    it('snaps to live once the wall clock reaches the pinned instant', () => {
+      setLookahead(5, false);
+      vi.setSystemTime(new Date('2026-06-10T12:05:00Z'));
+      expect(maybeSnapToLive(Date.now())).toBe(true);
+      expect(_getViewTimeMsForTest()).toBeNull();
+      expect(isScrubbed()).toBe(false);
+    });
+
+    it('is a no-op in live mode', () => {
+      expect(maybeSnapToLive(Date.now())).toBe(false);
+      expect(isScrubbed()).toBe(false);
+    });
+  });
+});
+
+describe('stepper wiring post-hoist (REGRESSION — setLookahead was closure-bound)', () => {
+  // 5A moved setLookahead out of bindTimeToggle; it now queries
+  // .time-step-btn from the document instead of a closure-captured
+  // NodeList. Pin the active-class + UTC-chip behavior at that seam.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-10T12:00:00Z'));
+    document.body.innerHTML = `
+      <button id="time-now" class="time-btn time-step-btn active" data-step="0">
+        <span class="time-step-utc" data-time-utc>--:--Z</span>
+      </button>
+      <button id="time-fwd-45" class="time-btn time-step-btn" data-step="45">
+        <span class="time-step-utc" data-time-utc>--:--Z</span>
+      </button>`;
+    _resetMapStateForTest();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  it('scrubbing clears the Now button active state; returning restores it', () => {
+    const nowBtn = document.getElementById('time-now')!;
+    setLookahead(45, false);
+    expect(nowBtn.classList.contains('active')).toBe(false);
+    setLookahead(0, false);
+    expect(nowBtn.classList.contains('active')).toBe(true);
+  });
+
+  it('updates the UTC chips relative to the current view offset', () => {
+    setLookahead(45, false);
+    // At +45, the [T+45 →] chip shows the time a further +45 click would
+    // land on: 12:00Z + 90min = 13:30Z. The Now chip stays wall-clock.
+    const fwdChip = document.querySelector('#time-fwd-45 [data-time-utc]')!;
+    const nowChip = document.querySelector('#time-now [data-time-utc]')!;
+    expect(fwdChip.textContent).toBe('13:30Z');
+    expect(nowChip.textContent).toBe('12:00Z');
+  });
+
+  it('REAL click wiring: a bound +45 button pins now+45 (bindTimeToggle seam)', () => {
+    // Hand-computed setLookahead calls can't catch a regression in the
+    // click handler itself (pre-landing review 2026-06-10) — drive the
+    // real listener.
+    bindTimeToggle();
+    (document.getElementById('time-fwd-45') as HTMLButtonElement).click();
+    expect(_getViewTimeMsForTest()).toBe(Date.parse('2026-06-10T12:45:00Z'));
+    (document.getElementById('time-now') as HTMLButtonElement).click();
+    expect(_getViewTimeMsForTest()).toBeNull();
+  });
+
+  it('ceiling click does not re-pin the absolute instant (same-instant guard)', () => {
+    bindTimeToggle();
+    setLookahead(LOOKAHEAD_MAX_MINUTES, false);
+    const pinned = _getViewTimeMsForTest();
+    vi.setSystemTime(new Date('2026-06-10T12:00:10Z'));
+    (document.getElementById('time-fwd-45') as HTMLButtonElement).click(); // styled noop
+    expect(_getViewTimeMsForTest()).toBe(pinned); // not nudged 10s forward
+  });
+
+  it('marks floor/ceiling steppers with the noop class (curMin-derived)', () => {
+    // REGRESSION: wouldBeNoop moved from the old lookaheadMinutes state to
+    // the curMin derived from the absolute view instant — pin both edges.
+    document.body.innerHTML += `
+      <button id="time-back-45" class="time-btn time-step-btn" data-step="-45">
+        <span class="time-step-utc" data-time-utc>--:--Z</span>
+      </button>`;
+    const backBtn = () => document.getElementById('time-back-45')!;
+    const fwdBtn = () => document.getElementById('time-fwd-45')!;
+    setLookahead(0, false); // refresh labels at the floor
+    expect(backBtn().classList.contains('time-step-noop')).toBe(true); // clamp(0-45)=0
+    expect(fwdBtn().classList.contains('time-step-noop')).toBe(false);
+    setLookahead(LOOKAHEAD_MAX_MINUTES, false); // ceiling
+    expect(fwdBtn().classList.contains('time-step-noop')).toBe(true); // clamp(max+45)=max
+    expect(backBtn().classList.contains('time-step-noop')).toBe(false);
   });
 });

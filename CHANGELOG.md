@@ -2,6 +2,36 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.8.0.0] - 2026-06-10
+
+## **Slide to any moment in the next 36 hours. The whole map keeps one clock.**
+
+Chris asked for it from orbit: "really nice to be able to *slide* time forward/backward and have it update the position/tracks (like GoISSWatch)." The Map tab now has a continuous time-slider under the stepper buttons — one drag reaches any instant out to +36h, and the ground track, ISS marker, day-night terminator, and target pins all follow live while you drag. Release, and the camera eases onto where the ISS will be. The steppers stay for precise orbit-relative jumps (±45 = half orbit, ±90 ≈ one); the slider is for reach.
+
+Two deeper changes ride along. First, a scrubbed view is now pinned to an **absolute UTC instant**: park the map on the 19:42Z pass and it stays the 19:42Z pass — previously the view silently re-resolved against the advancing clock, so ten minutes later you were looking at 19:52Z without touching anything. When the wall clock catches your pinned moment, the view snaps back to live. Second, **the whole map surface now honors that one clock**: tracked satellites (Tiangong, Hubble…) render their markers AND track lines at the view time instead of ticking live under a future ISS, and follow-ISS no longer chases the live position while you're looking at the future.
+
+The view is honest about its own limits while scrubbed: the imagery badge says "Clouds: observed — not forecast" (the forecast raster lands with the upcoming cloud-overlay release), and the time readout flags "stale TLE" when the orbit solution's age plus your scrub depth passes 48 hours — a fresh-looking TLE scrubbed +36h is an old projection, and that's exactly when the warning matters.
+
+### Itemized changes
+
+#### Added
+- **Continuous time-slider** (Map tab): Now…+36h in one drag, 5-min snap, visible Now/+36h scale anchors, day-aware UTC readout ("+1d 03:15Z" past midnight UTC), 44px touch target, keyboard arrows step it, and the readout doubles as the scrub-state indicator. Drag updates are frame-coalesced so the map refreshes at most once per animation frame with the newest value.
+- **Scrub honesty affordances:** "Clouds: observed *date* — not forecast" imagery badge while scrubbed; "· stale TLE" readout flag when effective propagation age (TLE age + scrub depth) exceeds 48h, sharing the topbar banner's exact threshold semantics so the two surfaces can never disagree.
+
+#### Changed
+- **Scrubbed views pin an absolute UTC instant** instead of a drifting offset-from-now; the view auto-returns to live when the clock catches the pinned moment. Stepper UTC chips now answer "where would a click land me from here."
+- **Satellites follow the scrub:** non-ISS markers and their track windows render at the view time; live 1Hz ticking resumes at Now. Topbar readouts intentionally stay on the live clock (they're the live domain, like the ISS topbar).
+- Release/keyboard-commit on an unchanged slider value never re-pins or re-renders — the pinned instant is sacred.
+
+#### Fixed
+- **Follow-ISS during a scrub:** the camera no longer chases the live ISS position (1Hz recenter gated; the Follow button's entry fly-to goes to the marker you can see), and snapping back to live eases the camera instead of teleporting.
+- **Marker stranded on stale data:** a manifest refresh arriving while the view is parked now repositions the ISS marker from the fresh track — previously only the live tick moved it, so a scrubbed view could show the marker on an outdated orbit solution.
+- Satellite picker panel opened on top of the overlay buttons that summon it (control offsets moved for the new slider row).
+
+#### Internal
+- `setLookahead` hoisted to a module-level export — steppers, slider, and tests drive one pathway; the time-scrub test file now imports the real `clampLookahead`/`formatUtcHm` instead of testing local copies that could never catch divergence.
+- 60 new tests (suite: 1068): absolute-time pinning/no-drift/snap, rAF coalescing, stepper↔slider lockstep, real click wiring, satellite view-time windows, follow-gate against the real implementation, badge wording, effective-TLE-age boundaries.
+
 ## [1.7.12.0] - 2026-06-10
 
 ## **The orbit track now keeps up with time, and the ISS marker sits exactly on it.**
