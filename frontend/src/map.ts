@@ -2262,6 +2262,18 @@ export function _resetFollowStateForTest(): void {
   followISS = false;
 }
 
+/** Test-only: install a map-like object + follow flag so the camera-gating
+ *  branches in applyFollowISS (follow off / no map / scrubbed — 4A) can be
+ *  exercised against the REAL implementation without a live MapLibre map
+ *  (happy-dom can't construct one). Pass null to restore the no-map state. */
+export function _setFollowEnvForTest(
+  m: { setCenter(c: [number, number]): void } | null,
+  follow: boolean,
+): void {
+  map = m as unknown as maplibregl.Map | null;
+  followISS = follow;
+}
+
 let multiOrbitToggleBound = false;
 function bindMultiOrbitToggle(): void {
   if (multiOrbitToggleBound) return;

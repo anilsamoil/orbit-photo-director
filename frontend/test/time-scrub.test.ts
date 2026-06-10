@@ -225,4 +225,21 @@ describe('stepper wiring post-hoist (REGRESSION — setLookahead was closure-bou
     expect(fwdChip.textContent).toBe('13:30Z');
     expect(nowChip.textContent).toBe('12:00Z');
   });
+
+  it('marks floor/ceiling steppers with the noop class (curMin-derived)', () => {
+    // REGRESSION: wouldBeNoop moved from the old lookaheadMinutes state to
+    // the curMin derived from the absolute view instant — pin both edges.
+    document.body.innerHTML += `
+      <button id="time-back-45" class="time-btn time-step-btn" data-step="-45">
+        <span class="time-step-utc" data-time-utc>--:--Z</span>
+      </button>`;
+    const backBtn = () => document.getElementById('time-back-45')!;
+    const fwdBtn = () => document.getElementById('time-fwd-45')!;
+    setLookahead(0, false); // refresh labels at the floor
+    expect(backBtn().classList.contains('time-step-noop')).toBe(true); // clamp(0-45)=0
+    expect(fwdBtn().classList.contains('time-step-noop')).toBe(false);
+    setLookahead(LOOKAHEAD_MAX_MINUTES, false); // ceiling
+    expect(fwdBtn().classList.contains('time-step-noop')).toBe(true); // clamp(max+45)=max
+    expect(backBtn().classList.contains('time-step-noop')).toBe(false);
+  });
 });

@@ -1,4 +1,12 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest';
+
+import {
+  _resetFollowStateForTest,
+  _resetMapStateForTest,
+  _setFollowEnvForTest,
+  applyFollowISS as realApplyFollowISS,
+  setLookahead,
+} from '../src/map';
 
 // v1.5.2.0 follow-ISS toggle test (Chris ask, /plan-eng-review T2):
 // asserts the dragstart-during-pending-tick race resolves correctly.
@@ -171,5 +179,61 @@ describe('follow-ISS one-shot click contract (v2 hotfix)', () => {
     expect(map.flyCalls).toHaveLength(0);
     expect(map.easeCalls).toHaveLength(0);
     expect(map.centerCalls).toHaveLength(0);
+  });
+});
+
+// REGRESSION (feat/time-slider, 4A 2026-06-10): applyFollowISS gained an
+// isScrubbed() gate — the 1Hz caller passes the LIVE ISS position, and
+// recentering on it while the map shows a future instant makes the camera
+// chase a marker that isn't on screen. Unlike the mirror contract above,
+// these tests drive the REAL applyFollowISS via the _setFollowEnvForTest
+// seam (map-like object — no MapLibre runtime needed for this gate).
+describe('applyFollowISS scrub gate (4A — real implementation)', () => {
+  let fake: FakeMap;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-10T12:00:00Z'));
+    _resetMapStateForTest();
+    _resetFollowStateForTest();
+    fake = new FakeMap();
+  });
+
+  afterEach(() => {
+    _setFollowEnvForTest(null, false);
+    vi.useRealTimers();
+  });
+
+  it('live + following → recenters on the ISS position', () => {
+    _setFollowEnvForTest(fake, true);
+    realApplyFollowISS({ lat: 30, lon: 50 });
+    expect(fake.centerCalls).toEqual([[50, 30]]);
+  });
+
+  it('scrubbed + following → no-op (camera must not chase the live position)', () => {
+    _setFollowEnvForTest(fake, true);
+    setLookahead(90, /*recenter=*/false);
+    realApplyFollowISS({ lat: 30, lon: 50 });
+    expect(fake.centerCalls).toHaveLength(0);
+  });
+
+  it('follow resumes when the view returns to live (Now reset)', () => {
+    _setFollowEnvForTest(fake, true);
+    setLookahead(90, false);
+    realApplyFollowISS({ lat: 30, lon: 50 });
+    setLookahead(0, false);
+    realApplyFollowISS({ lat: 31, lon: 51 });
+    expect(fake.centerCalls).toEqual([[51, 31]]);
+  });
+
+  it('follow OFF → no-op even when live', () => {
+    _setFollowEnvForTest(fake, false);
+    realApplyFollowISS({ lat: 30, lon: 50 });
+    expect(fake.centerCalls).toHaveLength(0);
+  });
+
+  it('no map → no-op regardless of follow + scrub state', () => {
+    _setFollowEnvForTest(null, true);
+    expect(() => realApplyFollowISS({ lat: 30, lon: 50 })).not.toThrow();
   });
 });
