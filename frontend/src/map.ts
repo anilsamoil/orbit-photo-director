@@ -15,7 +15,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
-import { liveIssPosition, wrapLon } from './iss';
+import { liveIssNow, liveIssPosition, wrapLon } from './iss';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
 import {
@@ -1259,21 +1259,55 @@ export async function renderMap(manifest: Manifest): Promise<void> {
  *  requested time (clamps to end-of-window).
  */
 function markerPositionFor(track: Track): { lat: number; lon: number } | null {
-  const targetMs = Date.now() + lookaheadMinutes * 60_000;
-  // For lookahead > 0 the polynomial likely doesn't cover the target time
-  // (only ~120 min). Use SGP4 directly so the frozen marker lands at the
-  // future orbit's start (Q2 → A in the 2026-05-20 decision).
-  if (lookaheadMinutes > 0) {
-    const sgp4 = issPositionWithAltSGP4(track, targetMs);
-    if (sgp4) return { lat: sgp4.lat, lon: sgp4.lon };
-  }
-  const pos = liveIssPosition(track, targetMs);
+  return markerPositionAt(track, lookaheadMinutes, Date.now());
+}
+
+/** Live ISS marker position for a given lookahead + wall-clock. Exported for
+ *  unit testing.
+ *
+ *  SGP4-first (via liveIssNow) so the marker sits on the SAME curve as the
+ *  ground-track polyline, which is raw SGP4 (generator sample_track_points).
+ *  Until 2026-06-09 the lookahead-0 path used the polynomial fit
+ *  (liveIssPosition) — up to ~1.1° / ~120 km off SGP4 truth INSIDE the window
+ *  (see liveIssNow in iss.ts), and the error grows toward the 120-min window
+ *  edge as the polynomial degrades. That put the marker visibly off the track
+ *  line when zoomed in, worse the longer the app stayed open (Chris feedback
+ *  2026-06-09). liveIssNow already handles future times natively, so the prior
+ *  lookahead>0 SGP4 special-case folds away.
+ *
+ *  Falls back to the polynomial only for legacy manifests with no usable TLE,
+ *  then clamps to the end of the polynomial window. */
+export function markerPositionAt(
+  track: Track,
+  lookaheadMinutes: number,
+  nowMs: number,
+): { lat: number; lon: number } | null {
+  const targetMs = nowMs + lookaheadMinutes * 60_000;
+  const pos = liveIssNow(track, targetMs);
   if (pos) return pos;
-  // Fallback: clamp to last point in the polynomial window
+  // No TLE AND past the polynomial window — clamp to the window's last point.
   const startMs = Date.parse(track.iss_polynomial.start);
   if (Number.isNaN(startMs)) return null;
   const endMs = startMs + track.iss_polynomial.duration_seconds * 1000;
   return liveIssPosition(track, Math.min(targetMs, endMs - 1000));
+}
+
+/** Re-render the map's dynamic layers when a newer manifest arrives mid-
+ *  session. No-op until the map has been created (renderMap lazily builds it
+ *  on the first Map-tab click).
+ *
+ *  Fixes the frozen-ground-track bug (Chris 2026-06-09): the 60s manifest
+ *  poll (main.ts doRefresh) updated the Queue/cards but never re-rendered the
+ *  map, so the ground-track polyline stayed pinned to the manifest from when
+ *  the Map tab was first opened — the live marker kept moving while the track
+ *  it should sit on never advanced to the next generator tick's data. Calling
+ *  this on each newer manifest rebuilds the track + marker + targets from the
+ *  fresh track.json. renderMap is idempotent on an existing map (it only
+ *  animates the bearing on first init), so it won't fight the operator's
+ *  current pan/zoom. */
+export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
+  if (!map) return;
+  await renderMap(manifest);
 }
 
 /** Rebuild the iss-track geojson source based on the current lookahead.

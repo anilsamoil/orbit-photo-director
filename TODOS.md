@@ -118,6 +118,16 @@ Refuted alternatives:
 - In-app reminders only (rejected: iPad isn't always app-focused during shifts, would train
   operators to distrust the feature)
 
+## Continuous time-slider (Chris feedback 2026-06-09)
+
+**Origin:** Chris: "it is really nice to be able to *slide* time forward/backward and have it update the position/tracks (like GoISSWatch). Nicer than the +45min discrete step, and lets you see an arbitrary time later in the day." Today the scrub is discrete ±45/±90-min stepper buttons (frontend/index.html `time-step-btn`, `data-step`).
+
+**What:** Replace (or augment) the discrete steppers with a continuous slider over the scrub horizon (0..~36h), live-updating marker + ground track as it drags.
+
+**Dependency / conflict:** Directly intersects **V4-P2 forecast cloud overlay** (eng-review 2026-06-09, `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-main-v4p2-forecast-cloud-overlay-eng-review-2026-06-09.md`). V4-P2's locked **6h horizon cap + hourly frames** assumed discrete steppers ("nobody clicks +45 fifty times"). A continuous slider to arbitrary times changes the forecast-frame strategy (need frames across the full slid range, or interpolation, or the slider also clamps the forecast layer at 6h with a badge). **Decide the slider before building V4-P2**, or build V4-P2 with the cap and let the slider clamp the forecast layer beyond 6h. Building the marker/track live-update for the slider is cheap now that the SGP4 marker path is fixed (2026-06-09); `futureOrbitGroundTrackFeatures(track, lookaheadMinutes, now)` already renders an arbitrary future window.
+
+**Effort:** ~half day CC (slider UI + bind to existing `setLookahead`/`refreshGroundTrackSource`; the underlying lookahead path already supports arbitrary minutes). **Priority:** P2 (operator-requested UX upgrade).
+
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
 ### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub

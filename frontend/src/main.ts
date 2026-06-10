@@ -218,6 +218,21 @@ async function doRefresh(): Promise<void> {
       precacheTilesForTargets(top5, gibsTrueColorUrl(yesterdayIso()));
     }
 
+    // Keep the Map tab's ground track + marker current as new manifests land.
+    // doRefresh() polls every 60s but historically never re-rendered the map,
+    // so the ground-track polyline froze at the manifest from when the tab was
+    // opened while the live marker kept moving along it (Chris 2026-06-09).
+    // Gated on isNewer so it re-renders once per generator tick, not every
+    // poll; refreshMapForManifest itself no-ops until the map has been created
+    // (first Map-tab visit), so this stays free for operators who never open
+    // the Map tab.
+    if (isNewer && mapModule) {
+      void mapModule.refreshMapForManifest(manifest).catch((e: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn('[map] manifest refresh failed', e);
+      });
+    }
+
     // World-view basemap (z0-3) precache — once per session, online only. The
     // per-target precache above only covers z6/8/10 around the top-3 targets;
     // without the world tiles the default z2 map view is a cache miss → black
