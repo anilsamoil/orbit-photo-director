@@ -1,27 +1,18 @@
 /** Tests for v1.4.0.0 time-scrub helpers (clamp, UTC label formatting,
- *  future-orbit ground track sampling). The interactive button + paint
- *  expression bits are exercised end-to-end during map smoke testing
- *  (Anil's iPhone in-flight QA); this file covers the pure functions. */
+ *  step semantics). The interactive button + paint expression bits are
+ *  exercised end-to-end during map smoke testing (Anil's iPhone in-flight
+ *  QA); this file covers the pure functions.
+ *
+ *  6A (2026-06-10): these tests previously ran against LOCAL COPIES of the
+ *  helpers, with a comment claiming the copies were "contract tests" that
+ *  would catch divergence — they couldn't (nothing ever compared the copy
+ *  to the real code; a real change kept these green). The real functions
+ *  are now exported from map.ts and tested directly, so the bounds the
+ *  slider's min/max/step depend on are actually guarded. */
 
 import { describe, expect, it } from 'vitest';
 
-// These constants + helpers are exported indirectly through the module
-// state in map.ts. We re-implement them here as a contract test — if
-// map.ts diverges from this expected behavior the test catches it.
-
-const LOOKAHEAD_MAX_MINUTES = 36 * 60;
-
-function clampLookahead(m: number): number {
-  if (!Number.isFinite(m) || m < 0) return 0;
-  if (m > LOOKAHEAD_MAX_MINUTES) return LOOKAHEAD_MAX_MINUTES;
-  return Math.round(m);
-}
-
-function formatUtcHm(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
-}
+import { LOOKAHEAD_MAX_MINUTES, clampLookahead, formatUtcHm } from '../src/map';
 
 describe('clampLookahead', () => {
   it('floors at 0 (no negative lookahead — back is relative-to-current)', () => {

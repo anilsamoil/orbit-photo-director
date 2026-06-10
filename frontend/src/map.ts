@@ -63,16 +63,21 @@ let currentPasses: PassEntry[] = [];
 // Cannot go negative (Q3 — "back" is relative-to-current; floor at 0).
 let lookaheadMinutes = 0;
 
-const LOOKAHEAD_MAX_MINUTES = 36 * 60;  // 2160; matches passes.json horizon
+// Exported (6A, 2026-06-10): the cap, the clamp, and the UTC formatter are
+// the contract the time controls (steppers + slider) and their tests share.
+// time-scrub.test.ts previously re-implemented these as local copies — a
+// copy can never catch the real implementation diverging, so the real
+// functions are exported and the copies were deleted.
+export const LOOKAHEAD_MAX_MINUTES = 36 * 60;  // 2160; matches passes.json horizon
 
-function clampLookahead(m: number): number {
+export function clampLookahead(m: number): number {
   if (!Number.isFinite(m) || m < 0) return 0;
   if (m > LOOKAHEAD_MAX_MINUTES) return LOOKAHEAD_MAX_MINUTES;
   return Math.round(m);
 }
 
 /** UTC ISO 8601 time portion at minute precision, e.g., "12:34Z". */
-function formatUtcHm(ms: number): string {
+export function formatUtcHm(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
@@ -280,6 +285,7 @@ export function _resetMapStateForTest(): void {
   bearingMode = 'north';
   nightLightsVisible = false;
   labelsVisible = true;
+  lookaheadMinutes = 0;
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
@@ -1663,49 +1669,58 @@ function updateTimeStepLabels(): void {
   }
 }
 
+/** Move the map's view time to now + newMinutes (clamped 0..36h) and refresh
+ *  every view-time consumer: ground track, target pins, terminator, ISS
+ *  marker, and the time-control labels.
+ *
+ *  Module-level + exported (5A, 2026-06-10 — was a closure inside
+ *  bindTimeToggle): the stepper buttons, the continuous slider, and unit
+ *  tests all drive this one function, so the controls can never disagree
+ *  about what a time change refreshes.
+ */
+export function setLookahead(newMinutes: number, recenter: boolean): void {
+  const clamped = clampLookahead(newMinutes);
+  if (clamped === lookaheadMinutes && lookaheadMinutes === 0) {
+    // Clicking Now while already at Now is a no-op; same for clicking
+    // back at floor. Skip the visual churn.
+    updateTimeStepLabels();
+    return;
+  }
+  lookaheadMinutes = clamped;
+  // Update active state — only the Now button has an "active" state
+  // (it's the only one that represents a specific lookahead value);
+  // the +/- step buttons are pure delta buttons that flash on click.
+  document.querySelectorAll<HTMLButtonElement>('.time-step-btn').forEach((b) => {
+    const isNow = b.id === 'time-now';
+    b.classList.toggle('active', isNow && clamped === 0);
+  });
+
+  // Rebuild track + targets with the new lookahead.
+  if (currentTrack) {
+    refreshGroundTrackSource(currentTrack);
+    refreshTargetsSource();
+    // Terminator + subsolar follow the time-scrub so day/night
+    // reflects the view time, not real-time-now (v1.4.2.0).
+    refreshTerminatorSources();
+    // Move + freeze marker at the new view time.
+    if (map && issMarker) {
+      const pos = markerPositionFor(currentTrack);
+      if (pos) {
+        issMarker.setLngLat([pos.lon, pos.lat]);
+        if (recenter) {
+          map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+        }
+      }
+    }
+  }
+  updateTimeStepLabels();
+}
+
 let toggleBound = false;
 function bindTimeToggle(): void {
   if (toggleBound) return;
   const stepBtns = document.querySelectorAll<HTMLButtonElement>('.time-step-btn');
   if (stepBtns.length === 0) return;
-
-  const setLookahead = (newMinutes: number, recenter: boolean) => {
-    const clamped = clampLookahead(newMinutes);
-    if (clamped === lookaheadMinutes && lookaheadMinutes === 0) {
-      // Clicking Now while already at Now is a no-op; same for clicking
-      // back at floor. Skip the visual churn.
-      updateTimeStepLabels();
-      return;
-    }
-    lookaheadMinutes = clamped;
-    // Update active state — only the Now button has an "active" state
-    // (it's the only one that represents a specific lookahead value);
-    // the +/- step buttons are pure delta buttons that flash on click.
-    stepBtns.forEach((b) => {
-      const isNow = b.id === 'time-now';
-      b.classList.toggle('active', isNow && clamped === 0);
-    });
-
-    // Rebuild track + targets with the new lookahead.
-    if (currentTrack) {
-      refreshGroundTrackSource(currentTrack);
-      refreshTargetsSource();
-      // Terminator + subsolar follow the time-scrub so day/night
-      // reflects the view time, not real-time-now (v1.4.2.0).
-      refreshTerminatorSources();
-      // Move + freeze marker at the new view time.
-      if (map && issMarker) {
-        const pos = markerPositionFor(currentTrack);
-        if (pos) {
-          issMarker.setLngLat([pos.lon, pos.lat]);
-          if (recenter) {
-            map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
-          }
-        }
-      }
-    }
-    updateTimeStepLabels();
-  };
 
   stepBtns.forEach((btn) => {
     const step = Number(btn.dataset.step);
