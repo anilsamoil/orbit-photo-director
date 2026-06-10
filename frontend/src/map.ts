@@ -54,14 +54,23 @@ let currentTrack: Track | null = null;
 // hits a time-scrub button we can re-derive the target-pin opacity (and
 // future-orbit ground track) without re-fetching the manifest.
 let currentPasses: PassEntry[] = [];
-// Orbit time-scrub: 0 = "Now" (live ISS marker + current 2-orbit track).
-// Positive values move forward by 45- or 90-minute steps; the map then
-// shows ONLY the orbit centered at +N min and freezes the ISS marker
-// at the start of that orbit (per Q2 → A in the 2026-05-20 decision).
-// Capped at 36h = 2160 min via clampLookahead() — matches the upcoming
+// Orbit time-scrub: null = live "Now" mode (1Hz marker tick + standard
+// 2-orbit track). Non-null = the map is pinned to an ABSOLUTE UTC instant
+// and shows ONLY the orbit centered there, ISS marker frozen at that
+// instant (per Q2 → A in the 2026-05-20 decision).
+//
+// T1 (eng-review 2026-06-10): this was `let lookaheadMinutes = 0` — a
+// RELATIVE offset that every refresh re-resolved against the advancing
+// wall clock, so a view parked on the 19:42Z pass silently became the
+// 19:52Z view ten minutes later. Buttons + short glances hid the drift;
+// the continuous slider invites parking, so the instant is now absolute
+// and the wall clock catching up snaps the view back to live
+// (maybeSnapToLive, called from the 1Hz live timer).
+//
+// Still capped at now+36h via clampLookahead() — matches the upcoming
 // passes.json horizon so we don't scrub into orbits with no target data.
-// Cannot go negative (Q3 — "back" is relative-to-current; floor at 0).
-let lookaheadMinutes = 0;
+// Cannot go into the past (Q3/3A — "back" is toward Now; floor at 0).
+let viewTimeMs: number | null = null;
 
 // Exported (6A, 2026-06-10): the cap, the clamp, and the UTC formatter are
 // the contract the time controls (steppers + slider) and their tests share.
@@ -81,6 +90,43 @@ export function formatUtcHm(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+/** The absolute instant the map renders (live now when not scrubbed). */
+function currentViewMs(nowMs = Date.now()): number {
+  return viewTimeMs ?? nowMs;
+}
+
+/** Minutes from live-now to the pinned view instant (0 when live).
+ *  Fractional by design: the pinned instant doesn't move, so this offset
+ *  shrinks as the wall clock advances toward it. */
+function lookaheadMinutesNow(nowMs = Date.now()): number {
+  if (viewTimeMs === null) return 0;
+  return Math.max(0, (viewTimeMs - nowMs) / 60_000);
+}
+
+/** True when the map is pinned to a future instant (scrub active). Gates
+ *  follow-ISS recentering and live ticking; exported for tests + main.ts. */
+export function isScrubbed(): boolean {
+  return viewTimeMs !== null;
+}
+
+/** Snap back to live mode once the wall clock reaches the pinned instant
+ *  (T1, 2026-06-10): a +N scrub eventually becomes "now"; returning to live
+ *  beats rendering a frozen scene that slowly falls behind. Called from the
+ *  1Hz live timer; returns true when a snap happened. Exported for unit
+ *  tests (the timer itself needs a full map env). */
+export function maybeSnapToLive(nowMs = Date.now()): boolean {
+  if (viewTimeMs !== null && nowMs >= viewTimeMs) {
+    setLookahead(0, /*recenter=*/false);
+    return true;
+  }
+  return false;
+}
+
+/** Test-only: the pinned absolute view instant (null = live). */
+export function _getViewTimeMsForTest(): number | null {
+  return viewTimeMs;
 }
 
 /** "Pass window" half-width: a pass with closest_approach within ±45 min
@@ -285,7 +331,7 @@ export function _resetMapStateForTest(): void {
   bearingMode = 'north';
   nightLightsVisible = false;
   labelsVisible = true;
-  lookaheadMinutes = 0;
+  viewTimeMs = null;
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
@@ -1187,11 +1233,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
   liveTimer = window.setInterval(() => {
     if (!map || !issMarker || !currentTrack) return;
-    // Live ISS marker updates every 1s ONLY at Now (lookahead=0). When
-    // the operator has scrubbed forward, the marker is frozen at the
-    // future orbit's start (Q2 → A) — no point recomputing every second
-    // since the target time isn't moving.
-    if (lookaheadMinutes === 0) {
+    // Wall clock caught the pinned instant → return to live mode (T1).
+    if (maybeSnapToLive()) return;
+    // Live ISS marker updates every 1s ONLY in live mode. When the
+    // operator has scrubbed, the marker is pinned at the absolute view
+    // instant (Q2 → A) — no point recomputing every second since the
+    // pinned time isn't moving.
+    if (!isScrubbed()) {
       const pos = markerPositionFor(currentTrack);
       if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
     }
@@ -1205,9 +1253,9 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   timeLabelTimer = window.setInterval(() => {
     updateTimeStepLabels();
     // Refresh terminator + subsolar point with the new wall-clock time
-    // (at lookahead=0; if scrubbed, the terminator follows lookahead
-    // already and won't drift). Cheap — terminatorFeatures is ~10ms.
-    if (lookaheadMinutes === 0) refreshTerminatorSources();
+    // (live mode only; when scrubbed, the terminator is pinned to the
+    // absolute view instant and must NOT drift). ~10ms, cheap.
+    if (!isScrubbed()) refreshTerminatorSources();
   }, 30_000);
   updateTimeStepLabels();
 
@@ -1265,7 +1313,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
  *  requested time (clamps to end-of-window).
  */
 function markerPositionFor(track: Track): { lat: number; lon: number } | null {
-  return markerPositionAt(track, lookaheadMinutes, Date.now());
+  const nowMs = Date.now();
+  return markerPositionAt(track, lookaheadMinutesNow(nowMs), nowMs);
 }
 
 /** Live ISS marker position for a given lookahead + wall-clock. Exported for
@@ -1321,7 +1370,8 @@ export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
  *  at +N>0 renders just the ±45min window around (now + N min) via SGP4. */
 function refreshGroundTrackSource(track: Track): void {
   if (!map) return;
-  const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutes, Date.now());
+  const nowMs = Date.now();
+  const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutesNow(nowMs), nowMs);
   upsertGeoJson(map, 'iss-track', {
     type: 'FeatureCollection',
     features,
@@ -1333,7 +1383,7 @@ function refreshGroundTrackSource(track: Track): void {
  *  render and from setLookahead on every time-scrub click. */
 function refreshTerminatorSources(): void {
   if (!map) return;
-  const when = new Date(Date.now() + lookaheadMinutes * 60_000);
+  const when = new Date(currentViewMs());
   upsertGeoJson(map, 'terminator-line', {
     type: 'FeatureCollection',
     features: terminatorFeatures(when),
@@ -1489,7 +1539,7 @@ function applyGlobalDimVisibility(): void {
  *  call this without staging a separate threshold cache. */
 function refreshTargetsSource(): void {
   if (!map) return;
-  const viewMs = Date.now() + lookaheadMinutes * 60_000;
+  const viewMs = currentViewMs();
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
   const thresholdKm = readActiveDistanceThresholdKm();
   const distanceVisible = filterPassesByDistance(currentPasses, thresholdKm);
@@ -1619,7 +1669,7 @@ function applyBearing(animate: boolean): void {
     return;
   }
   if (!currentTrack) return;
-  const heading = computeIssHeading(currentTrack, Date.now() + lookaheadMinutes * 60_000);
+  const heading = computeIssHeading(currentTrack, currentViewMs());
   if (heading === null) return;
   // Smallest angle between current and target, accounting for the 0=360 wrap.
   const delta = Math.abs(((heading - current + 540) % 360) - 180);
@@ -1638,7 +1688,10 @@ function applyBearing(animate: boolean): void {
  */
 function updateTimeStepLabels(): void {
   const nowMs = Date.now();
-  const viewMs = nowMs + lookaheadMinutes * 60_000;
+  // Whole-minute offset from live now to the view instant. The pinned
+  // instant is absolute, so this shrinks as the wall clock advances —
+  // the chips always answer "where would a click land me FROM HERE."
+  const curMin = clampLookahead(lookaheadMinutesNow(nowMs));
   // Map button id → step in minutes relative to CURRENT view.
   const steps: Array<[string, number]> = [
     ['time-back-90', -90],
@@ -1658,13 +1711,13 @@ function updateTimeStepLabels(): void {
       targetMinutes = 0;
     } else {
       // Back buttons clamp at 0; forward buttons clamp at LOOKAHEAD_MAX_MINUTES.
-      targetMinutes = clampLookahead(lookaheadMinutes + step);
+      targetMinutes = clampLookahead(curMin + step);
     }
     const targetMs = nowMs + targetMinutes * 60_000;
     chip.textContent = formatUtcHm(targetMs);
     // Disabled-look when the button would be a no-op (already at floor/ceiling).
     const wouldBeNoop = (id !== 'time-now') &&
-      clampLookahead(lookaheadMinutes + step) === lookaheadMinutes;
+      clampLookahead(curMin + step) === curMin;
     btn.classList.toggle('time-step-noop', wouldBeNoop);
   }
 }
@@ -1680,13 +1733,14 @@ function updateTimeStepLabels(): void {
  */
 export function setLookahead(newMinutes: number, recenter: boolean): void {
   const clamped = clampLookahead(newMinutes);
-  if (clamped === lookaheadMinutes && lookaheadMinutes === 0) {
-    // Clicking Now while already at Now is a no-op; same for clicking
+  if (clamped === 0 && viewTimeMs === null) {
+    // Clicking Now while already live is a no-op; same for clicking
     // back at floor. Skip the visual churn.
     updateTimeStepLabels();
     return;
   }
-  lookaheadMinutes = clamped;
+  // 0 = return to live mode; >0 = pin the view to an ABSOLUTE instant (T1).
+  viewTimeMs = clamped === 0 ? null : Date.now() + clamped * 60_000;
   // Update active state — only the Now button has an "active" state
   // (it's the only one that represents a specific lookahead value);
   // the +/- step buttons are pure delta buttons that flash on click.
@@ -1737,7 +1791,7 @@ function bindTimeToggle(): void {
         // expectation.
         setLookahead(0, /*recenter=*/true);
       } else {
-        setLookahead(lookaheadMinutes + step, /*recenter=*/true);
+        setLookahead(lookaheadMinutesNow() + step, /*recenter=*/true);
       }
     });
   });
