@@ -2,6 +2,22 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.7.12.0] - 2026-06-10
+
+## **The orbit track now keeps up with time, and the ISS marker sits exactly on it.**
+
+Two map fixes from Chris's flight feedback. First, leave the app open on the Map tab for a while and the ground track used to freeze at whatever it was when you opened it — the ISS marker kept moving but the track it should ride didn't. The 60-second data refresh updated the Queue and cards but never re-rendered the map, so the track stayed pinned to the manifest from when you first opened the tab. Now each new generator tick re-renders the track too. Second, the ISS marker didn't line up with the track when you zoomed in: the marker was drawn from the polynomial fit (which the generator itself flags as drifting up to ~120 km in-window) while the track line is raw SGP4. The marker now uses the same SGP4 source the track is drawn from, so it sits on the line at any zoom.
+
+### Itemized changes
+
+#### Fixed
+- **Ground track stayed frozen while the app was left open (Chris 2026-06-09).** `doRefresh()` polled every 60s but only re-rendered the Queue/cards, never the map — so the track polyline stayed pinned to the manifest from when the Map tab was first opened. Added `refreshMapForManifest()` (no-ops until the map exists); `doRefresh` now calls it on each newer manifest so the track follows the generator's ticks.
+- **ISS marker didn't line up with the track when zoomed in (Chris 2026-06-09).** The marker used the polynomial fit (`liveIssPosition`, which the generator documents as degrading visibly past ~120 min / up to ~120 km error in-window) while the ground-track polyline uses raw SGP4 `track_points`. New `markerPositionAt()` routes the marker through the existing SGP4-first `liveIssNow`, so it rides the exact curve the track is drawn from.
+
+#### Internal
+- New `scripts/ascent_smoke.py` — read-only smoke test for the launch-visibility (OVERHEAD + ASCENT) pathway against the cached LL2 launches + live TLE; explains per-launch why a card is or isn't produced.
+- 4 regression tests in `frontend/test/iss-marker.test.ts` (SGP4 marker-source contract + refresh no-op guard).
+
 ## [1.7.11.0] - 2026-06-08
 
 ## **The map's clouds, satellite basemap, and night-lights now render offline at world view, and the Help explains everything.**
