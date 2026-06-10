@@ -1325,7 +1325,12 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   void restorePersistedSatellites();
   if (!_satTrackTickerStarted) {
     _satTrackTickerStarted = true;
-    window.setInterval(() => { try { refreshSatelliteTracks(); } catch { /* noop */ } }, 60_000);
+    window.setInterval(() => {
+      // Live mode only: while scrubbed the track window is pinned to the
+      // view instant (4A) — rebuilding yields identical geometry.
+      if (isScrubbed()) return;
+      try { refreshSatelliteTracks(); } catch { /* noop */ }
+    }, 60_000);
   }
   // Apply persisted cloud + terminator preferences on first map render.
   applyCloudsVisibility();
@@ -1777,6 +1782,11 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   }
   // 0 = return to live mode; >0 = pin the view to an ABSOLUTE instant (T1).
   viewTimeMs = clamped === 0 ? null : Date.now() + clamped * 60_000;
+  // One-clock surface (4A): satellite markers + track windows follow the
+  // view time with everything else. Both no-op until the map exists; live
+  // 1Hz ticking resumes via the tickSatelliteMarkers gate at Now.
+  refreshSatelliteTracks();
+  refreshSatelliteMarkers();
   // Update active state — only the Now button has an "active" state
   // (it's the only one that represents a specific lookahead value);
   // the +/- step buttons are pure delta buttons that flash on click.
@@ -2139,7 +2149,11 @@ function bindTerminatorToggle(): void {
  *  one-shot toggle click below.
  */
 export function applyFollowISS(pos: { lat: number; lon: number }): void {
-  if (!followISS || !map) return;
+  // Gate while scrubbed (4A, Codex finding verified at main.ts:837): the
+  // 1Hz caller passes the LIVE ISS position; recentering on it while the
+  // marker shows a future instant makes the camera chase a position that
+  // isn't on screen. Follow resumes when the view returns to live.
+  if (!followISS || !map || isScrubbed()) return;
   map.setCenter([pos.lon, pos.lat]);
 }
 
@@ -2949,17 +2963,27 @@ function persistSelectedKeys(): void {
 }
 
 /** Build the ground-track polyline samples for a non-ISS satellite over
- *  one full orbit (~95min default) at 30s cadence. Returns features
- *  ready for upsertGeoJson — already split at antimeridian + world-copy
- *  duplicated. */
-function buildSatelliteTrackFeatures(state: SatelliteState): GeoJSON.Feature[] {
-  const track = trackFromTLE(state.tle);
+ *  one full orbit (~95min default) at 30s cadence, starting at `viewMs`.
+ *  Returns features ready for upsertGeoJson — already split at
+ *  antimeridian + world-copy duplicated.
+ *
+ *  4A (eng-review 2026-06-10): the window starts at the map's VIEW time,
+ *  not live now — when the operator scrubs to +6h, satellite tracks render
+ *  where those satellites will be, on the same clock as the ISS track
+ *  (the v1.7.12.0 marker-on-wrong-track bug class, applied forward).
+ *  ISS_ORBIT_PERIOD_SECONDS stays the window length for every LEO bird —
+ *  documented-acceptable approximation (HST/Tiangong are similar).
+ *  Exported for unit tests; viewMs injectable. */
+export function buildSatelliteTrackFeatures(
+  tle: TLEPair,
+  viewMs: number = currentViewMs(),
+): GeoJSON.Feature[] {
+  const track = trackFromTLE(tle);
   const stepSec = 30;
   const orbitSec = ISS_ORBIT_PERIOD_SECONDS; // close enough for LEO; HST/Tiangong are similar
   const samples: [number, number][] = [];
-  const startMs = Date.now();
   for (let t = 0; t <= orbitSec; t += stepSec) {
-    const pos = liveIssPositionSGP4(track, startMs + t * 1000);
+    const pos = liveIssPositionSGP4(track, viewMs + t * 1000);
     if (!pos) continue;
     samples.push([pos.lat, pos.lon]);
   }
@@ -2971,7 +2995,7 @@ function refreshSatelliteTracks(): void {
   for (const [key, state] of selectedSatellites.entries()) {
     const sourceId = `sat-track-${key}`;
     const layerId = `sat-track-layer-${key}`;
-    const features = buildSatelliteTrackFeatures(state);
+    const features = buildSatelliteTrackFeatures(state.tle);
     upsertGeoJson(map, sourceId, { type: 'FeatureCollection', features });
     if (!map.getLayer(layerId)) {
       map.addLayer({
@@ -2991,10 +3015,12 @@ function refreshSatelliteTracks(): void {
 
 function refreshSatelliteMarkers(): void {
   if (!map) return;
-  const nowMs = Date.now();
+  // One-clock surface (4A): markers render at the VIEW time — live now in
+  // live mode, the pinned instant while scrubbed.
+  const viewMs = currentViewMs();
   for (const state of selectedSatellites.values()) {
     const track = trackFromTLE(state.tle);
-    const pos = liveIssPositionSGP4(track, nowMs);
+    const pos = liveIssPositionSGP4(track, viewMs);
     if (!pos) continue;
     if (!state.marker) {
       const el = document.createElement('div');
@@ -3226,10 +3252,13 @@ async function restorePersistedSatellites(): Promise<void> {
   }
 }
 
-/** Hook called from the existing 1Hz tick (applyFollowISS or
- *  updateIssNow) — drives non-ISS satellite live markers. Cheap: 1
- *  SGP4 call per satellite × ~5 satellites max = ~0.5ms. */
+/** Hook called from the existing 1Hz tick (main.ts updateIssNow) — drives
+ *  non-ISS satellite markers in LIVE mode only. While scrubbed, markers are
+ *  pinned at the view instant by setLookahead (4A — one clock for the whole
+ *  map surface); ticking live positions over them would put two times on
+ *  one map. Cheap: 1 SGP4 call per satellite × ~5 satellites max = ~0.5ms. */
 export function tickSatelliteMarkers(): void {
+  if (isScrubbed()) return;
   refreshSatelliteMarkers();
 }
 
@@ -3252,6 +3281,10 @@ export function getSelectedSatellitesForPasses(): { name: string; color: string;
 }
 
 /** Compact short-labels + sub-points for the topbar multi-sat row.
+ *
+ *  INTENTIONALLY live (Date.now()), not view-time: the topbar is the LIVE
+ *  domain — its ISS readout also stays on the wall clock while the map is
+ *  scrubbed. Only the map surface follows the scrub (4A, 2026-06-10).
  *  Returns "Tg 32.5°N, 118.3°E" style strings. */
 export function getSatelliteTopbarReadouts(): { label: string; text: string; color: string }[] {
   const nowMs = Date.now();
