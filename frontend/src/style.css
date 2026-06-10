@@ -1026,6 +1026,10 @@ body.shotlist-bar-visible main {
   color: var(--accent);
   font-weight: 600;
 }
+/* Stale-TLE hint (eng-review T6b): deep scrubs on an old orbit solution. */
+.time-slider-readout.time-slider-stale {
+  color: var(--warn, #ffb454);
+}
 
 /* Bearing toggle sits below the time toggle on the same right edge.
  * v1.4.0.0 bumped from 130 → 170 because the new 5-button time-scrub

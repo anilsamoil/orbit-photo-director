@@ -129,6 +129,12 @@ export function _getViewTimeMsForTest(): number | null {
   return viewTimeMs;
 }
 
+/** Test-only: install a Track so track-dependent affordances (e.g. the
+ *  stale-TLE readout hint) can be exercised without a full renderMap. */
+export function _setCurrentTrackForTest(track: Track | null): void {
+  currentTrack = track;
+}
+
 /** Day-aware UTC readout for the slider (eng-review T6a): "13:30Z" today,
  *  "+1d 03:15Z" past midnight UTC. Bare HH:MMZ is ambiguous across the 36h
  *  scrub range — pass planning around midnight needs the day. */
@@ -364,6 +370,8 @@ export function _resetMapStateForTest(): void {
   viewTimeMs = null;
   sliderBound = false;
   sliderLastAppliedMinutes = -1;
+  currentTrack = null;
+  lastImageryBadgeArgs = null;
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
@@ -1787,6 +1795,8 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   // 1Hz ticking resumes via the tickSatelliteMarkers gate at Now.
   refreshSatelliteTracks();
   refreshSatelliteMarkers();
+  // Cloud-honesty badge (T5): observed-not-forecast wording while scrubbed.
+  refreshImageryDateBadgeForView();
   // Update active state — only the Now button has an "active" state
   // (it's the only one that represents a specific lookahead value);
   // the +/- step buttons are pure delta buttons that flash on click.
@@ -1860,14 +1870,24 @@ function syncTimeSliderControls(nowMs: number, curMin: number): void {
   slider.value = String(curMin);
   sliderLastAppliedMinutes = curMin;
   const scrubbed = isScrubbed();
-  const readoutText = scrubbed
+  // T6b (eng-review 2026-06-10): deep scrubs compound TLE propagation
+  // error. Inherit the existing >48h staleness threshold (Lane E banner):
+  // flag the readout so the operator knows the projected geometry is
+  // running on an old orbit solution.
+  const tleStale = scrubbed && (currentTrack?.tle_age_hours ?? 0) > 48;
+  const baseText = scrubbed
     ? formatViewTimeReadout(currentViewMs(nowMs), nowMs)
     : 'Now';
+  const readoutText = tleStale ? `${baseText} · stale TLE` : baseText;
   slider.setAttribute('aria-valuetext', readoutText);
   const readout = document.getElementById('time-slider-readout');
   if (readout) {
     readout.textContent = readoutText;
     readout.classList.toggle('time-slider-scrubbed', scrubbed);
+    readout.classList.toggle('time-slider-stale', tleStale);
+    readout.title = tleStale
+      ? 'TLE is over 48h old — projected positions degrade with both TLE age and scrub distance'
+      : '';
   }
 }
 
@@ -2573,7 +2593,13 @@ export function createIssMarkerElement(): HTMLElement {
  *  looking at actually is. Important offline — a GIBS tile cached past
  *  day-roll otherwise reads as today's clouds. Idempotent.
  */
+// Last (container, manifest) the imagery badge rendered with, so the badge
+// can re-render when the SCRUB state changes without renderMap re-running
+// (T5 — the badge text depends on isScrubbed()).
+let lastImageryBadgeArgs: { container: HTMLElement; manifest: Manifest } | null = null;
+
 export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifest): void {
+  lastImageryBadgeArgs = { container, manifest };
   let badge = container.querySelector<HTMLElement>('.map-imagery-date');
   if (!badge) {
     badge = document.createElement('div');
@@ -2592,8 +2618,25 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
     return;
   }
   const date = new Date(t).toISOString().slice(0, 10);
-  badge.textContent = `Imagery: ${date}`;
+  // T5 (eng-review 2026-06-10, Codex finding accepted): while scrubbed,
+  // the cloud raster is STILL the observed composite — pins show forecast,
+  // the background does not (until V4-P2 ships forecast frames). Say the
+  // mismatch out loud instead of letting the operator plan against
+  // yesterday's clouds believing they're tomorrow's (the trust mismatch
+  // Chris reported 2026-05-20). V4-P2's "Forecast +Nh (GFS run)" text
+  // lands in this same slot later.
+  badge.textContent = isScrubbed()
+    ? `Clouds: observed ${date} — not forecast`
+    : `Imagery: ${date}`;
   badge.hidden = false;
+}
+
+/** Re-render the imagery badge for the current scrub state (called from
+ *  setLookahead). No-op until renderMap has drawn the badge once. */
+function refreshImageryDateBadgeForView(): void {
+  if (lastImageryBadgeArgs) {
+    ensureImageryDateBadge(lastImageryBadgeArgs.container, lastImageryBadgeArgs.manifest);
+  }
 }
 
 // ---------------------------------------------------------------------------

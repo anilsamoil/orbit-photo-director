@@ -13,11 +13,13 @@ import {
   LOOKAHEAD_MAX_MINUTES,
   _getViewTimeMsForTest,
   _resetMapStateForTest,
+  _setCurrentTrackForTest,
   bindTimeSlider,
   formatViewTimeReadout,
   rafCoalesce,
   setLookahead,
 } from '../src/map';
+import type { Track } from '../src/types';
 
 const SLIDER_HTML = `
   <button id="time-now" class="time-btn time-step-btn active" data-step="0">
@@ -165,5 +167,50 @@ describe('slider binding (eng-review 1C/7A)', () => {
     slider().value = '45';
     slider().dispatchEvent(new Event('input'));
     expect(frames).toHaveLength(1); // one listener, one scheduled frame
+  });
+
+  // T6b (eng-review 2026-06-10): deep scrubs compound TLE propagation
+  // error — the readout inherits the existing >48h staleness threshold.
+  describe('stale-TLE hint', () => {
+    const staleTrack = {
+      tle: { line1: '', line2: '' },
+      tle_epoch: '2026-06-07T00:00:00Z',
+      tle_age_hours: 60,
+      tle_freshness_factor: 0.5,
+      iss_polynomial: {
+        start: '2026-06-10T12:00:00Z',
+        duration_seconds: 0,
+        lat_coeffs: [],
+        lon_coeffs: [],
+        polynomial_order: 0,
+      },
+    } as unknown as Track;
+
+    afterEach(() => {
+      _setCurrentTrackForTest(null);
+    });
+
+    it('flags the readout when scrubbing on a TLE older than 48h', () => {
+      _setCurrentTrackForTest(staleTrack);
+      setLookahead(360, false);
+      expect(readout().textContent).toBe('18:00Z · stale TLE');
+      expect(readout().classList.contains('time-slider-stale')).toBe(true);
+      expect(slider().getAttribute('aria-valuetext')).toBe('18:00Z · stale TLE');
+    });
+
+    it('no flag at Now even with a stale TLE (live view, no projection)', () => {
+      _setCurrentTrackForTest(staleTrack);
+      setLookahead(360, false);
+      setLookahead(0, false);
+      expect(readout().textContent).toBe('Now');
+      expect(readout().classList.contains('time-slider-stale')).toBe(false);
+    });
+
+    it('no flag when the TLE is fresh', () => {
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 6 } as Track);
+      setLookahead(360, false);
+      expect(readout().textContent).toBe('18:00Z');
+      expect(readout().classList.contains('time-slider-stale')).toBe(false);
+    });
   });
 });
