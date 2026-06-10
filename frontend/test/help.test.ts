@@ -53,6 +53,15 @@ describe('openHelpModal', () => {
     expect(text).toContain('Nadir distance');
   });
 
+  it('explains the time slider and scrub behavior', () => {
+    openHelpModal();
+    const text = document.querySelector('.help-body')?.textContent ?? '';
+    expect(text).toContain('Time slider');
+    expect(text).toContain('36 hours');
+    expect(text).toContain('not forecast');
+    expect(text).toContain('stale TLE');
+  });
+
   it('explains dropping a pin on the map', () => {
     openHelpModal();
     const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();

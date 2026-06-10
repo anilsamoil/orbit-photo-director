@@ -192,7 +192,7 @@ Rejected for V1 because forecast cloud (especially cirrus prediction) is its own
   - ISS dot, ground track (next 2 orbits)
   - Targets as colored points (color = score, gradient red→green)
   - Cloud overlay: a single global PNG tile from the cached SatCORPS hour, served from R2; no per-zoom retiling in V1
-  - Time toggle: `Now` / `+90 min` (V1); full timeline slider is V2
+  - Time toggle: `Now` / `+90 min` (V1); full timeline slider is V2 (shipped v1.8.0.0 as the continuous Map-tab time-slider, ahead of the V2 forecast package)
 - **Footer status banner**
   - Green: `Last updated 2 min ago`
   - Yellow: `Last updated 12 min ago — generator is slow`

@@ -3,7 +3,7 @@
 Earth-photography planner for an 8-month ISS mission. Mac-side Python generator publishes a ranked shot queue to [map.astroanil.dev](https://map.astroanil.dev). The astronaut opens the URL from orbit and sees:
 
 - the next 5 shots in the next 90 minutes (target, countdown, `P(unobstructed)`, day/night/terminator regime)
-- the live ISS dot + ground track + cloud overlay (secondary view)
+- the live ISS dot + ground track + cloud overlay (secondary view), with a time slider that scrubs the whole map — track, marker, terminator, satellites, target pins — to any instant in the next 36 hours
 - a confidence banner that escalates with snapshot age (green <1h → yellow <3h → orange <12h → red beyond) so it's always honest about how trustworthy the data on screen is
 
 The product is the shot queue, not the map.
@@ -58,7 +58,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) for ground-side support procedures.
 
 ## Status
 
-V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0 + Lane F SW at v1.1.0.1 + past-pass Queue filter at v1.1.0.2. V3.0 rocket-launch photography (OVERHEAD geometry) at v1.2.0.0 — 🚀 LAUNCH cards in Queue + Upcoming with reserved-slot guarantee, stale-launches banner overlay, LL2 schema-drift detection, operator-facing copy renamed Offline → LOS. V3-P2 ASCENT geometry shipped (2026-05-17 soak) — rocket-plume capture cards with `launch.kind="ascent"`; v1.6.1.0 adds the on-map trajectory layer (🚀 topbar toggle, altitude-coded polyline + pad pin). Kill-switch DNS (Lane G) still deferred; pre-launch e2e checklist (Lane H) partial via `scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md` — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
+V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0 + Lane F SW at v1.1.0.1 + past-pass Queue filter at v1.1.0.2. V3.0 rocket-launch photography (OVERHEAD geometry) at v1.2.0.0 — 🚀 LAUNCH cards in Queue + Upcoming with reserved-slot guarantee, stale-launches banner overlay, LL2 schema-drift detection, operator-facing copy renamed Offline → LOS. V3-P2 ASCENT geometry shipped (2026-05-17 soak) — rocket-plume capture cards with `launch.kind="ascent"`; v1.6.1.0 adds the on-map trajectory layer (🚀 topbar toggle, altitude-coded polyline + pad pin). Continuous time-slider (Chris feedback 2026-06-09) at v1.8.0.0 — one-drag scrub to any instant in the next 36h, absolute view-time pinning, one-clock satellite/follow consistency, scrub honesty badges. Kill-switch DNS (Lane G) still deferred; pre-launch e2e checklist (Lane H) partial via `scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md` — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
 
 ## License
 

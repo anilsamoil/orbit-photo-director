@@ -65,7 +65,8 @@ const HELP_SECTIONS: HelpSection[] = [
         label: 'Map',
         text:
           'Live ISS position and ground track, your targets, and overlays ' +
-          '(clouds, day/night, night-lights, labels, rocket ascent paths).',
+          '(clouds, day/night, night-lights, labels, rocket ascent paths). ' +
+          'A time slider scrubs the whole map up to 36 hours ahead.',
       },
       {
         icon: '',
@@ -217,6 +218,46 @@ const HELP_SECTIONS: HelpSection[] = [
       { icon: '🛰️', label: 'Satellites', text: 'Track other craft — Tiangong, Hubble, Starship, and more.' },
       { icon: '📍', label: 'Follow ISS', text: 'Recenter on the station; pan away to release.' },
       { icon: 'N↑ / ISS↑', label: 'Bearing', text: 'North up, or rotate so the ISS direction of travel points up.' },
+    ],
+  },
+  {
+    title: 'Scrub time on the map',
+    items: [
+      {
+        icon: '🕐',
+        label: 'Time slider',
+        text:
+          'Drag the slider under the time buttons to any moment in the next ' +
+          '36 hours. The ground track, ISS marker, day/night line, tracked ' +
+          'satellites, and target pins all follow as you drag; release and ' +
+          'the camera settles on where the ISS will be. The readout shows ' +
+          'the UTC view time ("+1d 03:15Z" past midnight).',
+      },
+      {
+        icon: '⏩',
+        label: 'Step buttons',
+        text:
+          'The ±45 / ±90 min buttons jump by half an orbit or a full one ' +
+          'from wherever you are. Now returns to the live view.',
+      },
+      {
+        icon: '📌',
+        label: 'The view stays put',
+        text:
+          'A scrubbed view is pinned to the UTC instant you chose — it does ' +
+          'not drift as the clock advances. When real time catches up to ' +
+          'your pinned moment, the map returns to live on its own.',
+      },
+      {
+        icon: '⚠️',
+        label: 'Honest limits',
+        text:
+          'While scrubbed, the imagery badge reads "Clouds: observed — not ' +
+          'forecast": the cloud layer is the latest real composite, not a ' +
+          'prediction for your view time. A "stale TLE" tag appears when the ' +
+          'orbit solution plus your scrub depth passes 48 hours — projected ' +
+          'positions degrade with distance.',
+      },
     ],
   },
   {
