@@ -776,9 +776,12 @@ function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
 
 /** Render a SINGLE orbit's ground track at a future time, SGP4-derived.
  *
- *  Used by the time-scrub buttons (v1.4.0.0). For lookaheadMinutes > 0,
- *  we sample the ISS ground track in a ±45-min window centered on
- *  (nowMs + lookahead*60s) at 30s resolution. The result is exactly
+ *  Used by the time-scrub controls — stepper buttons (v1.4.0.0) and the
+ *  continuous slider (2026-06-10) — via setLookahead. For
+ *  lookaheadMinutes > 0, we sample the ISS ground track in a ±45-min
+ *  window centered on (nowMs + lookahead*60s) at 30s resolution
+ *  (fractional minutes fine — callers pass the offset to the pinned
+ *  absolute view instant). The result is exactly
  *  one orbit's worth of polyline — the visual answer to "what would
  *  ISS be flying over at that future time?"
  *
@@ -1022,7 +1025,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         // falls within ±45 min of the current view time render full
         // opacity; out-of-window pins dim to 0.25 (Q3 → C from the
         // 2026-05-20 decision). The per-feature `in_window` property
-        // is set in refreshTargetsSource() based on lookaheadMinutes.
+        // is set in refreshTargetsSource() based on the view time.
         'circle-opacity': [
           'case',
           ['==', ['get', 'in_window'], true], 0.95,
@@ -1266,8 +1269,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
 
   // Live ISS position update (every 1s while map is open).
-  // In "+90 min" mode the marker is anchored to the future projection and
-  // updates only when the user toggles or new track data arrives.
+  // While scrubbed, the marker is pinned at the absolute view instant and
+  // updates only when the controls move it or new track data arrives.
   if (liveTimer !== null) {
     clearInterval(liveTimer);
   }
@@ -1425,7 +1428,8 @@ function refreshGroundTrackSource(track: Track): void {
 }
 
 /** Rebuild the terminator line + subsolar point sources at the current
- *  view time (now + lookaheadMinutes). Called from renderMap on first
+ *  view time (the pinned absolute instant, or live now). Called from
+ *  renderMap on first
  *  render and from setLookahead on every time-scrub click. */
 function refreshTerminatorSources(): void {
   if (!map) return;

@@ -118,15 +118,19 @@ Refuted alternatives:
 - In-app reminders only (rejected: iPad isn't always app-focused during shifts, would train
   operators to distrust the feature)
 
-## Continuous time-slider (Chris feedback 2026-06-09)
+## Continuous time-slider (Chris feedback 2026-06-09) — BUILT 2026-06-10 (feat/time-slider, PR pending)
 
-**Origin:** Chris: "it is really nice to be able to *slide* time forward/backward and have it update the position/tracks (like GoISSWatch). Nicer than the +45min discrete step, and lets you see an arbitrary time later in the day." Today the scrub is discrete ±45/±90-min stepper buttons (frontend/index.html `time-step-btn`, `data-step`).
+**Origin:** Chris: "it is really nice to be able to *slide* time forward/backward and have it update the position/tracks (like GoISSWatch). Nicer than the +45min discrete step, and lets you see an arbitrary time later in the day."
 
-**What:** Replace (or augment) the discrete steppers with a continuous slider over the scrub horizon (0..~36h), live-updating marker + ground track as it drags.
+**Shipped shape (eng-review `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-main-time-slider-eng-review-2026-06-10.md`, Codex outside-voice folded):**
+- Slider AUGMENTS the steppers (1C): slider = reach, steppers = orbit-relative jumps; /plan-design-review may prune later.
+- Absolute view-time model (T1): scrubbed views pin a UTC instant (no more relative drift); snap-to-live when the clock catches up.
+- One-clock surface (4A): satellite markers + track windows + follow-ISS all honor the view time; topbar stays live by design.
+- rAF-coalesced drag (7A); tiered light/heavy split is the documented fallback iff iPad QA measures jank.
+- Scrub honesty: "Clouds: observed — not forecast" badge until V4-P2; stale-TLE readout hint (>48h).
+- Forward-only (3A): floor at Now; past-scrub deliberately closed (no TODO — Lookup tab covers "where was ISS at T").
 
-**Dependency / conflict:** Directly intersects **V4-P2 forecast cloud overlay** (eng-review 2026-06-09, `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-main-v4p2-forecast-cloud-overlay-eng-review-2026-06-09.md`). V4-P2's locked **6h horizon cap + hourly frames** assumed discrete steppers ("nobody clicks +45 fifty times"). A continuous slider to arbitrary times changes the forecast-frame strategy (need frames across the full slid range, or interpolation, or the slider also clamps the forecast layer at 6h with a badge). **Decide the slider before building V4-P2**, or build V4-P2 with the cap and let the slider clamp the forecast layer beyond 6h. Building the marker/track live-update for the slider is cheap now that the SGP4 marker path is fixed (2026-06-09); `futureOrbitGroundTrackFeatures(track, lookaheadMinutes, now)` already renders an arbitrary future window.
-
-**Effort:** ~half day CC (slider UI + bind to existing `setLookahead`/`refreshGroundTrackSource`; the underlying lookahead path already supports arbitrary minutes). **Priority:** P2 (operator-requested UX upgrade).
+**Resolved the V4-P2 conflict (2C):** V4-P2's 6h horizon cap (premise: discrete steppers) is REVISED to tiered frames — hourly 0-6h + 3-hourly 6-36h ≈ 17 frames/run; Supersedes note applied to the V4-P2 eng-review doc 2026-06-10. Build V4-P2 against the revised P3.
 
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
