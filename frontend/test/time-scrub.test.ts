@@ -16,6 +16,7 @@ import {
   LOOKAHEAD_MAX_MINUTES,
   _getViewTimeMsForTest,
   _resetMapStateForTest,
+  bindTimeToggle,
   clampLookahead,
   formatUtcHm,
   isScrubbed,
@@ -224,6 +225,26 @@ describe('stepper wiring post-hoist (REGRESSION — setLookahead was closure-bou
     const nowChip = document.querySelector('#time-now [data-time-utc]')!;
     expect(fwdChip.textContent).toBe('13:30Z');
     expect(nowChip.textContent).toBe('12:00Z');
+  });
+
+  it('REAL click wiring: a bound +45 button pins now+45 (bindTimeToggle seam)', () => {
+    // Hand-computed setLookahead calls can't catch a regression in the
+    // click handler itself (pre-landing review 2026-06-10) — drive the
+    // real listener.
+    bindTimeToggle();
+    (document.getElementById('time-fwd-45') as HTMLButtonElement).click();
+    expect(_getViewTimeMsForTest()).toBe(Date.parse('2026-06-10T12:45:00Z'));
+    (document.getElementById('time-now') as HTMLButtonElement).click();
+    expect(_getViewTimeMsForTest()).toBeNull();
+  });
+
+  it('ceiling click does not re-pin the absolute instant (same-instant guard)', () => {
+    bindTimeToggle();
+    setLookahead(LOOKAHEAD_MAX_MINUTES, false);
+    const pinned = _getViewTimeMsForTest();
+    vi.setSystemTime(new Date('2026-06-10T12:00:10Z'));
+    (document.getElementById('time-fwd-45') as HTMLButtonElement).click(); // styled noop
+    expect(_getViewTimeMsForTest()).toBe(pinned); // not nudged 10s forward
   });
 
   it('marks floor/ceiling steppers with the noop class (curMin-derived)', () => {

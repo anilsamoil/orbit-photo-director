@@ -16,6 +16,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Manifest, PassEntry, Track } from './types';
 import { fetchArtifact } from './manifest';
 import { liveIssNow, liveIssPosition, wrapLon } from './iss';
+import { isTleStale } from './banner';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
 import {
@@ -106,7 +107,7 @@ function lookaheadMinutesNow(nowMs = Date.now()): number {
 }
 
 /** True when the map is pinned to a future instant (scrub active). Gates
- *  follow-ISS recentering and live ticking; exported for tests + main.ts. */
+ *  follow-ISS recentering and live ticking; exported for tests. */
 export function isScrubbed(): boolean {
   return viewTimeMs !== null;
 }
@@ -119,6 +120,14 @@ export function isScrubbed(): boolean {
 export function maybeSnapToLive(nowMs = Date.now()): boolean {
   if (viewTimeMs !== null && nowMs >= viewTimeMs) {
     setLookahead(0, /*recenter=*/false);
+    // Follow × snap interleaving (red-team 2026-06-10): with follow-ISS
+    // active, the next 1Hz tick would setCenter (instant) from the parked
+    // future view to the live sub-point — a silent jump cut. Give the
+    // operator one animated ease instead, mirroring the follow-entry cue.
+    if (followISS && map && currentTrack) {
+      const pos = markerPositionFor(currentTrack);
+      if (pos) map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+    }
     return true;
   }
   return false;
@@ -370,6 +379,8 @@ export function _resetMapStateForTest(): void {
   viewTimeMs = null;
   sliderBound = false;
   sliderLastAppliedMinutes = -1;
+  sliderDragging = false;
+  toggleBound = false;
   currentTrack = null;
   lastImageryBadgeArgs = null;
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
@@ -1047,6 +1058,10 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       const f = e.features?.[0];
       if (!f || f.geometry.type !== 'Point') return;
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
+      // INTENTIONALLY live (Date.now()): the popup's countdown answers
+      // "when is this pass from NOW" — the absolute UTC pass time is shown
+      // alongside, so live-relative is the planning-useful frame even while
+      // the map is scrubbed. Same live-domain rule as the topbar (4A).
       const popupBody = buildTargetPopupContent(
         f.properties as TargetPopupProps,
         Date.now(),
@@ -1266,6 +1281,15 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     issMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
       .setLngLat([initial.lon, initial.lat])
       .addTo(map);
+  } else {
+    // Reposition the EXISTING marker from the fresh track (red-team
+    // 2026-06-10): a manifest refresh during a parked scrub rebuilds the
+    // future-orbit polyline from the NEW track.json, but the 1Hz tick is
+    // gated while scrubbed — without this, the marker strands on the OLD
+    // orbit solution (the v1.7.12.0 marker-off-track class at the manifest
+    // boundary). Live mode is idempotent (next 1s tick does the same).
+    const pos = markerPositionFor(track);
+    if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
   }
 
   // Live ISS position update (every 1s while map is open).
@@ -1792,6 +1816,21 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
     updateTimeStepLabels();
     return;
   }
+  // Same-instant no-op (pre-landing review 2026-06-10, 3-specialist
+  // confirmed): a slider release / keyboard commit / ceiling-stepper click
+  // that lands on the CURRENT whole-minute offset must not re-pin the
+  // absolute instant against a newer now (that re-pin is exactly the
+  // relative-drift class T1 killed) nor re-run the full refresh cascade
+  // for a no-op time change. A requested recenter is still honored.
+  if (clamped !== 0 && viewTimeMs !== null
+      && clamped === clampLookahead(lookaheadMinutesNow())) {
+    if (recenter && map && issMarker && currentTrack) {
+      const pos = markerPositionFor(currentTrack);
+      if (pos) map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+    }
+    updateTimeStepLabels();
+    return;
+  }
   // 0 = return to live mode; >0 = pin the view to an ABSOLUTE instant (T1).
   viewTimeMs = clamped === 0 ? null : Date.now() + clamped * 60_000;
   // One-clock surface (4A): satellite markers + track windows follow the
@@ -1835,6 +1874,14 @@ let sliderBound = false;
 // Guards re-pinning the same offset against a newer wall clock, which
 // would quietly reintroduce the relative-drift the absolute model kills.
 let sliderLastAppliedMinutes = -1;
+// True while a pointer is actively manipulating the slider. The 30s label
+// timer's sync would otherwise rewrite slider.value mid-drag, yanking the
+// thumb out from under the finger (red-team 2026-06-10).
+let sliderDragging = false;
+/** Slider snap granularity (minutes). Owned here with min/max — real
+ *  browsers snap programmatic .value writes to the step grid, so the
+ *  contract must live in code, not hand-kept HTML. */
+const SLIDER_STEP_MINUTES = 5;
 
 /** Wire the continuous time-slider (eng-review 1C — Chris 2026-06-09:
  *  "slide time forward/backward... lets you see an arbitrary time later in
@@ -1844,18 +1891,25 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   if (sliderBound) return;
   const slider = document.getElementById('time-slider') as HTMLInputElement | null;
   if (!slider) return;
-  // Bounds come from the clamp contract, not hand-kept HTML attributes.
+  // Bounds + step come from the clamp contract, not hand-kept HTML
+  // attributes (real browsers snap programmatic .value to the step grid).
   slider.min = '0';
   slider.max = String(LOOKAHEAD_MAX_MINUTES);
+  slider.step = String(SLIDER_STEP_MINUTES);
   const applyFromSlider = (recenter: boolean): void => {
     const minutes = Number(slider.value);
     if (!Number.isFinite(minutes)) return;
     // Value-unchanged no-op: re-applying the same minutes would pin the
     // SAME offset to a NEW now (T1). syncTimeSliderControls keeps this
     // tracker in lockstep when steppers / snap-to-live move the view.
+    // (setLookahead's same-instant guard backstops the recenter=true path.)
     if (minutes === sliderLastAppliedMinutes && !recenter) return;
     setLookahead(minutes, recenter);
   };
+  // Drag-in-progress tracking: suppresses the 30s timer's value sync.
+  slider.addEventListener('pointerdown', () => { sliderDragging = true; });
+  slider.addEventListener('pointerup', () => { sliderDragging = false; });
+  slider.addEventListener('pointercancel', () => { sliderDragging = false; });
   // Drag: rAF-coalesced full refresh; never recenter under the finger.
   slider.addEventListener('input', rafCoalesce(() => applyFromSlider(false), raf));
   // Release (or keyboard commit): one recenter ease onto the marker.
@@ -1871,14 +1925,19 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
 function syncTimeSliderControls(nowMs: number, curMin: number): void {
   const slider = document.getElementById('time-slider') as HTMLInputElement | null;
   if (!slider) return;
-  slider.value = String(curMin);
-  sliderLastAppliedMinutes = curMin;
+  if (!sliderDragging) {
+    slider.value = String(curMin);
+    // Read BACK the value: real browsers snap range writes to the step
+    // grid, so the guard tracker must record what the slider can actually
+    // report, not what we asked for (red-team 2026-06-10; happy-dom does
+    // not implement the snapping, so tests see them equal).
+    sliderLastAppliedMinutes = Number(slider.value);
+  }
   const scrubbed = isScrubbed();
   // T6b (eng-review 2026-06-10): deep scrubs compound TLE propagation
-  // error. Inherit the existing >48h staleness threshold (Lane E banner):
-  // flag the readout so the operator knows the projected geometry is
-  // running on an old orbit solution.
-  const tleStale = scrubbed && (currentTrack?.tle_age_hours ?? 0) > 48;
+  // error. isTleStale shares the banner's rounded-boundary semantics so
+  // the topbar and the readout can never disagree at the threshold.
+  const tleStale = scrubbed && isTleStale(currentTrack?.tle_age_hours);
   const baseText = scrubbed
     ? formatViewTimeReadout(currentViewMs(nowMs), nowMs)
     : 'Now';
@@ -1896,7 +1955,10 @@ function syncTimeSliderControls(nowMs: number, curMin: number): void {
 }
 
 let toggleBound = false;
-function bindTimeToggle(): void {
+/** Wire the five stepper buttons. Exported for tests (pre-landing review
+ *  2026-06-10): the click wiring is the one seam between the DOM and
+ *  setLookahead that hand-computed offsets in tests cannot exercise. */
+export function bindTimeToggle(): void {
   if (toggleBound) return;
   const stepBtns = document.querySelectorAll<HTMLButtonElement>('.time-step-btn');
   if (stepBtns.length === 0) return;
@@ -2235,8 +2297,12 @@ function bindFollowToggle(): void {
     followISS = true;
     reflectFollowButton();
     if (!currentTrack) return;
-    const pos = liveIssPositionSGP4(currentTrack, Date.now())
-      ?? liveIssPosition(currentTrack, Date.now());
+    // VIEW-time position, not live (red-team 2026-06-10): clicking Follow
+    // while scrubbed must fly to the marker the operator can SEE (pinned
+    // at the view instant), not to the live sub-point where nothing is
+    // drawn. markerPositionFor honors the scrub and falls back through
+    // SGP4 → polynomial exactly like every other marker consumer.
+    const pos = markerPositionFor(currentTrack);
     if (pos && map) {
       map.flyTo({ center: [pos.lon, pos.lat], duration: 800, essential: true });
     }
@@ -2776,6 +2842,11 @@ function handlePinDrop(lng: number, lat: number): void {
   // v1.6.0.0: also compute passes for any selected non-ISS satellites
   // (Pettit #6 — multi-satellite). Each satellite gets its own section
   // in the popup; ISS is the default.
+  //
+  // INTENTIONALLY live (Date.now(), not view-time): "next passes over this
+  // point" is a planning query from NOW — a scrubbed map answers "what does
+  // +6h look like", but the operator dropping a pin wants upcoming shooting
+  // windows from the present. Same live-domain rule as the topbar (4A).
   const sectionsForPopup: { name: string; color: string; passes: UpcomingPass[] }[] = [
     {
       name: 'ISS',

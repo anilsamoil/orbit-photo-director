@@ -77,6 +77,13 @@ describe('formatViewTimeReadout (day-aware UTC — T6a)', () => {
     const now = Date.parse('2026-06-10T22:00:00Z');
     expect(formatViewTimeReadout(now + 120 * 60_000, now)).toBe('+1d 00:00Z');
   });
+
+  it('viewMs slightly in the past (pre-snap tick window) never emits a negative prefix', () => {
+    // The 1Hz snap means the pinned instant can sit up to ~1s in the past;
+    // across midnight that is dayDiff -1 — must render plain, never '-1d'.
+    const now = Date.parse('2026-06-11T00:00:10Z');
+    expect(formatViewTimeReadout(now - 30_000, now)).toBe('23:59Z');
+  });
 });
 
 describe('slider binding (eng-review 1C/7A)', () => {
@@ -104,9 +111,33 @@ describe('slider binding (eng-review 1C/7A)', () => {
     while (frames.length) frames.shift()!();
   };
 
-  it('binds bounds from the clamp contract, not hand-kept HTML attributes', () => {
+  it('binds bounds AND step from the clamp contract, not hand-kept HTML attributes', () => {
     expect(slider().min).toBe('0');
     expect(slider().max).toBe(String(LOOKAHEAD_MAX_MINUTES));
+    // step owned in code: real browsers snap programmatic .value writes to
+    // the step grid, so the contract must not live only in index.html.
+    expect(slider().step).toBe('5');
+  });
+
+  it("trailing rAF frame after 'change' does not re-pin (guard catches the stale frame)", () => {
+    slider().value = '45';
+    slider().dispatchEvent(new Event('input')); // frame queued
+    slider().dispatchEvent(new Event('change')); // applies immediately
+    const pinned = _getViewTimeMsForTest();
+    vi.setSystemTime(new Date('2026-06-10T12:00:05Z'));
+    drainFrames(); // stale frame fires with the same value
+    expect(_getViewTimeMsForTest()).toBe(pinned);
+  });
+
+  it("release ('change') with an unchanged value does not re-pin against a newer now", () => {
+    slider().value = '45';
+    slider().dispatchEvent(new Event('input'));
+    drainFrames(); // pinned at 12:45Z
+    const pinned = _getViewTimeMsForTest();
+    vi.setSystemTime(new Date('2026-06-10T12:00:10Z'));
+    slider().dispatchEvent(new Event('change')); // same value at release
+    // setLookahead's same-instant guard: recenter honored, pin untouched.
+    expect(_getViewTimeMsForTest()).toBe(pinned);
   });
 
   it("drag ('input') pins the view through the rAF gate", () => {
@@ -210,6 +241,36 @@ describe('slider binding (eng-review 1C/7A)', () => {
       _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 6 } as Track);
       setLookahead(360, false);
       expect(readout().textContent).toBe('18:00Z');
+      expect(readout().classList.contains('time-slider-stale')).toBe(false);
+    });
+
+    // Boundary semantics are SHARED with the topbar banner (isTleStale,
+    // rounded comparison — pre-landing review 2026-06-10): the two surfaces
+    // must agree at the threshold.
+    it('exactly 48h is not stale (rounded ≤ threshold, matches banner)', () => {
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 48 } as Track);
+      setLookahead(360, false);
+      expect(readout().textContent).toBe('18:00Z');
+      expect(readout().classList.contains('time-slider-stale')).toBe(false);
+    });
+
+    it('48.4h rounds to 48 → fresh on BOTH surfaces (banner consistency)', () => {
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 48.4 } as Track);
+      setLookahead(360, false);
+      expect(readout().classList.contains('time-slider-stale')).toBe(false);
+    });
+
+    it('48.6h rounds to 49 → stale', () => {
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 48.6 } as Track);
+      setLookahead(360, false);
+      expect(readout().classList.contains('time-slider-stale')).toBe(true);
+    });
+
+    it('missing tle_age_hours (legacy manifest) is not stale', () => {
+      const legacy = { ...staleTrack } as Record<string, unknown>;
+      delete legacy.tle_age_hours;
+      _setCurrentTrackForTest(legacy as unknown as Track);
+      setLookahead(360, false);
       expect(readout().classList.contains('time-slider-stale')).toBe(false);
     });
   });

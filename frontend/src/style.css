@@ -1026,9 +1026,25 @@ body.shotlist-bar-visible main {
   color: var(--accent);
   font-weight: 600;
 }
-/* Stale-TLE hint (eng-review T6b): deep scrubs on an old orbit solution. */
+/* Stale-TLE hint (eng-review T6b): deep scrubs on an old orbit solution.
+ * --yellow per the .toast.warn precedent — no new off-palette amber. */
 .time-slider-readout.time-slider-stale {
-  color: var(--warn, #ffb454);
+  color: var(--yellow);
+}
+/* Visible scale anchors (Codex design voice 2026-06-10): the slider's
+ * range was discoverable only via title/aria — iPad users never see
+ * either. "Now" and "+36h" flank the track. */
+.time-slider-end {
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+/* House focus pattern (matches .sort-btn / .filter-btn): appearance:none
+ * stripped WebKit's native focus ring; restore one for keyboard users. */
+.time-slider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 /* Bearing toggle sits below the time toggle on the same right edge.
@@ -1075,7 +1091,10 @@ body.shotlist-bar-visible main {
  * edge of the map. Closes on outside-click. */
 .satellite-picker-panel {
   position: absolute;
-  top: 270px;
+  /* 270 → 306: tracks the overlay row's 220 → 256 move for the slider row
+   * (pre-landing review 2026-06-10 — the panel was opening ON TOP of the
+   * row containing the button that opens it). */
+  top: 306px;
   right: 1rem;
   background: var(--surface-2);
   border: 1px solid var(--border);

@@ -80,16 +80,24 @@ export function bannerOffline(snapshotAgeMin: number): BannerState {
  *  noticeably past that). If the base banner is already red, only the
  *  text gets appended — we don't downgrade red to orange.
  */
+/** Shared TLE-staleness predicate. Encodes the ROUNDED-boundary semantics
+ *  (tleAgeHours=47.6 previously read "TLE 48h old" in text while being
+ *  treated as fresh — boundary inconsistency, fixed once). Used by the
+ *  banner overlay AND the map's scrub-readout hint so the two surfaces can
+ *  never disagree at the boundary (pre-landing review 2026-06-10). */
+export const TLE_STALE_AFTER_HOURS = 48;
+export function isTleStale(tleAgeHours: number | undefined): boolean {
+  if (typeof tleAgeHours !== 'number' || !Number.isFinite(tleAgeHours)) return false;
+  return Math.round(tleAgeHours) > TLE_STALE_AFTER_HOURS;
+}
+
 export function bannerWithTleOverlay(
   base: BannerState,
   tleAgeHours: number | undefined,
 ): BannerState {
-  if (typeof tleAgeHours !== 'number' || !Number.isFinite(tleAgeHours)) return base;
-  // Compare against the displayed (rounded) value. tleAgeHours=47.6 was
-  // previously below the threshold (no overlay) but the rendered text
-  // would have read "TLE 48h old" — boundary inconsistency.
-  const displayedHours = Math.round(tleAgeHours);
-  if (displayedHours <= 48) return base;
+  if (!isTleStale(tleAgeHours)) return base;
+  // Display the rounded value the threshold was judged against.
+  const displayedHours = Math.round(tleAgeHours as number);
   const tleNote = `TLE ${displayedHours}h old — live track may drift`;
   if (base.level === 'red') {
     return { level: 'red', text: `${base.text} · ${tleNote}` };
