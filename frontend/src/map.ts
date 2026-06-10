@@ -1811,8 +1811,16 @@ function updateTimeStepLabels(): void {
 export function setLookahead(newMinutes: number, recenter: boolean): void {
   const clamped = clampLookahead(newMinutes);
   if (clamped === 0 && viewTimeMs === null) {
-    // Clicking Now while already live is a no-op; same for clicking
-    // back at floor. Skip the visual churn.
+    // Already live: skip the refresh churn — but HONOR a requested
+    // recenter (Codex structured review P2, 2026-06-10): a slider drag
+    // back to 0 lands here already-live (the rAF 'input' applied 0 before
+    // the finger lifted), and the release's recenter must still bring the
+    // camera home; otherwise the controls say Now while the camera stays
+    // parked on the prior future view.
+    if (recenter && map && issMarker && currentTrack) {
+      const pos = markerPositionFor(currentTrack);
+      if (pos) map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+    }
     updateTimeStepLabels();
     return;
   }
@@ -1910,6 +1918,11 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   slider.addEventListener('pointerdown', () => { sliderDragging = true; });
   slider.addEventListener('pointerup', () => { sliderDragging = false; });
   slider.addEventListener('pointercancel', () => { sliderDragging = false; });
+  // Belt-and-braces (Codex adversarial 2026-06-10): a drag that loses
+  // pointer capture without a pointerup on the element (page blur, OS
+  // gesture swallowing the release) must not leave the sync suppressed
+  // forever. Bound once — sliderBound guards re-binding.
+  window.addEventListener('blur', () => { sliderDragging = false; });
   // Drag: rAF-coalesced full refresh; never recenter under the finger.
   slider.addEventListener('input', rafCoalesce(() => applyFromSlider(false), raf));
   // Release (or keyboard commit): one recenter ease onto the marker.
@@ -1937,7 +1950,15 @@ function syncTimeSliderControls(nowMs: number, curMin: number): void {
   // T6b (eng-review 2026-06-10): deep scrubs compound TLE propagation
   // error. isTleStale shares the banner's rounded-boundary semantics so
   // the topbar and the readout can never disagree at the threshold.
-  const tleStale = scrubbed && isTleStale(currentTrack?.tle_age_hours);
+  //
+  // Age is measured at the VIEW instant, not at manifest generation
+  // (Codex adversarial 2026-06-10): a 24h-old TLE scrubbed +36h is a 60h
+  // projection — the warning matters MOST at depth. Missing age (legacy
+  // manifest) stays unflagged: unknown is not the same as stale.
+  const ageAtView = typeof currentTrack?.tle_age_hours === 'number'
+    ? currentTrack.tle_age_hours + lookaheadMinutesNow(nowMs) / 60
+    : undefined;
+  const tleStale = scrubbed && isTleStale(ageAtView);
   const baseText = scrubbed
     ? formatViewTimeReadout(currentViewMs(nowMs), nowMs)
     : 'Now';

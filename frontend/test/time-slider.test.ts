@@ -244,25 +244,34 @@ describe('slider binding (eng-review 1C/7A)', () => {
       expect(readout().classList.contains('time-slider-stale')).toBe(false);
     });
 
-    // Boundary semantics are SHARED with the topbar banner (isTleStale,
-    // rounded comparison — pre-landing review 2026-06-10): the two surfaces
-    // must agree at the threshold.
-    it('exactly 48h is not stale (rounded ≤ threshold, matches banner)', () => {
-      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 48 } as Track);
-      setLookahead(360, false);
+    // Age is EFFECTIVE at the view instant: tle_age_hours + scrub depth
+    // (Codex adversarial 2026-06-10 — a manifest-fresh TLE scrubbed deep
+    // is an old projection). Boundary semantics SHARED with the topbar
+    // banner (isTleStale, rounded comparison): the surfaces must agree.
+    it('effective age exactly 48h (42h TLE + 6h scrub) is not stale', () => {
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 42 } as Track);
+      setLookahead(360, false); // +6h
       expect(readout().textContent).toBe('18:00Z');
       expect(readout().classList.contains('time-slider-stale')).toBe(false);
     });
 
-    it('48.4h rounds to 48 → fresh on BOTH surfaces (banner consistency)', () => {
-      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 48.4 } as Track);
+    it('effective 48.4h rounds to 48 → fresh (banner consistency)', () => {
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 42.4 } as Track);
       setLookahead(360, false);
       expect(readout().classList.contains('time-slider-stale')).toBe(false);
     });
 
-    it('48.6h rounds to 49 → stale', () => {
-      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 48.6 } as Track);
+    it('effective 48.6h rounds to 49 → stale', () => {
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 42.6 } as Track);
       setLookahead(360, false);
+      expect(readout().classList.contains('time-slider-stale')).toBe(true);
+    });
+
+    it('a manifest-fresh TLE flips stale at depth: 13h TLE + 36h scrub = 49h', () => {
+      // The headline case: the warning matters MOST on deep projections —
+      // manifest-time age alone would stay silent here.
+      _setCurrentTrackForTest({ ...staleTrack, tle_age_hours: 13 } as Track);
+      setLookahead(2160, false); // +36h
       expect(readout().classList.contains('time-slider-stale')).toBe(true);
     });
 
