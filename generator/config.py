@@ -92,6 +92,12 @@ class Settings:
     # the NHC hurricane tracker checks proximity per pass. v1.3.1 ships
     # framework + NHC; real GLM/CAPE/Blitzortung samplers come in v1.3.2.
     enable_weather: bool = False
+    # V4-P2 forecast cloud frames (eng review 2026-06-09, rev 2026-06-10).
+    # When True, each tick renders (at most once per GFS run) the 2.5°
+    # forecast-cloud tile frames under out/clouds-fcst/<run>/ and the
+    # manifest gains a `forecast_clouds` index for the frontend's
+    # scrub-aware layer swap. Off-by-default for a soak before flip.
+    enable_forecast_clouds: bool = False
 
     @classmethod
     def from_env(cls, repo_root: Path | None = None) -> Settings:
@@ -121,6 +127,8 @@ class Settings:
                 in ("1", "true", "yes", "on"),
             enable_weather=os.environ.get("OPD_ENABLE_WEATHER", "0").strip().lower()
                 in ("1", "true", "yes", "on"),
+            enable_forecast_clouds=os.environ.get("OPD_ENABLE_FORECAST_CLOUDS", "0")
+                .strip().lower() in ("1", "true", "yes", "on"),
         )
 
     def ensure_dirs(self) -> None:

@@ -134,7 +134,15 @@ Refuted alternatives:
 
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
-### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub
+### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub — SHIPPED v1.9.0.0 (2026-06-11, flag default-off)
+
+Shipped per the locked eng review (2026-06-09) as revised: stable run-keyed
+frame paths, 5° grid + 12h cadence (Open-Meteo location metering), 300s
+sweep budget + failure tombstones (tick-survival), 0.95 coverage floor
+(no false clear sky), tiered nearest-frame select on the frontend, three-
+state honesty badge. Flip `OPD_ENABLE_FORECAST_CLOUDS=1` after one daemon
+tick proves frames publish (`out/clouds-fcst/<run>/index.json` + manifest
+`forecast_clouds` key).
 
 **Origin:** Operator question 2026-05-20 after v1.4.0.0 (orbit time-scrub) shipped: when scrubbing forward on the map, the colored pin scores ARE future predictions (they already use GFS forecast cloud at each pass's `closest_approach`), but the visual cloud raster underneath is yesterday's MODIS composite. Mismatch between pin-color truth and visual-layer truth.
 
