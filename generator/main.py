@@ -1075,9 +1075,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         build_version=__version__,
         artifacts=artifacts_block,
         profile_artifacts=profile_artifacts,
-        extra={"forecast_clouds": forecast_clouds_index}
-        if forecast_clouds_index
-        else None,
+        forecast_clouds=forecast_clouds_index,
     )
 
     deleted = cleanup_old_versions(settings.out_dir, keep_minutes=60)

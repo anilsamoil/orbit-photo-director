@@ -367,3 +367,73 @@ def test_flag_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings.from_env().enable_forecast_clouds is False
     monkeypatch.setenv("OPD_ENABLE_FORECAST_CLOUDS", "1")
     assert Settings.from_env().enable_forecast_clouds is True
+
+
+# ---------------------------------------------------------------------------
+# run_tick wiring (ship coverage audit 2026-06-10): the flag gate, the
+# manifest extra, and the failure→omit path — the seam between this module
+# and the tick that no unit above exercises.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cached_tle(settings_in_tmp: Any) -> Path:
+    """Pre-seed the TLE cache so run_tick doesn't need network (mirrors
+    the test_main.py fixture — local to that module, so re-declared)."""
+    from tests.test_main import SAMPLE_TLE_TEXT
+    settings_in_tmp.cache_dir.mkdir(parents=True, exist_ok=True)
+    cache = settings_in_tmp.cache_dir / "iss.tle"
+    cache.write_text(SAMPLE_TLE_TEXT)
+    return cache
+
+
+def test_run_tick_flag_on_adds_manifest_index(
+    settings_in_tmp: Any, cached_tle: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from generator import forecast_clouds as fc_mod
+    from generator.main import run_tick
+
+    stub_index = {
+        "gfs_run": "2024-10-17T00:00:00Z",
+        "prefix": "clouds-fcst/20241017T000000Z",
+        "valid_times": ["2024-10-17T00:00:00Z"],
+        "max_zoom": 3,
+    }
+    calls: list[Path] = []
+
+    def fake_write_frames(out_dir: Path, now: datetime, **_: Any) -> dict[str, Any]:
+        calls.append(out_dir)
+        return stub_index
+
+    monkeypatch.setattr(fc_mod, "write_frames", fake_write_frames)
+    settings = replace(settings_in_tmp, enable_forecast_clouds=True)
+    manifest = run_tick(settings, now=datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC))
+    assert manifest["forecast_clouds"] == stub_index
+    assert calls == [settings.out_dir]
+
+
+def test_run_tick_flag_off_omits_manifest_index(
+    settings_in_tmp: Any, cached_tle: Path,
+) -> None:
+    from generator.main import run_tick
+
+    manifest = run_tick(settings_in_tmp, now=datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC))
+    assert "forecast_clouds" not in manifest
+
+
+def test_run_tick_render_failure_omits_key_and_does_not_fail_tick(
+    settings_in_tmp: Any, cached_tle: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from generator import forecast_clouds as fc_mod
+    from generator.main import run_tick
+
+    def explode(*_: Any, **__: Any) -> dict[str, Any]:
+        raise RuntimeError("open-meteo melted")
+
+    monkeypatch.setattr(fc_mod, "write_frames", explode)
+    settings = replace(settings_in_tmp, enable_forecast_clouds=True)
+    manifest = run_tick(settings, now=datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC))
+    # Locked A4: failures omit the key; the tick itself must survive.
+    assert "forecast_clouds" not in manifest
+    assert manifest["version"] == "20241017T120000Z"
