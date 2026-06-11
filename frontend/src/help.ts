@@ -20,6 +20,9 @@ interface HelpItem {
   label: string;
   /** The explanation. */
   text: string;
+  /** Optional stable anchor: UI elements deep-link to this entry via
+   *  openHelpModal(id) (photo-condition rows → Photography Almanac). */
+  id?: string;
 }
 
 interface HelpSection {
@@ -315,14 +318,50 @@ const HELP_SECTIONS: HelpSection[] = [
       },
     ],
   },
+  {
+    title: 'Photography Almanac',
+    items: [
+      {
+        icon: '📷',
+        label: 'Shutter floors & the camera line',
+        id: 'almanac-camera',
+        text:
+          'The expanded pass panel shows, per lens (400/800/1200mm — the ' +
+          'long-lens kit that flies), the ground footprint at THIS pass\'s ' +
+          'closest approach and the slowest safe shutter speed. The floors ' +
+          'assume HAND-TRACKING: the ground moves ~7.7 km/s, and as Don ' +
+          'Pettit\'s guide puts it, "even the fastest shutter speeds will ' +
+          'not stop the blurring effects of orbital motion" — you track the ' +
+          'target through the viewfinder and the floor handles handshake. ' +
+          'His D5-era rule was 1/(focal length); current Z9 bodies have ' +
+          'finer pixels, so these floors run ~1.5× faster (400mm ≥1/640 · ' +
+          '800mm ≥1/1250 · 1200mm ≥1/2000). NOT tracking? You need about a ' +
+          'stop faster still (400mm ~1/1250 at nadir) and it worsens near ' +
+          'nadir. Expect ~10 seconds of prime nadir viewing per pass. ' +
+          'Telephoto >85mm needs Russian-segment windows or the Cupola ' +
+          'bump-shield panes — scratch panes ruin long-lens work. Daytime ' +
+          'starting point: ISO 200–400, f5.6–8, sunny-16 minus ~2 stops so ' +
+          'cloud tops don\'t blow out. (Source: Pettit, Astronauts\' Guide ' +
+          'to Photography from Space, 2nd ed. 2017 — Fig. 23, Telephoto ' +
+          'Lens Skills, Sunny 16.)',
+      },
+    ],
+  },
 ];
 
 /** Build and show the help modal. Idempotent — a second call while open is
  *  a no-op so double-taps don't stack backdrops. Guards on DOM presence
  *  (not a module flag) so it can't desync if the backdrop is removed by
  *  some other path. */
-export function openHelpModal(): void {
-  if (document.querySelector('.help-modal')) return;
+export function openHelpModal(anchor?: string): void {
+  const existing = document.querySelector('.help-modal');
+  if (existing) {
+    // Already open (double-tap, or a condition row tapped while browsing):
+    // don't stack a second backdrop — just bring the requested entry into
+    // view in the open modal.
+    if (anchor) scrollHelpToAnchor(existing as HTMLElement, anchor);
+    return;
+  }
 
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -358,6 +397,7 @@ export function openHelpModal(): void {
     for (const item of section.items) {
       const li = document.createElement('li');
       li.className = 'help-item';
+      if (item.id) li.id = `help-${item.id}`;
       if (item.icon) {
         const ic = document.createElement('span');
         ic.className = 'help-item-icon';
@@ -399,9 +439,20 @@ export function openHelpModal(): void {
   document.addEventListener('keydown', onKey);
 
   document.body.appendChild(backdrop);
+  if (anchor) scrollHelpToAnchor(modal, anchor);
   // Focus the close button so Escape/Enter work immediately and the
   // screen-reader announces the dialog label first.
   requestAnimationFrame(() => close.focus());
+}
+
+/** Scroll the help body so the anchored entry tops the viewport. Missing
+ *  anchor → no scroll (the modal simply opens at the top — graceful). */
+function scrollHelpToAnchor(modal: HTMLElement, anchor: string): void {
+  const target = modal.querySelector<HTMLElement>(`#help-${anchor}`);
+  if (!target) return;
+  // scrollIntoView on the li keeps the math simple regardless of which
+  // ancestor scrolls (.help-body owns overflow in CSS).
+  target.scrollIntoView({ block: 'start' });
 }
 
 /** Wire the fixed "?" corner button to the help modal. Call once at boot.
@@ -409,5 +460,5 @@ export function openHelpModal(): void {
 export function bindHelp(): void {
   const fab = document.getElementById('help-fab');
   if (!fab) return;
-  fab.addEventListener('click', openHelpModal);
+  fab.addEventListener('click', () => openHelpModal());
 }

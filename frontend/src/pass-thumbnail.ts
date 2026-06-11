@@ -29,6 +29,7 @@
  */
 
 import type { PassEntry, Track } from './types';
+import { buildConditionRows, renderConditionBlock } from './photo-conditions';
 import { liveIssPosition } from './iss';
 import { liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
@@ -407,6 +408,14 @@ export function renderPassThumbnail(
   // contribution (countdown + the initial encounter the card lacks).
 
   wrap.appendChild(caption);
+
+  // Photo conditions (Unit 1, D4): full-card-width block BELOW the image —
+  // the caption above is a 256px overlay and cannot hold condition content.
+  // Zero rows render nothing (busy-ness rule 5: silence is a feature).
+  renderConditionBlock(
+    buildConditionRows({ pass, manifest: null, nowMs }),
+    wrap,
+  );
 
   // Esri attribution (ToS requirement; free-tier non-commercial use).
   const attr = document.createElement('div');

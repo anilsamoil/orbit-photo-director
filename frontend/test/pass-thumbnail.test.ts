@@ -229,6 +229,30 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(labels!.src).toContain(`/${THUMBNAIL_ZOOM}/`);
   });
 
+  it('renders the photo-conditions camera row below the image (Unit 1)', () => {
+    const el = renderPassThumbnail(samplePass, null, NOW);
+    const block = el.querySelector('.photo-conditions');
+    expect(block).not.toBeNull();
+    expect(block!.querySelector('.photo-conditions-divider')!.textContent)
+      .toBe('photo conditions');
+    const row = block!.querySelector<HTMLButtonElement>('.photo-condition-row');
+    expect(row).not.toBeNull();
+    expect(row!.querySelector('.photo-condition-label')!.textContent)
+      .toBe('📷 tracked floors · hand-track');
+    // 87km nadir / 410km alt → slant ≈ 419km: same rounded numbers as nadir.
+    expect(row!.querySelector('.photo-condition-value')!.textContent)
+      .toBe('400mm ≈38km ≥1/640 · 800mm ≈19km ≥1/1250 · 1200mm ≈13km ≥1/2000');
+    // The block must NOT live inside the 256px caption overlay (D4).
+    expect(el.querySelector('.pass-thumbnail-caption .photo-conditions')).toBeNull();
+  });
+
+  it('omits the conditions block entirely when the pass has no nadir geometry', () => {
+    const broken = { ...samplePass, nadir_distance_km: NaN };
+    const el = renderPassThumbnail(broken, null, NOW);
+    expect(el.querySelector('.photo-conditions')).toBeNull();
+    expect(el.querySelector('.photo-conditions-divider')).toBeNull();
+  });
+
   it('removes failed label tiles, leaving the imagery intact', () => {
     const el = renderPassThumbnail(samplePass, null, NOW);
     const labelTiles = [...el.querySelectorAll<HTMLImageElement>('img.pass-thumbnail-labels')];
