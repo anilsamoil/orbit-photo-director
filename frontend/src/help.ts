@@ -209,7 +209,7 @@ const HELP_SECTIONS: HelpSection[] = [
   {
     title: 'Map overlays (right-edge buttons)',
     items: [
-      { icon: '☁️', label: 'Clouds', text: 'Live/forecast cloud cover.' },
+      { icon: '☁️', label: 'Clouds', text: 'Cloud cover — observed at Now, forecast at scrubbed times when available.' },
       { icon: '☀️', label: 'Terminator', text: 'The day/night line and the sub-solar point.' },
       { icon: '🌃', label: 'Night-lights', text: 'City lights on the night side (off by default).' },
       { icon: '🏷️', label: 'Labels', text: 'Country and city names.' },
@@ -252,9 +252,13 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '⚠️',
         label: 'Honest limits',
         text:
-          'While scrubbed, the imagery badge reads "Clouds: observed — not ' +
-          'forecast": the cloud layer is the latest real composite, not a ' +
-          'prediction for your view time. A "stale TLE" tag appears when the ' +
+          'While scrubbed, the imagery badge names what the cloud layer is ' +
+          'showing. "Clouds: GFS forecast +6h · coarse" means the clouds ' +
+          'swapped to a real forecast for your view time — coarse ' +
+          'weather-model shapes for planning, not photo detail. "Clouds: ' +
+          'observed — not forecast" (or "— forecast ends +Nh") means the ' +
+          'forecast does not cover your view time, so you are seeing the ' +
+          'latest real composite instead. A "stale TLE" tag appears when the ' +
           'orbit solution plus your scrub depth passes 48 hours — projected ' +
           'positions degrade with distance.',
       },

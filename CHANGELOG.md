@@ -2,6 +2,52 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.9.1.0] - 2026-06-11
+
+## **Fourteen more rockets get a real ascent curve. The ones we don't know stay honestly blank.**
+
+Launch-visibility cards only render when the generator knows how a rocket climbs — and until now it knew exactly eleven. The audit of the live launch cache showed the misses were the world's busiest small and medium lifters: Electron, PSLV, Vega-C, H3, and the whole crowded Chinese manifest (Long March 2/3/4/6/8, Kuaizhou, Kinetica, Ceres-1), plus Firefly Alpha and Spectrum. This release adds coarse, source-grounded ascent profiles for all fourteen families, so a Long March 2F crew launch or an H3 station-resupply climb now produces a sightline card instead of silently skipping.
+
+Matching a rocket name to a profile got safer at the same time. Generic tokens now require exact-field matches — so a hypothetical "Alphabet" can never inherit Firefly Alpha's climb, "Mach3 Express" can't become an H3, and the real (much larger) Kinetica 2 and Ceres-2 fail-safe skip instead of borrowing their smaller sibling's geometry. Unknown rockets still mean "no card," never "a confidently wrong card."
+
+### Itemized changes
+
+#### Added
+- **14 new ascent profiles**: Electron, H3, Long March 2/3/4/6/8, Kuaizhou (family), Kinetica 1, Ceres-1, PSLV, Vega-C, Spectrum, Firefly Alpha — covering every rocket in the live LL2 cache audit that previously skipped ASCENT prediction.
+- **Chang Zheng aliases** on the new Long March families (LL2 sometimes uses CASC's naming), matching the CZ- abbreviations wave 1 already handled.
+
+#### Changed
+- **Exact-field keyword matching** for generic tokens: `match_rocket` gains a second pass that matches dangerously short keywords ("Alpha", "H3") by whole-field equality only. Substring lookalikes verified to misfire under the old matcher (Alphabet→Firefly, Mach3 Express→H3, bare "H3" field→no match) are all dead.
+- Kinetica and Ceres keywords narrowed to the -1 vehicles: Kinetica 2 (Lijian-2) and Ceres-2 are real, far larger siblings in active development with genuinely different climbs — they fail-safe skip until they earn their own profiles.
+
+#### Internal
+- Matcher docstrings corrected: ALL_PROFILES order is the sole precedence mechanism (the old text claimed per-field priority that never existed); FIREFLY_ALPHA-last now enforced by a structural test.
+- 181 new test cases (suite: 828; most from the per-profile invariant battery now running over 25 profiles instead of 11): exact-keyword semantics + hostile lookalikes, sibling-vehicle fail-safe battery, Long March future-collision pins (LM-10/12 stay unmatched), Chang Zheng aliases.
+
+## [1.9.0.0] - 2026-06-11
+
+## **Scrub the slider and the clouds become a forecast. The map stops showing yesterday under tomorrow's pins.**
+
+Since the time-slider shipped, sliding to +12h moved the orbit, the terminator, and the pins — but the cloud picture stayed yesterday's satellite composite, with a badge admitting it. This release closes that gap: when you scrub, the cloud layer swaps to the GFS forecast frame nearest your chosen moment, out to the slider's full +36h reach. At Now, nothing changes — the live view keeps the real observed imagery, always. The badge tells you exactly what you're seeing: "Clouds: GFS forecast +6h · coarse (12z)" — *coarse* because these are 5° synoptic blobs for planning, not photographic detail.
+
+The frames come from a new generator pipeline: twice a day it sweeps the GFS model through the same forecast source the pin scores already use, renders ~21 white-alpha tile frames (hourly out to +6h, 3-hourly to +48h), and publishes them alongside the pass data. The whole thing ships behind a flag (default off) and is built to fail honest: a frame with data holes is dropped rather than showing false clear sky, a failed render backs off instead of hammering the weather API, the sweep is hard-budgeted so it can never stall the pass pipeline that feeds the Queue, and any tile hiccup on the iPad falls back to the observed layer for the session.
+
+### Itemized changes
+
+#### Added
+- **Forecast cloud overlay synced to the time-scrub** (flag `OPD_ENABLE_FORECAST_CLOUDS`, default off): generator renders GFS cloud-fraction tile frames (5° grid, WebMercator z0-3, white-alpha ramp matched to the observed layer's visual weight) at most once per 12h forecast cycle; the map picks the frame nearest the scrubbed instant (±30min in the hourly band, ±90min beyond, never a frame older than 45min) and swaps it in under the same cloud toggle.
+- **Honest badge states:** "GFS forecast +Nh · coarse (HHz)" while a frame is active ("now" for sub-hour horizons), "forecast ends +Nh" past coverage, and the existing observed-not-forecast wording when no frames exist.
+
+#### Changed
+- Deploy pipeline: forecast frames upload additively before the manifest flip (scoped to the run the manifest references); remote pruning keeps the newest two runs so clients mid-flip never 404; the wrangler fallback path publishes manifests without the forecast index (graceful observed-layer fallback) since it cannot upload frames.
+
+#### Fixed
+- Prune cron died on every run on macOS bash 3.2 whenever the forecast feature was off (empty-array expansion under `set -u`) — rewritten.
+
+#### Internal
+- Live-fire revisions baked in: frames at stable run-keyed paths (`clouds-fcst/<run>/`) instead of per-tick versioned dirs (~6× fewer R2 writes); 5° grid + 12h cadence sized to Open-Meteo's location-request metering (verified against real 429 behavior); paced fetcher with backoff + a 300s sweep budget so a weather-API outage can never blow the daemon's stall watchdog; failure tombstones cap retries at 3 per run.
+- 49 new tests across generator (sweep budget, tombstone lifecycle, publish atomicity incl. crash paths, mercator/antimeridian/seam geometry, run_tick wiring) and frontend (frame selection tolerances, badge truth table, at-Now observed-path regression). Suites: 647 generator, 1083 frontend.
+
 ## [1.8.0.0] - 2026-06-10
 
 ## **Slide to any moment in the next 36 hours. The whole map keeps one clock.**

@@ -101,6 +101,25 @@ export default defineConfig({
             },
           },
           {
+            // V4-P2 forecast cloud frames: CacheFirst, immutable — the path
+            // carries the GFS run key (/clouds-fcst/<run>/<frame>/z/x/y.png)
+            // so a new run never collides with a cached one. Online-only by
+            // default (locked A5): nothing precaches these; the cache just
+            // keeps already-viewed frames cheap while scrubbing. LRU-capped
+            // at ~3 frames' worth of tiles; runs rotate twice a day so the
+            // TTL is an upper bound, not the eviction driver.
+            urlPattern: /\/clouds-fcst\/\d{8}T\d{6}Z\/.*\.png(\?.*)?$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opd-tiles-fcst',
+              expiration: {
+                maxEntries: 256,
+                maxAgeSeconds: 60 * 60 * 24, // 24h — two render cycles
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             // Versioned artifacts: CacheFirst, immutable. The path includes
             // the version slug (/v/YYYYMMDDTHHMMSSZ/...) so different
             // versions get different cache keys and never overwrite.

@@ -134,7 +134,15 @@ Refuted alternatives:
 
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
-### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub
+### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub — SHIPPED v1.9.0.0 (2026-06-11, flag default-off)
+
+Shipped per the locked eng review (2026-06-09) as revised: stable run-keyed
+frame paths, 5° grid + 12h cadence (Open-Meteo location metering), 300s
+sweep budget + failure tombstones (tick-survival), 0.95 coverage floor
+(no false clear sky), tiered nearest-frame select on the frontend, three-
+state honesty badge. Flip `OPD_ENABLE_FORECAST_CLOUDS=1` after one daemon
+tick proves frames publish (`out/clouds-fcst/<run>/index.json` + manifest
+`forecast_clouds` key).
 
 **Origin:** Operator question 2026-05-20 after v1.4.0.0 (orbit time-scrub) shipped: when scrubbing forward on the map, the colored pin scores ARE future predictions (they already use GFS forecast cloud at each pass's `closest_approach`), but the visual cloud raster underneath is yesterday's MODIS composite. Mismatch between pin-color truth and visual-layer truth.
 
@@ -306,6 +314,8 @@ All three slices are shipped:
 - Tests: `tests/test_ascent_profiles.py` + `tests/test_ascent.py` exist.
 
 **Soak status 2026-05-21:** flag is ON; daemon healthy at PID 36988. `launches_count_pass_opportunities: 0` in status.json because the single upcoming LL2 launch in the next 36h doesn't have ISS-photographable geometry — that's data, not a bug. The pipeline will produce ASCENT entries when an eligible rocket flies through the viewing cone. No further work needed unless soak surfaces a defect.
+
+**Coverage wave 2 — SHIPPED v1.9.1.0 (2026-06-11):** 14 more profiles (Electron, H3, LM 2/3/4/6/8, Kuaizhou, Kinetica 1, Ceres-1, PSLV, Vega-C, Spectrum, Firefly Alpha) covering every rocket in the live LL2 cache audit that previously skipped ASCENT; 25 profiles total. Matcher gained exact-field keywords for generic tokens (Alpha/H3) and narrowed Kinetica/Ceres so larger sibling vehicles (Kinetica 2, Ceres-2) fail-safe skip rather than inherit wrong geometry.
 
 ### V3-P2 — V3.1 ASCENT geometry (original plan — kept below for history)
 **Plan locked 2026-05-13** via /plan-eng-review. Design doc:
