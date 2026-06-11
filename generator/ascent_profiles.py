@@ -15,8 +15,10 @@ weather hold. Profile `confidence` field captures that uncertainty per sample
 (declines over the flight; earliest samples are most repeatable).
 
 The `match_rocket()` function maps an LL2 `rocket.configuration` dict to a
-profile, preferring `full_name` over `name` over `family` for specificity (a
-Falcon 9 and Falcon Heavy share the "Falcon" family but have different climbs).
+profile via substring keywords (joined-field haystack) plus exact whole-field
+keywords for generic tokens; ALL_PROFILES order is the precedence mechanism
+(a Falcon 9 and Falcon Heavy share the "Falcon" family but have different
+climbs — FALCON_HEAVY simply sits first).
 """
 
 from __future__ import annotations
@@ -53,12 +55,20 @@ class AscentProfile:
     """A rocket family's nominal liftoff-to-insertion climb."""
 
     name: str
-    # LL2 rocket.configuration string fragments matched (case-insensitive,
-    # substring). First profile to match wins; order matters in ALL_PROFILES.
-    # Match against full_name first, then name, then family.
+    # LL2 rocket.configuration string fragments matched case-insensitively
+    # as SUBSTRINGS of the space-joined (full_name, name, family) haystack.
+    # First profile to match wins; order matters in ALL_PROFILES.
     match_keywords: tuple[str, ...]
     samples: tuple[AscentSample, ...]
     insertion_t_seconds: int  # nominal orbit-insertion time
+    # Exact whole-FIELD matches (case-insensitive equality against
+    # full_name / name / family individually). For dangerously generic
+    # tokens where substring matching misfires (ship review 2026-06-11,
+    # verified live: bare-substring "Alpha" matched a hypothetical
+    # "Alphabet" family; the old "H3 " join-boundary hack matched
+    # "Mach3 Express" and missed a bare "H3" field). Checked in the same
+    # ALL_PROFILES order, after no substring keyword anywhere matched.
+    exact_keywords: tuple[str, ...] = ()
 
 
 # Falcon 9 Block 5 (SpaceX). Source: SpaceX webcast telemetry overlay.
@@ -276,7 +286,8 @@ ELECTRON = AscentProfile(
 # MECO ~T+297s, second-stage to LEO insertion ~T+700s.
 H3 = AscentProfile(
     name="H3",
-    match_keywords=("H3-", "H3 "),
+    match_keywords=("H3-",),
+    exact_keywords=("H3",),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.80),
         _s(30, 2.2, 0.3, 87.0, 0.78),
@@ -293,7 +304,7 @@ H3 = AscentProfile(
 # stage-2 ~T+330s; stage-3 burns long and dim toward GTO.
 LONG_MARCH_3 = AscentProfile(
     name="Long March 3",
-    match_keywords=("Long March 3", "CZ-3"),
+    match_keywords=("Long March 3", "CZ-3", "Chang Zheng 3"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.80),
         _s(30, 2.0, 0.3, 87.0, 0.78),
@@ -309,7 +320,7 @@ LONG_MARCH_3 = AscentProfile(
 # crew to Tiangong). Stage sep ~T+160s, insertion ~T+580s.
 LONG_MARCH_2 = AscentProfile(
     name="Long March 2",
-    match_keywords=("Long March 2", "CZ-2"),
+    match_keywords=("Long March 2", "CZ-2", "Chang Zheng 2"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.85),
         _s(30, 2.0, 0.3, 87.0, 0.82),
@@ -325,7 +336,7 @@ LONG_MARCH_2 = AscentProfile(
 # closely tracks CZ-2 with a third-stage stretch to ~T+700s.
 LONG_MARCH_4 = AscentProfile(
     name="Long March 4",
-    match_keywords=("Long March 4", "CZ-4"),
+    match_keywords=("Long March 4", "CZ-4", "Chang Zheng 4"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.80),
         _s(30, 2.0, 0.3, 87.0, 0.78),
@@ -341,7 +352,7 @@ LONG_MARCH_4 = AscentProfile(
 # 6A adds four solid boosters (sep ~T+115s). Insertion ~T+650s.
 LONG_MARCH_6 = AscentProfile(
     name="Long March 6",
-    match_keywords=("Long March 6", "CZ-6"),
+    match_keywords=("Long March 6", "CZ-6", "Chang Zheng 6"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.78),
         _s(30, 2.2, 0.3, 87.0, 0.75),
@@ -357,7 +368,7 @@ LONG_MARCH_6 = AscentProfile(
 # good ocean sight lines). Two boosters, core sep ~T+170s, ~T+700s to SSO.
 LONG_MARCH_8 = AscentProfile(
     name="Long March 8",
-    match_keywords=("Long March 8", "CZ-8"),
+    match_keywords=("Long March 8", "CZ-8", "Chang Zheng 8"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.78),
         _s(30, 2.2, 0.3, 87.0, 0.75),
@@ -373,7 +384,10 @@ LONG_MARCH_8 = AscentProfile(
 # Jiuquan. Solids climb FAST: very photogenic early plume, ~T+600s insertion.
 KINETICA_1 = AscentProfile(
     name="Kinetica 1",
-    match_keywords=("Kinetica", "Lijian"),
+    # NOT bare "Kinetica"/"Lijian": Kinetica 2 (Lijian-2) is a real,
+    # far larger kerolox vehicle (Codex adversarial 2026-06-11) — it must
+    # fail-safe skip, not inherit this solid-rocket climb.
+    match_keywords=("Kinetica 1", "Kinetica-1", "Lijian-1", "Lijian 1"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.72),
         _s(30, 3.0, 0.4, 86.0, 0.70),
@@ -389,6 +403,8 @@ KINETICA_1 = AscentProfile(
 # solid climb like Kinetica; insertion ~T+460s.
 KUAIZHOU = AscentProfile(
     name="Kuaizhou",
+    # Family-level on purpose: KZ-1A and the rare KZ-11 are both quick-burn
+    # solid LVs with similar climb character; one coarse profile covers both.
     match_keywords=("Kuaizhou", "KZ-"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.70),
@@ -405,7 +421,9 @@ KUAIZHOU = AscentProfile(
 # Chinese commercial cadence. Profile mirrors the solid-family shape.
 CERES_1 = AscentProfile(
     name="Ceres-1",
-    match_keywords=("Ceres",),
+    # NOT bare "Ceres": Ceres-2 (reusable kerolox, in development) has a
+    # genuinely different climb — fail-safe skip until it gets a profile.
+    match_keywords=("Ceres-1", "Ceres 1"),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.70),
         _s(30, 3.0, 0.4, 86.0, 0.68),
@@ -418,7 +436,10 @@ CERES_1 = AscentProfile(
 )
 
 # PSLV (ISRO). Solid core + 6 strap-ons; alternating solid/liquid stages
-# from Sriharikota. PS1 burnout ~T+110s, insertion ~T+1000s for typical SSO.
+# from Sriharikota. PS1 burnout ~T+110s. Table ends at a conservative low
+# parking altitude (~230 km) at T+1000s — real SSO missions keep climbing to
+# ~475-600+ km after the visibility window this profile serves; do not read
+# the final sample as SSO insertion altitude.
 PSLV = AscentProfile(
     name="PSLV",
     match_keywords=("PSLV",),
@@ -436,7 +457,7 @@ PSLV = AscentProfile(
 # Vega-C (Avio/Arianespace). Three solid stages + AVUM+ from Kourou.
 # P120C burnout ~T+135s; the bright solid climb ends ~T+450s.
 VEGA_C = AscentProfile(
-    name="Vega",
+    name="Vega-C",
     match_keywords=("Vega",),
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.78),
@@ -471,7 +492,8 @@ SPECTRUM = AscentProfile(
 # Stage sep ~T+165s, insertion ~T+500s.
 FIREFLY_ALPHA = AscentProfile(
     name="Firefly Alpha",
-    match_keywords=("Firefly Alpha", "Alpha"),
+    match_keywords=("Firefly Alpha",),
+    exact_keywords=("Alpha",),  # LL2 family for Firefly Alpha is exactly "Alpha"
     samples=(
         _s(0, 0.0, 0.0, 90.0, 0.68),
         _s(30, 2.2, 0.3, 87.0, 0.66),
@@ -521,10 +543,18 @@ ALL_PROFILES: tuple[AscentProfile, ...] = (
 def match_rocket(rocket_configuration: dict | None) -> AscentProfile | None:
     """Return the AscentProfile matching an LL2 `rocket.configuration` dict.
 
-    Matches case-insensitively against `full_name`, `name`, and `family` in
-    that order (most specific to least). Returns None if no profile matches,
-    in which case the caller should skip ASCENT prediction for this launch
-    (OVERHEAD path is unaffected).
+    Two passes, both walking ALL_PROFILES in order (order is the ONLY
+    precedence mechanism — there is no per-field priority; ship review
+    2026-06-11 corrected the docstring that claimed otherwise):
+
+    1. Substring pass: each profile's match_keywords against the
+       space-joined lowercase (full_name, name, family) haystack.
+    2. Exact pass: each profile's exact_keywords against the individual
+       fields, case-insensitive whole-field equality. This is the safe
+       home for generic tokens ("Alpha", "H3") where substrings misfire.
+
+    Returns None when nothing matches — the caller skips ASCENT prediction
+    for that launch (the fail-safe; OVERHEAD is unaffected).
     """
     if not rocket_configuration:
         return None
@@ -533,11 +563,16 @@ def match_rocket(rocket_configuration: dict | None) -> AscentProfile | None:
         rocket_configuration.get("name") or "",
         rocket_configuration.get("family") or "",
     )
-    haystack = " ".join(c.lower() for c in candidates if c)
-    if not haystack:
+    fields = [c.lower() for c in candidates if c]
+    if not fields:
         return None
+    haystack = " ".join(fields)
     for profile in ALL_PROFILES:
         for keyword in profile.match_keywords:
             if keyword.lower() in haystack:
+                return profile
+    for profile in ALL_PROFILES:
+        for keyword in profile.exact_keywords:
+            if keyword.lower() in fields:
                 return profile
     return None
