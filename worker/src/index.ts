@@ -15,6 +15,7 @@
  */
 
 import { handleKpRequest } from './aurora';
+import { handleAuroraRequest } from './ovation';
 import { handleProfilesRequest } from './profiles';
 import { isValidProfileName } from './shared';
 
@@ -587,6 +588,15 @@ export default {
         response = new Response(null, { status: response.status, headers: response.headers });
       }
     } else if (
+      url.pathname === '/api/aurora' &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      // Aurora v1.1: downsampled OVATION grid (edge cache + R2 last-good).
+      response = await handleAuroraRequest(request, env, ctx);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+    } else if (
       url.pathname === '/api/cal' &&
       (request.method === 'GET' || request.method === 'HEAD')
     ) {
@@ -611,7 +621,8 @@ export default {
       // contract verified by routing tests.
       url.pathname === '/api/log' ||
       url.pathname === '/api/health' ||
-      url.pathname === '/api/kp'
+      url.pathname === '/api/kp' ||
+      url.pathname === '/api/aurora'
     ) {
       response = new Response('method not allowed', { status: 405 });
     } else if (request.method === 'GET' || request.method === 'HEAD') {
