@@ -48,6 +48,9 @@ In Application → Cache Storage you should see:
 - `opd-tiles-carto` — populates only after you visit the Map tab and pan
   somewhere
 - `opd-tiles-gibs` — same as carto
+- `opd-tiles-fcst` (v1.9.0.0+) — only after scrubbing the time slider with
+  forecast frames published; absent is normal while
+  `OPD_ENABLE_FORECAST_CLOUDS` is off
 
 ❌ Fail mode: precache empty or under 8 entries → globPatterns regression.
 Cache names different from above → vite.config.ts cacheName changed

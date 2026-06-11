@@ -80,6 +80,24 @@ df -h /
 | Site shows manifest but `freshness.ok: false` | TLE or cloud composite source is degraded. Daemon is running but inputs are bad. Check upstream status pages: Celestrak, NASA Earthdata. |
 | Mac unresponsive | Hard reboot. launchd will auto-start the daemon after login. |
 
+## Forecast cloud frames (v1.9.0.0+, flag default off)
+
+The scrub-synced forecast cloud overlay is gated by `OPD_ENABLE_FORECAST_CLOUDS` in the launchd plist environment (same pattern as `OPD_ENABLE_ASCENT` / `OPD_ENABLE_WEATHER`). Off by default; flip to `1` after one daemon tick proves frames publish.
+
+When enabled:
+
+- The generator renders GFS cloud tile frames at most twice a day (00Z/12Z cycles) under `out/clouds-fcst/<run>/`; the manifest gains a top-level `forecast_clouds` key. Ticks in between no-op.
+- `scripts/deploy.sh` uploads the referenced run's frames additively BEFORE the manifest flip. `scripts/prune_versions.sh` keeps the newest two run dirs in R2 — the previous run must survive the flip so clients on a not-yet-refreshed manifest never 404.
+- Failures are self-healing: if a render fails or grid coverage is partial, the manifest simply omits `forecast_clouds` and the map stays on the observed cloud layer (the badge says so). Retries are capped (3 per run, ≥2h apart) so a weather-API outage can't burn the Open-Meteo request budget or starve the daemon's own pass-scoring fetches. No operator action needed.
+- The wrangler fallback deploy (`scripts/deploy_wrangler.sh`) cannot upload frames; it strips `forecast_clouds` from the manifest it publishes by design. Clients stay on the observed layer until a normal rclone deploy runs.
+
+Verify after flipping the flag (one render cycle, up to ~12h):
+
+```bash
+ls out/clouds-fcst/*/index.json
+curl -s https://map.astroanil.dev/manifest.json | jq '.forecast_clouds'
+```
+
 ## Adding personal targets
 
 The `targets.json` file ships with 106 curated targets (auroras, night-megacities, iconic shapes, big terrain, volcanoes, lightning belts, dynamic events, US + global communities) selected via a "social-media legibility" framework — each scores ≥7/10 on recognizability + local connection + visual contrast + caption-ability.
