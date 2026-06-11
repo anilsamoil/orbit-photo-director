@@ -2,6 +2,24 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.10.2.0] - 2026-06-11
+
+## **The time slider stops stuttering on the iPad. Drag it and the map keeps up.**
+
+Jack's report from orbit, verbatim: "super stutters... it jumps different amounts on the screen depending on the orbit. having the sun or weather up makes the picture even more corrupted as the data can't keep up." He was right about the mechanism: every frame of a drag was rebuilding the day/night terminator, the satellite tracks, the ground track, and every target pin — work that fits a desktop frame budget and blows the iPad's, and the dropped frames are exactly the varying-size jumps he saw.
+
+Now a drag updates what your finger is steering — the ISS marker and the time readout — on every frame, while the heavy layers refresh on a steady 150ms cadence and settle instantly the moment you let go. Measured on an emulated iPad under CPU throttle: worst frame down 28%, frames over 100ms cut from 70% to 44%, and the long-stall tail (125ms+) eliminated. Real hardware should feel better than the numbers suggest, since faster baseline frames let the throttle skip more work per frame.
+
+### Itemized changes
+
+#### Fixed
+- **Slider drag stutter on iPad**: tiered refresh during drag (marker + readout per frame; terminator/satellites/track/pins/clouds badge on a 150ms throttle, flushed synchronously on release, cancel, or page blur). Steppers and snap-to-live are untouched.
+- Satellite TLE cache is now keyed per-TLE (was single-entry): tracking Tiangong or Hubble while scrubbing no longer forces an ISS orbit re-parse every throttle window.
+- A drag that ends via page blur now also swaps the forecast cloud frame it had deferred.
+
+#### Internal
+- Adversarial-review hardening: mid-drag stepper taps (second finger) take the full refresh path with their camera ease; one failing surface refresh can no longer strand the others stale; NTP step-back clamp on the throttle clock. 10 new tests (suite: 1114) including a real-payload settle assertion and a timer-handle cancellation seam.
+
 ## [1.10.1.0] - 2026-06-11
 
 ## **Open the Map tab on a slow link and it now paints when the data arrives — not on your second try.**

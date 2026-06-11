@@ -9,13 +9,12 @@ import {
 import type { Track } from './types';
 import { wrapLon } from './iss';
 
-interface SatrecCacheEntry {
-  line1: string;
-  line2: string;
-  satrec: SatRec | null;
-}
-
-let cache: SatrecCacheEntry | null = null;
+// Map-keyed (perf audit 2026-06-11): a single-entry cache thrashed during
+// scrub drags whenever non-ISS satellites were selected — tier-2 satellite
+// refreshes evicted the ISS satrec every ~150ms, forcing a twoline2satrec
+// re-parse on the next per-frame marker update. Bounded: one entry per
+// distinct TLE on the map (a handful of birds).
+const cache = new Map<string, SatRec | null>();
 
 /** Parse the TLE shipped on `track.tle` into a satellite.js satrec.
  *  Returns null on malformed input (caller falls back to polynomial only).
@@ -31,9 +30,9 @@ export function parseTLE(tle: { line1: string; line2: string } | undefined): Sat
   if (!tle) return null;
   const line1 = tle.line1.trim();
   const line2 = tle.line2.trim();
-  if (cache && cache.line1 === line1 && cache.line2 === line2) {
-    return cache.satrec;
-  }
+  const key = line1 + '\n' + line2;
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
   let satrec: SatRec | null = null;
   // satellite.js's twoline2satrec is permissive — junk strings of the right
   // length parse to a satrec with error=0 and bogus orbital elements. Match
@@ -47,13 +46,13 @@ export function parseTLE(tle: { line1: string; line2: string } | undefined): Sat
       satrec = null;
     }
   }
-  cache = { line1, line2, satrec };
+  cache.set(key, satrec);
   return satrec;
 }
 
 /** Reset the satrec cache. Test-only helper. */
 export function _resetSatrecCacheForTests(): void {
-  cache = null;
+  cache.clear();
 }
 
 /** Compute live ISS lat/lon at nowMs by SGP4-propagating the track's TLE.
