@@ -242,6 +242,247 @@ STARSHIP = AscentProfile(
     insertion_t_seconds=515,
 )
 
+# ---------------------------------------------------------------------------
+# Coverage wave 2 (2026-06-10). A live audit of the cached LL2 feed showed
+# 5 of 7 distinct upcoming rockets had NO profile (Electron, H3, Kinetica 1,
+# Long March 3B/E, Spectrum) — every such launch silently skips ASCENT
+# prediction. This wave adds the cache-confirmed five plus the high-cadence
+# active families most likely to appear in the feed during the mission.
+# Tables are nominal keyframes from public webcast/press-kit telemetry;
+# confidence runs lower than wave 1 where public data is sparser. The
+# geometry math tolerates ±20% alt/downrange error — sight lines are
+# hundreds of km, so shape matters more than precision.
+# ---------------------------------------------------------------------------
+
+# Electron (Rocket Lab). Highest-cadence smallsat launcher. Tiny vehicle:
+# Max-Q ~T+65s, MECO ~T+150s @ ~70km, SES-1 to ~T+540s. Small plume —
+# apparent-plume-angle scoring will rank it honestly low at long range.
+ELECTRON = AscentProfile(
+    name="Electron",
+    match_keywords=("Electron",),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.90),
+        _s(30, 2.0, 0.2, 87.0, 0.88),
+        _s(65, 10.0, 3.0, 72.0, 0.85),
+        _s(150, 70.0, 55.0, 35.0, 0.80),
+        _s(300, 120.0, 350.0, 12.0, 0.72),
+        _s(540, 200.0, 1100.0, 2.0, 0.62),
+    ),
+    insertion_t_seconds=540,
+)
+
+# H3 (JAXA/MHI). H3-22/24 fly SRB-3 boosters (sep ~T+116s); H3-30 is the
+# all-liquid 3×LE-9 variant. Common keyframes cover both within tolerance.
+# MECO ~T+297s, second-stage to LEO insertion ~T+700s.
+H3 = AscentProfile(
+    name="H3",
+    match_keywords=("H3-", "H3 "),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.80),
+        _s(30, 2.2, 0.3, 87.0, 0.78),
+        _s(80, 13.0, 4.0, 70.0, 0.74),
+        _s(180, 80.0, 110.0, 35.0, 0.70),
+        _s(297, 140.0, 450.0, 12.0, 0.65),
+        _s(700, 220.0, 2100.0, 3.0, 0.55),
+    ),
+    insertion_t_seconds=700,
+)
+
+# Long March 3A/3B/3C (CASC). Hypergolic GTO workhorse from Xichang, four
+# boosters on 3B/3C. Booster sep ~T+140s; the photogenic climb ends with
+# stage-2 ~T+330s; stage-3 burns long and dim toward GTO.
+LONG_MARCH_3 = AscentProfile(
+    name="Long March 3",
+    match_keywords=("Long March 3", "CZ-3"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.80),
+        _s(30, 2.0, 0.3, 87.0, 0.78),
+        _s(75, 12.0, 4.0, 71.0, 0.74),
+        _s(140, 55.0, 45.0, 45.0, 0.70),
+        _s(330, 160.0, 600.0, 10.0, 0.62),
+        _s(800, 210.0, 2600.0, 2.0, 0.50),
+    ),
+    insertion_t_seconds=800,
+)
+
+# Long March 2C/2D/2F (CASC). Two-stage hypergolic LEO family (2F flies
+# crew to Tiangong). Stage sep ~T+160s, insertion ~T+580s.
+LONG_MARCH_2 = AscentProfile(
+    name="Long March 2",
+    match_keywords=("Long March 2", "CZ-2"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.85),
+        _s(30, 2.0, 0.3, 87.0, 0.82),
+        _s(75, 12.0, 4.0, 71.0, 0.78),
+        _s(160, 65.0, 70.0, 40.0, 0.74),
+        _s(330, 140.0, 500.0, 10.0, 0.68),
+        _s(580, 200.0, 1500.0, 2.0, 0.60),
+    ),
+    insertion_t_seconds=580,
+)
+
+# Long March 4B/4C (CASC). Three-stage hypergolic SSO workhorse; climb
+# closely tracks CZ-2 with a third-stage stretch to ~T+700s.
+LONG_MARCH_4 = AscentProfile(
+    name="Long March 4",
+    match_keywords=("Long March 4", "CZ-4"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.80),
+        _s(30, 2.0, 0.3, 87.0, 0.78),
+        _s(75, 12.0, 4.0, 71.0, 0.74),
+        _s(160, 65.0, 70.0, 40.0, 0.70),
+        _s(350, 150.0, 550.0, 10.0, 0.64),
+        _s(700, 210.0, 1900.0, 2.0, 0.55),
+    ),
+    insertion_t_seconds=700,
+)
+
+# Long March 6/6A/6C (CASC). Kerolox small/medium SSO family from Taiyuan;
+# 6A adds four solid boosters (sep ~T+115s). Insertion ~T+650s.
+LONG_MARCH_6 = AscentProfile(
+    name="Long March 6",
+    match_keywords=("Long March 6", "CZ-6"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.78),
+        _s(30, 2.2, 0.3, 87.0, 0.75),
+        _s(80, 13.0, 4.0, 70.0, 0.72),
+        _s(180, 75.0, 100.0, 36.0, 0.66),
+        _s(350, 140.0, 520.0, 10.0, 0.60),
+        _s(650, 200.0, 1700.0, 2.0, 0.52),
+    ),
+    insertion_t_seconds=650,
+)
+
+# Long March 8/8A (CASC). Kerolox medium-lift from Wenchang (coastal —
+# good ocean sight lines). Two boosters, core sep ~T+170s, ~T+700s to SSO.
+LONG_MARCH_8 = AscentProfile(
+    name="Long March 8",
+    match_keywords=("Long March 8", "CZ-8"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.78),
+        _s(30, 2.2, 0.3, 87.0, 0.75),
+        _s(80, 13.0, 4.0, 70.0, 0.72),
+        _s(170, 70.0, 90.0, 38.0, 0.66),
+        _s(350, 145.0, 540.0, 10.0, 0.60),
+        _s(700, 210.0, 1900.0, 2.0, 0.52),
+    ),
+    insertion_t_seconds=700,
+)
+
+# Kinetica 1 / Lijian-1 (CAS Space). Four-stage solid smallsat launcher from
+# Jiuquan. Solids climb FAST: very photogenic early plume, ~T+600s insertion.
+KINETICA_1 = AscentProfile(
+    name="Kinetica 1",
+    match_keywords=("Kinetica", "Lijian"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.72),
+        _s(30, 3.0, 0.4, 86.0, 0.70),
+        _s(70, 18.0, 8.0, 65.0, 0.66),
+        _s(160, 80.0, 110.0, 32.0, 0.60),
+        _s(330, 150.0, 550.0, 8.0, 0.54),
+        _s(600, 210.0, 1500.0, 2.0, 0.46),
+    ),
+    insertion_t_seconds=600,
+)
+
+# Kuaizhou-1A / KZ-11 (ExPace). Road-mobile solid smallsat family. Fast
+# solid climb like Kinetica; insertion ~T+460s.
+KUAIZHOU = AscentProfile(
+    name="Kuaizhou",
+    match_keywords=("Kuaizhou", "KZ-"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.70),
+        _s(30, 3.0, 0.4, 86.0, 0.68),
+        _s(70, 18.0, 8.0, 64.0, 0.64),
+        _s(150, 75.0, 100.0, 32.0, 0.58),
+        _s(300, 140.0, 480.0, 8.0, 0.52),
+        _s(460, 200.0, 1100.0, 2.0, 0.45),
+    ),
+    insertion_t_seconds=460,
+)
+
+# Ceres-1 (Galactic Energy). Four-stage solid smallsat launcher, high
+# Chinese commercial cadence. Profile mirrors the solid-family shape.
+CERES_1 = AscentProfile(
+    name="Ceres-1",
+    match_keywords=("Ceres",),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.70),
+        _s(30, 3.0, 0.4, 86.0, 0.68),
+        _s(70, 17.0, 7.0, 65.0, 0.64),
+        _s(150, 75.0, 95.0, 32.0, 0.58),
+        _s(320, 145.0, 500.0, 8.0, 0.52),
+        _s(500, 200.0, 1200.0, 2.0, 0.45),
+    ),
+    insertion_t_seconds=500,
+)
+
+# PSLV (ISRO). Solid core + 6 strap-ons; alternating solid/liquid stages
+# from Sriharikota. PS1 burnout ~T+110s, insertion ~T+1000s for typical SSO.
+PSLV = AscentProfile(
+    name="PSLV",
+    match_keywords=("PSLV",),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.82),
+        _s(30, 2.5, 0.3, 87.0, 0.80),
+        _s(70, 14.0, 5.0, 68.0, 0.76),
+        _s(180, 90.0, 140.0, 34.0, 0.70),
+        _s(400, 160.0, 700.0, 8.0, 0.62),
+        _s(1000, 230.0, 2900.0, 2.0, 0.50),
+    ),
+    insertion_t_seconds=1000,
+)
+
+# Vega-C (Avio/Arianespace). Three solid stages + AVUM+ from Kourou.
+# P120C burnout ~T+135s; the bright solid climb ends ~T+450s.
+VEGA_C = AscentProfile(
+    name="Vega",
+    match_keywords=("Vega",),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.78),
+        _s(30, 3.0, 0.4, 86.0, 0.75),
+        _s(70, 18.0, 8.0, 64.0, 0.72),
+        _s(135, 70.0, 80.0, 36.0, 0.66),
+        _s(300, 140.0, 460.0, 8.0, 0.58),
+        _s(600, 200.0, 1400.0, 2.0, 0.50),
+    ),
+    insertion_t_seconds=600,
+)
+
+# Spectrum (Isar Aerospace). Two-stage kerolox smallsat launcher from
+# Andøya (polar — high-latitude trajectories the ISS rarely sees, but the
+# tangent-clearance geometry handles that honestly). Sparse flight history:
+# lowest confidence in the table.
+SPECTRUM = AscentProfile(
+    name="Spectrum",
+    match_keywords=("Spectrum",),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.60),
+        _s(30, 2.0, 0.2, 87.0, 0.58),
+        _s(70, 11.0, 3.5, 70.0, 0.55),
+        _s(160, 65.0, 60.0, 36.0, 0.50),
+        _s(320, 130.0, 420.0, 10.0, 0.45),
+        _s(540, 190.0, 1100.0, 2.0, 0.40),
+    ),
+    insertion_t_seconds=540,
+)
+
+# Firefly Alpha. Two-stage kerolox smallsat launcher from Vandenberg.
+# Stage sep ~T+165s, insertion ~T+500s.
+FIREFLY_ALPHA = AscentProfile(
+    name="Firefly Alpha",
+    match_keywords=("Firefly Alpha", "Alpha"),
+    samples=(
+        _s(0, 0.0, 0.0, 90.0, 0.68),
+        _s(30, 2.2, 0.3, 87.0, 0.66),
+        _s(75, 12.0, 4.0, 70.0, 0.62),
+        _s(165, 70.0, 75.0, 36.0, 0.56),
+        _s(320, 135.0, 460.0, 9.0, 0.50),
+        _s(500, 195.0, 1100.0, 2.0, 0.44),
+    ),
+    insertion_t_seconds=500,
+)
+
 
 # Order matters: more-specific keywords go first so "Falcon Heavy" matches
 # FALCON_HEAVY before falling through to FALCON_9's "Falcon" substring.
@@ -257,6 +498,23 @@ ALL_PROFILES: tuple[AscentProfile, ...] = (
     NEW_GLENN,
     ARIANE_6,
     STARSHIP,
+    # Coverage wave 2 (2026-06-10) — see the section comment above.
+    LONG_MARCH_2,
+    LONG_MARCH_3,
+    LONG_MARCH_4,
+    LONG_MARCH_6,
+    LONG_MARCH_8,
+    ELECTRON,
+    H3,
+    KINETICA_1,
+    KUAIZHOU,
+    CERES_1,
+    PSLV,
+    VEGA_C,
+    SPECTRUM,
+    # LAST: "Alpha" is the family name LL2 uses for Firefly — generic enough
+    # that every more-specific profile must get first crack at the haystack.
+    FIREFLY_ALPHA,
 )
 
 
