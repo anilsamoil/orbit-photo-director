@@ -412,13 +412,16 @@ SWPC's `planetary_k_index_1m.json` with 5-min edge cache. No visibility
 math, no oval overlay, no card integration — intentionally minimal v1
 gated on operator feedback before spending the bigger budget on v1.1.
 
-**v1.1 — "Is the aurora visible from ISS right now?" (DEFERRED)**
+**v1.1 — "Is the aurora visible from ISS right now?" — SHIPPED v1.10.0.0 (2026-06-11)**
 
-Wait for Chris's feedback on v1 before starting. If he asks for more than
-the headline number, the design doc at
-`~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-aurora-v1-design-2026-05-13.md`
-covers the architecture decisions. Codex's outside-voice review surfaced
-real correctness requirements that must be in v1.1:
+Shipped with all three Codex requirements honored: `/api/aurora` worker
+route (OVATION → 5° MAX-pooled ~9KB grid, R2 last-good ≤24h degraded
+fallback), 3,600km look-angle cap scan with DUAL sun gating (subpoint +
+per contributing cell at −8°), trust-calibrated copy ("aurora in view"
+≥40% / "aurora nearby" ≥15% — both PROVISIONAL pending Earth-side
+validation), live-aging tooltip + client-side 24h effective-age cap so a
+long-offline tab never strands a stale claim. Note is live-domain during
+time-scrub (4A rule). Original v1.1 requirements kept below for history:
 
 - **Honest visibility math** (not naive ISS-subpoint lookup). ISS sees
   toward the limb hundreds of km, not just nadir. Real visibility test

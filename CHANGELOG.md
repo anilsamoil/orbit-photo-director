@@ -2,6 +2,31 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.10.0.0] - 2026-06-11
+
+## **The Kp badge now answers the real question: is there aurora out the window right now?**
+
+Chris checks SWPC daily, and since v1.7 the topbar has carried the Kp number — but Kp says how disturbed the magnetosphere is, not whether the oval is anywhere near the station. The badge now grows an honest second clause: **"· aurora in view"** when OVATION puts ≥40% probability inside the station's actual sight line, **"· aurora nearby"** for fainter activity, and nothing at all when there's nothing to see. The geometry is real: from 420 km the ISS sees aurora out to a ~3,600 km ground range (tangent to the ~150 km emission layer), so the lookup scans every grid cell within that cap — not just the subpoint — and both the subpoint *and* the contributing cell must be in darkness, because a daylit cell 3,000 km away can't paint anyone's window.
+
+The data path is built to be honest about its own age. A Cloudflare Worker squeezes NOAA's ~900 KB OVATION grid down to ~9 KB at the edge (5° MAX-pooled — a bright filament never gets averaged away), keeps a last-good copy for outages (served flagged "degraded," never silently), and refuses to serve anything older than 24 hours. The client holds the same line: the tooltip's "reading Xm old" ages in real time, and a tab that's been offline through a long outage drops the note entirely rather than display a confident claim from dead data.
+
+### Itemized changes
+
+#### Added
+- **`/api/aurora` worker endpoint**: NOAA OVATION (~900 KB, 65k points) downsampled to a 36×72 5° MAX-pooled grid (~9 KB) with schema validation, an 80% cell-coverage floor against truncated upstream bodies, 5-min edge cache (OVATION's own publish cadence), and R2 last-good fallback (≤24h, `degraded: true`, never edge-cached so recovery is immediate).
+- **Aurora visibility note on the Kp badge**: look-angle cap scan (3,600 km), dual sun gating (subpoint + per contributing cell, −8° threshold inside nautical twilight), trust-calibrated copy (confident wording only ≥40%, hedged ≥15% — both provisional pending Earth-side validation), tooltip with live-aging source timestamp and degraded flag.
+
+#### Changed
+- Kp badge value moved into its own child span so badge re-renders (60s poll) can never destroy the aurora note beside it.
+- The note is intentionally **live-domain** during a time-scrub (4A topbar rule): OVATION is a ~30-min nowcast and cannot answer "+6h" questions.
+
+#### Fixed
+- Failed aurora fetches retry in 60s instead of silently consuming the whole 10-min refresh window (a startup blip during LOS no longer blanks the note for 10 minutes after recovery).
+
+#### Internal
+- One clamped great-circle helper shared across the map (terminator's `greatCircleAngleDeg` exported; aurora reuses pin-drop's `greatCircleKm` instead of carrying a third haversine and a third Earth radius).
+- Ship-review fixes baked in: client-side 24h effective-age cap (flagged independently by four of five reviewers), per-cell daylight gate (Codex adversarial), de-vacuized edge-cache test, exact boundary tests (24h last-good 1440/1441, coverage floor 2074/2073), `/api/aurora` 405 route test. Suites: worker 125, frontend 1102.
+
 ## [1.9.1.0] - 2026-06-11
 
 ## **Fourteen more rockets get a real ascent curve. The ones we don't know stay honestly blank.**
