@@ -10,7 +10,9 @@
  *
  * Codex-folded requirements from the aurora v1 design review (2026-05-13):
  * - Worker downsamples; frontend runs visibility lookups against the
- *   compact grid (LOS resilience: SW cache holds the last response).
+ *   compact grid. LOS resilience = the frontend's in-memory last-good
+ *   grid (capped at this module's 24h policy) on top of the R2 last-good
+ *   below; there is intentionally NO service-worker cache for /api/*.
  * - Durable last-good storage beyond the edge cache: the CALIB R2 bucket
  *   (already bound for /api/log) keeps the latest good grid; cold-colo +
  *   SWPC-outage serves it flagged `degraded: true`.
@@ -27,6 +29,8 @@
 export const SWPC_OVATION_URL =
   'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json';
 
+// 300s ≈ OVATION's own publish cadence (~5min product updates) — a
+// fresher edge TTL buys nothing; a longer one delays storm onset.
 const EDGE_CACHE_TTL_SECONDS = 300;
 
 export const AURORA_GRID_STEP_DEG = 5;
@@ -34,8 +38,11 @@ export const AURORA_LAT_BINS = 36; // index 0 = [-90, -85)
 export const AURORA_LON_BINS = 72; // index 0 = [0°E, 5°E)
 
 const LAST_GOOD_KEY = 'aurora/ovation-last-good.json';
-/** Serve last-good for at most this long; beyond it, stale aurora data is
- *  worse than an honest 502 (the oval moves with the solar wind). */
+/** Serve last-good for at most this long. The oval moves with the solar
+ *  wind on a scale of hours, so 24h data is NOT a current nowcast — what
+ *  makes 24h defensible is that every consumer sees `degraded: true` plus
+ *  the true source age in the tooltip, and same-UT-of-day oval geometry
+ *  is at least the right shape. Beyond that, an honest 502 wins. */
 const LAST_GOOD_MAX_AGE_MIN = 24 * 60;
 /** Reject downsamples where fewer than this fraction of grid cells were
  *  populated — a truncated upstream body would otherwise look like a
@@ -174,8 +181,20 @@ export async function handleAuroraRequest(
         ...corsHeaders(),
       },
     });
-    if (cache) ctx.waitUntil(cache.put(cacheKey, response.clone()));
-    if (env.CALIB) ctx.waitUntil(env.CALIB.put(LAST_GOOD_KEY, body));
+    // Both writes are best-effort: a failed put must neither fail the
+    // request nor surface as an unhandled rejection — but it MUST be
+    // visible in wrangler tail (a silently dead R2 write means no durable
+    // fallback for the next outage).
+    if (cache) {
+      ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(
+        (err) => console.warn('[aurora] edge cache put failed:', (err as Error)?.message ?? err),
+      ));
+    }
+    if (env.CALIB) {
+      ctx.waitUntil(Promise.resolve(env.CALIB.put(LAST_GOOD_KEY, body)).catch(
+        (err) => console.warn('[aurora] R2 last-good put failed:', (err as Error)?.message ?? err),
+      ));
+    }
     return response;
   }
 

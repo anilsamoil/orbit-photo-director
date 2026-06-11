@@ -126,6 +126,22 @@ describe('downsampleOvation', () => {
     ).toBeNull();
   });
 
+  it('cell-coverage floor sits exactly at 80% of bins (2074 in, 2073 out)', () => {
+    // One row per distinct 5° cell center: k cells touched out of 2592.
+    // floor = 36*72*0.8 = 2073.6 → 2074 cells pass, 2073 fail.
+    const cells = (k: number): Record<string, unknown> => ({
+      'Observation Time': '2026-06-11T04:16:00Z',
+      'Forecast Time': '2026-06-11T05:22:00Z',
+      coordinates: Array.from({ length: k }, (_, i) => [
+        (i % 72) * 5 + 2.5,
+        Math.floor(i / 72) * 5 - 87.5,
+        0,
+      ]),
+    });
+    expect(downsampleOvation(cells(2074), NOW)).not.toBeNull();
+    expect(downsampleOvation(cells(2073), NOW)).toBeNull();
+  });
+
   it('rejects truncated payloads via the cell-coverage floor', () => {
     // Only ~100 of 65k rows present → far below 80% cell coverage.
     const coords = Array.from({ length: 100 }, (_, i) => [i, 0, 5]);
@@ -166,11 +182,15 @@ describe('handleAuroraRequest', () => {
     expect(body.probs[31]![2]).toBe(60);
     expect(body.degraded).toBeUndefined();
     expect(r2.store.has('aurora/ovation-last-good.json')).toBe(true);
-    // Second call: served from edge cache (fetch would explode if called)
+    // Second call: must come from the EDGE CACHE. Dead fetch AND no CALIB
+    // binding — if edge caching were broken this would 502; a non-degraded
+    // 200 can only be the cached response (the old assertion accepted the
+    // R2 degraded fallback and could never fail — ship review 2026-06-11).
     const res2 = await handleAuroraRequest(
-      req(), { CALIB: r2 }, ctx, deadFetch, cache as unknown as Cache, NOW,
+      req(), {}, ctx, deadFetch, cache as unknown as Cache, NOW,
     );
     expect(res2.status).toBe(200);
+    expect(((await res2.json()) as AuroraGridResponse).degraded).toBeUndefined();
   });
 
   it('upstream down → R2 last-good served degraded with recomputed age, uncached', async () => {
@@ -205,6 +225,29 @@ describe('handleAuroraRequest', () => {
       req(), { CALIB: r2 }, ctx, deadFetch, cache as unknown as Cache, NOW,
     );
     expect(res.status).toBe(502);
+  });
+
+  it('last-good boundary: exactly 24h serves degraded; one minute past → 502', async () => {
+    const mk = (obs: string): string => JSON.stringify({
+      observation_time: obs,
+      forecast_time: obs,
+      age_min: 5,
+      grid_step: 5,
+      probs: [[1]],
+    } satisfies AuroraGridResponse);
+    // NOW = 2026-06-11T05:00Z. Exactly 1440 min old → still served (<=).
+    r2.store.set('aurora/ovation-last-good.json', mk('2026-06-10T05:00:00Z'));
+    const atCap = await handleAuroraRequest(
+      req(), { CALIB: r2 }, ctx, deadFetch, cache as unknown as Cache, NOW,
+    );
+    expect(atCap.status).toBe(200);
+    expect(((await atCap.json()) as AuroraGridResponse).age_min).toBe(1440);
+    // 1441 min old → honest 502.
+    r2.store.set('aurora/ovation-last-good.json', mk('2026-06-10T04:59:00Z'));
+    const pastCap = await handleAuroraRequest(
+      req(), { CALIB: r2 }, ctx, deadFetch, cache as unknown as Cache, NOW,
+    );
+    expect(pastCap.status).toBe(502);
   });
 
   it('upstream down + nothing stored → 502', async () => {

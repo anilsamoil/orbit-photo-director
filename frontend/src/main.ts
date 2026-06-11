@@ -268,8 +268,16 @@ async function doRefresh(): Promise<void> {
         // assessment re-runs against the LIVE subpoint on every refresh.
         // Only meaningful when the Kp badge itself rendered (kp non-null).
         if (kp) {
+          // INTENTIONALLY live even while time-scrubbed (4A live-domain
+          // rule, same as the topbar): OVATION is a ~30min nowcast — it
+          // cannot answer "+6h" questions, so the note always describes
+          // NOW at the live subpoint. Do not "fix" this to follow
+          // viewTimeMs; that would ship dishonest output.
           const pos = currentTrack ? liveIssNow(currentTrack, Date.now()) : null;
-          void refreshAuroraVisibility(pos, widget);
+          refreshAuroraVisibility(pos, widget).catch(() => {
+            // The aurora note is optional garnish — a failure here must
+            // never take the Kp badge (or the poll loop) down with it.
+          });
         }
       }
     });

@@ -5,7 +5,8 @@
  * - fetchKpData: happy path, 5xx, malformed JSON, network error → all null
  * - kpToColorClass: every Kp threshold boundary
  * - renderKpWidget: null state hides; valid state renders + applies class +
- *   tooltip; tooltip age format switches at 60min boundary
+ *   tooltip; tooltip age format switches at 60min boundary; the Kp value
+ *   lives in a .kp-value child span so re-renders preserve the aurora note
  * - initKpWidget: click and keyboard activation open SWPC dashboard
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -216,6 +217,21 @@ function gridWith(hot: Array<[lat: number, lon: number, prob: number]>): AuroraG
 }
 
 describe('fetchAuroraGrid', () => {
+  it('reconstructs fields explicitly: defaults for grid_step/degraded drift', async () => {
+    const base = gridWith([]);
+    const sparse = {
+      observation_time: base.observation_time,
+      age_min: 12,
+      probs: base.probs,
+      // no grid_step, no degraded, no forecast_time
+    };
+    const okFetch = (async () => new Response(JSON.stringify(sparse))) as typeof fetch;
+    const grid = await fetchAuroraGrid(okFetch);
+    expect(grid).not.toBeNull();
+    expect(grid!.grid_step).toBe(5);
+    expect(grid!.degraded).toBe(false);
+  });
+
   it('parses a valid response and rejects malformed ones', async () => {
     const good = gridWith([]);
     const okFetch = (async () => new Response(JSON.stringify(good))) as typeof fetch;
@@ -285,8 +301,42 @@ describe('assessAuroraVisibility', () => {
     expect(assessAuroraVisibility(dark, spot.lat, spot.lon, whenNoon).state).toBe('none');
   });
 
-  it('sanity: the daylit threshold is below the horizon (twilight-aware)', () => {
-    expect(AURORA_DAYLIT_SUN_ELEV_DEG).toBeLessThan(0);
+  it('daylit threshold stays inside nautical twilight (recalibration guard)', () => {
+    // The comment justifies −8° as "inside nautical twilight, biased toward
+    // suppression" — pin the band so a future recalibration outside
+    // civil (−6) … nautical (−12) has to update the rationale too.
+    expect(AURORA_DAYLIT_SUN_ELEV_DEG).toBeLessThan(-6);
+    expect(AURORA_DAYLIT_SUN_ELEV_DEG).toBeGreaterThan(-12);
+  });
+
+  it('per-cell sun gate: a daylit hot cell on the cap rim cannot fire past a dark nadir', () => {
+    // Geometry built relative to the real subsolar point so the scenario
+    // is exact: ISS on the equator 105° of longitude from the sun (nadir
+    // dark, ≈ −14°); one hot cell sunward at +77.5° (daylit, ≈ +12°), one
+    // anti-sunward at +132.5° (dark, ≈ −40°). Both cells sit ~27.5° from
+    // the ISS — inside the 3,600km cap with margin for cell-center snap.
+    const when = new Date('2026-06-11T12:00:00Z');
+    const sub = subsolarPoint(when);
+    const signed = (x: number): number => ((x + 540) % 360) - 180;
+    const issLon = signed(sub.lon + 105);
+    const daylitCellLon = signed(sub.lon + 77.5);
+    const darkCellLon = signed(sub.lon + 132.5);
+    // Preconditions, asserted so drift fails loudly:
+    expect(sunElevationDeg(0, issLon, when)).toBeLessThan(AURORA_DAYLIT_SUN_ELEV_DEG);
+    expect(sunElevationDeg(0, daylitCellLon, when)).toBeGreaterThan(AURORA_DAYLIT_SUN_ELEV_DEG);
+    expect(sunElevationDeg(0, darkCellLon, when)).toBeLessThan(AURORA_DAYLIT_SUN_ELEV_DEG);
+
+    const daylitGrid = gridWith([[0, daylitCellLon, 90]]);
+    // Pure geometry (no `when`): the cell IS inside the cap…
+    expect(maxAuroraNearIss(daylitGrid, 0, issLon)).toBe(90);
+    // …but with the sun gate it cannot contribute,
+    expect(maxAuroraNearIss(daylitGrid, 0, issLon, when)).toBe(0);
+    // and end-to-end the operator never sees a confident false positive.
+    expect(assessAuroraVisibility(daylitGrid, 0, issLon, when).state).toBe('none');
+
+    const darkGrid = gridWith([[0, darkCellLon, 90]]);
+    expect(maxAuroraNearIss(darkGrid, 0, issLon, when)).toBe(90);
+    expect(assessAuroraVisibility(darkGrid, 0, issLon, when).state).toBe('in-view');
   });
 });
 
@@ -322,12 +372,21 @@ describe('renderAuroraVisibility (trust-calibrated copy)', () => {
   });
 });
 
-describe('refreshAuroraVisibility (rate-limit gate)', () => {
+/** High-lat point on the night side at `when`: antipode of the subsolar
+ *  point, nudged north into plausible aurora latitudes (same construction
+ *  as assessAuroraVisibility's nightSpot). */
+function nightSpotAt(when: Date): { lat: number; lon: number } {
+  const sub = subsolarPoint(when);
+  const lon = sub.lon > 0 ? sub.lon - 180 : sub.lon + 180;
+  return { lat: Math.min(65, -sub.lat + 40), lon };
+}
+
+describe('refreshAuroraVisibility (rate-limit gate + staleness honesty)', () => {
   beforeEach(() => {
     _resetAuroraStateForTest();
   });
 
-  it('fetches at most once per 10 minutes; re-assesses against the live position', async () => {
+  it('fetches at most once per 10 minutes after a success', async () => {
     let fetches = 0;
     const spot = { lat: 65, lon: 0 };
     const grid = gridWith([[70, 0, 80]]);
@@ -336,12 +395,113 @@ describe('refreshAuroraVisibility (rate-limit gate)', () => {
       return new Response(JSON.stringify(grid));
     }) as typeof fetch;
     const widget = document.createElement('div');
-    const t0 = Date.parse('2026-06-11T05:00:00Z'); // subpoint dark at 0°E? assessment not asserted here
+    const t0 = Date.parse('2026-06-11T05:00:00Z');
     await refreshAuroraVisibility(spot, widget, counting, t0);
     await refreshAuroraVisibility(spot, widget, counting, t0 + 60_000);
     expect(fetches).toBe(1); // second call inside the 10-min window
     await refreshAuroraVisibility(spot, widget, counting, t0 + 11 * 60_000);
     expect(fetches).toBe(2);
+  });
+
+  it('a failed fetch does not consume the 10-min window (60s retry)', async () => {
+    let fetches = 0;
+    let healthy = false;
+    const t0 = Date.parse('2026-06-11T12:00:00Z');
+    const spot = nightSpotAt(new Date(t0));
+    const grid = gridWith([[spot.lat + 5, spot.lon, 80]]);
+    const flaky = (async () => {
+      fetches += 1;
+      if (!healthy) throw new Error('LOS');
+      return new Response(JSON.stringify(grid));
+    }) as typeof fetch;
+    const widget = document.createElement('div');
+    await refreshAuroraVisibility(spot, widget, flaky, t0);
+    expect(fetches).toBe(1);
+    expect(widget.querySelector('.kp-aurora-note')).toBeNull();
+    healthy = true;
+    // 61s after the FAILURE the gate reopens (not 10 minutes later)…
+    await refreshAuroraVisibility(spot, widget, flaky, t0 + 61_000);
+    expect(fetches).toBe(2);
+    expect(widget.querySelector('.kp-aurora-note')).not.toBeNull();
+    // …and after a success the full 10-min gate applies again.
+    await refreshAuroraVisibility(spot, widget, flaky, t0 + 121_000);
+    expect(fetches).toBe(2);
+  });
+
+  it('re-assesses the cached grid against the live position between fetches', async () => {
+    let fetches = 0;
+    const t0 = Date.parse('2026-06-11T12:00:00Z');
+    const when0 = new Date(t0);
+    const near = nightSpotAt(when0);
+    const grid = gridWith([[near.lat + 5, near.lon, 80]]);
+    const counting = (async () => {
+      fetches += 1;
+      return new Response(JSON.stringify(grid));
+    }) as typeof fetch;
+    const widget = document.createElement('div');
+    await refreshAuroraVisibility(near, widget, counting, t0);
+    expect(widget.querySelector('.kp-aurora-note')).not.toBeNull();
+    // 5 min later (inside the window — no fetch) the ISS has moved to the
+    // dark southern ocean far from the oval: the note must flip OFF from
+    // the CACHED grid. Catches "cached the assessment instead of the grid".
+    const far = { lat: -40, lon: near.lon };
+    expect(sunElevationDeg(far.lat, far.lon, new Date(t0 + 5 * 60_000)))
+      .toBeLessThan(AURORA_DAYLIT_SUN_ELEV_DEG);
+    await refreshAuroraVisibility(far, widget, counting, t0 + 5 * 60_000);
+    expect(fetches).toBe(1);
+    expect(widget.querySelector('.kp-aurora-note')).toBeNull();
+  });
+
+  it('recomputes the displayed age while holding a grid, and drops it past 24h', async () => {
+    let healthy = true;
+    const t0 = Date.parse('2026-06-11T12:00:00Z');
+    const spot = nightSpotAt(new Date(t0));
+    const grid = gridWith([[spot.lat + 5, spot.lon, 80]]); // age_min: 12
+    const flaky = (async () => {
+      if (!healthy) throw new Error('SWPC outage');
+      return new Response(JSON.stringify(grid));
+    }) as typeof fetch;
+    const widget = document.createElement('div');
+    await refreshAuroraVisibility(spot, widget, flaky, t0);
+    expect(widget.querySelector<HTMLElement>('.kp-aurora-note')!.title).toContain('12m old');
+    // Outage begins. Two hours in: note survives on the last-good grid but
+    // the tooltip ages honestly (12m at fetch + 120m held = 2h 12m).
+    healthy = false;
+    const spot2h = nightSpotAt(new Date(t0 + 2 * 3_600_000));
+    await refreshAuroraVisibility(spot2h, widget, flaky, t0 + 2 * 3_600_000);
+    expect(widget.querySelector<HTMLElement>('.kp-aurora-note')!.title).toContain('2h 12m old');
+    // 25 hours in: effective source age passed 24h — the grid dies and the
+    // note disappears, mirroring the worker's own last-good cap. Without
+    // this a long-lived tab strands "aurora in view" on dead data.
+    const spot25h = nightSpotAt(new Date(t0 + 25 * 3_600_000));
+    await refreshAuroraVisibility(spot25h, widget, flaky, t0 + 25 * 3_600_000);
+    expect(widget.querySelector('.kp-aurora-note')).toBeNull();
+    // Recovery: the next successful fetch restores the note with fresh age.
+    healthy = true;
+    await refreshAuroraVisibility(spot25h, widget, flaky, t0 + 25 * 3_600_000 + 61_000);
+    expect(widget.querySelector<HTMLElement>('.kp-aurora-note')!.title).toContain('12m old');
+  });
+
+  it('the aurora note survives Kp badge re-renders (value-span contract)', async () => {
+    const t0 = Date.parse('2026-06-11T12:00:00Z');
+    const spot = nightSpotAt(new Date(t0));
+    const grid = gridWith([[spot.lat + 5, spot.lon, 80]]);
+    const okFetch = (async () => new Response(JSON.stringify(grid))) as typeof fetch;
+    const widget = document.createElement('div');
+    renderKpWidget({ kp: 5.0, timestamp: 'x', age_min: 3 }, widget);
+    await refreshAuroraVisibility(spot, widget, okFetch, t0);
+    expect(widget.querySelector('.kp-aurora-note')).not.toBeNull();
+    // The 60s poll re-renders the badge; before the value-span fix this
+    // wiped the note until the next aurora refresh re-appended it.
+    renderKpWidget({ kp: 5.3, timestamp: 'x', age_min: 1 }, widget);
+    renderKpWidget({ kp: 5.3, timestamp: 'x', age_min: 1 }, widget);
+    renderKpWidget({ kp: 6.1, timestamp: 'x', age_min: 0 }, widget);
+    expect(widget.querySelectorAll('.kp-aurora-note').length).toBe(1);
+    expect(widget.querySelector<HTMLElement>('.kp-value')!.textContent).toBe('Kp 6.1');
+    expect(widget.textContent).toContain('· aurora in view');
+    // Null state still wipes everything: a hidden widget carries no claims.
+    renderKpWidget(null, widget);
+    expect(widget.querySelector('.kp-aurora-note')).toBeNull();
   });
 
   it('clears the note when no position is available', async () => {
