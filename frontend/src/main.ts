@@ -161,6 +161,7 @@ async function doRefresh(): Promise<void> {
     currentTop24h = top24h;
     currentTrack = track;
     currentStatus = status ?? null;
+    renderPendingMapPane();
 
     // Disambiguate "stale data" → offline (LOS) vs genuine generator lag.
     // fetchManifest can SUCCEED while offline because the SW serves the last
@@ -958,7 +959,12 @@ function bindTabs(): void {
   tabQueue.addEventListener('click', () => setActive('view-queue', tabQueue));
   tabUpcoming.addEventListener('click', () => setActive('view-upcoming', tabUpcoming));
   tabMap.addEventListener('click', () => {
-    void loadMapPane();
+    loadMapPane().catch((err) => {
+      // A failed lazy import (LOS mid-chunk-download) must not be a silent
+      // black pane — log it; the next tab click retries the import.
+      console.error('[map] map pane failed to load:', err);
+      mapModule = null; // force re-import on next attempt
+    });
     setActive('view-map', tabMap);
   });
   if (tabProfile) {
@@ -1155,9 +1161,20 @@ export function openTokenModal(hasToken: boolean): Promise<string | null> {
 }
 
 let mapModule: typeof import('./map') | null = null;
+/** Set when the operator opened the Map tab BEFORE the first manifest
+ *  landed (slow uplink / LOS — exactly the station's network). doRefresh
+ *  consumes it to render the pane the moment data arrives. Without this,
+ *  loadMapPane's early return left a permanently black map until the
+ *  operator happened to re-click the tab (found by the iPad QA loop,
+ *  2026-06-11: reproduced on live in WebKit + Chromium, desktop + iPad). */
+let mapPaneWaitingForManifest = false;
 
 async function loadMapPane(): Promise<void> {
-  if (!currentManifest) return;
+  if (!currentManifest) {
+    mapPaneWaitingForManifest = true;
+    return;
+  }
+  mapPaneWaitingForManifest = false;
   if (!mapModule) {
     mapModule = await import('./map');
   }
@@ -1166,6 +1183,22 @@ async function loadMapPane(): Promise<void> {
   // The container starts hidden (display: none) so the canvas was 0×0 at init.
   // Defer one frame so the browser reflows the now-visible container first.
   requestAnimationFrame(() => mapModule!.resizeMap());
+}
+
+/** Render the Map pane that a pre-manifest tab click asked for. Called by
+ *  doRefresh after currentManifest is set. Only renders while the Map view
+ *  is still active — if the operator navigated away, the flag is cleared
+ *  and the normal tab-click path takes over on their next visit. */
+function renderPendingMapPane(): void {
+  if (!mapPaneWaitingForManifest) return;
+  if (document.getElementById('view')?.className !== 'view-map') {
+    mapPaneWaitingForManifest = false;
+    return;
+  }
+  loadMapPane().catch((err) => {
+    console.error('[map] deferred map pane render failed:', err);
+    mapModule = null;
+  });
 }
 
 /** Selected profile for this page load. Resolved from the URL before any
