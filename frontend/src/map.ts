@@ -471,6 +471,7 @@ export function _resetMapStateForTest(): void {
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
   _resetViirsFallbackForTest();
+  _resetScrubTierStateForTest();
 }
 
 /** GIBS true-color tile URL pattern. {date} is replaced per render. Daily layer
@@ -1905,6 +1906,98 @@ function updateTimeStepLabels(): void {
  *  tests all drive this one function, so the controls can never disagree
  *  about what a time change refreshes.
  */
+// ── Scrub-drag tiered refresh (7A) ──────────────────────────────────────
+// Activated by Jack's iPad report (2026-06-11): "super stutters... jumps
+// different amounts... sun or weather up makes the picture even more
+// corrupted as the data can't keep up." Every coalesced drag frame was
+// running two satellite SGP4 refreshes + full ground-track, targets, and
+// terminator GeoJSON rebuilds + setData — far past the iPad frame budget.
+// Tier 1 (every frame): view-time pin, ISS marker, readout — what the
+// finger is steering. Tier 2 (throttled to SCRUB_TIER2_THROTTLE_MS,
+// trailing-flushed on release): everything else. The release path and all
+// non-drag callers (steppers, snap-to-live, tests) are unchanged inline.
+const SCRUB_TIER2_THROTTLE_MS = 150;
+let scrubTier2Timer: ReturnType<typeof setTimeout> | null = null;
+let scrubTier2LastRunMs = 0;
+let scrubTier2Pending = false;
+
+let scrubTier2RunCount = 0; // test observability — counts REAL tier-2 runs
+
+function runScrubTier2(): void {
+  scrubTier2LastRunMs = Date.now();
+  scrubTier2Pending = false;
+  scrubTier2RunCount += 1;
+  // Each refresher is isolated (adversarial F5, 2026-06-11): pre-throttle,
+  // a throw here retried on the next 16ms frame; now the retry would be
+  // the next user action, so one bad surface must not strand the rest
+  // ~150ms in the past. Same posture as the 60s satellite ticker.
+  const safely = (fn: () => void): void => {
+    try { fn(); } catch { /* surface isolated — others still refresh */ }
+  };
+  safely(refreshSatelliteTracks);
+  safely(refreshSatelliteMarkers);
+  safely(refreshForecastCloudLayer);
+  safely(refreshImageryDateBadgeForView);
+  const isLive = viewTimeMs === null;
+  document.querySelectorAll<HTMLButtonElement>('.time-step-btn').forEach((b) => {
+    b.classList.toggle('active', b.id === 'time-now' && isLive);
+  });
+  if (currentTrack) {
+    const track = currentTrack;
+    safely(() => refreshGroundTrackSource(track));
+    safely(refreshTargetsSource);
+    safely(refreshTerminatorSources);
+  }
+}
+
+function scheduleScrubTier2(): void {
+  // Math.max guards an NTP step-back mid-drag (adversarial F6): a negative
+  // elapsed would otherwise arm a minutes-long trailing timer.
+  const since = Math.max(0, Date.now() - scrubTier2LastRunMs);
+  if (since >= SCRUB_TIER2_THROTTLE_MS) {
+    runScrubTier2();
+    return;
+  }
+  scrubTier2Pending = true;
+  if (scrubTier2Timer === null) {
+    scrubTier2Timer = setTimeout(() => {
+      scrubTier2Timer = null;
+      if (scrubTier2Pending) runScrubTier2();
+    }, SCRUB_TIER2_THROTTLE_MS - since);
+  }
+}
+
+/** Run any deferred tier-2 work NOW (drag release / cancel / blur). The
+ *  'change' event's same-instant guard can skip the full refresh path
+ *  entirely, so without this flush a drag could end with the terminator,
+ *  pins, and satellites frozen ~150ms in the past — permanently. */
+function flushScrubTier2(): void {
+  if (scrubTier2Timer !== null) {
+    clearTimeout(scrubTier2Timer);
+    scrubTier2Timer = null;
+  }
+  if (scrubTier2Pending) runScrubTier2();
+}
+
+/** Test-only: reset throttle state between vitest runs. */
+export function _resetScrubTierStateForTest(): void {
+  if (scrubTier2Timer !== null) clearTimeout(scrubTier2Timer);
+  scrubTier2Timer = null;
+  scrubTier2LastRunMs = 0;
+  scrubTier2Pending = false;
+  scrubTier2RunCount = 0;
+}
+
+/** Test-only: how many times tier 2 actually ran. */
+export function _getScrubTier2RunCountForTest(): number {
+  return scrubTier2RunCount;
+}
+
+/** Test-only: whether a trailing tier-2 timer is currently armed. */
+export function _isScrubTier2TimerArmedForTest(): boolean {
+  return scrubTier2Timer !== null;
+}
+
 export function setLookahead(newMinutes: number, recenter: boolean): void {
   const clamped = clampLookahead(newMinutes);
   if (clamped === 0 && viewTimeMs === null) {
@@ -1938,6 +2031,23 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   }
   // 0 = return to live mode; >0 = pin the view to an ABSOLUTE instant (T1).
   viewTimeMs = clamped === 0 ? null : Date.now() + clamped * 60_000;
+  // Drag fast path (7A): per-frame work is only what the finger steers —
+  // marker + readout. The heavy surface refreshes ride the tier-2
+  // throttle and are flushed on release. The slider's own listeners never
+  // pass recenter=true mid-drag ('input' passes false; 'change' fires
+  // after pointerup) — but a second-finger STEPPER tap mid-drag does
+  // (adversarial F2, 2026-06-11), so a recenter request always takes the
+  // full inline path: the ease and an immediate full refresh are exactly
+  // what that tap is asking for.
+  if (sliderDragging && !recenter) {
+    if (currentTrack && map && issMarker) {
+      const pos = markerPositionFor(currentTrack);
+      if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
+    }
+    scheduleScrubTier2();
+    updateTimeStepLabels();
+    return;
+  }
   // One-clock surface (4A): satellite markers + track windows follow the
   // view time with everything else. Both no-op until the map exists; live
   // 1Hz ticking resumes via the tickSatelliteMarkers gate at Now.
@@ -2020,19 +2130,30 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   slider.addEventListener('pointerdown', () => { sliderDragging = true; });
   slider.addEventListener('pointerup', () => {
     sliderDragging = false;
-    // Run the frame swap deferred during the drag (the release's
+    // Settle deferred tier-2 work first (terminator/pins/satellites/track),
+    // then the frame swap deferred during the drag (the release's
     // same-instant guard can skip the full refresh path entirely).
+    flushScrubTier2();
     refreshForecastCloudLayer();
   });
   slider.addEventListener('pointercancel', () => {
     sliderDragging = false;
+    flushScrubTier2();
     refreshForecastCloudLayer();
   });
   // Belt-and-braces (Codex adversarial 2026-06-10): a drag that loses
   // pointer capture without a pointerup on the element (page blur, OS
   // gesture swallowing the release) must not leave the sync suppressed
   // forever. Bound once — sliderBound guards re-binding.
-  window.addEventListener('blur', () => { sliderDragging = false; });
+  window.addEventListener('blur', () => {
+    sliderDragging = false;
+    flushScrubTier2();
+    // Mirror pointerup (adversarial F3): the leading tier-2 run during the
+    // drag deferred its forecast frame swap (visibility-only while
+    // dragging); without this, a blur-ended drag leaves the fcst raster on
+    // the pre-drag frame while every other surface shows the final time.
+    refreshForecastCloudLayer();
+  });
   // Drag: rAF-coalesced full refresh; never recenter under the finger.
   slider.addEventListener('input', rafCoalesce(() => applyFromSlider(false), raf));
   // Release (or keyboard commit): one recenter ease onto the marker.

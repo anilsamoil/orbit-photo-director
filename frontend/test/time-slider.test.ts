@@ -14,7 +14,10 @@ import {
   _getViewTimeMsForTest,
   _resetMapStateForTest,
   _setCurrentTrackForTest,
+  _getScrubTier2RunCountForTest,
+  _isScrubTier2TimerArmedForTest,
   bindTimeSlider,
+  ensureImageryDateBadge,
   formatViewTimeReadout,
   rafCoalesce,
   setLookahead,
@@ -282,5 +285,162 @@ describe('slider binding (eng-review 1C/7A)', () => {
       setLookahead(360, false);
       expect(readout().classList.contains('time-slider-stale')).toBe(false);
     });
+  });
+});
+
+describe('scrub-drag tiered refresh (7A — Jack iPad stutter report 2026-06-11)', () => {
+  let frames: Array<() => void>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-10T12:00:00Z'));
+    document.body.innerHTML = SLIDER_HTML;
+    _resetMapStateForTest();
+    frames = [];
+    bindTimeSlider((cb) => frames.push(cb));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  const slider = (): HTMLInputElement =>
+    document.getElementById('time-slider') as HTMLInputElement;
+  const readout = (): HTMLElement =>
+    document.getElementById('time-slider-readout') as HTMLElement;
+  const drainFrames = (): void => {
+    while (frames.length) frames.shift()!();
+  };
+  const dragFrame = (value: string): void => {
+    slider().value = value;
+    slider().dispatchEvent(new Event('input'));
+    drainFrames();
+  };
+
+  it('a rapid drag burst runs tier 2 ONCE (leading), not once per frame', () => {
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('15'); // leading tier-2 run
+    dragFrame('30');
+    dragFrame('45');
+    dragFrame('60'); // all within the 150ms window
+    expect(_getScrubTier2RunCountForTest()).toBe(1);
+    // ...but the view time itself was pinned on EVERY frame (tier 1).
+    expect(_getViewTimeMsForTest()).toBe(Date.parse('2026-06-10T13:00:00Z'));
+  });
+
+  it('tier 2 runs again once the throttle window elapses mid-drag', () => {
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('15');
+    expect(_getScrubTier2RunCountForTest()).toBe(1);
+    vi.setSystemTime(new Date('2026-06-10T12:00:00.200Z')); // >150ms later
+    dragFrame('30');
+    expect(_getScrubTier2RunCountForTest()).toBe(2);
+  });
+
+  it('a deferred tier-2 run fires via the trailing timer if the finger pauses', () => {
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('15'); // leading run at t=0
+    vi.advanceTimersByTime(50);
+    dragFrame('30'); // inside window → pending
+    expect(_getScrubTier2RunCountForTest()).toBe(1);
+    vi.advanceTimersByTime(150); // trailing timer fires
+    expect(_getScrubTier2RunCountForTest()).toBe(2);
+  });
+
+  it('release flushes pending tier-2 work IMMEDIATELY (no 150ms settle lag)', () => {
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('15');
+    vi.advanceTimersByTime(50);
+    dragFrame('45'); // pending
+    expect(_getScrubTier2RunCountForTest()).toBe(1);
+    slider().dispatchEvent(new Event('pointerup'));
+    // No timer advance — the flush is synchronous on release. This matters
+    // because the 'change' event's same-instant guard can skip the full
+    // refresh path entirely; without the flush the terminator/pins/
+    // satellites would stay frozen ~150ms in the past after the drag.
+    expect(_getScrubTier2RunCountForTest()).toBe(2);
+    slider().dispatchEvent(new Event('change'));
+    // Pin epoch reflects the drag frame at +50ms (fake clock advanced).
+    expect(_getViewTimeMsForTest()).toBe(Date.parse('2026-06-10T12:45:00Z') + 50);
+  });
+
+  it('pointercancel and window blur also flush pending tier-2 work', () => {
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('15');
+    vi.advanceTimersByTime(50);
+    dragFrame('30'); // pending
+    slider().dispatchEvent(new Event('pointercancel'));
+    expect(_getScrubTier2RunCountForTest()).toBe(2);
+
+    // Second drag interrupted by page blur (OS gesture ate the pointerup).
+    slider().dispatchEvent(new Event('pointerdown'));
+    vi.setSystemTime(new Date('2026-06-10T12:00:01Z'));
+    dragFrame('60');
+    vi.advanceTimersByTime(50);
+    dragFrame('75'); // pending
+    window.dispatchEvent(new Event('blur'));
+    expect(_getScrubTier2RunCountForTest()).toBe(4);
+  });
+
+  it('the readout updates on EVERY drag frame even while tier 2 is throttled', () => {
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('60');
+    const first = readout().textContent;
+    dragFrame('120'); // same throttle window — tier 2 deferred
+    expect(_getScrubTier2RunCountForTest()).toBe(1);
+    expect(readout().textContent).not.toBe(first); // tier 1 kept pace
+  });
+
+  it('non-drag callers (steppers/snap-to-live) never enter the tiered path', () => {
+    // No pointerdown — sliderDragging is false; setLookahead runs the full
+    // inline path which does NOT increment the tier-2 counter.
+    setLookahead(45, false);
+    setLookahead(90, false);
+    expect(_getScrubTier2RunCountForTest()).toBe(0);
+  });
+
+  it('a stale trailing timer after release cannot double-run tier 2', () => {
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('15');
+    vi.advanceTimersByTime(50);
+    dragFrame('30'); // pending + trailing timer armed
+    expect(_isScrubTier2TimerArmedForTest()).toBe(true);
+    slider().dispatchEvent(new Event('pointerup')); // flush cancels the timer
+    // The HANDLE must be cleared, not merely masked by the pending flag —
+    // an orphaned callback nulls scrubTier2Timer and can clobber a newly
+    // armed timer during a rapid double-drag (adversarial F4 2026-06-11).
+    expect(_isScrubTier2TimerArmedForTest()).toBe(false);
+    const after = _getScrubTier2RunCountForTest();
+    vi.advanceTimersByTime(500); // would fire the stale timer if not cancelled
+    expect(_getScrubTier2RunCountForTest()).toBe(after);
+  });
+
+  it('settle runs REAL tier-2 payload with the FINAL view state (not just the counter)', () => {
+    // Adversarial F1 (2026-06-11): the run-counter tests alone stay green
+    // if the refresh calls are deleted from runScrubTier2. The imagery
+    // badge is tier-2 payload observable without a map double — assert its
+    // wording tracks the drag through the throttle and lands on the final
+    // state at flush.
+    const badgeHost = document.createElement('div');
+    document.body.appendChild(badgeHost);
+    ensureImageryDateBadge(badgeHost, {
+      cloud_composite_hour: '2026-06-10T11:00:00Z',
+    } as never);
+    const badge = (): string =>
+      badgeHost.querySelector('.map-imagery-date')?.textContent ?? '';
+    expect(badge()).toContain('Imagery:'); // live wording before the drag
+
+    slider().dispatchEvent(new Event('pointerdown'));
+    dragFrame('60'); // leading tier-2 run — scrubbed wording lands
+    expect(badge()).toContain('not forecast');
+    // Drag back to live INSIDE the throttle window: badge wording is
+    // allowed to lag (tier 2 pending)…
+    dragFrame('0');
+    expect(_getScrubTier2RunCountForTest()).toBe(1);
+    slider().dispatchEvent(new Event('pointerup'));
+    // …but the release flush must land the FINAL (live) wording.
+    expect(badge()).toContain('Imagery:');
+    expect(badge()).not.toContain('not forecast');
   });
 });
