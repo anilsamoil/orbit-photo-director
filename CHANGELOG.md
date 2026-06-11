@@ -2,6 +2,21 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.10.1.0] - 2026-06-11
+
+## **Open the Map tab on a slow link and it now paints when the data arrives — not on your second try.**
+
+Browser QA with an emulated iPad caught a race that station network conditions would hit constantly: tap the Map tab before the first data fetch finishes and the pane stayed black *forever* — even after the data arrived — until you happened to tap the tab again. The pane now remembers it was asked for and renders itself the moment the manifest lands. A failed map-code download (LOS mid-chunk) also stopped being a silent black pane: it's logged and the next tap retries the download.
+
+### Itemized changes
+
+#### Fixed
+- **Map tab tapped before first data load** → pane rendered automatically when the manifest arrived (previously: black until a second tap). Gated on the Map view still being active, so navigating away cancels the deferred render.
+- Lazy map-chunk import failures are logged and retried on the next tab tap instead of being swallowed.
+
+#### Internal
+- 2 integration tests pin the race (deferred render with a late manifest; no background render after navigating away). Found and verified against the live site by a Playwright WebKit/Chromium iPad harness (~/opd-ipad-qa).
+
 ## [1.10.0.0] - 2026-06-11
 
 ## **The Kp badge now answers the real question: is there aurora out the window right now?**

@@ -41,6 +41,15 @@ vi.mock('../src/tile-precache', async () => {
   };
 });
 
+// Mock the lazily-imported map module so tab-map tests don't pull real
+// MapLibre into happy-dom. main.ts reaches it via `await import('./map')`,
+// which vi.mock intercepts the same as a static import.
+vi.mock('../src/map', () => ({
+  renderMap: vi.fn(async () => {}),
+  resizeMap: vi.fn(),
+  dropLookupPin: vi.fn(),
+}));
+
 // Mock aurora module so refresh() doesn't fire real /api/kp fetches during
 // test runs. Same isolation concern as tile-precache above.
 vi.mock('../src/aurora', async () => {
@@ -706,5 +715,60 @@ describe('main.ts: All/Mine target filter', () => {
     expect(document.getElementById('filter-mine-queue')!.classList.contains('active')).toBe(true);
     expect(document.getElementById('filter-mine-upcoming')!.classList.contains('active')).toBe(true);
     expect(document.getElementById('filter-all-queue')!.classList.contains('active')).toBe(false);
+  });
+});
+
+describe('main.ts: map pane vs manifest race (iPad QA loop 2026-06-11)', () => {
+  it('renders the map when the manifest lands AFTER the Map tab was clicked', async () => {
+    // Reproduces the live bug: on a slow uplink the operator clicks Map
+    // before the first manifest resolves; loadMapPane used to early-return
+    // and nothing ever rendered the pane — black map until a re-click.
+    let resolveManifest: (m: Manifest) => void = () => {};
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(
+      new Promise<Manifest>((res) => { resolveManifest = res; }),
+    );
+    vi.mocked(manifestModule.fetchTop5).mockResolvedValue([buildPass()]);
+    vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+
+    const mapModule = await import('../src/map');
+    const { init } = await import('../src/main');
+    void init();
+    await Promise.resolve();
+
+    // Operator clicks Map while the manifest fetch is still in flight.
+    (document.getElementById('tab-map') as HTMLElement).click();
+    await Promise.resolve();
+    expect(vi.mocked(mapModule.renderMap)).not.toHaveBeenCalled();
+    expect(document.getElementById('view')?.className).toBe('view-map');
+
+    // Manifest arrives → the pending Map pane must render without another click.
+    resolveManifest(buildManifest({ version: '20260504T140000Z' }));
+    await vi.waitFor(() => {
+      expect(vi.mocked(mapModule.renderMap)).toHaveBeenCalledTimes(1);
+    });
+    expect(vi.mocked(mapModule.renderMap).mock.calls[0]?.[0]?.version).toBe('20260504T140000Z');
+  });
+
+  it('does NOT render the map if the operator navigated away before data arrived', async () => {
+    let resolveManifest: (m: Manifest) => void = () => {};
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(
+      new Promise<Manifest>((res) => { resolveManifest = res; }),
+    );
+    vi.mocked(manifestModule.fetchTop5).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+
+    const mapModule = await import('../src/map');
+    const { init } = await import('../src/main');
+    void init();
+    await Promise.resolve();
+
+    (document.getElementById('tab-map') as HTMLElement).click();
+    (document.getElementById('tab-queue') as HTMLElement).click(); // changed their mind
+    resolveManifest(buildManifest());
+    // Flush the refresh pipeline fully, then confirm no background render.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(vi.mocked(mapModule.renderMap)).not.toHaveBeenCalled();
   });
 });
