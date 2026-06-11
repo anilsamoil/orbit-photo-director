@@ -315,6 +315,8 @@ All three slices are shipped:
 
 **Soak status 2026-05-21:** flag is ON; daemon healthy at PID 36988. `launches_count_pass_opportunities: 0` in status.json because the single upcoming LL2 launch in the next 36h doesn't have ISS-photographable geometry — that's data, not a bug. The pipeline will produce ASCENT entries when an eligible rocket flies through the viewing cone. No further work needed unless soak surfaces a defect.
 
+**Coverage wave 2 — SHIPPED v1.9.1.0 (2026-06-11):** 14 more profiles (Electron, H3, LM 2/3/4/6/8, Kuaizhou, Kinetica 1, Ceres-1, PSLV, Vega-C, Spectrum, Firefly Alpha) covering every rocket in the live LL2 cache audit that previously skipped ASCENT; 25 profiles total. Matcher gained exact-field keywords for generic tokens (Alpha/H3) and narrowed Kinetica/Ceres so larger sibling vehicles (Kinetica 2, Ceres-2) fail-safe skip rather than inherit wrong geometry.
+
 ### V3-P2 — V3.1 ASCENT geometry (original plan — kept below for history)
 **Plan locked 2026-05-13** via /plan-eng-review. Design doc:
 `~/.gstack/projects/anilsamoil-orbit-photo-director/anilsamoilenko-v3p2-ascent-eng-review-2026-05-13.md`

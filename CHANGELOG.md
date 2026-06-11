@@ -2,6 +2,28 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.9.1.0] - 2026-06-11
+
+## **Fourteen more rockets get a real ascent curve. The ones we don't know stay honestly blank.**
+
+Launch-visibility cards only render when the generator knows how a rocket climbs — and until now it knew exactly eleven. The audit of the live launch cache showed the misses were the world's busiest small and medium lifters: Electron, PSLV, Vega-C, H3, and the whole crowded Chinese manifest (Long March 2/3/4/6/8, Kuaizhou, Kinetica, Ceres-1), plus Firefly Alpha and Spectrum. This release adds coarse, source-grounded ascent profiles for all fourteen families, so a Long March 2F crew launch or an H3 station-resupply climb now produces a sightline card instead of silently skipping.
+
+Matching a rocket name to a profile got safer at the same time. Generic tokens now require exact-field matches — so a hypothetical "Alphabet" can never inherit Firefly Alpha's climb, "Mach3 Express" can't become an H3, and the real (much larger) Kinetica 2 and Ceres-2 fail-safe skip instead of borrowing their smaller sibling's geometry. Unknown rockets still mean "no card," never "a confidently wrong card."
+
+### Itemized changes
+
+#### Added
+- **14 new ascent profiles**: Electron, H3, Long March 2/3/4/6/8, Kuaizhou (family), Kinetica 1, Ceres-1, PSLV, Vega-C, Spectrum, Firefly Alpha — covering every rocket in the live LL2 cache audit that previously skipped ASCENT prediction.
+- **Chang Zheng aliases** on the new Long March families (LL2 sometimes uses CASC's naming), matching the CZ- abbreviations wave 1 already handled.
+
+#### Changed
+- **Exact-field keyword matching** for generic tokens: `match_rocket` gains a second pass that matches dangerously short keywords ("Alpha", "H3") by whole-field equality only. Substring lookalikes verified to misfire under the old matcher (Alphabet→Firefly, Mach3 Express→H3, bare "H3" field→no match) are all dead.
+- Kinetica and Ceres keywords narrowed to the -1 vehicles: Kinetica 2 (Lijian-2) and Ceres-2 are real, far larger siblings in active development with genuinely different climbs — they fail-safe skip until they earn their own profiles.
+
+#### Internal
+- Matcher docstrings corrected: ALL_PROFILES order is the sole precedence mechanism (the old text claimed per-field priority that never existed); FIREFLY_ALPHA-last now enforced by a structural test.
+- 181 new test cases (suite: 828; most from the per-profile invariant battery now running over 25 profiles instead of 11): exact-keyword semantics + hostile lookalikes, sibling-vehicle fail-safe battery, Long March future-collision pins (LM-10/12 stay unmatched), Chang Zheng aliases.
+
 ## [1.9.0.0] - 2026-06-11
 
 ## **Scrub the slider and the clouds become a forecast. The map stops showing yesterday under tomorrow's pins.**
