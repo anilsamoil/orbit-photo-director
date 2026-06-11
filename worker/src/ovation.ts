@@ -97,8 +97,9 @@ export function downsampleOvation(
     const li = Math.min(AURORA_LAT_BINS - 1, Math.max(0, Math.floor((lat + 90) / AURORA_GRID_STEP_DEG)));
     const lj = Math.min(AURORA_LON_BINS - 1, Math.max(0, Math.floor((lon % 360) / AURORA_GRID_STEP_DEG)));
     const clamped = Math.min(100, Math.max(0, prob));
-    if (clamped > probs[li][lj]) probs[li][lj] = clamped;
-    touched[li][lj] = true;
+    const probRow = probs[li]!;
+    if (clamped > probRow[lj]!) probRow[lj] = clamped;
+    touched[li]![lj] = true;
     valid += 1;
   }
   const cellsTouched = touched.flat().filter(Boolean).length;

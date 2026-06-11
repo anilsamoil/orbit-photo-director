@@ -93,17 +93,17 @@ describe('downsampleOvation', () => {
     const grid = downsampleOvation(payload, NOW);
     expect(grid).not.toBeNull();
     expect(grid!.probs.length).toBe(AURORA_LAT_BINS);
-    expect(grid!.probs[0].length).toBe(AURORA_LON_BINS);
+    expect(grid!.probs[0]!.length).toBe(AURORA_LON_BINS);
     expect(grid!.grid_step).toBe(5);
     // lat 67-68 → bin floor((67+90)/5)=31; lon 12-13 → bin 2
-    expect(grid!.probs[31][2]).toBe(55);
+    expect(grid!.probs[31]![2]).toBe(55);
     expect(grid!.age_min).toBe(44); // 04:16 → 05:00
     expect(grid!.observation_time).toBe('2026-06-11T04:16:00Z');
   });
 
   it('clamps out-of-range probabilities to 0..100', () => {
     const grid = downsampleOvation(ovationPayload([[100, 70, 250]]), NOW);
-    expect(grid!.probs[32][20]).toBe(100);
+    expect(grid!.probs[32]![20]).toBe(100);
   });
 
   it('skips junk rows without dying', () => {
@@ -111,7 +111,7 @@ describe('downsampleOvation', () => {
     (payload.coordinates as unknown[]).push(null, [1], ['x', 'y', 'z'], [400, 95, 10]);
     const grid = downsampleOvation(payload, NOW);
     expect(grid).not.toBeNull();
-    expect(grid!.probs[4][40]).toBe(25);
+    expect(grid!.probs[4]![40]).toBe(25);
   });
 
   it('rejects schema drift: missing keys / bad timestamp / non-array coords', () => {
@@ -163,7 +163,7 @@ describe('handleAuroraRequest', () => {
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as AuroraGridResponse;
-    expect(body.probs[31][2]).toBe(60);
+    expect(body.probs[31]![2]).toBe(60);
     expect(body.degraded).toBeUndefined();
     expect(r2.store.has('aurora/ovation-last-good.json')).toBe(true);
     // Second call: served from edge cache (fetch would explode if called)
