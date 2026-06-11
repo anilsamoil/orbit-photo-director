@@ -119,7 +119,7 @@ describe('imagery badge wording follows the layer truth (V4-P2)', () => {
   it('scrubbed with a frame available → GFS forecast wording with horizon + run', () => {
     setLookahead(360, /*recenter=*/false); // +6h → frame at +6h
     ensureImageryDateBadge(container, FC_MANIFEST);
-    expect(badge().textContent).toBe('Clouds: GFS forecast +6h (12z run)');
+    expect(badge().textContent).toBe('Clouds: GFS forecast +6h · coarse (12z)');
   });
 
   it('scrubbed past the last frame → observed + forecast-ends wording', () => {

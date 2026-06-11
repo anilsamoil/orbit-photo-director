@@ -2887,7 +2887,9 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
     if (frame && fc) {
       const aheadH = Math.max(0, Math.round((frame.validMs - nowMs) / 3_600_000));
       const runHH = fc.gfs_run.slice(11, 13);
-      badge.textContent = `Clouds: GFS forecast +${aheadH}h (${runHH}z run)`;
+      // "coarse" disclosed by design (A6 gate 2026-06-10): 5° cells are
+      // synoptic blobs — pre-empt the deep-zoom expectation gap.
+      badge.textContent = `Clouds: GFS forecast +${aheadH}h · coarse (${runHH}z)`;
     } else if (eligible && lastValidTimeMs(fc!) < currentViewMs(nowMs)) {
       // Index exists but the view is past the last frame (locked A4 clamp
       // wording — rare with the +48h tail, real on a stale manifest).
