@@ -379,7 +379,7 @@ def test_flag_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
 def cached_tle(settings_in_tmp: Any) -> Path:
     """Pre-seed the TLE cache so run_tick doesn't need network (mirrors
     the test_main.py fixture — local to that module, so re-declared)."""
-    from tests.test_main import SAMPLE_TLE_TEXT
+    from tests.conftest import SAMPLE_TLE_TEXT
     settings_in_tmp.cache_dir.mkdir(parents=True, exist_ok=True)
     cache = settings_in_tmp.cache_dir / "iss.tle"
     cache.write_text(SAMPLE_TLE_TEXT)
@@ -437,3 +437,88 @@ def test_run_tick_render_failure_omits_key_and_does_not_fail_tick(
     # Locked A4: failures omit the key; the tick itself must survive.
     assert "forecast_clouds" not in manifest
     assert manifest["version"] == "20241017T120000Z"
+
+
+# ---------------------------------------------------------------------------
+# Ship review 2026-06-11: sweep budget, failure tombstone, crash-path
+# atomicity, corrupt-index resilience.
+# ---------------------------------------------------------------------------
+
+def test_paced_fetcher_deadline_fails_fast() -> None:
+    clock_vals = iter([0.0, 0.0, 400.0])  # start, first check ok, second over
+    fetch = fc.paced_fetcher(
+        get=lambda url: FakeResp(), sleep=lambda s: None,
+        deadline_s=300.0, clock=lambda: next(clock_vals),
+    )
+    assert fetch("http://x/1") is not None  # within budget
+    with pytest.raises(RuntimeError, match="budget exceeded"):
+        fetch("http://x/2")  # over budget → fails fast, no sleep
+
+
+def test_crash_mid_render_cleans_tmp_and_records_tombstone(tmp_path: Path) -> None:
+    # A7 crash path: sampler explodes on a later frame → exception
+    # propagates, no .tmp leftovers, no partial run dir, tombstone written.
+    calls = {"n": 0}
+
+    def fn(lat: float, lon: float, when: datetime) -> FakeSample:
+        calls["n"] += 1
+        if calls["n"] > 5000:  # partway through frame 2's sweep
+            raise RuntimeError("budget blown mid-render")
+        return FakeSample(42.0)
+
+    with pytest.raises(RuntimeError):
+        fc.write_frames(tmp_path, NOW, sampler=FakeSampler(fn))
+    root = tmp_path / "clouds-fcst"
+    assert not list(root.glob("*.tmp"))
+    assert not (root / "20260610T000000Z").exists()
+    assert (root / "20260610T000000Z.failed.json").is_file()
+
+    # A healthy retry AFTER the backoff window publishes cleanly.
+    later = NOW + timedelta(hours=3)
+    index = fc.write_frames(tmp_path, later, sampler=FakeSampler())
+    assert index is not None
+    assert not (root / "20260610T000000Z.failed.json").exists()  # success clears
+
+
+def test_failure_backoff_skips_immediate_retries(tmp_path: Path) -> None:
+    dead = FakeSampler(lambda lat, lon, when: FakeSample(50.0, "gfs-forecast-no-data"))
+    assert fc.write_frames(tmp_path, NOW, sampler=dead) is None  # attempt 1
+    # Same run, 5 minutes later: inside RETRY_MIN_INTERVAL → sampler untouched.
+    probe = FakeSampler()
+    assert fc.write_frames(tmp_path, NOW + timedelta(minutes=5), sampler=probe) is None
+    assert probe.calls == 0
+
+
+def test_failure_attempts_cap(tmp_path: Path) -> None:
+    dead = FakeSampler(lambda lat, lon, when: FakeSample(50.0, "gfs-forecast-no-data"))
+    # Start at the TOP of the 12Z run's window (active 17:00Z..05:00Z) so
+    # three 2h-spaced attempts all land inside ONE run.
+    t = datetime(2026, 6, 10, 17, 30, tzinfo=UTC)
+    for _ in range(fc.MAX_RENDER_ATTEMPTS_PER_RUN):
+        assert fc.latest_gfs_run(t) == datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
+        assert fc.write_frames(tmp_path, t, sampler=dead) is None
+        t += timedelta(hours=2, minutes=1)  # past the retry interval
+    # Attempts exhausted: even past the interval, the run is abandoned.
+    assert fc.latest_gfs_run(t) == datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
+    probe = FakeSampler()
+    assert fc.write_frames(tmp_path, t, sampler=probe) is None
+    assert probe.calls == 0
+
+
+def test_corrupt_index_forces_rerender_and_prune_treats_dir_incomplete(tmp_path: Path) -> None:
+    root = tmp_path / "clouds-fcst"
+    bad = root / "20260610T000000Z"
+    bad.mkdir(parents=True)
+    (bad / "index.json").write_text("{not json")
+    # Corrupt index → not "already rendered" → re-renders this run fresh.
+    index = fc.write_frames(tmp_path, NOW, sampler=FakeSampler())
+    assert index is not None
+    assert (bad / "index.json").is_file()
+    assert fc._existing_index(bad) is not None  # replaced by the fresh render
+
+    # An index missing valid_times is incomplete → pruned.
+    junk = root / "20260609T120000Z"
+    junk.mkdir(parents=True)
+    (junk / "index.json").write_text(json.dumps({"gfs_run": "x"}))
+    fc.prune_old_runs(root)
+    assert not junk.exists()

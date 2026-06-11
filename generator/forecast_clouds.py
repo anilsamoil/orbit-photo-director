@@ -55,7 +55,7 @@ import json
 import logging
 import shutil
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -81,6 +81,7 @@ GRID_LONS = np.arange(-180.0, 180.0 - 0.001, GRID_STEP_DEG)  # 72 cols, W→E
 
 # --- Tiles (A2: WebMercator z0-3 = 1+4+16+64 = 85 tiles/frame) --------------
 MAX_ZOOM = 3
+TILES_PER_FRAME = sum(4**z for z in range(MAX_ZOOM + 1))  # 85 at z0-3
 TILE_SIZE = 256
 MERCATOR_LAT_LIMIT = 85.05112878
 
@@ -99,16 +100,35 @@ RAMP_FLOOR_CF = 12.5     # cloud% below this renders fully transparent
 RAMP_MAX_ALPHA = 217     # alpha at 100% cloud ≈ 0.85, matches gibs opacity
 
 # --- Open-Meteo pacing (live smoke 2026-06-10: an unpaced 104-call grid
-# sweep trips the per-minute burst limiter with 429s — and this generator
-# host ALSO runs the production tick whose pass-scoring fetches share the
-# IP, so the sweep must stay polite). ~1.2s pacing ≈ 2-minute sweep, 4×/day.
+# sweep trips the burst limiter with 429s — and this generator host ALSO
+# runs the production tick whose pass-scoring fetches share the IP, so the
+# sweep must stay polite). Post-Revision-3: ~26 paced calls ≈ 30s sweep,
+# 2 renders/day.
 OPEN_METEO_BATCH_DELAY_S = 1.2
 OPEN_METEO_429_RETRIES = 3
 OPEN_METEO_429_BACKOFF_S = 30.0
 
-# A frame with big data holes erodes trust more than no frame: require this
-# fraction of grid cells to carry real forecast data before publishing it.
-MIN_GRID_COVERAGE = 0.6
+# Near-complete frames or nothing (Codex adversarial 2026-06-11): NaN
+# cells render fully transparent — i.e. CLEAR SKY — so a frame with real
+# holes publishes false "clear" over the missing regions. 0.95 means a
+# partial-sweep frame (dropped batches) is omitted and nearest-frame
+# bridges the gap, rather than lying about a third of the planet.
+MIN_GRID_COVERAGE = 0.95
+
+# Hard wall-clock budget for the whole grid sweep (ship review 2026-06-11):
+# the sweep runs INSIDE the daemon tick, whose 900s stall watchdog SIGINTs
+# the entire process on overrun — taking the core pass pipeline down with
+# it. 300s leaves the rest of the tick ample room. On expiry the remaining
+# batches fail fast and the coverage floor decides the outcome.
+SWEEP_BUDGET_S = 300.0
+
+# Failure tombstone (ship review 2026-06-11): without one, every tick (and
+# every supervisor failure-retry) re-runs the full paced sweep until the
+# 12h run key rolls — burning ~10-25x the daily Open-Meteo location budget
+# during a sustained outage and 429-starving the daemon's own pass-scoring
+# fetches. Cap attempts per run and space them out.
+MAX_RENDER_ATTEMPTS_PER_RUN = 3
+RETRY_MIN_INTERVAL_S = 2 * 3600.0
 
 
 class _Sampler(Protocol):
@@ -143,7 +163,7 @@ def frame_times(run: datetime) -> list[datetime]:
     offsets = list(range(0, HOURLY_HORIZON_H + 1))  # 0..6
     offsets += list(
         range(HOURLY_HORIZON_H + COARSE_STEP_H, MAX_OFFSET_H + 1, COARSE_STEP_H)
-    )  # 9..42
+    )  # 9..48
     return [run + timedelta(hours=h) for h in offsets]
 
 
@@ -155,13 +175,22 @@ def grid_coords() -> list[tuple[float, float]]:
 def paced_fetcher(
     get: Any | None = None,
     sleep: Any = time.sleep,
+    deadline_s: float | None = None,
+    clock: Any = time.monotonic,
 ) -> Any:
     """Open-Meteo fetcher with inter-batch pacing + 429 backoff.
 
     The shared GFSForecastSampler default fires batches back-to-back — fine
-    for the 2-3 calls the target path makes, fatal for the 104-call grid
-    sweep (verified live 2026-06-10: burst 429s). `get`/`sleep` injectable
-    for tests.
+    for the 2-3 calls the target path makes, fatal for an unpaced grid
+    sweep (verified live 2026-06-10: burst 429s at the original 104-call
+    size). `get`/`sleep`/`clock` injectable for tests.
+
+    `deadline_s` bounds the WHOLE sweep's wall clock (ship review
+    2026-06-11): the sweep runs inside the daemon tick, and the daemon's
+    900s stall watchdog SIGINTs the whole tick — an unbounded 429-storm
+    sweep (timeouts + backoffs ≈ 80 min worst case) would stop pass data
+    publishing entirely. On expiry every remaining batch fails fast; the
+    coverage floor then decides whether partial frames publish.
     """
     if get is None:
         import requests
@@ -172,8 +201,14 @@ def paced_fetcher(
 
         get = _default_get
 
+    start = clock()
+
     def _fetch(url: str) -> Any:
         for attempt in range(OPEN_METEO_429_RETRIES + 1):
+            if deadline_s is not None and clock() - start > deadline_s:
+                raise RuntimeError(
+                    f"forecast sweep wall-clock budget exceeded ({deadline_s:.0f}s)"
+                )
             sleep(OPEN_METEO_BATCH_DELAY_S)
             resp = get(url)
             status = getattr(resp, "status_code", 200)
@@ -191,12 +226,15 @@ def build_grid_sampler(fetcher: Any | None = None) -> GFSForecastSampler:
     """One sampler over the whole 5° grid. forecast_days=3 comfortably
     covers run+48h even when the run is hours behind wall-clock now."""
     return GFSForecastSampler(
-        grid_coords(), forecast_days=3, fetcher=fetcher or paced_fetcher()
+        grid_coords(),
+        forecast_days=3,
+        fetcher=fetcher or paced_fetcher(deadline_s=SWEEP_BUDGET_S),
     )
 
 
 def sample_grid(sampler: _Sampler, when: datetime) -> np.ndarray:
-    """(72, 144) float array of cloud% at `when`; NaN where the sampler has
+    """(GRID_LATS.size, GRID_LONS.size) float array of cloud% at `when`;
+    NaN where the sampler has
     no real data (no-data / out-of-horizon sources render transparent)."""
     grid = np.full((GRID_LATS.size, GRID_LONS.size), np.nan, dtype=np.float64)
     for i, lat in enumerate(GRID_LATS):
@@ -229,7 +267,7 @@ def pixel_grid_indices(z: int) -> tuple[np.ndarray, np.ndarray]:
 
     Shared by every tile at the zoom, so tile seams are continuous by
     construction. Rows clamp at the mercator limit (poles reuse the extreme
-    grid rows); cols wrap modulo 144 (antimeridian continuity).
+    grid rows); cols wrap modulo GRID_LONS.size (antimeridian continuity).
     """
     n = TILE_SIZE * (2**z)
     lats = _pixel_row_to_lat(np.arange(n, dtype=np.float64), n)
@@ -275,18 +313,64 @@ def _existing_index(run_dir: Path) -> dict[str, Any] | None:
 
 
 def prune_old_runs(fcst_root: Path, keep: int = KEEP_RUNS) -> list[Path]:
-    """Delete all but the newest `keep` complete run dirs. Lexicographic order
-    IS chronological for compact keys. Incomplete dirs (no index.json — a
-    crashed render) are always pruned."""
+    """Delete all but the newest `keep` complete run dirs (lexicographic
+    order IS chronological for compact keys). Incomplete dirs (no readable
+    index.json — a crashed render) are always pruned, as are failure
+    tombstones for runs no longer kept. Single pass per dir (ship review
+    2026-06-11 — the old version re-parsed each index up to 3x)."""
     if not fcst_root.is_dir():
         return []
-    complete = sorted(d for d in fcst_root.iterdir() if d.is_dir() and not d.name.startswith("."))
-    doomed = [d for d in complete if _existing_index(d) is None]
-    keepers = [d for d in complete if _existing_index(d) is not None][-keep:]
-    doomed += [d for d in complete if _existing_index(d) is not None and d not in keepers]
+    run_dirs = sorted(d for d in fcst_root.iterdir() if d.is_dir() and not d.name.startswith("."))
+    complete = [d for d in run_dirs if _existing_index(d) is not None]
+    keepers = set(complete[-keep:])
+    doomed = [d for d in run_dirs if d not in keepers]
     for d in doomed:
         shutil.rmtree(d, ignore_errors=True)
+    # Tombstones for runs that no longer have a kept dir age out with them.
+    kept_keys = {d.name for d in keepers}
+    for marker in fcst_root.glob("*.failed.json"):
+        if marker.name.removesuffix(".failed.json") not in kept_keys:
+            marker.unlink(missing_ok=True)
     return doomed
+
+
+def _read_tombstone(marker: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(marker.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _should_skip_retry(marker: Path, now: datetime) -> bool:
+    """True when this run already failed too often / too recently."""
+    if not marker.is_file():
+        return False
+    data = _read_tombstone(marker)
+    attempts = data.get("attempts")
+    if isinstance(attempts, int) and attempts >= MAX_RENDER_ATTEMPTS_PER_RUN:
+        return True
+    last = Date_parse_or_none(data.get("last_attempt"))
+    return last is not None and (now - last).total_seconds() < RETRY_MIN_INTERVAL_S
+
+
+def Date_parse_or_none(iso: Any) -> datetime | None:
+    if not isinstance(iso, str):
+        return None
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _record_failure(marker: Path, now: datetime) -> None:
+    attempts = _read_tombstone(marker).get("attempts")
+    n = attempts + 1 if isinstance(attempts, int) else 1
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"attempts": n, "last_attempt": iso_z(now)}))
+    except OSError:
+        log.warning("forecast clouds: could not write failure tombstone %s", marker)
 
 
 def write_frames(
@@ -307,10 +391,17 @@ def write_frames(
     run = latest_gfs_run(now)
     fcst_root = out_dir / "clouds-fcst"
     run_dir = fcst_root / compact_key(run)
+    tombstone = fcst_root / f"{compact_key(run)}.failed.json"
 
     existing = _existing_index(run_dir)
     if existing is not None:
         return existing
+
+    # Retry gate (ship review 2026-06-11): a failed render must not re-run
+    # the full paced sweep on every tick/supervisor retry for 12 hours.
+    if _should_skip_retry(tombstone, now):
+        log.info("forecast clouds: run %s in failure backoff — skipping", iso_z(run))
+        return None
 
     if sampler is None:
         sampler = build_grid_sampler(fetcher)
@@ -340,6 +431,7 @@ def write_frames(
 
         if not valid_times:
             log.warning("forecast clouds: no usable GFS data for run %s — skipping publish", iso_z(run))
+            _record_failure(tombstone, now)
             return None
 
         index: dict[str, Any] = {
@@ -354,12 +446,18 @@ def write_frames(
         (tmp_dir / "index.json").write_text(json.dumps(index, indent=2))
         shutil.rmtree(run_dir, ignore_errors=True)
         tmp_dir.rename(run_dir)
+        tombstone.unlink(missing_ok=True)  # success clears the backoff
+    except Exception:
+        # Sweep budget blown / sampler exploded mid-render: record the
+        # attempt so the next tick backs off instead of re-sweeping.
+        _record_failure(tombstone, now)
+        raise
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     prune_old_runs(fcst_root)
     log.info(
         "forecast clouds: rendered %d frames for run %s (%d tiles)",
-        len(valid_times), iso_z(run), len(valid_times) * 85,
+        len(valid_times), iso_z(run), len(valid_times) * TILES_PER_FRAME,
     )
     return index

@@ -45,12 +45,15 @@ rclone copy "$OUT_DIR/v/" "$REMOTE/v/" \
 
 # V4-P2 forecast cloud frames (additive copy BEFORE the manifest flip, same
 # rationale as /v/: the manifest must never reference a frame set that isn't
-# fully uploaded). The run-keyed dirs are immutable once published; local
-# prune (KEEP_RUNS=2 in generator/forecast_clouds.py) propagates via
-# prune_versions.sh, not here — same no-sync-deletes discipline as /v/.
-if [ -d "$OUT_DIR/clouds-fcst" ]; then
-  echo "==> Uploading forecast cloud frames (additive copy): $OUT_DIR/clouds-fcst/ -> $REMOTE/clouds-fcst/"
-  rclone copy "$OUT_DIR/clouds-fcst/" "$REMOTE/clouds-fcst/" \
+# fully uploaded). Scoped to the run the manifest actually references (ship
+# review 2026-06-11): new tiles exist twice a day, but this deploy runs
+# every tick — copying the whole clouds-fcst tree paid a ~3,200-file no-op
+# listing 22 of 24 times. Run dirs are immutable once published; pruning
+# lives in prune_versions.sh (no-sync-deletes discipline, same as /v/).
+FCST_PREFIX=$(python3 -c "import json;print((json.load(open('$OUT_DIR/manifest.json')).get('forecast_clouds') or {}).get('prefix',''))" 2>/dev/null || true)
+if [ -n "$FCST_PREFIX" ] && [ -d "$OUT_DIR/$FCST_PREFIX" ]; then
+  echo "==> Uploading forecast cloud frames (additive copy): $OUT_DIR/$FCST_PREFIX/ -> $REMOTE/$FCST_PREFIX/"
+  rclone copy "$OUT_DIR/$FCST_PREFIX/" "$REMOTE/$FCST_PREFIX/" \
     --transfers 8 \
     --checkers 16 \
     --header-upload "Cache-Control: public, max-age=21600, immutable" \

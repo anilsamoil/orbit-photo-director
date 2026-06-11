@@ -43,23 +43,27 @@ rclone delete "$REMOTE/v/" \
 # 3. Empty leftover directory entries (rclone leaves dir markers on some backends).
 rclone rmdirs "$REMOTE/v/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
 
-# 4. Forecast cloud runs (V4-P2): preserve the run the current manifest's
-# forecast_clouds.prefix points at (plus anything younger than KEEP_HOURS —
-# covers the freshly-published run). One GFS run lives ~6h, so the default
-# horizon naturally keeps the active + previous run, mirroring the local
-# KEEP_RUNS=2 prune in generator/forecast_clouds.py.
-CURRENT_FCST_PREFIX=$(rclone cat "$REMOTE/manifest.json" 2>/dev/null \
-  | python3 -c "import json,sys; print((json.load(sys.stdin).get('forecast_clouds') or {}).get('prefix',''))" 2>/dev/null || true)
-FCST_EXCLUDE=()
-if [ -n "$CURRENT_FCST_PREFIX" ]; then
-  # prefix is "clouds-fcst/<runkey>" — strip the root for the exclude glob.
-  FCST_EXCLUDE=(--exclude "${CURRENT_FCST_PREFIX#clouds-fcst/}/**")
+# 4. Forecast cloud runs (V4-P2, rewritten 2026-06-11 per ship review):
+# keep the TWO newest run dirs by name (compact keys sort chronologically),
+# mirroring the generator's local KEEP_RUNS=2 — the previous run must
+# survive so clients on a not-yet-flipped manifest never 404. The earlier
+# --min-age approach deleted the deliberately-kept previous run every day
+# (delete/re-upload churn + a 404 window), and its empty-exclude array
+# aborted under bash 3.2 set -u whenever the manifest had no
+# forecast_clouds key (i.e. the feature-off default — the prune cron died
+# before this point on every run).
+FCST_DIRS=$(rclone lsf "$REMOTE/clouds-fcst/" --dirs-only 2>/dev/null | sed 's:/$::' | sort || true)
+if [ -n "$FCST_DIRS" ]; then
+  KEEPERS=$(printf '%s\n' "$FCST_DIRS" | tail -2)
+  printf '%s\n' "$FCST_DIRS" | while IFS= read -r RUN_DIR; do
+    [ -z "$RUN_DIR" ] && continue
+    if printf '%s\n' "$KEEPERS" | grep -qx "$RUN_DIR"; then
+      continue
+    fi
+    echo "==> Pruning old forecast run: clouds-fcst/$RUN_DIR"
+    rclone purge "$REMOTE/clouds-fcst/$RUN_DIR" $VERBOSE_FLAG 2>/dev/null || true
+  done
 fi
-rclone delete "$REMOTE/clouds-fcst/" \
-  --min-age "${KEEP_HOURS}h" \
-  --use-server-modtime \
-  "${FCST_EXCLUDE[@]}" \
-  $VERBOSE_FLAG 2>/dev/null || true
 rclone rmdirs "$REMOTE/clouds-fcst/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
 
 echo "==> Prune complete"

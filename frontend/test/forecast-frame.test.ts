@@ -146,3 +146,49 @@ describe('imagery badge wording follows the layer truth (V4-P2)', () => {
     expect(badge().textContent).toBe('Imagery: 2026-06-09');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ship review 2026-06-11: tiles-failed badge reversion + sub-hour wording.
+// ---------------------------------------------------------------------------
+
+import { _setFcstTilesFailedForTest } from '../src/map';
+
+describe('ship-review additions', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(NOW));
+    container = document.createElement('div');
+    document.body.replaceChildren(container);
+    _resetMapStateForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  const badge = () => container.querySelector<HTMLElement>('.map-imagery-date')!;
+
+  it('after a tile failure the badge reverts to observed wording (A4 layer-2)', () => {
+    setLookahead(360, false);
+    _setFcstTilesFailedForTest(true);
+    ensureImageryDateBadge(container, FC_MANIFEST);
+    expect(badge().textContent).toBe('Clouds: observed 2026-06-09 — not forecast');
+    _setFcstTilesFailedForTest(false);
+    ensureImageryDateBadge(container, FC_MANIFEST);
+    expect(badge().textContent).toContain('GFS forecast');
+  });
+
+  it('sub-hour horizons say "now", never "+0h"', () => {
+    // Scrub +30min: nearest frame is +0h or +1h — whichever wins, a
+    // sub-hour horizon must not read as "+0h" (labels a slightly-past
+    // frame as future).
+    setLookahead(30, false);
+    ensureImageryDateBadge(container, FC_MANIFEST);
+    const text = badge().textContent!;
+    expect(text).not.toContain('+0h');
+    expect(text).toMatch(/GFS forecast (now|\+1h) · coarse/);
+  });
+});

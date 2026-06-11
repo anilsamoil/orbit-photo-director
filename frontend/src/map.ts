@@ -152,20 +152,28 @@ export function compactFrameKey(iso: string): string {
   return iso.replace(/[-:]/g, '');
 }
 
-/** Pick the forecast frame nearest the view instant (locked A4 as revised
- *  by the slider eng review 2C): tolerance ±30min within the first 6h of
- *  lookahead, ±90min beyond (frames go 3-hourly there). Frames more than
- *  45min in the PAST are never candidates — a stale frame depicted as
- *  forecast is the trust mismatch this feature exists to kill. Returns
- *  null when nothing qualifies (caller falls back to the observed layer). */
+// Frame-matching policy constants (locked A4 as revised by the slider eng
+// review 2C). The hourly band + tolerances TRACK the generator's cadence
+// constants (generator/forecast_clouds.py HOURLY_HORIZON_H / COARSE_STEP_H):
+// hourly frames ≤6h of lookahead → ±30min match; 3-hourly beyond → ±90min.
+const FCST_HOURLY_BAND_H = 6;
+const FCST_TOL_HOURLY_MIN = 30;
+const FCST_TOL_COARSE_MIN = 90;
+// A frame older than this is never depicted as forecast (anti-stale guard).
+const FCST_MAX_FRAME_AGE_MIN = 45;
+
+/** Pick the forecast frame nearest the view instant. Frames more than
+ *  FCST_MAX_FRAME_AGE_MIN in the PAST are never candidates — a stale frame
+ *  depicted as forecast is the trust mismatch this feature exists to kill.
+ *  Returns null when nothing qualifies (caller falls back to observed). */
 export function nearestForecastFrame(
   validTimes: string[],
   viewMs: number,
   nowMs: number,
 ): { iso: string; validMs: number } | null {
   const lookaheadH = (viewMs - nowMs) / 3_600_000;
-  const tolMs = (lookaheadH <= 6 ? 30 : 90) * 60_000;
-  const minValidMs = nowMs - 45 * 60_000;
+  const tolMs = (lookaheadH <= FCST_HOURLY_BAND_H ? FCST_TOL_HOURLY_MIN : FCST_TOL_COARSE_MIN) * 60_000;
+  const minValidMs = nowMs - FCST_MAX_FRAME_AGE_MIN * 60_000;
   let best: { iso: string; validMs: number } | null = null;
   for (const iso of validTimes) {
     const validMs = Date.parse(iso);
@@ -178,15 +186,30 @@ export function nearestForecastFrame(
   return best;
 }
 
-/** The frame the CURRENT view should display, or null for the observed
- *  layer. Centralizes the gate: scrubbed + index present + tiles healthy +
- *  clouds toggled on. At Now (not scrubbed) this is ALWAYS null — the live
- *  view stays on observed imagery (critical regression guard). */
-function forecastFrameForView(nowMs = Date.now()): { iso: string; validMs: number } | null {
+/** Shared eligibility + selection gate (ship review 2026-06-11 — the badge
+ *  previously re-implemented half of this; one gate, two callers). The
+ *  index is a parameter so the badge stays pure given (manifest, scrub
+ *  state); module state (scrub, tile health, clouds toggle) is read here. */
+function frameForIndex(
+  fc: ForecastCloudsIndex | undefined,
+  nowMs: number,
+): { iso: string; validMs: number } | null {
   if (!isScrubbed() || fcstTilesFailed || !cloudsVisible) return null;
-  const fc = currentManifest?.forecast_clouds;
   if (!fc || !Array.isArray(fc.valid_times) || fc.valid_times.length === 0) return null;
   return nearestForecastFrame(fc.valid_times, currentViewMs(nowMs), nowMs);
+}
+
+/** The frame the CURRENT view should display, or null for the observed
+ *  layer. At Now (not scrubbed) this is ALWAYS null — the live view stays
+ *  on observed imagery (critical regression guard). */
+function forecastFrameForView(nowMs = Date.now()): { iso: string; validMs: number } | null {
+  return frameForIndex(currentManifest?.forecast_clouds, nowMs);
+}
+
+/** Test-only: simulate the one-way tile-failure fallback (the real flag is
+ *  set by the MapLibre error handler, unreachable from happy-dom). */
+export function _setFcstTilesFailedForTest(failed: boolean): void {
+  fcstTilesFailed = failed;
 }
 
 /** Day-aware UTC readout for the slider (eng-review T6a): "13:30Z" today,
@@ -1923,7 +1946,9 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   // Forecast frame swap (V4-P2): scrubbed views show the GFS frame nearest
   // the view instant when one is published; observed otherwise.
   refreshForecastCloudLayer();
-  // Cloud-honesty badge (T5): wording follows the active layer.
+  // Imagery badge: three-way wording follows the active layer — GFS
+  // forecast frame (+Nh · coarse) / observed + forecast-ends clamp /
+  // observed-not-forecast fallback (T5 + V4-P2).
   refreshImageryDateBadgeForView();
   // Update active state — only the Now button has an "active" state
   // (it's the only one that represents a specific lookahead value);
@@ -1993,8 +2018,16 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   };
   // Drag-in-progress tracking: suppresses the 30s timer's value sync.
   slider.addEventListener('pointerdown', () => { sliderDragging = true; });
-  slider.addEventListener('pointerup', () => { sliderDragging = false; });
-  slider.addEventListener('pointercancel', () => { sliderDragging = false; });
+  slider.addEventListener('pointerup', () => {
+    sliderDragging = false;
+    // Run the frame swap deferred during the drag (the release's
+    // same-instant guard can skip the full refresh path entirely).
+    refreshForecastCloudLayer();
+  });
+  slider.addEventListener('pointercancel', () => {
+    sliderDragging = false;
+    refreshForecastCloudLayer();
+  });
   // Belt-and-braces (Codex adversarial 2026-06-10): a drag that loses
   // pointer capture without a pointerup on the element (page blur, OS
   // gesture swallowing the release) must not leave the sync suppressed
@@ -2115,6 +2148,14 @@ function refreshForecastCloudLayer(): void {
   const fc = currentManifest?.forecast_clouds;
   if (frame && fc) {
     const key = compactFrameKey(frame.iso);
+    // Allowlist the manifest-derived path pieces (defense-in-depth, ship
+    // review 2026-06-11): a drifted/poisoned manifest must fail CLOSED to
+    // the observed layer, not build cross-origin or traversal URLs. The
+    // shapes mirror the generator contract + the SW cache regex.
+    if (!/^clouds-fcst\/\d{8}T\d{6}Z$/.test(fc.prefix) || !/^\d{8}T\d{6}Z$/.test(key)) {
+      applyCloudsVisibility();
+      return;
+    }
     const url = `/${fc.prefix}/${key}/{z}/{x}/{y}.png`;
     try {
       if (!map.getSource('fcst-clouds')) {
@@ -2125,8 +2166,15 @@ function refreshForecastCloudLayer(): void {
           maxzoom: fc.max_zoom,
         });
         // Same stack slot as the observed clouds: under the coastline
-        // overlay so coastline/track/pins render on top.
-        const beforeId = map.getLayer('ne-coastline-layer') ? 'ne-coastline-layer' : undefined;
+        // overlay so coastline/track/pins render on top. FAIL CLOSED if
+        // the anchor layer is missing (ship review 2026-06-11): appending
+        // with undefined beforeId would paint a 0.55-opacity raster OVER
+        // the track/pins/labels — the v3.1 stacking bug class.
+        if (!map.getLayer('ne-coastline-layer')) {
+          applyCloudsVisibility();
+          return;
+        }
+        const beforeId = 'ne-coastline-layer';
         map.addLayer({
           id: 'fcst-clouds-layer',
           type: 'raster',
@@ -2136,6 +2184,16 @@ function refreshForecastCloudLayer(): void {
         }, beforeId);
         fcstCurrentFrameKey = key;
       } else if (fcstCurrentFrameKey !== key) {
+        // Defer frame SWAPS while the finger is on the slider (ship review
+        // 2026-06-11): a 36h drag crosses ~20 frame boundaries in under a
+        // second, and each setTiles clears the source's tile cache — a
+        // burst of aborted fetches + raster flicker. The current frame
+        // stays up during the drag; pointerup re-runs this refresh and
+        // swaps once, at the settled position.
+        if (sliderDragging) {
+          applyCloudsVisibility();
+          return;
+        }
         const src = map.getSource('fcst-clouds') as maplibregl.RasterTileSource & {
           setTiles?: (tiles: string[]) => unknown;
         };
@@ -2219,7 +2277,10 @@ function bindCloudToggle(): void {
     cloudsVisible = !cloudsVisible;
     try { localStorage.setItem(CLOUDS_PREF_KEY, cloudsVisible ? '1' : '0'); } catch { /* noop */ }
     reflect();
-    applyCloudsVisibility();
+    // Wire (not just show) the forecast layer: toggling clouds ON while
+    // scrubbed must CREATE the fcst source if the scrub happened with
+    // clouds off (Codex adversarial 2026-06-11).
+    refreshForecastCloudLayer();
   });
   cloudToggleBound = true;
 }
@@ -2864,13 +2925,12 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
     return;
   }
   const date = new Date(t).toISOString().slice(0, 10);
-  // T5 (eng-review 2026-06-10, Codex finding accepted): while scrubbed,
-  // the cloud raster is STILL the observed composite — pins show forecast,
-  // the background does not (until V4-P2 ships forecast frames). Say the
-  // mismatch out loud instead of letting the operator plan against
-  // yesterday's clouds believing they're tomorrow's (the trust mismatch
-  // Chris reported 2026-05-20). V4-P2's "Forecast +Nh (GFS run)" text
-  // lands in this same slot later.
+  // Badge wording follows the LAYER truth (T5 → V4-P2). Three states while
+  // scrubbed: a forecast frame is active → name it (+Nh · coarse · run);
+  // index present but the view is past coverage → observed + ends-clamp;
+  // no frames at all → the original T5 observed-not-forecast wording, so
+  // the operator never plans against yesterday's clouds believing they're
+  // tomorrow's (the trust mismatch Chris reported 2026-05-20).
   if (!isScrubbed()) {
     badge.textContent = `Imagery: ${date}`;
   } else {
@@ -2879,17 +2939,18 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
     // badge and its tests stay pure given (manifest, scrub state).
     const nowMs = Date.now();
     const fc = manifest.forecast_clouds;
+    const frame = frameForIndex(fc, nowMs);
     const eligible = !!fc && cloudsVisible && !fcstTilesFailed
       && Array.isArray(fc.valid_times) && fc.valid_times.length > 0;
-    const frame = eligible
-      ? nearestForecastFrame(fc!.valid_times, currentViewMs(nowMs), nowMs)
-      : null;
     if (frame && fc) {
-      const aheadH = Math.max(0, Math.round((frame.validMs - nowMs) / 3_600_000));
+      const aheadH = Math.round((frame.validMs - nowMs) / 3_600_000);
       const runHH = fc.gfs_run.slice(11, 13);
       // "coarse" disclosed by design (A6 gate 2026-06-10): 5° cells are
-      // synoptic blobs — pre-empt the deep-zoom expectation gap.
-      badge.textContent = `Clouds: GFS forecast +${aheadH}h · coarse (${runHH}z)`;
+      // synoptic blobs — pre-empt the deep-zoom expectation gap. Sub-hour
+      // horizons say "now" — "+0h" would label a slightly-past frame as
+      // future (ship review 2026-06-11).
+      const horizon = aheadH < 1 ? 'now' : `+${aheadH}h`;
+      badge.textContent = `Clouds: GFS forecast ${horizon} · coarse (${runHH}z)`;
     } else if (eligible && lastValidTimeMs(fc!) < currentViewMs(nowMs)) {
       // Index exists but the view is past the last frame (locked A4 clamp
       // wording — rare with the +48h tail, real on a stale manifest).
