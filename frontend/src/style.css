@@ -2225,3 +2225,8 @@ body.shotlist-bar-visible main {
 .photo-conditions-more:focus-visible {
   color: var(--text);
 }
+.pass-thumbnail-panel {
+  /* Root when photo conditions are present: thumbnail box + conditions
+   * block as siblings, spanning the card column (D4 full width). */
+  display: block;
+}

@@ -409,21 +409,25 @@ export function renderPassThumbnail(
 
   wrap.appendChild(caption);
 
-  // Photo conditions (Unit 1, D4): full-card-width block BELOW the image —
-  // the caption above is a 256px overlay and cannot hold condition content.
-  // Zero rows render nothing (busy-ness rule 5: silence is a feature).
-  renderConditionBlock(
-    buildConditionRows({ pass, manifest: null, nowMs }),
-    wrap,
-  );
-
   // Esri attribution (ToS requirement; free-tier non-commercial use).
   const attr = document.createElement('div');
   attr.className = 'pass-thumbnail-attribution';
   attr.textContent = '© Esri, Maxar, Earthstar Geographics';
   wrap.appendChild(attr);
 
-  return wrap;
+  // Photo conditions (Unit 1, D4): the block must be a SIBLING of the
+  // 256px thumbnail box, not a child — .pass-thumbnail is overflow:hidden
+  // with a fixed height, which silently clips any in-box content below the
+  // image (visual QA 2026-06-11: DOM checks passed while the block was
+  // invisible). The panel root spans the card width, so the conditions
+  // rows get the full-width layout D4 locked.
+  const rows = buildConditionRows({ pass, manifest: null, nowMs });
+  if (rows.length === 0) return wrap;
+  const panel = document.createElement('div');
+  panel.className = 'pass-thumbnail-panel';
+  panel.appendChild(wrap);
+  renderConditionBlock(rows, panel);
+  return panel;
 }
 
 /** Replace the tile <img> with a gray placeholder + caption when the

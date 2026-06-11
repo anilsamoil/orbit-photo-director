@@ -211,7 +211,10 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
 
   it('renders the .pass-thumbnail wrapper with an <img> at the correct Esri URL', () => {
     const el = renderPassThumbnail(samplePass, null, NOW);
-    expect(el.className).toBe('pass-thumbnail');
+    // With photo conditions present (samplePass has nadir geometry) the
+    // root is the panel; the 256px thumbnail box is its first child.
+    expect(el.className).toBe('pass-thumbnail-panel');
+    expect(el.firstElementChild!.className).toBe('pass-thumbnail');
     const img = el.querySelector<HTMLImageElement>('img.pass-thumbnail-image');
     expect(img).not.toBeNull();
     expect(img!.src).toMatch(/server\.arcgisonline\.com\/ArcGIS\/rest\/services\/World_Imagery/);
@@ -242,13 +245,18 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     // 87km nadir / 410km alt → slant ≈ 419km: same rounded numbers as nadir.
     expect(row!.querySelector('.photo-condition-value')!.textContent)
       .toBe('400mm ≈38km ≥1/640 · 800mm ≈19km ≥1/1250 · 1200mm ≈13km ≥1/2000');
-    // The block must NOT live inside the 256px caption overlay (D4).
+    // The block must be a SIBLING of the 256px box, never inside it —
+    // .pass-thumbnail is overflow:hidden and silently clips in-box content
+    // (visual QA 2026-06-11). And never in the caption overlay (D4).
+    expect(el.querySelector('.pass-thumbnail .photo-conditions')).toBeNull();
     expect(el.querySelector('.pass-thumbnail-caption .photo-conditions')).toBeNull();
   });
 
   it('omits the conditions block entirely when the pass has no nadir geometry', () => {
     const broken = { ...samplePass, nadir_distance_km: NaN };
     const el = renderPassThumbnail(broken, null, NOW);
+    // Degenerate passes keep the ORIGINAL root — zero structural change.
+    expect(el.className).toBe('pass-thumbnail');
     expect(el.querySelector('.photo-conditions')).toBeNull();
     expect(el.querySelector('.photo-conditions-divider')).toBeNull();
   });
@@ -420,8 +428,12 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     const placeholder = el.querySelector('.pass-thumbnail-placeholder');
     expect(placeholder).not.toBeNull();
     expect(placeholder!.textContent).toContain('Imagery unavailable');
-    // The wrap gets a class flag so the polyline overlay can still show.
-    expect(el.classList.contains('pass-thumbnail-tile-failed')).toBe(true);
+    // The wrap (the 256px box — root may be the conditions panel) gets a
+    // class flag so the polyline overlay can still show.
+    const box = el.classList.contains('pass-thumbnail')
+      ? el
+      : el.querySelector('.pass-thumbnail')!;
+    expect(box.classList.contains('pass-thumbnail-tile-failed')).toBe(true);
   });
 
   it('omits the polyline when no track is available', () => {
