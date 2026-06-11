@@ -56,9 +56,28 @@ done < <(find "$V_DIR" -type f)
 echo "==> Uploaded $COUNT version artifacts"
 
 # 2. Atomic pointer flip: copy manifest.json LAST.
+#
+# V4-P2 guard (Codex adversarial 2026-06-11): this fallback path uploads
+# only v/$VERSION — it does NOT upload out/clouds-fcst/ (per-file wrangler
+# puts for ~1,800 tiles would blow the deploy timeout). Publishing a
+# manifest whose forecast_clouds index points at never-uploaded tiles
+# would 404 every client and trip their one-way session fallback. Strip
+# the key before flipping: clients gracefully stay on the observed layer
+# (locked A4) until an rclone deploy publishes the frames.
+MANIFEST_TO_FLIP="$OUT_DIR/manifest.json"
+if python3 -c "import json,sys; sys.exit(0 if 'forecast_clouds' in json.load(open('$OUT_DIR/manifest.json')) else 1)" 2>/dev/null; then
+  echo "WARN: wrangler fallback cannot upload forecast cloud frames — stripping forecast_clouds from the published manifest (observed-layer fallback)" >&2
+  MANIFEST_TO_FLIP=$(mktemp)
+  python3 -c "
+import json
+m = json.load(open('$OUT_DIR/manifest.json'))
+m.pop('forecast_clouds', None)
+open('$MANIFEST_TO_FLIP', 'w').write(json.dumps(m, indent=2, sort_keys=True))
+"
+fi
 echo "==> Atomic flip: writing manifest.json"
 wrangler r2 object put "$BUCKET/manifest.json" \
-  --file "$OUT_DIR/manifest.json" \
+  --file "$MANIFEST_TO_FLIP" \
   --content-type "application/json" \
   --cache-control "public, max-age=10" \
   --remote >/dev/null 2>&1

@@ -35,6 +35,19 @@ export interface Manifest {
    *  per-astronaut map of variant artifacts. Use `resolveArtifactEntry()`
    *  from `manifest.ts` to access either kind safely. */
   artifacts: Record<string, ArtifactEntry | ProfileArtifactsBlock | undefined>;
+  /** V4-P2 forecast cloud frame index (absent when the generator flag is
+   *  off or the render failed — the map stays on the observed layer). */
+  forecast_clouds?: ForecastCloudsIndex;
+}
+
+/** Index of GFS forecast cloud tile frames published by the generator
+ *  (generator/forecast_clouds.py). Frames live at
+ *  `<prefix>/<compactKey(valid_time)>/{z}/{x}/{y}.png` from the site root. */
+export interface ForecastCloudsIndex {
+  gfs_run: string;
+  prefix: string;
+  valid_times: string[];
+  max_zoom: number;
 }
 
 export interface PassEntry {

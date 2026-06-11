@@ -46,6 +46,7 @@ def write_manifest(
     artifacts: dict[str, Path],
     extra: dict[str, Any] | None = None,
     profile_artifacts: dict[str, dict[str, Path]] | None = None,
+    forecast_clouds: dict[str, Any] | None = None,
 ) -> Path:
     """Write manifest.json (top-level, atomic-swap pointer) describing this version's artifacts.
 
@@ -125,6 +126,12 @@ def write_manifest(
     }
     if extra:
         manifest["extra"] = extra
+    # V4-P2: TOP-LEVEL key — the frontend reads manifest.forecast_clouds
+    # directly (caught by the ship-time run_tick wiring test 2026-06-10:
+    # routing this through `extra` nested it under manifest.extra and
+    # silently broke the generator↔frontend contract).
+    if forecast_clouds:
+        manifest["forecast_clouds"] = forecast_clouds
 
     manifest_path = out_dir / "manifest.json"
     tmp_path = manifest_path.with_suffix(".json.tmp")

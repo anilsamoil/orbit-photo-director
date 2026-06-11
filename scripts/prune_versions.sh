@@ -43,4 +43,27 @@ rclone delete "$REMOTE/v/" \
 # 3. Empty leftover directory entries (rclone leaves dir markers on some backends).
 rclone rmdirs "$REMOTE/v/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
 
+# 4. Forecast cloud runs (V4-P2, rewritten 2026-06-11 per ship review):
+# keep the TWO newest run dirs by name (compact keys sort chronologically),
+# mirroring the generator's local KEEP_RUNS=2 — the previous run must
+# survive so clients on a not-yet-flipped manifest never 404. The earlier
+# --min-age approach deleted the deliberately-kept previous run every day
+# (delete/re-upload churn + a 404 window), and its empty-exclude array
+# aborted under bash 3.2 set -u whenever the manifest had no
+# forecast_clouds key (i.e. the feature-off default — the prune cron died
+# before this point on every run).
+FCST_DIRS=$(rclone lsf "$REMOTE/clouds-fcst/" --dirs-only 2>/dev/null | sed 's:/$::' | sort || true)
+if [ -n "$FCST_DIRS" ]; then
+  KEEPERS=$(printf '%s\n' "$FCST_DIRS" | tail -2)
+  printf '%s\n' "$FCST_DIRS" | while IFS= read -r RUN_DIR; do
+    [ -z "$RUN_DIR" ] && continue
+    if printf '%s\n' "$KEEPERS" | grep -qx "$RUN_DIR"; then
+      continue
+    fi
+    echo "==> Pruning old forecast run: clouds-fcst/$RUN_DIR"
+    rclone purge "$REMOTE/clouds-fcst/$RUN_DIR" $VERBOSE_FLAG 2>/dev/null || true
+  done
+fi
+rclone rmdirs "$REMOTE/clouds-fcst/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
+
 echo "==> Prune complete"
