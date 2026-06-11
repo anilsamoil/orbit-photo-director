@@ -27,7 +27,7 @@ import { probeConnectivity } from './network-probe';
 import { buildIcs } from './ics';
 import { shareOrDownloadIcs } from './calendar-share';
 import { clearShotlist, isInShotlist, nextSequence, pruneExpired, shotlistCount, toggleShotlist } from './shotlist';
-import { fetchKpData, initKpWidget, renderKpWidget } from './aurora';
+import { fetchKpData, initKpWidget, refreshAuroraVisibility, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { hydratePersonalTargets } from './profile-crud';
@@ -261,7 +261,25 @@ async function doRefresh(): Promise<void> {
     // regardless of how many refresh ticks happen client-side.
     void fetchKpData().then((kp) => {
       const widget = document.getElementById('kp-widget');
-      if (widget) renderKpWidget(kp, widget);
+      if (widget) {
+        renderKpWidget(kp, widget);
+        // Aurora v1.1: append the honest "visible from the station?" note.
+        // Internally rate-limited to one 9KB grid fetch per 10 min; the
+        // assessment re-runs against the LIVE subpoint on every refresh.
+        // Only meaningful when the Kp badge itself rendered (kp non-null).
+        if (kp) {
+          // INTENTIONALLY live even while time-scrubbed (4A live-domain
+          // rule, same as the topbar): OVATION is a ~30min nowcast — it
+          // cannot answer "+6h" questions, so the note always describes
+          // NOW at the live subpoint. Do not "fix" this to follow
+          // viewTimeMs; that would ship dishonest output.
+          const pos = currentTrack ? liveIssNow(currentTrack, Date.now()) : null;
+          refreshAuroraVisibility(pos, widget).catch(() => {
+            // The aurora note is optional garnish — a failure here must
+            // never take the Kp badge (or the poll loop) down with it.
+          });
+        }
+      }
     });
 
     renderQueue();

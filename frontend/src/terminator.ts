@@ -489,8 +489,10 @@ const ISS_ECLIPSE_THRESHOLD_DEG = 90 + ISS_HORIZON_HALF_ANGLE_DEG;
 
 /** Great-circle angle (in degrees) between two points on a unit sphere
  *  given (lat, lon) in degrees. Used to find the angle from the Sun's
- *  subsolar point to an arbitrary sub-point. */
-function greatCircleAngleDeg(
+ *  subsolar point to an arbitrary sub-point. Exported for aurora.ts's
+ *  sun-elevation gate (90° − this angle), keeping one clamped (A7)
+ *  implementation instead of a km→angle round-trip. */
+export function greatCircleAngleDeg(
   lat1: number, lon1: number,
   lat2: number, lon2: number,
 ): number {

@@ -454,6 +454,12 @@ describe('routing + CORS', () => {
     expect(r.status).toBe(405);
   });
 
+  it('rejects POST to /api/aurora (read-only route)', async () => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/aurora', { method: 'POST' });
+    expect(r.status).toBe(405);
+  });
+
   it('attaches CORS headers to allowed origin', async () => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/health', {
