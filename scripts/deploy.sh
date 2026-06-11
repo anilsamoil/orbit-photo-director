@@ -43,6 +43,20 @@ rclone copy "$OUT_DIR/v/" "$REMOTE/v/" \
   --header-upload "Cache-Control: public, max-age=3600, immutable" \
   $VERBOSE_FLAG
 
+# V4-P2 forecast cloud frames (additive copy BEFORE the manifest flip, same
+# rationale as /v/: the manifest must never reference a frame set that isn't
+# fully uploaded). The run-keyed dirs are immutable once published; local
+# prune (KEEP_RUNS=2 in generator/forecast_clouds.py) propagates via
+# prune_versions.sh, not here — same no-sync-deletes discipline as /v/.
+if [ -d "$OUT_DIR/clouds-fcst" ]; then
+  echo "==> Uploading forecast cloud frames (additive copy): $OUT_DIR/clouds-fcst/ -> $REMOTE/clouds-fcst/"
+  rclone copy "$OUT_DIR/clouds-fcst/" "$REMOTE/clouds-fcst/" \
+    --transfers 8 \
+    --checkers 16 \
+    --header-upload "Cache-Control: public, max-age=21600, immutable" \
+    $VERBOSE_FLAG
+fi
+
 echo "==> Atomic pointer flip: copying manifest.json LAST"
 rclone copyto "$OUT_DIR/manifest.json" "$REMOTE/manifest.json" \
   --header-upload "Cache-Control: public, max-age=10" \

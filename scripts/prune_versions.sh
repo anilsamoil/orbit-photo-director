@@ -43,4 +43,23 @@ rclone delete "$REMOTE/v/" \
 # 3. Empty leftover directory entries (rclone leaves dir markers on some backends).
 rclone rmdirs "$REMOTE/v/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
 
+# 4. Forecast cloud runs (V4-P2): preserve the run the current manifest's
+# forecast_clouds.prefix points at (plus anything younger than KEEP_HOURS —
+# covers the freshly-published run). One GFS run lives ~6h, so the default
+# horizon naturally keeps the active + previous run, mirroring the local
+# KEEP_RUNS=2 prune in generator/forecast_clouds.py.
+CURRENT_FCST_PREFIX=$(rclone cat "$REMOTE/manifest.json" 2>/dev/null \
+  | python3 -c "import json,sys; print((json.load(sys.stdin).get('forecast_clouds') or {}).get('prefix',''))" 2>/dev/null || true)
+FCST_EXCLUDE=()
+if [ -n "$CURRENT_FCST_PREFIX" ]; then
+  # prefix is "clouds-fcst/<runkey>" — strip the root for the exclude glob.
+  FCST_EXCLUDE=(--exclude "${CURRENT_FCST_PREFIX#clouds-fcst/}/**")
+fi
+rclone delete "$REMOTE/clouds-fcst/" \
+  --min-age "${KEEP_HOURS}h" \
+  --use-server-modtime \
+  "${FCST_EXCLUDE[@]}" \
+  $VERBOSE_FLAG 2>/dev/null || true
+rclone rmdirs "$REMOTE/clouds-fcst/" --leave-root $VERBOSE_FLAG 2>/dev/null || true
+
 echo "==> Prune complete"

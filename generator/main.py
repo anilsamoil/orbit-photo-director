@@ -1040,6 +1040,22 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                     exc,
                 )
 
+    # 5d. Forecast cloud frames (V4-P2). Gated by OPD_ENABLE_FORECAST_CLOUDS.
+    # Renders at most once per GFS run (write_frames no-ops between runs);
+    # any failure logs + omits the manifest key so the frontend stays on the
+    # observed layer (locked A4 fallback — never blank, never stale-labeled).
+    forecast_clouds_index: dict[str, Any] | None = None
+    if settings.enable_forecast_clouds:
+        try:
+            from .forecast_clouds import write_frames
+
+            forecast_clouds_index = write_frames(settings.out_dir, n)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "forecast cloud frames failed (%s); manifest omits forecast_clouds",
+                exc,
+            )
+
     # 6. Manifest
     artifacts_block: dict[str, Path] = {
         "passes": canonical_artifacts["passes"],
@@ -1059,6 +1075,9 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         build_version=__version__,
         artifacts=artifacts_block,
         profile_artifacts=profile_artifacts,
+        extra={"forecast_clouds": forecast_clouds_index}
+        if forecast_clouds_index
+        else None,
     )
 
     deleted = cleanup_old_versions(settings.out_dir, keep_minutes=60)
