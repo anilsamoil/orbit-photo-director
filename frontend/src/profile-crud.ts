@@ -594,7 +594,11 @@ function geocodeErrorMessage(
 /** Optimistic add: persist locally, re-render, fire API, rollback on
  *  failure. Returns 'ok' on success or a human-readable error message
  *  on rollback. */
-async function handleAdd(profileName: string, target: PersonalTarget): Promise<'ok' | string> {
+/** Exported for the map's pin-popup "Add to my targets" footer (Jack's
+ *  ask, 2026-06-11): one add pathway app-wide — optimistic local save,
+ *  POST, rollback + error toast on failure (D1=B: a mid-LOS add fails
+ *  honestly; the operator retries when the link returns). */
+export async function handleAdd(profileName: string, target: PersonalTarget): Promise<'ok' | string> {
   const before = safeLoadProfile(profileName);
   if (!before) return 'Could not load active profile.';
   let next: Profile;

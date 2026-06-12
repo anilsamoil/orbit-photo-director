@@ -20,6 +20,7 @@ import { liveIssNow, liveIssPosition, wrapLon } from './iss';
 import { isTleStale } from './banner';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
+import { handleAdd } from './profile-crud';
 import {
   findUpcomingPasses,
   roundForZoom,
@@ -41,7 +42,7 @@ import {
   terminatorNightPolygonFeatures,
   type IssIllumination,
 } from './terminator';
-import { loadProfile, parseProfileFromURL, type PersonalTarget } from './profile';
+import { loadProfile, parseProfileFromURL, validatePersonalTargetInput, type PersonalTarget } from './profile';
 import { applyTargetFilter, getTargetFilter } from './target-filter-pref';
 import { subscribeProfileChanged } from './profile-events';
 
@@ -3245,6 +3246,12 @@ function handlePinDrop(lng: number, lat: number): void {
 
   // Build popup body via DOM (Q1: no innerHTML).
   const body = buildPinDropPopup(pinLat, pinLon, rounded.precision, sectionsForPopup);
+  // Pin → personal target (Jack 2026-06-11): footer button + inline name
+  // field. Profile from the URL (house pattern — map stays URL-authoritative).
+  const pinProfile = parseProfileFromURL(window.location.href);
+  body.appendChild(buildPinAddFooter(pinLat, pinLon, rounded.precision, pinProfile, () => {
+    dismissDroppedPin();
+  }));
 
   // Replace any prior popup.
   if (droppedPinPopup) droppedPinPopup.remove();
@@ -3359,6 +3366,114 @@ function formatUtc(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+/** Coordinate-derived default target name, e.g. "42.4°N 71.1°W" — editable
+ *  by the operator before saving. NO reverse geocoding by design (plan
+ *  2026-06-11): a third-party lookup adds latency + a network dependency
+ *  to a moment that must work during LOS, and operators rename pins to
+ *  personal names anyway. */
+export function coordTargetName(lat: number, lon: number, precision: number): string {
+  const latStr = `${Math.abs(lat).toFixed(precision)}°${lat >= 0 ? 'N' : 'S'}`;
+  const lonStr = `${Math.abs(lon).toFixed(precision)}°${lon >= 0 ? 'E' : 'W'}`;
+  return `${latStr} ${lonStr}`;
+}
+
+/** Footer for the pin popup: [➕ Add to my targets] → inline name field
+ *  (pre-filled with the coordinate name) + Save/Cancel. Save runs the
+ *  Profile tab's exact add pathway (handleAdd: optimistic save → POST →
+ *  rollback + toast on failure, D1=B) and closes the popup on success.
+ *  Validation errors render inline and keep the popup open for a rename.
+ *  textContent throughout. Exported for unit testing. */
+export function buildPinAddFooter(
+  pinLat: number,
+  pinLon: number,
+  precision: number,
+  profileName: string,
+  onAdded: () => void,
+  addFn: typeof handleAdd = handleAdd,
+): HTMLElement {
+  const footer = document.createElement('div');
+  footer.className = 'pin-add-footer';
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'pin-add-button';
+  addBtn.textContent = '➕ Add to my targets';
+  footer.appendChild(addBtn);
+
+  addBtn.addEventListener('click', () => {
+    addBtn.remove();
+    const form = document.createElement('div');
+    form.className = 'pin-add-form';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'pin-add-name';
+    input.maxLength = 200;
+    input.value = coordTargetName(pinLat, pinLon, precision);
+    input.setAttribute('aria-label', 'Target name');
+
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'pin-add-save';
+    save.textContent = 'Save';
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'pin-add-cancel';
+    cancel.textContent = 'Cancel';
+
+    const err = document.createElement('div');
+    err.className = 'pin-add-error';
+    err.hidden = true;
+
+    form.append(input, save, cancel, err);
+    footer.appendChild(form);
+    input.focus();
+    input.select();
+
+    cancel.addEventListener('click', () => {
+      form.remove();
+      footer.appendChild(addBtn);
+    });
+
+    const submit = async (): Promise<void> => {
+      // Whitespace-only name falls back to the coordinate name rather
+      // than erroring — the operator's intent ("just save the spot") is
+      // unambiguous.
+      const name = input.value.trim() || coordTargetName(pinLat, pinLon, precision);
+      const validated = validatePersonalTargetInput({
+        profileName, name, lat: pinLat, lon: pinLon,
+      });
+      if (!validated.ok) {
+        err.textContent = validated.error === 'name_too_long'
+          ? 'Name too long (200 characters max).'
+          : `Could not save: ${validated.error}`;
+        err.hidden = false;
+        return;
+      }
+      save.disabled = true;
+      save.textContent = 'Saving…';
+      const result = await addFn(profileName, validated.target);
+      if (result === 'ok') {
+        onAdded(); // success toast comes from handleAdd; close the popup
+        return;
+      }
+      // Failure (validation/duplicate/network-rollback): handleAdd already
+      // toasted; keep the popup open for a rename/retry and show why.
+      err.textContent = result;
+      err.hidden = false;
+      save.disabled = false;
+      save.textContent = 'Save';
+    };
+    save.addEventListener('click', () => { void submit(); });
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); void submit(); }
+    });
+  });
+
+  return footer;
 }
 
 /** Clock-only UTC for the pin-drop popup. v1.6.1.2 dropped the date
