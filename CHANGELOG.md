@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.12.1.0] - 2026-06-11
+
+## **Scrubbing forward shows real clouds again. The gray forecast slabs are gone.**
+
+Operator verdict from the iPad: the forecast cloud tiles that appeared when you scrubbed the time slider read as flat gray and black areas — not something you could plan against. They're gone. Scrub anywhere in the next 36 hours and the map keeps the real observed imagery, with the badge stating plainly: "Clouds: observed — not forecast." The ☁️ toggle does what it always did — current cloud cover on and off — and you make your own call about the future. No new buttons, nothing else moved.
+
+### Itemized changes
+
+#### Changed
+- Time-scrubbed views no longer swap to GFS forecast cloud frames; observed imagery + the honest badge in all scrub states. The generator stopped producing forecast frames (and stopped spending its weather-API budget on them).
+
+#### Internal
+- Implemented as a master switch over the verified pipeline rather than a deletion — re-enabling with a sharper forecast source someday is a flag flip. Frame machinery remains fully tested in its dormant state, plus a new default-off regression pin. Suite: 1152.
+
 ## [1.12.0.0] - 2026-06-11
 
 ## **See something out the window? Press the map, name it, and it's in your shot plan.**
