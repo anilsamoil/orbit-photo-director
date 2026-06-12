@@ -2,6 +2,22 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.13.0.0] - 2026-06-11
+
+## **The app now warns you before the sun refuses to set. Night photography gets a forecast.**
+
+Every couple of months the station's orbit tilts so far toward the sun that it stops passing through Earth's shadow — days with no orbital night at all. Aurora, cities at night, star fields, sprites: physically unavailable, no matter what the Kp badge says. Starting now, the Upcoming tab tells you before it happens: a quiet amber line appears when a blackout is underway or starting within a week — "No orbital night through Jun 24 (β 72°)" — and says the honest version ("orbital night under 15 min") when nights shrink without fully vanishing. Tap it for the full explanation in the Photography Almanac, including the flip side: those same days deliver continuous low-angle sunlight — long-shadow texture passes and sun-never-sets time-lapses.
+
+Computed on your iPad from the same orbit data everything else uses, fourteen days ahead, six-hour resolution. No notice means what it says: normal nights ahead (today's real numbers: ~35 minutes of darkness per orbit, no blackout in the next two weeks — so you won't see the line until it matters).
+
+### Itemized changes
+
+#### Added
+- **Beta-angle blackout forecast**: Upcoming-tab notice (inside a window, or ≤7 days before one; silent otherwise), hard-zero condition rows on night-regime targets, and an almanac entry covering the ~2-month β rhythm and the ~70° full-sun threshold.
+
+#### Internal
+- SGP4-propagated orbit normal against the terminator's own solar model (one sun, no frame mixing); eclipse math verified against references (36.0 min night at β=0; critical β ≈69.7° at 420 km, decreasing with altitude). 20 new tests (suite: 1172) including a live-TLE smoke and a physically eclipse-free dawn-dusk fixture for the hard-zero paths.
+
 ## [1.12.2.0] - 2026-06-11
 
 ## **The app boots 20% lighter. Built for an iPad on a laggy link, audited to stay that way.**
