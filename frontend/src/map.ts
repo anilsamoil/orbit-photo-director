@@ -22,6 +22,7 @@ import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
 import { handleAdd } from './profile-crud';
 import {
+  greatCircleBearingDeg,
   findUpcomingPasses,
   roundForZoom,
   type UpcomingPass,
@@ -1810,23 +1811,7 @@ function refreshMyTargetsSource(): void {
   upsertGeoJson(map, 'my-targets', { type: 'FeatureCollection', features });
 }
 
-/** Great-circle initial bearing from (lat1, lon1) to (lat2, lon2), in degrees
- *  clockwise from true north (0..360). Standard formula; ISS travels along
- *  great circles so this is the correct way to read direction-of-travel
- *  vs flat-Earth atan2(Δlat, Δlon). At ISS speed (~7.7 km/s, 30s spacing)
- *  the great-circle vs rhumb-line difference is negligible, but using the
- *  right formula means antimeridian + polar passes don't blow up.
- */
-export function greatCircleBearingDeg(
-  lat1: number, lon1: number, lat2: number, lon2: number,
-): number {
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-  const y = Math.sin(Δλ) * Math.cos(φ2);
-  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-}
+
 
 /** Compute the ISS heading (degrees clockwise from north) by sampling
  *  ISS position at `nowMs` and `nowMs + 30s`. Returns null if either
@@ -3352,7 +3337,7 @@ export function buildPinDropPopup(
       rel.style.fontWeight = '600';
       rel.textContent = formatRelative(p.closestApproachMs - nowMs);
       const utc = document.createElement('span');
-      utc.textContent = formatUtcClock(p.closestApproachMs);
+      utc.textContent = formatUtcHm(p.closestApproachMs);
       const nadir = document.createElement('span');
       nadir.style.textAlign = 'right';
       nadir.textContent = `${Math.round(p.nadirKm)} km`;
@@ -3502,14 +3487,7 @@ export function buildPinAddFooter(
   return footer;
 }
 
-/** Clock-only UTC for the pin-drop popup. v1.6.1.2 dropped the date
- *  portion to free up a column for the angle/window/direction hint —
- *  the relative "+12m" / "+1d3h" already implies which day. */
-export function formatUtcClock(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
-}
+
 
 /** Format the "where do I point the camera" hint for one pass row.
  *  Returns "" if the pass has no window/bearing data (older builds).

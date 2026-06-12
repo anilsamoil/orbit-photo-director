@@ -162,8 +162,3 @@ export function registerViirsAlphaProtocol(mapLibre: typeof maplibregl): void {
   });
 }
 
-/** Test-only: reset the registered flag so multiple test files can each
- *  call registerViirsAlphaProtocol against fresh mocks. */
-export function _resetRegisteredForTest(): void {
-  registered = false;
-}

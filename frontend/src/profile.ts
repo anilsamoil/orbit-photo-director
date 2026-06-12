@@ -334,14 +334,6 @@ export function loadOrCreateProfileFromURL(urlHref: string): Profile {
   return fresh;
 }
 
-/** Test-only helper to reset module state. Used by vitest beforeEach to
- *  ensure test isolation when many tests touch localStorage. NOT for
- *  production code. */
-export function _resetForTests(): void {
-  // No module-level state to reset in v1 (loaders are pure). Tests
-  // wipe their own localStorage. Provided so callers don't have to
-  // import a no-op stub.
-}
 
 // ---------------------------------------------------------------------------
 // Slot 6 — Profile tab CRUD helpers (locked 2026-05-26).
