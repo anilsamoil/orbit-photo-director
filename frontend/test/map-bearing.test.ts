@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { greatCircleBearingDeg } from '../src/map';
+import { greatCircleBearingDeg } from '../src/pin-drop';
 
 describe('greatCircleBearingDeg', () => {
   it('due north → 0°', () => {

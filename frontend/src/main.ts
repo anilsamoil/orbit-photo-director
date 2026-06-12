@@ -30,7 +30,6 @@ import { clearShotlist, isInShotlist, nextSequence, pruneExpired, shotlistCount,
 import { fetchKpData, initKpWidget, refreshAuroraVisibility, renderKpWidget } from './aurora';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
-import { hydratePersonalTargets } from './profile-crud';
 import { subscribeProfileChanged } from './profile-events';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
@@ -1334,7 +1333,17 @@ async function init(): Promise<void> {
   // needing a Profile-tab visit first. No-ops without a calibration token and
   // stays retryable until one is set. saveProfile fires 'profile-changed', so
   // an already-open map picks the rings up. Fire-and-forget.
-  if (currentProfile) void hydratePersonalTargets(currentProfile.name);
+  // Dynamic import (boot-slim review 2026-06-11): the static import dragged
+  // ~37KB of profile-CRUD machinery (geocode, CSV parse, JSON IO, API) into
+  // the boot chunk — 28% of boot JS for a background hydrate that isn't
+  // needed to paint the Queue. The lazy profile-ui chunk picks it up too;
+  // bundlers dedupe into one shared chunk fetched off the critical path.
+  if (currentProfile) {
+    const name = currentProfile.name;
+    void import('./profile-crud').then(({ hydratePersonalTargets }) => {
+      void hydratePersonalTargets(name);
+    }).catch(() => { /* hydrate is best-effort; Profile tab retries on open */ });
+  }
   // V4-P2 aurora widget: attach the click handler once. Widget content is
   // rendered later by refresh() once /api/kp resolves.
   const kpWidget = document.getElementById('kp-widget');

@@ -441,13 +441,6 @@ main {
 }
 
 .score-label { color: var(--text-dim); }
-.score-value {
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  color: var(--text);
-  font-size: 1.1rem;
-}
-
 /* V4-P2 5-star alignment (v1.2.5.0). Stars replace the numeric score in
  * the card headline so predicted and rated scales align (operator rates
  * 1-5★ post-shoot; we now predict on the same scale). Yellow color so
@@ -526,11 +519,6 @@ main {
 .score-breakdown-table .sb-foot .sb-val {
   color: var(--accent);
   font-size: 0.95rem;
-}
-
-.card-note {
-  grid-area: meta;
-  color: var(--text-dim);
 }
 
 .card-actions {
@@ -1875,24 +1863,8 @@ body.shotlist-bar-visible main {
  * Subtitle gives Chris-asked-for "what does this tab actually mean" answer
  * inline, no need to remember the difference. */
 .pane-header,
-.upcoming-header {
-  max-width: 720px;
-  margin: 0 auto 1rem;
-}
 .pane-title,
-.upcoming-title {
-  margin: 0 0 0.2rem 0;
-  font-size: 1.15rem;
-  font-weight: 600;
-}
 .pane-sub,
-.upcoming-sub {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--text-dim);
-  line-height: 1.4;
-}
-
 /* Forecast cards have a softer accent so the user can tell observed-now
  * (Queue) from forecast-later (Upcoming) at a glance. */
 .card.forecast .card-countdown {

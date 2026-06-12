@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatShootHint, formatUtcClock } from '../src/map';
+import { formatShootHint, formatUtcHm } from '../src/map';
 import type { UpcomingPass } from '../src/pin-drop';
 
 // Regression: v1.6.1.2 — pin-drop popup gains a "shoot from" hint.
@@ -21,24 +21,24 @@ function makePass(overrides: Partial<UpcomingPass> = {}): UpcomingPass {
   };
 }
 
-describe('formatUtcClock (v1.6.1.2 — dropped date, kept HH:MMZ)', () => {
+describe('popup clock format (v1.6.1.2 dropped the date; boot-slim 2026-06-11 unified on formatUtcHm)', () => {
   it('renders 23:33Z for the Atlas V Amazon Leo example', () => {
     const ms = Date.UTC(2026, 4, 29, 23, 33, 0);
-    expect(formatUtcClock(ms)).toBe('23:33Z');
+    expect(formatUtcHm(ms)).toBe('23:33Z');
   });
 
   it('zero-pads single-digit hours and minutes', () => {
     const ms = Date.UTC(2026, 0, 1, 4, 7, 0);
-    expect(formatUtcClock(ms)).toBe('04:07Z');
+    expect(formatUtcHm(ms)).toBe('04:07Z');
   });
 
   it('midnight UTC is 00:00Z', () => {
     const ms = Date.UTC(2026, 0, 1, 0, 0, 0);
-    expect(formatUtcClock(ms)).toBe('00:00Z');
+    expect(formatUtcHm(ms)).toBe('00:00Z');
   });
 
   it('does not include date components', () => {
-    const s = formatUtcClock(Date.UTC(2026, 4, 29, 12, 34, 0));
+    const s = formatUtcHm(Date.UTC(2026, 4, 29, 12, 34, 0));
     expect(s).not.toMatch(/2026/);
     expect(s).not.toMatch(/05|29/);
   });

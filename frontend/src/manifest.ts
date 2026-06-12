@@ -185,14 +185,6 @@ export async function fetchTop24h(
   return fetchArtifact<PassEntry[]>(manifest, 'top_24h', baseUrl, profileName);
 }
 
-export async function fetchPasses(
-  manifest: Manifest,
-  baseUrl = '',
-  profileName?: string,
-): Promise<PassEntry[]> {
-  return fetchArtifact<PassEntry[]>(manifest, 'passes', baseUrl, profileName);
-}
-
 /** Track (ISS ground-track polynomial + raw SGP4 samples + TLE) is
  *  profile-agnostic — the ISS orbit is the same regardless of which
  *  astronaut is looking. Stays at canonical top-level; no profileName
