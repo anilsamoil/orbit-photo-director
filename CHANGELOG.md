@@ -2,6 +2,19 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.12.2.0] - 2026-06-11
+
+## **The app boots 20% lighter. Built for an iPad on a laggy link, audited to stay that way.**
+
+A bulk review of the whole frontend, with orbit constraints as the yardstick: the code that must arrive before you see your pass queue is now 38KB compressed (was 48KB) — profile-management machinery that loaded at boot for no visual benefit now arrives lazily in the background. The heavy map engine was already lazy; photo-lookup already lazy; the audit found zero unused dependencies and about 1KB of true dead code in 18,000 lines, now removed.
+
+The offline story stays strong: one visit caches the entire app (354KB compressed, one time) so every later launch — including during LOS — serves from the iPad itself.
+
+### Itemized changes
+
+#### Changed
+- Boot JS chunk −20% (gzip): profile-CRUD machinery moved off the boot path into a shared lazy chunk; two duplicate helpers unified; dead exports and orphaned CSS removed.
+
 ## [1.12.1.0] - 2026-06-11
 
 ## **Scrubbing forward shows real clouds again. The gray forecast slabs are gone.**
