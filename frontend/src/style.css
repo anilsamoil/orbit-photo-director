@@ -2149,3 +2149,84 @@ body.shotlist-bar-visible main {
 .help-item-icon { flex: 0 0 1.6rem; text-align: center; }
 .help-item-text { flex: 1; color: var(--text); }
 .help-item-text strong { color: var(--text); }
+
+/* ── Photo conditions (Unit 1, D4) ─────────────────────────────────────────
+ * Full-card-width block BELOW the thumbnail image (the caption above is a
+ * 256px overlay and can't hold condition content). Same visual language as
+ * the caption rows — dim uppercase header, brighter value — but laid out as
+ * tappable buttons that open the Photography Almanac at their entry. */
+.photo-conditions {
+  margin-top: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.photo-conditions-divider {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.photo-conditions-divider::before,
+.photo-conditions-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.photo-condition-row {
+  /* Real button (almanac deep-link) styled as a calm row: 44px hit target
+   * met via padding, no button chrome. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  min-height: 2.4rem;
+  padding: 0.3rem 0.4rem;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.photo-condition-row:hover,
+.photo-condition-row:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  outline: none;
+}
+.photo-condition-row:focus-visible {
+  box-shadow: 0 0 0 2px rgba(92, 208, 255, 0.6);
+}
+.photo-condition-label {
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.photo-condition-value {
+  font-size: 0.78rem;
+  color: var(--text);
+  line-height: 1.4;
+}
+.photo-conditions-more {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  padding: 0.25rem 0.4rem;
+  cursor: pointer;
+}
+.photo-conditions-more:hover,
+.photo-conditions-more:focus-visible {
+  color: var(--text);
+}
+.pass-thumbnail-panel {
+  /* Root when photo conditions are present: thumbnail box + conditions
+   * block as siblings, spanning the card column (D4 full width). */
+  display: block;
+}

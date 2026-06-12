@@ -2,6 +2,27 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.11.0.0] - 2026-06-11
+
+## **Every pass now tells you which lens and how fast a shutter. Don Pettit's playbook, built in.**
+
+Expand any pass card's 🌍 thumbnail and a new "photo conditions" line answers the two questions every long-lens orbital shot starts with: how big is your frame on the ground, and how fast your shutter must be before orbital smear eats the shot. The numbers are per-pass — an oblique pass at 1,000km shows an 81km frame at 400mm where a near-nadir pass shows 38km — and the lenses are the real kit (400/800/1200mm), straight from the Astronauts' Guide to Photography from Space.
+
+The shutter floors assume hand-tracking, because that's how the genre is actually shot — as Pettit's guide puts it, "even the fastest shutter speeds will not stop the blurring effects of orbital motion." His D5-era 1/f rule is modernized ~1.5× for today's Z9 bodies and their finer pixels: 400mm ≥1/640 · 800mm ≥1/1250 · 1200mm ≥1/2000, snapped onto the real third-stop dial. Tap the line and a new **Photography Almanac** help section explains the why: tracking vs static floors, the Russian-window rule for telephoto glass, daytime exposure starting points — all source-cited.
+
+This ships the quiet foundation for the rest of the photography arc: moon, sun-glint, sprite-watch, and aurora conditions will join the same calm block — at most three rows, below the image, never on the collapsed card, silent when they don't apply.
+
+### Itemized changes
+
+#### Added
+- **📷 Camera line** in the expanded pass thumbnail: per-lens ground footprint at THIS pass's slant range (law-of-cosines geometry, validated against the guide's field-of-view table) + tracked shutter floors on the third-stop ladder, with a "hand-track" cue. Omitted entirely when a pass lacks geometry.
+- **Photography Almanac** help section (the ? button): shutter floors and tracking explained, Z9-vs-D5 pixel math, scratch-pane window rule, daytime exposure starting points — with sources. Condition rows deep-link to their entry; an already-open help modal scrolls instead of stacking.
+- **Photo Conditions framework**: ordered providers, max three visible rows + "▸ N more", real buttons with focus rings, per-provider failure isolation (a broken signal logs and disappears — it can never take the thumbnail down or masquerade as "condition doesn't apply").
+
+#### Internal
+- Busy-ness contract pinned as tests: collapsed cards gain nothing; zero conditions render nothing. 33 new tests (suite: 1143) including guide-anchored math pins and visual QA at iPad/iPhone widths (the overflow:hidden clip that DOM assertions can't see — caught by screenshot, independently flagged by Codex).
+- Absorbs the deferred "camera lens suggestion" item via pure geometry — no speculative target-size model.
+
 ## [1.10.2.0] - 2026-06-11
 
 ## **The time slider stops stuttering on the iPad. Drag it and the map keeps up.**

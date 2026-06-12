@@ -754,3 +754,16 @@ describe('renderCard — Hide button (v3 / v3.2)', () => {
     expect(hide.getAttribute('aria-label')).toContain('Etna');
   });
 });
+
+describe('busy-ness contract rule 1 (photography arc, 2026-06-11)', () => {
+  it('collapsed cards gain NOTHING from the photo-conditions arc', () => {
+    // Binding test for every unit of the arc: condition UI renders ONLY
+    // inside the expanded thumbnail panel. If this fails, a unit leaked
+    // chrome onto the collapsed card.
+    const cards = document.getElementById('cards');
+    expect(cards).not.toBeNull();
+    expect(cards!.querySelector('.photo-conditions')).toBeNull();
+    expect(cards!.querySelector('.photo-condition-row')).toBeNull();
+    expect(cards!.querySelector('.photo-conditions-divider')).toBeNull();
+  });
+});

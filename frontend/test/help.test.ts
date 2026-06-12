@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { bindHelp, openHelpModal } from '../src/help';
 
@@ -136,5 +136,44 @@ describe('bindHelp', () => {
 
   it('no-ops when the button is absent (older fixtures)', () => {
     expect(() => bindHelp()).not.toThrow();
+  });
+});
+
+describe('Photography Almanac anchors (Unit 1)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('the almanac section renders with the camera entry carrying its anchor id', () => {
+    openHelpModal();
+    const titles = [...document.querySelectorAll('.help-section-title')]
+      .map((h) => h.textContent);
+    expect(titles).toContain('Photography Almanac');
+    const entry = document.getElementById('help-almanac-camera');
+    expect(entry).not.toBeNull();
+    expect(entry!.textContent).toContain('HAND-TRACKING');
+    expect(entry!.textContent).toContain('Pettit');
+  });
+
+  it('openHelpModal(anchor) scrolls the entry into view on a fresh open', () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy as never;
+    openHelpModal('almanac-camera');
+    expect(spy).toHaveBeenCalledWith({ block: 'start' });
+  });
+
+  it('already-open modal: a second anchored call scrolls instead of stacking', () => {
+    openHelpModal();
+    expect(document.querySelectorAll('.help-modal')).toHaveLength(1);
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy as never;
+    openHelpModal('almanac-camera');
+    expect(document.querySelectorAll('.help-modal')).toHaveLength(1); // no stack
+    expect(spy).toHaveBeenCalledWith({ block: 'start' });
+  });
+
+  it('a missing anchor opens the modal at the top without throwing (graceful)', () => {
+    expect(() => openHelpModal('almanac-does-not-exist')).not.toThrow();
+    expect(document.querySelector('.help-modal')).not.toBeNull();
   });
 });

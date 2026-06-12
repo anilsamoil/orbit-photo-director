@@ -29,6 +29,7 @@
  */
 
 import type { PassEntry, Track } from './types';
+import { buildConditionRows, renderConditionBlock } from './photo-conditions';
 import { liveIssPosition } from './iss';
 import { liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
@@ -414,7 +415,19 @@ export function renderPassThumbnail(
   attr.textContent = '© Esri, Maxar, Earthstar Geographics';
   wrap.appendChild(attr);
 
-  return wrap;
+  // Photo conditions (Unit 1, D4): the block must be a SIBLING of the
+  // 256px thumbnail box, not a child — .pass-thumbnail is overflow:hidden
+  // with a fixed height, which silently clips any in-box content below the
+  // image (visual QA 2026-06-11: DOM checks passed while the block was
+  // invisible). The panel root spans the card width, so the conditions
+  // rows get the full-width layout D4 locked.
+  const rows = buildConditionRows({ pass, manifest: null, nowMs });
+  if (rows.length === 0) return wrap;
+  const panel = document.createElement('div');
+  panel.className = 'pass-thumbnail-panel';
+  panel.appendChild(wrap);
+  renderConditionBlock(rows, panel);
+  return panel;
 }
 
 /** Replace the tile <img> with a gray placeholder + caption when the
