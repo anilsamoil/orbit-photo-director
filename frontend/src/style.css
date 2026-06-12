@@ -2230,3 +2230,45 @@ body.shotlist-bar-visible main {
    * block as siblings, spanning the card column (D4 full width). */
   display: block;
 }
+
+/* ── Pin → add-to-targets footer (Jack 2026-06-11) ───────────────────────── */
+.pin-add-footer {
+  margin-top: 0.5rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.15);
+  padding-top: 0.45rem;
+}
+.pin-add-button {
+  width: 100%;
+  min-height: 2.4rem; /* 44px-class touch target inside the popup */
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  background: #f2f5f9;
+  font: inherit;
+  cursor: pointer;
+}
+.pin-add-button:hover { background: #e6ecf3; }
+.pin-add-form { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.pin-add-name {
+  flex: 1 1 100%;
+  min-height: 2.2rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  font: inherit;
+}
+.pin-add-save, .pin-add-cancel {
+  flex: 1 1 45%;
+  min-height: 2.2rem;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.pin-add-save { background: #1d6ef0; color: #fff; border-color: #1d6ef0; }
+.pin-add-save:disabled { opacity: 0.6; cursor: default; }
+.pin-add-cancel { background: #f2f5f9; }
+.pin-add-error {
+  flex: 1 1 100%;
+  color: #b3261e;
+  font-size: 0.78rem;
+}
