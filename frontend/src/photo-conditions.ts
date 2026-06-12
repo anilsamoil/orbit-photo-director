@@ -24,8 +24,9 @@
  *               (ordered)        Row[] (pure)             DOM under thumbnail
  */
 
-import type { Manifest, PassEntry } from './types';
+import type { Manifest, PassEntry, Track } from './types';
 import { openHelpModal } from './help';
+import { betaCriticalDeg, scanBetaForecast } from './beta-angle';
 
 // ── Physics constants ──────────────────────────────────────────────────────
 // Sources: D. Pettit, "Astronauts' Guide to Photography from Space",
@@ -128,6 +129,8 @@ export interface ConditionCtx {
   /** Null when the caller has no manifest in hand (the camera provider
    *  doesn't need it; later units widen what they read from ctx). */
   manifest: Manifest | null;
+  /** Track (TLE carrier) — null for legacy snapshots; β provider needs it. */
+  track: Track | null;
   nowMs: number;
 }
 
@@ -171,8 +174,31 @@ export function cameraConditionProvider(ctx: ConditionCtx): ConditionRow | null 
   };
 }
 
+/** Beta-blackout row (Unit 2, D1=A + outside-voice gating): fires ONLY
+ *  when this pass's own time falls on a HARD-ZERO full-sun day (β beyond
+ *  critical — physically no orbital night) AND the target is a
+ *  night-regime target. Shoulder days (short-but-real nights) stay
+ *  row-silent; the Upcoming header carries the period story. */
+export function betaBlackoutProvider(ctx: ConditionCtx): ConditionRow | null {
+  if (ctx.pass.target_regime !== 'night') return null;
+  const fc = scanBetaForecast(ctx.track, ctx.nowMs);
+  if (!fc || fc.windows.length === 0) return null;
+  const passMs = Date.parse(ctx.pass.closest_approach ?? '');
+  if (!Number.isFinite(passMs)) return null;
+  const day = fc.days.find((d) => passMs >= d.dayStartMs && passMs < d.dayStartMs + 86400_000);
+  if (!day || day.nightMin > 0) return null;
+  return {
+    id: 'beta-blackout',
+    icon: '☀️',
+    label: 'beta blackout',
+    value: `no orbital night this period (β ${Math.round(Math.abs(day.betaDeg))}° ≥ ${Math.round(betaCriticalDeg(420))}°)`,
+    almanacAnchor: 'almanac-beta',
+  };
+}
+
 /** Ordered registry — order IS display priority. Later units append. */
 export const PROVIDERS: ConditionProvider[] = [
+  betaBlackoutProvider,
   cameraConditionProvider,
 ];
 

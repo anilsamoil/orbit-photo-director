@@ -421,7 +421,7 @@ export function renderPassThumbnail(
   // image (visual QA 2026-06-11: DOM checks passed while the block was
   // invisible). The panel root spans the card width, so the conditions
   // rows get the full-width layout D4 locked.
-  const rows = buildConditionRows({ pass, manifest: null, nowMs });
+  const rows = buildConditionRows({ pass, manifest: null, track, nowMs });
   if (rows.length === 0) return wrap;
   const panel = document.createElement('div');
   panel.className = 'pass-thumbnail-panel';
