@@ -2,6 +2,22 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.12.0.0] - 2026-06-11
+
+## **See something out the window? Press the map, name it, and it's in your shot plan.**
+
+Jack asked for this one from orbit: the map's pin popup (right-click on desktop, press-and-hold on the iPad) now ends with an **➕ Add to my targets** button. Tap it, and a name field appears pre-filled with the coordinates — keep that, or type "Ben's house" — and Save puts the point straight into your personal target list. The planner scores passes for it from the next hourly update, and the success message says exactly that.
+
+It uses the same trusted save path as the Profile tab: the add lands on your iPad instantly, syncs to the planner, and if the link is down mid-save it tells you plainly and keeps the form open so you can retry when the station regains signal. No new network dependencies were added — the name suggestion is computed on-device, so the button behaves identically with or without connectivity.
+
+### Itemized changes
+
+#### Added
+- **Pin → personal target**: footer button on the dropped-pin popup with an inline, editable name field (coordinate-name pre-fill); Save validates and stores via the existing per-astronaut target pathway, with the existing duplicate and error handling.
+
+#### Internal
+- profile-crud's add pathway exported and reused — one sync code path app-wide (rollback-on-failure semantics confirmed as the chosen design). 8 new tests (suite: 1151); emulator QA covers the popup flow and the link-down path.
+
 ## [1.11.0.0] - 2026-06-11
 
 ## **Every pass now tells you which lens and how fast a shutter. Don Pettit's playbook, built in.**
