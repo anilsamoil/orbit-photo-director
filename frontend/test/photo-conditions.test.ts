@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_ALT_KM,
+  betaBlackoutProvider,
   KIT_FOCAL_LENGTHS_MM,
   MAX_VISIBLE_ROWS,
   SHUTTER_LADDER,
@@ -38,7 +39,7 @@ function passWith(over: Partial<PassEntry> = {}): PassEntry {
 }
 
 function ctxWith(over: Partial<PassEntry> = {}): ConditionCtx {
-  return { pass: passWith(over), manifest: null, nowMs: Date.parse('2026-06-11T12:00:00Z') };
+  return { pass: passWith(over), manifest: null, track: null, nowMs: Date.parse('2026-06-11T12:00:00Z') };
 }
 
 describe('slantRangeKm (law of cosines — nadir distance is arc length)', () => {
@@ -233,5 +234,40 @@ describe('renderConditionBlock', () => {
   it('exactly MAX_VISIBLE_ROWS rows → no disclosure button', () => {
     renderConditionBlock(['a', 'b', 'c'].map(fakeRow), host, () => {});
     expect(host.querySelector('.photo-conditions-more')).toBeNull();
+  });
+});
+
+describe('betaBlackoutProvider (Unit 2 — hard-zero + night-regime gating)', () => {
+  const SSO_TLE = {
+    line1: '1 99999U 26001A   26162.50000000  .00000100  00000-0  10000-3 0  9997',
+    line2: '2 99999  97.8000 350.0000 0001000  90.0000 270.0000 14.80000000  1234',
+  };
+  const ISS_TLE = {
+    line1: '1 25544U 98067A   26161.50000000  .00016717  00000-0  30771-3 0  9991',
+    line2: '2 25544  51.6400  10.0000 0003000  86.0000 274.1000 15.50000000123456',
+  };
+  const NOW = Date.parse('2026-06-11T12:00:00Z');
+  const mkCtx = (tle: { line1: string; line2: string } | null, over: Partial<PassEntry>): ConditionCtx => ({
+    pass: passWith({ closest_approach: '2026-06-12T03:00:00Z', ...over }),
+    manifest: null,
+    track: (tle ? { tle } : { }) as never,
+    nowMs: NOW,
+  });
+
+  it('fires for a night-regime target on a true full-sun day', () => {
+    const row = betaBlackoutProvider(mkCtx(SSO_TLE, { target_regime: 'night' } as never));
+    expect(row).not.toBeNull();
+    expect(row!.icon).toBe('☀️');
+    expect(row!.value).toContain('no orbital night this period');
+    expect(row!.almanacAnchor).toBe('almanac-beta');
+  });
+
+  it('silent for day-regime targets even on full-sun days (rule 5)', () => {
+    expect(betaBlackoutProvider(mkCtx(SSO_TLE, { target_regime: 'day' } as never))).toBeNull();
+  });
+
+  it('silent on normal-beta days (ISS today) and without a track', () => {
+    expect(betaBlackoutProvider(mkCtx(ISS_TLE, { target_regime: 'night' } as never))).toBeNull();
+    expect(betaBlackoutProvider(mkCtx(null, { target_regime: 'night' } as never))).toBeNull();
   });
 });

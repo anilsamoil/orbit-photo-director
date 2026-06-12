@@ -28,6 +28,7 @@ import { buildIcs } from './ics';
 import { shareOrDownloadIcs } from './calendar-share';
 import { clearShotlist, isInShotlist, nextSequence, pruneExpired, shotlistCount, toggleShotlist } from './shotlist';
 import { fetchKpData, initKpWidget, refreshAuroraVisibility, renderKpWidget } from './aurora';
+import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { subscribeProfileChanged } from './profile-events';
@@ -458,7 +459,36 @@ function renderOfflineBanner(): void {
   ));
 }
 
+/** Beta-blackout notice atop the Upcoming pane (Unit 2, D1=A). Slim line,
+ *  present ONLY inside/approaching a window (rule 5: silence otherwise).
+ *  Tap → Photography Almanac at the β entry. */
+function renderBetaNotice(nowMs: number): void {
+  const pane = document.getElementById('upcoming-pane');
+  if (!pane) return;
+  let line = pane.querySelector<HTMLButtonElement>('.beta-notice');
+  let text: string | null = null;
+  try {
+    text = betaNoticeText(scanBetaForecast(currentTrack, nowMs), nowMs);
+  } catch { text = null; /* notice is optional garnish */ }
+  if (!text) {
+    line?.remove();
+    return;
+  }
+  if (!line) {
+    line = document.createElement('button');
+    line.type = 'button';
+    line.className = 'beta-notice';
+    line.addEventListener('click', () => {
+      void import('./help').then(({ openHelpModal }) => openHelpModal('almanac-beta'));
+    });
+    const header = pane.querySelector('.pane-header');
+    header?.insertAdjacentElement('afterend', line);
+  }
+  line.textContent = text;
+}
+
 function renderUpcoming(nowMs: number, stale: boolean): void {
+  renderBetaNotice(nowMs);
   const cards = document.getElementById('upcoming-cards');
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;

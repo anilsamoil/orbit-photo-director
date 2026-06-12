@@ -345,6 +345,25 @@ const HELP_SECTIONS: HelpSection[] = [
           'to Photography from Space, 2nd ed. 2017 — Fig. 23, Telephoto ' +
           'Lens Skills, Sunny 16.)',
       },
+      {
+        icon: '☀️',
+        label: 'Beta angle & night blackouts',
+        id: 'almanac-beta',
+        text:
+          'The beta angle (β) is the tilt between the station\'s orbit '
+          + 'plane and the sun. It cycles over ~2 months, and when |β| '
+          + 'passes ~70° the station stops entering Earth\'s shadow at '
+          + 'all — days with NO orbital night. Aurora, cities at night, '
+          + 'star fields, and sprites are physically unavailable then (the '
+          + 'aurora note staying quiet during those days is correct, not '
+          + 'broken). The Upcoming tab shows a notice when a blackout is '
+          + 'underway or starting within a week, computed from the same '
+          + 'orbit data as everything else. The flip side is a gift: those '
+          + 'days the station rides near the terminator in continuous '
+          + 'low-angle sunlight — long-shadow texture passes and '
+          + 'sun-never-sets time-lapses (the guide: "during some orbital '
+          + 'phases, the sun never sinks below the horizon").',
+      },
     ],
   },
 ];
