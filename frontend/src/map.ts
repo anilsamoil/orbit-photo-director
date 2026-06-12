@@ -187,6 +187,32 @@ export function nearestForecastFrame(
   return best;
 }
 
+/** Forecast-clouds UI master switch — OFF (operator revert, Anil
+ *  2026-06-11): the 5° GFS frames render as flat gray slabs on the iPad
+ *  ("you end up just seeing gray areas... that don't help you determine
+ *  anything"). Scrubbed views keep the OBSERVED imagery + the honest
+ *  "observed — not forecast" badge, and the ☁️ toggle keeps controlling
+ *  current cloud cover exactly as pre-v1.9. The machinery stays dormant +
+ *  tested (D3=A): if a sharper forecast source ever lands, re-enabling is
+ *  this one flag. The generator-side flag (OPD_ENABLE_FORECAST_CLOUDS) is
+ *  off in the daemon plist for the same reason. */
+const FORECAST_CLOUDS_UI = false;
+let forecastUiOverrideForTest: boolean | null = null;
+
+/** Test-only: exercise the dormant forecast machinery. */
+export function _setForecastCloudsUiForTest(on: boolean | null): void {
+  forecastUiOverrideForTest = on;
+}
+
+/** The forecast index the UI is allowed to see: the manifest's index when
+ *  the master switch is on, undefined otherwise. EVERY forecast_clouds
+ *  read routes through here — frame selection, tile layer, and badge
+ *  revert to observed behavior together when the switch is off. */
+function activeForecastIndex(m: Manifest | null | undefined): ForecastCloudsIndex | undefined {
+  const enabled = forecastUiOverrideForTest ?? FORECAST_CLOUDS_UI;
+  return enabled ? m?.forecast_clouds : undefined;
+}
+
 /** Shared eligibility + selection gate (ship review 2026-06-11 — the badge
  *  previously re-implemented half of this; one gate, two callers). The
  *  index is a parameter so the badge stays pure given (manifest, scrub
@@ -204,7 +230,7 @@ function frameForIndex(
  *  layer. At Now (not scrubbed) this is ALWAYS null — the live view stays
  *  on observed imagery (critical regression guard). */
 function forecastFrameForView(nowMs = Date.now()): { iso: string; validMs: number } | null {
-  return frameForIndex(currentManifest?.forecast_clouds, nowMs);
+  return frameForIndex(activeForecastIndex(currentManifest), nowMs);
 }
 
 /** Test-only: simulate the one-way tile-failure fallback (the real flag is
@@ -2267,7 +2293,7 @@ let followISS = false;
 function refreshForecastCloudLayer(): void {
   if (!map) return;
   const frame = forecastFrameForView();
-  const fc = currentManifest?.forecast_clouds;
+  const fc = activeForecastIndex(currentManifest);
   if (frame && fc) {
     const key = compactFrameKey(frame.iso);
     // Allowlist the manifest-derived path pieces (defense-in-depth, ship
@@ -3060,7 +3086,7 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
     // intentionally reads the PARAM manifest (not currentManifest) so the
     // badge and its tests stay pure given (manifest, scrub state).
     const nowMs = Date.now();
-    const fc = manifest.forecast_clouds;
+    const fc = activeForecastIndex(manifest);
     const frame = frameForIndex(fc, nowMs);
     const eligible = !!fc && cloudsVisible && !fcstTilesFailed
       && Array.isArray(fc.valid_times) && fc.valid_times.length > 0;
