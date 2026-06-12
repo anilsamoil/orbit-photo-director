@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  _setForecastCloudsUiForTest,
   _resetMapStateForTest,
   compactFrameKey,
   ensureImageryDateBadge,
@@ -102,9 +103,14 @@ describe('imagery badge wording follows the layer truth (V4-P2)', () => {
     container = document.createElement('div');
     document.body.replaceChildren(container);
     _resetMapStateForTest();
+    // The forecast UI is OFF in production (operator revert 2026-06-11);
+    // these tests exercise the DORMANT machinery via the test override so
+    // a future re-enable inherits a verified pipeline.
+    _setForecastCloudsUiForTest(true);
   });
 
   afterEach(() => {
+    _setForecastCloudsUiForTest(null);
     vi.useRealTimers();
     document.body.replaceChildren();
   });
@@ -162,9 +168,14 @@ describe('ship-review additions', () => {
     container = document.createElement('div');
     document.body.replaceChildren(container);
     _resetMapStateForTest();
+    // The forecast UI is OFF in production (operator revert 2026-06-11);
+    // these tests exercise the DORMANT machinery via the test override so
+    // a future re-enable inherits a verified pipeline.
+    _setForecastCloudsUiForTest(true);
   });
 
   afterEach(() => {
+    _setForecastCloudsUiForTest(null);
     vi.useRealTimers();
     document.body.replaceChildren();
   });
@@ -190,5 +201,30 @@ describe('ship-review additions', () => {
     const text = badge().textContent!;
     expect(text).not.toContain('+0h');
     expect(text).toMatch(/GFS forecast (now|\+1h) · coarse/);
+  });
+});
+
+describe('forecast UI master switch (operator revert, 2026-06-11)', () => {
+  let container: HTMLElement;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(NOW));
+    container = document.createElement('div');
+    document.body.replaceChildren(container);
+    _resetMapStateForTest();
+    // No override: production default (OFF).
+  });
+  afterEach(() => {
+    _setForecastCloudsUiForTest(null);
+    vi.useRealTimers();
+  });
+
+  it('DEFAULT OFF: a valid forecast index yields NO frame; badge says observed — not forecast', () => {
+    setLookahead(360, false); // scrubbed deep into FC_MANIFEST coverage
+    ensureImageryDateBadge(container, FC_MANIFEST);
+    const badge = container.querySelector('.map-imagery-date')!;
+    expect(badge.textContent).toContain('not forecast');
+    expect(badge.textContent).not.toContain('GFS');
+    expect(badge.textContent).not.toContain('forecast ends');
   });
 });

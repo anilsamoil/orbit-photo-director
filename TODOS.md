@@ -134,6 +134,19 @@ Refuted alternatives:
 
 ## V4 — Forecast cloud overlay on map (operator question 2026-05-20)
 
+**REVERTED (UI + generator) 2026-06-11, v1.12.1.0:** operator feedback
+(Anil, iPhone screenshot): the 5° GFS frames render as flat gray slabs —
+"you end up just seeing gray areas or black areas that don't help you
+determine anything." Scrubbed views now keep OBSERVED imagery + the T5
+"observed — not forecast" badge; the ☁️ toggle controls current clouds as
+pre-v1.9. Frontend: FORECAST_CLOUDS_UI=false master switch in map.ts (all
+forecast_clouds reads route through activeForecastIndex; machinery dormant
++ still tested via _setForecastCloudsUiForTest). Generator:
+OPD_ENABLE_FORECAST_CLOUDS removed from the daemon plist (no frames
+rendered, no Open-Meteo spend, no R2 writes). RE-ENABLE CONDITIONS: a
+visibly sharper forecast source (sub-1° model frames, or imagery-like
+rendering), then flip both flags — the pipeline is verified end-to-end.
+
 ### V4-P2 — Forecast cloud overlay synced to the orbit time-scrub — SHIPPED v1.9.0.0 (2026-06-11, flag default-off)
 
 Shipped per the locked eng review (2026-06-09) as revised: stable run-keyed
