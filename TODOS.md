@@ -3,6 +3,20 @@
 Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 (must fix before mission start), P2 (nice to have), P3+ (future).
 
+## Photography arc (Units 1-9)
+
+- **P3 — Sprite advisory only surfaces on passes that rank into the feed**
+  (observed during Unit 7 live verification 2026-06-14). The `sprite` row is
+  enrichment on a pass the operator already sees; the curated `top_24h`/`top5`
+  feeds are top-N-by-score, so a sprite-bearing night pass that scores below
+  the cutoff (e.g. an open-ocean target where the *only* thing worth shooting
+  is the limb storm) never shows the advisory. This matches the deliberate
+  advisory-only philosophy (golden hour D1=A, glint D1=A — no scoring boosts),
+  but a strong sprite opportunity is exactly the case where boosting a
+  low-priority pass into the feed could be justified. Decide in the Unit 9
+  integration loop: leave advisory-only (busy-ness contract), or add a small
+  sprite-presence nudge to the score. No code owed until that call.
+
 ## Operator-feedback tracker
 
 ### Pettit's 12-ask wishlist (2026-05-19) — 12/12 SHIPPED ✅
