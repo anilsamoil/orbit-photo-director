@@ -260,6 +260,77 @@ def test_score_pass_for_target_serializes_encounter(sample_tle: TLE) -> None:
     assert enc["rel_bearing_deg"] == 33.6  # rounded to 1 dp
 
 
+def test_score_pass_for_target_serializes_sprite_on_night_limb_storm(
+    sample_tle: TLE,
+) -> None:
+    """Sprite watch (Unit 7): on a NIGHT pass — i.e. the ISS SUB-POINT is in
+    Earth's shadow, not the target's regime — a strong limb-storm cluster
+    from the lightning sampler serializes a `sprite` object. A daylit ISS, a
+    quiet sky (cluster None), or no sampler omits the key ENTIRELY, so a
+    no-sprite pass stays byte-identical to the pre-feature manifest."""
+    from generator.cloud import MockCloudSampler
+    from generator.lightning import LightningSample, StrongCluster
+
+    # 12:00Z subsolar ≈ (-10.9, -3.9): ISS at (0,180) is night; (0,0) is day.
+    when = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    sampler = MockCloudSampler(default_cf=10.0)
+
+    def _empty_sample(_lat: float, _lon: float, w: datetime) -> LightningSample:
+        # The scorer also queries per-pass lightning potential; that path is
+        # orthogonal to sprite detection, so report a quiet nadir.
+        return LightningSample(
+            lightning_potential=0.0, flash_rate_per_min=0.0,
+            sample_time=w, source="placeholder",
+        )
+
+    class _StormSampler:
+        """Always reports a vigorous limb cluster, regardless of position."""
+
+        def sample(self, lat: float, lon: float, w: datetime) -> LightningSample:
+            return _empty_sample(lat, lon, w)
+
+        def strongest_cluster_in_annulus(self, lat: float, lon: float, **_: object):
+            return StrongCluster(distance_km=1480.0, bearing_deg=216.8, flash_count=1689)
+
+    class _QuietSampler:
+        def sample(self, lat: float, lon: float, w: datetime) -> LightningSample:
+            return _empty_sample(lat, lon, w)
+
+        def strongest_cluster_in_annulus(self, lat: float, lon: float, **_: object):
+            return None
+
+    def _score(iss_lon: float, lightning: object) -> dict[str, object]:
+        target = {
+            "id": "test", "name": "Test",
+            "geom": {"type": "point", "lat": 0.0, "lon": iss_lon},
+            "priority": 4, "regime": "any",
+        }
+        pass_obj = Pass(
+            target_id="test", target_lat=0.0, target_lon=iss_lon,
+            closest_approach=when, nadir_distance_km=100.0,
+            iss_position=Position(lat=0.0, lon=iss_lon, alt_km=410, when=when),
+        )
+        return score_pass_for_target(
+            target, pass_obj, sampler, 1.0, lightning_sampler=lightning,
+        )
+
+    # NIGHT ISS sub-point + storm → sprite serialized verbatim.
+    night = _score(180.0, _StormSampler())
+    assert night["sprite"] == {
+        "distance_km": 1480.0, "bearing_deg": 216.8, "flash_count": 1689,
+    }
+
+    # NIGHT but quiet sky → key absent (NOT null) so bytes are unchanged.
+    assert "sprite" not in _score(180.0, _QuietSampler())
+
+    # The night gate itself: a DAYLIT ISS sub-point omits sprite even though
+    # the very same storm sampler would report a cluster.
+    assert "sprite" not in _score(0.0, _StormSampler())
+
+    # No sampler at all → key absent (the pre-Unit-7 manifest shape).
+    assert "sprite" not in _score(180.0, None)
+
+
 def test_run_tick_skips_targets_with_no_passes(
     settings_in_tmp: Settings, cached_tle: Path, tmp_path: Path
 ) -> None:
