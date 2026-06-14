@@ -204,7 +204,12 @@ export function betaBlackoutProvider(ctx: ConditionCtx): ConditionRow | null {
  *  illum from true elongation (right at the quarters), "up" gated against
  *  the orbital horizon via the pass's alt_km. */
 export function moonConditionProvider(ctx: ConditionCtx): ConditionRow | null {
-  if (ctx.pass.target_regime !== 'night' && ctx.pass.pass_regime !== 'night') return null;
+  // Gate on PASS regime, not target regime (Codex review 2026-06-14): the
+  // Moon only washes the sky when THIS pass is actually dark. A night-best
+  // TARGET shot on a daylit pass has no moonlight problem. This also makes
+  // the moon row mutually exclusive with beta-blackout — a blackout means
+  // no orbital night, so pass_regime is never 'night' then.
+  if (ctx.pass.pass_regime !== 'night') return null;
   const passMs = Date.parse(ctx.pass.closest_approach ?? '');
   if (!Number.isFinite(passMs)) return null;
   const at = ctx.pass.iss_at_closest;
@@ -227,11 +232,11 @@ export function moonConditionProvider(ctx: ConditionCtx): ConditionRow | null {
 }
 
 /** Ordered registry — order IS display priority. β (period-critical) >
- *  moon > camera (baseline). Worst real case on a night-regime target is
- *  β + moon + camera = 3 rows = exactly MAX_VISIBLE_ROWS (they are NOT
- *  mutually exclusive — both gate on night regime; verified 2026-06-14),
- *  so the disclosure never triggers and slice(0,3) shows the most
- *  planning-critical rows first. */
+ *  moon > camera (baseline). β gates on a night-regime TARGET during a
+ *  full-sun blackout (pass_regime is day/terminator then); moon gates on a
+ *  night PASS. A blackout has no orbital night, so β and moon can never
+ *  co-occur — worst real case is moon + camera (or β + camera) = 2 rows,
+ *  well under MAX_VISIBLE_ROWS=3 (Codex review 2026-06-14). */
 export const PROVIDERS: ConditionProvider[] = [
   betaBlackoutProvider,
   moonConditionProvider,

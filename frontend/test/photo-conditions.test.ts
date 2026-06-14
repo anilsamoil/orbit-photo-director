@@ -283,7 +283,7 @@ describe('moonConditionProvider (Unit 3 — night gate + sky state)', () => {
   })();
 
   const nightPassAtSub = (over: Partial<PassEntry> = {}): PassEntry => passWith({
-    target_regime: 'night',
+    pass_regime: 'night',
     closest_approach: '2026-06-29T23:57:00Z',
     iss_at_closest: { lat: sub.lat, lon: sub.lon, alt_km: 420 },
     ...over,
@@ -302,7 +302,12 @@ describe('moonConditionProvider (Unit 3 — night gate + sky state)', () => {
   });
 
   it('silent on a DAY pass even with the Moon up (rule 5)', () => {
-    expect(moonConditionProvider(ctx(nightPassAtSub({ target_regime: 'day', pass_regime: 'day' } as never)))).toBeNull();
+    expect(moonConditionProvider(ctx(nightPassAtSub({ pass_regime: 'day' } as never)))).toBeNull();
+  });
+
+  it('silent on a night-best TARGET if the PASS is daylit (Codex gate fix)', () => {
+    // night target, day pass → moonlight is irrelevant, no row.
+    expect(moonConditionProvider(ctx(nightPassAtSub({ target_regime: 'night', pass_regime: 'day' } as never)))).toBeNull();
   });
 
   it('silent (dark) when the Moon is on the far side of Earth', () => {
@@ -310,7 +315,7 @@ describe('moonConditionProvider (Unit 3 — night gate + sky state)', () => {
     expect(moonConditionProvider(ctx(farPass))).toBeNull();
   });
 
-  it('uses pass_regime OR target_regime for the night gate', () => {
+  it('fires on a night PASS regardless of target regime', () => {
     const byPassRegime = nightPassAtSub({ target_regime: 'day', pass_regime: 'night' } as never);
     expect(moonConditionProvider(ctx(byPassRegime))).not.toBeNull();
   });
@@ -323,7 +328,7 @@ describe('row budget at the cap (verifier 2026-06-14: β+moon+camera = 3, not 2)
     expect(MAX_VISIBLE_ROWS).toBe(3);
     const rows = buildConditionRows({
       pass: passWith({
-        target_regime: 'night',
+        pass_regime: 'night',
         closest_approach: '2026-06-29T23:57:00Z',
         nadir_distance_km: 200,
         iss_at_closest: { lat: -27, lon: 2, alt_km: 420 },
