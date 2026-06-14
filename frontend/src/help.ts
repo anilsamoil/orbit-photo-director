@@ -346,6 +346,28 @@ const HELP_SECTIONS: HelpSection[] = [
           'Lens Skills, Sunny 16.)',
       },
       {
+        icon: '✨',
+        label: 'Sun glint — light off the water',
+        id: 'almanac-glint',
+        text:
+          'Sun glint is the Sun reflecting specularly off water straight '
+          + 'into your camera — a bright spot that reveals surface detail '
+          + 'invisible under flat light: ocean eddies and free vortices you '
+          + 'can track for months, ship wakes like contrails, internal '
+          + 'waves, river channels, estuary mixing. Pettit calls it some of '
+          + 'the most fascinating water imagery from orbit. It happens near '
+          + 'local noon when the geometry lines up — the app predicts that '
+          + 'geometry on the curated coastal targets (archipelagos, straits, '
+          + 'canals, big lakes); whether the glint actually shows depends on '
+          + 'the sea state, which the geometry cannot see. His settings: '
+          + '180–400mm, ISO 200, 1/200–1/1000, f11–f16, matrix metering '
+          + 'with about a stop of compensation, and bracket to hold the '
+          + 'glint detail. (Glint is a wide-to-mid telephoto subject; for '
+          + 'the long-lens motion floor see the camera line.) Source: '
+          + 'Pettit, Astronauts\' Guide to Photography from Space, 2nd ed. '
+          + '2017 — Sun Glint.',
+      },
+      {
         icon: '🌌',
         label: 'Noctilucent clouds (the highest clouds)',
         id: 'almanac-nlc',

@@ -15,6 +15,10 @@ import {
   DEFAULT_ALT_KM,
   MAX_VISIBLE_ROWS,
   betaBlackoutProvider,
+  GLINT_DEVIATION_DEG,
+  GLINT_SUN_FLOOR_DEG,
+  glintConditionProvider,
+  glintDeviationDeg,
   goldenHourConditionProvider,
   isNlcSeason,
   nlcConditionProvider,
@@ -506,5 +510,82 @@ describe('nlcConditionProvider (Unit 5 — summer high-lat twilight window)', ()
   it('band edges fire; just outside does not', () => {
     expect(nlcConditionProvider(ctxAt(58, '2026-06-21T00:00:00Z', NLC_SUN_HI - 0.5))).not.toBeNull();
     expect(nlcConditionProvider(ctxAt(58, '2026-06-21T00:00:00Z', NLC_SUN_LO + 0.5))).not.toBeNull();
+  });
+});
+
+describe('glintDeviationDeg (verified 3-D specular reflection)', () => {
+  // Anchors the multi-agent recompute lens reproduced to 0.01°.
+  it('0° at a near-perfect mirror toward the ISS', () => {
+    expect(glintDeviationDeg(0, -150, 8, -150, -0.5, -150, 420)).toBeCloseTo(0.04, 1);
+  });
+  it('grows off-axis (ISS on the sun side → ~70°)', () => {
+    expect(glintDeviationDeg(0, -150, 8, -150, 6, -150, 420)).toBeCloseTo(69.66, 0);
+  });
+  it('~8° at nadir under a high sun (still a real glint), ~16° just past', () => {
+    expect(glintDeviationDeg(0, -150, 8, -150, 0, -150, 420)).toBeCloseTo(8.0, 0);
+    expect(glintDeviationDeg(0, -150, 8, -150, 0.5, -150, 420)).toBeCloseTo(16.04, 0);
+  });
+  it('degenerate ISS-at-target → 180 (never glint)', () => {
+    expect(glintDeviationDeg(10, 20, 10, 20, 10, 20, 0)).toBe(180);
+  });
+});
+
+describe('glintConditionProvider (Unit 6 — water-framed coastal glint, advisory)', () => {
+  // iconic-shape target; control the sun + ISS sub-points via closest_approach
+  // and iss_at_closest to hit a chosen specular geometry. We pick a time whose
+  // subsolar point we read, then place the target/ISS for the desired deviation.
+  const WHEN = '2026-06-21T19:00:00Z';
+  const sub = subsolarPoint(new Date(WHEN));
+
+  // Put the target where the sun is high (near the sub-point) and the ISS
+  // near the mirror point (≈ target reflected: for high sun the mirror ISS
+  // sub-point sits just poleward of the target).
+  const glintPass = (over: Partial<PassEntry> = {}): PassEntry => passWith({
+    category: 'iconic-shape',
+    target_lat: sub.lat, target_lon: sub.lon,
+    iss_at_closest: { lat: sub.lat - 0.5, lon: sub.lon, alt_km: 420 },
+    closest_approach: WHEN,
+    ...over,
+  } as never);
+  const ctx = (p: PassEntry): ConditionCtx => ({ pass: p, manifest: null, track: null, nowMs: Date.parse(WHEN) });
+
+  it('fires on an iconic-shape target with the sun mirror-aligned to the ISS', () => {
+    const row = glintConditionProvider(ctx(glintPass()));
+    expect(row).not.toBeNull();
+    expect(row!.id).toBe('glint');
+    expect(row!.icon).toBe('✨');
+    expect(row!.value).toContain('sun glints off the water');
+    expect(row!.value).toContain('sea state permitting');
+    expect(row!.almanacAnchor).toBe('almanac-glint');
+  });
+
+  it('silent for non-water categories (the SOLE land guard)', () => {
+    expect(glintConditionProvider(ctx(glintPass({ category: 'big-terrain' } as never)))).toBeNull();
+    expect(glintConditionProvider(ctx(glintPass({ category: 'volcano' } as never)))).toBeNull();
+    expect(glintConditionProvider(ctx(glintPass({ category: undefined } as never)))).toBeNull();
+  });
+
+  it('silent when the ISS is off the specular axis (deviation > threshold)', () => {
+    // ISS far from the mirror point → big deviation → no row.
+    expect(glintConditionProvider(ctx(glintPass({
+      iss_at_closest: { lat: sub.lat + 8, lon: sub.lon, alt_km: 420 },
+    } as never)))).toBeNull();
+  });
+
+  it('silent when the sun is below the glint floor at the target', () => {
+    // Move the target far from the sub-point so sun elevation < 15°.
+    const farLat = sub.lat > 0 ? sub.lat - 80 : sub.lat + 80;
+    expect(glintConditionProvider(ctx(glintPass({
+      target_lat: farLat, iss_at_closest: { lat: farLat, lon: sub.lon, alt_km: 420 },
+    } as never)))).toBeNull();
+  });
+
+  it('respects the tightened 10° threshold (boundary)', () => {
+    // The provider gate uses GLINT_DEVIATION_DEG; assert the constant + that
+    // a deviation just over it is rejected by the math the gate calls.
+    expect(GLINT_DEVIATION_DEG).toBe(10);
+    expect(GLINT_SUN_FLOOR_DEG).toBe(15);
+    expect(glintDeviationDeg(0, -150, 8, -150, 0.2, -150, 420)).toBeGreaterThan(GLINT_DEVIATION_DEG);
+    expect(glintDeviationDeg(0, -150, 8, -150, 0.1, -150, 420)).toBeLessThan(GLINT_DEVIATION_DEG);
   });
 });

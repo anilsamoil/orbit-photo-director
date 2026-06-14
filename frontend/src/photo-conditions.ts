@@ -335,6 +335,99 @@ export function nlcConditionProvider(ctx: ConditionCtx): ConditionRow | null {
   };
 }
 
+/** Sun glint (Unit 6): the Sun mirroring off water specularly into the
+ *  station's camera — a bright spot that reveals surface detail (eddies,
+ *  ship wakes, internal waves) invisible under flat light. Pettit's prized
+ *  water-surface genre. ADVISORY ROW ONLY: the generator's sun_glint_risk
+ *  PENALTY is left untouched (same call as golden hour — no fleet-wide
+ *  scorer change). Designed + adversarially verified (2026-06-14): the
+ *  3-D reflection math is exact; the honest scope is the 12 curated
+ *  water-framed coastline targets (no reliable general water mask exists
+ *  yet — is_water flags the Sahara and misses coastlines; that's the
+ *  deferred GSHHG-mask enhancement). The CATEGORY gate is the SOLE land
+ *  guard: a mis-categorized iconic-shape target would fire glint with no
+ *  geometry-side defense, so the curated category list must stay clean. */
+export const GLINT_CATEGORIES = ['iconic-shape'] as const;
+/** Max deviation (deg) of the specular-reflection direction from the
+ *  actual target→ISS direction for the row to fire. 10° (tightened from
+ *  the design's 15° after the over-fire finding) — captures the
+ *  roughness-widened glint lobe while cutting near-noon false abundance. */
+export const GLINT_DEVIATION_DEG = 10;
+/** Sun must be at least this high at the target. Below it the specular
+ *  sheet is too low/narrow and the lobe balloons (over-fire); also keeps
+ *  glint (day) cleanly separated from golden-hour twilight. */
+export const GLINT_SUN_FLOOR_DEG = 15;
+
+/** Deviation (deg) between the mirror reflection of the sun ray about the
+ *  target's local vertical and the actual target→ISS direction. 0° = a
+ *  perfect mirror toward the station. ISS at FINITE altitude (the V1 fix);
+ *  Sun at infinity (its sub-point direction). Spherical model — geodetic
+ *  vs geocentric normal adds ~0.2° physical, negligible vs the 10° gate.
+ *  Exported so tests assert the math directly (never re-implement it). */
+export function glintDeviationDeg(
+  tLat: number, tLon: number,
+  sLat: number, sLon: number,
+  iLat: number, iLon: number,
+  altKm: number,
+): number {
+  const D = Math.PI / 180;
+  const unit = (la: number, lo: number): [number, number, number] => {
+    const cl = Math.cos(la * D);
+    return [cl * Math.cos(lo * D), cl * Math.sin(lo * D), Math.sin(la * D)];
+  };
+  const up = unit(tLat, tLon);
+  const toSun = unit(sLat, sLon);
+  const niss = unit(iLat, iLon);
+  const R = EARTH_RADIUS_KM, Ri = R + altKm;
+  const toIssV: [number, number, number] = [
+    niss[0] * Ri - up[0] * R, niss[1] * Ri - up[1] * R, niss[2] * Ri - up[2] * R,
+  ];
+  const im = Math.hypot(toIssV[0], toIssV[1], toIssV[2]);
+  if (!(im > 0)) return 180; // ISS at the target → degenerate, never glint
+  const toIss: [number, number, number] = [toIssV[0] / im, toIssV[1] / im, toIssV[2] / im];
+  // incoming sun ray d = -toSun; reflect about up: r = d - 2(d·up)up
+  const d: [number, number, number] = [-toSun[0], -toSun[1], -toSun[2]];
+  const dDotUp = d[0] * up[0] + d[1] * up[1] + d[2] * up[2];
+  const rv: [number, number, number] = [
+    d[0] - 2 * dDotUp * up[0], d[1] - 2 * dDotUp * up[1], d[2] - 2 * dDotUp * up[2],
+  ];
+  const rm = Math.hypot(rv[0], rv[1], rv[2]);
+  if (!(rm > 0)) return 180;
+  const dot = (rv[0] * toIss[0] + rv[1] * toIss[1] + rv[2] * toIss[2]) / rm;
+  return Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI);
+}
+
+/** Sun-glint opportunity row: a curated water-framed coastal target where
+ *  the Sun mirrors specularly off the water toward the station. Honest:
+ *  predicts the GEOMETRY (sea state, which it cannot see, decides the
+ *  actual glint), and is scoped to coastal targets where "the water" is
+ *  the scene. */
+export function glintConditionProvider(ctx: ConditionCtx): ConditionRow | null {
+  const cat = ctx.pass.category;
+  if (!cat || !(GLINT_CATEGORIES as readonly string[]).includes(cat)) return null;
+  const passMs = Date.parse(ctx.pass.closest_approach ?? '');
+  if (!Number.isFinite(passMs)) return null;
+  const when = new Date(passMs);
+  const lat = ctx.pass.target_lat;
+  const lon = ctx.pass.target_lon;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (targetSunElevationDeg(lat, lon, when) < GLINT_SUN_FLOOR_DEG) return null;
+  const at = ctx.pass.iss_at_closest;
+  if (!at || !Number.isFinite(at.lat) || !Number.isFinite(at.lon)) return null;
+  const altKm = Number.isFinite(at.alt_km) && at.alt_km > 0 ? at.alt_km : DEFAULT_ALT_KM;
+  const sub = subsolarPoint(when);
+  if (glintDeviationDeg(lat, lon, sub.lat, sub.lon, at.lat, at.lon, altKm) > GLINT_DEVIATION_DEG) {
+    return null;
+  }
+  return {
+    id: 'glint',
+    icon: '✨',
+    label: 'sun glint',
+    value: 'sun glints off the water near this coast · sea state permitting',
+    almanacAnchor: 'almanac-glint',
+  };
+}
+
 /** Ordered registry — order IS display priority. β (period-critical) >
  *  moon > golden hour > camera (baseline). Golden hour is a DAY-side
  *  signal (terrain at low sun); moon/beta are night signals, so they don't
@@ -348,6 +441,7 @@ export const PROVIDERS: ConditionProvider[] = [
   betaBlackoutProvider,
   moonConditionProvider,
   goldenHourConditionProvider,
+  glintConditionProvider,
   nlcConditionProvider,
   cameraConditionProvider,
 ];
