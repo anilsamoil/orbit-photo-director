@@ -57,6 +57,9 @@ export interface PassEntry {
   target_priority: number;
   target_lat: number;
   target_lon: number;
+  /** Curated target category (e.g. 'big-terrain', 'volcano'). Drives the
+   *  golden-hour condition row (Unit 4). Absent on personal/launch targets. */
+  category?: string;
   closest_approach: string; // ISO 8601 Z
   nadir_distance_km: number;
   /** Angle from ISS-nadir vector to the line-of-sight to the target.

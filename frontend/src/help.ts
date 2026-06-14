@@ -346,6 +346,29 @@ const HELP_SECTIONS: HelpSection[] = [
           'Lens Skills, Sunny 16.)',
       },
       {
+        icon: '🌅',
+        label: 'Golden hour — low-sun terrain texture',
+        id: 'almanac-golden-hour',
+        text:
+          'Terrain photographs best in low-angle light. When the Sun sits '
+          + 'low over the target, ridges, dunes, volcanoes, and mountains '
+          + 'throw long shadows that carve out relief and texture the eye '
+          + 'would miss at noon. Don Pettit makes the point with two of his '
+          + 'best telephoto frames: Patagonian glaciers where "the high '
+          + 'contrast shadows imparted by low angle sunlight" reveal fine '
+          + 'crevasse detail, and Manhattan "under low angle lighting" '
+          + 'showing shadow-borne texture in the streets and projected onto '
+          + 'the rivers — the opposite of the shadowless noon view a mapping '
+          + 'satellite takes. So the expanded pass panel shows a golden-hour '
+          + 'row on terrain targets (big-terrain, volcanoes) when the Sun is '
+          + 'roughly 2–25° up at closest approach. It is advisory — it tells '
+          + 'you the light is right; it does not reshuffle the Queue. His '
+          + 'frames were 800mm at ISO 200, f5.6 (he shot 1/1000 on the older '
+          + 'D5 body; see the camera line for your own body\'s shutter '
+          + 'floor). Source: Pettit, Astronauts\' Guide to Photography from '
+          + 'Space, 2nd ed. 2017 — Figs. 1 (Patagonia, Manhattan).',
+      },
+      {
         icon: '🌙',
         label: 'The Moon & night photography',
         id: 'almanac-moon',

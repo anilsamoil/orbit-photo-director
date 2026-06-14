@@ -15,6 +15,9 @@ import {
   DEFAULT_ALT_KM,
   MAX_VISIBLE_ROWS,
   betaBlackoutProvider,
+  goldenHourConditionProvider,
+  GOLDEN_FLOOR_DEG,
+  GOLDEN_CEIL_DEG,
   moonConditionProvider,
   KIT_FOCAL_LENGTHS_MM,
   SHUTTER_LADDER,
@@ -30,6 +33,7 @@ import {
   type ConditionRow,
 } from '../src/photo-conditions';
 import type { PassEntry } from '../src/types';
+import { greatCircleAngleDeg, subsolarPoint } from '../src/terminator';
 
 function passWith(over: Partial<PassEntry> = {}): PassEntry {
   return {
@@ -342,5 +346,73 @@ describe('row budget at the cap (verifier 2026-06-14: β+moon+camera = 3, not 2)
     expect(rows.length).toBeLessThanOrEqual(MAX_VISIBLE_ROWS);
     expect(rows.some((r) => r.id === 'moon')).toBe(true);
     expect(rows.some((r) => r.id === 'camera')).toBe(true);
+  });
+});
+
+describe('goldenHourConditionProvider (Unit 4 — terrain texture, advisory row)', () => {
+  // Build a pass whose TARGET sits at a controlled sun elevation by placing
+  // it a chosen great-circle angle from the subsolar point at a fixed time.
+  const WHEN = '2026-06-21T12:00:00Z';
+  const sub = subsolarPoint(new Date(WHEN));
+
+  // A point `theta` degrees from the subsolar point → sun elevation 90-theta.
+  // Walk west along the sub-point's latitude until the elevation matches.
+  const targetAtElevation = (targetElev: number): { lat: number; lon: number } => {
+    let best = { lat: sub.lat, lon: sub.lon };
+    let bestErr = Infinity;
+    for (let dLon = 0; dLon <= 180; dLon += 0.5) {
+      const lon = ((sub.lon + dLon + 540) % 360) - 180;
+      const elev = 90 - greatCircleAngleDeg(sub.lat, lon, sub.lat, sub.lon);
+      const err = Math.abs(elev - targetElev);
+      if (err < bestErr) { bestErr = err; best = { lat: sub.lat, lon }; }
+    }
+    return best;
+  };
+
+  const ctxFor = (category: string | undefined, elev: number): ConditionCtx => {
+    const t = targetAtElevation(elev);
+    return {
+      pass: passWith({
+        category, target_lat: t.lat, target_lon: t.lon, closest_approach: WHEN,
+      } as never),
+      manifest: null, track: null, nowMs: Date.parse(WHEN),
+    };
+  };
+
+  it('fires for big-terrain at low sun (raking light)', () => {
+    const row = goldenHourConditionProvider(ctxFor('big-terrain', 10));
+    expect(row).not.toBeNull();
+    expect(row!.icon).toBe('🌅');
+    expect(row!.label).toBe('golden hour');
+    expect(row!.value).toMatch(/low sun \d+° · raking light/);
+    expect(row!.almanacAnchor).toBe('almanac-golden-hour');
+  });
+
+  it('fires for volcano at low sun', () => {
+    expect(goldenHourConditionProvider(ctxFor('volcano', 8))).not.toBeNull();
+  });
+
+  it('silent at high sun (midday, shadows too short)', () => {
+    expect(goldenHourConditionProvider(ctxFor('big-terrain', 60))).toBeNull();
+    expect(goldenHourConditionProvider(ctxFor('big-terrain', GOLDEN_CEIL_DEG + 5))).toBeNull();
+  });
+
+  it('silent when the target is dark (sun below the floor)', () => {
+    expect(goldenHourConditionProvider(ctxFor('big-terrain', GOLDEN_FLOOR_DEG - 3))).toBeNull();
+  });
+
+  it('silent for non-terrain categories (iconic-shape excluded — sea-level outlines)', () => {
+    expect(goldenHourConditionProvider(ctxFor('iconic-shape', 10))).toBeNull();
+    expect(goldenHourConditionProvider(ctxFor('night-megacity', 10))).toBeNull();
+    expect(goldenHourConditionProvider(ctxFor('aurora', 10))).toBeNull();
+  });
+
+  it('silent when the pass carries no category (personal/launch targets)', () => {
+    expect(goldenHourConditionProvider(ctxFor(undefined, 10))).toBeNull();
+  });
+
+  it('band edges: fires at the floor and ceiling, not just outside', () => {
+    expect(goldenHourConditionProvider(ctxFor('big-terrain', GOLDEN_FLOOR_DEG + 1))).not.toBeNull();
+    expect(goldenHourConditionProvider(ctxFor('big-terrain', GOLDEN_CEIL_DEG - 1))).not.toBeNull();
   });
 });

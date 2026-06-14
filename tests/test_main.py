@@ -1123,3 +1123,37 @@ def test_run_tick_does_not_emit_ascent_when_flag_off(
     for p in passes:
         if "launch" in p:
             assert p["launch"].get("kind") != "ascent"
+
+
+def test_score_pass_for_target_serializes_category(sample_tle: TLE) -> None:
+    """The curated target category is serialized onto the pass so the
+    frontend golden-hour row (Unit 4) can gate on terrain-texture targets;
+    absent category serializes None (synthetic/personal targets)."""
+    from generator.cloud import MockCloudSampler
+
+    when = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    pass_obj = Pass(
+        target_id="t",
+        target_lat=0.0,
+        target_lon=0.0,
+        closest_approach=when,
+        nadir_distance_km=100.0,
+        iss_position=Position(lat=0.5, lon=0.5, alt_km=410, when=when),
+        iss_relative_bearing_deg=92.0,
+        encounter=None,
+    )
+    sampler = MockCloudSampler(default_cf=10.0)
+
+    terrain = {
+        "id": "t", "name": "T", "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+        "priority": 4, "regime": "day", "category": "big-terrain",
+    }
+    assert score_pass_for_target(terrain, pass_obj, sampler, tle_freshness=1.0)["category"] == "big-terrain"
+
+    no_cat = {
+        "id": "t", "name": "T", "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
+        "priority": 4, "regime": "day",
+    }
+    # Byte-stability: the key is OMITTED entirely when there's no category
+    # (no "category": null), so no-category passes stay byte-identical.
+    assert "category" not in score_pass_for_target(no_cat, pass_obj, sampler, tle_freshness=1.0)
