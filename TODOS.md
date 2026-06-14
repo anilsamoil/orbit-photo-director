@@ -28,7 +28,7 @@ Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 |---|---|---|
 | 1 | 24h+ lookahead | ✅ existing 36h Upcoming tab |
 | 2 | Lightning predictions/probability | ✅ v1.5.5.0 (Weather v1.3.2 — GLM + GFS-CAPE) |
-| 3 | OPTIMIS timeline overlay | ❌ DEFERRED — Pettit explicitly refutes; 1-1 cross-astronaut tension; defer until a 3rd operator votes |
+| 3 | OPTIMIS timeline overlay | ❌ CUT 2026-06-14 — Chris + Jack both decline (too tricky w/ NASA gates); vote now 3-1 against (Pettit/Chris/Jack vs Dominick). Not building. |
 
 ### Chris's asks (ISS operator) — all shipped
 
@@ -256,7 +256,7 @@ Shipped the `maplibregl.addProtocol` luminance-key approach — see `frontend/sr
 - **JTWC integration** (W.Pacific / Indian Ocean tropical systems). Skipped in D4 — text-bulletin parsing is fragile. Revisit if Pacific typhoons are visibly missed during a typhoon season.
 - **Vaisala GLD360** (commercial lightning network) — declined permanently; paid product.
 - **Volcano / wildfire / aurora row integration** — different data domains; aurora already has its own widget (v1.2.3.0).
-- **OPTIMIS timeline overlay** (Dominick 2026-05-19 bullet 3) — Pettit explicitly refutes 2026-05-19: *"I leave it up to me to figure out targets and how to work these into my work schedule... I find you can take a break to photo a target when needed. Just tell ground you need a bio-break. I keep an egg timer on my kneeboard and set reminder alarms."* Cross-astronaut tension: Dominick (mid-mission Crew-8) wants it; Pettit (4 missions, longest cumulative ISS time among Americans pre-2024) does not. If built, must be **opt-in** with sensible default-off. Defer eng-review until a third operator either votes for or against; current 1-1 split is no signal.
+- ~~**OPTIMIS timeline overlay** (Dominick 2026-05-19 bullet 3)~~ — **CUT 2026-06-14.** Chris + Jack both declined (too tricky to integrate with the NASA gates); the cross-astronaut vote is now 3-1 against (Pettit + Chris + Jack vs Dominick alone). Not pursuing. Historical context: Pettit refused 2026-05-19 ("I leave it up to me to figure out targets... take a bio-break... egg timer on my kneeboard"). Revisit only if a future crew specifically requests it.
 
 ## V2 — offline-resilient frontend (in progress)
 

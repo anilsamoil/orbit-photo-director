@@ -27,6 +27,7 @@
 import type { Manifest, PassEntry, Track } from './types';
 import { openHelpModal } from './help';
 import { betaCriticalDeg, scanBetaForecast } from './beta-angle';
+import { assessMoon } from './moon';
 
 // ── Physics constants ──────────────────────────────────────────────────────
 // Sources: D. Pettit, "Astronauts' Guide to Photography from Space",
@@ -196,9 +197,49 @@ export function betaBlackoutProvider(ctx: ConditionCtx): ConditionRow | null {
   };
 }
 
-/** Ordered registry — order IS display priority. Later units append. */
+/** Moon row (Unit 3): on NIGHT passes where the Moon is up in the
+ *  station's sky. 'moonlit' (bright + up) warns night genres are washed;
+ *  'up-faint' notes soft fill light. A DARK sky returns null — silence IS
+ *  the aurora/star window signal. Verified (multi-agent, 2026-06-14):
+ *  illum from true elongation (right at the quarters), "up" gated against
+ *  the orbital horizon via the pass's alt_km. */
+export function moonConditionProvider(ctx: ConditionCtx): ConditionRow | null {
+  // Gate on PASS regime, not target regime (Codex review 2026-06-14): the
+  // Moon only washes the sky when THIS pass is actually dark. A night-best
+  // TARGET shot on a daylit pass has no moonlight problem. This also makes
+  // the moon row mutually exclusive with beta-blackout — a blackout means
+  // no orbital night, so pass_regime is never 'night' then.
+  if (ctx.pass.pass_regime !== 'night') return null;
+  const passMs = Date.parse(ctx.pass.closest_approach ?? '');
+  if (!Number.isFinite(passMs)) return null;
+  const at = ctx.pass.iss_at_closest;
+  const observer = at && Number.isFinite(at.lat) && Number.isFinite(at.lon)
+    ? { lat: at.lat, lon: at.lon } : null;
+  const altKm = at && Number.isFinite(at.alt_km) && at.alt_km > 0 ? at.alt_km : undefined;
+  const m = assessMoon(passMs, observer, altKm);
+  if (m.skyState === 'dark') return null;
+  const phase = m.phaseName.replace('-', ' ');
+  const tail = m.skyState === 'moonlit'
+    ? 'moonlit — night genres washed'
+    : 'up, faint — soft fill';
+  return {
+    id: 'moon',
+    icon: m.glyph,
+    label: 'moon',
+    value: `${phase} ${Math.round(m.illum * 100)}% · ${tail}`,
+    almanacAnchor: 'almanac-moon',
+  };
+}
+
+/** Ordered registry — order IS display priority. β (period-critical) >
+ *  moon > camera (baseline). β gates on a night-regime TARGET during a
+ *  full-sun blackout (pass_regime is day/terminator then); moon gates on a
+ *  night PASS. A blackout has no orbital night, so β and moon can never
+ *  co-occur — worst real case is moon + camera (or β + camera) = 2 rows,
+ *  well under MAX_VISIBLE_ROWS=3 (Codex review 2026-06-14). */
 export const PROVIDERS: ConditionProvider[] = [
   betaBlackoutProvider,
+  moonConditionProvider,
   cameraConditionProvider,
 ];
 

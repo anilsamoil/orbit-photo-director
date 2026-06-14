@@ -2110,10 +2110,13 @@ let sliderLastAppliedMinutes = -1;
 // timer's sync would otherwise rewrite slider.value mid-drag, yanking the
 // thumb out from under the finger (red-team 2026-06-10).
 let sliderDragging = false;
-/** Slider snap granularity (minutes). Owned here with min/max — real
- *  browsers snap programmatic .value writes to the step grid, so the
- *  contract must live in code, not hand-kept HTML. */
-const SLIDER_STEP_MINUTES = 5;
+/** Slider snap granularity (minutes). 1-minute steps (Chris 2026-06-14:
+ *  finer time resolution) — the tiered drag refresh (7A) throttles the
+ *  expensive surface work regardless of step count, so the finer grid adds
+ *  no per-frame cost. Owned here with min/max — real browsers snap
+ *  programmatic .value writes to the step grid, so the contract must live
+ *  in code, not hand-kept HTML. */
+const SLIDER_STEP_MINUTES = 1;
 
 /** Wire the continuous time-slider (eng-review 1C — Chris 2026-06-09:
  *  "slide time forward/backward... lets you see an arbitrary time later in

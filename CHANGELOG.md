@@ -2,6 +2,25 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.14.0.0] - 2026-06-14
+
+## **The app now reads the Moon. A bright Moon up means your aurora note says so — and the slider moves a minute at a time.**
+
+On a night pass the Moon is the biggest variable nobody was tracking. A bright Moon up in the station's sky floods the night Earth with light — gorgeous for cloud, ocean, and terrain texture, but it drowns faint aurora and star fields. Don Pettit's own guide is blunt about it: shoot stars "during no Moonlight night passes." Now the expanded pass panel shows a moon row on dark passes — phase, percent lit, and whether the Moon is washing the sky or merely up and faint — and a dark sky shows nothing, because that silence is the aurora/star window. When a bright Moon is up, the aurora note hedges itself to "aurora in view (moonlit — faint)." Tap the row for the full almanac entry, including Pettit's lunar-disk recipe and the limb-distortion time-lapse.
+
+Chris asked for finer time control, so the Map slider now steps a minute at a time instead of five.
+
+### Itemized changes
+
+#### Added
+- **Moon planning**: a moon condition row on night passes (phase glyph + % illuminated + moonlit/up-faint), copy-only modulation of the aurora note when the Moon is washing the sky, and a "The Moon & night photography" almanac entry. Silent on dark-sky and daylit passes.
+
+#### Changed
+- Time slider resolution is now 1 minute (was 5).
+
+#### Internal
+- Lunar math designed and adversarially verified by a multi-agent pass: illuminated fraction from the true sun-moon elongation (correct at the quarters, where a phase-by-age model errs ~8 points), Meeus low-precision position (<0.3°), and a "Moon up" gate against the station's orbital horizon (not a ground airmass threshold). Cross-checked against published June-2026 ephemeris. 34 new tests (suite: 1201).
+
 ## [1.13.0.0] - 2026-06-11
 
 ## **The app now warns you before the sun refuses to set. Night photography gets a forecast.**

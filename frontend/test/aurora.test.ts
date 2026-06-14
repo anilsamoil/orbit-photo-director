@@ -513,3 +513,36 @@ describe('refreshAuroraVisibility (rate-limit gate + staleness honesty)', () => 
     expect(widget.querySelector('.kp-aurora-note')).toBeNull();
   });
 });
+
+describe('moon modulation of the aurora note (Unit 3 — copy-only)', () => {
+  let widget: HTMLElement;
+  beforeEach(() => { widget = document.createElement('div'); });
+
+  const moonlit: import('../src/moon').MoonState = { phaseName: 'full', glyph: '🌕', illum: 0.98, waning: false, altitudeDeg: 80, skyState: 'moonlit' };
+  const upFaint: import('../src/moon').MoonState = { phaseName: 'waxing-crescent', glyph: '🌒', illum: 0.1, waning: false, altitudeDeg: 40, skyState: 'up-faint' };
+
+  it('back-compat: the 3-arg call is unchanged (no moon param)', () => {
+    renderAuroraVisibility({ state: 'in-view', maxProb: 62, ageMin: 12, degraded: false }, widget);
+    expect(widget.querySelector('.kp-aurora-note')!.textContent).toBe(' · aurora in view');
+  });
+
+  it('moonlit appends the hedge to text AND the tooltip', () => {
+    renderAuroraVisibility({ state: 'in-view', maxProb: 62, ageMin: 12, degraded: false }, widget, moonlit);
+    const note = widget.querySelector<HTMLElement>('.kp-aurora-note')!;
+    expect(note.textContent).toBe(' · aurora in view (moonlit — faint)');
+    expect(note.title).toContain('moon 98% up — skyglow');
+    expect(note.title).toContain('OVATION max 62%'); // base tooltip preserved
+  });
+
+  it('faint state hedges the same way for "nearby"', () => {
+    renderAuroraVisibility({ state: 'faint', maxProb: 20, ageMin: 5, degraded: false }, widget, moonlit);
+    expect(widget.querySelector('.kp-aurora-note')!.textContent).toBe(' · aurora nearby (moonlit — faint)');
+  });
+
+  it('up-faint and null moon do NOT modulate', () => {
+    renderAuroraVisibility({ state: 'in-view', maxProb: 50, ageMin: 5, degraded: false }, widget, upFaint);
+    expect(widget.querySelector('.kp-aurora-note')!.textContent).toBe(' · aurora in view');
+    renderAuroraVisibility({ state: 'in-view', maxProb: 50, ageMin: 5, degraded: false }, widget, null);
+    expect(widget.querySelector('.kp-aurora-note')!.textContent).toBe(' · aurora in view');
+  });
+});

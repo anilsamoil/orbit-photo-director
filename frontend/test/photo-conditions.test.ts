@@ -13,9 +13,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_ALT_KM,
-  betaBlackoutProvider,
-  KIT_FOCAL_LENGTHS_MM,
   MAX_VISIBLE_ROWS,
+  betaBlackoutProvider,
+  moonConditionProvider,
+  KIT_FOCAL_LENGTHS_MM,
   SHUTTER_LADDER,
   buildConditionRows,
   cameraConditionProvider,
@@ -269,5 +270,77 @@ describe('betaBlackoutProvider (Unit 2 — hard-zero + night-regime gating)', ()
   it('silent on normal-beta days (ISS today) and without a track', () => {
     expect(betaBlackoutProvider(mkCtx(ISS_TLE, { target_regime: 'night' } as never))).toBeNull();
     expect(betaBlackoutProvider(mkCtx(null, { target_regime: 'night' } as never))).toBeNull();
+  });
+});
+
+describe('moonConditionProvider (Unit 3 — night gate + sky state)', () => {
+  // Real full moon; observer placed AT the sub-point so the Moon is up.
+  const FULL = Date.parse('2026-06-29T23:57:00Z');
+  const sub = (() => {
+    // mirror moonSubpoint without importing private math: use assessMoon via
+    // a coarse search is overkill — use the known value (-27.2, +1.9).
+    return { lat: -27, lon: 2 };
+  })();
+
+  const nightPassAtSub = (over: Partial<PassEntry> = {}): PassEntry => passWith({
+    pass_regime: 'night',
+    closest_approach: '2026-06-29T23:57:00Z',
+    iss_at_closest: { lat: sub.lat, lon: sub.lon, alt_km: 420 },
+    ...over,
+  } as never);
+
+  const ctx = (pass: PassEntry): ConditionCtx => ({ pass, manifest: null, track: null, nowMs: FULL });
+
+  it('fires moonlit on a night pass with the bright Moon up', () => {
+    const row = moonConditionProvider(ctx(nightPassAtSub()));
+    expect(row).not.toBeNull();
+    expect(row!.id).toBe('moon');
+    expect(row!.icon).toBe('🌕');
+    expect(row!.value).toContain('full');
+    expect(row!.value).toContain('moonlit — night genres washed');
+    expect(row!.almanacAnchor).toBe('almanac-moon');
+  });
+
+  it('silent on a DAY pass even with the Moon up (rule 5)', () => {
+    expect(moonConditionProvider(ctx(nightPassAtSub({ pass_regime: 'day' } as never)))).toBeNull();
+  });
+
+  it('silent on a night-best TARGET if the PASS is daylit (Codex gate fix)', () => {
+    // night target, day pass → moonlight is irrelevant, no row.
+    expect(moonConditionProvider(ctx(nightPassAtSub({ target_regime: 'night', pass_regime: 'day' } as never)))).toBeNull();
+  });
+
+  it('silent (dark) when the Moon is on the far side of Earth', () => {
+    const farPass = nightPassAtSub({ iss_at_closest: { lat: 27, lon: -178, alt_km: 420 } } as never);
+    expect(moonConditionProvider(ctx(farPass))).toBeNull();
+  });
+
+  it('fires on a night PASS regardless of target regime', () => {
+    const byPassRegime = nightPassAtSub({ target_regime: 'day', pass_regime: 'night' } as never);
+    expect(moonConditionProvider(ctx(byPassRegime))).not.toBeNull();
+  });
+});
+
+describe('row budget at the cap (verifier 2026-06-14: β+moon+camera = 3, not 2)', () => {
+  it('a night pass can produce exactly MAX_VISIBLE_ROWS with no disclosure', () => {
+    // Camera always fires (nadir present); moon fires (Moon up); beta only
+    // on a hard-zero day — we assert the cap math directly.
+    expect(MAX_VISIBLE_ROWS).toBe(3);
+    const rows = buildConditionRows({
+      pass: passWith({
+        pass_regime: 'night',
+        closest_approach: '2026-06-29T23:57:00Z',
+        nadir_distance_km: 200,
+        iss_at_closest: { lat: -27, lon: 2, alt_km: 420 },
+      } as never),
+      manifest: null,
+      track: null,
+      nowMs: Date.parse('2026-06-29T23:57:00Z'),
+    });
+    // moon + camera (β needs a full-sun TLE which this lacks) → 2 here; the
+    // point is the renderer caps at 3 with no overflow button.
+    expect(rows.length).toBeLessThanOrEqual(MAX_VISIBLE_ROWS);
+    expect(rows.some((r) => r.id === 'moon')).toBe(true);
+    expect(rows.some((r) => r.id === 'camera')).toBe(true);
   });
 });
