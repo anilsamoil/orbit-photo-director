@@ -40,10 +40,12 @@ from .cloud import (
     MockCloudSampler,
     SatCORPSSampler,
     assess_obstruction,
+    is_water,
     lighting_regime,
     sun_glint_risk,
     sun_subpoint,
 )
+from .water_mask import load_water_mask
 from .config import (
     DEFAULT_TOP_MAP,
     DEFAULT_TOP_QUEUE,
@@ -316,6 +318,7 @@ def score_pass_for_target(
     composite_hour: datetime | None = None,
     lightning_sampler: Any | None = None,
     hurricane_tracker: Any | None = None,
+    water_mask: Any | None = None,
 ) -> dict[str, Any]:
     when = pass_obj.closest_approach
     iss = pass_obj.iss_position
@@ -326,6 +329,7 @@ def score_pass_for_target(
         sun_lat, sun_lon,
         pass_obj.target_lat, pass_obj.target_lon,
         iss.lat, iss.lon,
+        mask=water_mask,
     )
     # Pick observed sampler for imminent passes (<= horizon); forecast for
     # everything beyond. Observed cloud is irrelevant for a pass 6h from now;
@@ -499,6 +503,16 @@ def score_pass_for_target(
     category = target.get("category")
     if category:
         out["category"] = category
+
+    # Per-pass water flag for the general sun-glint gate (GSHHG mask, Unit 6
+    # follow-up). Computed from a SEPARATE is_water lookup — NOT the `glint`
+    # bool, which already ANDs in daylight + ISS proximity; the frontend gate
+    # needs the geometry-independent "is this a water scene?" signal and runs
+    # its own glintDeviationDeg timing check. Inserted LAST and only when a mask
+    # is loaded, so the no-mask path stays byte-identical to the pre-mask
+    # manifest — same conditional pattern as `category`/`sprite`.
+    if water_mask is not None:
+        out["water"] = is_water(pass_obj.target_lat, pass_obj.target_lon, water_mask)
     return out
 
 
@@ -793,6 +807,15 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # is still the final fallback if both real samplers fail.
     lightning_sampler_obj = None
     hurricane_tracker_obj = None
+    # GSHHG land/water mask for the general sun-glint gate — loaded ONCE per
+    # tick (numpy-only, ~1µs/lookup). None when the committed artifact is
+    # absent (fresh checkout / CI), which cleanly falls back to the V1 ocean-
+    # band heuristic and omits the per-pass `water` key (byte-stable).
+    water_mask_obj = load_water_mask()
+    log.info(
+        "water mask: %s",
+        "loaded (GSHHG general glint gate)" if water_mask_obj else "absent — V1 heuristic fallback",
+    )
     # Function-scoped so the per-profile multiplex can top it up with personal
     # coords (same fix as the cloud forecast_sampler). None when weather is
     # disabled or CAPE init fails.
@@ -866,6 +889,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 composite_hour=composite_hour,
                 lightning_sampler=lightning_sampler_obj,
                 hurricane_tracker=hurricane_tracker_obj,
+                water_mask=water_mask_obj,
             ))
     log.info("found %d passes across %d targets", len(all_passes), len(targets))
 
@@ -906,6 +930,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 composite_hour=composite_hour,
                 lightning_sampler=lightning_sampler_obj,
                 hurricane_tracker=hurricane_tracker_obj,
+                water_mask=water_mask_obj,
             )
             entry["launch"] = {
                 "name": la.name,
@@ -1046,6 +1071,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                     composite_hour=composite_hour,
                     lightning_sampler_obj=lightning_sampler_obj,
                     hurricane_tracker_obj=hurricane_tracker_obj,
+                    water_mask_obj=water_mask_obj,
                     launch_pass_entries=launch_pass_entries,
                     n=n,
                     settings=settings,
@@ -1251,6 +1277,7 @@ def _run_profile_multiplex(
     composite_hour: datetime,
     lightning_sampler_obj: Any,
     hurricane_tracker_obj: Any,
+    water_mask_obj: Any = None,
     launch_pass_entries: list[dict[str, Any]],
     n: datetime,
     settings: Settings,
@@ -1320,6 +1347,7 @@ def _run_profile_multiplex(
                 composite_hour=composite_hour,
                 lightning_sampler=lightning_sampler_obj,
                 hurricane_tracker=hurricane_tracker_obj,
+                water_mask=water_mask_obj,
             ))
 
     # Launches are shared across all profiles (Anil curates the launch

@@ -60,6 +60,11 @@ export interface PassEntry {
   /** Curated target category (e.g. 'big-terrain', 'volcano'). Drives the
    *  golden-hour condition row (Unit 4). Absent on personal/launch targets. */
   category?: string;
+  /** True when the generator's GSHHG land/water mask classifies target_lat/lon
+   *  as water. Drives the general sun-glint gate (Unit 6 follow-up). Absent on
+   *  pre-mask manifests → the glint provider falls back to the legacy category
+   *  gate so old manifests still surface glint on the 12 curated coasts. */
+  water?: boolean;
   closest_approach: string; // ISO 8601 Z
   nadir_distance_km: number;
   /** Angle from ISS-nadir vector to the line-of-sight to the target.

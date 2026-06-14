@@ -532,7 +532,7 @@ describe('glintDeviationDeg (verified 3-D specular reflection)', () => {
   });
 });
 
-describe('glintConditionProvider (Unit 6 — water-framed coastal glint, advisory)', () => {
+describe('glintConditionProvider (Unit 6 + GSHHG water gate, advisory)', () => {
   // iconic-shape target; control the sun + ISS sub-points via closest_approach
   // and iss_at_closest to hit a chosen specular geometry. We pick a time whose
   // subsolar point we read, then place the target/ISS for the desired deviation.
@@ -557,14 +557,42 @@ describe('glintConditionProvider (Unit 6 — water-framed coastal glint, advisor
     expect(row!.id).toBe('glint');
     expect(row!.icon).toBe('✨');
     expect(row!.value).toContain('sun glints off the water');
-    expect(row!.value).toContain('sea state permitting');
+    expect(row!.value).toContain('surface permitting');  // generalized for inland lakes too
     expect(row!.almanacAnchor).toBe('almanac-glint');
   });
 
-  it('silent for non-water categories (the SOLE land guard)', () => {
+  it('BACK-COMPAT: with `water` absent, falls back to the iconic-shape category gate', () => {
+    // Pre-mask manifests carry no `water` flag → the legacy category gate
+    // still decides, so old manifests surface glint exactly as before.
     expect(glintConditionProvider(ctx(glintPass({ category: 'big-terrain' } as never)))).toBeNull();
     expect(glintConditionProvider(ctx(glintPass({ category: 'volcano' } as never)))).toBeNull();
     expect(glintConditionProvider(ctx(glintPass({ category: undefined } as never)))).toBeNull();
+  });
+
+  it('GSHHG gate: `water:true` fires regardless of category (e.g. inland lake, no category)', () => {
+    // A personal target over Lake Baikal: no curated category, but the
+    // generator flagged water:true → glint fires on the geometry alone.
+    const row = glintConditionProvider(ctx(glintPass({
+      category: undefined, water: true,
+    } as never)));
+    expect(row).not.toBeNull();
+    expect(row!.id).toBe('glint');
+  });
+
+  it('GSHHG gate: `water:false` is silent even on an iconic-shape target (land wins)', () => {
+    // The mask is authoritative: water:false suppresses glint even if the
+    // legacy category would have fired.
+    expect(glintConditionProvider(ctx(glintPass({
+      category: 'iconic-shape', water: false,
+    } as never)))).toBeNull();
+  });
+
+  it('GSHHG gate: `water:true` still respects the real-time geometry gates', () => {
+    // water:true is necessary, not sufficient — the deviation gate still
+    // decides actual glint timing. Off-axis ISS → no row even over water.
+    expect(glintConditionProvider(ctx(glintPass({
+      water: true, iss_at_closest: { lat: sub.lat + 8, lon: sub.lon, alt_km: 420 },
+    } as never)))).toBeNull();
   });
 
   it('silent when the ISS is off the specular axis (deviation > threshold)', () => {
