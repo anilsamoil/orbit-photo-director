@@ -294,22 +294,16 @@ export const NLC_LAT_MIN = 45;
 export const NLC_SUN_HI = -6;
 export const NLC_SUN_LO = -16;
 
-/** UTC day-of-year, 1-based (Jan 1 = 1). */
-export function dayOfYear(d: Date): number {
-  return Math.floor(
-    (Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-      - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400_000,
-  );
-}
-
-/** NLC season by hemisphere (NASA AIM climatology): N ~May 24-Aug 22
- *  (centered on the June solstice); S ~Nov 17-Feb 22 (wraps the year).
- *  Conservative onset (under-fires by up to ~10 days vs the earliest
- *  recorded seasons) — silence is the right default for a rare event. */
+/** NLC season by hemisphere (NASA AIM climatology): N May 24-Aug 22
+ *  (centered on the June solstice); S Nov 17-Feb 22 (wraps the year).
+ *  Compared as calendar month/day (MMDD), not day-of-year, so the dates
+ *  are EXACT and leap-year-safe (Codex review 2026-06-14). Conservative
+ *  onset (under-fires vs the earliest recorded seasons) — silence is the
+ *  right default for a rare event. */
 export function isNlcSeason(d: Date, hemisphere: 'N' | 'S'): boolean {
-  const doy = dayOfYear(d);
-  if (hemisphere === 'N') return doy >= 144 && doy <= 234;
-  return doy >= 321 || doy <= 53;
+  const md = (d.getUTCMonth() + 1) * 100 + d.getUTCDate(); // e.g. May 24 -> 524
+  if (hemisphere === 'N') return md >= 524 && md <= 822;
+  return md >= 1117 || md <= 222;
 }
 
 /** NLC window row: a summer high-latitude target at twilight, where the
