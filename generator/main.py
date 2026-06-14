@@ -391,11 +391,6 @@ def score_pass_for_target(
         "target_name": target["name"],
         "target_regime": target["regime"],
         "target_priority": target["priority"],
-        # Curated category (big-terrain/volcano/iconic-shape/...) — lets the
-        # frontend's golden-hour condition row fire only for terrain-texture
-        # targets (Unit 4). Absent on synthetic launch targets; the frontend
-        # treats missing as "no row". No scorer interaction (advisory only).
-        "category": target.get("category"),
         "target_lat": pass_obj.target_lat,
         "target_lon": pass_obj.target_lon,
         "closest_approach": utcnow_iso(when),
@@ -476,6 +471,15 @@ def score_pass_for_target(
         out["lightning_bonus"] = round(lightning_bonus_value, 3)
     if hurricane_dict is not None:
         out["hurricane_nearby"] = hurricane_dict
+    # Curated category (big-terrain/volcano/...) — lets the frontend's
+    # golden-hour row fire only on terrain-texture targets (Unit 4).
+    # Conditionally inserted (Codex review 2026-06-14): omitting the key
+    # entirely when absent keeps no-category passes byte-identical (manifest
+    # version dedup) and matches the optional `category?:` frontend type. No
+    # scorer interaction — advisory only.
+    category = target.get("category")
+    if category:
+        out["category"] = category
     return out
 
 

@@ -1154,4 +1154,6 @@ def test_score_pass_for_target_serializes_category(sample_tle: TLE) -> None:
         "id": "t", "name": "T", "geom": {"type": "point", "lat": 0.0, "lon": 0.0},
         "priority": 4, "regime": "day",
     }
-    assert score_pass_for_target(no_cat, pass_obj, sampler, tle_freshness=1.0)["category"] is None
+    # Byte-stability: the key is OMITTED entirely when there's no category
+    # (no "category": null), so no-category passes stay byte-identical.
+    assert "category" not in score_pass_for_target(no_cat, pass_obj, sampler, tle_freshness=1.0)
