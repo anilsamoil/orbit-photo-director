@@ -741,3 +741,6 @@ once all artifacts settle).
 - ✅ **P2** — upload_frontend.sh surfaces wrangler errors and exits non-zero on partial failure
 - ✅ **P3** — pass_time strict regex (`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`)
 - ✅ **P3** — detect_reboost direction-aware (only fires on mean-motion decrease = orbit raise)
+
+### Sun-glint general water mask (GSHHG) — unlocks Unit 6 beyond curated coastlines
+**Priority:** P3. Unit 6 (sun glint, shipped scoped to 12 iconic-shape curated targets) is limited by the absence of a real water mask. `generator/cloud.py:is_water` is a crude ocean-band heuristic that flags the Sahara and misses inland water (Amazon/Nile/Mississippi deltas, the Great Lakes interior) and coastlines at their centroids. The 3-D specular glint math (`glintDeviationDeg`, photo-conditions.ts) is verified sound; the only gap is reliable water-ness at the target point. **When a real GSHHG-derived binary water mask lands** (already anticipated in `is_water`'s own comments), serialize a per-pass `water: boolean` onto the pass and switch the glint provider's gate from `category==='iconic-shape'` to the water flag — then glint fires on ANY real water (rivers, lakes, coasts) with no land false-positives. Verified design + decision logged 2026-06-14.
