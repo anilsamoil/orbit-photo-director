@@ -346,6 +346,34 @@ const HELP_SECTIONS: HelpSection[] = [
           'Lens Skills, Sunny 16.)',
       },
       {
+        icon: '🌙',
+        label: 'The Moon & night photography',
+        id: 'almanac-moon',
+        text:
+          'On a night pass the Moon is the biggest variable. A bright Moon '
+          + 'up in the sky floods the night-side Earth with light — '
+          + 'beautiful for cloud, ocean, and terrain TEXTURE, but it '
+          + 'drowns faint aurora and star fields. Don Pettit\'s rule is '
+          + 'blunt: shoot stars and the Milky Way "during no Moonlight '
+          + 'night passes." So the expanded-pass moon row tells you the '
+          + 'phase and whether the Moon is up and washing the sky '
+          + '(moonlit) or merely up and faint — and a dark sky shows no '
+          + 'row at all, because that silence IS the aurora/star window. '
+          + 'The aurora note hedges to "(moonlit — faint)" when a bright '
+          + 'Moon is up. As a TARGET the Moon is easy: his card says start '
+          + 'from Sunny 16, then f8, ISO 400, 1/1600 for the lunar disk — '
+          + 'and expose for EITHER the Moon OR the night Earth, never both '
+          + 'in one frame; bracket in a rapid sequence for HDR. Past 85mm '
+          + 'use the Russian windows or a Cupola bump-shield pane. '
+          + 'At the limb: a low Moon setting or rising through the '
+          + 'atmosphere at orbital sunrise/sunset refracts into a flattened, '
+          + 'distorted disk — a striking time-lapse when you catch it. '
+          + '(Phase/altitude are computed from the orbit clock on your '
+          + 'iPad, accurate to a planning grade for the station\'s own sky. '
+          + 'Source: Pettit, Astronauts\' Guide to Photography from Space, '
+          + '2nd ed. 2017 — Moon & Night Phenomena cards.)',
+      },
+      {
         icon: '☀️',
         label: 'Beta angle & night blackouts',
         id: 'almanac-beta',

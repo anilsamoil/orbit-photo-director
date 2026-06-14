@@ -158,6 +158,7 @@ export function initKpWidget(container: HTMLElement): void {
 
 import { greatCircleAngleDeg, subsolarPoint } from './terminator';
 import { greatCircleKm } from './pin-drop';
+import { assessMoon, type MoonState } from './moon';
 
 /** Response shape from /api/aurora. Matches AuroraGridResponse in
  *  worker/src/ovation.ts; kept independent (same rule as KpData). */
@@ -300,6 +301,7 @@ export function assessAuroraVisibility(
 export function renderAuroraVisibility(
   vis: AuroraVisibility | null,
   container: HTMLElement,
+  moon?: MoonState | null,
 ): void {
   let note = container.querySelector<HTMLElement>('.kp-aurora-note');
   const show = vis !== null && (vis.state === 'in-view' || vis.state === 'faint');
@@ -312,13 +314,22 @@ export function renderAuroraVisibility(
     note.className = 'kp-aurora-note';
     container.appendChild(note);
   }
-  note.textContent = vis.state === 'in-view' ? ' · aurora in view' : ' · aurora nearby';
+  // Moon modulation (Unit 3) — COPY ONLY: a bright Moon up in the station's
+  // sky washes faint aurora (Pettit: "best during no Moonlight night
+  // passes"). We hedge the WORDING; we never suppress the note or touch the
+  // OVATION threshold (the visibility decision stays pure geometry). Only
+  // the 'moonlit' state (bright AND above the orbital horizon) modulates —
+  // 'up-faint' and 'dark' append nothing.
+  const moonlit = moon != null && moon.skyState === 'moonlit';
+  const base = vis.state === 'in-view' ? ' · aurora in view' : ' · aurora nearby';
+  note.textContent = moonlit ? `${base} (moonlit — faint)` : base;
   const staleNote = vis.degraded ? ' · SWPC degraded, last good reading' : '';
   const ageMin = Math.max(0, Math.round(vis.ageMin));
   const ageText = ageMin < 60 ? `${ageMin}m` : `${Math.floor(ageMin / 60)}h ${ageMin % 60}m`;
+  const moonNote = moonlit ? ` · moon ${Math.round(moon!.illum * 100)}% up — skyglow` : '';
   note.title =
     `OVATION max ${Math.round(vis.maxProb)}% within the station's horizon`
-    + ` · reading ${ageText} old${staleNote}`;
+    + ` · reading ${ageText} old${staleNote}${moonNote}`;
 }
 
 // Refresh cadence gate: the kp fetch rides every 60s poll; the 9KB grid
@@ -387,5 +398,8 @@ export async function refreshAuroraVisibility(
   renderAuroraVisibility(
     assessAuroraVisibility(lastAuroraGrid, pos.lat, pos.lon, new Date(nowMs), effAgeMin),
     container,
+    // Live moon at the live station sub-point (the note is a "right now at
+    // the station" claim) — assessMoon defaults to 420km dip.
+    assessMoon(nowMs, pos),
   );
 }

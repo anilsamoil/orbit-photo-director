@@ -27,6 +27,7 @@
 import type { Manifest, PassEntry, Track } from './types';
 import { openHelpModal } from './help';
 import { betaCriticalDeg, scanBetaForecast } from './beta-angle';
+import { assessMoon } from './moon';
 
 // ── Physics constants ──────────────────────────────────────────────────────
 // Sources: D. Pettit, "Astronauts' Guide to Photography from Space",
@@ -196,9 +197,44 @@ export function betaBlackoutProvider(ctx: ConditionCtx): ConditionRow | null {
   };
 }
 
-/** Ordered registry — order IS display priority. Later units append. */
+/** Moon row (Unit 3): on NIGHT passes where the Moon is up in the
+ *  station's sky. 'moonlit' (bright + up) warns night genres are washed;
+ *  'up-faint' notes soft fill light. A DARK sky returns null — silence IS
+ *  the aurora/star window signal. Verified (multi-agent, 2026-06-14):
+ *  illum from true elongation (right at the quarters), "up" gated against
+ *  the orbital horizon via the pass's alt_km. */
+export function moonConditionProvider(ctx: ConditionCtx): ConditionRow | null {
+  if (ctx.pass.target_regime !== 'night' && ctx.pass.pass_regime !== 'night') return null;
+  const passMs = Date.parse(ctx.pass.closest_approach ?? '');
+  if (!Number.isFinite(passMs)) return null;
+  const at = ctx.pass.iss_at_closest;
+  const observer = at && Number.isFinite(at.lat) && Number.isFinite(at.lon)
+    ? { lat: at.lat, lon: at.lon } : null;
+  const altKm = at && Number.isFinite(at.alt_km) && at.alt_km > 0 ? at.alt_km : undefined;
+  const m = assessMoon(passMs, observer, altKm);
+  if (m.skyState === 'dark') return null;
+  const phase = m.phaseName.replace('-', ' ');
+  const tail = m.skyState === 'moonlit'
+    ? 'moonlit — night genres washed'
+    : 'up, faint — soft fill';
+  return {
+    id: 'moon',
+    icon: m.glyph,
+    label: 'moon',
+    value: `${phase} ${Math.round(m.illum * 100)}% · ${tail}`,
+    almanacAnchor: 'almanac-moon',
+  };
+}
+
+/** Ordered registry — order IS display priority. β (period-critical) >
+ *  moon > camera (baseline). Worst real case on a night-regime target is
+ *  β + moon + camera = 3 rows = exactly MAX_VISIBLE_ROWS (they are NOT
+ *  mutually exclusive — both gate on night regime; verified 2026-06-14),
+ *  so the disclosure never triggers and slice(0,3) shows the most
+ *  planning-critical rows first. */
 export const PROVIDERS: ConditionProvider[] = [
   betaBlackoutProvider,
+  moonConditionProvider,
   cameraConditionProvider,
 ];
 
