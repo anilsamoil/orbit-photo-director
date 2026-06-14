@@ -346,6 +346,28 @@ const HELP_SECTIONS: HelpSection[] = [
           'Lens Skills, Sunny 16.)',
       },
       {
+        icon: '⚡',
+        label: 'Sprites — upward lightning at the limb',
+        id: 'almanac-sprites',
+        text:
+          'Sprites are brief red flashes of upward lightning into the '
+          + 'mesosphere (about 50–90 km) above strong storms. The catch: '
+          + '"you will not be able to see them with your eyes" (Pettit) — '
+          + 'you shoot the dark limb above a distant vigorous storm on '
+          + 'faith. So a heads-up that such a storm is in view at the limb '
+          + 'is the whole game. The sprite-watch row fires on a night pass '
+          + 'when a strong electrically-active storm sits in the limb '
+          + 'annulus (600–3200 km out) and the sky is dark — possible '
+          + 'sprites, not a detection. Mount on the Bogen arm and aim toward '
+          + 'the flagged storm, at the limb or near nadir as the geometry '
+          + 'allows; long-ish exposures catch multiple flashes. His '
+          + 'settings: f2.8, start ISO 1600 / 2s, then trade down the ladder '
+          + '(4s/800 · 2s/1600 · 1s/3200 · 1/2s/6400 · 1/4s/12800); LiveView '
+          + '10× to focus. Coverage is the Americas and Atlantic only '
+          + '(GOES lightning mapper). Source: Pettit, Astronauts\' Guide to '
+          + 'Photography from Space, 2nd ed. 2017 — Lightning and Sprites.',
+      },
+      {
         icon: '✨',
         label: 'Sun glint — light off the water',
         id: 'almanac-glint',

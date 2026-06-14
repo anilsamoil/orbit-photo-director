@@ -104,6 +104,12 @@ export interface PassEntry {
    *  components, so the operator understands how the bonus moved the
    *  star count. */
   lightning_bonus?: number;
+  /** Strong storm cluster at the limb on a NIGHT pass (Unit 7 sprite watch).
+   *  Present only when the generator found a sprite-capable storm in the
+   *  600-3200km annulus around the ISS sub-point while the sub-point was
+   *  dark. Drives the sprite condition row (which adds a moon-darkness gate).
+   *  GLM coverage = Americas/Atlantic/E-Pacific only. */
+  sprite?: { distance_km: number; bearing_deg: number; flash_count: number };
   /** Named tropical system within ~1500km of the pass target. NHC
    *  Atlantic + East Pacific basins only in v1.3.1; JTWC deferred to
    *  V4-P3. When present, the card renders a 🌀 tag with the storm

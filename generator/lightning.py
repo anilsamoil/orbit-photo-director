@@ -36,6 +36,7 @@ import concurrent.futures
 import json
 import logging
 import time
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,7 +44,7 @@ from typing import Any, Protocol
 
 import requests
 
-from .orbit import great_circle_km
+from .orbit import great_circle_bearing_deg, great_circle_km
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +163,30 @@ GLM_WINDOW_MINUTES = 60
 # (~3° lat at 408km altitude); matches operator's mental model of
 # "lightning near my photo target."
 GLM_LOOKUP_RADIUS_KM = 100.0
+
+# ── Sprite watch (Unit 7) ────────────────────────────────────────────────
+# Sprites are upward lightning at ~50-90km above STRONG storms, photographed
+# from the ISS by looking at the dark LIMB toward a distant storm. The
+# annulus of storm ground-distances from the ISS sub-point where a sprite is
+# a genuine limb target (not the nadir-lightning ⚡ tag) and is above the
+# ISS's visible horizon for a 75km-elevated source:
+#   inner 900km  → ~61.7° off-nadir (clears the 60° initial-encounter /
+#                  30° WORF-Cupola nadir-framing window — a true limb view).
+#   outer 3200km → the elevated horizon for a 75km sprite seen from 420km
+#                  (acos(R/(R+420)) + acos(R/(R+75)) ≈ 29.0° central angle →
+#                  ~3227km, rounded down for refraction/occultation margin).
+SPRITE_ANNULUS_INNER_KM = 900.0
+SPRITE_ANNULUS_OUTER_KM = 3200.0
+# Minimum GLM flashes in a winning 5° bucket over the 60-min window for the
+# storm to count as sprite-capable. A COARSE VIGOR PROXY, not a derived
+# charge-moment threshold — GLM total-flash count only loosely tracks the
+# high-charge-moment +CG strokes in a storm's stratiform region that actually
+# trigger sprites. Set conservatively (anti-over-fire; ~4 flashes/min average
+# over the hour = a genuinely active mesoscale system) and SOAK-TUNABLE: the
+# dev env has no live GLM past 2025, so this only exercises under `make
+# glm-smoke` / production. Raise if the soak shows noise, lower if it never
+# fires.
+SPRITE_MIN_FLASHES = 250
 # Coarse spatial-index bucket size (P2). 5° lat/lon ≈ 555km × 555km at
 # the equator; a 100km lookup radius always lands within at most 4
 # adjacent buckets, so the per-target retrieval is O(1) bucket fetch
@@ -324,6 +349,15 @@ def _bucket_key(lat: float, lon: float) -> tuple[int, int]:
     )
 
 
+@dataclass(frozen=True)
+class StrongCluster:
+    """A sprite-capable storm cluster found in the limb annulus."""
+
+    distance_km: float   # ISS sub-point → cluster centroid (great-circle)
+    bearing_deg: float   # true bearing [0,360) from sub-point to centroid
+    flash_count: int     # in-annulus flashes in the winning 5° bucket
+
+
 class GLMSampler:
     """Observed-lightning sampler via NOAA GLM AWS S3 buckets.
 
@@ -483,6 +517,59 @@ class GLMSampler:
             source=f"glm{age_suffix}",
         )
 
+    def strongest_cluster_in_annulus(
+        self,
+        lat: float,
+        lon: float,
+        inner_km: float = SPRITE_ANNULUS_INNER_KM,
+        outer_km: float = SPRITE_ANNULUS_OUTER_KM,
+        min_flashes: int = SPRITE_MIN_FLASHES,
+    ) -> StrongCluster | None:
+        """Sprite-watch (Unit 7): strongest storm cluster in the limb annulus
+        [inner_km, outer_km] around (lat, lon) — the ISS sub-point. Reuses
+        the prebuilt 5° flash index (zero new I/O). Returns the densest 5°
+        bucket's in-annulus flashes as a StrongCluster (flash-weighted
+        centroid, distance + true bearing from the sub-point), or None if no
+        bucket clears `min_flashes`. Cheap first cut: the sub-point must be
+        inside GOES coverage (a non-None result outside it is impossible, and
+        the box check avoids scanning when the orbit is over Asia/Pacific).
+        """
+        if not _in_glm_coverage(lat, lon):
+            return None
+        # Bucket window sized from the OUTER radius. cos-lat widens the
+        # longitude span toward the poles; floor near the equator is fine.
+        deg_pad = outer_km / 111.0
+        clat, clon = _bucket_key(lat, lon)
+        lat_span = int(deg_pad // GLM_SPATIAL_BUCKET_DEG) + 1
+        coslat = max(0.2, math.cos(math.radians(lat)))
+        lon_span = int((deg_pad / coslat) // GLM_SPATIAL_BUCKET_DEG) + 1
+
+        best_flashes: list[_GLMFlash] | None = None
+        best_count = 0
+        for by in range(clat - lat_span, clat + lat_span + 1):
+            for bx in range(clon - lon_span, clon + lon_span + 1):
+                bucket = self._flashes_by_bucket.get((by, bx))
+                if not bucket:
+                    continue
+                in_ann = [
+                    f for f in bucket
+                    if inner_km <= great_circle_km(lat, lon, f.lat, f.lon) <= outer_km
+                ]
+                if len(in_ann) >= min_flashes and len(in_ann) > best_count:
+                    best_count = len(in_ann)
+                    best_flashes = in_ann
+        if best_flashes is None:
+            return None
+        # Flash-weighted centroid (simple mean — clusters are compact within
+        # a 5° bucket so a planar mean is adequate for a bearing cue).
+        clat_c = sum(f.lat for f in best_flashes) / len(best_flashes)
+        clon_c = sum(f.lon for f in best_flashes) / len(best_flashes)
+        return StrongCluster(
+            distance_km=round(great_circle_km(lat, lon, clat_c, clon_c), 1),
+            bearing_deg=round(great_circle_bearing_deg(lat, lon, clat_c, clon_c), 1),
+            flash_count=best_count,
+        )
+
 
 # ---------------------------------------------------------------------------
 # GFS-CAPE forecast lightning sampler — v1.5.5.0 (weather v1.3.2)
@@ -564,6 +651,16 @@ class CombinedLightningSampler:
     ):
         self._observed = observed
         self._forecast = forecast
+
+    def strongest_cluster_in_annulus(
+        self, lat: float, lon: float,
+    ) -> "StrongCluster | None":
+        """Sprite watch (Unit 7): delegate to the observed (GLM) sampler;
+        forecast/placeholder samplers have no flash field → None."""
+        obs = self._observed
+        if obs is not None and hasattr(obs, "strongest_cluster_in_annulus"):
+            return obs.strongest_cluster_in_annulus(lat, lon)
+        return None
 
     def sample(self, lat: float, lon: float, when: datetime) -> LightningSample:
         obs: LightningSample | None = None

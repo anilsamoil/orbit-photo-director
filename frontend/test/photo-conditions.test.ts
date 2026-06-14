@@ -19,7 +19,9 @@ import {
   GLINT_SUN_FLOOR_DEG,
   glintConditionProvider,
   glintDeviationDeg,
+  compassPoint,
   goldenHourConditionProvider,
+  spriteConditionProvider,
   isNlcSeason,
   nlcConditionProvider,
   NLC_LAT_MIN,
@@ -589,3 +591,61 @@ describe('glintConditionProvider (Unit 6 — water-framed coastal glint, advisor
     expect(glintDeviationDeg(0, -150, 8, -150, 0.1, -150, 420)).toBeLessThan(GLINT_DEVIATION_DEG);
   });
 });
+
+describe('compassPoint', () => {
+  it('maps bearings to 16-point compass labels', () => {
+    expect(compassPoint(0)).toBe('N');
+    expect(compassPoint(90)).toBe('E');
+    expect(compassPoint(180)).toBe('S');
+    expect(compassPoint(270)).toBe('W');
+    expect(compassPoint(158)).toBe('SSE');
+    expect(compassPoint(360)).toBe('N');
+    expect(compassPoint(-10)).toBe('N'); // wraps (350° → N)
+  });
+});
+
+describe('spriteConditionProvider (Unit 7 — moon-gated honest sprite watch)', () => {
+  const NIGHT = '2026-06-15T03:00:00Z'; // near new moon → dark sky
+  // ISS sub-point far from the (near-new) moon → not moonlit.
+  const spritePass = (over: Partial<PassEntry> = {}): PassEntry => passWith({
+    closest_approach: NIGHT,
+    iss_at_closest: { lat: 15, lon: -85, alt_km: 420 },
+    sprite: { distance_km: 1480, bearing_deg: 158, flash_count: 320 },
+    ...over,
+  } as never);
+  const ctx = (p: PassEntry): ConditionCtx => ({ pass: p, manifest: null, track: null, nowMs: Date.parse(NIGHT) });
+
+  it('fires an honest "possible" row when the generator flagged a limb storm (dark sky)', () => {
+    const row = spriteConditionProvider(ctx(spritePass()));
+    expect(row).not.toBeNull();
+    expect(row!.id).toBe('sprite');
+    expect(row!.icon).toBe('⚡');
+    expect(row!.value).toContain('possible sprites');
+    expect(row!.value).toContain('1480km SSE');
+    expect(row!.value).toContain('limb');
+    expect(row!.almanacAnchor).toBe('almanac-sprites');
+  });
+
+  it('silent when the pass carries no sprite field (the common case)', () => {
+    expect(spriteConditionProvider(ctx(spritePass({ sprite: undefined } as never)))).toBeNull();
+  });
+
+  it('SUPPRESSED when a bright Moon is up (washes faint sprites)', () => {
+    // Full moon instant + ISS sub-point AT the moon sub-point → moonlit.
+    const FULL = '2026-06-29T23:57:00Z';
+    const sub = subsolarPointMoonProxy(FULL); // helper below
+    const moonlit = spritePass({
+      closest_approach: FULL,
+      iss_at_closest: { lat: sub.lat, lon: sub.lon, alt_km: 420 },
+    } as never);
+    const row = spriteConditionProvider({ pass: moonlit, manifest: null, track: null, nowMs: Date.parse(FULL) });
+    expect(row).toBeNull();
+  });
+});
+
+// Moon sub-point proxy for the moonlit-suppression test (mirrors moon.ts).
+function subsolarPointMoonProxy(iso: string): { lat: number; lon: number } {
+  // Use the real moon subpoint via the moon module to place the observer.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return { lat: -27, lon: 2 }; // ≈ full-moon subpoint 2026-06-29T23:57Z (from moon.test)
+}

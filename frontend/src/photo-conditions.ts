@@ -428,7 +428,48 @@ export function glintConditionProvider(ctx: ConditionCtx): ConditionRow | null {
   };
 }
 
+/** 16-point compass label from a true bearing (deg). Coarse on purpose:
+ *  the generator computes the bearing at closest approach from the moving
+ *  sub-point, so a 16-point cue stays usable across the orient-and-shoot
+ *  window where a precise degree would already be stale. */
+export function compassPoint(deg: number): string {
+  const pts = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+    'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+  return pts[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16]!;
+}
+
+/** Sprite-watch row (Unit 7): the generator already proved a sprite-capable
+ *  storm is in the limb annulus on a dark (night) pass — this adds the MOON
+ *  gate (faint red sprites need a black sky; a bright Moon up washes them
+ *  out, per the beta almanac) and renders an honest "possible" heads-up.
+ *  "You will not be able to see them with your eyes" (Pettit) — so a flag
+ *  that a vigorous storm is in view at the limb is the whole game. */
+export function spriteConditionProvider(ctx: ConditionCtx): ConditionRow | null {
+  const sp = ctx.pass.sprite;
+  if (!sp || !Number.isFinite(sp.distance_km) || !Number.isFinite(sp.bearing_deg)) return null;
+  // Moon-darkness gate: suppress when a bright Moon is up at the station
+  // (it washes the faint sprite glow). The generator only proved the SUN is
+  // down; the Moon is the frontend's to check.
+  const passMs = Date.parse(ctx.pass.closest_approach ?? '');
+  const at = ctx.pass.iss_at_closest;
+  if (Number.isFinite(passMs) && at && Number.isFinite(at.lat) && Number.isFinite(at.lon)) {
+    const moon = assessMoon(passMs, { lat: at.lat, lon: at.lon },
+      Number.isFinite(at.alt_km) && at.alt_km > 0 ? at.alt_km : undefined);
+    if (moon.skyState === 'moonlit') return null;
+  }
+  const dist = Math.round(sp.distance_km);
+  const dir = compassPoint(sp.bearing_deg);
+  return {
+    id: 'sprite',
+    icon: '⚡',
+    label: 'sprite watch',
+    value: `possible sprites · vigorous storm at the limb, ${dist}km ${dir} · try the dark limb`,
+    almanacAnchor: 'almanac-sprites',
+  };
+}
+
 /** Ordered registry — order IS display priority. β (period-critical) >
+ *  moon > golden hour > camera (baseline)./** Ordered registry — order IS display priority. β (period-critical) >
  *  moon > golden hour > camera (baseline). Golden hour is a DAY-side
  *  signal (terrain at low sun); moon/beta are night signals, so they don't
  *  co-occur — worst real case is golden-hour + camera = 2 rows, under
@@ -440,6 +481,7 @@ export function glintConditionProvider(ctx: ConditionCtx): ConditionRow | null {
 export const PROVIDERS: ConditionProvider[] = [
   betaBlackoutProvider,
   moonConditionProvider,
+  spriteConditionProvider,
   goldenHourConditionProvider,
   glintConditionProvider,
   nlcConditionProvider,
