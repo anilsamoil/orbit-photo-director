@@ -391,6 +391,11 @@ def score_pass_for_target(
         "target_name": target["name"],
         "target_regime": target["regime"],
         "target_priority": target["priority"],
+        # Curated category (big-terrain/volcano/iconic-shape/...) — lets the
+        # frontend's golden-hour condition row fire only for terrain-texture
+        # targets (Unit 4). Absent on synthetic launch targets; the frontend
+        # treats missing as "no row". No scorer interaction (advisory only).
+        "category": target.get("category"),
         "target_lat": pass_obj.target_lat,
         "target_lon": pass_obj.target_lon,
         "closest_approach": utcnow_iso(when),

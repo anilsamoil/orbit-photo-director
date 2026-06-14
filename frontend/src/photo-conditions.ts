@@ -28,6 +28,7 @@ import type { Manifest, PassEntry, Track } from './types';
 import { openHelpModal } from './help';
 import { betaCriticalDeg, scanBetaForecast } from './beta-angle';
 import { assessMoon } from './moon';
+import { greatCircleAngleDeg, subsolarPoint } from './terminator';
 
 // ── Physics constants ──────────────────────────────────────────────────────
 // Sources: D. Pettit, "Astronauts' Guide to Photography from Space",
@@ -231,8 +232,53 @@ export function moonConditionProvider(ctx: ConditionCtx): ConditionRow | null {
   };
 }
 
+/** Sun-elevation band (degrees, at the target) for raking texture light.
+ *  Below the floor the terrain is too dark / sun on the horizon; above the
+ *  ceiling shadows shorten toward flat midday. Advisory only — no scorer
+ *  interaction (Unit 4 decision A, 2026-06-14): a low-sun SCORING boost is
+ *  dead against the existing regime_fit, which penalizes terminator-lit
+ *  passes; this tells the photographer the light is good and lets them
+ *  decide (Pettit shoots terrain texture opportunistically at low sun). */
+export const GOLDEN_FLOOR_DEG = 2;
+export const GOLDEN_CEIL_DEG = 25;
+/** Curated categories whose subjects have RELIEF that low-angle light
+ *  carves into texture. NOT iconic-shape (sea-level coastline outlines —
+ *  no relief to shadow; outside-voice 2026-06-14) and never night targets. */
+export const GOLDEN_CATEGORIES = ['big-terrain', 'volcano'] as const;
+
+/** Sun elevation (deg) at a ground point — same model as aurora/moon
+ *  (90 − great-circle angle to the subsolar point), inlined to avoid
+ *  pulling the heavy aurora module into this chunk. */
+function targetSunElevationDeg(lat: number, lon: number, when: Date): number {
+  const sub = subsolarPoint(when);
+  return 90 - greatCircleAngleDeg(lat, lon, sub.lat, sub.lon);
+}
+
+/** Golden-hour row (Unit 4): on terrain-texture targets (big-terrain /
+ *  volcano) whose sun sits low at closest approach — raking light that
+ *  carves relief. Advisory; no score change. Silent otherwise. */
+export function goldenHourConditionProvider(ctx: ConditionCtx): ConditionRow | null {
+  const cat = ctx.pass.category;
+  if (!cat || !(GOLDEN_CATEGORIES as readonly string[]).includes(cat)) return null;
+  const passMs = Date.parse(ctx.pass.closest_approach ?? '');
+  if (!Number.isFinite(passMs)) return null;
+  if (!Number.isFinite(ctx.pass.target_lat) || !Number.isFinite(ctx.pass.target_lon)) return null;
+  const elev = targetSunElevationDeg(ctx.pass.target_lat, ctx.pass.target_lon, new Date(passMs));
+  if (elev < GOLDEN_FLOOR_DEG || elev > GOLDEN_CEIL_DEG) return null;
+  return {
+    id: 'golden-hour',
+    icon: '🌅',
+    label: 'golden hour',
+    value: `low sun ${Math.round(elev)}° · raking light, long shadows`,
+    almanacAnchor: 'almanac-golden-hour',
+  };
+}
+
 /** Ordered registry — order IS display priority. β (period-critical) >
- *  moon > camera (baseline). β gates on a night-regime TARGET during a
+ *  moon > golden hour > camera (baseline). Golden hour is a DAY-side
+ *  signal (terrain at low sun); moon/beta are night signals, so they don't
+ *  co-occur — worst real case is golden-hour + camera = 2 rows, under
+ *  MAX_VISIBLE_ROWS=3. β gates on a night-regime TARGET during a
  *  full-sun blackout (pass_regime is day/terminator then); moon gates on a
  *  night PASS. A blackout has no orbital night, so β and moon can never
  *  co-occur — worst real case is moon + camera (or β + camera) = 2 rows,
@@ -240,6 +286,7 @@ export function moonConditionProvider(ctx: ConditionCtx): ConditionRow | null {
 export const PROVIDERS: ConditionProvider[] = [
   betaBlackoutProvider,
   moonConditionProvider,
+  goldenHourConditionProvider,
   cameraConditionProvider,
 ];
 
