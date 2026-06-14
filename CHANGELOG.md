@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.18.0.0] - 2026-06-14
+
+## **The app watches for sprites. When a fierce storm is at your dark limb, it tells you to point the camera.**
+
+Sprites are brief red flashes of upward lightning into the mesosphere above strong storms — and as Don Pettit puts it, "you will not be able to see them with your eyes." You aim the camera at the dark limb above a distant storm on faith. So a heads-up that such a storm is in view is the entire game. On a night pass, the generator now scans the live lightning data for a vigorous storm cluster in the limb annulus (600–3200 km out) around the station, and the expanded panel shows "⚡ sprite watch · possible sprites · vigorous storm at the limb, 1480km SSE · try the dark limb." It's honest: possible sprites, not a detection. And it stays quiet when a bright Moon would wash them out.
+
+### Itemized changes
+
+#### Added
+- **Sprite-watch row** on night passes when a strong electrically-active storm sits in the limb annulus around the station (live GOES lightning data), suppressed under a bright Moon, with a "Sprites" almanac entry (Pettit's settings: f2.8, start ISO 1600 / 2s, the ladder, LiveView focus).
+
+#### Internal
+- New `GLMSampler.strongest_cluster_in_annulus` reuses the prebuilt 5° flash index (zero new I/O); night gate computed at the ISS sub-point (not the target). Designed and adversarially verified by a multi-agent pass that set the annulus from the elevated-horizon geometry (900 km inner clears the 60° nadir window; 3200 km outer is the horizon for a 75 km sprite), added the moon gate, corrected the copy to honest "possible," and documented the flash threshold as a soak-tunable vigor proxy. Coverage is the Americas/Atlantic only (GOES); honest in the copy. Verified in-browser end to end. 12 new tests (frontend 1232, generator lightning 66).
+
 ## [1.17.0.0] - 2026-06-14
 
 ## **The app spots sun glint. When the Sun mirrors off the water toward you, it says so.**
