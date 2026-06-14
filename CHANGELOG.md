@@ -2,6 +2,22 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.15.0.0] - 2026-06-14
+
+## **The app spots golden hour over terrain. When the light rakes the mountains, it tells you.**
+
+Terrain photographs best in low-angle light — long shadows carve out ridges, dunes, and volcanoes that noon flattens into nothing. Don Pettit's best telephoto frames make the case: Patagonian glaciers where low-angle sun reveals fine crevasse detail, Manhattan under raking light showing shadow texture in the streets, the opposite of the shadowless noon view a mapping satellite takes. Now the expanded pass panel shows a golden-hour row on terrain targets (big-terrain, volcanoes) when the Sun sits low — roughly 2–25° up — at closest approach: "🌅 golden hour — low sun 14°, raking light, long shadows." Tap it for the almanac, including Pettit's frames and where to find your own body's shutter floor.
+
+It's advisory by design. It tells you the light is right and lets you decide; it does not reshuffle the Queue. That was a deliberate call — the honest signal, not a hidden thumb on the ranking.
+
+### Itemized changes
+
+#### Added
+- **Golden-hour condition row** on terrain-texture targets at low sun, with a "Golden hour — low-sun terrain texture" almanac entry grounded in Pettit's low-angle examples.
+
+#### Internal
+- Designed and adversarially verified by a multi-agent pass, which proved a low-sun *scoring* boost would be dead on arrival (it lands in the lighting regime the scorer already penalizes for terrain) — so the feature is an advisory row, not a score change. iconic-shape dropped from the allowlist (sea-level outlines have no relief to shadow). Generator serializes the target category onto the pass (conditionally, byte-stable); sun elevation computed client-side with the same model as aurora/moon. Verified in-browser end to end. 8 new tests (frontend 1208, generator test_main 49).
+
 ## [1.14.0.0] - 2026-06-14
 
 ## **The app now reads the Moon. A bright Moon up means your aurora note says so — and the slider moves a minute at a time.**
