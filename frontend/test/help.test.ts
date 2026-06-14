@@ -205,10 +205,14 @@ describe('Photography Almanac completion (Unit 8)', () => {
     // sixth pass row; aurora is NOT in the PROVIDERS registry. Guard the fix.
     const t = entryText('almanac-intro');
     expect(t).toContain('Five subjects get a live per-pass row');
-    expect(t).toContain('Aurora has its own always-on cue');
+    expect(t).toContain('Aurora has its own topbar cue');
     expect(t).toContain('not a pass row');
     // It must not claim six rows or list aurora among the per-pass subjects.
     expect(t).not.toContain('Six subjects');
+    // Cities are NOT dark-sky-only (Codex fix): Moon-tolerant + Night-lights
+    // overlay is their cue, so they must not be lumped with the faint pair.
+    expect(t).toContain('Moon-tolerant');
+    expect(t).toContain('Night-lights map overlay');
   });
 
   it('aurora entry ties to the real Kp/OVATION feature with verbatim Pettit settings', () => {
@@ -217,6 +221,10 @@ describe('Photography Almanac completion (Unit 8)', () => {
     expect(t).toContain('OVATION');
     expect(t).toContain('(moonlit — faint)');  // honors the moon gate
     expect(t).toContain('ISO 3200, 1/2s');      // verbatim Aurora card
+    // Must NOT over-claim "the one ... actively watches" (Codex fix): sprites
+    // are actively watched per-pass too. Aurora is the TOPBAR watch.
+    expect(t).toContain('watches from the topbar');
+    expect(t).not.toContain('the one night subject');
   });
 
   it('night-sky entry covers stars/Milky Way/airglow as reference, no row', () => {
@@ -231,7 +239,11 @@ describe('Photography Almanac completion (Unit 8)', () => {
     const t = entryText('almanac-cities-night').replace(/\s+/g, ' ');
     expect(t).toContain('no city-specific condition row');
     expect(t).toContain('ISO 6400 at 1/60s');   // verbatim Cities at Night card
-    expect(t).toContain('faster shutters are marked not-recommended');
+    // Exposure-limited, NOT motion-floor-limited (Codex fix): a night city
+    // holds Pettit's slow shutter + loose-Bogen, it does not chase the
+    // daylit camera-line motion floor.
+    expect(t).toContain('exposure-limited');
+    expect(t).toContain('loose Bogen hand-track');
   });
 
   it('meteors entry is reference-only with the verbatim 15s/ISO800 ladder', () => {

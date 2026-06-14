@@ -334,11 +334,12 @@ const HELP_SECTIONS: HelpSection[] = [
           'verbatim settings. Five subjects get a live per-pass row when the ' +
           'geometry is right — sprites, noctilucent clouds, golden hour, sun glint, ' +
           'and the Moon (the beta-blackout notice and the camera line ride along ' +
-          'too). Aurora has its own always-on cue instead: the topbar Kp badge and ' +
-          'the aurora-visibility note, not a pass row. The last three — stars and ' +
-          'the Milky Way, cities at night, and meteor showers — carry no row at all ' +
-          'and live here as pure reference for your dark-sky night passes; their ' +
-          'only live cue is the moon row going quiet. Source: Pettit, Astronauts\' ' +
+          'too). Aurora has its own topbar cue instead: the Kp badge and the ' +
+          'aurora-visibility note, not a pass row. The last three carry no ' +
+          'condition row and live here as pure reference: for the faint pair — ' +
+          'stars and the Milky Way, and meteor showers — the live cue is the moon ' +
+          'row going quiet (a dark sky); cities at night are Moon-tolerant and have ' +
+          'the Night-lights map overlay to place them. Source: Pettit, Astronauts\' ' +
           'Guide to Photography from Space, 2nd ed. 2017 — topical guide cards.',
       },
       {
@@ -461,7 +462,7 @@ const HELP_SECTIONS: HelpSection[] = [
         label: 'Aurora — the night-sky marquee',
         id: 'almanac-aurora',
         text:
-          'Aurora is the one night subject the app actively watches for you. The ' +
+          'Aurora is the night subject the app watches from the topbar. The ' +
           'green Kp badge on the topbar is the headline geomagnetic number, ' +
           'straight from NOAA SWPC — quiet, active, storm, or severe by color (Kp ' +
           'under 3 green, 3–5 yellow, 5–7 orange, 7–9 red), with the reading\'s age ' +
@@ -533,11 +534,12 @@ const HELP_SECTIONS: HelpSection[] = [
           'bright-glass, fast-shutter: on a medium low-light prime (50mm f1.4, 58mm ' +
           'f1.2, 85mm f1.4) start ISO 6400 at 1/60s; on the telephoto (180/400mm ' +
           'f2.8, ~4× more exposure) use ISO 12800 at 1/30s. Keep ISO at 12800 or ' +
-          'below, and treat his listed shutter speeds (1/60s, 1/30s) as the floor — ' +
-          'faster shutters are marked not-recommended. Those shutter speeds are his ' +
-          'floor for the lens; on the long-lens kit your own body\'s motion floor ' +
-          'may be faster still, so cross-check the camera line, which owns the ' +
-          'shutter math. LiveView 10× to focus, dark frames after a series, and ' +
+          'below; his shutter speeds (1/60s, 1/30s) are about as fast as the dim ' +
+          'scene allows — going faster just underexposes, so a night city is ' +
+          'exposure-limited, not motion-floor-limited the way a daylit target is. ' +
+          'That is exactly why the loose Bogen hand-track matters: it buys ' +
+          'stability at a slow shutter instead of a faster one you cannot afford. ' +
+          'LiveView 10× to focus, dark frames after a series, and ' +
           'control window reflections. Unlike faint stars, a bright Moon up ' +
           'doesn\'t hurt a city — the light only drowns the faint stuff — but the ' +
           'same no-orbital-night blackout that mutes aurora mutes city passes too ' +
