@@ -322,6 +322,27 @@ const HELP_SECTIONS: HelpSection[] = [
     title: 'Photography Almanac',
     items: [
       {
+        icon: '📖',
+        label: 'Using this almanac',
+        id: 'almanac-intro',
+        text:
+          'This is the photographer\'s field guide for the station — the camera ' +
+          'recipes and the physics behind each subject, grounded in Don Pettit\'s ' +
+          'Astronauts\' Guide to Photography from Space. The condition rows on an ' +
+          'expanded pass each deep-link down here: tap a sprite-watch, a moonlit ' +
+          'sky, or a glint setup and you land on the matching card with Pettit\'s ' +
+          'verbatim settings. Five subjects get a live per-pass row when the ' +
+          'geometry is right — sprites, noctilucent clouds, golden hour, sun glint, ' +
+          'and the Moon (the beta-blackout notice and the camera line ride along ' +
+          'too). Aurora has its own topbar cue instead: the Kp badge and the ' +
+          'aurora-visibility note, not a pass row. The last three carry no ' +
+          'condition row and live here as pure reference: for the faint pair — ' +
+          'stars and the Milky Way, and meteor showers — the live cue is the moon ' +
+          'row going quiet (a dark sky); cities at night are Moon-tolerant and have ' +
+          'the Night-lights map overlay to place them. Source: Pettit, Astronauts\' ' +
+          'Guide to Photography from Space, 2nd ed. 2017 — topical guide cards.',
+      },
+      {
         icon: '📷',
         label: 'Shutter floors & the camera line',
         id: 'almanac-camera',
@@ -435,6 +456,120 @@ const HELP_SECTIONS: HelpSection[] = [
           + 'D5 body; see the camera line for your own body\'s shutter '
           + 'floor). Source: Pettit, Astronauts\' Guide to Photography from '
           + 'Space, 2nd ed. 2017 — Figs. 1 (Patagonia, Manhattan).',
+      },
+      {
+        icon: '🟢',
+        label: 'Aurora — the night-sky marquee',
+        id: 'almanac-aurora',
+        text:
+          'Aurora is the night subject the app watches from the topbar. The ' +
+          'green Kp badge on the topbar is the headline geomagnetic number, ' +
+          'straight from NOAA SWPC — quiet, active, storm, or severe by color (Kp ' +
+          'under 3 green, 3–5 yellow, 5–7 orange, 7–9 red), with the reading\'s age ' +
+          'in the hover tooltip and a click-through to the SWPC oval map; it hides ' +
+          'itself silently on any fetch failure. But Kp only says how stirred-up ' +
+          'the magnetosphere is, not whether the oval is anywhere near the station. ' +
+          'So a geometry-driven note rides beside the badge: it scans the live ' +
+          'OVATION oval against the station\'s own horizon and appends "· aurora in ' +
+          'view" when the probability over a dark, in-view patch of ground is high, ' +
+          'or "· aurora nearby" when it is only suggestive — a hint that the light ' +
+          'is there to chase, not a detection. The note stays quiet when the oval ' +
+          'is out of view and when the nadir is daylit, so it also goes silent ' +
+          'through a beta blackout (no orbital night, no aurora — the silence is ' +
+          'correct, not broken; see beta angle). And it honors the Moon: when a ' +
+          'bright Moon is up over the station the note hedges to "(moonlit — ' +
+          'faint)," because moonlight washes faint aurora exactly as it drowns ' +
+          'stars — the moon row\'s "no Moonlight night passes" rule applies here ' +
+          'too. It only warns; it never suppresses the note. As a subject, aurora ' +
+          'is fast and low-light: shoot a fast prime at f1.4, ISO 3200, 1/2s, or ' +
+          'wide at f2.8, ISO 12800, 1/2s (1/15–1/30 is marked not-recommended); a ' +
+          '14–24 or fisheye takes in the whole arc but needs about 4× the exposure. ' +
+          'Keep ISO at or under 12800, focus with LiveView at 10×, steady on the ' +
+          'Bogen arm, and shoot dark frames after the series for post-flight ' +
+          'cosmic-ray subtraction. Source: Pettit, Astronauts\' Guide to ' +
+          'Photography from Space, 2nd ed. 2017 — Aurora card.',
+      },
+      {
+        icon: '🌠',
+        label: 'Stars, Milky Way & airglow',
+        id: 'almanac-night-sky',
+        text:
+          'On a dark night pass the sky itself is the subject. Stars and the Milky ' +
+          'Way arc above the limb, and just below them sits airglow — a faint ' +
+          'green-and-red band from oxygen and sodium high in the atmosphere, the ' +
+          'same layer that paints the thin glowing line hugging the limb. Pettit\'s ' +
+          'rule for all of it is the one the moon row already enforces: shoot ' +
+          '"during no Moonlight night passes," because a bright Moon up in the sky ' +
+          'drowns faint star fields and washes the airglow flat. So there is no ' +
+          'dedicated star or airglow row — this is reference knowledge for a dark ' +
+          'night pass, and your cue is the moon row going quiet: a dark sky shows ' +
+          'no row at all, and that silence is your star-and-airglow window (the ' +
+          'same window the aurora note hedges to "(moonlit — faint)" when a bright ' +
+          'Moon is up). When the window is open, the Night Phenomena setup is a ' +
+          'shutter-and-ISO tradeoff against your lens: at f1.4, start ISO 6400, ' +
+          '1/2s; at f2.8, start ISO 12800, 1s. Keep ISO at 12800 or below — past ' +
+          'that the noise costs more than it buys. Focus with LiveView at 10× on a ' +
+          'bright star, mount on the Bogen arm, shoot dark frames after every ' +
+          'series for ground cosmic-ray subtraction, and shroud the window so cabin ' +
+          'light doesn\'t reflect in. (These are the wide-field night settings; for ' +
+          'the long-lens motion floor see the camera line.) Source: Pettit, ' +
+          'Astronauts\' Guide to Photography from Space, 2nd ed. 2017 — Night ' +
+          'Phenomena card.',
+      },
+      {
+        icon: '🌃',
+        label: 'Cities at night — lights from the dark side',
+        id: 'almanac-cities-night',
+        text:
+          'Cities at night are a signature night-pass subject — street grids, ' +
+          'harbor fronts, and the warm-vs-white split of old sodium against new LED ' +
+          'lighting, all from the dark side of the orbit. The Night-lights map ' +
+          'overlay shows you WHERE the lights are so you can line a city up before ' +
+          'it slides under you, but there is no city-specific condition row and no ' +
+          'per-pass prompt: a city is reference knowledge for any dark pass, not a ' +
+          'predicted event the way aurora or sprites are. The real enemy is motion ' +
+          'blur — the ground runs under you at ~7.7 km/s and the frame is dim — so ' +
+          'Pettit\'s fix is a LOOSE Bogen arm: hand-track the city across the ' +
+          'window for stability rather than locking down. His settings are ' +
+          'bright-glass, fast-shutter: on a medium low-light prime (50mm f1.4, 58mm ' +
+          'f1.2, 85mm f1.4) start ISO 6400 at 1/60s; on the telephoto (180/400mm ' +
+          'f2.8, ~4× more exposure) use ISO 12800 at 1/30s. Keep ISO at 12800 or ' +
+          'below; his shutter speeds (1/60s, 1/30s) are about as fast as the dim ' +
+          'scene allows — going faster just underexposes, so a night city is ' +
+          'exposure-limited, not motion-floor-limited the way a daylit target is. ' +
+          'That is exactly why the loose Bogen hand-track matters: it buys ' +
+          'stability at a slow shutter instead of a faster one you cannot afford. ' +
+          'LiveView 10× to focus, dark frames after a series, and ' +
+          'control window reflections. Unlike faint stars, a bright Moon up ' +
+          'doesn\'t hurt a city — the light only drowns the faint stuff — but the ' +
+          'same no-orbital-night blackout that mutes aurora mutes city passes too ' +
+          '(see beta angle). Source: Pettit, Astronauts\' Guide to Photography from ' +
+          'Space, 2nd ed. 2017 — Cities at Night card.',
+      },
+      {
+        icon: '☄️',
+        label: 'Meteor showers — looking down on the streaks',
+        id: 'almanac-meteors',
+        text:
+          'During a meteor shower the streaks burn up at roughly 80–120 km, which ' +
+          'is BELOW you — so from the station you look DOWN at the flashes against ' +
+          'the night Earth, not up at them the way the ground does. They are brief ' +
+          'and unpredictable, so this is a faith shoot: lock the camera down, run ' +
+          'it across the whole dark pass, and hope a streak crosses the frame. Like ' +
+          'stars, the Milky Way, and cities at night, this is reference knowledge — ' +
+          'there is no dedicated meteor row and the app does not predict shower ' +
+          'peaks; lean on the same dark-sky window the other night subjects need. ' +
+          'Pettit\'s rule for faint night sky is blunt — best "during no Moonlight ' +
+          'night passes" — so let the moon row be your gate: a dark sky shows no ' +
+          'row at all, and that silence is the window for streaks too (a bright ' +
+          'Moon up will wash them just as it washes aurora and star fields). His ' +
+          'setup: these are not low-light-limited, so shoot f5.6 — start ISO 800 at ' +
+          '15s, then trade down the ladder (15s/800 · 8s/1600 · 4s/3200) if the ' +
+          'Moon-dark sky still glows. Run an intervalometer so the camera fires ' +
+          'repeated exposures across the pass while you work; LiveView 10× to ' +
+          'focus, mount on the Bogen arm, and shroud the window to kill ' +
+          'reflections. Source: Pettit, Astronauts\' Guide to Photography from ' +
+          'Space, 2nd ed. 2017 — Meteor Showers card.',
       },
       {
         icon: '🌙',

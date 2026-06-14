@@ -177,3 +177,90 @@ describe('Photography Almanac anchors (Unit 1)', () => {
     expect(document.querySelector('.help-modal')).not.toBeNull();
   });
 });
+
+describe('Photography Almanac completion (Unit 8)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  const entryText = (anchor: string): string => {
+    openHelpModal();
+    return document.getElementById(`help-${anchor}`)?.textContent ?? '';
+  };
+
+  it('renders all twelve almanac entries, each carrying its anchor id', () => {
+    openHelpModal();
+    const ids = [
+      'almanac-intro', 'almanac-camera', 'almanac-sprites', 'almanac-glint',
+      'almanac-nlc', 'almanac-golden-hour', 'almanac-aurora', 'almanac-night-sky',
+      'almanac-cities-night', 'almanac-meteors', 'almanac-moon', 'almanac-beta',
+    ];
+    for (const id of ids) {
+      expect(document.getElementById(`help-${id}`), id).not.toBeNull();
+    }
+  });
+
+  it('the intro categorizes aurora as a topbar cue, NOT a pass row, and counts five rows', () => {
+    // The adversarial verifier caught a draft that miscounted aurora as a
+    // sixth pass row; aurora is NOT in the PROVIDERS registry. Guard the fix.
+    const t = entryText('almanac-intro');
+    expect(t).toContain('Five subjects get a live per-pass row');
+    expect(t).toContain('Aurora has its own topbar cue');
+    expect(t).toContain('not a pass row');
+    // It must not claim six rows or list aurora among the per-pass subjects.
+    expect(t).not.toContain('Six subjects');
+    // Cities are NOT dark-sky-only (Codex fix): Moon-tolerant + Night-lights
+    // overlay is their cue, so they must not be lumped with the faint pair.
+    expect(t).toContain('Moon-tolerant');
+    expect(t).toContain('Night-lights map overlay');
+  });
+
+  it('aurora entry ties to the real Kp/OVATION feature with verbatim Pettit settings', () => {
+    const t = entryText('almanac-aurora');
+    expect(t).toContain('Kp');
+    expect(t).toContain('OVATION');
+    expect(t).toContain('(moonlit — faint)');  // honors the moon gate
+    expect(t).toContain('ISO 3200, 1/2s');      // verbatim Aurora card
+    // Must NOT over-claim "the one ... actively watches" (Codex fix): sprites
+    // are actively watched per-pass too. Aurora is the TOPBAR watch.
+    expect(t).toContain('watches from the topbar');
+    expect(t).not.toContain('the one night subject');
+  });
+
+  it('night-sky entry covers stars/Milky Way/airglow as reference, no row', () => {
+    const t = entryText('almanac-night-sky');
+    expect(t).toContain('Milky Way');
+    expect(t).toContain('airglow');
+    expect(t.replace(/\s+/g, ' ')).toContain('no dedicated star or airglow row');
+    expect(t).toContain('ISO 6400');  // verbatim Night Phenomena card
+  });
+
+  it('cities entry is honest about having no condition row + verbatim settings', () => {
+    const t = entryText('almanac-cities-night').replace(/\s+/g, ' ');
+    expect(t).toContain('no city-specific condition row');
+    expect(t).toContain('ISO 6400 at 1/60s');   // verbatim Cities at Night card
+    // Exposure-limited, NOT motion-floor-limited (Codex fix): a night city
+    // holds Pettit's slow shutter + loose-Bogen, it does not chase the
+    // daylit camera-line motion floor.
+    expect(t).toContain('exposure-limited');
+    expect(t).toContain('loose Bogen hand-track');
+  });
+
+  it('meteors entry is reference-only with the verbatim 15s/ISO800 ladder', () => {
+    const t = entryText('almanac-meteors').replace(/\s+/g, ' ');
+    expect(t).toContain('no dedicated meteor row');
+    expect(t).toContain('ISO 800 at 15s');       // verbatim Meteor Showers card
+    expect(t).toContain('intervalometer');
+  });
+
+  it('every new entry deep-links: openHelpModal(anchor) scrolls it into view', () => {
+    for (const anchor of ['almanac-aurora', 'almanac-night-sky',
+      'almanac-cities-night', 'almanac-meteors', 'almanac-intro']) {
+      document.body.innerHTML = '';
+      const spy = vi.fn();
+      Element.prototype.scrollIntoView = spy as never;
+      openHelpModal(anchor);
+      expect(spy, anchor).toHaveBeenCalledWith({ block: 'start' });
+    }
+  });
+});

@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.18.1.0] - 2026-06-14
+
+## **The Photography Almanac is now complete — the field guide covers every subject the station shoots.**
+
+The almanac documented the seven automated condition rows, but the night sky has more to it than that. This fills in the rest of Don Pettit's topical guide: aurora (tied to the live Kp badge and the aurora-visibility note), stars / the Milky Way / airglow, cities at night, and meteor showers — plus a short "Using this almanac" intro that explains which subjects get a live per-pass row, which one (aurora) is watched from the topbar, and which three are pure reference for a dark-sky pass. Each card carries Pettit's verbatim camera settings. All of it lives behind the help tap — no new clutter on the map.
+
+### Itemized changes
+
+#### Added
+- **Four new Photography Almanac cards** — Aurora, Stars/Milky Way/airglow, Cities at night, and Meteor showers — plus a "Using this almanac" intro, each with Pettit's verbatim settings and honest "what the app does (and doesn't)" framing. Reference content only; no new condition row, data flow, or map element.
+
+#### Internal
+- Drafted and adversarially verified by a multi-agent pass (5 drafters → synthesize → 5 verifiers) that caught a fake-feature claim (an early intro counted aurora as a per-pass row — it is a topbar cue). A follow-up outside-voice review folded four more accuracy nits (cities are Moon-tolerant, not dark-sky-only; aurora isn't the *only* watched subject; the Kp cue isn't literally always-on; a night city is exposure-limited, not motion-floor-limited). Every camera setting checked verbatim against the 2017 guide cards. 7 new help tests + a real-browser proof (12 entries render, deep-links resolve, 0 console errors).
+
 ## [1.18.0.0] - 2026-06-14
 
 ## **The app watches for sprites. When a fierce storm is at your dark limb, it tells you to point the camera.**
