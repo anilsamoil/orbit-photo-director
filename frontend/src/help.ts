@@ -346,6 +346,30 @@ const HELP_SECTIONS: HelpSection[] = [
           'Lens Skills, Sunny 16.)',
       },
       {
+        icon: '🌌',
+        label: 'Noctilucent clouds (the highest clouds)',
+        id: 'almanac-nlc',
+        text:
+          'Noctilucent ("night-shining") clouds are the highest clouds on '
+          + 'Earth — electric-blue ice at about 83 km, in the mesosphere. '
+          + 'They form only over the SUMMER pole at high latitude, and you '
+          + 'see them in a narrow twilight window: the Sun has set for the '
+          + 'ground below but still lights the ice deck far above, so it '
+          + 'glows against a dark lower sky. From the station, look toward '
+          + 'the summer pole at the limb near orbital sunrise/sunset. The '
+          + 'window row fires on summer high-latitude passes when the Sun '
+          + 'sits roughly 6–16° below the horizon at the viewed point — '
+          + 'possible geometry, not a guarantee (NLC do not appear every '
+          + 'night even in season). Pettit\'s setup: these are not '
+          + 'low-light-limited, so shoot f8, ISO 400, 1/30–1/250 by '
+          + 'brightness; focus on the horizon; take BOTH wide and telephoto '
+          + 'frames and bracket to hold the clouds and the atmosphere '
+          + 'together. (Wide-field NLC settings — for long lenses see the '
+          + 'camera line\'s motion floor.) Source: Pettit, Astronauts\' '
+          + 'Guide to Photography from Space, 2nd ed. 2017 — Noctilucent '
+          + 'Clouds card.',
+      },
+      {
         icon: '🌅',
         label: 'Golden hour — low-sun terrain texture',
         id: 'almanac-golden-hour',

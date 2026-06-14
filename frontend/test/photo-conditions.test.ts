@@ -16,6 +16,11 @@ import {
   MAX_VISIBLE_ROWS,
   betaBlackoutProvider,
   goldenHourConditionProvider,
+  isNlcSeason,
+  nlcConditionProvider,
+  NLC_LAT_MIN,
+  NLC_SUN_HI,
+  NLC_SUN_LO,
   GOLDEN_FLOOR_DEG,
   GOLDEN_CEIL_DEG,
   moonConditionProvider,
@@ -414,5 +419,92 @@ describe('goldenHourConditionProvider (Unit 4 — terrain texture, advisory row)
   it('band edges: fires at the floor and ceiling, not just outside', () => {
     expect(goldenHourConditionProvider(ctxFor('big-terrain', GOLDEN_FLOOR_DEG + 1))).not.toBeNull();
     expect(goldenHourConditionProvider(ctxFor('big-terrain', GOLDEN_CEIL_DEG - 1))).not.toBeNull();
+  });
+});
+
+describe('isNlcSeason (NASA AIM climatology)', () => {
+  it('Northern: open at summer solstice, closed in winter', () => {
+    expect(isNlcSeason(new Date('2026-06-21T00:00:00Z'), 'N')).toBe(true);
+    expect(isNlcSeason(new Date('2026-12-21T00:00:00Z'), 'N')).toBe(false);
+    expect(isNlcSeason(new Date('2026-03-21T00:00:00Z'), 'N')).toBe(false); // spring: NOT season (over-fire guard)
+    expect(isNlcSeason(new Date('2026-09-15T00:00:00Z'), 'N')).toBe(false);
+  });
+  it('Southern: open around the Dec solstice, wraps the year boundary', () => {
+    expect(isNlcSeason(new Date('2026-12-21T00:00:00Z'), 'S')).toBe(true);
+    expect(isNlcSeason(new Date('2026-01-15T00:00:00Z'), 'S')).toBe(true); // wraps into January
+    expect(isNlcSeason(new Date('2026-06-21T00:00:00Z'), 'S')).toBe(false);
+  });
+});
+
+describe('nlcConditionProvider (Unit 5 — summer high-lat twilight window)', () => {
+  // Place a target at a chosen latitude where the sun sits at a chosen
+  // (negative) elevation, at a fixed in-season instant, by searching lon.
+  const targetAtElev = (lat: number, when: Date, wantElev: number): { lat: number; lon: number } => {
+    const sub = subsolarPoint(when);
+    let best = { lat, lon: 0 }, bestErr = Infinity;
+    for (let lon = -180; lon < 180; lon += 0.5) {
+      const elev = 90 - greatCircleAngleDeg(lat, lon, sub.lat, sub.lon);
+      const err = Math.abs(elev - wantElev);
+      if (err < bestErr) { bestErr = err; best = { lat, lon }; }
+    }
+    return best;
+  };
+  const ctxAt = (lat: number, iso: string, wantElev: number): ConditionCtx => {
+    const when = new Date(iso);
+    const t = targetAtElev(lat, when, wantElev);
+    return {
+      pass: passWith({ target_lat: t.lat, target_lon: t.lon, closest_approach: iso } as never),
+      manifest: null, track: null, nowMs: when.getTime(),
+    };
+  };
+
+  it('fires for a Northern summer high-lat target in the twilight band', () => {
+    const row = nlcConditionProvider(ctxAt(58, '2026-06-21T00:00:00Z', -10));
+    expect(row).not.toBeNull();
+    expect(row!.id).toBe('nlc');
+    expect(row!.icon).toBe('🌌');
+    expect(row!.value).toContain('possible');
+    expect(row!.value).toContain('N pole');
+    expect(row!.almanacAnchor).toBe('almanac-nlc');
+  });
+
+  it('fires deep in the band (sun 14° below) — proving NO dead-band clip', () => {
+    // The original pass_regime gate would have rejected this as "night";
+    // band-only gating reaches the full [-16,-6].
+    expect(nlcConditionProvider(ctxAt(58, '2026-06-21T00:00:00Z', -14))).not.toBeNull();
+  });
+
+  it('fires for a Southern target in December (year-wrap season)', () => {
+    const row = nlcConditionProvider(ctxAt(-58, '2026-12-21T00:00:00Z', -10));
+    expect(row).not.toBeNull();
+    expect(row!.value).toContain('S pole');
+  });
+
+  it('silent: sun too bright (above the band)', () => {
+    expect(nlcConditionProvider(ctxAt(58, '2026-06-21T00:00:00Z', NLC_SUN_HI + 3))).toBeNull();
+  });
+
+  it('silent: sun too dark (below the band — deck unlit)', () => {
+    // lat 48 on Aug 15 (still N season) CAN reach deep depression, unlike
+    // midsummer high latitudes where nights are too short to get there.
+    expect(nlcConditionProvider(ctxAt(48, '2026-08-15T00:00:00Z', NLC_SUN_LO - 4))).toBeNull();
+  });
+
+  it('silent: latitude too low', () => {
+    expect(nlcConditionProvider(ctxAt(NLC_LAT_MIN - 10, '2026-06-21T00:00:00Z', -10))).toBeNull();
+  });
+
+  it('silent: in the band + high lat but OUT of season (winter)', () => {
+    expect(nlcConditionProvider(ctxAt(58, '2026-12-21T00:00:00Z', -10))).toBeNull(); // N target, N winter
+  });
+
+  it('silent: high latitude in the WRONG (winter) hemisphere', () => {
+    // Northern-summer instant, but a Southern (winter) target → no NLC.
+    expect(nlcConditionProvider(ctxAt(-58, '2026-06-21T00:00:00Z', -10))).toBeNull();
+  });
+
+  it('band edges fire; just outside does not', () => {
+    expect(nlcConditionProvider(ctxAt(58, '2026-06-21T00:00:00Z', NLC_SUN_HI - 0.5))).not.toBeNull();
+    expect(nlcConditionProvider(ctxAt(58, '2026-06-21T00:00:00Z', NLC_SUN_LO + 0.5))).not.toBeNull();
   });
 });

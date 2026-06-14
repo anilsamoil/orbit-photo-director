@@ -274,6 +274,73 @@ export function goldenHourConditionProvider(ctx: ConditionCtx): ConditionRow | n
   };
 }
 
+/** Noctilucent-cloud (NLC) window (Unit 5). NLC are the highest clouds
+ *  (~83km, electric blue), a RARE summer-high-latitude twilight phenomenon
+ *  seen toward the pole at the limb when the mesosphere is still sunlit but
+ *  the ground below has gone dark. Geometric, not per-target. Verified by a
+ *  multi-agent pass (2026-06-14); the key correction: gate on the
+ *  sun-elevation BAND directly, NOT on pass_regime — the generator buckets
+ *  pass_regime by zenith, whose 'terminator' span [-10,+20] would clip the
+ *  NLC band [-16,-6] to a [-10,-6] dead-band and make most of the window
+ *  unreachable. The band (computed at the VIEWED ground point) is the true
+ *  twilight condition. */
+export const NLC_LAT_MIN = 45;
+/** Twilight band for NLC visibility (sun elevation at the target, deg,
+ *  negative = below horizon). HI: any brighter and the lower sky drowns
+ *  the faint clouds. LO: any darker and the sunlit 83km deck has dropped
+ *  below the poleward horizon (the 83km sunlit-depression cap is ~9.2°;
+ *  the band runs deeper because NLC are seen low toward the pole at slant
+ *  range). */
+export const NLC_SUN_HI = -6;
+export const NLC_SUN_LO = -16;
+
+/** UTC day-of-year, 1-based (Jan 1 = 1). */
+export function dayOfYear(d: Date): number {
+  return Math.floor(
+    (Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+      - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400_000,
+  );
+}
+
+/** NLC season by hemisphere (NASA AIM climatology): N ~May 24-Aug 22
+ *  (centered on the June solstice); S ~Nov 17-Feb 22 (wraps the year).
+ *  Conservative onset (under-fires by up to ~10 days vs the earliest
+ *  recorded seasons) — silence is the right default for a rare event. */
+export function isNlcSeason(d: Date, hemisphere: 'N' | 'S'): boolean {
+  const doy = dayOfYear(d);
+  if (hemisphere === 'N') return doy >= 144 && doy <= 234;
+  return doy >= 321 || doy <= 53;
+}
+
+/** NLC window row: a summer high-latitude target at twilight, where the
+ *  mesosphere toward the pole is lit while the ground is dark. Honest:
+ *  signals a viewing GEOMETRY window ("possible"), not a detection. */
+export function nlcConditionProvider(ctx: ConditionCtx): ConditionRow | null {
+  const passMs = Date.parse(ctx.pass.closest_approach ?? '');
+  if (!Number.isFinite(passMs)) return null;
+  const when = new Date(passMs);
+  const lat = ctx.pass.target_lat;
+  const lon = ctx.pass.target_lon;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) < NLC_LAT_MIN) return null;
+  // Summer hemisphere: the target's hemisphere must match the sun's
+  // declination sign AND be inside the climatological season.
+  const sub = subsolarPoint(when);
+  if (sub.lat === 0 || Math.sign(lat) !== Math.sign(sub.lat)) return null;
+  const hemisphere: 'N' | 'S' = lat >= 0 ? 'N' : 'S';
+  if (!isNlcSeason(when, hemisphere)) return null;
+  // Twilight band at the viewed point.
+  const elev = targetSunElevationDeg(lat, lon, when);
+  if (elev > NLC_SUN_HI || elev < NLC_SUN_LO) return null;
+  return {
+    id: 'nlc',
+    icon: '🌌',
+    label: 'noctilucent clouds',
+    value: `possible · look toward the ${hemisphere} pole at the limb · summer twilight, sun ${Math.round(Math.abs(elev))}° below`,
+    almanacAnchor: 'almanac-nlc',
+  };
+}
+
 /** Ordered registry — order IS display priority. β (period-critical) >
  *  moon > golden hour > camera (baseline). Golden hour is a DAY-side
  *  signal (terrain at low sun); moon/beta are night signals, so they don't
@@ -287,6 +354,7 @@ export const PROVIDERS: ConditionProvider[] = [
   betaBlackoutProvider,
   moonConditionProvider,
   goldenHourConditionProvider,
+  nlcConditionProvider,
   cameraConditionProvider,
 ];
 
