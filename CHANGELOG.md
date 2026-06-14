@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.17.0.0] - 2026-06-14
+
+## **The app spots sun glint. When the Sun mirrors off the water toward you, it says so.**
+
+Sun glint — the Sun reflecting specularly off water straight into your camera — turns a flat sea into a bright sheet that reveals detail invisible otherwise: ocean eddies you can track for months, ship wakes like contrails, internal waves, river channels. It is one of Pettit's signature genres, and it only happens when the geometry lines up near local noon. Now the expanded pass panel shows a "✨ sun glint · sun glints off the water near this coast · sea state permitting" row on the curated coastal targets (archipelagos, straits, canals, big lakes) when the Sun is actually mirror-aligned toward the station. It is honest about what it knows: it predicts the geometry; the sea state, which it can't see, decides whether the glint shows. Tap it for Pettit's settings.
+
+### Itemized changes
+
+#### Added
+- **Sun-glint opportunity row** on water-framed coastal targets when the specular geometry aligns the Sun's reflection toward the ISS, with a "Sun glint" almanac entry (Pettit's settings: 180–400mm, ISO 200, 1/200–1/1000, f11–f16, matrix metering + a stop of compensation).
+
+#### Internal
+- Exact 3-D specular reflection (mirror of the sun ray about the target's local vertical vs the target→ISS direction, ISS at finite altitude) — designed and adversarially verified by a multi-agent pass that confirmed the math and tightened the feature: scoped to curated water-framed coastlines (no reliable general water mask exists yet — the deferred GSHHG-mask follow-up would extend it to rivers/lakes everywhere), a 10° deviation threshold to cut near-noon over-fire, honest geometry-prediction copy, and the generator's existing glint-risk penalty left untouched (advisory row only). Verified in-browser end to end. 10 new tests (suite: 1228).
+
 ## [1.16.0.0] - 2026-06-14
 
 ## **The app watches for night-shining clouds. When the geometry lines up over the summer pole, it tells you.**
