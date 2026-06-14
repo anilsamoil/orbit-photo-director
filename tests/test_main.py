@@ -331,6 +331,46 @@ def test_score_pass_for_target_serializes_sprite_on_night_limb_storm(
     assert "sprite" not in _score(180.0, None)
 
 
+def test_score_pass_for_target_serializes_water_with_mask(sample_tle: TLE) -> None:
+    """General sun-glint water gate (GSHHG follow-up): with a mask, out['water']
+    is the is_water result; WITHOUT a mask the key is omitted entirely so the
+    no-mask path stays byte-identical to the pre-mask manifest."""
+    import json
+
+    from generator.cloud import MockCloudSampler
+
+    when = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    sampler = MockCloudSampler(default_cf=10.0)
+
+    def always_water(_lat: float, _lon: float) -> bool:
+        return True
+
+    def always_land(_lat: float, _lon: float) -> bool:
+        return False
+
+    def _score(lat: float, lon: float, mask: object) -> dict[str, object]:
+        target = {
+            "id": "t", "name": "T",
+            "geom": {"type": "point", "lat": lat, "lon": lon},
+            "priority": 4, "regime": "any",
+        }
+        pass_obj = Pass(
+            target_id="t", target_lat=lat, target_lon=lon,
+            closest_approach=when, nadir_distance_km=100.0,
+            iss_position=Position(lat=lat, lon=lon, alt_km=410, when=when),
+        )
+        return score_pass_for_target(target, pass_obj, sampler, 1.0, water_mask=mask)
+
+    assert _score(0.0, 0.0, always_water)["water"] is True
+    assert _score(0.0, 0.0, always_land)["water"] is False
+    # No mask → key absent (NOT water:false) → byte-stable vs pre-mask manifest.
+    assert "water" not in _score(0.0, 0.0, None)
+    # Deterministic: two runs with identical inputs + mask are byte-identical.
+    a = _score(20.0, 10.0, always_land)
+    b = _score(20.0, 10.0, always_land)
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
 def test_run_tick_skips_targets_with_no_passes(
     settings_in_tmp: Settings, cached_tle: Path, tmp_path: Path
 ) -> None:

@@ -323,6 +323,20 @@ def test_run_tick_one_profile_no_personal_matches_canonical(
     profile = json.loads((v_dir / "passes_jack.json").read_text())
     assert canonical == profile
 
+    # GSHHG water gate (regression guard, Codex 2026-06-14): the profile
+    # multiplex must actually RECEIVE the water mask — an early version
+    # referenced water_mask_obj outside its scope, NameError'd inside
+    # _run_profile_multiplex, and the caller silently dropped every profile's
+    # passes. With the committed mask present (the normal case) each profile
+    # pass must carry a `water` boolean; absence here means the mask never
+    # reached the profile scorer.
+    from generator.water_mask import load_water_mask
+
+    if load_water_mask() is not None and profile:
+        assert all("water" in p for p in profile), (
+            "profile passes must carry the water flag when the mask is loaded"
+        )
+
     # Manifest declares the profile artifacts under artifacts.profiles
     assert "profiles" in manifest["artifacts"]
     assert "jack" in manifest["artifacts"]["profiles"]

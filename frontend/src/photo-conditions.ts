@@ -403,8 +403,16 @@ export function glintDeviationDeg(
  *  actual glint), and is scoped to coastal targets where "the water" is
  *  the scene. */
 export function glintConditionProvider(ctx: ConditionCtx): ConditionRow | null {
-  const cat = ctx.pass.category;
-  if (!cat || !(GLINT_CATEGORIES as readonly string[]).includes(cat)) return null;
+  // Gate on the generator's per-pass water flag (GSHHG mask) — fires on ANY
+  // real water (lakes, coasts, estuaries), not just the 12 curated coasts.
+  // Back-compat: when `water` is absent (a pre-mask manifest) fall back to the
+  // legacy iconic-shape category gate so old manifests still surface glint.
+  const w = ctx.pass.water;
+  if (w === false) return null;
+  if (w === undefined) {
+    const cat = ctx.pass.category;
+    if (!cat || !(GLINT_CATEGORIES as readonly string[]).includes(cat)) return null;
+  }
   const passMs = Date.parse(ctx.pass.closest_approach ?? '');
   if (!Number.isFinite(passMs)) return null;
   const when = new Date(passMs);
@@ -423,7 +431,7 @@ export function glintConditionProvider(ctx: ConditionCtx): ConditionRow | null {
     id: 'glint',
     icon: '✨',
     label: 'sun glint',
-    value: 'sun glints off the water near this coast · sea state permitting',
+    value: 'sun glints off the water below · surface permitting',
     almanacAnchor: 'almanac-glint',
   };
 }

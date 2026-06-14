@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.19.0.0] - 2026-06-14
+
+## **Sun glint now fires on any water on Earth — every lake and coastline, not just twelve hand-picked spots.**
+
+The sun-glint heads-up (the mirror-bright flash off water that reveals eddies, ship wakes, and internal waves) shipped scoped to twelve curated coastal targets, because the old water test was a crude ocean-band guess that flagged the Sahara and missed every lake and coastline. This swaps in a real GSHHG shoreline-derived land/water map, so glint now fires on **any** real water — the Great Lakes, the Caspian, Lake Baikal, every coast and estuary — with no land false alarms.
+
+### Itemized changes
+
+#### Changed
+- **Sun-glint gate generalized** from the 12 curated "iconic-shape" coastal targets to a real GSHHG land/water mask: glint fires on any water body the station can mirror, including inland lakes. Old saved views still work unchanged (the gate falls back to the curated list when a pass predates the mask).
+
+#### Internal
+- Added a committed GSHHG-derived water mask (Strandgren Global Land Water Mask, Zenodo 10.5281/zenodo.10076199, CC-BY-4.0) as a 0.43 MB packed-bit numpy artifact; the generator loads it numpy-only (~1 µs/lookup) and serializes a per-pass `water` flag (byte-stable: absent when the mask is, so a fresh checkout is identical). The data source was chosen by a multi-agent pass that disqualified an elevation-derived alternative for treating lakes as land, then adversarially verified inland-water correctness, byte-stability, and a numpy-only runtime; an outside-voice review caught a scope bug that would have dropped per-astronaut passes. Known limit: GSHHG excludes thin river channels (covered: lakes/coasts/estuaries). 10 new tests + in-browser + end-to-end proofs.
+
 ## [1.18.1.0] - 2026-06-14
 
 ## **The Photography Almanac is now complete — the field guide covers every subject the station shoots.**
