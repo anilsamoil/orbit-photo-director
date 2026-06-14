@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.16.0.0] - 2026-06-14
+
+## **The app watches for night-shining clouds. When the geometry lines up over the summer pole, it tells you.**
+
+Noctilucent clouds — the highest clouds on Earth, electric-blue ice at about 83 km — only appear over the summer pole at high latitude, in a narrow twilight window where the Sun has set for the ground but still lights the deck far above. They are rare and easy to miss. Now the expanded pass panel shows a row when the geometry is right: a summer high-latitude pass where the Sun sits roughly 6–16° below the horizon at the viewed point — "noctilucent clouds · possible · look toward the N pole at the limb · summer twilight, sun 9° below." It is honest about what it is: a viewing window, not a detection. Tap it for the almanac, including Pettit's wide-field NLC settings.
+
+### Itemized changes
+
+#### Added
+- **Noctilucent-cloud window row** on summer high-latitude twilight passes, with a "Noctilucent clouds" almanac entry grounded in Pettit's card (f8, ISO 400, 1/30–1/250, focus on the horizon, wide and telephoto).
+
+#### Internal
+- Designed and adversarially verified by a multi-agent pass that caught a cross-component dead-band: the draft gated on the pass's lighting regime AND the sun-elevation band, but the generator buckets that regime by zenith, which would have clipped 60% of the NLC window unreachable. Fixed by gating purely on the sun-elevation band at the viewed point. Season uses NASA AIM climatology as exact calendar dates (leap-safe), N May 24–Aug 22, S Nov 17–Feb 22 (wraps the year). Verified in-browser end to end. 12 new tests (suite: 1219).
+
 ## [1.15.0.0] - 2026-06-14
 
 ## **The app spots golden hour over terrain. When the light rakes the mountains, it tells you.**
