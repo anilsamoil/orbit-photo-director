@@ -252,6 +252,48 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(el.querySelector('.pass-thumbnail-caption .photo-conditions')).toBeNull();
   });
 
+  it('mounts the ⚡ sprite-watch row when the pass carries a dark-sky sprite field (Unit 7)', () => {
+    // The full feed→thumbnail→conditions wiring for a sprite pass: a night
+    // pass whose closest_approach sits ~6 h before the June-2026 new moon
+    // (dark sky), so the moon gate does NOT suppress. Same geometry as the
+    // in-browser proof, exercised here through the real render function.
+    const spritePass: PassEntry = {
+      ...samplePass,
+      pass_regime: 'night',
+      closest_approach: '2026-06-15T03:00:00Z',
+      iss_at_closest: { lat: 15, lon: -85, alt_km: 420 },
+      sprite: { distance_km: 1480, bearing_deg: 158, flash_count: 320 },
+    };
+    const el = renderPassThumbnail(spritePass, null, Date.parse('2026-06-15T03:00:00Z'));
+    const sprite = [...el.querySelectorAll<HTMLButtonElement>('.photo-condition-row')].find(
+      (r) => /sprite watch/.test(r.querySelector('.photo-condition-label')?.textContent ?? ''),
+    );
+    expect(sprite).toBeTruthy();
+    expect(sprite!.tagName).toBe('BUTTON');  // every row deep-links to the almanac
+    expect(sprite!.querySelector('.photo-condition-label')!.textContent).toBe('⚡ sprite watch');
+    const v = sprite!.querySelector('.photo-condition-value')!.textContent!;
+    expect(v).toContain('possible sprites');   // honest hedge, never a detection claim
+    expect(v).toContain('1480km SSE');         // distance + 16-pt bearing (158° → SSE)
+    expect(v).toContain('try the dark limb');  // does NOT command "limb only" — Pettit shoots nadir too
+  });
+
+  it('suppresses the sprite row under a bright Moon despite a sprite field (Unit 7 moon gate)', () => {
+    // Full moon with the ISS at the lunar sub-point → moonlit → faint red
+    // sprites wash out, so the row stays silent. The block still renders its
+    // other rows (camera floors) — the gate drops one row, not the panel.
+    const moonlitSprite: PassEntry = {
+      ...samplePass,
+      pass_regime: 'night',
+      closest_approach: '2026-06-29T23:57:00Z',
+      iss_at_closest: { lat: -27, lon: 2, alt_km: 420 },
+      sprite: { distance_km: 1480, bearing_deg: 158, flash_count: 320 },
+    };
+    const el = renderPassThumbnail(moonlitSprite, null, Date.parse('2026-06-29T23:57:00Z'));
+    const labels = [...el.querySelectorAll('.photo-condition-label')].map((l) => l.textContent);
+    expect(labels.some((t) => /sprite/.test(t ?? ''))).toBe(false);
+    expect(el.querySelector('.photo-conditions')).not.toBeNull();
+  });
+
   it('omits the conditions block entirely when the pass has no nadir geometry', () => {
     const broken = { ...samplePass, nadir_distance_km: NaN };
     const el = renderPassThumbnail(broken, null, NOW);
