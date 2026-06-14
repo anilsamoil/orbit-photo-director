@@ -264,3 +264,42 @@ describe('Photography Almanac completion (Unit 8)', () => {
     }
   });
 });
+
+describe('condition-row → almanac deep-link contract (Unit 9 integration)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  // Every almanacAnchor a condition-row provider (Units 1-7) can emit MUST
+  // resolve to a real almanac entry (Unit 8), or the row's tap silently opens
+  // the help modal at the top instead of the matching card. This is the seam
+  // between the providers and the almanac — guard it so neither side can
+  // drift (rename an entry id, add a provider with a typo'd anchor) unnoticed.
+  // Kept in sync with the `almanacAnchor:` literals in photo-conditions.ts.
+  const PROVIDER_ANCHORS = [
+    'almanac-camera',       // cameraConditionProvider (Unit 1)
+    'almanac-beta',         // betaBlackoutProvider (Unit 2)
+    'almanac-moon',         // moonConditionProvider (Unit 3)
+    'almanac-golden-hour',  // goldenHourConditionProvider (Unit 4)
+    'almanac-nlc',          // nlcConditionProvider (Unit 5)
+    'almanac-glint',        // glintConditionProvider (Unit 6)
+    'almanac-sprites',      // spriteConditionProvider (Unit 7)
+  ];
+
+  it('every provider almanac anchor resolves to a help entry', () => {
+    openHelpModal();
+    for (const anchor of PROVIDER_ANCHORS) {
+      expect(document.getElementById(`help-${anchor}`), anchor).not.toBeNull();
+    }
+  });
+
+  it('each provider anchor deep-links (scrolls its card into view)', () => {
+    for (const anchor of PROVIDER_ANCHORS) {
+      document.body.innerHTML = '';
+      const spy = vi.fn();
+      Element.prototype.scrollIntoView = spy as never;
+      openHelpModal(anchor);
+      expect(spy, anchor).toHaveBeenCalledWith({ block: 'start' });
+    }
+  });
+});
