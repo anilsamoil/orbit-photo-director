@@ -38,6 +38,29 @@ def main() -> None:
             f"flashes/min={result.flash_rate_per_min:.2f}"
         )
 
+    # Sprite-watch live-verify (Unit 7): the limb-annulus cluster scan is
+    # invisible in dev (no live GLM past 2025), so this is the only place it
+    # can be exercised against real flashes. Sweep a few sub-points sitting
+    # over GLM coverage and report the strongest in-annulus storm cluster —
+    # what the generator would attach as pass.sprite on a night pass there.
+    print()
+    print("Sprite annulus scan (strongest storm in the 900-3200km limb ring):")
+    for lat, lon, name in [
+        (25.0, -85.0, "Gulf of Mexico"),
+        (10.0, -75.0, "N. Andes / Caribbean"),
+        (-20.0, -55.0, "S. Brazil / La Plata"),
+        (0.0, -30.0, "Equatorial Atlantic"),
+    ]:
+        cluster = sampler.strongest_cluster_in_annulus(lat, lon)
+        if cluster is None:
+            print(f"  {name:30s} ({lat:6.2f}, {lon:7.2f}): no qualifying storm")
+        else:
+            print(
+                f"  {name:30s} ({lat:6.2f}, {lon:7.2f}): "
+                f"{cluster.distance_km:.0f}km @ {cluster.bearing_deg:.0f}deg, "
+                f"{cluster.flash_count} flashes"
+            )
+
 
 if __name__ == "__main__":
     main()

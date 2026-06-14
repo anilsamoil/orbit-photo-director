@@ -471,6 +471,25 @@ def score_pass_for_target(
         out["lightning_bonus"] = round(lightning_bonus_value, 3)
     if hurricane_dict is not None:
         out["hurricane_nearby"] = hurricane_dict
+    # Sprite watch (Unit 7): on a NIGHT pass (the ISS SUB-POINT in darkness —
+    # its own computation, NOT the target regime: the limb air column along
+    # the sightline must be genuinely dark for a faint mesospheric flash),
+    # look for a strong storm cluster in the limb annulus around the ISS
+    # sub-point. Observed-only (GLM); serialized conditionally so absent =
+    # byte-identical. Frontend adds the moon-darkness gate + the honest row.
+    if lightning_sampler is not None:
+        iss_regime = lighting_regime(sun_lat, sun_lon, iss.lat, iss.lon)
+        if iss_regime == "night" and hasattr(
+            lightning_sampler, "strongest_cluster_in_annulus"
+        ):
+            cluster = lightning_sampler.strongest_cluster_in_annulus(iss.lat, iss.lon)
+            if cluster is not None:
+                out["sprite"] = {
+                    "distance_km": cluster.distance_km,
+                    "bearing_deg": cluster.bearing_deg,
+                    "flash_count": cluster.flash_count,
+                }
+
     # Curated category (big-terrain/volcano/...) — lets the frontend's
     # golden-hour row fire only on terrain-texture targets (Unit 4).
     # Conditionally inserted (Codex review 2026-06-14): omitting the key

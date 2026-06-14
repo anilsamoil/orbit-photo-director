@@ -873,3 +873,76 @@ def test_glm_fetch_budget_constant_is_120s() -> None:
     design doc — 120s gives ~3-4 min total tick budget headroom over the
     900s post-soak watchdog target."""
     assert GLM_FETCH_BUDGET_SECONDS == 120
+
+
+# ---------------------------------------------------------------------------
+# Sprite watch (Unit 7): strongest_cluster_in_annulus
+# ---------------------------------------------------------------------------
+
+
+def _glm_with_flashes(when, flashes):
+    """Build a GLMSampler with a pre-populated index (no network)."""
+    from generator.lightning import GLMSampler, _GLMFlash, _bucket_key
+    s = GLMSampler.__new__(GLMSampler)
+    s._when = when
+    s._window_minutes = 60
+    s._flashes_by_bucket = {}
+    s._oldest_granule_age_min = 0
+    for (lat, lon) in flashes:
+        f = _GLMFlash(lat=lat, lon=lon, t=when)
+        s._flashes_by_bucket.setdefault(_bucket_key(lat, lon), []).append(f)
+    return s
+
+
+def test_strongest_cluster_in_annulus_finds_strong_limb_storm() -> None:
+    from generator.lightning import SPRITE_MIN_FLASHES
+    when = datetime(2024, 7, 1, 3, 0, 0, tzinfo=UTC)
+    # ISS sub-point in GLM coverage (Gulf of Mexico-ish), storm ~1500km N.
+    iss_lat, iss_lon = 15.0, -85.0
+    storm_lat, storm_lon = 28.5, -85.0  # ~1500km north (in the 900-3200 annulus)
+    flashes = [(storm_lat + 0.05 * (i % 5), storm_lon + 0.05 * (i // 5))
+               for i in range(SPRITE_MIN_FLASHES + 10)]
+    s = _glm_with_flashes(when, flashes)
+    c = s.strongest_cluster_in_annulus(iss_lat, iss_lon)
+    assert c is not None
+    assert c.flash_count >= SPRITE_MIN_FLASHES
+    assert 900.0 <= c.distance_km <= 3200.0
+    assert 350.0 <= c.bearing_deg or c.bearing_deg <= 10.0  # ~due north
+
+
+def test_strongest_cluster_below_threshold_returns_none() -> None:
+    from generator.lightning import SPRITE_MIN_FLASHES
+    when = datetime(2024, 7, 1, 3, 0, 0, tzinfo=UTC)
+    flashes = [(28.5 + 0.05 * i, -85.0) for i in range(SPRITE_MIN_FLASHES - 50)]
+    s = _glm_with_flashes(when, flashes)
+    assert s.strongest_cluster_in_annulus(15.0, -85.0) is None
+
+
+def test_strongest_cluster_ignores_flashes_inside_inner_radius() -> None:
+    from generator.lightning import SPRITE_MIN_FLASHES
+    when = datetime(2024, 7, 1, 3, 0, 0, tzinfo=UTC)
+    # A big storm right at nadir (inside 900km inner) must NOT count as sprite.
+    flashes = [(15.2 + 0.02 * (i % 8), -85.0 + 0.02 * (i // 8))
+               for i in range(SPRITE_MIN_FLASHES + 50)]
+    s = _glm_with_flashes(when, flashes)
+    assert s.strongest_cluster_in_annulus(15.0, -85.0) is None
+
+
+def test_strongest_cluster_out_of_glm_coverage_returns_none() -> None:
+    from generator.lightning import SPRITE_MIN_FLASHES
+    when = datetime(2024, 7, 1, 3, 0, 0, tzinfo=UTC)
+    flashes = [(28.5, 120.0 + 0.05 * i) for i in range(SPRITE_MIN_FLASHES + 10)]
+    s = _glm_with_flashes(when, flashes)
+    # ISS sub-point over Asia (lon 120) — outside GLM coverage box.
+    assert s.strongest_cluster_in_annulus(15.0, 120.0) is None
+
+
+def test_strongest_cluster_negative_longitude_bucket_math() -> None:
+    from generator.lightning import SPRITE_MIN_FLASHES
+    when = datetime(2024, 7, 1, 3, 0, 0, tzinfo=UTC)
+    # Western-hemisphere negative-lon floor-division path.
+    iss_lat, iss_lon = -10.0, -120.0
+    flashes = [(-23.0 + 0.05 * (i % 5), -120.0) for i in range(SPRITE_MIN_FLASHES + 5)]
+    s = _glm_with_flashes(when, flashes)
+    c = s.strongest_cluster_in_annulus(iss_lat, iss_lon)
+    assert c is not None and c.flash_count >= SPRITE_MIN_FLASHES
