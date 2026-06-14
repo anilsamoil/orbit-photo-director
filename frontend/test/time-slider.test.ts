@@ -29,7 +29,7 @@ const SLIDER_HTML = `
     <span class="time-step-utc" data-time-utc>--:--Z</span>
   </button>
   <div class="time-slider-row">
-    <input id="time-slider" class="time-slider" type="range" min="0" max="2160" step="5" value="0" />
+    <input id="time-slider" class="time-slider" type="range" min="0" max="2160" step="1" value="0" />
     <span id="time-slider-readout">Now</span>
   </div>`;
 
@@ -119,7 +119,8 @@ describe('slider binding (eng-review 1C/7A)', () => {
     expect(slider().max).toBe(String(LOOKAHEAD_MAX_MINUTES));
     // step owned in code: real browsers snap programmatic .value writes to
     // the step grid, so the contract must not live only in index.html.
-    expect(slider().step).toBe('5');
+    // 1-min resolution (Chris 2026-06-14).
+    expect(slider().step).toBe('1');
   });
 
   it("trailing rAF frame after 'change' does not re-pin (guard catches the stale frame)", () => {
