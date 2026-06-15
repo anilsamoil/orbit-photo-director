@@ -8,7 +8,7 @@ import type { Manifest, PassEntry } from '../src/types';
 // render through renderCards without NaN/undefined).
 const cupolaWindow = (over: Partial<PassEntry> = {}): PassEntry => ({
   target_id: 'cupola:2026-06-15T14:32Z',
-  target_name: 'Cupola window — South Pacific',
+  target_name: 'Memorabilia shot — South Pacific',
   target_regime: 'day',
   target_priority: 5,
   target_lat: -20.1,
@@ -98,6 +98,9 @@ describe('setupCupolaPane', () => {
     await flush();
     expect(pane.hidden).toBe(false);
     expect(button.getAttribute('aria-expanded')).toBe('true');
+    // The visible on-state (operator feedback 2026-06-15): the .active class
+    // drives the filled-pill + caret-▾ styling so the toggle reads clearly.
+    expect(button.classList.contains('active')).toBe(true);
     const card = cardsContainer.querySelector('[data-target-id="cupola:2026-06-15T14:32Z"]');
     expect(card).not.toBeNull();
     // No NaN in the rendered card (full PassEntry-compatible shape).
@@ -115,7 +118,7 @@ describe('setupCupolaPane', () => {
     });
     button.click();
     await flush();
-    expect(cardsContainer.querySelector('.cupola-empty')?.textContent).toMatch(/No Cupola windows/);
+    expect(cardsContainer.querySelector('.cupola-empty')?.textContent).toMatch(/No memorabilia windows/);
   });
 
   it('shows a reconnect message when the fetch throws', async () => {
@@ -142,5 +145,6 @@ describe('setupCupolaPane', () => {
     button.click();
     expect(pane.hidden).toBe(true);
     expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.classList.contains('active')).toBe(false);  // visible off-state
   });
 });

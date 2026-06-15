@@ -193,17 +193,18 @@ const HELP_SECTIONS: HelpSection[] = [
     ],
   },
   {
-    title: 'Cupola window finder (📸)',
+    title: 'Memorabilia shot (📸)',
     items: [
       {
         icon: '📸',
         label: 'What it is',
         text:
-          'Tap "📸 Cupola windows" in the Queue header to pull up the next ' +
+          'Tap "📸 Memorabilia shot" in the Queue header to pull up the next ' +
           'handful of daylit moments with a clear, bright Earth and a ' +
           'land-and-ocean mix behind the station — built for batch-shooting ' +
-          'floating keepsakes in the Cupola. It is on-demand: it stays out of ' +
-          'the way until you ask for it.',
+          'floating keepsakes in the Cupola. The button is a show/hide toggle ' +
+          '(it fills in and the caret flips ▾ when open); it stays out of the ' +
+          'way until you ask for it.',
       },
       {
         icon: '☀️',
