@@ -115,6 +115,14 @@ export interface PassEntry {
    *  dark. Drives the sprite condition row (which adds a moon-darkness gate).
    *  GLM coverage = Americas/Atlantic/E-Pacific only. */
   sprite?: { distance_km: number; bearing_deg: number; flash_count: number };
+  /** Cupola keepsake-window fields — present ONLY on cupola_windows entries
+   *  (the on-demand window finder), never on real target passes. golden_hour
+   *  is the bonus tag; water_pct is the disc water fraction; window_start/end
+   *  bracket the good-geometry run. */
+  golden_hour?: boolean;
+  water_pct?: number;
+  window_start?: string;
+  window_end?: string;
   /** Named tropical system within ~1500km of the pass target. NHC
    *  Atlantic + East Pacific basins only in v1.3.1; JTWC deferred to
    *  V4-P3. When present, the card renders a 🌀 tag with the storm

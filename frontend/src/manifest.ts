@@ -185,6 +185,20 @@ export async function fetchTop24h(
   return fetchArtifact<PassEntry[]>(manifest, 'top_24h', baseUrl, profileName);
 }
 
+/** Cupola keepsake windows — daylit + low-cloud + land/ocean-mix moments for
+ *  shooting floating trinkets (Loral). On-demand + profile-agnostic; absent
+ *  when the generator flag is off or the manifest predates the feature →
+ *  returns []. The artifact wraps the list as {version, generated_at,
+ *  windows: PassEntry[]}, so we unwrap to the array the cards consume. */
+export async function fetchCupolaWindows(
+  manifest: Manifest,
+  baseUrl = '',
+): Promise<PassEntry[]> {
+  if (!resolveArtifactEntry(manifest, 'cupola_windows')) return [];
+  const doc = await fetchArtifact<{ windows?: PassEntry[] }>(manifest, 'cupola_windows', baseUrl);
+  return Array.isArray(doc?.windows) ? doc.windows : [];
+}
+
 /** Track (ISS ground-track polynomial + raw SGP4 samples + TLE) is
  *  profile-agnostic — the ISS orbit is the same regardless of which
  *  astronaut is looking. Stays at canonical top-level; no profileName

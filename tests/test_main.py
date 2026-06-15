@@ -57,6 +57,44 @@ def test_run_tick_creates_versioned_artifacts(settings_in_tmp: Settings, cached_
     assert (v_dir / "targets.json").exists()
 
 
+def test_run_tick_omits_cupola_windows_when_disabled(
+    settings_in_tmp: Settings, cached_tle: Path
+) -> None:
+    """Flag off (default) → no cupola_windows artifact or manifest key
+    (byte-stable vs the pre-feature manifest)."""
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    manifest = run_tick(settings_in_tmp, now=now)
+    assert "cupola_windows" not in manifest["artifacts"]
+    v_dir = settings_in_tmp.out_dir / "v" / "20241017T120000Z"
+    assert not (v_dir / "cupola_windows.json").exists()
+
+
+def test_run_tick_emits_cupola_windows_when_enabled(
+    settings_in_tmp: Settings, cached_tle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Flag on + windows found → the artifact is written and the manifest
+    references it. The finder is patched (its own sweep is unit-tested in
+    test_cupola); this guards the run_tick WIRING + manifest key."""
+    import dataclasses
+
+    canned = [{
+        "target_id": "cupola:2024-10-17T13:00Z",
+        "target_name": "Cupola window — North Pacific",
+        "closest_approach": "2024-10-17T13:00:00Z",
+        "pass_regime": "day", "cloud_fraction": 5.0,
+    }]
+    monkeypatch.setattr("generator.cupola.find_cupola_windows", lambda *a, **k: canned)
+    settings = dataclasses.replace(settings_in_tmp, enable_cupola_windows=True)
+
+    now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    manifest = run_tick(settings, now=now)
+    assert manifest["artifacts"]["cupola_windows"]["path"].endswith("cupola_windows.json")
+    v_dir = settings_in_tmp.out_dir / "v" / "20241017T120000Z"
+    data = json.loads((v_dir / "cupola_windows.json").read_text())
+    assert data["windows"] == canned
+    assert data["version"] == "20241017T120000Z"
+
+
 def test_run_tick_top5_passes_format(settings_in_tmp: Settings, cached_tle: Path) -> None:
     now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
     run_tick(settings_in_tmp, now=now)

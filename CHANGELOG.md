@@ -2,6 +2,20 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.20.0.0] - 2026-06-15
+
+## **A Cupola window finder — tap a button and the app lists the next good moments to shoot a keepsake against the Earth.**
+
+Astronaut Loral wanted to batch-shoot floating trinkets in the Cupola with a clear, bright Earth behind them. Now there is a "Cupola windows" button in the Queue header: tap it and the app surfaces the next handful of daylit moments where the station has a low-cloud, land-and-ocean Earth below — each one a normal card you can add to your shot list with one tap, so the whole keepsake session exports to your calendar together. It stays out of the way until you ask for it.
+
+### Itemized changes
+
+#### Added
+- **Cupola window finder** (on-demand): a "📸 Cupola windows" button reveals the next ~8 good keepsake moments — daylit, 30%-or-less cloud (ranked clearest-first), with a land-and-ocean mix behind the station — as reminder-capable cards with a golden-hour bonus tag. A new help section explains it. Ships behind a flag while it soaks.
+
+#### Internal
+- New generator window-finder sweeps the ISS ground track over the 36h horizon, scoring each moment against three gates (daylit via solar zenith, cloud ≤30% via the GFS forecast, and a 25-point land/ocean-mix disc on the GSHHG water mask), run-length-merging good samples into windows and emitting a deterministic `cupola_windows` artifact (flag-gated, byte-stable — the manifest is unchanged when off). Designed + adversarially verified by a multi-agent pass (mix geometry empirically checked against the real mask: 9/9 coastlines accept, ocean/interiors/island-specks reject) and an outside-voice review (no findings); the test suite caught a cadence calibration the design missed (a coastline mix rarely persists 3 coarse samples → recalibrated to 20s/min-run-2). The on-demand cards reuse the existing reminder + calendar machinery via a pseudo-pass; 17 new tests + in-browser proof.
+
 ## [1.19.0.0] - 2026-06-14
 
 ## **Sun glint now fires on any water on Earth — every lake and coastline, not just twelve hand-picked spots.**
