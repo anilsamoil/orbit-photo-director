@@ -1110,6 +1110,33 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 exc,
             )
 
+    # 5e. Cupola keepsake-window finder (Loral). Sweeps the ISS ground track
+    # for daylit + low-cloud + land/ocean-mix moments and emits a small
+    # cupola_windows artifact the frontend shows on demand as reminder-capable
+    # cards. Flag-gated + requires the water mask (a fresh checkout without
+    # data/water_mask.npz no-ops — never falls back to the crude is_water
+    # heuristic, which would produce garbage mixes). Caught so a failure here
+    # never aborts the tick; the manifest just omits the key (byte-stable).
+    cupola_windows_path: Path | None = None
+    if settings.enable_cupola_windows and forecast_sampler is not None and water_mask_obj is not None:
+        try:
+            from .cupola import find_cupola_windows
+            windows = find_cupola_windows(
+                tle, n,
+                forecast_sampler=forecast_sampler,
+                water_mask_obj=water_mask_obj,
+                minutes=settings.pass_window_hours * 60,
+            )
+            if windows:
+                cupola_windows_path = v_dir / "cupola_windows.json"
+                cupola_windows_path.write_text(json.dumps(
+                    {"version": version, "generated_at": utcnow_iso(n), "windows": windows},
+                    indent=2, sort_keys=True,
+                ))
+                log.info("cupola windows: %d found", len(windows))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cupola windows failed (%s); manifest omits cupola_windows", exc)
+
     # 6. Manifest
     artifacts_block: dict[str, Path] = {
         "passes": canonical_artifacts["passes"],
@@ -1119,6 +1146,8 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         "status": canonical_artifacts["status"],
         "targets": v_dir / "targets.json",
     }
+    if cupola_windows_path is not None:
+        artifacts_block["cupola_windows"] = cupola_windows_path
     manifest_path = write_manifest(
         out_dir=settings.out_dir,
         version=version,

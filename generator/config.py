@@ -98,6 +98,9 @@ class Settings:
     # manifest gains a `forecast_clouds` index for the frontend's
     # scrub-aware layer swap. Off-by-default for a soak before flip.
     enable_forecast_clouds: bool = False
+    # Cupola keepsake-window finder (Loral): manifest gains a `cupola_windows`
+    # artifact (daylit + low-cloud + land/ocean-mix moments). Off-by-default.
+    enable_cupola_windows: bool = False
 
     @classmethod
     def from_env(cls, repo_root: Path | None = None) -> Settings:
@@ -128,6 +131,8 @@ class Settings:
             enable_weather=os.environ.get("OPD_ENABLE_WEATHER", "0").strip().lower()
                 in ("1", "true", "yes", "on"),
             enable_forecast_clouds=os.environ.get("OPD_ENABLE_FORECAST_CLOUDS", "0")
+                .strip().lower() in ("1", "true", "yes", "on"),
+            enable_cupola_windows=os.environ.get("OPD_ENABLE_CUPOLA_WINDOWS", "0")
                 .strip().lower() in ("1", "true", "yes", "on"),
         )
 

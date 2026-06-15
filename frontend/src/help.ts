@@ -193,6 +193,61 @@ const HELP_SECTIONS: HelpSection[] = [
     ],
   },
   {
+    title: 'Cupola window finder (📸)',
+    items: [
+      {
+        icon: '📸',
+        label: 'What it is',
+        text:
+          'Tap "📸 Cupola windows" in the Queue header to pull up the next ' +
+          'handful of daylit moments with a clear, bright Earth and a ' +
+          'land-and-ocean mix behind the station — built for batch-shooting ' +
+          'floating keepsakes in the Cupola. It is on-demand: it stays out of ' +
+          'the way until you ask for it.',
+      },
+      {
+        icon: '☀️',
+        label: 'Daylit & low cloud',
+        text:
+          'Every window is in full daylight (no night, no terminator) so the ' +
+          'Earth behind your trinket is bright, with 30% cloud cover or less at ' +
+          'nadir. Windows are ranked lowest-cloud first — less is always better.',
+      },
+      {
+        icon: '🌊',
+        label: 'Land + ocean mix',
+        text:
+          'The view is a coastline scene — some land, some water, not open ' +
+          'ocean and not all land — for a varied backdrop. A 🌊 tag shows how ' +
+          'much water is in frame.',
+      },
+      {
+        icon: '🌇',
+        label: 'Golden hour is a bonus',
+        text:
+          'Any kind of daylight works; when the sun is low and warm a window ' +
+          'gets a 🌇 golden-hour tag. It is a flag, never a filter — golden ' +
+          'windows are just shorter and harder to catch.',
+      },
+      {
+        icon: '🔔',
+        label: 'Remind & batch',
+        text:
+          'Each window is a normal card: tap 🔔 to add it to your shot list, ' +
+          'then Add to Calendar exports the whole session in one go — alongside ' +
+          'your target passes — with the same 5-minutes-before and at-time ' +
+          'alarms. Stage the camera and float up when one fires.',
+      },
+      {
+        icon: '📶',
+        label: 'Fetched live',
+        text:
+          'Windows are pulled from the station\'s latest forecast when you tap ' +
+          'the button; if you are offline the panel asks you to reconnect.',
+      },
+    ],
+  },
+  {
     title: 'Sorting & filtering',
     items: [
       {

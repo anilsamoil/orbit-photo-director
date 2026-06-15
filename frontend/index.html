@@ -47,9 +47,14 @@
             <button id="filter-all-queue" class="filter-btn active" type="button" data-filter="all" title="Show all targets (shared + yours)">All</button>
             <button id="filter-mine-queue" class="filter-btn" type="button" data-filter="mine" title="Show only your targets">Mine</button>
           </div>
+          <button id="cupola-toggle" class="cupola-toggle-btn" type="button" aria-expanded="false" title="Find good moments to shoot a keepsake in the Cupola — clear, daylit, land-and-ocean Earth behind it">📸 Cupola windows</button>
         </div>
         <div id="cards" class="cards" aria-live="polite"></div>
         <div id="empty" class="empty" hidden>No passes in the next 90 minutes.</div>
+        <div id="cupola-pane" class="cupola-pane" hidden>
+          <p class="cupola-pane-sub">Daylit, low-cloud moments with a land-and-ocean Earth behind the station — for shooting floating keepsakes in the Cupola. Tap 🔔 to add one to your shot list.</p>
+          <div id="cupola-cards" class="cards" aria-live="polite"></div>
+        </div>
       </section>
 
       <section id="upcoming-pane" class="pane">

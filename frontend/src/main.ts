@@ -36,7 +36,8 @@ import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snap
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import { applyTargetFilter, getTargetFilter, setTargetFilter, type TargetFilter } from './target-filter-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
-import { fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
+import { fetchCupolaWindows, fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
+import { setupCupolaPane } from './cupola-pane';
 import { gibsTrueColorUrl, precacheTilesForTargets, precacheWorldBaseTiles, yesterdayIso } from './tile-precache';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
@@ -544,7 +545,7 @@ function rerenderCountdowns(): void {
  *  state messaging). Returns false on unexpected DOM state too —
  *  caller's fallback is the safe path. */
 function tryUpdateCountdownsInPlace(now: number): boolean {
-  for (const containerId of ['cards', 'upcoming-cards']) {
+  for (const containerId of ['cards', 'upcoming-cards', 'cupola-cards']) {
     const container = document.getElementById(containerId);
     if (!container) continue;
     // Snapshot children — we don't remove anything in the fast path
@@ -769,6 +770,15 @@ async function onCardAction(action: CardAction, p: PassEntry): Promise<void> {
  *    something.
  */
 function handleHideAction(p: PassEntry): void {
+  // Cupola windows are ephemeral, on-demand cards — NOT profile targets. Hide
+  // just removes the card from the panel; never persist a synthetic "cupola:"
+  // id into removedCuratedIds (which the daemon multiplex filter would honor).
+  if (p.target_id.startsWith('cupola:')) {
+    document.querySelectorAll('#cupola-cards [data-target-id]').forEach((el) => {
+      if ((el as HTMLElement).dataset.targetId === p.target_id) el.remove();
+    });
+    return;
+  }
   const profile = currentProfile ? loadProfile(currentProfile.name) : null;
   if (!profile) {
     showToast(`Could not hide — profile unavailable`, 'error');
@@ -1358,6 +1368,22 @@ async function init(): Promise<void> {
   bindSortToggles();
   bindFilterToggles();
   bindHelp();
+  // Cupola keepsake-window finder (Loral): on-demand pane that reuses the card
+  // + 🔔 reminder machinery; fetches windows from the live manifest on first
+  // open. No-ops cleanly if the markup or manifest artifact is absent.
+  const cupolaToggle = document.getElementById('cupola-toggle');
+  const cupolaPaneEl = document.getElementById('cupola-pane');
+  const cupolaCardsEl = document.getElementById('cupola-cards');
+  if (cupolaToggle && cupolaPaneEl && cupolaCardsEl) {
+    setupCupolaPane({
+      button: cupolaToggle,
+      pane: cupolaPaneEl,
+      cardsContainer: cupolaCardsEl,
+      onCardAction,
+      loadWindows: () =>
+        currentManifest ? fetchCupolaWindows(currentManifest, '') : Promise.resolve([]),
+    });
+  }
   // Hydrate this profile's server-side targets into localStorage on load so
   // the my-targets map rings (and the Profile list) reflect them without
   // needing a Profile-tab visit first. No-ops without a calibration token and
