@@ -117,7 +117,7 @@ def _build_window(run: list[dict[str, Any]]) -> dict[str, Any]:
     id_stamp = id_min.strftime("%Y-%m-%dT%H:%MZ")
     return {
         "target_id": f"cupola:{id_stamp}",
-        "target_name": f"Cupola window — {label}",
+        "target_name": f"Memorabilia shot — {label}",
         # Daylit-only region window; synthesize the fields the card + breakdown
         # panel read so nothing renders "undefined"/"NaN" (verifier note).
         "target_regime": "day",

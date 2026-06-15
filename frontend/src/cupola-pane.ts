@@ -66,7 +66,7 @@ export function setupCupolaPane(deps: CupolaPaneDeps): void {
     if (!open || inFlight) return;
 
     inFlight = true;
-    message(cardsContainer, 'Finding Cupola windows…');
+    message(cardsContainer, 'Finding memorabilia windows…');
     let windows: PassEntry[] = [];
     try {
       windows = await loadWindows();
@@ -77,7 +77,7 @@ export function setupCupolaPane(deps: CupolaPaneDeps): void {
     }
     inFlight = false;
     if (!windows.length) {
-      message(cardsContainer, 'No Cupola windows just now — fetch again when online.');
+      message(cardsContainer, 'No memorabilia windows just now — fetch again when online.');
       return;
     }
     cardsContainer.textContent = '';
