@@ -2,6 +2,18 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.20.1.0] - 2026-06-15
+
+## **The Cupola finder is now "Memorabilia shot," with a button that clearly shows when it's on.**
+
+Quick follow-up to operator feedback: the finder's button gave no obvious feedback when tapped and the name wasn't clear. It's now "📸 Memorabilia shot," and the button is a proper show/hide toggle — it fills in and a caret flips when the panel is open, matching the other Sort/Show toggles. The windows and the calendar events it exports are renamed to match.
+
+### Itemized changes
+
+#### Changed
+- Renamed the Cupola window finder to **"Memorabilia shot"** across the button, the window cards, the calendar export, and the help section.
+- The button is now a clear outlined-when-off / filled-with-a-caret-when-on toggle (it previously had no styling, so its state was invisible). Clarified the tooltip and panel copy.
+
 ## [1.20.0.0] - 2026-06-15
 
 ## **A Cupola window finder — tap a button and the app lists the next good moments to shoot a keepsake against the Earth.**
