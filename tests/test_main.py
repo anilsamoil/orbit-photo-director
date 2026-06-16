@@ -79,7 +79,7 @@ def test_run_tick_emits_cupola_windows_when_enabled(
 
     canned = [{
         "target_id": "cupola:2024-10-17T13:00Z",
-        "target_name": "Memorabilia shot — North Pacific",
+        "target_name": "Keepsake — North Pacific",
         "closest_approach": "2024-10-17T13:00:00Z",
         "pass_regime": "day", "cloud_fraction": 5.0,
     }]
