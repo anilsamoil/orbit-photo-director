@@ -1306,7 +1306,7 @@ body.shotlist-bar-visible main {
   outline-offset: 2px;
 }
 
-/* Memorabilia-shot finder — a STANDALONE show/hide toggle (not a segmented
+/* Keepsake finder — a STANDALONE show/hide toggle (not a segmented
  * pill), so its on/off state must be unmistakable on its own (operator
  * feedback 2026-06-15: the old button gave no obvious feedback when tapped).
  * Outlined + caret ▸ when off; filled accent + caret ▾ when on. */

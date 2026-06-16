@@ -8,7 +8,7 @@ import type { Manifest, PassEntry } from '../src/types';
 // render through renderCards without NaN/undefined).
 const cupolaWindow = (over: Partial<PassEntry> = {}): PassEntry => ({
   target_id: 'cupola:2026-06-15T14:32Z',
-  target_name: 'Memorabilia shot — South Pacific',
+  target_name: 'Keepsake — South Pacific',
   target_regime: 'day',
   target_priority: 5,
   target_lat: -20.1,
@@ -118,7 +118,7 @@ describe('setupCupolaPane', () => {
     });
     button.click();
     await flush();
-    expect(cardsContainer.querySelector('.cupola-empty')?.textContent).toMatch(/No memorabilia windows/);
+    expect(cardsContainer.querySelector('.cupola-empty')?.textContent).toMatch(/No keepsake windows/);
   });
 
   it('shows a reconnect message when the fetch throws', async () => {

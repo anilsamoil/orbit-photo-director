@@ -95,7 +95,7 @@ def test_find_windows_shape_and_ranking(sample_tle: TLE) -> None:
     # Each window is PassEntry-compatible with no NaN-inducing gaps.
     for w in windows:
         assert w["target_id"].startswith("cupola:")
-        assert w["target_name"].startswith("Memorabilia shot —")
+        assert w["target_name"].startswith("Keepsake —")
         assert w["pass_regime"] == "day"
         assert w["target_regime"] == "day"
         assert isinstance(w["nadir_distance_km"], float)

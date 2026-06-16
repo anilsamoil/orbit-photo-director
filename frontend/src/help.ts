@@ -193,13 +193,13 @@ const HELP_SECTIONS: HelpSection[] = [
     ],
   },
   {
-    title: 'Memorabilia shot (📸)',
+    title: 'Keepsake (📸)',
     items: [
       {
         icon: '📸',
         label: 'What it is',
         text:
-          'Tap "📸 Memorabilia shot" in the Queue header to pull up the next ' +
+          'Tap "📸 Keepsake" in the Queue header to pull up the next ' +
           'handful of daylit moments with a clear, bright Earth and a ' +
           'land-and-ocean mix behind the station — built for batch-shooting ' +
           'floating keepsakes in the Cupola. The button is a show/hide toggle ' +
