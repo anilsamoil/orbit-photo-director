@@ -2,6 +2,11 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.20.2.0] - 2026-06-16
+
+### Changed
+- Renamed the keepsake-photo finder button from **"Memorabilia shot" to "Keepsake"** — one short word that captures the intent. Applies to the button, the window cards, the calendar export, and the help section.
+
 ## [1.20.1.0] - 2026-06-15
 
 ## **The Cupola finder is now "Memorabilia shot," with a button that clearly shows when it's on.**
