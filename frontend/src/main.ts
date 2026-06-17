@@ -685,7 +685,7 @@ function exportShotlist(): void {
   );
 }
 
-async function onCardAction(action: CardAction, p: PassEntry): Promise<void> {
+async function onCardAction(action: CardAction, p: PassEntry, value?: number): Promise<void> {
   // v3 — Hide path (Anil 2026-05-26). One-tap dismiss for curated cards.
   // We MUTATE the profile + save synchronously and rip the card from the
   // DOM immediately so the operator sees instant feedback rather than
@@ -698,6 +698,26 @@ async function onCardAction(action: CardAction, p: PassEntry): Promise<void> {
   }
   if (action === 'remind') {
     handleRemindToggle(p);
+    return;
+  }
+  if (action === 'rate') {
+    // One-tap rating from the card (2026-06-17). Mirrors the Log-tab rate
+    // payload: a separate 'rate' calib event keyed by target+pass+rating, so
+    // it stores alongside the Shoot without clobbering it (the Worker dedupes
+    // by dedupe_key). Star value rides in `value`.
+    const rating = value ?? 0;
+    if (rating < 1) return;
+    const ratePayload = {
+      ...buildPayload('rate', p.target_id, p.closest_approach, p.score),
+      rating,
+      dedupe_key: `${p.target_id}|${p.closest_approach}|rate|${rating}`,
+    };
+    const rateResult = await postCalib(ratePayload);
+    updatePendingSyncBadge();
+    showToast(
+      rateResult.ok ? `Rated ${rating}★` : `Rating queued (${rating}★)`,
+      rateResult.ok ? 'success' : 'warn',
+    );
     return;
   }
   const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);

@@ -551,6 +551,34 @@ main {
 
 .btn-shoot { background: var(--green); color: var(--bg); border: 0; }
 .btn-skip { background: var(--surface-2); color: var(--text); }
+
+/* Inline 1-5 rating, revealed after a Shoot (2026-06-17) so ratings get
+ * logged in the moment instead of being buried in the Log tab. */
+.card-rating {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-top: 0.4rem;
+}
+.card-rating-label {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  margin-right: 0.35rem;
+}
+.card-rating-star {
+  background: transparent;
+  border: 0;
+  padding: 0 0.1rem;
+  font-size: 1.15rem;
+  line-height: 1;
+  color: var(--accent);
+  cursor: pointer;
+}
+.card-rating-star:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
 /* v3 — Hide button (Anil 2026-05-26). One-tap dismiss for curated cards.
  * Visually subordinate to Shoot/Skip — no color fill, just an outlined
  * button. The operator should glance, see Shoot/Skip as the primary

@@ -96,6 +96,37 @@ describe('renderCard', () => {
     expect(onAction.mock.calls[0]![0]).toBe('skip');
   });
 
+  it('hides the inline rating until a Shoot, then reveals it (one-tap rating)', () => {
+    const onAction = vi.fn();
+    const el = renderCard(samplePass(), NOW, false, onAction);
+    const rating = el.querySelector<HTMLElement>('.card-rating')!;
+    expect(rating).not.toBeNull();
+    expect(rating.hidden).toBe(true);  // not shown until you shoot
+    el.querySelector<HTMLButtonElement>('.btn-shoot')!.click();
+    expect(rating.hidden).toBe(false);
+    expect(rating.querySelectorAll('.card-rating-star')).toHaveLength(5);
+  });
+
+  it('emits rate action with the star value when a star is tapped', () => {
+    const onAction = vi.fn();
+    const el = renderCard(samplePass(), NOW, false, onAction);
+    el.querySelector<HTMLButtonElement>('.btn-shoot')!.click();  // reveal stars
+    const stars = el.querySelectorAll<HTMLButtonElement>('.card-rating-star');
+    stars[3]!.click();  // tap the 4th star
+    const rateCall = onAction.mock.calls.find((c) => c[0] === 'rate');
+    expect(rateCall).toBeTruthy();
+    expect(rateCall![2]).toBe(4);  // rating value rides in the 3rd arg
+    // Visual: 4 filled, label confirms.
+    expect([...stars].filter((s) => s.textContent === '★')).toHaveLength(4);
+    expect(el.querySelector('.card-rating-label')!.textContent).toContain('rated 4★');
+  });
+
+  it('forecast variant has no inline rating (no Shoot there)', () => {
+    const onAction = vi.fn();
+    const el = renderCard(samplePass(), NOW, false, onAction, { variant: 'forecast' });
+    expect(el.querySelector('.card-rating')).toBeNull();
+  });
+
   // Shot-list "remind" toggle must appear on BOTH card variants — Queue
   // (observed) and Upcoming (forecast) — since the operator plans shots from
   // either. Regression guard for the both-variants wiring (card.ts:326/338).
