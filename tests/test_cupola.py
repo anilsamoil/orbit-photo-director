@@ -56,6 +56,26 @@ def test_disc_mix_rejects_island_specks() -> None:
         assert _disc_water_fraction(lat, lon, mask) > 0.80, f"{name} speck should reject"
 
 
+def test_region_label_tiles_the_globe() -> None:
+    """Every window gets a named region — the box table must tile the globe so
+    no card ever shows the generic 'land' fallback (operator feedback)."""
+    from generator.cupola import _region_label
+
+    generic = {"the far north", "the far south", "the open ocean", "a remote coast"}
+    misses = [
+        (lat, lon)
+        for lat in range(-89, 90, 3)
+        for lon in range(-179, 180, 3)
+        if _region_label(float(lat), float(lon), True) in generic
+    ]
+    assert not misses, f"{len(misses)} grid points hit the generic fallback, e.g. {misses[:5]}"
+    # A few labels read sensibly.
+    assert _region_label(47.5, -87.5, True) == "the Great Lakes"
+    assert _region_label(78.0, 20.0, True) == "the Arctic"
+    assert _region_label(-80.0, 40.0, True) == "the Southern Ocean"
+    assert _region_label(44.0, 34.0, True) == "the Black Sea"
+
+
 def test_solar_zenith_overhead_is_zero() -> None:
     # Sun directly overhead → zenith ≈ 0; antipode → ≈ 180.
     assert _solar_zenith_deg(10.0, 20.0, 10.0, 20.0) < 0.01

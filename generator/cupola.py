@@ -52,27 +52,47 @@ GOLDEN_ZENITH_HI = 96.0
 DAYLIT_CELL_CAP = 1500        # defensive cap on add_targets pre-pass cells
 
 # Coarse region boxes for the card title (cosmetic — never a gate). First
-# containing box wins; (name, lat_min, lat_max, lon_min, lon_max).
+# containing box wins; (name, lat_min, lat_max, lon_min, lon_max). Ordered
+# specific seas → continents → ocean basins → polar zones, and the basins +
+# poles tile the whole globe so a window never falls through to the generic
+# fallback (operator feedback 2026-06-16: some windows showed "land").
 _REGION_BOXES: tuple[tuple[str, float, float, float, float], ...] = (
-    ("Mediterranean", 30.0, 46.0, -6.0, 37.0),
-    ("Caribbean", 8.0, 27.0, -90.0, -59.0),
-    ("North Atlantic", 0.0, 70.0, -80.0, -5.0),
-    ("South Atlantic", -60.0, 0.0, -70.0, 20.0),
-    ("North Pacific", 0.0, 65.0, 120.0, 180.0),
-    ("North Pacific", 0.0, 65.0, -180.0, -90.0),
-    ("South Pacific", -60.0, 0.0, 150.0, 180.0),
-    ("South Pacific", -60.0, 0.0, -180.0, -70.0),
-    ("Indian Ocean", -60.0, 30.0, 20.0, 120.0),
-    ("Southern Ocean", -78.0, -60.0, -180.0, 180.0),
+    # Specific named waters (small — checked first for the nicest label;
+    # the smaller/enclosed seas precede the basins they overlap).
+    ("the Black Sea", 40.0, 48.0, 27.0, 42.0),
+    ("the Mediterranean", 30.0, 46.0, -6.0, 37.0),
+    ("the Red Sea", 12.0, 30.0, 32.0, 44.0),
+    ("the Persian Gulf", 23.0, 31.0, 47.0, 57.0),
+    ("the Caribbean", 8.0, 27.0, -90.0, -59.0),
+    ("the Gulf of Mexico", 18.0, 31.0, -98.0, -80.0),
+    ("the North Sea & Baltic", 50.0, 66.0, -5.0, 31.0),
+    ("the Great Lakes", 41.0, 49.0, -93.0, -76.0),
+    ("the Bay of Bengal", 5.0, 23.0, 80.0, 95.0),
+    ("the South China Sea", 0.0, 23.0, 105.0, 122.0),
+    ("the Sea of Japan", 33.0, 52.0, 127.0, 143.0),
+    # Continents / land regions.
     ("North America", 15.0, 72.0, -168.0, -52.0),
     ("South America", -56.0, 15.0, -82.0, -34.0),
     ("Europe", 36.0, 71.0, -10.0, 40.0),
     ("Africa", -35.0, 37.0, -18.0, 52.0),
     ("the Middle East", 12.0, 40.0, 34.0, 63.0),
-    ("Asia", 5.0, 78.0, 60.0, 150.0),
     ("Southeast Asia", -11.0, 28.0, 92.0, 141.0),
     ("Australia", -44.0, -10.0, 112.0, 154.0),
     ("New Zealand", -48.0, -33.0, 165.0, 179.0),
+    ("Greenland", 59.0, 84.0, -73.0, -11.0),
+    ("Asia", 5.0, 80.0, 40.0, 150.0),
+    # Polar zones — all longitudes (guarantee coverage at the caps).
+    ("the Arctic", 66.0, 90.0, -180.0, 180.0),
+    ("the Southern Ocean", -90.0, -55.0, -180.0, 180.0),
+    # Ocean basins — broad, generously overlapping so lat -55..66 is fully
+    # tiled across all longitudes (the last-resort layer for offshore peaks).
+    ("the North Atlantic", 0.0, 66.0, -80.0, 5.0),
+    ("the South Atlantic", -55.0, 0.0, -70.0, 20.0),
+    ("the Indian Ocean", -55.0, 30.0, 20.0, 122.0),
+    ("the North Pacific", 0.0, 66.0, 105.0, 180.0),
+    ("the North Pacific", 0.0, 66.0, -180.0, -70.0),
+    ("the South Pacific", -55.0, 0.0, 118.0, 180.0),
+    ("the South Pacific", -55.0, 0.0, -180.0, -68.0),
 )
 
 
@@ -99,7 +119,13 @@ def _region_label(lat: float, lon: float, is_water: bool) -> str:
     for name, lat_min, lat_max, lon_min, lon_max in _REGION_BOXES:
         if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
             return name
-    return "the open ocean" if is_water else "land"
+    # The boxes tile the globe, so this is a defensive backstop only — never
+    # a bare "land". Pick a graceful zone from latitude.
+    if lat >= 60.0:
+        return "the far north"
+    if lat <= -60.0:
+        return "the far south"
+    return "the open ocean" if is_water else "a remote coast"
 
 
 def _build_window(run: list[dict[str, Any]]) -> dict[str, Any]:
