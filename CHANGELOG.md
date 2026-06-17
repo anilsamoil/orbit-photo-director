@@ -2,6 +2,17 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.20.5.0] - 2026-06-17
+
+## **Rate a shot the moment you take it — one tap, right on the card.**
+
+Tapping **Shoot** now reveals a quick 1–5 star row on the card, so you can grade how the capture came out in the moment. Until now rating lived only in the Log tab, where it went unused; this puts it where the work happens. The Log tab still works for rating shots after the fact.
+
+### Itemized changes
+
+#### Added
+- **Inline 1–5 star rating** on Queue cards: appears right after you tap Shoot, logs the rating (offline-safe, like Shoot/Skip), and confirms with a toast. Stored alongside the Shoot, so it never overwrites it.
+
 ## [1.20.4.0] - 2026-06-17
 
 ### Fixed

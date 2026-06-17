@@ -67,7 +67,7 @@ export function _resetOpenThumbnailsForTest(): void {
  *  cards delete the target outright (restorable by re-adding in the
  *  Profile tab). The branch lives in main.ts:handleHideAction; card.ts
  *  is profile-agnostic and just emits the action. */
-export type CardAction = 'shoot' | 'skip' | 'hide' | 'remind';
+export type CardAction = 'shoot' | 'skip' | 'hide' | 'remind' | 'rate';
 
 /** Render the card list into the cards container.
  *  Each card emits Shoot/Skip/Hide events via the provided `onAction`
@@ -82,7 +82,7 @@ export function renderCards(
   passes: PassEntry[],
   nowMs: number,
   isStale: boolean,
-  onAction: (action: CardAction, p: PassEntry) => void,
+  onAction: (action: CardAction, p: PassEntry, value?: number) => void,
   options: RenderOptions | CardVariant = {},
 ): void {
   const opts = typeof options === 'string' ? { variant: options } : options;
@@ -99,7 +99,7 @@ export function renderCard(
   p: PassEntry,
   nowMs: number,
   isStale: boolean,
-  onAction: (action: CardAction, p: PassEntry) => void,
+  onAction: (action: CardAction, p: PassEntry, value?: number) => void,
   options: RenderOptions | CardVariant = {},
 ): HTMLElement {
   const opts = typeof options === 'string' ? { variant: options } : options;
@@ -315,7 +315,14 @@ export function renderCard(
     shoot.textContent = tokenSet ? 'Shoot' : 'Shoot · set token';
     shoot.disabled = isStale;
     if (!tokenSet) shoot.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
-    shoot.addEventListener('click', () => onAction('shoot', p));
+    const ratingRow = makeRatingRow(p, onAction);
+    // Reveal the in-the-moment rating right after a Shoot — that's the whole
+    // point of the move: ratings never got logged when they lived only in the
+    // Log tab (the live calib log was empty). A one-tap on the card captures it.
+    shoot.addEventListener('click', () => {
+      onAction('shoot', p);
+      ratingRow.hidden = false;
+    });
     const skip = document.createElement('button');
     skip.className = 'btn btn-skip';
     skip.type = 'button';
@@ -326,7 +333,7 @@ export function renderCard(
     actions.appendChild(remindBtn);
     actions.appendChild(hideBtn);
     if (thumbnailToggle) actions.appendChild(thumbnailToggle);
-    card.append(name, countdown, meta, score, actions);
+    card.append(name, countdown, meta, score, actions, ratingRow);
     if (thumbnailContainer) card.appendChild(thumbnailContainer);
   } else {
     card.append(name, countdown, meta, score);
@@ -349,6 +356,40 @@ function makeTag(extraClass: string, text: string): HTMLElement {
   span.className = `tag ${extraClass}`.trim();
   span.textContent = text;
   return span;
+}
+
+/** Inline 1-5 star rating, hidden until a Shoot reveals it, so the operator
+ *  grades the capture in the moment. Tapping a star emits onAction('rate', p,
+ *  n); main.ts posts the 'rate' calib event (action='rate', rating=n). Moved
+ *  here from the Log tab (2026-06-17) because ratings buried there never got
+ *  logged — the live calib log was empty. */
+function makeRatingRow(
+  p: PassEntry,
+  onAction: (action: CardAction, p: PassEntry, value?: number) => void,
+): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'card-rating';
+  row.hidden = true;
+  const label = document.createElement('span');
+  label.className = 'card-rating-label';
+  label.textContent = "how'd it come out?";
+  row.appendChild(label);
+  const stars: HTMLButtonElement[] = [];
+  for (let i = 1; i <= 5; i += 1) {
+    const star = document.createElement('button');
+    star.type = 'button';
+    star.className = 'card-rating-star';
+    star.textContent = '☆';
+    star.setAttribute('aria-label', `Rate ${i} star${i > 1 ? 's' : ''}`);
+    star.addEventListener('click', () => {
+      stars.forEach((s, idx) => { s.textContent = idx < i ? '★' : '☆'; });
+      label.textContent = `rated ${i}★ · thanks`;
+      onAction('rate', p, i);
+    });
+    stars.push(star);
+    row.appendChild(star);
+  }
+  return row;
 }
 
 /** Format the age of a cloud observation as a card tag suffix. Returns the
