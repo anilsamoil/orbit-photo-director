@@ -2,6 +2,11 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.20.4.0] - 2026-06-17
+
+### Fixed
+- **Keepsake windows always name their region now** (no more "land"). The region table was rewritten to cover the whole globe — named seas, continents, ocean basins, and the poles — so every window reads like "Keepsake — the Great Lakes" or "Keepsake — the South Pacific".
+
 ## [1.20.3.0] - 2026-06-16
 
 ### Fixed
