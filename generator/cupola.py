@@ -172,6 +172,14 @@ def find_cupola_windows(
         pos = propagate(tle, when)
         sun_lat, sun_lon = sun_subpoint(when)
         zenith = _solar_zenith_deg(sun_lat, sun_lon, pos.lat, pos.lon)
+        day = zenith < 70.0
+        # The land/ocean-MIX gate is a cheap LOCAL water-mask disc (no network),
+        # so evaluate it HERE for daylit samples. The forecast pre-pass below
+        # then seeds ONLY the daylit *coastline* cells, not the whole daylit
+        # track. (429 fix 2026-06-16: seeding all ~1500 daylit cells/tick
+        # rate-limited Open-Meteo to 0 windows; the mix gate cuts it ~15-30x.)
+        water_frac = _disc_water_fraction(pos.lat, pos.lon, water_mask_obj) if day else 0.0
+        mix = day and MIX_WATER_FLOOR <= water_frac <= MIX_WATER_CEIL
         samples.append({
             "t": i,
             "when": when,
@@ -179,18 +187,22 @@ def find_cupola_windows(
             "lon": pos.lon,
             "alt": pos.alt_km,
             "zenith": zenith,
-            "day": zenith < 70.0,
+            "day": day,
+            "water_frac": water_frac,
+            "mix": mix,
             "golden": GOLDEN_ZENITH_LO <= zenith <= GOLDEN_ZENITH_HI,
         })
 
-    # --- load-bearing pre-pass: seed the forecast cache for daylit cells -----
-    # Without this, off-curated track cells return the cf=50 placeholder and we
-    # emit zero windows. add_targets is additive + batched; only daylit cells.
+    # --- load-bearing pre-pass: seed the forecast cache for the daylit
+    # COASTLINE cells only (samples already past the cheap daylit + mix gates).
+    # Without seeding, off-curated cells return the cf=50 placeholder → 0
+    # windows; seeding the WHOLE daylit track rate-limited Open-Meteo (429s),
+    # so we seed only the mix cells — a small fraction. add_targets is additive.
     if hasattr(forecast_sampler, "add_targets"):
         seen: set[tuple[float, float]] = set()
         cells: list[tuple[float, float]] = []
         for s in samples:
-            if not s["day"]:
+            if not s["mix"]:
                 continue
             cell = (round(s["lat"] * 4) / 4, round(s["lon"] * 4) / 4)
             if cell not in seen:
@@ -201,17 +213,14 @@ def find_cupola_windows(
         if cells:
             forecast_sampler.add_targets(cells)
 
-    # --- score each daylit sample: cloud<=30% + land/ocean mix ---------------
+    # --- score each daylit+mix sample on cloud<=30% (water_frac already set) --
     for s in samples:
         good = False
-        if s["day"]:
+        if s["mix"]:
             cs = forecast_sampler.sample(s["lat"], s["lon"], s["when"])
             if cs.source == "gfs-forecast" and cs.cloud_fraction <= CLOUD_MAX_PCT:
-                wf = _disc_water_fraction(s["lat"], s["lon"], water_mask_obj)
-                if MIX_WATER_FLOOR <= wf <= MIX_WATER_CEIL:
-                    good = True
-                    s["cloud"] = float(cs.cloud_fraction)
-                    s["water_frac"] = wf
+                good = True
+                s["cloud"] = float(cs.cloud_fraction)
         s["good"] = good
 
     # --- segment consecutive good samples into windows -----------------------

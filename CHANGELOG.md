@@ -2,6 +2,11 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.20.3.0] - 2026-06-16
+
+### Fixed
+- **Keepsake finder no longer overloads the weather forecast API.** It was requesting every daylit point along the orbit track from Open-Meteo each hour (~2,400 cells), tripping the rate limit and starving the finder to zero windows. It now checks the cheap land/ocean test first and only asks the forecast for the handful of daylit coastline moments (~18× fewer requests). Internal only; the feature stays behind its flag for a soak.
+
 ## [1.20.2.0] - 2026-06-16
 
 ### Changed
