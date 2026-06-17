@@ -123,6 +123,42 @@ def test_find_windows_seeds_forecast_cache_with_daylit_cells(sample_tle: TLE) ->
         assert abs(lon * 4 - round(lon * 4)) < 1e-9
 
 
+def test_find_windows_seeds_only_mix_cells_not_whole_daylit_track(sample_tle: TLE) -> None:
+    """429 fix (2026-06-16): the pre-pass must seed ONLY the daylit COASTLINE
+    cells (past the local mix gate), not the whole daylit track — otherwise it
+    floods Open-Meteo with ~15-30x more cells and gets rate-limited to zero
+    windows. Guards against reverting to all-daylit seeding."""
+    from datetime import timedelta
+
+    from generator.cloud import sun_subpoint
+    from generator.cupola import _disc_water_fraction, _solar_zenith_deg, MIX_WATER_CEIL, MIX_WATER_FLOOR
+    from generator.orbit import propagate
+
+    mask = load_water_mask()
+    assert mask is not None
+    fc = _StubForecast(cf=5.0)
+    minutes, step = 360, 20
+    find_cupola_windows(sample_tle, WHEN, forecast_sampler=fc, water_mask_obj=mask,
+                        minutes=minutes, step_seconds=step)
+    seeded = len(set(fc.added))
+
+    # Count the unique daylit cells the OLD code would have seeded.
+    daylit_cells = set()
+    for i in range(int(minutes * 60 / step) + 1):
+        when = WHEN + timedelta(seconds=i * step)
+        pos = propagate(sample_tle, when)
+        slat, slon = sun_subpoint(when)
+        if _solar_zenith_deg(slat, slon, pos.lat, pos.lon) < 70.0:
+            daylit_cells.add((round(pos.lat * 4) / 4, round(pos.lon * 4) / 4))
+
+    assert seeded > 0
+    # Seeding must be a small fraction of all-daylit — the mix gate dropping
+    # open-ocean + interior cells is the whole point.
+    assert seeded < len(daylit_cells) / 3, (
+        f"seeded {seeded} of {len(daylit_cells)} daylit cells — mix-gating not applied"
+    )
+
+
 def test_find_windows_rejects_cloud_placeholder(sample_tle: TLE) -> None:
     """A forecast that only returns the cf=50 'no-data' placeholder must yield
     zero windows — never treat the placeholder as a real clear sky."""
