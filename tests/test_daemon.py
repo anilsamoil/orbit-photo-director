@@ -22,6 +22,14 @@ from generator.daemon import (
 from tests.conftest import SAMPLE_TLE_TEXT
 
 
+@pytest.fixture(autouse=True)
+def _skip_host_netcheck(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep daemon tests hermetic: don't shell out to netstat/sysctl for the
+    host net guardrails. The guardrails themselves are unit-tested in
+    test_netcheck.py; the dedicated wiring test below re-enables them."""
+    monkeypatch.setenv("OPD_SKIP_NETCHECK", "1")
+
+
 def test_stall_watchdog_does_not_fire_when_work_finishes_quickly() -> None:
     with StallWatchdog(seconds=2.0) as wd:
         time.sleep(0.1)
@@ -70,6 +78,57 @@ def test_supervisor_loop_runs_max_iterations(settings_in_tmp: Settings) -> None:
             supervisor_loop(settings_in_tmp, max_iterations=2)
 
     assert call_count["n"] == 2
+
+
+def test_supervisor_loop_calls_time_wait_monitor(
+    settings_in_tmp: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When netcheck is enabled, the loop emits the host TIME_WAIT guardrail
+    once per tick (the 2026-06-24 outage early-warning)."""
+    monkeypatch.delenv("OPD_SKIP_NETCHECK", raising=False)  # re-enable
+    cache = settings_in_tmp.cache_dir
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "iss.tle").write_text(SAMPLE_TLE_TEXT)
+
+    with (
+        patch("generator.daemon.run_tick_with_watchdog", return_value=True),
+        patch("time.sleep"),
+        patch("generator.netcheck.warn_if_time_wait_high") as monitor,
+    ):
+        supervisor_loop(settings_in_tmp, max_iterations=2)
+    assert monitor.call_count == 2
+
+
+def test_supervisor_loop_skips_monitor_when_disabled(
+    settings_in_tmp: Settings,
+) -> None:
+    """OPD_SKIP_NETCHECK=1 (set by the autouse fixture) suppresses the host
+    guardrail — the operator off-switch / hermetic-test path."""
+    cache = settings_in_tmp.cache_dir
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "iss.tle").write_text(SAMPLE_TLE_TEXT)
+
+    with (
+        patch("generator.daemon.run_tick_with_watchdog", return_value=True),
+        patch("time.sleep"),
+        patch("generator.netcheck.warn_if_time_wait_high") as monitor,
+    ):
+        supervisor_loop(settings_in_tmp, max_iterations=2)
+    monitor.assert_not_called()
+
+
+def test_main_runs_net_tuning_self_check(
+    settings_in_tmp: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """At startup main() warns if the host ephemeral-port tuning is missing."""
+    monkeypatch.delenv("OPD_SKIP_NETCHECK", raising=False)  # re-enable
+    monkeypatch.setattr("generator.daemon.supervisor_loop", lambda s: None)
+    monkeypatch.setattr(
+        "generator.daemon.Settings.from_env", classmethod(lambda cls: settings_in_tmp)
+    )
+    with patch("generator.netcheck.warn_if_net_tuning_missing") as check:
+        assert main() == 0
+    check.assert_called_once()
 
 
 def test_supervisor_loop_exits_when_generator_code_changes(

@@ -198,7 +198,80 @@ FileVault encrypts the disk. After a kernel update reboot, the disk is locked at
 - **Turn FileVault OFF** (System Settings → Privacy & Security → FileVault → Turn Off…). Simpler ops; the Mac fully auto-resumes after any reboot. Less protection if the Mac is physically stolen.
 - **Keep FileVault ON**. After kernel updates, your support contact must use `sudo fdesetup authrestart -inputplist <plist>` to schedule an auto-unlock for the next reboot, OR be physically present after the reboot to type the password. Document this carefully — multiple kernel updates per year is normal.
 
-This Mac currently: **FileVault ON**. Decision pending — record outcome here once made.
+This Mac currently: **FileVault OFF** (set before the 2026-06-24 incident; the Mac auto-resumes after any reboot *once a user is logged in* — see "Reboot recovery requires a login" below).
+
+### Host network tuning (ephemeral-port exhaustion — the 2026-06-24 outage)
+
+**What happened:** the host wedged its own networking. ~19,000 stuck `TIME_WAIT`
+sockets filled the macOS default ephemeral-port range (49152–65535, only ~16k
+ports). Once full, *every* `127.0.0.1` connection failed with "Can't assign
+requested address". That cascaded: Colima couldn't SSH to its VM → Docker/Guacamole
+returned 502; the OpenClaw gateway couldn't reach its local model relay (looked like
+an OAuth failure but wasn't). It built up over ~50 days of uptime. The bulk of the
+churn was localhost services (BlueBubbles relay `:1234`, the gateway `:18789`) — NOT
+this generator, which holds zero connections between its hourly ticks.
+
+**The host fix (the real defense — this app depends on it):** a LaunchDaemon
+`com.astroanil.net-tuning` (`/Library/LaunchDaemons/com.astroanil.net-tuning.plist`,
+`RunAtLoad`) widens the range and shortens `TIME_WAIT` linger:
+
+```bash
+# Verify it is applied (expected: first=32768, msl=750):
+sysctl net.inet.ip.portrange.first net.inet.tcp.msl
+# If first is back at 49152, the daemon did not load — reload it:
+sudo launchctl load -w /Library/LaunchDaemons/com.astroanil.net-tuning.plist
+```
+
+This gives ~33k ports (2×) and drains `TIME_WAIT` in ~1.5s instead of ~30s.
+
+**The generator's guardrails (added 2026-06-24):**
+- It pools outbound HTTP via a shared keep-alive session (`generator/netpool.py`),
+  so a tick reuses connections instead of opening a fresh socket per request
+  (the ~360-granule GLM fetch drops from ~360 connections to ~16). It is a good
+  host citizen — not a cause.
+- At startup it logs a **WARNING** if `portrange.first` is back at the 49152
+  default (the net-tuning daemon is missing). Grep: `net-tuning`.
+- Each tick it logs the host `TIME_WAIT` count and **WARNS above 8000** — an early
+  tripwire long before exhaustion. Grep: `TIME_WAIT sockets`.
+- Off-switch (rarely needed): `OPD_SKIP_NETCHECK=1`.
+
+**Manual recovery if it ever recurs (needs sudo):**
+```bash
+sudo sysctl -w net.inet.ip.portrange.first=32768 net.inet.tcp.msl=750  # localhost recovers
+colima stop --force && colima start          # plain `restart` HANGS while localhost is broken
+launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway
+cd ~/iss2-guacamole && docker compose -f docker-compose.guacamole.yml restart  # clears the 502
+```
+
+### Reboot recovery requires a login (auto-login + VPN)
+
+The generator runs as a **per-user LaunchAgent** (`gui/$UID/...`) and the Tailscale
+VPN runs as the **GUI app + network extension** under the login session. Neither
+starts at the macOS login window — they start when a user **logs into the GUI**.
+So after a reboot with no auto-login, the Mac sits dark (no daemon, no VPN, SSH/guac
+unreachable) until someone physically logs in. That is why the 2026-06-24 reboot
+needed a hands-on login before everything reconnected.
+
+**Fix for unattended operation** (FileVault is OFF, so this is safe to enable):
+- [ ] **Enable Automatic Login**: System Settings → Users & Groups → Automatically
+      log in as → the operator user. Apple removed the scriptable path on Apple
+      Silicon, so this is a one-time manual GUI step. With it on, a reboot lands
+      straight in the session and the daemon + VPN come up with no human present.
+- [ ] *(Optional, belt-and-suspenders — NOT a quick command)* The VPN here is the
+      **macsys GUI variant** (`/Applications/Tailscale.app`, v1.96.2 + a Network
+      Extension). That variant has **no `install-system-daemon`** subcommand — it is
+      architecturally tied to the login session, and a bare `sudo tailscale
+      install-system-daemon` just errors ("unknown subcommand", also true of the
+      homebrew v1.94.2 CLI). True boot-independence means **replacing** macsys with the
+      open-source `tailscaled` running as a LaunchDaemon, then re-authing the node.
+      That migration **drops the tunnel and needs interactive re-auth**, so do it ONLY
+      with console/physical access — never blind over the tunnel it would cut. Until
+      then, **auto-login is the supported unattended path for macsys** (and it is now
+      enabled).
+
+Verify after enabling: `sudo shutdown -r +1`, then confirm (remotely) that
+`map.astroanil.dev` manifest advances and Tailscale reconnects within ~5 min — with
+**no** interactive login.
 
 ## Credential rotation
 

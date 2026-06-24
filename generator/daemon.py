@@ -18,10 +18,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import netcheck
 from .config import Settings
 from .main import run_tick
 
 log = logging.getLogger(__name__)
+
+
+def _netcheck_enabled() -> bool:
+    """Host net self-checks run unless OPD_SKIP_NETCHECK=1 (off-switch for the
+    unattended box / hermetic tests). Best-effort either way — they never raise."""
+    import os
+
+    return os.environ.get("OPD_SKIP_NETCHECK") != "1"
 
 # 15 min cap. Was 600s; bumped to 1800s on 2026-05-27 during a NASA GIBS
 # outage when multiplex(3 profiles) + slow-cloud-sampling ticks were exceeding
@@ -246,6 +255,12 @@ def supervisor_loop(settings: Settings, *, max_iterations: int | None = None) ->
         tick_ok = run_tick_with_watchdog(settings)
         deploy_ok = deploy_to_r2(settings) if tick_ok else False
         ok = tick_ok and deploy_ok
+
+        # Host-citizen guardrail: log the host TIME_WAIT count each tick and warn
+        # if it is climbing toward ephemeral-port exhaustion (the 2026-06-24
+        # outage signature). Best-effort; never breaks the loop.
+        if _netcheck_enabled():
+            netcheck.warn_if_time_wait_high(log)
         if ok:
             consecutive_fail = 0
             backoff = INITIAL_BACKOFF_SECONDS
@@ -296,6 +311,12 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     settings = Settings.from_env()
+    # Startup self-check: this app depends on the host net-tuning daemon
+    # (com.astroanil.net-tuning) keeping the ephemeral-port range wide. Warn
+    # loudly at boot if it is not applied, so a reverted/unloaded daemon is
+    # caught here rather than as a multi-hour networking outage.
+    if _netcheck_enabled():
+        netcheck.warn_if_net_tuning_missing(log)
     try:
         supervisor_loop(settings)
     except KeyboardInterrupt:
