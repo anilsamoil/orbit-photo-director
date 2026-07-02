@@ -133,6 +133,16 @@ export interface PassEntry {
     distance_km: number;     // great-circle from storm center to target
     nhc_id: string;          // NHC storm ID, e.g., "AL052024"
   };
+  /** Significant FIRMS-observed active-fire complex within 100 km of the
+   *  target (v1.21.0.0). The generator only emits this above the
+   *  "photographable complex" threshold (3+ confident detections, or one
+   *  with FRP ≥ 200 MW), so presence alone justifies the 🔥 card tag. */
+  fire_activity?: {
+    count: number;        // qualifying MODIS detections within 100 km
+    max_frp_mw: number;   // hottest detection, fire radiative power (MW)
+    nearest_km: number;   // distance from target to nearest detection
+    source: string;       // "firms-modis-24h"
+  };
   pass_regime: 'day' | 'night' | 'terminator';
   obstruction_class: 'clear' | 'cloudy' | 'sun-glint risk';
   p_unobstructed: number;

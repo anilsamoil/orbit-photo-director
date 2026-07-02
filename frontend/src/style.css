@@ -427,6 +427,13 @@ main {
   letter-spacing: 0.02em;
 }
 
+.tag.weather-fire {
+  color: #ff9d5c;
+  background: rgba(255, 130, 60, 0.2);
+  border-color: rgba(255, 130, 60, 0.55);
+  font-weight: 600;
+}
+
 .card-score-wrap {
   grid-area: score;
 }

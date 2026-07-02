@@ -135,6 +135,17 @@ const HELP_SECTIONS: HelpSection[] = [
           'off-nadir you can shoot from the WORF (Destiny nadir window); beyond ' +
           'that it is a Cupola shot.',
       },
+      {
+        icon: '🔥',
+        label: 'Fire tag',
+        text:
+          'A "🔥 N fires · X km" tag means NASA satellites detected a ' +
+          'significant active fire complex within 100 km of the target in the ' +
+          'last 24 hours (several confident detections, or one very hot fire ' +
+          'front) — expect visible smoke plumes on the pass. Small isolated ' +
+          'burns are filtered out so the tag only fires when it is worth a ' +
+          'frame. Source: NASA FIRMS (MODIS).',
+      },
     ],
   },
   {

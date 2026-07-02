@@ -2,6 +2,27 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.21.0.0] - 2026-07-02
+
+## **🔥 Wildfire tags — see the big smoke plumes before you overfly them.**
+
+Cards now carry a "🔥 N fires · X km" tag when NASA FIRMS satellites have
+detected a significant active-fire complex within 100 km of the target in the
+last 24 hours. Aggressively thresholded (3+ confident MODIS detections, or a
+single front over 200 MW fire radiative power) so only genuinely
+photographable complexes tag — lone agricultural burns stay silent, per the
+"don't make it busy" rule. Advisory only: no score interaction.
+
+- Generator: `fires.py` FIRMS sampler — public MODIS C6.1 global-24h CSV
+  (~1 MB, no API key), pooled keep-alive fetch, hourly disk cache with
+  stale-cache fallback and the never-cache-garbage guard; 5° spatial buckets
+  (GLM geometry). Wired through both the canonical and per-profile multiplex
+  scoring paths; `fire_activity` serialized conditionally so no-fire passes
+  stay byte-identical.
+- Frontend: 🔥 card tag + type + CSS + help entry ("Fire tag").
+- Tests: 12 generator (parse/thresholds/buckets/cache-resilience/serialize)
+  + 2 card render tests. Suites: 886 py / 74 frontend files, tsc clean.
+
 ## [1.20.5.0] - 2026-06-17
 
 ## **Rate a shot the moment you take it — one tap, right on the card.**

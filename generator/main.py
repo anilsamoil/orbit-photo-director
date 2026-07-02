@@ -319,6 +319,7 @@ def score_pass_for_target(
     lightning_sampler: Any | None = None,
     hurricane_tracker: Any | None = None,
     water_mask: Any | None = None,
+    fire_sampler: Any | None = None,
 ) -> dict[str, Any]:
     when = pass_obj.closest_approach
     iss = pass_obj.iss_position
@@ -475,6 +476,18 @@ def score_pass_for_target(
         out["lightning_bonus"] = round(lightning_bonus_value, 3)
     if hurricane_dict is not None:
         out["hurricane_nearby"] = hurricane_dict
+    # 🔥 FIRMS active-fire tag (v1.21.0.0): significant fire complex within
+    # 100 km of the target. Advisory only — no score interaction. Serialized
+    # conditionally so absent = byte-identical (same rule as the fields above).
+    if fire_sampler is not None:
+        fire = fire_sampler.lookup(pass_obj.target_lat, pass_obj.target_lon)
+        if fire is not None:
+            out["fire_activity"] = {
+                "count": fire.count,
+                "max_frp_mw": fire.max_frp_mw,
+                "nearest_km": fire.nearest_km,
+                "source": "firms-modis-24h",
+            }
     # Sprite watch (Unit 7): on a NIGHT pass (the ISS SUB-POINT in darkness —
     # its own computation, NOT the target regime: the limb air column along
     # the sightline must be genuinely dark for a faint mesospheric flash),
@@ -807,6 +820,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # is still the final fallback if both real samplers fail.
     lightning_sampler_obj = None
     hurricane_tracker_obj = None
+    fire_sampler_obj = None
     # GSHHG land/water mask for the general sun-glint gate — loaded ONCE per
     # tick (numpy-only, ~1µs/lookup). None when the committed artifact is
     # absent (fresh checkout / CI), which cleanly falls back to the V1 ocean-
@@ -867,6 +881,18 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 "NHC refresh raised (%s); proceeding without hurricane proximity this tick",
                 exc,
             )
+        # FIRMS active fires (v1.21.0.0) — same resilience contract as NHC:
+        # any init trouble degrades to "no fire tags this tick", never a
+        # failed tick. The sampler itself falls back to its disk cache on
+        # network failure; this outer guard is for the truly unexpected.
+        try:
+            from .fires import FIRMSFireSampler
+
+            fire_sampler_obj = FIRMSFireSampler(
+                cache_path=settings.cache_dir / "firms-fires.csv",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("FIRMS fire sampler init failed (%s); no fire tags this tick", exc)
 
     # 5. Find + score passes
     window_end = n + timedelta(hours=settings.pass_window_hours)
@@ -890,6 +916,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                 lightning_sampler=lightning_sampler_obj,
                 hurricane_tracker=hurricane_tracker_obj,
                 water_mask=water_mask_obj,
+                fire_sampler=fire_sampler_obj,
             ))
     log.info("found %d passes across %d targets", len(all_passes), len(targets))
 
@@ -1072,6 +1099,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
                     lightning_sampler_obj=lightning_sampler_obj,
                     hurricane_tracker_obj=hurricane_tracker_obj,
                     water_mask_obj=water_mask_obj,
+                    fire_sampler_obj=fire_sampler_obj,
                     launch_pass_entries=launch_pass_entries,
                     n=n,
                     settings=settings,
@@ -1307,6 +1335,7 @@ def _run_profile_multiplex(
     lightning_sampler_obj: Any,
     hurricane_tracker_obj: Any,
     water_mask_obj: Any = None,
+    fire_sampler_obj: Any = None,
     launch_pass_entries: list[dict[str, Any]],
     n: datetime,
     settings: Settings,
@@ -1377,6 +1406,7 @@ def _run_profile_multiplex(
                 lightning_sampler=lightning_sampler_obj,
                 hurricane_tracker=hurricane_tracker_obj,
                 water_mask=water_mask_obj,
+                fire_sampler=fire_sampler_obj,
             ))
 
     # Launches are shared across all profiles (Anil curates the launch

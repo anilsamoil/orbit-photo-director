@@ -158,6 +158,24 @@ describe('renderCard', () => {
     expect(el.querySelector('.tag.obs-cloudy')).toBeTruthy();
   });
 
+  it('renders the 🔥 fire tag when fire_activity is present (v1.21.0.0)', () => {
+    const el = renderCard(
+      samplePass({
+        fire_activity: { count: 4, max_frp_mw: 320, nearest_km: 37.2, source: 'firms-modis-24h' },
+      }),
+      NOW, false, () => undefined,
+    );
+    const tag = el.querySelector('.tag.weather-fire');
+    expect(tag).toBeTruthy();
+    expect(tag?.textContent).toContain('4 fires');
+    expect(tag?.textContent).toContain('37 km');
+  });
+
+  it('omits the fire tag when fire_activity is absent', () => {
+    const el = renderCard(samplePass(), NOW, false, () => undefined);
+    expect(el.querySelector('.tag.weather-fire')).toBeNull();
+  });
+
   it('shows WORF badge when angle is below 30°', () => {
     const el = renderCard(
       samplePass({ angle_off_nadir_deg: 18 }),
