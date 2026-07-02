@@ -214,7 +214,9 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     // With photo conditions present (samplePass has nadir geometry) the
     // root is the panel; the 256px thumbnail box is its first child.
     expect(el.className).toBe('pass-thumbnail-panel');
-    expect(el.firstElementChild!.className).toBe('pass-thumbnail');
+    // thumbnail + nearest-station weather share a flex top row (Feature A).
+    expect(el.firstElementChild!.className).toBe('pass-thumbnail-top');
+    expect(el.querySelector('.pass-thumbnail-top > .pass-thumbnail')).not.toBeNull();
     const img = el.querySelector<HTMLImageElement>('img.pass-thumbnail-image');
     expect(img).not.toBeNull();
     expect(img!.src).toMatch(/server\.arcgisonline\.com\/ArcGIS\/rest\/services\/World_Imagery/);
@@ -297,8 +299,9 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
   it('omits the conditions block entirely when the pass has no nadir geometry', () => {
     const broken = { ...samplePass, nadir_distance_km: NaN };
     const el = renderPassThumbnail(broken, null, NOW);
-    // Degenerate passes keep the ORIGINAL root — zero structural change.
-    expect(el.className).toBe('pass-thumbnail');
+    // Always the panel root now (it hosts the weather column beside the
+    // thumbnail); the conditions block is still omitted with no nadir geometry.
+    expect(el.className).toBe('pass-thumbnail-panel');
     expect(el.querySelector('.photo-conditions')).toBeNull();
     expect(el.querySelector('.photo-conditions-divider')).toBeNull();
   });
@@ -439,7 +442,7 @@ describe('renderPassThumbnail (DOM scaffold)', () => {
     expect(el.querySelector('.pass-thumbnail-caption-row')).toBeNull();
     expect(el.querySelector('.pass-thumbnail-caption-context')).toBeNull();
     // The thumbnail itself still renders (caption just has no rows).
-    expect(el.className).toBe('pass-thumbnail');
+    expect(el.className).toBe('pass-thumbnail-panel');
   });
 
   it('uses textContent for the caption (XSS discipline)', () => {

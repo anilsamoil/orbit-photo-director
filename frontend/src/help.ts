@@ -38,11 +38,12 @@ const HELP_SECTIONS: HelpSection[] = [
     items: [
       {
         icon: '🛰️',
-        label: 'Orbit Photo Director',
+        label: 'SNAP (SNAP\'s Not an Astro Photographer)',
         text:
-          'A shot planner for Earth photography from the ISS. It tells you ' +
-          'what your camera targets are about to pass under, when, and ' +
-          'whether the light and clouds make the shot worth taking.',
+          'A shot planner for Earth photography from the ISS. SNAP\'s ' +
+          'Not an Astro Photographer — it won\'t take the shot for you, but ' +
+          'it tells you what your camera targets are about to pass under, ' +
+          'when, and whether the light and clouds make the shot worth taking.',
       },
     ],
   },
@@ -82,8 +83,9 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '',
         label: 'Log',
         text:
-          'Your shoot/skip history. Rating shots here helps tune which ' +
-          'passes get surfaced for you.',
+          'Your shoot/skip history. You rate a shot right after tapping Shoot ' +
+          'on its card; you can also revisit and rate past shoots here. Those ' +
+          'ratings tune which passes get surfaced for you.',
       },
     ],
   },
@@ -104,10 +106,16 @@ const HELP_SECTIONS: HelpSection[] = [
       },
       {
         icon: '🌍',
-        label: 'Zoom preview',
+        label: 'Zoom preview + station weather',
         text:
           'Tap the globe to expand a satellite thumbnail of the target with ' +
-          'the ISS track drawn over it, so you know what to look for.',
+          'the ISS track drawn over it, so you know what to look for. Beside ' +
+          'it, when the target is near an airport, you get the nearest ' +
+          'station\'s current cloud cover (METAR) and a short plain-language ' +
+          'forecast (TAF) — ground truth that measures the cloud base from ' +
+          'below, catching low cloud or fog the satellite can miss. Far from ' +
+          'any station (open ocean, remote coast) it stays quiet; needs a ' +
+          'connection, so it is blank offline.',
       },
       {
         icon: '📐',
@@ -136,8 +144,10 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '📸',
         label: 'Shoot',
         text:
-          'Log that you took the shot. Your shoot/skip history tunes which ' +
-          'passes get surfaced for you.',
+          'Log that you took the shot — then a quick 1–5 star "how\'d it come ' +
+          'out?" row appears right on the card so you grade the capture in the ' +
+          'moment. Your shoot/skip history and those ratings tune which passes ' +
+          'get surfaced for you.',
       },
       {
         icon: '⏭️',
@@ -269,6 +279,7 @@ const HELP_SECTIONS: HelpSection[] = [
     title: 'Map overlays (right-edge buttons)',
     items: [
       { icon: '☁️', label: 'Clouds', text: 'Cloud cover — observed at Now, forecast at scrubbed times when available.' },
+      { icon: '🌡️', label: 'IR (live cloud-tops)', text: 'The "IR" button — optional, off by default. Near-real-time infrared cloud-tops (~30 min old, day AND night), far fresher than the daily cloud photo. While on it replaces the daily clouds and auto-switches satellite (GOES / Himawari / Meteosat) to match your view, covering the whole globe except the poles. IR reads cloud-top temperature, so it MISSES low cloud and fog — the badge says so. Pair it with a target\'s nearest-station report (which catches exactly that low cloud) for the fullest picture.' },
       { icon: '☀️', label: 'Terminator', text: 'The day/night line and the sub-solar point.' },
       { icon: '🌃', label: 'Night-lights', text: 'City lights on the night side (off by default).' },
       { icon: '🏷️', label: 'Labels', text: 'Country and city names.' },
@@ -319,7 +330,11 @@ const HELP_SECTIONS: HelpSection[] = [
           'forecast does not cover your view time, so you are seeing the ' +
           'latest real composite instead. A "stale TLE" tag appears when the ' +
           'orbit solution plus your scrub depth passes 48 hours — projected ' +
-          'positions degrade with distance.',
+          'positions degrade with distance. In the live view the badge dates ' +
+          'the cloud photo and how old it is ("Imagery: 2026-06-20 · ~1 day ' +
+          'old"): the daily true-color is a backdrop, often a day or two ' +
+          'behind — for clear-sky timing trust the per-pass cloud score and ' +
+          'the station weather, not the picture.',
       },
     ],
   },
@@ -334,6 +349,66 @@ const HELP_SECTIONS: HelpSection[] = [
           'a pin. You get the next few passes over that exact spot in the ' +
           'coming 36 hours, each with its time, off-nadir angle, and which ' +
           'window to shoot from.',
+      },
+    ],
+  },
+  {
+    title: 'Tap a target pin',
+    items: [
+      {
+        icon: '👆',
+        label: 'What a tap shows',
+        text:
+          'Tap any target dot or your own white ring to open a card right on ' +
+          'the map: its name, the upcoming pass time, how far off the ground ' +
+          'track it sits ("29° right of track"), the cloud picture, and a ' +
+          '"✓ shot N×" line if you have already photographed it. The cloud ' +
+          'line fills in the live now-value a moment after the card opens — ' +
+          '"Cloud: now 42% · at pass 18%" — so you get current sky AND the ' +
+          'forecast for the pass. Offline it just shows the forecast and stays ' +
+          'quiet about "now".',
+      },
+      {
+        icon: '🎯',
+        label: 'No upcoming pass',
+        text:
+          'A target with no pass in the next window says "No upcoming pass in ' +
+          'window" instead of a score — a zero score would be misleading. It ' +
+          'still shows the cloud picture for the spot.',
+      },
+      {
+        icon: '🤏',
+        label: 'If two pins overlap',
+        text:
+          'When pins sit on top of each other, a tap picks the nearest one to ' +
+          'your finger. This is the reliable replacement for the old behaviour ' +
+          'that "worked sometimes but not always".',
+      },
+    ],
+  },
+  {
+    title: 'Edit a target',
+    items: [
+      {
+        icon: '✏️',
+        label: 'Fix a typo without re-adding',
+        text:
+          'Tap one of your own targets (a white ring), then Edit target in the ' +
+          'card — it jumps to the Profile tab with the name, lat, lon, and ' +
+          'priority ready to change. Or open Profile › Your targets and tap ' +
+          'Edit on any row. Fix the longitude (or anything else), tap Save, and ' +
+          'it syncs to the Worker; the map and queue pick it up on the next ' +
+          'hourly update. Only your own targets are editable — curated targets ' +
+          'have no Edit button.',
+      },
+      {
+        icon: '🛟',
+        label: 'Safe to edit from two devices',
+        text:
+          'Saving an edit pulls the current server list first, changes just ' +
+          'that one target, and writes the whole list back — so an edit on ' +
+          'your iPad will not wipe a target you added on your phone. If the ' +
+          'save fails, the target rolls back to exactly what it was.',
       },
     ],
   },
@@ -699,7 +774,7 @@ export function openHelpModal(anchor?: string): void {
   modal.className = 'modal help-modal';
   modal.setAttribute('role', 'dialog');
   modal.setAttribute('aria-modal', 'true');
-  modal.setAttribute('aria-label', 'Help — how to use Orbit Photo Director');
+  modal.setAttribute('aria-label', 'Help — how to use SNAP');
 
   const header = document.createElement('div');
   header.className = 'help-header';

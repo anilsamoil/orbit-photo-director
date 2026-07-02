@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Orbit Photo Director</title>
+    <title>SNAP (SNAP's Not an Astro Photographer)</title>
     <meta
       name="description"
       content="Earth-photography planner for the ISS. The shot queue tells you what's about to be under the station and whether it's worth raising the camera."
@@ -15,7 +15,8 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">🛰️</span>
-        <span class="brand-name">Orbit Photo Director</span>
+        <span class="brand-name">SNAP</span>
+        <span class="brand-expansion">(SNAP's Not an Astro Photographer)</span>
       </div>
       <div id="iss-now" class="iss-now" title="Live ISS sub-point from polynomial fit"></div>
       <div id="kp-widget" class="kp-badge" hidden></div>
@@ -119,6 +120,7 @@
         </div>
         <div class="map-controls map-controls-overlay">
           <button id="toggle-clouds" class="time-btn active" type="button" title="Toggle GIBS cloud overlay">&#9729;</button>
+          <button id="toggle-ir" class="time-btn time-btn-ir" type="button" title="Show live geostationary IR cloud-tops (~10 min, day + night; replaces the daily clouds layer, off by default)">IR</button>
           <button id="toggle-terminator" class="time-btn active" type="button" title="Toggle day-night terminator + subsolar point">&#9728;</button>
           <button id="toggle-night-lights" class="time-btn" type="button" title="Toggle VIIRS Black Marble night-lights overlay (off by default)">&#x1F303;</button>
           <button id="toggle-labels" class="time-btn active" type="button" title="Toggle country/city label overlay (Esri Reference)">&#x1F3F7;&#xFE0F;</button>
@@ -191,7 +193,7 @@
       Loading…
     </footer>
 
-    <button id="help-fab" class="help-fab" type="button" aria-label="Help — how to use Orbit Photo Director" title="Help">?</button>
+    <button id="help-fab" class="help-fab" type="button" aria-label="Help — how to use SNAP" title="Help">?</button>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

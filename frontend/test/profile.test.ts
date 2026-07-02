@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CURRENT_PROFILE_VERSION,
   DEFAULT_PROFILE_NAME,
+  addPersonalTarget,
   createDefaultProfile,
   isValidProfileName,
   listProfiles,
@@ -10,6 +11,8 @@ import {
   migrate,
   parseProfileFromURL,
   saveProfile,
+  updatePersonalTarget,
+  type PersonalTarget,
 } from '../src/profile';
 
 // Slot 1 of design rev 2 — locked 2026-05-26.
@@ -328,5 +331,24 @@ describe("'profile-changed' event", () => {
     } finally {
       window.removeEventListener('profile-changed', handler as EventListener);
     }
+  });
+});
+
+describe('updatePersonalTarget', () => {
+  const mk = (over: Partial<PersonalTarget> = {}): PersonalTarget => ({
+    id: 'personal:default:gw', name: 'Great Wall', lat: 40.4, lon: 116.6, priority: 5, createdAt: '2026-06-01T00:00:00Z', ...over,
+  });
+  it('replaces in place — immutable, preserves createdAt, leaves original intact', () => {
+    const p = addPersonalTarget(createDefaultProfile('default'), mk());
+    const next = updatePersonalTarget(p, mk({ lon: -116.6 })); // fix the lon typo
+    expect(next).not.toBe(p);
+    expect(next.additions).toHaveLength(1);
+    expect(next.additions[0]!.lon).toBe(-116.6);
+    expect(next.additions[0]!.createdAt).toBe('2026-06-01T00:00:00Z'); // not re-stamped
+    expect(p.additions[0]!.lon).toBe(116.6); // original untouched → rollback-safe
+  });
+  it('THROWS on a missing id (no silent no-op → no clobbering PUT)', () => {
+    const p = addPersonalTarget(createDefaultProfile('default'), mk());
+    expect(() => updatePersonalTarget(p, mk({ id: 'personal:default:nope' }))).toThrow(/not found/);
   });
 });

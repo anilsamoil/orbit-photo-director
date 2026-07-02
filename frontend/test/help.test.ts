@@ -69,6 +69,24 @@ describe('openHelpModal', () => {
     expect(text).toContain('right-click');
   });
 
+  it('explains tapping a target pin', () => {
+    openHelpModal();
+    const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();
+    expect(text).toContain('tap a target');
+    expect(text).toContain('off the ground');
+    expect(text).toContain('no upcoming pass');
+    expect(text).toContain('nearest one to');
+  });
+
+  it('explains editing a target', () => {
+    openHelpModal();
+    const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();
+    expect(text).toContain('edit a target');
+    expect(text).toContain('edit target');
+    expect(text).toContain('curated targets have no edit button');
+    expect(text).toContain('two devices');
+  });
+
   it('describes offline caching behavior', () => {
     openHelpModal();
     const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();
@@ -83,6 +101,13 @@ describe('openHelpModal', () => {
     expect(text).toContain('Shoot');
     expect(text).toContain('Hide');
     expect(text).toContain('calibration token');
+  });
+
+  it('explains the inline star rating after Shoot', () => {
+    openHelpModal();
+    const text = (document.querySelector('.help-body')?.textContent ?? '').toLowerCase();
+    expect(text).toContain('star');
+    expect(text).toContain("how'd it come out");
   });
 
   it('closes on the ✕ button', () => {

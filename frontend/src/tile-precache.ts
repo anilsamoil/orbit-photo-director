@@ -73,6 +73,92 @@ export function gibsBlackMarbleUrl(yearIso: string): string {
  *  Source caps at Level8; MapLibre overzooms above this with no extra fetch. */
 export const VIIRS_BLACK_MARBLE_MAX_ZOOM = 8;
 
+// ── Live geostationary IR overlay (Feature C, cloud-confidence 2026-06-21) ───
+// Optional "IR" toggle: near-real-time (~10 min) Band-13 Clean-IR cloud-top
+// imagery, day AND night — unlike the daily true-color it shows clouds RIGHT
+// NOW. GIBS serves these per-satellite (no global mosaic), so we pick the one
+// satellite covering the current view center. Tiles fetched ONLY when the
+// toggle is on (it ships off by default).
+
+/** GIBS geo-IR source caps at GoogleMapsCompatible_Level6; MapLibre overzooms. */
+export const GIBS_GEO_IR_MAX_ZOOM = 6;
+
+export interface GeoIRSat {
+  /** Tile-source layer/product id. */
+  layer: string;
+  /** Human label for the freshness badge ("GOES-East"). */
+  label: string;
+  /** Which tile service serves this satellite. */
+  source: 'gibs' | 'realearth';
+}
+
+// GOES + Himawari Band-13 from GIBS (NASA, epsg3857 @ Level6). Meteosat-11
+// SEVIRI B09 ENHANCED (colorized 10.8um IR — grayscale clear + rainbow cold
+// tops, matching the GIBS GOES look) from RealEarth (SSEC) fills the Europe/
+// Africa/Mid-East gap GIBS doesn't carry — verified 2026-06-22: web-mercator
+// PNG, CORS *, no key, latest hourly frame. With Meteosat at 0° (reach 75°)
+// the only remaining no-coverage zone is the poles.
+const GEO_IR_SATS: ReadonlyArray<GeoIRSat & { lon: number }> = [
+  { layer: 'GOES-East_ABI_Band13_Clean_Infrared', label: 'GOES-East', lon: -75, source: 'gibs' },
+  { layer: 'GOES-West_ABI_Band13_Clean_Infrared', label: 'GOES-West', lon: -137, source: 'gibs' },
+  { layer: 'Himawari_AHI_Band13_Clean_Infrared', label: 'Himawari', lon: 140, source: 'gibs' },
+  { layer: 'Met11-SEVIRI-FD-BAND09-enh', label: 'Meteosat-11', lon: 0, source: 'realearth' },
+];
+/** Usable IR reach from a satellite's sub-point; beyond this the limb is too
+ *  distorted to trust. */
+const GEO_IR_LON_REACH_DEG = 75;
+/** Geostationary IR is unusable poleward of this |lat| (extreme limb). */
+const GEO_IR_LAT_LIMIT_DEG = 70;
+
+/** Pick the geostationary satellite covering a view center, or null in a gap
+ *  (poles, or a longitude no satellite reaches). Dateline-aware. */
+export function pickGeoIRSat(lat: number, lon: number): GeoIRSat | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > GEO_IR_LAT_LIMIT_DEG) return null;
+  let best: { sat: GeoIRSat; d: number } | null = null;
+  for (const s of GEO_IR_SATS) {
+    let d = Math.abs(lon - s.lon) % 360;
+    if (d > 180) d = 360 - d;
+    if (!best || d < best.d) best = { sat: { layer: s.layer, label: s.label, source: s.source }, d };
+  }
+  if (!best || best.d > GEO_IR_LON_REACH_DEG) return null;
+  return best.sat;
+}
+
+/** Floor an epoch to the previous 10-minute mark as a full ISO instant —
+ *  the GIBS geostationary TIME dimension format ("2026-06-21T17:30:00Z"). */
+export function floorTo10MinIso(ms: number): string {
+  const floored = Math.floor(ms / (10 * 60_000)) * (10 * 60_000);
+  return `${new Date(floored).toISOString().slice(0, 19)}Z`;
+}
+
+/** A recent, published geo-IR time for "now" — back off 30 min for the
+ *  upstream processing/publish latency, floored to the 10-min grid. */
+export function geoIRTimeForNow(nowMs: number = Date.now()): string {
+  return floorTo10MinIso(nowMs - 30 * 60_000);
+}
+
+/** GIBS geostationary Band-13 Clean-IR tile URL for a satellite layer + time. */
+export function gibsGeoIRUrl(layer: string, timeIso: string): string {
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer}/default/${timeIso}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`;
+}
+
+/** RealEarth (SSEC) web-mercator tile URL for a Meteosat product. Omitting the
+ *  time serves the LATEST frame; the cache-bust param (rolls every 10 min)
+ *  forces a refresh without pinning a stale frame, since RealEarth always
+ *  serves the newest available. Verified web-mercator + CORS * 2026-06-22. */
+export function realEarthGeoIRUrl(product: string, cacheBust: string): string {
+  return `https://realearth.ssec.wisc.edu/api/image?products=${product}&x={x}&y={y}&z={z}&_v=${encodeURIComponent(cacheBust)}`;
+}
+
+/** Tile URL for a geo-IR satellite at a rolling time. GIBS uses the time as the
+ *  frame timestamp; RealEarth uses it as a refresh cache-bust (latest frame). */
+export function geoIRTileUrl(sat: GeoIRSat, timeIso: string): string {
+  return sat.source === 'realearth'
+    ? realEarthGeoIRUrl(sat.layer, timeIso)
+    : gibsGeoIRUrl(sat.layer, timeIso);
+}
+
 /** Number of top Queue targets to pre-cache. Higher = more coverage but
  *  more LRU eviction of user-pan tiles. 3 = the imminent passes that are
  *  visible on a single Queue screen. */
