@@ -168,6 +168,15 @@ export function renderCard(
       `🌀 ${h.classification} ${h.name}`,
     ));
   }
+  // 🔥 fire tag (v1.21.0.0): FIRMS-observed significant fire complex within
+  // 100 km of the target. The generator only emits fire_activity above the
+  // "photographable complex" threshold, so presence == render.
+  if (p.fire_activity && typeof p.fire_activity.count === 'number') {
+    meta.appendChild(makeTag(
+      'weather-fire',
+      `🔥 ${p.fire_activity.count} fires · ${Math.round(p.fire_activity.nearest_km)} km`,
+    ));
+  }
   if (typeof p.angle_off_nadir_deg === 'number') {
     const deg = p.angle_off_nadir_deg;
     const isWorf = deg < 30;
