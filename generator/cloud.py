@@ -325,7 +325,8 @@ class GIBSCloudSampler:
     def __init__(self, when: datetime, fetcher: Any | None = None):
         """Pre-fetch the four GIBS layers for the given date.
 
-        `fetcher` is an optional callable for tests; defaults to requests.get.
+        `fetcher` is an optional callable for tests; defaults to the pooled
+        keep-alive session (generator.netpool.get_session).
         """
         self._when = when
         # Use yesterday's date — today's products may not be published yet.
@@ -353,10 +354,10 @@ class GIBSCloudSampler:
         from PIL import Image
 
         if fetcher is None:
-            import requests
+            from .netpool import get_session
 
             def _get(url: str) -> bytes:
-                resp = requests.get(url, timeout=20)
+                resp = get_session().get(url, timeout=20)
                 resp.raise_for_status()
                 return resp.content
 
@@ -498,10 +499,10 @@ class GeostationaryIRSampler:
         from PIL import Image
 
         if fetcher is None:
-            import requests
+            from .netpool import get_session
 
             def _get(url: str) -> bytes:
-                resp = requests.get(url, timeout=20)
+                resp = get_session().get(url, timeout=20)
                 resp.raise_for_status()
                 return resp.content
 
@@ -591,10 +592,10 @@ class MeteosatEUMETSATSampler:
         from PIL import Image
 
         if fetcher is None:
-            import requests
+            from .netpool import get_session
 
             def _get(url: str) -> bytes:
-                resp = requests.get(url, timeout=30)
+                resp = get_session().get(url, timeout=30)
                 resp.raise_for_status()
                 return resp.content
 
@@ -725,10 +726,10 @@ class HimawariNICTSampler:
         from PIL import Image
 
         if fetcher is None:
-            import requests
+            from .netpool import get_session
 
             def _get(url: str) -> bytes:
-                resp = requests.get(url, timeout=20)
+                resp = get_session().get(url, timeout=20)
                 resp.raise_for_status()
                 return resp.content
 
@@ -831,10 +832,10 @@ class GFSForecastSampler:
         self._include_cape = include_cape
         self._forecast_days = forecast_days
         if fetcher is None:
-            import requests
+            from .netpool import get_session
 
             def _get(url: str) -> Any:
-                resp = requests.get(url, timeout=OPEN_METEO_TIMEOUT_SECONDS)
+                resp = get_session().get(url, timeout=OPEN_METEO_TIMEOUT_SECONDS)
                 resp.raise_for_status()
                 return resp.json()
 

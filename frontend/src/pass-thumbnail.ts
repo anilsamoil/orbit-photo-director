@@ -30,6 +30,7 @@
 
 import type { PassEntry, Track } from './types';
 import { buildConditionRows, renderConditionBlock } from './photo-conditions';
+import { renderWxColumn } from './wx';
 import { liveIssPosition } from './iss';
 import { liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
@@ -421,12 +422,20 @@ export function renderPassThumbnail(
   // image (visual QA 2026-06-11: DOM checks passed while the block was
   // invisible). The panel root spans the card width, so the conditions
   // rows get the full-width layout D4 locked.
+  // Always build the panel so the nearest-station weather column has a home
+  // beside the thumbnail (in the space right of the 256px image). The column
+  // self-collapses when there's no nearby station (ocean/remote) or offline,
+  // so this adds no clutter for those passes. The thumbnail + weather share a
+  // flex top row; the photo-conditions block (if any) spans full-width below.
   const rows = buildConditionRows({ pass, manifest: null, track, nowMs });
-  if (rows.length === 0) return wrap;
   const panel = document.createElement('div');
   panel.className = 'pass-thumbnail-panel';
-  panel.appendChild(wrap);
-  renderConditionBlock(rows, panel);
+  const top = document.createElement('div');
+  top.className = 'pass-thumbnail-top';
+  top.appendChild(wrap);
+  top.appendChild(renderWxColumn(pass));
+  panel.appendChild(top);
+  if (rows.length > 0) renderConditionBlock(rows, panel);
   return panel;
 }
 

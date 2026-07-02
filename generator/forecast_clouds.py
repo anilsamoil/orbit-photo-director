@@ -193,10 +193,10 @@ def paced_fetcher(
     coverage floor then decides whether partial frames publish.
     """
     if get is None:
-        import requests
+        from .netpool import get_session
 
         def _default_get(url: str) -> Any:
-            resp = requests.get(url, timeout=OPEN_METEO_TIMEOUT_SECONDS)
+            resp = get_session().get(url, timeout=OPEN_METEO_TIMEOUT_SECONDS)
             return resp
 
         get = _default_get

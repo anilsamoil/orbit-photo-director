@@ -44,6 +44,7 @@ from typing import Any, Protocol
 
 import requests
 
+from .netpool import get_session
 from .orbit import great_circle_bearing_deg, great_circle_km
 
 log = logging.getLogger(__name__)
@@ -389,7 +390,10 @@ class GLMSampler:
 
         if fetcher is None:
             def _fetch_bytes(url: str) -> bytes:
-                resp = requests.get(url, timeout=GLM_GRANULE_TIMEOUT_SECONDS)
+                # Pooled keep-alive session: the 16 GLM workers reuse a small
+                # set of connections to s3.amazonaws.com across ~360 granule
+                # GETs/tick instead of opening a fresh socket each time.
+                resp = get_session().get(url, timeout=GLM_GRANULE_TIMEOUT_SECONDS)
                 resp.raise_for_status()
                 return resp.content
             fetcher = _fetch_bytes

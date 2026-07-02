@@ -40,8 +40,8 @@ export default defineConfig({
       // SVG. iOS Safari falls back to apple-touch-icon (the existing inline
       // SVG favicon in index.html). Real PNG icons are TODO V2-P3 polish.
       manifest: {
-        name: 'Orbit Photo Director',
-        short_name: 'OPD',
+        name: 'SNAP (SNAP\'s Not an Astro Photographer)',
+        short_name: 'SNAP',
         description: 'Earth-photography planner for the ISS shot queue.',
         theme_color: '#0b0d12',
         background_color: '#0b0d12',

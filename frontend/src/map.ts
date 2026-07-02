@@ -20,6 +20,8 @@ import { liveIssNow, liveIssPosition, wrapLon } from './iss';
 import { isTleStale } from './banner';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
+import { fetchLiveCloud } from './cloud';
+import { getShotCount } from './shot-counts';
 import { handleAdd } from './profile-crud';
 import {
   greatCircleBearingDeg,
@@ -365,6 +367,28 @@ function readNightLightsVisible(): boolean {
 }
 let nightLightsVisible: boolean = readNightLightsVisible();
 
+/** Live geostationary-IR overlay preference. Default OFF — opt-in experimental
+ *  layer (Feature C, 2026-06-21); ships off, fetches tiles only when on, and is
+ *  mutually exclusive with the daily clouds layer. */
+const IR_PREF_KEY = 'opd-map-ir-visible';
+function readIrVisible(): boolean {
+  try { return localStorage.getItem(IR_PREF_KEY) === '1'; } catch { return false; }
+}
+let irVisible: boolean = readIrVisible();
+/** The geo-IR satellite currently loaded in the source (re-picked on pan);
+ *  null when the view center is in a no-coverage gap (poles / Europe-Africa). */
+let currentGeoIRSat: GeoIRSat | null = null;
+/** ISO time of the IR frame currently loaded — advances as new ~10-min frames
+ *  publish so a stationary operator never sees stale imagery (Codex #1). */
+let currentGeoIRTime: string | null = null;
+let irTickerStarted = false;
+/** Feed-health (Codex review): a geo-IR tile loaded since the last tile-set.
+ *  If the layer is visible but the map settles with NOTHING loaded (every tile
+ *  errored), the feed is down — surface that so an outage can't masquerade as
+ *  clear-sky IR. Especially relevant for RealEarth (a university service). */
+let geoIrAnyLoaded = false;
+let geoIrFeedDown = false;
+
 /** Esri Reference labels overlay preference. Default ON — country / city
  *  labels are a near-universal-utility overlay (Chris feedback 2026-05-27);
  *  operators who don't want them can toggle off. */
@@ -510,10 +534,16 @@ export function _resetMapStateForTest(): void {
 // here so this module's existing internal callers (buildStyle below) don't
 // have to change.
 import {
+  GIBS_GEO_IR_MAX_ZOOM,
   GIBS_MAX_ZOOM,
   VIIRS_BLACK_MARBLE_MAX_ZOOM,
+  geoIRTileUrl,
+  geoIRTimeForNow,
+  gibsGeoIRUrl,
   gibsTrueColorUrl,
+  pickGeoIRSat,
   yesterdayIso,
+  type GeoIRSat,
 } from './tile-precache';
 import { registerViirsAlphaProtocol, viirsAlphaUrl } from './viirs-alpha-protocol';
 
@@ -618,6 +648,19 @@ function buildStyle(): maplibregl.StyleSpecification {
         attribution:
           'Night lights: <a href="https://earthdata.nasa.gov">NASA GIBS VIIRS Black Marble</a>',
       },
+      // Live geostationary IR (Feature C, 2026-06-21). Opt-in "IR" toggle:
+      // near-real-time (~10 min) Band-13 cloud-top imagery, day AND night.
+      // Initial tiles use GOES-East; applyIrVisibility re-picks the satellite
+      // covering the view on toggle/pan. The layer below ships visibility:'none'
+      // → MapLibre fetches ZERO tiles until the operator turns it on.
+      'geo-ir': {
+        type: 'raster',
+        tiles: [gibsGeoIRUrl('GOES-East_ABI_Band13_Clean_Infrared', geoIRTimeForNow())],
+        tileSize: 256,
+        maxzoom: GIBS_GEO_IR_MAX_ZOOM,
+        attribution:
+          'Live IR: <a href="https://earthdata.nasa.gov">NASA GIBS</a> (GOES/Himawari) + <a href="https://realearth.ssec.wisc.edu">SSEC RealEarth</a> (Meteosat)',
+      },
       // Esri Reference labels overlay (v2 — Chris feedback 2026-05-27).
       // Country / state / city / road labels on a transparent background,
       // rendered ABOVE all other layers so labels remain legible regardless
@@ -661,6 +704,18 @@ function buildStyle(): maplibregl.StyleSpecification {
         type: 'raster',
         source: 'gibs-clouds',
         paint: { 'raster-opacity': 0.55 }, // semi-transparent so basemap shows through
+      },
+      {
+        // Live geostationary IR overlay (Feature C). Cloud-layer z-level (below
+        // coastline / track / markers). Ships visibility:'none' → zero tiles
+        // until toggled; mutually exclusive with the daily clouds layer. 0.82
+        // opacity over the dark basemap reads as a thermal cloud picture (cold
+        // tops bright); off-disk pixels are transparent so the basemap shows.
+        id: 'geo-ir-layer',
+        type: 'raster',
+        source: 'geo-ir',
+        layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 0.82 },
       },
       {
         // Coastline overlay ABOVE the cloud layer (renders order is
@@ -989,6 +1044,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       touchPitch: true,
     });
     map.addControl(new maplibregl.NavigationControl(), 'top-left');
+    // E2E hook (gated behind ?e2e in the URL): expose the map so automated
+    // WebKit/iPad interaction tests can project a known target's lng/lat to
+    // screen coords and tap the exact pin. Inert in normal use — attaches only
+    // when ?e2e is present, adds no UI, and never runs for real operators.
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('e2e')) {
+      (window as unknown as { __opdMap?: maplibregl.Map }).__opdMap = map;
+    }
     // A2 from /plan-eng-review 2026-05-21: silent fallback to Carto Dark
     // if Esri imagery tiles fail to load. Listens for source-data errors;
     // if the failing source is the Esri basemap, flip the session flag
@@ -1172,34 +1234,89 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         ],
       },
     });
-    // Click handler: popup with target name + score + forecast conditions.
-    // Uses setDOMContent + textContent (NOT setHTML) so target names with
-    // HTML-meta characters can't render as markup. personal-targets.csv is
-    // user-controlled, so a name like "<img onerror=...>" must not become
-    // a script-injection surface inside the popup.
-    map.on('click', 'targets-layer', (e) => {
-      const f = e.features?.[0];
-      if (!f || f.geometry.type !== 'Point') return;
-      const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
-      // INTENTIONALLY live (Date.now()): the popup's countdown answers
-      // "when is this pass from NOW" — the absolute UTC pass time is shown
-      // alongside, so live-relative is the planning-useful frame even while
-      // the map is scrubbed. Same live-domain rule as the topbar (4A).
-      const popupBody = buildTargetPopupContent(
-        f.properties as TargetPopupProps,
-        Date.now(),
+    // Unified target tap (Jack 2026-06-23, review R1/R2/R10/R11): ONE general
+    // click handler that hit-tests BOTH target layers, merge-dedups a personal-
+    // target-that-also-has-a-pass (it lives in both sources under one id), picks
+    // the pin nearest the tap when the bbox caught more than one, then derives
+    // has_pass / is_personal from the union. Returns early when no target was
+    // hit so the pad / lookup-pin / dropped-pin handlers still fire normally —
+    // this fixes Jack's "works sometimes but not always" (the old single-layer
+    // handler missed personal rings and lost ties).
+    //
+    // Uses setDOMContent + textContent (NOT setHTML) so a user-controlled target
+    // name like "<img onerror=...>" from personal-targets.csv stays literal.
+    map.on('click', (e) => {
+      if (!map) return;
+      const layers = ['targets-layer', 'my-targets-layer'].filter((id) => map!.getLayer(id));
+      if (layers.length === 0) return;
+      // ~7px bbox around the tap — fingertip-generous, yet tight enough that
+      // "nearest" rarely needs to disambiguate (review R10/R16).
+      const pad = 7;
+      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
+        [e.point.x - pad, e.point.y - pad],
+        [e.point.x + pad, e.point.y + pad],
+      ];
+      // Higher-priority interactive layers own their taps: if the tap also
+      // landed on an ascent pad / lookup pin / dropped pin, defer to their own
+      // layer-scoped handlers so we don't double-open a target popup over them
+      // (Codex review). Their handlers still fire; we just bow out.
+      const priorityLayers = ['ascent-pad-layer', 'lookup-pin-layer', 'dropped-pin-layer']
+        .filter((id) => map!.getLayer(id));
+      if (priorityLayers.length > 0
+        && map.queryRenderedFeatures(bbox, { layers: priorityLayers }).length > 0) {
+        return;
+      }
+      const feats = map.queryRenderedFeatures(bbox, { layers });
+      if (feats.length === 0) return; // not a target tap — let other handlers run
+      const hit = pickTargetAtTap(
+        feats as unknown as Parameters<typeof pickTargetAtTap>[0],
+        { x: e.point.x, y: e.point.y },
+        (ll) => map!.project(ll),
       );
-      new maplibregl.Popup()
-        .setLngLat(coords)
-        .setDOMContent(popupBody)
-        .addTo(map!);
+      if (!hit) return;
+      const props = hit.props;
+
+      // "Have I shot it yet" — read from the shared in-memory store the Profile
+      // pane publishes (review R12: no /api/log fetch on tap). 0 / unknown →
+      // the popup quietly omits the row (absence ≠ never shot).
+      if (props.target_id) {
+        const shot = getShotCount(props.target_id);
+        if (shot > 0) props.shot_count = shot;
+      }
+
+      // INTENTIONALLY live (Date.now()): the popup's countdown answers "when is
+      // this pass from NOW" alongside the absolute UTC time — same live-domain
+      // rule as the topbar even while the map is scrubbed.
+      const popup = new maplibregl.Popup();
+      const onEdit = props.is_personal && props.target_id
+        ? (id: string) => {
+            popup.remove();
+            // Deep-link to the Profile-pane edit form (review R11). The pane
+            // listener switches tabs + opens the form pre-filled for this id.
+            window.dispatchEvent(new CustomEvent('opd-edit-target', { detail: { targetId: id } }));
+          }
+        : undefined;
+      const popupBody = buildTargetPopupContent(props, Date.now(), onEdit);
+      popup.setLngLat(hit.lngLat).setDOMContent(popupBody).addTo(map);
+
+      // Async live "now" cloud — patched onto the popup's single weather row
+      // once it resolves. Guard on isConnected so a resolve after the popup
+      // closed / was replaced is a no-op (review R7/R8). Offline → null → the
+      // at-pass baseline stays (or the row collapses); it NEVER blocks the tap.
+      const [lon, lat] = hit.lngLat;
+      void fetchLiveCloud(lat, lon).then((pct) => {
+        if (popupBody.isConnected) patchPopupWeather(popupBody, pct, props);
+      });
     });
-    map.on('mouseenter', 'targets-layer', () => {
-      if (map) map.getCanvas().style.cursor = 'pointer';
-    });
-    map.on('mouseleave', 'targets-layer', () => {
-      if (map) map.getCanvas().style.cursor = '';
-    });
+    // Pointer cursor over BOTH target layers (review R3 — the ring layer had none).
+    for (const layerId of ['targets-layer', 'my-targets-layer']) {
+      map.on('mouseenter', layerId, () => {
+        if (map) map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', layerId, () => {
+        if (map) map.getCanvas().style.cursor = '';
+      });
+    }
   }
 
   // Day-night terminator overlay (v1.4.2.0 — Pettit feedback 2026-05-19).
@@ -1468,6 +1585,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindCloudToggle();
   bindTerminatorToggle();
   bindNightLightsToggle();
+  bindIrToggle();
   bindLabelsToggle();
   bindAscentToggle();
   bindMultiOrbitToggle();
@@ -1497,6 +1615,14 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   refreshForecastCloudLayer();
   applyTerminatorVisibility();
   applyNightLightsVisibility();
+  // Feature C: restore persisted IR state — re-pick the satellite for the view
+  // and show/hide the raster. Zero tiles fetched when IR is off (the default).
+  // (The basemap arbiter already accounts for irVisible via the call above.)
+  repickGeoIRForView();
+  applyIrVisibility();
+  // Re-render the badge now that currentGeoIRSat is set — otherwise a persisted
+  // IR-on session flashes a false "no coverage" on first paint (Codex #3).
+  refreshImageryDateBadgeForView();
   applyLabelsVisibility();
   // Apply persisted bearing preference ONLY on first map creation. Calling
   // easeTo on every Map-tab click (which re-runs renderMap) was eating
@@ -1770,6 +1896,14 @@ function refreshTargetsSource(): void {
         pass_regime: p.pass_regime,
         obstruction_class: p.obstruction_class,
         sample_time: p.sample_time ?? null,
+        // Tap-target popup (Jack 2026-06-23): lat/lon for live-cloud + edit,
+        // off-nadir for the distance-from-track row, has_pass so the merged
+        // popup knows this id has an upcoming pass.
+        lat: p.target_lat,
+        lon: p.target_lon,
+        has_pass: true,
+        angle_off_nadir_deg: p.angle_off_nadir_deg,
+        iss_relative_bearing_deg: p.iss_relative_bearing_deg,
       },
       geometry: { type: 'Point' as const, coordinates: [p.target_lon, p.target_lat] },
     };
@@ -1805,7 +1939,11 @@ function refreshMyTargetsSource(): void {
       && Math.abs(t.lat) <= 90 && Math.abs(t.lon) <= 180)
     .map((t) => ({
       type: 'Feature' as const,
-      properties: { target_id: t.id, target_name: t.name },
+      properties: {
+        target_id: t.id, target_name: t.name,
+        lat: t.lat, lon: t.lon, priority: t.priority,
+        has_pass: false, is_personal: true,
+      },
       geometry: { type: 'Point' as const, coordinates: [t.lon, t.lat] },
     }));
   upsertGeoJson(map, 'my-targets', { type: 'FeatureCollection', features });
@@ -2364,15 +2502,21 @@ function applyCloudsVisibility(): void {
     fcstActive = map.getLayer('fcst-clouds-layer') != null
       && forecastFrameForView() !== null;
   } catch { /* treat as observed-layer mode */ }
-  const cloudsLayerVis = cloudsVisible && !fcstActive ? 'visible' : 'none';
-  const fcstLayerVis = cloudsVisible && fcstActive ? 'visible' : 'none';
+  // IR (Feature C) is mutually exclusive with the daily/forecast clouds: when
+  // IR is on, the cloud layers hide regardless of the clouds toggle state.
+  const cloudsLayerVis = cloudsVisible && !fcstActive && !irVisible ? 'visible' : 'none';
+  const fcstLayerVis = cloudsVisible && fcstActive && !irVisible ? 'visible' : 'none';
   // v1.5.1.0: when clouds are OFF, swap from Carto Dark to Esri World Imagery
   // so the operator can see real satellite/feature data (Chris ask 2026-05-21).
   // Carto Dark stays as the basemap when clouds are ON because the dark
   // background makes the 55%-opacity GIBS cloud overlay legible.
   // P1 from review: source-swap via setLayoutProperty visibility, not
   // setStyle rebuild — keeps all overlays + layer state intact.
-  const useEsri = !cloudsVisible && !esriTilesFailed;
+  // Basemap arbiter (shared with IR): Esri imagery only when NO cloud overlay
+  // shows — neither daily clouds NOR the IR thermal layer (which is designed
+  // for the dark Carto backdrop, not bright Esri imagery). This is what makes
+  // the mutual exclusion real rather than just layer-level (Codex/eng R1).
+  const useEsri = !cloudsVisible && !irVisible && !esriTilesFailed;
   const esriVis = useEsri ? 'visible' : 'none';
   const cartoVis = useEsri ? 'none' : 'visible';
   try {
@@ -2413,6 +2557,15 @@ function bindCloudToggle(): void {
     cloudsVisible = !cloudsVisible;
     try { localStorage.setItem(CLOUDS_PREF_KEY, cloudsVisible ? '1' : '0'); } catch { /* noop */ }
     reflect();
+    // Mutual exclusion with IR (Feature C): showing the daily clouds turns the
+    // IR layer off (one cloud view at a time); the basemap arbiter follows via
+    // refreshForecastCloudLayer → applyCloudsVisibility below.
+    if (cloudsVisible && irVisible) {
+      irVisible = false;
+      try { localStorage.setItem(IR_PREF_KEY, '0'); } catch { /* noop */ }
+      applyIrVisibility();
+      reflectIrButton();
+    }
     // Wire (not just show) the forecast layer: toggling clouds ON while
     // scrubbed must CREATE the fcst source if the scrub happened with
     // clouds off (Codex adversarial 2026-06-11).
@@ -2528,6 +2681,158 @@ function bindNightLightsToggle(): void {
     applyNightLightsVisibility();
   });
   nightLightsToggleBound = true;
+}
+
+// ── Live geostationary IR overlay (Feature C, 2026-06-21) ────────────────────
+
+/** Re-point the geo-IR source at the satellite covering the current view
+ *  center. Touches tiles only when IR is ON and the satellite changed, so
+ *  panning with IR off issues zero tile requests (eng R5). */
+function repickGeoIRForView(): void {
+  if (!map || !irVisible) return;
+  let lat: number;
+  let lng: number;
+  try { const c = map.getCenter(); lat = c.lat; lng = c.lng; } catch { return; }
+  const sat = pickGeoIRSat(lat, lng);
+  const time = geoIRTimeForNow();
+  // Reset tiles when the satellite OR the 10-min frame time changes, so a
+  // stationary operator still gets fresh imagery rather than a frame frozen at
+  // toggle-on (Codex #1).
+  const changed = (sat?.layer ?? null) !== (currentGeoIRSat?.layer ?? null) || time !== currentGeoIRTime;
+  currentGeoIRSat = sat;
+  if (sat && changed) {
+    currentGeoIRTime = time;
+    geoIrAnyLoaded = false; // new tiles → re-evaluate feed health
+    geoIrFeedDown = false;
+    try {
+      const src = map.getSource('geo-ir') as maplibregl.RasterTileSource | undefined;
+      if (src && 'setTiles' in src) src.setTiles([geoIRTileUrl(sat, time)]);
+    } catch { /* source not ready */ }
+  } else if (!sat) {
+    currentGeoIRTime = null;
+  }
+}
+
+/** Show/hide the geo-IR raster. Hidden when off OR in a no-coverage gap
+ *  (currentGeoIRSat === null) so the operator never sees blank/stale tiles —
+ *  the badge explains the gap (eng R7). */
+function applyIrVisibility(): void {
+  if (!map) return;
+  const showRaster = irVisible && currentGeoIRSat !== null;
+  try {
+    if (map.getLayer('geo-ir-layer')) {
+      map.setLayoutProperty('geo-ir-layer', 'visibility', showRaster ? 'visible' : 'none');
+    }
+  } catch { /* layer not loaded yet */ }
+}
+
+/** Sync the clouds button's active/aria state (its own reflect is a closure;
+ *  the IR toggle needs to update it when mutual-exclusion flips clouds off). */
+function reflectCloudsButtonState(): void {
+  const btn = document.getElementById('toggle-clouds');
+  if (!btn) return;
+  btn.classList.toggle('active', cloudsVisible);
+  btn.setAttribute('aria-pressed', cloudsVisible ? 'true' : 'false');
+  btn.title = cloudsVisible
+    ? 'Clouds shown (dark basemap) — click to hide clouds and show satellite imagery'
+    : 'Clouds hidden (satellite imagery) — click to show clouds and dark basemap';
+}
+
+/** Drive the whole IR state: re-pick the satellite, set raster visibility,
+ *  re-run the shared basemap/clouds arbiter (depends on irVisible), refresh
+ *  the badge. */
+function refreshIr(): void {
+  repickGeoIRForView();
+  applyIrVisibility();
+  applyCloudsVisibility();
+  refreshImageryDateBadgeForView();
+}
+
+let irToggleBound = false;
+function reflectIrButton(): void {
+  const btn = document.getElementById('toggle-ir');
+  if (!btn) return;
+  btn.classList.toggle('active', irVisible);
+  btn.setAttribute('aria-pressed', irVisible ? 'true' : 'false');
+  btn.title = irVisible
+    ? 'Live IR cloud-tops shown (replaces daily clouds; misses low cloud) — click to hide'
+    : 'Show live geostationary IR cloud-tops (~10 min, day + night; replaces the daily clouds layer)';
+}
+
+let irErrorLogged = false;
+function armIrErrorHandler(): void {
+  if (!map) return;
+  map.on('error', (e) => {
+    const sourceId = (e as { sourceId?: string }).sourceId;
+    if (sourceId !== 'geo-ir') return;
+    if (irErrorLogged) return;
+    irErrorLogged = true;
+    // Geostationary IR tiles legitimately 404 at the satellite DISK EDGES and
+    // for the most-recent (not-yet-published) 10-min frame — that is NOT a
+    // "layer down" signal. Log once but DO NOT disable IR: a single edge tile
+    // must never kill the whole overlay (it stays valid where tiles exist).
+    console.warn('[map] some geo-IR tiles 404 (disk edge / unpublished frame); IR left on.');
+  });
+}
+
+function bindIrToggle(): void {
+  if (irToggleBound) return;
+  const btn = document.getElementById('toggle-ir');
+  if (!btn) return;
+  armIrErrorHandler();
+  reflectIrButton();
+  // Advance the IR frame as new 10-min imagery publishes, even if the operator
+  // never pans (Codex #1). Cheap: a no-op unless IR is on and the frame rolled.
+  if (!irTickerStarted) {
+    irTickerStarted = true;
+    window.setInterval(() => {
+      if (!irVisible) return;
+      repickGeoIRForView();
+      applyIrVisibility();
+      refreshImageryDateBadgeForView();
+    }, 120_000);
+  }
+  // Re-pick the satellite as the operator pans — GATED on irVisible so panning
+  // with IR off issues zero tile requests (eng R5).
+  if (map) {
+    map.on('moveend', () => {
+      if (!irVisible) return;
+      repickGeoIRForView();
+      applyIrVisibility();
+      refreshImageryDateBadgeForView();
+    });
+    // Feed-health (Codex review): a loaded geo-IR tile clears any "feed down"
+    // state; if the map settles (idle) with IR visible but nothing loaded, the
+    // feed is down — so an outage shows "feed unavailable", not fake clear sky.
+    map.on('data', (e) => {
+      const ev = e as { sourceId?: string; tile?: { state?: string } };
+      if (ev.sourceId === 'geo-ir' && ev.tile?.state === 'loaded') {
+        geoIrAnyLoaded = true;
+        if (geoIrFeedDown) { geoIrFeedDown = false; refreshImageryDateBadgeForView(); }
+      }
+    });
+    map.on('idle', () => {
+      if (irVisible && currentGeoIRSat && !geoIrAnyLoaded && !geoIrFeedDown) {
+        geoIrFeedDown = true;
+        refreshImageryDateBadgeForView();
+      }
+    });
+  }
+  btn.addEventListener('click', () => {
+    if (irErrorLogged) irErrorLogged = false; // re-arm on explicit re-toggle
+    irVisible = !irVisible;
+    try { localStorage.setItem(IR_PREF_KEY, irVisible ? '1' : '0'); } catch { /* noop */ }
+    // Mutual exclusion: turning IR on turns the daily clouds OFF (one cloud
+    // view at a time); the shared basemap arbiter follows in refreshIr().
+    if (irVisible && cloudsVisible) {
+      cloudsVisible = false;
+      try { localStorage.setItem(CLOUDS_PREF_KEY, '0'); } catch { /* noop */ }
+      reflectCloudsButtonState();
+    }
+    reflectIrButton();
+    refreshIr();
+  });
+  irToggleBound = true;
 }
 
 /** Show / hide the Esri Reference labels overlay. v2 (Chris feedback
@@ -2780,6 +3085,7 @@ export function resizeMap(): void {
  *  fields populated in refreshTargetsSource(); kept inline so the popup
  *  builder is self-contained and testable without importing PassEntry. */
 export interface TargetPopupProps {
+  target_id?: string;
   target_name?: string;
   score?: number;
   closest_approach?: string;
@@ -2788,6 +3094,18 @@ export interface TargetPopupProps {
   pass_regime?: string;
   obstruction_class?: string;
   sample_time?: string | null;
+  // Tap-target popup (Jack 2026-06-23). has_pass distinguishes the two shapes;
+  // is_personal gates the Edit affordance; shot_count gates the "shot it" row
+  // (rendered only when > 0); lat/lon feed live-cloud + edit deep-link;
+  // off-nadir feeds the distance-from-track row (only valid when has_pass).
+  lat?: number;
+  lon?: number;
+  priority?: number;
+  has_pass?: boolean;
+  is_personal?: boolean;
+  shot_count?: number;
+  angle_off_nadir_deg?: number;
+  iss_relative_bearing_deg?: number;
 }
 
 /** Translate the generator's cloud_source string into an operator-facing
@@ -2824,59 +3142,161 @@ export function cloudSourceLabel(source: string | undefined): string {
 export function buildTargetPopupContent(
   props: TargetPopupProps,
   nowMs: number,
+  onEdit?: (targetId: string) => void,
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'map-target-popup';
   body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:200px';
 
+  // Local row helper — textContent ONLY (XSS-safe for names/station strings).
+  const addRow = (cls: string, text: string, style: string): HTMLDivElement => {
+    const r = document.createElement('div');
+    r.className = cls;
+    r.style.cssText = style;
+    r.textContent = text;
+    body.appendChild(r);
+    return r;
+  };
+
   const nameEl = document.createElement('strong');
   nameEl.textContent = props.target_name ?? 'unknown';
   body.appendChild(nameEl);
 
-  const scoreEl = document.createElement('div');
-  scoreEl.className = 'map-popup-score';
-  scoreEl.style.cssText = 'font-weight:600;color:#0b0d12;margin-top:2px';
-  scoreEl.textContent = `score ${Math.round(props.score ?? 0)}`;
-  body.appendChild(scoreEl);
+  const hasPass = props.has_pass === true;
 
-  // Pass time row.
-  if (props.closest_approach) {
-    const passMs = Date.parse(props.closest_approach);
-    if (Number.isFinite(passMs)) {
-      const row = document.createElement('div');
-      row.className = 'map-popup-row';
-      row.style.cssText = 'margin-top:6px;color:#444';
-      const utc = props.closest_approach.replace('T', ' ').replace(/:\d{2}(\.\d+)?Z$/, 'Z');
-      const deltaMin = Math.round((passMs - nowMs) / 60_000);
-      const rel = formatRelativeMinutes(deltaMin);
-      row.textContent = `Pass: ${utc}${rel ? ` (${rel})` : ''}`;
-      body.appendChild(row);
+  if (hasPass) {
+    // Shape A — target with an upcoming pass (score 0 is a valid bad pass).
+    addRow('map-popup-score', `score ${Math.round(props.score ?? 0)}`, 'font-weight:600;color:#0b0d12;margin-top:2px');
+    if (props.closest_approach) {
+      const passMs = Date.parse(props.closest_approach);
+      if (Number.isFinite(passMs)) {
+        const utc = props.closest_approach.replace('T', ' ').replace(/:\d{2}(\.\d+)?Z$/, 'Z');
+        const rel = formatRelativeMinutes(Math.round((passMs - nowMs) / 60_000));
+        addRow('map-popup-row', `Pass: ${utc}${rel ? ` (${rel})` : ''}`, 'margin-top:6px;color:#444');
+      }
     }
+    // Distance from track — only when both angles are finite. A stationary
+    // target has no off-nadir, so never call formatTrackOffset(undefined,…)
+    // which would render "NaN° … of track" (review R7).
+    if (Number.isFinite(props.angle_off_nadir_deg) && Number.isFinite(props.iss_relative_bearing_deg)) {
+      addRow('map-popup-row', formatTrackOffset(props.angle_off_nadir_deg!, props.iss_relative_bearing_deg!), 'margin-top:2px;color:#444');
+    }
+    const regimeBits: string[] = [];
+    if (props.pass_regime) regimeBits.push(props.pass_regime);
+    if (props.obstruction_class) regimeBits.push(props.obstruction_class);
+    if (regimeBits.length > 0) addRow('map-popup-row', regimeBits.join(' · '), 'margin-top:2px;color:#444');
+  } else {
+    // Shape B — no upcoming pass. NEVER "score 0" (review R6).
+    addRow('map-popup-row', 'No upcoming pass in window', 'margin-top:6px;color:#444');
   }
 
-  // Forecast / observed cloud row.
-  if (typeof props.cloud_fraction === 'number') {
-    const row = document.createElement('div');
-    row.className = 'map-popup-row';
-    row.style.cssText = 'margin-top:2px;color:#444';
-    const label = cloudSourceLabel(props.cloud_source);
-    row.textContent = `Cloud: ${Math.round(props.cloud_fraction)}% (${label})`;
-    body.appendChild(row);
+  // ONE weather row (review R9): the at-pass forecast baseline now, patched
+  // with the live "now" value async-after-open via patchPopupWeather.
+  const atPass = hasPass && typeof props.cloud_fraction === 'number' ? Math.round(props.cloud_fraction) : null;
+  addRow('map-popup-weather', atPass != null ? `Cloud: at pass ${atPass}%` : 'Cloud: checking now…', 'margin-top:2px;color:#444');
+
+  // Shot status — ONLY when count > 0; absence is not "never shot" (review R12).
+  if (typeof props.shot_count === 'number' && props.shot_count > 0) {
+    addRow('map-popup-shot', `✓ shot ${props.shot_count}×`, 'margin-top:4px;color:#1a7a3a;font-weight:600');
   }
 
-  // Regime + obstruction row.
-  const regimeBits: string[] = [];
-  if (props.pass_regime) regimeBits.push(props.pass_regime);
-  if (props.obstruction_class) regimeBits.push(props.obstruction_class);
-  if (regimeBits.length > 0) {
-    const row = document.createElement('div');
-    row.className = 'map-popup-row';
-    row.style.cssText = 'margin-top:2px;color:#444';
-    row.textContent = regimeBits.join(' · ');
-    body.appendChild(row);
+  // Edit affordance — personal targets only (review R11); single tap deep-links
+  // to the Profile-pane edit form via the onEdit callback.
+  if (props.is_personal && props.target_id && onEdit) {
+    const id = props.target_id;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'map-popup-edit';
+    btn.textContent = 'Edit target';
+    btn.style.cssText = 'margin-top:8px;font:inherit;cursor:pointer;border:1px solid #2a3142;background:#eef1f6;color:#0b0d12;border-radius:4px;padding:3px 8px';
+    btn.addEventListener('click', () => onEdit(id));
+    body.appendChild(btn);
   }
 
   return body;
+}
+
+/** Patch the popup's single weather row with the live "now" cloud %, combined
+ *  with the at-pass forecast: "Cloud: now X% · at pass Y%". Collapses the row
+ *  when there's nothing to show. Caller guards on body.isConnected so a resolve
+ *  after the popup closed/replaced is a no-op (review R7/R8). */
+export function patchPopupWeather(
+  body: HTMLElement,
+  nowPct: number | null,
+  props: TargetPopupProps,
+): void {
+  const row = body.querySelector<HTMLElement>('.map-popup-weather');
+  if (!row) return;
+  const atPass = props.has_pass === true && typeof props.cloud_fraction === 'number' ? Math.round(props.cloud_fraction) : null;
+  const parts: string[] = [];
+  if (nowPct != null) parts.push(`now ${nowPct}%`);
+  if (atPass != null) parts.push(`at pass ${atPass}%`);
+  if (parts.length === 0) { row.remove(); return; }
+  row.textContent = `Cloud: ${parts.join(' · ')}`;
+}
+
+/** A merge-deduped target hit under a tap, ready for the popup. */
+export interface TargetHit {
+  props: TargetPopupProps;
+  lngLat: [number, number];
+}
+
+/** Minimal shape of the MapLibre features we hit-test — kept structural so
+ *  this is unit-testable without a real map. */
+interface HitFeature {
+  properties: Record<string, unknown> | null;
+  geometry: { type: string; coordinates: number[] };
+}
+
+/** Resolve which target a tap selected and merge its property bags.
+ *
+ *  A personal target that also has an upcoming pass appears in BOTH the
+ *  `targets` (score-colored, has_pass:true) and `my-targets` (white ring,
+ *  is_personal:true) sources — the same target_id in two features. The tap
+ *  bbox can also catch two genuinely different targets. So we:
+ *    1. pick the feature whose projected pin is NEAREST the tap (review R10/R16),
+ *    2. collect every hit feature sharing that winning target_id,
+ *    3. union their properties, deriving has_pass / is_personal from the WHOLE
+ *       group (not any single feature's flag — review R1/R2), and treating any
+ *       `personal:`-prefixed id as personal even if the ring layer wasn't hit.
+ *  Returns null when nothing point-like was hit. */
+export function pickTargetAtTap(
+  features: HitFeature[],
+  tap: { x: number; y: number },
+  project: (lngLat: [number, number]) => { x: number; y: number },
+): TargetHit | null {
+  const pts = features.filter((f) => f.geometry?.type === 'Point' && f.properties);
+
+  // Nearest pin to the tap decides the winning target.
+  let nearest: HitFeature | null = null;
+  let nearestD = Infinity;
+  for (const f of pts) {
+    const ll = f.geometry.coordinates as [number, number];
+    const p = project(ll);
+    const d = (p.x - tap.x) ** 2 + (p.y - tap.y) ** 2;
+    if (d < nearestD) { nearestD = d; nearest = f; }
+  }
+  if (!nearest) return null;
+
+  const winId = (nearest.properties as Record<string, unknown>).target_id;
+  const group = winId != null ? pts.filter((f) => f.properties!.target_id === winId) : [nearest];
+
+  const merged: Record<string, unknown> = {};
+  let hasPass = false;
+  let isPersonal = false;
+  for (const f of group) {
+    const props = f.properties as Record<string, unknown>;
+    for (const [k, v] of Object.entries(props)) {
+      if (v !== undefined && v !== null) merged[k] = v;
+    }
+    if (props.has_pass === true) hasPass = true;
+    if (props.is_personal === true) isPersonal = true;
+  }
+  if (typeof winId === 'string' && winId.startsWith('personal:')) isPersonal = true;
+  merged.has_pass = hasPass;
+  merged.is_personal = isPersonal;
+
+  return { props: merged as TargetPopupProps, lngLat: nearest.geometry.coordinates as [number, number] };
 }
 
 /** Compact human-friendly relative-time string for the popup pass row.
@@ -3041,6 +3461,17 @@ export function createIssMarkerElement(): HTMLElement {
 // (T5 — the badge text depends on isScrubbed()).
 let lastImageryBadgeArgs: { container: HTMLElement; manifest: Manifest } | null = null;
 
+/** Honest, coarse age of the shown cloud imagery — answers "how old is the
+ *  satellite cloud photo?" (Jack 2026-06-21) at the point of use, so the
+ *  operator weights a day-old daily composite correctly. Pure for testing. */
+export function formatImageryAge(compositeMs: number, nowMs: number): string {
+  const ageMin = Math.max(0, Math.floor((nowMs - compositeMs) / 60_000));
+  if (ageMin < 90) return `~${ageMin}m old`;
+  if (ageMin < 24 * 60) return `~${Math.round(ageMin / 60)}h old`;
+  const ageD = Math.round(ageMin / 1440);
+  return `~${ageD} day${ageD === 1 ? '' : 's'} old`;
+}
+
 export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifest): void {
   lastImageryBadgeArgs = { container, manifest };
   let badge = container.querySelector<HTMLElement>('.map-imagery-date');
@@ -3048,6 +3479,30 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
     badge = document.createElement('div');
     badge.className = 'map-imagery-date';
     container.appendChild(badge);
+  }
+  // IR active: the badge reflects the IR layer (eng R9), carrying the low-cloud
+  // caveat at point-of-use (eng R3), or the no-coverage note in a gap (eng R7).
+  if (irVisible) {
+    if (!currentGeoIRSat) {
+      badge.textContent = 'IR: no geostationary coverage here';
+    } else if (geoIrFeedDown) {
+      // Visible but every tile errored → an outage, NOT clear sky (Codex review).
+      badge.textContent = `IR · ${currentGeoIRSat.label} · feed unavailable`;
+    } else if (isScrubbed()) {
+      // IR is always CURRENT cloud-tops; under a scrubbed/future view it must
+      // NOT read as a forecast for the scrubbed time (Codex #2).
+      badge.textContent = `IR · ${currentGeoIRSat.label} · LIVE now (not the scrubbed time) · misses low cloud`;
+    } else {
+      // GIBS frames carry a computed timestamp → show its age. RealEarth
+      // (Meteosat) always serves the newest frame with no pinned time/age →
+      // "latest", not a false specific age (Codex review).
+      const fresh = currentGeoIRSat.source === 'realearth'
+        ? 'latest'
+        : (currentGeoIRTime ? formatImageryAge(Date.parse(currentGeoIRTime), Date.now()) : '');
+      badge.textContent = `IR · ${currentGeoIRSat.label}${fresh ? ` · ${fresh}` : ''} · misses low cloud`;
+    }
+    badge.hidden = false;
+    return;
   }
   const hour = manifest.cloud_composite_hour;
   if (!hour) {
@@ -3068,7 +3523,9 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
   // the operator never plans against yesterday's clouds believing they're
   // tomorrow's (the trust mismatch Chris reported 2026-05-20).
   if (!isScrubbed()) {
-    badge.textContent = `Imagery: ${date}`;
+    // Now-view: the daily true-color cloud composite. Surface its age so the
+    // operator never reads a day-old picture as current (Jack 2026-06-21).
+    badge.textContent = `Imagery: ${date} · ${formatImageryAge(t, Date.now())}`;
   } else {
     // Scrubbed: the wording follows the layer truth (V4-P2). The gate here
     // intentionally reads the PARAM manifest (not currentManifest) so the

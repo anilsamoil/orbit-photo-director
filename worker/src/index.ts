@@ -16,6 +16,8 @@
 
 import { handleKpRequest } from './aurora';
 import { handleAuroraRequest } from './ovation';
+import { handleCloudRequest } from './cloud';
+import { handleWxRequest } from './wx';
 import { handleProfilesRequest } from './profiles';
 import { isValidProfileName } from './shared';
 
@@ -597,6 +599,26 @@ export default {
         response = new Response(null, { status: response.status, headers: response.headers });
       }
     } else if (
+      url.pathname === '/api/wx' &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      // Cloud-confidence: nearest-station METAR + plain-language TAF for the
+      // CEO zoom panel (edge cache + R2 last-good; honest-quiet over ocean).
+      response = await handleWxRequest(request, env, ctx);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+    } else if (
+      url.pathname === '/api/cloud' &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      // Live current cloud-cover for the map target popup (Open-Meteo proxy,
+      // edge-cached; 0-100% integer, same scale as the at-pass cloud number).
+      response = await handleCloudRequest(request, env, ctx);
+      if (request.method === 'HEAD') {
+        response = new Response(null, { status: response.status, headers: response.headers });
+      }
+    } else if (
       url.pathname === '/api/cal' &&
       (request.method === 'GET' || request.method === 'HEAD')
     ) {
@@ -622,7 +644,9 @@ export default {
       url.pathname === '/api/log' ||
       url.pathname === '/api/health' ||
       url.pathname === '/api/kp' ||
-      url.pathname === '/api/aurora'
+      url.pathname === '/api/aurora' ||
+      url.pathname === '/api/wx' ||
+      url.pathname === '/api/cloud'
     ) {
       response = new Response('method not allowed', { status: 405 });
     } else if (request.method === 'GET' || request.method === 'HEAD') {

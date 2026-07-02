@@ -462,6 +462,20 @@ export function removePersonalTarget(profile: Profile, targetId: string): Profil
   return { ...profile, additions: next };
 }
 
+/** Replace a personal target in place by id (immutable — returns a NEW profile
+ *  for rollback). THROWS on miss (design review R2/R12): an edit against a
+ *  stale local list must NOT silently no-op into a whole-list PUT that drops
+ *  the target — the caller aborts the PUT on throw. The replacement keeps the
+ *  original id; the caller threads the original createdAt through validation
+ *  (review R3) so an edit never re-stamps the creation time. */
+export function updatePersonalTarget(profile: Profile, target: PersonalTarget): Profile {
+  const idx = profile.additions.findIndex((t) => t.id === target.id);
+  if (idx === -1) throw new Error(`target id not found: ${target.id}`);
+  const next = profile.additions.slice();
+  next[idx] = target;
+  return { ...profile, additions: next };
+}
+
 /** Flip the "removed for this profile" marker on a curated target id.
  *  Toggle semantics: present → remove from removedCuratedIds (un-hide);
  *  absent → append (hide). Caller must `saveProfile(next)` to persist. */

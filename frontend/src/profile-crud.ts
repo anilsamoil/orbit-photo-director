@@ -29,6 +29,7 @@ import {
   removePersonalTarget,
   saveProfile,
   toggleCuratedRemoved,
+  updatePersonalTarget,
   validatePersonalTargetInput,
   type PersonalTarget,
   type Profile,
@@ -46,6 +47,7 @@ import {
   type ImportResult,
 } from './profile-json-io';
 import { fetchLog } from './log';
+import { aggregateShootCounts, publishShotCounts } from './shot-counts';
 import { fetchCuratedTargets } from './manifest';
 import type { CuratedTarget, Manifest } from './types';
 import { getCurrentManifest } from './main';
@@ -237,7 +239,7 @@ export async function hydratePersonalTargets(profileName: string): Promise<void>
     );
     return;
   }
-  rerenderCrudSection(profileName);
+  if (editingTargetId === null) rerenderCrudSection(profileName);
 }
 
 /** Slot 8b — one-shot GET against `/api/log` filtered to the active
@@ -260,13 +262,14 @@ export async function hydrateShotCounts(profileName: string): Promise<void> {
     // mount. Treat as "no data" rather than letting the error escape.
     return;
   }
-  const counts = new Map<string, number>();
-  for (const e of entries) {
-    if (e.action !== 'shoot') continue;
-    counts.set(e.target_id, (counts.get(e.target_id) ?? 0) + 1);
-  }
+  const counts = aggregateShootCounts(entries);
   shotCountsByProfile.set(profileName, counts);
-  rerenderCrudSection(profileName);
+  // Publish to the shared store so the map popup can show "✓ shot N×" without
+  // its own /api/log fetch on tap (review R12, Jack's "have I shot it yet").
+  publishShotCounts(counts);
+  // Don't clobber an open edit form's in-progress input with a refresh; the
+  // badge picks up on the next non-editing render (Jack edit form, 2026-06-23).
+  if (editingTargetId === null) rerenderCrudSection(profileName);
 }
 
 /** Replace the existing CRUD section in the DOM (if mounted) with a
@@ -674,6 +677,13 @@ function buildPersonalRow(
   target: PersonalTarget,
   shotCount: number,
 ): HTMLElement {
+  // Jack 2026-06-23: when this row is the one being edited, render the inline
+  // edit form in its place (the module-scope editingTargetId survives async
+  // re-renders so the form stays open across a hydrate/shot-count refresh).
+  if (target.id === editingTargetId) {
+    return buildEditRow(profileName, target);
+  }
+
   const li = document.createElement('li');
   li.className = 'profile-crud-row';
   li.dataset.targetId = target.id;
@@ -700,6 +710,17 @@ function buildPersonalRow(
     children.push(badge);
   }
 
+  // Edit — opens the inline form in place (Jack's "fix a longitude typo" ask).
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'profile-btn profile-crud-btn';
+  editBtn.textContent = 'Edit';
+  editBtn.addEventListener('click', () => {
+    editingTargetId = target.id;
+    rerenderCrudSection(profileName);
+  });
+  children.push(editBtn);
+
   const delBtn = document.createElement('button');
   delBtn.type = 'button';
   delBtn.className = 'profile-btn danger profile-crud-btn';
@@ -711,6 +732,200 @@ function buildPersonalRow(
 
   li.append(...children);
   return li;
+}
+
+// ---------------------------------------------------------------------------
+// Inline edit (Jack 2026-06-23). One target id is "open" at a time, tracked at
+// module scope so the form survives async re-renders (hydrate / shot-count).
+// ---------------------------------------------------------------------------
+
+/** The personal-target id currently open in the inline edit form, or null. */
+let editingTargetId: string | null = null;
+
+/** Deep-link entry point from the map popup's Edit button (review R11-edit).
+ *  Opens the inline edit form for `targetId`. The caller (main.ts's
+ *  opd-edit-target listener) has already switched to the Profile tab + rendered
+ *  the pane; if the CRUD section isn't mounted yet, setting the flag is enough
+ *  — the next buildPersonalRow honors it. */
+export function openEditTargetForm(profileName: string, targetId: string): void {
+  editingTargetId = targetId;
+  rerenderCrudSection(profileName);
+  // Best-effort: scroll the freshly-opened editor into view. Ids are
+  // regex-restricted (no quotes), so the quoted selector is injection-safe.
+  const row = document.querySelector(`[data-target-id="${targetId}"][data-kind="personal-edit"]`);
+  if (row instanceof HTMLElement) row.scrollIntoView({ block: 'center' });
+}
+
+/** Build the inline edit form for one personal target. Pre-fills the four
+ *  editable fields; id + createdAt are preserved untouched (review R3-edit). */
+function buildEditRow(profileName: string, target: PersonalTarget): HTMLElement {
+  const li = document.createElement('li');
+  // NOT .profile-crud-row (that is horizontal flex and would cram the four
+  // fields + Save/Cancel onto one line, pushing the buttons off a narrow iPad).
+  // .profile-crud-row-editing stacks vertically with an accent border.
+  li.className = 'profile-crud-row-editing';
+  li.dataset.targetId = target.id;
+  li.dataset.kind = 'personal-edit';
+
+  const sfx = target.id.slice(-8);
+  const mkField = (
+    labelText: string,
+    idAttr: string,
+    value: string,
+    type: string,
+    attrs: Record<string, string | number> = {},
+  ): { row: HTMLElement; input: HTMLInputElement } => {
+    const row = document.createElement('div');
+    row.className = 'profile-row';
+    const label = document.createElement('label');
+    label.htmlFor = idAttr;
+    label.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = type;
+    input.id = idAttr;
+    input.className = 'profile-input';
+    input.value = value;
+    for (const [k, v] of Object.entries(attrs)) input.setAttribute(k, String(v));
+    row.append(label, input);
+    return { row, input };
+  };
+
+  const name = mkField('Name:', `profile-edit-name-${sfx}`, target.name, 'text', { maxlength: 200, autocomplete: 'off' });
+  const lat = mkField('Lat:', `profile-edit-lat-${sfx}`, String(target.lat), 'number', { step: 'any', min: -90, max: 90 });
+  const lon = mkField('Lon:', `profile-edit-lon-${sfx}`, String(target.lon), 'number', { step: 'any', min: -180, max: 180 });
+  const prio = mkField('Priority:', `profile-edit-priority-${sfx}`, String(target.priority), 'number', { step: 1, min: 1, max: 10 });
+
+  const errorEl = document.createElement('div');
+  errorEl.className = 'profile-error';
+  errorEl.setAttribute('role', 'alert');
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'profile-row';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'profile-btn';
+  saveBtn.textContent = 'Save';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'profile-btn profile-crud-btn';
+  cancelBtn.textContent = 'Cancel';
+  btnRow.append(saveBtn, cancelBtn);
+
+  cancelBtn.addEventListener('click', () => {
+    editingTargetId = null;
+    rerenderCrudSection(profileName);
+  });
+
+  saveBtn.addEventListener('click', () => {
+    errorEl.textContent = '';
+    // Preserve id + createdAt; only name/lat/lon/priority are editable (R3-edit).
+    const result = validatePersonalTargetInput({
+      id: target.id,
+      profileName,
+      name: name.input.value,
+      lat: Number(lat.input.value),
+      lon: Number(lon.input.value),
+      priority: Number(prio.input.value || String(target.priority)),
+      createdAt: target.createdAt,
+    });
+    if (!result.ok) {
+      errorEl.textContent = ERROR_MESSAGES[result.error] ?? `Invalid input (${result.error}).`;
+      return;
+    }
+    saveBtn.disabled = true;
+    cancelBtn.disabled = true;
+    void handleEdit(profileName, result.target).then((feedback) => {
+      // Early local failures in handleEdit (profile failed to load, id vanished
+      // locally) return WITHOUT re-rendering — re-enable the form + surface the
+      // reason so it isn't stuck with greyed-out buttons (Codex review). After a
+      // network failure handleEdit rebuilds the section, so saveBtn is detached
+      // and this is a harmless no-op.
+      if (feedback !== 'ok' && saveBtn.isConnected) {
+        errorEl.textContent = feedback;
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    });
+  });
+
+  li.append(name.row, lat.row, lon.row, prio.row, errorEl, btnRow);
+  return li;
+}
+
+/** Optimistic edit (Jack 2026-06-23). The server has no single-target UPDATE
+ *  verb — POST 409s on a duplicate id — so we GET the FRESH server list, swap
+ *  the one target by id, and PUT the whole list back. Fetching fresh first
+ *  means a concurrent add/edit from ANOTHER device survives our write rather
+ *  than being clobbered by a stale local snapshot (review R1-edit). Local is
+ *  updated optimistically and rolled back surgically on any failure.
+ *
+ *  KNOWN LIMIT (accepted for v1): the Worker PUT is an unconditional replace
+ *  (no ETag/If-Match), so two devices editing the SAME profile within the
+ *  ~tens-of-ms GET→PUT window can still last-write-wins each other. With a
+ *  4-person crew each on their own profile this is rare, and it is no weaker
+ *  than the existing add/delete surface. Full optimistic-concurrency control
+ *  would need server-side CAS — out of scope for "fix a longitude typo". */
+export async function handleEdit(profileName: string, edited: PersonalTarget): Promise<'ok' | string> {
+  const before = safeLoadProfile(profileName);
+  if (!before) return 'Could not load active profile.';
+
+  let next: Profile;
+  try {
+    next = updatePersonalTarget(before, edited); // throws if id vanished locally (R2-edit)
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  try {
+    saveProfile(next);
+  } catch (e) {
+    return `Could not save locally: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  editingTargetId = null;
+  rerenderCrudSection(profileName);
+
+  // Fresh-GET → apply by id → PUT whole list (review R1-edit).
+  const serverList = await getProfileTargets(profileName);
+  if (!serverList.ok) {
+    return rollbackEdit(profileName, before, edited, apiSyncErrorMessage(serverList.reason, serverList.detail));
+  }
+  const idx = serverList.data.targets.findIndex((t) => t.id === edited.id);
+  if (idx === -1) {
+    // Deleted on another device — honest failure, not a silent re-create.
+    return rollbackEdit(profileName, before, edited, 'target no longer on the server (deleted on another device?)');
+  }
+  const mergedList = serverList.data.targets.slice();
+  mergedList[idx] = edited;
+  const put = await putProfileTargets(profileName, mergedList);
+  if (put.ok) {
+    showToast(`Updated "${edited.name}" — map & queue refresh on the next hourly update`, 'success');
+    return 'ok';
+  }
+  return rollbackEdit(profileName, before, edited, apiSyncErrorMessage(put.reason, put.detail));
+}
+
+/** Surgical rollback: restore ONLY the edited target to its pre-edit state
+ *  (Codex review). We reload the CURRENT profile — it may have changed locally
+ *  while the request was in flight (a concurrent add/delete) — and revert just
+ *  that one target, leaving everything else untouched. If the target was
+ *  deleted meanwhile, we leave it deleted. Then re-render + toast. */
+function rollbackEdit(profileName: string, before: Profile, edited: PersonalTarget, msg: string): string {
+  const original = before.additions.find((t) => t.id === edited.id);
+  const current = safeLoadProfile(profileName);
+  if (current && original) {
+    const idx = current.additions.findIndex((t) => t.id === edited.id);
+    if (idx !== -1) {
+      const restored = current.additions.slice();
+      restored[idx] = original;
+      try {
+        saveProfile({ ...current, additions: restored });
+      } catch {
+        /* surface the network error, not the save failure */
+      }
+    }
+  }
+  rerenderCrudSection(profileName);
+  showToast(`Edit failed: ${msg}`, 'error');
+  return msg;
 }
 
 /** Optimistic delete: persist locally, re-render, fire API, rollback on
@@ -1821,17 +2036,23 @@ async function handleJsonImportReplace(
 export const _test = {
   handleAdd,
   handleDelete,
+  handleEdit,
   handleToggleCurated,
   handleCsvImport,
   handleJsonImportReplace,
   hydratePersonalTargets,
   hydrateShotCounts,
+  openEditTargetForm,
+  /** Get / set the module-scope edit-mode flag from tests. */
+  getEditingTargetId: (): string | null => editingTargetId,
+  setEditingTargetId: (id: string | null): void => { editingTargetId = id; },
   /** Reset the per-session hydrated-profiles set. Tests use this to
    *  simulate "fresh page load" between assertions. */
   resetHydrationState: (): void => {
     hydratedProfiles.clear();
     shotCountsFetched.clear();
     shotCountsByProfile.clear();
+    editingTargetId = null;
   },
   /** v3 — reset curated-catalog cache between tests so a stub catalog
    *  from one test doesn't leak into the next. Production code never

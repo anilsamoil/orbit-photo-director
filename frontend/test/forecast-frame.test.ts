@@ -119,7 +119,7 @@ describe('imagery badge wording follows the layer truth (V4-P2)', () => {
 
   it('CRITICAL regression: at Now the observed wording renders, never forecast', () => {
     ensureImageryDateBadge(container, FC_MANIFEST);
-    expect(badge().textContent).toBe('Imagery: 2026-06-09');
+    expect(badge().textContent).toContain('Imagery: 2026-06-09');
   });
 
   it('scrubbed with a frame available → GFS forecast wording with horizon + run', () => {
@@ -149,7 +149,7 @@ describe('imagery badge wording follows the layer truth (V4-P2)', () => {
     setLookahead(360, false);
     ensureImageryDateBadge(container, FC_MANIFEST);
     setLookahead(0, false); // badge auto-refreshes via setLookahead
-    expect(badge().textContent).toBe('Imagery: 2026-06-09');
+    expect(badge().textContent).toContain('Imagery: 2026-06-09');
   });
 });
 

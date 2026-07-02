@@ -61,7 +61,7 @@ body {
  *   suffix ("over Pacific Ocean"); keep the coordinates. Shrink
  *   horizontal padding so every pixel counts for content.
  * < 430px (iPhone portrait, the common case): hide the brand text
- *   ("Orbit Photo Director"); keep the 🛰️ emoji as a visual anchor.
+ *   ("SNAP"); keep the 🛰️ emoji as a visual anchor.
  *   Tab buttons get tighter padding so the four-tab row stays one line.
  *
  * The flex-wrap: wrap on .topbar above gives us a graceful fallback
@@ -81,6 +81,16 @@ body {
 }
 
 .brand-mark { font-size: 1.2rem; }
+
+/* Recursive acronym: "SNAP" reads prominent (inherits .brand font-weight 600);
+ * the expansion "(SNAP's Not an Astro Photographer)" trails smaller + dimmer.
+ * Hidden < 860px (see responsive block below) so the busy topbar stays tidy. */
+.brand-expansion {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 
 /* Live ISS sub-point in the topbar — tells the user where the station is
  * right now, in seconds, so an empty queue isn't ambiguous ("over Pacific
@@ -241,6 +251,13 @@ body {
 
 /* Responsive topbar — placed AFTER the base .topbar/.tabs/.tab rules so the
  * overrides win on source order (see the note above the .topbar rule). */
+@media (max-width: 860px) {
+  /* The recursive-acronym expansion is verbose; drop it once the topbar
+   * tightens so brand + readouts + 5 tabs stay one line. iPad landscape (the
+   * rail-mounted view, 1194px) keeps it; iPad portrait / phones show just
+   * "JACK". */
+  .brand-expansion { display: none; }
+}
 @media (max-width: 500px) {
   .iss-now .iss-region { display: none; }
   .topbar { padding: 0.6rem 0.7rem; }
@@ -1253,6 +1270,14 @@ body.shotlist-bar-visible main {
   font-weight: 600;
 }
 
+/* The IR overlay button shows text ("IR"), not a glyph like its row-mates —
+ * size it to sit cleanly alongside them (Feature C). */
+.time-btn-ir {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
 /* Time / Score sort toggle in Queue + Upcoming pane headers.
  * Defaults to Time per operator feedback (anilsamoilenko 2026-05-16):
  * "chronological in queue would be better." Score-sort stays available
@@ -1578,6 +1603,18 @@ body.shotlist-bar-visible main {
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.88rem;
+}
+/* Inline edit form (Jack 2026-06-23) — vertical stack so the four labelled
+ * fields + Save/Cancel never overflow a narrow iPad. Accent border marks the
+ * row as being edited. */
+.profile-crud-row-editing {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface-2);
+  border: 1px solid var(--accent, #5cd0ff);
+  border-radius: 6px;
 }
 .profile-crud-name {
   flex: 1;
@@ -2282,10 +2319,68 @@ body.shotlist-bar-visible main {
   color: var(--text);
 }
 .pass-thumbnail-panel {
-  /* Root when photo conditions are present: thumbnail box + conditions
-   * block as siblings, spanning the card column (D4 full width). */
+  /* Root: a flex top row (thumbnail + nearest-station weather) with the
+   * photo-conditions block spanning full width below (D4). */
   display: block;
 }
+/* Thumbnail + nearest-station weather, side by side; weather wraps below the
+ * 256px image on a narrow card (flex-wrap — no separate media query needed). */
+.pass-thumbnail-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+/* Nearest-station weather column — airport ground-truth (METAR + plain TAF)
+ * that catches the low cloud the satellite/IR misses. Self-collapses (hidden)
+ * when no station is within range (ocean/remote) or offline, so it never
+ * clutters a pass that has nothing useful to show. */
+.pass-thumbnail-wx {
+  flex: 1 1 160px;
+  min-width: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text);
+}
+.pass-thumbnail-wx[hidden] { display: none; }
+.pass-thumbnail-wx-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.15rem;
+}
+.pass-thumbnail-wx-loading {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+.pass-thumbnail-wx-cover { font-weight: 600; }
+.pass-thumbnail-wx-meta,
+.pass-thumbnail-wx-taf {
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+.pass-thumbnail-wx-taf { margin-top: 0.1rem; }
+.pass-thumbnail-wx-degraded {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  opacity: 0.8;
+}
+/* Flight-category chip — standard aviation colors (VFR green … LIFR magenta). */
+.pass-thumbnail-wx-chip {
+  display: inline-block;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  vertical-align: middle;
+  color: #0b0d12;
+}
+.pass-thumbnail-wx-chip[data-cat='VFR'] { background: #3ddc84; }
+.pass-thumbnail-wx-chip[data-cat='MVFR'] { background: #4aa3ff; }
+.pass-thumbnail-wx-chip[data-cat='IFR'] { background: #ff5c5c; color: #fff; }
+.pass-thumbnail-wx-chip[data-cat='LIFR'] { background: #d56bff; color: #fff; }
 
 /* ── Pin → add-to-targets footer (Jack 2026-06-11) ───────────────────────── */
 .pin-add-footer {

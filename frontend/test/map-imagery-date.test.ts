@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { _resetMapStateForTest, ensureImageryDateBadge, setLookahead } from '../src/map';
+import { _resetMapStateForTest, ensureImageryDateBadge, formatImageryAge, setLookahead } from '../src/map';
 import type { Manifest } from '../src/types';
 
 const baseManifest: Manifest = {
@@ -26,7 +26,9 @@ describe('ensureImageryDateBadge', () => {
     ensureImageryDateBadge(container, baseManifest);
     const badge = container.querySelector<HTMLElement>('.map-imagery-date');
     expect(badge).not.toBeNull();
-    expect(badge!.textContent).toBe('Imagery: 2026-05-04');
+    // Date stays deterministic; a live "~N old" age is appended (B1).
+    expect(badge!.textContent).toContain('Imagery: 2026-05-04');
+    expect(badge!.textContent).toMatch(/old$/);
     expect(badge!.hidden).toBe(false);
   });
 
@@ -35,7 +37,7 @@ describe('ensureImageryDateBadge', () => {
     ensureImageryDateBadge(container, { ...baseManifest, cloud_composite_hour: '2026-05-05T00:00:00Z' });
     const badges = container.querySelectorAll('.map-imagery-date');
     expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent).toBe('Imagery: 2026-05-05');
+    expect(badges[0]?.textContent).toContain('Imagery: 2026-05-05');
   });
 
   it('hides the badge when cloud_composite_hour is malformed', () => {
@@ -58,11 +60,29 @@ describe('ensureImageryDateBadge', () => {
     it('re-renders automatically when the scrub state changes (no renderMap needed)', () => {
       ensureImageryDateBadge(container, baseManifest); // live → caches args
       const badge = container.querySelector<HTMLElement>('.map-imagery-date');
-      expect(badge!.textContent).toBe('Imagery: 2026-05-04');
+      expect(badge!.textContent).toContain('Imagery: 2026-05-04');
       setLookahead(360, false); // setLookahead refreshes the badge itself
       expect(badge!.textContent).toBe('Clouds: observed 2026-05-04 — not forecast');
       setLookahead(0, false);
-      expect(badge!.textContent).toBe('Imagery: 2026-05-04');
+      expect(badge!.textContent).toContain('Imagery: 2026-05-04');
     });
+  });
+});
+
+describe('formatImageryAge', () => {
+  const composite = Date.parse('2026-05-04T11:00:00Z');
+  it('minutes under 90', () => {
+    expect(formatImageryAge(composite, composite + 40 * 60_000)).toBe('~40m old');
+  });
+  it('hours under 24', () => {
+    expect(formatImageryAge(composite, composite + 5 * 3_600_000)).toBe('~5h old');
+    expect(formatImageryAge(composite, composite + 23 * 3_600_000)).toBe('~23h old');
+  });
+  it('days at/after 24h, with singular/plural', () => {
+    expect(formatImageryAge(composite, composite + 24 * 3_600_000)).toBe('~1 day old');
+    expect(formatImageryAge(composite, composite + 48 * 3_600_000)).toBe('~2 days old');
+  });
+  it('never negative (clock skew / future composite)', () => {
+    expect(formatImageryAge(composite, composite - 10 * 60_000)).toBe('~0m old');
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Orbit Photo Director — frontend entry point.
+ * SNAP (SNAP's Not an Astro Photographer) — frontend entry point.
  *
  * Loads manifest.json once, dereferences every artifact through it (so mixed-version
  * reads are impossible), renders the queue, wires up Shoot/Skip POST actions, and
@@ -41,6 +41,7 @@ import { setupCupolaPane } from './cupola-pane';
 import { gibsTrueColorUrl, precacheTilesForTargets, precacheWorldBaseTiles, yesterdayIso } from './tile-precache';
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
+import { aggregateShootCounts, claimMapShotFetch, publishShotCounts } from './shot-counts';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -1025,6 +1026,17 @@ function bindTabs(): void {
       mapModule = null; // force re-import on next attempt
     });
     setActive('view-map', tabMap);
+    // Hydrate shot counts so a target popup can answer "have I shot it yet"
+    // WITHOUT waiting for a Profile-tab visit (the popup reads the shared
+    // store; the Profile pane was previously the only thing that filled it).
+    // Once per session per profile; offline / no-token → fetchLog returns []
+    // → no badges, never an error.
+    const pn = getCurrentProfile()?.name;
+    if (pn && claimMapShotFetch(pn)) {
+      void fetchLog('', 500, pn)
+        .then((entries) => publishShotCounts(aggregateShootCounts(entries)))
+        .catch(() => { /* leave the store empty — badges stay quiet */ });
+    }
   });
   if (tabProfile) {
     tabProfile.addEventListener('click', () => {
@@ -1039,6 +1051,36 @@ function bindTabs(): void {
   tabLog.addEventListener('click', () => {
     setActive('view-log', tabLog);
     void loadLogPane();
+  });
+
+  // Map popup "Edit target" deep-link (Jack 2026-06-23). The map.ts popup
+  // dispatches opd-edit-target with the personal-target id; switch to the
+  // Profile tab, render the pane, then open the inline edit form. Setting the
+  // edit flag is honored by buildPersonalRow even if it lands before the pane
+  // finishes rendering, so the ordering is race-safe.
+  window.addEventListener('opd-edit-target', (e) => {
+    const detail = (e as CustomEvent<{ targetId?: unknown }>).detail;
+    const targetId = detail && typeof detail.targetId === 'string' ? detail.targetId : null;
+    if (!targetId) return;
+    const profileName = getCurrentProfile()?.name;
+    if (!profileName) return;
+    if (tabProfile) setActive('view-profile', tabProfile);
+    void loadProfilePane().then(async () => {
+      const crud = await import('./profile-crud');
+      crud.openEditTargetForm(profileName, targetId);
+    }).catch((err) => {
+      // A flaky lazy import (LOS mid-chunk) must not leave the operator on a
+      // blank Profile pane with no feedback (Codex review). Surface it; they
+      // can tap Edit on the row manually once the chunk loads.
+      console.error('[edit] deep-link failed to open the edit form:', err);
+      const toast = document.getElementById('toast');
+      if (toast) {
+        toast.className = 'toast error show';
+        toast.textContent = 'Could not open the edit form — open Profile › your target › Edit.';
+        toast.hidden = false;
+        window.setTimeout(() => { toast.classList.remove('show'); toast.hidden = true; }, 3500);
+      }
+    });
   });
 }
 
