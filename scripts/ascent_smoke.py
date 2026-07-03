@@ -59,13 +59,12 @@ PASS_MAX_DISTANCE_KM = 800.0
 
 
 def _synth_target(la) -> dict:
-    return {
-        "id": f"launch:{la.id}",
-        "name": la.name,
-        "lat": la.site_lat,
-        "lon": la.site_lon,
-        "priority": 5,
-    }
+    # Use the PRODUCTION target builder so this harness can never drift from
+    # the schema find_passes expects again (2026-07-03: a hand-rolled copy
+    # here predated the geom{} target shape and crashed the whole smoke).
+    from generator.main import _synthesize_launch_target
+
+    return _synthesize_launch_target(la)
 
 
 def main() -> int:
