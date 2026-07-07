@@ -33,7 +33,10 @@ DEFAULT_TOP_UPCOMING = 10
 # When empty, the multiplexer is a no-op and the canonical single-tenant
 # output (passes.json + friends) is the only thing written — useful for
 # rollback or local dev where the Worker API isn't reachable.
-PROFILE_NAMES: tuple[str, ...] = ("anil", "chris", "jack", "josh")
+# kikina + dubrov added 2026-07-07: Soyuz MS-29 cosmonaut crewmates (Anna
+# Kikina, Pyotr Dubrov), pre-seeded with Russian program sites + hometowns
+# via the Worker API.
+PROFILE_NAMES: tuple[str, ...] = ("anil", "chris", "dubrov", "jack", "josh", "kikina")
 # Base URL of the Cloudflare Worker exposing /api/profiles/<name>/targets
 # (see worker/src/profiles.ts). Overridable in tests + local dev.
 PROFILE_API_BASE = "https://map.astroanil.dev"
