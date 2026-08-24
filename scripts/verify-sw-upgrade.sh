@@ -18,6 +18,26 @@
 #   scripts/verify-sw-upgrade.sh https://localhost:4173  # vite preview
 #
 # Exit code: 0 = all checks pass, non-zero = at least one failed.
+#
+# ---------------------------------------------------------------------------
+# KNOWN LIMITATION (2026-08-24): against https://map.astroanil.dev this script
+# reports ALL 15 checks failed, and that is NOT a deploy failure.
+#
+# The 2026-07-10 security lockdown put map.astroanil.dev behind Cloudflare
+# Access (single-identity policy). An unauthenticated curl now gets a 302 to
+# anilsamoil.cloudflareaccess.com, so every check compares against the Access
+# login HTML instead of the site. The script has no Access credentials and
+# cannot get past the gate headlessly.
+#
+# Do not chase this during an incident. To verify a deploy, read the objects
+# straight out of R2, which is what the site serves:
+#
+#   rclone copy r2:map-astroanil-dev/sw.js /tmp/ && \
+#     grep -c 'skipWaiting()\|clientsClaim()\|networkTimeoutSeconds:8' /tmp/sw.js
+#
+# Fixing this properly means minting an Access service token and sending
+# CF-Access-Client-Id / CF-Access-Client-Secret headers on every curl here.
+# ---------------------------------------------------------------------------
 
 set -uo pipefail
 # Don't `-e` — we want to continue on individual check failures and report
