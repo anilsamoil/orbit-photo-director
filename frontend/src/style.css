@@ -305,6 +305,35 @@ main {
     "actions actions";
 }
 
+/* Launch cards carry a warm background wash + brighter edge so a rocket is
+ * findable while scrolling, not just once you read the meta row (operator
+ * request 2026-08-24 — launches are the highest-priority shot on the board).
+ * Deliberately subtle: this sits behind body text, so it stays a wash rather
+ * than the saturated fill the 🚀 tags use. Hues match the existing tag
+ * language — orange for OVERHEAD, warmer yellow for ASCENT — so card and tag
+ * reinforce each other instead of introducing a third color story.
+ * A left border-accent carries the same signal for anyone who can't separate
+ * the background hues. */
+.card.launch {
+  border-left-width: 3px;
+}
+.card.launch-overhead-card {
+  background:
+    linear-gradient(rgba(255, 138, 61, 0.07), rgba(255, 138, 61, 0.07)),
+    var(--surface);
+  border-color: rgba(255, 138, 61, 0.38);
+  border-left-color: #ff8a3d;
+}
+.card.launch-ascent-card {
+  background:
+    linear-gradient(rgba(255, 212, 92, 0.07), rgba(255, 212, 92, 0.07)),
+    var(--surface);
+  border-color: rgba(255, 212, 92, 0.38);
+  border-left-color: #ffd45c;
+}
+
+/* Stale wins over the launch wash — a stale launch card must still read as
+ * stale, so keep this after the launch rules. */
 .card.stale {
   opacity: 0.55;
   filter: grayscale(40%);

@@ -934,7 +934,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # banner overlay (V4 work; not in this lane).
     launches_cache = settings.cache_dir / "launches.json"
     launch_fetch = fetch_upcoming_launches(launches_cache, ttl_hours=1.0, now=n)
-    actionable_launches = filter_launches(launch_fetch.launches)
+    actionable_launches = filter_launches(launch_fetch.launches, now=n)
     launch_pass_entries: list[dict[str, Any]] = []
     for la in actionable_launches:
         site_target = _synthesize_launch_target(la)
@@ -986,7 +986,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # flies shifts, not WHERE). predict_ascent_pass walks the profile at
     # 15s cadence and picks the best viewable instant within the window.
     # The OVERHEAD + ASCENT entries for the same launch coexist per D7.
-    ascent_actionable = filter_ascent_launches(launch_fetch.launches)
+    ascent_actionable = filter_ascent_launches(launch_fetch.launches, now=n)
     ascent_pass_entries: list[dict[str, Any]] = []
     if settings.enable_ascent and ascent_actionable:
         for la in ascent_actionable:

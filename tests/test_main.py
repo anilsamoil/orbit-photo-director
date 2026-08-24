@@ -838,12 +838,43 @@ def test_run_tick_raises_when_tle_age_exceeds_hard_fail(
 
 
 def _seed_launches_cache(
-    settings: Settings, fixture_path: Path, mtime_age_seconds: float = 0.0
+    settings: Settings,
+    fixture_path: Path,
+    mtime_age_seconds: float = 0.0,
+    rebase_to: datetime | None = None,
 ) -> Path:
-    """Pre-seed the LL2 cache so run_tick doesn't hit the network."""
+    """Pre-seed the LL2 cache so run_tick doesn't hit the network.
+
+    `rebase_to` shifts every launch in the fixture so the EARLIEST one lands at
+    that instant, preserving the relative spacing (and therefore each row's NET
+    half-width) that the filter tests depend on. Needed because tests pin `now`
+    to the cached TLE's epoch, while the fixture carries real 2026 dates —
+    a gap far beyond LAUNCH_HORIZON_MAX_SECONDS.
+    """
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     cache = settings.cache_dir / "launches.json"
-    cache.write_text(fixture_path.read_text())
+    text = fixture_path.read_text()
+    if rebase_to is not None:
+        payload = json.loads(text)
+        stamps = ("net", "window_start", "window_end")
+
+        def _parse(value: str) -> datetime:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        earliest = min(
+            _parse(r[k])
+            for r in payload.get("results", [])
+            for k in stamps
+            if isinstance(r.get(k), str)
+        )
+        delta = rebase_to - earliest
+        for row in payload.get("results", []):
+            for key in stamps:
+                if isinstance(row.get(key), str):
+                    shifted = _parse(row[key]) + delta
+                    row[key] = shifted.isoformat().replace("+00:00", "Z")
+        text = json.dumps(payload)
+    cache.write_text(text)
     if mtime_age_seconds:
         import os
         ts = time.time() - mtime_age_seconds
@@ -856,8 +887,15 @@ def test_run_tick_status_json_includes_launches_fields(
 ) -> None:
     """ARCH-1: launches health folds into status.json."""
     fixture = Path(__file__).parent / "fixtures" / "ll2-response-2026-05.json"
-    _seed_launches_cache(settings_in_tmp, fixture)
     now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    # `now` stays pinned to the cached_tle fixture's epoch (moving it trips the
+    # 96h TLE hard-fail), so the launch fixture is re-dated to sit just after it
+    # instead. The fixture's real dates are ~570 days past `now`, which
+    # LAUNCH_HORIZON_MAX_SECONDS now correctly rejects — previously nothing
+    # bounded lead time, so the stale dates sailed through.
+    _seed_launches_cache(
+        settings_in_tmp, fixture, rebase_to=now + timedelta(days=1)
+    )
     run_tick(settings_in_tmp, now=now)
 
     status = json.loads(

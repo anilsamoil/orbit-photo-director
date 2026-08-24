@@ -44,6 +44,17 @@ import requests
 LL2_DEFAULT_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
 LL2_FETCH_TIMEOUT_SECONDS = 15
 
+# LL2 paginates /launch/upcoming/ and defaults to 10 results. Ten rows is
+# nowhere near enough: ~86% of the upcoming feed sits at status TBD, so a
+# 10-row page is mostly spent on rows the status filter drops, and the visible
+# horizon collapses to about a week. Measured 2026-08-24 against 363 upcoming
+# launches: limit=10 yielded 5 ascent / 1 overhead over a 6-day horizon, while
+# limit=50 yielded 11 ascent / 5 overhead over 128 days. 100 is the server-side
+# maximum (larger values clamp to it) and leaves headroom as the feed grows.
+# One request per hourly tick, so this costs no extra calls against the LL2
+# rate limit — just a bigger page on the call we already make.
+LL2_PAGE_LIMIT = 100
+
 # Status abbrevs that count as "actionable, plan around it." Everything else
 # (TBD, Hold, Removed, Failed, etc.) is filtered out before pass-finding.
 # LL2 status abbrev field is stable across the 2.2.0 schema.
@@ -71,6 +82,30 @@ NET_WINDOW_MAX_SECONDS = PASS_WINDOW_SECONDS
 # narrow on the day-of. The single best ISS-viewing instant within that window
 # is still picked by predict_ascent_pass() at 15s cadence.
 ASCENT_NET_WINDOW_MAX_SECONDS = 21600  # 6 hours
+
+# How far ahead of *now* a launch may sit and still get ISS geometry predicted.
+#
+# This gate is new in the same change that added LL2_PAGE_LIMIT, and it exists
+# because of that change. Before it, the horizon was an ACCIDENT: LL2's default
+# 10-row page happened to span about six days, so nothing further out was ever
+# considered. Raising the page size to 100 removed that accidental ceiling and
+# exposed launches up to +56 days to find_passes / predict_ascent_pass — which
+# neither filter bounded, because neither ever had to.
+#
+# That matters because ISS geometry at those leads is not merely imprecise, it
+# is meaningless. SGP4 error for the ISS grows a few km/day nominally, but a
+# single routine reboost inside the window shifts the true position by ~1000 km
+# — past PASS_MAX_DISTANCE_KM (800), so the prediction flips between "pass" and
+# "no pass" on every TLE refresh. A card built on that is fabricated precision,
+# and the operator cannot tell it apart from a real one from orbit.
+#
+# 7 days keeps every launch the accidental horizon used to catch (measured
+# 2026-08-24: 6 ascent / 2 overhead vs the old page's 5 / 1, so this is still a
+# net gain over the pre-limit behavior) while cutting the far tail entirely.
+# Follow-up, tracked separately: derive score_components.tle_freshness from
+# t0 - tle.epoch instead of hardcoding 1.0, so lead time is visible on the card
+# rather than implied to be perfect.
+LAUNCH_HORIZON_MAX_SECONDS = 7 * 24 * 3600
 
 log = logging.getLogger(__name__)
 
@@ -181,22 +216,25 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
     )
 
 
-def filter_launches(launches: list[Launch]) -> list[Launch]:
+def filter_launches(launches: list[Launch], now: datetime | None = None) -> list[Launch]:
     """Apply the actionable-status + tight-NET filters for OVERHEAD geometry.
     Inclination filter happens later (find_passes returns no opportunities
     for sites the ISS can't pass over, which is the right encoding — no need
     to pre-filter here)."""
     out: list[Launch] = []
+    n = now or datetime.now(tz=UTC)
     for la in launches:
         if la.status_abbrev not in LL2_GO_STATUS_ABBREVS:
             continue
         if la.net_window_seconds > NET_WINDOW_MAX_SECONDS:
             continue
+        if (la.t0 - n).total_seconds() > LAUNCH_HORIZON_MAX_SECONDS:
+            continue
         out.append(la)
     return out
 
 
-def filter_ascent_launches(launches: list[Launch]) -> list[Launch]:
+def filter_ascent_launches(launches: list[Launch], now: datetime | None = None) -> list[Launch]:
     """Like filter_launches but with the looser ASCENT_NET_WINDOW threshold.
 
     OVERHEAD geometry needs a tight NET window because we predict the exact
@@ -208,10 +246,13 @@ def filter_ascent_launches(launches: list[Launch]) -> list[Launch]:
     cadence and picks the single best viewable instant within the window.
     """
     out: list[Launch] = []
+    n = now or datetime.now(tz=UTC)
     for la in launches:
         if la.status_abbrev not in LL2_GO_STATUS_ABBREVS:
             continue
         if la.net_window_seconds > ASCENT_NET_WINDOW_MAX_SECONDS:
+            continue
+        if (la.t0 - n).total_seconds() > LAUNCH_HORIZON_MAX_SECONDS:
             continue
         out.append(la)
     return out
@@ -354,7 +395,11 @@ def fetch_upcoming_launches(
 
     # Stale cache (or no cache): try the network.
     try:
-        resp = requests.get(url, timeout=LL2_FETCH_TIMEOUT_SECONDS)
+        resp = requests.get(
+            url,
+            timeout=LL2_FETCH_TIMEOUT_SECONDS,
+            params={"limit": LL2_PAGE_LIMIT},
+        )
         resp.raise_for_status()
         text = resp.text
         # Parse FIRST. If LL2 returned an HTML error page captured as 200 OR

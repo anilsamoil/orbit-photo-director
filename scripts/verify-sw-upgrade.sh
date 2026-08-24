@@ -53,14 +53,17 @@ SW_BODY=$(curl -s "$URL/sw.js")
 check "HTTP 200"     "$SW_HEADERS" "^HTTP.* 200"
 check "JS content-type" "$SW_HEADERS" "content-type: application/javascript"
 
-# 2. SW lifecycle directives — skipWaiting present, clientsClaim absent
-# This is the multi-tab safety property the V2 plan was designed to enforce.
+# 2. SW lifecycle directives — both skipWaiting and clientsClaim present.
+# clientsClaim flipped absent -> present on 2026-08-24 (operator decision); this
+# assertion was inverted at the same time. Left as an explicit check rather than
+# deleted so an accidental revert still trips a red here instead of silently
+# changing first-load tile-seeding behavior.
 echo
-echo "[2/6] SW lifecycle: skipWaiting yes, clientsClaim no"
+echo "[2/6] SW lifecycle: skipWaiting yes, clientsClaim yes"
 SKIP_COUNT=$(echo "$SW_BODY" | grep -oE 'skipWaiting\(\)' | wc -l | tr -d ' ' || echo 0)
 CLAIM_COUNT=$(echo "$SW_BODY" | grep -oE 'clientsClaim\(\)' | wc -l | tr -d ' ' || echo 0)
-check "skipWaiting() present (1+)" "$SKIP_COUNT" "^[1-9]"
-check "clientsClaim() absent (0)"  "$CLAIM_COUNT" "^0$"
+check "skipWaiting() present (1+)"  "$SKIP_COUNT"  "^[1-9]"
+check "clientsClaim() present (1+)" "$CLAIM_COUNT" "^[1-9]"
 
 # 3. Runtime cache strategies present
 echo

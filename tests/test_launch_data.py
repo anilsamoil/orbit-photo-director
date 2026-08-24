@@ -17,7 +17,10 @@ import requests
 
 from generator.launch_data import (
     ASCENT_NET_WINDOW_MAX_SECONDS,
+    LAUNCH_HORIZON_MAX_SECONDS,
+    LL2_PAGE_LIMIT,
     NET_WINDOW_MAX_SECONDS,
+    Launch,
     compute_schema_hash,
     fetch_upcoming_launches,
     filter_ascent_launches,
@@ -285,6 +288,101 @@ def test_fetch_hits_network_when_cache_stale(
     assert mock_get.call_count == 1
     assert len(result.launches) == 4
     assert result.last_successful_fetch == n  # fresh fetch timestamp
+
+
+def _launch_at(t0: datetime, *, net_window_seconds: int = 0) -> Launch:
+    """Minimal Go-status Launch with a controllable t0, for horizon tests."""
+    return Launch(
+        id="horizon-test",
+        name="Falcon 9 | Horizon Test",
+        t0=t0,
+        net_window_seconds=net_window_seconds,
+        site_lat=28.6,
+        site_lon=-80.6,
+        site_name="LC-39A",
+        rocket_type="Falcon 9 Block 5",
+        status_abbrev="Go",
+    )
+
+
+def test_far_future_launches_are_cut_by_the_horizon_gate() -> None:
+    """Launches too far out must not reach ISS geometry prediction.
+
+    Before LL2_PAGE_LIMIT, the horizon was accidental: LL2's default 10-row page
+    spanned about six days, so nothing further out was ever seen. Raising the
+    page size removed that ceiling and exposed launches up to +56 days, where a
+    single ISS reboost moves the true position ~1000 km — past
+    PASS_MAX_DISTANCE_KM — so the prediction is noise in both directions.
+    """
+    n = datetime(2026, 5, 11, tzinfo=UTC)
+    inside = _launch_at(n + timedelta(days=6))
+    outside = _launch_at(n + timedelta(days=8))
+    way_outside = _launch_at(n + timedelta(days=56))
+
+    both = [inside, outside, way_outside]
+    # Instantaneous NET window, so only the horizon gate can reject these.
+    assert [la.t0 for la in filter_launches(both, now=n)] == [inside.t0]
+    assert [la.t0 for la in filter_ascent_launches(both, now=n)] == [inside.t0]
+
+
+def test_horizon_gate_applies_to_ascent_not_just_overhead() -> None:
+    """The ascent filter is the one that actually fires in production.
+
+    filter_ascent_launches accepts a 6h NET window, so a far-future launch sails
+    past the NET check that bounds the overhead path. If the horizon gate were
+    only wired into filter_launches, the ascent pipeline would still publish
+    +56d cards — which is exactly the shape of the original defect.
+    """
+    n = datetime(2026, 5, 11, tzinfo=UTC)
+    # 2h NET window: fine for ascent, rejected by overhead's tight NET gate.
+    far = _launch_at(n + timedelta(days=30), net_window_seconds=7200)
+    assert filter_ascent_launches([far], now=n) == []
+
+
+def test_horizon_gate_keeps_the_near_term_launches_operators_shoot() -> None:
+    """The gate must not claw back the launches the page-limit fix unlocked."""
+    n = datetime(2026, 5, 11, tzinfo=UTC)
+    near = [_launch_at(n + timedelta(hours=h)) for h in (1, 24, 72, 144)]
+    assert len(filter_launches(near, now=n)) == len(near)
+    assert len(filter_ascent_launches(near, now=n)) == len(near)
+
+
+def test_horizon_is_bounded_and_covers_the_old_accidental_window() -> None:
+    # Must reach at least the ~6 days the 10-row page used to span, or the
+    # page-limit fix would be a net regression in card count.
+    assert LAUNCH_HORIZON_MAX_SECONDS >= 6 * 24 * 3600
+    # And must stay well inside the range where ISS SGP4 propagation is usable.
+    assert LAUNCH_HORIZON_MAX_SECONDS <= 10 * 24 * 3600
+
+
+def test_fetch_requests_a_full_page_not_ll2_default(
+    cache_path: Path, fixture_text: str
+) -> None:
+    """LL2 defaults /launch/upcoming/ to 10 results and we must override it.
+
+    Ten rows is silently near-useless: ~86% of the upcoming feed is status TBD,
+    so the status filter eats most of the page and the visible horizon collapses
+    to roughly a week. The failure mode leaves no error in the logs — the feed
+    just quietly goes thin — so pin the param explicitly.
+    """
+    cache_path.write_text(fixture_text)
+    import os
+    n = datetime(2026, 5, 11, tzinfo=UTC)
+    old = (n - timedelta(hours=2)).timestamp()
+    os.utime(cache_path, (old, old))
+
+    class FakeResp:
+        text = fixture_text
+        def raise_for_status(self) -> None: ...
+
+    with patch("generator.launch_data.requests.get", return_value=FakeResp()) as mock_get:
+        fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
+
+    assert mock_get.call_count == 1
+    params = mock_get.call_args.kwargs.get("params") or {}
+    assert params.get("limit") == LL2_PAGE_LIMIT
+    # 100 is the LL2 server-side maximum; larger values clamp silently.
+    assert 50 <= LL2_PAGE_LIMIT <= 100
 
 
 def test_fetch_falls_back_to_cache_on_network_error(

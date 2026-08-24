@@ -71,11 +71,21 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,ico,woff2,geojson}'],
 
         // skipWaiting: new SW activates as soon as installed (doesn't sit in
-        // 'waiting' state). clientsClaim=false: existing tabs keep their old
-        // SW until navigation. Per V2 plan: prevents the "new SW + old JS"
-        // multi-tab race that comes with clientsClaim=true.
+        // 'waiting' state).
+        //
+        // clientsClaim flipped false -> true 2026-08-24 (operator decision).
+        // The V2 plan chose false to avoid a "new SW + old JS" multi-tab race,
+        // but the cost landed on the operator: with false, the already-open tab
+        // stays on its OLD service worker until a natural navigation, so
+        // refresh #1 re-serves the precached shell (stale data, old default
+        // tab) and only refresh #2 picks up the new build. That is the
+        // "have to hit refresh twice" report.
+        //
+        // Accepted tradeoff: the race needs two tabs open on different builds
+        // at once, which is not how a single ISS iPad is used, and the cost of
+        // the guard was paid on every single refresh.
         skipWaiting: true,
-        clientsClaim: false,
+        clientsClaim: true,
 
         // Don't precache the source-map files — they're huge and only useful
         // when the dev tools are open.
@@ -84,15 +94,25 @@ export default defineConfig({
         // Runtime cache routing per the locked V2 plan.
         runtimeCaching: [
           {
-            // manifest.json: NetworkFirst with 2s timeout. Falls back to cache
-            // when offline OR when the network is so slow it'd hang the boot
-            // path. The frontend's snapshot-first boot already handles the
-            // common LOS case; this is the SW-level second line of defense.
+            // manifest.json: NetworkFirst. Falls back to cache when offline OR
+            // when the network is so slow it'd hang the boot path. The
+            // frontend's snapshot-first boot already handles the common LOS
+            // case; this is the SW-level second line of defense.
+            //
+            // Timeout raised 2s -> 8s (operator report 2026-08-24: "have to hit
+            // refresh twice to get non-stale data"). ISS downlink RTT runs
+            // hundreds of ms to multiple seconds and degrades further near
+            // handover, so a 2s budget expired routinely and NetworkFirst
+            // served the cached manifest — indistinguishable from "the app is
+            // stale". The second refresh then hit a warm connection and
+            // succeeded, which is exactly the two-refresh pattern reported.
+            // 8s still bounds the boot path well under the snapshot-first
+            // fallback, and going to cache remains correct on a true LOS.
             urlPattern: /\/manifest\.json(\?.*)?$/,
             handler: 'NetworkFirst',
             options: {
               cacheName: 'opd-manifest',
-              networkTimeoutSeconds: 2,
+              networkTimeoutSeconds: 8,
               expiration: {
                 maxEntries: 1,
                 maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days; manifest changes hourly so this is just an upper bound

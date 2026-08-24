@@ -109,6 +109,16 @@ export function renderCard(
   const classes = ['card'];
   if (isStale) classes.push('stale');
   if (variant === 'forecast') classes.push('forecast');
+  // Card-level launch cue (operator request 2026-08-24). The meta-row tags
+  // already say "rocket" but only once you're reading the row; launches are
+  // the highest-priority shot on the board and need to be findable while
+  // scrolling past everything else. Kind-specific so ASCENT and OVERHEAD stay
+  // distinguishable at card level the same way their tags already are.
+  if (p.launch) {
+    const launchKind = p.launch.kind ?? p.launch.geometry;
+    classes.push('launch');
+    classes.push(launchKind === 'ascent' ? 'launch-ascent-card' : 'launch-overhead-card');
+  }
   card.className = classes.join(' ');
   card.dataset.targetId = p.target_id;
   card.dataset.passTime = p.closest_approach;

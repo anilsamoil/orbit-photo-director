@@ -127,6 +127,13 @@ async function doRefresh(): Promise<void> {
     currentlyOffline = true;
     renderOfflineBanner();
     renderQueue();
+    // Map is the default landing tab, and its only other render call site sits
+    // PAST the network fetch below. Without this, an offline cold boot paints
+    // the Queue pane (which isn't visible) and leaves the Map pane blank for
+    // the entire LOS, even though the manifest and track are already in
+    // localStorage and MapLibre is precached. Recovery would be an
+    // undiscoverable tap on the already-active Map tab.
+    renderPendingMapPane();
     return;
   }
   try {
@@ -311,6 +318,10 @@ async function doRefresh(): Promise<void> {
       currentlyOffline = true;
       renderOfflineBanner();
       renderQueue();
+      // Same reason as the !isOnline() early return above: a rejecting fetch
+      // (lie-fi — Wi-Fi associated, downlink dead) must still paint the Map
+      // landing tab from the snapshot instead of leaving it blank.
+      renderPendingMapPane();
     } else {
       setBanner(bannerError((e as Error).message));
     }
@@ -1427,6 +1438,23 @@ async function init(): Promise<void> {
     if (currentManifest) renderQueue();
   });
   bindTabs();
+  // Map is the default landing tab (view-map is set in HTML). Trigger the lazy
+  // load now so mapPaneWaitingForManifest is set; renderPendingMapPane() in
+  // doRefresh() will complete the render once the first manifest arrives.
+  loadMapPane().catch((err) => {
+    console.warn('[map] auto-init pre-manifest call failed:', err);
+    mapModule = null;
+  });
+  // Hydrate shot counts so target popups show "already shot" badges without
+  // needing a Profile-tab visit first. Mirrors the Map tab click handler.
+  {
+    const mapInitProfile = getCurrentProfile()?.name;
+    if (mapInitProfile && claimMapShotFetch(mapInitProfile)) {
+      void fetchLog('', 500, mapInitProfile)
+        .then((entries) => publishShotCounts(aggregateShootCounts(entries)))
+        .catch(() => { /* leave store empty — badges stay quiet */ });
+    }
+  }
   bindSortToggles();
   bindFilterToggles();
   bindHelp();
