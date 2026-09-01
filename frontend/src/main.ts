@@ -9,8 +9,10 @@
 import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { bindHelp } from './help';
-import { formatCountdown } from './countdown';
+import { formatCountdown, parseUtcIso } from './countdown';
 import {
+  ACCESS_REAUTH_PATH,
+  bannerAuthExpired,
   bannerError,
   bannerFromManifest,
   bannerLoading,
@@ -84,6 +86,66 @@ function setBanner(state: BannerState): void {
   if (!el) return;
   el.className = `banner banner-${state.level}`;
   el.textContent = state.text;
+  // Any non-auth banner clears the tap-to-reauth affordance, so a stale banner
+  // from an ordinary LOS never looks tappable.
+  el.onclick = null;
+  el.style.cursor = '';
+}
+
+/** Make the banner a one-tap escape to the Cloudflare Access login. */
+function setAuthBanner(state: BannerState): void {
+  setBanner(state);
+  const el = document.getElementById('status-banner');
+  if (!el) return;
+  el.style.cursor = 'pointer';
+  el.onclick = () => {
+    // Full navigation, not fetch: we WANT the browser to follow the 302 to the
+    // Access login and render it. location.assign on a denylisted path is the
+    // only route that escapes the precached shell.
+    window.location.assign(ACCESS_REAUTH_PATH);
+  };
+}
+
+/** True when Cloudflare Access has logged us out.
+ *
+ *  Detected with redirect:'manual' — a 302 to the Access origin surfaces as an
+ *  opaqueredirect response (type 'opaqueredirect', status 0) which is readable
+ *  without CORS. A normal fetch would follow the redirect cross-origin and fail
+ *  CORS instead, which is indistinguishable from a plain network error.
+ *
+ *  Probes a denylisted /api/ path so the service worker does not intercept it;
+ *  probing /manifest.json would hit the NetworkFirst route and get answered from
+ *  cache, which is the exact blindness this function exists to defeat.
+ *
+ *  Returns false on any error: a genuine LOS must NOT be misreported as a login
+ *  problem, or the operator taps through to a login page that cannot load.
+ */
+async function isAccessSessionExpired(): Promise<boolean> {
+  try {
+    const r = await fetch(ACCESS_REAUTH_PATH, {
+      method: 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      credentials: 'include',
+    });
+    return r.type === 'opaqueredirect';
+  } catch {
+    return false;
+  }
+}
+
+/** Generator ticks hourly, so anything past ~2.5h means we are not receiving
+ *  fresh manifests at all. Only then is the auth probe worth an extra request. */
+const AUTH_PROBE_AGE_MINUTES = 150;
+
+/** If the manifest looks frozen, find out whether it is an expired Access
+ *  session (fixable in one tap) rather than a real comms gap. */
+async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean> {
+  const ageMin = (Date.now() - parseUtcIso(generatedAtIso).getTime()) / 60000;
+  if (ageMin < AUTH_PROBE_AGE_MINUTES) return false;
+  if (!(await isAccessSessionExpired())) return false;
+  setAuthBanner(bannerAuthExpired(ageMin));
+  return true;
 }
 
 /** Render or hide the topbar "N pending sync" badge based on the calib queue.
@@ -297,7 +359,12 @@ async function doRefresh(): Promise<void> {
       // Stale data + failed probe = LOS. Show the "LOS" framing (snapshot-age
       // based, via renderOfflineBanner) rather than blaming the generator.
       renderOfflineBanner();
-    } else {
+    } else if (!(await maybeFlagExpiredSession(manifest.generated_at))) {
+      // Not an expired Access session, so the ordinary staleness banner is
+      // honest. When it IS expired, maybeFlagExpiredSession has already put the
+      // tappable sign-in banner up and we must not overwrite it — a "STALE"
+      // banner there is actively misleading, because it reads as a comms
+      // problem the operator can only wait out, when in fact one tap fixes it.
       setBanner(bannerWithLaunchesOverlay(
         bannerWithTleOverlay(
           bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
