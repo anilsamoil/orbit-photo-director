@@ -999,7 +999,7 @@ body.shotlist-bar-visible main {
 }
 #map-launch-coverage { flex: 0 0 auto; }
 
-@media (max-width: 600px) {
+@media (max-width: 1100px) {
   .view-map #map-pane {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
