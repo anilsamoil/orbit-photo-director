@@ -57,42 +57,54 @@ export async function postCalib(
   payload: CalibPayload,
   baseUrl = ''
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  return sendCalib(payload, baseUrl, true);
+}
+
+async function sendCalib(
+  payload: CalibPayload,
+  baseUrl: string,
+  queueFailures: boolean,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   const token = getToken();
-  if (!token) {
-    enqueue(payload);
-    return { ok: false, reason: 'token_missing' };
-  }
   const dedupe = payload.dedupe_key ?? makeDedupeKey(payload);
   const body = { ...payload, dedupe_key: dedupe };
+  const keep = () => { if (queueFailures) enqueue(body); };
   try {
     const resp = await fetch(`${baseUrl}/api/log`, {
       method: 'POST',
+      credentials: 'same-origin',
+      redirect: 'manual',
       headers: {
         'content-type': 'application/json',
-        'x-calib-token': token,
+        ...(token ? { 'x-calib-token': token } : {}),
       },
       body: JSON.stringify(body),
     });
+    if (resp.type === 'opaqueredirect' || resp.status >= 300 && resp.status < 400) {
+      keep();
+      return { ok: false, reason: 'sign_in_required' };
+    }
     if (!resp.ok) {
-      // v2 token-bug fix (Chris feedback 2026-05-27): on 401, KEEP the token
-      // (so the operator can see what's in their field and re-paste/edit) AND
-      // queue the payload (well-formed; will succeed once token is corrected).
-      // Surfaced as `server_401` so the UI shows a distinct "Token rejected"
-      // toast instead of the generic "Server rejected …" message. Per-call
-      // scoping: we do NOT add 401 to `shouldQueueOnStatus` — other endpoints
-      // (profile-api etc.) should still fail-fast on auth errors.
-      if (resp.status === 401) {
-        enqueue(body);
-        return { ok: false, reason: 'server_401' };
+      // Expired Access sessions must not discard a well-formed rating.
+      if (resp.status === 401 || resp.status === 403) {
+        keep();
+        return { ok: false, reason: `server_${resp.status}` };
       }
       if (shouldQueueOnStatus(resp.status)) {
-        enqueue(body);
+        keep();
       }
       return { ok: false, reason: `server_${resp.status}` };
     }
+    // An Access login page can be HTTP200. Only an API receipt confirms a save.
+    let receipt: { ok?: boolean } | null = null;
+    try { receipt = await resp.json(); } catch { /* keep the queued record */ }
+    if (receipt?.ok !== true) {
+      keep();
+      return { ok: false, reason: 'sign_in_required' };
+    }
     return { ok: true };
   } catch {
-    enqueue(body);
+    keep();
     return { ok: false, reason: 'network' };
   }
 }
@@ -107,20 +119,29 @@ export function queuedCalibCount(): number {
 }
 
 /** Drain queued calibrations on page load. Returns how many were sent successfully. */
-export async function drainQueue(baseUrl = ''): Promise<number> {
+let drainPromise: Promise<number> | null = null;
+export function drainQueue(baseUrl = ''): Promise<number> {
+  if (!drainPromise) drainPromise = drainQueued(baseUrl).finally(() => { drainPromise = null; });
+  return drainPromise;
+}
+
+async function drainQueued(baseUrl: string): Promise<number> {
   const queued = readQueue();
   if (queued.length === 0) return 0;
   let sent = 0;
-  const failed: CalibPayload[] = [];
   for (const p of queued) {
-    const r = await postCalib(p, baseUrl);
+    const r = await sendCalib(p, baseUrl, false);
     if (r.ok) {
       sent++;
-    } else {
-      failed.push(p);
+      // Preserve records added while this request was in flight.
+      const latest = readQueue();
+      const index = latest.findIndex((entry) => JSON.stringify(entry) === JSON.stringify(p));
+      if (index >= 0) {
+        latest.splice(index, 1);
+        writeQueue(latest);
+      }
     }
   }
-  writeQueue(failed);
   return sent;
 }
 

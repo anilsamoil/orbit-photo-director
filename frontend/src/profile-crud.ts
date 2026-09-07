@@ -1387,7 +1387,7 @@ function safeLoadProfile(name: string): Profile | null {
 }
 
 function apiSyncErrorMessage(reason: string, detail?: string): string {
-  if (reason === 'token_missing') return 'set the calib token in the Log tab first';
+  if (reason === 'token_missing') return 'set the legacy target-sync key in Profile first';
   if (reason === 'network') return 'network unreachable (queued for next sync)';
   if (reason === 'validation') return `server rejected (${detail ?? 'invalid'})`;
   if (reason === 'http') return `server error (${detail ?? 'http'})`;

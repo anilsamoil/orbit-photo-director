@@ -152,6 +152,10 @@
           <p class="pane-sub">Each astronaut has their own URL (e.g., <code>?u=jack</code>). Switching profiles reloads the page so per-profile caches stay clean.</p>
         </div>
         <div id="profile-body" class="profile-body"></div>
+        <details>
+          <summary>Legacy target-sync key</summary>
+          <div id="profile-token" class="log-token"></div>
+        </details>
         <!-- Photo lookup lives under Profile (v1.6.6.0). It's a side
              feature — paste a timestamp or drop a photo with EXIF and
              get a pin on the map. Was its own tab; the move keeps the
@@ -183,7 +187,7 @@
         <div class="log-header">
           <h2 class="log-title">Calibration log</h2>
           <div id="log-stats" class="log-stats"></div>
-          <div id="log-token" class="log-token"></div>
+          <a href="/api/__reauth">Sign in again</a>
         </div>
         <div id="log-list" class="log-list" aria-live="polite"></div>
         <div id="log-empty" class="empty" hidden>No calibration entries yet. Tap Shoot or Skip on a queue card to start logging.</div>

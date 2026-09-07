@@ -67,9 +67,14 @@ describe('mergeLogEntries', () => {
 });
 
 describe('fetchLog', () => {
-  it('returns [] when no token set', async () => {
+  it('reads through the signed-in session without a token', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] })));
+    vi.stubGlobal('fetch', fetchMock);
     const entries = await fetchLog();
     expect(entries).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/log'), expect.objectContaining({
+      credentials: 'same-origin', redirect: 'manual', headers: {},
+    }));
   });
 
   it('hits /api/log with the token header', async () => {

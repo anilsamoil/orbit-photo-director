@@ -479,7 +479,6 @@ function renderQueue(): void {
     // (top-5-by-score within 90 min stays the pool of candidates).
     const sorted = sortPassesByOrder(visible, getSortOrder());
     renderCards(cards, sorted, now, stale, onCardAction, {
-      tokenSet: !!getToken(),
       renderThumbnail: thumbnailRenderer(),
     });
     cards.prepend(...slots.launches.map((selection) => renderLaunchCard(selection, launches, now)));
@@ -855,16 +854,11 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
   const verb = action === 'shoot' ? 'Shoot' : 'Skip';
   if (result.ok) {
     showToast(`✓ ${verb} logged: ${p.target_name}`, 'success');
-  } else if (result.reason === 'token_missing') {
-    showToast(`Saved offline — set token in Log tab to sync`, 'warn');
   } else if (result.reason === 'network') {
     showToast(`Offline — ${verb.toLowerCase()} queued for next visit`, 'warn');
-  } else if (result.reason === 'server_401') {
-    // v2 token-bug fix (Chris feedback 2026-05-27): the payload has been
-    // queued; the operator's token field still shows what they pasted so
-    // they can correct it without re-typing the whole thing.
+  } else if (['server_401', 'server_403', 'sign_in_required'].includes(result.reason)) {
     showToast(
-      'Token rejected — re-paste in Log tab (your current token was not accepted by the server)',
+      'Saved offline — sign in again to sync',
       'error',
     );
   } else if (result.reason?.startsWith('server_4')) {
@@ -1200,6 +1194,7 @@ async function loadProfilePane(): Promise<void> {
     profilePaneModule = await import('./profile-ui');
   }
   profilePaneModule.renderProfilePane();
+  renderTokenStatus();
 }
 
 let lookupPaneBound = false;
@@ -1230,7 +1225,6 @@ async function loadLogPane(): Promise<void> {
   const emptyEl = document.getElementById('log-empty');
   const statsEl = document.getElementById('log-stats');
   if (!listEl || !emptyEl || !statsEl) return;
-  renderTokenStatus();
   // Pass the active profile name so the Log tab shows the current
   // astronaut's records — without this, the Worker's legacy-default
   // filter returns Anil's records to anyone with a token (e.g. Jack).
@@ -1244,11 +1238,11 @@ async function loadLogPane(): Promise<void> {
   });
 }
 
-/** Render the calibration-token status row in the log pane header. Lets the
- *  user paste/clear the x-calib-token without opening DevTools.
+/** Legacy profile-target API still uses its machine credential. Ratings use
+ *  the Google Access session and do not require this advanced control.
  */
 function renderTokenStatus(): void {
-  const slot = document.getElementById('log-token');
+  const slot = document.getElementById('profile-token');
   if (!slot) return;
   slot.replaceChildren();
   const hasToken = !!getToken();
@@ -1267,25 +1261,13 @@ function renderTokenStatus(): void {
     if (result === null) return; // cancel
     if (result === '') {
       clearToken();
-      showToast('Token cleared — Shoot/Skip will queue offline', 'warn');
+      showToast('Legacy target-sync key cleared', 'warn');
     } else {
       setToken(result);
-      showToast('Token saved — Shoot/Skip will sync to the Worker', 'success');
+      showToast('Legacy target-sync key saved', 'success');
       void drainQueue();
     }
-    void loadLogPane();
-    // Re-render the Queue so its buttons reflect the new token state.
-    if (currentManifest && currentTop5.length > 0) {
-      const cards = document.getElementById('cards');
-      if (cards) {
-        const now = Date.now();
-        const stale = isStaleManifest(currentManifest, now);
-        renderCards(cards, currentTop5, now, stale, onCardAction, {
-          tokenSet: !!getToken(),
-          renderThumbnail: thumbnailRenderer(),
-        });
-      }
-    }
+    renderTokenStatus();
   });
   slot.appendChild(btn);
 }

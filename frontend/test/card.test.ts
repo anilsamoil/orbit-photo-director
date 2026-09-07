@@ -255,25 +255,24 @@ describe('renderCard', () => {
     expect(el.querySelector('.tag.forecast-tag')).toBeTruthy();
   });
 
-  it('token-aware buttons: hint text + tooltip when no token is set', () => {
+  it('does not require a token to use calibration buttons', () => {
     const el = renderCard(
       samplePass(),
       NOW, false, () => undefined,
-      { tokenSet: false },
+      {},
     );
     const shoot = el.querySelector<HTMLButtonElement>('.btn-shoot');
     const skip = el.querySelector<HTMLButtonElement>('.btn-skip');
-    expect(shoot?.textContent).toContain('set token');
-    expect(skip?.textContent).toContain('set token');
-    expect(shoot?.title).toContain('queues offline');
-    expect(skip?.title).toContain('queues offline');
+    expect(shoot?.textContent).toBe('Shoot');
+    expect(skip?.textContent).toBe('Skip');
+    expect(el.textContent).not.toContain('set token');
   });
 
   it('token-aware buttons: plain "Shoot"/"Skip" when token is set', () => {
     const el = renderCard(
       samplePass(),
       NOW, false, () => undefined,
-      { tokenSet: true },
+      {},
     );
     const shoot = el.querySelector<HTMLButtonElement>('.btn-shoot');
     const skip = el.querySelector<HTMLButtonElement>('.btn-skip');

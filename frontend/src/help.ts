@@ -182,11 +182,11 @@ const HELP_SECTIONS: HelpSection[] = [
       },
       {
         icon: '🔑',
-        label: 'Calibration token',
+        label: 'Calibration sign-in',
         text:
-          'Shoot/Skip work offline and queue locally; they upload to the ' +
-          'server once you paste your calibration token in the Log tab. Until ' +
-          'then the buttons read "set token" and the pending count waits.',
+          'Shoot, Skip and ratings use your Google sign-in. Offline entries ' +
+          'queue locally and sync when connected and signed in. No extra ' +
+          'calibration token is needed.',
       },
     ],
   },

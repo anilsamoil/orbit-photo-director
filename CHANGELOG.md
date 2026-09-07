@@ -2,6 +2,16 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.22.0.2] - 2026-09-07
+
+- Use the existing Google Access session for Shoot, Skip, ratings and calibration
+  history. Validate signed Access JWTs server-side; reject forged identities,
+  wrong audiences, expired sessions and cross-origin session writes.
+- Remove the second-token prompt from calibration. Retain the legacy machine
+  credential and unchanged profile API under Profile's advanced key control.
+- Keep pending ratings on auth redirects or login HTML, require an API save
+  receipt and preserve entries added during an in-flight queue drain.
+
 ## [1.22.0.1] - 2026-09-07
 
 - Exclude Cloudflare authentication callbacks and the connectivity probe from
