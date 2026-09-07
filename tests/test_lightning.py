@@ -882,7 +882,7 @@ def test_glm_fetch_budget_constant_is_120s() -> None:
 
 def _glm_with_flashes(when, flashes):
     """Build a GLMSampler with a pre-populated index (no network)."""
-    from generator.lightning import GLMSampler, _GLMFlash, _bucket_key
+    from generator.lightning import GLMSampler, _bucket_key, _GLMFlash
     s = GLMSampler.__new__(GLMSampler)
     s._when = when
     s._window_minutes = 60

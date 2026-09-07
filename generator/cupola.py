@@ -24,11 +24,12 @@ numpy/math-only on the tick; the only network is forecast_sampler.add_targets
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from .ascent import _destination_along_bearing
-from .cloud import lighting_regime, sun_subpoint
+from .cloud import sun_subpoint
 from .manifest import utcnow_iso
 from .orbit import TLE, propagate
 
@@ -105,7 +106,9 @@ def _solar_zenith_deg(sun_lat: float, sun_lon: float, lat: float, lon: float) ->
     return math.degrees(math.acos(max(-1.0, min(1.0, cos_z))))
 
 
-def _disc_water_fraction(lat: float, lon: float, water_mask: Callable[[float, float], bool]) -> float:
+def _disc_water_fraction(
+    lat: float, lon: float, water_mask: Callable[[float, float], bool],
+) -> float:
     """Fraction of the 25-point keepsake-backdrop disc that is water (0..1)."""
     points = [(lat, lon)]
     for bearing in DISC_BEARINGS:

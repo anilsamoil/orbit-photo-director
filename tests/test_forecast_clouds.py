@@ -22,7 +22,6 @@ from PIL import Image
 
 from generator import forecast_clouds as fc
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -390,6 +389,7 @@ def test_run_tick_flag_on_adds_manifest_index(
     settings_in_tmp: Any, cached_tle: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
+
     from generator import forecast_clouds as fc_mod
     from generator.main import run_tick
 
@@ -425,6 +425,7 @@ def test_run_tick_render_failure_omits_key_and_does_not_fail_tick(
     settings_in_tmp: Any, cached_tle: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
+
     from generator import forecast_clouds as fc_mod
     from generator.main import run_tick
 

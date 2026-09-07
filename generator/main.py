@@ -1131,7 +1131,8 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # heuristic, which would produce garbage mixes). Caught so a failure here
     # never aborts the tick; the manifest just omits the key (byte-stable).
     cupola_windows_path: Path | None = None
-    if settings.enable_cupola_windows and forecast_sampler is not None and water_mask_obj is not None:
+    if (settings.enable_cupola_windows and forecast_sampler is not None
+            and water_mask_obj is not None):
         try:
             from .cupola import find_cupola_windows
             windows = find_cupola_windows(

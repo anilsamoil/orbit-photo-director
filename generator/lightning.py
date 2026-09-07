@@ -35,8 +35,8 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
-import time
 import math
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -658,7 +658,7 @@ class CombinedLightningSampler:
 
     def strongest_cluster_in_annulus(
         self, lat: float, lon: float,
-    ) -> "StrongCluster | None":
+    ) -> StrongCluster | None:
         """Sprite watch (Unit 7): delegate to the observed (GLM) sampler;
         forecast/placeholder samplers have no flash field → None."""
         obs = self._observed
