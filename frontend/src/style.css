@@ -1324,14 +1324,17 @@ body.shotlist-bar-visible main {
 }
 
 .map-legend {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
+  position: static;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  max-width: calc(100% - 24px);
+  margin: 4px 12px;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.7rem;
   background: rgba(11, 13, 18, 0.72);
   padding: 0.25rem 0.6rem;
-  border-radius: 12px;
+  border-radius: 4px;
   font-size: 0.72rem;
   color: var(--text-dim);
   pointer-events: none;
