@@ -999,6 +999,32 @@ body.shotlist-bar-visible main {
 }
 #map-launch-coverage { flex: 0 0 auto; }
 
+@media (max-width: 600px) {
+  .view-map #map-pane {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(200px, 1fr) auto auto;
+    gap: 4px;
+  }
+  .view-map #map-pane > .map-controls {
+    position: static;
+    transform: none;
+    margin: 0;
+    max-width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-self: start;
+  }
+  .view-map .map-controls-filter { grid-area: 1 / 1; justify-self: start; }
+  .view-map .map-controls-bearing { grid-area: 1 / 2; justify-self: end; }
+  .view-map .map-controls-bearing .time-btn { padding: 0.35rem 0.45rem; }
+  .view-map .map-controls-time { grid-area: 2 / 1 / 3 / 3; }
+  .view-map .map-controls-overlay { grid-area: 3 / 1 / 4 / 3; }
+  .view-map #map { grid-area: 4 / 1 / 5 / 3; }
+  .view-map #map-launch-coverage { grid-area: 5 / 1 / 6 / 3; }
+  .view-map .map-legend { grid-area: 6 / 1 / 7 / 3; }
+}
+
 /* ISS marker: silhouette icon + pulsing halo. Wrap is 40×16 px (matches
  * SVG viewBox) so the truss center lands on the lat/lon. The pulse halo
  * draws the eye when the dot is over a busy cloud-overlay region. */
