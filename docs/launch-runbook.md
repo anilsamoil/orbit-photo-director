@@ -60,6 +60,9 @@ Frontend support for future geometry-supported fixtures is not activation.
 All views share one hash/schema-validated revision. Queue allows at most two
 supported near-term captures, Upcoming covers 36 hours, Map covers seven days.
 Unknown trajectories have a site marker but no invented ascent corridor.
+Fresh, clean last-good data can retain a Queue slot within its source/artifact
+validity; failed refreshes are labeled, not silently refreshed. A stricter
+ready-only Queue policy is an explicit activation decision tracked in TODOS.md.
 
 ## Rollback And Acceptance
 
