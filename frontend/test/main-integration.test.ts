@@ -49,6 +49,9 @@ vi.mock('../src/map', () => ({
   renderMap: vi.fn(async () => {}),
   resizeMap: vi.fn(),
   dropLookupPin: vi.fn(),
+  getSatelliteTopbarReadouts: vi.fn(() => []),
+  applyFollowISS: vi.fn(),
+  tickSatelliteMarkers: vi.fn(),
 }));
 
 // Mock aurora module so refresh() doesn't fire real /api/kp fetches during
@@ -785,6 +788,13 @@ describe('main.ts: map pane vs manifest race (iPad QA loop 2026-06-11)', () => {
       expect(vi.mocked(mapModule.renderMap)).toHaveBeenCalledTimes(1);
     });
     expect(vi.mocked(mapModule.renderMap).mock.calls[0]?.[0]?.version).toBe('20260504T140000Z');
+
+    // Exercise the next 1Hz tick explicitly instead of depending on CI timing.
+    const { rerenderCountdowns } = await import('../src/main');
+    expect(() => rerenderCountdowns()).not.toThrow();
+    expect(mapModule.getSatelliteTopbarReadouts).toHaveBeenCalled();
+    expect(mapModule.applyFollowISS).toHaveBeenCalled();
+    expect(mapModule.tickSatelliteMarkers).toHaveBeenCalled();
   });
 
   it('does NOT render the map if the operator navigated away before data arrived', async () => {
