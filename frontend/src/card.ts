@@ -13,10 +13,6 @@ export type CardVariant = 'observed' | 'forecast';
 
 export interface RenderOptions {
   variant?: CardVariant;
-  /** When false, the Shoot/Skip buttons get a "(set token to sync)" hint
-   *  so first-time users understand why their clicks aren't persisting
-   *  to the calibration log. Click still queues to localStorage. */
-  tokenSet?: boolean;
   /** v2 — CEO zoom imagery (Jack feedback 2026-05-27). When provided, the
    *  card adds a 🌍 icon-button that toggles an inline thumbnail under the
    *  card. The factory returns the thumbnail DOM (renderPassThumbnail
@@ -107,7 +103,6 @@ export function renderCard(
   if (isLaunchPass(p)) return renderLegacyLaunchCard(p, isStale);
   const opts = typeof options === 'string' ? { variant: options } : options;
   const variant: CardVariant = opts.variant ?? 'observed';
-  const tokenSet = opts.tokenSet ?? true;
   const card = document.createElement('article');
   const classes = ['card'];
   if (isStale) classes.push('stale');
@@ -305,9 +300,8 @@ export function renderCard(
     const shoot = document.createElement('button');
     shoot.className = 'btn btn-shoot';
     shoot.type = 'button';
-    shoot.textContent = tokenSet ? 'Shoot' : 'Shoot · set token';
+    shoot.textContent = 'Shoot';
     shoot.disabled = isStale;
-    if (!tokenSet) shoot.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
     const ratingRow = makeRatingRow(p, onAction);
     // Reveal the in-the-moment rating right after a Shoot — that's the whole
     // point of the move: ratings never got logged when they lived only in the
@@ -319,8 +313,7 @@ export function renderCard(
     const skip = document.createElement('button');
     skip.className = 'btn btn-skip';
     skip.type = 'button';
-    skip.textContent = tokenSet ? 'Skip' : 'Skip · set token';
-    if (!tokenSet) skip.title = 'Click still queues offline — set your calibration token in the Log tab to sync.';
+    skip.textContent = 'Skip';
     skip.addEventListener('click', () => onAction('skip', p));
     actions.append(shoot, skip);
     actions.appendChild(remindBtn);

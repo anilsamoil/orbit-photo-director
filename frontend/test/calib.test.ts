@@ -65,7 +65,7 @@ describe('buildPayload', () => {
       'fetch',
       vi.fn(async (_url: string, opts: RequestInit) => {
         captured.push(JSON.parse(opts.body as string) as { profile?: string });
-        return new Response('{}', { status: 200 });
+        return new Response('{"ok":true}', { status: 200 });
       }),
     );
     const payload = buildPayload('shoot', 'tokyo-night', '2024-10-17T12:00:00Z', 87);
@@ -86,17 +86,22 @@ describe('postCalib', () => {
     vi.restoreAllMocks();
   });
 
-  it('queues when no token set', async () => {
+  it('sends with the signed-in session without a token', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
     const r = await postCalib(
       { target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }
     );
-    expect(r.ok).toBe(false);
-    expect(readQueue()).toHaveLength(1);
+    expect(r.ok).toBe(true);
+    expect(readQueue()).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledWith('/api/log', expect.objectContaining({
+      credentials: 'same-origin', redirect: 'manual', headers: { 'content-type': 'application/json' },
+    }));
   });
 
   it('sends when token + network ok', async () => {
     setToken('s');
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
     const r = await postCalib(
       { target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }
     );
@@ -220,7 +225,7 @@ describe('drainQueue', () => {
   it('sends queued items when network ok', async () => {
     enqueue({ target_id: 't1', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' });
     enqueue({ target_id: 't2', pass_time: '2024-10-17T12:30:00Z', action: 'skip' });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
     const sent = await drainQueue();
     expect(sent).toBe(2);
     expect(readQueue()).toHaveLength(0);

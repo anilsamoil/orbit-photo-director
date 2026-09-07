@@ -58,13 +58,14 @@ export async function fetchLog(
   profileName?: string,
 ): Promise<LogEntry[]> {
   const token = getToken();
-  if (!token) return [];
   const profileQuery = profileName
     ? `&profile=${encodeURIComponent(profileName)}`
     : '';
   try {
     const resp = await fetch(`${baseUrl}/api/log?limit=${limit}${profileQuery}`, {
-      headers: { 'x-calib-token': token },
+      headers: token ? { 'x-calib-token': token } : {},
+      credentials: 'same-origin',
+      redirect: 'manual',
       cache: 'no-cache',
     });
     if (!resp.ok) return [];

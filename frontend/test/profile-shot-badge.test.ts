@@ -150,18 +150,18 @@ describe('hydrateShotCounts', () => {
     expect(document.querySelectorAll('[data-kind="personal"]')).toHaveLength(3);
   });
 
-  it('is silent when the calib token is missing', async () => {
+  it('tries the signed-in session when the legacy token is missing', async () => {
     localStorage.removeItem(TOKEN_KEY);
     seedTargets();
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     document.getElementById('profile-body')!.appendChild(buildCrudSection(PROFILE));
     await new Promise((r) => setTimeout(r, 0));
-    // fetchLog short-circuits on token_missing — no /api/log call fires
+    // Google Access replaces the legacy token for calibration reads.
     const logCalls = (fetchMock.mock.calls as unknown[][]).filter((c) =>
       String(c[0]).includes('/api/log'),
     );
-    expect(logCalls).toHaveLength(0);
+    expect(logCalls).toHaveLength(1);
     expect(document.querySelectorAll('.profile-crud-shot-badge')).toHaveLength(0);
   });
 

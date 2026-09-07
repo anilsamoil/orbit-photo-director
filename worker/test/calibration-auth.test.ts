@@ -1,0 +1,113 @@
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import type { Env } from '../src/index';
+
+const issuer = 'https://test-team.cloudflareaccess.com';
+const origin = 'https://map.astroanil.dev';
+const authEnv = { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUD: 'map-audience', CALIB_TOKEN: 'legacy' };
+let pair: Awaited<ReturnType<typeof generateKeyPair>>;
+let jwks: string;
+beforeAll(async () => {
+  pair = await generateKeyPair('RS256');
+  jwks = JSON.stringify({ keys: [{ ...await exportJWK(pair.publicKey), kid: 'test-key' }] });
+});
+beforeEach(() => {
+  vi.resetModules();
+  vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
+    expect(String(url)).toBe(`${issuer}/cdn-cgi/access/certs`);
+    return new Response(jwks, { headers: { 'content-type': 'application/json' } });
+  }));
+});
+afterEach(() => { vi.unstubAllGlobals(); });
+
+async function token(overrides: Record<string, unknown> = {}, key = pair.privateKey) {
+  return new SignJWT({
+    sub: 'user-1', email: 'test@example.com', iss: issuer, aud: ['map-audience'],
+    iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 300,
+    ...overrides,
+  }).setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).sign(key);
+}
+function req(jwt?: string, method = 'GET', extra = {}) {
+  return new Request(`${origin}/api/log`, { method, headers: {
+    ...(jwt ? { 'cf-access-jwt-assertion': jwt } : {}),
+    ...(method === 'POST' ? { origin } : {}), ...extra,
+  } });
+}
+async function authorize(request: Request, env = authEnv) {
+  return (await import('../src/calibration-auth')).authorizeCalibration(request, env);
+}
+
+describe('Google Access calibration authorization', () => {
+  it('accepts a signed, unexpired map audience without a shared token', async () => {
+    expect(await authorize(req(await token()))).toBeNull();
+    expect(await authorize(req(await token(), 'POST'))).toBeNull();
+  });
+  for (const claims of [
+    { exp: 1 }, { iss: 'https://another-team.cloudflareaccess.com' },
+    { aud: ['different-application'] }, { email: null }, { sub: '' }, { exp: undefined },
+    { nbf: Math.floor(Date.now() / 1000) + 3600 },
+  ]) {
+    it(`rejects invalid claims ${JSON.stringify(claims)}`, async () => {
+      expect((await authorize(req(await token(claims))))?.status).toBe(401);
+    });
+  }
+  it('rejects wrong signatures', async () => {
+    const other = await generateKeyPair('RS256');
+    expect((await authorize(req(await token({}, other.privateKey))))?.status).toBe(401);
+  });
+  it('rejects forged identity headers, unsigned assertions and anonymous callers', async () => {
+    expect((await authorize(req(undefined, 'GET', { 'cf-access-authenticated-user-email': 'test@example.com' })))?.status).toBe(401);
+    expect((await authorize(req('forged'))) ?.status).toBe(401);
+    expect((await authorize(req()))?.status).toBe(401);
+  });
+  it('does not fall back from invalid assertion to legacy credential', async () => {
+    expect((await authorize(req('forged', 'GET', { 'x-calib-token': 'legacy' })))?.status).toBe(401);
+  });
+  it('rejects cross-origin or origin-less session-authenticated writes', async () => {
+    const jwt = await token();
+    for (const value of ['https://evil.example', 'null', '']) {
+      expect((await authorize(req(jwt, 'POST', { origin: value })))?.status).toBe(403);
+    }
+    expect((await authorize(req(jwt, 'POST', { 'sec-fetch-site': 'cross-site' })))?.status).toBe(403);
+  });
+  it('fails closed without issuer/audience config or when keys are unavailable', async () => {
+    const jwt = await token();
+    expect((await authorize(req(jwt), { ...authEnv, ACCESS_AUD: '' }))?.status).toBe(503);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    expect((await authorize(req(jwt)))?.status).toBe(503);
+  });
+  it('retains the existing machine credential without touching profile auth', async () => {
+    expect(await authorize(req(undefined, 'GET', { 'x-calib-token': 'legacy' }))).toBeNull();
+    const worker = (await import('../src/index')).default;
+    const response = await worker.fetch(new Request(`${origin}/api/profiles/anil/targets`, {
+      headers: { 'cf-access-jwt-assertion': await token() },
+    }), authEnv as Env, {} as ExecutionContext);
+    expect(response.status).toBe(401);
+  });
+  it('routes token-free ratings through validation, persistence and idempotency', async () => {
+    const records = new Map<string, string>();
+    const bucket = {
+      get: async (key: string) => records.has(key) ? { json: async () => JSON.parse(records.get(key)!) } : null,
+      put: async (key: string, body: string, options?: { onlyIf?: unknown }) => {
+        if (options?.onlyIf && records.has(key)) return null;
+        records.set(key, body); return { key };
+      },
+      list: async () => ({ objects: [] }),
+    };
+    const env = { ...authEnv, CALIB: bucket, SITE: bucket } as unknown as Env;
+    const worker = (await import('../src/index')).default;
+    const jwt = await token();
+    const makeRequest = () => new Request(`${origin}/api/log`, { method: 'POST', headers: {
+      origin, 'content-type': 'application/json', 'cf-access-jwt-assertion': jwt,
+    }, body: JSON.stringify({ target_id: 'test', pass_time: '2026-09-07T12:00:00Z',
+      action: 'rate', rating: 4, profile: 'anil', dedupe_key: 'test-rating' }) });
+    const first = await worker.fetch(makeRequest(), env, {} as ExecutionContext);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ ok: true, deduped: false });
+    const second = await worker.fetch(makeRequest(), env, {} as ExecutionContext);
+    expect(await second.json()).toMatchObject({ ok: true, deduped: true });
+    expect([...records.keys()].filter((key) => key.startsWith('log/'))).toHaveLength(1);
+    const read = await worker.fetch(req(jwt), env, {} as ExecutionContext);
+    expect(read.status).toBe(200);
+  });
+});

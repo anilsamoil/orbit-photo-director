@@ -2,7 +2,7 @@
  * Orbit Photo Director — Cloudflare Worker.
  *
  * Three endpoints:
- *   POST /api/log     — calibration ingest. Requires X-Calib-Token header. Appends one
+ *   POST /api/log     — calibration ingest. Validated Access session or legacy key. Appends one
  *                        JSONL record per request to r2:CALIB/log/<yyyymm>/<random>.jsonl.
  *                        Idempotent on a client-supplied dedupe_key.
  *   GET  /api/health  — reads manifest.json from r2:SITE; returns 200 if last_run is
@@ -20,11 +20,14 @@ import { handleCloudRequest } from './cloud';
 import { handleWxRequest } from './wx';
 import { handleProfilesRequest } from './profiles';
 import { isValidProfileName } from './shared';
+import { authorizeCalibration } from './calibration-auth';
 
 export interface Env {
   SITE: R2Bucket;
   CALIB: R2Bucket;
   CALIB_TOKEN: string; // wrangler secret
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_AUD?: string;
   STALE_THRESHOLD_SECONDS: string;
 }
 
@@ -99,16 +102,6 @@ function corsHeaders(origin: string | null): HeadersInit {
     headers['access-control-allow-origin'] = allowed;
   }
   return headers;
-}
-
-/** Constant-time string compare; avoids token-timing leaks across requests. */
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
 }
 
 /** Day's rate-limit counter: read-only check, used BEFORE the conditional
@@ -220,16 +213,8 @@ function isLogRequest(value: unknown): value is LogRequest {
 }
 
 async function handleLog(request: Request, env: Env): Promise<Response> {
-  // Guard against secret deletion / deploy misconfig: an undefined CALIB_TOKEN
-  // would crash constantTimeEqual on `undefined.length`. Return 503 so the
-  // client knows the server is misconfigured rather than seeing a 500.
-  if (!env.CALIB_TOKEN) {
-    return jsonResponse({ error: 'service_misconfigured' }, 503);
-  }
-  const token = request.headers.get('x-calib-token');
-  if (!token || !constantTimeEqual(token, env.CALIB_TOKEN)) {
-    return jsonResponse({ error: 'unauthorized' }, 401);
-  }
+  const denied = await authorizeCalibration(request, env);
+  if (denied) return denied;
 
   // Reject oversized bodies BEFORE buffering. Cloudflare's body parser will also
   // refuse very large requests, but Content-Length lets us short-circuit cheaply.
@@ -388,13 +373,8 @@ async function handleStatic(pathname: string, env: Env): Promise<Response> {
  *  list response or include customMetadata so the per-key get isn't needed.
  */
 async function handleLogList(request: Request, env: Env): Promise<Response> {
-  if (!env.CALIB_TOKEN) {
-    return jsonResponse({ error: 'service_misconfigured' }, 503);
-  }
-  const token = request.headers.get('x-calib-token');
-  if (!token || !constantTimeEqual(token, env.CALIB_TOKEN)) {
-    return jsonResponse({ error: 'unauthorized' }, 401);
-  }
+  const denied = await authorizeCalibration(request, env);
+  if (denied) return denied;
   const url = new URL(request.url);
   const limitRaw = Number(url.searchParams.get('limit') ?? '50');
   const limit = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50));
