@@ -151,7 +151,9 @@ def test_find_windows_seeds_only_mix_cells_not_whole_daylit_track(sample_tle: TL
     from datetime import timedelta
 
     from generator.cloud import sun_subpoint
-    from generator.cupola import _disc_water_fraction, _solar_zenith_deg, MIX_WATER_CEIL, MIX_WATER_FLOOR
+    from generator.cupola import (
+        _solar_zenith_deg,
+    )
     from generator.orbit import propagate
 
     mask = load_water_mask()

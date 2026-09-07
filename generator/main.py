@@ -24,6 +24,7 @@ import requests
 
 from . import __version__
 from .ascent import (
+    _explicit_launch_azimuth,
     ascent_score_multiplier,
     build_ascent_trajectory,
     predict_ascent_pass,
@@ -45,7 +46,6 @@ from .cloud import (
     sun_glint_risk,
     sun_subpoint,
 )
-from .water_mask import load_water_mask
 from .config import (
     DEFAULT_TOP_MAP,
     DEFAULT_TOP_QUEUE,
@@ -66,6 +66,7 @@ from .launch_data import (
     filter_ascent_launches,
     filter_launches,
 )
+from .launch_geometry import look_direction_at
 from .manifest import cleanup_old_versions, utcnow_iso, version_id, write_manifest
 from .multiplex import (
     build_profile_target_list,
@@ -80,13 +81,12 @@ from .orbit import (
     find_passes,
     fit_iss_polynomial,
     freshness_factor,
-    great_circle_bearing_deg,
     great_circle_km,
-    relative_bearing_deg,
     sample_track_points,
     tle_age_hours,
 )
 from .score import compute_score, top_n
+from .water_mask import load_water_mask
 
 # Hard-fail threshold: above this TLE age, sgp4 predictions degrade so badly
 # the queue would mislead the user. Better to publish a stale-flag manifest
@@ -548,7 +548,7 @@ def _synthesize_launch_target(la: Launch) -> dict[str, Any]:
 
 
 def _build_ascent_pass_entry(
-    la: Launch, pred: Any, now: datetime,
+    la: Launch, pred: Any, now: datetime, *, tle: TLE,
 ) -> dict[str, Any]:
     """Shape an AscentPrediction into a PassEntry dict the existing
     sort/render pipeline can consume.
@@ -563,29 +563,16 @@ def _build_ascent_pass_entry(
     - score = 100 × ascent_score_multiplier so it integrates cleanly with
       the existing 0-100 score scale (OVERHEAD scores live in same range).
     - launch.kind = "ascent" drives the frontend's "ASCENT plume" tag.
+    - look angles use full SGP4 TEME velocity and the elevated rocket at the
+      best instant, in orbital-LVLH, not station body/window attitude.
     """
     rocket_subpoint_dist = great_circle_km(
         pred.iss_position.lat, pred.iss_position.lon,
         pred.rocket_lat, pred.rocket_lon,
     )
-    iss_heading = great_circle_bearing_deg(
-        pred.iss_position.lat, pred.iss_position.lon,
-        # Bearing computed across +30s of ISS travel via the recorded ISS
-        # position alone isn't possible here (we have one sample, not two).
-        # Approximate using bearing-to-rocket as a proxy direction-of-look
-        # since the operator's main use of this is "which way to face,"
-        # not aircraft-navigation precision.
-        pred.rocket_lat, pred.rocket_lon,
+    look = look_direction_at(
+        tle, pred.best_instant_utc, pred.rocket_lat, pred.rocket_lon, pred.rocket_alt_km,
     )
-    target_bearing = great_circle_bearing_deg(
-        pred.iss_position.lat, pred.iss_position.lon,
-        pred.rocket_lat, pred.rocket_lon,
-    )
-    # For ASCENT, the "relative bearing" of the target is its bearing
-    # relative to ISS direction of travel — but we lack a heading sample
-    # here, so we just use the absolute bearing as a placeholder direction
-    # indicator. Soak data will tell us if this needs refinement.
-    rel_bearing = relative_bearing_deg(iss_heading, target_bearing)
     multiplier = ascent_score_multiplier(pred)
     # Trajectory polyline for the frontend ascent-trajectory map layer.
     # Recomputed from the matched profile + pad + real launch azimuth so
@@ -617,10 +604,8 @@ def _build_ascent_pass_entry(
         "target_lon": round(pred.rocket_lon, 4),
         "closest_approach": utcnow_iso(pred.best_instant_utc),
         "nadir_distance_km": round(rocket_subpoint_dist, 2),
-        "angle_off_nadir_deg": round(
-            angle_off_nadir_deg(rocket_subpoint_dist, pred.iss_position.alt_km), 1
-        ),
-        "iss_relative_bearing_deg": round(rel_bearing, 1),
+        "angle_off_nadir_deg": round(look["off_nadir_deg"], 1),
+        "iss_relative_bearing_deg": round(look["azimuth_deg"], 1) % 360.0,
         "pass_regime": "night" if pred.background_dark_score > 0.5 else (
             "terminator" if pred.background_dark_score > 0.1 else "day"
         ),
@@ -934,7 +919,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # banner overlay (V4 work; not in this lane).
     launches_cache = settings.cache_dir / "launches.json"
     launch_fetch = fetch_upcoming_launches(launches_cache, ttl_hours=1.0, now=n)
-    actionable_launches = filter_launches(launch_fetch.launches)
+    actionable_launches = filter_launches(launch_fetch.launches, now=n)
     launch_pass_entries: list[dict[str, Any]] = []
     for la in actionable_launches:
         site_target = _synthesize_launch_target(la)
@@ -980,40 +965,40 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     all_passes.extend(launch_pass_entries)
 
     # 5c. ASCENT pipeline (V3-P2). Gated by OPD_ENABLE_ASCENT (on in prod
-    # since 2026-05-17). Uses a much looser NET window than OVERHEAD —
-    # filter_ascent_launches accepts up to 6h of t0 uncertainty because
-    # the trajectory's ground track shape is t0-independent (only WHEN it
-    # flies shifts, not WHERE). predict_ascent_pass walks the profile at
-    # 15s cadence and picks the best viewable instant within the window.
+    # since 2026-05-17). Discovery accepts a looser NET window than OVERHEAD,
+    # but this legacy predictor evaluates only the nominal liftoff la.t0.
+    # It samples the ascent at 15s cadence and picks one best instant for
+    # that liftoff; it does not evaluate the full uncertain launch window.
+    # Legacy evaluation additionally requires an explicit sourced azimuth;
+    # inclination alone cannot identify the trajectory branch.
     # The OVERHEAD + ASCENT entries for the same launch coexist per D7.
-    ascent_actionable = filter_ascent_launches(launch_fetch.launches)
+    ascent_actionable = filter_ascent_launches(launch_fetch.launches, now=n)
     ascent_pass_entries: list[dict[str, Any]] = []
     if settings.enable_ascent and ascent_actionable:
         for la in ascent_actionable:
-            pred = predict_ascent_pass(
-                launch={
-                    "rocket": {"configuration": {
-                        # match_rocket uses these strings to resolve a profile;
-                        # we only have la.rocket_type (the LL2 `full_name`).
-                        "full_name": la.rocket_type,
-                    }},
-                    # Inclination unknown at launch_data layer (LL2 stores it
-                    # under mission.orbit.inclination but we don't surface it
-                    # in Launch yet). Default to ISS-rendezvous inclination
-                    # 51.6° — most ISS-photographable launches target that or
-                    # similar; SSO/polar will be slightly off but the soak
-                    # will surface any cases that need real inclination data.
-                    "mission": {"orbit": {"inclination": 51.6}},
-                },
-                pad_lat_deg=la.site_lat,
-                pad_lon_deg=la.site_lon,
-                t0_utc=la.t0,
-                iss_tle=tle,
-                cloud_sampler=sampler,
-            )
-            if pred is None:
+            launch_dict = {
+                "rocket": {"configuration": {"full_name": la.rocket_type}},
+                "launch_azimuth_deg": la.launch_azimuth_deg,
+                "trajectory_source": la.trajectory_source,
+            }
+            if _explicit_launch_azimuth(launch_dict) is None:
                 continue
-            ascent_pass_entries.append(_build_ascent_pass_entry(la, pred, n))
+            try:
+                pred = predict_ascent_pass(
+                    launch=launch_dict,
+                    pad_lat_deg=la.site_lat,
+                    pad_lon_deg=la.site_lon,
+                    t0_utc=la.t0,
+                    iss_tle=tle,
+                    cloud_sampler=sampler,
+                )
+                if pred is None:
+                    continue
+                entry = _build_ascent_pass_entry(la, pred, n, tle=tle)
+            except (ValueError, RuntimeError) as exc:
+                log.warning("ASCENT geometry unavailable for launch %s: %s", la.id, exc)
+                continue
+            ascent_pass_entries.append(entry)
         if ascent_pass_entries:
             log.info(
                 "found %d ASCENT opportunities out of %d ascent-eligible launches "
@@ -1146,7 +1131,8 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
     # heuristic, which would produce garbage mixes). Caught so a failure here
     # never aborts the tick; the manifest just omits the key (byte-stable).
     cupola_windows_path: Path | None = None
-    if settings.enable_cupola_windows and forecast_sampler is not None and water_mask_obj is not None:
+    if (settings.enable_cupola_windows and forecast_sampler is not None
+            and water_mask_obj is not None):
         try:
             from .cupola import find_cupola_windows
             windows = find_cupola_windows(

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as manifestModule from '../src/manifest';
 import type { Manifest, PassEntry, Track } from '../src/types';
+import { artifact as launchArtifact, envelope as launchEnvelope, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
 
 // Mock the network layer at module boundary so tests control what each
 // fetch resolves with.
@@ -715,6 +716,42 @@ describe('main.ts: All/Mine target filter', () => {
     expect(document.getElementById('filter-mine-queue')!.classList.contains('active')).toBe(true);
     expect(document.getElementById('filter-mine-upcoming')!.classList.contains('active')).toBe(true);
     expect(document.getElementById('filter-all-queue')!.classList.contains('active')).toBe(false);
+  });
+});
+
+describe('main.ts: common launch lane', () => {
+  it('renders max two launches with three ground slots, no duplicate legacy, and ignores Mine for launches', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
+    try {
+      const { launchStore } = await import('../src/launch-store');
+      localStorage.setItem('opd-launch-v2', JSON.stringify(await launchEnvelope(launchArtifact([
+        supported({ event_id: 'b' }), supported({ event_id: 'a' }), supported({ event_id: 'c' }), launch({ event_id: 'map-only' }),
+      ]))));
+      await launchStore.restore();
+      const legacy = buildPass({ target_id: 'launch:old', launch: { name: 'Old launch', rocket_type: 'Rocket', geometry: 'ascent', site_name: 'Site', t0: new Date(LAUNCH_NOW + 600_000).toISOString(), net_window_seconds: 0 } });
+      seedSnapshot([...Array.from({ length: 5 }, (_, i) => buildPass({ target_id: `ground-${i}` })), legacy], [legacy]);
+      const { bootFromSnapshot, renderQueue } = await import('../src/main');
+      bootFromSnapshot();
+      expect(document.querySelectorAll('#cards .card')).toHaveLength(5);
+      expect(document.querySelectorAll('#cards [data-launch="v2"]')).toHaveLength(2);
+      expect(document.querySelectorAll('[data-launch="legacy"]')).toHaveLength(0);
+      expect(document.querySelectorAll('#upcoming-cards [data-launch="v2"]')).toHaveLength(4);
+      localStorage.setItem('opd_target_filter_v1', 'mine'); renderQueue();
+      expect(document.querySelectorAll('#cards .card')).toHaveLength(2);
+      expect(document.querySelectorAll('#upcoming-cards .card')).toHaveLength(4);
+      expect(document.getElementById('cards-launch-coverage')?.textContent).toContain('Coverage complete');
+    } finally { clock.mockRestore(); }
+  });
+  it.each([true, false])('missing pointer preserves Earth Queue and bounds legacy Upcoming (known time: %s)', async (knownTime) => {
+    const legacy = buildPass({ target_id: 'launch:old', launch: { name: 'Legacy', rocket_type: 'Rocket', geometry: 'ascent', site_name: 'Site', t0: knownTime ? new Date(Date.now() + 600_000).toISOString() : '', net_window_seconds: 0 } });
+    seedSnapshot([buildPass(), legacy], [legacy]);
+    const { launchStore } = await import('../src/launch-store');
+    await launchStore.refresh(false);
+    const { bootFromSnapshot } = await import('../src/main'); bootFromSnapshot();
+    expect(document.querySelectorAll('#cards .card')).toHaveLength(1);
+    expect(document.querySelector('#cards .card-score')).not.toBeNull();
+    expect(document.querySelectorAll('#upcoming-cards [data-launch="legacy"]')).toHaveLength(knownTime ? 1 : 0);
+    expect(document.getElementById('cards-launch-coverage')?.textContent).toContain('coverage unknown');
   });
 });
 

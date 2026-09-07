@@ -3,6 +3,31 @@
 Tracked work surfaced by reviews. Priority bands: P0 (ship-blocker), P1
 (must fix before mission start), P2 (nice to have), P3+ (future).
 
+<!-- Map-first implementation is separate from launch-instruction activation. -->
+
+## ISS Launch Photography Follow-Up (2026-09-07)
+
+Status: map-first implementation approved; source validation and alerts remain gated. Public plan:
+`docs/plans/2026-09-07-iss-launch-photography-autoplan.md`.
+- [x] L1/L2/L9: explicit timing and incomplete coverage, independent orbital-direction math, read-only diagnostic with negative-path tests.
+- [x] L3 initial: unknown branch stays unknown; bounded conditional liftoff samples. Sampling is not validated photographic recall.
+- [ ] P1: L3 refinement: curated trajectory provenance, adaptive narrow-window resolution and full-window ephemeris validation before instructions.
+- [x] L5-L7 initial source: isolated publisher and shared Map/Queue/Upcoming reviewed; browser QA completed with two layout fixes. See `docs/launch-qa-2026-09-07.md` for limits.
+- [x] P0 local ship gate: owner approved separate cleanup of 16 existing Ruff findings; lint, all 2,695 tests, typechecks and production build pass (`4b05b0c`). Remote CI and deployment readback remain required.
+- [ ] P1: staged map-only production activation with ownership and refresh gates below. Do not develop in the watched production checkout.
+- [ ] P1: L4 independent OEM/frame and optical/reference validation; acquire historical ephemeris before claiming observed replay success.
+- [ ] P1: L11 positive-only notifier stays shadow until policy, evidence and crash-receipt tests pass.
+- [ ] P2: L8/L10/L12 optional viewing feedback, current runbook, measured soak and explicit owner alert activation.
+- [ ] P3 deferred: verified spacecraft attitude/window accessibility integration. Revisit when a reliable source exists; orbital-relative direction is not body/window orientation.
+- [ ] P3 deferred: high-fidelity universal rocket trajectories or paid launch feed. First prove the existing deterministic pipeline with provenance; public availability is unresolved.
+- [ ] P3 deferred: photo ingestion/automatic outcome classification and mandatory feedback. Crew burden and sensitive imagery are outside the initial scope; optional one-tap labels suffice.
+- [ ] P3 deferred: new Web Push and automatic calendar rescheduling. Reuse optional existing ICS; it is a snapshot, not a live launch-slip tracker.
+- [ ] P2: L5 shared request budget, pagination, scheduler ownership, remote pointer recovery and 48-hour soak. This release adds no extra provider polling.
+- [ ] P2: Optional feedback remains unimplemented; unanswered observations must never be counted as misses.
+- [x] L10 initial: cache-only diagnostic and staged publication/rollback runbook written; no operator or production rehearsal claimed.
+- [ ] P1 before capture activation: explicitly decide whether any failed refresh removes even still-valid last-good Queue entries. Current reviewed policy retains these briefly, labeled LAST GOOD, with source/artifact expiry enforced.
+- [ ] P2 QA follow-up: physical iPad/iPhone and actual canvas-marker click, authenticated profile readback, real offline transition and map-only soak. Existing external NASA polar tile errors remain outside this launch change.
+
 ## Photography arc (Units 1-9) — COMPLETE ✅
 
 All 9 units shipped + live-verified (2026-06-14). Final live versions:

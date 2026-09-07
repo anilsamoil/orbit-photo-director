@@ -23,9 +23,9 @@
       <div id="sun-widget" class="sun-badge" hidden></div>
       <span id="profile-badge" class="profile-badge" title="Active astronaut profile" hidden></span>
       <nav class="tabs">
-        <button id="tab-queue" class="tab active" type="button">Queue</button>
+        <button id="tab-queue" class="tab" type="button">Queue</button>
         <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
-        <button id="tab-map" class="tab" type="button">Map</button>
+        <button id="tab-map" class="tab active" type="button">Map</button>
         <button id="tab-profile" class="tab" type="button">Profile</button>
         <button id="tab-log" class="tab" type="button">Log<span id="pending-sync-badge" class="pending-badge" hidden></span></button>
       </nav>
@@ -33,7 +33,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-    <main id="view" class="view-queue">
+    <main id="view" class="view-map">
       <section id="queue-pane" class="pane">
         <div class="pane-header">
           <h2 class="pane-title">Next 90 min &mdash; what to shoot now</h2>
@@ -138,7 +138,8 @@
             <div id="satellite-picker-status" class="satellite-picker-status"></div>
           </div>
         </div>
-        <div class="map-legend" aria-label="ISS illumination legend">
+          <div class="map-legend" aria-label="Map legend">
+          <span class="map-legend-item"><span class="map-legend-dot map-legend-launch"></span>launch</span>
           <span class="map-legend-item"><span class="map-legend-dot map-legend-day"></span>day</span>
           <span class="map-legend-item"><span class="map-legend-dot map-legend-twilight"></span>twilight</span>
           <span class="map-legend-item"><span class="map-legend-dot map-legend-eclipse"></span>eclipse</span>

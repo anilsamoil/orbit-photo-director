@@ -145,6 +145,33 @@ export function bannerError(reason: string): BannerState {
   return { level: 'red', text: `Failed to load: ${reason}` };
 }
 
+/** Path that reaches the network instead of the precached app shell.
+ *
+ *  The service worker's NavigationRoute serves /index.html from precache for
+ *  every navigation except the denylisted prefixes (/api/, /v/, /manifest.json).
+ *  So when the Cloudflare Access session expires, a normal reload NEVER sees the
+ *  302 to the Access login — it just re-renders the cached shell. Sending the
+ *  operator to a denylisted path is the only way out of that loop from inside
+ *  the app. /api/ has no GET route registered, so nothing intercepts it.
+ */
+export const ACCESS_REAUTH_PATH = '/api/__reauth';
+
+/** Cloudflare Access session expired: the app is alive on cache but cannot
+ *  reach the network, and a plain refresh cannot fix it (see ACCESS_REAUTH_PATH).
+ *
+ *  Distinct from LOS. During LOS the data is stale because the link is down and
+ *  there is nothing to do but wait. Here the link is fine and one tap fixes it,
+ *  so the wording has to push the operator to act rather than wait it out —
+ *  otherwise this reads as a comms gap and gets ignored for a day, which is
+ *  exactly what happened on 2026-09-01 (26h stale before anyone questioned it).
+ */
+export function bannerAuthExpired(ageMin: number): BannerState {
+  return {
+    level: 'red',
+    text: `SIGN IN AGAIN — session expired, data frozen ${formatAge(ageMin)} ago. Tap here.`,
+  };
+}
+
 function formatAge(min: number): string {
   if (min < 1) return `<1 min`;
   if (min < 60) return `${Math.round(min)} min`;

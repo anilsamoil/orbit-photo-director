@@ -305,10 +305,91 @@ main {
     "actions actions";
 }
 
+/* Launch cards carry a warm background wash + brighter edge so a rocket is
+ * findable while scrolling, not just once you read the meta row (operator
+ * request 2026-08-24 — launches are the highest-priority shot on the board).
+ * Deliberately subtle: this sits behind body text, so it stays a wash rather
+ * than the saturated fill the 🚀 tags use. Hues match the existing tag
+ * language — orange for OVERHEAD, warmer yellow for ASCENT — so card and tag
+ * reinforce each other instead of introducing a third color story.
+ * A left border-accent carries the same signal for anyone who can't separate
+ * the background hues. */
+.card.launch {
+  border-left-width: 3px;
+}
+.card.launch-overhead-card {
+  background:
+    linear-gradient(rgba(255, 138, 61, 0.07), rgba(255, 138, 61, 0.07)),
+    var(--surface);
+  border-color: rgba(255, 138, 61, 0.38);
+  border-left-color: #ff8a3d;
+}
+.card.launch-ascent-card {
+  background:
+    linear-gradient(rgba(255, 212, 92, 0.07), rgba(255, 212, 92, 0.07)),
+    var(--surface);
+  border-color: rgba(255, 212, 92, 0.38);
+  border-left-color: #ffd45c;
+}
+
+/* Stale wins over the launch wash — a stale launch card must still read as
+ * stale, so keep this after the launch rules. */
 .card.stale {
   opacity: 0.55;
   filter: grayscale(40%);
 }
+
+.card.launch-v2 {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "name" "meta" "summary";
+  grid-template-rows: auto;
+  border-radius: 8px;
+  opacity: 1;
+  filter: none;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.launch-name {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+.launch-name:focus-visible { outline: 2px solid #ffd45c; outline-offset: 3px; }
+.launch-summary { grid-area: summary; display: grid; gap: 0.4rem; }
+.launch-status { color: #ffd45c; font-weight: 600; opacity: 1; }
+.launch-time { font-variant-numeric: tabular-nums; }
+.launch-coverage {
+  color: #ffd45c;
+  background: var(--surface);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.launch-dialog {
+  width: min(640px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  overflow: auto;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid #ffd45c;
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-wrap: anywhere;
+}
+.launch-dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
+.launch-dialog h2 { font-size: 1.1rem; margin: 0 0 1rem; }
+.launch-dialog > .btn { margin-top: 1rem; min-height: 44px; }
+.launch-facts { display: grid; gap: 0.6rem; }
+.launch-fact { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.2rem; }
+.launch-fact-label { font-weight: 600; }
+.launch-source a { color: #8edbff; }
 
 .card-name {
   grid-area: name;
@@ -905,6 +986,45 @@ body.shotlist-bar-visible main {
   touch-action: none;
 }
 
+/* Reserve layout space for launch coverage instead of hiding it below the footer. */
+.view-map #map-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.view-map #map {
+  height: auto;
+  min-height: 200px;
+  flex: 1 0 200px;
+}
+#map-launch-coverage { flex: 0 0 auto; }
+
+@media (max-width: 1100px) {
+  .view-map #map-pane {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(200px, 1fr) auto auto;
+    gap: 4px;
+  }
+  .view-map #map-pane > .map-controls {
+    position: static;
+    transform: none;
+    margin: 0;
+    max-width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-self: start;
+  }
+  .view-map .map-controls-filter { grid-area: 1 / 1; justify-self: start; }
+  .view-map .map-controls-bearing { grid-area: 1 / 2; justify-self: end; }
+  .view-map .map-controls-bearing .time-btn { padding: 0.35rem 0.45rem; }
+  .view-map .map-controls-time { grid-area: 2 / 1 / 3 / 3; }
+  .view-map .map-controls-overlay { grid-area: 3 / 1 / 4 / 3; }
+  .view-map #map { grid-area: 4 / 1 / 5 / 3; }
+  .view-map #map-launch-coverage { grid-area: 5 / 1 / 6 / 3; }
+  .view-map .map-legend { grid-area: 6 / 1 / 7 / 3; }
+}
+
 /* ISS marker: silhouette icon + pulsing halo. Wrap is 40×16 px (matches
  * SVG viewBox) so the truss center lands on the lat/lon. The pulse halo
  * draws the eye when the dot is over a busy cloud-overlay region. */
@@ -1230,14 +1350,17 @@ body.shotlist-bar-visible main {
 }
 
 .map-legend {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
+  position: static;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  max-width: calc(100% - 24px);
+  margin: 4px 12px;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.7rem;
   background: rgba(11, 13, 18, 0.72);
   padding: 0.25rem 0.6rem;
-  border-radius: 12px;
+  border-radius: 4px;
   font-size: 0.72rem;
   color: var(--text-dim);
   pointer-events: none;
@@ -1258,6 +1381,7 @@ body.shotlist-bar-visible main {
   flex-shrink: 0;
 }
 .map-legend-day { background: #5cd0ff; }
+.map-legend-launch { background: #ffd45c; border: 1px solid #0b0d12; }
 .map-legend-twilight { background: #d65cff; }
 .map-legend-eclipse { background: #7a8aa8; }
 

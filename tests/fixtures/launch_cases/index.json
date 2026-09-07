@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "observed_cases": ["progress-2018.json", "falcon-heavy-2023.json"],
+  "synthetic_tests": ["tests/test_launch_geometry.py", "tests/test_launch_evidence.py"],
+  "observed_recall_validated": false
+}

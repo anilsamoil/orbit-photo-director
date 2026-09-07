@@ -569,23 +569,22 @@ describe('renderCard launch.kind tag (V3-P2 ASCENT)', () => {
     },
   });
 
-  it('renders "OVERHEAD pass" for kind=overhead', () => {
+  it('does not promote legacy overhead geometry to a supported pass', () => {
     const card = renderCard(launchOverhead, NOW, false, () => undefined);
-    const tag = card.querySelector('.tag.launch-overhead');
-    expect(tag?.textContent).toBe('🚀 OVERHEAD pass');
+    expect(card.textContent).toContain('MAP ONLY | LEGACY');
+    expect(card.querySelector('.card-score')).toBeNull();
   });
 
-  it('renders "ASCENT plume" for kind=ascent + uses launch-ascent class', () => {
+  it('keeps ascent identity without an unsupported plume claim', () => {
     const card = renderCard(launchAscent, NOW, false, () => undefined);
-    expect(card.querySelector('.tag.launch-ascent')?.textContent).toBe('🚀 ASCENT plume');
+    expect(card.querySelector('.tag.launch-ascent')?.textContent).toBe('LAUNCH / ASCENT');
     // Must NOT also have the launch-overhead tag.
     expect(card.querySelector('.tag.launch-overhead')).toBeNull();
   });
 
-  it('falls back to geometry when kind missing (older manifest)', () => {
+  it('keeps older manifests map-only when kind is missing', () => {
     const card = renderCard(launchOlderManifest, NOW, false, () => undefined);
-    const tag = card.querySelector('.tag.launch-overhead');
-    expect(tag?.textContent).toBe('🚀 OVERHEAD pass');
+    expect(card.textContent).toContain('MAP ONLY | LEGACY');
   });
 });
 

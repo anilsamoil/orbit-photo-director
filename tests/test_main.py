@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import math
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from generator.config import Settings
 from generator.main import (
@@ -23,6 +27,15 @@ from generator.main import (
 )
 from generator.orbit import TLE, Pass, Position
 from tests.conftest import SAMPLE_TLE_TEXT
+
+
+@pytest.fixture(autouse=True)
+def _offline_http_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tick/cache tests offline; explicit requests.get mocks still work."""
+    monkeypatch.setattr(
+        "requests.sessions.Session.request",
+        Mock(side_effect=requests.ConnectionError("HTTP disabled in main tests")),
+    )
 
 
 @pytest.fixture
@@ -838,12 +851,43 @@ def test_run_tick_raises_when_tle_age_exceeds_hard_fail(
 
 
 def _seed_launches_cache(
-    settings: Settings, fixture_path: Path, mtime_age_seconds: float = 0.0
+    settings: Settings,
+    fixture_path: Path,
+    mtime_age_seconds: float = 0.0,
+    rebase_to: datetime | None = None,
 ) -> Path:
-    """Pre-seed the LL2 cache so run_tick doesn't hit the network."""
+    """Pre-seed the LL2 cache so run_tick doesn't hit the network.
+
+    `rebase_to` shifts every launch in the fixture so the EARLIEST one lands at
+    that instant, preserving the relative spacing (and therefore each row's NET
+    half-width) that the filter tests depend on. Needed because tests pin `now`
+    to the cached TLE's epoch, while the fixture carries real 2026 dates —
+    a gap far beyond LAUNCH_HORIZON_MAX_SECONDS.
+    """
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     cache = settings.cache_dir / "launches.json"
-    cache.write_text(fixture_path.read_text())
+    text = fixture_path.read_text()
+    if rebase_to is not None:
+        payload = json.loads(text)
+        stamps = ("net", "window_start", "window_end")
+
+        def _parse(value: str) -> datetime:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        earliest = min(
+            _parse(r[k])
+            for r in payload.get("results", [])
+            for k in stamps
+            if isinstance(r.get(k), str)
+        )
+        delta = rebase_to - earliest
+        for row in payload.get("results", []):
+            for key in stamps:
+                if isinstance(row.get(key), str):
+                    shifted = _parse(row[key]) + delta
+                    row[key] = shifted.isoformat().replace("+00:00", "Z")
+        text = json.dumps(payload)
+    cache.write_text(text)
     if mtime_age_seconds:
         import os
         ts = time.time() - mtime_age_seconds
@@ -856,8 +900,15 @@ def test_run_tick_status_json_includes_launches_fields(
 ) -> None:
     """ARCH-1: launches health folds into status.json."""
     fixture = Path(__file__).parent / "fixtures" / "ll2-response-2026-05.json"
-    _seed_launches_cache(settings_in_tmp, fixture)
     now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
+    # `now` stays pinned to the cached_tle fixture's epoch (moving it trips the
+    # 96h TLE hard-fail), so the launch fixture is re-dated to sit just after it
+    # instead. The fixture's real dates are ~570 days past `now`, which
+    # LAUNCH_HORIZON_MAX_SECONDS now correctly rejects — previously nothing
+    # bounded lead time, so the stale dates sailed through.
+    _seed_launches_cache(
+        settings_in_tmp, fixture, rebase_to=now + timedelta(days=1)
+    )
     run_tick(settings_in_tmp, now=now)
 
     status = json.loads(
@@ -1159,7 +1210,7 @@ def test_reserve_launch_slot_in_queue_preserves_score_descending_order() -> None
 # --------------------------------------------------------------------------
 
 
-def test_build_ascent_pass_entry_shape() -> None:
+def test_build_ascent_pass_entry_shape(sample_tle: TLE) -> None:
     """The dict returned by _build_ascent_pass_entry must be valid PassEntry
     shape so the existing sort/render pipeline can consume it."""
     from generator.ascent import AscentPrediction, SunState
@@ -1197,7 +1248,7 @@ def test_build_ascent_pass_entry_shape() -> None:
         profile_confidence=0.85,
     )
     now = datetime(2024, 10, 17, 11, 55, tzinfo=UTC)
-    entry = _build_ascent_pass_entry(la, pred, now)
+    entry = _build_ascent_pass_entry(la, pred, now, tle=sample_tle)
     assert entry["target_id"] == "launch:abc:ascent"
     assert entry["target_name"] == "🚀 Falcon 9 Block 5 | Starlink 11-X"
     assert entry["target_lat"] == 29.5
@@ -1214,7 +1265,7 @@ def test_build_ascent_pass_entry_shape() -> None:
         assert k in entry["score_components"]
 
 
-def test_build_ascent_pass_entry_floors_score_for_poor_conditions() -> None:
+def test_build_ascent_pass_entry_floors_score_for_poor_conditions(sample_tle: TLE) -> None:
     """A bad-conditions prediction folds to the MULTIPLIER_FLOOR (0.3 × 100 = 30)."""
     from generator.ascent import (
         MULTIPLIER_FLOOR,
@@ -1254,8 +1305,161 @@ def test_build_ascent_pass_entry_floors_score_for_poor_conditions() -> None:
         background_cloud_score=1.0,
         profile_confidence=0.7,
     )
-    entry = _build_ascent_pass_entry(la, pred, la.t0)
+    entry = _build_ascent_pass_entry(la, pred, la.t0, tle=sample_tle)
     assert entry["score"] == 100.0 * MULTIPLIER_FLOOR
+
+
+@pytest.fixture
+def sourced_ascent():
+    from generator.ascent import AscentPrediction, SunState
+    from generator.launch_data import Launch
+
+    t0 = datetime(2024, 10, 17, 12, 30, tzinfo=UTC)
+    launch = Launch(
+        id="sourced", name="Sourced launch", rocket_type="Falcon 9 Block 5",
+        site_name="Test pad", site_lat=0.0, site_lon=0.0, t0=t0,
+        net_window_seconds=0, status_abbrev="Go", launch_azimuth_deg=0.0,
+        trajectory_source="https://example.invalid/mission-trajectory",
+    )
+    prediction = AscentPrediction(
+        rocket_name=launch.rocket_type, profile_name="Falcon 9", t0_utc=t0,
+        t_offset_seconds=180,
+        iss_position=Position(0.0, 0.0, 400.0, t0 + timedelta(seconds=180)),
+        rocket_lat=5.0, rocket_lon=0.0, rocket_alt_km=200.0,
+        pad_lat=0.0, pad_lon=0.0, launch_azimuth_deg=0.0,
+        slant_range_km=500.0, apparent_plume_angle_mrad=3.5,
+        rocket_sun_state=SunState.SUNLIT, background_dark_score=1.0,
+        obstruction_cloud_score=1.0, background_cloud_score=1.0, profile_confidence=0.85,
+    )
+    return launch, prediction
+
+
+@pytest.mark.parametrize(("lat", "lon", "azimuth"), [
+    (0.0, 5.0, 0.0), (5.0, 0.0, 90.0), (0.0, -5.0, 180.0), (-5.0, 0.0, 270.0),
+])
+def test_build_ascent_entry_uses_full_velocity_and_elevated_target(
+    lat: float, lon: float, azimuth: float, sourced_ascent,
+    sample_tle: TLE, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from generator import launch_geometry
+
+    launch, prediction = sourced_ascent
+    prediction = replace(prediction, rocket_lat=lat, rocket_lon=lon)
+    satellite = SimpleNamespace(sgp4=Mock(return_value=(
+        0, (6778.137, 0.0, 0.0), (2.0, 7.0, 0.0),
+    )))
+    monkeypatch.setattr(launch_geometry, "_satrec", lambda *_args: satellite)
+    monkeypatch.setattr(launch_geometry, "_gmst_rad", lambda _when: 0.0)
+    look = Mock(wraps=launch_geometry.look_direction_at)
+    monkeypatch.setattr("generator.main.look_direction_at", look)
+    now = launch.t0 - timedelta(minutes=30)
+    entry = _build_ascent_pass_entry(launch, prediction, now, tle=sample_tle)
+    look.assert_called_once_with(
+        sample_tle, prediction.best_instant_utc, lat, lon, 200.0,
+    )
+    assert entry["iss_relative_bearing_deg"] == azimuth
+    separation = math.radians(5.0)
+    elevated_angle = math.degrees(math.atan2(
+        6578.137 * math.sin(separation), 6778.137 - 6578.137 * math.cos(separation),
+    ))
+    surface_angle = math.degrees(math.atan2(
+        6378.137 * math.sin(separation), 6778.137 - 6378.137 * math.cos(separation),
+    ))
+    assert entry["angle_off_nadir_deg"] == round(elevated_angle, 1)
+    assert entry["angle_off_nadir_deg"] != round(surface_angle, 1)
+
+
+def test_build_ascent_entry_rounding_preserves_azimuth_range(
+    sourced_ascent, sample_tle: TLE, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch, prediction = sourced_ascent
+    monkeypatch.setattr("generator.main.look_direction_at", lambda *_args: {
+        "frame": "orbital-lvlh", "azimuth_deg": 359.99, "off_nadir_deg": 40.0,
+    })
+    entry = _build_ascent_pass_entry(launch, prediction, launch.t0, tle=sample_tle)
+    assert entry["iss_relative_bearing_deg"] == 0.0
+
+
+@pytest.fixture
+def legacy_ascent_tick(settings_in_tmp: Settings, cached_tle: Path, sourced_ascent,
+                      monkeypatch: pytest.MonkeyPatch):
+    from generator.launch_data import FetchResult
+
+    launch, prediction = sourced_ascent
+    now = datetime(2024, 10, 17, 12, tzinfo=UTC)
+    fetched = FetchResult([launch], now, "test-schema", 1)
+    monkeypatch.setattr("generator.main.fetch_upcoming_launches", lambda *_args, **_kwargs: fetched)
+    # Exercise only the legacy ascent launch lane; keep ground evaluation real.
+    monkeypatch.setattr("generator.main.filter_launches", lambda *_args, **_kwargs: [])
+    predictor = Mock(return_value=prediction)
+    monkeypatch.setattr("generator.main.predict_ascent_pass", predictor)
+    settings = replace(settings_in_tmp, enable_ascent=True)
+    return settings, now, fetched, predictor
+
+
+def test_run_tick_skips_legacy_ascent_without_explicit_sourced_direction(
+    legacy_ascent_tick, sourced_ascent,
+) -> None:
+    settings, now, fetched, predictor = legacy_ascent_tick
+    launch, _ = sourced_ascent
+    invalid = [
+        {"launch_azimuth_deg": None, "trajectory_source": None},
+        {"launch_azimuth_deg": None, "mission_inclination_deg": 51.6},
+        {"trajectory_source": None}, {"trajectory_source": ""}, {"trajectory_source": "  "},
+        {"trajectory_source": True}, {"launch_azimuth_deg": True},
+        {"launch_azimuth_deg": math.nan}, {"launch_azimuth_deg": math.inf},
+        {"launch_azimuth_deg": -1.0}, {"launch_azimuth_deg": 360.0},
+    ]
+    fetched.launches[:] = [replace(launch, id=f"unsupported-{i}", **fields)
+                           for i, fields in enumerate(invalid)]
+    run_tick(settings, now=now)
+    predictor.assert_not_called()
+    entries = json.loads((settings.out_dir / "v" / "20241017T120000Z" / "passes.json").read_text())
+    assert all(entry.get("launch", {}).get("kind") != "ascent" for entry in entries)
+
+
+@pytest.mark.parametrize("azimuth", [0.0, 225.0])
+def test_run_tick_passes_sourced_azimuth_and_tle_without_default_inclination(
+    azimuth: float, legacy_ascent_tick, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import generator.main as main_module
+
+    settings, now, fetched, predictor = legacy_ascent_tick
+    fetched.launches[0] = replace(fetched.launches[0], launch_azimuth_deg=azimuth)
+    predictor.return_value = replace(predictor.return_value, launch_azimuth_deg=azimuth)
+    builder = Mock(wraps=main_module._build_ascent_pass_entry)
+    monkeypatch.setattr(main_module, "_build_ascent_pass_entry", builder)
+    run_tick(settings, now=now)
+    predictor.assert_called_once()
+    payload = predictor.call_args.kwargs["launch"]
+    assert payload["launch_azimuth_deg"] == azimuth
+    assert payload["trajectory_source"] == fetched.launches[0].trajectory_source
+    assert "mission" not in payload
+    builder.assert_called_once_with(
+        fetched.launches[0], predictor.return_value, now,
+        tle=predictor.call_args.kwargs["iss_tle"],
+    )
+    entries = json.loads((settings.out_dir / "v" / "20241017T120000Z" / "passes.json").read_text())
+    assert any(entry["target_id"] == "launch:sourced:ascent" for entry in entries)
+
+
+@pytest.mark.parametrize("error", [ValueError("unresolved direction"), RuntimeError("SGP4 failed")])
+@pytest.mark.parametrize("stage", ["predictor", "look"])
+def test_legacy_ascent_geometry_failure_leaves_ground_output_unchanged(
+    error: Exception, stage: str, legacy_ascent_tick, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, now, _, predictor = legacy_ascent_tick
+    artifact = settings.out_dir / "v" / "20241017T120000Z" / "passes.json"
+    run_tick(replace(settings, enable_ascent=False), now=now)
+    ground_before = artifact.read_bytes()
+    assert json.loads(ground_before), "ground-parity check requires actual ground entries"
+    if stage == "predictor":
+        predictor.side_effect = error
+    else:
+        monkeypatch.setattr("generator.main.look_direction_at", Mock(side_effect=error))
+    run_tick(settings, now=now)
+    predictor.assert_called_once()
+    assert artifact.read_bytes() == ground_before
 
 
 def test_run_tick_does_not_emit_ascent_when_flag_off(

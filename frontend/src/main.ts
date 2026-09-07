@@ -9,8 +9,10 @@
 import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { bindHelp } from './help';
-import { formatCountdown } from './countdown';
+import { formatCountdown, parseUtcIso } from './countdown';
 import {
+  ACCESS_REAUTH_PATH,
+  bannerAuthExpired,
   bannerError,
   bannerFromManifest,
   bannerLoading,
@@ -42,6 +44,9 @@ import { gibsTrueColorUrl, precacheTilesForTargets, precacheWorldBaseTiles, yest
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 import { aggregateShootCounts, claimMapShotFetch, publishShotCounts } from './shot-counts';
+import { launchStore } from './launch-store';
+import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from './launch-selectors';
+import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -84,6 +89,66 @@ function setBanner(state: BannerState): void {
   if (!el) return;
   el.className = `banner banner-${state.level}`;
   el.textContent = state.text;
+  // Any non-auth banner clears the tap-to-reauth affordance, so a stale banner
+  // from an ordinary LOS never looks tappable.
+  el.onclick = null;
+  el.style.cursor = '';
+}
+
+/** Make the banner a one-tap escape to the Cloudflare Access login. */
+function setAuthBanner(state: BannerState): void {
+  setBanner(state);
+  const el = document.getElementById('status-banner');
+  if (!el) return;
+  el.style.cursor = 'pointer';
+  el.onclick = () => {
+    // Full navigation, not fetch: we WANT the browser to follow the 302 to the
+    // Access login and render it. location.assign on a denylisted path is the
+    // only route that escapes the precached shell.
+    window.location.assign(ACCESS_REAUTH_PATH);
+  };
+}
+
+/** True when Cloudflare Access has logged us out.
+ *
+ *  Detected with redirect:'manual' — a 302 to the Access origin surfaces as an
+ *  opaqueredirect response (type 'opaqueredirect', status 0) which is readable
+ *  without CORS. A normal fetch would follow the redirect cross-origin and fail
+ *  CORS instead, which is indistinguishable from a plain network error.
+ *
+ *  Probes a denylisted /api/ path so the service worker does not intercept it;
+ *  probing /manifest.json would hit the NetworkFirst route and get answered from
+ *  cache, which is the exact blindness this function exists to defeat.
+ *
+ *  Returns false on any error: a genuine LOS must NOT be misreported as a login
+ *  problem, or the operator taps through to a login page that cannot load.
+ */
+async function isAccessSessionExpired(): Promise<boolean> {
+  try {
+    const r = await fetch(ACCESS_REAUTH_PATH, {
+      method: 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      credentials: 'include',
+    });
+    return r.type === 'opaqueredirect';
+  } catch {
+    return false;
+  }
+}
+
+/** Generator ticks hourly, so anything past ~2.5h means we are not receiving
+ *  fresh manifests at all. Only then is the auth probe worth an extra request. */
+const AUTH_PROBE_AGE_MINUTES = 150;
+
+/** If the manifest looks frozen, find out whether it is an expired Access
+ *  session (fixable in one tap) rather than a real comms gap. */
+async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean> {
+  const ageMin = (Date.now() - parseUtcIso(generatedAtIso).getTime()) / 60000;
+  if (ageMin < AUTH_PROBE_AGE_MINUTES) return false;
+  if (!(await isAccessSessionExpired())) return false;
+  setAuthBanner(bannerAuthExpired(ageMin));
+  return true;
 }
 
 /** Render or hide the topbar "N pending sync" badge based on the calib queue.
@@ -112,7 +177,7 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 
 async function refresh(): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = doRefresh().finally(() => {
+  refreshInFlight = Promise.all([launchStore.refresh(isOnline()), doRefresh()]).then(() => {}).finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
@@ -127,6 +192,13 @@ async function doRefresh(): Promise<void> {
     currentlyOffline = true;
     renderOfflineBanner();
     renderQueue();
+    // Map is the default landing tab, and its only other render call site sits
+    // PAST the network fetch below. Without this, an offline cold boot paints
+    // the Queue pane (which isn't visible) and leaves the Map pane blank for
+    // the entire LOS, even though the manifest and track are already in
+    // localStorage and MapLibre is precached. Recovery would be an
+    // undiscoverable tap on the already-active Map tab.
+    renderPendingMapPane();
     return;
   }
   try {
@@ -290,7 +362,12 @@ async function doRefresh(): Promise<void> {
       // Stale data + failed probe = LOS. Show the "LOS" framing (snapshot-age
       // based, via renderOfflineBanner) rather than blaming the generator.
       renderOfflineBanner();
-    } else {
+    } else if (!(await maybeFlagExpiredSession(manifest.generated_at))) {
+      // Not an expired Access session, so the ordinary staleness banner is
+      // honest. When it IS expired, maybeFlagExpiredSession has already put the
+      // tappable sign-in banner up and we must not overwrite it — a "STALE"
+      // banner there is actively misleading, because it reads as a comms
+      // problem the operator can only wait out, when in fact one tap fixes it.
       setBanner(bannerWithLaunchesOverlay(
         bannerWithTleOverlay(
           bannerFromManifest(manifest.generated_at, manifest.freshness.ok, Date.now()),
@@ -311,6 +388,10 @@ async function doRefresh(): Promise<void> {
       currentlyOffline = true;
       renderOfflineBanner();
       renderQueue();
+      // Same reason as the !isOnline() early return above: a rejecting fetch
+      // (lie-fi — Wi-Fi associated, downlink dead) must still paint the Map
+      // landing tab from the snapshot instead of leaving it blank.
+      renderPendingMapPane();
     } else {
       setBanner(bannerError((e as Error).message));
     }
@@ -350,18 +431,32 @@ function applyDistanceFilter(passes: PassEntry[]): PassEntry[] {
 /** Render the Queue + Upcoming panes from current module state. Extracted so
  *  both the snapshot boot and a normal refresh share one render path. */
 function renderQueue(): void {
-  if (!currentManifest) return;
   const cards = document.getElementById('cards');
   const empty = document.getElementById('empty');
   if (!cards || !empty) return;
   const now = Date.now();
-  const stale = isStaleManifest(currentManifest, now);
+  const stale = !currentManifest || isStaleManifest(currentManifest, now);
+  const launches = launchStore.getState();
+  for (const anchorId of ['cards', 'upcoming-cards', 'map']) {
+    const anchor = document.getElementById(anchorId);
+    if (!anchor) continue;
+    let notice = document.getElementById(`${anchorId}-launch-coverage`);
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.id = `${anchorId}-launch-coverage`;
+      if (anchorId === 'map') anchor.after(notice);
+      else anchor.before(notice);
+    }
+    renderLaunchCoverage(notice, launches, now, anchorId === 'map' ? 'map' : 'upcoming');
+  }
   const filter = getTargetFilter();
-  const visible = applyTargetFilter(
-    applyDistanceFilter(upcomingPasses(currentTop5, now)),
+  const ground = applyTargetFilter(
+    applyDistanceFilter(upcomingPasses(currentTop5.filter((p) => !isLaunchPass(p)), now)),
     filter,
   );
-  if (visible.length === 0) {
+  const slots = queueSlots(sortPassesByOrder(ground, getSortOrder()), selectLaunches(launches, now, 'queue'));
+  const visible = slots.ground;
+  if (visible.length === 0 && slots.launches.length === 0) {
     cards.replaceChildren();
     // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
     // by generator lag (every pick has aged out of the 90-min window),
@@ -373,7 +468,7 @@ function renderQueue(): void {
     if (filter === 'mine') {
       empty.textContent = 'None of your targets pass in the next 90 minutes. Switch to All to see shared targets.';
     } else {
-      const hint = emptyQueueHint(currentManifest, now, currentlyOffline);
+      const hint = currentManifest ? emptyQueueHint(currentManifest, now, currentlyOffline) : null;
       empty.textContent = hint ?? 'No passes in the next 90 minutes.';
     }
     empty.hidden = false;
@@ -387,6 +482,7 @@ function renderQueue(): void {
       tokenSet: !!getToken(),
       renderThumbnail: thumbnailRenderer(),
     });
+    cards.prepend(...slots.launches.map((selection) => renderLaunchCard(selection, launches, now)));
   }
   renderUpcoming(now, stale);
   // Keep the shot-list bar count fresh + prune passes that have aged out.
@@ -495,11 +591,18 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;
   const filter = getTargetFilter();
+  const launches = launchStore.getState();
+  const launchSelections = selectLaunches(launches, nowMs, 'upcoming');
   const visible = applyTargetFilter(
-    applyDistanceFilter(upcomingPasses(currentTop24h, nowMs)),
+    applyDistanceFilter(upcomingPasses(currentTop24h.filter((p) => !isLaunchPass(p)), nowMs)),
     filter,
   );
-  if (visible.length === 0) {
+  // One global fallback mode. Legacy launches remain map-only and never
+  // consume an immediate Queue slot or pass through personal filters.
+  const legacy = launches.artifact ? [] : [...currentTop5, ...currentTop24h]
+    .filter((p, index, all) => p.launch && all.findIndex((other) => other.launch?.name === p.launch?.name && other.launch?.t0 === p.launch?.t0) === index)
+    .filter((p) => legacyLaunchInHorizon(p, nowMs, 36 * 3600_000));
+  if (visible.length === 0 && launchSelections.length === 0 && legacy.length === 0) {
     cards.replaceChildren();
     empty.textContent = filter === 'mine'
       ? 'None of your targets have an upcoming pass. Switch to All to see shared targets.'
@@ -509,14 +612,16 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   }
   empty.hidden = true;
   const sorted = sortPassesByOrder(visible, getSortOrder());
-  renderCards(cards, sorted, nowMs, stale, onCardAction, {
+  renderCards(cards, [...legacy, ...sorted], nowMs, stale, onCardAction, {
     variant: 'forecast',
     renderThumbnail: thumbnailRenderer(),
   });
+  cards.prepend(...launchSelections.map((selection) => renderLaunchCard(selection, launches, nowMs)));
 }
 
 function rerenderCountdowns(): void {
   updateIssNow();
+  launchStore.tick(Date.now());
   if (!currentManifest) return;
   const now = Date.now();
   // V2-P3 perf fix (TODOS.md, 2026-05-17). Fast path: just update the
@@ -553,6 +658,7 @@ function tryUpdateCountdownsInPlace(now: number): boolean {
     // but defensive against future code changes.
     for (const child of Array.from(container.children)) {
       const card = child as HTMLElement;
+      if (card.dataset.launch) continue;
       const passTime = card.dataset.passTime;
       if (!passTime) return false;  // unexpected DOM shape; safe path
       const t = Date.parse(passTime);
@@ -1427,6 +1533,23 @@ async function init(): Promise<void> {
     if (currentManifest) renderQueue();
   });
   bindTabs();
+  // Map is the default landing tab (view-map is set in HTML). Trigger the lazy
+  // load now so mapPaneWaitingForManifest is set; renderPendingMapPane() in
+  // doRefresh() will complete the render once the first manifest arrives.
+  loadMapPane().catch((err) => {
+    console.warn('[map] auto-init pre-manifest call failed:', err);
+    mapModule = null;
+  });
+  // Hydrate shot counts so target popups show "already shot" badges without
+  // needing a Profile-tab visit first. Mirrors the Map tab click handler.
+  {
+    const mapInitProfile = getCurrentProfile()?.name;
+    if (mapInitProfile && claimMapShotFetch(mapInitProfile)) {
+      void fetchLog('', 500, mapInitProfile)
+        .then((entries) => publishShotCounts(aggregateShootCounts(entries)))
+        .catch(() => { /* leave store empty — badges stay quiet */ });
+    }
+  }
   bindSortToggles();
   bindFilterToggles();
   bindHelp();
@@ -1502,6 +1625,9 @@ async function init(): Promise<void> {
   // Initial badge from whatever's already queued, before drain finishes.
   updatePendingSyncBadge();
 
+  launchStore.subscribe(renderQueue);
+  await launchStore.restore();
+  renderQueue();
   await refresh();
 
   // Visibility-aware polling: pause while the tab is hidden, fetch

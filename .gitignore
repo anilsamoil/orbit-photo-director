@@ -8,13 +8,13 @@ build/
 dist/
 *.egg-info/
 .pytest_cache/
-.venv/
+.venv
 .env
 .env.local
 uv.lock
 
 # Node
-node_modules/
+node_modules
 .next/
 .cache/
 .parcel-cache/

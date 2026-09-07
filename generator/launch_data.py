@@ -35,7 +35,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +43,17 @@ import requests
 
 LL2_DEFAULT_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
 LL2_FETCH_TIMEOUT_SECONDS = 15
+
+# LL2 paginates /launch/upcoming/ and defaults to 10 results. Ten rows is
+# nowhere near enough: ~86% of the upcoming feed sits at status TBD, so a
+# 10-row page is mostly spent on rows the status filter drops, and the visible
+# horizon collapses to about a week. Measured 2026-08-24 against 363 upcoming
+# launches: limit=10 yielded 5 ascent / 1 overhead over a 6-day horizon, while
+# limit=50 yielded 11 ascent / 5 overhead over 128 days. 100 is the server-side
+# maximum (larger values clamp to it) and leaves headroom as the feed grows.
+# One request per hourly tick, so this costs no extra calls against the LL2
+# rate limit — just a bigger page on the call we already make.
+LL2_PAGE_LIMIT = 100
 
 # Status abbrevs that count as "actionable, plan around it." Everything else
 # (TBD, Hold, Removed, Failed, etc.) is filtered out before pass-finding.
@@ -62,15 +73,34 @@ PASS_WINDOW_SECONDS = 300
 # allowing 30-min-uncertain launches to publish bogus pass entries.
 NET_WINDOW_MAX_SECONDS = PASS_WINDOW_SECONDS
 
-# ASCENT pipeline (V3-P2) uses a much looser NET window. The trajectory shape
-# is fixed by the pad + rocket profile + mission inclination — slippage in t0
-# doesn't change WHERE the rocket flies, only WHEN. A Falcon 9 with a 2-hour
-# launch window has the same Florida-to-Atlantic ground track whether it goes
-# up at the top of the window or the bottom. So we surface every actionable
-# launch within ~6h, which catches all SpaceX / ULA windows even before they
-# narrow on the day-of. The single best ISS-viewing instant within that window
-# is still picked by predict_ascent_pass() at 15s cadence.
+# A wide window is discovery input, not a guaranteed viewing interval:
+# the ISS moves during liftoff uncertainty. Launch v2 evaluates conditional
+# liftoff scenarios; the legacy predictor evaluates only its supplied T0.
 ASCENT_NET_WINDOW_MAX_SECONDS = 21600  # 6 hours
+
+# How far ahead of *now* a launch may sit and still get ISS geometry predicted.
+#
+# This gate is new in the same change that added LL2_PAGE_LIMIT, and it exists
+# because of that change. Before it, the horizon was an ACCIDENT: LL2's default
+# 10-row page happened to span about six days, so nothing further out was ever
+# considered. Raising the page size to 100 removed that accidental ceiling and
+# exposed launches up to +56 days to find_passes / predict_ascent_pass — which
+# neither filter bounded, because neither ever had to.
+#
+# That matters because ISS geometry at those leads is not merely imprecise, it
+# is meaningless. SGP4 error for the ISS grows a few km/day nominally, but a
+# single routine reboost inside the window shifts the true position by ~1000 km
+# — past PASS_MAX_DISTANCE_KM (800), so the prediction flips between "pass" and
+# "no pass" on every TLE refresh. A card built on that is fabricated precision,
+# and the operator cannot tell it apart from a real one from orbit.
+#
+# 7 days keeps every launch the accidental horizon used to catch (measured
+# 2026-08-24: 6 ascent / 2 overhead vs the old page's 5 / 1, so this is still a
+# net gain over the pre-limit behavior) while cutting the far tail entirely.
+# Follow-up, tracked separately: derive score_components.tle_freshness from
+# t0 - tle.epoch instead of hardcoding 1.0, so lead time is visible on the card
+# rather than implied to be perfect.
+LAUNCH_HORIZON_MAX_SECONDS = 7 * 24 * 3600
 
 log = logging.getLogger(__name__)
 
@@ -96,13 +126,25 @@ class Launch:
     site_name: str
     rocket_type: str
     status_abbrev: str
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    time_precision: str | None = None
+    timing_reasons: tuple[str, ...] = ()
+    mission_inclination_deg: float | None = None
+    launch_azimuth_deg: float | None = None
+    trajectory_source: str | None = None
 
 
 def _parse_iso8601_z(text: str) -> datetime:
     """LL2 timestamps are ISO 8601 with trailing Z. fromisoformat needs +00:00."""
+    if not isinstance(text, str):
+        raise ValueError("timestamp must be a string")
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
-    return datetime.fromisoformat(text)
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include timezone")
+    return parsed.astimezone(UTC)
 
 
 def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> Launch | None:
@@ -133,16 +175,27 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
         # `net` is the headline T-0; if absent fall back to window_start.
         # Per LL2 docs, `net` is always present for non-removed launches.
         t0 = _parse_iso8601_z(result.get("net") or result["window_start"])
-        # NET window: (window_end - window_start) / 2. If absent, treat as 0
-        # (zero-width window — the launch is precisely scheduled).
+        reasons: list[str] = []
         ws_raw = result.get("window_start")
         we_raw = result.get("window_end")
         if ws_raw and we_raw:
             ws = _parse_iso8601_z(ws_raw)
             we = _parse_iso8601_z(we_raw)
             net_window_seconds = max(0, int((we - ws).total_seconds() // 2))
+            if we < ws or not ws <= t0 <= we or ws < t0:
+                reasons.append("TIME_CONFLICT")
         else:
-            net_window_seconds = 0
+            ws = _parse_iso8601_z(ws_raw) if ws_raw else None
+            we = _parse_iso8601_z(we_raw) if we_raw else None
+            net_window_seconds = ASCENT_NET_WINDOW_MAX_SECONDS + 1
+            reasons.append("WINDOW_UNKNOWN")
+        precision_raw = result.get("net_precision")
+        precision = precision_raw.get("name") if isinstance(precision_raw, dict) else None
+        if not isinstance(precision, str):
+            precision = None
+            reasons.append("TIME_PRECISION_UNKNOWN")
+        elif precision.lower() not in {"second", "minute"}:
+            reasons.append("TIME_PRECISION_COARSE")
         status_abbrev = result["status"]["abbrev"]
         rocket_type = (
             result["rocket"]["configuration"].get("full_name")
@@ -152,10 +205,13 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
         site_name = pad["location"]["name"]
         site_lat = float(pad["latitude"])
         site_lon = float(pad["longitude"])
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
         log.debug("LL2 result skipped (parse failure): %s", exc)
         return None
 
+    if any(not isinstance(v, str) or not v.strip() for v in
+           (launch_id, name, site_name, rocket_type, status_abbrev)):
+        return None
     if not (math.isfinite(site_lat) and math.isfinite(site_lon)):
         log.warning("LL2 result skipped (non-finite coords): id=%s lat=%s lon=%s",
                     launch_id, site_lat, site_lon)
@@ -164,10 +220,19 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
         log.warning("LL2 result skipped (out-of-range coords): id=%s lat=%s lon=%s",
                     launch_id, site_lat, site_lon)
         return None
-    if t0 <= n:
+    # Keep open windows and a short ascent grace; stale cached events cannot
+    # become future instructions, but a just-launched rocket is not yet gone.
+    active_end = max(t0, we) if we is not None else t0
+    if active_end + timedelta(minutes=10) <= n:
         log.debug("LL2 result skipped (t0 in past): id=%s t0=%s", launch_id, t0.isoformat())
         return None
 
+    mission = result.get("mission")
+    orbit = mission.get("orbit") if isinstance(mission, dict) else None
+    inclination = orbit.get("inclination") if isinstance(orbit, dict) else None
+    if (isinstance(inclination, bool) or not isinstance(inclination, (int, float))
+            or not math.isfinite(inclination) or not 0 <= inclination <= 180):
+        inclination = None
     return Launch(
         id=launch_id,
         name=name,
@@ -178,40 +243,46 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
         site_name=site_name,
         rocket_type=rocket_type,
         status_abbrev=status_abbrev,
+        window_start=ws,
+        window_end=we,
+        time_precision=precision,
+        timing_reasons=tuple(reasons),
+        mission_inclination_deg=inclination,
     )
 
 
-def filter_launches(launches: list[Launch]) -> list[Launch]:
+def filter_launches(launches: list[Launch], now: datetime | None = None) -> list[Launch]:
     """Apply the actionable-status + tight-NET filters for OVERHEAD geometry.
     Inclination filter happens later (find_passes returns no opportunities
     for sites the ISS can't pass over, which is the right encoding — no need
     to pre-filter here)."""
     out: list[Launch] = []
+    n = now or datetime.now(tz=UTC)
     for la in launches:
         if la.status_abbrev not in LL2_GO_STATUS_ABBREVS:
             continue
+        if set(la.timing_reasons) & {"WINDOW_UNKNOWN", "TIME_CONFLICT", "TIME_PRECISION_COARSE"}:
+            continue
         if la.net_window_seconds > NET_WINDOW_MAX_SECONDS:
+            continue
+        if (la.t0 - n).total_seconds() > LAUNCH_HORIZON_MAX_SECONDS:
             continue
         out.append(la)
     return out
 
 
-def filter_ascent_launches(launches: list[Launch]) -> list[Launch]:
-    """Like filter_launches but with the looser ASCENT_NET_WINDOW threshold.
-
-    OVERHEAD geometry needs a tight NET window because we predict the exact
-    ISS-overhead instant; if t0 slips outside the 5-min search window, the
-    prediction is meaningless. ASCENT geometry doesn't have that constraint —
-    the trajectory's ground track is the same regardless of t0 slip, so we
-    can surface launches with multi-hour NET windows and still draw a useful
-    climb path on the map. predict_ascent_pass walks the profile at 15s
-    cadence and picks the single best viewable instant within the window.
-    """
+def filter_ascent_launches(launches: list[Launch], now: datetime | None = None) -> list[Launch]:
+    """Discovery gate only; a wide liftoff window needs conditional evaluation."""
     out: list[Launch] = []
+    n = now or datetime.now(tz=UTC)
     for la in launches:
         if la.status_abbrev not in LL2_GO_STATUS_ABBREVS:
             continue
+        if set(la.timing_reasons) & {"WINDOW_UNKNOWN", "TIME_CONFLICT", "TIME_PRECISION_COARSE"}:
+            continue
         if la.net_window_seconds > ASCENT_NET_WINDOW_MAX_SECONDS:
+            continue
+        if (la.t0 - n).total_seconds() > LAUNCH_HORIZON_MAX_SECONDS:
             continue
         out.append(la)
     return out
@@ -287,6 +358,19 @@ class FetchResult:
     launches we filtered out.'"""
 
 
+def validate_feed(payload: Any) -> None:
+    """Reject schema failures before replacing the last-good cache."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise ValueError("LL2 response requires a results array")
+    if len(payload["results"]) > 1000:
+        raise ValueError("LL2 response exceeds bounded input size")
+    count = payload.get("count", len(payload["results"]))
+    if isinstance(count, bool) or not isinstance(count, int) or count < len(payload["results"]):
+        raise ValueError("LL2 response has invalid count")
+    if payload.get("next") is not None and not isinstance(payload["next"], str):
+        raise ValueError("LL2 response has invalid pagination")
+
+
 def fetch_upcoming_launches(
     cache_path: Path,
     ttl_hours: float = 1.0,
@@ -321,6 +405,7 @@ def fetch_upcoming_launches(
         try:
             text = cache_path.read_text()
             payload = json.loads(text)
+            validate_feed(payload)
             # Re-filter against the CURRENT wall clock — a cache served after
             # weeks of LL2 downtime would otherwise surface completed launches
             # as upcoming. parse_response with now=n drops past-t0 rows.
@@ -354,16 +439,25 @@ def fetch_upcoming_launches(
 
     # Stale cache (or no cache): try the network.
     try:
-        resp = requests.get(url, timeout=LL2_FETCH_TIMEOUT_SECONDS)
+        resp = requests.get(
+            url,
+            timeout=LL2_FETCH_TIMEOUT_SECONDS,
+            params={"limit": LL2_PAGE_LIMIT},
+        )
         resp.raise_for_status()
         text = resp.text
         # Parse FIRST. If LL2 returned an HTML error page captured as 200 OR
         # a JSON shape we can't parse, fall back to cache (matches the
         # fetch_tle pattern; never overwrite a known-good cache with garbage).
         payload = json.loads(text)
+        validate_feed(payload)
         launches = parse_response(payload, now=n)
         schema_hash = compute_schema_hash(payload)
         cache_path.write_text(text)
+        cache_path.with_suffix(".json.receipt.json").write_text(json.dumps({
+            "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "fetched_at": n.isoformat(),
+        }))
         log.info(
             "LL2: fetched %d launches (schema_hash=%s)",
             len(launches), schema_hash,

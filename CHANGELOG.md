@@ -2,6 +2,87 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.22.0.0] - 2026-09-07
+
+### Launch candidates without guessed photo instructions
+
+- Add a separate, hash-validated launch snapshot shared by Map, Queue and
+  Upcoming, with gold launch identities, UTC timing, source age and explicit
+  incomplete-coverage states. Map covers seven days; Upcoming covers 36 hours.
+- Reserve no more than two Queue slots for future supported launch captures.
+  Unknown, stale, offline or incomplete candidates cannot displace Earth shots.
+  The current publisher accepts map-only candidates, not capture instructions.
+- Preserve actual timing bounds and uncertainty. Require explicit trajectory
+  provenance; remove generic inclination and fabricated direction defaults.
+  Elevated-target direction uses the full orbital position/velocity frame.
+- Add bounded conditional geometry, a read-only diagnostic, safe separate
+  publication, historical-reference registry and staged activation runbook.
+  No new source polling, launch notifications or automatic deployment.
+- Fix stale legacy candidates, connectivity-state races, mobile map coverage
+  placement and initial launch-detail focus. Reject overlong validity windows.
+- Include the preceding expired-Access sign-in recovery and service-worker
+  upgrade diagnostics already present on the source branch.
+
+The items below were implemented on 2026-08-24 and are retained in this release.
+
+## **🚀 Rocket launches were being truncated to 10 rows — that's why you barely saw any.**
+
+`generator/launch_data.py` called the Launch Library API with no `params`, so
+LL2's default page size of 10 applied. Out of 363 upcoming launches the pipeline
+only ever considered the first 10 — and since ~86% of the feed sits at status
+TBD, most of that budget went to rows the status filter discards. Measured
+2026-08-24: 5 ascent / 1 overhead candidate, with a visible horizon of 6 days.
+Now requests a full page (`LL2_PAGE_LIMIT = 100`): 6 ascent / 2 overhead, and
+Crew-13 and Falcon Heavy / Roman are reachable where before they were past the
+horizon entirely. No extra API calls — same one request per hourly tick, just a
+bigger page.
+
+Raising the page size removed an *accidental* safety property, so this ships
+with a deliberate one: `LAUNCH_HORIZON_MAX_SECONDS` (7 days) bounds how far
+ahead a launch may sit and still get ISS geometry predicted. Without it,
+launches up to +56 days reached `find_passes` / `predict_ascent_pass`, where a
+single routine reboost moves the true ISS position ~1000 km — past
+`PASS_MAX_DISTANCE_KM` — so the prediction flips between "pass" and "no pass" on
+every TLE refresh. Fabricated precision is worse than no card.
+
+### Launch cards are findable while scrolling
+
+Launch cards now carry a background wash and a left border accent, orange for
+OVERHEAD and warmer yellow for ASCENT, matching the existing 🚀 tag hues. The
+meta-row tags already said "rocket", but only once you were reading the row.
+
+### Map framing is correct on iPhone
+
+Initial map zoom was hardcoded to `z=2`. Web-mercator zoom is independent of
+viewport width, so at z=2 an iPad saw 50% of the globe and an iPhone saw 19% —
+same number, wildly different framing, which read as "zoomed in".
+`initialZoomForViewport()` holds the visible fraction constant instead. iPad and
+desktop framing are unchanged by design (clamped at the tuned z=2).
+
+### Fewer double-refreshes on the ISS link
+
+`manifest.json`'s NetworkFirst timeout went 2s → 8s. ISS downlink RTT runs from
+hundreds of ms to several seconds and degrades near handover, so a 2s budget
+expired routinely and the service worker served the cached manifest — which is
+indistinguishable from "the app is stale". `clientsClaim` also flipped to true
+so a new build takes over the open tab on first load.
+
+### Map renders offline on the landing tab
+
+Map is now the default landing tab, and `renderPendingMapPane()` is called from
+both offline exits of `doRefresh`. Previously its only call site sat past the
+network fetch, so an offline cold boot painted the (hidden) Queue pane and left
+the Map pane blank for the whole LOS — despite manifest and track being in
+localStorage and MapLibre being precached.
+
+### Reverted: live IR overlay stays opt-in
+
+An earlier same-day change flipped the geo-IR overlay to default-on. Reverted:
+IR force-hides the daily clouds layer, and its ~10-minute-timestamped tiles
+churn the `opd-tiles-gibs-base` LRU and evict the precached z0-3 tiles the
+offline story depends on — so the manual "toggle IR off" escape hatch fails
+exactly during LOS. Re-enabling needs a graceful-degradation path first.
+
 ## [1.21.0.0] - 2026-07-02
 
 ## **🔥 Wildfire tags — see the big smoke plumes before you overfly them.**

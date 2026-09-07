@@ -350,11 +350,11 @@ def _should_skip_retry(marker: Path, now: datetime) -> bool:
     attempts = data.get("attempts")
     if isinstance(attempts, int) and attempts >= MAX_RENDER_ATTEMPTS_PER_RUN:
         return True
-    last = Date_parse_or_none(data.get("last_attempt"))
+    last = date_parse_or_none(data.get("last_attempt"))
     return last is not None and (now - last).total_seconds() < RETRY_MIN_INTERVAL_S
 
 
-def Date_parse_or_none(iso: Any) -> datetime | None:
+def date_parse_or_none(iso: Any) -> datetime | None:
     if not isinstance(iso, str):
         return None
     try:
@@ -430,7 +430,9 @@ def write_frames(
             valid_times.append(when)
 
         if not valid_times:
-            log.warning("forecast clouds: no usable GFS data for run %s — skipping publish", iso_z(run))
+            log.warning(
+                "forecast clouds: no usable GFS data for run %s — skipping publish", iso_z(run),
+            )
             _record_failure(tombstone, now)
             return None
 

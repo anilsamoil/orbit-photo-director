@@ -22,7 +22,7 @@ Every existing ISS tracker is built for ground viewers aiming up: "when can I se
 │                            │  sync   │  + Worker for        │  +      │                        │
 │  python generator (30min)  ├────────►│    /api/log endpoint │ Worker  │  shot queue cards      │
 │  + daemon.py watchdog      │  every  │  + custom domain     │  POST   │  + map (secondary)     │
-│  + OpenClaw notify pipe    │  30 min │  map.astroanil.dev   │         │  + manifest-driven     │
+│  + OpenClaw notify pipe    │  60 min │  map.astroanil.dev   │         │  + manifest-driven     │
 └────────────────────────────┘         └──────────────────────┘         └────────────────────────┘
 ```
 
@@ -50,8 +50,13 @@ cd frontend && bun install && bun run dev
 ## Operations
 
 - `make tick` — one generator tick (writes to `out/`)
-- `make watch` — daemon mode, ticks every 30 min
-- `make deploy` — `rclone sync` to Cloudflare R2
+- `make watch` — daemon mode, defaults to one tick every 60 min
+- `make deploy` — additive Earth artifacts to Cloudflare R2, manifest last
+- `make PYTHON=.venv/bin/python launch-diag` — read-only launch cache diagnosis; exit 2 means incomplete evidence, not a crash
+
+Launch candidate publication is separate from Earth generation and does not send
+notifications. See [the launch runbook](docs/launch-runbook.md) and
+[the staged launch plan](docs/plans/2026-09-07-iss-launch-photography-autoplan.md).
 - `make soak SCENARIO=network-kill` — inject a failure for soak testing
 
 See [docs/RUNBOOK.md](docs/RUNBOOK.md) for ground-side support procedures.
