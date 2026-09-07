@@ -13,7 +13,7 @@ Status: map-first implementation approved; source validation and alerts remain g
 - [x] L3 initial: unknown branch stays unknown; bounded conditional liftoff samples. Sampling is not validated photographic recall.
 - [ ] P1: L3 refinement: curated trajectory provenance, adaptive narrow-window resolution and full-window ephemeris validation before instructions.
 - [x] L5-L7 initial source: isolated publisher and shared Map/Queue/Upcoming reviewed; browser QA completed with two layout fixes. See `docs/launch-qa-2026-09-07.md` for limits.
-- [ ] P0 ship gate: approve separate cleanup of 16 pre-existing Ruff findings (baseline 17), rerun CI-equivalent checks, then push/create PR. No production activation yet.
+- [x] P0 local ship gate: owner approved separate cleanup of 16 existing Ruff findings; lint, all 2,695 tests, typechecks and production build pass (`4b05b0c`). Remote CI and deployment readback remain required.
 - [ ] P1: staged map-only production activation with ownership and refresh gates below. Do not develop in the watched production checkout.
 - [ ] P1: L4 independent OEM/frame and optical/reference validation; acquire historical ephemeris before claiming observed replay success.
 - [ ] P1: L11 positive-only notifier stays shadow until policy, evidence and crash-receipt tests pass.
