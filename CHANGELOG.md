@@ -2,6 +2,14 @@
 
 All notable changes to Orbit Photo Director.
 
+## [1.22.0.1] - 2026-09-07
+
+- Exclude Cloudflare authentication callbacks and the connectivity probe from
+  offline app-shell navigation. A sign-in callback must reach Cloudflare, not
+  render a cached map under a false profile name.
+- Test the actual shared navigation denylist against auth, API, artifact and
+  normal offline profile routes. No browser storage or queued logs are cleared.
+
 ## [1.22.0.0] - 2026-09-07
 
 ### Launch candidates without guessed photo instructions

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { defineConfig } from 'vite';
+import { NAVIGATION_FALLBACK_DENYLIST } from './src/sw-navigation';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // Read the repo-root VERSION file at build time so the app version stamped
@@ -289,12 +290,7 @@ export default defineConfig({
         // responses inflate cache size and can mask 404s as cached "successes".
         // The runtimeCaching rules above scope the tile sources we DO want.
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [
-          /^\/launch\//,
-          /^\/api\//,        // API routes go straight to network
-          /^\/v\//,          // Versioned artifact paths handled by their own rule
-          /\/manifest\.json/, // manifest.json handled by its own rule
-        ],
+        navigateFallbackDenylist: NAVIGATION_FALLBACK_DENYLIST,
       },
 
       // Don't include extra static assets in the precache from outside the
