@@ -1,4 +1,4 @@
-.PHONY: help install test test-py test-worker test-frontend lint tick watch deploy soak clean ll2-diff glm-smoke
+.PHONY: help install test test-py test-worker test-frontend lint tick watch deploy soak clean ll2-diff glm-smoke launch-diag
 
 PYTHON ?= python3
 BUN ?= bun
@@ -13,8 +13,9 @@ help:
 	@echo "  test-frontend  Run frontend tests"
 	@echo "  lint           Run ruff (Python) + tsc (TS)"
 	@echo "  tick           Run one generator tick → out/"
-	@echo "  watch          Run generator daemon (30-min loop)"
-	@echo "  deploy         rclone sync out/ to Cloudflare R2"
+	@echo "  watch          Run generator daemon (60-min default loop)"
+	@echo "  deploy         Additive Earth publication; manifest last"
+	@echo "  launch-diag    Read-only cached launch evidence (exit 2 = incomplete)"
 	@echo "  soak SCENARIO  Inject a failure scenario (network-kill, daemon-kill, ...)"
 	@echo "  ll2-diff       Diff live LL2 schema against tests/fixtures/ll2-response-2026-05.json"
 	@echo "  glm-smoke      Live-S3 smoke test for the GLM sampler (v1.3.2 verify)"
@@ -48,9 +49,10 @@ watch:
 	$(PYTHON) -m generator.daemon
 
 deploy:
-	@which rclone > /dev/null || (echo "rclone not installed"; exit 1)
-	rclone sync out/v/ $(RCLONE_REMOTE)/v/ --progress
-	rclone copyto out/manifest.json $(RCLONE_REMOTE)/manifest.json
+	OPD_RCLONE_REMOTE="$(RCLONE_REMOTE)" bash scripts/deploy.sh
+
+launch-diag:
+	$(PYTHON) -m scripts.ascent_smoke --json $(LAUNCH_DIAG_ARGS)
 
 soak:
 	@test -n "$(SCENARIO)" || (echo "Usage: make soak SCENARIO=network-kill"; exit 1)

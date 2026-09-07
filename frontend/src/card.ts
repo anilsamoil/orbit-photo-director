@@ -3,6 +3,8 @@ import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
 import { renderStarBlock, scoreToStars, starsToLabel } from './score-stars';
 import { formatTrackOffset } from './track-offset';
 import { isInShotlist } from './shotlist';
+import { renderLegacyLaunchCard } from './launch-card';
+import { isLaunchPass } from './launch-selectors';
 
 /** Variant marker for cards: 'observed' uses Queue styling (Shoot/Skip on
  *  the imminent pass), 'forecast' uses Upcoming styling (no actions; soft
@@ -102,6 +104,7 @@ export function renderCard(
   onAction: (action: CardAction, p: PassEntry, value?: number) => void,
   options: RenderOptions | CardVariant = {},
 ): HTMLElement {
+  if (isLaunchPass(p)) return renderLegacyLaunchCard(p, isStale);
   const opts = typeof options === 'string' ? { variant: options } : options;
   const variant: CardVariant = opts.variant ?? 'observed';
   const tokenSet = opts.tokenSet ?? true;
@@ -109,16 +112,6 @@ export function renderCard(
   const classes = ['card'];
   if (isStale) classes.push('stale');
   if (variant === 'forecast') classes.push('forecast');
-  // Card-level launch cue (operator request 2026-08-24). The meta-row tags
-  // already say "rocket" but only once you're reading the row; launches are
-  // the highest-priority shot on the board and need to be findable while
-  // scrolling past everything else. Kind-specific so ASCENT and OVERHEAD stay
-  // distinguishable at card level the same way their tags already are.
-  if (p.launch) {
-    const launchKind = p.launch.kind ?? p.launch.geometry;
-    classes.push('launch');
-    classes.push(launchKind === 'ascent' ? 'launch-ascent-card' : 'launch-overhead-card');
-  }
   card.className = classes.join(' ');
   card.dataset.targetId = p.target_id;
   card.dataset.passTime = p.closest_approach;
@@ -134,25 +127,6 @@ export function renderCard(
 
   const meta = document.createElement('div');
   meta.className = 'card-meta';
-  // V3.0 launch-tag is leftmost when present — operator scans the meta
-  // row from left to right; "this is a rocket launch" is the most
-  // load-bearing thing they can know about a card. Rocket name + window
-  // confidence follow as adjacent tags so the visual cluster stays tight.
-  if (p.launch) {
-    // Kind-aware tag (V3-P2): ASCENT and OVERHEAD are different photo
-    // opportunities for the same launch — different lens, look angle, and
-    // timing. Operator needs to see which one this card represents.
-    // Fall back to generic LAUNCH tag for older manifests that don't yet
-    // carry the `kind` field.
-    const kind = p.launch.kind ?? p.launch.geometry;
-    const launchLabel = kind === 'ascent' ? '🚀 ASCENT plume' :
-                        kind === 'overhead' ? '🚀 OVERHEAD pass' :
-                        '🚀 LAUNCH';
-    const launchClass = kind === 'ascent' ? 'launch-ascent' : 'launch-overhead';
-    meta.appendChild(makeTag(launchClass, launchLabel));
-    meta.appendChild(makeTag('launch-rocket', p.launch.rocket_type));
-    meta.appendChild(makeTag('launch-window', formatLaunchWindow(p.launch.net_window_seconds)));
-  }
   meta.appendChild(makeTag(`regime-${p.pass_regime}`, p.pass_regime));
   meta.appendChild(makeTag(obstructionClass(p.obstruction_class), p.obstruction_class));
   meta.appendChild(makeTag('', `${formatUtcLabel(p.closest_approach)}`));
@@ -476,7 +450,7 @@ function isNoObservationSource(source: string): boolean {
  *  Source for the half-width is launch_data.py's net_window_seconds field
  *  computed from (LL2.window_end - LL2.window_start) / 2. */
 export function formatLaunchWindow(netWindowSeconds: number): string {
-  if (netWindowSeconds <= 0) return 'T-0 exact';
+  if (!Number.isFinite(netWindowSeconds) || netWindowSeconds <= 0) return 'Schedule precision unknown';
   if (netWindowSeconds < 60) return `Window: ±${netWindowSeconds}s`;
   if (netWindowSeconds < 3600) {
     return `Window: ±${Math.round(netWindowSeconds / 60)} min`;

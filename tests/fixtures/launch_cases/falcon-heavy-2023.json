@@ -1,0 +1,7 @@
+{
+  "event": "Falcon Heavy plume observed from the ISS on 2023-01-15",
+  "evidence_kind": "observed",
+  "validation_status": "historical_ephemeris_missing",
+  "source": "https://www.nasa.gov/image-article/launch-plume-of-spacex-falcon-heavy-rocket-seen-from-station-2/",
+  "missing": ["exact exposure time", "matching archived ISS state", "event-specific trajectory", "optical-domain validation"]
+}

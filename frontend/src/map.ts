@@ -48,6 +48,9 @@ import {
 import { loadProfile, parseProfileFromURL, validatePersonalTargetInput, type PersonalTarget } from './profile';
 import { applyTargetFilter, getTargetFilter } from './target-filter-pref';
 import { subscribeProfileChanged } from './profile-events';
+import { launchStore, type LaunchState } from './launch-store';
+import { isLaunchPass, legacyLaunchInHorizon, selectLaunches } from './launch-selectors';
+import { openLaunchDetails, renderLegacyLaunchCard } from './launch-card';
 
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
@@ -60,6 +63,7 @@ let currentTrack: Track | null = null;
 // hits a time-scrub button we can re-derive the target-pin opacity (and
 // future-orbit ground track) without re-fetching the manifest.
 let currentPasses: PassEntry[] = [];
+let launchSubscriptionBound = false;
 // Orbit time-scrub: null = live "Now" mode (1Hz marker tick + standard
 // 2-orbit track). Non-null = the map is pinned to an ABSOLUTE UTC instant
 // and shows ONLY the orbit centered there, ISS marker frozen at that
@@ -1482,9 +1486,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
   applyTerminatorVisibility();
 
-  // ASCENT trajectory layer (v1.6.1.0). Polyline colored by altitude:
-  // red near surface (early climb / max-Q), orange mid-climb,
-  // cyan near orbital altitude (~200km). Plus a pad pin at T+0.
+  // Launch candidates share a gold marker/corridor identity. A corridor is
+  // supplied only with trajectory provenance; legacy rows retain only a pad.
   refreshAscentTrajectorySource();
   if (!map.getLayer('ascent-trajectory-layer')) {
     map.addLayer({
@@ -1492,13 +1495,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       type: 'line',
       source: 'ascent-trajectory',
       paint: {
-        'line-color': [
-          'interpolate', ['linear'], ['get', 'alt_km'],
-          0, '#ff4d4d',     // red: pre-Max-Q (0-10km)
-          50, '#ffa64d',    // orange: through stratosphere
-          120, '#ffe14d',   // yellow: stage sep regime
-          200, '#5cd0ff',   // cyan: orbit insertion
-        ],
+        'line-color': '#ffd45c',
         'line-width': 3,
         'line-opacity': 0.9,
       },
@@ -1511,7 +1508,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       source: 'ascent-pad',
       paint: {
         'circle-radius': 7,
-        'circle-color': '#ff4d4d',
+        'circle-color': '#ffd45c',
         'circle-stroke-color': '#0b0d12',
         'circle-stroke-width': 2,
         'circle-opacity': 0.95,
@@ -1522,23 +1519,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       if (!f || f.geometry.type !== 'Point') return;
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
       const props = f.properties ?? {};
-      const body = document.createElement('div');
-      body.className = 'target-popup';
-      const name = String(props.launch_name ?? 'Launch');
-      const site = String(props.site_name ?? '');
-      const t0 = String(props.t0 ?? '');
-      body.textContent = '';
-      const h = document.createElement('div');
-      h.style.fontWeight = '600';
-      h.textContent = `🚀 ${name}`;
-      const s = document.createElement('div');
-      s.textContent = site;
-      const t = document.createElement('div');
-      t.style.opacity = '0.75';
-      t.textContent = `T-0: ${t0}`;
-      body.appendChild(h);
-      body.appendChild(s);
-      body.appendChild(t);
+      if (props.event_id) {
+        openLaunchDetails(String(props.event_id));
+        return;
+      }
+      const pass = currentPasses.find((p) => p.target_id === props.target_id);
+      if (!pass || launchStore.getState().artifact) return;
+      const body = renderLegacyLaunchCard(pass, true);
       new maplibregl.Popup()
         .setLngLat(coords)
         .setDOMContent(body)
@@ -1552,6 +1539,14 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
   }
   applyAscentVisibility();
+  if (!launchSubscriptionBound) {
+    launchSubscriptionBound = true;
+    launchStore.subscribe(() => {
+      if (!map?.getSource('ascent-pad')) return;
+      refreshAscentTrajectorySource();
+      refreshTargetsSource();
+    });
+  }
 
   // ISS marker: ISS-silhouette icon + pulsing halo. Replaces the prior
   // cyan dot which blended into the cloud overlay at world-zoom and was
@@ -1792,38 +1787,57 @@ export function buildAscentFeatures(passes: PassEntry[]): {
 } {
   const lines: GeoJSON.Feature[] = [];
   const pads: GeoJSON.Feature[] = [];
+  const seen = new Set<string>();
   for (const p of passes) {
-    const traj = p.launch?.trajectory;
-    if (!traj || traj.length < 2) continue;
-    if (p.launch?.kind !== 'ascent') continue;
-    for (let i = 0; i < traj.length - 1; i++) {
-      const a = traj[i];
-      const b = traj[i + 1];
-      if (!a || !b) continue;
-      const segMidAlt = (a.alt_km + b.alt_km) / 2;
-      const segs = buildLineFeatures([
-        [a.lat, a.lon],
-        [b.lat, b.lon],
-      ]);
-      for (const s of segs) {
-        s.properties = { alt_km: segMidAlt, launch_name: p.launch?.name ?? '' };
-        lines.push(s);
-      }
-    }
-    const pad = traj[0];
-    if (!pad) continue;
+    if (!p.launch) continue;
+    const key = `${p.launch.name}|${p.launch.t0}`;
+    if (seen.has(key)) continue;
+    const lat = p.launch.pad_lat ?? p.target_lat;
+    const lon = p.launch.pad_lon ?? p.target_lon;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+    seen.add(key);
     pads.push({
       type: 'Feature' as const,
       properties: {
+        target_id: p.target_id,
+        label: 'LAUNCH / MAP ONLY',
         launch_name: p.launch?.name ?? '',
         site_name: p.launch?.site_name ?? '',
         t0: p.launch?.t0 ?? '',
       },
       geometry: {
         type: 'Point' as const,
-        coordinates: [pad.lon, pad.lat],
+        coordinates: [lon, lat],
       },
     });
+  }
+  return { lines, pads };
+}
+
+export function buildLaunchMapFeatures(state: LaunchState, now: number): { lines: GeoJSON.Feature[]; pads: GeoJSON.Feature[] } {
+  const lines: GeoJSON.Feature[] = [];
+  const pads: GeoJSON.Feature[] = [];
+  for (const { item } of selectLaunches(state, now, 'map')) {
+    const properties = { event_id: item.event_id, revision: item.revision, artifact_revision: state.artifact!.revision,
+      label: `LAUNCH / ${item.status === 'map_only' ? 'MAP ONLY' : 'ASCENT'}`, launch_name: item.name };
+    pads.push({ type: 'Feature', properties, geometry: { type: 'Point', coordinates: [item.site.lon, item.site.lat] } });
+    const trajectory = item.trajectory;
+    if (trajectory.quality === 'unknown' || !trajectory.source || trajectory.points.length < 2) continue;
+    // Unwrap each supplied pair locally. Unlike the Earth-track helper's
+    // sample splitting, this retains even a two-point dateline crossing.
+    const segments: GeoJSON.Feature[] = [];
+    for (let i = 1; i < trajectory.points.length; i++) {
+      const a = trajectory.points[i - 1]!;
+      const b = trajectory.points[i]!;
+      const lon = a.lon + wrapLon(b.lon - a.lon);
+      for (const offset of [-360, 0, 360]) {
+        segments.push({ type: 'Feature', properties: {}, geometry: {
+          type: 'LineString', coordinates: [[a.lon + offset, a.lat], [lon + offset, b.lat]],
+        } });
+      }
+    }
+    for (const segment of segments) segment.properties = { ...properties, quality: trajectory.quality };
+    lines.push(...segments);
   }
   return { lines, pads };
 }
@@ -1833,7 +1847,10 @@ export function buildAscentFeatures(passes: PassEntry[]): {
  *  features to the map sources. */
 function refreshAscentTrajectorySource(): void {
   if (!map) return;
-  const { lines, pads } = buildAscentFeatures(currentPasses);
+  const state = launchStore.getState();
+  const now = Date.now();
+  const { lines, pads } = state.artifact ? buildLaunchMapFeatures(state, now)
+    : buildAscentFeatures(currentPasses.filter((pass) => legacyLaunchInHorizon(pass, now, 7 * 24 * 3600_000)));
   upsertGeoJson(map, 'ascent-trajectory', {
     type: 'FeatureCollection',
     features: lines,
@@ -1909,7 +1926,7 @@ function refreshTargetsSource(): void {
   const viewMs = currentViewMs();
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
   const thresholdKm = readActiveDistanceThresholdKm();
-  const distanceVisible = filterPassesByDistance(currentPasses, thresholdKm);
+  const distanceVisible = filterPassesByDistance(currentPasses.filter((p) => !isLaunchPass(p)), thresholdKm);
   // Honor the global "All / Mine" filter: 'mine' drops curated score-dots so
   // the map matches the Queue/Upcoming view. The always-on my-targets ring
   // layer still shows every personal target regardless of this filter.

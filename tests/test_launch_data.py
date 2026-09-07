@@ -163,8 +163,9 @@ def test_ascent_filter_drops_tbd_status(fixture_payload: dict) -> None:
 
 
 def test_ascent_filter_keeps_wide_net_window(fixture_payload: dict) -> None:
-    """The Vandy fixture (1h half-window = 3600s) is dropped by OVERHEAD but
-    kept by ASCENT — trajectory shape doesn't depend on tight t0."""
+    """A consistent wide window remains discoverable, not a viewing instruction."""
+    wide = fixture_payload["results"][3]
+    wide["net"] = wide["window_start"]
     launches = parse_response(fixture_payload, now=datetime(2025, 1, 1, tzinfo=UTC))
     overhead = {la.id for la in filter_launches(launches)}
     ascent = {la.id for la in filter_ascent_launches(launches)}

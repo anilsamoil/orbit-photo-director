@@ -1,171 +1,97 @@
-/**
- * Tests for the V3.0 launch tag rendering on PassEntry cards.
- * Covers: 🚀 LAUNCH tag presence, rocket name + window confidence chips,
- * formatLaunchWindow text, backward compat for v1.0/v1.1 PassEntries
- * without a launch field.
- */
-import { beforeEach, describe, expect, it } from 'vitest';
-
-import { formatLaunchWindow, renderCard } from '../src/card';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderCard, formatLaunchWindow } from '../src/card';
+import { openLaunchDetails, renderLaunchCard, renderLaunchFacts } from '../src/launch-card';
+import { launchStore } from '../src/launch-store';
 import type { PassEntry } from '../src/types';
+import { interval, iso, launch, NOW, state, supported } from './launch-fixtures';
 
-const baseLaunchPass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
-  target_id: 'launch:f9-starlink-2026-05-test-1',
-  target_name: '🚀 Falcon 9 Block 5 | Starlink Group 6-99',
-  target_regime: 'any',
-  target_priority: 5,
-  target_lat: 28.6082,
-  target_lon: -80.6041,
-  closest_approach: '2026-05-12T03:42:00Z',
-  nadir_distance_km: 50,
-  pass_regime: 'night',
-  obstruction_class: 'clear',
-  p_unobstructed: 95,
-  cloud_fraction: 5,
-  cloud_source: 'gibs',
-  score: 88,
-  score_components: {
-    p_unobstructed: 95,
-    regime_fit: 100,
-    nadir_proximity: 95,
-    priority_weight: 100,
-    tle_freshness: 1,
-  },
-  iss_at_closest: { lat: 28.6, lon: -80.6, alt_km: 410 },
-  launch: {
-    name: 'Falcon 9 Block 5 | Starlink Group 6-99',
-    rocket_type: 'Falcon 9 Block 5',
-    geometry: 'overhead',
-    site_name: 'Kennedy Space Center, FL, USA',
-    net_window_seconds: 0,
-    t0: '2026-05-12T03:42:00Z',
-  },
-  ...overrides,
-});
+beforeEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
 
-const groundPass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
-  target_id: 'tokyo-night',
-  target_name: 'Tokyo at night',
-  target_regime: 'night',
-  target_priority: 5,
-  target_lat: 35.68,
-  target_lon: 139.69,
-  closest_approach: '2026-05-12T03:42:00Z',
-  nadir_distance_km: 200,
-  pass_regime: 'night',
-  obstruction_class: 'clear',
-  p_unobstructed: 85,
-  cloud_fraction: 15,
-  cloud_source: 'gibs',
-  score: 78,
-  score_components: {
-    p_unobstructed: 85,
-    regime_fit: 100,
-    nadir_proximity: 75,
-    priority_weight: 100,
-    tle_freshness: 1,
-  },
-  iss_at_closest: { lat: 35, lon: 140, alt_km: 410 },
-  ...overrides,
-});
-
-const NOW = Date.parse('2026-05-12T03:00:00Z');
-
-beforeEach(() => {
-  document.body.innerHTML = '';
-});
-
-describe('formatLaunchWindow', () => {
-  it('renders 0s as "T-0 exact"', () => {
-    expect(formatLaunchWindow(0)).toBe('T-0 exact');
+describe('launch-specific cards', () => {
+  it('marks conflicting source bounds unknown rather than showing an inverted launch window', () => {
+    const item = launch({ reason_codes: ['TIME_CONFLICT'], launch_window: { net: iso(10), start: iso(20), end: iso(-40), precision: 'minute' } });
+    const facts = renderLaunchFacts(item, state([item]), NOW);
+    expect(facts.textContent).toContain('Launch window startUnknown (conflicting source bounds)');
+    expect(facts.textContent).toContain('Launch window endUnknown (conflicting source bounds)');
+    expect(facts.textContent).toContain('Schedule precisionUnknown (time conflict)');
+    expect(facts.textContent).not.toContain('2026-09-07 11:20:00 UTC');
+    expect(renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW).textContent).toContain('TIME_CONFLICT');
   });
-
-  it('renders sub-minute windows in seconds', () => {
-    expect(formatLaunchWindow(15)).toBe('Window: ±15s');
-    expect(formatLaunchWindow(45)).toBe('Window: ±45s');
+  it('shows tentative NET, unknown capture and explicit MAP ONLY without ground claims', () => {
+    const item = launch();
+    const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
+    expect(card.textContent).toContain('LAUNCH / ASCENT');
+    expect(card.textContent).toContain('MAP ONLY');
+    expect(card.textContent).toContain('NET (tentative): 2026-09-07 12:10:00 UTC');
+    expect(card.textContent).toContain('Capture interval unknown');
+    expect(card.textContent).not.toMatch(/%|[★☆]|WORF|Cupola|exact|Remind|Shoot/);
+    expect(card.querySelector('.card-countdown,.card-score,.btn-remind')).toBeNull();
   });
-
-  it('renders sub-hour windows in minutes', () => {
-    expect(formatLaunchWindow(60)).toBe('Window: ±1 min');
-    expect(formatLaunchWindow(900)).toBe('Window: ±15 min');
-    expect(formatLaunchWindow(1800)).toBe('Window: ±30 min');
+  it('shows supported conditional capture and all UTC facts with orbital frame', () => {
+    const item = supported(); const s = state([item]);
+    const card = renderLaunchCard({ item, interval: interval(), expired: false }, s, NOW);
+    expect(card.textContent).toContain('Conditional capture:');
+    const facts = renderLaunchFacts(item, s, NOW);
+    expect(facts.textContent).toContain('Orbital-relative (LVLH)');
+    expect(facts.textContent).toContain('Conditional liftoff');
+    expect(facts.textContent).toContain('2026-09-07 12:12:30 UTC');
+    expect(facts.textContent).toContain('event-r1');
+    expect(facts.textContent).not.toMatch(/%|[★☆]|WORF|Cupola|body|access/);
   });
-
-  it('renders multi-hour windows with one decimal up to 10h', () => {
-    expect(formatLaunchWindow(3600)).toBe('Window: ±1.0h');
-    expect(formatLaunchWindow(5400)).toBe('Window: ±1.5h');
+  it('keeps stale/expired labels full contrast and missing bounds unknown', () => {
+    const item = launch(); const s = state([item], { availability: 'offline' });
+    const card = renderLaunchCard({ item, interval: null, expired: true }, s, Date.parse(iso(60)));
+    expect(card.textContent).toContain('STALE / EXPIRED DATA');
+    expect(card.textContent).toContain('OFFLINE');
+    expect(card.classList.contains('stale')).toBe(false);
+    const facts = renderLaunchFacts(item, s, NOW);
+    expect(facts.textContent).toContain('Launch window startUnknown');
+    expect(facts.textContent).toContain('Schedule precisionUnknown');
   });
-
-  it('renders very wide windows as integer hours past 10h', () => {
-    expect(formatLaunchWindow(36000)).toBe('Window: ±10h');
-    expect(formatLaunchWindow(43200)).toBe('Window: ±12h');
+  it('renders source and name as text, never HTML', () => {
+    const item = launch({ name: '<img src=x onerror=alert(1)>', reason_codes: ['<script>bad</script>'] });
+    const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
+    expect(card.querySelector('img')).toBeNull();
+    const facts = renderLaunchFacts(item, state([item]), NOW);
+    expect(facts.querySelector('script')).toBeNull();
+    expect(facts.querySelector('a')?.rel).toContain('noopener');
+  });
+  it('card and marker entry point opens current shared facts and updates revisions', () => {
+    let s = state(); let update = () => {};
+    vi.spyOn(launchStore, 'getState').mockImplementation(() => s);
+    vi.spyOn(launchStore, 'subscribe').mockImplementation((fn) => { update = fn; return () => {}; });
+    vi.spyOn(HTMLDialogElement.prototype, 'showModal').mockImplementation(function (this: HTMLDialogElement) { this.open = true; });
+    renderLaunchCard({ item: s.artifact!.items[0]!, interval: null, expired: false }, s, NOW).querySelector('button')!.click();
+    expect(document.querySelector('.launch-facts')?.getAttribute('data-revision')).toBe('event-r1');
+    s = state([launch({ revision: 'event-r2', name: 'Revised schedule' })]); update();
+    expect(document.querySelector('.launch-facts')?.getAttribute('data-revision')).toBe('event-r2');
+    expect(document.querySelector('h2')?.textContent).toContain('Revised schedule');
+    document.querySelector('dialog')?.close();
+    openLaunchDetails('event-1');
+    expect(document.querySelector('.launch-facts')?.getAttribute('data-revision')).toBe('event-r2');
   });
 });
 
-describe('renderCard with launch field', () => {
-  it('renders the launch tag (OVERHEAD pass for geometry=overhead)', () => {
-    // V3-P2: the tag is now kind-aware. Old PassEntries with geometry='overhead'
-    // (no `kind` field yet) fall back to geometry, rendering "🚀 OVERHEAD pass".
-    const card = renderCard(baseLaunchPass(), NOW, false, () => {});
-    const tags = Array.from(card.querySelectorAll('.tag'));
-    const launchTag = tags.find((t) => t.textContent?.startsWith('🚀'));
-    expect(launchTag).toBeTruthy();
-    expect(launchTag?.textContent).toBe('🚀 OVERHEAD pass');
-    expect(launchTag?.classList.contains('launch-overhead')).toBe(true);
+describe('legacy launch fallback', () => {
+  it('suppresses score claims even when legacy launch metadata is missing', () => {
+    const card = renderCard({ target_id: 'launch:broken', target_name: 'Launch' } as PassEntry, NOW, false, () => {});
+    expect(card.textContent).toContain('MAP ONLY | LEGACY');
+    expect(card.querySelector('.card-score')).toBeNull();
   });
-
-  it('renders the rocket name as a tag adjacent to 🚀 LAUNCH', () => {
-    const card = renderCard(baseLaunchPass(), NOW, false, () => {});
-    const rocketTag = card.querySelector('.tag.launch-rocket');
-    expect(rocketTag?.textContent).toBe('Falcon 9 Block 5');
+  const legacy = (t0?: string) => ({ target_id: 'launch:one', target_name: 'Legacy', closest_approach: iso(1),
+    launch: { name: 'Legacy', rocket_type: 'Rocket', geometry: 'ascent', site_name: 'Pad', net_window_seconds: 0, t0 },
+    score: 99, p_unobstructed: 95, angle_off_nadir_deg: 25,
+  }) as PassEntry;
+  it.each([undefined, '', 'not-a-time', '2026-09-07T12:00:00-05:00'])('does not substitute closest approach for missing UTC NET: %s', (t0) => {
+    const card = renderCard(legacy(t0), NOW, true, () => {});
+    expect(card.textContent).toContain('NET (tentative)Unknown');
+    expect(card.textContent).toContain('MAP ONLY | LEGACY | STALE');
+    expect(card.textContent).not.toMatch(/%|[★☆]|WORF|Cupola|exact|Remind|Shoot|12:01/);
+    expect(card.querySelector('button,.card-score,.card-countdown')).toBeNull();
   });
-
-  it('renders the window confidence chip from net_window_seconds', () => {
-    const card = renderCard(
-      baseLaunchPass({
-        launch: {
-          name: 'X',
-          rocket_type: 'X',
-          geometry: 'overhead',
-          site_name: 'X',
-          net_window_seconds: 900,
-          t0: '2026-05-12T03:42:00Z',
-        },
-      }),
-      NOW, false, () => {},
-    );
-    const windowTag = card.querySelector('.tag.launch-window');
-    expect(windowTag?.textContent).toBe('Window: ±15 min');
-  });
-
-  it('renders T-0 exact when net_window_seconds is 0', () => {
-    const card = renderCard(baseLaunchPass(), NOW, false, () => {});
-    const windowTag = card.querySelector('.tag.launch-window');
-    expect(windowTag?.textContent).toBe('T-0 exact');
-  });
-
-  it('places launch tags BEFORE regime + obstruction tags (left-to-right scan)', () => {
-    const card = renderCard(baseLaunchPass(), NOW, false, () => {});
-    const tagTexts = Array.from(card.querySelectorAll('.tag')).map((t) => t.textContent);
-    const launchIdx = tagTexts.findIndex((t) => t?.startsWith('🚀'));
-    const regimeIdx = tagTexts.findIndex((t) => t === 'night' || t === 'day' || t === 'terminator');
-    expect(launchIdx).toBeLessThan(regimeIdx);
-  });
-});
-
-describe('renderCard backward compat (no launch field)', () => {
-  it('omits all launch tags when launch field is absent (older PassEntry)', () => {
-    const card = renderCard(groundPass(), NOW, false, () => {});
-    expect(card.querySelector('.tag.launch-overhead')).toBeNull();
-    expect(card.querySelector('.tag.launch-rocket')).toBeNull();
-    expect(card.querySelector('.tag.launch-window')).toBeNull();
-  });
-
-  it('renders ground passes identically to v1.1.x (no regression)', () => {
-    const card = renderCard(groundPass(), NOW, false, () => {});
-    // Smoke check: the existing card structure (name + countdown + meta + score) intact.
-    expect(card.querySelector('.card-name')?.textContent).toBe('Tokyo at night');
-    expect(card.querySelector('.card-meta .tag.regime-night')?.textContent).toBe('night');
-    expect(card.querySelector('.card-score')).toBeTruthy();
+  it('labels available schedule as tentative, never exact', () => {
+    expect(renderCard(legacy(iso(10)), NOW, false, () => {}).textContent).toContain('NET (tentative)2026-09-07 12:10:00 UTC');
+    expect(formatLaunchWindow(0)).toBe('Schedule precision unknown');
+    expect(formatLaunchWindow(NaN)).toBe('Schedule precision unknown');
   });
 });

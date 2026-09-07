@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
@@ -378,11 +379,16 @@ def f9_launch_dict() -> dict:
             "family": "Falcon",
         }},
         "mission": {"orbit": {"inclination": 51.6}},
+        "launch_azimuth_deg": 45.0,
+        "trajectory_source": "https://example.invalid/mission-trajectory",
     }
 
 
 def test_predict_ascent_pass_returns_none_for_unknown_rocket(sample_tle: TLE) -> None:
-    launch = {"rocket": {"configuration": {"full_name": "Electron"}}}
+    launch = {
+        "rocket": {"configuration": {"full_name": "Electron"}},
+        "launch_azimuth_deg": 90.0, "trajectory_source": "test-trajectory",
+    }
     sampler = _FixedCloudSampler()
     when = datetime(2024, 10, 17, 12, 0, tzinfo=UTC)
     assert predict_ascent_pass(launch, 28.6, -80.6, when, sample_tle, sampler) is None
@@ -409,10 +415,78 @@ def test_predict_ascent_pass_returns_prediction_for_falcon_9(
 
 def test_predict_ascent_pass_skips_when_no_profile_match(sample_tle: TLE) -> None:
     """LL2 rocket with no matching profile returns None instead of crashing."""
-    launch = {"rocket": {"configuration": {"full_name": "Some Unknown LV-5"}}}
+    launch = {
+        "rocket": {"configuration": {"full_name": "Some Unknown LV-5"}},
+        "launch_azimuth_deg": 90.0, "trajectory_source": "test-trajectory",
+    }
     sampler = _FixedCloudSampler()
     when = datetime(2024, 10, 17, 12, 0, tzinfo=UTC)
     assert predict_ascent_pass(launch, 28.6, -80.6, when, sample_tle, sampler) is None
+
+
+@pytest.mark.parametrize("direction", [
+    {},
+    {"mission": None},
+    {"mission": {"orbit": {"inclination": 51.6}}},
+    {"mission": {"orbit": {"inclination": 97.0}}},
+    {"launch_azimuth_deg": 45.0},
+    {"trajectory_source": "mission-trajectory"},
+    {"launch_azimuth_deg": 45.0, "trajectory_source": ""},
+    {"launch_azimuth_deg": 45.0, "trajectory_source": "  "},
+    {"launch_azimuth_deg": 45.0, "trajectory_source": True},
+    {"launch_azimuth_deg": True, "trajectory_source": "mission-trajectory"},
+    {"launch_azimuth_deg": "45", "trajectory_source": "mission-trajectory"},
+    {"launch_azimuth_deg": math.nan, "trajectory_source": "mission-trajectory"},
+    {"launch_azimuth_deg": math.inf, "trajectory_source": "mission-trajectory"},
+    {"launch_azimuth_deg": -1.0, "trajectory_source": "mission-trajectory"},
+    {"launch_azimuth_deg": 360.0, "trajectory_source": "mission-trajectory"},
+])
+def test_predict_ascent_requires_explicit_sourced_azimuth(
+    direction: dict, f9_launch_dict: dict, sample_tle: TLE, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch = {"rocket": f9_launch_dict["rocket"], **direction}
+    propagate = Mock(side_effect=AssertionError("unsupported trajectory must not be propagated"))
+    infer = Mock(side_effect=AssertionError("inclination must not select a trajectory branch"))
+    monkeypatch.setattr("generator.ascent.propagate", propagate)
+    monkeypatch.setattr("generator.ascent.real_launch_azimuth", infer)
+    result = predict_ascent_pass(
+        launch, 28.6, -80.6, datetime(2024, 10, 17, 12, tzinfo=UTC),
+        sample_tle, _FixedCloudSampler(),
+    )
+    assert result is None
+    propagate.assert_not_called()
+    infer.assert_not_called()
+
+
+@pytest.mark.parametrize("azimuth", [0.0, 135.0, 225.0, 359.5])
+@pytest.mark.parametrize("mission", [None, {"orbit": {"inclination": 51.6}}])
+def test_predict_ascent_uses_explicit_azimuth_without_inclination_inference(
+    azimuth: float, mission: dict | None, f9_launch_dict: dict,
+    sample_tle: TLE, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch = {**f9_launch_dict, "launch_azimuth_deg": azimuth}
+    if mission is None:
+        launch.pop("mission")
+    else:
+        launch["mission"] = mission
+    position = Mock(return_value=(1.0, 2.0, 100.0, 0.9))
+    infer = Mock(side_effect=AssertionError("do not infer northbound/southbound branch"))
+    monkeypatch.setattr("generator.ascent.rocket_position_at", position)
+    monkeypatch.setattr("generator.ascent.real_launch_azimuth", infer)
+    monkeypatch.setattr("generator.ascent.propagate", lambda *_args: _iss_position())
+    monkeypatch.setattr("generator.ascent.tangent_clearance", lambda *_args: True)
+    monkeypatch.setattr("generator.ascent.rocket_sun_state", lambda *_args: SunState.SUNLIT)
+    monkeypatch.setattr("generator.ascent.slant_range_km", lambda *_args: 500.0)
+    monkeypatch.setattr("generator.ascent.background_dark_score", lambda *_args: 1.0)
+    result = predict_ascent_pass(
+        launch, 28.6, -80.6, datetime(2024, 10, 17, 12, tzinfo=UTC),
+        sample_tle, _FixedCloudSampler(),
+    )
+    assert result is not None
+    assert result.launch_azimuth_deg == azimuth
+    assert position.call_count > 1
+    assert all(call.args[4] == azimuth for call in position.call_args_list)
+    infer.assert_not_called()
 
 
 # --------------------------------------------------------------------------

@@ -1,0 +1,8 @@
+{
+  "event": "Progress MS-10 launch observed from the ISS",
+  "observed_at": "2018-11-16T18:14:00Z",
+  "evidence_kind": "observed",
+  "validation_status": "historical_ephemeris_missing",
+  "source": "https://www.esa.int/esatv/Videos/2023/03/Alexander_Gerst_s_Horizons_Mission_B-Rolls/Progress_launch_seen_from_space_timelapse",
+  "missing": ["matching archived ISS state", "event-specific trajectory", "frame and timing tolerance validation"]
+}

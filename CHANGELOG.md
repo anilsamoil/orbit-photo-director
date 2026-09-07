@@ -2,7 +2,28 @@
 
 All notable changes to Orbit Photo Director.
 
-## [1.22.0.0] - 2026-08-24
+## [1.22.0.0] - 2026-09-07
+
+### Launch candidates without guessed photo instructions
+
+- Add a separate, hash-validated launch snapshot shared by Map, Queue and
+  Upcoming, with gold launch identities, UTC timing, source age and explicit
+  incomplete-coverage states. Map covers seven days; Upcoming covers 36 hours.
+- Reserve no more than two Queue slots for future supported launch captures.
+  Unknown, stale, offline or incomplete candidates cannot displace Earth shots.
+  The current publisher accepts map-only candidates, not capture instructions.
+- Preserve actual timing bounds and uncertainty. Require explicit trajectory
+  provenance; remove generic inclination and fabricated direction defaults.
+  Elevated-target direction uses the full orbital position/velocity frame.
+- Add bounded conditional geometry, a read-only diagnostic, safe separate
+  publication, historical-reference registry and staged activation runbook.
+  No new source polling, launch notifications or automatic deployment.
+- Fix stale legacy candidates, connectivity-state races, mobile map coverage
+  placement and initial launch-detail focus. Reject overlong validity windows.
+- Include the preceding expired-Access sign-in recovery and service-worker
+  upgrade diagnostics already present on the source branch.
+
+The items below were implemented on 2026-08-24 and are retained in this release.
 
 ## **🚀 Rocket launches were being truncated to 10 rows — that's why you barely saw any.**
 

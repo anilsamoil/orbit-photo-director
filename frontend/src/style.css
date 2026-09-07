@@ -339,6 +339,58 @@ main {
   filter: grayscale(40%);
 }
 
+.card.launch-v2 {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "name" "meta" "summary";
+  grid-template-rows: auto;
+  border-radius: 8px;
+  opacity: 1;
+  filter: none;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.launch-name {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+.launch-name:focus-visible { outline: 2px solid #ffd45c; outline-offset: 3px; }
+.launch-summary { grid-area: summary; display: grid; gap: 0.4rem; }
+.launch-status { color: #ffd45c; font-weight: 600; opacity: 1; }
+.launch-time { font-variant-numeric: tabular-nums; }
+.launch-coverage {
+  color: #ffd45c;
+  background: var(--surface);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.launch-dialog {
+  width: min(640px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  overflow: auto;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid #ffd45c;
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-wrap: anywhere;
+}
+.launch-dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
+.launch-dialog h2 { font-size: 1.1rem; margin: 0 0 1rem; }
+.launch-dialog > .btn { margin-top: 1rem; min-height: 44px; }
+.launch-facts { display: grid; gap: 0.6rem; }
+.launch-fact { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.2rem; }
+.launch-fact-label { font-weight: 600; }
+.launch-source a { color: #8edbff; }
+
 .card-name {
   grid-area: name;
   font-size: 1.05rem;
@@ -934,6 +986,19 @@ body.shotlist-bar-visible main {
   touch-action: none;
 }
 
+/* Reserve layout space for launch coverage instead of hiding it below the footer. */
+.view-map #map-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.view-map #map {
+  height: auto;
+  min-height: 200px;
+  flex: 1 0 200px;
+}
+#map-launch-coverage { flex: 0 0 auto; }
+
 /* ISS marker: silhouette icon + pulsing halo. Wrap is 40×16 px (matches
  * SVG viewBox) so the truss center lands on the lat/lon. The pulse halo
  * draws the eye when the dot is over a busy cloud-overlay region. */
@@ -1287,6 +1352,7 @@ body.shotlist-bar-visible main {
   flex-shrink: 0;
 }
 .map-legend-day { background: #5cd0ff; }
+.map-legend-launch { background: #ffd45c; border: 1px solid #0b0d12; }
 .map-legend-twilight { background: #d65cff; }
 .map-legend-eclipse { background: #7a8aa8; }
 

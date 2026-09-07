@@ -11,6 +11,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 const APP_VERSION = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
 
 export default defineConfig({
+  cacheDir: '.vite-cache',
   define: {
     // Substituted as a string literal everywhere `__APP_VERSION__` appears
     // in src/. Vitest does NOT run vite's define pass; modules that read
@@ -289,6 +290,7 @@ export default defineConfig({
         // The runtimeCaching rules above scope the tile sources we DO want.
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [
+          /^\/launch\//,
           /^\/api\//,        // API routes go straight to network
           /^\/v\//,          // Versioned artifact paths handled by their own rule
           /\/manifest\.json/, // manifest.json handled by its own rule

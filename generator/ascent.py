@@ -20,8 +20,8 @@ Physics per /plan-eng-review 2026-05-13 + Codex outside-voice review:
   PLUME ANGLE — a 5km luminous plume at 1500km is ~3.3 mrad, ~100px at
   200mm on a Nikon D5-class sensor. Useful out to ~3000km clamped at true
   Earth-tangent line-of-sight horizon.
-- Real launch azimuth from mission inclination + pad latitude
-  (cos i = cos lat × sin az), NOT a guessed `azimuth_mode` constant.
+- Launch azimuth must be explicit and carry a trajectory source. Inclination
+  alone does not determine the northbound/southbound trajectory branch.
 - Real tangent-clearance geometry replaces the |lat|>52° hack from the
   /autoplan locked requirements — Earth occultation has no latitude exception.
 - Profiles are interpolated at 15-second cadence (vs the 5-7 sparse samples
@@ -508,6 +508,25 @@ def background_cloud_score(
 # ---------------------------------------------------------------------------
 
 
+def _explicit_launch_azimuth(launch: dict) -> float | None:
+    """Accept only a finite [0, 360) azimuth with explicit source provenance.
+
+    This validates the supplied metadata, not the source's physical accuracy.
+    Missing direction is never reconstructed from inclination or rocket type.
+    """
+    azimuth = launch.get("launch_azimuth_deg")
+    source = launch.get("trajectory_source")
+    if not isinstance(source, str) or not source.strip():
+        return None
+    if (
+        isinstance(azimuth, bool)
+        or not isinstance(azimuth, (int, float))
+        or not 0.0 <= azimuth < 360.0
+    ):
+        return None
+    return float(azimuth)
+
+
 def predict_ascent_pass(
     launch: dict,
     pad_lat_deg: float,
@@ -521,21 +540,22 @@ def predict_ascent_pass(
     Walks the matched rocket profile at INTERPOLATION_CADENCE_SECONDS,
     filters by tangent-clearance + UMBRA-rejection, picks the instant
     with the highest score. Returns None if no instant passes the gates
-    (e.g., rocket fully eclipsed throughout climb, or no profile match).
+    (e.g., rocket fully eclipsed throughout climb, no profile match, or
+    missing/invalid explicitly sourced launch azimuth).
 
     The `launch` dict is the LL2-shaped launch record. We read:
     - rocket.configuration → profile match
-    - mission.orbit.inclination → real launch azimuth
+    - launch_azimuth_deg + trajectory_source → explicit trajectory branch
+
+    Inclination is neither required nor used to infer an azimuth. The generic
+    ascent profile remains an estimate, even when its direction has a source.
     """
+    azimuth_deg = _explicit_launch_azimuth(launch)
+    if azimuth_deg is None:
+        return None
     profile = match_rocket(launch.get("rocket", {}).get("configuration"))
     if profile is None:
         return None
-    inclination = (
-        launch.get("mission", {})
-        .get("orbit", {})
-        .get("inclination", 51.6)  # ISS default if unspecified
-    )
-    azimuth_deg = real_launch_azimuth(pad_lat_deg, inclination)
 
     best: AscentPrediction | None = None
     best_score = -1.0

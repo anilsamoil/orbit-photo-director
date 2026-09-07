@@ -44,6 +44,9 @@ import { gibsTrueColorUrl, precacheTilesForTargets, precacheWorldBaseTiles, yest
 import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 import { aggregateShootCounts, claimMapShotFetch, publishShotCounts } from './shot-counts';
+import { launchStore } from './launch-store';
+import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from './launch-selectors';
+import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -174,7 +177,7 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 
 async function refresh(): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = doRefresh().finally(() => {
+  refreshInFlight = Promise.all([launchStore.refresh(isOnline()), doRefresh()]).then(() => {}).finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
@@ -428,18 +431,32 @@ function applyDistanceFilter(passes: PassEntry[]): PassEntry[] {
 /** Render the Queue + Upcoming panes from current module state. Extracted so
  *  both the snapshot boot and a normal refresh share one render path. */
 function renderQueue(): void {
-  if (!currentManifest) return;
   const cards = document.getElementById('cards');
   const empty = document.getElementById('empty');
   if (!cards || !empty) return;
   const now = Date.now();
-  const stale = isStaleManifest(currentManifest, now);
+  const stale = !currentManifest || isStaleManifest(currentManifest, now);
+  const launches = launchStore.getState();
+  for (const anchorId of ['cards', 'upcoming-cards', 'map']) {
+    const anchor = document.getElementById(anchorId);
+    if (!anchor) continue;
+    let notice = document.getElementById(`${anchorId}-launch-coverage`);
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.id = `${anchorId}-launch-coverage`;
+      if (anchorId === 'map') anchor.after(notice);
+      else anchor.before(notice);
+    }
+    renderLaunchCoverage(notice, launches, now, anchorId === 'map' ? 'map' : 'upcoming');
+  }
   const filter = getTargetFilter();
-  const visible = applyTargetFilter(
-    applyDistanceFilter(upcomingPasses(currentTop5, now)),
+  const ground = applyTargetFilter(
+    applyDistanceFilter(upcomingPasses(currentTop5.filter((p) => !isLaunchPass(p)), now)),
     filter,
   );
-  if (visible.length === 0) {
+  const slots = queueSlots(sortPassesByOrder(ground, getSortOrder()), selectLaunches(launches, now, 'queue'));
+  const visible = slots.ground;
+  if (visible.length === 0 && slots.launches.length === 0) {
     cards.replaceChildren();
     // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
     // by generator lag (every pick has aged out of the 90-min window),
@@ -451,7 +468,7 @@ function renderQueue(): void {
     if (filter === 'mine') {
       empty.textContent = 'None of your targets pass in the next 90 minutes. Switch to All to see shared targets.';
     } else {
-      const hint = emptyQueueHint(currentManifest, now, currentlyOffline);
+      const hint = currentManifest ? emptyQueueHint(currentManifest, now, currentlyOffline) : null;
       empty.textContent = hint ?? 'No passes in the next 90 minutes.';
     }
     empty.hidden = false;
@@ -465,6 +482,7 @@ function renderQueue(): void {
       tokenSet: !!getToken(),
       renderThumbnail: thumbnailRenderer(),
     });
+    cards.prepend(...slots.launches.map((selection) => renderLaunchCard(selection, launches, now)));
   }
   renderUpcoming(now, stale);
   // Keep the shot-list bar count fresh + prune passes that have aged out.
@@ -573,11 +591,18 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;
   const filter = getTargetFilter();
+  const launches = launchStore.getState();
+  const launchSelections = selectLaunches(launches, nowMs, 'upcoming');
   const visible = applyTargetFilter(
-    applyDistanceFilter(upcomingPasses(currentTop24h, nowMs)),
+    applyDistanceFilter(upcomingPasses(currentTop24h.filter((p) => !isLaunchPass(p)), nowMs)),
     filter,
   );
-  if (visible.length === 0) {
+  // One global fallback mode. Legacy launches remain map-only and never
+  // consume an immediate Queue slot or pass through personal filters.
+  const legacy = launches.artifact ? [] : [...currentTop5, ...currentTop24h]
+    .filter((p, index, all) => p.launch && all.findIndex((other) => other.launch?.name === p.launch?.name && other.launch?.t0 === p.launch?.t0) === index)
+    .filter((p) => legacyLaunchInHorizon(p, nowMs, 36 * 3600_000));
+  if (visible.length === 0 && launchSelections.length === 0 && legacy.length === 0) {
     cards.replaceChildren();
     empty.textContent = filter === 'mine'
       ? 'None of your targets have an upcoming pass. Switch to All to see shared targets.'
@@ -587,14 +612,16 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   }
   empty.hidden = true;
   const sorted = sortPassesByOrder(visible, getSortOrder());
-  renderCards(cards, sorted, nowMs, stale, onCardAction, {
+  renderCards(cards, [...legacy, ...sorted], nowMs, stale, onCardAction, {
     variant: 'forecast',
     renderThumbnail: thumbnailRenderer(),
   });
+  cards.prepend(...launchSelections.map((selection) => renderLaunchCard(selection, launches, nowMs)));
 }
 
 function rerenderCountdowns(): void {
   updateIssNow();
+  launchStore.tick(Date.now());
   if (!currentManifest) return;
   const now = Date.now();
   // V2-P3 perf fix (TODOS.md, 2026-05-17). Fast path: just update the
@@ -631,6 +658,7 @@ function tryUpdateCountdownsInPlace(now: number): boolean {
     // but defensive against future code changes.
     for (const child of Array.from(container.children)) {
       const card = child as HTMLElement;
+      if (card.dataset.launch) continue;
       const passTime = card.dataset.passTime;
       if (!passTime) return false;  // unexpected DOM shape; safe path
       const t = Date.parse(passTime);
@@ -1597,6 +1625,9 @@ async function init(): Promise<void> {
   // Initial badge from whatever's already queued, before drain finishes.
   updatePendingSyncBadge();
 
+  launchStore.subscribe(renderQueue);
+  await launchStore.restore();
+  renderQueue();
   await refresh();
 
   // Visibility-aware polling: pause while the tab is hidden, fetch
