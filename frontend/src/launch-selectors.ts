@@ -31,7 +31,7 @@ function compare(a: LaunchSelection, b: LaunchSelection): number {
 export function selectLaunches(state: LaunchState, now: number, view: 'queue' | 'upcoming' | 'map'): LaunchSelection[] {
   const a = state.artifact;
   if (!a || (view === 'queue' && (!launchFresh(state, now) || !a.coverage.complete
-    || a.coverage.reasons.length > 0 || !sourceFresh(a, a.coverage.fetched_at, now) || state.availability !== 'ready'))) return [];
+    || a.coverage.reasons.length > 0 || !sourceFresh(a, a.coverage.fetched_at, now) || state.availability === 'offline'))) return [];
   const horizon = view === 'map' ? LAUNCH_MAP_HORIZON_MS : LAUNCH_HORIZON_MS;
   const result: LaunchSelection[] = [];
   for (const item of a.items) {
