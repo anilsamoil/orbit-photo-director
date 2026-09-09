@@ -1,7 +1,7 @@
 import type { LaunchOpportunity } from './launch-schema';
 import { isLaunchUtc, safeSourceUrl } from './launch-schema';
 import { launchStore, type LaunchState } from './launch-store';
-import { hasLaunchTimeConflict, launchCoverageLabel, launchFresh, utc, type LaunchSelection } from './launch-selectors';
+import { hasLaunchTimeConflict, launchCoverageLabel, launchFresh, launchScheduleFresh, utc, type LaunchSelection } from './launch-selectors';
 import type { PassEntry } from './types';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
@@ -11,8 +11,9 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: strin
   return node;
 }
 function status(item: LaunchOpportunity, state: LaunchState, now: number, expired = false): string {
+  const fresh = item.status === 'map_only' ? launchScheduleFresh(state, now) : launchFresh(state, now);
   return [item.status === 'map_only' ? 'MAP ONLY' : 'GEOMETRY SUPPORTED',
-    expired ? 'EXPIRED' : '', !launchFresh(state, now) ? 'STALE / EXPIRED DATA' : '',
+    expired ? 'EXPIRED' : '', !fresh ? 'STALE / EXPIRED DATA' : '',
     state.availability === 'offline' ? 'OFFLINE' : state.availability === 'last-good' ? 'LAST GOOD' : '',
   ].filter(Boolean).join(' | ');
 }
@@ -52,7 +53,7 @@ export function renderLaunchFacts(item: LaunchOpportunity, state: LaunchState, n
   if (state.artifact) {
     row(body, 'Artifact revision', state.artifact.revision);
     row(body, 'Generated', utc(state.artifact.generated_at));
-    row(body, 'Valid until', utc(state.artifact.valid_until));
+    row(body, 'Camera evidence valid until', utc(state.artifact.valid_until));
     row(body, 'Coverage fetched', state.artifact.coverage.fetched_at ? utc(state.artifact.coverage.fetched_at) : 'Unknown');
   }
   for (const source of item.sources) {

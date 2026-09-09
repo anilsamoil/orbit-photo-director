@@ -13,6 +13,18 @@ export function launchFresh(state: LaunchState, now: number): boolean {
   const a = state.artifact;
   return !!a && Date.parse(a.generated_at) <= now && now < Date.parse(a.valid_until);
 }
+/** Schedule-only display tolerance; never used to admit capture instructions. */
+export function launchScheduleFresh(state: LaunchState, now: number): boolean {
+  const a = state.artifact;
+  if (!a || a.coverage.reasons.some((reason) => ['SOURCE_AGE_UNKNOWN', 'SOURCE_AGE_MTIME_ONLY', 'REPLAY_SOURCE_MISMATCH'].includes(reason))) return false;
+  const generated = Date.parse(a.generated_at);
+  const recent = (value: string | null) => {
+    const fetched = value === null ? NaN : Date.parse(value);
+    return fetched <= generated && now - fetched < 3 * 3600_000;
+  };
+  return generated <= now && recent(a.coverage.fetched_at)
+    && a.items.every((item) => item.sources.length > 0 && item.sources.every((source) => recent(source.fetched_at)));
+}
 function inCoverage(a: LaunchArtifact, start: string, end = start): boolean {
   return Date.parse(start) >= Date.parse(a.coverage.from) && Date.parse(end) <= Date.parse(a.coverage.until);
 }
@@ -80,11 +92,15 @@ export function queueSlots(ground: PassEntry[], launches: LaunchSelection[]): { 
 export function launchCoverageLabel(state: LaunchState, now: number, view: 'upcoming' | 'map' = 'upcoming'): string {
   const a = state.artifact;
   if (!a) return state.availability === 'loading' ? 'LAUNCH: loading' : 'LAUNCH: unavailable; coverage unknown';
-  const freshness = !launchFresh(state, now) ? 'STALE / EXPIRED' : state.availability === 'offline' ? 'OFFLINE' : state.availability === 'last-good' ? 'LAST GOOD; refresh unavailable' : 'CURRENT';
+  const scheduleOnly = a.items.every((item) => item.status === 'map_only');
+  const fresh = scheduleOnly ? launchScheduleFresh(state, now) : launchFresh(state, now);
+  const freshness = [!fresh ? 'STALE / EXPIRED' : scheduleOnly ? 'SCHEDULE CURRENT (MAP ONLY)' : 'CURRENT',
+    state.availability === 'offline' ? 'OFFLINE' : state.availability === 'last-good' ? 'LAST GOOD; refresh unavailable' : '',
+  ].filter(Boolean).join('; ');
   const horizon = view === 'map' ? LAUNCH_MAP_HORIZON_MS : LAUNCH_HORIZON_MS;
   const until = Math.min(Date.parse(a.coverage.until), now + horizon);
   const incomplete = !a.coverage.complete || a.coverage.reasons.length > 0 || Date.parse(a.coverage.until) < now + horizon;
-  return `LAUNCH: ${freshness} | Coverage ${incomplete ? 'incomplete' : 'complete'}: ${utc(a.coverage.from)} to ${utc(until)}${a.coverage.reasons.length ? ` | ${a.coverage.reasons.join(', ')}` : ''}`;
+  return `LAUNCH: ${freshness} | Schedule checked ${a.coverage.fetched_at ? utc(a.coverage.fetched_at) : 'Unknown'} | Coverage ${incomplete ? 'incomplete' : 'complete'}: ${utc(a.coverage.from)} to ${utc(until)}${a.coverage.reasons.length ? ` | ${a.coverage.reasons.join(', ')}` : ''}`;
 }
 export function utc(value: string | number): string {
   const t = typeof value === 'number' ? value : Date.parse(value);
