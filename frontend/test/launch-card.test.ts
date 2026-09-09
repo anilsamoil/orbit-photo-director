@@ -8,6 +8,18 @@ import { interval, iso, launch, NOW, state, supported } from './launch-fixtures'
 beforeEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
 
 describe('launch-specific cards', () => {
+  it('does not turn a day-only TBD schedule into a midnight launch time', () => {
+    const item = launch({ reason_codes: ['LAUNCH_UNCONFIRMED', 'TIME_PRECISION_COARSE'],
+      launch_window: { net: '2026-09-16T00:00:00Z', start: '2026-09-16T00:00:00Z', end: '2026-09-16T00:00:00Z', precision: 'Day' } });
+    const s = state([item]);
+    const card = renderLaunchCard({ item, interval: null, expired: false }, s, NOW);
+    const facts = renderLaunchFacts(item, s, NOW);
+    for (const node of [card, facts]) {
+      expect(node.textContent).toContain('2026-09-16 UTC (day estimate; time unconfirmed)');
+      expect(node.textContent).not.toContain('2026-09-16 00:00:00 UTC');
+      expect(node.textContent).toContain('SCHEDULE UNCONFIRMED');
+    }
+  });
   it('marks conflicting source bounds unknown rather than showing an inverted launch window', () => {
     const item = launch({ reason_codes: ['TIME_CONFLICT'], launch_window: { net: iso(10), start: iso(20), end: iso(-40), precision: 'minute' } });
     const facts = renderLaunchFacts(item, state([item]), NOW);
