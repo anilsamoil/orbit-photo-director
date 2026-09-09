@@ -1,11 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { launchCoverageLabel, queueSlots, selectLaunches } from '../src/launch-selectors';
+import { launchCoverageLabel, launchScheduleFresh, queueSlots, selectLaunches } from '../src/launch-selectors';
 import { applyTargetFilter } from '../src/target-filter-pref';
 import { filterPassesByDistance } from '../src/map';
 import type { PassEntry } from '../src/types';
 import { artifact, interval, iso, launch, NOW, state, supported } from './launch-fixtures';
 
 describe('shared launch selection', () => {
+  it('separates recent tentative schedules from expired camera evidence without extending Queue', () => {
+    const s = state();
+    const later = NOW + 120 * 60_000;
+    expect(launchScheduleFresh(s, later)).toBe(true);
+    expect(launchCoverageLabel(s, later)).toContain('SCHEDULE CURRENT (MAP ONLY)');
+    expect(launchCoverageLabel(s, later)).toContain('Schedule checked 2026-09-07 11:55:00 UTC');
+    expect(selectLaunches(s, later, 'queue')).toEqual([]);
+    expect(launchScheduleFresh(s, NOW + 175 * 60_000)).toBe(false);
+    expect(launchCoverageLabel(s, NOW + 175 * 60_000)).toContain('STALE / EXPIRED');
+    s.availability = 'offline';
+    expect(launchCoverageLabel(s, later)).toContain('OFFLINE');
+    s.artifact!.coverage.reasons.push('SOURCE_AGE_MTIME_ONLY');
+    expect(launchScheduleFresh(s, later)).toBe(false);
+  });
+  it('a new wrapper cannot renew the tentative schedule timestamp or unsupported instruction', () => {
+    const s = state();
+    for (const fetched of [null, iso(-180), iso(1)]) {
+      s.artifact!.coverage.fetched_at = fetched;
+      expect(launchScheduleFresh(s, NOW)).toBe(false);
+    }
+    s.artifact!.coverage.fetched_at = iso(-5);
+    s.artifact!.items = [supported()];
+    expect(launchCoverageLabel(s, NOW + 20 * 60_000)).toContain('STALE / EXPIRED');
+    expect(selectLaunches(s, NOW + 20 * 60_000, 'queue')).toEqual([]);
+  });
   it('uses tentative NET instead of a conflicting old end for map-only events', () => {
     const s = state([launch({ reason_codes: ['TIME_CONFLICT'], launch_window: { net: iso(10), start: iso(20), end: iso(-40), precision: null } })]);
     expect(selectLaunches(s, NOW, 'queue')).toEqual([]);

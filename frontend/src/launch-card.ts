@@ -1,7 +1,7 @@
 import type { LaunchOpportunity } from './launch-schema';
 import { isLaunchUtc, safeSourceUrl } from './launch-schema';
 import { launchStore, type LaunchState } from './launch-store';
-import { hasLaunchTimeConflict, launchCoverageLabel, launchFresh, utc, type LaunchSelection } from './launch-selectors';
+import { hasLaunchTimeConflict, launchCoverageLabel, launchFresh, launchScheduleFresh, utc, type LaunchSelection } from './launch-selectors';
 import type { PassEntry } from './types';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
@@ -11,10 +11,20 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: strin
   return node;
 }
 function status(item: LaunchOpportunity, state: LaunchState, now: number, expired = false): string {
+  const fresh = item.status === 'map_only' ? launchScheduleFresh(state, now) : launchFresh(state, now);
   return [item.status === 'map_only' ? 'MAP ONLY' : 'GEOMETRY SUPPORTED',
-    expired ? 'EXPIRED' : '', !launchFresh(state, now) ? 'STALE / EXPIRED DATA' : '',
+    item.reason_codes.includes('LAUNCH_UNCONFIRMED') ? 'SCHEDULE UNCONFIRMED' : '',
+    expired ? 'EXPIRED' : '', !fresh ? 'STALE / EXPIRED DATA' : '',
     state.availability === 'offline' ? 'OFFLINE' : state.availability === 'last-good' ? 'LAST GOOD' : '',
   ].filter(Boolean).join(' | ');
+}
+function tentativeNet(item: LaunchOpportunity): string {
+  const timestamp = utc(item.launch_window.net);
+  const precision = item.launch_window.precision?.toLowerCase();
+  if (precision === 'day') return `${timestamp.slice(0, 10)} UTC (day estimate; time unconfirmed)`;
+  if (precision === 'month') return `${timestamp.slice(0, 7)} (month estimate; date/time unconfirmed)`;
+  if (precision === 'year') return `${timestamp.slice(0, 4)} (year estimate; date/time unconfirmed)`;
+  return timestamp;
 }
 function row(container: HTMLElement, label: string, value: string): void {
   const line = element('div', 'launch-fact');
@@ -28,10 +38,11 @@ export function renderLaunchFacts(item: LaunchOpportunity, state: LaunchState, n
   row(body, 'Status', status(item, state, now));
   row(body, 'Rocket / site', `${item.rocket} / ${item.site.name}`);
   row(body, 'Site', `${item.site.lat}, ${item.site.lon}`);
-  row(body, 'NET (tentative)', utc(item.launch_window.net));
+  row(body, 'NET (tentative)', tentativeNet(item));
   const conflict = hasLaunchTimeConflict(item);
-  row(body, 'Launch window start', conflict ? 'Unknown (conflicting source bounds)' : item.launch_window.start ? utc(item.launch_window.start) : 'Unknown');
-  row(body, 'Launch window end', conflict ? 'Unknown (conflicting source bounds)' : item.launch_window.end ? utc(item.launch_window.end) : 'Unknown');
+  const coarse = ['day', 'month', 'year'].includes(item.launch_window.precision?.toLowerCase() ?? '');
+  row(body, 'Launch window start', conflict ? 'Unknown (conflicting source bounds)' : coarse ? 'Unknown (coarse schedule)' : item.launch_window.start ? utc(item.launch_window.start) : 'Unknown');
+  row(body, 'Launch window end', conflict ? 'Unknown (conflicting source bounds)' : coarse ? 'Unknown (coarse schedule)' : item.launch_window.end ? utc(item.launch_window.end) : 'Unknown');
   row(body, 'Schedule precision', conflict ? 'Unknown (time conflict)' : item.launch_window.precision ?? 'Unknown');
   row(body, 'Trajectory', `${item.trajectory.quality}${item.trajectory.source ? ` / ${item.trajectory.source}` : ' / source unknown'}`);
   if (item.status === 'map_only' || item.capture_intervals.length === 0) {
@@ -52,7 +63,7 @@ export function renderLaunchFacts(item: LaunchOpportunity, state: LaunchState, n
   if (state.artifact) {
     row(body, 'Artifact revision', state.artifact.revision);
     row(body, 'Generated', utc(state.artifact.generated_at));
-    row(body, 'Valid until', utc(state.artifact.valid_until));
+    row(body, 'Camera evidence valid until', utc(state.artifact.valid_until));
     row(body, 'Coverage fetched', state.artifact.coverage.fetched_at ? utc(state.artifact.coverage.fetched_at) : 'Unknown');
   }
   for (const source of item.sources) {
@@ -114,7 +125,7 @@ export function renderLaunchCard(selection: LaunchSelection, state: LaunchState,
   summary.append(element('div', '', `${item.rocket} | ${item.site.name}`));
   summary.append(element('div', 'launch-time', interval
     ? `Conditional capture: ${utc(interval.start)} to ${utc(interval.end)}`
-    : `NET (tentative): ${utc(item.launch_window.net)}`));
+    : `NET (tentative): ${tentativeNet(item)}`));
   if (!interval) summary.append(element('div', 'launch-status', 'Capture interval unknown'));
   if (hasLaunchTimeConflict(item)) summary.append(element('div', 'launch-status', 'Launch window unknown: TIME_CONFLICT'));
   card.append(name, meta, summary);

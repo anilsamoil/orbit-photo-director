@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.22.0.4 - 2026-09-09
+
+- Refresh tentative launch schedules every two hours from the existing cache, without extra source polling, Earth generation, AI calls or messages.
+- Skip consumed input receipts, verify remote ownership and hashes, and recover interrupted commits without blind replay. Keep last-good on missing, stale or conflicting inputs.
+- Distinguish recently checked map-only schedules from camera-evidence expiry. Preserve the 15-minute capture gates and all recent Google-sign-in fixes.
+
 ## 1.22.0.3 — 2026-09-09
 
 - Use the existing Google sign-in for personal-target sync and remove the remaining browser token controls. Signed session validation and same-origin checks cover every write method; machine clients retain their existing credential.

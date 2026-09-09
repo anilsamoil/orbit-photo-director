@@ -8,6 +8,18 @@ import { interval, iso, launch, NOW, state, supported } from './launch-fixtures'
 beforeEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
 
 describe('launch-specific cards', () => {
+  it('does not turn a day-only TBD schedule into a midnight launch time', () => {
+    const item = launch({ reason_codes: ['LAUNCH_UNCONFIRMED', 'TIME_PRECISION_COARSE'],
+      launch_window: { net: '2026-09-16T00:00:00Z', start: '2026-09-16T00:00:00Z', end: '2026-09-16T00:00:00Z', precision: 'Day' } });
+    const s = state([item]);
+    const card = renderLaunchCard({ item, interval: null, expired: false }, s, NOW);
+    const facts = renderLaunchFacts(item, s, NOW);
+    for (const node of [card, facts]) {
+      expect(node.textContent).toContain('2026-09-16 UTC (day estimate; time unconfirmed)');
+      expect(node.textContent).not.toContain('2026-09-16 00:00:00 UTC');
+      expect(node.textContent).toContain('SCHEDULE UNCONFIRMED');
+    }
+  });
   it('marks conflicting source bounds unknown rather than showing an inverted launch window', () => {
     const item = launch({ reason_codes: ['TIME_CONFLICT'], launch_window: { net: iso(10), start: iso(20), end: iso(-40), precision: 'minute' } });
     const facts = renderLaunchFacts(item, state([item]), NOW);
@@ -40,13 +52,21 @@ describe('launch-specific cards', () => {
   });
   it('keeps stale/expired labels full contrast and missing bounds unknown', () => {
     const item = launch(); const s = state([item], { availability: 'offline' });
-    const card = renderLaunchCard({ item, interval: null, expired: true }, s, Date.parse(iso(60)));
+    const card = renderLaunchCard({ item, interval: null, expired: true }, s, Date.parse(iso(180)));
     expect(card.textContent).toContain('STALE / EXPIRED DATA');
     expect(card.textContent).toContain('OFFLINE');
     expect(card.classList.contains('stale')).toBe(false);
     const facts = renderLaunchFacts(item, s, NOW);
     expect(facts.textContent).toContain('Launch window startUnknown');
     expect(facts.textContent).toContain('Schedule precisionUnknown');
+  });
+  it('recent schedule-only cards do not claim camera evidence is valid', () => {
+    const item = launch(); const s = state([item]);
+    const card = renderLaunchCard({ item, interval: null, expired: false }, s, Date.parse(iso(120)));
+    expect(card.textContent).not.toContain('STALE / EXPIRED DATA');
+    expect(card.textContent).toContain('MAP ONLY');
+    expect(card.textContent).toContain('Capture interval unknown');
+    expect(renderLaunchFacts(item, s, NOW).textContent).toContain('Camera evidence valid until');
   });
   it('renders source and name as text, never HTML', () => {
     const item = launch({ name: '<img src=x onerror=alert(1)>', reason_codes: ['<script>bad</script>'] });
