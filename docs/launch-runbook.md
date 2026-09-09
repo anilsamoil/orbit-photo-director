@@ -2,7 +2,7 @@
 
 ## Release Boundary
 
-This release is map-only. It does not install a scheduler, send WhatsApp, change
+This release is map-only. The host runs a two-hour cache-only publisher. It does not send WhatsApp, change
 Earth scoring, claim photographic detection, or infer a physical spacecraft
 window. Source validation and notification activation are separate gates.
 
@@ -40,20 +40,52 @@ refuses Earth `out/`, unknown public fields, altered revisions and older local
 pointers. One lock spans immutable upload and pointer upload. Failed uploads
 retain the local last-good pointer; remote acceptance can still be ambiguous.
 
-No new launch network fetcher is installed. Refresh uses the existing LL2 cache;
-its normal one-hour cadence can exceed the 15-minute candidate validity window.
-The UI deliberately labels this stale instead of extending validity silently.
+No new launch network fetcher is installed. Refresh uses the existing LL2 cache,
+whose normal source cadence is about one hour plus Earth-generation time.
+Map/Upcoming can label a hash-receipted schedule current for less than three hours
+from its original source check. This accommodates the two-hour publisher and
+existing source cadence; it is not a promise against a late launch slip.
+The independent 15-minute camera-evidence lifetime and all Queue gates are unchanged.
+Map-only items still have unknown capture intervals/directions and never enter Queue.
 
 ## Remote Publication Gate
 
-`--publish --remote <rclone-remote>` is an explicit side effect, never part of
-diagnosis. Do not activate it automatically. Use one persistent output directory
-and exactly one publisher owner. The local lock cannot coordinate another host
-or a different output directory. Before resuming after lost local state, compare
-the remote pointer and immutable artifact with the saved local receipt; do not
-assume an empty output directory grants ownership or replay an ambiguous write.
-Automated ownership recovery, provider-wide request budgeting and a dedicated
-launch refresh schedule remain tracked prerequisites for unattended deployment.
+`--publish --remote <rclone-remote>` is an explicit side effect, never part of diagnosis.
+The approved unattended invocation is:
+
+```sh
+python -m scripts.launch_refresh --scheduled --publish \
+  --cache-dir /path/to/existing/cache --output /path/to/persistent/launch-output \
+  --remote <rclone-remote>
+```
+
+Use exactly one owner and persistent output directory. The host's launchd job
+runs at login and every 7200 seconds, with background priority/nice 10 and no
+KeepAlive retry loop. It uses a pinned runtime checkout, separate from watched
+Earth source. No additional LL2/TLE fetch, Earth generation, model or sender is called.
+
+The scheduled path requires a stable, hash-matched source receipt less than
+three hours old; future/missing/stale receipts fail closed. It consumes each
+schedule-receipt/TLE identity once across restarts. Unchanged input checks remote
+ownership but performs no compute or upload. Actual source timestamps are retained.
+A refreshed source receipt may publish unchanged event content because the provider
+really was checked again. Source timestamp rollback is rejected.
+
+Each attempt journals its artifact before upload. The publisher reads and hashes
+the remote artifact, requires the saved local pointer or exact journaled commit,
+uploads immutable data first, rechecks ownership, flips the pointer last and
+verifies readback. An accepted but unacknowledged commit is adopted without replay.
+An expired unaccepted intent can be retired only when remote still equals local
+last-good. Conflicting remote state stops publication. Lost local ownership is
+not automatically adopted: restore/verify the saved receipt before enabling.
+These checks are single-owner fencing, not cross-host compare-and-swap; never
+install a second writer against this namespace. No new provider budget is needed
+for cache-only publication; paginated source coverage remains explicitly incomplete.
+
+Inspect timestamped JSON stdout/stderr and `.refresh-state.json` in the private
+output directory. A healthy run reports `PUBLISHED` or `UNCHANGED_INPUT` and
+`notified: false`; source/publication failures return exit 2. A stopped source or
+publisher ages out visibly, rather than being made fresh by a timer.
 
 The publisher accepts only `map_only`; an instruction-ready item is rejected.
 Frontend support for future geometry-supported fixtures is not activation.
@@ -70,6 +102,10 @@ Disable the new launch consumer or remove its pointer to return to explicitly
 tentative legacy launch cards. Do not rewind the Earth manifest or restart
 messaging or unrelated agents. A last-good cached launch stays labeled as such
 and cannot retain a current Queue slot after expiry.
+
+To stop only automation, unload its launchd job; retain the output directory and
+receipts for restart. Do not remove/recreate ownership state to bypass a conflict.
+Keep a 48-hour map-only soak before claiming long-term unattended reliability.
 
 Before production activation: complete browser checks of Map, Queue, Upcoming,
 UTC rollover, mobile layouts, corrupt/stale/offline data, and overlapping event

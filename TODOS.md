@@ -22,7 +22,8 @@ Status: map-first implementation approved; source validation and alerts remain g
 - [ ] P3 deferred: high-fidelity universal rocket trajectories or paid launch feed. First prove the existing deterministic pipeline with provenance; public availability is unresolved.
 - [ ] P3 deferred: photo ingestion/automatic outcome classification and mandatory feedback. Crew burden and sensitive imagery are outside the initial scope; optional one-tap labels suffice.
 - [ ] P3 deferred: new Web Push and automatic calendar rescheduling. Reuse optional existing ICS; it is a snapshot, not a live launch-slip tracker.
-- [ ] P2: L5 shared request budget, pagination, scheduler ownership, remote pointer recovery and 48-hour soak. This release adds no extra provider polling.
+- [x] L5 cache-only refresh and ownership recovery: two-hour host scheduler, persistent input receipts, verified remote readback, interruption recovery and explicit schedule-vs-camera age labels. No extra provider polling or messages.
+- [ ] P2: L5 48-hour unattended soak and bounded provider pagination/shared request budget before expanding source collection. Current partial-page coverage remains explicit; optical/trajectory gates are unchanged.
 - [ ] P2: Optional feedback remains unimplemented; unanswered observations must never be counted as misses.
 - [x] L10 initial: cache-only diagnostic and staged publication/rollback runbook written; no operator or production rehearsal claimed.
 - [ ] P1 before capture activation: explicitly decide whether any failed refresh removes even still-valid last-good Queue entries. Current reviewed policy retains these briefly, labeled LAST GOOD, with source/artifact expiry enforced.

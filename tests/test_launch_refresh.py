@@ -19,12 +19,17 @@ def setup(tmp_path):
     now = datetime(2026, 9, 9, 8, tzinfo=UTC)
     cache, output = tmp_path / "cache", tmp_path / "publication"
     cache.mkdir()
-    row = {"id": "same-event", "name": "Test launch", "net": utc(now + timedelta(hours=8)),
-           "window_start": utc(now + timedelta(hours=8)),
-           "window_end": utc(now + timedelta(hours=8)), "net_precision": {"name": "Second"},
-           "status": {"abbrev": "Go"},
-           "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
-           "pad": {"latitude": 28.6, "longitude": -80.6, "location": {"name": "Test pad"}}}
+    row = {
+        "id": "same-event",
+        "name": "Test launch",
+        "net": utc(now + timedelta(hours=8)),
+        "window_start": utc(now + timedelta(hours=8)),
+        "window_end": utc(now + timedelta(hours=8)),
+        "net_precision": {"name": "Second"},
+        "status": {"abbrev": "Go"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {"latitude": 28.6, "longitude": -80.6, "location": {"name": "Test pad"}},
+    }
     payload = {"results": [row], "count": 100, "next": "https://example.invalid/page2"}
     remote = {}
     calls = []
@@ -36,22 +41,31 @@ def setup(tmp_path):
     def read_remote():
         return json.loads(remote["launch/latest.json"])
 
-    old = build_launch_artifact(payload, None, now - timedelta(days=2), fetched_at=now - timedelta(days=2))
+    old = build_launch_artifact(
+        payload, None, now - timedelta(days=2), fetched_at=now - timedelta(days=2)
+    )
     publish_launch_artifact(old, output, upload=upload)
     calls.clear()
 
     def write_cache(at=now):
         raw = canonical_bytes(payload)
         (cache / "launches.json").write_bytes(raw)
-        (cache / "launches.json.receipt.json").write_bytes(canonical_bytes({
-            "sha256": hashlib.sha256(raw).hexdigest(), "fetched_at": utc(at)}))
+        (cache / "launches.json.receipt.json").write_bytes(
+            canonical_bytes({"sha256": hashlib.sha256(raw).hexdigest(), "fetched_at": utc(at)})
+        )
 
     write_cache()
 
     def run(at=now, **kwargs):
         with patch("requests.get", side_effect=AssertionError("source fetch forbidden")):
-            return refresh_cached(cache, output, at, remote="test:bucket",
-                                  upload=kwargs.get("upload", upload), read_remote=read_remote)
+            return refresh_cached(
+                cache,
+                output,
+                at,
+                remote="test:bucket",
+                upload=kwargs.get("upload", upload),
+                read_remote=read_remote,
+            )
 
     return now, cache, output, payload, remote, calls, write_cache, run, upload
 
@@ -76,16 +90,23 @@ def test_slip_then_tbd_removes_old_exact_event(setup):
     now, _, _, payload, remote, _, write_cache, run, _ = setup
     run()
     row = payload["results"][0]
-    row.update(net=utc(now + timedelta(days=1, hours=8)),
-               window_start=utc(now + timedelta(days=1, hours=8)),
-               window_end=utc(now + timedelta(days=1, hours=8)))
+    row.update(
+        net=utc(now + timedelta(days=1, hours=8)),
+        window_start=utc(now + timedelta(days=1, hours=8)),
+        window_end=utc(now + timedelta(days=1, hours=8)),
+    )
     write_cache(now + timedelta(hours=1))
     run(now + timedelta(hours=1))
     pointer = json.loads(remote["launch/latest.json"])
     item = json.loads(remote[pointer["path"]])["items"][0]
     assert item["launch_window"]["net"] == row["net"]
-    row.update(net=utc(now + timedelta(days=8)), status={"abbrev": "TBD"},
-               net_precision={"name": "Day"}, window_start=None, window_end=None)
+    row.update(
+        net=utc(now + timedelta(days=8)),
+        status={"abbrev": "TBD"},
+        net_precision={"name": "Day"},
+        window_start=None,
+        window_end=None,
+    )
     write_cache(now + timedelta(hours=2))
     run(now + timedelta(hours=2))
     pointer = json.loads(remote["launch/latest.json"])
@@ -147,7 +168,9 @@ def test_rollback_and_cross_destination_are_rejected(setup):
     with pytest.raises(ValueError, match="OBSOLETE_SOURCE_RECEIPT"):
         run()
     with pytest.raises(ValueError, match="REMOTE_OWNER_MISMATCH"):
-        refresh_cached(cache, output, now, remote="other:bucket", upload=upload, read_remote=lambda: {})
+        refresh_cached(
+            cache, output, now, remote="other:bucket", upload=upload, read_remote=lambda: {}
+        )
     assert len(calls) == 2
 
 
@@ -206,9 +229,13 @@ def test_remote_reader_bounds_and_verifies_actual_artifact(setup, failure):
         pointer["path"] = "../credentials"
     raw = canonical_bytes(pointer)
     outputs = [raw, remote.get(pointer["path"], b""), raw if failure != "changed" else b"{}"]
-    with (patch("generator.launch_publish.shutil.which", return_value="/usr/bin/rclone"),
-          patch("generator.launch_publish.subprocess.run",
-                side_effect=[SimpleNamespace(stdout=value) for value in outputs]) as run):
+    with (
+        patch("generator.launch_publish.shutil.which", return_value="/usr/bin/rclone"),
+        patch(
+            "generator.launch_publish.subprocess.run",
+            side_effect=[SimpleNamespace(stdout=value) for value in outputs],
+        ) as run,
+    ):
         reader = rclone_reader("test:bucket")
         if failure:
             with pytest.raises(ValueError):

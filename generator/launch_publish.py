@@ -62,8 +62,12 @@ def _validate_artifact(artifact: dict) -> None:
 
 
 def publish_launch_artifact(
-    artifact: dict, output: Path, *, upload: Callable[[Path, str, bool], None] | None = None,
-    read_remote: Callable[[], dict] | None = None, permit_upload: bool = True,
+    artifact: dict,
+    output: Path,
+    *,
+    upload: Callable[[Path, str, bool], None] | None = None,
+    read_remote: Callable[[], dict] | None = None,
+    permit_upload: bool = True,
 ) -> dict:
     _validate_artifact(artifact)
     if "out" in output.resolve().parts:
@@ -166,7 +170,9 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
     def cat(relative: str, limit: int) -> bytes:
         result = subprocess.run(  # noqa: S603
             [executable, "cat", f"{remote.rstrip('/')}/{relative}", "--count", str(limit + 1)],
-            check=True, capture_output=True, timeout=45,
+            check=True,
+            capture_output=True,
+            timeout=45,
         )
         if len(result.stdout) > limit:
             raise ValueError("REMOTE_LAUNCH_TOO_LARGE")
@@ -176,20 +182,32 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
         raw = cat("launch/latest.json", 4096)
         pointer = json.loads(raw)
         if not isinstance(pointer, dict) or set(pointer) != {
-            "schema_version", "revision", "generated_at", "valid_until", "path", "sha256"
+            "schema_version",
+            "revision",
+            "generated_at",
+            "valid_until",
+            "path",
+            "sha256",
         }:
             raise ValueError("INVALID_REMOTE_LAUNCH_POINTER")
         revision = pointer["revision"]
-        if (not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{24}", revision)
-                or pointer["path"] != f"launch/v/{revision}.json"):
+        if (
+            not isinstance(revision, str)
+            or not re.fullmatch(r"[a-f0-9]{24}", revision)
+            or pointer["path"] != f"launch/v/{revision}.json"
+        ):
             raise ValueError("INVALID_REMOTE_LAUNCH_PATH")
         body = cat(pointer["path"], 2_000_000)
         artifact = json.loads(body)
         _validate_artifact(artifact)
-        if (hashlib.sha256(body).hexdigest() != pointer["sha256"]
-                or any(pointer[k] != artifact[k] for k in
-                       ("schema_version", "revision", "generated_at", "valid_until"))
-                or cat("launch/latest.json", 4096) != raw):
+        if (
+            hashlib.sha256(body).hexdigest() != pointer["sha256"]
+            or any(
+                pointer[k] != artifact[k]
+                for k in ("schema_version", "revision", "generated_at", "valid_until")
+            )
+            or cat("launch/latest.json", 4096) != raw
+        ):
             raise ValueError("REMOTE_LAUNCH_READBACK_FAILED")
         return pointer
 
