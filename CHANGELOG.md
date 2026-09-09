@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.22.0.3 — 2026-09-09
+
+- Use the existing Google sign-in for personal-target sync and remove the remaining browser token controls. Signed session validation and same-origin checks cover every write method; machine clients retain their existing credential.
+- Reject expired sign-in redirects and malformed target-save receipts so failed synchronization never appears saved.
+- Add `/api/app?u=anil` to open the current app through the network without deleting cached data or unsynced ratings. Recovery and sign-in paths cannot become profile names.
+
+
 All notable changes to Orbit Photo Director.
 
 ## [1.22.0.2] - 2026-09-07

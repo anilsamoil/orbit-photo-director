@@ -590,6 +590,22 @@ describe('handleStatic (R2 fallback)', () => {
     expect(r.headers.get('content-type')).toContain('text/html');
   });
 
+  it('opens the current app shell at the network-only recovery URL without touching calibration data', async () => {
+    await env.SITE.put('index.html', '<html>current app</html>', {
+      httpMetadata: { contentType: 'text/html; charset=utf-8', cacheControl: 'public, max-age=60' },
+    });
+    const response = await fetchWorker(env, '/api/app?u=anil');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.has('location')).toBe(false);
+    expect(await response.text()).toBe('<html>current app</html>');
+    expect(env.CALIB.size()).toBe(0);
+    const head = await fetchWorker(env, '/api/app', { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe('');
+  });
+
   it('rewrites trailing-slash paths to {path}index.html', async () => {
     await env.SITE.put('docs/index.html', '<html>docs</html>', {});
     const r = await fetchWorker(env, '/docs/');

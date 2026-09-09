@@ -519,3 +519,13 @@ describe('refreshPickerFromExternalChange', () => {
     expect(pushSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('fresh-app recovery profile', () => {
+  it('selects Anil and preserves his settings at the bare recovery URL', () => {
+    saveProfile(createDefaultProfile('anil'));
+    setLocation('/api/app');
+    renderProfilePane();
+    expect(document.querySelector<HTMLSelectElement>('#profile-picker-select')?.value).toBe('anil');
+    expect(listProfiles()).not.toContain('api');
+  });
+});

@@ -6,7 +6,7 @@
  *    - Export click invokes downloadProfileJson (asserts blob URL + click)
  *    - Import preview shows target count, cross-profile warning, replacement
  *      caveat
- *    - Replace triggers PUT /api/profiles/<name>/targets and saves locally
+ *    - Replace triggers PUT /api/browser/profiles/<name>/targets and saves locally
  *    - Failed PUT rolls back local state
  *    - Future-schema export rejected with a clear error in the preview
  *    - Operator-controlled imported profile name flows through textContent
@@ -426,7 +426,7 @@ describe('handleJsonImportReplace', () => {
     const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const url = call[0];
     const init = call[1];
-    expect(String(url)).toContain(`/api/profiles/${PROFILE}/targets`);
+    expect(String(url)).toContain(`/api/browser/profiles/${PROFILE}/targets`);
     expect(init.method).toBe('PUT');
     const body = JSON.parse(init.body as string);
     expect(body.targets).toHaveLength(2);

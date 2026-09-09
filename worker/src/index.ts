@@ -542,7 +542,14 @@ export default {
     }
 
     let response: Response;
-    if (url.pathname === '/api/log' && request.method === 'POST') {
+    if (url.pathname === '/api/app' && (request.method === 'GET' || request.method === 'HEAD')) {
+      // /api/ has always bypassed the offline navigation shell. This entry
+      // opens the latest app without clearing unsynced browser data.
+      const app = await handleStatic('/', env);
+      const headers = new Headers(app.headers);
+      headers.set('cache-control', 'no-store');
+      response = new Response(request.method === 'HEAD' ? null : app.body, { status: app.status, headers });
+    } else if (url.pathname === '/api/log' && request.method === 'POST') {
       response = await handleLog(request, env);
     } else if (
       url.pathname === '/api/log' &&
@@ -607,7 +614,7 @@ export default {
       if (request.method === 'HEAD') {
         response = new Response(null, { status: response.status, headers: response.headers });
       }
-    } else if (url.pathname.startsWith('/api/profiles/')) {
+    } else if (url.pathname.startsWith('/api/profiles/') || url.pathname.startsWith('/api/browser/profiles/')) {
       // Slot 3: per-astronaut profile target CRUD. Auth + per-method routing
       // lives inside handleProfilesRequest so this dispatcher stays thin.
       response = await handleProfilesRequest(request, env);

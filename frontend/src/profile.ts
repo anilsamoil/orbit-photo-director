@@ -165,7 +165,7 @@ export function parseProfileFromURL(url: string | URL): string {
   // Path segment fallback: `/<name>` (single segment, root-relative).
   // Strip leading slash, ignore any trailing slash or further segments.
   const seg = parsed.pathname.replace(/^\//, '').split('/')[0];
-  if (seg && isValidProfileName(seg)) return seg;
+  if (seg && !['api', 'cdn-cgi', 'launch'].includes(seg) && isValidProfileName(seg)) return seg;
   return DEFAULT_PROFILE_NAME;
 }
 

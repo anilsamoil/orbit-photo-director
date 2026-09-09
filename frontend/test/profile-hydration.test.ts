@@ -62,27 +62,12 @@ function makeServerTarget(name: string): PersonalTarget {
 // ---------------------------------------------------------------------------
 
 describe('getProfileTargets', () => {
-  it('returns token_missing when no calib token is set', async () => {
+  it('sends a same-origin session GET without a token to the right URL', async () => {
     localStorage.removeItem(TOKEN_KEY);
-    const r = await getProfileTargets(PROFILE);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('token_missing');
-  });
-
-  it('sends GET with x-calib-token header to the right URL', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true, targets: [] }), { status: 200 }),
-    );
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ targets: [] }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
-    const r = await getProfileTargets(PROFILE);
-    expect(r.ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const calls = fetchMock.mock.calls as unknown[][];
-    const [url, init] = calls[0]! as [string, RequestInit];
-    expect(url).toBe(`/api/profiles/${PROFILE}/targets`);
-    expect(init.method).toBe('GET');
-    const headers = init.headers as Record<string, string>;
-    expect(headers['x-calib-token']).toBe('test-token');
+    expect((await getProfileTargets(PROFILE)).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/browser/profiles/${PROFILE}/targets`, expect.objectContaining({ method: 'GET', credentials: 'same-origin' }));
   });
 
   it('parses targets array out of the response body', async () => {
@@ -99,14 +84,13 @@ describe('getProfileTargets', () => {
     }
   });
 
-  it('normalises a missing targets field to an empty array', async () => {
+  it('rejects a missing targets field', async () => {
     vi.stubGlobal('fetch', vi.fn(async () =>
       // Some unexpected shape — body is {ok:true} but no targets.
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
     ));
     const r = await getProfileTargets(PROFILE);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.data.targets).toEqual([]);
+    expect(r.ok).toBe(false);
   });
 
   it('reports http on 5xx', async () => {
@@ -174,25 +158,15 @@ describe('hydratePersonalTargets', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('silently no-ops when token is missing (no toast, no save)', async () => {
+  it('hydrates a fresh device without a stored key', async () => {
     saveProfile(createDefaultProfile(PROFILE));
     localStorage.removeItem(TOKEN_KEY);
-    // Re-seed the profile (clear-then-removeItem-then-save sequence is
-    // brittle — the previous saveProfile happened with token set so it's
-    // still there). Confirm starting state:
-    expect(loadProfile(PROFILE)!.additions).toHaveLength(0);
-    const fetchMock = vi.fn();
+    const targets = [makeServerTarget('Signed-in target')];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ targets })));
     vi.stubGlobal('fetch', fetchMock);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
     await _test.hydratePersonalTargets(PROFILE);
-
-    expect(loadProfile(PROFILE)!.additions).toHaveLength(0);
-    // No toast — verify the toast element is still hidden.
-    expect(document.getElementById('toast')!.hidden).toBe(true);
-    expect(warn).toHaveBeenCalled();
-    // Fetch should NOT fire — getProfileTargets short-circuits on missing token.
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(loadProfile(PROFILE)!.additions).toEqual(targets);
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it('silently no-ops when the server returns 5xx', async () => {
@@ -292,7 +266,7 @@ describe('buildCrudSection hydration wiring', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     const targetsCalls = (fetchMock.mock.calls as unknown[][]).filter((c) =>
-      String(c[0]).includes('/api/profiles/'),
+      String(c[0]).includes('/api/browser/profiles/'),
     );
     expect(targetsCalls).toHaveLength(0);
   });
