@@ -67,6 +67,12 @@ describe('isValidProfileName', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseProfileFromURL', () => {
+  it('keeps the recovery and sign-in paths out of profile identity', () => {
+    expect(parseProfileFromURL('https://map.astroanil.dev/api/app')).toBe(DEFAULT_PROFILE_NAME);
+    expect(parseProfileFromURL('https://map.astroanil.dev/api/app?u=jack')).toBe('jack');
+    expect(parseProfileFromURL('https://map.astroanil.dev/cdn-cgi/access/authorized')).toBe(DEFAULT_PROFILE_NAME);
+  });
+
   it('reads ?u=<name> from the query string', () => {
     expect(parseProfileFromURL('https://map.astroanil.dev/?u=jack')).toBe('jack');
   });

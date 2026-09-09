@@ -266,15 +266,7 @@ describe('toggleCuratedRemoved', () => {
 // ---------------------------------------------------------------------------
 
 describe('profile-api', () => {
-  it('postProfileTarget returns token_missing when no calib token is set', async () => {
-    localStorage.removeItem(TOKEN_KEY);
-    const t = makeTarget();
-    const r = await postProfileTarget(PROFILE, t);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('token_missing');
-  });
-
-  it('postProfileTarget sends x-calib-token + JSON body', async () => {
+  it('postProfileTarget sends the Google session and JSON body', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ ok: true, count: 1 }), { status: 200 }),
     );
@@ -285,10 +277,11 @@ describe('profile-api', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const calls = fetchMock.mock.calls as unknown[][];
     const [url, init] = calls[0]! as [string, RequestInit];
-    expect(url).toBe(`/api/profiles/${PROFILE}/targets`);
+    expect(url).toBe(`/api/browser/profiles/${PROFILE}/targets`);
     expect(init.method).toBe('POST');
     const headers = init.headers as Record<string, string>;
-    expect(headers['x-calib-token']).toBe('test-token');
+    expect(headers['x-calib-token']).toBeUndefined();
+    expect(init.credentials).toBe('same-origin');
     expect(headers['content-type']).toBe('application/json');
     expect(JSON.parse(init.body as string)).toEqual(t);
   });
@@ -334,7 +327,7 @@ describe('profile-api', () => {
     expect(r.ok).toBe(true);
     const calls = fetchMock.mock.calls as unknown[][];
     const [url, init] = calls[0]! as [string, RequestInit];
-    expect(url).toBe(`/api/profiles/${PROFILE}/targets/${encodeURIComponent(id)}`);
+    expect(url).toBe(`/api/browser/profiles/${PROFILE}/targets/${encodeURIComponent(id)}`);
     expect(init.method).toBe('DELETE');
   });
 

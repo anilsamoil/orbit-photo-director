@@ -1,42 +1,19 @@
-/** Profile-targets API client — Slot 6 of design rev 2 (2026-05-26).
- *
- *  Thin wrapper over the Worker's `/api/profiles/<name>/targets` CRUD
- *  routes (Slot 3). Each call:
- *    - reads the calib token from localStorage (`opd-calib-token`, same
- *      shared secret the Shoot/Skip path uses)
- *    - sends `x-calib-token` header + JSON body
- *    - returns a discriminated `Result` the caller can switch on
- *
- *  The UI layer (profile-crud.ts) owns the optimistic-UI flow: mutate
- *  localStorage first, fire one of these calls, rollback on failure. So
- *  this module deliberately stays pure — no localStorage writes, no DOM,
- *  no toast. Returns network errors AND 4xx/5xx as `{ ok: false, ... }`
- *  with a stable `reason` discriminant so the caller's rollback path is
- *  branch-once.
+/** Profile-target CRUD uses the map's Google session. No separate browser
+ * key is needed. Redirects and malformed receipts are failures so optimistic
+ * edits roll back instead of being acknowledged without server persistence.
  */
-
 import type { PersonalTarget } from './profile';
 
-/** Localized token reader — duplicated (not imported from calib.ts) so
- *  this module stays free of the calib.ts ↔ main.ts circular dependency.
- *  Same TOKEN_KEY string. If the token is missing OR localStorage throws
- *  (private-mode Safari), returns null and callers short-circuit with a
- *  `token_missing` reason. */
-const TOKEN_KEY = 'opd-calib-token';
-function readCalibToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
+const SESSION_REQUEST: RequestInit = {
+  credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
+};
 
 /** Standard discriminated result. Successful flows return the parsed
  *  body shape; failures carry a stable `reason` and optional HTTP status
  *  / detail string so the toast layer can show a useful message. */
 export type ApiResult<T = unknown> =
   | { ok: true; data: T }
-  | { ok: false; reason: 'token_missing' | 'network' | 'http' | 'validation'; status?: number; detail?: string };
+  | { ok: false; reason: 'authentication' | 'network' | 'http' | 'validation'; status?: number; detail?: string };
 
 /** Fetch the current personal-target list for a profile (GET).
  *  Slot 6b — used by the Profile pane's first-render hydration so that
@@ -47,20 +24,16 @@ export async function getProfileTargets(
   profileName: string,
   baseUrl = '',
 ): Promise<ApiResult<{ targets: PersonalTarget[] }>> {
-  const token = readCalibToken();
-  if (!token) return { ok: false, reason: 'token_missing' };
   try {
-    const resp = await fetch(`${baseUrl}/api/profiles/${profileName}/targets`, {
-      method: 'GET',
-      headers: { 'x-calib-token': token },
+    const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
+      ...SESSION_REQUEST, method: 'GET',
     });
-    const parsed = await parseJsonResult<{ targets: PersonalTarget[] }>(resp);
+    const parsed = await parseJsonResult<{ targets: PersonalTarget[] }>(resp, false);
     if (!parsed.ok) return parsed;
-    // Defensive shape check — the parse helper only enforces resp.ok, so
-    // a 200 with the wrong body shape would still come back as ok:true.
-    // Normalise `data.targets` to an array regardless.
-    const targets = Array.isArray(parsed.data?.targets) ? parsed.data.targets : [];
-    return { ok: true, data: { targets } };
+    if (!Array.isArray(parsed.data?.targets)) {
+      return { ok: false, reason: 'http', status: resp.status, detail: 'invalid_response' };
+    }
+    return { ok: true, data: { targets: parsed.data.targets } };
   } catch (e) {
     return { ok: false, reason: 'network', detail: errMsg(e) };
   }
@@ -73,12 +46,10 @@ export async function putProfileTargets(
   targets: PersonalTarget[],
   baseUrl = '',
 ): Promise<ApiResult<{ count: number }>> {
-  const token = readCalibToken();
-  if (!token) return { ok: false, reason: 'token_missing' };
   try {
-    const resp = await fetch(`${baseUrl}/api/profiles/${profileName}/targets`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', 'x-calib-token': token },
+    const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
+      ...SESSION_REQUEST, method: 'PUT',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ targets }),
     });
     return await parseJsonResult<{ count: number }>(resp);
@@ -93,12 +64,10 @@ export async function postProfileTarget(
   target: PersonalTarget,
   baseUrl = '',
 ): Promise<ApiResult<{ count: number }>> {
-  const token = readCalibToken();
-  if (!token) return { ok: false, reason: 'token_missing' };
   try {
-    const resp = await fetch(`${baseUrl}/api/profiles/${profileName}/targets`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-calib-token': token },
+    const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
+      ...SESSION_REQUEST, method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(target),
     });
     return await parseJsonResult<{ count: number }>(resp);
@@ -114,13 +83,11 @@ export async function deleteProfileTarget(
   targetId: string,
   baseUrl = '',
 ): Promise<ApiResult<{ removed: boolean; count: number }>> {
-  const token = readCalibToken();
-  if (!token) return { ok: false, reason: 'token_missing' };
   try {
     // Path-encode the id; the worker's DELETE decodes + re-validates shape.
     const resp = await fetch(
-      `${baseUrl}/api/profiles/${profileName}/targets/${encodeURIComponent(targetId)}`,
-      { method: 'DELETE', headers: { 'x-calib-token': token } },
+      `${baseUrl}/api/browser/profiles/${profileName}/targets/${encodeURIComponent(targetId)}`,
+      { ...SESSION_REQUEST, method: 'DELETE' },
     );
     return await parseJsonResult<{ removed: boolean; count: number }>(resp);
   } catch (e) {
@@ -131,8 +98,12 @@ export async function deleteProfileTarget(
 /** Parse a Response into the discriminated ApiResult shape. Non-OK
  *  responses are categorized: 4xx that match the worker's `invalid_*`
  *  surfaces become `validation`; everything else (incl. 5xx) is `http`.
- *  Body parse failures degrade to `http` with detail "bad_json". */
-async function parseJsonResult<T>(resp: Response): Promise<ApiResult<T>> {
+ *  Missing or malformed success receipts return `http` with "invalid_response". */
+async function parseJsonResult<T>(resp: Response, writeReceipt = true): Promise<ApiResult<T>> {
+  if (resp.type === 'opaqueredirect' || resp.redirected || resp.status === 401
+    || (resp.status >= 300 && resp.status < 400)) {
+    return { ok: false, reason: 'authentication', status: resp.status, detail: 'sign_in_required' };
+  }
   let body: unknown = null;
   try {
     body = await resp.json();
@@ -154,7 +125,11 @@ async function parseJsonResult<T>(resp: Response): Promise<ApiResult<T>> {
       detail: err || `http_${resp.status}`,
     };
   }
-  return { ok: true, data: (body as T) ?? ({} as T) };
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+    || (writeReceipt && (body as { ok?: unknown }).ok !== true)) {
+    return { ok: false, reason: 'http', status: resp.status, detail: 'invalid_response' };
+  }
+  return { ok: true, data: body as T };
 }
 
 function errMsg(e: unknown): string {

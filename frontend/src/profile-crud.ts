@@ -138,7 +138,7 @@ export function buildCrudSection(profileName: string): HTMLElement {
 
   // Slot 8b — independent fire-and-forget log fetch for shot-count
   // badges. Independent from the targets hydrate above so a log-fetch
-  // failure (token missing, 4xx, network) can never kill target
+  // failure (sign-in expired, 4xx, network) can never kill target
   // rendering. Once-per-session per profile; re-renders consult the
   // module-scope cache rather than refetching.
   if (!shotCountsFetched.has(profileName)) {
@@ -195,7 +195,7 @@ const shotCountsFetched = new Set<string>();
  *      adds whose id is local-only because POST hasn't completed
  *    - operators rarely edit the same profile from two devices at once
  *
- *  On any failure (token_missing / network / http / validation) this
+ *  On any failure (authentication / network / http / validation) this
  *  silently no-ops with a console.warn — first-render hydration should
  *  never pop a toast at the operator. */
 export async function hydratePersonalTargets(profileName: string): Promise<void> {
@@ -1387,8 +1387,8 @@ function safeLoadProfile(name: string): Profile | null {
 }
 
 function apiSyncErrorMessage(reason: string, detail?: string): string {
-  if (reason === 'token_missing') return 'set the legacy target-sync key in Profile first';
-  if (reason === 'network') return 'network unreachable (queued for next sync)';
+  if (reason === 'authentication') return 'Google sign-in expired; reload and sign in again';
+  if (reason === 'network') return 'network unreachable; try again when connected';
   if (reason === 'validation') return `server rejected (${detail ?? 'invalid'})`;
   if (reason === 'http') return `server error (${detail ?? 'http'})`;
   return detail ?? reason;
