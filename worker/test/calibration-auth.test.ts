@@ -30,7 +30,7 @@ async function token(overrides: Record<string, unknown> = {}, key = pair.private
 function req(jwt?: string, method = 'GET', extra = {}) {
   return new Request(`${origin}/api/log`, { method, headers: {
     ...(jwt ? { 'cf-access-jwt-assertion': jwt } : {}),
-    ...(method === 'POST' ? { origin } : {}), ...extra,
+    ...(['POST', 'PUT', 'DELETE'].includes(method) ? { origin } : {}), ...extra,
   } });
 }
 async function authorize(request: Request, env = authEnv) {
@@ -76,13 +76,38 @@ describe('Google Access calibration authorization', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
     expect((await authorize(req(jwt)))?.status).toBe(503);
   });
-  it('retains the existing machine credential without touching profile auth', async () => {
+  it('retains the existing machine credential', async () => {
     expect(await authorize(req(undefined, 'GET', { 'x-calib-token': 'legacy' }))).toBeNull();
+  });
+  it('authorizes profile CRUD using signed Google sessions and rejects unsafe writes before storage', async () => {
+    const records = new Map<string, string>();
+    const bucket = {
+      get: vi.fn(async (key: string) => records.has(key) ? { json: async () => JSON.parse(records.get(key)!) } : null),
+      put: vi.fn(async (key: string, body: string) => { records.set(key, body); return { key }; }),
+    };
+    const env = { ...authEnv, CALIB_TOKEN: '', CALIB: bucket, SITE: bucket } as unknown as Env;
     const worker = (await import('../src/index')).default;
-    const response = await worker.fetch(new Request(`${origin}/api/profiles/anil/targets`, {
-      headers: { 'cf-access-jwt-assertion': await token() },
-    }), authEnv as Env, {} as ExecutionContext);
-    expect(response.status).toBe(401);
+    const jwt = await token();
+    const target = { id: 'personal:jack:test', name: 'Test', lat: 0, lon: 0, priority: 5, createdAt: '2026-09-09T00:00:00Z' };
+    const request = (method: string, body?: unknown, extra = {}, suffix = '') => new Request(`${origin}/api/browser/profiles/jack/targets${suffix}`, {
+      method, headers: { origin, 'content-type': 'application/json', 'cf-access-jwt-assertion': jwt, ...extra },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    for (const method of ['POST', 'PUT', 'DELETE']) {
+      for (const headers of [{ origin: 'https://evil.example' }, { origin: '' }, { 'sec-fetch-site': 'cross-site' }]) {
+        expect((await worker.fetch(request(method, undefined, headers), env, {} as ExecutionContext)).status).toBe(403);
+      }
+    }
+    expect(bucket.get).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect((await worker.fetch(request('POST', target), env, {} as ExecutionContext)).status).toBe(200);
+    const read = await worker.fetch(request('GET'), env, {} as ExecutionContext);
+    expect(await read.json()).toEqual({ targets: [target] });
+    expect((await worker.fetch(request('PUT', { targets: [target] }), env, {} as ExecutionContext)).status).toBe(200);
+    const removed = await worker.fetch(request('DELETE', undefined, {}, `/${encodeURIComponent(target.id)}`), env, {} as ExecutionContext);
+    expect(await removed.json()).toMatchObject({ ok: true, removed: true, count: 0 });
+    const forged = await worker.fetch(request('GET', undefined, { 'cf-access-jwt-assertion': 'forged', 'x-calib-token': 'legacy' }), { ...env, CALIB_TOKEN: 'legacy' }, {} as ExecutionContext);
+    expect(forged.status).toBe(401);
   });
   it('routes token-free ratings through validation, persistence and idempotency', async () => {
     const records = new Map<string, string>();

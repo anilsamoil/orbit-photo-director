@@ -26,7 +26,7 @@ export async function authorizeCalibration(
   if (!/^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(issuer) || !env.ACCESS_AUD) {
     return jsonResponse({ error: 'service_misconfigured' }, 503);
   }
-  if (request.method === 'POST' && (
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && (
     request.headers.get('origin') !== new URL(request.url).origin
     || request.headers.get('sec-fetch-site') === 'cross-site'
   )) return jsonResponse({ error: 'cross_origin_write' }, 403);

@@ -1,7 +1,7 @@
 /**
  * Per-astronaut profile target CRUD — Slot 3 of design rev 2 (2026-05-26).
  *
- * Routes (all gated by `x-calib-token` shared secret, constant-time compared):
+ * Routes (signed Google Access session or legacy machine key):
  *   GET    /api/profiles/<name>/targets       — list PersonalTarget[] from R2
  *   PUT    /api/profiles/<name>/targets       — replace entire list
  *   POST   /api/profiles/<name>/targets       — append a single target
@@ -11,10 +11,9 @@
  * returns `[]` (empty list = "no targets yet" state, NOT a 404). The CALIB
  * bucket is reused so deploy-time wrangler.toml needs no change for v1.
  *
- * Auth: same `CALIB_TOKEN` shared secret as `/api/log`. Per-profile HMAC
- * tokens are a v2 TODO (design doc premise 12). All routes 401 on missing
- * or wrong token before any path validation runs — no info leakage about
- * which profiles exist.
+ * Auth: uses the same signed Google Access session as ratings. All browser
+ * writes require a same-origin Origin; legacy machine keys remain supported.
+ * Profile selection stays shared within the existing map Access allowlist.
  *
  * Concurrency: last-write-wins (design doc risk #4). Optimistic concurrency
  * via R2 ETag is deferred to v2. Two simultaneous PUTs interleave by
@@ -38,7 +37,8 @@
  */
 
 import type { Env } from './index';
-import { constantTimeEqual, isValidProfileName, jsonResponse } from './shared';
+import { isValidProfileName, jsonResponse } from './shared';
+import { authorizeCalibration } from './calibration-auth';
 
 /** A target owned by a specific profile. Shape mirrors
  *  `frontend/src/profile.ts:PersonalTarget`. */
@@ -119,18 +119,16 @@ async function writeTargets(env: Env, profileName: string, list: PersonalTarget[
 /** Pure-function entry point used by `index.ts` router. Returns the
  *  Response with status + JSON body; CORS headers are merged downstream. */
 export async function handleProfilesRequest(request: Request, env: Env): Promise<Response> {
-  if (!env.CALIB_TOKEN) {
-    return jsonResponse({ error: 'service_misconfigured' }, 503);
-  }
-  const token = request.headers.get('x-calib-token');
-  if (!token || !constantTimeEqual(token, env.CALIB_TOKEN)) {
-    return jsonResponse({ error: 'unauthorized' }, 401);
-  }
+  const denied = await authorizeCalibration(request, env);
+  if (denied) return denied;
 
   const url = new URL(request.url);
   // Routes: /api/profiles/<name>/targets [optional: /<id>]
   // Split & trim leading slash; then verify shape.
-  const parts = url.pathname.split('/').filter(Boolean);
+  // Browser alias stays behind the main Google Access application; the
+  // legacy path keeps its server-to-server bypass for machine clients.
+  const profilePath = url.pathname.replace(/^\/api\/browser\/profiles\//, '/api/profiles/');
+  const parts = profilePath.split('/').filter(Boolean);
   // parts: ['api', 'profiles', '<name>', 'targets', '<id>?']
   if (parts.length < 4 || parts[0] !== 'api' || parts[1] !== 'profiles' || parts[3] !== 'targets') {
     return jsonResponse({ error: 'not_found' }, 404);

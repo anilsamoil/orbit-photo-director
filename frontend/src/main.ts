@@ -20,7 +20,7 @@ import {
   bannerWithLaunchesOverlay,
   bannerWithTleOverlay,
 } from './banner';
-import { buildPayload, clearToken, drainQueue, getToken, postCalib, queuedCalibCount, setToken } from './calib';
+import { buildPayload, drainQueue, postCalib, queuedCalibCount } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
@@ -1194,7 +1194,6 @@ async function loadProfilePane(): Promise<void> {
     profilePaneModule = await import('./profile-ui');
   }
   profilePaneModule.renderProfilePane();
-  renderTokenStatus();
 }
 
 let lookupPaneBound = false;
@@ -1235,117 +1234,6 @@ async function loadLogPane(): Promise<void> {
     if (ok) {
       await loadLogPane();
     }
-  });
-}
-
-/** Legacy profile-target API still uses its machine credential. Ratings use
- *  the Google Access session and do not require this advanced control.
- */
-function renderTokenStatus(): void {
-  const slot = document.getElementById('profile-token');
-  if (!slot) return;
-  slot.replaceChildren();
-  const hasToken = !!getToken();
-
-  const status = document.createElement('span');
-  status.className = `token-status ${hasToken ? 'set' : 'unset'}`;
-  status.textContent = hasToken ? 'token: set' : 'token: not set';
-  slot.appendChild(status);
-
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'token-btn';
-  btn.textContent = hasToken ? 'change' : 'set';
-  btn.addEventListener('click', async () => {
-    const result = await openTokenModal(hasToken);
-    if (result === null) return; // cancel
-    if (result === '') {
-      clearToken();
-      showToast('Legacy target-sync key cleared', 'warn');
-    } else {
-      setToken(result);
-      showToast('Legacy target-sync key saved', 'success');
-      void drainQueue();
-    }
-    renderTokenStatus();
-  });
-  slot.appendChild(btn);
-}
-
-/** In-page token modal. Replaces window.prompt — which exposed the token to
- *  shoulder-surfers (plain text, no field masking) and persisted entries in
- *  the browser's autofill history. The new modal uses a password-type
- *  field so the token reads as bullets, no autofill capture, and the input
- *  field is wiped on close. Resolves to:
- *    - null on cancel/backdrop click
- *    - "" when the user submits an empty input (clear-token intent)
- *    - the trimmed token otherwise
- */
-export function openTokenModal(hasToken: boolean): Promise<string | null> {
-  return new Promise((resolve) => {
-    const backdrop = document.createElement('div');
-    backdrop.className = 'modal-backdrop';
-    const modal = document.createElement('div');
-    modal.className = 'modal token-modal';
-
-    const title = document.createElement('h3');
-    title.textContent = hasToken ? 'Change calibration token' : 'Set calibration token';
-    const help = document.createElement('p');
-    help.className = 'modal-meta';
-    help.textContent = hasToken
-      ? 'Paste a new token, or leave empty + Save to clear the current one.'
-      : 'Paste the calibration token (issued by the Worker).';
-
-    const input = document.createElement('input');
-    input.type = 'password';
-    input.autocomplete = 'off';
-    input.spellcheck = false;
-    input.className = 'token-input';
-    input.placeholder = 'paste token here';
-
-    const actions = document.createElement('div');
-    actions.className = 'modal-actions';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'btn btn-skip';
-    cancel.textContent = 'Cancel';
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'btn btn-shoot';
-    save.textContent = 'Save';
-
-    let resolved = false;
-    const close = (value: string | null) => {
-      if (resolved) return;
-      resolved = true;
-      // Wipe the input value before removal so it doesn't persist in any
-      // browser-internal field cache between sessions.
-      input.value = '';
-      backdrop.remove();
-      resolve(value);
-    };
-
-    cancel.addEventListener('click', () => close(null));
-    save.addEventListener('click', () => close(input.value.trim()));
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        close(input.value.trim());
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        close(null);
-      }
-    });
-    backdrop.addEventListener('click', (e) => {
-      if (e.target === backdrop) close(null);
-    });
-
-    actions.append(cancel, save);
-    modal.append(title, help, input, actions);
-    backdrop.appendChild(modal);
-    document.body.appendChild(backdrop);
-    // Focus on next frame so screen-readers announce the title first.
-    requestAnimationFrame(() => input.focus());
   });
 }
 
@@ -1553,7 +1441,7 @@ async function init(): Promise<void> {
   }
   // Hydrate this profile's server-side targets into localStorage on load so
   // the my-targets map rings (and the Profile list) reflect them without
-  // needing a Profile-tab visit first. No-ops without a calibration token and
+  // needing a Profile-tab visit first. Uses the signed-in Google session and
   // stays retryable until one is set. saveProfile fires 'profile-changed', so
   // an already-open map picks the rings up. Fire-and-forget.
   // Dynamic import (boot-slim review 2026-06-11): the static import dragged

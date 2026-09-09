@@ -27,6 +27,7 @@ import {
   isValidProfileName,
   listProfiles,
   loadProfile,
+  parseProfileFromURL,
   saveProfile,
   DEFAULT_PROFILE_NAME,
   type Profile,
@@ -383,14 +384,7 @@ function safeLoadProfile(name: string): Profile | null {
  *  circular dependency at module load time). Same precedence as
  *  parseProfileFromURL. */
 function readActiveProfileName(): string {
-  try {
-    const url = new URL(window.location.href);
-    const q = url.searchParams.get('u');
-    if (q && isValidProfileName(q)) return q;
-    const seg = url.pathname.replace(/^\//, '').split('/')[0];
-    if (seg && isValidProfileName(seg)) return seg;
-  } catch { /* fallthrough */ }
-  return DEFAULT_PROFILE_NAME;
+  return parseProfileFromURL(window.location.href);
 }
 
 /** Switch the active profile: mutate URL via pushState + reload so all
