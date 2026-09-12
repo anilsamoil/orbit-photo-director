@@ -6,10 +6,22 @@ import type { CalibAction, CalibPayload } from './types';
 // `getCurrentProfile` lazily (call-site, not module-load).
 import { getCurrentProfile } from './main';
 import { DEFAULT_PROFILE_NAME } from './profile';
+import { getAccountProfile } from './profile-session';
 
 const TOKEN_KEY = 'opd-calib-token';
 const QUEUE_KEY = 'opd-calib-queue';
 const QUEUE_MAX_ENTRIES = 200; // hard cap so localStorage never balloons
+
+interface QueueContext { key: string; profile?: string; }
+
+function queueContext(): QueueContext {
+  const account = getAccountProfile();
+  return account ? { key: `${QUEUE_KEY}:${account.name}`, profile: account.name } : { key: QUEUE_KEY };
+}
+
+function belongsTo(p: CalibPayload, context: QueueContext): boolean {
+  return !context.profile || p.profile === context.profile;
+}
 
 export function getToken(): string | null {
   try {
@@ -65,10 +77,21 @@ async function sendCalib(
   baseUrl: string,
   queueFailures: boolean,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const token = getToken();
+  const account = getAccountProfile();
+  const context = queueContext();
+  // Browser identity must never fall back to an old shared machine token.
+  const token = account ? null : getToken();
   const dedupe = payload.dedupe_key ?? makeDedupeKey(payload);
   const body = { ...payload, dedupe_key: dedupe };
-  const keep = () => { if (queueFailures) enqueue(body); };
+  const keep = () => { if (queueFailures) enqueueFor(body, context); };
+  if (account && payload.profile !== account.name) {
+    keep();
+    return { ok: false, reason: 'profile_mismatch' };
+  }
+  if (account?.isVerified === false) {
+    keep();
+    return { ok: false, reason: 'sign_in_required' };
+  }
   try {
     const resp = await fetch(`${baseUrl}/api/log`, {
       method: 'POST',
@@ -115,7 +138,8 @@ async function sendCalib(
  *  the queue is bounded at QUEUE_MAX_ENTRIES.
  */
 export function queuedCalibCount(): number {
-  return readQueue().length;
+  const context = queueContext();
+  return readQueueFor(context).filter((entry) => belongsTo(entry, context)).length;
 }
 
 /** Drain queued calibrations on page load. Returns how many were sent successfully. */
@@ -126,19 +150,24 @@ export function drainQueue(baseUrl = ''): Promise<number> {
 }
 
 async function drainQueued(baseUrl: string): Promise<number> {
-  const queued = readQueue();
+  const context = queueContext();
+  if (getAccountProfile()?.isVerified === false) return 0;
+  const queued = readQueueFor(context).filter((entry) => belongsTo(entry, context));
   if (queued.length === 0) return 0;
   let sent = 0;
   for (const p of queued) {
+    // A sign-in change during an earlier request must not send the next record
+    // under a different session, nor drain that new account's storage.
+    if (queueContext().key !== context.key || getAccountProfile()?.isVerified === false) break;
     const r = await sendCalib(p, baseUrl, false);
     if (r.ok) {
       sent++;
       // Preserve records added while this request was in flight.
-      const latest = readQueue();
+      const latest = readQueueFor(context);
       const index = latest.findIndex((entry) => JSON.stringify(entry) === JSON.stringify(p));
       if (index >= 0) {
         latest.splice(index, 1);
-        writeQueue(latest);
+        writeQueueFor(latest, context);
       }
     }
   }
@@ -160,7 +189,7 @@ export function buildPayload(
   // back to DEFAULT_PROFILE_NAME ("anil") — matches the Worker's legacy
   // default so a pre-v1.6.3.0 read of these payloads still surfaces them
   // in the unfiltered list.
-  const profile = getCurrentProfile()?.name ?? DEFAULT_PROFILE_NAME;
+  const profile = getAccountProfile()?.name ?? getCurrentProfile()?.name ?? DEFAULT_PROFILE_NAME;
   return {
     target_id: targetId,
     pass_time: passTimeIso,
@@ -173,29 +202,44 @@ export function buildPayload(
 // ----- queue helpers (exported for tests) -----
 
 export function enqueue(p: CalibPayload): void {
-  const q = readQueue();
+  enqueueFor(p, queueContext());
+}
+
+function enqueueFor(p: CalibPayload, context: QueueContext): void {
+  const q = readQueueFor(context);
   q.push(p);
-  // Drop oldest entries when over the cap so localStorage stays bounded.
-  // Calibration data is best-effort — the alternative (failing the write) is worse.
-  if (q.length > QUEUE_MAX_ENTRIES) {
-    q.splice(0, q.length - QUEUE_MAX_ENTRIES);
+  // Bound this account's queue without discarding someone else's legacy items.
+  let excess = q.filter((entry) => belongsTo(entry, context)).length - QUEUE_MAX_ENTRIES;
+  for (let i = 0; excess > 0 && i < q.length;) {
+    if (belongsTo(q[i]!, context)) { q.splice(i, 1); excess--; }
+    else i++;
   }
-  writeQueue(q);
+  writeQueueFor(q, context);
 }
 
 export function readQueue(): CalibPayload[] {
+  return readQueueFor(queueContext());
+}
+
+function readQueueFor(context: QueueContext): CalibPayload[] {
   try {
-    const raw = localStorage.getItem(QUEUE_KEY);
+    let raw = localStorage.getItem(context.key);
+    if (raw === null && context.profile === 'anil') raw = localStorage.getItem(QUEUE_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as CalibPayload[];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((entry) => entry && typeof entry === 'object') : [];
   } catch {
     return [];
   }
 }
 
 export function writeQueue(q: CalibPayload[]): void {
+  writeQueueFor(q, queueContext());
+}
+
+function writeQueueFor(q: CalibPayload[], context: QueueContext): void {
   try {
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+    localStorage.setItem(context.key, JSON.stringify(q));
   } catch {
     /* ignore */
   }
@@ -203,7 +247,9 @@ export function writeQueue(q: CalibPayload[]): void {
 
 export function clearQueue(): void {
   try {
-    localStorage.removeItem(QUEUE_KEY);
+    const context = queueContext();
+    if (!context.profile) localStorage.removeItem(context.key);
+    else writeQueueFor(readQueueFor(context).filter((entry) => !belongsTo(entry, context)), context);
   } catch {
     /* ignore */
   }

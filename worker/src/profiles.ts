@@ -13,7 +13,8 @@
  *
  * Auth: uses the same signed Google Access session as ratings. All browser
  * writes require a same-origin Origin; legacy machine keys remain supported.
- * Profile selection stays shared within the existing map Access allowlist.
+ * Signed accounts may access only their resolved profile. Explicit private
+ * aliases retain legacy names; machine-key requests retain named-profile access.
  *
  * Concurrency: last-write-wins (design doc risk #4). Optimistic concurrency
  * via R2 ETag is deferred to v2. Two simultaneous PUTs interleave by
@@ -38,7 +39,8 @@
 
 import type { Env } from './index';
 import { isValidProfileName, jsonResponse } from './shared';
-import { authorizeCalibration } from './calibration-auth';
+import { authenticateCalibration } from './calibration-auth';
+import { resolveBrowserProfile } from './browser-identity';
 
 /** A target owned by a specific profile. Shape mirrors
  *  `frontend/src/profile.ts:PersonalTarget`. */
@@ -119,10 +121,9 @@ async function writeTargets(env: Env, profileName: string, list: PersonalTarget[
 /** Pure-function entry point used by `index.ts` router. Returns the
  *  Response with status + JSON body; CORS headers are merged downstream. */
 export async function handleProfilesRequest(request: Request, env: Env): Promise<Response> {
-  const denied = await authorizeCalibration(request, env);
-  if (denied) return denied;
-
   const url = new URL(request.url);
+  const auth = await authenticateCalibration(request, env, url.pathname.startsWith('/api/browser/'));
+  if ('denied' in auth) return auth.denied;
   // Routes: /api/profiles/<name>/targets [optional: /<id>]
   // Split & trim leading slash; then verify shape.
   // Browser alias stays behind the main Google Access application; the
@@ -136,6 +137,11 @@ export async function handleProfilesRequest(request: Request, env: Env): Promise
   const profileName = parts[2] ?? '';
   if (!isValidProfileName(profileName)) {
     return jsonResponse({ error: 'invalid_profile_name' }, 400);
+  }
+  if (auth.principal.kind === 'access') {
+    const resolved = await resolveBrowserProfile(auth.principal, env);
+    if ('denied' in resolved) return resolved.denied;
+    if (resolved.profile.name !== profileName) return jsonResponse({ error: 'profile_forbidden' }, 403);
   }
   const targetId = parts[4]; // undefined when there's no /<id> segment
 

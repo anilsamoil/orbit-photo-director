@@ -15,6 +15,13 @@ import * as manifestModule from '../src/manifest';
 import type { Manifest, PassEntry, Track } from '../src/types';
 import { artifact as launchArtifact, envelope as launchEnvelope, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
 
+// These orchestration fixtures exercise the legacy cache migration boundary.
+// Account selection and fail-closed boot are tested in account-session.test.ts.
+vi.mock('../src/profile-session', () => ({
+  getAccountProfile: () => null,
+  resolveAccountProfile: async () => ({ name: 'anil', displayName: 'Anil', isVerified: true }),
+}));
+
 // Mock the network layer at module boundary so tests control what each
 // fetch resolves with.
 vi.mock('../src/manifest', () => ({

@@ -1,6 +1,12 @@
 import type { Manifest, PassEntry, Status, Track } from './types';
+import { getAccountProfile } from './profile-session';
 
 export const SNAPSHOT_KEY = 'opd-snapshot';
+
+function snapshotKey(): string {
+  const account = getAccountProfile();
+  return account ? `${SNAPSHOT_KEY}:${account.name}` : SNAPSHOT_KEY;
+}
 
 /** Everything the app needs to boot a usable UI without the network.
  *  Persisted as one localStorage key so reads are O(1) and writes are atomic
@@ -23,7 +29,7 @@ export interface Snapshot {
  *  next tick; a thrown exception isn't. */
 export function saveSnapshot(snapshot: Snapshot): boolean {
   try {
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
+    localStorage.setItem(snapshotKey(), JSON.stringify(snapshot));
     return true;
   } catch {
     // QuotaExceededError, SecurityError (private browsing), JSON.stringify
@@ -40,7 +46,12 @@ export function saveSnapshot(snapshot: Snapshot): boolean {
 export function readSnapshot(): Snapshot | null {
   let raw: string | null;
   try {
-    raw = localStorage.getItem(SNAPSHOT_KEY);
+    raw = localStorage.getItem(snapshotKey());
+    // Only the server-verified legacy owner may resume the pre-account cache.
+    // Keep it intact; subsequent saves use the account's own namespace.
+    if (raw === null && getAccountProfile()?.name === 'anil') {
+      raw = localStorage.getItem(SNAPSHOT_KEY);
+    }
   } catch {
     return null;
   }
@@ -75,7 +86,9 @@ export function snapshotAgeMinutes(nowMs: number = Date.now()): number {
  */
 export function clearSnapshot(): void {
   try {
-    localStorage.removeItem(SNAPSHOT_KEY);
+    const key = snapshotKey();
+    if (key === SNAPSHOT_KEY) localStorage.removeItem(key);
+    else localStorage.setItem(key, 'null'); // Do not resurrect a legacy cache.
   } catch {
     // ignore
   }

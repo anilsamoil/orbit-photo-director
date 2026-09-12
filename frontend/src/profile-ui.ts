@@ -34,6 +34,7 @@ import {
 } from './profile';
 import { subscribeProfileChanged } from './profile-events';
 import { buildCrudSection } from './profile-crud';
+import { getAccountProfile } from './profile-session';
 
 /** Min/max for the distance threshold slider (km). Range chosen to span
  *  "tight nadir only" (100 km) through "well past ISS horizon" (2000 km).
@@ -152,6 +153,17 @@ function buildPickerSection(): HTMLElement {
   const heading = document.createElement('h3');
   heading.textContent = 'Active profile';
   section.appendChild(heading);
+
+  const account = getAccountProfile();
+  if (account) {
+    heading.textContent = `Your profile · ${account.displayName}`;
+    const info = document.createElement('p');
+    info.textContent = account.isVerified === false
+      ? 'Offline · using this tab’s last verified profile. Reconnect and reload to sync.'
+      : 'Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.';
+    section.appendChild(info);
+    return section;
+  }
 
   const desc = document.createElement('p');
   desc.textContent = 'Each profile keeps its own personal targets and threshold settings. Switching reloads the page so caches stay clean.';
@@ -384,7 +396,7 @@ function safeLoadProfile(name: string): Profile | null {
  *  circular dependency at module load time). Same precedence as
  *  parseProfileFromURL. */
 function readActiveProfileName(): string {
-  return parseProfileFromURL(window.location.href);
+  return getAccountProfile()?.name ?? parseProfileFromURL(window.location.href);
 }
 
 /** Switch the active profile: mutate URL via pushState + reload so all
@@ -395,6 +407,7 @@ function readActiveProfileName(): string {
  *  `location.reload` to verify the URL mutation contract without
  *  actually navigating. */
 export function switchToProfile(name: string): void {
+  if (getAccountProfile() && getAccountProfile()?.name !== name) return;
   if (!isValidProfileName(name)) return;
   try {
     const url = new URL(window.location.href);
@@ -480,8 +493,9 @@ export function renderProfileBadge(name: string | null): void {
   // name is also already validated by isValidProfileName before it gets
   // here (lowercase ASCII + digits + hyphen), so the worst case is a
   // visual oddity, not a script-injection surface.
-  el.textContent = `👤 ${name}`;
-  el.title = `Active profile: ${name}`;
+  const displayName = getAccountProfile()?.displayName ?? name;
+  el.textContent = `👤 ${displayName}`;
+  el.title = `Your profile: ${displayName}`;
 }
 
 /** Test-only state reset. Clears the suppress-recursion flag + the

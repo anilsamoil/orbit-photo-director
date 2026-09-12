@@ -33,6 +33,11 @@ function req(jwt?: string, method = 'GET', extra = {}) {
     ...(['POST', 'PUT', 'DELETE'].includes(method) ? { origin } : {}), ...extra,
   } });
 }
+async function bindingForTestAccount(profile: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('test@example.com'));
+  const key = 'email:' + [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return JSON.stringify({ [key]: profile });
+}
 async function authorize(request: Request, env = authEnv) {
   return (await import('../src/calibration-auth')).authorizeCalibration(request, env);
 }
@@ -85,7 +90,7 @@ describe('Google Access calibration authorization', () => {
       get: vi.fn(async (key: string) => records.has(key) ? { json: async () => JSON.parse(records.get(key)!) } : null),
       put: vi.fn(async (key: string, body: string) => { records.set(key, body); return { key }; }),
     };
-    const env = { ...authEnv, CALIB_TOKEN: '', CALIB: bucket, SITE: bucket } as unknown as Env;
+    const env = { ...authEnv, ACCESS_PROFILE_BINDINGS: await bindingForTestAccount('jack'), CALIB_TOKEN: '', CALIB: bucket, SITE: bucket } as unknown as Env;
     const worker = (await import('../src/index')).default;
     const jwt = await token();
     const target = { id: 'personal:jack:test', name: 'Test', lat: 0, lon: 0, priority: 5, createdAt: '2026-09-09T00:00:00Z' };
@@ -119,7 +124,7 @@ describe('Google Access calibration authorization', () => {
       },
       list: async () => ({ objects: [] }),
     };
-    const env = { ...authEnv, CALIB: bucket, SITE: bucket } as unknown as Env;
+    const env = { ...authEnv, ACCESS_PROFILE_BINDINGS: await bindingForTestAccount('anil'), CALIB: bucket, SITE: bucket } as unknown as Env;
     const worker = (await import('../src/index')).default;
     const jwt = await token();
     const makeRequest = () => new Request(`${origin}/api/log`, { method: 'POST', headers: {
