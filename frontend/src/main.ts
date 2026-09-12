@@ -12,6 +12,7 @@ import { bindHelp } from './help';
 import { formatCountdown, parseUtcIso } from './countdown';
 import {
   ACCESS_REAUTH_PATH,
+  getAccessRecoveryPath,
   bannerAuthExpired,
   bannerError,
   bannerFromManifest,
@@ -44,7 +45,7 @@ import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchCupolaWindows, fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { setupCupolaPane } from './cupola-pane';
 import { gibsTrueColorUrl, precacheTilesForTargets, precacheWorldBaseTiles, yesterdayIso } from './tile-precache';
-import { fetchLog, mergeLogEntries, openRateModal, renderLog } from './log';
+import { fetchLog, fetchLogResult, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 import { aggregateShootCounts, claimMapShotFetch, publishShotCounts } from './shot-counts';
 import { launchStore } from './launch-store';
@@ -108,7 +109,7 @@ function setAuthBanner(state: BannerState): void {
     // Full navigation, not fetch: we WANT the browser to follow the 302 to the
     // Access login and render it. location.assign on a denylisted path is the
     // only route that escapes the precached shell.
-    window.location.assign(ACCESS_REAUTH_PATH);
+    window.location.assign(getAccessRecoveryPath(getAccountProfile()?.name ?? getCurrentProfile()?.name));
   };
 }
 
@@ -1273,17 +1274,49 @@ function loadLookupPane(): void {
   });
 }
 
+let logLoadSequence = 0;
 async function loadLogPane(): Promise<void> {
   const listEl = document.getElementById('log-list');
   const emptyEl = document.getElementById('log-empty');
   const statsEl = document.getElementById('log-stats');
+  const noticeEl = document.getElementById('log-notice');
   if (!listEl || !emptyEl || !statsEl) return;
   // Pass the active profile name so the Log tab shows the current
   // astronaut's records — without this, the Worker's legacy-default
   // filter returns Anil's records to anyone with a token (e.g. Jack).
-  const entries = await fetchLog('', 100, getCurrentProfile()?.name);
-  const merged = mergeLogEntries(entries);
+  const profileName = getAccountProfile()?.name ?? getCurrentProfile()?.name;
+  const sequence = ++logLoadSequence;
+  const result = await fetchLogResult('', 100, profileName);
+  // Reopening Log can overlap an earlier request. An old auth failure must
+  // never replace a newer successful read or another profile's state.
+  if (sequence !== logLoadSequence
+    || profileName !== (getAccountProfile()?.name ?? getCurrentProfile()?.name)) return;
+  if (noticeEl) {
+    noticeEl.replaceChildren();
+    noticeEl.hidden = result.ok;
+  }
+  if (!result.ok) {
+    listEl.replaceChildren();
+    statsEl.replaceChildren();
+    emptyEl.hidden = true;
+    if (noticeEl) {
+      if (result.reason === 'authentication') {
+        noticeEl.textContent = 'Sign in to reload this profile. Your saved ratings have been kept. ';
+        const retry = document.createElement('a');
+        retry.href = getAccessRecoveryPath(profileName);
+        retry.textContent = 'Sign in and reload';
+        noticeEl.appendChild(retry);
+      } else {
+        noticeEl.textContent = result.reason === 'offline'
+          ? 'Could not connect to your log. Your saved ratings are kept; reconnect, then reopen Log.'
+          : 'Could not load your log. Your saved ratings are kept; try reopening Log.';
+      }
+    }
+    return;
+  }
+  const merged = mergeLogEntries(result.entries);
   renderLog(listEl, emptyEl, statsEl, merged, async (row: MergedRow) => {
+    if (profileName !== (getAccountProfile()?.name ?? getCurrentProfile()?.name)) return;
     const ok = await openRateModal(row);
     if (ok) {
       await loadLogPane();
@@ -1592,6 +1625,8 @@ export {
   renderOfflineBanner,
   renderQueue,
   updatePendingSyncBadge,
+  loadLogPane,
+  setAuthBanner,
   // v3 — exposed so the hide-from-card flow can be tested at the
   // handler boundary (DOM removal + profile save + toast) without
   // simulating the full Queue render path. Card-test side covers
