@@ -52,6 +52,8 @@ import { fetchCuratedTargets } from './manifest';
 import type { CuratedTarget, Manifest } from './types';
 import { getCurrentManifest } from './main';
 import { geocode, type GeocodeResult } from './profile-geocode';
+import { getAccountProfile } from './profile-session';
+import { markProfileTargetsChanged, profileTargetsChanged, profileTargetRevision, resetProfileTargetSyncForTests } from './profile-target-sync';
 
 /** App version stamped into export envelopes. Injected by Vite's `define`
  *  at build time from the repo-root VERSION file (see vite.config.ts) so
@@ -153,6 +155,7 @@ export function buildCrudSection(profileName: string): HTMLElement {
  *  only on full page reload — that's the operator behaviour we care
  *  about (open the URL on a fresh device → hydrate once). */
 const hydratedProfiles = new Set<string>();
+const hydrationInFlight = new Map<string, Promise<void>>();
 
 /** v3 — module-scope cache of the curated targets catalog. The Profile-tab
  *  typeahead (Component C, Anil 2026-05-26) consults this on every
@@ -180,33 +183,26 @@ const shotCountsByProfile = new Map<string, Map<string, number>>();
  *  cannot prevent targets from hydrating (and vice versa). */
 const shotCountsFetched = new Set<string>();
 
-/** Slot 6b — one-shot GET on Profile-pane render that pulls the server's
- *  personal-target list into localStorage when the local copy is empty.
- *
- *  GUARD ("preserve local"): we only hydrate when local additions are
- *  empty. This is intentional — if the operator has any local targets,
- *  some of them may be in-flight optimistic adds whose POST hasn't
- *  resolved yet (slot 6 pattern). Clobbering them with the server's
- *  view would lose the just-added entry. The trade-off: a stale local
- *  cache won't pick up cross-device adds until the operator clears
- *  localStorage. For v1 this is the right call because:
- *    - the original bug (fresh device shows 0) is fully fixed
- *    - the alternative (union-merge by id) risks deleting in-flight
- *      adds whose id is local-only because POST hasn't completed
- *    - operators rarely edit the same profile from two devices at once
- *
- *  On any failure (authentication / network / http / validation) this
- *  silently no-ops with a console.warn — first-render hydration should
- *  never pop a toast at the operator. */
-export async function hydratePersonalTargets(profileName: string): Promise<void> {
+/** Add new server IDs without replacing local values or removing local-only
+ * targets. Once-per-load UI callers share one pending GET. Local mutations
+ * defer hydration until reload; this is deliberately not bidirectional sync. */
+export function hydratePersonalTargets(profileName: string): Promise<void> {
+  const pending = hydrationInFlight.get(profileName);
+  if (pending) return pending;
+  const task = hydrateUnchangedProfile(profileName).finally(() => { hydrationInFlight.delete(profileName); });
+  hydrationInFlight.set(profileName, task);
+  return task;
+}
+
+async function hydrateUnchangedProfile(profileName: string): Promise<void> {
+  const account = getAccountProfile();
+  if (account && (account.name !== profileName || account.isVerified === false)) return;
+  if (profileTargetsChanged(profileName)) return;
   const current = safeLoadProfile(profileName);
   if (!current) return;
-  if (current.additions.length > 0) {
-    // "Preserve local" guard — see comment above. Also makes this function
-    // idempotent for the success case: once additions are populated, a later
-    // call (init + Profile-pane) returns here before re-fetching.
-    return;
-  }
+  hydratedProfiles.add(profileName);
+  const before = JSON.stringify(current);
+  const revision = profileTargetRevision(profileName);
 
   const apiResult = await getProfileTargets(profileName);
   if (!apiResult.ok) {
@@ -218,16 +214,32 @@ export async function hydratePersonalTargets(profileName: string): Promise<void>
     return;
   }
 
-  // Re-check local state — another tab / the operator may have added a
-  // target between when we fired the GET and when it resolved. Only
-  // overwrite when the local copy is still empty.
+  // Reject an obsolete response after sign-in changes or any intervening
+  // local edit/delete. Re-reading also catches saves from another tab.
+  const freshAccount = getAccountProfile();
+  if (freshAccount?.name !== account?.name || freshAccount?.isVerified === false
+    || profileTargetsChanged(profileName) || profileTargetRevision(profileName) !== revision) return;
   const fresh = safeLoadProfile(profileName);
-  if (!fresh) return;
-  if (fresh.additions.length > 0) return;
+  if (!fresh || JSON.stringify(fresh) !== before) return;
+
+  const ids = new Set(fresh.additions.map((t) => t.id));
+  const missing: PersonalTarget[] = [];
+  for (const target of apiResult.data.targets) {
+    if (!target || typeof target.id !== 'string' || typeof target.name !== 'string'
+      || typeof target.lat !== 'number' || typeof target.lon !== 'number'
+      || typeof target.priority !== 'number' || typeof target.createdAt !== 'string') return;
+    const checked = validatePersonalTargetInput({ ...target, profileName });
+    if (!checked.ok) return; // A wrong-profile or malformed list is never applied.
+    if (!ids.has(target.id)) {
+      ids.add(target.id);
+      missing.push(checked.target);
+    }
+  }
+  if (missing.length === 0) return;
 
   const merged: Profile = {
     ...fresh,
-    additions: apiResult.data.targets,
+    additions: [...fresh.additions, ...missing],
   };
   try {
     saveProfile(merged);
@@ -367,7 +379,7 @@ function buildAddForm(profileName: string): HTMLElement {
   const attribution = document.createElement('div');
   attribution.className = 'profile-geocode-attribution';
   attribution.id = 'profile-add-search-attribution';
-  attribution.textContent = 'Geocoding © OpenStreetMap contributors via Nominatim';
+  attribution.textContent = 'General place search: © OpenStreetMap contributors via Nominatim. Tuvalu / Funafuti point: Geoscience Australia TUVA station.';
   searchPanel.appendChild(attribution);
 
   wrap.appendChild(searchPanel);
@@ -611,6 +623,7 @@ export async function handleAdd(profileName: string, target: PersonalTarget): Pr
     return e instanceof Error ? e.message : String(e);
   }
   try {
+    markProfileTargetsChanged(profileName);
     saveProfile(next);
   } catch (e) {
     return `Could not save locally: ${e instanceof Error ? e.message : String(e)}`;
@@ -876,6 +889,7 @@ export async function handleEdit(profileName: string, edited: PersonalTarget): P
     return e instanceof Error ? e.message : String(e);
   }
   try {
+    markProfileTargetsChanged(profileName);
     saveProfile(next);
   } catch (e) {
     return `Could not save locally: ${e instanceof Error ? e.message : String(e)}`;
@@ -937,6 +951,7 @@ async function handleDelete(profileName: string, target: PersonalTarget): Promis
   const next = removePersonalTarget(before, target.id);
   if (next === before) return; // already absent locally
   try {
+    markProfileTargetsChanged(profileName);
     saveProfile(next);
   } catch (e) {
     showToast(`Delete failed locally: ${e instanceof Error ? e.message : String(e)}`, 'error');
@@ -946,6 +961,22 @@ async function handleDelete(profileName: string, target: PersonalTarget): Promis
 
   const apiResult = await deleteProfileTarget(profileName, target.id);
   if (apiResult.ok) {
+    markProfileTargetsChanged(profileName);
+    // Another tab can hydrate the old server list while this DELETE waits.
+    // The receipt confirms this ID is gone; remove only that ID again from
+    // the latest local profile, preserving every unrelated intervening edit.
+    const latest = safeLoadProfile(profileName);
+    if (latest) {
+      const confirmed = removePersonalTarget(latest, target.id);
+      if (confirmed !== latest) {
+        try { saveProfile(confirmed); }
+        catch {
+          showToast('Deleted on the server, but could not update this device’s saved copy. Reload and retry locally.', 'warn');
+          return;
+        }
+        if (editingTargetId === null) rerenderCrudSection(profileName);
+      }
+    }
     showToast(`Deleted "${target.name}"`, 'success');
     return;
   }
@@ -1653,6 +1684,7 @@ async function handleCsvImport(profileName: string, valid: ParsedValidRow[]): Pr
   let optimistic: Profile;
   try {
     optimistic = addPersonalTargetsBatch(before, targets);
+    markProfileTargetsChanged(profileName);
     saveProfile(optimistic);
   } catch (e) {
     showToast(`Could not save locally: ${e instanceof Error ? e.message : String(e)}`, 'error');
@@ -2003,6 +2035,7 @@ async function handleJsonImportReplace(
   };
 
   try {
+    markProfileTargetsChanged(currentProfileName);
     saveProfile(merged);
   } catch (e) {
     showToast(`Could not save locally: ${e instanceof Error ? e.message : String(e)}`, 'error');
@@ -2050,6 +2083,8 @@ export const _test = {
    *  simulate "fresh page load" between assertions. */
   resetHydrationState: (): void => {
     hydratedProfiles.clear();
+    hydrationInFlight.clear();
+    resetProfileTargetSyncForTests();
     shotCountsFetched.clear();
     shotCountsByProfile.clear();
     editingTargetId = null;

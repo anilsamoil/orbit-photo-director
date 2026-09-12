@@ -35,6 +35,8 @@ import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { subscribeProfileChanged } from './profile-events';
 import { getAccountProfile, resolveAccountProfile } from './profile-session';
+import { deleteProfileTarget } from './profile-api';
+import { markProfileTargetsChanged } from './profile-target-sync';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import { applyTargetFilter, getTargetFilter, setTargetFilter, type TargetFilter } from './target-filter-pref';
@@ -800,7 +802,7 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
   // multiplex (slot 4) will filter the id out on the next tick so the
   // hide persists across refreshes.
   if (action === 'hide') {
-    handleHideAction(p);
+    await handleHideAction(p);
     return;
   }
   if (action === 'remind') {
@@ -891,7 +893,7 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
  *    we still remove the card from DOM so the operator's tap does
  *    something.
  */
-function handleHideAction(p: PassEntry): void {
+async function handleHideAction(p: PassEntry): Promise<void> {
   // Cupola windows are ephemeral, on-demand cards — NOT profile targets. Hide
   // just removes the card from the panel; never persist a synthetic "cupola:"
   // id into removedCuratedIds (which the daemon multiplex filter would honor).
@@ -907,8 +909,17 @@ function handleHideAction(p: PassEntry): void {
     return;
   }
   const isPersonal = p.target_id.startsWith('personal:');
+  const account = getAccountProfile();
+  if (isPersonal && (p.target_id.split(':')[1] !== profile.name
+    || account && (account.name !== profile.name || account.isVerified === false))) {
+    showToast('Reconnect and reload to verify your own profile before deleting a target.', 'error');
+    return;
+  }
+  const removedIndex = profile.additions.findIndex((target) => target.id === p.target_id);
+  const removed = profile.additions[removedIndex];
   let next: Profile = profile;
   if (isPersonal) {
+    markProfileTargetsChanged(profile.name);
     // removePersonalTarget is idempotent — returns the profile unchanged
     // if the id isn't in additions, so we can call it unconditionally.
     next = removePersonalTarget(profile, p.target_id);
@@ -918,6 +929,7 @@ function handleHideAction(p: PassEntry): void {
   if (next !== profile) {
     try {
       saveProfile(next);
+      currentProfile = next;
     } catch (e) {
       showToast(
         `Could not hide: ${e instanceof Error ? e.message : String(e)}`,
@@ -936,6 +948,47 @@ function handleHideAction(p: PassEntry): void {
     }
   }
   if (isPersonal) {
+    showToast(`Removing personal target "${p.target_name}"…`, 'warn');
+    const result = await deleteProfileTarget(profile.name, p.target_id);
+    if (!result.ok) {
+      // Restore just this deletion. Other targets/settings may have changed
+      // while the request was pending, and must survive the rollback.
+      const latest = loadProfile(profile.name);
+      let restoredLocally = !!removed && !!latest?.additions.some((target) => target.id === removed.id);
+      if (latest && removed && !latest.additions.some((target) => target.id === removed.id)) {
+        const additions = latest.additions.slice();
+        additions.splice(Math.min(removedIndex, additions.length), 0, removed);
+        const restored = { ...latest, additions };
+        try {
+          saveProfile(restored);
+          restoredLocally = true;
+          if (currentProfile?.name === profile.name) currentProfile = restored;
+        } catch { /* report failure without overwriting other local data */ }
+      }
+      if (currentProfile?.name === profile.name) renderQueue();
+      showToast(`Could not confirm deletion. ${restoredLocally
+        ? 'Target restored on this device; retry when connected.'
+        : 'Retry when connected.'}`, 'error');
+      return;
+    }
+    // A second tab may have rehydrated the still-server target while DELETE
+    // was pending. Reconcile only the now-confirmed deletion against latest
+    // local data, never restore or replace unrelated targets/settings.
+    markProfileTargetsChanged(profile.name);
+    const latest = loadProfile(profile.name);
+    if (latest) {
+      const confirmed = removePersonalTarget(latest, p.target_id);
+      if (confirmed !== latest) {
+        try {
+          saveProfile(confirmed);
+          if (currentProfile?.name === profile.name) currentProfile = confirmed;
+        } catch {
+          showToast('Deleted on the server, but could not update this device’s saved copy. Reload and retry locally.', 'warn');
+          return;
+        }
+        if (currentProfile?.name === profile.name) renderQueue();
+      }
+    }
     showToast(
       `Removed personal target "${p.target_name}" — re-add in Profile tab`,
       'success',

@@ -71,3 +71,10 @@ on-device geometric ISS passes from the current TLE, explicitly without weather
 scoring. Automatic scored personal Queue/Upcoming artifacts are currently produced
 only for the generator's existing named profiles; creating an account does not
 silently enroll another expensive generator slice.
+
+Cross-device additions are fetched on normal boot even when local targets exist.
+Hydration adds missing valid server IDs and preserves local values and unsynced
+items. It defers when edits are underway; reload after editing to sync again.
+This is deliberately additive: remote edits/deletions of already-local IDs do not
+automatically replace local work. The personal card Hide shortcut now performs
+the same server DELETE as the profile list, with per-target rollback on failure.
