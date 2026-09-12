@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as manifestModule from '../src/manifest';
 import type { Manifest, PassEntry, Track } from '../src/types';
-import { artifact as launchArtifact, envelope as launchEnvelope, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
+import { artifact as launchArtifact, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
 import * as profileApi from '../src/profile-api';
 
 const schedulerStops = vi.hoisted(() => new Set<() => void>());
@@ -188,6 +188,10 @@ afterEach(() => {
   for (const id of liveIntervals) window.clearInterval(id);
   liveIntervals.clear();
   restoreIntervalSpy?.();
+  // Test-body finally blocks may never resume after an awaited operation
+  // times out. Restore Date.now and every other spy before the next test's
+  // resetAllMocks can turn a leaked clock implementation into undefined.
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   document.body.innerHTML = '';
   localStorage.clear();
@@ -811,16 +815,22 @@ describe('main.ts: All/Mine target filter', () => {
 
 describe('main.ts: common launch lane', () => {
   it('renders max two launches with three ground slots, no duplicate legacy, and ignores Mine for launches', async () => {
+    // Test the rendering boundary with a validated store snapshot. Cache
+    // hashing/restoration has its own LaunchStore tests; invoking it here
+    // interleaved async crypto/imports with earlier fire-and-forget init()
+    // work after resetModules, which could strand this rendering test in CI.
+    // Complete imports before freezing the clock; no awaits remain below.
+    const { bootFromSnapshot, renderQueue } = await import('../src/main');
+    const { launchStore } = await import('../src/launch-store');
+    vi.spyOn(launchStore, 'getState').mockReturnValue({
+      artifact: launchArtifact([
+        supported({ event_id: 'b' }), supported({ event_id: 'a' }), supported({ event_id: 'c' }), launch({ event_id: 'map-only' }),
+      ]), pointer: null, availability: 'ready',
+    });
     const clock = vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
     try {
-      const { launchStore } = await import('../src/launch-store');
-      localStorage.setItem('opd-launch-v2', JSON.stringify(await launchEnvelope(launchArtifact([
-        supported({ event_id: 'b' }), supported({ event_id: 'a' }), supported({ event_id: 'c' }), launch({ event_id: 'map-only' }),
-      ]))));
-      await launchStore.restore();
       const legacy = buildPass({ target_id: 'launch:old', launch: { name: 'Old launch', rocket_type: 'Rocket', geometry: 'ascent', site_name: 'Site', t0: new Date(LAUNCH_NOW + 600_000).toISOString(), net_window_seconds: 0 } });
       seedSnapshot([...Array.from({ length: 5 }, (_, i) => buildPass({ target_id: `ground-${i}` })), legacy], [legacy]);
-      const { bootFromSnapshot, renderQueue } = await import('../src/main');
       bootFromSnapshot();
       expect(document.querySelectorAll('#cards .card')).toHaveLength(5);
       expect(document.querySelectorAll('#cards [data-launch="v2"]')).toHaveLength(2);
