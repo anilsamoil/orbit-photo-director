@@ -34,7 +34,7 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { subscribeProfileChanged } from './profile-events';
-import { getAccountProfile, resolveAccountProfile } from './profile-session';
+import { getAccountProfile, getAuthorizedProfiles, resolveAccountProfile } from './profile-session';
 import { deleteProfileTarget } from './profile-api';
 import { markProfileTargetsChanged } from './profile-target-sync';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
@@ -912,7 +912,7 @@ async function handleHideAction(p: PassEntry): Promise<void> {
   const account = getAccountProfile();
   if (isPersonal && (p.target_id.split(':')[1] !== profile.name
     || account && (account.name !== profile.name || account.isVerified === false))) {
-    showToast('Reconnect and reload to verify your own profile before deleting a target.', 'error');
+    showToast('Reconnect and reload to verify access to the selected profile before deleting a target.', 'error');
     return;
   }
   const removedIndex = profile.additions.findIndex((target) => target.id === p.target_id);
@@ -1376,7 +1376,7 @@ export function renderTopbarProfileBadge(name: string | null): void {
   el.hidden = false;
   const account = getAccountProfile();
   el.textContent = `👤 ${account?.displayName ?? name}${account?.isVerified === false ? ' · Offline' : ''}`;
-  el.title = account ? 'Open your profile' : `Active profile: ${name} — click to switch`;
+  el.title = account ? (getAuthorizedProfiles().length > 1 ? 'Choose your profile or a crew profile' : 'Open your profile') : `Active profile: ${name} — click to switch`;
   // Bug 1 — make the chip discoverable as a profile switcher. Click
   // (or Enter / Space when focused) activates the Profile tab and
   // scrolls the picker section into view. a11y: role=button + tabindex
@@ -1392,7 +1392,7 @@ let profileBadgeBound = false;
 
 function bindProfileBadgeAffordance(el: HTMLElement): void {
   el.setAttribute('role', 'button');
-  el.setAttribute('aria-label', getAccountProfile() ? 'Open your profile' : 'Switch profile');
+  el.setAttribute('aria-label', getAccountProfile() && getAuthorizedProfiles().length < 2 ? 'Open your profile' : 'Switch profile');
   el.setAttribute('tabindex', '0');
   el.style.cursor = 'pointer';
   if (profileBadgeBound) return;
@@ -1424,7 +1424,7 @@ function bindProfileBadgeAffordance(el: HTMLElement): void {
 
 async function init(): Promise<void> {
   // Authenticate before loading any personal cache, target or rating queue.
-  // A shared ?u= link never selects someone else's profile.
+  // A shared ?u= link selects a crew profile only when the session allows it.
   try {
     const account = await resolveAccountProfile();
     const url = new URL(window.location.href);

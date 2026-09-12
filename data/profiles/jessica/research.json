@@ -1,0 +1,1053 @@
+{
+  "title": "Jessica Meir photography profile research",
+  "researched_at": "2026-09-12",
+  "language": "en",
+  "scope": "Publicly documented connections and photography interests; editorial map recommendations, not a wishlist approved by Jessica.",
+  "import_count": 17,
+  "optional_oblique_count": 2,
+  "excluded_count": 1,
+  "coordinate_policy": "Approximate city or landscape anchors. Nominatim results manually disambiguated; Scripps Pier result in La Playa rejected for the La Jolla result. No private locations.",
+  "iss_policy": "51.6degrees is the nadir latitude limit, not the total visibility limit. Sweden requires oblique viewing. McMurdo exceeds even ideal geometric horizon at typical400–430km ISS altitude.",
+  "candidates": [
+    {
+      "id": "personal:jessica:research-caribou",
+      "slug": "caribou",
+      "name": "Caribou, Maine — hometown",
+      "lat": 46.861,
+      "lon": -68.012,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "Her publicly documented hometown; northern Maine is central to her early connection with nature.",
+      "source_ids": [
+        "nasa-bio",
+        "harvard"
+      ],
+      "sources": [
+        {
+          "id": "nasa-bio",
+          "publisher": "NASA",
+          "title": "Jessica U. Meir",
+          "date": "2026-02-17",
+          "url": "https://www.nasa.gov/people/jessica-u-meir/",
+          "claims": "Official biography; hometown, NEEMO4, Belize research.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "harvard",
+          "publisher": "Alvin Powell / Harvard Gazette",
+          "title": "Destination space",
+          "date": "2013-09-06",
+          "url": "https://news.harvard.edu/gazette/story/2013/09/destination-space/",
+          "claims": "Firsthand interview and university reporting; Maine forests, MGH role, research trajectory.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame the Aroostook landscape around Caribou: forest and agricultural patterns. City-scale subject; no home or family address.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Caribou%2C+Maine&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-nile-cairo",
+      "slug": "nile-cairo",
+      "name": "Nile and Cairo — night photography",
+      "lat": 30.044,
+      "lon": 31.236,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "expressed_interest",
+      "connection": "She has repeatedly praised Nile city lights; her May2026 caption calls the Nile/Cairo/delta sequence a favorite nighttime scene.",
+      "source_ids": [
+        "academy",
+        "nile-post-report"
+      ],
+      "sources": [
+        {
+          "id": "academy",
+          "publisher": "American Academy of Arts and Sciences",
+          "title": "A Conversation with Astronaut Jessica Meir",
+          "date": "Winter2021 (event2020-12-02)",
+          "url": "https://www.amacad.org/news/conversation-astronaut-jessica-meir",
+          "claims": "Primary interview/event transcript: appreciation of Nile, city lights, lightning and auroras.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "nile-post-report",
+          "publisher": "Astitva Raj / NDTV",
+          "title": "NASA Astronaut Captures Lightning Flashes And Illuminated Nile In Mesmerising Timelapse From Space",
+          "date": "2026-05-30",
+          "url": "https://www.ndtv.com/science/nasa-astronaut-captures-lightning-flashes-and-illuminated-nile-in-mesmerising-timelapse-from-space-11569205",
+          "claims": "Secondary report reproduces her May29 post naming Nile/Cairo/delta a favorite nighttime scene. Direct X text was unavailable.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Use Cairo as an anchor for the wider illuminated Nile corridor and delta. Nighttime/timelapse candidate; generic daylight target ranking may undervalue it.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Cairo%2C+Egypt&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-richat",
+      "slug": "richat",
+      "name": "Richat Structure — Earth art",
+      "lat": 21.11,
+      "lon": -11.378,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "expressed_interest",
+      "connection": "Her Aug2026 post praises the lighting and color palette of her Richat photograph.",
+      "source_ids": [
+        "richat-post-report",
+        "richat-post"
+      ],
+      "sources": [
+        {
+          "id": "richat-post-report",
+          "publisher": "Space.com",
+          "title": "Try not to be hypnotized by the Eye of Africa — Space photo of the day for Aug20,2026",
+          "date": "2026-08-20",
+          "url": "https://www.space.com/astronomy/earth/try-not-to-be-hypnotized-by-the-eye-of-africa-space-photo-of-the-day-for-aug-20-2026",
+          "claims": "Secondary report reproduces her own caption praising Richat lighting and colors; exact original post linked.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "richat-post",
+          "publisher": "Jessica Meir / X",
+          "title": "Richat Structure lighting and colors",
+          "date": "2026-08-16",
+          "url": "https://x.com/Astro_Jessica/status/2089059353110196269",
+          "claims": "Original URL from Space.com; direct retrieval unavailable, caption corroborated in article. Date derived from public post ID.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Fit the concentric rings and surrounding desert into the frame. Favor texture-revealing oblique sunlight; the whole structure is the subject.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Richat+Structure%2C+Mauritania&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-scripps",
+      "slug": "scripps",
+      "name": "La Jolla and Scripps coast",
+      "lat": 32.867,
+      "lon": -117.256,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "Scripps is her doctoral institution, and she has publicly emphasized the appeal of observing the ocean from orbit.",
+      "source_ids": [
+        "scripps"
+      ],
+      "sources": [
+        {
+          "id": "scripps",
+          "publisher": "Brittany Hook / Scripps Institution of Oceanography",
+          "title": "From the Sea to the Stars",
+          "date": "2019-10-03",
+          "url": "https://scripps.ucsd.edu/news/sea-stars",
+          "claims": "Doctoral and ocean-observation connections; her expressed interest in viewing ocean from orbit.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Use the La Jolla coastline and Scripps Pier vicinity as the anchor. Wide coastal scene first; the pier is a locator, not a promise of resolved detail.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Scripps+Pier%2C+California&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-providence",
+      "slug": "providence",
+      "name": "Providence — Brown University",
+      "lat": 41.824,
+      "lon": -71.413,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "Brown1999 alumna; in her 2024 address she emphasized the lasting importance of relationships formed there.",
+      "source_ids": [
+        "brown"
+      ],
+      "sources": [
+        {
+          "id": "brown",
+          "publisher": "Brown University",
+          "title": "NASA astronaut Jessica Meir: It’s always worth making the leap that scares you",
+          "date": "2024-05-25",
+          "url": "https://www.brown.edu/news/2024-05-25/baccalaureate",
+          "claims": "Direct address: Brown1999 alumna, enduring relationships and scientific mentors.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame Providence, waterways and the College Hill setting. City-center anchor rather than an individual campus building.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Providence%2C+Rhode+Island&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-vancouver",
+      "slug": "vancouver",
+      "name": "Vancouver and UBC peninsula",
+      "lat": 49.258,
+      "lon": -123.243,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "She led bar-headed-goose flight-physiology research at UBC.",
+      "source_ids": [
+        "ubc"
+      ],
+      "sources": [
+        {
+          "id": "ubc",
+          "publisher": "Lui Xia Lee / University of British Columbia",
+          "title": "Slowed metabolism helps geese fly high",
+          "date": "2019-09-03",
+          "url": "https://news.ubc.ca/2019/09/slowed-metabolism-helps-geese-fly-high/",
+          "claims": "Meir led wind-tunnel goose research at UBC; Himalayan migration context, not fieldwork in Nepal.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Use the UBC/Point Grey peninsula in a larger Vancouver, coast and mountain composition. Clear weather is necessary; low cloud can obscure the city.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=University+of+British+Columbia%2C+Vancouver&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-boston",
+      "slug": "boston",
+      "name": "Boston — MGH research connection",
+      "lat": 42.363,
+      "lon": -71.069,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "She held a Harvard Medical School/Massachusetts General Hospital research appointment before astronaut training.",
+      "source_ids": [
+        "harvard"
+      ],
+      "sources": [
+        {
+          "id": "harvard",
+          "publisher": "Alvin Powell / Harvard Gazette",
+          "title": "Destination space",
+          "date": "2013-09-06",
+          "url": "https://news.harvard.edu/gazette/story/2013/09/destination-space/",
+          "claims": "Firsthand interview and university reporting; Maine forests, MGH role, research trajectory.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame the Charles River, Boston and harbor. MGH is a public institutional locator, not an attempt to show a lab interior.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Massachusetts+General+Hospital%2C+Boston&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-strasbourg",
+      "slug": "strasbourg",
+      "name": "Strasbourg — International Space University",
+      "lat": 48.585,
+      "lon": 7.751,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "Her ISU testimonial explicitly credits her year in Strasbourg and its interdisciplinary education.",
+      "source_ids": [
+        "isu"
+      ],
+      "sources": [
+        {
+          "id": "isu",
+          "publisher": "International Space University",
+          "title": "International Space University official website — Jessica Meir MSS2000 testimonial",
+          "date": null,
+          "url": "https://www.isunet.edu/",
+          "claims": "Her own testimonial credits year in Strasbourg and the interdisciplinary education.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame Strasbourg and the Rhine landscape. This is a city-scale anchor; it does not assert a particular favorite monument.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Strasbourg%2C+France&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-ano-nuevo",
+      "slug": "ano-nuevo",
+      "name": "Año Nuevo — elephant seal coast",
+      "lat": 37.108,
+      "lon": -122.337,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "UCSD Earthguide credits her photograph of an Año Nuevo juvenile elephant seal alongside her research contributions.",
+      "source_ids": [
+        "seal",
+        "ano-park"
+      ],
+      "sources": [
+        {
+          "id": "seal",
+          "publisher": "UC San Diego Earthguide",
+          "title": "Elephant Seals",
+          "date": "2009-10-27",
+          "url": "https://earthguide.ucsd.edu/elephantseals/index.html",
+          "claims": "Meir contributed/reviewed content; juvenile Año Nuevo seal photo explicitly credited to her.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "ano-park",
+          "publisher": "California State Parks",
+          "title": "Año Nuevo State Park",
+          "date": null,
+          "url": "https://www.parks.ca.gov/?page_id=523",
+          "claims": "Public peninsula, coast, island and elephant-seal habitat context.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame Año Nuevo Point, island, beaches and adjacent ocean. Photograph habitat geometry from orbit; individual seals are not realistic subjects.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=A%C3%B1o+Nuevo+Island%2C+California&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-conch-reef",
+      "slug": "conch-reef",
+      "name": "Conch Reef / Key Largo — NEEMO",
+      "lat": 24.983,
+      "lon": -80.416,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "She served on NEEMO4 in the Aquarius habitat; Conch Reef is the surrounding public marine-research landscape.",
+      "source_ids": [
+        "nasa-bio",
+        "neemo",
+        "conch"
+      ],
+      "sources": [
+        {
+          "id": "nasa-bio",
+          "publisher": "NASA",
+          "title": "Jessica U. Meir",
+          "date": "2026-02-17",
+          "url": "https://www.nasa.gov/people/jessica-u-meir/",
+          "claims": "Official biography; hometown, NEEMO4, Belize research.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "neemo",
+          "publisher": "Sarah A. Loff / NASA",
+          "title": "About NEEMO (NASA Extreme Environment Mission Operations)",
+          "date": "2015-06-24",
+          "url": "https://www.nasa.gov/missions/analog-field-testing/neemo/about-neemo-nasa-extreme-environment-mission-operations/",
+          "claims": "Aquarius/Key Largo marine setting; habitat is submerged.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "conch",
+          "publisher": "Frontiers in Marine Science",
+          "title": "Being there: scientific saturation and technical diving with in situ instrumentation in an internal surf zone reveal driving physical dynamics of coral reefs",
+          "date": "2025",
+          "url": "https://doi.org/10.3389/fmars.2025.1548608",
+          "claims": "Primary coral-reef research locates Conch Reef/Aquarius research site at24.983N,80.416W.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Look for reef edges, shallows and Keys geometry in daylight. The underwater habitat itself is not visible from ISS.",
+      "anchor_note": "Approximate Conch Reef research-site anchor from primary marine-science paper; not an exact habitat-navigation fix.",
+      "coordinate_source": "https://doi.org/10.3389/fmars.2025.1548608",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-sardinia",
+      "slug": "sardinia",
+      "name": "Supramonte, Sardinia — CAVES",
+      "lat": 40.193,
+      "lon": 9.461,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "Her first-person ESA blog describes Sardinia CAVES2016; ESA locates Sa Grutta in the Supramonte cave region.",
+      "source_ids": [
+        "caves",
+        "caves-day",
+        "caves-region"
+      ],
+      "sources": [
+        {
+          "id": "caves",
+          "publisher": "Jessica Meir / ESA Caves & Pangaea blog",
+          "title": "Direct from the minds of team Luca Libre",
+          "date": "2016-06-30",
+          "url": "https://blogs.esa.int/caves/2016/06/30/caves-2016-blog-1-direct-from-the-minds-of-team-luca-libre/",
+          "claims": "Her own account of Sardinia CAVES training and photography.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "caves-day",
+          "publisher": "ESA Caves & Pangaea blog",
+          "title": "First cave expedition report",
+          "date": "2016-07-02",
+          "url": "https://blogs.esa.int/caves/2016/07/02/first-cave-expedition-report/",
+          "claims": "2016 Sa Grutta entry and Meir role as chief biology scientist.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "caves-region",
+          "publisher": "European Space Agency",
+          "title": "Underground wonderland",
+          "date": null,
+          "url": "https://www.esa.int/Science_Exploration/Human_and_Robotic_Exploration/CAVES_and_Pangaea/Underground_wonderland",
+          "claims": "Sa Grutta/Supramonte regional location and cave context.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame the rugged eastern Sardinian karst terrain with coastline context. Surface landscape only; the cave is underground.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Supramonte%2C+Sardinia&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-madagascar",
+      "slug": "madagascar",
+      "name": "Onilahy mouth, Madagascar — photographed",
+      "lat": -23.552,
+      "lon": 43.761,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "published_photograph",
+      "connection": "NASA Johnson credits her Aug28,2026 photograph of the Onilahy/Fiherenana coastal area.",
+      "source_ids": [
+        "madagascar"
+      ],
+      "sources": [
+        {
+          "id": "madagascar",
+          "publisher": "NASA Johnson / Flickr",
+          "title": "Madagascar’s southwestern coast along the Mozambique Channel",
+          "date": "2026-09-02",
+          "url": "https://www.flickr.com/photos/nasa2explore/55504634433",
+          "claims": "Photo taken2026-08-28, iss075e0085238, explicitly credited NASA/Jessica Meir; Onilahy/Fiherenana coast.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame the Onilahy mouth near Saint-Augustin and broader southwest Madagascar coast. Sediment and sandbar shape vary; use current conditions.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Saint+Augustin%2C+Madagascar&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-salton",
+      "slug": "salton",
+      "name": "Salton Sea — photographed",
+      "lat": 33.317,
+      "lon": -115.786,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "published_photograph",
+      "connection": "UCSD’s Feb2026 interview includes her credited photograph of Baja California and the Salton Sea.",
+      "source_ids": [
+        "ucsd-2026"
+      ],
+      "sources": [
+        {
+          "id": "ucsd-2026",
+          "publisher": "Brittany Hook / UC San Diego Today",
+          "title": "Alumna Jessica Meir Returns to Space — This Time as Commander",
+          "date": "2026-02-17",
+          "url": "https://today.ucsd.edu/story/alumna-jessica-meir-returns-to-space-this-time-as-commander",
+          "claims": "Interview and credited photograph of Baja California and Salton Sea; nature interests.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "The lake, agricultural geometry and surrounding desert offer strong contrasts. Wider views can connect it to the northern Gulf of California.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Salton+Sea%2C+California&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-black-point",
+      "slug": "black-point",
+      "name": "Black Point Lava Flow — Desert RATS",
+      "lat": 35.69,
+      "lon": -111.37,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "documented_connection",
+      "connection": "NASA documents her 2022 simulated-moonwalk work at Black Point Lava Flow.",
+      "source_ids": [
+        "drats",
+        "blackpoint-photo"
+      ],
+      "sources": [
+        {
+          "id": "drats",
+          "publisher": "NASA Communications",
+          "title": "NASA Practices Rover Operations in Simulated Lunar Environment",
+          "date": "2022-11-18",
+          "url": "https://www.nasa.gov/humans-in-space/nasa-practices-rover-operations-in-simulated-lunar-environment/",
+          "claims": "Black Point Lava Flow setting and named photo of Meir on simulated moonwalk.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "blackpoint-photo",
+          "publisher": "NASA JSC Gateway to Astronaut Photography of Earth",
+          "title": "Astronaut Photo ISS020-E-33530 USA-ARIZONA",
+          "date": "2009-08-21",
+          "url": "https://eol.jsc.nasa.gov/SearchPhotos/photo.pl?frame=33530&mission=ISS020&roll=E",
+          "claims": "Photo center35.7,-111.3; ML center35.69,-111.37. Geographical reference, not Meir photograph.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame the dark lava flow against the pale surrounding landscape and Little Colorado River. Approximate flow-area center, not a historic camp.",
+      "anchor_note": "Approximate landscape anchor from NASA ISS020-E-33530 machine-learning photo center, rounded to0.01degree; not a surveyed site point.",
+      "coordinate_source": "https://eol.jsc.nasa.gov/SearchPhotos/photo.pl?frame=33530&mission=ISS020&roll=E",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-sossusvlei",
+      "slug": "sossusvlei",
+      "name": "Sossusvlei dunes — suggested",
+      "lat": -24.74,
+      "lon": 15.292,
+      "priority": 3,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "inspired_recommendation",
+      "connection": "Suggested from her stated enjoyment of Africa daytime passes; no verified statement identifies Sossusvlei as a personal favorite.",
+      "source_ids": [
+        "africa-post-report",
+        "africa-post",
+        "namib"
+      ],
+      "sources": [
+        {
+          "id": "africa-post-report",
+          "publisher": "Matt Growcoot / PetaPixel",
+          "title": "Astronaut Who Fell in Love With Space Photography Shares Stunning Timelapse",
+          "date": "2026-03-10",
+          "url": "https://petapixel.com/2026/03/10/astronaut-who-fell-in-love-with-space-photography-shares-stunning-timelapse/",
+          "claims": "Secondary report reproduces March2 Africa daytime-pass preference and March9 photography/aurora post.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "africa-post",
+          "publisher": "Jessica Meir / X",
+          "title": "Favorite daytime passes over Africa",
+          "date": "2026-03-02",
+          "url": "https://twitter.com/Astro_Jessica/status/2028514586274447813",
+          "claims": "Original URL from PetaPixel; direct retrieval unavailable.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "namib",
+          "publisher": "NASA Earth Observatory",
+          "title": "Namib Sand Sea",
+          "date": "2021-11-26",
+          "url": "https://science.nasa.gov/earth/earth-observatory/namib-sand-sea-149130/",
+          "claims": "Sossusvlei/Tsauchab setting and dune types; landscape evidence, not proof of personal preference.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame dune patterns and pale Tsauchab pans. Lower-angle sunlight can separate dune forms; select a wider pattern instead of a single tiny dune.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Sossusvlei%2C+Namibia&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-lighthouse-reef",
+      "slug": "lighthouse-reef",
+      "name": "Lighthouse Reef, Belize — suggested",
+      "lat": 17.3,
+      "lon": -87.55,
+      "priority": 3,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "inspired_recommendation",
+      "connection": "Her Belize diving expeditions are documented; this particular reef is a photographic recommendation, not a verified expedition site or favorite.",
+      "source_ids": [
+        "nasa-bio",
+        "belize"
+      ],
+      "sources": [
+        {
+          "id": "nasa-bio",
+          "publisher": "NASA",
+          "title": "Jessica U. Meir",
+          "date": "2026-02-17",
+          "url": "https://www.nasa.gov/people/jessica-u-meir/",
+          "claims": "Official biography; hometown, NEEMO4, Belize research.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "belize",
+          "publisher": "NASA JSC / Earth Observatory",
+          "title": "Lighthouse Reef and the Great Blue Hole",
+          "date": "2020-08-23",
+          "url": "https://esrs.jsc.nasa.gov/Collections/EarthObservatory/articles/LighthouseReefandtheGreatBlueHole.htm",
+          "claims": "Astronaut photograph and reef geometry; unrelated astronaut, not Meir preference evidence.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Prioritize the entire atoll and reef edge. The small Great Blue Hole is an optional detailed subject, dependent on clear skies and suitable view.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Lighthouse+Reef%2C+Belize&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-big-bend",
+      "slug": "big-bend",
+      "name": "Big Bend, Texas — stated travel interest",
+      "lat": 29.25,
+      "lon": -103.25,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z",
+      "recommended_import": true,
+      "evidence_class": "expressed_interest",
+      "connection": "In a 2019 NASA interview she explicitly said Big Bend was on her travel list; no visit or current wishlist is established.",
+      "source_ids": [
+        "nasa-podcast"
+      ],
+      "sources": [
+        {
+          "id": "nasa-podcast",
+          "publisher": "NASA Houston We Have a Podcast",
+          "title": "From the Seas to the Stars",
+          "date": "2019-09-18",
+          "url": "https://www.nasa.gov/podcasts/houston-we-have-a-podcast/from-the-seas-to-the-stars/",
+          "claims": "Meir describes penguin research site usually about15miles from McMurdo Station.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Frame the Big Bend landscape and Rio Grande curves around the Chisos region. This translates a historical travel interest into a photography suggestion.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Big+Bend+National+Park%2C+Texas&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "within_nadir_latitude",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-stockholm",
+      "slug": "stockholm",
+      "name": "Stockholm — oblique view only",
+      "lat": 59.325,
+      "lon": 18.071,
+      "priority": 2,
+      "createdAt": "2026-09-12T00:00:00.000Z",
+      "recommended_import": false,
+      "evidence_class": "documented_connection",
+      "connection": "She studied at Stockholm University and chose its flag for her first ISS mission.",
+      "source_ids": [
+        "stockholm"
+      ],
+      "sources": [
+        {
+          "id": "stockholm",
+          "publisher": "Stockholm University Communications Office",
+          "title": "Astronaut Jessica Meir took Stockholm University flag into space",
+          "date": "2022-06-22",
+          "url": "https://www.su.se/english/news/astronaut-jessica-meir-took-stockholm-university-flag-into-space-1.618793",
+          "claims": "Former study connection and her choice to carry university flag on ISS.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "No direct overhead pass. Attempt a broad oblique city/archipelago scene when geometry, clouds and window view allow.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=Stockholm%2C+Sweden&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "oblique_only",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-vasteras",
+      "slug": "vasteras",
+      "name": "Västerås — oblique view only",
+      "lat": 59.611,
+      "lon": 16.546,
+      "priority": 2,
+      "createdAt": "2026-09-12T00:00:00.000Z",
+      "recommended_import": false,
+      "evidence_class": "documented_connection",
+      "connection": "The Swedish Space Agency publicly documents the city as her mother’s hometown.",
+      "source_ids": [
+        "sweden"
+      ],
+      "sources": [
+        {
+          "id": "sweden",
+          "publisher": "Swedish National Space Agency",
+          "title": "Jessica Meir återvänder till rymden",
+          "date": "2026-01",
+          "url": "https://www.rymdstyrelsen.se/upptack-rymden/bloggen/2026/01/jessica-meir-atervander-till-rymden/",
+          "claims": "Public Swedish connections including mother’s hometown Västerås; summarized in English.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "No direct overhead pass. Treat city and Lake Mälaren setting as an optional broad oblique scene; no family address.",
+      "anchor_note": "Approximate public geographic anchor; map center selected for the named landscape/city, not a private location.",
+      "coordinate_source": "https://nominatim.openstreetmap.org/search?q=V%C3%A4ster%C3%A5s%2C+Sweden&format=jsonv2&limit=2&accept-language=en",
+      "iss_reachability": "oblique_only",
+      "personally_confirmed_wishlist": false
+    },
+    {
+      "id": "personal:jessica:research-mcmurdo",
+      "slug": "mcmurdo",
+      "name": "McMurdo Sound — research context only",
+      "lat": -77.848,
+      "lon": 166.669,
+      "priority": 1,
+      "createdAt": "2026-09-12T00:00:00.000Z",
+      "recommended_import": false,
+      "evidence_class": "documented_connection",
+      "connection": "Her Antarctic penguin research was near McMurdo; the historic field site moved with conditions.",
+      "source_ids": [
+        "nasa-podcast",
+        "mcmurdo"
+      ],
+      "sources": [
+        {
+          "id": "nasa-podcast",
+          "publisher": "NASA Houston We Have a Podcast",
+          "title": "From the Seas to the Stars",
+          "date": "2019-09-18",
+          "url": "https://www.nasa.gov/podcasts/houston-we-have-a-podcast/from-the-seas-to-the-stars/",
+          "claims": "Meir describes penguin research site usually about15miles from McMurdo Station.",
+          "accessed": "2026-09-12"
+        },
+        {
+          "id": "mcmurdo",
+          "publisher": "US National Science Foundation",
+          "title": "NSF McMurdo Station",
+          "date": null,
+          "url": "https://www.nsf.gov/od/opp/ail/mcmurdo-station",
+          "claims": "Official station coordinates77°50.89S,166°40.11E; approximate historical research-region anchor.",
+          "accessed": "2026-09-12"
+        }
+      ],
+      "shooting_notes": "Do not schedule as an ISS ground photograph: this latitude is beyond the ideal Earth-surface horizon at ordinary ISS altitude.",
+      "anchor_note": "Approximate McMurdo Station regional reference from NSF; not the moving historic Penguin Ranch field camp.",
+      "coordinate_source": "https://www.nsf.gov/od/opp/ail/mcmurdo-station",
+      "iss_reachability": "beyond_geometric_horizon",
+      "personally_confirmed_wishlist": false
+    }
+  ],
+  "sources": [
+    {
+      "id": "nasa-bio",
+      "publisher": "NASA",
+      "title": "Jessica U. Meir",
+      "date": "2026-02-17",
+      "url": "https://www.nasa.gov/people/jessica-u-meir/",
+      "claims": "Official biography; hometown, NEEMO4, Belize research.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "harvard",
+      "publisher": "Alvin Powell / Harvard Gazette",
+      "title": "Destination space",
+      "date": "2013-09-06",
+      "url": "https://news.harvard.edu/gazette/story/2013/09/destination-space/",
+      "claims": "Firsthand interview and university reporting; Maine forests, MGH role, research trajectory.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "brown",
+      "publisher": "Brown University",
+      "title": "NASA astronaut Jessica Meir: It’s always worth making the leap that scares you",
+      "date": "2024-05-25",
+      "url": "https://www.brown.edu/news/2024-05-25/baccalaureate",
+      "claims": "Direct address: Brown1999 alumna, enduring relationships and scientific mentors.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "scripps",
+      "publisher": "Brittany Hook / Scripps Institution of Oceanography",
+      "title": "From the Sea to the Stars",
+      "date": "2019-10-03",
+      "url": "https://scripps.ucsd.edu/news/sea-stars",
+      "claims": "Doctoral and ocean-observation connections; her expressed interest in viewing ocean from orbit.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "ucsd-2026",
+      "publisher": "Brittany Hook / UC San Diego Today",
+      "title": "Alumna Jessica Meir Returns to Space — This Time as Commander",
+      "date": "2026-02-17",
+      "url": "https://today.ucsd.edu/story/alumna-jessica-meir-returns-to-space-this-time-as-commander",
+      "claims": "Interview and credited photograph of Baja California and Salton Sea; nature interests.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "ubc",
+      "publisher": "Lui Xia Lee / University of British Columbia",
+      "title": "Slowed metabolism helps geese fly high",
+      "date": "2019-09-03",
+      "url": "https://news.ubc.ca/2019/09/slowed-metabolism-helps-geese-fly-high/",
+      "claims": "Meir led wind-tunnel goose research at UBC; Himalayan migration context, not fieldwork in Nepal.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "isu",
+      "publisher": "International Space University",
+      "title": "International Space University official website — Jessica Meir MSS2000 testimonial",
+      "date": null,
+      "url": "https://www.isunet.edu/",
+      "claims": "Her own testimonial credits year in Strasbourg and the interdisciplinary education.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "seal",
+      "publisher": "UC San Diego Earthguide",
+      "title": "Elephant Seals",
+      "date": "2009-10-27",
+      "url": "https://earthguide.ucsd.edu/elephantseals/index.html",
+      "claims": "Meir contributed/reviewed content; juvenile Año Nuevo seal photo explicitly credited to her.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "ano-park",
+      "publisher": "California State Parks",
+      "title": "Año Nuevo State Park",
+      "date": null,
+      "url": "https://www.parks.ca.gov/?page_id=523",
+      "claims": "Public peninsula, coast, island and elephant-seal habitat context.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "caves",
+      "publisher": "Jessica Meir / ESA Caves & Pangaea blog",
+      "title": "Direct from the minds of team Luca Libre",
+      "date": "2016-06-30",
+      "url": "https://blogs.esa.int/caves/2016/06/30/caves-2016-blog-1-direct-from-the-minds-of-team-luca-libre/",
+      "claims": "Her own account of Sardinia CAVES training and photography.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "caves-day",
+      "publisher": "ESA Caves & Pangaea blog",
+      "title": "First cave expedition report",
+      "date": "2016-07-02",
+      "url": "https://blogs.esa.int/caves/2016/07/02/first-cave-expedition-report/",
+      "claims": "2016 Sa Grutta entry and Meir role as chief biology scientist.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "caves-region",
+      "publisher": "European Space Agency",
+      "title": "Underground wonderland",
+      "date": null,
+      "url": "https://www.esa.int/Science_Exploration/Human_and_Robotic_Exploration/CAVES_and_Pangaea/Underground_wonderland",
+      "claims": "Sa Grutta/Supramonte regional location and cave context.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "academy",
+      "publisher": "American Academy of Arts and Sciences",
+      "title": "A Conversation with Astronaut Jessica Meir",
+      "date": "Winter2021 (event2020-12-02)",
+      "url": "https://www.amacad.org/news/conversation-astronaut-jessica-meir",
+      "claims": "Primary interview/event transcript: appreciation of Nile, city lights, lightning and auroras.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "nile-post-report",
+      "publisher": "Astitva Raj / NDTV",
+      "title": "NASA Astronaut Captures Lightning Flashes And Illuminated Nile In Mesmerising Timelapse From Space",
+      "date": "2026-05-30",
+      "url": "https://www.ndtv.com/science/nasa-astronaut-captures-lightning-flashes-and-illuminated-nile-in-mesmerising-timelapse-from-space-11569205",
+      "claims": "Secondary report reproduces her May29 post naming Nile/Cairo/delta a favorite nighttime scene. Direct X text was unavailable.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "richat-post-report",
+      "publisher": "Space.com",
+      "title": "Try not to be hypnotized by the Eye of Africa — Space photo of the day for Aug20,2026",
+      "date": "2026-08-20",
+      "url": "https://www.space.com/astronomy/earth/try-not-to-be-hypnotized-by-the-eye-of-africa-space-photo-of-the-day-for-aug-20-2026",
+      "claims": "Secondary report reproduces her own caption praising Richat lighting and colors; exact original post linked.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "richat-post",
+      "publisher": "Jessica Meir / X",
+      "title": "Richat Structure lighting and colors",
+      "date": "2026-08-16",
+      "url": "https://x.com/Astro_Jessica/status/2089059353110196269",
+      "claims": "Original URL from Space.com; direct retrieval unavailable, caption corroborated in article. Date derived from public post ID.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "madagascar",
+      "publisher": "NASA Johnson / Flickr",
+      "title": "Madagascar’s southwestern coast along the Mozambique Channel",
+      "date": "2026-09-02",
+      "url": "https://www.flickr.com/photos/nasa2explore/55504634433",
+      "claims": "Photo taken2026-08-28, iss075e0085238, explicitly credited NASA/Jessica Meir; Onilahy/Fiherenana coast.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "africa-post-report",
+      "publisher": "Matt Growcoot / PetaPixel",
+      "title": "Astronaut Who Fell in Love With Space Photography Shares Stunning Timelapse",
+      "date": "2026-03-10",
+      "url": "https://petapixel.com/2026/03/10/astronaut-who-fell-in-love-with-space-photography-shares-stunning-timelapse/",
+      "claims": "Secondary report reproduces March2 Africa daytime-pass preference and March9 photography/aurora post.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "africa-post",
+      "publisher": "Jessica Meir / X",
+      "title": "Favorite daytime passes over Africa",
+      "date": "2026-03-02",
+      "url": "https://twitter.com/Astro_Jessica/status/2028514586274447813",
+      "claims": "Original URL from PetaPixel; direct retrieval unavailable.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "namib",
+      "publisher": "NASA Earth Observatory",
+      "title": "Namib Sand Sea",
+      "date": "2021-11-26",
+      "url": "https://science.nasa.gov/earth/earth-observatory/namib-sand-sea-149130/",
+      "claims": "Sossusvlei/Tsauchab setting and dune types; landscape evidence, not proof of personal preference.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "drats",
+      "publisher": "NASA Communications",
+      "title": "NASA Practices Rover Operations in Simulated Lunar Environment",
+      "date": "2022-11-18",
+      "url": "https://www.nasa.gov/humans-in-space/nasa-practices-rover-operations-in-simulated-lunar-environment/",
+      "claims": "Black Point Lava Flow setting and named photo of Meir on simulated moonwalk.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "blackpoint-photo",
+      "publisher": "NASA JSC Gateway to Astronaut Photography of Earth",
+      "title": "Astronaut Photo ISS020-E-33530 USA-ARIZONA",
+      "date": "2009-08-21",
+      "url": "https://eol.jsc.nasa.gov/SearchPhotos/photo.pl?frame=33530&mission=ISS020&roll=E",
+      "claims": "Photo center35.7,-111.3; ML center35.69,-111.37. Geographical reference, not Meir photograph.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "belize",
+      "publisher": "NASA JSC / Earth Observatory",
+      "title": "Lighthouse Reef and the Great Blue Hole",
+      "date": "2020-08-23",
+      "url": "https://esrs.jsc.nasa.gov/Collections/EarthObservatory/articles/LighthouseReefandtheGreatBlueHole.htm",
+      "claims": "Astronaut photograph and reef geometry; unrelated astronaut, not Meir preference evidence.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "conch",
+      "publisher": "Frontiers in Marine Science",
+      "title": "Being there: scientific saturation and technical diving with in situ instrumentation in an internal surf zone reveal driving physical dynamics of coral reefs",
+      "date": "2025",
+      "url": "https://doi.org/10.3389/fmars.2025.1548608",
+      "claims": "Primary coral-reef research locates Conch Reef/Aquarius research site at24.983N,80.416W.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "neemo",
+      "publisher": "Sarah A. Loff / NASA",
+      "title": "About NEEMO (NASA Extreme Environment Mission Operations)",
+      "date": "2015-06-24",
+      "url": "https://www.nasa.gov/missions/analog-field-testing/neemo/about-neemo-nasa-extreme-environment-mission-operations/",
+      "claims": "Aquarius/Key Largo marine setting; habitat is submerged.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "stockholm",
+      "publisher": "Stockholm University Communications Office",
+      "title": "Astronaut Jessica Meir took Stockholm University flag into space",
+      "date": "2022-06-22",
+      "url": "https://www.su.se/english/news/astronaut-jessica-meir-took-stockholm-university-flag-into-space-1.618793",
+      "claims": "Former study connection and her choice to carry university flag on ISS.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "sweden",
+      "publisher": "Swedish National Space Agency",
+      "title": "Jessica Meir återvänder till rymden",
+      "date": "2026-01",
+      "url": "https://www.rymdstyrelsen.se/upptack-rymden/bloggen/2026/01/jessica-meir-atervander-till-rymden/",
+      "claims": "Public Swedish connections including mother’s hometown Västerås; summarized in English.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "nasa-podcast",
+      "publisher": "NASA Houston We Have a Podcast",
+      "title": "From the Seas to the Stars",
+      "date": "2019-09-18",
+      "url": "https://www.nasa.gov/podcasts/houston-we-have-a-podcast/from-the-seas-to-the-stars/",
+      "claims": "Meir describes penguin research site usually about15miles from McMurdo Station.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "mcmurdo",
+      "publisher": "US National Science Foundation",
+      "title": "NSF McMurdo Station",
+      "date": null,
+      "url": "https://www.nsf.gov/od/opp/ail/mcmurdo-station",
+      "claims": "Official station coordinates77°50.89S,166°40.11E; approximate historical research-region anchor.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "orbit",
+      "publisher": "NASA Technical Reports Server",
+      "title": "Geocam Space: Enhancing Handheld Digital Camera Imagery from the International Space Station for Research and Applications",
+      "date": "2016",
+      "url": "https://ntrs.nasa.gov/citations/20160003887",
+      "claims": "Nadir limited to51.6N/S; oblique surface photographs beyond those latitudes exist.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "ceo",
+      "publisher": "NASA JSC Gateway to Astronaut Photography of Earth",
+      "title": "Science — Request New Imagery",
+      "date": null,
+      "url": "https://eol.jsc.nasa.gov/RequestNewImagery/Science.htm",
+      "claims": "High latitude introduces obliquity/degradation; recommends53N/S for small features.",
+      "accessed": "2026-09-12"
+    },
+    {
+      "id": "osm",
+      "publisher": "OpenStreetMap contributors / Nominatim",
+      "title": "Public geocoding queries for candidate anchors",
+      "date": "2026-09-12",
+      "url": "https://www.openstreetmap.org/copyright",
+      "claims": "Coordinates rounded from relevant named results; full queries/results retained in geocoding-evidence.json.",
+      "accessed": "2026-09-12"
+    }
+  ]
+}

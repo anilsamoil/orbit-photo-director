@@ -35,6 +35,9 @@ vi.mock('../src/profile-api', async () => {
 // Account selection and fail-closed boot are tested in account-session.test.ts.
 vi.mock('../src/profile-session', () => ({
   getAccountProfile: () => null,
+  getAuthorizedProfiles: () => [],
+  getSignedInAccountProfile: () => null,
+  canSelectProfile: () => false,
   resolveAccountProfile: async () => ({ name: 'anil', displayName: 'Anil', isVerified: true }),
 }));
 
