@@ -2,28 +2,34 @@
  *
  *  Covers the one-shot GET that fires on Profile-pane render:
  *    - profile-api.getProfileTargets (URL, headers, response shape)
- *    - profile-crud.hydratePersonalTargets (preserve-local guard,
+ *    - profile-crud.hydratePersonalTargets (additive merge and mutation guards,
  *      silent-fail surfaces, save + rerender on success)
  *    - buildCrudSection wires the hydrate call on mount
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const session = vi.hoisted(() => ({ account: null as { name: string; displayName: string; isVerified?: boolean } | null }));
+vi.mock('../src/profile-session', () => ({ getAccountProfile: () => session.account }));
+
 import {
   addPersonalTarget,
   createDefaultProfile,
   loadProfile,
   makePersonalTargetId,
+  removePersonalTarget,
   saveProfile,
   type PersonalTarget,
 } from '../src/profile';
 import { getProfileTargets } from '../src/profile-api';
 import { _test, buildCrudSection } from '../src/profile-crud';
+import { markProfileTargetsChanged, profileTargetRevision, resetProfileTargetSyncForTests } from '../src/profile-target-sync';
 
 const PROFILE = 'jack';
 const TOKEN_KEY = 'opd-calib-token';
 
 beforeEach(() => {
+  session.account = null;
   localStorage.clear();
   localStorage.setItem(TOKEN_KEY, 'test-token');
   // Each test simulates a fresh page load — clear the per-session
@@ -40,6 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  session.account = null;
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -140,22 +147,126 @@ describe('hydratePersonalTargets', () => {
     ]);
   });
 
-  it('is a no-op when local additions already exist (preserve-local guard)', async () => {
-    const local = makeServerTarget('Local target');
-    saveProfile(addPersonalTarget(createDefaultProfile(PROFILE), local));
+  it('adds Tuvalu from the server to an existing two-target device without replacing local values', async () => {
+    const local = [makeServerTarget('Local Alpha'), makeServerTarget('Local Beta')];
+    const tuvalu = { ...makeServerTarget('Tuvalu'), lat: -8.525292, lon: 179.196561 };
+    saveProfile({ ...createDefaultProfile(PROFILE), additions: local, distanceThresholdKm: 700, removedCuratedIds: ['tokyo'] });
     const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true, targets: [makeServerTarget('Server X')] }), { status: 200 }),
+      new Response(JSON.stringify({ targets: [{ ...local[0], name: 'Older server Alpha' }, local[1], tuvalu] })),
     );
     vi.stubGlobal('fetch', fetchMock);
 
     await _test.hydratePersonalTargets(PROFILE);
 
     const after = loadProfile(PROFILE)!;
-    // Local target preserved; server target NOT merged in.
-    expect(after.additions).toHaveLength(1);
-    expect(after.additions[0]!.name).toBe('Local target');
-    // Guard short-circuits BEFORE the fetch — no network call made.
+    expect(after.additions).toEqual([...local, tuvalu]);
+    expect(after.distanceThresholdKm).toBe(700);
+    expect(after.removedCuratedIds).toEqual(['tokyo']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves every local-only or unsynced item when the server omits it', async () => {
+    const local = makeServerTarget('Unsynced local');
+    const remote = makeServerTarget('Other device');
+    saveProfile(addPersonalTarget(createDefaultProfile(PROFILE), local));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ targets: [remote, remote] }))));
+    await _test.hydratePersonalTargets(PROFILE);
+    expect(loadProfile(PROFILE)!.additions).toEqual([local, remote]);
+  });
+
+  it('rejects the wrong account before fetching and rejects cross-profile response items', async () => {
+    saveProfile(createDefaultProfile(PROFILE));
+    session.account = { name: 'other', displayName: 'Other' };
+    const foreign = { ...makeServerTarget('Foreign'), id: makePersonalTargetId('other') };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ targets: [foreign] })));
+    vi.stubGlobal('fetch', fetchMock);
+    await _test.hydratePersonalTargets(PROFILE);
     expect(fetchMock).not.toHaveBeenCalled();
+    session.account = { name: PROFILE, displayName: 'Jack' };
+    await _test.hydratePersonalTargets(PROFILE);
+    expect(loadProfile(PROFILE)!.additions).toEqual([]);
+  });
+
+  it('does not apply a response after the signed-in account changes', async () => {
+    saveProfile(createDefaultProfile(PROFILE));
+    session.account = { name: PROFILE, displayName: 'Jack' };
+    let resolve!: (r: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((r) => { resolve = r; })));
+    const hydrate = _test.hydratePersonalTargets(PROFILE);
+    session.account = { name: 'other', displayName: 'Other' };
+    resolve(new Response(JSON.stringify({ targets: [makeServerTarget('Jack server')] })));
+    await hydrate;
+    expect(loadProfile(PROFILE)!.additions).toEqual([]);
+  });
+
+  it('shares an in-flight fetch so boot and Profile mount cannot race separate server responses', async () => {
+    saveProfile(createDefaultProfile(PROFILE));
+    let resolve!: (r: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>((r) => { resolve = r; }));
+    vi.stubGlobal('fetch', fetchMock);
+    const first = _test.hydratePersonalTargets(PROFILE);
+    const second = _test.hydratePersonalTargets(PROFILE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolve(new Response(JSON.stringify({ targets: [makeServerTarget('Server')] })));
+    await Promise.all([first, second]);
+    expect(loadProfile(PROFILE)!.additions).toHaveLength(1);
+  });
+
+  it('does not resurrect a target deleted while the hydrate fetch is in flight', async () => {
+    const removed = makeServerTarget('Delete me');
+    const retained = makeServerTarget('Keep me');
+    saveProfile({ ...createDefaultProfile(PROFILE), additions: [removed, retained] });
+    let resolve!: (r: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((r) => { resolve = r; })));
+    const hydrate = _test.hydratePersonalTargets(PROFILE);
+    saveProfile(removePersonalTarget(loadProfile(PROFILE)!, removed.id));
+    resolve(new Response(JSON.stringify({ targets: [removed, retained] })));
+    await hydrate;
+    expect(loadProfile(PROFILE)!.additions).toEqual([retained]);
+  });
+
+  it('defers same-tab hydration and reconciles cross-tab resurrection after confirmed deletion', async () => {
+    const removed = makeServerTarget('Delete me');
+    const retained = makeServerTarget('Keep me');
+    saveProfile({ ...createDefaultProfile(PROFILE), additions: [removed, retained] });
+    let resolveDelete!: (r: Response) => void;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => init?.method === 'DELETE'
+      ? new Promise<Response>((r) => { resolveDelete = r; })
+      : Promise.resolve(new Response(JSON.stringify({ targets: [removed, retained] }))));
+    vi.stubGlobal('fetch', fetchMock);
+    const deleting = _test.handleDelete(PROFILE, removed);
+    await _test.hydratePersonalTargets(PROFILE);
+    expect(loadProfile(PROFILE)!.additions).toEqual([retained]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // A separate tab has its own module guard. Simulate its stale GET merge
+    // into shared storage, alongside an unrelated local edit and new target.
+    const edited = { ...retained, name: 'Edited in other tab' };
+    const added = makeServerTarget('Added in other tab');
+    saveProfile({ ...loadProfile(PROFILE)!, additions: [removed, edited, added], distanceThresholdKm: 850 });
+    resolveDelete(new Response('{"ok":true,"removed":true}'));
+    await deleting;
+    expect(loadProfile(PROFILE)!.additions).toEqual([edited, added]);
+    expect(loadProfile(PROFILE)!.distanceThresholdKm).toBe(850);
+  });
+
+  it('rejects an old GET resolving after another tab confirms DELETE even if local profile bytes did not change', async () => {
+    const deleted = makeServerTarget('Deleted in other tab');
+    const retained = makeServerTarget('Keep');
+    saveProfile({ ...createDefaultProfile(PROFILE), additions: [retained] });
+    markProfileTargetsChanged(PROFILE); // Tab A has already removed its target.
+    resetProfileTargetSyncForTests(); // Tab B has an independent in-memory guard.
+    const before = localStorage.getItem(`opd-profile-${PROFILE}`);
+    const revision = profileTargetRevision(PROFILE);
+    let resolve!: (r: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((r) => { resolve = r; })));
+    const hydrate = _test.hydratePersonalTargets(PROFILE);
+    markProfileTargetsChanged(PROFILE); // Tab A receives confirmed DELETE.
+    resetProfileTargetSyncForTests(); // Its module-local guard is not Tab B's.
+    expect(profileTargetRevision(PROFILE)).not.toBe(revision);
+    expect(localStorage.getItem(`opd-profile-${PROFILE}`)).toBe(before);
+    resolve(new Response(JSON.stringify({ targets: [deleted, retained] })));
+    await hydrate;
+    expect(loadProfile(PROFILE)!.additions).toEqual([retained]);
   });
 
   it('hydrates a fresh device without a stored key', async () => {
@@ -248,16 +359,16 @@ describe('buildCrudSection hydration wiring', () => {
     expect(after.additions).toHaveLength(2);
   });
 
-  it('does not fire getProfileTargets when local additions exist', async () => {
+  it('checks the server once on mount even when local additions exist', async () => {
     saveProfile(addPersonalTarget(
       createDefaultProfile(PROFILE),
       makeServerTarget('Already local'),
     ));
     // Default-resolving stub: slot 8b also fires a `/api/log` fetch on
     // first mount for shot-count badges. We're asserting only that the
-    // *targets* endpoint isn't called — filter on URL below.
+    // *targets* endpoint is called once — filter on URL below.
     const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ entries: [] }), { status: 200 }),
+      new Response(JSON.stringify({ targets: [], entries: [] }), { status: 200 }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -268,6 +379,14 @@ describe('buildCrudSection hydration wiring', () => {
     const targetsCalls = (fetchMock.mock.calls as unknown[][]).filter((c) =>
       String(c[0]).includes('/api/browser/profiles/'),
     );
-    expect(targetsCalls).toHaveLength(0);
+    expect(targetsCalls).toHaveLength(1);
+  });
+
+  it('credits the exact Tuvalu point separately from generic OSM geocoding', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"targets":[],"entries":[]}')));
+    saveProfile(createDefaultProfile(PROFILE));
+    const section = buildCrudSection(PROFILE);
+    expect(section.querySelector('#profile-add-search-attribution')?.textContent).toContain('Geoscience Australia');
+    expect(section.querySelector('#profile-add-search-attribution')?.textContent).toContain('OpenStreetMap');
   });
 });

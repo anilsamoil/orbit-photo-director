@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.22.0.6 — 2026-09-12
+
+Refreshing an existing profile now discovers places added on another device,
+while preserving local and unsynced targets. Hydration defers around local edits
+and pending deletes. The personal-target Hide shortcut now persists deletion to
+the server and restores only that target if saving fails.
+
 ## 1.22.0.5 — 2026-09-12
 
 Google login now selects a stable personal map profile, even through a shared

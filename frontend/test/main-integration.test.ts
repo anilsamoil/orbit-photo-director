@@ -14,6 +14,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as manifestModule from '../src/manifest';
 import type { Manifest, PassEntry, Track } from '../src/types';
 import { artifact as launchArtifact, envelope as launchEnvelope, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
+import * as profileApi from '../src/profile-api';
+
+const schedulerStops = vi.hoisted(() => new Set<() => void>());
+vi.mock('../src/network-status', async () => {
+  const actual = await vi.importActual<typeof import('../src/network-status')>('../src/network-status');
+  return { ...actual, createPollScheduler: (options: Parameters<typeof actual.createPollScheduler>[0]) => {
+    const scheduler = actual.createPollScheduler(options);
+    schedulerStops.add(() => scheduler.stop());
+    return scheduler;
+  } };
+});
+
+vi.mock('../src/profile-api', async () => {
+  const actual = await vi.importActual<typeof import('../src/profile-api')>('../src/profile-api');
+  return { ...actual, deleteProfileTarget: vi.fn() };
+});
 
 // These orchestration fixtures exercise the legacy cache migration boundary.
 // Account selection and fail-closed boot are tested in account-session.test.ts.
@@ -147,15 +163,32 @@ function buildTrack(): Track {
   };
 }
 
+const liveIntervals = new Set<ReturnType<typeof window.setInterval>>();
+let restoreIntervalSpy: (() => void) | undefined;
+
 beforeEach(() => {
   document.body.innerHTML = DOM;
   localStorage.clear();
   vi.resetModules();    // clears module-level state in main.ts (refreshInFlight, currentManifest, etc.)
   vi.resetAllMocks();
+  const realSetInterval = window.setInterval.bind(window) as (...args: Parameters<typeof window.setInterval>) => ReturnType<typeof window.setInterval>;
+  const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((...args) => {
+    const id = realSetInterval(...args);
+    liveIntervals.add(id);
+    return id;
+  });
+  restoreIntervalSpy = () => intervalSpy.mockRestore();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"targets":[],"entries":[]}')));
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
 });
 
 afterEach(() => {
+  for (const stop of schedulerStops) stop();
+  schedulerStops.clear();
+  for (const id of liveIntervals) window.clearInterval(id);
+  liveIntervals.clear();
+  restoreIntervalSpy?.();
+  vi.unstubAllGlobals();
   document.body.innerHTML = '';
   localStorage.clear();
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
@@ -431,6 +464,7 @@ describe('main.ts: hide-from-card (v3)', () => {
   // minimal — same code path the operator hits on a fresh `?u=anil` open.
   beforeEach(() => {
     history.replaceState(null, '', '/?u=anil');
+    vi.mocked(profileApi.deleteProfileTarget).mockResolvedValue({ ok: true, data: { removed: true, count: 0 } });
     // Drive refresh to fail fast so init() returns instead of awaiting
     // a real network call — we just need init() to set currentProfile.
     vi.mocked(manifestModule.fetchManifest).mockRejectedValue(new Error('test'));
@@ -506,7 +540,7 @@ describe('main.ts: hide-from-card (v3)', () => {
       createdAt: '2026-05-26T00:00:00Z',
     });
     profileModule.saveProfile(seeded);
-    handleHideAction(buildPass({
+    await handleHideAction(buildPass({
       target_id: 'personal:anil:abc',
       target_name: 'My personal',
     }));
@@ -515,6 +549,7 @@ describe('main.ts: hide-from-card (v3)', () => {
     expect(profile.additions.find((t: { id: string }) => t.id === 'personal:anil:abc')).toBeUndefined();
     // And NOT added to removedCuratedIds — that's a curated-only list.
     expect(profile.removedCuratedIds).toEqual([]);
+    expect(profileApi.deleteProfileTarget).toHaveBeenCalledWith('anil', 'personal:anil:abc');
   });
 
   it('handleHideAction on a personal-target fires the "Removed personal target" toast (v3.2)', async () => {
@@ -531,7 +566,7 @@ describe('main.ts: hide-from-card (v3)', () => {
       createdAt: '2026-05-26T00:00:00Z',
     });
     profileModule.saveProfile(seeded);
-    handleHideAction(buildPass({
+    await handleHideAction(buildPass({
       target_id: 'personal:anil:xyz',
       target_name: 'Backyard observatory',
     }));
@@ -561,11 +596,56 @@ describe('main.ts: hide-from-card (v3)', () => {
     card.className = 'card';
     card.dataset.targetId = 'personal:anil:dom';
     cardsHost.appendChild(card);
-    handleHideAction(buildPass({
+    const hiding = handleHideAction(buildPass({
       target_id: 'personal:anil:dom',
       target_name: 'DOM test target',
     }));
     expect(document.querySelector('.card[data-target-id="personal:anil:dom"]')).toBeNull();
+    await hiding;
+  });
+
+  it('personal Hide blocks hydration while pending and restores only its target after server failure', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    const p = await import('../src/profile');
+    const { hydratePersonalTargets } = await import('../src/profile-crud');
+    await init();
+    const removed = { id: 'personal:anil:restore', name: 'Restore me', lat: 1, lon: 2, priority: 3, createdAt: '2026-05-26T00:00:00Z' };
+    const other = { ...removed, id: 'personal:anil:other', name: 'Keep updated' };
+    p.saveProfile({ ...p.loadProfile('anil')!, additions: [removed, other] });
+    let failDelete!: (value: Awaited<ReturnType<typeof profileApi.deleteProfileTarget>>) => void;
+    vi.mocked(profileApi.deleteProfileTarget).mockReturnValue(new Promise((r) => { failDelete = r; }));
+    const hiding = handleHideAction(buildPass({ target_id: removed.id, target_name: removed.name }));
+    expect(p.loadProfile('anil')!.additions).toEqual([other]);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ targets: [removed, other] })));
+    vi.stubGlobal('fetch', fetchMock);
+    await hydratePersonalTargets('anil');
+    expect(fetchMock).not.toHaveBeenCalled();
+    const later = { ...other, id: 'personal:anil:later', name: 'Added while waiting' };
+    p.saveProfile({ ...p.loadProfile('anil')!, additions: [{ ...other, name: 'Edited meanwhile' }, later], distanceThresholdKm: 800 });
+    failDelete({ ok: false, reason: 'network' });
+    await hiding;
+    const after = p.loadProfile('anil')!;
+    expect(after.additions).toEqual([removed, { ...other, name: 'Edited meanwhile' }, later]);
+    expect(after.distanceThresholdKm).toBe(800);
+    expect(document.getElementById('toast')?.textContent).toContain('Could not confirm deletion');
+    expect(document.getElementById('toast')?.textContent).toContain('Target restored on this device');
+  });
+
+  it('confirmed personal Hide removes a cross-tab resurrection while preserving unrelated changes', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    const p = await import('../src/profile');
+    await init();
+    const removed = { id: 'personal:anil:cross-tab', name: 'Delete me', lat: 1, lon: 2, priority: 3, createdAt: '2026-05-26T00:00:00Z' };
+    p.saveProfile({ ...p.loadProfile('anil')!, additions: [removed] });
+    let finish!: (value: Awaited<ReturnType<typeof profileApi.deleteProfileTarget>>) => void;
+    vi.mocked(profileApi.deleteProfileTarget).mockReturnValue(new Promise((r) => { finish = r; }));
+    const hiding = handleHideAction(buildPass({ target_id: removed.id, target_name: removed.name }));
+    const other = { ...removed, id: 'personal:anil:keep-new', name: 'New other-tab target' };
+    p.saveProfile({ ...p.loadProfile('anil')!, additions: [removed, other], distanceThresholdKm: 850 });
+    finish({ ok: true, data: { removed: true, count: 0 } });
+    await hiding;
+    expect(p.loadProfile('anil')!.additions).toEqual([other]);
+    expect(p.loadProfile('anil')!.distanceThresholdKm).toBe(850);
   });
 
   it('handleHideAction is idempotent when the id is already hidden', async () => {
