@@ -14,11 +14,13 @@ exactly `name` and `displayName` fields. A Jessica grant is
 addresses or deployed hashes in source control. Missing grants preserve
 own-profile-only behavior; malformed grants fail closed with HTTP 503.
 
-The initial deployment grants Jessica access only to the three existing owner
-aliases. It does not identify Jessica's Google account. Once her exact sign-in
-email is supplied, an explicit private binding can make `jessica` her default,
-after checking for and preserving any targets in her earlier automatic account
-namespace. Never guess an email from a name, search result or URL.
+The three existing owner aliases retain their Jessica management grants.
+Jessica's exact Google sign-in email, supplied by the owner, is privately bound
+to `jessica` as her default. Before that binding, remote inventories showed no
+targets or ratings under an automatic account namespace; existing data was
+retained. Her actual device login remains a user verification step. Any local
+unsynced data stays on the device, so do not clear browser site data. Never
+guess an email or an earlier account namespace from a name or URL.
 
 The source-backed starter list is in `data/profiles/jessica/bootstrap.json`.
 Research evidence is presented at `/profile-research/jessica.html`. Place

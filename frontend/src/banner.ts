@@ -152,9 +152,14 @@ export function bannerError(reason: string): BannerState {
  *  So when the Cloudflare Access session expires, a normal reload NEVER sees the
  *  302 to the Access login — it just re-renders the cached shell. Sending the
  *  operator to a denylisted path is the only way out of that loop from inside
- *  the app. /api/ has no GET route registered, so nothing intercepts it.
+ *  the app. /api/app is the Worker's supported no-store app entry, so it opens
+ *  the current app after Access completes instead of an unhandled endpoint.
  */
-export const ACCESS_REAUTH_PATH = '/api/__reauth';
+export const ACCESS_REAUTH_PATH = '/api/app';
+
+export function getAccessRecoveryPath(profileName?: string): string {
+  return profileName ? `${ACCESS_REAUTH_PATH}?u=${encodeURIComponent(profileName)}` : ACCESS_REAUTH_PATH;
+}
 
 /** Cloudflare Access session expired: the app is alive on cache but cannot
  *  reach the network, and a plain refresh cannot fix it (see ACCESS_REAUTH_PATH).

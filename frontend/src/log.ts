@@ -58,8 +58,24 @@ export async function fetchLog(
   limit = 100,
   profileName?: string,
 ): Promise<LogEntry[]> {
+  const result = await fetchLogResult(baseUrl, limit, profileName);
+  return result.ok ? result.entries : [];
+}
+
+export type LogLoadResult =
+  | { ok: true; entries: LogEntry[] }
+  | { ok: false; reason: 'authentication' | 'offline' | 'unavailable' };
+
+/** The Log pane needs to distinguish an empty history from a failed read.
+ * Badge callers retain fetchLog's quiet [] fallback. */
+export async function fetchLogResult(
+  baseUrl = '',
+  limit = 100,
+  profileName?: string,
+): Promise<LogLoadResult> {
   const account = getAccountProfile();
-  if (account?.isVerified === false || (account && profileName && profileName !== account.name)) return [];
+  if (account?.isVerified === false) return { ok: false, reason: 'offline' };
+  if (account && profileName && profileName !== account.name) return { ok: false, reason: 'unavailable' };
   profileName = account?.name ?? profileName;
   const token = account ? '' : getToken();
   const profileQuery = profileName
@@ -72,11 +88,20 @@ export async function fetchLog(
       redirect: 'manual',
       cache: 'no-cache',
     });
-    if (!resp.ok) return [];
-    const body = (await resp.json()) as { entries?: LogEntry[] };
-    return body.entries ?? [];
+    if (resp.type === 'opaqueredirect' || resp.redirected || resp.status === 401 || resp.status === 403
+      || resp.status >= 300 && resp.status < 400) return { ok: false, reason: 'authentication' };
+    if (!resp.ok) return { ok: false, reason: 'unavailable' };
+    try {
+      const body = (await resp.json()) as { entries?: LogEntry[] } | null;
+      if (!Array.isArray(body?.entries) || !body.entries.every((entry) => entry
+        && typeof entry.target_id === 'string' && typeof entry.pass_time === 'string'
+        && ['shoot', 'skip', 'rate'].includes(entry.action))) return { ok: false, reason: 'unavailable' };
+      return { ok: true, entries: body.entries };
+    } catch {
+      return { ok: false, reason: 'unavailable' };
+    }
   } catch {
-    return [];
+    return { ok: false, reason: 'offline' };
   }
 }
 
@@ -226,6 +251,7 @@ function span(text: string): HTMLElement {
  *  submits OR cancels. On submit, posts a Rate event and resolves true.
  */
 export function openRateModal(row: MergedRow, baseUrl = ''): Promise<boolean> {
+  const initialPayload = buildPayload('rate', row.target_id, row.pass_time, row.score_at_time ?? 0);
   return new Promise((resolve) => {
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
@@ -289,6 +315,11 @@ export function openRateModal(row: MergedRow, baseUrl = ''): Promise<boolean> {
     submit.type = 'button';
     submit.textContent = 'Save';
     submit.addEventListener('click', async () => {
+      if (initialPayload.profile !== buildPayload('rate', row.target_id, row.pass_time, row.score_at_time ?? 0).profile) {
+        submit.disabled = true;
+        submit.textContent = 'Profile changed — close and reopen this rating';
+        return;
+      }
       if (chosenRating < 1) {
         submit.textContent = 'Pick a rating first';
         return;
@@ -296,7 +327,7 @@ export function openRateModal(row: MergedRow, baseUrl = ''): Promise<boolean> {
       submit.disabled = true;
       submit.textContent = 'Saving...';
       const payload: CalibPayload = {
-        ...buildPayload('rate', row.target_id, row.pass_time, row.score_at_time ?? 0),
+        ...initialPayload,
         rating: chosenRating,
         observed_obstruction: obsSelect.value || undefined,
         // Different dedupe key from the original shoot so both events store.

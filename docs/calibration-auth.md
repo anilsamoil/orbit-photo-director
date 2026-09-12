@@ -36,8 +36,10 @@ No profiles or existing offline data are cleared during this migration.
 
 The client sends same-origin credentials, preserves queued data on expired
 sessions/network errors and accepts only an API `{ok:true}` receipt as a save.
-A redirect or HTTP200 login page is not success. The Log tab provides the normal
-sign-in link. Single-flight draining acknowledges records individually without
+A redirect or HTTP200 login page is not success. The Log tab offers a
+profile-preserving `/api/app` sign-in link only after an authentication failure;
+valid sessions show no extra sign-in control. Failed reads remain distinct from
+empty history. Single-flight draining acknowledges records individually without
 overwriting entries created during a network request. Existing R2 idempotency,
 payload validation, size limits and daily rate limit are unchanged.
 

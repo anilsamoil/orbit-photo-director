@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.22.0.8 — 2026-09-12
+
+The Log no longer shows a redundant sign-in button during a valid session.
+Expired sessions offer a working, profile-preserving reload link; connection
+and server failures are distinguished from an empty history. Saved ratings and
+pending synchronization remain intact.
+
 ## 1.22.0.7 — 2026-09-12
 
 The Profile chooser now lists the signed-in account and explicitly authorized

@@ -29,7 +29,7 @@ describe('Cloudflare Access re-auth escape hatch', () => {
     '/__opd_probe',
     '/__opd_probe?_probe=123',
     '/launch/latest.json',
-    '/api/__reauth',
+    '/api/app?u=jessica',
     '/v/test/track.json',
     '/manifest.json',
   ])('keeps the network-owned navigation %s out of the app shell', (path) => {
