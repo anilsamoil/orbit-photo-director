@@ -687,6 +687,20 @@
     "notes": "Iconic turquoise sandbars + tiger-stripe tidal patterns."
   },
   {
+    "id": "tuvalu-funafuti",
+    "name": "Tuvalu — Funafuti atoll",
+    "geom": {
+      "type": "point",
+      "lat": -8.525292,
+      "lon": 179.196561
+    },
+    "priority": 4,
+    "regime": "day",
+    "tier": 1,
+    "category": "big-terrain",
+    "notes": "Funafuti's reef ring, lagoon and narrow Fongafale island. Tuvalu is an island nation; this land point represents Funafuti, not all nine islands. Coordinates: Geoscience Australia TUVA station at the Funafuti weather station, Table 9.4, https://www.ga.gov.au/bigobj/GA8466.pdf."
+  },
+  {
     "id": "tuamotus",
     "name": "Tuamotu atolls",
     "geom": {

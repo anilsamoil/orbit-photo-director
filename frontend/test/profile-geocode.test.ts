@@ -13,6 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import { _clearGeocodeCacheForTest, geocode } from '../src/profile-geocode';
 
@@ -38,10 +39,134 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   localStorage.clear();
   _clearGeocodeCacheForTest();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('geocode — Tuvalu photography target', () => {
+  it.each(['Tuvalu', ' tubalu ', 'TUVALU', 'Funafuti', 'Funafuti, Tuvalu', 'Fongafale'])
+  ('resolves %s on Funafuti without needing a provider', async (query) => {
+    const fetchMock = vi.fn(async () => { throw new TypeError('offline'); });
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await geocode(query);
+    expect(r).toEqual({ ok: true, data: [{
+      displayName: 'Funafuti atoll (Fongafale), Tuvalu',
+      shortName: 'Funafuti, Tuvalu', country: 'Tuvalu',
+      lat: -8.525292, lon: 179.196561,
+    }] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('takes precedence over a previously cached empty country search', async () => {
+    localStorage.setItem('opd-geocode-cache-v1', JSON.stringify({
+      tuvalu: { storedAt: Date.now(), data: [] },
+    }));
+    const r = await geocode('Tuvalu');
+    expect(r.ok && r.data[0]?.shortName).toBe('Funafuti, Tuvalu');
+  });
+
+  it('matches the shared curated target consumed by the map generator', async () => {
+    const targets = JSON.parse(readFileSync('../targets.json', 'utf8'));
+    const target = targets.find((t: { id: string }) => t.id === 'tuvalu-funafuti');
+    expect(target).toMatchObject({
+      name: 'Tuvalu — Funafuti atoll', regime: 'day',
+      geom: { type: 'point', lat: -8.525292, lon: 179.196561 },
+    });
+    const r = await geocode('Tuvalu');
+    expect(r.ok && r.data[0]?.lat).toBe(target.geom.lat);
+    expect(r.ok && r.data[0]?.lon).toBe(target.geom.lon);
+  });
+
+  it('does not replace a more specific query containing Tuvalu', async () => {
+    const fetchMock = vi.fn(async () => new Response('[]'));
+    vi.stubGlobal('fetch', fetchMock);
+    await geocode('Tuvalu Street, Auckland');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe('geocode — recovery from intermittent provider failures', () => {
+  it('retries an empty result after one minute, including old v1 cache entries', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([makeNominatimHit()])));
+    vi.stubGlobal('fetch', fetchMock);
+    localStorage.setItem('opd-geocode-cache-v1', JSON.stringify({
+      'san diego': { storedAt: Date.now() - 61_000, data: [] },
+    }));
+    const r = await geocode('San Diego');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(r.ok && r.data).toHaveLength(1);
+  });
+
+  it('briefly caches a genuine no-match response to avoid repeated provider calls', async () => {
+    const fetchMock = vi.fn(async () => new Response('[]'));
+    vi.stubGlobal('fetch', fetchMock);
+    await geocode('antarctica-spaceport');
+    await geocode('antarctica-spaceport');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { storedAt: Date.now(), data: [{}] },
+    { storedAt: 'yesterday', data: [] },
+    { storedAt: Date.now(), data: { message: 'bad cache' } },
+  ])('refetches malformed cached entries instead of rendering them: %j', async (entry) => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([makeNominatimHit()])));
+    vi.stubGlobal('fetch', fetchMock);
+    localStorage.setItem('opd-geocode-cache-v1', JSON.stringify({ 'san diego': entry }));
+    const r = await geocode('San Diego');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(r.ok && r.data[0]?.shortName).toBe('San Diego');
+  });
+
+  it('allows a normal response that takes longer than three seconds', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      setTimeout(() => resolve(new Response(JSON.stringify([makeNominatimHit()]))), 4_500);
+    })));
+    const pending = geocode('San Diego');
+    await vi.advanceTimersByTimeAsync(4_500);
+    expect((await pending).ok).toBe(true);
+  });
+
+  it('keeps the timeout active while the response body is downloading', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      json: () => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      }),
+    } as Response)));
+    const settled = vi.fn();
+    void geocode('San Diego').then(settled);
+    await vi.advanceTimersByTimeAsync(8_001);
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({ ok: false, reason: 'timeout' }));
+  });
+
+  it('identifies provider blocking and does not cache it as no matches', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('Blocked', { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([makeNominatimHit()])));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await geocode('San Diego')).toMatchObject({
+      ok: false, reason: 'http', status: 403, detail: expect.stringMatching(/provider.*blocked/i),
+    });
+    expect((await geocode('San Diego')).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a malformed nonempty provider response as an error, not no matches', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([
+      makeNominatimHit({ lat: null }),
+      makeNominatimHit({ lon: '' }),
+      makeNominatimHit({ lat: false }),
+      makeNominatimHit({ display_name: '' }),
+    ]))));
+    expect(await geocode('malformed')).toMatchObject({ ok: false, reason: 'bad_json' });
+  });
 });
 
 describe('geocode — happy path', () => {
@@ -175,24 +300,8 @@ describe('geocode — error paths', () => {
   });
 
   it('returns timeout when AbortController fires (AbortError)', async () => {
-    // Simulate the timeout path by throwing an AbortError-like exception.
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit | undefined) => {
-      // Wait long enough for the test runner to abort the controller.
-      await new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => {
-          const err = new Error('aborted');
-          err.name = 'AbortError';
-          reject(err);
-        });
-      });
-      // Never resolves.
-      return new Response(null);
-    }));
-    // The default timeout is 3000ms; we just trust the AbortController
-    // codepath here (waiting 3+ seconds in a unit test is wasteful).
-    // To simulate without waiting, mock setTimeout to fire abort
-    // synchronously. Simpler: assert geocode returns reason=timeout
-    // when the underlying fetch throws AbortError.
+    // Runtime AbortError normalization, separate from the fake-clock
+    // response/body timeout tests above.
     vi.stubGlobal('fetch', vi.fn(async () => {
       const err = new Error('The user aborted a request.');
       err.name = 'AbortError';

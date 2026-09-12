@@ -1332,7 +1332,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       // INTENTIONALLY live (Date.now()): the popup's countdown answers "when is
       // this pass from NOW" alongside the absolute UTC time — same live-domain
       // rule as the topbar even while the map is scrubbed.
-      const popup = new maplibregl.Popup();
+      const popup = new maplibregl.Popup({ maxWidth: '360px' });
       const onEdit = props.is_personal && props.target_id
         ? (id: string) => {
             popup.remove();
@@ -1341,7 +1341,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
             window.dispatchEvent(new CustomEvent('opd-edit-target', { detail: { targetId: id } }));
           }
         : undefined;
-      const popupBody = buildTargetPopupContent(props, Date.now(), onEdit);
+      const popupBody = buildTargetPopupContent(props, Date.now(), onEdit, currentTrack);
       popup.setLngLat(hit.lngLat).setDOMContent(popupBody).addTo(map);
 
       // Async live "now" cloud — patched onto the popup's single weather row
@@ -3201,6 +3201,7 @@ export function buildTargetPopupContent(
   props: TargetPopupProps,
   nowMs: number,
   onEdit?: (targetId: string) => void,
+  track: Track | null = null,
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'map-target-popup';
@@ -3244,8 +3245,11 @@ export function buildTargetPopupContent(
     if (props.obstruction_class) regimeBits.push(props.obstruction_class);
     if (regimeBits.length > 0) addRow('map-popup-row', regimeBits.join(' · '), 'margin-top:2px;color:#444');
   } else {
-    // Shape B — no upcoming pass. NEVER "score 0" (review R6).
-    addRow('map-popup-row', 'No upcoming pass in window', 'margin-top:6px;color:#444');
+    // New account profiles may have no generated artifact yet. A missing
+    // scored pass is not evidence that their saved location has no passes.
+    addRow('map-popup-row', props.is_personal
+      ? 'Saved target · no scored forecast available'
+      : 'No upcoming pass in window', 'margin-top:6px;color:#444');
   }
 
   // ONE weather row (review R9): the at-pass forecast baseline now, patched
@@ -3269,6 +3273,54 @@ export function buildTargetPopupContent(
     btn.style.cssText = 'margin-top:8px;font:inherit;cursor:pointer;border:1px solid #2a3142;background:#eef1f6;color:#0b0d12;border-radius:4px;padding:3px 8px';
     btn.addEventListener('click', () => onEdit(id));
     body.appendChild(btn);
+  }
+
+  if (props.is_personal && !hasPass && track
+    && Number.isFinite(props.lat) && Number.isFinite(props.lon)
+    && Math.abs(props.lat!) <= 90 && Math.abs(props.lon!) <= 180) {
+    const lat = props.lat!;
+    const lon = props.lon!;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'map-popup-next-passes';
+    button.textContent = 'Next ISS passes';
+    button.style.cssText = 'display:block;margin-top:8px;font:inherit;cursor:pointer';
+    const results = document.createElement('div');
+    results.className = 'map-popup-personal-passes';
+    results.setAttribute('aria-live', 'polite');
+    button.addEventListener('click', () => {
+      button.disabled = true;
+      results.textContent = 'Calculating upcoming passes…';
+      // Only scan the requested target, after yielding to paint the response.
+      // Hundreds of saved locations must not each trigger a scan on boot.
+      window.setTimeout(() => {
+        const queryMs = Date.now();
+        try {
+          if (!liveIssPositionSGP4(track, queryMs)) {
+            results.textContent = 'Orbit data is unavailable. Reconnect and refresh to check passes.';
+            return;
+          }
+          const passes = findUpcomingPasses(track, lat, lon, queryMs);
+          const prediction = buildPinDropPopup(lat, lon, 3, [{ name: 'ISS', color: '#125e87', passes }], {
+            emptyText: 'No ISS passes within 1500 km in the next 36 hours.',
+            footerText: 'Geometric estimate from the saved orbit data; clouds and window obstructions are not included.',
+          });
+          const epoch = Date.parse(track.tle_epoch);
+          const ageHours = Number.isFinite(epoch) ? (queryMs - epoch) / 3_600_000 : track.tle_age_hours;
+          if (isTleStale(ageHours)) {
+            const stale = document.createElement('p');
+            stale.textContent = `Orbit data is ${Math.round(ageHours!)} hours old; pass times may have drifted. Refresh when connected.`;
+            prediction.appendChild(stale);
+          }
+          results.replaceChildren(prediction);
+        } catch {
+          results.textContent = 'Could not calculate passes. Reconnect and refresh the orbit data.';
+        } finally {
+          button.disabled = false;
+        }
+      }, 0);
+    });
+    body.append(button, results);
   }
 
   return body;
@@ -3820,6 +3872,7 @@ export function buildPinDropPopup(
   pinLon: number,
   precision: number,
   sections: PinDropSection[],
+  options: { emptyText?: string; footerText?: string } = {},
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'dropped-pin-popup';
@@ -3875,7 +3928,7 @@ export function buildPinDropPopup(
   if (!anyPasses) {
     const empty = document.createElement('div');
     empty.style.cssText = 'margin-top:8px;color:#444';
-    empty.textContent = 'No passes from any tracked satellite within 1500 km in the next 36 hours.';
+    empty.textContent = options.emptyText ?? 'No passes from any tracked satellite within 1500 km in the next 36 hours.';
     body.appendChild(empty);
     const hint = document.createElement('div');
     hint.style.cssText = 'margin-top:6px;color:#888;font-size:0.78rem';
@@ -3885,7 +3938,7 @@ export function buildPinDropPopup(
 
   const footer = document.createElement('div');
   footer.style.cssText = 'margin-top:6px;color:#888;font-size:0.72rem';
-  footer.textContent = 'Closest-approach within 1500 km horizon. Click pin to dismiss.';
+  footer.textContent = options.footerText ?? 'Closest-approach within 1500 km horizon. Click pin to dismiss.';
   body.appendChild(footer);
 
   return body;

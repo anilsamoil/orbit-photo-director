@@ -11,8 +11,14 @@
  *  several passes a day, each its own reminder.
  */
 import type { PassEntry } from './types';
+import { getAccountProfile } from './profile-session';
 
 const STORAGE_KEY = 'opd_shotlist_v1';
+
+function storageKey(): string {
+  const account = getAccountProfile();
+  return account ? `${STORAGE_KEY}:${account.name}` : STORAGE_KEY;
+}
 
 /** The minimal pass data the .ics builder needs. Kept small — this is what we
  *  persist per selected pass. */
@@ -32,7 +38,10 @@ export function passKey(p: { target_id: string; closest_approach: string }): str
 
 function readRaw(): ShotlistEntry[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(storageKey());
+    if (raw === null && getAccountProfile()?.name === 'anil') {
+      raw = localStorage.getItem(STORAGE_KEY);
+    }
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -53,7 +62,7 @@ function readRaw(): ShotlistEntry[] {
 
 function writeRaw(entries: ShotlistEntry[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    localStorage.setItem(storageKey(), JSON.stringify(entries));
   } catch {
     // Swallow — the in-memory/DOM state still reflects the toggle for this
     // session, it just won't survive reload.

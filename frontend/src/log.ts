@@ -9,6 +9,7 @@
 import { buildPayload, getToken, postCalib } from './calib';
 import { formatUtcLabel } from './countdown';
 import type { CalibPayload } from './types';
+import { getAccountProfile } from './profile-session';
 
 export interface LogEntry {
   target_id: string;
@@ -57,7 +58,10 @@ export async function fetchLog(
   limit = 100,
   profileName?: string,
 ): Promise<LogEntry[]> {
-  const token = getToken();
+  const account = getAccountProfile();
+  if (account?.isVerified === false || (account && profileName && profileName !== account.name)) return [];
+  profileName = account?.name ?? profileName;
+  const token = account ? '' : getToken();
   const profileQuery = profileName
     ? `&profile=${encodeURIComponent(profileName)}`
     : '';

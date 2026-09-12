@@ -5,16 +5,17 @@
  *  pin-in-the-Atlantic bug Anil hit on his first add).
  *
  *  No new external dependencies — native `fetch`, `AbortController`,
- *  `URLSearchParams`, and a plain JSON localStorage cache. Nominatim's
- *  ToS tolerates browser-direct fetches; we add Accept header + obey
- *  the 1-req-per-sec rate limit via UI-side debounce. Attribution is
- *  rendered as a required caption below results in profile-crud.ts.
+ *  `URLSearchParams`, and a plain JSON localStorage cache. Generic
+ *  searches are explicitly user-triggered; the UI throttles each form
+ *  to 1 request/sec and renders OSM attribution. This is not an
+ *  application-wide rate limiter: public Nominatim use must remain
+ *  within https://operations.osmfoundation.org/policies/nominatim/.
  */
 
 /** Normalized geocoding result shape. Stripped down from Nominatim's
  *  verbose response to just what the UI needs. */
 export interface GeocodeResult {
-  /** Full Nominatim display name — long; used for the result tile. */
+  /** Full place display name — used for the result tile. */
   displayName: string;
   /** Best-effort short name (city / town / first comma-segment) — used
    *  as a default to autofill into the operator's name field. */
@@ -36,12 +37,33 @@ export type GeocodeApiResult =
     };
 
 const NOMINATIM_BASE = 'https://nominatim.openstreetmap.org/search';
-const REQUEST_TIMEOUT_MS = 3_000;
+const REQUEST_TIMEOUT_MS = 8_000;
 
-/** localStorage cache. Bounded LRU by recency; 24-hour TTL per entry. */
+/** Tuvalu is an island nation, not one island. Its administrative
+ *  geocoder point is offshore; use a named land point on Funafuti.
+ *  GA's TUVA station, Table 9.4: S08 31 31.05048 E179 11 47.62083.
+ *  https://www.ga.gov.au/bigobj/GA8466.pdf (section 9, pp. 37–39).
+ *  Keep coordinates aligned with targets.json:tuvalu-funafuti; tested.
+ *  Exact aliases only: e.g. "Tuvalu Street, Auckland" still geocodes.
+ */
+const TUVALU_ALIASES = new Set([
+  'tuvalu', 'tubalu', 'funafuti', 'funafuti tuvalu', 'fongafale',
+  'fongafale tuvalu',
+]);
+const TUVALU_FUNAFUTI: GeocodeResult = {
+  displayName: 'Funafuti atoll (Fongafale), Tuvalu',
+  shortName: 'Funafuti, Tuvalu',
+  country: 'Tuvalu',
+  lat: -8.525292,
+  lon: 179.196561,
+};
+
+/** Bounded localStorage cache: places last 24 hours, empty results one minute. */
 const CACHE_KEY = 'opd-geocode-cache-v1';
 const CACHE_MAX_ENTRIES = 100;
 const CACHE_TTL_MS = 24 * 3_600_000;
+// A transient no-match must not strand a search for the whole day.
+const EMPTY_CACHE_TTL_MS = 60_000;
 
 interface CacheEntry {
   /** ms since epoch. Expired entries are evicted on read. */
@@ -72,6 +94,10 @@ export async function geocode(query: string): Promise<GeocodeApiResult> {
   }
   const cacheKey = trimmed.toLowerCase();
 
+  if (TUVALU_ALIASES.has(cacheKey.replace(/[,\s]+/g, ' '))) {
+    return { ok: true, data: [{ ...TUVALU_FUNAFUTI }] };
+  }
+
   const cached = readCache(cacheKey);
   if (cached) {
     return { ok: true, data: cached };
@@ -88,49 +114,56 @@ export async function geocode(query: string): Promise<GeocodeApiResult> {
   const timeoutHandle = (typeof window !== 'undefined' ? window : globalThis)
     .setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  let resp: Response;
   try {
-    resp = await fetch(url, {
+    const resp = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     });
+
+    if (!resp.ok) {
+      return {
+        ok: false,
+        reason: 'http',
+        status: resp.status,
+        detail: resp.status === 403
+          ? 'place search provider blocked this request (HTTP 403)'
+          : resp.status === 429
+            ? 'place search provider is rate limiting requests; wait and retry (HTTP 429)'
+            : `place search provider returned HTTP ${resp.status}`,
+      };
+    }
+
+    let body: unknown;
+    try {
+      body = await resp.json();
+    } catch (e) {
+      // Preserve abort/network failures during body download. The timer
+      // stays armed until the complete JSON response has arrived.
+      if (controller.signal.aborted || isAbortError(e) || e instanceof TypeError) throw e;
+      return { ok: false, reason: 'bad_json', detail: errMsg(e) };
+    }
+    if (!Array.isArray(body)) {
+      return { ok: false, reason: 'bad_json', detail: 'expected JSON array' };
+    }
+
+    const normalized = body
+      .map(normalizeNominatimEntry)
+      .filter((r): r is GeocodeResult => r !== null);
+    if (body.length > 0 && normalized.length === 0) {
+      return { ok: false, reason: 'bad_json', detail: 'provider returned no valid place coordinates' };
+    }
+
+    writeCache(cacheKey, normalized);
+    return { ok: true, data: normalized };
   } catch (e) {
-    (typeof window !== 'undefined' ? window : globalThis).clearTimeout(timeoutHandle);
-    // AbortError from the timeout looks like a TypeError/DOMException
-    // depending on the runtime — discriminate by name.
-    if (e instanceof Error && (e.name === 'AbortError' || /aborted/i.test(e.message))) {
+    if (controller.signal.aborted || isAbortError(e)) {
       return { ok: false, reason: 'timeout', detail: `>${REQUEST_TIMEOUT_MS}ms` };
     }
     return { ok: false, reason: 'network', detail: errMsg(e) };
+  } finally {
+    (typeof window !== 'undefined' ? window : globalThis).clearTimeout(timeoutHandle);
   }
-  (typeof window !== 'undefined' ? window : globalThis).clearTimeout(timeoutHandle);
-
-  if (!resp.ok) {
-    return {
-      ok: false,
-      reason: 'http',
-      status: resp.status,
-      detail: `http_${resp.status}`,
-    };
-  }
-
-  let body: unknown;
-  try {
-    body = await resp.json();
-  } catch (e) {
-    return { ok: false, reason: 'bad_json', detail: errMsg(e) };
-  }
-  if (!Array.isArray(body)) {
-    return { ok: false, reason: 'bad_json', detail: 'expected JSON array' };
-  }
-
-  const normalized = body
-    .map(normalizeNominatimEntry)
-    .filter((r): r is GeocodeResult => r !== null);
-
-  writeCache(cacheKey, normalized);
-  return { ok: true, data: normalized };
 }
 
 /** Normalize a single Nominatim response entry into our trimmed shape.
@@ -139,11 +172,12 @@ export async function geocode(query: string): Promise<GeocodeApiResult> {
 function normalizeNominatimEntry(raw: unknown): GeocodeResult | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  const lat = Number(r.lat);
-  const lon = Number(r.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const lat = parseCoordinate(r.lat);
+  const lon = parseCoordinate(r.lon);
+  if (lat === null || lon === null) return null;
   if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
-  const displayName = typeof r.display_name === 'string' ? r.display_name : '';
+  const displayName = typeof r.display_name === 'string' ? r.display_name.trim() : '';
+  if (!displayName) return null;
   // address sub-object holds normalized city / country fields.
   const address = (r.address && typeof r.address === 'object')
     ? (r.address as Record<string, unknown>)
@@ -169,9 +203,10 @@ function normalizeNominatimEntry(raw: unknown): GeocodeResult | null {
 
 function readCache(key: string): GeocodeResult[] | null {
   const cache = loadCache();
+  if (!Object.hasOwn(cache, key)) return null;
   const entry = cache[key];
-  if (!entry) return null;
-  if (Date.now() - entry.storedAt > CACHE_TTL_MS) {
+  if (!isCacheEntry(entry) || Date.now() < entry.storedAt
+      || Date.now() - entry.storedAt > (entry.data.length === 0 ? EMPTY_CACHE_TTL_MS : CACHE_TTL_MS)) {
     // Expired — evict and miss. Re-save so the eviction sticks.
     delete cache[key];
     try {
@@ -182,6 +217,27 @@ function readCache(key: string): GeocodeResult[] | null {
     return null;
   }
   return entry.data;
+}
+
+function parseCoordinate(value: unknown): number | null {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isCacheEntry(value: unknown): value is CacheEntry {
+  if (!value || typeof value !== 'object') return false;
+  const entry = value as CacheEntry;
+  return typeof entry.storedAt === 'number' && Number.isFinite(entry.storedAt)
+    && Array.isArray(entry.data) && entry.data.every((r) => r && typeof r === 'object'
+      && typeof r.displayName === 'string' && r.displayName.trim().length > 0
+      && typeof r.shortName === 'string' && typeof r.country === 'string'
+      && typeof r.lat === 'number' && Number.isFinite(r.lat) && Math.abs(r.lat) <= 90
+      && typeof r.lon === 'number' && Number.isFinite(r.lon) && Math.abs(r.lon) <= 180);
+}
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && (e.name === 'AbortError' || /aborted/i.test(e.message));
 }
 
 function writeCache(key: string, data: GeocodeResult[]): void {

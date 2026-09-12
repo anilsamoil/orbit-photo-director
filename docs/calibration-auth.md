@@ -13,7 +13,26 @@ Browser target sync uses `/api/browser/profiles/<name>/targets`, under the
 existing Google Access application. The legacy `/api/profiles` path keeps its
 server-to-server Access bypass and existing machine-key clients. Both routes
 validate authentication before reading or writing storage. No browser key
-control remains. Profiles remain shared trusted-user namespaces, not individual ACLs.
+control remains. Browser ownership is resolved by `GET /api/browser/session`
+from the verified issuer and subject; shared URL parameters cannot select another
+account. Unknown accounts get a stable `u-` namespace. Browser target CRUD and
+signed-session log reads/writes enforce that resolved profile before storage.
+Machine-key clients retain explicit named-profile access for the generator.
+
+`ACCESS_PROFILE_BINDINGS` is a private Worker secret containing optional explicit
+legacy owner aliases: `{"email:<SHA256(normalized-email)>":"anil"}`. Stage it before
+deploying identity enforcement. Never claim a legacy profile from a URL or let the
+first visitor take it. Invalid configuration fails closed. Existing generated
+opportunity artifacts remain shared map data; account target CRUD and ratings
+are the owned data boundary.
+
+The frontend waits for identity before personal hydration, cached snapshots or
+rating queue drain. Offline reload can resume only this tab's last verified
+identity, with a visible offline label and writes held until a fresh verification.
+An HTTP/authentication failure never falls back to a previous account. Snapshots,
+reminders and rating queues are account-scoped; only the verified Anil alias may
+read legacy global caches. Foreign/unstamped queued entries are retained unsent.
+No profiles or existing offline data are cleared during this migration.
 
 The client sends same-origin credentials, preserves queued data on expired
 sessions/network errors and accepts only an API `{ok:true}` receipt as a save.
@@ -40,9 +59,15 @@ relay, fantasy or VPN processes for this web-only change.
 
 Primary reference: [Cloudflare JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
 
-Phone recovery: open `/api/app?u=anil` in the same browser to fetch the latest
+Phone recovery: open `/api/app` in the same browser to fetch the latest
 shell through the existing `/api/` service-worker navigation bypass. The route
 is Google-protected, returns HTML with `Cache-Control: no-store`, uses root-relative
 assets, and never clears storage. A standalone iOS Home Screen app may have its
 own storage: keep it installed and preserve any unsynced ratings there. Opening
 the URL in Safari does not copy data from that separate app.
+
+New accounts can save personal pins immediately. Tapping a saved pin offers
+on-device geometric ISS passes from the current TLE, explicitly without weather
+scoring. Automatic scored personal Queue/Upcoming artifacts are currently produced
+only for the generator's existing named profiles; creating an account does not
+silently enroll another expensive generator slice.

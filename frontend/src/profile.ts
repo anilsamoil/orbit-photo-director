@@ -15,6 +15,8 @@
 /** Per-profile schema. Versioned for migration safety (premise 8 of the
  *  design doc). Bump `version` + add a migrator in MIGRATIONS when the
  *  shape changes. */
+import { getAccountProfile } from './profile-session';
+
 export interface Profile {
   /** Schema version. Migrations chain runs `version → version+1` until
    *  CURRENT_VERSION on every load. */
@@ -326,7 +328,7 @@ export function listProfiles(): string[] {
  *  profile or malformed JSON would cause); main.ts catches + logs +
  *  recreates. */
 export function loadOrCreateProfileFromURL(urlHref: string): Profile {
-  const name = parseProfileFromURL(urlHref);
+  const name = getAccountProfile()?.name ?? parseProfileFromURL(urlHref);
   const existing = loadProfile(name);
   if (existing) return existing;
   const fresh = createDefaultProfile(name);

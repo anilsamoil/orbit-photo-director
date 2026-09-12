@@ -20,7 +20,8 @@ import { handleCloudRequest } from './cloud';
 import { handleWxRequest } from './wx';
 import { handleProfilesRequest } from './profiles';
 import { isValidProfileName } from './shared';
-import { authorizeCalibration } from './calibration-auth';
+import { authenticateCalibration } from './calibration-auth';
+import { handleBrowserSession, resolveBrowserProfile } from './browser-identity';
 
 export interface Env {
   SITE: R2Bucket;
@@ -28,6 +29,7 @@ export interface Env {
   CALIB_TOKEN: string; // wrangler secret
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  ACCESS_PROFILE_BINDINGS?: string; // private verified-email hash to legacy profile aliases
   STALE_THRESHOLD_SECONDS: string;
 }
 
@@ -213,8 +215,8 @@ function isLogRequest(value: unknown): value is LogRequest {
 }
 
 async function handleLog(request: Request, env: Env): Promise<Response> {
-  const denied = await authorizeCalibration(request, env);
-  if (denied) return denied;
+  const auth = await authenticateCalibration(request, env);
+  if ('denied' in auth) return auth.denied;
 
   // Reject oversized bodies BEFORE buffering. Cloudflare's body parser will also
   // refuse very large requests, but Content-Length lets us short-circuit cheaply.
@@ -236,6 +238,14 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: 'invalid_payload' }, 400);
   }
   const payload = body as LogRequest;
+  if (auth.principal.kind === 'access') {
+    const resolved = await resolveBrowserProfile(auth.principal, env);
+    if ('denied' in resolved) return resolved.denied;
+    if (payload.profile !== undefined && payload.profile !== resolved.profile.name) {
+      return jsonResponse({ error: 'profile_forbidden' }, 403);
+    }
+    payload.profile = resolved.profile.name;
+  }
 
   // Rate-limit CHECK runs after auth + payload validation. The BUMP happens
   // after a successful first-time write below, so dedupe-no-op retries
@@ -252,7 +262,11 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
   // Object key: log/YYYYMM/<sanitized-dedupe_key or uuid>.json
   const yyyymm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
   const key = payload.dedupe_key ? sanitizeDedupeKey(payload.dedupe_key) : crypto.randomUUID();
-  const objectKey = `log/${yyyymm}/${key}.json`;
+  // Preserve Anil's existing retry keys. Other signed accounts need separate
+  // dedupe keys even when both photographed the same target/pass/action.
+  const namespace = auth.principal.kind === 'access' && payload.profile !== LEGACY_DEFAULT_PROFILE
+    ? `${payload.profile}-` : '';
+  const objectKey = `log/${yyyymm}/${namespace}${key}.json`;
 
   try {
     // Atomic dedupe via R2 conditional put — `onlyIf: { etagDoesNotMatch: '*' }`
@@ -373,8 +387,8 @@ async function handleStatic(pathname: string, env: Env): Promise<Response> {
  *  list response or include customMetadata so the per-key get isn't needed.
  */
 async function handleLogList(request: Request, env: Env): Promise<Response> {
-  const denied = await authorizeCalibration(request, env);
-  if (denied) return denied;
+  const auth = await authenticateCalibration(request, env);
+  if ('denied' in auth) return auth.denied;
   const url = new URL(request.url);
   const limitRaw = Number(url.searchParams.get('limit') ?? '50');
   const limit = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50));
@@ -386,19 +400,32 @@ async function handleLogList(request: Request, env: Env): Promise<Response> {
   //     OR missing (legacy pre-v1.6.3.0 records). This preserves the v1.6.x
   //     reader contract — when Anil opens the calib panel without a profile
   //     query he sees his own data, not Jack's.
-  const profileFilter = url.searchParams.get('profile');
+  let profileFilter = url.searchParams.get('profile');
   if (profileFilter !== null && !isValidProfileName(profileFilter)) {
     return jsonResponse({ error: 'invalid_profile' }, 400);
   }
 
+  let accountNamespace = '';
+  if (auth.principal.kind === 'access') {
+    const resolved = await resolveBrowserProfile(auth.principal, env);
+    if ('denied' in resolved) return resolved.denied;
+    if (profileFilter !== null && profileFilter !== resolved.profile.name) {
+      return jsonResponse({ error: 'profile_forbidden' }, 403);
+    }
+    profileFilter = resolved.profile.name;
+    // New opaque profiles have no older global records. Query their prefix
+    // directly so another user's busy log cannot crowd this account out.
+    if (!resolved.legacy) accountNamespace = `${resolved.profile.name}-`;
+  }
+
   const now = new Date();
   const monthKeys = [
-    `log/${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}/`,
+    `log/${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}/${accountNamespace}`,
   ];
   // Include previous month so user opening the page on the 1st still sees data.
   const prev = new Date(now.getUTCFullYear(), now.getUTCMonth() - 1, 1);
   monthKeys.push(
-    `log/${prev.getUTCFullYear()}${String(prev.getUTCMonth() + 1).padStart(2, '0')}/`,
+    `log/${prev.getUTCFullYear()}${String(prev.getUTCMonth() + 1).padStart(2, '0')}/${accountNamespace}`,
   );
 
   /** Profile match — applied after read but before pushing to the result.
@@ -415,7 +442,7 @@ async function handleLogList(request: Request, env: Env): Promise<Response> {
       // writes a record without stamping the profile field.
       return p === undefined || p === LEGACY_DEFAULT_PROFILE;
     }
-    return p === profileFilter;
+    return (p ?? LEGACY_DEFAULT_PROFILE) === profileFilter;
   };
 
   const entries: Array<Record<string, unknown>> = [];
@@ -542,7 +569,10 @@ export default {
     }
 
     let response: Response;
-    if (url.pathname === '/api/app' && (request.method === 'GET' || request.method === 'HEAD')) {
+    if (url.pathname === '/api/browser/session' && (request.method === 'GET' || request.method === 'HEAD')) {
+      response = await handleBrowserSession(request, env);
+      if (request.method === 'HEAD') response = new Response(null, { status: response.status, headers: response.headers });
+    } else if (url.pathname === '/api/app' && (request.method === 'GET' || request.method === 'HEAD')) {
       // /api/ has always bypassed the offline navigation shell. This entry
       // opens the latest app without clearing unsynced browser data.
       const app = await handleStatic('/', env);
@@ -628,6 +658,7 @@ export default {
       // surface "405 method not allowed" rather than fall through to the
       // static R2 handler (which would 404). Preserves the existing
       // contract verified by routing tests.
+      url.pathname === '/api/browser/session' ||
       url.pathname === '/api/log' ||
       url.pathname === '/api/health' ||
       url.pathname === '/api/kp' ||

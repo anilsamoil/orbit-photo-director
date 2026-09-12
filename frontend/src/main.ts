@@ -34,6 +34,7 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { subscribeProfileChanged } from './profile-events';
+import { getAccountProfile, resolveAccountProfile } from './profile-session';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
 import { applyTargetFilter, getTargetFilter, setTargetFilter, type TargetFilter } from './target-filter-pref';
@@ -1320,8 +1321,9 @@ export function renderTopbarProfileBadge(name: string | null): void {
     return;
   }
   el.hidden = false;
-  el.textContent = `👤 ${name}`;
-  el.title = `Active profile: ${name} — click to switch`;
+  const account = getAccountProfile();
+  el.textContent = `👤 ${account?.displayName ?? name}${account?.isVerified === false ? ' · Offline' : ''}`;
+  el.title = account ? 'Open your profile' : `Active profile: ${name} — click to switch`;
   // Bug 1 — make the chip discoverable as a profile switcher. Click
   // (or Enter / Space when focused) activates the Profile tab and
   // scrolls the picker section into view. a11y: role=button + tabindex
@@ -1337,7 +1339,7 @@ let profileBadgeBound = false;
 
 function bindProfileBadgeAffordance(el: HTMLElement): void {
   el.setAttribute('role', 'button');
-  el.setAttribute('aria-label', 'Switch profile');
+  el.setAttribute('aria-label', getAccountProfile() ? 'Open your profile' : 'Switch profile');
   el.setAttribute('tabindex', '0');
   el.style.cursor = 'pointer';
   if (profileBadgeBound) return;
@@ -1368,25 +1370,32 @@ function bindProfileBadgeAffordance(el: HTMLElement): void {
 }
 
 async function init(): Promise<void> {
-  // Resolve the profile from the URL FIRST. Future slots make the
-  // manifest fetch profile-aware; today this just stamps the topbar
-  // and primes localStorage. Failure (e.g., corrupted profile JSON in
-  // localStorage from an older build) is non-fatal — we log + discard +
-  // recreate so the page never bricks on profile errors alone.
+  // Authenticate before loading any personal cache, target or rating queue.
+  // A shared ?u= link never selects someone else's profile.
   try {
+    const account = await resolveAccountProfile();
+    const url = new URL(window.location.href);
+    // Recovery is deliberately network-only; return to the normal app URL so
+    // this successfully verified tab can reload its saved shell while offline.
+    if (url.pathname === '/api/app') url.pathname = '/';
+    url.searchParams.set('u', account.name);
+    window.history.replaceState({}, '', url.toString());
     currentProfile = loadOrCreateProfileFromURL(window.location.href);
   } catch (e) {
-    console.warn('[profile] failed to load, recreating default:', e);
-    // The loadOrCreate path already catches most issues, but a
-    // future-versioned profile would throw. Recreate the default.
-    try {
-      const url = new URL(window.location.href);
-      const name = url.searchParams.get('u') ?? 'anil';
-      localStorage.removeItem(`opd-profile-${name}`);
-      currentProfile = loadOrCreateProfileFromURL(window.location.href);
-    } catch {
-      currentProfile = null;
+    currentProfile = null;
+    console.warn('[profile] account initialization failed:', e);
+    setBanner({ level: 'red', text: e instanceof Error ? e.message : 'Could not verify your profile. Please reload.' });
+    const container = document.getElementById('map-pane') ?? document.querySelector('main');
+    if (container) {
+      const message = document.createElement('p');
+      message.textContent = 'Your saved targets and ratings have been kept. ';
+      const retry = document.createElement('a');
+      retry.href = '/api/app';
+      retry.textContent = 'Sign in and reload';
+      message.appendChild(retry);
+      container.appendChild(message);
     }
+    return;
   }
   renderTopbarProfileBadge(currentProfile?.name ?? null);
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +

@@ -113,7 +113,7 @@ export function buildCrudSection(profileName: string): HTMLElement {
   section.appendChild(heading);
 
   const desc = document.createElement('p');
-  desc.textContent = 'Targets you add here are synced to the Worker so the daemon scores them on the next tick. Curated targets you hide here are excluded from your scored view but stay shared with everyone else.';
+  desc.textContent = 'Save places to your account, then tap their pins on the Map to see upcoming ISS passes. New personal pins show geometric passes; cloud and obstruction forecasts are not included. Hiding a curated target changes only your view.';
   section.appendChild(desc);
 
   section.appendChild(buildAddForm(profileName));

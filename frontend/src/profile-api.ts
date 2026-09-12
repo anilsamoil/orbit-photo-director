@@ -3,6 +3,7 @@
  * edits roll back instead of being acknowledged without server persistence.
  */
 import type { PersonalTarget } from './profile';
+import { getAccountProfile } from './profile-session';
 
 const SESSION_REQUEST: RequestInit = {
   credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
@@ -15,6 +16,14 @@ export type ApiResult<T = unknown> =
   | { ok: true; data: T }
   | { ok: false; reason: 'authentication' | 'network' | 'http' | 'validation'; status?: number; detail?: string };
 
+function accountGuard(profileName: string): ApiResult<never> | null {
+  const account = getAccountProfile();
+  if (account && (account.name !== profileName || account.isVerified === false)) {
+    return { ok: false, reason: 'authentication', detail: 'Reconnect and reload to verify your own profile before syncing.' };
+  }
+  return null;
+}
+
 /** Fetch the current personal-target list for a profile (GET).
  *  Slot 6b — used by the Profile pane's first-render hydration so that
  *  a fresh device (empty localStorage) sees the targets the server
@@ -24,6 +33,7 @@ export async function getProfileTargets(
   profileName: string,
   baseUrl = '',
 ): Promise<ApiResult<{ targets: PersonalTarget[] }>> {
+  const denied = accountGuard(profileName); if (denied) return denied;
   try {
     const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
       ...SESSION_REQUEST, method: 'GET',
@@ -46,6 +56,7 @@ export async function putProfileTargets(
   targets: PersonalTarget[],
   baseUrl = '',
 ): Promise<ApiResult<{ count: number }>> {
+  const denied = accountGuard(profileName); if (denied) return denied;
   try {
     const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
       ...SESSION_REQUEST, method: 'PUT',
@@ -64,6 +75,7 @@ export async function postProfileTarget(
   target: PersonalTarget,
   baseUrl = '',
 ): Promise<ApiResult<{ count: number }>> {
+  const denied = accountGuard(profileName); if (denied) return denied;
   try {
     const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
       ...SESSION_REQUEST, method: 'POST',
@@ -83,6 +95,7 @@ export async function deleteProfileTarget(
   targetId: string,
   baseUrl = '',
 ): Promise<ApiResult<{ removed: boolean; count: number }>> {
+  const denied = accountGuard(profileName); if (denied) return denied;
   try {
     // Path-encode the id; the worker's DELETE decodes + re-validates shape.
     const resp = await fetch(

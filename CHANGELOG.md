@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.22.0.5 — 2026-09-12
+
+Google login now selects a stable personal map profile, even through a shared
+`?u=anil` link. Browser target and rating requests enforce account ownership;
+existing Anil data and offline queues are preserved. Cached snapshots, reminders
+and pending ratings stay scoped to the verified account.
+
+Tuvalu is included at a land point on Funafuti. Profile search recognizes Tuvalu,
+Funafuti and the spelling “tubalu” without relying on the external geocoder.
+Temporary empty search results expire quickly, slow responses have more time,
+and malformed coordinates cannot become an accidental (0,0) target. Saved
+personal map pins offer on-device geometric ISS pass predictions.
+
 ## 1.22.0.4 - 2026-09-09
 
 - Refresh tentative launch schedules every two hours from the existing cache, without extra source polling, Earth generation, AI calls or messages.
