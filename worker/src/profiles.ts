@@ -13,8 +13,8 @@
  *
  * Auth: uses the same signed Google Access session as ratings. All browser
  * writes require a same-origin Origin; legacy machine keys remain supported.
- * Signed accounts may access only their resolved profile. Explicit private
- * aliases retain legacy names; machine-key requests retain named-profile access.
+ * Signed accounts may access their resolved profile and explicit private grants.
+ * Private aliases retain legacy names; machine-key requests retain named-profile access.
  *
  * Concurrency: last-write-wins (design doc risk #4). Optimistic concurrency
  * via R2 ETag is deferred to v2. Two simultaneous PUTs interleave by
@@ -141,7 +141,7 @@ export async function handleProfilesRequest(request: Request, env: Env): Promise
   if (auth.principal.kind === 'access') {
     const resolved = await resolveBrowserProfile(auth.principal, env);
     if ('denied' in resolved) return resolved.denied;
-    if (resolved.profile.name !== profileName) return jsonResponse({ error: 'profile_forbidden' }, 403);
+    if (!resolved.profiles.some((profile) => profile.name === profileName)) return jsonResponse({ error: 'profile_forbidden' }, 403);
   }
   const targetId = parts[4]; // undefined when there's no /<id> segment
 

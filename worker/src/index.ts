@@ -21,7 +21,7 @@ import { handleWxRequest } from './wx';
 import { handleProfilesRequest } from './profiles';
 import { isValidProfileName } from './shared';
 import { authenticateCalibration } from './calibration-auth';
-import { handleBrowserSession, resolveBrowserProfile } from './browser-identity';
+import { handleBrowserSession, isOpaqueProfileName, resolveBrowserProfile } from './browser-identity';
 
 export interface Env {
   SITE: R2Bucket;
@@ -30,6 +30,7 @@ export interface Env {
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string; // private verified-email hash to legacy profile aliases
+  ACCESS_PROFILE_GRANTS?: string; // private verified-email hash to explicit additional profiles
   STALE_THRESHOLD_SECONDS: string;
 }
 
@@ -241,10 +242,11 @@ async function handleLog(request: Request, env: Env): Promise<Response> {
   if (auth.principal.kind === 'access') {
     const resolved = await resolveBrowserProfile(auth.principal, env);
     if ('denied' in resolved) return resolved.denied;
-    if (payload.profile !== undefined && payload.profile !== resolved.profile.name) {
+    const requestedProfile = payload.profile ?? resolved.profile.name;
+    if (!resolved.profiles.some((profile) => profile.name === requestedProfile)) {
       return jsonResponse({ error: 'profile_forbidden' }, 403);
     }
-    payload.profile = resolved.profile.name;
+    payload.profile = requestedProfile;
   }
 
   // Rate-limit CHECK runs after auth + payload validation. The BUMP happens
@@ -409,13 +411,16 @@ async function handleLogList(request: Request, env: Env): Promise<Response> {
   if (auth.principal.kind === 'access') {
     const resolved = await resolveBrowserProfile(auth.principal, env);
     if ('denied' in resolved) return resolved.denied;
-    if (profileFilter !== null && profileFilter !== resolved.profile.name) {
+    const requestedProfile = profileFilter ?? resolved.profile.name;
+    if (!resolved.profiles.some((profile) => profile.name === requestedProfile)) {
       return jsonResponse({ error: 'profile_forbidden' }, 403);
     }
-    profileFilter = resolved.profile.name;
+    profileFilter = requestedProfile;
     // New opaque profiles have no older global records. Query their prefix
     // directly so another user's busy log cannot crowd this account out.
-    if (!resolved.legacy) accountNamespace = `${resolved.profile.name}-`;
+    // Scope according to the selected profile, not the caller's default:
+    // a granted legacy profile may still have records in the global namespace.
+    if (isOpaqueProfileName(requestedProfile)) accountNamespace = `${requestedProfile}-`;
   }
 
   const now = new Date();

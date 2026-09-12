@@ -19,7 +19,7 @@ export type ApiResult<T = unknown> =
 function accountGuard(profileName: string): ApiResult<never> | null {
   const account = getAccountProfile();
   if (account && (account.name !== profileName || account.isVerified === false)) {
-    return { ok: false, reason: 'authentication', detail: 'Reconnect and reload to verify your own profile before syncing.' };
+    return { ok: false, reason: 'authentication', detail: 'Reconnect and reload to verify access to the selected profile before syncing.' };
   }
   return null;
 }

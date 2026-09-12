@@ -34,7 +34,7 @@ import {
 } from './profile';
 import { subscribeProfileChanged } from './profile-events';
 import { buildCrudSection } from './profile-crud';
-import { getAccountProfile } from './profile-session';
+import { canSelectProfile, getAccountProfile, getAuthorizedProfiles, getSignedInAccountProfile } from './profile-session';
 
 /** Min/max for the distance threshold slider (km). Range chosen to span
  *  "tight nadir only" (100 km) through "well past ISS horizon" (2000 km).
@@ -156,12 +156,42 @@ function buildPickerSection(): HTMLElement {
 
   const account = getAccountProfile();
   if (account) {
-    heading.textContent = `Your profile · ${account.displayName}`;
+    const own = getSignedInAccountProfile();
+    const managingCrew = own !== null && own.name !== account.name;
+    heading.textContent = `${account.isVerified === false ? 'Active profile' : managingCrew ? 'Crew profile' : 'Your profile'} · ${account.displayName}`;
     const info = document.createElement('p');
     info.textContent = account.isVerified === false
       ? 'Offline · using this tab’s last verified profile. Reconnect and reload to sync.'
-      : 'Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.';
+      : managingCrew
+        ? `Signed in as ${own.displayName}. You are managing ${account.displayName}’s targets, settings and ratings.`
+        : 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.';
     section.appendChild(info);
+    if (getAuthorizedProfiles().length > 1) {
+      const row = document.createElement('div');
+      row.className = 'profile-row';
+      const label = document.createElement('label');
+      label.htmlFor = 'profile-picker-select';
+      label.textContent = 'Profile:';
+      const select = document.createElement('select');
+      select.id = 'profile-picker-select';
+      select.className = 'profile-select';
+      populateAuthorizedOptions(select);
+      select.addEventListener('change', () => {
+        if (!suppressPickerChange && select.value !== readActiveProfileName()) switchToProfile(select.value);
+      });
+      row.append(label, select);
+      section.appendChild(row);
+    } else if (account.isVerified !== false) {
+      info.textContent = 'Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.';
+    }
+    if (account.name === 'jessica') {
+      const sources = document.createElement('p');
+      const link = document.createElement('a');
+      link.href = '/profile-research/jessica.html';
+      link.textContent = 'Why these targets? Sources and shooting ideas';
+      sources.appendChild(link);
+      section.appendChild(sources);
+    }
     return section;
   }
 
@@ -407,7 +437,7 @@ function readActiveProfileName(): string {
  *  `location.reload` to verify the URL mutation contract without
  *  actually navigating. */
 export function switchToProfile(name: string): void {
-  if (getAccountProfile() && getAccountProfile()?.name !== name) return;
+  if (getAccountProfile() && !canSelectProfile(name)) return;
   if (!isValidProfileName(name)) return;
   try {
     const url = new URL(window.location.href);
@@ -459,6 +489,10 @@ export function refreshPickerFromExternalChange(): void {
   // added/removed profiles. textContent only.
   suppressPickerChange = true;
   try {
+    if (getAccountProfile()) {
+      populateAuthorizedOptions(select);
+      return;
+    }
     select.replaceChildren();
     const names = new Set<string>(listProfiles());
     // v2 hotfix: belt-and-braces self-heal (see discoverProfileKeys).
@@ -475,6 +509,19 @@ export function refreshPickerFromExternalChange(): void {
     select.value = currentName;
   } finally {
     suppressPickerChange = false;
+  }
+}
+
+/** Never add locally discovered profiles to a signed-in account's chooser. */
+function populateAuthorizedOptions(select: HTMLSelectElement): void {
+  select.replaceChildren();
+  const own = getSignedInAccountProfile();
+  for (const profile of getAuthorizedProfiles()) {
+    const option = document.createElement('option');
+    option.value = profile.name;
+    option.textContent = profile.name === own?.name ? `${profile.displayName} (Your profile)` : profile.displayName;
+    option.selected = profile.name === readActiveProfileName();
+    select.appendChild(option);
   }
 }
 
@@ -495,7 +542,7 @@ export function renderProfileBadge(name: string | null): void {
   // visual oddity, not a script-injection surface.
   const displayName = getAccountProfile()?.displayName ?? name;
   el.textContent = `👤 ${displayName}`;
-  el.title = `Your profile: ${displayName}`;
+  el.title = `Active profile: ${displayName}`;
 }
 
 /** Test-only state reset. Clears the suppress-recursion flag + the

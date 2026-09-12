@@ -6,6 +6,7 @@ export interface CalibrationAuthEnv {
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string;
+  ACCESS_PROFILE_GRANTS?: string;
 }
 
 let cachedIssuer = '';

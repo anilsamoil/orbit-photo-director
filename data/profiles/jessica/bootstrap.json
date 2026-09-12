@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "profile": "jessica",
+  "targets": [
+    {
+      "id": "personal:jessica:research-caribou",
+      "name": "Caribou, Maine — hometown",
+      "lat": 46.861,
+      "lon": -68.012,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-nile-cairo",
+      "name": "Nile and Cairo — night photography",
+      "lat": 30.044,
+      "lon": 31.236,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-richat",
+      "name": "Richat Structure — Earth art",
+      "lat": 21.11,
+      "lon": -11.378,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-scripps",
+      "name": "La Jolla and Scripps coast",
+      "lat": 32.867,
+      "lon": -117.256,
+      "priority": 5,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-providence",
+      "name": "Providence — Brown University",
+      "lat": 41.824,
+      "lon": -71.413,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-vancouver",
+      "name": "Vancouver and UBC peninsula",
+      "lat": 49.258,
+      "lon": -123.243,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-boston",
+      "name": "Boston — MGH research connection",
+      "lat": 42.363,
+      "lon": -71.069,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-strasbourg",
+      "name": "Strasbourg — International Space University",
+      "lat": 48.585,
+      "lon": 7.751,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-ano-nuevo",
+      "name": "Año Nuevo — elephant seal coast",
+      "lat": 37.108,
+      "lon": -122.337,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-conch-reef",
+      "name": "Conch Reef / Key Largo — NEEMO",
+      "lat": 24.983,
+      "lon": -80.416,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-sardinia",
+      "name": "Supramonte, Sardinia — CAVES",
+      "lat": 40.193,
+      "lon": 9.461,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-madagascar",
+      "name": "Onilahy mouth, Madagascar — photographed",
+      "lat": -23.552,
+      "lon": 43.761,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-salton",
+      "name": "Salton Sea — photographed",
+      "lat": 33.317,
+      "lon": -115.786,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-black-point",
+      "name": "Black Point Lava Flow — Desert RATS",
+      "lat": 35.69,
+      "lon": -111.37,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-sossusvlei",
+      "name": "Sossusvlei dunes — suggested",
+      "lat": -24.74,
+      "lon": 15.292,
+      "priority": 3,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-lighthouse-reef",
+      "name": "Lighthouse Reef, Belize — suggested",
+      "lat": 17.3,
+      "lon": -87.55,
+      "priority": 3,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    },
+    {
+      "id": "personal:jessica:research-big-bend",
+      "name": "Big Bend, Texas — stated travel interest",
+      "lat": 29.25,
+      "lon": -103.25,
+      "priority": 4,
+      "createdAt": "2026-09-12T15:05:01.551Z"
+    }
+  ],
+  "research": "research.json",
+  "notes": "Sourced starter suggestions; not a current wishlist confirmed by Jessica. Append missing stable IDs and preserve existing targets."
+}

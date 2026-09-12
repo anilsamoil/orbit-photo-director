@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.22.0.7 — 2026-09-12
+
+The Profile chooser now lists the signed-in account and explicitly authorized
+crew profiles. An authorized Jessica link selects Jessica's targets and ratings;
+unapproved links still open the account's own profile. Offline access remains
+limited to the last verified profile in that tab, with synchronization disabled.
+
+Jessica Meir's shooting profile has a sourced starter list based on her public
+photography and documented connections. A linked research page explains each
+choice and viewing constraints. Jessica is enrolled in normal profile forecast
+generation so her saved targets can appear in Queue and Upcoming.
+
 ## 1.22.0.6 — 2026-09-12
 
 Refreshing an existing profile now discovers places added on another device,

@@ -27,7 +27,7 @@ DEFAULT_TOP_UPCOMING = 10
 # Profiles the daemon multiplexes per tick. Static-config because:
 #  - The daemon needs to know names BEFORE fetching (no `list profiles`
 #    endpoint exists yet — design rev 2 deferred that to v2).
-#  - 5 names max in foreseeable mission staffing; manual config is fine.
+#  - The small crew roster is explicitly configured.
 #  - Adding a new astronaut = one-line PR (matches existing curated
 #    target curation pattern).
 # When empty, the multiplexer is a no-op and the canonical single-tenant
@@ -36,7 +36,8 @@ DEFAULT_TOP_UPCOMING = 10
 # kikina + dubrov added 2026-07-07: Soyuz MS-29 cosmonaut crewmates (Anna
 # Kikina, Pyotr Dubrov), pre-seeded with Russian program sites + hometowns
 # via the Worker API.
-PROFILE_NAMES: tuple[str, ...] = ("anil", "chris", "dubrov", "jack", "josh", "kikina")
+# Jessica Meir added 2026-09-12 with sourced public photography targets.
+PROFILE_NAMES: tuple[str, ...] = ("anil", "chris", "dubrov", "jack", "jessica", "josh", "kikina")
 # Base URL of the Cloudflare Worker exposing /api/profiles/<name>/targets
 # (see worker/src/profiles.ts). Overridable in tests + local dev.
 PROFILE_API_BASE = "https://map.astroanil.dev"

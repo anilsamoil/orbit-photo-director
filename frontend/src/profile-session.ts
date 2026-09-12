@@ -1,4 +1,4 @@
-/** Browser identity comes only from the Worker's verified Google session. */
+/** Browser identity and selectable profiles come only from the verified session. */
 export interface AccountProfile {
   name: string;
   displayName: string;
@@ -8,8 +8,20 @@ export interface AccountProfile {
 
 const CACHE_KEY = 'opd-account-session-v1';
 let account: AccountProfile | null = null;
+let signedInAccount: AccountProfile | null = null;
+let authorizedProfiles: AccountProfile[] = [];
 
+/** Active profile; all personal caches, writes and ratings use this scope. */
 export function getAccountProfile(): AccountProfile | null { return account; }
+/** The Google account's own profile, distinct from a crew profile it manages. */
+export function getSignedInAccountProfile(): AccountProfile | null { return signedInAccount; }
+/** Offline cache never supplies permissions to switch into another profile. */
+export function getAuthorizedProfiles(): AccountProfile[] {
+  return authorizedProfiles.map((profile) => ({ ...profile }));
+}
+export function canSelectProfile(name: string): boolean {
+  return account?.isVerified === true && authorizedProfiles.some((profile) => profile.name === name);
+}
 
 function resumeOfflineProfile(): AccountProfile | null {
   try {
@@ -30,8 +42,26 @@ function validProfile(value: unknown): value is AccountProfile {
     && p.displayName.length <= 200;
 }
 
-export async function resolveAccountProfile(): Promise<AccountProfile> {
+function validateAuthorizedProfiles(value: unknown, own: AccountProfile): AccountProfile[] {
+  // Old Workers return only the account profile. An explicitly malformed list
+  // must fail closed instead of silently retaining earlier permissions.
+  if (value === undefined) return [own];
+  if (!Array.isArray(value) || value.length < 1 || value.length > 100
+    || !value.every(validProfile)) throw new Error('Could not verify your profiles. Please reload when connected.');
+  const profiles = value as AccountProfile[];
+  if (new Set(profiles.map((profile) => profile.name)).size !== profiles.length
+    || !profiles.some((profile) => profile.name === own.name && profile.displayName === own.displayName)) {
+    throw new Error('Could not verify your profiles. Please reload when connected.');
+  }
+  return [own, ...profiles.filter((profile) => profile.name !== own.name)].map((profile) => ({
+    name: profile.name, displayName: profile.displayName, isVerified: true,
+  }));
+}
+
+export async function resolveAccountProfile(urlHref = window.location.href): Promise<AccountProfile> {
   account = null;
+  signedInAccount = null;
+  authorizedProfiles = [];
   // Tab-local storage avoids selecting another account merely because it used
   // this browser previously. Never resume a cache after an HTTP/auth failure.
   if (navigator.onLine === false) {
@@ -62,7 +92,13 @@ export async function resolveAccountProfile(): Promise<AccountProfile> {
     if (body?.ok !== true || !validProfile(body.profile)) {
       throw new Error('Could not verify your profile. Please reload when connected.');
     }
-    account = { name: body.profile.name, displayName: body.profile.displayName, isVerified: true };
+    const own = { name: body.profile.name, displayName: body.profile.displayName, isVerified: true };
+    const profiles = validateAuthorizedProfiles(body.profiles, own);
+    let requested: string | null = null;
+    try { requested = new URL(urlHref).searchParams.get('u'); } catch { /* use own profile */ }
+    account = profiles.find((profile) => profile.name === requested) ?? own;
+    signedInAccount = own;
+    authorizedProfiles = profiles;
     try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(account)); } catch { /* storage disabled */ }
     return account;
   } catch (error) {
