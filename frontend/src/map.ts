@@ -51,6 +51,7 @@ import { subscribeProfileChanged } from './profile-events';
 import { launchStore, type LaunchState } from './launch-store';
 import { isLaunchPass, legacyLaunchInHorizon, selectLaunches } from './launch-selectors';
 import { openLaunchDetails, renderLegacyLaunchCard } from './launch-card';
+import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
 let map: maplibregl.Map | null = null;
 let issMarker: maplibregl.Marker | null = null;
@@ -461,22 +462,6 @@ let multiOrbitVisible: boolean = readMultiOrbitVisible();
  *  just visually distinguishable). */
 const ISS_ORBIT_PERIOD_SECONDS = 5568;
 
-/** ASCENT trajectory overlay (v1.6.1.0). When ON and a PassEntry with
- *  launch.kind="ascent" and a non-empty trajectory exists, the layer
- *  draws the rocket's predicted ground track (T+0 → orbit insertion,
- *  ~9 min) as an altitude-colored polyline plus a pad pin. Default ON
- *  — when an ascent is actionable, you want to see it. */
-const ASCENT_PREF_KEY = 'opd-map-ascent-visible';
-function readAscentVisible(): boolean {
-  try {
-    const v = localStorage.getItem(ASCENT_PREF_KEY);
-    return v === null ? true : v === '1';
-  } catch {
-    return true;
-  }
-}
-let ascentVisible: boolean = readAscentVisible();
-
 /** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
  *  "make so can turn off/on as needed" stays sticky across reloads. Default
  *  on (clouds visible) matches v1.0+ behavior. */
@@ -522,6 +507,13 @@ let bearingMode: BearingMode = readBearingMode();
 
 /** Test-only: reset module-level state between vitest runs. */
 export function _resetMapStateForTest(): void {
+  mapLaunchModeUnsubscribe?.();
+  mapLaunchModeUnsubscribe = null;
+  dismissMapModePopup('target');
+  dismissMapModePopup('launch');
+  mapLaunchStyleMap?.off('styledata', applyMapLaunchVisibility);
+  mapLaunchStyleMap = null;
+  setMapLaunchMode(false);
   bearingMode = 'north';
   nightLightsVisible = false;
   labelsVisible = true;
@@ -1218,6 +1210,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       id: 'my-targets-casing',
       type: 'circle',
       source: 'my-targets',
+      layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
       paint: {
         'circle-radius': 9,
         'circle-color': 'rgba(0,0,0,0)',
@@ -1232,6 +1225,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       id: 'my-targets-layer',
       type: 'circle',
       source: 'my-targets',
+      layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
       paint: {
         'circle-radius': 9,
         'circle-color': 'rgba(0,0,0,0)',  // hollow — stroke-only ring
@@ -1250,6 +1244,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       id: 'targets-layer',
       type: 'circle',
       source: 'targets',
+      layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
       paint: {
         'circle-radius': 6,
         'circle-color': [
@@ -1342,7 +1337,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
           }
         : undefined;
       const popupBody = buildTargetPopupContent(props, Date.now(), onEdit, currentTrack);
-      popup.setLngLat(hit.lngLat).setDOMContent(popupBody).addTo(map);
+      trackMapModePopup(popup, 'target').setLngLat(hit.lngLat).setDOMContent(popupBody).addTo(map);
 
       // Async live "now" cloud — patched onto the popup's single weather row
       // once it resolves. Guard on isConnected so a resolve after the popup
@@ -1494,6 +1489,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       id: 'ascent-trajectory-layer',
       type: 'line',
       source: 'ascent-trajectory',
+      layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
       paint: {
         'line-color': '#ffd45c',
         'line-width': 3,
@@ -1506,6 +1502,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       id: 'ascent-pad-layer',
       type: 'circle',
       source: 'ascent-pad',
+      layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
       paint: {
         'circle-radius': 7,
         'circle-color': '#ffd45c',
@@ -1526,7 +1523,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       const pass = currentPasses.find((p) => p.target_id === props.target_id);
       if (!pass || launchStore.getState().artifact) return;
       const body = renderLegacyLaunchCard(pass, true);
-      new maplibregl.Popup()
+      trackMapModePopup(new maplibregl.Popup(), 'launch')
         .setLngLat(coords)
         .setDOMContent(body)
         .addTo(map!);
@@ -1538,7 +1535,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       if (map) map.getCanvas().style.cursor = '';
     });
   }
-  applyAscentVisibility();
+  syncMapLaunchMode();
   if (!launchSubscriptionBound) {
     launchSubscriptionBound = true;
     launchStore.subscribe(() => {
@@ -1623,7 +1620,6 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindNightLightsToggle();
   bindIrToggle();
   bindLabelsToggle();
-  bindAscentToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
   bindPinDrop();
@@ -1861,19 +1857,77 @@ function refreshAscentTrajectorySource(): void {
   });
 }
 
-/** Show / hide the ascent-trajectory layers (polyline + pad pin). */
-function applyAscentVisibility(): void {
+/** Launch mode replaces ordinary target pins; all other overlays keep their
+ * current settings. Recheck recreated layers without changing map time. */
+function applyMapLaunchVisibility(): void {
   if (!map) return;
-  const vis = ascentVisible ? 'visible' : 'none';
+  const enabled = getMapLaunchMode();
   try {
-    if (map.getLayer('ascent-trajectory-layer')) {
-      map.setLayoutProperty('ascent-trajectory-layer', 'visibility', vis);
-    }
-    if (map.getLayer('ascent-pad-layer')) {
-      map.setLayoutProperty('ascent-pad-layer', 'visibility', vis);
+    for (const [layer, launch] of [
+      ['ascent-trajectory-layer', true], ['ascent-pad-layer', true],
+      ['targets-layer', false], ['my-targets-layer', false], ['my-targets-casing', false],
+    ] as const) {
+      const visibility = enabled === launch ? 'visible' : 'none';
+      if (map.getLayer(layer) && map.getLayoutProperty(layer, 'visibility') !== visibility) {
+        map.setLayoutProperty(layer, 'visibility', visibility);
+      }
     }
   } catch { /* layers not loaded yet */ }
 }
+
+let mapLaunchModeUnsubscribe: (() => void) | null = null;
+let mapLaunchStyleMap: maplibregl.Map | null = null;
+type MapModePopupKind = 'target' | 'launch';
+interface MapModePopup {
+  remove(): unknown;
+  once(type: 'close', listener: () => void): unknown;
+}
+const mapModePopups: Partial<Record<MapModePopupKind, MapModePopup>> = {};
+
+function dismissMapModePopup(kind: MapModePopupKind): void {
+  const popup = mapModePopups[kind];
+  delete mapModePopups[kind];
+  popup?.remove();
+}
+
+/** Keep only the target/launch popup that belongs to the active map mode.
+ * Popup.remove() performs MapLibre's listener/DOM cleanup; other popup types
+ * retain their own lifecycle. A delayed old close cannot clear a replacement. */
+function trackMapModePopup<T extends MapModePopup>(popup: T, kind: MapModePopupKind): T {
+  dismissMapModePopup(kind);
+  mapModePopups[kind] = popup;
+  popup.once('close', () => {
+    if (mapModePopups[kind] === popup) delete mapModePopups[kind];
+  });
+  return popup;
+}
+
+function syncMapLaunchMode(): void {
+  if (!mapLaunchModeUnsubscribe) {
+    mapLaunchModeUnsubscribe = subscribeMapLaunchMode((enabled) => {
+      dismissMapModePopup(enabled ? 'target' : 'launch');
+      if (!map) return;
+      // Sources may predate this mode switch after an offline or profile
+      // refresh. Rebuild only sources that the loaded style already owns.
+      if (map.getSource('ascent-pad')) refreshAscentTrajectorySource();
+      if (map.getSource('targets')) refreshTargetsSource();
+      if (map.getSource('my-targets')) refreshMyTargetsSource();
+      applyMapLaunchVisibility();
+    });
+  }
+  if (map && mapLaunchStyleMap !== map) {
+    mapLaunchStyleMap?.off('styledata', applyMapLaunchVisibility);
+    map.on('styledata', applyMapLaunchVisibility);
+    mapLaunchStyleMap = map;
+  }
+  applyMapLaunchVisibility();
+}
+
+/** Test hook for actual startup/subscription behavior without WebGL. */
+export {
+  syncMapLaunchMode as _syncMapLaunchModeForTest,
+  trackMapModePopup as _trackMapModePopupForTest,
+};
 
 /** Focus the current launch revision's site and supplied corridor. The ISS
  * marker keeps the time selected by the operator's existing map controls. */
@@ -1884,10 +1938,8 @@ export function focusLaunchOnMap(eventId: string): boolean {
   if (!selection) return false;
   const { site, trajectory } = selection.item;
   exitFollowISS();
-  ascentVisible = true;
-  try { localStorage.setItem(ASCENT_PREF_KEY, '1'); } catch { /* storage optional */ }
-  reflectAscentButton();
-  applyAscentVisibility();
+  setMapLaunchMode(true);
+  applyMapLaunchVisibility();
   const points: [number, number][] = [[site.lon, site.lat]];
   if (trajectory.quality !== 'unknown' && trajectory.source && trajectory.points.length >= 2) {
     let longitude = site.lon;
@@ -2660,30 +2712,6 @@ function bindCloudToggle(): void {
     refreshForecastCloudLayer();
   });
   cloudToggleBound = true;
-}
-
-let ascentToggleBound = false;
-function reflectAscentButton(): void {
-  const btn = document.getElementById('toggle-ascent');
-  if (!btn) return;
-  btn.classList.toggle('active', ascentVisible);
-  btn.setAttribute('aria-pressed', ascentVisible ? 'true' : 'false');
-  btn.title = ascentVisible
-    ? 'Launch sites and available ascent corridors shown — click to hide'
-    : 'Launch sites and available ascent corridors hidden — click to show';
-}
-function bindAscentToggle(): void {
-  if (ascentToggleBound) return;
-  const btn = document.getElementById('toggle-ascent');
-  if (!btn) return;
-  reflectAscentButton();
-  btn.addEventListener('click', () => {
-    ascentVisible = !ascentVisible;
-    try { localStorage.setItem(ASCENT_PREF_KEY, ascentVisible ? '1' : '0'); } catch { /* noop */ }
-    reflectAscentButton();
-    applyAscentVisibility();
-  });
-  ascentToggleBound = true;
 }
 
 /** Show / hide the VIIRS Black Marble night-lights overlay. Idempotent —
@@ -4389,6 +4417,7 @@ function bindSatellitePicker(): void {
     requestAnimationFrame(resizeMap);
   };
   const openPicker = () => {
+    setMapLaunchMode(false);
     pickerOpen = true;
     panel.hidden = false;
     btn.classList.add('active');

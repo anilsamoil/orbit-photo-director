@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderMapLaunchBrief } from '../src/launch-map-brief';
 import { _setFollowEnvForTest, applyFollowISS, focusLaunchOnMap } from '../src/map';
 import { launchStore } from '../src/launch-store';
+import { getMapLaunchMode, setMapLaunchMode } from '../src/map-launch-mode';
 import { assessment, iso, launch, NOW, state, supported } from './launch-fixtures';
 
 afterEach(() => { vi.restoreAllMocks(); localStorage.removeItem('opd-map-launch-brief-open'); _setFollowEnvForTest(null, false); document.body.replaceChildren(); });
@@ -95,12 +96,14 @@ describe('map launch brief', () => {
 });
 
 describe('show launch on map', () => {
+  afterEach(() => setMapLaunchMode(false));
   function setup(data = state()) {
+    setMapLaunchMode(false);
     vi.spyOn(Date, 'now').mockReturnValue(NOW);
     vi.spyOn(launchStore, 'getState').mockReturnValue(data);
-    const map = { setCenter: vi.fn(), easeTo: vi.fn(), fitBounds: vi.fn(), getLayer: vi.fn(() => true), setLayoutProperty: vi.fn() };
+    const map = { setCenter: vi.fn(), easeTo: vi.fn(), fitBounds: vi.fn(), getLayer: vi.fn(() => true), getLayoutProperty: vi.fn(), setLayoutProperty: vi.fn() };
     _setFollowEnvForTest(map, true);
-    document.body.innerHTML = '<button id="toggle-ascent"></button><button id="toggle-follow-iss"></button>';
+    document.body.innerHTML = '<button id="toggle-follow-iss"></button>';
     return map;
   }
   it('shows an unknown-trajectory pad and releases ISS following without fabricating a corridor', () => {
@@ -108,7 +111,8 @@ describe('show launch on map', () => {
     expect(focusLaunchOnMap('event-1')).toBe(true);
     expect(map.easeTo).toHaveBeenCalledWith(expect.objectContaining({ center: [-80.6, 28.5] }));
     expect(map.fitBounds).not.toHaveBeenCalled();
-    expect(document.getElementById('toggle-ascent')?.getAttribute('aria-pressed')).toBe('true');
+    expect(getMapLaunchMode()).toBe(true);
+    expect(map.setLayoutProperty).toHaveBeenCalledWith('ascent-pad-layer', 'visibility', 'visible');
     applyFollowISS({ lat: 0, lon: 0 });
     expect(map.setCenter).not.toHaveBeenCalled();
   });
@@ -130,5 +134,6 @@ describe('show launch on map', () => {
     expect(focusLaunchOnMap('event-1')).toBe(false);
     expect(map.easeTo).not.toHaveBeenCalled();
     expect(map.fitBounds).not.toHaveBeenCalled();
+    expect(getMapLaunchMode()).toBe(false);
   });
 });

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.22.0.12 — 2026-09-13
+
+The map fills the pane again, with the time slider beside All/Mine and the controls overlaid on the map. Launches is a third map selection that starts off on each visit; selecting it opens the launch panel and shows launch sites and supplied corridors. All or Mine closes the panel and restores normal targets. The redundant rocket toggle is removed, and launch/satellite popups share a bounded overlay area.
+
 ## 1.22.0.11 — 2026-09-13
 
 The main Map launch box now collapses like Other launches and starts closed, leaving more room for the map. Its compact summary retains the current shooting verdict; opening or closing is remembered across refreshes and reloads.
