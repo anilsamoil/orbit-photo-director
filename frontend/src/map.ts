@@ -1875,6 +1875,36 @@ function applyAscentVisibility(): void {
   } catch { /* layers not loaded yet */ }
 }
 
+/** Focus the current launch revision's site and supplied corridor. The ISS
+ * marker keeps the time selected by the operator's existing map controls. */
+export function focusLaunchOnMap(eventId: string): boolean {
+  if (!map) return false;
+  const selection = selectLaunches(launchStore.getState(), Date.now(), 'map')
+    .find(({ item }) => item.event_id === eventId);
+  if (!selection) return false;
+  const { site, trajectory } = selection.item;
+  exitFollowISS();
+  ascentVisible = true;
+  try { localStorage.setItem(ASCENT_PREF_KEY, '1'); } catch { /* storage optional */ }
+  reflectAscentButton();
+  applyAscentVisibility();
+  const points: [number, number][] = [[site.lon, site.lat]];
+  if (trajectory.quality !== 'unknown' && trajectory.source && trajectory.points.length >= 2) {
+    let longitude = site.lon;
+    for (const point of trajectory.points) {
+      longitude += wrapLon(point.lon - longitude);
+      points.push([longitude, point.lat]);
+    }
+  }
+  if (points.length === 1) map.easeTo({ center: points[0], zoom: 4, duration: 600 });
+  else {
+    const bounds = new maplibregl.LngLatBounds(points[0], points[0]);
+    for (const point of points.slice(1)) bounds.extend(point);
+    map.fitBounds(bounds, { padding: 50, maxZoom: 5, duration: 600 });
+  }
+  return true;
+}
+
 /** Show / hide the terminator overlay (line + subsolar dot). Idempotent. */
 function applyTerminatorVisibility(): void {
   if (!map) return;
@@ -2633,22 +2663,24 @@ function bindCloudToggle(): void {
 }
 
 let ascentToggleBound = false;
+function reflectAscentButton(): void {
+  const btn = document.getElementById('toggle-ascent');
+  if (!btn) return;
+  btn.classList.toggle('active', ascentVisible);
+  btn.setAttribute('aria-pressed', ascentVisible ? 'true' : 'false');
+  btn.title = ascentVisible
+    ? 'Launch sites and available ascent corridors shown — click to hide'
+    : 'Launch sites and available ascent corridors hidden — click to show';
+}
 function bindAscentToggle(): void {
   if (ascentToggleBound) return;
   const btn = document.getElementById('toggle-ascent');
   if (!btn) return;
-  const reflect = () => {
-    btn.classList.toggle('active', ascentVisible);
-    btn.setAttribute('aria-pressed', ascentVisible ? 'true' : 'false');
-    btn.title = ascentVisible
-      ? 'ASCENT trajectory shown — click to hide'
-      : 'ASCENT trajectory hidden — click to show';
-  };
-  reflect();
+  reflectAscentButton();
   btn.addEventListener('click', () => {
     ascentVisible = !ascentVisible;
     try { localStorage.setItem(ASCENT_PREF_KEY, ascentVisible ? '1' : '0'); } catch { /* noop */ }
-    reflect();
+    reflectAscentButton();
     applyAscentVisibility();
   });
   ascentToggleBound = true;
@@ -4338,6 +4370,7 @@ function renderSatellitePickerList(): void {
     }
     list.appendChild(label);
   }
+  requestAnimationFrame(resizeMap);
 }
 
 function bindSatellitePicker(): void {
@@ -4353,6 +4386,7 @@ function bindSatellitePicker(): void {
     pickerOpen = false;
     panel.hidden = true;
     btn.classList.remove('active');
+    requestAnimationFrame(resizeMap);
   };
   const openPicker = () => {
     pickerOpen = true;

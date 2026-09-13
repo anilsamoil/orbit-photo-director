@@ -25,6 +25,18 @@ export interface LaunchOpportunity {
     points: { lat: number; lon: number; alt_km: number; t_offset_seconds: number }[];
   };
   sources: { kind: string; url: string; fetched_at: string | null }[];
+  assessment?: LaunchAssessment;
+}
+
+/** Planning at the listed liftoff time; does not grant camera/Queue eligibility. */
+export interface LaunchAssessment {
+  checked_at: string; valid_until: string; tle_epoch: string | null;
+  model: { name: string; duration_seconds: number; max_altitude_km: number; max_downrange_km: number } | null;
+  net: {
+    verdict: 'possible' | 'too_far' | 'unknown'; reason: string; at: string;
+    pad_distance_km: number | null; look: CaptureInterval['look'];
+  };
+  window: { verdict: 'too_far' | 'unknown'; reason: string };
 }
 
 export interface LaunchArtifact {
@@ -37,14 +49,21 @@ export interface LaunchArtifact {
   items: LaunchOpportunity[];
 }
 
+const ASSESSMENT_REASONS = new Set([
+  'SITE_IN_VIEW_AT_NET', 'NOMINAL_ASCENT_TOO_FAR', 'VIEW_UNCONFIRMED', 'TIMING_UNCONFIRMED',
+  'EPHEMERIS_UNAVAILABLE', 'EPHEMERIS_OUTSIDE_HORIZON', 'SOURCE_UNAVAILABLE', 'PROFILE_UNKNOWN',
+  'EVALUATION_INCOMPLETE', 'GEOMETRY_INVALID',
+]);
+
 function requireValue(ok: unknown): asserts ok {
   if (!ok) throw new Error('Invalid launch schema');
 }
-function record(value: unknown, keys: string): Record<string, unknown> {
+function record(value: unknown, keys: string, optionalKeys = ''): Record<string, unknown> {
   requireValue(value !== null && typeof value === 'object' && !Array.isArray(value));
   const obj = value as Record<string, unknown>;
-  const allowed = keys.split(' ');
-  requireValue(Object.keys(obj).length === allowed.length && allowed.every((key) => Object.hasOwn(obj, key)));
+  const required = keys.split(' ');
+  const allowed = [...required, ...optionalKeys.split(' ').filter(Boolean)];
+  requireValue(Object.keys(obj).every((key) => allowed.includes(key)) && required.every((key) => Object.hasOwn(obj, key)));
   return obj;
 }
 function string(value: unknown): value is string {
@@ -109,7 +128,7 @@ export function parseLaunchArtifact(value: unknown): LaunchArtifact {
   requireValue(Array.isArray(obj.items) && obj.items.length <= 2000);
   const ids = new Set<string>();
   for (const value of obj.items) {
-    const item = record(value, 'event_id revision name rocket site status reason_codes launch_window capture_intervals trajectory sources');
+    const item = record(value, 'event_id revision name rocket site status reason_codes launch_window capture_intervals trajectory sources', 'assessment');
     requireValue(string(item.event_id) && !ids.has(item.event_id));
     ids.add(item.event_id);
     requireValue(revision(item.revision) && string(item.name) && string(item.rocket));
@@ -174,6 +193,68 @@ export function parseLaunchArtifact(value: unknown): LaunchArtifact {
       requireValue(string(source.kind) && safeSourceUrl(source.url));
       timestamp(source.fetched_at, true);
     }
+    if (Object.hasOwn(item, 'assessment')) {
+      const assessment = record(item.assessment, 'checked_at valid_until tle_epoch model net window');
+      ordered(assessment.checked_at, assessment.valid_until);
+      const duration = Date.parse(assessment.valid_until as string) - Date.parse(assessment.checked_at as string);
+      requireValue(assessment.checked_at === obj.generated_at && duration > 0 && duration <= 3 * 3600_000);
+      timestamp(assessment.tle_epoch, true);
+      if (assessment.model !== null) {
+        const model = record(assessment.model, 'name duration_seconds max_altitude_km max_downrange_km');
+        requireValue(string(model.name) && model.name.length <= 100 && number(model.duration_seconds, 1, 3600)
+          && number(model.max_altitude_km, 0, 2000) && number(model.max_downrange_km, 0, 20000));
+      }
+      const net = record(assessment.net, 'verdict reason at pad_distance_km look');
+      requireValue(['possible', 'too_far', 'unknown'].includes(String(net.verdict)) && ASSESSMENT_REASONS.has(String(net.reason)));
+      timestamp(net.at);
+      requireValue(net.at === window.net);
+      requireValue(net.pad_distance_km === null || number(net.pad_distance_km, 0, 21000));
+      if (net.look !== null) {
+        const look = record(net.look, 'frame azimuth_deg off_nadir_deg');
+        requireValue(look.frame === 'orbital-lvlh' && number(look.azimuth_deg, 0, 360) && look.azimuth_deg !== 360 && number(look.off_nadir_deg, 0, 180));
+      }
+      if (net.verdict === 'possible') {
+        requireValue(net.reason === 'SITE_IN_VIEW_AT_NET' && net.look !== null && net.pad_distance_km !== null
+          && assessment.tle_epoch !== null);
+      } else requireValue(net.look === null);
+      const assessedWindow = record(assessment.window, 'verdict reason');
+      requireValue(['too_far', 'unknown'].includes(String(assessedWindow.verdict)) && ASSESSMENT_REASONS.has(String(assessedWindow.reason)));
+      const concrete = net.verdict !== 'unknown' || assessedWindow.verdict !== 'unknown';
+      const checked = Date.parse(assessment.checked_at as string);
+      const expires = Date.parse(assessment.valid_until as string);
+      const netTime = Date.parse(net.at as string);
+      const epoch = Date.parse(assessment.tle_epoch as string);
+      const fetched = Date.parse(coverage.fetched_at as string);
+      if (concrete) {
+        requireValue(assessment.tle_epoch !== null && coverage.fetched_at !== null && netTime >= checked
+          && Math.abs(checked - epoch) <= 24 * 3600_000 && Math.abs(netTime - epoch) <= 24 * 3600_000
+          && fetched <= checked && checked - fetched < 3 * 3600_000 && expires - fetched <= 3 * 3600_000
+          && ['minute', 'second'].includes(String(window.precision).toLowerCase())
+          && [...item.reason_codes as string[], ...coverage.reasons as string[]].every((reason) => ![
+            'LAUNCH_UNCONFIRMED', 'TIME_CONFLICT', 'TIME_PRECISION_UNKNOWN', 'TIME_PRECISION_COARSE', 'WINDOW_UNKNOWN',
+            'SOURCE_AGE_MTIME_ONLY', 'SOURCE_AGE_UNKNOWN', 'REPLAY_SOURCE_MISMATCH',
+          ].includes(reason)));
+        ordered(window.start, net.at);
+        ordered(net.at, window.start);
+        ordered(net.at, window.end);
+      }
+      const model = assessment.model as LaunchAssessment['model'];
+      for (const result of [net, assessedWindow]) {
+        if (result.verdict === 'too_far') requireValue(model !== null && assessment.tle_epoch !== null && result.reason === 'NOMINAL_ASCENT_TOO_FAR');
+      }
+      if (net.verdict === 'too_far') requireValue(netTime - epoch + model!.duration_seconds * 1000 <= 24 * 3600_000);
+      if (assessedWindow.verdict === 'too_far') {
+        requireValue(net.verdict !== 'possible' && !hasTimeConflict(item));
+        ordered(window.start, window.end);
+        const start = Date.parse(window.start as string);
+        const end = Date.parse(window.end as string);
+        requireValue(start >= netTime && end - start <= 6 * 3600_000 && end - epoch + model!.duration_seconds * 1000 <= 24 * 3600_000);
+      }
+    }
   }
   return value as LaunchArtifact;
+}
+
+function hasTimeConflict(item: Record<string, unknown>): boolean {
+  return (item.reason_codes as string[]).includes('TIME_CONFLICT');
 }

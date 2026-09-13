@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -12,6 +13,11 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from .launch_assessment import (
+    ASSESSMENT_REASONS,
+    EPHEMERIS_HORIZON_SECONDS,
+    PLANNING_VALID_SECONDS,
+)
 from .launch_data import _parse_iso8601_z
 from .launch_evidence import VALID_SECONDS, canonical_bytes
 
@@ -32,7 +38,8 @@ def _validate_artifact(artifact: dict) -> None:
         keys(
             item,
             "event_id revision name rocket site status reason_codes "
-            "launch_window capture_intervals trajectory sources",
+            "launch_window capture_intervals trajectory sources"
+            + (" assessment" if "assessment" in item else ""),
         )
         if item["status"] != "map_only":
             raise ValueError("LAUNCH_INSTRUCTIONS_NOT_ENABLED")
@@ -47,6 +54,8 @@ def _validate_artifact(artifact: dict) -> None:
                 keys(interval["look"], "frame azimuth_deg off_nadir_deg")
         for source in item["sources"]:
             keys(source, "kind url fetched_at")
+        if "assessment" in item:
+            _validate_assessment(item["assessment"], item, artifact, keys)
     expected = hashlib.sha256(
         canonical_bytes({k: v for k, v in artifact.items() if k != "revision"})
     ).hexdigest()[:24]
@@ -59,6 +68,92 @@ def _validate_artifact(artifact: dict) -> None:
     ).total_seconds()
     if not 0 < validity <= VALID_SECONDS:
         raise ValueError("INVALID_LAUNCH_VALIDITY")
+
+
+def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable) -> None:
+    """Public planning facts cannot accidentally become camera instructions."""
+    def number(raw: object, lower: float, upper: float) -> bool:
+        return (isinstance(raw, (int, float)) and not isinstance(raw, bool)
+                and math.isfinite(raw) and lower <= raw <= upper)
+
+    keys(value, "checked_at valid_until tle_epoch model net window")
+    keys(value["net"], "verdict reason at pad_distance_km look")
+    keys(value["window"], "verdict reason")
+    checked = _parse_iso8601_z(value["checked_at"])
+    expires = _parse_iso8601_z(value["valid_until"])
+    net_time = _parse_iso8601_z(value["net"]["at"])
+    net, window, model = value["net"], value["window"], value["model"]
+    if (value["checked_at"] != artifact["generated_at"]
+            or value["net"]["at"] != item["launch_window"]["net"]
+            or not 0 < (expires - checked).total_seconds() <= PLANNING_VALID_SECONDS
+            or not isinstance(net["verdict"], str)
+            or net["verdict"] not in {"possible", "too_far", "unknown"}
+            or not isinstance(window["verdict"], str)
+            or window["verdict"] not in {"too_far", "unknown"}
+            or not isinstance(net["reason"], str) or net["reason"] not in ASSESSMENT_REASONS
+            or not isinstance(window["reason"], str) or window["reason"] not in ASSESSMENT_REASONS
+            or (net["pad_distance_km"] is not None
+                and not number(net["pad_distance_km"], 0, 21_000))):
+        raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+    if model is not None:
+        keys(model, "name duration_seconds max_altitude_km max_downrange_km")
+        if (not isinstance(model["name"], str) or not 0 < len(model["name"]) <= 100
+                or not number(model["duration_seconds"], 1, 3600)
+                or not number(model["max_altitude_km"], 0, 2000)
+                or not number(model["max_downrange_km"], 0, 20_000)):
+            raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+    epoch = _parse_iso8601_z(value["tle_epoch"]) if value["tle_epoch"] is not None else None
+    concrete = net["verdict"] != "unknown" or window["verdict"] != "unknown"
+    if concrete:
+        fetched = artifact["coverage"]["fetched_at"]
+        precision = item["launch_window"]["precision"]
+        start, end = item["launch_window"]["start"], item["launch_window"]["end"]
+        uncertain_reasons = {
+            "WINDOW_UNKNOWN", "TIME_CONFLICT", "TIME_PRECISION_UNKNOWN", "TIME_PRECISION_COARSE",
+            "LAUNCH_UNCONFIRMED", "SOURCE_AGE_MTIME_ONLY", "SOURCE_AGE_UNKNOWN",
+            "REPLAY_SOURCE_MISMATCH",
+        }
+        if (epoch is None or fetched is None or net_time < checked
+                or not isinstance(precision, str) or precision.lower() not in {"second", "minute"}
+                or uncertain_reasons.intersection(item["reason_codes"])
+                or uncertain_reasons.intersection(artifact["coverage"]["reasons"])
+                or start is None or end is None
+                or _parse_iso8601_z(start) != net_time or _parse_iso8601_z(end) < net_time
+                or abs((checked - epoch).total_seconds()) > EPHEMERIS_HORIZON_SECONDS
+                or abs((net_time - epoch).total_seconds()) > EPHEMERIS_HORIZON_SECONDS
+                or not 0 <= (checked - _parse_iso8601_z(fetched)).total_seconds()
+                < PLANNING_VALID_SECONDS
+                or (expires - _parse_iso8601_z(fetched)).total_seconds() > PLANNING_VALID_SECONDS):
+            raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+    look = net["look"]
+    if net["verdict"] == "possible":
+        if (net["reason"] != "SITE_IN_VIEW_AT_NET" or net["pad_distance_km"] is None
+                or look is None):
+            raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+        keys(look, "frame azimuth_deg off_nadir_deg")
+        if (look["frame"] != "orbital-lvlh" or not number(look["azimuth_deg"], 0, 360)
+                or look["azimuth_deg"] == 360 or not number(look["off_nadir_deg"], 0, 180)):
+            raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+    elif look is not None:
+        raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+    for result in (net, window):
+        if result["verdict"] == "too_far" and (
+            model is None or result["reason"] != "NOMINAL_ASCENT_TOO_FAR"
+        ):
+            raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+    if net["verdict"] == "too_far" and (
+        net_time - epoch
+    ).total_seconds() + model["duration_seconds"] > EPHEMERIS_HORIZON_SECONDS:
+        raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+    if window["verdict"] == "too_far":
+        start, end = item["launch_window"]["start"], item["launch_window"]["end"]
+        if start is None or end is None or net["verdict"] == "possible":
+            raise ValueError("INVALID_LAUNCH_ASSESSMENT")
+        start, end = _parse_iso8601_z(start), _parse_iso8601_z(end)
+        if (end < start or start < net_time or (end - start).total_seconds() > 6 * 3600
+                or (end - epoch).total_seconds() + model["duration_seconds"]
+                > EPHEMERIS_HORIZON_SECONDS):
+            raise ValueError("INVALID_LAUNCH_ASSESSMENT")
 
 
 def publish_launch_artifact(

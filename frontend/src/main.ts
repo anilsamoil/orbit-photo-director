@@ -51,6 +51,7 @@ import { aggregateShootCounts, claimMapShotFetch, publishShotCounts } from './sh
 import { launchStore } from './launch-store';
 import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from './launch-selectors';
 import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
+import { renderMapLaunchBrief } from './launch-map-brief';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -448,10 +449,14 @@ function renderQueue(): void {
     if (!notice) {
       notice = document.createElement('div');
       notice.id = `${anchorId}-launch-coverage`;
-      if (anchorId === 'map') anchor.after(notice);
-      else anchor.before(notice);
+      if (anchorId === 'map') notice.addEventListener('toggle', resizeVisibleMap, true);
+      anchor.before(notice);
     }
-    renderLaunchCoverage(notice, launches, now, anchorId === 'map' ? 'map' : 'upcoming');
+    if (anchorId === 'map') {
+      renderMapLaunchBrief(notice, launches, now, showLaunchOnMap);
+      resizeVisibleMap();
+    }
+    else renderLaunchCoverage(notice, launches, now, 'upcoming');
   }
   const filter = getTargetFilter();
   const ground = applyTargetFilter(
@@ -485,7 +490,7 @@ function renderQueue(): void {
     renderCards(cards, sorted, now, stale, onCardAction, {
       renderThumbnail: thumbnailRenderer(),
     });
-    cards.prepend(...slots.launches.map((selection) => renderLaunchCard(selection, launches, now)));
+    cards.prepend(...slots.launches.map((selection) => renderLaunchCard(selection, launches, now, showLaunchOnMap)));
   }
   renderUpcoming(now, stale);
   // Keep the shot-list bar count fresh + prune passes that have aged out.
@@ -619,7 +624,7 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
     variant: 'forecast',
     renderThumbnail: thumbnailRenderer(),
   });
-  cards.prepend(...launchSelections.map((selection) => renderLaunchCard(selection, launches, nowMs)));
+  cards.prepend(...launchSelections.map((selection) => renderLaunchCard(selection, launches, nowMs, showLaunchOnMap)));
 }
 
 function rerenderCountdowns(): void {
@@ -1332,6 +1337,19 @@ let mapModule: typeof import('./map') | null = null;
  *  operator happened to re-click the tab (found by the iPad QA loop,
  *  2026-06-11: reproduced on live in WebKit + Chromium, desktop + iPad). */
 let mapPaneWaitingForManifest = false;
+let pendingLaunchFocus: string | null = null;
+
+function resizeVisibleMap(): void {
+  if (mapModule && document.getElementById('view')?.className === 'view-map') {
+    requestAnimationFrame(() => mapModule?.resizeMap());
+  }
+}
+
+function showLaunchOnMap(eventId: string): void {
+  if (!selectLaunches(launchStore.getState(), Date.now(), 'map').some(({ item }) => item.event_id === eventId)) return;
+  pendingLaunchFocus = eventId;
+  document.getElementById('tab-map')?.click();
+}
 
 async function loadMapPane(): Promise<void> {
   if (!currentManifest) {
@@ -1346,7 +1364,17 @@ async function loadMapPane(): Promise<void> {
   // MapLibre needs explicit resize() after its container becomes visible.
   // The container starts hidden (display: none) so the canvas was 0×0 at init.
   // Defer one frame so the browser reflows the now-visible container first.
-  requestAnimationFrame(() => mapModule!.resizeMap());
+  requestAnimationFrame(() => {
+    if (!mapModule) return;
+    mapModule.resizeMap();
+    if (pendingLaunchFocus) {
+      const eventId = pendingLaunchFocus;
+      pendingLaunchFocus = null;
+      if (document.getElementById('view')?.className === 'view-map' && mapModule.focusLaunchOnMap(eventId)) {
+        document.getElementById('map')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+    }
+  });
 }
 
 /** Render the Map pane that a pre-manifest tab click asked for. Called by
@@ -1357,6 +1385,7 @@ function renderPendingMapPane(): void {
   if (!mapPaneWaitingForManifest) return;
   if (document.getElementById('view')?.className !== 'view-map') {
     mapPaneWaitingForManifest = false;
+    pendingLaunchFocus = null;
     return;
   }
   loadMapPane().catch((err) => {

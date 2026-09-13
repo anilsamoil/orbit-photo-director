@@ -74,6 +74,7 @@ vi.mock('../src/tile-precache', async () => {
 vi.mock('../src/map', () => ({
   renderMap: vi.fn(async () => {}),
   resizeMap: vi.fn(),
+  focusLaunchOnMap: vi.fn(),
   dropLookupPin: vi.fn(),
   getSatelliteTopbarReadouts: vi.fn(() => []),
   applyFollowISS: vi.fn(),
@@ -169,11 +170,13 @@ function buildTrack(): Track {
 const liveIntervals = new Set<ReturnType<typeof window.setInterval>>();
 let restoreIntervalSpy: (() => void) | undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   document.body.innerHTML = DOM;
   localStorage.clear();
   vi.resetModules();    // clears module-level state in main.ts (refreshInFlight, currentManifest, etc.)
   vi.resetAllMocks();
+  const mapModule = await import('../src/map');
+  vi.mocked(mapModule.getSatelliteTopbarReadouts).mockReturnValue([]);
   const realSetInterval = window.setInterval.bind(window) as (...args: Parameters<typeof window.setInterval>) => ReturnType<typeof window.setInterval>;
   const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((...args) => {
     const id = realSetInterval(...args);
@@ -859,6 +862,32 @@ describe('main.ts: common launch lane', () => {
 });
 
 describe('main.ts: map pane vs manifest race (iPad QA loop 2026-06-11)', () => {
+  it('opens the requested launch after the map finishes loading', async () => {
+    const mapModule = await import('../src/map');
+    const { launchStore } = await import('../src/launch-store');
+    const { init, renderQueue } = await import('../src/main');
+    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest());
+    vi.mocked(manifestModule.fetchTop5).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+    await init();
+    document.getElementById('view')!.insertAdjacentHTML('beforeend', '<section><div id="map"></div></section>');
+    vi.spyOn(launchStore, 'getState').mockReturnValue({ artifact: launchArtifact([launch()]), pointer: null, availability: 'ready' });
+    vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
+    renderQueue();
+    const box = document.getElementById('map-launch-coverage')!;
+    expect(box.nextElementSibling?.id).toBe('map');
+    const scroll = vi.fn();
+    document.getElementById('map')!.scrollIntoView = scroll;
+    vi.mocked(mapModule.focusLaunchOnMap).mockReturnValue(true);
+    (box.querySelector('.launch-brief-actions button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(mapModule.focusLaunchOnMap).toHaveBeenCalledWith('event-1'));
+    expect(document.getElementById('view')?.className).toBe('view-map');
+    expect(scroll).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
+    vi.mocked(mapModule.resizeMap).mockClear();
+    box.querySelector('details')!.dispatchEvent(new Event('toggle'));
+    await vi.waitFor(() => expect(mapModule.resizeMap).toHaveBeenCalled());
+  });
   it('renders the map when the manifest lands AFTER the Map tab was clicked', async () => {
     // Reproduces the live bug: on a slow uplink the operator clicks Map
     // before the first manifest resolves; loadMapPane used to early-return

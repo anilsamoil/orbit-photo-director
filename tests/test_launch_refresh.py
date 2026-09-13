@@ -246,3 +246,26 @@ def test_remote_reader_bounds_and_verifies_actual_artifact(setup, failure):
         assert all("--count" in call.args[0] for call in run.call_args_list)
         if failure == "path":
             assert run.call_count == 1
+
+
+def test_policy_upgrade_republishes_same_receipt_once_without_releasing_owner(setup):
+    now, _, output, _, _, calls, _, run, _ = setup
+    first = run()
+    state_path = output / ".refresh-state.json"
+    state = json.loads(state_path.read_bytes())
+    old_owner = state["remote"]
+    old_receipt = state["input"]["fetched_at"]
+    state["input"]["policy"] = 1
+    state["input"]["input_id"] = hashlib.sha256(canonical_bytes(
+        {key: value for key, value in state["input"].items() if key != "input_id"}
+    )).hexdigest()
+    state_path.write_bytes(canonical_bytes(state))
+    upgraded = run(now + timedelta(seconds=1))
+    assert upgraded["published"] and upgraded["revision"] != first["revision"]
+    state = json.loads(state_path.read_bytes())
+    assert state["remote"] == old_owner
+    assert state["input"]["fetched_at"] == old_receipt
+    assert state["input"]["policy"] == 2
+    assert len(calls) == 4
+    assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
+    assert len(calls) == 4

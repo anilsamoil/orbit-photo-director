@@ -2,7 +2,9 @@
 
 ## Release Boundary
 
-This release is map-only. The host runs a two-hour cache-only publisher. It does not send WhatsApp, change
+The host runs an hourly cache-only publisher. Items remain map-only for camera
+admission; release 1.22.0.9 adds a separate nominal planning brief (see the V2
+contract). It does not send WhatsApp, change
 Earth scoring, claim photographic detection, or infer a physical spacecraft
 window. Source validation and notification activation are separate gates.
 
@@ -43,7 +45,7 @@ retain the local last-good pointer; remote acceptance can still be ambiguous.
 No new launch network fetcher is installed. Refresh uses the existing LL2 cache,
 whose normal source cadence is about one hour plus Earth-generation time.
 Map/Upcoming can label a hash-receipted schedule current for less than three hours
-from its original source check. This accommodates the two-hour publisher and
+from its original source check. This accommodates the hourly publisher and
 existing source cadence; it is not a promise against a late launch slip.
 The independent 15-minute camera-evidence lifetime and all Queue gates are unchanged.
 Map-only items still have unknown capture intervals/directions and never enter Queue.
@@ -60,7 +62,7 @@ python -m scripts.launch_refresh --scheduled --publish \
 ```
 
 Use exactly one owner and persistent output directory. The host's launchd job
-runs at login and every 7200 seconds, with background priority/nice 10 and no
+runs at login and every 3600 seconds, with background priority/nice 10 and no
 KeepAlive retry loop. It uses a pinned runtime checkout, separate from watched
 Earth source. No additional LL2/TLE fetch, Earth generation, model or sender is called.
 
