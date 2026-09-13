@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.22.0.9 — 2026-09-13
+
+- Replace the always-yellow launch presentation with a compact shooting brief: possible at liftoff, too far for early ascent, or a plain explanation of what is unknown. Show the nearest launch above the map, with other launches and technical evidence collapsed.
+- Assess the advertised liftoff and the full launch window separately using the existing cached ISS orbit. A visible launch site can give a green planning chance and orbital-relative viewing angle; a conservative nominal ascent screen can explain when ISS is too far away. Delays, clouds, station-window access and later burns remain explicit limits.
+- Keep schedule freshness, planning validity and camera-instruction eligibility separate. Expiry withdraws the verdict and angle automatically; existing Queue admission is unchanged. Map actions show the site and only a supplied corridor.
+- Retain the existing hourly publisher and ownership receipts. Policy version 2 publishes the new assessment once for unchanged source inputs; deploy the accepting frontend before updating the separate pinned publisher.
+
 ## 1.22.0.8 — 2026-09-12
 
 The Log no longer shows a redundant sign-in button during a valid session.

@@ -1,11 +1,14 @@
 import { parseLaunchArtifact, parseLaunchPointer, type LaunchArtifact, type LaunchPointer } from './launch-schema';
 
 export const LAUNCH_STORAGE_KEY = 'opd-launch-v2';
+export const LAUNCH_OBSERVED_POINTER_KEY = 'opd-launch-v2-observed-pointer';
 const MAX_BYTES = 2_000_000;
 export interface LaunchState {
   artifact: LaunchArtifact | null;
   pointer: LaunchPointer | null;
   availability: 'loading' | 'ready' | 'unavailable' | 'last-good' | 'offline';
+  /** Cached schedule remains readable, but a known newer publication invalidates its evidence. */
+  superseded?: boolean;
 }
 type Envelope = { pointer: LaunchPointer; body: string };
 
@@ -29,6 +32,11 @@ function freeze<T>(value: T): T {
 function samePointer(a: LaunchPointer, b: LaunchPointer): boolean {
   return a.revision === b.revision && a.sha256 === b.sha256 && a.generated_at === b.generated_at && a.valid_until === b.valid_until;
 }
+function regressesOrCollides(pointer: LaunchPointer, known: LaunchPointer): boolean {
+  return Date.parse(pointer.generated_at) < Date.parse(known.generated_at)
+    || (pointer.revision === known.revision && !samePointer(pointer, known))
+    || (pointer.generated_at === known.generated_at && pointer.revision !== known.revision);
+}
 
 /** A single public artifact, never profile-specific. Consumers do not fetch. */
 export class LaunchStore {
@@ -40,6 +48,7 @@ export class LaunchStore {
   private controller: AbortController | null = null;
   private restored: Promise<void> | null = null;
   private clockKey = '';
+  private observedPointer: LaunchPointer | null = null;
   constructor(private fetcher: typeof fetch = (...args) => fetch(...args)) {}
   getState(): LaunchState { return this.state; }
   subscribe(listener: () => void): () => void {
@@ -50,9 +59,33 @@ export class LaunchStore {
     this.state = freeze(state);
     for (const listener of this.listeners) listener();
   }
+  private observePointer(pointer: LaunchPointer): void {
+    const known = this.observedPointer;
+    if (known && regressesOrCollides(pointer, known)) throw new Error('Launch revision regression or collision');
+    if (known && samePointer(pointer, known)) return;
+    this.observedPointer = freeze(pointer);
+    // Persist observation before the body download: reloads must not resurrect
+    // old shooting evidence when the new body is temporarily unavailable.
+    try { localStorage.setItem(LAUNCH_OBSERVED_POINTER_KEY, JSON.stringify(pointer)); }
+    catch {
+      // Free the much larger cached body and retry the durable marker on quota
+      // failure. An inaccessible store can still use the in-memory guard.
+      try {
+        localStorage.removeItem(LAUNCH_STORAGE_KEY);
+        localStorage.setItem(LAUNCH_OBSERVED_POINTER_KEY, JSON.stringify(pointer));
+      } catch { /* Storage unavailable. */ }
+    }
+    if (this.state.pointer && !samePointer(pointer, this.state.pointer)) {
+      this.publish({ ...this.state, superseded: true });
+    }
+  }
   restore(): Promise<void> {
     if (this.restored) return this.restored;
     this.restored = (async () => {
+      try {
+        const observed = localStorage.getItem(LAUNCH_OBSERVED_POINTER_KEY);
+        if (observed && observed.length < 4096) this.observedPointer = freeze(parseLaunchPointer(JSON.parse(observed)));
+      } catch { /* An invalid marker is not evidence of a newer publication. */ }
       try {
         const raw = localStorage.getItem(LAUNCH_STORAGE_KEY);
         if (!raw || raw.length > MAX_BYTES * 2) return;
@@ -60,7 +93,9 @@ export class LaunchStore {
         const pointer = parseLaunchPointer(saved.pointer);
         if (typeof saved.body !== 'string') return;
         const artifact = await validateLaunchBytes(pointer, new TextEncoder().encode(saved.body).buffer);
-        if (!this.state.artifact) this.publish({ artifact, pointer, availability: this.latestOnline ? 'last-good' : 'offline' });
+        if (!this.observedPointer || !regressesOrCollides(pointer, this.observedPointer)) this.observePointer(pointer);
+        if (!this.state.artifact) this.publish({ artifact, pointer, availability: this.latestOnline ? 'last-good' : 'offline',
+          superseded: !!this.observedPointer && !samePointer(pointer, this.observedPointer) });
       } catch { /* A corrupt or inaccessible cache cannot block Earth data. */ }
     })();
     return this.restored;
@@ -103,12 +138,8 @@ export class LaunchStore {
     try {
       const pointer = await getPointer();
       if (controller.signal.aborted) throw new Error('Launch refresh aborted');
+      this.observePointer(pointer);
       const old = this.state.pointer;
-      if (old && (Date.parse(pointer.generated_at) < Date.parse(old.generated_at)
-        || (pointer.revision === old.revision && !samePointer(pointer, old))
-        || (pointer.generated_at === old.generated_at && pointer.revision !== old.revision))) {
-        throw new Error('Launch revision regression or collision');
-      }
       if (old && samePointer(pointer, old)) {
         this.publish({ ...this.state, availability: 'ready' });
         return;
@@ -118,9 +149,11 @@ export class LaunchStore {
       if (controller.signal.aborted) throw new Error('Launch refresh aborted');
       // A pointer change during download must not publish an already
       // superseded capture instruction. Retry on the next common poll.
-      if (!samePointer(pointer, await getPointer())) throw new Error('Launch pointer changed during refresh');
+      const finalPointer = await getPointer();
       if (controller.signal.aborted) throw new Error('Launch refresh aborted');
-      this.publish({ artifact, pointer, availability: 'ready' });
+      this.observePointer(finalPointer);
+      if (!samePointer(pointer, finalPointer)) throw new Error('Launch pointer changed during refresh');
+      this.publish({ artifact, pointer, availability: 'ready', superseded: false });
       try {
         const saved: Envelope = { pointer, body: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
         localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(saved));
@@ -139,14 +172,15 @@ export class LaunchStore {
     const lifetime = Date.parse(artifact.valid_until) - Date.parse(artifact.generated_at);
     const sourceExpiries = [artifact.coverage.fetched_at, ...artifact.items.flatMap((item) => item.sources.map((source) => source.fetched_at))]
       .filter((timestamp): timestamp is string => timestamp !== null)
-      .map((timestamp) => new Date(Date.parse(timestamp) + lifetime).toISOString());
+      .flatMap((timestamp) => [lifetime, 3 * 3600_000].map((age) => new Date(Date.parse(timestamp) + age).toISOString()));
     const boundaries = [artifact.valid_until, artifact.generated_at, artifact.coverage.until, ...artifact.items.flatMap((item) => [
       item.launch_window.net, item.launch_window.end ?? item.launch_window.net,
+      ...(item.assessment ? [item.assessment.checked_at, item.assessment.valid_until, item.assessment.net.at] : []),
       ...item.capture_intervals.flatMap((interval) => [interval.start, interval.peak, interval.end]),
     ]), ...sourceExpiries];
     const key = boundaries.map((time) => {
       const t = Date.parse(time);
-      return `${t > now}:${t > now - 30 * 60_000}:${t <= now + 90 * 60_000}:${t <= now + 36 * 3600_000}:${t <= now + 7 * 24 * 3600_000}`;
+      return `${t > now}:${t >= now}:${t > now - 30 * 60_000}:${t <= now + 90 * 60_000}:${t <= now + 36 * 3600_000}:${t <= now + 7 * 24 * 3600_000}`;
     }).join('|');
     if (key !== this.clockKey) {
       this.clockKey = key;

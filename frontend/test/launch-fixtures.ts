@@ -1,4 +1,4 @@
-import type { CaptureInterval, LaunchArtifact, LaunchOpportunity, LaunchPointer } from '../src/launch-schema';
+import type { CaptureInterval, LaunchArtifact, LaunchAssessment, LaunchOpportunity, LaunchPointer } from '../src/launch-schema';
 import type { LaunchState } from '../src/launch-store';
 
 export const NOW = Date.parse('2026-09-07T12:00:00Z');
@@ -23,6 +23,15 @@ export function supported(over: Partial<LaunchOpportunity> = {}): LaunchOpportun
       { lat: 28.5, lon: -80.6, alt_km: 0, t_offset_seconds: 0 },
       { lat: 29, lon: -80, alt_km: 30, t_offset_seconds: 60 },
     ] }, ...over });
+}
+export function assessment(over: Partial<LaunchAssessment> = {}): LaunchAssessment {
+  return {
+    checked_at: iso(-5), valid_until: iso(170), tle_epoch: iso(-60),
+    model: { name: 'Nominal ascent envelope', duration_seconds: 600, max_altitude_km: 400, max_downrange_km: 1500 },
+    net: { verdict: 'possible', reason: 'SITE_IN_VIEW_AT_NET', at: iso(10), pad_distance_km: 1000,
+      look: { frame: 'orbital-lvlh', azimuth_deg: 45, off_nadir_deg: 55 } },
+    window: { verdict: 'unknown', reason: 'VIEW_UNCONFIRMED' }, ...over,
+  };
 }
 export function artifact(items: LaunchOpportunity[] = [launch()], over: Partial<LaunchArtifact> = {}): LaunchArtifact {
   return { schema_version: 2, revision: 'r1', generated_at: iso(-5), valid_until: iso(10),

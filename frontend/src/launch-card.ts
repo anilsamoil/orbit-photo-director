@@ -1,7 +1,7 @@
 import type { LaunchOpportunity } from './launch-schema';
 import { isLaunchUtc, safeSourceUrl } from './launch-schema';
 import { launchStore, type LaunchState } from './launch-store';
-import { hasLaunchTimeConflict, launchCoverageLabel, launchFresh, launchScheduleFresh, utc, type LaunchSelection } from './launch-selectors';
+import { hasLaunchTimeConflict, launchBrief, launchCameraEvidenceFresh, launchCoverageLabel, launchFresh, launchScheduleFresh, utc, type LaunchSelection } from './launch-selectors';
 import type { PassEntry } from './types';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
@@ -53,9 +53,22 @@ export function renderLaunchFacts(item: LaunchOpportunity, state: LaunchState, n
       row(body, 'Conditional capture', `${utc(interval.start)} to ${utc(interval.end)}`);
       row(body, 'Peak', utc(interval.peak));
       row(body, 'Conditional liftoff', `${utc(interval.liftoff_start)} to ${utc(interval.liftoff_end)}`);
-      row(body, 'Orbital-relative (LVLH)', interval.look
+      row(body, 'Orbital-relative (LVLH)', launchCameraEvidenceFresh({ item, interval, expired: Date.parse(interval.end) <= now }, state, now) && interval.look
         ? `Azimuth ${interval.look.azimuth_deg.toFixed(1)} deg; off-nadir ${interval.look.off_nadir_deg.toFixed(1)} deg`
-        : 'Unknown');
+        : 'Unavailable — current camera evidence required');
+    }
+  }
+  if (item.assessment) {
+    row(body, 'Planning checked', utc(item.assessment.checked_at));
+    row(body, 'Planning valid until', utc(item.assessment.valid_until));
+    row(body, 'At planned liftoff', `${item.assessment.net.verdict}: ${item.assessment.net.reason}`);
+    row(body, 'Across launch window', `${item.assessment.window.verdict}: ${item.assessment.window.reason}`);
+    if (item.assessment.net.pad_distance_km !== null) row(body, 'ISS to launch site at NET', `${Math.round(item.assessment.net.pad_distance_km)} km`);
+    if (item.assessment.model) {
+      row(body, 'Nominal ascent model', item.assessment.model.name);
+      row(body, 'Model duration', `${item.assessment.model.duration_seconds} seconds`);
+      row(body, 'Model maximum altitude', `${item.assessment.model.max_altitude_km} km`);
+      row(body, 'Model maximum downrange', `${item.assessment.model.max_downrange_km} km`);
     }
   }
   if (item.reason_codes.length) row(body, 'Reasons', item.reason_codes.join(', '));
@@ -109,10 +122,12 @@ export function openLaunchDetails(eventId: string): void {
   dialog.scrollTop = 0;
 }
 
-export function renderLaunchCard(selection: LaunchSelection, state: LaunchState, now: number): HTMLElement {
-  const { item, interval, expired } = selection;
-  const card = element('article', 'card launch launch-v2 launch-ascent-card');
+export function renderLaunchCard(selection: LaunchSelection, state: LaunchState, now: number, onShowMap?: (eventId: string) => void): HTMLElement {
+  const { item, interval } = selection;
+  const brief = launchBrief(selection, state, now);
+  const card = element('article', 'card launch launch-v2 launch-brief');
   card.dataset.launch = 'v2';
+  card.dataset.verdict = brief.verdict;
   card.dataset.eventId = item.event_id;
   card.dataset.revision = item.revision;
   card.dataset.artifactRevision = state.artifact?.revision ?? '';
@@ -120,15 +135,34 @@ export function renderLaunchCard(selection: LaunchSelection, state: LaunchState,
   name.type = 'button';
   name.addEventListener('click', () => openLaunchDetails(item.event_id));
   const meta = element('div', 'card-meta');
-  meta.append(element('span', 'tag launch-ascent', 'LAUNCH / ASCENT'), element('span', 'tag launch-status', status(item, state, now, expired)));
+  const verdict = element('span', 'launch-verdict', brief.label);
+  verdict.dataset.verdict = brief.verdict;
+  meta.append(verdict);
   const summary = element('div', 'launch-summary');
-  summary.append(element('div', '', `${item.rocket} | ${item.site.name}`));
-  summary.append(element('div', 'launch-time', interval
+  summary.append(element('div', 'launch-brief-reason', brief.reason));
+  const currentCapture = interval && launchCameraEvidenceFresh(selection, state, now);
+  const assessedWindow = brief.verdict === 'no_chance' && item.assessment?.window.verdict === 'too_far';
+  row(summary, 'When', currentCapture
     ? `Conditional capture: ${utc(interval.start)} to ${utc(interval.end)}`
-    : `NET (tentative): ${tentativeNet(item)}`));
-  if (!interval) summary.append(element('div', 'launch-status', 'Capture interval unknown'));
-  if (hasLaunchTimeConflict(item)) summary.append(element('div', 'launch-status', 'Launch window unknown: TIME_CONFLICT'));
+    : assessedWindow && item.launch_window.start && item.launch_window.end
+      ? `Launch window: ${utc(item.launch_window.start)} to ${utc(item.launch_window.end)}`
+    : `Launch (tentative): ${tentativeNet(item)}`);
+  row(summary, 'Where', `${item.site.name} · ${item.rocket}`);
+  if (brief.direction) row(summary, 'View', `${currentCapture ? 'At capture' : 'Launch site at liftoff'}: ${brief.direction}`);
+  else if (brief.verdict === 'unknown') row(summary, 'View', 'Direction and angle not yet established');
   card.append(name, meta, summary);
+  if (onShowMap) {
+    const actions = element('div', 'launch-brief-actions');
+    const corridor = item.trajectory.quality !== 'unknown' && !!item.trajectory.source && item.trajectory.points.length >= 2;
+    const showMap = element('button', 'btn', corridor ? 'Show site and corridor' : 'Show launch site');
+    showMap.type = 'button';
+    showMap.addEventListener('click', () => onShowMap(item.event_id));
+    actions.append(showMap);
+    card.append(actions);
+  }
+  const details = element('details', 'launch-details');
+  details.append(element('summary', '', 'Details'), renderLaunchFacts(item, state, now));
+  card.append(details);
   return card;
 }
 
@@ -153,5 +187,10 @@ export function renderLegacyLaunchCard(pass: PassEntry, stale: boolean): HTMLEle
 export function renderLaunchCoverage(container: HTMLElement, state: LaunchState, now: number, view: 'upcoming' | 'map' = 'upcoming'): void {
   container.classList.add('launch-coverage');
   container.setAttribute('role', 'status');
-  container.textContent = launchCoverageLabel(state, now, view);
+  const details = element('details', 'launch-data-details');
+  const checked = state.artifact?.coverage.fetched_at;
+  const label = !state.artifact && state.availability === 'loading' ? 'Launch data details · checking schedule'
+    : checked ? `Launch data details · schedule checked ${utc(checked)}` : 'Launch data details · schedule unavailable';
+  details.append(element('summary', '', label), element('p', '', launchCoverageLabel(state, now, view)));
+  container.replaceChildren(details);
 }

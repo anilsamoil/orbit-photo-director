@@ -61,7 +61,9 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     except (ValueError, UnicodeError):
         tle = None
     identity = {
-        "policy": 1,
+        # A model-policy change requires one fresh publication even when the
+        # source receipt is unchanged. Retain ownership and prior receipts.
+        "policy": 2,
         "schedule_sha256": receipt["sha256"],
         "fetched_at": receipt["fetched_at"],
         "tle_sha256": hashlib.sha256(tle_raw).hexdigest(),

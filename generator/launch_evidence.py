@@ -25,6 +25,7 @@ from .ascent import (
     tangent_clearance,
 )
 from .ascent_profiles import match_rocket
+from .launch_assessment import build_planning_assessment
 from .launch_data import LL2_GO_STATUS_ABBREVS, Launch, parse_response, validate_feed
 from .orbit import TLE, _ensure_utc, propagate
 
@@ -271,6 +272,9 @@ def build_launch_artifact(
                     "fetched_at": utc(fetched_at) if fetched_at else None,
                 }
             ],
+            "assessment": build_planning_assessment(
+                la, tle, now, fetched_at, budget, source_reasons=source_reasons,
+            ),
         }
         item["revision"] = hashlib.sha256(canonical_bytes(item)).hexdigest()[:24]
         items.append(item)

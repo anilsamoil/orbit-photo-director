@@ -1,6 +1,6 @@
 /** Local-only synthetic browser fixture. Never proxies production or sends. */
 import { resolve, sep } from 'node:path';
-import { artifact, envelope, interval, launch, supported, NOW } from '../frontend/test/launch-fixtures';
+import { artifact, assessment, envelope, interval, launch, supported, NOW } from '../frontend/test/launch-fixtures';
 
 const root = resolve(import.meta.dir, '../frontend/dist');
 const port = Number(process.env.PORT ?? 8769);
@@ -38,8 +38,15 @@ const items = [sample(1), sample(2), sample(3), launch({ event_id: 'qa-tentative
   site: { name: 'Synthetic pad', lat: 0, lon: 0 } }), launch({ event_id: 'qa-day3', name: 'SYNTHETIC QA day-three map candidate',
   launch_window: { net: new Date(NOW + 72 * 3600_000).toISOString(), start: null, end: null, precision: null } })];
 const builds = new Map<string, Awaited<ReturnType<typeof envelope>>>();
-for (const key of ['ready', 'stale', 'partial', 'map-only']) {
-  const a = shift(artifact(key === 'map-only' ? items.filter((x) => x.status === 'map_only') : items));
+for (const key of ['ready', 'stale', 'partial', 'map-only', 'chance', 'too-far', 'assessment-expired']) {
+  const plan = assessment();
+  if (key === 'too-far') plan.net = { ...plan.net, verdict: 'too_far', reason: 'NOMINAL_ASCENT_TOO_FAR', pad_distance_km: 14627, look: null };
+  if (key === 'assessment-expired') plan.valid_until = new Date(NOW - 60_000).toISOString();
+  const planningItems = [launch({ event_id: `qa-${key}`, name: 'SYNTHETIC QA Falcon 9 launch', rocket: 'Falcon 9',
+    launch_window: { net: new Date(NOW + 10 * 60_000).toISOString(), start: new Date(NOW + 10 * 60_000).toISOString(), end: new Date(NOW + 97 * 60_000).toISOString(), precision: 'Minute' },
+    assessment: plan }), ...items.filter((x) => x.event_id === 'qa-day3')];
+  const a = shift(artifact(['chance', 'too-far', 'assessment-expired'].includes(key) ? planningItems
+    : key === 'map-only' ? items.filter((x) => x.status === 'map_only') : items));
   a.revision = `qa-${key}`;
   if (key === 'stale') { a.generated_at = iso(-16); a.valid_until = iso(-1); }
   if (key === 'partial') { a.coverage.complete = false; a.coverage.reasons = ['FEED_PAGINATED']; }
@@ -49,7 +56,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port, async fetch(request) {
   const path = new URL(request.url).pathname;
   if (path.startsWith('/__qa/mode/')) {
     const next = path.split('/').at(-1)!;
-    if (!['ready', 'stale', 'partial', 'map-only', 'corrupt', 'unavailable'].includes(next)) return json({ error: 'unknown mode' }, 400);
+    if (!['ready', 'stale', 'partial', 'map-only', 'chance', 'too-far', 'assessment-expired', 'corrupt', 'unavailable'].includes(next)) return json({ error: 'unknown mode' }, 400);
     mode = next;
     return json({ mode, synthetic: true });
   }
@@ -66,9 +73,10 @@ const server = Bun.serve({ hostname: '127.0.0.1', port, async fetch(request) {
     const entry = [...builds.values()].find((x) => `/${x.pointer.path}` === path);
     return entry ? new Response(entry.body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }) : json({}, 404);
   }
-  if (path.startsWith('/api/')) return json({ items: [], targets: [], entries: [] });
+  if (path === '/api/browser/session') return json({ ok: true, profile: { name: 'anil', displayName: 'Synthetic QA' } });
+  if (path.startsWith('/api/') && path !== '/api/app') return json({ items: [], targets: [], entries: [] });
   if (path === '/__opd_probe') return new Response(null, { status: 204 });
-  const filename = resolve(root, `.${path === '/' ? '/index.html' : path}`);
+  const filename = resolve(root, `.${path === '/' || path === '/api/app' ? '/index.html' : path}`);
   if (!filename.startsWith(root + sep)) return new Response(null, { status: 404 });
   const file = Bun.file(filename);
   return await file.exists() ? new Response(file) : new Response(null, { status: 404 });

@@ -29,13 +29,13 @@ describe('launch-specific cards', () => {
     expect(facts.textContent).not.toContain('2026-09-07 11:20:00 UTC');
     expect(renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW).textContent).toContain('TIME_CONFLICT');
   });
-  it('shows tentative NET, unknown capture and explicit MAP ONLY without ground claims', () => {
+  it('shows tentative launch time and unknown chance with technical MAP ONLY in Details', () => {
     const item = launch();
     const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
-    expect(card.textContent).toContain('LAUNCH / ASCENT');
-    expect(card.textContent).toContain('MAP ONLY');
-    expect(card.textContent).toContain('NET (tentative): 2026-09-07 12:10:00 UTC');
-    expect(card.textContent).toContain('Capture interval unknown');
+    expect(card.querySelector('.launch-verdict')?.textContent).toBe('Chance unknown');
+    expect(card.querySelector('details')?.textContent).toContain('MAP ONLY');
+    expect(card.querySelector('.launch-summary')?.textContent).toContain('Launch (tentative): 2026-09-07 12:10:00 UTC');
+    expect(card.querySelector('.launch-summary')?.textContent).toContain('Direction and angle not yet established');
     expect(card.textContent).not.toMatch(/%|[★☆]|WORF|Cupola|exact|Remind|Shoot/);
     expect(card.querySelector('.card-countdown,.card-score,.btn-remind')).toBeNull();
   });
@@ -65,7 +65,7 @@ describe('launch-specific cards', () => {
     const card = renderLaunchCard({ item, interval: null, expired: false }, s, Date.parse(iso(120)));
     expect(card.textContent).not.toContain('STALE / EXPIRED DATA');
     expect(card.textContent).toContain('MAP ONLY');
-    expect(card.textContent).toContain('Capture interval unknown');
+    expect(card.querySelector('.launch-summary')?.textContent).toContain('Direction and angle not yet established');
     expect(renderLaunchFacts(item, s, NOW).textContent).toContain('Camera evidence valid until');
   });
   it('renders source and name as text, never HTML', () => {

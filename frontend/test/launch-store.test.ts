@@ -1,10 +1,116 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { LaunchStore, LAUNCH_STORAGE_KEY } from '../src/launch-store';
+import { LaunchStore, LAUNCH_STORAGE_KEY, LAUNCH_OBSERVED_POINTER_KEY } from '../src/launch-store';
 import { parseLaunchArtifact, parseLaunchPointer } from '../src/launch-schema';
-import { launchCoverageLabel, launchFresh, selectLaunches } from '../src/launch-selectors';
-import { artifact, envelope, iso, launch, NOW, supported } from './launch-fixtures';
+import { launchBrief, launchCameraEvidenceFresh, launchCoverageLabel, launchFresh, launchScheduleFresh, selectLaunches } from '../src/launch-selectors';
+import { artifact, assessment, envelope, iso, launch, NOW, supported } from './launch-fixtures';
 
 beforeEach(() => localStorage.clear());
+
+describe('superseded launch evidence', () => {
+  const planned = () => launch({ assessment: assessment(),
+    launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' } });
+  const displayed = (store: LaunchStore) => launchBrief(selectLaunches(store.getState(), NOW, 'map')[0]!, store.getState(), NOW);
+  const withdrawn = (store: LaunchStore) => {
+    const state = store.getState();
+    expect(state.artifact?.revision).toBe('r1');
+    expect(selectLaunches(state, NOW, 'map')).toHaveLength(1);
+    expect(displayed(store)).toMatchObject({ verdict: 'unknown', direction: null, scheduleCurrent: false });
+    expect(displayed(store).reason).toContain('newer launch update');
+    expect(launchCameraEvidenceFresh(selectLaunches(state, NOW, 'map')[0]!, state, NOW)).toBe(false);
+    expect(selectLaunches(state, NOW, 'queue')).toEqual([]);
+  };
+
+  it.each(['possible', 'too_far', 'camera'])('withdraws %s evidence as soon as a newer pointer is seen, through failure, old replay and reload', async (kind) => {
+    const item = kind === 'camera' ? supported() : planned();
+    if (kind === 'too_far') item.assessment!.net = { ...item.assessment!.net, verdict: 'too_far', reason: 'NOMINAL_ASCENT_TOO_FAR', look: null };
+    const old = await envelope(artifact([item]));
+    const nextItem = structuredClone(item);
+    if (nextItem.assessment) nextItem.assessment.checked_at = iso(-1);
+    const next = await envelope(artifact([nextItem], { revision: 'r2', generated_at: iso(-1) }));
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(old));
+    let finish!: (response: Response) => void;
+    let started!: () => void;
+    const downloading = new Promise<void>((resolve) => { started = resolve; });
+    const fetcher = vi.fn(async (path) => {
+      if (path === '/launch/latest.json') return new Response(JSON.stringify(next.pointer));
+      started(); return new Promise<Response>((resolve) => { finish = resolve; });
+    });
+    const store = new LaunchStore(fetcher);
+    await store.restore();
+    expect(displayed(store).verdict).toBe(kind === 'too_far' ? 'no_chance' : 'chance');
+    const refreshing = store.refresh();
+    await downloading;
+    withdrawn(store); // Do not wait for a failed download to withdraw an obsolete instruction.
+    finish(new Response('', { status: 503 })); await refreshing;
+    withdrawn(store);
+    fetcher.mockImplementation(async () => new Response(JSON.stringify(old.pointer)));
+    await store.refresh(); withdrawn(store);
+    const reloaded = new LaunchStore(fetcher);
+    await reloaded.restore(); withdrawn(reloaded);
+    await reloaded.refresh(); withdrawn(reloaded);
+    fetcher.mockImplementation(async (path) => new Response(path === '/launch/latest.json' ? JSON.stringify(next.pointer) : next.body));
+    await reloaded.refresh();
+    expect(reloaded.getState().artifact?.revision).toBe('r2');
+    expect(displayed(reloaded).verdict).toBe(kind === 'too_far' ? 'no_chance' : 'chance');
+    expect(displayed(reloaded).scheduleCurrent).toBe(true);
+  });
+
+  it('remembers the newest final pointer across a download race and rejects intermediate replay after reload', async () => {
+    const old = await envelope(artifact([planned()]));
+    const newer = async (revision: string, generated: number) => {
+      const item = planned(); item.assessment!.checked_at = iso(generated);
+      return envelope(artifact([item], { revision, generated_at: iso(generated) }));
+    };
+    const second = await newer('r2', -3); const third = await newer('r3', -1);
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(old));
+    let reads = 0;
+    const store = new LaunchStore(vi.fn(async (path) => new Response(path === '/launch/latest.json'
+      ? JSON.stringify(++reads === 1 ? second.pointer : third.pointer) : second.body)));
+    await store.refresh(); withdrawn(store);
+    const fetcher = vi.fn(async (_path: RequestInfo | URL) => new Response(JSON.stringify(second.pointer)));
+    const reloaded = new LaunchStore(fetcher);
+    await reloaded.refresh(); withdrawn(reloaded);
+    expect(fetcher).toHaveBeenCalledOnce();
+    fetcher.mockImplementation(async (path) => new Response(path === '/launch/latest.json' ? JSON.stringify(third.pointer) : third.body));
+    await reloaded.refresh();
+    expect(reloaded.getState().artifact?.revision).toBe('r3');
+    expect(displayed(reloaded).verdict).toBe('chance');
+  });
+
+  it('preserves bounded last-good evidence when refresh fails before any newer pointer is seen', async () => {
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(await envelope(artifact([planned()]))));
+    const store = new LaunchStore(vi.fn(async () => { throw new Error('offline'); }));
+    await store.refresh();
+    expect(store.getState().availability).toBe('last-good');
+    expect(displayed(store).verdict).toBe('chance');
+  });
+
+  it('frees the cached body and retains the newer marker when storage quota initially blocks it', async () => {
+    const old = await envelope(artifact([planned()]));
+    const next = await envelope(artifact([], { revision: 'r2', generated_at: iso(-1) }));
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(old));
+    const store = new LaunchStore(vi.fn(async (path) => path === '/launch/latest.json'
+      ? new Response(JSON.stringify(next.pointer)) : new Response('', { status: 503 })));
+    await store.restore();
+    const write = localStorage.setItem.bind(localStorage);
+    const quota = vi.spyOn(localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === LAUNCH_OBSERVED_POINTER_KEY && value.includes('r2') && localStorage.getItem(LAUNCH_STORAGE_KEY)) {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      }
+      write(key, value);
+    });
+    try {
+      await store.refresh(); withdrawn(store);
+      expect(localStorage.getItem(LAUNCH_STORAGE_KEY)).toBeNull();
+      expect(JSON.parse(localStorage.getItem(LAUNCH_OBSERVED_POINTER_KEY)!).revision).toBe('r2');
+      const replay = vi.fn(async () => new Response(JSON.stringify(old.pointer)));
+      const reloaded = new LaunchStore(replay);
+      await reloaded.refresh();
+      expect(reloaded.getState().artifact).toBeNull();
+      expect(replay).toHaveBeenCalledOnce();
+    } finally { quota.mockRestore(); }
+  });
+});
 
 describe('launch runtime schema', () => {
   it('preserves inverted map-only bounds with TIME_CONFLICT but rejects unmarked or supported conflicts', () => {
@@ -251,5 +357,47 @@ describe('common launch store', () => {
     expect(listener).toHaveBeenCalledOnce();
     expect(launchFresh(store.getState(), Date.parse(iso(5)))).toBe(true);
     expect(selectLaunches(store.getState(), Date.parse(iso(5)), 'queue')).toEqual([]);
+  });
+  it('withdraws a displayed planning verdict exactly at its independent expiry without fetching', async () => {
+    const item = launch({ assessment: assessment({ valid_until: iso(6) }),
+      launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' } });
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(await envelope(artifact([item]))));
+    const fetcher = vi.fn();
+    const store = new LaunchStore(fetcher); await store.restore();
+    let clock = Date.parse(iso(6)) - 1;
+    const selected = { item, interval: null, expired: false };
+    let displayed = launchBrief(selected, store.getState(), clock);
+    const listener = vi.fn(() => { displayed = launchBrief(selected, store.getState(), clock); });
+    store.subscribe(listener);
+    store.tick(clock); listener.mockClear();
+    expect(displayed.verdict).toBe('chance');
+    clock += 1; store.tick(clock);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(displayed).toMatchObject({ verdict: 'unknown', direction: null });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('notifies at the 3-hour schedule-source expiry independently of camera and event boundaries', async () => {
+    const item = launch({ launch_window: { net: iso(300), start: null, end: null, precision: null } });
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(await envelope(artifact([item]))));
+    const store = new LaunchStore(vi.fn()); await store.restore();
+    const listener = vi.fn(); store.subscribe(listener);
+    const expiry = Date.parse(iso(170)); // item source fetched at -10 minutes
+    store.tick(expiry - 1); listener.mockClear();
+    expect(launchScheduleFresh(store.getState(), expiry - 1)).toBe(true);
+    store.tick(expiry);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(launchScheduleFresh(store.getState(), expiry)).toBe(false);
+  });
+  it('withdraws a planned NET direction on the tick after exact liftoff time', async () => {
+    const item = launch({ assessment: assessment(), launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' } });
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(await envelope(artifact([item]))));
+    const store = new LaunchStore(vi.fn()); await store.restore();
+    const listener = vi.fn(); store.subscribe(listener);
+    const net = Date.parse(iso(10));
+    store.tick(net); listener.mockClear();
+    expect(launchBrief({ item, interval: null, expired: false }, store.getState(), net).verdict).toBe('chance');
+    store.tick(net + 1);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(launchBrief({ item, interval: null, expired: false }, store.getState(), net + 1)).toMatchObject({ verdict: 'unknown', direction: null });
   });
 });
