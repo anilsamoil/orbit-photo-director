@@ -96,13 +96,12 @@ export function launchBrief(selection: LaunchSelection, state: LaunchState, now:
     if (Date.parse(assessment.net.at) < now) {
       return brief('unknown', 'Chance unknown', 'The planned liftoff time has passed; an updated time is needed.');
     }
-    const time = utc(assessment.net.at).slice(11);
     if (assessment.net.verdict === 'possible' && assessment.net.look) {
-      return brief('chance', 'Possible at liftoff', `The launch site is in view from ISS at ${time}. A delay can change this. Clouds and your window view can still prevent a shot.`,
+      return brief('chance', 'Possible at liftoff', 'The launch pad is in view from ISS. Delays, clouds or your window view may prevent a shot.',
         launchLookDirection(assessment.net.look));
     }
     if (assessment.net.verdict === 'too_far') {
-      return brief('no_chance', 'Too far at planned time', `Too far from ISS in the nominal model for ${ascentScope} at ${time}. A delay can change this; later burns are not assessed.`);
+      return brief('no_chance', 'Too far at planned time', `The nominal model puts ${ascentScope} too far from ISS. Delays may change this; later burns unassessed.`);
     }
     const reasons: Record<string, string> = {
       TIMING_UNCONFIRMED: 'The liftoff time is not confirmed.',

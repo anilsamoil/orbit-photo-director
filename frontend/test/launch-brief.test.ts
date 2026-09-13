@@ -14,9 +14,9 @@ describe('plain launch shooting brief', () => {
     const brief = launchBrief(selection(item), s, NOW);
     expect(brief.verdict).toBe('chance');
     expect(brief.label).toBe('Possible at liftoff');
-    expect(brief.reason).toContain('launch site is in view');
-    expect(brief.reason).toContain('12:10:00 UTC');
-    expect(brief.reason).toContain('delay can change');
+    expect(brief.reason).toContain('launch pad is in view from ISS');
+    expect(brief.reason).toContain('Delays, clouds or your window view may prevent a shot');
+    expect(brief.reason).not.toContain('12:10');
     expect(brief.direction).toBe('ahead-right of ISS travel; 55.0° from straight down');
     expect(selectLaunches(s, NOW, 'queue')).toEqual([]);
   });
@@ -27,11 +27,12 @@ describe('plain launch shooting brief', () => {
     const brief = launchBrief(selection(item), state([item]), NOW);
     expect(brief.verdict).toBe('no_chance');
     expect(brief.label).toBe('Too far at planned time');
-    expect(brief.reason).toContain('Too far');
+    expect(brief.reason).toContain('too far from ISS');
     expect(brief.reason).toContain('nominal model');
-    expect(brief.reason).toContain('liftoff and early ascent (first 10 minutes) at 12:10:00 UTC');
-    expect(brief.reason).toContain('later burns are not assessed');
-    expect(brief.reason).toContain('delay can change');
+    expect(brief.reason).toContain('liftoff and early ascent (first 10 minutes)');
+    expect(brief.reason).toContain('later burns unassessed');
+    expect(brief.reason).toContain('Delays may change');
+    expect(brief.reason).not.toContain('12:10');
     expect(brief.direction).toBeNull();
   });
 
@@ -181,7 +182,7 @@ describe('actionable shared launch card', () => {
     const summary = card.querySelector('.launch-summary')!;
     expect(card.dataset.verdict).toBe('chance');
     expect(card.querySelector('.launch-verdict')?.textContent).toBe('Possible at liftoff');
-    expect(summary.textContent).toContain('2026-09-07 12:10:00 UTC');
+    expect(summary.textContent).toContain('7 Sep 2026, 12:10 UTC (tentative)');
     expect(summary.textContent).toContain('Test site');
     expect(summary.textContent).toContain('55.0° from straight down');
     expect(summary.textContent).not.toMatch(/MAP ONLY|VALIDATION_PENDING|TRAJECTORY_UNKNOWN|revision|coverage/i);

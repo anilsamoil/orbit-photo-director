@@ -15,6 +15,8 @@ describe('map launch brief', () => {
     renderMapLaunchBrief(box, data, NOW, show);
     expect(Array.from(box.children).filter((node) => node.tagName === 'ARTICLE')).toHaveLength(1);
     expect(box.firstElementChild?.getAttribute('data-event-id')).toBe('event-1');
+    expect(box.firstElementChild?.querySelector('.launch-details .launch-coverage')).not.toBeNull();
+    expect(Array.from(box.children).some((child) => child.classList.contains('launch-coverage'))).toBe(false);
     const more = box.querySelector<HTMLDetailsElement>('.map-launch-more')!;
     expect(more.open).toBe(false);
     expect(more.querySelector('summary')?.textContent).toBe('Other launches (1)');
