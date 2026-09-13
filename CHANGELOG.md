@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.22.0.11 — 2026-09-13
+
+The main Map launch box now collapses like Other launches and starts closed, leaving more room for the map. Its compact summary retains the current shooting verdict; opening or closing is remembered across refreshes and reloads.
+
 ## 1.22.0.10 — 2026-09-13
 
 The live phone check showed the launch banner still used too much vertical space. Compact UTC dates, shorter explanations and removal of duplicate rocket text leave more map visible. The map action and Details share a row; technical schedule data now lives inside Details. Precise camera timestamps and all shooting-verdict admission rules are preserved.

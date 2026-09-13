@@ -4,7 +4,7 @@ import { _setFollowEnvForTest, applyFollowISS, focusLaunchOnMap } from '../src/m
 import { launchStore } from '../src/launch-store';
 import { assessment, iso, launch, NOW, state, supported } from './launch-fixtures';
 
-afterEach(() => { vi.restoreAllMocks(); _setFollowEnvForTest(null, false); document.body.replaceChildren(); });
+afterEach(() => { vi.restoreAllMocks(); localStorage.removeItem('opd-map-launch-brief-open'); _setFollowEnvForTest(null, false); document.body.replaceChildren(); });
 
 describe('map launch brief', () => {
   it('leads with the next launch and keeps other launches collapsed across refresh', () => {
@@ -13,8 +13,10 @@ describe('map launch brief', () => {
     const show = vi.fn();
     const data = state([launch({ event_id: 'later', launch_window: { ...launch().launch_window, net: new Date(NOW + 3600_000).toISOString() } }), launch()]);
     renderMapLaunchBrief(box, data, NOW, show);
-    expect(Array.from(box.children).filter((node) => node.tagName === 'ARTICLE')).toHaveLength(1);
-    expect(box.firstElementChild?.getAttribute('data-event-id')).toBe('event-1');
+    const primary = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    expect(primary.open).toBe(false);
+    expect(primary.querySelector('summary')?.textContent).toBe('Next launch · Chance unknown');
+    expect(primary.querySelector('article')?.getAttribute('data-event-id')).toBe('event-1');
     expect(box.firstElementChild?.querySelector('.launch-details .launch-coverage')).not.toBeNull();
     expect(Array.from(box.children).some((child) => child.classList.contains('launch-coverage'))).toBe(false);
     const more = box.querySelector<HTMLDetailsElement>('.map-launch-more')!;
@@ -29,6 +31,52 @@ describe('map launch brief', () => {
     expect(box.querySelector<HTMLDetailsElement>('.map-launch-more')?.open).toBe(true);
     expect(box.querySelector<HTMLDetailsElement>('.launch-details')?.open).toBe(true);
     expect(box.querySelector<HTMLDetailsElement>('.launch-data-details')?.open).toBe(true);
+  });
+  it('remembers the current choice through an immediate refresh and a new page', () => {
+    const box = document.createElement('div');
+    document.body.append(box);
+    renderMapLaunchBrief(box, state(), NOW, vi.fn());
+    const original = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    original.open = true;
+    original.querySelector('summary')!.focus();
+    // Refresh before the queued native toggle event has fired.
+    renderMapLaunchBrief(box, state(), NOW, vi.fn());
+    const current = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    expect(current.open).toBe(true);
+    expect(document.activeElement).toBe(current.querySelector('summary'));
+    const reloaded = document.createElement('div');
+    renderMapLaunchBrief(reloaded, state(), NOW, vi.fn());
+    expect(reloaded.querySelector<HTMLDetailsElement>('.map-launch-primary')?.open).toBe(true);
+    current.open = false;
+    current.dispatchEvent(new Event('toggle'));
+    original.dispatchEvent(new Event('toggle')); // Detached old events cannot reopen it.
+    renderMapLaunchBrief(document.createElement('div'), state(), NOW, vi.fn());
+    expect(localStorage.getItem('opd-map-launch-brief-open')).toBe('0');
+    renderMapLaunchBrief(box, state(), NOW, vi.fn());
+    expect(box.querySelector<HTMLDetailsElement>('.map-launch-primary')?.open).toBe(false);
+  });
+  it('keeps the current choice through missing data and storage failure', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage unavailable'); });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable'); });
+    const box = document.createElement('div');
+    renderMapLaunchBrief(box, state(), NOW, vi.fn());
+    const primary = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    expect(primary.open).toBe(false);
+    primary.open = true;
+    renderMapLaunchBrief(box, state([], { artifact: null, availability: 'loading' }), NOW, vi.fn());
+    renderMapLaunchBrief(box, state(), NOW, vi.fn());
+    expect(box.querySelector<HTMLDetailsElement>('.map-launch-primary')?.open).toBe(true);
+  });
+  it('updates the collapsed verdict without reopening or retaining a superseded green', () => {
+    const box = document.createElement('div');
+    const items = [launch({ assessment: assessment() })];
+    renderMapLaunchBrief(box, state(items), NOW, vi.fn());
+    expect(box.querySelector('.map-launch-primary > summary')?.textContent).toContain('Possible at liftoff');
+    expect(box.querySelector('.map-launch-primary > summary')?.getAttribute('data-has-chance')).toBe('true');
+    renderMapLaunchBrief(box, state(items, { superseded: true }), NOW, vi.fn());
+    expect(box.querySelector<HTMLDetailsElement>('.map-launch-primary')?.open).toBe(false);
+    expect(box.querySelector('.map-launch-primary > summary')?.getAttribute('data-has-chance')).toBe('false');
+    expect(box.querySelector('.map-launch-primary > summary')?.textContent).not.toContain('Possible at liftoff');
   });
   it('describes an unavailable schedule without claiming no launches exist', () => {
     const box = document.createElement('div');
