@@ -79,54 +79,59 @@
 
       <section id="map-pane" class="pane">
         <div id="map" class="map"></div>
-        <div class="map-controls map-controls-filter" role="group" aria-label="Target filter">
-          <button id="filter-all-map" class="filter-btn active" type="button" data-filter="all" title="Show all targets (shared + yours)">All</button>
-          <button id="filter-mine-map" class="filter-btn" type="button" data-filter="mine" title="Show only your targets">Mine</button>
-        </div>
-        <div class="map-controls map-controls-time">
-          <button id="time-back-90" class="time-btn time-step-btn" type="button" data-step="-90" title="Step back 90 minutes (one orbit)">
-            <span class="time-step-label">&larr; T-90</span>
-            <span class="time-step-utc" data-time-utc>--:--Z</span>
-          </button>
-          <button id="time-back-45" class="time-btn time-step-btn" type="button" data-step="-45" title="Step back 45 minutes (half orbit)">
-            <span class="time-step-label">&larr; T-45</span>
-            <span class="time-step-utc" data-time-utc>--:--Z</span>
-          </button>
-          <button id="time-now" class="time-btn time-step-btn active" type="button" data-step="0" title="Now (current orbit)">
-            <span class="time-step-label">Now</span>
-            <span class="time-step-utc" data-time-utc>--:--Z</span>
-          </button>
-          <button id="time-fwd-45" class="time-btn time-step-btn" type="button" data-step="45" title="Step forward 45 minutes (half orbit)">
-            <span class="time-step-label">T+45 &rarr;</span>
-            <span class="time-step-utc" data-time-utc>--:--Z</span>
-          </button>
-          <button id="time-fwd-90" class="time-btn time-step-btn" type="button" data-step="90" title="Step forward 90 minutes (one orbit)">
-            <span class="time-step-label">T+90 &rarr;</span>
-            <span class="time-step-utc" data-time-utc>--:--Z</span>
-          </button>
-          <div class="time-slider-row">
-            <span class="time-slider-end" aria-hidden="true">Now</span>
-            <input id="time-slider" class="time-slider" type="range" min="0" max="2160" step="1" value="0"
-                   aria-label="Scrub view time: minutes ahead of now"
-                   title="Slide to any time in the next 36 hours — track, marker, terminator and pins follow" />
-            <span class="time-slider-end" aria-hidden="true">+36h</span>
-            <span id="time-slider-readout" class="time-slider-readout" aria-hidden="true">Now</span>
+        <div class="map-toolbar">
+          <div class="map-controls map-controls-filter" role="group" aria-label="Target filter">
+            <button id="filter-all-map" class="filter-btn active" type="button" data-filter="all" title="Show all targets (shared + yours)">All</button>
+            <button id="filter-mine-map" class="filter-btn" type="button" data-filter="mine" title="Show only your targets">Mine</button>
+            <button id="filter-launches-map" class="filter-btn" type="button" aria-pressed="false" aria-expanded="false" aria-controls="map-launch-coverage" title="Show launches and their sites on the map">Launches</button>
+          </div>
+          <div class="map-controls map-controls-time">
+            <div class="time-slider-row">
+              <span class="time-slider-end" aria-hidden="true">Now</span>
+              <input id="time-slider" class="time-slider" type="range" min="0" max="2160" step="1" value="0"
+                     aria-label="Scrub view time: minutes ahead of now"
+                     title="Slide to any time in the next 36 hours — track, marker, terminator and pins follow" />
+              <span class="time-slider-end" aria-hidden="true">+36h</span>
+              <span id="time-slider-readout" class="time-slider-readout" aria-hidden="true">Now</span>
+            </div>
+            <button id="time-back-90" class="time-btn time-step-btn" type="button" data-step="-90" title="Step back 90 minutes (one orbit)">
+              <span class="time-step-label">&larr; T-90</span>
+              <span class="time-step-utc" data-time-utc>--:--Z</span>
+            </button>
+            <button id="time-back-45" class="time-btn time-step-btn" type="button" data-step="-45" title="Step back 45 minutes (half orbit)">
+              <span class="time-step-label">&larr; T-45</span>
+              <span class="time-step-utc" data-time-utc>--:--Z</span>
+            </button>
+            <button id="time-now" class="time-btn time-step-btn active" type="button" data-step="0" title="Now (current orbit)">
+              <span class="time-step-label">Now</span>
+              <span class="time-step-utc" data-time-utc>--:--Z</span>
+            </button>
+            <button id="time-fwd-45" class="time-btn time-step-btn" type="button" data-step="45" title="Step forward 45 minutes (half orbit)">
+              <span class="time-step-label">T+45 &rarr;</span>
+              <span class="time-step-utc" data-time-utc>--:--Z</span>
+            </button>
+            <button id="time-fwd-90" class="time-btn time-step-btn" type="button" data-step="90" title="Step forward 90 minutes (one orbit)">
+              <span class="time-step-label">T+90 &rarr;</span>
+              <span class="time-step-utc" data-time-utc>--:--Z</span>
+            </button>
+
           </div>
         </div>
-        <div class="map-controls map-controls-bearing">
-          <button id="bearing-north" class="time-btn active" type="button" title="North up (default)">N&uarr;</button>
-          <button id="bearing-iss" class="time-btn" type="button" title="Rotate map so ISS direction-of-travel points up">ISS&uarr;</button>
-          <button id="toggle-follow-iss" class="time-btn" type="button" title="Recenter on ISS — click again or pan to release">&#x1F4CD;</button>
-        </div>
-        <div class="map-controls map-controls-overlay">
-          <button id="toggle-clouds" class="time-btn active" type="button" title="Toggle GIBS cloud overlay">&#9729;</button>
-          <button id="toggle-ir" class="time-btn time-btn-ir" type="button" title="Show live geostationary IR cloud-tops (~10 min, day + night; replaces the daily clouds layer, off by default)">IR</button>
-          <button id="toggle-terminator" class="time-btn active" type="button" title="Toggle day-night terminator + subsolar point">&#9728;</button>
-          <button id="toggle-night-lights" class="time-btn" type="button" title="Toggle VIIRS Black Marble night-lights overlay (off by default)">&#x1F303;</button>
-          <button id="toggle-labels" class="time-btn active" type="button" title="Toggle country/city label overlay (Esri Reference)">&#x1F3F7;&#xFE0F;</button>
-          <button id="toggle-multi-orbit" class="time-btn" type="button" title="Toggle multi-orbit display (4 future ISS orbits)">&#x21BB;</button>
-          <button id="toggle-ascent" class="time-btn active" type="button" title="Toggle ASCENT trajectory overlay (rocket climb path for active launches)">&#x1F680;</button>
-          <button id="toggle-satellite-picker" class="time-btn" type="button" title="Track other satellites (Tiangong, Hubble, Starship, ...)">&#x1F6F0;</button>
+        <div class="map-control-dock">
+          <div class="map-controls map-controls-bearing">
+            <button id="bearing-north" class="time-btn active" type="button" title="North up (default)">N&uarr;</button>
+            <button id="bearing-iss" class="time-btn" type="button" title="Rotate map so ISS direction-of-travel points up">ISS&uarr;</button>
+            <button id="toggle-follow-iss" class="time-btn" type="button" title="Recenter on ISS — click again or pan to release">&#x1F4CD;</button>
+          </div>
+          <div class="map-controls map-controls-overlay">
+            <button id="toggle-clouds" class="time-btn active" type="button" title="Toggle GIBS cloud overlay">&#9729;</button>
+            <button id="toggle-ir" class="time-btn time-btn-ir" type="button" title="Show live geostationary IR cloud-tops (~10 min, day + night; replaces the daily clouds layer, off by default)">IR</button>
+            <button id="toggle-terminator" class="time-btn active" type="button" title="Toggle day-night terminator + subsolar point">&#9728;</button>
+            <button id="toggle-night-lights" class="time-btn" type="button" title="Toggle VIIRS Black Marble night-lights overlay (off by default)">&#x1F303;</button>
+            <button id="toggle-labels" class="time-btn active" type="button" title="Toggle country/city label overlay (Esri Reference)">&#x1F3F7;&#xFE0F;</button>
+            <button id="toggle-multi-orbit" class="time-btn" type="button" title="Toggle multi-orbit display (4 future ISS orbits)">&#x21BB;</button>
+            <button id="toggle-satellite-picker" class="time-btn" type="button" title="Track other satellites (Tiangong, Hubble, Starship, ...)">&#x1F6F0;</button>
+          </div>
         </div>
         <div id="satellite-picker-panel" class="satellite-picker-panel" hidden>
           <div class="satellite-picker-header">TRACKING</div>

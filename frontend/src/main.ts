@@ -52,6 +52,7 @@ import { launchStore } from './launch-store';
 import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from './launch-selectors';
 import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
+import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -449,10 +450,22 @@ function renderQueue(): void {
     if (!notice) {
       notice = document.createElement('div');
       notice.id = `${anchorId}-launch-coverage`;
-      if (anchorId === 'map') notice.addEventListener('toggle', resizeVisibleMap, true);
-      anchor.before(notice);
+      if (anchorId === 'map') {
+        notice.hidden = true;
+        notice.addEventListener('toggle', resizeVisibleMap, true);
+        const dock = document.querySelector('#map-pane > .map-control-dock');
+        if (dock) dock.after(notice);
+        else anchor.before(notice);
+      } else anchor.before(notice);
     }
     if (anchorId === 'map') {
+      const enabled = getMapLaunchMode();
+      if (enabled && notice.hidden) {
+        notice.dataset.launchBriefOpen = '1';
+        const primary = notice.querySelector<HTMLDetailsElement>('.map-launch-primary');
+        if (primary) primary.open = true;
+      }
+      notice.hidden = !enabled;
       renderMapLaunchBrief(notice, launches, now, showLaunchOnMap);
       resizeVisibleMap();
     }
@@ -1127,25 +1140,36 @@ function bindSortToggles(): void {
   });
 }
 
-/** Wire the "All / Mine" target-filter toggles on Queue + Upcoming. The
- *  preference is global (the Map reads it too), so a click syncs the active
- *  state across every .filter-btn, persists the choice, and re-renders the
- *  card panes. The Map picks up the change on its next render (tab switch /
- *  refresh tick) — the toggles only live in the card panes, so there's no
- *  way to flip the filter while the Map is on screen. Mirrors bindSortToggles. */
+/** All/Mine remains a shared target preference. Launches is a Map-only
+ * selection which starts off and never replaces the saved target filter. */
 function bindFilterToggles(): void {
-  const buttons = document.querySelectorAll<HTMLButtonElement>('.filter-btn');
-  if (buttons.length === 0) return;
+  const buttons = document.querySelectorAll<HTMLButtonElement>('.filter-btn[data-filter]');
+  const launchButton = document.getElementById('filter-launches-map');
+  if (buttons.length === 0 && !launchButton) return;
   const syncActiveState = (filter: TargetFilter) => {
+    const launches = getMapLaunchMode();
     buttons.forEach((b) => {
-      b.classList.toggle('active', b.dataset.filter === filter);
+      const active = b.dataset.filter === filter && !(launches && b.closest('#map-pane'));
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', String(active));
     });
+    launchButton?.classList.toggle('active', launches);
+    launchButton?.setAttribute('aria-pressed', String(launches));
+    launchButton?.setAttribute('aria-expanded', String(launches));
+    document.getElementById('map-pane')?.classList.toggle('launch-mode', launches);
   };
   syncActiveState(getTargetFilter());
+  subscribeMapLaunchMode((enabled) => {
+    if (!enabled) pendingLaunchFocus = null;
+    syncActiveState(getTargetFilter());
+    renderQueue();
+  });
+  launchButton?.addEventListener('click', () => setMapLaunchMode(!getMapLaunchMode()));
   buttons.forEach((b) => {
     b.addEventListener('click', () => {
       const filter = (b.dataset.filter as TargetFilter | undefined) ?? 'all';
       setTargetFilter(filter);
+      if (b.closest('#map-pane')) setMapLaunchMode(false);
       syncActiveState(filter);
       renderQueue();
       // If the map is loaded, refresh its score-dots so toggling from the
@@ -1347,6 +1371,7 @@ function resizeVisibleMap(): void {
 
 function showLaunchOnMap(eventId: string): void {
   if (!selectLaunches(launchStore.getState(), Date.now(), 'map').some(({ item }) => item.event_id === eventId)) return;
+  setMapLaunchMode(true);
   pendingLaunchFocus = eventId;
   document.getElementById('tab-map')?.click();
 }

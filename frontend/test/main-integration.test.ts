@@ -75,6 +75,7 @@ vi.mock('../src/map', () => ({
   renderMap: vi.fn(async () => {}),
   resizeMap: vi.fn(),
   focusLaunchOnMap: vi.fn(),
+  applyDistanceThreshold: vi.fn(),
   dropLookupPin: vi.fn(),
   getSatelliteTopbarReadouts: vi.fn(() => []),
   applyFollowISS: vi.fn(),
@@ -746,6 +747,62 @@ function seedSnapshot(top5: PassEntry[], top24h: PassEntry[] = []): void {
 }
 
 describe('main.ts: All/Mine target filter', () => {
+  it('starts launches off, opens them from the map selector, and returns to All/Mine', async () => {
+    document.body.innerHTML = DOM_WITH_FILTER;
+    document.getElementById('view')!.insertAdjacentHTML('beforeend', `
+      <section id="map-pane">
+        <div id="map"></div>
+        <div class="map-toolbar"><div class="map-controls-filter">
+          <button id="filter-all-map" class="filter-btn" data-filter="all">All</button>
+          <button id="filter-mine-map" class="filter-btn" data-filter="mine">Mine</button>
+          <button id="filter-launches-map" class="filter-btn">Launches</button>
+        </div></div>
+        <div class="map-control-dock"></div>
+      </section>`);
+    localStorage.setItem('opd-map-ascent-visible', '1');
+    localStorage.setItem('opd-map-launch-brief-open', '1');
+    localStorage.setItem('opd_target_filter_v1', 'mine');
+    const { launchStore } = await import('../src/launch-store');
+    const { getMapLaunchMode } = await import('../src/map-launch-mode');
+    const { init, renderQueue } = await import('../src/main');
+    vi.spyOn(launchStore, 'getState').mockReturnValue({ artifact: launchArtifact([launch()]), pointer: null, availability: 'ready' });
+    vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
+    seedSnapshot([]);
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise(() => {}));
+    void init();
+    await Promise.resolve();
+    await Promise.resolve();
+    const panel = document.getElementById('map-launch-coverage')!;
+    const button = document.getElementById('filter-launches-map')!;
+    expect(panel.previousElementSibling?.className).toBe('map-control-dock');
+    expect(panel.hidden).toBe(true);
+    expect(getMapLaunchMode()).toBe(false);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    button.click();
+    expect(getMapLaunchMode()).toBe(true);
+    expect(panel.hidden).toBe(false);
+    expect(panel.querySelector<HTMLDetailsElement>('.map-launch-primary')?.open).toBe(true);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById('filter-mine-map')?.getAttribute('aria-pressed')).toBe('false');
+    expect(document.getElementById('filter-mine-queue')?.getAttribute('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('opd_target_filter_v1')).toBe('mine');
+    renderQueue();
+    expect(panel.hidden).toBe(false);
+    document.getElementById('filter-mine-map')!.click();
+    expect(panel.hidden).toBe(true);
+    expect(getMapLaunchMode()).toBe(false);
+    expect(document.getElementById('filter-mine-map')?.getAttribute('aria-pressed')).toBe('true');
+    button.click();
+    document.getElementById('filter-all-map')!.click();
+    expect(panel.hidden).toBe(true);
+    expect(localStorage.getItem('opd_target_filter_v1')).toBe('all');
+    button.click();
+    button.click();
+    renderQueue();
+    expect(panel.hidden).toBe(true);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('renderQueue shows both shared and personal passes under "all"', async () => {
     document.body.innerHTML = DOM_WITH_FILTER;
     const mine = buildPass({ target_id: 'personal:josh:abc', target_name: 'Josh Farm' });
