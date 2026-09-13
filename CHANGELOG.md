@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.22.0.10 — 2026-09-13
+
+The live phone check showed the launch banner still used too much vertical space. Compact UTC dates, shorter explanations and removal of duplicate rocket text leave more map visible. The map action and Details share a row; technical schedule data now lives inside Details. Precise camera timestamps and all shooting-verdict admission rules are preserved.
+
 ## 1.22.0.9 — 2026-09-13
 
 - Replace the always-yellow launch presentation with a compact shooting brief: possible at liftoff, too far for early ascent, or a plain explanation of what is unknown. Show the nearest launch above the map, with other launches and technical evidence collapsed.

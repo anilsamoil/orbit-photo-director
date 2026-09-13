@@ -26,6 +26,36 @@ function tentativeNet(item: LaunchOpportunity): string {
   if (precision === 'year') return `${timestamp.slice(0, 4)} (year estimate; date/time unconfirmed)`;
   return timestamp;
 }
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function friendlyDate(value: string): string {
+  const date = new Date(value);
+  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+function friendlyUtc(value: string, seconds: boolean): string {
+  return `${friendlyDate(value)}, ${utc(value).slice(11, seconds ? 19 : 16)} UTC`;
+}
+function friendlyRange(start: string, end: string, seconds: boolean): string {
+  if (start.slice(0, 10) !== end.slice(0, 10)) return `${friendlyUtc(start, seconds)} – ${friendlyUtc(end, seconds)}`;
+  return `${friendlyDate(start)}, ${utc(start).slice(11, seconds ? 19 : 16)}–${utc(end).slice(11, seconds ? 19 : 16)} UTC`;
+}
+function summaryNet(item: LaunchOpportunity): string {
+  if (hasLaunchTimeConflict(item)) return 'Launch time disputed (see Details)';
+  const { net, precision } = item.launch_window;
+  switch (precision?.toLowerCase()) {
+    case 'minute': return `${friendlyUtc(net, false)} (tentative)`;
+    case 'second': return `${friendlyUtc(net, true)} (tentative)`;
+    case 'day': return `${friendlyDate(net)} UTC (day estimate; time unconfirmed)`;
+    case 'month': return `${MONTHS[new Date(net).getUTCMonth()]} ${new Date(net).getUTCFullYear()} (month estimate)`;
+    case 'year': return `${new Date(net).getUTCFullYear()} (year estimate)`;
+    default: return 'Timing unconfirmed (see Details)';
+  }
+}
+function summarySite(item: LaunchOpportunity): string {
+  const words = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const title = ` ${words(item.name)} `;
+  const rocket = words(item.rocket);
+  return rocket && title.includes(` ${rocket} `) ? item.site.name : `${item.site.name} · ${item.rocket}`;
+}
 function row(container: HTMLElement, label: string, value: string): void {
   const line = element('div', 'launch-fact');
   line.append(element('span', 'launch-fact-label', label), element('span', '', value));
@@ -143,11 +173,11 @@ export function renderLaunchCard(selection: LaunchSelection, state: LaunchState,
   const currentCapture = interval && launchCameraEvidenceFresh(selection, state, now);
   const assessedWindow = brief.verdict === 'no_chance' && item.assessment?.window.verdict === 'too_far';
   row(summary, 'When', currentCapture
-    ? `Conditional capture: ${utc(interval.start)} to ${utc(interval.end)}`
+    ? `Conditional capture: ${friendlyRange(interval.start, interval.end, true)}`
     : assessedWindow && item.launch_window.start && item.launch_window.end
-      ? `Launch window: ${utc(item.launch_window.start)} to ${utc(item.launch_window.end)}`
-    : `Launch (tentative): ${tentativeNet(item)}`);
-  row(summary, 'Where', `${item.site.name} · ${item.rocket}`);
+      ? `Launch window: ${friendlyRange(item.launch_window.start, item.launch_window.end, item.launch_window.precision?.toLowerCase() === 'second')}`
+    : summaryNet(item));
+  row(summary, 'Where', summarySite(item));
   if (brief.direction) row(summary, 'View', `${currentCapture ? 'At capture' : 'Launch site at liftoff'}: ${brief.direction}`);
   else if (brief.verdict === 'unknown') row(summary, 'View', 'Direction and angle not yet established');
   card.append(name, meta, summary);

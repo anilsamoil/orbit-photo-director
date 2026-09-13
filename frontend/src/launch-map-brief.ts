@@ -14,7 +14,8 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
   const selections = selectLaunches(state, now, 'map');
   const nodes: HTMLElement[] = [];
   const next = selections[0];
-  if (next) nodes.push(renderLaunchCard(next, state, now, onShowMap));
+  const nextCard = next ? renderLaunchCard(next, state, now, onShowMap) : null;
+  if (nextCard) nodes.push(nextCard);
   if (selections.length > 1) {
     const more = document.createElement('details');
     more.className = 'map-launch-more';
@@ -36,7 +37,8 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
     if (!state.artifact && state.availability !== 'loading') empty.textContent = 'Launch schedule unavailable. Reconnect to check upcoming launches.';
     nodes.push(empty);
   }
-  nodes.push(coverage);
+  if (nextCard) nextCard.querySelector('.launch-details')!.append(coverage);
+  else nodes.push(coverage);
   container.replaceChildren(...nodes);
   for (const card of container.querySelectorAll<HTMLElement>('.launch-brief')) {
     if (openEvents.has(card.dataset.eventId)) card.querySelector<HTMLDetailsElement>('.launch-details')!.open = true;
