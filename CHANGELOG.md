@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.23.0.0 - 2026-09-20
+
+Launch feed requests now share a nonblocking cache lock and a durable cooldown receipt, so overlapping consumers and restarts cannot bypass provider backoff. Successful-cache TTL remains one hour. HTTP 429/503 Retry-After, bounded failure history, malformed-state recovery and interrupted cache/receipt updates have regression coverage. Request gates and successful-fetch timestamps use wall clock rather than an older generator tick timestamp.
+
+The existing cache-only publisher can check every ten minutes without extra launch-provider or model calls. Unchanged inputs do not upload or renew freshness; schedule and camera expiry gates are unchanged. Deployment and rollback instructions are in `docs/launch-api-recovery.md`. Synthetic browser QA now shifts the entire launch horizon, including dates beyond its first fixture day.
+
 ## 1.22.0.12 — 2026-09-13
 
 The map fills the pane again, with the time slider beside All/Mine and the controls overlaid on the map. Launches is a third map selection that starts off on each visit; selecting it opens the launch panel and shows launch sites and supplied corridors. All or Mine closes the panel and restores normal targets. The redundant rocket toggle is removed, and launch/satellite popups share a bounded overlay area.
