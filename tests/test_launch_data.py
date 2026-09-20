@@ -281,10 +281,12 @@ def test_fetch_hits_network_when_cache_stale(
     os.utime(cache_path, (old, old))
 
     class FakeResp:
+        status_code = 200
         text = fixture_text
         def raise_for_status(self) -> None: ...
 
-    with patch("generator.launch_data.requests.get", return_value=FakeResp()) as mock_get:
+    with (patch("generator.launch_data.requests.get", return_value=FakeResp()) as mock_get,
+          patch("generator.launch_data._utc_now", return_value=n)):
         result = fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
     assert mock_get.call_count == 1
     assert len(result.launches) == 4
@@ -373,6 +375,7 @@ def test_fetch_requests_a_full_page_not_ll2_default(
     os.utime(cache_path, (old, old))
 
     class FakeResp:
+        status_code = 200
         text = fixture_text
         def raise_for_status(self) -> None: ...
 
@@ -416,6 +419,7 @@ def test_fetch_falls_back_to_cache_on_parse_error(
     os.utime(cache_path, (old, old))
 
     class HtmlErrorResp:
+        status_code = 200
         text = "<html><body>503 Bad Gateway</body></html>"
         def raise_for_status(self) -> None: ...
 
@@ -449,10 +453,12 @@ def test_fetch_writes_cache_on_successful_network(
     assert not cache_path.exists()
 
     class FakeResp:
+        status_code = 200
         text = fixture_text
         def raise_for_status(self) -> None: ...
 
-    with patch("generator.launch_data.requests.get", return_value=FakeResp()):
+    with (patch("generator.launch_data.requests.get", return_value=FakeResp()),
+          patch("generator.launch_data._utc_now", return_value=n)):
         result = fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
     assert cache_path.exists()
     assert cache_path.read_text() == fixture_text
@@ -472,6 +478,7 @@ def test_fetch_does_not_overwrite_cache_with_html_error(
     n = datetime.now(tz=UTC)
 
     class HtmlErrorResp:
+        status_code = 200
         text = "<html><body>cdn outage</body></html>"
         def raise_for_status(self) -> None: ...
 

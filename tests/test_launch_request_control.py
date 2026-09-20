@@ -1,6 +1,7 @@
 """LL2 cooldown/ownership survives retries, concurrent readers and process loss."""
 
 import fcntl
+import hashlib
 import importlib
 import json
 import os
@@ -153,14 +154,20 @@ def test_failure_preserves_cache_and_persists_bounded_backoff(cache, failure):
 
 
 @pytest.mark.parametrize("bad", ["bad json", "{}", "[]", '{"schema_version":99}', "x" * 65537])
-def test_corrupt_attempt_ledger_fails_closed(cache, bad):
+def test_corrupt_attempt_ledger_quarantines_and_defers_recovery(cache, bad):
     ledger = cache.with_suffix(".json.request.json")
     ledger.write_text(bad)
     with patch("requests.get") as get:
         result = fetch(cache)
     get.assert_not_called()
     assert len(result.launches) == 4
-    assert ledger.read_text() == bad
+    assert ledger.with_suffix(".invalid.json").read_text() == bad
+    assert state(cache)["outcome"] == "control_recovered"
+    with patch("requests.get", return_value=response()) as get:
+        fetch(cache, NOW + timedelta(minutes=119))
+        get.assert_not_called()
+        fetch(cache, NOW + timedelta(hours=2))
+        assert get.call_count == 1
 
 
 def test_attempt_reservation_must_be_durable_before_network(cache):
@@ -222,3 +229,81 @@ def test_cooldown_uses_wall_clock_not_old_tick_start(cache):
             launch_data.fetch_upcoming_launches(cache, now=NOW)
     assert state(cache)["attempted_at"] == clock.isoformat()
     assert state(cache)["next_attempt_at"] == (clock + timedelta(hours=2)).isoformat()
+
+
+def test_implausible_retry_after_does_not_disable_feed_for_centuries(cache):
+    with patch("requests.get", return_value=response(429, {"Retry-After": "9999999999"})):
+        fetch(cache)
+    assert state(cache)["retry_after_rejected"] is True
+    assert state(cache)["next_attempt_at"] == (NOW + timedelta(hours=2)).isoformat()
+
+
+def test_retry_after_on_invalid_success_body_is_not_a_provider_cooldown(cache):
+    with patch("requests.get", return_value=response(200, {"Retry-After": "172800"}, "{}")):
+        fetch(cache)
+    assert state(cache)["retry_after_seconds"] is None
+    assert state(cache)["next_attempt_at"] == (NOW + timedelta(minutes=15)).isoformat()
+
+
+def test_success_and_ttl_use_wall_clock_not_old_tick_start(cache):
+    clock = NOW + timedelta(minutes=10)
+    old = (clock - timedelta(minutes=65)).timestamp()
+    os.utime(cache, (old, old))
+    with patch("generator.launch_data._utc_now", return_value=clock):
+        with patch("requests.get", return_value=response()) as get:
+            result = launch_data.fetch_upcoming_launches(cache, now=NOW)
+    assert get.call_count == 1
+    assert result.last_successful_fetch == clock
+    receipt = json.loads(cache.with_suffix(".json.receipt.json").read_text())
+    assert receipt["fetched_at"] == clock.isoformat()
+
+
+def test_ten_minute_consumer_ticks_do_not_raise_successful_fetch_cadence(cache):
+    with patch("requests.get", return_value=response()) as get:
+        fetch(cache)
+        # Model filesystem mtime using the same simulated wall clock.
+        os.utime(cache, (NOW.timestamp(), NOW.timestamp()))
+        for minute in range(10, 60, 10):
+            fetch(cache, NOW + timedelta(minutes=minute))
+        assert get.call_count == 1
+        fetch(cache, NOW + timedelta(hours=1))
+        assert get.call_count == 2
+
+
+@pytest.mark.parametrize("failed_file", ["launches.json.receipt.pending.json", "launches.json"])
+def test_cache_write_failure_leaves_last_good_pair_intact(cache, failed_file):
+    before = (cache.read_bytes(), cache.stat().st_mtime_ns,
+              cache.with_suffix(".json.receipt.json").read_bytes())
+    original = launch_data._atomic_write
+
+    def fail_one(path, text):
+        if path.name == failed_file:
+            raise OSError("disk full")
+        original(path, text)
+
+    with patch("generator.launch_data._atomic_write", side_effect=fail_one):
+        with patch("requests.get", return_value=response(body='{"results": [], "count": 0}')):
+            fetch(cache)
+    assert (cache.read_bytes(), cache.stat().st_mtime_ns,
+            cache.with_suffix(".json.receipt.json").read_bytes()) == before
+
+
+def test_interrupted_receipt_promotion_repairs_before_ttl_without_refetch(cache):
+    original = os.replace
+
+    def fail_receipt(source, target):
+        if Path(target).name == "launches.json.receipt.json":
+            raise OSError("interrupted receipt promotion")
+        return original(source, target)
+
+    with patch("generator.launch_data.os.replace", side_effect=fail_receipt):
+        with patch("requests.get", return_value=response(body='{"results": [], "count": 0}')):
+            fetch(cache)
+    assert cache.with_suffix(".json.receipt.pending.json").exists()
+    with patch("requests.get") as get:
+        fetch(cache, NOW + timedelta(minutes=1))
+    get.assert_not_called()
+    receipt = json.loads(cache.with_suffix(".json.receipt.json").read_text())
+    assert receipt["sha256"] == hashlib.sha256(cache.read_bytes()).hexdigest()
+    assert receipt["fetched_at"] == NOW.isoformat()
+    assert not cache.with_suffix(".json.receipt.pending.json").exists()
