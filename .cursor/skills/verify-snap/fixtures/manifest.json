@@ -1,0 +1,35 @@
+{
+  "version": "VERIFY",
+  "generated_at": "2026-09-20T11:00:34Z",
+  "tle_epoch": "2026-09-20T05:00:34Z",
+  "cloud_composite_hour": "2026-09-20T10:00:34Z",
+  "target_data_version": "verify-v1",
+  "build_version": "1.22.0.12",
+  "freshness": {
+    "tle_hours": 6,
+    "cloud_hours": 1,
+    "ok": true
+  },
+  "artifacts": {
+    "top5": {
+      "path": "v/VERIFY/top5.json",
+      "sha256": "b80ddc51cd4076c18a8db065f9da7ea05adb1d8979a6f57502717ec2c29c80b9",
+      "bytes": 1599
+    },
+    "top_24h": {
+      "path": "v/VERIFY/top_24h.json",
+      "sha256": "871df6cc78209f58148a2673a481f17c2437a35be6301ff09ae90d0557435e53",
+      "bytes": 2681
+    },
+    "track": {
+      "path": "v/VERIFY/track.json",
+      "sha256": "f6aa82f1a93bf93bee12967b1dac1ec7c6dd0d82ee1ec52c543b3d1348346f3f",
+      "bytes": 1176
+    },
+    "status": {
+      "path": "v/VERIFY/status.json",
+      "sha256": "ebe0a2db00ef18122287fd995371bd931c2890bf9faf501dfd1f865e372a9242",
+      "bytes": 400
+    }
+  }
+}
