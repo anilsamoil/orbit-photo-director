@@ -8,7 +8,7 @@ const started = Date.now();
 let mode = 'ready';
 const iso = (minutes = 0) => new Date(started + minutes * 60_000).toISOString();
 function shift(value: unknown): any {
-  if (typeof value === 'string' && /^2026-09-07T/.test(value)) return new Date(Date.parse(value) + started - NOW).toISOString();
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return new Date(Date.parse(value) + started - NOW).toISOString();
   if (Array.isArray(value)) return value.map(shift);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, shift(v)]));
   return value;

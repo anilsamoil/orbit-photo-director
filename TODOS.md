@@ -24,6 +24,8 @@ Status: map-first implementation approved; source validation and alerts remain g
 - [ ] P3 deferred: new Web Push and automatic calendar rescheduling. Reuse optional existing ICS; it is a snapshot, not a live launch-slip tracker.
 - [x] L5 cache-only refresh and ownership recovery: two-hour host scheduler, persistent input receipts, verified remote readback, interruption recovery and explicit schedule-vs-camera age labels. No extra provider polling or messages.
 - [ ] P2: L5 48-hour unattended soak and bounded provider pagination/shared request budget before expanding source collection. Current partial-page coverage remains explicit; optical/trajectory gates are unchanged.
+- [x] L5 request hardening: durable same-cache ownership, provider cooldown/backoff, bounded diagnostics and interrupted cache-pair recovery. Hourly successful-source TTL and existing admission gates retained; see `docs/launch-api-recovery.md`.
+- [ ] P2: Verify the ten-minute cache-only publisher and first genuine throttle/recovery cycle in unattended soak. Historical HTTP429 origin remains unconfirmed; do not claim tests establish the provider's cause or increase source pagination yet.
 - [ ] P2: Optional feedback remains unimplemented; unanswered observations must never be counted as misses.
 - [x] L10 initial: cache-only diagnostic and staged publication/rollback runbook written; no operator or production rehearsal claimed.
 - [ ] P1 before capture activation: explicitly decide whether any failed refresh removes even still-valid last-good Queue entries. Current reviewed policy retains these briefly, labeled LAST GOOD, with source/artifact expiry enforced.
