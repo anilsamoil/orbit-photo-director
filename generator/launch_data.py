@@ -18,9 +18,8 @@ Hardening locked from the /autoplan + /plan-eng-review cycles:
   launches in the upcoming feed; skip them so cache-fallback after weeks
   of LL2 downtime doesn't surface historical entries
 
-Future polish (not yet wired): ETag conditional GET (304 fallthrough). LL2
-supports If-None-Match. Currently the file-TTL gate covers the steady-state
-case; ETag would eliminate the 1 fresh fetch/hour against the rate budget.
+The successful-cache TTL and a persisted request cooldown bound network use.
+Conditional GETs are not assumed to be exempt from the provider's quota.
 
 Note: per ARCH-1 in the eng review, launches health (last_successful_fetch,
 count_upcoming, schema_hash) is published via fields on the existing
@@ -30,12 +29,16 @@ module exposes the values; main.py threads them into status_data.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
 import math
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +46,8 @@ import requests
 
 LL2_DEFAULT_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
 LL2_FETCH_TIMEOUT_SECONDS = 15
+LL2_MIN_ATTEMPT_SECONDS = 900
+LL2_MAX_BACKOFF_SECONDS = 7200
 
 # LL2 paginates /launch/upcoming/ and defaults to 10 results. Ten rows is
 # nowhere near enough: ~86% of the upcoming feed sits at status TBD, so a
@@ -371,6 +376,82 @@ def validate_feed(payload: Any) -> None:
         raise ValueError("LL2 response has invalid pagination")
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Replace a complete file; readers never observe an in-progress write."""
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as file:
+        pending = Path(file.name)
+        try:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        except BaseException:
+            pending.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(pending, path)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _request_state(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    if path.stat().st_size > 65536:
+        raise ValueError("request receipt too large")
+    state = json.loads(path.read_text())
+    if (not isinstance(state, dict) or type(state.get("schema_version")) is not int
+            or state["schema_version"] != 1):
+        raise ValueError("invalid request receipt version")
+    for key in ("attempted_at", "next_attempt_at"):
+        value = datetime.fromisoformat(state[key])
+        if value.tzinfo is None:
+            raise ValueError("request receipt needs timezone")
+    failures = state["consecutive_failures"]
+    if type(failures) is not int or not 0 <= failures <= 31:
+        raise ValueError("invalid request failure count")
+    if (datetime.fromisoformat(state["next_attempt_at"])
+            < datetime.fromisoformat(state["attempted_at"])):
+        raise ValueError("request deadline precedes attempt")
+    history = state.get("recent_attempts", [])
+    if not isinstance(history, list) or len(history) > 24:
+        raise ValueError("invalid request history")
+    return state
+
+
+def _retry_after_seconds(value: str | None, now: datetime) -> int | None:
+    if not isinstance(value, str) or not 0 < len(value) <= 128:
+        return None
+    value = value.strip()
+    try:
+        if value.isascii() and value.isdigit() and len(value) <= 10:
+            seconds = int(value)
+        else:
+            until = parsedate_to_datetime(value)
+            if until.tzinfo is None:
+                return None
+            seconds = math.ceil((until - now).total_seconds())
+        # Validate arithmetic before persisting a provider-supplied deadline.
+        now + timedelta(seconds=seconds)
+        return seconds if seconds >= 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _safe_response_metadata(headers: Any) -> dict:
+    result = {}
+    for key in ("CF-Cache-Status", "X-Cache-Status", "Age"):
+        value = headers.get(key)
+        if isinstance(value, str) and 0 < len(value) <= 40:
+            if all(char in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_ "
+                   for char in value):
+                result[key.lower()] = value
+    return result
+
+
 def fetch_upcoming_launches(
     cache_path: Path,
     ttl_hours: float = 1.0,
@@ -385,10 +466,8 @@ def fetch_upcoming_launches(
     cache. Never raises — a tick should be able to publish without launches
     if LL2 is down.
 
-    Etag note: LL2 supports `If-None-Match` for 304 responses. We don't use
-    it yet because the file-TTL gate already covers the common case (we poll
-    hourly, LL2 changes hourly at most). Etag would be a P3 polish to
-    eliminate the 1 fresh fetch/hour entirely.
+    A nonblocking per-cache lock and persisted attempt receipt prevent overlap
+    and preserve Retry-After/backoff across restart. No sleeps or inline retries.
     """
     n = now or datetime.now(tz=UTC)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -431,42 +510,89 @@ def fetch_upcoming_launches(
                 count_upcoming_unfiltered=0,
             )
 
-    # Fresh cache → use it without hitting the network.
-    if cache_path.exists():
-        age_h = (n.timestamp() - cache_path.stat().st_mtime) / 3600.0
-        if age_h < ttl_hours:
-            return _from_cache(f"cache fresh ({age_h:.2f}h < {ttl_hours}h TTL)")
-
-    # Stale cache (or no cache): try the network.
+    cache_path = cache_path.resolve()
+    request_path = cache_path.with_suffix(".json.request.json")
+    lock_path = cache_path.with_suffix(".json.fetch.lock")
+    # Lock before testing freshness: a concurrent successful writer may have
+    # replaced the cache since this caller entered. Never delete the lock file.
     try:
-        resp = requests.get(
-            url,
-            timeout=LL2_FETCH_TIMEOUT_SECONDS,
-            params={"limit": LL2_PAGE_LIMIT},
-        )
-        resp.raise_for_status()
-        text = resp.text
-        # Parse FIRST. If LL2 returned an HTML error page captured as 200 OR
-        # a JSON shape we can't parse, fall back to cache (matches the
-        # fetch_tle pattern; never overwrite a known-good cache with garbage).
-        payload = json.loads(text)
-        validate_feed(payload)
-        launches = parse_response(payload, now=n)
-        schema_hash = compute_schema_hash(payload)
-        cache_path.write_text(text)
-        cache_path.with_suffix(".json.receipt.json").write_text(json.dumps({
-            "sha256": hashlib.sha256(text.encode()).hexdigest(),
-            "fetched_at": n.isoformat(),
-        }))
-        log.info(
-            "LL2: fetched %d launches (schema_hash=%s)",
-            len(launches), schema_hash,
-        )
-        return FetchResult(
-            launches=launches,
-            last_successful_fetch=n,
-            schema_hash=schema_hash,
-            count_upcoming_unfiltered=len(launches),
-        )
-    except (requests.RequestException, json.JSONDecodeError, ValueError, OSError) as exc:
-        return _from_cache(f"network/parse failure: {exc}")
+        with lock_path.open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return _from_cache("request owner busy")
+            if cache_path.exists():
+                age_h = (n.timestamp() - cache_path.stat().st_mtime) / 3600.0
+                if age_h < ttl_hours:
+                    return _from_cache(f"cache fresh ({age_h:.2f}h < {ttl_hours}h TTL)")
+            previous = _request_state(request_path)
+            attempted = _utc_now()
+            if previous and attempted < datetime.fromisoformat(previous["next_attempt_at"]):
+                return _from_cache(f"request cooldown until {previous['next_attempt_at']}")
+            failures = min(previous.get("consecutive_failures", 0) + 1, 31)
+            state = {
+                "schema_version": 1,
+                "attempted_at": attempted.isoformat(),
+                "completed_at": None,
+                "status": None,
+                "outcome": "in_flight",
+                "consecutive_failures": failures,
+                "next_attempt_at": (
+                    attempted + timedelta(seconds=LL2_MIN_ATTEMPT_SECONDS)
+                ).isoformat(),
+                "retry_after_seconds": None,
+                "response_metadata": {},
+                "recent_attempts": previous.get("recent_attempts", [])[-23:] + (
+                    [{key: value for key, value in previous.items() if key != "recent_attempts"}]
+                    if previous else []
+                ),
+            }
+            # Reserve durably BEFORE the GET. Even process loss cannot turn
+            # restarts into a request burst. A corrupt/unwritable ledger fails closed.
+            _atomic_write(request_path, json.dumps(state))
+            try:
+                resp = requests.get(
+                    url, timeout=LL2_FETCH_TIMEOUT_SECONDS,
+                    params={"limit": LL2_PAGE_LIMIT}, allow_redirects=False,
+                )
+                state["status"] = getattr(resp, "status_code", 200)
+                headers = getattr(resp, "headers", {})
+                state["response_metadata"] = _safe_response_metadata(headers)
+                state["retry_after_seconds"] = _retry_after_seconds(
+                    headers.get("Retry-After"), _utc_now()
+                )
+                resp.raise_for_status()
+                if state["status"] != 200:
+                    raise requests.HTTPError("LL2 expected HTTP200; redirects are not followed")
+                text = resp.text
+                payload = json.loads(text)
+                validate_feed(payload)
+                launches = parse_response(payload, now=n)
+                schema_hash = compute_schema_hash(payload)
+                _atomic_write(cache_path, text)
+                _atomic_write(cache_path.with_suffix(".json.receipt.json"), json.dumps({
+                    "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                    "fetched_at": n.isoformat(),
+                }))
+            except (requests.RequestException, ValueError, OSError) as exc:
+                backoff = min(LL2_MIN_ATTEMPT_SECONDS * 2 ** (failures - 1),
+                              LL2_MAX_BACKOFF_SECONDS)
+                delay = max(backoff, state["retry_after_seconds"] or 0)
+                completed = _utc_now()
+                state.update(
+                    outcome="request_failed", error_type=type(exc).__name__,
+                    completed_at=completed.isoformat(),
+                    next_attempt_at=(completed + timedelta(seconds=delay)).isoformat(),
+                )
+                _atomic_write(request_path, json.dumps(state))
+                return _from_cache(f"request failed status={state['status']} "
+                                   f"type={state['error_type']}; cooldown until "
+                                   f"{state['next_attempt_at']}")
+            state.update(outcome="ok", consecutive_failures=0,
+                         completed_at=_utc_now().isoformat())
+            _atomic_write(request_path, json.dumps(state))
+            log.info("LL2: fetched %d launches (schema_hash=%s)", len(launches), schema_hash)
+            return FetchResult(launches, n, schema_hash, len(launches))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.error("LL2 request control unavailable: %s", type(exc).__name__)
+        return _from_cache("request control unavailable; network attempt refused")

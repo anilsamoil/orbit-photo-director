@@ -86,6 +86,38 @@ def test_refresh_and_restart_noop_preserve_source_age(setup):
     assert json.loads((output / "launch/latest.json").read_bytes()) == pointer
 
 
+def test_ten_minute_checks_do_not_fetch_renew_or_republish(setup):
+    now, _, _, _, remote, calls, _, run, _ = setup
+    run()
+    original_pointer = remote["launch/latest.json"]
+    for minutes in range(10, 180, 10):
+        result = run(now + timedelta(minutes=minutes))
+        assert result["reason"] == "UNCHANGED_INPUT"
+        assert not result["notified"] and not result["published"]
+    assert len(calls) == 2
+    assert remote["launch/latest.json"] == original_pointer
+    with pytest.raises(ValueError, match="CACHE_RECEIPT_EXPIRED_OR_FUTURE"):
+        run(now + timedelta(hours=3))
+    assert len(calls) == 2
+
+
+def test_ten_minute_check_consumes_new_receipt_once(setup):
+    now, _, _, _, remote, calls, write_cache, run, _ = setup
+    run()
+    # Receipt arrives before the old source lease expires; the hourly phase
+    # could miss it. A ten-minute check consumes it before expiry.
+    received = now + timedelta(hours=2, minutes=41)
+    write_cache(received)
+    result = run(now + timedelta(hours=2, minutes=50))
+    assert result["published"] and not result["notified"]
+    pointer = json.loads(remote["launch/latest.json"])
+    artifact = json.loads(remote[pointer["path"]])
+    assert artifact["coverage"]["fetched_at"] == utc(received)
+    assert len(calls) == 4
+    assert run(now + timedelta(hours=3))["reason"] == "UNCHANGED_INPUT"
+    assert len(calls) == 4
+
+
 def test_slip_then_tbd_removes_old_exact_event(setup):
     now, _, _, payload, remote, _, write_cache, run, _ = setup
     run()
