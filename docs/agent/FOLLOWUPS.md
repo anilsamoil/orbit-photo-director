@@ -24,7 +24,7 @@ Defects and stale documentation found while writing `ARCHITECTURE_NOW.md`. None 
 
 ## Stale documentation
 
-**`map.ts:3` documents a five-layer stack.** The real stack is 21 layers. The header predates the Esri basemap, the IR raster, the terminator, the coastline, and the labels layer. An agent that trusts the header will insert a layer in the wrong position.
+**`map.ts:3` documents a five-layer stack.** `renderMap` paints 17, and four more arrive on demand: the forecast cloud raster, the lookup pin, the dropped pin, and one per selected satellite. The header predates the Esri basemap, the IR raster, the terminator, the coastline, and the labels layer. An agent that trusts the header will insert a layer in the wrong position. `map-render-contract.test.ts` now holds the real bring-up order, so the header is the only wrong description left.
 
 **`docs/TEST_PLAN.md` describes tests that do not exist.** Line 69 claims Playwright E2E flows. No Playwright dependency exists in `frontend/package.json` or `worker/package.json`. Line 70 claims `make test` emits a coverage report. It does not. Line 67 claims a 90% line and 100% branch gate on `score.py`. CI enforces 85% across `generator/`.
 
