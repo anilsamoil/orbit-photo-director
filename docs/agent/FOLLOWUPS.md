@@ -14,6 +14,8 @@ Defects and stale documentation found while writing `ARCHITECTURE_NOW.md`. None 
 
 **The test reset helper disagrees with production.** `_resetMapStateForTest` at `map.ts:517` sets `bearingMode = 'north'`. Production defaults to `iss-up`. Any test that relies on the reset is asserting against a default the app never has.
 
+**The pin popup's add-to-targets controls paint light text on a light button.** `.pin-add-button` and `.pin-add-cancel` in `style.css` set `background: #f2f5f9` and `font: inherit` with no `color`, so they inherit the dark popup's light text. In a real browser the labels "➕ Add to my targets" and "Cancel" are near-invisible; only the ➕ glyph and the blue Save button read. Seen in the slice 4 walkthrough screenshots, identical on the build before the move, so it is a styling defect and not a regression. Fix is one `color` rule in each selector, after a pin on the computed color.
+
 ## Dead code
 
 **Six Earth radius constants carry two different values.** `iss-sgp4.ts`, `pin-drop.ts` and `terminator.ts` use 6378.137, the equatorial radius. `photo-conditions.ts`, `moon.ts` and `beta-angle.ts` use 6371, the mean radius. Distances computed in one module are therefore not comparable with the other, and the 0.11% difference is large enough to move a nadir distance by kilometres near the threshold. Collapsing them would change output numbers, so it cannot ride inside a structural change. Decide which radius each computation should use, then pin the new numbers.
