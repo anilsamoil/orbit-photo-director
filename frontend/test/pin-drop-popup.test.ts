@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatShootHint, formatUtcHm } from '../src/map';
+import { formatUtcHm } from '../src/countdown';
+import { formatShootHint } from '../src/map/overlays/pass-list';
 import type { UpcomingPass } from '../src/pin-drop';
 
 // Regression: v1.6.1.2 — pin-drop popup gains a "shoot from" hint.

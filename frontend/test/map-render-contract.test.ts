@@ -179,6 +179,9 @@ describe('renderMap bring-up', () => {
       'touchstart:*',
       'touchmove:*',
       'touchend:*',
+      'click:dropped-pin-layer',
+      'mouseenter:dropped-pin-layer',
+      'mouseleave:dropped-pin-layer',
     ]);
   });
 

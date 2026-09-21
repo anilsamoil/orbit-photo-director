@@ -10,7 +10,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildPinAddFooter, coordTargetName } from '../src/map';
+import { buildPinAddFooter, coordTargetName } from '../src/map/features/pin-drop/popup';
 import type { PersonalTarget } from '../src/profile';
 
 describe('coordTargetName', () => {

@@ -7,6 +7,8 @@ import { createVendorMap } from './map/adapters/maplibre';
 import { initialCamera } from './map/map-core/camera';
 import { createClock } from './map/map-core/clock';
 import { createMapCore, type MapCore } from './map/map-core/core';
+import { FEATURES } from './map/features';
+import { buildPassList } from './map/overlays/pass-list';
 import { boundsOf, type Point } from './map/map-core/geometry';
 import type { StyleSpec } from './map/map-core/layer-spec';
 import type {
@@ -23,13 +25,8 @@ import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
 import { fetchLiveCloud } from './cloud';
 import { getShotCount } from './shot-counts';
-import { handleAdd } from './profile-crud';
-import {
-  greatCircleBearingDeg,
-  findUpcomingPasses,
-  roundForZoom,
-  type UpcomingPass,
-} from './pin-drop';
+import { formatUtcHm } from './countdown';
+import { greatCircleBearingDeg, findUpcomingPasses } from './pin-drop';
 import {
   CURATED_SATELLITES,
   fetchSatelliteTLE,
@@ -44,7 +41,7 @@ import {
   terminatorNightPolygonFeatures,
   type IssIllumination,
 } from './terminator';
-import { loadProfile, parseProfileFromURL, validatePersonalTargetInput, type PersonalTarget } from './profile';
+import { loadProfile, parseProfileFromURL, type PersonalTarget } from './profile';
 import { applyTargetFilter, getTargetFilter } from './target-filter-pref';
 import { subscribeProfileChanged } from './profile-events';
 import { launchStore, type LaunchState } from './launch-store';
@@ -73,13 +70,6 @@ export function clampLookahead(m: number): number {
   if (!Number.isFinite(m) || m < 0) return 0;
   if (m > LOOKAHEAD_MAX_MINUTES) return LOOKAHEAD_MAX_MINUTES;
   return Math.round(m);
-}
-
-/** UTC ISO 8601 time portion at minute precision, e.g., "12:34Z". */
-export function formatUtcHm(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
 }
 
 /** Minutes from live-now to the pinned view instant (0 when live).
@@ -129,6 +119,7 @@ export function _getViewTimeMsForTest(): number | null {
  *  stale-TLE readout hint) can be exercised without a full renderMap. */
 export function _setCurrentTrackForTest(track: Track | null): void {
   currentTrack = track;
+  core?.setTrack(track);
 }
 
 /** Path-safe frame key for a manifest valid_time ISO string:
@@ -475,6 +466,7 @@ export function _resetMapStateForTest(): void {
   sliderDragging = false;
   toggleBound = false;
   currentTrack = null;
+  core?.setTrack(null);
   lastImageryBadgeArgs = null;
   currentManifest = null;
   fcstTilesFailed = false;
@@ -1000,6 +992,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
     await vendor.whenLoaded();
   }
+  core.setTrack(track);
 
   // Imagery-date badge: tells the user how recent the cloud composite the
   // map's tiles are showing actually is. Especially load-bearing offline —
@@ -1465,7 +1458,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindLabelsToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
-  bindPinDrop();
+  if (isFirstInit) for (const feature of FEATURES) feature.mount(core);
   bindSatellitePicker();
   // Slot 7: re-filter the targets layer when the active profile's
   // distance threshold changes. Slot 11 refactors this to the debounced
@@ -3086,7 +3079,7 @@ export function buildTargetPopupContent(
             return;
           }
           const passes = findUpcomingPasses(track, lat, lon, queryMs);
-          const prediction = buildPinDropPopup(lat, lon, 3, [{ name: 'ISS', color: '#125e87', passes }], {
+          const prediction = buildPassList(lat, lon, 3, [{ name: 'ISS', color: '#125e87', passes }], queryMs, {
             emptyText: 'No ISS passes within 1500 km in the next 36 hours.',
             footerText: 'Geometric estimate from the saved orbit data; clouds and window obstructions are not included.',
           });
@@ -3462,407 +3455,6 @@ function refreshImageryDateBadgeForView(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Pin-drop pass lookup (v1.5.6.0 — Pettit feedback #10)
-// ---------------------------------------------------------------------------
-//
-// Operator long-presses (touch) or right-clicks (desktop) anywhere on the
-// map. We drop a cyan pin at that lat/lon and surface a popup listing the
-// next 5 upcoming ISS passes over that point. All client-side via SGP4 +
-// the existing iss-sgp4 satrec cache.
-//
-// State: module-level so the pin survives renderMap re-runs (i.e., Map tab
-// re-entry within the same page session). Cleared on full page reload.
-
-let droppedPinPopup: PopupHandle | null = null;
-let pinDropBound = false;
-// Long-press tracking for touch devices.
-let longPressTimer: number | null = null;
-let longPressStartXY: { x: number; y: number } | null = null;
-const LONG_PRESS_MS = 500;
-const LONG_PRESS_MOVE_THRESHOLD_PX = 8;
-
-function bindPinDrop(): void {
-  if (pinDropBound || !core) return;
-
-  // Desktop: right-click (contextmenu).
-  core.on('contextmenu', ({ lngLat: [lng, lat] }) => {
-    handlePinDrop(lng, lat);
-  });
-
-  // Touch: long-press. MapLibre's `touchstart` fires before MapLibre decides
-  // it's a drag vs a tap; we start a 500ms timer and cancel it on touchmove
-  // beyond an 8px threshold (treated as a pan).
-  core.on('touchstart', ({ lngLat: [lng, lat], touches }) => {
-    if (touches.length !== 1) return;
-    const touch = touches[0];
-    if (!touch) return;
-    longPressStartXY = { x: touch.x, y: touch.y };
-    longPressTimer = window.setTimeout(() => {
-      longPressTimer = null;
-      handlePinDrop(lng, lat);
-    }, LONG_PRESS_MS);
-  });
-  core.on('touchmove', ({ touches }) => {
-    if (longPressTimer === null || !longPressStartXY) return;
-    const touch = touches[0];
-    if (!touch) return;
-    const dx = touch.x - longPressStartXY.x;
-    const dy = touch.y - longPressStartXY.y;
-    if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_THRESHOLD_PX) {
-      window.clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-  });
-  core.on('touchend', () => {
-    if (longPressTimer !== null) {
-      window.clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-    longPressStartXY = null;
-  });
-
-  pinDropBound = true;
-}
-
-/** Drop a pin at (lng, lat), compute upcoming passes, show popup. */
-function handlePinDrop(lng: number, lat: number): void {
-  if (!core || !currentTrack) return;
-  // Round to zoom-appropriate precision (A3 from /plan-eng-review).
-  const rounded = roundForZoom(lat, lng, core.zoom());
-  const pinLat = rounded.lat;
-  const pinLon = rounded.lon;
-
-  // Single-pin model: replace previous source.
-  const fc: GeoJSON.FeatureCollection = {
-    type: 'FeatureCollection',
-    features: [{
-      type: 'Feature',
-      properties: {
-        lat: pinLat,
-        lon: pinLon,
-        precision: rounded.precision,
-      },
-      geometry: { type: 'Point', coordinates: [pinLon, pinLat] },
-    }],
-  };
-  core.setGeoJson('dropped-pin', fc);
-
-  // Add layer on first drop. Distinct cyan color + downward-triangle-with-dot
-  // style differentiates from target pins (score-colored) and lookup pin
-  // (magenta).
-  if (!core.hasLayer('dropped-pin-layer')) {
-    core.ensureLayer({
-      id: 'dropped-pin-layer',
-      type: 'circle',
-      source: 'dropped-pin',
-      paint: {
-        'circle-radius': 11,
-        'circle-color': '#5cd0ff',
-        'circle-stroke-color': '#0b0d12',
-        'circle-stroke-width': 3,
-        'circle-opacity': 1.0,
-      },
-    });
-    core.onLayer('click', 'dropped-pin-layer', () => {
-      // Clicking the pin dismisses (matches the "active query" mental model).
-      dismissDroppedPin();
-    });
-    core.onLayer('mouseenter', 'dropped-pin-layer', () => {
-      if (core) core.setCursor('pointer');
-    });
-    core.onLayer('mouseleave', 'dropped-pin-layer', () => {
-      if (core) core.setCursor('');
-    });
-  }
-
-  // Compute the passes. Pure-frontend SGP4 walk — see pin-drop.ts.
-  // v1.6.0.0: also compute passes for any selected non-ISS satellites
-  // (Pettit #6 — multi-satellite). Each satellite gets its own section
-  // in the popup; ISS is the default.
-  //
-  // INTENTIONALLY live (clock.now(), not view-time): "next passes over this
-  // point" is a planning query from NOW — a scrubbed map answers "what does
-  // +6h look like", but the operator dropping a pin wants upcoming shooting
-  // windows from the present. Same live-domain rule as the topbar (4A).
-  const sectionsForPopup: { name: string; color: string; passes: UpcomingPass[] }[] = [
-    {
-      name: 'ISS',
-      color: '#5cd0ff',
-      passes: findUpcomingPasses(currentTrack, pinLat, pinLon, clock.now()),
-    },
-  ];
-  for (const sat of getSelectedSatellitesForPasses()) {
-    sectionsForPopup.push({
-      name: sat.name,
-      color: sat.color,
-      passes: findUpcomingPasses(sat.track, pinLat, pinLon, clock.now()),
-    });
-  }
-
-  // Build popup body via DOM (Q1: no innerHTML).
-  const body = buildPinDropPopup(pinLat, pinLon, rounded.precision, sectionsForPopup);
-  // Pin → personal target (Jack 2026-06-11): footer button + inline name
-  // field. Profile from the URL (house pattern — map stays URL-authoritative).
-  const pinProfile = parseProfileFromURL(window.location.href);
-  body.appendChild(buildPinAddFooter(pinLat, pinLon, rounded.precision, pinProfile, () => {
-    dismissDroppedPin();
-  }));
-
-  // Replace any prior popup.
-  if (droppedPinPopup) droppedPinPopup.remove();
-  droppedPinPopup = core.openPopup({ at: [pinLon, pinLat], content: body, maxWidth: '340px' });
-}
-
-/** Remove the dropped pin + popup. */
-function dismissDroppedPin(): void {
-  if (!core) return;
-  if (droppedPinPopup) {
-    droppedPinPopup.remove();
-    droppedPinPopup = null;
-  }
-  core.setGeoJson('dropped-pin', { type: 'FeatureCollection', features: [] });
-}
-
-/** One satellite's passes for the pin-drop popup. v1.6.0.0 — Q2 from
- *  /plan-eng-review: builder is generic over multiple satellites, so
- *  the multi-satellite feature surfaces ISS + Tiangong + ... sections. */
-export interface PinDropSection {
-  name: string;
-  color: string;
-  passes: UpcomingPass[];
-}
-
-/** Build the pin-drop popup DOM. textContent throughout — no innerHTML.
- *  Multi-section: one section per selected satellite (ISS is always first).
- *  Exported for unit testing.
- *
- *  Per A2 from /plan-eng-review: popup body is `max-height: 60vh; overflow-y: auto`
- *  so it scrolls on mobile when many satellites × passes are listed. */
-export function buildPinDropPopup(
-  pinLat: number,
-  pinLon: number,
-  precision: number,
-  sections: PinDropSection[],
-  options: { emptyText?: string; footerText?: string } = {},
-): HTMLElement {
-  const body = document.createElement('div');
-  body.className = 'dropped-pin-popup';
-  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:320px;max-height:60vh;overflow-y:auto';
-
-  // Title: 📍 lat°N/S, lon°E/W
-  const title = document.createElement('strong');
-  const latStr = `${Math.abs(pinLat).toFixed(precision)}°${pinLat >= 0 ? 'N' : 'S'}`;
-  const lonStr = `${Math.abs(pinLon).toFixed(precision)}°${pinLon >= 0 ? 'E' : 'W'}`;
-  title.textContent = `📍 ${latStr}, ${lonStr}`;
-  body.appendChild(title);
-
-  const nowMs = clock.now();
-  let anyPasses = false;
-
-  for (const section of sections) {
-    if (section.passes.length === 0) continue;
-    anyPasses = true;
-    const heading = document.createElement('div');
-    heading.style.cssText = `margin:8px 0 2px;color:${section.color};font-weight:600;font-size:0.82rem`;
-    heading.textContent = `${section.name} — next ${section.passes.length} pass${section.passes.length === 1 ? '' : 'es'}`;
-    body.appendChild(heading);
-
-    const list = document.createElement('div');
-    list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace;color:#0b0d12';
-    for (const p of section.passes) {
-      const row = document.createElement('div');
-      // v1.6.1.2: 5 cols (was 4). Dropped UTC date portion (kept HH:MMZ
-      // only — relative "+12m" already implies the day). Added shoot-from
-      // column with "angle · window · direction" matching the card render.
-      row.style.cssText = 'display:grid;grid-template-columns:55px 50px 55px 1fr 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee;align-items:baseline';
-      const rel = document.createElement('span');
-      rel.style.fontWeight = '600';
-      rel.textContent = formatRelative(p.closestApproachMs - nowMs);
-      const utc = document.createElement('span');
-      utc.textContent = formatUtcHm(p.closestApproachMs);
-      const nadir = document.createElement('span');
-      nadir.style.textAlign = 'right';
-      nadir.textContent = `${Math.round(p.nadirKm)} km`;
-      const shoot = document.createElement('span');
-      shoot.style.cssText = 'font-size:0.72rem;color:#444';
-      shoot.textContent = formatShootHint(p);
-      const regime = document.createElement('span');
-      regime.style.textAlign = 'right';
-      regime.style.color = regimeColor(p.regime);
-      regime.textContent = regimeLabel(p.regime);
-      row.append(rel, utc, nadir, shoot, regime);
-      list.appendChild(row);
-    }
-    body.appendChild(list);
-  }
-
-  if (!anyPasses) {
-    const empty = document.createElement('div');
-    empty.style.cssText = 'margin-top:8px;color:#444';
-    empty.textContent = options.emptyText ?? 'No passes from any tracked satellite within 1500 km in the next 36 hours.';
-    body.appendChild(empty);
-    const hint = document.createElement('div');
-    hint.style.cssText = 'margin-top:6px;color:#888;font-size:0.78rem';
-    hint.textContent = 'Most low-Earth-orbit satellites have inclinations 27-65°; points near the poles see few passes.';
-    body.appendChild(hint);
-  }
-
-  const footer = document.createElement('div');
-  footer.style.cssText = 'margin-top:6px;color:#888;font-size:0.72rem';
-  footer.textContent = options.footerText ?? 'Closest-approach within 1500 km horizon. Click pin to dismiss.';
-  body.appendChild(footer);
-
-  return body;
-}
-
-/** Coordinate-derived default target name, e.g. "42.4°N 71.1°W" — editable
- *  by the operator before saving. NO reverse geocoding by design (plan
- *  2026-06-11): a third-party lookup adds latency + a network dependency
- *  to a moment that must work during LOS, and operators rename pins to
- *  personal names anyway. */
-export function coordTargetName(lat: number, lon: number, precision: number): string {
-  const latStr = `${Math.abs(lat).toFixed(precision)}°${lat >= 0 ? 'N' : 'S'}`;
-  const lonStr = `${Math.abs(lon).toFixed(precision)}°${lon >= 0 ? 'E' : 'W'}`;
-  return `${latStr} ${lonStr}`;
-}
-
-/** Footer for the pin popup: [➕ Add to my targets] → inline name field
- *  (pre-filled with the coordinate name) + Save/Cancel. Save runs the
- *  Profile tab's exact add pathway (handleAdd: optimistic save → POST →
- *  rollback + toast on failure, D1=B) and closes the popup on success.
- *  Validation errors render inline and keep the popup open for a rename.
- *  textContent throughout. Exported for unit testing. */
-export function buildPinAddFooter(
-  pinLat: number,
-  pinLon: number,
-  precision: number,
-  profileName: string,
-  onAdded: () => void,
-  addFn: typeof handleAdd = handleAdd,
-): HTMLElement {
-  const footer = document.createElement('div');
-  footer.className = 'pin-add-footer';
-
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.className = 'pin-add-button';
-  addBtn.textContent = '➕ Add to my targets';
-  footer.appendChild(addBtn);
-
-  addBtn.addEventListener('click', () => {
-    addBtn.remove();
-    const form = document.createElement('div');
-    form.className = 'pin-add-form';
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'pin-add-name';
-    input.maxLength = 200;
-    input.value = coordTargetName(pinLat, pinLon, precision);
-    input.setAttribute('aria-label', 'Target name');
-
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'pin-add-save';
-    save.textContent = 'Save';
-
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'pin-add-cancel';
-    cancel.textContent = 'Cancel';
-
-    const err = document.createElement('div');
-    err.className = 'pin-add-error';
-    err.hidden = true;
-
-    form.append(input, save, cancel, err);
-    footer.appendChild(form);
-    input.focus();
-    input.select();
-
-    cancel.addEventListener('click', () => {
-      form.remove();
-      footer.appendChild(addBtn);
-    });
-
-    const submit = async (): Promise<void> => {
-      // Whitespace-only name falls back to the coordinate name rather
-      // than erroring — the operator's intent ("just save the spot") is
-      // unambiguous.
-      const name = input.value.trim() || coordTargetName(pinLat, pinLon, precision);
-      const validated = validatePersonalTargetInput({
-        profileName, name, lat: pinLat, lon: pinLon,
-      });
-      if (!validated.ok) {
-        err.textContent = validated.error === 'name_too_long'
-          ? 'Name too long (200 characters max).'
-          : `Could not save: ${validated.error}`;
-        err.hidden = false;
-        return;
-      }
-      save.disabled = true;
-      save.textContent = 'Saving…';
-      const result = await addFn(profileName, validated.target);
-      if (result === 'ok') {
-        onAdded(); // success toast comes from handleAdd; close the popup
-        return;
-      }
-      // Failure (validation/duplicate/network-rollback): handleAdd already
-      // toasted; keep the popup open for a rename/retry and show why.
-      err.textContent = result;
-      err.hidden = false;
-      save.disabled = false;
-      save.textContent = 'Save';
-    };
-    save.addEventListener('click', () => { void submit(); });
-    input.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key === 'Enter') { e.preventDefault(); void submit(); }
-    });
-  });
-
-  return footer;
-}
-
-
-
-/** Format the "where do I point the camera" hint for one pass row.
- *  Returns "" if the pass has no window/bearing data (older builds).
- *  Format mirrors the card render: "35° right of track · WORF" (CEO convention,
- *  off-nadir = degrees right/left of track at closest). Exported for unit testing. */
-export function formatShootHint(p: UpcomingPass): string {
-  if (typeof p.angleOffNadirDeg !== 'number') return '';
-  const deg = Math.round(p.angleOffNadirDeg);
-  const win = p.angleOffNadirDeg < 30 ? 'WORF' : 'Cupola';
-  if (typeof p.relativeBearingDeg !== 'number') {
-    return `${deg}° · ${win}`;
-  }
-  return `${formatTrackOffset(p.angleOffNadirDeg, p.relativeBearingDeg)} · ${win}`;
-}
-
-function formatRelative(deltaMs: number): string {
-  const totalMin = Math.round(deltaMs / 60000);
-  if (totalMin < 60) return `+${totalMin}m`;
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h < 24) return m === 0 ? `+${h}h` : `+${h}h${m}m`;
-  const d = Math.floor(h / 24);
-  const rh = h % 24;
-  return rh === 0 ? `+${d}d` : `+${d}d${rh}h`;
-}
-
-function regimeLabel(r: import('./terminator').IssIllumination): string {
-  if (r === 'iss-day') return 'day';
-  if (r === 'iss-twilight') return 'twilight';
-  return 'night';
-}
-
-function regimeColor(r: import('./terminator').IssIllumination): string {
-  if (r === 'iss-day') return '#0a8acc';      // cyan-ish, photo-friendly
-  if (r === 'iss-twilight') return '#a8389a';  // magenta — warning
-  return '#5b6b8a';                            // grey-blue — night
-}
-
-// ---------------------------------------------------------------------------
 // Multi-satellite tracking (v1.6.0.0 — Pettit feedback #6)
 // ---------------------------------------------------------------------------
 //
@@ -4033,6 +3625,7 @@ async function addSatelliteByMeta(meta: SatelliteMeta): Promise<{ ok: boolean; m
     stale: result.stale,
     marker: null,
   });
+  publishSelectedSatellites();
   refreshSatelliteTracks();
   refreshSatelliteMarkers();
   persistSelectedKeys();
@@ -4043,6 +3636,7 @@ function removeSatellite(key: string): void {
   if (!selectedSatellites.has(key)) return;
   removeSatelliteVisuals(key);
   selectedSatellites.delete(key);
+  publishSelectedSatellites();
   persistSelectedKeys();
 }
 
@@ -4226,18 +3820,12 @@ export function tickSatelliteMarkers(): void {
   refreshSatelliteMarkers();
 }
 
-/** Lookup currently-selected satellites for the pin-drop popup (Q2):
- *  the popup needs to iterate per satellite to compute passes. */
-export function getSelectedSatellitesForPasses(): { name: string; color: string; track: Track }[] {
-  const out: { name: string; color: string; track: Track }[] = [];
-  for (const state of selectedSatellites.values()) {
-    out.push({
-      name: state.meta.name,
-      color: state.meta.track_color,
-      track: trackFromTLE(state.tle),
-    });
-  }
-  return out;
+function publishSelectedSatellites(): void {
+  core?.setSatellites([...selectedSatellites.values()].map((state) => ({
+    name: state.meta.name,
+    color: state.meta.track_color,
+    track: trackFromTLE(state.tle),
+  })));
 }
 
 /** Compact short-labels + sub-points for the topbar multi-sat row.
