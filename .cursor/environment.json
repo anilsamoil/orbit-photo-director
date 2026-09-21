@@ -1,5 +1,6 @@
 {
-  "install": "bash -lc 'set -euo pipefail; export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null 2>&1; then curl -fsSL https://bun.sh/install | bash; export PATH=\"$HOME/.bun/bin:$PATH\"; fi; (cd frontend && bun install); (cd worker && bun install); if command -v python3 >/dev/null 2>&1; then python3 -m pip install -e \".[dev]\" || echo \"[opd-env] python generator deps skipped (ok for frontend/worker cloud work)\"; fi'",
+  "name": "Orbit Photo Director",
+  "install": "bash -lc 'set -euo pipefail; export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null 2>&1; then curl -fsSL https://bun.sh/install | bash; export PATH=\"$HOME/.bun/bin:$PATH\"; fi; (cd frontend && bun install --frozen-lockfile); (cd worker && bun install --frozen-lockfile); python3 -m pip install --user -e \".[dev]\"'",
   "start": "true",
   "terminals": [
     {
