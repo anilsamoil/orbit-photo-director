@@ -11,7 +11,7 @@
  * - Malformed timestamps don't fly to top/bottom on NaN
  * - Missing score field treated as 0
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_SORT_ORDER,

@@ -24,7 +24,7 @@ import {
 import { buildPayload, drainQueue, postCalib, queuedCalibCount } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
-import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
+import { createPollScheduler, isOnline } from './network-status';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
 import { probeConnectivity } from './network-probe';
 import { buildIcs } from './ics';
@@ -74,10 +74,6 @@ let currentlyOffline = false;
 // World-view basemap tiles (z0-3) are static, so precache them once per session
 // rather than every manifest tick. Latches true after the first online refresh.
 let worldBasePrecached = false;
-// Held to keep the scheduler's listeners alive and reachable. Production
-// code never tears down (single-page lifetime); reserved for future SW
-// upgrade flow that may want pollScheduler.stop() before reload.
-let pollScheduler: PollScheduler | null = null;
 // Re-entrancy guard. createPollScheduler explicitly does NOT serialize
 // onPoll calls (see network-status.ts); visibility-resume can fire
 // onPoll while a prior interval-driven refresh is still in flight.
@@ -1653,7 +1649,7 @@ async function init(): Promise<void> {
   // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
   // watching and gives the user fresh data the moment they look at the
   // page after a long pause.
-  pollScheduler = createPollScheduler({
+  createPollScheduler({
     intervalMs: REFRESH_MS,
     onPoll: () => void refresh(),
   });

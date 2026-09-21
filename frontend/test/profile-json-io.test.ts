@@ -19,7 +19,6 @@ import {
   CURRENT_PROFILE_VERSION,
   createDefaultProfile,
   saveProfile,
-  type PersonalTarget,
   type Profile,
   type ProfileMigrator,
 } from '../src/profile';
