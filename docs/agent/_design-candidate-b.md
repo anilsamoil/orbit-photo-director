@@ -4,7 +4,7 @@
 
 The shape is **Compiled scene catalog**. Each feature has one `entrypoint.ts` that declares its state transition, persistence, control, source, overlay, and domain inputs as data. A build step compiles every entrypoint into one typed scene catalog and one registry. The catalog, not registration call order, owns paint order. `map-core` owns one `ViewState`, the shared clocks, input routing, persistence, and scene reconciliation. The MapLibre adapter owns every MapLibre type and call. This is not the usual `index.ts`, `state.ts`, `layers.ts`, and `interactions.ts` feature layout. The organizing axis is the compiled paint sequence. Feature folders supply rows to that sequence and pure transitions over the shared model.
 
-This shape targets the actual failure points in `frontend/src/map.ts`. `buildStyle` declares seven sources and five layers. `renderMap` then adds twelve startup layers in call order, computes `beforeTrack`, starts the 1 Hz and 30 second clocks, and invokes the twelve `bind*` functions. `setLookahead` reaches into ground track, targets, terminator, forecast imagery, satellite markers, and camera movement. A feature-owned installer would move those calls without removing the ordering and lifecycle coupling. The compiled scene catalog removes that coupling.
+This shape targets the actual failure points in `frontend/src/map.ts`. `buildStyle` declares seven sources and five layers. `renderMap` then adds twelve startup layers in call order, computes `beforeTrack`, starts the 1 Hz and 30 second clocks, and invokes the twelve `bind*` functions. `setLookahead` reaches into ground track, targets, terminator, forecast imagery, satellite markers, and camera movement. An imperative entrypoint that receives the map would move those calls without removing the ordering and lifecycle coupling. The compiled scene catalog removes that coupling.
 
 ## 2. Target directory layout
 
@@ -19,6 +19,8 @@ frontend/src/
       map-event.ts
       overlay.ts
       paint-pass.ts
+      pass-filter.ts
+      solar-geometry.ts
       view-state.ts
     generated/
       feature-ids.ts
@@ -27,10 +29,12 @@ frontend/src/
       scene-ids.ts
     map-core/
       clock.ts
+      control-renderer.ts
       create-map-core.ts
       facade.ts
       input-router.ts
       persistence.ts
+      popup-renderer.ts
       scene-reconciler.ts
     adapter/
       maplibre/
@@ -51,7 +55,7 @@ frontend/src/
         ir-overlay.test.ts
       terminator/
         entrypoint.ts
-        solar-geometry.ts
+        terminator-geometry.ts
         terminator.test.ts
       ground-track/
         entrypoint.ts
@@ -107,11 +111,11 @@ frontend/scripts/
   check-map-architecture.ts
 ```
 
-`frontend/src/map/features/basemap-clouds/` is the home for the current `basemapVisibility`, `applyCloudsVisibility`, cloud preference, Carto and Esri sources, GIBS source, coastline, and tile precache behavior. `frontend/src/map/features/terminator/` is the home for the current `terminatorFeatures`, `terminatorNightPolygonFeatures`, `subsolarFeature`, visibility control, three sources, and three overlays. Shared longitude wrapping, antimeridian splitting, and bearings move to `frontend/src/map/domain/geo.ts`. Ground track does not import terminator internals. Shared illumination math moves to `frontend/src/map/domain/solar-geometry.ts` if both features need it.
+`frontend/src/map/features/basemap-clouds/` is the home for the current `basemapVisibility`, `applyCloudsVisibility`, cloud preference, Carto and Esri sources, GIBS source, coastline, and tile precache behavior. `frontend/src/map/features/terminator/` is the home for the current `terminatorFeatures`, `terminatorNightPolygonFeatures`, `subsolarFeature`, visibility control, three sources, and three overlays. Shared longitude wrapping, antimeridian splitting, and bearings move to `frontend/src/map/domain/geo.ts`. Ground track does not import terminator internals. Shared subsolar and illumination math moves to `frontend/src/map/domain/solar-geometry.ts`.
 
 `frontend/src/map/generated/` is generated and committed. An agent does not edit it. The checked output gives reviewers one place to inspect all feature ids, source ids, layer ids, and paint order. `frontend/src/map/adapter/maplibre/map-app.ts` is the composition root. It receives the generated registry and catalog, creates the MapLibre adapter, and passes both into `map-core`. No file in `domain`, `map-core`, or `features` imports the adapter.
 
-`frontend/src/main.ts` dynamically imports only `map/adapter/maplibre/map-app.ts`. It no longer knows `applyFollowISS`, `tickSatelliteMarkers`, `dropLookupPin`, or `focusLaunchOnMap`. It mounts the map, replaces the typed data snapshot, dispatches typed external events, and requests a resize.
+`frontend/src/main.ts` dynamically imports only the public application boundary in `map/adapter/maplibre/map-app.ts`. No file outside the adapter folder imports `maplibre-adapter.ts`, `maplibre-events.ts`, `maplibre-style.ts`, or `viirs-alpha.ts`. `main.ts` no longer knows `applyFollowISS`, `tickSatelliteMarkers`, `dropLookupPin`, or `focusLaunchOnMap`. It mounts the map, replaces the typed data snapshot, dispatches typed external events, and requests a resize.
 
 ## 3. Typed domain model
 
@@ -298,16 +302,22 @@ const impossibleIr: ImageryView = {
 
 The first assignment names a layer outside the generated catalog. The second assignment claims that an IR feed is ready when no satellite covers the view. `tsc --noEmit` rejects both.
 
-Every feature exports the same entrypoint shape. The generic `Writes` parameter limits a reducer to named `ViewState` keys. The generator rejects two writers for one key unless `paint-pass.ts` marks that key as shared. `imagery` and `visibleFeatures` are deliberate shared keys.
+Every feature exports the same entrypoint shape. The generic `Writes` parameter limits a reducer to named `ViewState` keys. The generator rejects two writers for one key unless `view-state.ts` marks that key as shared. `imagery` and `visibleFeatures` are deliberate shared keys.
 
 ```ts
 import type { MapCoreFacade } from '../map-core/facade';
+import type { FeatureId } from '../generated/feature-ids';
+import type { LayerId, SourceId } from '../generated/scene-ids';
 import type { MapData } from './map-data';
 import type {
+  CameraIntent,
   ControlDefinition,
   InputBinding,
   LayerDefinition,
+  MarkerView,
+  OverlayData,
   PersistenceBinding,
+  PopupView,
   SourceDefinition,
 } from './overlay';
 import type { ViewState } from './view-state';
@@ -363,6 +373,10 @@ export interface FeatureEntrypoint<
 Feature code gets two methods. The application shell gets four lifecycle methods. Neither interface mirrors MapLibre.
 
 ```ts
+import type { MapData } from '../domain/map-data';
+import type { MapExternalEvent } from '../domain/map-event';
+import type { ViewState } from '../domain/view-state';
+
 export type MapModel = Readonly<{
   view: ViewState;
   data: MapData;
@@ -612,13 +626,14 @@ Use two Bun scripts and the existing TypeScript dependency. Do not add ESLint fo
 
 `frontend/scripts/generate-map-catalog.ts` loads each `features/*/entrypoint.ts` with Bun, validates the declarations, sorts the paint addresses, and writes deterministic files under `src/map/generated/`. Its `--check` mode writes to memory and exits nonzero when committed output differs.
 
-`frontend/scripts/check-map-architecture.ts` uses the TypeScript compiler API to inspect imports, calls, constructors, and comments. It enforces these rules:
+`frontend/scripts/check-map-architecture.ts` uses the TypeScript compiler API to resolve imports, call targets, constructors, and comments. It checks symbols instead of matching method names as text. It enforces these rules:
 
 - Only `src/map/features/<kebab-case>/entrypoint.ts` may call `defineFeature`.
 - Every feature directory has exactly one exported `entrypoint`, and its id matches the directory name.
-- Only `src/map/generated/feature-registry.ts` imports feature entrypoints.
+- Only `src/map/generated/feature-registry.ts` imports feature entrypoints in production. The generator and a test in the same feature directory are the only other allowed importers.
 - `map-core` cannot import `features` or `adapter`.
 - A feature cannot import another feature directory or the adapter.
+- Outside the adapter folder, only `main.ts` may import `map-app.ts`. No outside file may import another adapter file.
 - Only `src/map/adapter/maplibre/` may import `maplibre-gl`, use a MapLibre type, construct a MapLibre object, or call `addLayer`, `addSource`, `removeLayer`, `removeSource`, `setLayoutProperty`, `setData`, `on`, `off`, or `once`.
 - Feature code cannot call `localStorage`, `document`, `window`, `addEventListener`, `setInterval`, or `setTimeout`. Persistence, controls, adapter events, and clocks are declared through the entrypoint.
 - Production files under `src/map/` cannot contain comments.
@@ -653,13 +668,13 @@ bun run build
 node scripts/verify-map-pins.mjs
 ```
 
-No slice keeps a re-export at an old path. Callers move and the old symbol or file is deleted in the same slice.
+No slice keeps a re-export at an old path. Callers move and the old symbol or file is deleted in the same slice. The frontend test count cannot fall below the 1707-test baseline. A deleted dormant-path test is replaced with a production behavior test in the same slice.
 
 ### Slice 1. Delete code that production cannot reach
 
 Delete the dormant forecast-cloud path guarded by `FORECAST_CLOUDS_UI = false`. This removes `nearestForecastFrame`, `compactFrameKey`, `activeForecastIndex`, `frameForIndex`, `forecastFrameForView`, `refreshForecastCloudLayer`, `_setForecastCloudsUiForTest`, `_setFcstTilesFailedForTest`, the `fcst*` module state, and the `fcst-clouds` source and layer branch. Replace dormant-path tests with behavior tests that assert a scrubbed view keeps observed imagery and says that it is not a forecast.
 
-Delete the unused `fetchTLEByCATNR` and `fetchTLEByName` imports from `map.ts`. Keep the functions in `satellites.ts`, where the satellite tests and `fetchSatelliteTLE` still use them. Delete `_resetViirsFallbackForTest` and its call from `_resetMapStateForTest`. Delete the stale five-layer header in `map.ts`.
+Delete the unused `fetchTLEByCATNR` and `fetchTLEByName` imports from `map.ts`. Keep the functions in `satellites.ts`. The satellite tests cover both public wrappers, and each wrapper delegates to `fetchSatelliteTLE`. Delete `_resetViirsFallbackForTest` and its call from `_resetMapStateForTest`. Delete the stale five-layer header in `map.ts`.
 
 Production behavior remains unchanged because the deleted forecast path is disabled and the deleted imports and reset function do no production work.
 
@@ -675,11 +690,11 @@ Extend `test/maplibre-double.ts` to record tile replacement, source errors, data
 
 Delete the `fs.readFile` calls, regular expressions over `src/map.ts`, copied fake logic, and tests that only assert absence of old text. Keep `map-render-contract.test.ts` and `map-interaction-contract.test.ts` as the behavior pins.
 
-### Slice 4. Move pure capability code into final feature directories
+### Slice 4. Move pure feature code into final feature directories
 
-Move `terminator.ts` to `map/features/terminator/solar-geometry.ts`, `pin-drop.ts` to `map/features/pin-drop/pass-search.ts`, and `satellites.ts` to `map/features/satellite-picker/tle.ts`. Move the IR URL and coverage functions from `tile-precache.ts` to `map/features/ir-overlay/satellite-coverage.ts`. Move cloud and world tile caching to `map/features/basemap-clouds/tile-cache.ts`.
+Split `terminator.ts` between `map/domain/solar-geometry.ts` and `map/features/terminator/terminator-geometry.ts`. Move `pin-drop.ts` to `map/features/pin-drop/pass-search.ts` and `satellites.ts` to `map/features/satellite-picker/tle.ts`. Move the IR URL and coverage functions from `tile-precache.ts` to `map/features/ir-overlay/satellite-coverage.ts`. Move cloud and world tile caching to `map/features/basemap-clouds/tile-cache.ts`. Move the VIIRS URL and zoom definitions to `map/features/night-lights/entrypoint.ts`.
 
-Update every caller and test to the new path. Delete the five old flat files and the moved sections of `tile-precache.ts`. Do not add re-export files.
+Update every caller and test to the new path. Delete the four old flat files `terminator.ts`, `pin-drop.ts`, `satellites.ts`, and `tile-precache.ts`. Do not add re-export files.
 
 ### Slice 5. Extract pure projections and popup models
 
@@ -691,7 +706,7 @@ Delete `buildTargetPopupContent`, `buildPinDropPopup`, `buildPinAddFooter`, `bui
 
 Add `ViewState`, the discriminated unions, the entrypoint interface, the domain overlay grammar, paint passes, and the catalog generator. Create one entrypoint in every final feature directory. Make `map.ts` consume source and layer definitions from the generated catalog instead of carrying inline specifications. Make its remaining binders dispatch typed feature events and apply the returned projections.
 
-Delete every inline source specification, layer specification, localStorage key, duplicated default, and feature-specific visibility branch from `map.ts`. Delete the individual map control buttons and time controls from `index.html` after the generated control renderer produces the same ids, classes, text, order, and initial states. Keep only the empty dock hosts in HTML.
+Delete every inline source specification, layer specification, localStorage key, duplicated default, and feature-specific visibility branch from `map.ts`. Move launch mode into `ViewState`, migrate its callers, and delete `map-launch-mode.ts`. Delete the individual map control buttons and time controls from `index.html` after the generated control renderer produces the same ids, classes, text, order, and initial states. Keep only the empty dock hosts in HTML.
 
 The runtime is still the existing map for this slice, but each feature has one declaration and one reducer. There is no old declaration beside a new declaration.
 
@@ -699,7 +714,7 @@ The runtime is still the existing map for this slice, but each feature has one d
 
 Add the generic clocks, input router, persistence, scene reconciler, MapLibre adapter, and recording adapter. Drive all generated entrypoints through them in tests. Port `map-render-contract.test.ts`, `map-interaction-contract.test.ts`, `map-style-contract.test.ts`, `map-camera-contract.test.ts`, `map-basemap.test.ts`, and `map-overlay-prefs.test.ts` without changing their literal expected behavior.
 
-Delete feature-specific setup from `maplibre-double.ts`. The recording adapter replaces it. Delete test-only production setters such as `_setFollowEnvForTest`, `_setCurrentTrackForTest`, `_setForecastCloudsUiForTest`, and `_resetMapStateForTest` as their tests move through the real facade.
+Delete feature-specific setup from `maplibre-double.ts`. The recording adapter replaces it. Delete test-only production setters such as `_setFollowEnvForTest`, `_setCurrentTrackForTest`, `_resetFollowStateForTest`, `_resetScrubTierStateForTest`, and `_resetMapStateForTest` as their tests move through the real facade.
 
 No production caller uses map-core yet. This slice proves the complete replacement against the current pins without an old and new production path.
 
@@ -730,7 +745,7 @@ Delete the mutation anchors that reference old `map.ts` text and delete any temp
 
 Three alternatives lose against these constraints:
 
-- A feature-owned installer with `install(map)` is smaller at first, but it spreads `map.on`, timers, source existence checks, and `beforeId` knowledge into every feature. It is the current architecture in smaller files.
+- An imperative entrypoint with `install(map)` is smaller at first, but it spreads `map.on`, timers, source existence checks, and `beforeId` knowledge into every feature. It is the current architecture in smaller files.
 - Render-pass directories make the seventeen-row order obvious, but terminator, launch corridor, and targets would each span several directories. That violates feature colocation.
 - An event log with replay gives excellent history, but SNAP has one in-memory view and no replay requirement. It adds serialization and migration work without removing a current failure mode.
 
@@ -742,7 +757,7 @@ An agent adding a feature no longer needs to know:
 - that `night-lights-global-dim-layer`, `terminator-night-fill-layer`, and `viirs-night-lights-layer` need `beforeId: 'iss-track-layer'`;
 - that `renderMap` is both constructor and refresh path, with `getLayer` checks and bind-once flags making it idempotent;
 - which of the 55 `map.ts` variables mirror localStorage, adapter resources, current data, or view state;
-- which of `Date.now()` and `currentViewMs()` a capability must use;
+- which of `Date.now()` and `currentViewMs()` a feature must use;
 - how `setLookahead` refreshes ground track, target opacity, terminator, satellite tracks, imagery text, marker position, and camera;
 - where the twelve binders live or which HTML button an agent must add;
 - how to construct a MapLibre source, style expression, marker, popup, bounds object, or event payload;
@@ -750,11 +765,12 @@ An agent adding a feature no longer needs to know:
 - which of the map tests uses a copy, a regular expression, or a real recording double;
 - that `main.ts` calls back into four feature-specific exports on the 1 Hz tick, lookup flow, launch flow, and manifest refresh.
 
-The agent needs four facts:
+The agent needs five facts:
 
 1. A feature lives in `frontend/src/map/features/<feature>/`.
 2. `entrypoint.ts` is the only registration route.
 3. The paint address comes from the nearest existing feature with the intended visual relationship.
 4. The feature test drives the entrypoint through `feature-test-app`, while the global render contract protects the seventeen-row scene.
+5. `bun run map:generate` updates the checked catalog before the standard checks run.
 
 That is the intended copy pattern for Cursor and Grok Bot. The generated catalog and CI check reject every other path instead of asking an agent to remember the architecture.
