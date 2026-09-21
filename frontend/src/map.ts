@@ -6,8 +6,8 @@ import {
   beforeIdFor,
   satTrackLayerId,
   satTrackSourceId,
+  type GeoJsonSourceId,
   type LayerId,
-  type SourceId,
 } from './map/map-core/catalog';
 import { createVendorMap } from './map/adapters/maplibre';
 import { initialCamera } from './map/map-core/camera';
@@ -3026,7 +3026,7 @@ function ensureLayer(spec: LayerSpec): void {
   vendor.addLayer(spec, beforeIdFor(spec.id, vendor.paintedLayers()));
 }
 
-function upsertGeoJson(id: SourceId, data: GeoJSON.FeatureCollection): void {
+function upsertGeoJson(id: GeoJsonSourceId, data: GeoJSON.FeatureCollection): void {
   if (!vendor) return;
   if (vendor.hasSource(id)) vendor.setGeoJson(id, data);
   else vendor.addSource(id, { type: 'geojson', data });

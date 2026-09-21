@@ -1,4 +1,4 @@
-import type { LayerId, SourceId } from './catalog';
+import type { GeoJsonSourceId, LayerId, RasterSourceId } from './catalog';
 
 export type Visibility = 'visible' | 'none';
 
@@ -12,7 +12,7 @@ type Layout = { visibility?: Visibility };
 export type RasterLayer = {
   id: LayerId;
   type: 'raster';
-  source: SourceId;
+  source: RasterSourceId;
   layout?: Layout;
   paint?: { 'raster-opacity'?: Value<number> };
 };
@@ -20,7 +20,7 @@ export type RasterLayer = {
 export type LineLayer = {
   id: LayerId;
   type: 'line';
-  source: SourceId;
+  source: GeoJsonSourceId;
   layout?: Layout;
   paint?: {
     'line-color'?: Value<string>;
@@ -34,7 +34,7 @@ export type LineLayer = {
 export type FillLayer = {
   id: LayerId;
   type: 'fill';
-  source: SourceId;
+  source: GeoJsonSourceId;
   layout?: Layout;
   paint?: {
     'fill-color'?: Value<string>;
@@ -46,7 +46,7 @@ export type FillLayer = {
 export type CircleLayer = {
   id: LayerId;
   type: 'circle';
-  source: SourceId;
+  source: GeoJsonSourceId;
   layout?: Layout;
   paint?: {
     'circle-radius'?: Value<number>;
@@ -89,6 +89,6 @@ export type SourceSpec = RasterSource | GeoJsonSource;
 /** What the vendor is handed at construction. The adapter adds the style
  *  version and any vendor-only fields. */
 export type StyleSpec = {
-  sources: Partial<Record<SourceId, SourceSpec>>;
+  sources: Partial<Record<RasterSourceId, RasterSource>> & Partial<Record<GeoJsonSourceId, GeoJsonSource>>;
   layers: LayerSpec[];
 };

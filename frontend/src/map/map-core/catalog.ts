@@ -37,15 +37,18 @@ export type StaticLayerId = Exclude<(typeof LAYER_ORDER)[number], typeof SAT_TRA
 export type SatTrackLayerId = `${typeof SAT_TRACK_LAYER_PREFIX}${string}`;
 export type LayerId = StaticLayerId | SatTrackLayerId;
 
-export const SOURCE_IDS = [
+export const RASTER_SOURCE_IDS = [
   'carto-dark',
   'gibs-clouds',
   'esri-imagery',
-  'ne-coastline',
   'viirs-night-lights',
   'geo-ir',
   'esri-labels-reference',
   'fcst-clouds',
+] as const;
+
+export const GEOJSON_SOURCE_IDS = [
+  'ne-coastline',
   'iss-track',
   'my-targets',
   'targets',
@@ -58,9 +61,12 @@ export const SOURCE_IDS = [
   'dropped-pin',
 ] as const;
 
-export type StaticSourceId = (typeof SOURCE_IDS)[number];
+export const SOURCE_IDS = [...RASTER_SOURCE_IDS, ...GEOJSON_SOURCE_IDS] as const;
+
+export type RasterSourceId = (typeof RASTER_SOURCE_IDS)[number];
 export type SatTrackSourceId = `${typeof SAT_TRACK_SOURCE_PREFIX}${string}`;
-export type SourceId = StaticSourceId | SatTrackSourceId;
+export type GeoJsonSourceId = (typeof GEOJSON_SOURCE_IDS)[number] | SatTrackSourceId;
+export type SourceId = RasterSourceId | GeoJsonSourceId;
 
 export function isSatTrackLayer(id: string): id is SatTrackLayerId {
   return id.startsWith(SAT_TRACK_LAYER_PREFIX);

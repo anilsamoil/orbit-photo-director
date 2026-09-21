@@ -1,7 +1,13 @@
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import { asLayerId, type LayerId, type SourceId } from '../../map-core/catalog';
+import {
+  asLayerId,
+  type GeoJsonSourceId,
+  type LayerId,
+  type RasterSourceId,
+  type SourceId,
+} from '../../map-core/catalog';
 import type { BBox, LngLat, Point } from '../../map-core/geometry';
 import type { LayerSpec, SourceSpec, StyleSpec, Visibility } from '../../map-core/layer-spec';
 import type {
@@ -93,11 +99,11 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
     hasSource: (id: SourceId) => map.getSource(id) !== undefined,
     addSource: (id: SourceId, spec: SourceSpec) => map.addSource(id, toVendorSource(spec)),
     removeSource: (id: SourceId) => map.removeSource(id),
-    setGeoJson: (id: SourceId, data: GeoJSON.FeatureCollection) => {
+    setGeoJson: (id: GeoJsonSourceId, data: GeoJSON.FeatureCollection) => {
       const source = map.getSource(id);
       if (source && 'setData' in source) (source as maplibregl.GeoJSONSource).setData(data);
     },
-    setRasterTiles: (id: SourceId, tiles: string[]) => {
+    setRasterTiles: (id: RasterSourceId, tiles: string[]) => {
       const source = map.getSource(id);
       if (source && 'setTiles' in source) (source as maplibregl.RasterTileSource).setTiles(tiles);
     },

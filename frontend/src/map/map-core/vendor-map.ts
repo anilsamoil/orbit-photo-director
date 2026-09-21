@@ -1,4 +1,4 @@
-import type { LayerId, SourceId } from './catalog';
+import type { GeoJsonSourceId, LayerId, RasterSourceId, SourceId } from './catalog';
 import type { BBox, LngLat, Point } from './geometry';
 import type { LayerSpec, SourceSpec, StyleSpec, Visibility } from './layer-spec';
 
@@ -75,8 +75,8 @@ export interface VendorMap {
   hasSource(id: SourceId): boolean;
   addSource(id: SourceId, spec: SourceSpec): void;
   removeSource(id: SourceId): void;
-  setGeoJson(id: SourceId, data: GeoJSON.FeatureCollection): void;
-  setRasterTiles(id: SourceId, tiles: string[]): void;
+  setGeoJson(id: GeoJsonSourceId, data: GeoJSON.FeatureCollection): void;
+  setRasterTiles(id: RasterSourceId, tiles: string[]): void;
 
   center(): LngLat;
   zoom(): number;
