@@ -1983,15 +1983,6 @@ function updateTimeStepLabels(): void {
   syncTimeSliderControls(nowMs, curMin);
 }
 
-/** Move the map's view time to now + newMinutes (clamped 0..36h) and refresh
- *  every view-time consumer: ground track, target pins, terminator, ISS
- *  marker, and the time-control labels.
- *
- *  Module-level + exported (5A, 2026-06-10 — was a closure inside
- *  bindTimeToggle): the stepper buttons, the continuous slider, and unit
- *  tests all drive this one function, so the controls can never disagree
- *  about what a time change refreshes.
- */
 // ── Scrub-drag tiered refresh (7A) ──────────────────────────────────────
 // Activated by Jack's iPad report (2026-06-11): "super stutters... jumps
 // different amounts... sun or weather up makes the picture even more
@@ -1999,11 +1990,9 @@ function updateTimeStepLabels(): void {
 // running two satellite SGP4 refreshes + full ground-track, targets, and
 // terminator GeoJSON rebuilds + setData — far past the iPad frame budget.
 // Tier 1 (every frame): view-time pin, ISS marker, readout — what the
-// finger is steering. Tier 2 (throttled to SCRUB_TIER2_THROTTLE_MS,
-// trailing-flushed on release): everything else. The release path and all
-// non-drag callers (steppers, snap-to-live, tests) are unchanged inline.
-const SCRUB_TIER2_THROTTLE_MS = 150;
-
+// finger is steering. Tier 2: everything else, heard through the clock's
+// view-time listeners — at once for a discrete change, coalesced through
+// clock.settle while the slider drags.
 let scrubTier2RunCount = 0; // test observability — counts REAL tier-2 runs
 
 function runScrubTier2(): void {
@@ -2031,11 +2020,11 @@ function runScrubTier2(): void {
   }
 }
 
-const scrubTier2 = clock.throttle(SCRUB_TIER2_THROTTLE_MS, runScrubTier2);
+clock.onViewTime(runScrubTier2);
 
 /** Test-only: reset throttle state between vitest runs. */
 export function _resetScrubTierStateForTest(): void {
-  scrubTier2.reset();
+  clock.settle.reset();
   scrubTier2RunCount = 0;
 }
 
@@ -2046,9 +2035,18 @@ export function _getScrubTier2RunCountForTest(): number {
 
 /** Test-only: whether a trailing tier-2 timer is currently armed. */
 export function _isScrubTier2TimerArmedForTest(): boolean {
-  return scrubTier2.armed;
+  return clock.settle.armed;
 }
 
+/** Move the map's view time to now + newMinutes (clamped 0..36h) and refresh
+ *  every view-time consumer: ground track, target pins, terminator, ISS
+ *  marker, and the time-control labels.
+ *
+ *  Module-level + exported (5A, 2026-06-10 — was a closure inside
+ *  bindTimeToggle): the stepper buttons, the continuous slider, and unit
+ *  tests all drive this one function, so the controls can never disagree
+ *  about what a time change refreshes.
+ */
 export function setLookahead(newMinutes: number, recenter: boolean): void {
   const clamped = clampLookahead(newMinutes);
   if (clamped === 0 && !clock.isScrubbed()) {
@@ -2081,62 +2079,22 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
     return;
   }
   // 0 = return to live mode; >0 = pin the view to an ABSOLUTE instant (T1).
-  clock.setViewTime(clamped === 0
-    ? { kind: 'live' }
-    : { kind: 'scrubbed', atMs: clock.now() + clamped * 60_000 });
-  // Drag fast path (7A): per-frame work is only what the finger steers —
-  // marker + readout. The heavy surface refreshes ride the tier-2
-  // throttle and are flushed on release. The slider's own listeners never
-  // pass recenter=true mid-drag ('input' passes false; 'change' fires
+  // A drag frame is coalesced (7A): the view-time listeners ride
+  // clock.settle and are flushed on release. The slider's own listeners
+  // never pass recenter=true mid-drag ('input' passes false; 'change' fires
   // after pointerup) — but a second-finger STEPPER tap mid-drag does
-  // (adversarial F2, 2026-06-11), so a recenter request always takes the
-  // full inline path: the ease and an immediate full refresh are exactly
-  // what that tap is asking for.
-  if (sliderDragging && !recenter) {
-    if (currentTrack && core && issMarker) {
-      const pos = markerPositionFor(currentTrack);
-      if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
-    }
-    scrubTier2.schedule();
-    updateTimeStepLabels();
-    return;
-  }
-  // One-clock surface (4A): satellite markers + track windows follow the
-  // view time with everything else. Both no-op until the map exists; live
-  // 1Hz ticking resumes via the tickSatelliteMarkers gate at Now.
-  refreshSatelliteTracks();
-  refreshSatelliteMarkers();
-  // Forecast frame swap (V4-P2): scrubbed views show the GFS frame nearest
-  // the view instant when one is published; observed otherwise.
-  refreshForecastCloudLayer();
-  // Imagery badge: three-way wording follows the active layer — GFS
-  // forecast frame (+Nh · coarse) / observed + forecast-ends clamp /
-  // observed-not-forecast fallback (T5 + V4-P2).
-  refreshImageryDateBadgeForView();
-  // Update active state — only the Now button has an "active" state
-  // (it's the only one that represents a specific lookahead value);
-  // the +/- step buttons are pure delta buttons that flash on click.
-  document.querySelectorAll<HTMLButtonElement>('.time-step-btn').forEach((b) => {
-    const isNow = b.id === 'time-now';
-    b.classList.toggle('active', isNow && clamped === 0);
-  });
-
-  // Rebuild track + targets with the new lookahead.
-  if (currentTrack) {
-    refreshGroundTrackSource(currentTrack);
-    refreshTargetsSource();
-    // Terminator + subsolar follow the time-scrub so day/night
-    // reflects the view time, not real-time-now (v1.4.2.0).
-    refreshTerminatorSources();
-    // Move + freeze marker at the new view time.
-    if (core && issMarker) {
-      const pos = markerPositionFor(currentTrack);
-      if (pos) {
-        issMarker.setLngLat([pos.lon, pos.lat]);
-        if (recenter) {
-          core.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
-        }
-      }
+  // (adversarial F2, 2026-06-11), and the ease plus an immediate full
+  // refresh are exactly what that tap is asking for.
+  clock.setViewTime(
+    clamped === 0 ? { kind: 'live' } : { kind: 'scrubbed', atMs: clock.now() + clamped * 60_000 },
+    sliderDragging && !recenter ? 'coalesced' : 'now',
+  );
+  // Move + freeze marker at the new view time.
+  if (currentTrack && core && issMarker) {
+    const pos = markerPositionFor(currentTrack);
+    if (pos) {
+      issMarker.setLngLat([pos.lon, pos.lat]);
+      if (recenter) core.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
     }
   }
   updateTimeStepLabels();
@@ -2189,12 +2147,12 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
     // Settle deferred tier-2 work first (terminator/pins/satellites/track),
     // then the frame swap deferred during the drag (the release's
     // same-instant guard can skip the full refresh path entirely).
-    scrubTier2.flush();
+    clock.settle.flush();
     refreshForecastCloudLayer();
   });
   slider.addEventListener('pointercancel', () => {
     sliderDragging = false;
-    scrubTier2.flush();
+    clock.settle.flush();
     refreshForecastCloudLayer();
   });
   // Belt-and-braces (Codex adversarial 2026-06-10): a drag that loses
@@ -2203,7 +2161,7 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   // forever. Bound once — sliderBound guards re-binding.
   window.addEventListener('blur', () => {
     sliderDragging = false;
-    scrubTier2.flush();
+    clock.settle.flush();
     // Mirror pointerup (adversarial F3): the leading tier-2 run during the
     // drag deferred its forecast frame swap (visibility-only while
     // dragging); without this, a blur-ended drag leaves the fcst raster on

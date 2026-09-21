@@ -393,12 +393,15 @@ describe('scrub-drag tiered refresh (7A — Jack iPad stutter report 2026-06-11)
     expect(readout().textContent).not.toBe(first); // tier 1 kept pace
   });
 
-  it('non-drag callers (steppers/snap-to-live) never enter the tiered path', () => {
-    // No pointerdown — sliderDragging is false; setLookahead runs the full
-    // inline path which does NOT increment the tier-2 counter.
+  it('non-drag callers (steppers/snap-to-live) refresh at once, with nothing deferred', () => {
+    // No pointerdown — sliderDragging is false; every view-time listener
+    // runs synchronously inside setLookahead and no trailing timer is armed.
     setLookahead(45, false);
+    expect(_getScrubTier2RunCountForTest()).toBe(1);
+    expect(_isScrubTier2TimerArmedForTest()).toBe(false);
     setLookahead(90, false);
-    expect(_getScrubTier2RunCountForTest()).toBe(0);
+    expect(_getScrubTier2RunCountForTest()).toBe(2);
+    expect(_isScrubTier2TimerArmedForTest()).toBe(false);
   });
 
   it('a stale trailing timer after release cannot double-run tier 2', () => {

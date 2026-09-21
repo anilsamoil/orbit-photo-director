@@ -47,6 +47,56 @@ describe('view time', () => {
   });
 });
 
+describe('view time listeners', () => {
+  it('hear a discrete change at once, with the new instant already readable', () => {
+    const clock = createClock();
+    const heard: number[] = [];
+    clock.onViewTime(() => heard.push(clock.viewMs()));
+    clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 60_000 });
+    expect(heard).toEqual([T0 + 60_000]);
+    expect(clock.settle.armed).toBe(false);
+  });
+
+  it('hear a coalesced burst on its leading edge and once more when it settles', () => {
+    const clock = createClock();
+    const heard: number[] = [];
+    clock.onViewTime(() => heard.push(clock.viewMs()));
+    clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 15 * 60_000 }, 'coalesced');
+    clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 30 * 60_000 }, 'coalesced');
+    clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 45 * 60_000 }, 'coalesced');
+    expect(heard).toEqual([T0 + 15 * 60_000]);
+    expect(clock.viewMs()).toBe(T0 + 45 * 60_000);
+    expect(clock.settle.armed).toBe(true);
+    vi.advanceTimersByTime(150);
+    expect(heard).toEqual([T0 + 15 * 60_000, T0 + 45 * 60_000]);
+  });
+
+  it('hear a pending coalesced change now when the settle is flushed', () => {
+    const clock = createClock();
+    const listener = vi.fn();
+    clock.onViewTime(listener);
+    clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 60_000 }, 'coalesced');
+    vi.advanceTimersByTime(50);
+    clock.setViewTime({ kind: 'live' }, 'coalesced');
+    expect(listener).toHaveBeenCalledOnce();
+    clock.settle.flush();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(clock.settle.armed).toBe(false);
+    vi.advanceTimersByTime(1_000);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('stop hearing once unsubscribed', () => {
+    const clock = createClock();
+    const listener = vi.fn();
+    const stop = clock.onViewTime(listener);
+    clock.setViewTime({ kind: 'live' });
+    stop();
+    clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 60_000 });
+    expect(listener).toHaveBeenCalledOnce();
+  });
+});
+
 describe('every', () => {
   it('ticks on the interval and hands the tick the wall clock at fire time', () => {
     const clock = createClock();
