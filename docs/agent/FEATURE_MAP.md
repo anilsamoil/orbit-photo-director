@@ -1,6 +1,6 @@
 # Feature map
 
-Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Two capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
+Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Three capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
 
 Paths below are relative to `frontend/`. Tests run with `bun run test <path>` from `frontend/`.
 
@@ -32,13 +32,25 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | Tests | `src/map/features/satellites/satellites.test.ts` mounts on the vendor double with `fetchSatelliteTLE` mocked. `test/map-satellites-contract.test.ts` drives it through `renderMap` and the MapLibre double with a stubbed CelesTrak. `test/satellites.test.ts` covers the fetch and cache. |
 | Traps | Every add fetches CelesTrak through `fetchSatelliteTLE`; mock the `src/satellites` module in tests or the suite goes to the network. A persisted satellite whose fetch failed at mount is not retried (`FOLLOWUPS.md`). Opening the picker leaves launch mode (`setMapLaunchMode(false)`). The tickers skip while scrubbed and `clock.onViewTime` repaints instead, so a scrub test must advance the view time, not the timers. |
 
+### basemap
+
+| | |
+| --- | --- |
+| Directory | `src/map/features/basemap/` |
+| Entrypoint | `basemap` in `index.ts`, id `'basemap'` |
+| User reaches it | Dock `#toggle-clouds` and `#toggle-ir`. Clouds on shows the dark basemap plus the daily GIBS composite. Clouds off, and IR off, shows Esri imagery. IR replaces the daily clouds. The imagery badge sits in the map container. |
+| What it draws | Visibility of `carto-dark-layer`, `esri-imagery-layer`, `gibs-clouds-layer`, `fcst-clouds-layer`, and `geo-ir-layer`. The decision is `basemapVisibility` in `visibility.ts`. The first paint, including those sources, is still `buildStyle` in `map.ts`. |
+| Control it in code | `bindBasemapClock` shares the composition root's clock and refreshes the forecast layer and the badge on every view-time change. `attachBasemap` arms the Esri and forecast tile-error fallback when the core is created. `setBasemapManifest` publishes the manifest. `refreshBasemap` reapplies forecast, IR, and the badge. `setForecastSwapDeferred` holds forecast tile swaps during a slider drag. Keys are `PREF_KEYS.cloudsVisible` (default on) and `PREF_KEYS.irVisible` (default off, only `'1'`). |
+| Files | `index.ts` toggles, IR repick, forecast refresh, badge, mount; `visibility.ts` the four-layer decision; `forecast.ts` `compactFrameKey` and `nearestForecastFrame`. Satellite pick and tile URLs are `src/tile-precache.ts`. |
+| Tests | `src/map/features/basemap/basemap.test.ts` mounts on the vendor double. `test/map-basemap.test.ts` is the 16-row decision table. `test/map-ir.test.ts` drives IR through `renderMap`. `test/map-imagery-date.test.ts`, `test/forecast-frame.test.ts`, `test/time-slider.test.ts` (badge follows the scrub). `test/map-style-contract.test.ts` still pins `buildStyle`. `test/tile-precache.test.ts`, `test/tile-precache-ir.test.ts`. |
+| Traps | `FORECAST_CLOUDS_UI` is false. Scrubbed views keep observed imagery and the "observed — not forecast" badge. `_setForecastCloudsUiForTest(true)` is how the forecast tests turn the machinery on. IR and clouds are mutually exclusive. The IR frame time is `geoIRTimeForNow()` (wall clock, inside `tile-precache.ts`), and under a scrub the badge says `LIVE now (not the scrubbed time)`. The badge listener is registered by `bindBasemapClock` at `map.ts` load, before `runScrubTier2`, so `setLookahead` refreshes it with no `renderMap`; putting that listener only in `mount` goes red. `pointerup`, `pointercancel`, and `blur` clear the defer flag, flush settle, then call `refreshForecastCloudLayer` again, because a same-instant release can skip `setViewTime`. `attachBasemap` runs before `whenLoaded`. `resetBasemapForTest` does not clear the in-memory IR flag or `esriTilesFailed`. The `carto-dark-layer` line in `visibility.ts` is what `verify-map-pins.mjs` mutates. |
+
 ## Capabilities still in `src/map.ts`
 
 Each row names the symbols in `map.ts` that own the capability today, the domain modules it leans on, and the directory it becomes. `renderMap` is the composition root until the last row moves. Layer ids are in `src/map/map-core/catalog.ts`; each capability's layers paint at their `LAYER_ORDER` position whatever order they are added.
 
 | Capability | User reaches it | Owned by | Domain modules | Tests | Becomes |
 | --- | --- | --- | --- | --- | --- |
-| Basemap: Esri imagery or Carto dark with Esri-failure fallback, GIBS daily clouds, geostationary IR, forecast cloud frames while scrubbed | Dock `#toggle-clouds`, `#toggle-ir`; the slider selects forecast frames | `buildStyle`, `basemapVisibility`, `applyCloudsVisibility`, `bindCloudToggle`, `repickGeoIRForView`, `applyIrVisibility`, `bindIrToggle`, `refreshForecastCloudLayer`, `nearestForecastFrame`, `ensureImageryDateBadge` | `src/tile-precache.ts` (`pickGeoIRSat`, tile URLs) | `test/map-basemap.test.ts`, `test/map-ir.test.ts`, `test/map-style-contract.test.ts`, `test/map-imagery-date.test.ts`, `test/forecast-frame.test.ts`, `test/tile-precache.test.ts`, `test/tile-precache-ir.test.ts` | `features/basemap/` |
 | Labels overlay | Dock `#toggle-labels` | `applyLabelsVisibility`, `bindLabelsToggle`, `readLabelsVisible` | | `test/map-overlay-prefs.test.ts`, `test/map-render-contract.test.ts` | `features/labels/` |
 | Night lights (VIIRS Black Marble, with the global dim) | Dock `#toggle-night-lights` | `applyNightLightsVisibility`, `bindNightLightsToggle`, `applyGlobalDimVisibility`, `armNightLightsErrorHandler`, `readNightLightsVisible` | `src/map/adapters/maplibre/viirs-alpha.ts` (the `viirs-alpha://` protocol) | `test/map-night-lights.test.ts`, `test/viirs-alpha.test.ts` | `features/night-lights/` |
 | Day-night terminator and subsolar point | Dock `#toggle-terminator` | `refreshTerminatorSources`, `applyTerminatorVisibility`, `bindTerminatorToggle`, `readTerminatorVisible` | `src/terminator.ts` | `test/terminator.test.ts`, `test/map-night-lights.test.ts` (dim interplay), `test/map-render-contract.test.ts` | `features/terminator/` |
