@@ -1,4 +1,5 @@
 import type { Track } from './types';
+import { wrapLon } from './geo';
 import { liveIssPositionSGP4 } from './iss-sgp4';
 
 /** Evaluate a polynomial p(t) = c[0]*t^n + c[1]*t^(n-1) + ... + c[n]. */
@@ -8,14 +9,6 @@ function evalPoly(coeffs: number[], t: number): number {
     acc = acc * t + c;
   }
   return acc;
-}
-
-/** Wrap longitude to [-180, 180]. */
-export function wrapLon(lon: number): number {
-  let v = lon;
-  while (v > 180) v -= 360;
-  while (v < -180) v += 360;
-  return v;
 }
 
 /** Compute live ISS lat/lon at nowMs from the polynomial fit shipped in track.json.

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { liveIssNow, liveIssPosition, wrapLon } from '../src/iss';
+import { wrapLon } from '../src/geo';
+import { liveIssNow, liveIssPosition } from '../src/iss';
 import { _resetSatrecCacheForTests } from '../src/iss-sgp4';
 import type { Track } from '../src/types';
 

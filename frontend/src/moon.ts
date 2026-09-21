@@ -24,7 +24,7 @@
  */
 
 import { greatCircleAngleDeg } from './terminator';
-import { wrapLon } from './iss';
+import { wrapLon } from './geo';
 
 const DEG = Math.PI / 180;
 const EARTH_RADIUS_KM = 6371;
