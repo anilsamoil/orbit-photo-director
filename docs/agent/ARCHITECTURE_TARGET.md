@@ -152,7 +152,9 @@ Copy a feature directory. Rename it. Edit three lines outside it: one entry in `
 
 ## What fails the build
 
-One Vitest file, `frontend/src/map/boundaries.test.ts`, run by `bun run test`, which CI already runs. It parses `frontend/src/**/*.ts` with the `typescript` package that is already a dependency, so there is no new tool, no new CI step and no new config file. It carries a self-test that feeds one violating snippet per rule to the rule function, the same way `verify-map-pins.mjs` proves the pins.
+One Vitest file, `frontend/test/architecture-boundaries.test.ts`, run by `bun run test`, which CI already runs. Vitest's `include` is `test/**/*.test.ts`, so a check under `src/` would need a config change to run at all; it lives beside the other 93 test files instead. It parses `frontend/src/**/*.ts` with the `typescript` package that is already a dependency, so there is no new tool, no new CI step and no new config file. It carries a self-test that feeds one violating snippet per rule to the rule function, the same way `verify-map-pins.mjs` proves the pins.
+
+Two of its rules are already live, because both had teeth before any code moved. Nothing in `src/` may statically import the map entry, which is what keeps the 801 KB MapLibre chunk out of the app shell, and only `map.ts` and `viirs-alpha-protocol.ts` may name `maplibre-gl`. The remaining rules land with the slices that make them meaningful.
 
 It rejects: `maplibre-gl` imported outside `adapters/`; `map-core/` importing `features/` or `adapters/`; a feature importing another feature, an adapter, or the composition root; an adapter imported anywhere but the composition root; any static import of `src/map/**` from outside it, which is what keeps the 800 KB MapLibre chunk out of the app shell and is only a convention today; a feature directory that is not registered, or registered twice; a top-level `let` or `var` anywhere under `src/map/` except the one `let core`; `Date.now(` inside `features/`, which is the two-clock gotcha; an `opd-map-` key literal outside `prefs.ts`; and any comment under `src/map/`.
 
