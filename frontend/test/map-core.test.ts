@@ -178,7 +178,7 @@ describe('popups', () => {
 
 describe('view', () => {
   const track = { tle_epoch: '2026-05-04T00:00:00Z', tle_age_hours: 12 } as Track;
-  const tiangong: SelectedSatellite = { name: 'Tiangong', color: '#ffb000', track };
+  const tiangong: SelectedSatellite = { name: 'Tiangong', label: 'Tg', color: '#ffb000', track };
 
   it('opens with no track and no satellites', () => {
     expect(core.view()).toEqual({ track: null, satellites: [] });

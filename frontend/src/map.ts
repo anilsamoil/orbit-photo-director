@@ -2,13 +2,14 @@ import type { Manifest, PassEntry, Track } from './types';
 import type { ForecastCloudsIndex } from './types';
 import { fetchArtifact } from './manifest';
 import { wrapLon } from './geo';
-import { satTrackLayerId, satTrackSourceId, type LayerId } from './map/map-core/catalog';
+import type { LayerId } from './map/map-core/catalog';
 import { createVendorMap } from './map/adapters/maplibre';
 import { initialCamera } from './map/map-core/camera';
 import { createClock } from './map/map-core/clock';
 import { createMapCore, type MapCore } from './map/map-core/core';
 import { FEATURES } from './map/features';
 import { buildPassList } from './map/overlays/pass-list';
+import { buildLineFeatures } from './map/overlays/track-line';
 import { boundsOf, type Point } from './map/map-core/geometry';
 import type { StyleSpec } from './map/map-core/layer-spec';
 import type {
@@ -19,7 +20,7 @@ import type {
   VendorMap,
 } from './map/map-core/vendor-map';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from './pass-filter';
-import { liveIssNow, liveIssPosition } from './iss';
+import { ISS_ORBIT_PERIOD_SECONDS, liveIssNow, liveIssPosition } from './iss';
 import { isTleStale } from './banner';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
@@ -27,13 +28,6 @@ import { fetchLiveCloud } from './cloud';
 import { getShotCount } from './shot-counts';
 import { formatUtcHm } from './countdown';
 import { greatCircleBearingDeg, findUpcomingPasses } from './pin-drop';
-import {
-  CURATED_SATELLITES,
-  fetchSatelliteTLE,
-  metaKey,
-  type SatelliteMeta,
-  type TLEPair,
-} from './satellites';
 import {
   classifyIssIllumination,
   subsolarFeature,
@@ -396,13 +390,6 @@ export function readMultiOrbitVisible(): boolean {
 }
 let multiOrbitVisible: boolean = readMultiOrbitVisible();
 
-/** ISS orbital period in seconds. Used to split track_points into
- *  per-orbit segments. 92.8 min ≈ 5568s; SGP4 mean motion varies
- *  ±0.1% over the mission so a fixed constant is fine for visual
- *  segmentation (the segments don't need to be exactly orbit-aligned,
- *  just visually distinguishable). */
-const ISS_ORBIT_PERIOD_SECONDS = 5568;
-
 /** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
  *  "make so can turn off/on as needed" stays sticky across reloads. Default
  *  on (clouds visible) matches v1.0+ behavior. */
@@ -681,60 +668,6 @@ export function buildStyle(): StyleSpec {
       },
     ],
   };
-}
-
-/** Convert a flat list of [lat, lon] samples into MapLibre LineString
- *  features, splitting at antimeridian crossings (so the line doesn't
- *  drag across the whole map) and duplicating at lon ±360 (so the line
- *  renders continuously when the user pans across world copies — see
- *  Pettit feedback 2026-05-19).
- *
- *  Factored out so both the live-orbit (`groundTrackFeatures`) and
- *  future-orbit (`futureOrbitGroundTrackFeatures`) paths share the
- *  same antimeridian + world-copy handling.
- */
-function buildLineFeatures(samples: [number, number][]): GeoJSON.Feature[] {
-  type Pt = [number, number];
-  const segments: Pt[][] = [];
-  let current: Pt[] = [];
-  let prevLon: number | null = null;
-
-  for (const [lat, lonRaw] of samples) {
-    const lon = wrapLon(lonRaw);
-    if (prevLon !== null && Math.abs(lon - prevLon) > 180) {
-      if (current.length > 1) segments.push(current);
-      current = [];
-    }
-    current.push([lon, lat]);
-    prevLon = lon;
-  }
-  if (current.length > 1) segments.push(current);
-
-  const segmentFeatures = segments.map((coords) => ({
-    type: 'Feature' as const,
-    properties: {},
-    geometry: { type: 'LineString' as const, coordinates: coords },
-  }));
-  const duplicated: GeoJSON.Feature[] = [];
-  for (const f of segmentFeatures) {
-    const coords = f.geometry.coordinates as [number, number][];
-    duplicated.push(f);
-    duplicated.push({
-      ...f,
-      geometry: {
-        type: 'LineString',
-        coordinates: coords.map(([lon, lat]) => [lon + 360, lat]),
-      },
-    });
-    duplicated.push({
-      ...f,
-      geometry: {
-        type: 'LineString',
-        coordinates: coords.map(([lon, lat]) => [lon - 360, lat]),
-      },
-    });
-  }
-  return duplicated;
 }
 
 /** Split `track_points` (each `[t_seconds, lat, lon]`) into per-orbit
@@ -1459,22 +1392,10 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindMultiOrbitToggle();
   bindFollowToggle();
   if (isFirstInit) for (const feature of FEATURES) feature.mount(core);
-  bindSatellitePicker();
   // Slot 7: re-filter the targets layer when the active profile's
   // distance threshold changes. Slot 11 refactors this to the debounced
   // event-bus subscriber.
   bindProfileChangedListener();
-  // Restore persisted satellite selections (fire-and-forget; UI updates
-  // as each fetch resolves). Also kick off the 60s track refresh tick.
-  void restorePersistedSatellites();
-  if (isFirstInit) {
-    clock.every(60_000, () => {
-      // Live mode only: while scrubbed the track window is pinned to the
-      // view instant (4A) — rebuilding yields identical geometry.
-      if (clock.isScrubbed()) return;
-      try { refreshSatelliteTracks(); } catch { /* noop */ }
-    });
-  }
   // Apply persisted cloud + terminator preferences on first map render.
   // refreshForecastCloudLayer wraps applyCloudsVisibility and additionally
   // wires the V4-P2 forecast frame when a scrub is active across a manifest
@@ -2000,12 +1921,10 @@ function runScrubTier2(): void {
   // Each refresher is isolated (adversarial F5, 2026-06-11): pre-throttle,
   // a throw here retried on the next 16ms frame; now the retry would be
   // the next user action, so one bad surface must not strand the rest
-  // ~150ms in the past. Same posture as the 60s satellite ticker.
+  // ~150ms in the past.
   const safely = (fn: () => void): void => {
     try { fn(); } catch { /* surface isolated — others still refresh */ }
   };
-  safely(refreshSatelliteTracks);
-  safely(refreshSatelliteMarkers);
   safely(refreshForecastCloudLayer);
   safely(refreshImageryDateBadgeForView);
   const isLive = !clock.isScrubbed();
@@ -3412,380 +3331,6 @@ function refreshImageryDateBadgeForView(): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Multi-satellite tracking (v1.6.0.0 — Pettit feedback #6)
-// ---------------------------------------------------------------------------
-//
-// Operator picks satellites to track beyond ISS via the 🛰 picker button.
-// Each selected non-ISS satellite gets:
-//  - Ground-track polyline (color per satellite, refreshed every 60s)
-//  - Live marker at current sub-point (1Hz refresh — uses SGP4 propagator)
-//  - Pin-drop popup section with next 5 passes over the pinned point
-//
-// All client-side. TLEs from CelesTrak (cached 6h in localStorage).
-// Per /plan-eng-review 2026-05-22 P1: track polyline at 60s, markers at 1s.
-
-/** Per-satellite state. ISS is the canonical existing path and is NOT
- *  represented here — selectedSatellites only holds non-ISS picks. */
-interface SatelliteState {
-  meta: SatelliteMeta;
-  tle: TLEPair;
-  matchCount: number;
-  stale: boolean;
-  marker: MarkerHandle | null;
-}
-
-const selectedSatellites = new Map<string, SatelliteState>();
-let pickerOpen = false;
-let satellitePickerBound = false;
-const SATELLITE_SELECTION_KEY = 'opd-selected-satellites';
-
-/** Synthetic Track for a non-ISS satellite. Wraps the TLE so the existing
- *  `findUpcomingPasses` (which expects a `Track`) and `liveIssPositionSGP4`
- *  callsites work without modification. */
-function trackFromTLE(tle: TLEPair): Track {
-  return {
-    tle: { line1: tle.line1, line2: tle.line2 },
-    tle_epoch: '', // SGP4 parses epoch from the TLE itself
-    tle_age_hours: 0,
-    tle_freshness_factor: 1,
-    iss_polynomial: {
-      start: new Date().toISOString(),
-      duration_seconds: 0,
-      lat_coeffs: [],
-      lon_coeffs: [],
-      polynomial_order: 0,
-    },
-  } as Track;
-}
-
-function readSelectedKeys(): string[] {
-  try {
-    const v = localStorage.getItem(SATELLITE_SELECTION_KEY);
-    if (!v) return [];
-    const arr = JSON.parse(v);
-    return Array.isArray(arr) ? arr.filter((k) => typeof k === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistSelectedKeys(): void {
-  try {
-    const keys = Array.from(selectedSatellites.keys());
-    localStorage.setItem(SATELLITE_SELECTION_KEY, JSON.stringify(keys));
-  } catch { /* noop */ }
-}
-
-/** Build the ground-track polyline samples for a non-ISS satellite over
- *  one full orbit (~95min default) at 30s cadence, starting at `viewMs`.
- *  Returns features ready for core.setGeoJson — already split at
- *  antimeridian + world-copy duplicated.
- *
- *  4A (eng-review 2026-06-10): the window starts at the map's VIEW time,
- *  not live now — when the operator scrubs to +6h, satellite tracks render
- *  where those satellites will be, on the same clock as the ISS track
- *  (the v1.7.12.0 marker-on-wrong-track bug class, applied forward).
- *  ISS_ORBIT_PERIOD_SECONDS stays the window length for every LEO bird —
- *  documented-acceptable approximation (HST/Tiangong are similar).
- *  Exported for unit tests; viewMs injectable. */
-export function buildSatelliteTrackFeatures(
-  tle: TLEPair,
-  viewMs: number = clock.viewMs(),
-): GeoJSON.Feature[] {
-  const track = trackFromTLE(tle);
-  const stepSec = 30;
-  const orbitSec = ISS_ORBIT_PERIOD_SECONDS; // close enough for LEO; HST/Tiangong are similar
-  const samples: [number, number][] = [];
-  for (let t = 0; t <= orbitSec; t += stepSec) {
-    const pos = liveIssPositionSGP4(track, viewMs + t * 1000);
-    if (!pos) continue;
-    samples.push([pos.lat, pos.lon]);
-  }
-  return buildLineFeatures(samples);
-}
-
-function refreshSatelliteTracks(): void {
-  if (!core) return;
-  for (const [key, state] of selectedSatellites.entries()) {
-    const sourceId = satTrackSourceId(key);
-    const layerId = satTrackLayerId(key);
-    const features = buildSatelliteTrackFeatures(state.tle);
-    core.setGeoJson(sourceId, { type: 'FeatureCollection', features });
-    core.ensureLayer({
-      id: layerId,
-      type: 'line',
-      source: sourceId,
-      paint: {
-        'line-color': state.meta.track_color,
-        'line-width': 1.6,
-        'line-opacity': 0.7,
-        'line-dasharray': [3, 2],
-      },
-    });
-  }
-}
-
-function refreshSatelliteMarkers(): void {
-  if (!core) return;
-  // One-clock surface (4A): markers render at the VIEW time — live now in
-  // live mode, the pinned instant while scrubbed.
-  const viewMs = clock.viewMs();
-  for (const state of selectedSatellites.values()) {
-    const track = trackFromTLE(state.tle);
-    const pos = liveIssPositionSGP4(track, viewMs);
-    if (!pos) continue;
-    if (!state.marker) {
-      const el = document.createElement('div');
-      el.className = 'sat-marker';
-      el.style.background = state.meta.track_color;
-      el.title = `${state.meta.icon} ${state.meta.name}`;
-      state.marker = core.addMarker(el, [pos.lon, pos.lat]);
-    } else {
-      state.marker.setLngLat([pos.lon, pos.lat]);
-    }
-  }
-}
-
-function removeSatelliteVisuals(key: string): void {
-  if (!core) return;
-  const state = selectedSatellites.get(key);
-  if (state?.marker) {
-    state.marker.remove();
-    state.marker = null;
-  }
-  const layerId = satTrackLayerId(key);
-  const sourceId = satTrackSourceId(key);
-  try {
-    core.removeLayer(layerId);
-    core.removeSource(sourceId);
-  } catch { /* noop */ }
-}
-
-async function addSatelliteByMeta(meta: SatelliteMeta): Promise<{ ok: boolean; message: string }> {
-  const key = metaKey(meta);
-  if (selectedSatellites.has(key)) {
-    return { ok: true, message: 'Already tracking' };
-  }
-  const result = await fetchSatelliteTLE(meta);
-  if (!result) {
-    return {
-      ok: false,
-      message: meta.resolution.kind === 'name'
-        ? `No satellite found for "${meta.resolution.query}"`
-        : `Couldn't fetch TLE for NORAD ${meta.resolution.catnr}`,
-    };
-  }
-  selectedSatellites.set(key, {
-    meta,
-    tle: result.tle,
-    matchCount: result.match_count,
-    stale: result.stale,
-    marker: null,
-  });
-  publishSelectedSatellites();
-  refreshSatelliteTracks();
-  refreshSatelliteMarkers();
-  persistSelectedKeys();
-  return { ok: true, message: 'Tracking added' };
-}
-
-function removeSatellite(key: string): void {
-  if (!selectedSatellites.has(key)) return;
-  removeSatelliteVisuals(key);
-  selectedSatellites.delete(key);
-  publishSelectedSatellites();
-  persistSelectedKeys();
-}
-
-/** Render the picker panel's curated satellite list. Called on open
- *  AND on every selection change so checkboxes + match-count labels stay
- *  in sync. */
-function renderSatellitePickerList(): void {
-  const list = document.getElementById('satellite-picker-list');
-  if (!list) return;
-  list.textContent = '';
-  for (const meta of CURATED_SATELLITES) {
-    if (metaKey(meta) === '25544') continue; // ISS is always-on; not in picker
-    const key = metaKey(meta);
-    const state = selectedSatellites.get(key);
-    const label = document.createElement('label');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = !!state;
-    cb.addEventListener('change', async () => {
-      if (cb.checked) {
-        const status = document.getElementById('satellite-picker-status');
-        if (status) status.textContent = `Fetching ${meta.name}…`;
-        const result = await addSatelliteByMeta(meta);
-        if (status) {
-          status.textContent = result.message;
-          status.className = `satellite-picker-status ${result.ok ? 'success' : 'error'}`;
-        }
-        if (!result.ok) cb.checked = false;
-        renderSatellitePickerList();
-      } else {
-        removeSatellite(key);
-        renderSatellitePickerList();
-      }
-    });
-    const icon = document.createElement('span');
-    icon.className = 'sat-icon';
-    icon.textContent = meta.icon;
-    const nameSpan = document.createElement('span');
-    nameSpan.textContent = meta.name;
-    label.append(cb, icon, nameSpan);
-    if (state) {
-      if (state.stale) {
-        const badge = document.createElement('span');
-        badge.className = 'sat-stale';
-        badge.textContent = 'stale TLE';
-        label.appendChild(badge);
-      } else if (state.matchCount > 1) {
-        const badge = document.createElement('span');
-        badge.className = 'sat-multi-match';
-        badge.textContent = `1 of ${state.matchCount}`;
-        label.appendChild(badge);
-      }
-    }
-    list.appendChild(label);
-  }
-  requestAnimationFrame(resizeMap);
-}
-
-function bindSatellitePicker(): void {
-  if (satellitePickerBound) return;
-  const btn = document.getElementById('toggle-satellite-picker');
-  const panel = document.getElementById('satellite-picker-panel');
-  const input = document.getElementById('satellite-picker-input') as HTMLInputElement | null;
-  const addBtn = document.getElementById('satellite-picker-add');
-  const status = document.getElementById('satellite-picker-status');
-  if (!btn || !panel || !input || !addBtn) return;
-
-  const closePicker = () => {
-    pickerOpen = false;
-    panel.hidden = true;
-    btn.classList.remove('active');
-    requestAnimationFrame(resizeMap);
-  };
-  const openPicker = () => {
-    setMapLaunchMode(false);
-    pickerOpen = true;
-    panel.hidden = false;
-    btn.classList.add('active');
-    renderSatellitePickerList();
-  };
-
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    pickerOpen ? closePicker() : openPicker();
-  });
-  // Outside-click closes the panel.
-  document.addEventListener('click', (e) => {
-    if (!pickerOpen) return;
-    const target = e.target as Node | null;
-    if (target && (panel.contains(target) || btn.contains(target))) return;
-    closePicker();
-  });
-
-  const handleAdd = async () => {
-    const q = input.value.trim();
-    if (!q) return;
-    if (status) {
-      status.textContent = 'Searching…';
-      status.className = 'satellite-picker-status';
-    }
-    const isNumeric = /^\d+$/.test(q);
-    const meta: SatelliteMeta = isNumeric
-      ? {
-        name: `NORAD ${q}`,
-        short_label: q.slice(-3),
-        track_color: '#888',
-        icon: '🛰',
-        resolution: { kind: 'catnr', catnr: Number(q) },
-      }
-      : {
-        name: q.toUpperCase(),
-        short_label: q.slice(0, 3).toUpperCase(),
-        track_color: '#aaa',
-        icon: '🔍',
-        resolution: { kind: 'name', query: q.toUpperCase() },
-      };
-    const result = await addSatelliteByMeta(meta);
-    if (status) {
-      status.textContent = result.message;
-      status.className = `satellite-picker-status ${result.ok ? 'success' : 'error'}`;
-    }
-    if (result.ok) {
-      input.value = '';
-      renderSatellitePickerList();
-    }
-  };
-  addBtn.addEventListener('click', handleAdd);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleAdd();
-  });
-
-  satellitePickerBound = true;
-}
-
-/** Restore selected satellites from localStorage on map init. Best-effort:
- *  fetches each cached selection's TLE; failures are silent (operator
- *  can re-add). */
-async function restorePersistedSatellites(): Promise<void> {
-  const keys = readSelectedKeys();
-  for (const key of keys) {
-    // Find the SatelliteMeta — either a curated entry, a CATNR, or a name search.
-    let meta: SatelliteMeta | null = null;
-    for (const c of CURATED_SATELLITES) {
-      if (metaKey(c) === key) {
-        meta = c;
-        break;
-      }
-    }
-    if (!meta) {
-      if (key.startsWith('name:')) {
-        const q = key.slice(5);
-        meta = {
-          name: q,
-          short_label: q.slice(0, 3),
-          track_color: '#aaa',
-          icon: '🔍',
-          resolution: { kind: 'name', query: q },
-        };
-      } else if (/^\d+$/.test(key)) {
-        const catnr = Number(key);
-        meta = {
-          name: `NORAD ${catnr}`,
-          short_label: String(catnr).slice(-3),
-          track_color: '#888',
-          icon: '🛰',
-          resolution: { kind: 'catnr', catnr },
-        };
-      }
-    }
-    if (meta) await addSatelliteByMeta(meta);
-  }
-}
-
-/** Hook called from the existing 1Hz tick (main.ts updateIssNow) — drives
- *  non-ISS satellite markers in LIVE mode only. While scrubbed, markers are
- *  pinned at the view instant by setLookahead (4A — one clock for the whole
- *  map surface); ticking live positions over them would put two times on
- *  one map. Cheap: 1 SGP4 call per satellite × ~5 satellites max = ~0.5ms. */
-export function tickSatelliteMarkers(): void {
-  if (clock.isScrubbed()) return;
-  refreshSatelliteMarkers();
-}
-
-function publishSelectedSatellites(): void {
-  core?.setSatellites([...selectedSatellites.values()].map((state) => ({
-    name: state.meta.name,
-    color: state.meta.track_color,
-    track: trackFromTLE(state.tle),
-  })));
-}
-
 /** Compact short-labels + sub-points for the topbar multi-sat row.
  *
  *  INTENTIONALLY live (clock.now()), not view-time: the topbar is the LIVE
@@ -3795,16 +3340,15 @@ function publishSelectedSatellites(): void {
 export function getSatelliteTopbarReadouts(): { label: string; text: string; color: string }[] {
   const nowMs = clock.now();
   const out: { label: string; text: string; color: string }[] = [];
-  for (const state of selectedSatellites.values()) {
-    const track = trackFromTLE(state.tle);
+  for (const { label, color, track } of core?.view().satellites ?? []) {
     const pos = liveIssPositionSGP4(track, nowMs);
     if (!pos) continue;
     const ns = pos.lat >= 0 ? 'N' : 'S';
     const ew = pos.lon >= 0 ? 'E' : 'W';
     out.push({
-      label: state.meta.short_label,
+      label,
       text: `${Math.abs(pos.lat).toFixed(1)}°${ns}, ${Math.abs(pos.lon).toFixed(1)}°${ew}`,
-      color: state.meta.track_color,
+      color,
     });
   }
   return out;

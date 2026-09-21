@@ -2,6 +2,10 @@ import type { Track } from './types';
 import { wrapLon } from './geo';
 import { liveIssPositionSGP4 } from './iss-sgp4';
 
+/** 92.8 min. Splits track_points into orbits and bounds a one-orbit
+ *  window; the LEO birds the picker offers are close enough to share it. */
+export const ISS_ORBIT_PERIOD_SECONDS = 5568;
+
 /** Evaluate a polynomial p(t) = c[0]*t^n + c[1]*t^(n-1) + ... + c[n]. */
 function evalPoly(coeffs: number[], t: number): number {
   let acc = 0;

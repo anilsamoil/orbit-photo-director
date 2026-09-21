@@ -317,9 +317,8 @@ describe('the clock', () => {
     expect(markerFor('🇨🇳 Tiangong (CSS)')?.lngLat).toEqual(subPointAt(TIANGONG, at));
   });
 
-  it('live, the 1 Hz hook moves the marker and the 60 s ticker advances the window', () => {
+  it('live, the marker ticks at 1 Hz and the 60 s ticker advances the window', () => {
     vi.advanceTimersByTime(30_000);
-    mapModule.tickSatelliteMarkers();
     expect(markerFor('🇨🇳 Tiangong (CSS)')?.lngLat).toEqual(subPointAt(TIANGONG, NOW + 30_000));
 
     expect(trackStart('48274')).toEqual(subPointAt(TIANGONG, NOW));
@@ -327,13 +326,11 @@ describe('the clock', () => {
     expect(trackStart('48274')).toEqual(subPointAt(TIANGONG, NOW + 60_000));
   });
 
-  it('scrubbed, neither the 1 Hz hook nor the 60 s ticker moves anything', () => {
+  it('scrubbed, neither the 1 Hz nor the 60 s ticker moves anything', () => {
     mapModule.setLookahead(360, false);
     const at = NOW + 360 * 60_000;
 
-    vi.advanceTimersByTime(30_000);
-    mapModule.tickSatelliteMarkers();
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(60_000);
 
     expect(markerFor('🇨🇳 Tiangong (CSS)')?.lngLat).toEqual(subPointAt(TIANGONG, at));
     expect(trackStart('48274')).toEqual(subPointAt(TIANGONG, at));

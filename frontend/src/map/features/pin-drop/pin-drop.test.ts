@@ -63,8 +63,8 @@ describe('sections', () => {
   it('lists the ISS first and then every selected satellite, in selection order', () => {
     const { vendor, core } = mounted();
     core.setSatellites([
-      { name: 'Tiangong', color: '#ffb000', track: ISS_TRACK },
-      { name: 'Hubble', color: '#8fd3ff', track: ISS_TRACK },
+      { name: 'Tiangong', label: 'Tg', color: '#ffb000', track: ISS_TRACK },
+      { name: 'Hubble', label: 'HST', color: '#8fd3ff', track: ISS_TRACK },
     ]);
     vendor.fire('contextmenu', PARIS);
     expect(headings(vendor)).toEqual(['ISS — next 5 passes', 'Tiangong — next 5 passes', 'Hubble — next 5 passes']);
@@ -72,7 +72,7 @@ describe('sections', () => {
 
   it('colours each section heading with the satellite colour', () => {
     const { vendor, core } = mounted();
-    core.setSatellites([{ name: 'Tiangong', color: '#ffb000', track: ISS_TRACK }]);
+    core.setSatellites([{ name: 'Tiangong', label: 'Tg', color: '#ffb000', track: ISS_TRACK }]);
     vendor.fire('contextmenu', PARIS);
     const [iss, tiangong] = headingElements(vendor);
     expect(iss?.style.color).toBe('#5cd0ff');
@@ -81,7 +81,7 @@ describe('sections', () => {
 
   it('renders a satellite name as text, never as markup', () => {
     const { vendor, core } = mounted();
-    core.setSatellites([{ name: '<b>Tiangong</b>', color: '#ffb000', track: ISS_TRACK }]);
+    core.setSatellites([{ name: '<b>Tiangong</b>', label: 'Tg', color: '#ffb000', track: ISS_TRACK }]);
     vendor.fire('contextmenu', PARIS);
     expect(headings(vendor)[1]).toBe('<b>Tiangong</b> — next 5 passes');
     expect(openPopup(vendor)!.content.querySelector('b')).toBeNull();
@@ -91,7 +91,7 @@ describe('sections', () => {
     const { vendor, core } = mounted();
     vendor.fire('contextmenu', PARIS);
     expect(headings(vendor)).toEqual(['ISS — next 5 passes']);
-    core.setSatellites([{ name: 'Tiangong', color: '#ffb000', track: ISS_TRACK }]);
+    core.setSatellites([{ name: 'Tiangong', label: 'Tg', color: '#ffb000', track: ISS_TRACK }]);
     expect(headings(vendor)).toEqual(['ISS — next 5 passes']);
     vendor.fire('contextmenu', PARIS);
     expect(headings(vendor)).toEqual(['ISS — next 5 passes', 'Tiangong — next 5 passes']);

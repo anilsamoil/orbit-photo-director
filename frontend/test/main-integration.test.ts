@@ -79,7 +79,6 @@ vi.mock('../src/map', () => ({
   dropLookupPin: vi.fn(),
   getSatelliteTopbarReadouts: vi.fn(() => []),
   applyFollowISS: vi.fn(),
-  tickSatelliteMarkers: vi.fn(),
 }));
 
 // Mock aurora module so refresh() doesn't fire real /api/kp fetches during
@@ -980,7 +979,6 @@ describe('main.ts: map pane vs manifest race (iPad QA loop 2026-06-11)', () => {
     expect(() => rerenderCountdowns()).not.toThrow();
     expect(mapModule.getSatelliteTopbarReadouts).toHaveBeenCalled();
     expect(mapModule.applyFollowISS).toHaveBeenCalled();
-    expect(mapModule.tickSatelliteMarkers).toHaveBeenCalled();
   });
 
   it('does NOT render the map if the operator navigated away before data arrived', async () => {
