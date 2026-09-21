@@ -98,6 +98,10 @@ export class RecordingMap {
     return this.layerSpecs.get(id);
   }
 
+  getStyle(): { layers: LayerSpec[] } {
+    return { layers: this.layerOrder.map((id) => this.layerSpecs.get(id) as LayerSpec) };
+  }
+
   setLayoutProperty(id: string, key: string, value: string): void {
     if (key === 'visibility') this.visibility.set(id, value);
   }

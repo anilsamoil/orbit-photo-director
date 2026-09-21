@@ -155,23 +155,35 @@ describe('the catalog against what renderMap paints', () => {
     for (const id of declared) expect(known).toContain(id);
   });
 
-  it('computes the same beforeId renderMap hand-writes today, for all twelve runtime layers', async () => {
+  it('places the night overlays under the ISS track and everything else on top, by catalog position alone', async () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
-    const map = renderedMap();
-    const addedAtRuntime = new Set(map.addLayerCalls.map((call) => call.id));
-    const painted = map.layerOrder.filter((id) => !addedAtRuntime.has(id)) as LayerId[];
-    expect(painted).toHaveLength(5);
-    const computed: [string, string | undefined][] = [];
-    for (const call of map.addLayerCalls) {
-      const id = call.id as LayerId;
-      computed.push([id, beforeIdFor(id, painted)]);
-      painted.push(id);
-    }
-    expect(computed).toEqual(map.addLayerCalls.map((call) => [call.id, call.beforeId]));
-    expect(computed.filter(([, before]) => before !== undefined)).toEqual([
-      ['night-lights-global-dim-layer', 'iss-track-layer'],
-      ['terminator-night-fill-layer', 'iss-track-layer'],
-      ['viirs-night-lights-layer', 'iss-track-layer'],
+    const placed = renderedMap().addLayerCalls.filter((call) => call.beforeId !== undefined);
+    expect(placed).toEqual([
+      { id: 'night-lights-global-dim-layer', beforeId: 'iss-track-layer' },
+      { id: 'terminator-night-fill-layer', beforeId: 'iss-track-layer' },
+      { id: 'viirs-night-lights-layer', beforeId: 'iss-track-layer' },
     ]);
+  });
+
+  it('stacks the on-demand pins in catalog order whichever one the operator makes first', async () => {
+    const drop = { lat: 51.5, lon: -0.12, alt_km: 420, timestamp_utc: new Date('2026-05-04T12:10:00Z') };
+    const rightClick = () => renderedMap().fire('contextmenu', {
+      preventDefault: () => {},
+      lngLat: { lng: 2.35, lat: 48.85 },
+    });
+
+    await mapModule.renderMap(MANIFEST_FIXTURE);
+    rightClick();
+    mapModule.dropLookupPin(drop);
+    expect(renderedMap().layerOrder.slice(-2)).toEqual(['lookup-pin-layer', 'dropped-pin-layer']);
+    expect(renderedMap().addLayerCalls.at(-1)).toEqual({ id: 'lookup-pin-layer', beforeId: 'dropped-pin-layer' });
+
+    vi.resetModules();
+    resetMaplibreDouble();
+    mapModule = await import('../src/map');
+    await mapModule.renderMap(MANIFEST_FIXTURE);
+    mapModule.dropLookupPin(drop);
+    rightClick();
+    expect(renderedMap().layerOrder.slice(-2)).toEqual(['lookup-pin-layer', 'dropped-pin-layer']);
   });
 });

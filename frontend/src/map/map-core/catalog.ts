@@ -70,6 +70,13 @@ export function isLayerId(id: string): id is LayerId {
   return isSatTrackLayer(id) || (LAYER_ORDER as readonly string[]).includes(id);
 }
 
+/** Narrow an id read back from the map. Every layer on the map is one the
+ *  app added, so anything else is a programming error worth stopping on. */
+export function asLayerId(id: string): LayerId {
+  if (!isLayerId(id)) throw new Error(`${id} is not in LAYER_ORDER`);
+  return id;
+}
+
 export function satTrackLayerId(key: string): SatTrackLayerId {
   return `${SAT_TRACK_LAYER_PREFIX}${key}`;
 }

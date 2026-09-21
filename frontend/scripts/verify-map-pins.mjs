@@ -26,9 +26,15 @@ const PIN_FILES = [
 const MUTATIONS = [
   {
     contract: 'night overlays stay below the ISS ground track',
+    file: CATALOG,
+    find: "  'viirs-night-lights-layer',\n  'iss-track-layer',",
+    replace: "  'iss-track-layer',\n  'viirs-night-lights-layer',",
+  },
+  {
+    contract: 'a layer added later still paints at its catalog position',
     file: MAP,
-    find: '    }, beforeTrack);\n  }\n  if (!map.getLayer(\'terminator-night-fill-layer\')) {',
-    replace: '    });\n  }\n  if (!map.getLayer(\'terminator-night-fill-layer\')) {',
+    find: '  map.addLayer(spec, beforeIdFor(spec.id, paintedLayerIds(map)));',
+    replace: '  map.addLayer(spec);',
   },
   {
     contract: 'hiding clouds swaps the dark basemap for Esri imagery',
@@ -57,8 +63,8 @@ const MUTATIONS = [
   {
     contract: 'the night lights raster paints at 95% opacity',
     file: MAP,
-    find: "      source: 'viirs-night-lights',\n      layout: { visibility: 'none' },\n      paint: { 'raster-opacity': 0.95 },",
-    replace: "      source: 'viirs-night-lights',\n      layout: { visibility: 'none' },\n      paint: { 'raster-opacity': 0.55 },",
+    find: "    source: 'viirs-night-lights',\n    layout: { visibility: 'none' },\n    paint: { 'raster-opacity': 0.95 },",
+    replace: "    source: 'viirs-night-lights',\n    layout: { visibility: 'none' },\n    paint: { 'raster-opacity': 0.55 },",
   },
   {
     contract: 'the global dim shows only with lights on and the terminator off',

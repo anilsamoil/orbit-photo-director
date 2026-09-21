@@ -5,6 +5,14 @@ import type { Manifest, PassEntry, Track } from './types';
 import type { ForecastCloudsIndex } from './types';
 import { fetchArtifact } from './manifest';
 import { wrapLon } from './geo';
+import {
+  asLayerId,
+  beforeIdFor,
+  satTrackLayerId,
+  satTrackSourceId,
+  type LayerId,
+  type SourceId,
+} from './map/map-core/catalog';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from './pass-filter';
 import { liveIssNow, liveIssPosition } from './iss';
 import { isTleStale } from './banner';
@@ -703,9 +711,6 @@ export function buildStyle(): maplibregl.StyleSpecification {
           'line-opacity': 0.75,
         },
       },
-      // Esri Reference labels layer is added later in renderMap (rather
-      // than here) so it remains the TOPMOST layer above all later overlays
-      // (terminator night-fill, ground track, ISS marker, targets, etc.).
     ],
   };
 }
@@ -1108,70 +1113,68 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // standard track_points 2-orbit polyline; at +N>0 shows a single ±45min
   // window centered on the future time, SGP4-derived.
   refreshGroundTrackSource(track);
-  if (!map.getLayer('iss-track-layer')) {
-    map.addLayer({
-      id: 'iss-track-layer',
-      type: 'line',
-      source: 'iss-track',
-      paint: {
-        // v1.5.4.0 (Chris ask 2026-05-21): each orbit gets a slightly
-        // different color hue layered on top of the illumination signal.
-        // Hue family is determined by illumination state (cyan=day,
-        // magenta=twilight, grey-blue=eclipse); per-orbit sub-shade
-        // shifts the color so the operator can also tell orbits apart
-        // visually (not just by opacity).
-        //
-        // Matrix is 3 illumination × 4 orbit_index = 12 cells. Default
-        // (no illumination property) falls through to cyan day orbit-0
-        // so legacy code paths still render correctly.
-        'line-color': [
-          'match',
-          ['coalesce', ['get', 'illumination'], 'iss-day'],
-          'iss-day', [
-            'match', ['coalesce', ['get', 'orbit_index'], 0],
-            0, '#5cd0ff',  // cyan
-            1, '#5ce0c8',  // cyan-teal
-            2, '#7cd99c',  // soft green
-            3, '#a8d680',  // yellow-green
-            '#5cd0ff',
-          ],
-          'iss-twilight', [
-            'match', ['coalesce', ['get', 'orbit_index'], 0],
-            0, '#d65cff',  // magenta
-            1, '#d680e0',  // soft pink-magenta
-            2, '#cc94c8',  // muted mauve
-            3, '#bca0a8',  // dusty pink
-            '#d65cff',
-          ],
-          'iss-eclipse', [
-            'match', ['coalesce', ['get', 'orbit_index'], 0],
-            0, '#7a8aa8',  // grey-blue
-            1, '#7392ac',  // slightly cooler
-            2, '#6c9aac',  // more teal
-            3, '#65a0a0',  // dusty teal
-            '#7a8aa8',
-          ],
-          '#5cd0ff',  // fallback
+  ensureLayer({
+    id: 'iss-track-layer',
+    type: 'line',
+    source: 'iss-track',
+    paint: {
+      // v1.5.4.0 (Chris ask 2026-05-21): each orbit gets a slightly
+      // different color hue layered on top of the illumination signal.
+      // Hue family is determined by illumination state (cyan=day,
+      // magenta=twilight, grey-blue=eclipse); per-orbit sub-shade
+      // shifts the color so the operator can also tell orbits apart
+      // visually (not just by opacity).
+      //
+      // Matrix is 3 illumination × 4 orbit_index = 12 cells. Default
+      // (no illumination property) falls through to cyan day orbit-0
+      // so legacy code paths still render correctly.
+      'line-color': [
+        'match',
+        ['coalesce', ['get', 'illumination'], 'iss-day'],
+        'iss-day', [
+          'match', ['coalesce', ['get', 'orbit_index'], 0],
+          0, '#5cd0ff',  // cyan
+          1, '#5ce0c8',  // cyan-teal
+          2, '#7cd99c',  // soft green
+          3, '#a8d680',  // yellow-green
+          '#5cd0ff',
         ],
-        'line-width': 2,
-        // v1.5.0.0: data-driven opacity. With multi-orbit OFF every
-        // feature has orbit_index=0 and renders at 0.85 (the prior
-        // single-orbit look). With multi-orbit ON, orbit 0 is solid,
-        // +1/+2/+3 fade out so the operator sees current is dominant
-        // and future orbits are context, not noise.
-        'line-opacity': [
-          'match',
-          ['coalesce', ['get', 'orbit_index'], 0],
-          0, 0.85,
-          1, 0.55,
-          2, 0.35,
-          3, 0.2,
-          0.12,
+        'iss-twilight', [
+          'match', ['coalesce', ['get', 'orbit_index'], 0],
+          0, '#d65cff',  // magenta
+          1, '#d680e0',  // soft pink-magenta
+          2, '#cc94c8',  // muted mauve
+          3, '#bca0a8',  // dusty pink
+          '#d65cff',
         ],
-        'line-dasharray': [2, 1],
-      },
-    });
-  }
+        'iss-eclipse', [
+          'match', ['coalesce', ['get', 'orbit_index'], 0],
+          0, '#7a8aa8',  // grey-blue
+          1, '#7392ac',  // slightly cooler
+          2, '#6c9aac',  // more teal
+          3, '#65a0a0',  // dusty teal
+          '#7a8aa8',
+        ],
+        '#5cd0ff',  // fallback
+      ],
+      'line-width': 2,
+      // v1.5.0.0: data-driven opacity. With multi-orbit OFF every
+      // feature has orbit_index=0 and renders at 0.85 (the prior
+      // single-orbit look). With multi-orbit ON, orbit 0 is solid,
+      // +1/+2/+3 fade out so the operator sees current is dominant
+      // and future orbits are context, not noise.
+      'line-opacity': [
+        'match',
+        ['coalesce', ['get', 'orbit_index'], 0],
+        0, 0.85,
+        1, 0.55,
+        2, 0.35,
+        3, 0.2,
+        0.12,
+      ],
+      'line-dasharray': [2, 1],
+    },
+  });
 
   // "My targets" ring layer (Jack feedback 2026-06-01) — every personal
   // target as a hollow white ring, independent of whether it has a pass.
@@ -1183,43 +1186,39 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // basemap regions (clouds, snow, desert, day-side). Mirrors how the
   // score-dot layer pairs every dot with a dark #0b0d12 stroke. Wider dark
   // stroke under a narrower white one reads as a haloed ring on any
-  // luminance. Added first so it sits beneath the white ring.
-  if (!map.getLayer('my-targets-casing')) {
-    map.addLayer({
-      id: 'my-targets-casing',
-      type: 'circle',
-      source: 'my-targets',
-      layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
-      paint: {
-        'circle-radius': 9,
-        'circle-color': 'rgba(0,0,0,0)',
-        'circle-stroke-color': '#0b0d12',
-        'circle-stroke-width': 4,
-        'circle-stroke-opacity': 0.7,
-      },
-    });
-  }
-  if (!map.getLayer('my-targets-layer')) {
-    map.addLayer({
-      id: 'my-targets-layer',
-      type: 'circle',
-      source: 'my-targets',
-      layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
-      paint: {
-        'circle-radius': 9,
-        'circle-color': 'rgba(0,0,0,0)',  // hollow — stroke-only ring
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 2,
-        'circle-stroke-opacity': 0.95,
-      },
-    });
-  }
+  // luminance.
+  ensureLayer({
+    id: 'my-targets-casing',
+    type: 'circle',
+    source: 'my-targets',
+    layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
+    paint: {
+      'circle-radius': 9,
+      'circle-color': 'rgba(0,0,0,0)',
+      'circle-stroke-color': '#0b0d12',
+      'circle-stroke-width': 4,
+      'circle-stroke-opacity': 0.7,
+    },
+  });
+  ensureLayer({
+    id: 'my-targets-layer',
+    type: 'circle',
+    source: 'my-targets',
+    layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
+    paint: {
+      'circle-radius': 9,
+      'circle-color': 'rgba(0,0,0,0)',  // hollow — stroke-only ring
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 2,
+      'circle-stroke-opacity': 0.95,
+    },
+  });
 
   // Targets layer — features carry closest_approach_ms so the paint
   // expression can dim out-of-window passes per Q3 → C (filter+dim).
   refreshTargetsSource();
   if (!map.getLayer('targets-layer')) {
-    map.addLayer({
+    ensureLayer({
       id: 'targets-layer',
       type: 'circle',
       source: 'targets',
@@ -1341,57 +1340,40 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // Day-night terminator overlay (v1.4.2.0 — Pettit feedback 2026-05-19).
   // v2 (Chris feedback 2026-05-27): added a night-side polygon fill at 55%
   // opacity (was previously line-only, which was visually subtle vs GoISSWatch's
-  // clean dark night-side). The fill goes UNDER the line (added first → bottom
-  // of stack), and the line gains a 40px line-blur halo so the day/night
-  // boundary is a soft gradient rather than a hard edge.
+  // clean dark night-side). The line gains a 40px line-blur halo so the
+  // day/night boundary is a soft gradient rather than a hard edge.
   refreshTerminatorSources();
-  // v3.1 (Anil same-day feedback 2026-05-26): both addLayer calls below pass
-  // `beforeId='iss-track-layer'` so MapLibre inserts these fill/raster layers
-  // BELOW the cyan ISS ground-track polyline. v1.6.18.0 added them without a
-  // beforeId, which stacked the 0.95-opacity Black Marble tile (and the
-  // 0.30-opacity night-fill) ABOVE the track and made the polyline disappear
-  // whenever the 🌃 toggle was on. The track must stay topmost over the
-  // night/day raster + fill layers so the operator can always see where the
-  // ISS is going.
-  const beforeTrack = map.getLayer('iss-track-layer') ? 'iss-track-layer' : undefined;
   // v3.6 (Anil 2026-05-29): global dim for lights-only mode. When night-lights
   // is ON but terminator is OFF, this background fill darkens the whole map
   // so bright pinpoint lights pop. When terminator is ON, the existing
   // terminator-night-fill handles night-side dimming and this layer hides
-  // (otherwise the day side would also be dimmed). Inserted first among the
-  // night-related layers so it sits below terminator-night-fill + the raster.
-  if (!map.getLayer('night-lights-global-dim-layer')) {
-    map.addLayer({
-      id: 'night-lights-global-dim-layer',
-      type: 'background',
-      layout: { visibility: 'none' },
-      paint: {
-        'background-color': '#000000',
-        'background-opacity': 0.30,
-      },
-    }, beforeTrack);
-  }
-  if (!map.getLayer('terminator-night-fill-layer')) {
-    map.addLayer({
-      id: 'terminator-night-fill-layer',
-      type: 'fill',
-      source: 'terminator-night-fill',
-      paint: {
-        'fill-color': '#000000',
-        // v2 hotfix (Anil same-day feedback after v1.6.16.0): opacity
-        // bumped to 0.55 obscured the underlying basemap too aggressively.
-        // Drop to 0.30 — still reads as "night side" at a glance, but
-        // labels, coastlines, and city lights stay legible underneath.
-        // Prior journey: 0.35 (initial) → 0.55 (v2 spec) → 0.30 (this fix).
-        'fill-opacity': 0.30,
-        'fill-antialias': true,
-      },
-    }, beforeTrack);
-  }
+  // (otherwise the day side would also be dimmed).
+  ensureLayer({
+    id: 'night-lights-global-dim-layer',
+    type: 'background',
+    layout: { visibility: 'none' },
+    paint: {
+      'background-color': '#000000',
+      'background-opacity': 0.30,
+    },
+  });
+  ensureLayer({
+    id: 'terminator-night-fill-layer',
+    type: 'fill',
+    source: 'terminator-night-fill',
+    paint: {
+      'fill-color': '#000000',
+      // v2 hotfix (Anil same-day feedback after v1.6.16.0): opacity
+      // bumped to 0.55 obscured the underlying basemap too aggressively.
+      // Drop to 0.30 — still reads as "night side" at a glance, but
+      // labels, coastlines, and city lights stay legible underneath.
+      // Prior journey: 0.35 (initial) → 0.55 (v2 spec) → 0.30 (this fix).
+      'fill-opacity': 0.30,
+      'fill-antialias': true,
+    },
+  });
   // VIIRS Black Marble night-lights overlay (v2 — Chris feedback 2026-05-27).
-  // Added AFTER the night-side dim fill so city lights render on top of (not
-  // under) the dimming, staying visible. Default visibility 'none' — operator
-  // opts in via toggle-night-lights button.
+  // Default visibility 'none' — operator opts in via toggle-night-lights button.
   //
   // Opacity journey:
   //   v2 (1.6.16.0): 0.95 — assumed PNG had alpha so dark areas would be
@@ -1416,68 +1398,60 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   //     background gone, 0.95 opacity paints bright city lights cleanly
   //     without darkening basemap or clouds. Solves the saga that started
   //     in v2.
-  if (!map.getLayer('viirs-night-lights-layer')) {
-    map.addLayer({
-      id: 'viirs-night-lights-layer',
-      type: 'raster',
-      source: 'viirs-night-lights',
-      layout: { visibility: 'none' },
-      paint: { 'raster-opacity': 0.95 },
-    }, beforeTrack);
-  }
-  if (!map.getLayer('terminator-line-layer')) {
-    map.addLayer({
-      id: 'terminator-line-layer',
-      type: 'line',
-      source: 'terminator-line',
-      paint: {
-        'line-color': '#ffd45c',  // warm gold; reads clearly over both
-        'line-width': 1.4,         // dark basemap and bright cloud overlay
-        'line-opacity': 0.7,
-        'line-dasharray': [3, 2],
-        // v2 (Chris 2026-05-27): 40px line-blur softens the day/night
-        // boundary — instead of a hard line between the satellite imagery
-        // and the 55%-opacity night fill, the operator sees a gentle
-        // gradient over ~40 device pixels. Pairs visually with the
-        // terminatorNightPolygonFeatures fill below.
-        'line-blur': 40,
-      },
-    });
-  }
-  if (!map.getLayer('subsolar-point-layer')) {
-    map.addLayer({
-      id: 'subsolar-point-layer',
-      type: 'circle',
-      source: 'subsolar-point',
-      paint: {
-        'circle-radius': 8,
-        'circle-color': '#ffd45c',
-        'circle-stroke-color': '#0b0d12',
-        'circle-stroke-width': 1.5,
-        'circle-opacity': 0.95,
-      },
-    });
-  }
+  ensureLayer({
+    id: 'viirs-night-lights-layer',
+    type: 'raster',
+    source: 'viirs-night-lights',
+    layout: { visibility: 'none' },
+    paint: { 'raster-opacity': 0.95 },
+  });
+  ensureLayer({
+    id: 'terminator-line-layer',
+    type: 'line',
+    source: 'terminator-line',
+    paint: {
+      'line-color': '#ffd45c',  // warm gold; reads clearly over both
+      'line-width': 1.4,         // dark basemap and bright cloud overlay
+      'line-opacity': 0.7,
+      'line-dasharray': [3, 2],
+      // v2 (Chris 2026-05-27): 40px line-blur softens the day/night
+      // boundary — instead of a hard line between the satellite imagery
+      // and the 55%-opacity night fill, the operator sees a gentle
+      // gradient over ~40 device pixels. Pairs visually with the
+      // terminatorNightPolygonFeatures fill below.
+      'line-blur': 40,
+    },
+  });
+  ensureLayer({
+    id: 'subsolar-point-layer',
+    type: 'circle',
+    source: 'subsolar-point',
+    paint: {
+      'circle-radius': 8,
+      'circle-color': '#ffd45c',
+      'circle-stroke-color': '#0b0d12',
+      'circle-stroke-width': 1.5,
+      'circle-opacity': 0.95,
+    },
+  });
   applyTerminatorVisibility();
 
   // Launch candidates share a gold marker/corridor identity. A corridor is
   // supplied only with trajectory provenance; legacy rows retain only a pad.
   refreshAscentTrajectorySource();
-  if (!map.getLayer('ascent-trajectory-layer')) {
-    map.addLayer({
-      id: 'ascent-trajectory-layer',
-      type: 'line',
-      source: 'ascent-trajectory',
-      layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
-      paint: {
-        'line-color': '#ffd45c',
-        'line-width': 3,
-        'line-opacity': 0.9,
-      },
-    });
-  }
+  ensureLayer({
+    id: 'ascent-trajectory-layer',
+    type: 'line',
+    source: 'ascent-trajectory',
+    layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
+    paint: {
+      'line-color': '#ffd45c',
+      'line-width': 3,
+      'line-opacity': 0.9,
+    },
+  });
   if (!map.getLayer('ascent-pad-layer')) {
-    map.addLayer({
+    ensureLayer({
       id: 'ascent-pad-layer',
       type: 'circle',
       source: 'ascent-pad',
@@ -1578,18 +1552,14 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }, 30_000);
   updateTimeStepLabels();
 
-  // Esri Reference labels overlay (v2 — Chris feedback 2026-05-27). Added
-  // at the END of renderMap so it remains TOPMOST above all later overlays
-  // (terminator, ground track, ISS marker, targets, etc.). Default visibility
-  // is governed by labelsVisible preference (default ON), applied below.
-  if (!map.getLayer('esri-labels-reference-layer')) {
-    map.addLayer({
-      id: 'esri-labels-reference-layer',
-      type: 'raster',
-      source: 'esri-labels-reference',
-      paint: { 'raster-opacity': 0.85 },
-    });
-  }
+  // Esri Reference labels overlay (v2 — Chris feedback 2026-05-27). Default
+  // visibility is governed by labelsVisible preference (default ON), applied below.
+  ensureLayer({
+    id: 'esri-labels-reference-layer',
+    type: 'raster',
+    source: 'esri-labels-reference',
+    paint: { 'raster-opacity': 0.85 },
+  });
 
   bindTimeToggle();
   bindTimeSlider();
@@ -2558,23 +2528,13 @@ function refreshForecastCloudLayer(): void {
           tileSize: 256,
           maxzoom: fc.max_zoom,
         });
-        // Same stack slot as the observed clouds: under the coastline
-        // overlay so coastline/track/pins render on top. FAIL CLOSED if
-        // the anchor layer is missing (ship review 2026-06-11): appending
-        // with undefined beforeId would paint a 0.55-opacity raster OVER
-        // the track/pins/labels — the v3.1 stacking bug class.
-        if (!map.getLayer('ne-coastline-layer')) {
-          applyCloudsVisibility();
-          return;
-        }
-        const beforeId = 'ne-coastline-layer';
-        map.addLayer({
+        ensureLayer({
           id: 'fcst-clouds-layer',
           type: 'raster',
           source: 'fcst-clouds',
           layout: { visibility: 'none' },
           paint: { 'raster-opacity': 0.55 }, // matches gibs-clouds-layer
-        }, beforeId);
+        });
         fcstCurrentFrameKey = key;
       } else if (fcstCurrentFrameKey !== key) {
         // Defer frame SWAPS while the finger is on the slider (ship review
@@ -3164,6 +3124,20 @@ function bindBearingToggle(): void {
   bearingToggleBound = true;
 }
 
+type CatalogLayer = maplibregl.LayerSpecification & { id: LayerId; source?: SourceId };
+
+/** Add a layer once, at its catalog position. The catalog decides where it
+ *  paints, so no call site names a beforeId and the stacking is the same
+ *  whatever order the callers run in. */
+function ensureLayer(spec: CatalogLayer): void {
+  if (!map || map.getLayer(spec.id)) return;
+  map.addLayer(spec, beforeIdFor(spec.id, paintedLayerIds(map)));
+}
+
+function paintedLayerIds(m: maplibregl.Map): LayerId[] {
+  return m.getStyle().layers.map((layer) => asLayerId(layer.id));
+}
+
 function upsertGeoJson(
   m: maplibregl.Map,
   id: string,
@@ -3501,7 +3475,7 @@ export function dropLookupPin(result: {
   };
   upsertGeoJson(map, 'lookup-pin', fc);
   if (!map.getLayer('lookup-pin-layer')) {
-    map.addLayer({
+    ensureLayer({
       id: 'lookup-pin-layer',
       type: 'circle',
       source: 'lookup-pin',
@@ -3824,7 +3798,7 @@ function handlePinDrop(lng: number, lat: number): void {
   // style differentiates from target pins (score-colored) and lookup pin
   // (magenta).
   if (!map.getLayer('dropped-pin-layer')) {
-    map.addLayer({
+    ensureLayer({
       id: 'dropped-pin-layer',
       type: 'circle',
       source: 'dropped-pin',
@@ -4235,23 +4209,21 @@ export function buildSatelliteTrackFeatures(
 function refreshSatelliteTracks(): void {
   if (!map) return;
   for (const [key, state] of selectedSatellites.entries()) {
-    const sourceId = `sat-track-${key}`;
-    const layerId = `sat-track-layer-${key}`;
+    const sourceId = satTrackSourceId(key);
+    const layerId = satTrackLayerId(key);
     const features = buildSatelliteTrackFeatures(state.tle);
     upsertGeoJson(map, sourceId, { type: 'FeatureCollection', features });
-    if (!map.getLayer(layerId)) {
-      map.addLayer({
-        id: layerId,
-        type: 'line',
-        source: sourceId,
-        paint: {
-          'line-color': state.meta.track_color,
-          'line-width': 1.6,
-          'line-opacity': 0.7,
-          'line-dasharray': [3, 2],
-        },
-      });
-    }
+    ensureLayer({
+      id: layerId,
+      type: 'line',
+      source: sourceId,
+      paint: {
+        'line-color': state.meta.track_color,
+        'line-width': 1.6,
+        'line-opacity': 0.7,
+        'line-dasharray': [3, 2],
+      },
+    });
   }
 }
 
@@ -4285,8 +4257,8 @@ function removeSatelliteVisuals(key: string): void {
     state.marker.remove();
     state.marker = null;
   }
-  const layerId = `sat-track-layer-${key}`;
-  const sourceId = `sat-track-${key}`;
+  const layerId = satTrackLayerId(key);
+  const sourceId = satTrackSourceId(key);
   try {
     if (map.getLayer(layerId)) map.removeLayer(layerId);
     if (map.getSource(sourceId)) map.removeSource(sourceId);
