@@ -1,6 +1,6 @@
 # Target architecture
 
-The shape the map should have. `ARCHITECTURE_NOW.md` describes what exists; this describes what replaces it and in what order. No code has moved yet.
+The shape the map should have. `ARCHITECTURE_NOW.md` describes what existed at the start; this describes what replaces it and in what order. Slices 0 to 3 have shipped; each slice's record under "Phase 3 slices" says what it actually did.
 
 ## The shape in one paragraph
 
@@ -26,15 +26,16 @@ frontend/src/map/
     catalog.ts              LAYER_ORDER, the id unions, positionOf, beforeIdFor
     view.ts                 View, ViewTime, Overlays, BearingMode, changed()
     feature.ts              MapFeature, RenderContext
-    core.ts                 createMapCore over a VendorMap
+    core.ts                 MapCore, createMapCore over a VendorMap and a Clock
     vendor-map.ts           the VendorMap interface, in domain types only
-    camera.ts               Camera, LngLat, BBox, initialZoomForViewport, mapCameraOptions
+    geometry.ts             LngLat, Point, BBox
+    layer-spec.ts           LayerSpec, SourceSpec, StyleSpec
+    camera.ts               initialZoomForViewport, initialCamera
     prefs.ts                the one localStorage key table
-    clock.ts                the 1 Hz tick, the 30 s label tick, the scrub tiers
+    clock.ts                ViewTime, now, every, throttle
   adapters/maplibre/
-    index.ts                createVendorMap. the only importer of maplibre-gl
+    index.ts                createVendorMap, markers and popups. the only importer of maplibre-gl
     events.ts               MapLibre payloads to Hit, Tap, LngLat
-    overlays.ts             Marker and Popup wrappers to MarkerHandle, PopupHandle
     viirs-alpha.ts          moved from src/viirs-alpha-protocol.ts
   features/
     index.ts                FEATURES, the one registration list
@@ -184,7 +185,11 @@ Two of this slice's planned deletions were wrong and did not happen. `refreshMap
 
 **Slice 2, the adapter directory.** Shipped as one commit. Moved `viirs-alpha-protocol.ts` to `adapters/maplibre/viirs-alpha.ts`, where it imports `maplibre-gl` itself instead of taking the module as a parameter, and dropped its `registered` latch: `map.ts` registers once at module load, and under `vi.resetModules()` both modules reset together, so the latch never had a second call to stop. `_keyAlphaForTest` became `keyAlpha`, because `keyTileBytes` calls it and it was never test-only. The vendor rule now allows the adapter directory plus the legacy module, and a containment rule fails any import of `adapters/` from outside the composition root. The `Map`, `Marker`, `Popup`, `NavigationControl` and `LngLatBounds` constructions stay in `map.ts` until slice 3, because moving them means giving them domain signatures, and a `VendorMap` with no `MapCore` calling it would be dead code in the meantime. `vi.mock('maplibre-gl')` in the contract tests keeps working; the double's `addProtocol` recorder already took the call.
 
-**Slice 3, the facade and the clock.** Add `MapCore` and `clock.ts`. Move the view time, the scrub tiers and the interval latches out of `renderMap`.
+**Slice 3, the facade and the clock.** Shipped as five commits, in two halves. The first half gave the vendor a domain-typed interface: `map-core/vendor-map.ts` (`VendorMap`, with `Hit`, `Tap`, `LayerTap`, `MarkerHandle`, `PopupHandle` and the event maps), `map-core/geometry.ts` (`LngLat`, `Point`, `BBox`), `map-core/layer-spec.ts` (the raster, line, fill, circle and background specs and `StyleSpec`), `map-core/camera.ts` (`initialCamera`), and `adapters/maplibre/index.ts` + `events.ts`, which are the only modules that know MapLibre. Then `map.ts` moved onto it in one wave: every `maplibregl` reference went, `new Map`, `Marker`, `Popup`, `NavigationControl` and `LngLatBounds` constructions became `createVendorMap`, `addMarker`, `openPopup`, and `fitBounds(BBox)`, and `HitFeature` died in favor of `Hit`. `GeoJsonSource.data` widened to `FeatureCollection | string` because `ne-coastline` is a URL.
+
+The second half made the catalog say which sources are raster and which are GeoJSON, so a raster layer over a GeoJSON source and `setGeoJson('gibs-clouds', ...)` no longer typecheck; nothing in `buildStyle` had to change to satisfy it. Then it added the two modules this slice is named for. `map-core/clock.ts` is the one answer to what instant the map renders: a `ViewTime` that is `live` or `scrubbed` with a required `atMs`, `viewMs()`, `now()`, `every()` for a ticker started once and handed the wall clock, and `throttle()`, the leading-plus-trailing gate the slider drag uses. `map-core/core.ts` is `MapCore`, built over a `VendorMap` and a `Clock`: `ensureLayer` places by the catalog, `setVisibility` drops a write to an absent layer, `setGeoJson` creates the source on first write, `removeLayer` and `removeSource` accept only satellite-track ids, and `openPopup` with an `owner` closes the last popup of that owner and forgets it on close. Both are pinned in `map-clock.test.ts` and `map-core.test.ts` against `test/vendor-map-double.ts`, an in-memory `VendorMap` that the feature tests of waves one to three will share.
+
+`map.ts` then moved onto both. It holds one `core` and one `clock` where it held a `vendor` and its own time: `viewTimeMs` and `currentViewMs` became a `ViewTime` and `clock.viewMs`; every `Date.now()` became `clock.now()`, so the two clocks a line could reach for sit on one object; the 1 Hz, 30 s, 60 s and 120 s tickers start once through `clock.every`, which deleted `liveTimer`, `timeLabelTimer`, `_satTrackTickerStarted` and `irTickerStarted` (the last was redundant with `irToggleBound`); the tier-2 throttle became `clock.throttle`, deleting three state variables and two functions; the private `ensureLayer`, `upsertGeoJson`, `trackMapModePopup` and `dismissMapModePopup` went, and eight `if (hasLayer) setVisibility` guards collapsed into the facade. `map.ts` is 4265 lines and 48 module-level `let`s, from 4518 and 55 when the slice began. The scrub tiers themselves (`runScrubTier2` and the drag fast path in `setLookahead`) stay in `map.ts` until the `time-scrub` feature, because they are the list of surfaces to refresh, and that list is what wave three distributes. One delta, not a contract: the 1 Hz and 30 s tickers no longer re-phase when a manifest refresh re-runs `renderMap`. Proven on the built artifact in a real browser: a view scrubbed one minute ahead snapped back to `Now` on its own after 60 s, and a second target tap replaced the first popup instead of stacking.
 
 **Slices 4 and 5, wave one.** `features/pin-drop`, then `features/satellites`.
 
