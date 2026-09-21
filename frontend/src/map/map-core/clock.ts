@@ -32,7 +32,9 @@ export function createClock(now: () => number = () => Date.now()): Clock {
   let view: ViewTime = { kind: 'live' };
   const listeners = new Set<() => void>();
   const notify = (): void => {
-    for (const listener of [...listeners]) listener();
+    for (const listener of [...listeners]) {
+      try { listener(); } catch { /* the next listener still hears the change */ }
+    }
   };
 
   const throttle = (intervalMs: number, run: (nowMs: number) => void): Throttle => {

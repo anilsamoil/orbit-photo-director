@@ -95,6 +95,16 @@ describe('view time listeners', () => {
     clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 60_000 });
     expect(listener).toHaveBeenCalledOnce();
   });
+
+  it('are isolated: one that throws strands neither the listeners after it nor the scrub', () => {
+    const clock = createClock();
+    const after = vi.fn();
+    clock.onViewTime(() => { throw new Error('one bad surface'); });
+    clock.onViewTime(after);
+    expect(() => clock.setViewTime({ kind: 'scrubbed', atMs: T0 + 60_000 })).not.toThrow();
+    expect(after).toHaveBeenCalledOnce();
+    expect(clock.viewMs()).toBe(T0 + 60_000);
+  });
 });
 
 describe('every', () => {
