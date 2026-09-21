@@ -6,7 +6,7 @@
  *  A boundary check that cannot fail is worse than no check, because it
  *  reads like protection. */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, posix, relative, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
@@ -188,6 +188,58 @@ export function prefKeyReferences(sourceText: string): string[] {
   return out;
 }
 
+const FEATURES_DIR = 'map/features/';
+const FEATURE_REGISTRY = 'map/features/index.ts';
+const OVERLAYS_DIR = 'map/overlays/';
+
+/** Where a relative specifier lands, as an extensionless path under src/,
+ *  so `../../map-core/core` from a feature file reads `map/map-core/core`.
+ *  Bare specifiers are packages and resolve to null. */
+function resolveLocal(path: string, specifier: string): string | null {
+  if (!specifier.startsWith('.')) return null;
+  return posix.join(posix.dirname(path), specifier).replace(/\.(ts|js)$/, '');
+}
+
+function featureOf(path: string): string | null {
+  if (!path.startsWith(FEATURES_DIR) || path === FEATURE_REGISTRY) return null;
+  return path.slice(FEATURES_DIR.length).split('/')[0] ?? null;
+}
+
+/** The modules that would make a feature depend on whoever mounts it: the
+ *  registry, the composition root, the legacy module and the app shell. */
+function isMountSide(target: string): boolean {
+  return target === 'map/features' || target === 'map/features/index' || target === 'map' || target === 'map/index' || target === 'main';
+}
+
+/** A feature is one directory. It imports map-core, overlays, its own files
+ *  and domain leaves outside src/map/. Another feature's files would make
+ *  two directories one feature, and the mount side would make the feature
+ *  depend on the thing that depends on it. */
+export function featureImportViolations(path: string, sourceText: string): string[] {
+  const feature = featureOf(path);
+  if (!feature) return [];
+  const own = `${FEATURES_DIR}${feature}`;
+  return importsOf(sourceText)
+    .filter((entry) => {
+      const target = resolveLocal(path, entry.specifier);
+      if (!target || target === own || target.startsWith(`${own}/`)) return false;
+      return target.startsWith(FEATURES_DIR) || isMountSide(target);
+    })
+    .map((entry) => `${path} imports ${entry.specifier}`);
+}
+
+/** An overlay is drawing that features share. One that imports a feature
+ *  has become part of it. */
+export function overlayImportViolations(path: string, sourceText: string): string[] {
+  if (!path.startsWith(OVERLAYS_DIR)) return [];
+  return importsOf(sourceText)
+    .filter((entry) => {
+      const target = resolveLocal(path, entry.specifier);
+      return target !== null && (target.startsWith(FEATURES_DIR) || isMountSide(target));
+    })
+    .map((entry) => `${path} imports ${entry.specifier}`);
+}
+
 function sourceFiles(): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   const walk = (dir: string): void => {
@@ -238,6 +290,16 @@ describe('import boundaries in frontend/src', () => {
 
   it('map-core imports no feature, no adapter, no vendor and not the legacy map module', () => {
     const violations = files.flatMap((file) => mapCoreImportViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+  });
+
+  it('a feature imports nothing from another feature, the registry, the composition root or the app shell', () => {
+    const violations = files.flatMap((file) => featureImportViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+  });
+
+  it('an overlay imports no feature', () => {
+    const violations = files.flatMap((file) => overlayImportViolations(file.path, file.text));
     expect(violations).toEqual([]);
   });
 
@@ -340,6 +402,56 @@ describe('the boundary rules can fail', () => {
   it('lets map-core import domain leaves and its own siblings', () => {
     const text = "import { wrapLon } from '../../geo';\nimport { LAYER_ORDER } from './catalog';";
     expect(mapCoreImportViolations('map/map-core/core.ts', text)).toEqual([]);
+  });
+
+  it('flags a feature reaching another feature, the registry, the composition root, the legacy module or main', () => {
+    const text = [
+      "import { pinFeature } from '../pin-drop/layers';",
+      "import { FEATURES } from '..';",
+      "import { FEATURES } from '../index';",
+      "import { renderMap } from '../../index';",
+      "import { renderMap } from '../../../map';",
+      "import { boot } from '../../../main';",
+    ].join('\n');
+    expect(featureImportViolations('map/features/satellites/index.ts', text)).toEqual([
+      'map/features/satellites/index.ts imports ../pin-drop/layers',
+      'map/features/satellites/index.ts imports ..',
+      'map/features/satellites/index.ts imports ../index',
+      'map/features/satellites/index.ts imports ../../index',
+      'map/features/satellites/index.ts imports ../../../map',
+      'map/features/satellites/index.ts imports ../../../main',
+    ]);
+  });
+
+  it('lets a feature import its own files, map-core, overlays, domain leaves and the test double, and exempts the registry', () => {
+    const text = [
+      "import { trackLayer } from './layers';",
+      "import { satellites } from '.';",
+      "import type { MapCore } from '../../map-core/core';",
+      "import { buildPassList } from '../../overlays/pass-list';",
+      "import { fetchSatelliteTLE } from '../../../satellites';",
+      "import { createVendorDouble } from '../../../../test/vendor-map-double';",
+      "import { describe } from 'vitest';",
+    ].join('\n');
+    expect(featureImportViolations('map/features/satellites/satellites.test.ts', text)).toEqual([]);
+    expect(featureImportViolations('map/features/index.ts', "import { pinDrop } from './pin-drop';")).toEqual([]);
+    expect(featureImportViolations('map/map-core/core.ts', "import { pinDrop } from '../features/pin-drop';")).toEqual([]);
+  });
+
+  it('flags an overlay reaching a feature or the mount side, and lets it import map-core and domain leaves', () => {
+    const text = [
+      "import { pinFeature } from '../features/pin-drop/layers';",
+      "import { FEATURES } from '../features';",
+      "import { renderMap } from '../../map';",
+      "import { wrapLon } from '../../geo';",
+      "import type { LngLat } from '../map-core/geometry';",
+    ].join('\n');
+    expect(overlayImportViolations('map/overlays/track-line.ts', text)).toEqual([
+      'map/overlays/track-line.ts imports ../features/pin-drop/layers',
+      'map/overlays/track-line.ts imports ../features',
+      'map/overlays/track-line.ts imports ../../map',
+    ]);
+    expect(overlayImportViolations('map/features/pin-drop/index.ts', text)).toEqual([]);
   });
 
   it('flags a module-level let or var under src/map/ and allows const', () => {
