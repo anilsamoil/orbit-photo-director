@@ -12,6 +12,7 @@ const MAP = 'src/map.ts';
 const CORE = 'src/map/map-core/core.ts';
 const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
+const PIN_DROP = 'src/map/features/pin-drop/index.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -23,6 +24,7 @@ const PIN_FILES = [
   'test/map-catalog.test.ts',
   'test/map-ir.test.ts',
   'test/map-night-lights.test.ts',
+  'test/map-pin-drop-contract.test.ts',
 ];
 
 const MUTATIONS = [
@@ -85,6 +87,18 @@ const MUTATIONS = [
     file: CATALOG,
     find: "  'iss-track-layer',\n  'my-targets-casing',",
     replace: "  'my-targets-casing',\n  'iss-track-layer',",
+  },
+  {
+    contract: 'the dropped pin lists passes from the wall clock, not the scrubbed view',
+    file: PIN_DROP,
+    find: '      const nowMs = core.clock.now();',
+    replace: '      const nowMs = core.clock.viewMs();',
+  },
+  {
+    contract: 'a finger that drifts more than 8 px is a pan, not a long press',
+    file: PIN_DROP,
+    find: '    if (Math.hypot(finger.x - press.start.x, finger.y - press.start.y) > LONG_PRESS_MOVE_THRESHOLD_PX) release();',
+    replace: '    if (Math.hypot(finger.x - press.start.x, finger.y - press.start.y) > 1000) release();',
   },
 ];
 
