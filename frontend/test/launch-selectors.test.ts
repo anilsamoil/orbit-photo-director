@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { launchCoverageLabel, launchScheduleFresh, queueSlots, selectLaunches } from '../src/launch-selectors';
 import { applyTargetFilter } from '../src/target-filter-pref';
-import { filterPassesByDistance } from '../src/map';
+import { filterPassesByDistance } from '../src/pass-filter';
 import type { PassEntry } from '../src/types';
 import { artifact, interval, iso, launch, NOW, state, supported } from './launch-fixtures';
 

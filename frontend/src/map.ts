@@ -5,6 +5,7 @@ import type { Manifest, PassEntry, Track } from './types';
 import type { ForecastCloudsIndex } from './types';
 import { fetchArtifact } from './manifest';
 import { wrapLon } from './geo';
+import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from './pass-filter';
 import { liveIssNow, liveIssPosition } from './iss';
 import { isTleStale } from './banner';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
@@ -269,12 +270,6 @@ export function rafCoalesce(
  *  opacity. Outside that window the pin dims to 0.3 alpha (Q3 → C). */
 const PASS_WINDOW_HALF_MINUTES = 45;
 
-/** Fallback distance threshold (km) used when no profile is present or
- *  the profile is corrupted. Matches the existing ISS_HORIZON_KM used by
- *  the generator's scoring loop, so the v1 default behavior is unchanged
- *  for first-launchers. */
-const DEFAULT_DISTANCE_THRESHOLD_KM = 1500;
-
 /** Read the active profile's distanceThresholdKm from localStorage. Slot
  *  7 of design rev 2 — the threshold is per-profile, settable from the
  *  Profile tab slider, and filters out long-range passes from the queue,
@@ -299,26 +294,6 @@ function readActiveDistanceThresholdKm(): number {
     /* fallthrough to default */
   }
   return DEFAULT_DISTANCE_THRESHOLD_KM;
-}
-
-/** Apply the distance threshold filter to a passes array. Exported for
- *  the queue/upcoming list builders in main.ts so the entire view stays
- *  consistent (same passes in the queue + upcoming + map). Pure function
- *  — no I/O, takes the threshold as an arg so callers can pass the value
- *  they just read. */
-export function filterPassesByDistance(
-  passes: PassEntry[],
-  thresholdKm: number,
-): PassEntry[] {
-  if (!Number.isFinite(thresholdKm) || thresholdKm <= 0) return passes;
-  return passes.filter((p) => {
-    const d = p.nadir_distance_km;
-    // Defensive: missing / non-finite distance means the generator
-    // couldn't compute it. Don't filter those out — they'll still render
-    // (and the operator will see the missing-distance state on the card).
-    if (typeof d !== 'number' || !Number.isFinite(d)) return true;
-    return d <= thresholdKm;
-  });
 }
 
 /** Re-read the threshold + re-render the targets source. Called from
