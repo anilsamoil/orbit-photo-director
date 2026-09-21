@@ -6,9 +6,7 @@ Defects and stale documentation found while writing `ARCHITECTURE_NOW.md`. None 
 
 **The 1 Hz countdown tick overwrites the offline banner.** `rerenderCountdowns` at `main.ts:643` ends with an unconditional `setBanner(bannerWithLaunchesOverlay(bannerFromManifest(...)))`. It ignores `currentlyOffline` and it ignores the tappable "sign in again" banner that `doRefresh` sets when the Access session has expired. Once a manifest exists, either banner survives for at most one second. Pin the offline banner first, then fix.
 
-**Map pin filtering and queue filtering can disagree for a signed-in crew member.** `readActiveDistanceThresholdKm` at `map.ts:305` resolves the profile with `parseProfileFromURL` only. `main.ts` filters the queue from `currentProfile`, which comes from `resolveAccountProfile`. When those two resolve to different profiles, the map and the queue show different passes for the same operator.
-
-**`applyDistanceFilter` is a silent clone.** `main.ts:427` is line-for-line identical to `filterPassesByDistance` at `map.ts:322`. The comment above it says it delegates to that helper and is tested through it. Neither is true. The clone exists to keep `main.ts` from importing MapLibre, which is a real constraint, so the fix is to move the pure filter out of `map.ts` rather than to add an import.
+**Map pin filtering and queue filtering can disagree for a signed-in crew member.** `readActiveDistanceThresholdKm` in `map.ts` resolves the profile with `parseProfileFromURL` only. `main.ts` filters the queue from `currentProfile`, which comes from `resolveAccountProfile`. When those two resolve to different profiles, the map and the queue show different passes for the same operator. The structural work made this visible rather than fixing it: both callers now share one predicate in `pass-filter.ts`, and each still reads its own threshold. `queueDistanceThresholdKm` in `main.ts` is the other half. Deciding which read is correct is a product call.
 
 **GIBS imagery never advances past the date it was built with.** `buildStyle` bakes `yesterdayIso()` into the `gibs-clouds` tile URL at `map.ts:568`, and no code calls `setTiles` on that source. A tab left open across UTC midnight keeps painting the previous day's composite. The imagery badge is the only signal to the operator.
 
@@ -18,13 +16,11 @@ Defects and stale documentation found while writing `ARCHITECTURE_NOW.md`. None 
 
 ## Dead code
 
-**Two unused imports from `satellites.ts`.** `fetchTLEByCATNR` and `fetchTLEByName` are imported at `map.ts:40` and never called. The satellite picker builds a `SatelliteMeta` and calls `fetchSatelliteTLE` instead. `frontend/tsconfig.json` does not set `noUnusedLocals`, so nothing catches this.
+**Six Earth radius constants carry two different values.** `iss-sgp4.ts`, `pin-drop.ts` and `terminator.ts` use 6378.137, the equatorial radius. `photo-conditions.ts`, `moon.ts` and `beta-angle.ts` use 6371, the mean radius. Distances computed in one module are therefore not comparable with the other, and the 0.11% difference is large enough to move a nadir distance by kilometres near the threshold. Collapsing them would change output numbers, so it cannot ride inside a structural change. Decide which radius each computation should use, then pin the new numbers.
 
 **The forecast cloud layer is gated off.** `FORECAST_CLOUDS_UI = false` at `map.ts:207` disables a full raster path that still has `nearestForecastFrame`, `refreshForecastCloudLayer`, an `addSource` site, an `addLayer` site, and a test file. Decide whether it is a capability or dead weight before moving it.
 
 ## Stale documentation
-
-**`map.ts:3` documents a five-layer stack.** `renderMap` paints 17, and four more arrive on demand: the forecast cloud raster, the lookup pin, the dropped pin, and one per selected satellite. The header predates the Esri basemap, the IR raster, the terminator, the coastline, and the labels layer. An agent that trusts the header will insert a layer in the wrong position. `map-render-contract.test.ts` now holds the real bring-up order, so the header is the only wrong description left.
 
 **`docs/TEST_PLAN.md` describes tests that do not exist.** Line 69 claims Playwright E2E flows. No Playwright dependency exists in `frontend/package.json` or `worker/package.json`. Line 70 claims `make test` emits a coverage report. It does not. Line 67 claims a 90% line and 100% branch gate on `score.py`. CI enforces 85% across `generator/`.
 

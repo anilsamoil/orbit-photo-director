@@ -1,6 +1,8 @@
 # Architecture now
 
-This document describes the SNAP frontend as it exists on this branch, before any structural change. It is a ground-truth brief for a coding agent about to work in `frontend/src`. It records what the code does, where each concern lives, and which patterns make the repo expensive for an agent to change. It proposes no target architecture. Every count in the last section has the command that regenerates it. Defects and stale docs found along the way are listed in `docs/agent/FOLLOWUPS.md` instead of being fixed here.
+This document describes the SNAP frontend as it stood at commit `a89cf2d`, before any structural change. It is a ground-truth brief for a coding agent about to work in `frontend/src`. It records what the code does, where each concern lives, and which patterns make the repo expensive for an agent to change. It proposes no target architecture. Every count in the last section has the command that regenerates it. Defects and stale docs found along the way are listed in `docs/agent/FOLLOWUPS.md` instead of being fixed here.
+
+The line numbers are as of `a89cf2d`. `ARCHITECTURE_TARGET.md` describes the shape replacing this one and the slices that get there; each landed slice moves the code further from this description. Re-derive a count with the command in the last section rather than trusting the number here. This file is retired at the end of the migration, when `FEATURE_MAP.md` and `AGENTS.md` replace it.
 
 ## Overview
 
