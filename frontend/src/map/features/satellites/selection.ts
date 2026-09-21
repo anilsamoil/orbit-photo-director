@@ -1,10 +1,9 @@
 import { CURATED_SATELLITES, metaKey, type SatelliteMeta } from '../../../satellites';
-
-export const SELECTION_KEY = 'opd-selected-satellites';
+import { PREF_KEYS } from '../../map-core/prefs';
 
 export function readSelectedKeys(): string[] {
   try {
-    const raw = localStorage.getItem(SELECTION_KEY);
+    const raw = localStorage.getItem(PREF_KEYS.selectedSatellites);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === 'string') : [];
@@ -15,7 +14,7 @@ export function readSelectedKeys(): string[] {
 
 export function persistSelectedKeys(keys: Iterable<string>): void {
   try {
-    localStorage.setItem(SELECTION_KEY, JSON.stringify([...keys]));
+    localStorage.setItem(PREF_KEYS.selectedSatellites, JSON.stringify([...keys]));
   } catch { /* storage disabled */ }
 }
 

@@ -11,6 +11,8 @@ import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 
+import { PREF_KEYS } from '../src/map/map-core/prefs';
+
 const SRC = resolve(__dirname, '../src');
 
 export type Import = { specifier: string; dynamic: boolean };
@@ -133,6 +135,59 @@ export function escapeHatchViolations(path: string, sourceText: string): string[
   return ESCAPE_HATCHES.filter((hatch) => sourceText.includes(hatch)).map((hatch) => `${path} contains ${hatch}`);
 }
 
+const PREFS = 'map/map-core/prefs.ts';
+const STORAGE_OBJECTS = new Set(['localStorage', 'sessionStorage']);
+const STORAGE_METHODS = new Set(['getItem', 'setItem', 'removeItem']);
+
+function isIdentifierNamed(node: ts.Node, name: string): boolean {
+  return ts.isIdentifier(node) && node.text === name;
+}
+
+function isStorage(node: ts.Expression): boolean {
+  if (ts.isIdentifier(node)) return STORAGE_OBJECTS.has(node.text);
+  return ts.isPropertyAccessExpression(node) && isIdentifierNamed(node.expression, 'window') && STORAGE_OBJECTS.has(node.name.text);
+}
+
+/** Under src/map/ a storage key is a `PREF_KEYS` entry and nothing else, so
+ *  one file lists what the map persists and two features cannot share a key
+ *  by accident. The literal and the call are both flagged, because a key
+ *  can reach a call through a local constant. */
+export function prefKeyViolations(path: string, sourceText: string): string[] {
+  if (!path.startsWith('map/') || path === PREFS) return [];
+  const parsed = ts.createSourceFile('probe.ts', sourceText, ts.ScriptTarget.ES2022, true);
+  const out: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && /^opd[-_]/.test(node.text)) {
+      out.push(`${path} holds the storage key literal '${node.text}'`);
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      isStorage(node.expression.expression) &&
+      STORAGE_METHODS.has(node.expression.name.text)
+    ) {
+      const [key] = node.arguments;
+      const fromTable = key !== undefined && ts.isPropertyAccessExpression(key) && isIdentifierNamed(key.expression, 'PREF_KEYS');
+      if (!fromTable) out.push(`${path} calls ${node.expression.getText()} with a key that is not a PREF_KEYS entry`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  return out;
+}
+
+/** The `PREF_KEYS` entries a file reads. */
+export function prefKeyReferences(sourceText: string): string[] {
+  const parsed = ts.createSourceFile('probe.ts', sourceText, ts.ScriptTarget.ES2022, true);
+  const out: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(node) && isIdentifierNamed(node.expression, 'PREF_KEYS')) out.push(node.name.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  return out;
+}
+
 function sourceFiles(): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   const walk = (dir: string): void => {
@@ -198,6 +253,27 @@ describe('import boundaries in frontend/src', () => {
 
   it('the rules above are running against real files under src/map/', () => {
     expect(files.some((file) => file.path.startsWith('map/map-core/'))).toBe(true);
+  });
+});
+
+describe('the storage key table', () => {
+  const files = sourceFiles();
+  const production = files.filter((file) => file.path.startsWith('map/') && !file.path.endsWith('.test.ts'));
+
+  it('is the only place under src/map/ that names a key, and every storage call reads one from it', () => {
+    const violations = files.flatMap((file) => prefKeyViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+  });
+
+  it('holds distinct opd- keys', () => {
+    const values = Object.values(PREF_KEYS);
+    expect(new Set(values).size).toBe(values.length);
+    for (const value of values) expect(value).toMatch(/^opd-/);
+  });
+
+  it('has no entry that nothing under src/map/ reads', () => {
+    const used = new Set(production.flatMap((file) => prefKeyReferences(file.text)));
+    expect(Object.keys(PREF_KEYS).filter((key) => !used.has(key))).toEqual([]);
   });
 });
 
@@ -284,5 +360,27 @@ describe('the boundary rules can fail', () => {
       'map/map-core/core.ts contains TODO',
     ]);
     expect(escapeHatchViolations('main.ts', text)).toEqual([]);
+  });
+
+  it('flags a storage key literal and an off-table storage call under src/map/, and allows the table and the rest of src/', () => {
+    const text = [
+      "const KEY = 'opd-map-x';",
+      "localStorage.setItem(KEY, '1');",
+      'window.localStorage.getItem(PREF_KEYS.x);',
+      'sessionStorage.removeItem(`opd_y`);',
+      'localStorage.clear();',
+    ].join('\n');
+    expect(prefKeyViolations('map/features/x/index.ts', text)).toEqual([
+      "map/features/x/index.ts holds the storage key literal 'opd-map-x'",
+      'map/features/x/index.ts calls localStorage.setItem with a key that is not a PREF_KEYS entry',
+      'map/features/x/index.ts calls sessionStorage.removeItem with a key that is not a PREF_KEYS entry',
+      "map/features/x/index.ts holds the storage key literal 'opd_y'",
+    ]);
+    expect(prefKeyViolations('map/map-core/prefs.ts', text)).toEqual([]);
+    expect(prefKeyViolations('sort-pref.ts', text)).toEqual([]);
+  });
+
+  it('reads the PREF_KEYS entries a file touches', () => {
+    expect(prefKeyReferences('localStorage.getItem(PREF_KEYS.a); const k = PREF_KEYS.b; other.c;')).toEqual(['a', 'b']);
   });
 });

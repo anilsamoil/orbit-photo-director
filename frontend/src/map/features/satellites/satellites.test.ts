@@ -7,6 +7,7 @@ import type { Track } from '../../../types';
 import { createClock } from '../../map-core/clock';
 import { createMapCore, type MapCore } from '../../map-core/core';
 import type { LngLat } from '../../map-core/geometry';
+import { PREF_KEYS } from '../../map-core/prefs';
 import { satellites } from './index';
 import { orbitTrackFeatures } from './layers';
 
@@ -29,8 +30,6 @@ const NOAA20 = {
   name: 'NOAA 20 (JPSS-1)',
 };
 const TLE_BY_CATNR: Record<number, typeof TIANGONG> = { 48274: TIANGONG, 43013: NOAA20 };
-
-const SELECTION_KEY = 'opd-selected-satellites';
 
 function subPointAt(lines: { line1: string; line2: string }, atMs: number): LngLat {
   const track = {
@@ -85,7 +84,7 @@ function mounted(): { vendor: VendorDouble; core: MapCore } {
 }
 
 async function mountedWith(...keys: string[]): Promise<{ vendor: VendorDouble; core: MapCore }> {
-  localStorage.setItem(SELECTION_KEY, JSON.stringify(keys));
+  localStorage.setItem(PREF_KEYS.selectedSatellites, JSON.stringify(keys));
   const result = mounted();
   await settle();
   return result;
@@ -147,7 +146,7 @@ describe('restoring a selection', () => {
     expect(vi.mocked(fetchSatelliteTLE).mock.calls.map(([meta]) => meta.name)).toEqual(['NORAD 99999', 'Tiangong (CSS)']);
     expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer', 'sat-track-layer-48274']);
     expect(core.view().satellites.map((sat) => sat.name)).toEqual(['Tiangong (CSS)']);
-    expect(localStorage.getItem(SELECTION_KEY)).toBe('["48274"]');
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('["48274"]');
   });
 });
 
@@ -159,14 +158,14 @@ describe('the picker', () => {
     await toggle('Tiangong');
     expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer', 'sat-track-layer-48274']);
     expect(core.view().satellites.map((sat) => sat.label)).toEqual(['Tg']);
-    expect(localStorage.getItem(SELECTION_KEY)).toBe('["48274"]');
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('["48274"]');
 
     await toggle('Tiangong');
     expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer']);
     expect(vendor.sources.has('sat-track-48274')).toBe(false);
     expect(markerFor(vendor, '🇨🇳 Tiangong (CSS)')?.removed).toBe(true);
     expect(core.view().satellites).toEqual([]);
-    expect(localStorage.getItem(SELECTION_KEY)).toBe('[]');
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('[]');
   });
 
   it('typing the NORAD number of a satellite already tracked says so without fetching again', async () => {
