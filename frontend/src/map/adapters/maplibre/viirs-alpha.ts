@@ -1,46 +1,19 @@
-/** VIIRS Black Marble luminance-keying protocol for MapLibre (V4-P3 — Anil
- *  2026-05-29, ends the v2 → v3.1 → v3.3 → v3.4 → v3.5 opacity saga).
- *
- *  The problem: GIBS `VIIRS_Black_Marble` is an 8-bit RGB PNG with NO alpha
- *  channel and an opaque dark navy background (~rgb 4,5,15). At any
- *  non-trivial opacity that dark background darkens the basemap and clouds
- *  everywhere, not just where city lights are. v3.3/v3.4 muted the layer to
- *  0.55 opacity so the wash was tolerable, but that also dimmed the bright
- *  city pixels — the operator (Anil) reported lights are too dim when zoomed
- *  out at 0.55.
- *
- *  The fix (this file): register a `viirs-alpha://` MapLibre protocol that
- *  fetches the upstream PNG, walks pixels in a canvas, computes luminance
- *  (Rec. 601 weighted), and rewrites dark pixels to alpha=0 with a soft
- *  linear ramp at the threshold edge so cluster boundaries don't alias. The
- *  raster now has true alpha — dark areas are transparent — so the night-
- *  lights layer can paint at 0.95 opacity without darkening anything.
- *
- *  Why the canvas dance instead of `raster-color` paint expressions: the
- *  raster-color path requires a single-band `raster-array` source (FLOAT32
- *  GeoTIFF / Zarr / etc.), not the RGB PNGs GIBS publishes. addProtocol is
- *  the cleanest fix that works with the existing tile source. ~50 LoC.
- *
- *  Threshold tuning: the dark navy background is luminance ~8; dim city
- *  lights start around luminance 50+. Threshold 30 cleanly separates them.
- *  The 10-unit linear ramp above 30 soft-keys the edges so light clusters
- *  fade smoothly into transparency rather than producing aliased hard
- *  outlines.
- *
- *  Test environments (happy-dom) have neither OffscreenCanvas nor
- *  HTMLCanvasElement.getContext('2d') with real pixel buffers. The protocol
- *  handler gracefully falls back to passthrough (returns the original PNG
- *  bytes) when canvas APIs are missing — the pure pixel-walk function is
- *  unit-tested directly via `_keyAlphaForTest`.
- */
+/** The `viirs-alpha://` tile protocol. GIBS publishes VIIRS Black Marble as
+ *  an RGB PNG with no alpha and an opaque dark-navy background (~rgb 4,5,15),
+ *  so at any useful opacity the background dims the basemap everywhere. This
+ *  handler fetches the PNG, keys dark pixels to alpha 0 through a canvas, and
+ *  hands MapLibre a tile with true transparency. A `raster-color` paint
+ *  expression cannot do this because it needs a single-band raster-array
+ *  source, not an RGB PNG. Where canvas APIs are missing (happy-dom) the
+ *  handler passes the original bytes through. */
 
-import type maplibregl from 'maplibre-gl';
+import maplibregl from 'maplibre-gl';
 
-import { gibsBlackMarbleUrl } from './tile-precache';
+import { gibsBlackMarbleUrl } from '../../../tile-precache';
 
 /** Pixel luminance below this becomes fully transparent. Dark navy
  *  background is ~8, dim city lights are ~50+, so 30 cleanly separates the
- *  two. Exported for unit testing. */
+ *  two. */
 export const LUMINANCE_THRESHOLD = 30;
 
 /** Soft-key band width above the threshold. Luminance values in
@@ -60,10 +33,8 @@ export function viirsAlphaUrl(yearIso: string): string {
   return `${VIIRS_ALPHA_PROTOCOL}://${gibsBlackMarbleUrl(yearIso)}`;
 }
 
-/** Pure pixel-walk that luminance-keys an RGBA buffer in place. Returns
- *  the same buffer (also mutated) so callers can chain. Exported for unit
- *  testing without needing a canvas context. */
-export function _keyAlphaForTest(pixels: Uint8ClampedArray): Uint8ClampedArray {
+/** Luminance-key an RGBA buffer in place and return it. */
+export function keyAlpha(pixels: Uint8ClampedArray): Uint8ClampedArray {
   for (let i = 0; i < pixels.length; i += 4) {
     // Non-null-assert: the loop bound (i < pixels.length, step 4) guarantees
     // i, i+1, i+2 are in-range. TS's noUncheckedIndexedAccess can't see that.
@@ -123,7 +94,7 @@ async function keyTileBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
 
   ctx.drawImage(bitmap, 0, 0);
   const imageData = ctx.getImageData(0, 0, width, height);
-  _keyAlphaForTest(imageData.data);
+  keyAlpha(imageData.data);
   ctx.putImageData(imageData, 0, 0);
 
   // OffscreenCanvas exposes convertToBlob; HTMLCanvasElement exposes toBlob
@@ -140,15 +111,8 @@ async function keyTileBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
   return await blob.arrayBuffer();
 }
 
-let registered = false;
-
-/** Register the `viirs-alpha://` protocol handler with MapLibre. Idempotent
- *  — calling more than once is a no-op so tests and hot-reload don't double-
- *  register. */
-export function registerViirsAlphaProtocol(mapLibre: typeof maplibregl): void {
-  if (registered) return;
-  registered = true;
-  mapLibre.addProtocol(VIIRS_ALPHA_PROTOCOL, async (params, _abortController) => {
+export function registerViirsAlphaProtocol(): void {
+  maplibregl.addProtocol(VIIRS_ALPHA_PROTOCOL, async (params, _abortController) => {
     // Strip the `viirs-alpha://` prefix to recover the upstream GIBS URL.
     // MapLibre has already substituted {z}/{y}/{x} by this point.
     const upstream = params.url.replace(`${VIIRS_ALPHA_PROTOCOL}://`, '');

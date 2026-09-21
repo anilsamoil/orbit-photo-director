@@ -525,13 +525,9 @@ import {
   yesterdayIso,
   type GeoIRSat,
 } from './tile-precache';
-import { registerViirsAlphaProtocol, viirsAlphaUrl } from './viirs-alpha-protocol';
+import { registerViirsAlphaProtocol, viirsAlphaUrl } from './map/adapters/maplibre/viirs-alpha';
 
-// Register the viirs-alpha:// MapLibre protocol once at module load. The
-// handler luminance-keys VIIRS Black Marble tiles so dark areas become
-// transparent (v3.5 — ends the opacity-tuning saga; see
-// frontend/src/viirs-alpha-protocol.ts for the full why). Idempotent.
-registerViirsAlphaProtocol(maplibregl);
+registerViirsAlphaProtocol();
 
 export function buildStyle(): maplibregl.StyleSpecification {
   const dateIso = yesterdayIso();

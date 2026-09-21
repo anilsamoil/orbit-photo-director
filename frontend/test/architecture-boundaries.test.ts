@@ -45,15 +45,32 @@ function isVendor(specifier: string): boolean {
   return specifier === 'maplibre-gl' || specifier.startsWith('maplibre-gl/');
 }
 
-/** The only modules allowed to name `maplibre-gl`. Everything else reaches
- *  the map through the module's exports, which is what keeps the 800 KB
- *  vendor chunk reachable from exactly one place. */
-const VENDOR_IMPORTERS = ['map.ts', 'viirs-alpha-protocol.ts'];
+const ADAPTER_DIR = 'map/adapters/maplibre/';
+const LEGACY_MAP = 'map.ts';
+const COMPOSITION_ROOT = 'map/index.ts';
+
+/** Only the adapter names `maplibre-gl`, plus the legacy module until it is
+ *  gone. Everything else reaches the map through domain types, which is what
+ *  keeps the 800 KB vendor chunk reachable from exactly one place. */
+function mayImportVendor(path: string): boolean {
+  return path === LEGACY_MAP || path.startsWith(ADAPTER_DIR);
+}
 
 export function vendorImportViolations(path: string, sourceText: string): string[] {
-  if (VENDOR_IMPORTERS.includes(path)) return [];
+  if (mayImportVendor(path)) return [];
   return importsOf(sourceText)
     .filter((entry) => isVendor(entry.specifier))
+    .map((entry) => `${path} imports ${entry.specifier}`);
+}
+
+/** An adapter is wired in once, by the composition root. A feature or
+ *  map-core module that imports one has reached past the facade to the
+ *  vendor, and the legacy module is the composition root until it is
+ *  deleted. */
+export function adapterImportViolations(path: string, sourceText: string): string[] {
+  if (path === LEGACY_MAP || path === COMPOSITION_ROOT || path.startsWith(ADAPTER_DIR)) return [];
+  return importsOf(sourceText)
+    .filter((entry) => /(^|\/)adapters\//.test(entry.specifier))
     .map((entry) => `${path} imports ${entry.specifier}`);
 }
 
@@ -136,14 +153,20 @@ describe('import boundaries in frontend/src', () => {
     expect(files.length).toBeGreaterThan(50);
   });
 
-  it('only the map and the tile protocol name maplibre-gl', () => {
+  it('only the adapter and the legacy map module name maplibre-gl', () => {
     const violations = files.flatMap((file) => vendorImportViolations(file.path, file.text));
     expect(violations).toEqual([]);
   });
 
-  it('every allowed vendor importer still exists', () => {
-    const present = files.map((file) => file.path);
-    for (const allowed of VENDOR_IMPORTERS) expect(present).toContain(allowed);
+  it('the adapter directory exists and does name the vendor', () => {
+    const adapter = files.filter((file) => file.path.startsWith(ADAPTER_DIR));
+    expect(adapter.length).toBeGreaterThan(0);
+    expect(adapter.some((file) => importsOf(file.text).some((entry) => isVendor(entry.specifier)))).toBe(true);
+  });
+
+  it('adapters are imported only by the composition root', () => {
+    const violations = files.flatMap((file) => adapterImportViolations(file.path, file.text));
+    expect(violations).toEqual([]);
   });
 
   it('nothing statically imports the map entry', () => {
@@ -197,8 +220,19 @@ describe('the boundary rules can fail', () => {
     ]);
   });
 
-  it('allows the vendor import from the modules on the list', () => {
+  it('allows the vendor import from the adapter and the legacy module', () => {
     expect(vendorImportViolations('map.ts', "import maplibregl from 'maplibre-gl';")).toEqual([]);
+    expect(vendorImportViolations('map/adapters/maplibre/index.ts', "import maplibregl from 'maplibre-gl';")).toEqual([]);
+  });
+
+  it('flags an adapter import from a feature or map-core and allows it from the root', () => {
+    const text = "import { createVendorMap } from '../../adapters/maplibre';";
+    expect(adapterImportViolations('map/features/pin-drop/index.ts', text)).toEqual([
+      'map/features/pin-drop/index.ts imports ../../adapters/maplibre',
+    ]);
+    expect(adapterImportViolations('map/index.ts', "import { createVendorMap } from './adapters/maplibre';")).toEqual([]);
+    expect(adapterImportViolations('map.ts', "import { x } from './map/adapters/maplibre/viirs-alpha';")).toEqual([]);
+    expect(adapterImportViolations('map/adapters/maplibre/index.ts', "import { x } from './viirs-alpha';")).toEqual([]);
   });
 
   it('flags a static import of the map entry', () => {
