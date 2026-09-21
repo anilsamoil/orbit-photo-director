@@ -36,31 +36,24 @@ export function viirsAlphaUrl(yearIso: string): string {
 /** Luminance-key an RGBA buffer in place and return it. */
 export function keyAlpha(pixels: Uint8ClampedArray): Uint8ClampedArray {
   for (let i = 0; i < pixels.length; i += 4) {
-    // Non-null-assert: the loop bound (i < pixels.length, step 4) guarantees
-    // i, i+1, i+2 are in-range. TS's noUncheckedIndexedAccess can't see that.
-    const r = pixels[i]!;
-    const g = pixels[i + 1]!;
-    const b = pixels[i + 2]!;
-    // Rec. 601 luma — matches the perceptual weighting of human vision and
-    // is the standard for "is this pixel bright?" decisions in image work.
-    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+    const luminance = rec601Luma(pixels[i]!, pixels[i + 1]!, pixels[i + 2]!);
     if (luminance < LUMINANCE_THRESHOLD) {
       pixels[i + 3] = 0;
     } else if (luminance < LUMINANCE_THRESHOLD + LUMINANCE_RAMP) {
-      // Linear ramp: luminance threshold → 0, threshold+ramp → 255.
       const t = (luminance - LUMINANCE_THRESHOLD) / LUMINANCE_RAMP;
       pixels[i + 3] = Math.round(t * 255);
     }
-    // else: leave alpha at 255 (bright pixel, full opacity).
   }
   return pixels;
 }
 
-/** Internal: decode → key → encode. Returns null when canvas APIs are
- *  unavailable (happy-dom in tests), signaling the caller to passthrough. */
+function rec601Luma(r: number, g: number, b: number): number {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/** Decode, key, encode. Null when the canvas APIs are missing (happy-dom),
+ *  which tells the caller to pass the original bytes through. */
 async function keyTileBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
-  // createImageBitmap is the cheapest decode path. Both browsers and Node
-  // 20+ support it; happy-dom does not.
   if (typeof createImageBitmap !== 'function') return null;
   let bitmap: ImageBitmap;
   try {
@@ -72,8 +65,6 @@ async function keyTileBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
   const width = bitmap.width;
   const height = bitmap.height;
 
-  // Prefer OffscreenCanvas (works off the main thread, no DOM); fall back
-  // to HTMLCanvasElement when only the latter is available.
   let canvas: OffscreenCanvas | HTMLCanvasElement;
   if (typeof OffscreenCanvas === 'function') {
     canvas = new OffscreenCanvas(width, height);
@@ -97,8 +88,6 @@ async function keyTileBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
   keyAlpha(imageData.data);
   ctx.putImageData(imageData, 0, 0);
 
-  // OffscreenCanvas exposes convertToBlob; HTMLCanvasElement exposes toBlob
-  // (callback-based — wrap in a promise).
   let blob: Blob | null;
   if ('convertToBlob' in canvas) {
     blob = await canvas.convertToBlob({ type: 'image/png' });
@@ -113,8 +102,6 @@ async function keyTileBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
 
 export function registerViirsAlphaProtocol(): void {
   maplibregl.addProtocol(VIIRS_ALPHA_PROTOCOL, async (params, _abortController) => {
-    // Strip the `viirs-alpha://` prefix to recover the upstream GIBS URL.
-    // MapLibre has already substituted {z}/{y}/{x} by this point.
     const upstream = params.url.replace(`${VIIRS_ALPHA_PROTOCOL}://`, '');
     const response = await fetch(upstream);
     if (!response.ok) {

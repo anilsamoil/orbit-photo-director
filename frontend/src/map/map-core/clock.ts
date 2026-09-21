@@ -33,7 +33,9 @@ export function createClock(now: () => number = () => Date.now()): Clock {
   const listeners = new Set<() => void>();
   const notify = (): void => {
     for (const listener of [...listeners]) {
-      try { listener(); } catch { /* the next listener still hears the change */ }
+      try {
+        listener();
+      } catch {}
     }
   };
 

@@ -15,7 +15,7 @@ export function readSelectedKeys(): string[] {
 export function persistSelectedKeys(keys: Iterable<string>): void {
   try {
     localStorage.setItem(PREF_KEYS.selectedSatellites, JSON.stringify([...keys]));
-  } catch { /* storage disabled */ }
+  } catch {}
 }
 
 export function noradMeta(catnr: number): SatelliteMeta {

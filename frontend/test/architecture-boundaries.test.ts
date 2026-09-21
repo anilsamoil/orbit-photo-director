@@ -282,6 +282,39 @@ export function wallClockViolations(path: string, sourceText: string): string[] 
   return out;
 }
 
+function isDocComment(sourceText: string, range: ts.CommentRange): boolean {
+  return range.kind === ts.SyntaxKind.MultiLineCommentTrivia && sourceText.startsWith('/**', range.pos) && range.end - range.pos > 4;
+}
+
+/** Under src/map/ the one comment form is the doc comment, which states
+ *  the contract of the declaration below it and shows on hover. A line
+ *  comment or a plain block comment narrates code; the legacy module shows
+ *  where that ends, with 28% of its lines comments and most of them stale.
+ *  Every token's leading and trailing trivia is read through the parser, so
+ *  a `//` inside a string or a regex is not a comment. */
+export function commentViolations(path: string, sourceText: string): string[] {
+  if (!path.startsWith('map/')) return [];
+  const parsed = ts.createSourceFile('probe.ts', sourceText, ts.ScriptTarget.ES2022, true);
+  const ranges = new Map<number, ts.CommentRange>();
+  const collect = (found: ts.CommentRange[] | undefined): void => {
+    for (const range of found ?? []) ranges.set(range.pos, range);
+  };
+  const visit = (node: ts.Node): void => {
+    collect(ts.getLeadingCommentRanges(sourceText, node.getFullStart()));
+    collect(ts.getTrailingCommentRanges(sourceText, node.getEnd()));
+    for (const child of node.getChildren(parsed)) visit(child);
+  };
+  visit(parsed);
+  return [...ranges.values()]
+    .sort((a, b) => a.pos - b.pos)
+    .filter((range) => !isDocComment(sourceText, range))
+    .map((range) => {
+      const line = parsed.getLineAndCharacterOfPosition(range.pos).line + 1;
+      const form = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? 'a line comment' : 'a block comment that is not a doc comment';
+      return `${path}:${line} has ${form}`;
+    });
+}
+
 function isMapFeature(value: unknown): value is { id: string; mount: (core: unknown) => void } {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -366,6 +399,11 @@ describe('import boundaries in frontend/src', () => {
     expect(violations).toEqual([]);
     const clock = files.find((file) => file.path === CLOCK);
     expect(clock?.text).toContain('Date.now()');
+  });
+
+  it('nothing under src/map/ carries a comment that is not a doc comment', () => {
+    const violations = files.flatMap((file) => commentViolations(file.path, file.text));
+    expect(violations).toEqual([]);
   });
 
   it('the rules above are running against real files under src/map/', () => {
@@ -598,6 +636,30 @@ describe('the boundary rules can fail', () => {
     ]);
     expect(wallClockViolations('map/map-core/clock.ts', text)).toEqual([]);
     expect(wallClockViolations('countdown.ts', text)).toEqual([]);
+  });
+
+  it('flags line and plain block comments under src/map/, allows doc comments, reads through strings and regexes', () => {
+    const text = [
+      '/** The contract. */',
+      'export const a = 1; // trailing',
+      '// leading',
+      'const b = /* inline */ 2;',
+      'function f() {',
+      '  return b;',
+      '  // dangling before the brace',
+      '}',
+      "const url = 'https://x.test/a//b';",
+      'const re = /\\/\\//;',
+      '/**/',
+    ].join('\n');
+    expect(commentViolations('map/features/x/index.ts', text)).toEqual([
+      'map/features/x/index.ts:2 has a line comment',
+      'map/features/x/index.ts:3 has a line comment',
+      'map/features/x/index.ts:4 has a block comment that is not a doc comment',
+      'map/features/x/index.ts:7 has a line comment',
+      'map/features/x/index.ts:11 has a block comment that is not a doc comment',
+    ]);
+    expect(commentViolations('main.ts', text)).toEqual([]);
   });
 
   it('flags an unregistered directory, a registered id with no directory, and a repeated id', () => {

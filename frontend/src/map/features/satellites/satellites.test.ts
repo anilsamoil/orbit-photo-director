@@ -18,7 +18,8 @@ vi.mock('../../../satellites', async (importActual) => ({
 
 const NOW = Date.parse('2026-05-04T12:10:00Z');
 
-// Epoch 26124.5 = 2026-05-04T12:00Z, ten minutes before the test clock.
+/** Both TLEs carry epoch 26124.5, 2026-05-04T12:00Z, ten minutes before
+ *  the test clock. */
 const TIANGONG = {
   line1: '1 48274U 21035A   26124.50000000  .00010000  00000-0  20000-3 0  9990',
   line2: '2 48274  41.4700  10.0000 0005000  86.0000 274.1000 15.60000000123456',
