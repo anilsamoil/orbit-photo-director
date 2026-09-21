@@ -34,6 +34,8 @@ export class RecordingMap {
   readonly cameraCalls: { method: string; args: unknown[] }[] = [];
   readonly canvas = document.createElement('canvas');
   readonly canvasContainer = document.createElement('div');
+  /** Where the camera sits. Set it, then `fire('moveend')`, to model a pan. */
+  center = { lng: 0, lat: 0 };
   private visibility = new Map<string, string>();
   private loadHandlers: Handler[] = [];
 
@@ -70,6 +72,14 @@ export class RecordingMap {
 
   getSource(id: string): SourceDouble | undefined {
     return this.sources.get(id);
+  }
+
+  /** Every tile-URL list a raster source was re-pointed at, oldest first.
+   *  Empty means the source still serves its style-time tiles, which for a
+   *  hidden layer is the "zero tiles fetched" observation. */
+  tilesSetOn(id: string): string[][] {
+    const source = this.sources.get(id);
+    return source ? vi.mocked(source.setTiles).mock.calls.map(([tiles]) => tiles) : [];
   }
 
   addLayer(spec: LayerSpec, beforeId?: string): void {
@@ -145,7 +155,7 @@ export class RecordingMap {
   }
 
   getCenter(): { lng: number; lat: number } {
-    return { lng: 0, lat: 0 };
+    return this.center;
   }
 
   getZoom(): number {

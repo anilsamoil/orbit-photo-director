@@ -19,6 +19,8 @@ const PIN_FILES = [
   'test/map-basemap.test.ts',
   'test/map-overlay-prefs.test.ts',
   'test/map-catalog.test.ts',
+  'test/map-ir.test.ts',
+  'test/map-night-lights.test.ts',
 ];
 
 const MUTATIONS = [
@@ -51,6 +53,24 @@ const MUTATIONS = [
     file: MAP,
     find: '    const v = localStorage.getItem(LABELS_PREF_KEY);\n    return v === null ? true : v === \'1\';',
     replace: '    const v = localStorage.getItem(LABELS_PREF_KEY);\n    return v === \'1\';',
+  },
+  {
+    contract: 'the night lights raster paints at 95% opacity',
+    file: MAP,
+    find: "      source: 'viirs-night-lights',\n      layout: { visibility: 'none' },\n      paint: { 'raster-opacity': 0.95 },",
+    replace: "      source: 'viirs-night-lights',\n      layout: { visibility: 'none' },\n      paint: { 'raster-opacity': 0.55 },",
+  },
+  {
+    contract: 'the global dim shows only with lights on and the terminator off',
+    file: MAP,
+    find: '  const dimVisible = nightLightsVisible && !terminatorVisible;',
+    replace: '  const dimVisible = nightLightsVisible;',
+  },
+  {
+    contract: 'the IR raster ships hidden so no tile is fetched until the operator asks',
+    file: MAP,
+    find: "        source: 'geo-ir',\n        layout: { visibility: 'none' },\n        paint: { 'raster-opacity': 0.82 },",
+    replace: "        source: 'geo-ir',\n        layout: { visibility: 'visible' },\n        paint: { 'raster-opacity': 0.82 },",
   },
   {
     contract: 'the catalog order is the order renderMap paints',
