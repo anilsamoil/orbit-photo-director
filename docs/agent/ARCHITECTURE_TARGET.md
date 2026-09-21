@@ -6,7 +6,7 @@ The shape the map should have. `ARCHITECTURE_NOW.md` describes what exists; this
 
 **Catalog-ordered features.** One ordered tuple of layer ids is the paint order, and it lives in `map-core/catalog.ts`. A feature is one directory that declares its sources, its layers, its control and its reactions, and it never says where its layers paint, because the catalog already decided. When a feature adds a layer, `map-core` computes the `beforeId` by walking the catalog for the nearest successor already on the map, so the stacking is the same whatever order features mount in. Everything the map shows is one immutable `View` record. The only thing a feature may call is a typed facade with no MapLibre type in any signature. `map-core` never imports a feature; the composition root hands it the list.
 
-That last sentence is the whole design. Today paint order is a side effect of the call sequence inside a 606-line `renderMap`, and the comment at `map.ts:1626` claims the labels layer is topmost while four layers land above it. Making order a value a test reads, rather than a sequence a test observes, is what lets code move at all.
+That last sentence is the whole design. Today paint order is a side effect of the call sequence inside a 606-line `renderMap`, and the comment above the labels layer claims it "remains TOPMOST above all later overlays" while the lookup pin, the dropped pin and every satellite track land above it. Making order a value a test reads, rather than a sequence a test observes, is what lets code move at all.
 
 ## Nouns
 
@@ -64,6 +64,7 @@ export const LAYER_ORDER = [
   'carto-dark-layer',
   'gibs-clouds-layer',
   'geo-ir-layer',
+  'fcst-clouds-layer',
   'ne-coastline-layer',
   'night-lights-global-dim-layer',
   'terminator-night-fill-layer',
@@ -85,7 +86,7 @@ export const LAYER_ORDER = [
 export type LayerId = (typeof LAYER_ORDER)[number] | SatTrackLayerId;
 ```
 
-The first seventeen entries are exactly the array `map-render-contract.test.ts` already asserts. The last three are the on-demand layers that `map-interaction-contract.test.ts` and the satellite picker add.
+Strip `fcst-clouds-layer` and the last three entries and what remains is exactly the seventeen-string array `map-render-contract.test.ts` already asserts. The four extras are the on-demand layers. `fcst-clouds-layer` sits where its `beforeId: 'ne-coastline-layer'` puts it today. The other three append with no `beforeId`, so their relative order is whichever capability the operator reaches first, and the catalog is what makes it deterministic.
 
 `View` is one immutable record of everything the map shows: the time (live or scrubbed, with `atMs` required when scrubbed so a half-set scrub cannot be constructed), the overlay flags, follow, bearing mode, launch mode, the current data, the active profile and the selected satellites. Features read it, and only the facade writes it.
 
@@ -116,7 +117,7 @@ A layer id that is not in `LAYER_ORDER` is not assignable, so a layer cannot exi
 
 `MapCore` is what a feature is allowed to call. It groups into state writers (`setViewTime`, `setOverlay`, `setBearingMode`, `setFollow`, `setLaunchMode`, `setSatellites`), the layer and source runtime (`ensureLayer`, `setVisibility`, `setGeoJson`, `setRasterTiles`), overlays (`addMarker`, `openPopup`, `closePopups`), input (`onTap`, `onLayerTap`, `queryAt`, `onLongPress`, `onSourceError`), camera (`camera`, `setCenter`, `setBearing`, `easeTo`, `flyTo`, `fitBounds`) and time (`every`, `now`).
 
-What each group hides is the test of whether it earns its place. `ensureLayer` hides the `beforeId` computation, the 27 `getLayer` existence guards in `map.ts`, and the style-not-loaded `try` blocks. `setGeoJson` hides today's `upsertGeoJson` add-or-`setData` branch. `openPopup` hides the popup tracking that `trackMapModePopup` does and the `setDOMContent`-not-`setHTML` rule that keeps a user-supplied target name from executing. `every` hides the interval latches (`liveTimer`, `timeLabelTimer`, `irTickerStarted`, `_satTrackTickerStarted`) and makes the tick take `nowMs` so a feature cannot reach for `Date.now()` and silently ignore the scrub. `queryAt` hides the seven-pixel tap box and the layer-priority order.
+What each group hides is the test of whether it earns its place. `ensureLayer` hides the `beforeId` computation, the 31 `getLayer` existence guards in `map.ts`, and the style-not-loaded `try` blocks. `setGeoJson` hides today's `upsertGeoJson` add-or-`setData` branch. `openPopup` hides the popup tracking that `trackMapModePopup` does and the `setDOMContent`-not-`setHTML` rule that keeps a user-supplied target name from executing. `every` hides the interval latches (`liveTimer`, `timeLabelTimer`, `irTickerStarted`, `_satTrackTickerStarted`) and makes the tick take `nowMs` so a feature cannot reach for `Date.now()` and silently ignore the scrub. `queryAt` hides the seven-pixel tap box and the layer-priority order.
 
 There is deliberately no `setStyle`, no `getLayer`, no `addLayer(spec, beforeId)` and no `removeLayer` for anything but satellite tracks, which are the only layers the app ever removes.
 
@@ -161,7 +162,7 @@ It rejects: `maplibre-gl` imported outside `adapters/`; `map-core/` importing `f
 
 The candidates disagreed about scope, and the disagreement is worth recording because it is the main risk in this plan.
 
-The case against full feature folders is that the overlays are not independent. `basemapVisibility` decides four layer visibilities from one state, so clouds and IR are one decision, not two features. Three night layers are inserted with `beforeId: 'iss-track-layer'`, so they know about the ground track. `applyMapLaunchVisibility` writes `targets-layer` and `my-targets-layer`, so launch knows about targets. Folders around coupled code are pass-throughs, and the churn is real: all 4604 lines redistributed, roughly 40 files touched, and every map pin in play.
+The case against full feature folders is that the overlays are not independent. `basemapVisibility` decides four layer visibilities from one state, so clouds and IR are one decision, not two features. Three night layers are inserted with `beforeId: 'iss-track-layer'`, so they know about the ground track. `applyMapLaunchVisibility` writes `targets-layer` and `my-targets-layer`, so launch knows about targets. Folders around coupled code are pass-throughs, and the churn is real: all 4550 lines redistributed, roughly 40 files touched, and every map pin in play.
 
 Two of those three couplings dissolve under this design rather than moving. `beforeIdFor` means no feature ever writes `beforeId: 'iss-track-layer'`; the catalog does. Launch mode becomes a `tool` flag on `View`, and each feature derives its own visibility from `view.launchMode` instead of one function reaching across three layers. The one that does not dissolve is `basemapVisibility`, and the answer there is that it is one feature, `features/basemap`, owning all four layers, not four features sharing a helper.
 
@@ -201,15 +202,15 @@ Camera as app state. Center and zoom stay inside MapLibre and nothing serializes
 
 A UI framework. Dock buttons stay in `index.html` and a new feature pays a one-line HTML edit, which the registry rule catches when it is forgotten.
 
-The comment ban costs real history. `map.ts` carries 1322 comment lines, many of them decision records naming an operator and a date. Those become test names where a test can carry them, and entries in a decisions log where one cannot. Deleting them without that step would lose information the team paid for.
+The comment ban costs real history. `map.ts` carries 1293 comment lines, many of them decision records naming an operator and a date. Those become test names where a test can carry them, and entries in a decisions log where one cannot. Deleting them without that step would lose information the team paid for.
 
 One deliberate non-deletion. Candidate A proposed deleting the whole forecast cloud path in slice 0, on the grounds that `FORECAST_CLOUDS_UI` is `false` and the generator flag is off. That removes 15 tests and halves the `basemapVisibility` truth table from 16 rows to 8, which is tempting. It is still a product call about a complete capability, not a structural one, and `FOLLOWUPS.md` already asks it. It stays until someone answers. The cost of keeping it is that the basemap arbiter carries the forecast branch through the whole migration.
 
 ## Reader-load delta
 
-Today, "where does paint order come from" has three answers and one of them is wrong: the call sequence in `renderMap` at `map.ts:1079`, the header comment at `map.ts:3` that says five layers, and the comment at `map.ts:1626` that calls labels topmost. After, there is one tuple, walked by one function, asserted as a literal by a test that exists today.
+Today, "where does paint order come from" has two answers and one of them is wrong: the call sequence inside `renderMap`, and the comment above the labels layer that calls it topmost. A third, the five-layer header, is already deleted. After, there is one tuple, walked by one function, asserted as a literal by a test that exists today.
 
-Today, "what can change the clouds" is nine names in one 4604-line file: `cloudsVisible`, `irVisible`, `forecastFrameActive`, `esriTilesFailed`, `bindCloudToggle`, `bindIrToggle`, the error handler, `refreshForecastCloudLayer` and `basemapVisibility`. After, it is `core.setOverlay('basemap', next)`, one writer into one `View`.
+Today, "what can change the clouds" is nine names in one 4550-line file: `cloudsVisible`, `irVisible`, `forecastFrameActive`, `esriTilesFailed`, `bindCloudToggle`, `bindIrToggle`, the error handler, `refreshForecastCloudLayer` and `basemapVisibility`. After, it is `core.setOverlay('basemap', next)`, one writer into one `View`.
 
 Today, "how do I add an overlay" has no answer, because no example keeps the change in one place. After, it is copy a directory, add one catalog row and one registry line.
 
