@@ -1,15 +1,3 @@
-/** Map view: dark basemap + GIBS true-color cloud overlay + ground track + targets + live ISS dot.
- *
- *  Layer stack (bottom → top):
- *    1. Carto dark basemap (continents, ocean, country outlines)
- *    2. GIBS true-color daily imagery — visible clouds baked into the satellite image
- *    3. ISS ground track polyline (polynomial-fit, ~1h ahead)
- *    4. Target points (colored by score)
- *    5. Live ISS marker (updates every 1s from polynomial)
- *
- *  Lazy-loaded: heavy MapLibre import only fires when the user toggles to map view.
- */
-
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -32,8 +20,6 @@ import {
 import {
   CURATED_SATELLITES,
   fetchSatelliteTLE,
-  fetchTLEByCATNR,
-  fetchTLEByName,
   metaKey,
   type SatelliteMeta,
   type TLEPair,
@@ -533,7 +519,6 @@ export function _resetMapStateForTest(): void {
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(IR_PREF_KEY); } catch { /* noop */ }
-  _resetViirsFallbackForTest();
   _resetScrubTierStateForTest();
 }
 
@@ -2765,15 +2750,6 @@ function applyNightLightsVisibility(): void {
   applyGlobalDimVisibility();
 }
 
-/** Test-only: no-op stub kept for source compatibility with the prior
- *  year-fallback machinery (removed in the v2 hotfix). Other test files
- *  may still import this; keep the symbol so they don't break.
- *  TODO: remove once no test imports it. */
-export function _resetViirsFallbackForTest(): void {
-  // Year-fallback removed: GIBS publishes VIIRS_Black_Marble for only
-  // 2012-01-01 + 2016-01-01. We hardcode 2016 — nothing to reset.
-}
-
 /** Arm a minimal error listener for the VIIRS night-lights source. With
  *  the year-fallback gone (v2 hotfix — 2016-01-01 is hardcoded), there's
  *  no walk-back logic; if the canonical date fails it means GIBS itself
@@ -4037,12 +4013,6 @@ export function buildPinDropPopup(
   body.appendChild(footer);
 
   return body;
-}
-
-function formatUtc(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
 }
 
 /** Coordinate-derived default target name, e.g. "42.4°N 71.1°W" — editable

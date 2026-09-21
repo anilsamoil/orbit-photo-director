@@ -72,7 +72,7 @@ describe('subscribeProfileChanged', () => {
 
   it('coalesces multiple rapid events within the 150ms debounce window', () => {
     const handler = vi.fn();
-    const unsubscribe = subscribeProfileChanged(handler);
+    subscribeProfileChanged(handler);
 
     // First event fires immediately (leading edge).
     window.dispatchEvent(new CustomEvent('profile-changed'));

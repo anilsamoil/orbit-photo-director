@@ -328,15 +328,6 @@ export function terminatorNightPolygonFeatures(when: Date): GeoJSON.Feature[] {
         const c = 180 + k * 360;
         if (c > startN && c < endN) { crossing = c; break; }
       }
-      const wrapBackToWorld = (lon: number): number => {
-        // Wrap into [-180, 180]. The "world-copy duplication" loop later
-        // emits the +360 / -360 copies separately, so we keep the quad
-        // ring in the canonical world here.
-        let v = lon;
-        while (v > 180) v -= 360;
-        while (v <= -180) v += 360;
-        return v;
-      };
       // Build per-row endpoint lons in the unioned coordinate frame, then
       // wrap back. The polygon ring uses the unioned-frame values for the
       // interior calculation (no wrap), then we wrap_back when emitting
