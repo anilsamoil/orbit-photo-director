@@ -2,7 +2,9 @@
  * Feature C (live geo-IR overlay) invariants. Like map-night-lights.test.ts,
  * these grep the map.ts source for the load-bearing properties — the safest
  * way to pin map behavior without a full MapLibre mock. They lock the
- * design-review fixes (R1/R3/R5/R7/R9) so a refactor can't silently undo them.
+ * design-review fixes (R3/R5/R7/R9) so a refactor can't silently undo them.
+ * R1, the IR exclusion in the basemap arbiter, is pinned against the real
+ * basemapVisibility function in map-basemap.test.ts.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -16,12 +18,6 @@ describe('Feature C — live IR overlay invariants', () => {
   it('geo-ir-layer ships visibility:none → zero tiles until toggled on (R5)', async () => {
     const src = await mapSrc();
     expect(src).toMatch(/id:\s*'geo-ir-layer'[\s\S]*?layout:\s*\{\s*visibility:\s*'none'\s*\}/);
-  });
-
-  it('basemap arbiter excludes IR — Esri only with no clouds AND no IR (R1)', async () => {
-    const src = await mapSrc();
-    expect(src).toMatch(/useEsri\s*=\s*!cloudsVisible\s*&&\s*!irVisible\s*&&\s*!esriTilesFailed/);
-    expect(src).toMatch(/cloudsLayerVis\s*=\s*cloudsVisible\s*&&\s*!fcstActive\s*&&\s*!irVisible/);
   });
 
   it('IR badge carries the low-cloud caveat + no-coverage note (R3/R7/R9)', async () => {

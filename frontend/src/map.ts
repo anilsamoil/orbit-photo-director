@@ -363,7 +363,7 @@ function bindProfileChangedListener(): void {
  *  a heavy, niche layer (asks the operator to opt in). v2 (Chris feedback
  *  2026-05-27). Same persistence pattern as cloud + terminator. */
 const NIGHT_LIGHTS_PREF_KEY = 'opd-map-night-lights-visible';
-function readNightLightsVisible(): boolean {
+export function readNightLightsVisible(): boolean {
   try {
     return localStorage.getItem(NIGHT_LIGHTS_PREF_KEY) === '1';
   } catch {
@@ -388,7 +388,7 @@ let nightLightsVisible: boolean = readNightLightsVisible();
  *  default-ON needs a graceful-degradation path first (drive an auto-fallback
  *  off the existing geoIrFeedDown signal) and a separate cache bucket. */
 const IR_PREF_KEY = 'opd-map-ir-visible';
-function readIrVisible(): boolean {
+export function readIrVisible(): boolean {
   try { return localStorage.getItem(IR_PREF_KEY) === '1'; } catch { return false; }
 }
 let irVisible: boolean = readIrVisible();
@@ -410,7 +410,7 @@ let geoIrFeedDown = false;
  *  labels are a near-universal-utility overlay (Chris feedback 2026-05-27);
  *  operators who don't want them can toggle off. */
 const LABELS_PREF_KEY = 'opd-map-labels-visible';
-function readLabelsVisible(): boolean {
+export function readLabelsVisible(): boolean {
   try {
     const v = localStorage.getItem(LABELS_PREF_KEY);
     return v === null ? true : v === '1';
@@ -426,7 +426,7 @@ let labelsVisible: boolean = readLabelsVisible();
  *  time-scrub naturally (without it, operator can't tell day-side from
  *  night-side at +6h scrubbed views). */
 const TERMINATOR_PREF_KEY = 'opd-map-terminator-visible';
-function readTerminatorVisible(): boolean {
+export function readTerminatorVisible(): boolean {
   try {
     const v = localStorage.getItem(TERMINATOR_PREF_KEY);
     return v === null ? true : v === '1';
@@ -445,7 +445,7 @@ let terminatorVisible: boolean = readTerminatorVisible();
  *  users keep the familiar single-orbit look until they reach for the
  *  toggle. */
 const MULTI_ORBIT_PREF_KEY = 'opd-map-multi-orbit-visible';
-function readMultiOrbitVisible(): boolean {
+export function readMultiOrbitVisible(): boolean {
   try {
     const v = localStorage.getItem(MULTI_ORBIT_PREF_KEY);
     return v === '1';
@@ -466,7 +466,7 @@ const ISS_ORBIT_PERIOD_SECONDS = 5568;
  *  "make so can turn off/on as needed" stays sticky across reloads. Default
  *  on (clouds visible) matches v1.0+ behavior. */
 const CLOUDS_PREF_KEY = 'opd-map-clouds-visible';
-function readCloudsVisible(): boolean {
+export function readCloudsVisible(): boolean {
   try {
     const v = localStorage.getItem(CLOUDS_PREF_KEY);
     return v === null ? true : v === '1';
@@ -492,9 +492,9 @@ let fcstCurrentFrameKey: string | null = null;
  *  the map so the ISS direction-of-travel points up — matches Chris's
  *  mental model in WORF: "I'm looking down, this is what's coming next."
  *  Persisted to localStorage so the operator's preference survives reload. */
-type BearingMode = 'north' | 'iss-up';
+export type BearingMode = 'north' | 'iss-up';
 const BEARING_PREF_KEY = 'opd-map-bearing-mode';
-function readBearingMode(): BearingMode {
+export function readBearingMode(): BearingMode {
   try {
     const v = localStorage.getItem(BEARING_PREF_KEY);
     // Default to iss-up; only switch to north if explicitly stored.
@@ -564,7 +564,7 @@ import { registerViirsAlphaProtocol, viirsAlphaUrl } from './viirs-alpha-protoco
 // frontend/src/viirs-alpha-protocol.ts for the full why). Idempotent.
 registerViirsAlphaProtocol(maplibregl);
 
-function buildStyle(): maplibregl.StyleSpecification {
+export function buildStyle(): maplibregl.StyleSpecification {
   const dateIso = yesterdayIso();
   return {
     version: 8,
@@ -1033,6 +1033,49 @@ export function initialZoomForViewport(widthPx: number): number {
   return Math.min(MAP_REFERENCE_ZOOM, Math.max(0, scaled));
 }
 
+/** Camera and gesture options the map is constructed with.
+ *
+ *  center [0,0] is deliberate: the first recenter comes from main.ts's 1Hz
+ *  applyFollowISS tick, not from construction. projection, bearing, and pitch
+ *  are absent so MapLibre's mercator / 0 / 0 defaults apply.
+ *
+ *  z=1.5 fit the whole world but made panning feel like a no-op (you were
+ *  already at the edge of the visible tile space). z=2 leaves room to drag
+ *  without losing the "see the orbit at a glance" affordance. Operator
+ *  reported 2026-05-17 pan felt locked at z=1.5.
+ *
+ *  Pettit feedback 2026-05-19: "Having the map view scroll left and right so
+ *  that ISS location can be placed where you want (so if near right hand side
+ *  map not to have orbit clipped where you have to piece together with the
+ *  left hand side)." Explicit renderWorldCopies (default true; pin it so
+ *  MapLibre majors can't silently flip it) + groundTrackFeatures duplicates
+ *  the ground track at lon ±360 offsets so the polyline renders continuously
+ *  across world copies. The gesture flags are explicit for the same reason.
+ */
+export function mapCameraOptions(viewportWidthPx: number): {
+  center: [number, number];
+  zoom: number;
+  attributionControl: { compact: true };
+  renderWorldCopies: true;
+  dragPan: true;
+  dragRotate: true;
+  scrollZoom: true;
+  touchZoomRotate: true;
+  touchPitch: true;
+} {
+  return {
+    center: [0, 0],
+    zoom: initialZoomForViewport(viewportWidthPx),
+    attributionControl: { compact: true },
+    renderWorldCopies: true,
+    dragPan: true,
+    dragRotate: true,
+    scrollZoom: true,
+    touchZoomRotate: true,
+    touchPitch: true,
+  };
+}
+
 export async function renderMap(manifest: Manifest): Promise<void> {
   const container = document.getElementById('map');
   if (!container) return;
@@ -1050,35 +1093,10 @@ export async function renderMap(manifest: Manifest): Promise<void> {
 
   const isFirstInit = !map;
   if (!map) {
-    // See initialZoomForViewport — a fixed zoom shows a different amount of
-    // world on every screen width, which is why the map read as over-zoomed
-    // on iPhone while looking right on iPad.
     map = new maplibregl.Map({
       container,
       style: buildStyle(),
-      center: [0, 0],
-      // z=1.5 fit the whole world but made panning feel like a no-op (you
-      // were already at the edge of the visible tile space). z=2 leaves
-      // room to drag without losing the "see the orbit at a glance"
-      // affordance. Operator reported 2026-05-17 pan felt locked at z=1.5.
-      zoom: initialZoomForViewport(container.clientWidth || window.innerWidth),
-      attributionControl: { compact: true },
-      // Pettit feedback 2026-05-19: "Having the map view scroll left and
-      // right so that ISS location can be placed where you want (so if
-      // near right hand side map not to have orbit clipped where you
-      // have to piece together with the left hand side)." Explicit
-      // renderWorldCopies (default true; pin it so MapLibre majors
-      // can't silently flip it) + below in groundTrackFeatures we
-      // duplicate the ground track at lon ±360 offsets so the polyline
-      // renders continuously across world copies.
-      renderWorldCopies: true,
-      // Explicit gesture defaults. Defending against a future MapLibre
-      // major bump silently flipping a default to false.
-      dragPan: true,
-      dragRotate: true,
-      scrollZoom: true,
-      touchZoomRotate: true,
-      touchPitch: true,
+      ...mapCameraOptions(container.clientWidth || window.innerWidth),
     });
     map.addControl(new maplibregl.NavigationControl(), 'top-left');
     // E2E hook (gated behind ?e2e in the URL): expose the map so automated
@@ -2630,47 +2648,64 @@ function refreshForecastCloudLayer(): void {
   applyCloudsVisibility();
 }
 
+export type LayerVisibility = 'visible' | 'none';
+
+export type BasemapState = {
+  cloudsVisible: boolean;
+  irVisible: boolean;
+  forecastFrameActive: boolean;
+  esriTilesFailed: boolean;
+};
+
+/** The one decision that picks the basemap and the cloud layers, as data.
+ *
+ *  v1.5.1.0: when clouds are OFF, swap from Carto Dark to Esri World Imagery
+ *  so the operator can see real satellite/feature data (Chris ask 2026-05-21).
+ *  Carto Dark stays as the basemap when clouds are ON because the dark
+ *  background makes the 55%-opacity GIBS cloud overlay legible.
+ *
+ *  Esri imagery shows only when NO cloud overlay shows, neither the daily
+ *  clouds NOR the IR thermal layer, which is designed for the dark Carto
+ *  backdrop and not for bright Esri imagery. That is what makes the mutual
+ *  exclusion real rather than just layer-level (Codex/eng R1).
+ *
+ *  V4-P2: an active forecast frame REPLACES the observed cloud layer, and both
+ *  honor the clouds toggle.
+ */
+export function basemapVisibility(state: BasemapState): Record<
+  'gibs-clouds-layer' | 'fcst-clouds-layer' | 'esri-imagery-layer' | 'carto-dark-layer',
+  LayerVisibility
+> {
+  const { cloudsVisible: clouds, irVisible: ir, forecastFrameActive: fcst } = state;
+  const useEsri = !clouds && !ir && !state.esriTilesFailed;
+  return {
+    'gibs-clouds-layer': clouds && !fcst && !ir ? 'visible' : 'none',
+    'fcst-clouds-layer': clouds && fcst && !ir ? 'visible' : 'none',
+    'esri-imagery-layer': useEsri ? 'visible' : 'none',
+    'carto-dark-layer': useEsri ? 'none' : 'visible',
+  };
+}
+
 function applyCloudsVisibility(): void {
   if (!map) return;
-  // V4-P2: an active forecast frame REPLACES the observed layer; both
-  // honor the clouds toggle. refreshForecastCloudLayer keeps the frame
-  // source current — this function only flips visibility. Defensive try:
-  // the style may not be loaded yet, and test seams install map doubles
-  // without the layer API.
-  let fcstActive = false;
+  // Defensive try: the style may not be loaded yet, and test seams install
+  // map doubles without the layer API.
+  let forecastFrameActive = false;
   try {
-    fcstActive = map.getLayer('fcst-clouds-layer') != null
+    forecastFrameActive = map.getLayer('fcst-clouds-layer') != null
       && forecastFrameForView() !== null;
   } catch { /* treat as observed-layer mode */ }
-  // IR (Feature C) is mutually exclusive with the daily/forecast clouds: when
-  // IR is on, the cloud layers hide regardless of the clouds toggle state.
-  const cloudsLayerVis = cloudsVisible && !fcstActive && !irVisible ? 'visible' : 'none';
-  const fcstLayerVis = cloudsVisible && fcstActive && !irVisible ? 'visible' : 'none';
-  // v1.5.1.0: when clouds are OFF, swap from Carto Dark to Esri World Imagery
-  // so the operator can see real satellite/feature data (Chris ask 2026-05-21).
-  // Carto Dark stays as the basemap when clouds are ON because the dark
-  // background makes the 55%-opacity GIBS cloud overlay legible.
+  const visibility = basemapVisibility({
+    cloudsVisible,
+    irVisible,
+    forecastFrameActive,
+    esriTilesFailed,
+  });
   // P1 from review: source-swap via setLayoutProperty visibility, not
   // setStyle rebuild — keeps all overlays + layer state intact.
-  // Basemap arbiter (shared with IR): Esri imagery only when NO cloud overlay
-  // shows — neither daily clouds NOR the IR thermal layer (which is designed
-  // for the dark Carto backdrop, not bright Esri imagery). This is what makes
-  // the mutual exclusion real rather than just layer-level (Codex/eng R1).
-  const useEsri = !cloudsVisible && !irVisible && !esriTilesFailed;
-  const esriVis = useEsri ? 'visible' : 'none';
-  const cartoVis = useEsri ? 'none' : 'visible';
   try {
-    if (map.getLayer('gibs-clouds-layer')) {
-      map.setLayoutProperty('gibs-clouds-layer', 'visibility', cloudsLayerVis);
-    }
-    if (map.getLayer('fcst-clouds-layer')) {
-      map.setLayoutProperty('fcst-clouds-layer', 'visibility', fcstLayerVis);
-    }
-    if (map.getLayer('esri-imagery-layer')) {
-      map.setLayoutProperty('esri-imagery-layer', 'visibility', esriVis);
-    }
-    if (map.getLayer('carto-dark-layer')) {
-      map.setLayoutProperty('carto-dark-layer', 'visibility', cartoVis);
+    for (const [layerId, vis] of Object.entries(visibility)) {
+      if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', vis);
     }
   } catch {
     /* layers may not be loaded yet on the first call — applyCloudsVisibility
