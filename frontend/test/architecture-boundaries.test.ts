@@ -72,6 +72,50 @@ export function eagerMapImportViolations(path: string, sourceText: string): stri
     .map((entry) => `${path} statically imports ${entry.specifier}`);
 }
 
+/** map-core owns the instance, the catalog, the camera and the clocks. It
+ *  may not know which features exist, may not reach the vendor, and may not
+ *  lean on the legacy module it is replacing. */
+export function mapCoreImportViolations(path: string, sourceText: string): string[] {
+  if (!path.startsWith('map/map-core/')) return [];
+  return importsOf(sourceText)
+    .filter(
+      (entry) =>
+        isVendor(entry.specifier) ||
+        /(^|\/)features\//.test(entry.specifier) ||
+        /(^|\/)adapters\//.test(entry.specifier) ||
+        /^\.\.\/\.\.\/map$/.test(entry.specifier),
+    )
+    .map((entry) => `${path} imports ${entry.specifier}`);
+}
+
+/** Module-level `let` and `var` are the hidden state that made map.ts hard
+ *  to test: 55 of them with no teardown. Under src/map/ the only mutable
+ *  module state allowed is the composition root's one `let core`. */
+export function moduleStateViolations(path: string, sourceText: string): string[] {
+  if (!path.startsWith('map/') || path === 'map/index.ts') return [];
+  const parsed = ts.createSourceFile('probe.ts', sourceText, ts.ScriptTarget.ES2022, true);
+  const out: string[] = [];
+  for (const statement of parsed.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    const flags = statement.declarationList.flags;
+    if (flags & ts.NodeFlags.Const) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      out.push(`${path} declares module-level ${flags & ts.NodeFlags.Let ? 'let' : 'var'} ${declaration.name.getText()}`);
+    }
+  }
+  return out;
+}
+
+const ESCAPE_HATCHES = ['as any', '@ts-ignore', '@ts-expect-error', '@ts-nocheck', 'eslint-disable', 'TODO', 'FIXME'];
+
+/** Under src/map/ the types are the contract. An escape hatch there is a
+ *  place the contract stopped holding, and a TODO is a decision deferred to
+ *  a reader who will not have the context. */
+export function escapeHatchViolations(path: string, sourceText: string): string[] {
+  if (!path.startsWith('map/')) return [];
+  return ESCAPE_HATCHES.filter((hatch) => sourceText.includes(hatch)).map((hatch) => `${path} contains ${hatch}`);
+}
+
 function sourceFiles(): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   const walk = (dir: string): void => {
@@ -113,6 +157,25 @@ describe('import boundaries in frontend/src', () => {
     const dynamic = importsOf(main?.text ?? '').filter((entry) => entry.dynamic && isMapEntry(entry.specifier));
     expect(dynamic.length).toBeGreaterThan(0);
   });
+
+  it('map-core imports no feature, no adapter, no vendor and not the legacy map module', () => {
+    const violations = files.flatMap((file) => mapCoreImportViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+  });
+
+  it('nothing under src/map/ holds module-level mutable state except the composition root', () => {
+    const violations = files.flatMap((file) => moduleStateViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+  });
+
+  it('nothing under src/map/ carries an escape hatch or a deferred decision', () => {
+    const violations = files.flatMap((file) => escapeHatchViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+  });
+
+  it('the rules above are running against real files under src/map/', () => {
+    expect(files.some((file) => file.path.startsWith('map/map-core/'))).toBe(true);
+  });
 });
 
 describe('the boundary rules can fail', () => {
@@ -147,5 +210,45 @@ describe('the boundary rules can fail', () => {
   it('allows the dynamic import and the type-only reference', () => {
     const dynamic = "const m = await import('./map');\nlet held: typeof import('./map') | null = null;";
     expect(eagerMapImportViolations('main.ts', dynamic)).toEqual([]);
+  });
+
+  it('flags map-core reaching a feature, an adapter, the vendor, or the legacy module', () => {
+    const text = [
+      "import { pinDrop } from '../features/pin-drop';",
+      "import { createVendorMap } from '../adapters/maplibre';",
+      "import maplibregl from 'maplibre-gl';",
+      "import { renderMap } from '../../map';",
+    ].join('\n');
+    expect(mapCoreImportViolations('map/map-core/core.ts', text)).toEqual([
+      'map/map-core/core.ts imports ../features/pin-drop',
+      'map/map-core/core.ts imports ../adapters/maplibre',
+      'map/map-core/core.ts imports maplibre-gl',
+      'map/map-core/core.ts imports ../../map',
+    ]);
+  });
+
+  it('lets map-core import domain leaves and its own siblings', () => {
+    const text = "import { wrapLon } from '../../geo';\nimport { LAYER_ORDER } from './catalog';";
+    expect(mapCoreImportViolations('map/map-core/core.ts', text)).toEqual([]);
+  });
+
+  it('flags a module-level let or var under src/map/ and allows const', () => {
+    const text = 'let map = null;\nvar bound = false;\nconst KEY = "x";\nfunction f() { let local = 1; return local; }';
+    expect(moduleStateViolations('map/features/x/state.ts', text)).toEqual([
+      'map/features/x/state.ts declares module-level let map',
+      'map/features/x/state.ts declares module-level var bound',
+    ]);
+    expect(moduleStateViolations('map/index.ts', text)).toEqual([]);
+    expect(moduleStateViolations('main.ts', text)).toEqual([]);
+  });
+
+  it('flags every escape hatch under src/map/ and ignores them elsewhere', () => {
+    const text = 'const x = y as any; // TODO later\n// @ts-ignore\n';
+    expect(escapeHatchViolations('map/map-core/core.ts', text)).toEqual([
+      'map/map-core/core.ts contains as any',
+      'map/map-core/core.ts contains @ts-ignore',
+      'map/map-core/core.ts contains TODO',
+    ]);
+    expect(escapeHatchViolations('main.ts', text)).toEqual([]);
   });
 });
