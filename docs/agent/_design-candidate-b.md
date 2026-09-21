@@ -416,8 +416,8 @@ Each method hides a specific coordination problem:
 | Method | What it hides |
 | --- | --- |
 | `MapCoreFacade.dispatch` | Routes to one typed reducer, merges only declared state keys, writes declared persistence, runs the optional non-map effect, batches projections, and reconciles one scene frame. A feature does not call another feature. |
-| `MapCoreFacade.snapshot` | Returns one frozen model. It hides the mutable store and prevents async work such as a TLE fetch from closing over stale module variables. |
-| `MapApplication.mount` | Creates one map instance, compiles the five style layers, waits for style load, installs the adapter event bridge, starts the 1 Hz and 30 second clocks once, restores persistence, and renders all startup features. Repeated calls return the same mounted application. |
+| `MapCoreFacade.snapshot` | Returns one frozen model. It hides the mutable store and lets async work such as a TLE fetch re-read current state after an `await` instead of relying on captured module variables. |
+| `MapApplication.mount` | Creates one map instance, compiles the five style layers, waits for style load, installs the adapter event bridge, starts the 1 Hz and 30 second clocks once, restores persistence, and renders all startup features. Repeated calls resolve without constructing another map. |
 | `MapApplication.update` | Atomically replaces `Manifest`, passes, track, launch data, profile data, and shot counts. It runs projections without re-registering a source, layer, control, handler, or interval. |
 | `MapApplication.dispatch` | Carries non-map input from `main.ts`, such as a lookup result or launch focus request, into the same reducer path as adapter input. The generated `MapExternalEvent` union prevents string event names. |
 | `MapApplication.resize` | Defers adapter sizing until the map container is visible. It hides MapLibre's zero-sized hidden-container behavior. |
@@ -464,6 +464,7 @@ export type SourceFamilyDefinition = Readonly<{
   kind: 'source-family';
   idPrefix: 'sat-track-';
   key: 'satellite';
+  sourceKind: 'geojson';
 }>;
 
 export type LayerFamilyDefinition = Readonly<{
@@ -471,6 +472,13 @@ export type LayerFamilyDefinition = Readonly<{
   idPrefix: 'sat-track-layer-';
   sourceIdPrefix: 'sat-track-';
   key: 'satellite';
+  overlay: Readonly<{
+    kind: 'line';
+    color: 'satellite-track-color';
+    width: 1.6;
+    opacity: 0.7;
+    dash: readonly [3, 2];
+  }>;
   install: Readonly<{
     phase: 'activation';
   }>;
@@ -599,7 +607,7 @@ export const entrypoint = defineFeature<LabelsEvent, 'visibleFeatures'>({
         visibleFeatures: setFeatureVisible(
           view.visibleFeatures,
           id,
-          value === null || value === '1',
+          value === '1',
         ),
       }),
       serialize: (view) =>
@@ -628,6 +636,8 @@ export const entrypoint = defineFeature<LabelsEvent, 'visibleFeatures'>({
   }),
 });
 ```
+
+The persistence runner calls `hydrate` only when the key exists. `defaultVisibility` is therefore the only no-preference default. The entrypoint does not encode the same default twice.
 
 `frontend/src/map/features/labels/labels.test.ts`:
 
