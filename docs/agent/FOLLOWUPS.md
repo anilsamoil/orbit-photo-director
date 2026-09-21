@@ -14,7 +14,13 @@ Defects and stale documentation found while writing `ARCHITECTURE_NOW.md`. None 
 
 **The test reset helper disagrees with production.** `_resetMapStateForTest` at `map.ts:517` sets `bearingMode = 'north'`. Production defaults to `iss-up`. Any test that relies on the reset is asserting against a default the app never has.
 
+**A second `renderMap` during the first load throws "Style is not done loading".** `renderMap` assigns `core` before it awaits `vendor.whenLoaded()`, so a call that arrives during that await sees a map, skips the wait, and its first `setGeoJson` reaches MapLibre's `addSource` while the style is still loading. `main.ts` catches the rejection and logs `map pane failed to load`, and the map still paints because the first call finishes. The slice 5 walkthrough hit it on every page reload, on the build before the slice and the build after, because the Map tab click and the manifest arrival both call `renderMap` within a few hundred milliseconds. Pin it with two overlapping `renderMap` calls against the double, then make the second call wait on the first.
+
 **The pin popup's add-to-targets controls paint light text on a light button.** `.pin-add-button` and `.pin-add-cancel` in `style.css` set `background: #f2f5f9` and `font: inherit` with no `color`, so they inherit the dark popup's light text. In a real browser the labels "➕ Add to my targets" and "Cancel" are near-invisible; only the ➕ glyph and the blue Save button read. Seen in the slice 4 walkthrough screenshots, identical on the build before the move, so it is a styling defect and not a regression. Fix is one `color` rule in each selector, after a pin on the computed color.
+
+## Behavior the reshape dropped
+
+**A persisted satellite whose TLE fetch failed at boot is no longer retried on the next manifest.** Before slice 5, `renderMap` called `restorePersistedSatellites()` on every run, so a key that failed (no cache and CelesTrak unreachable) was fetched again when a newer manifest re-rendered the map. The satellites feature restores once, at mount. No test pinned the retry and the old comment did not name it, so it is recorded here rather than rebuilt. If it is wanted, the feature needs a signal that the map re-rendered; today nothing outside `map.ts` has one.
 
 ## Dead code
 
