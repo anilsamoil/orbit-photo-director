@@ -17,6 +17,8 @@
  *  one-evening implementation).
  */
 
+import { wrapLon } from './geo';
+
 /** Equation of Time in minutes — apparent solar time minus mean solar
  *  time. Positive when apparent noon is BEFORE mean noon. Spencer's
  *  two-component approximation (obliquity + eccentricity), accurate
@@ -45,18 +47,8 @@ export function subsolarPoint(when: Date): { lat: number; lon: number } {
   const eotMin = equationOfTimeMinutes(dayOfYear);
   // Generator note: "sub_lon = -15 * (mean solar time offset from noon)";
   // EoT correction shifts apparent noon meridian eastward when EoT > 0.
-  let subLon = -15.0 * (utcH - 12.0 + eotMin / 60.0);
-  while (subLon > 180) subLon -= 360;
-  while (subLon < -180) subLon += 360;
+  const subLon = wrapLon(-15.0 * (utcH - 12.0 + eotMin / 60.0));
   return { lat: dec, lon: subLon };
-}
-
-/** Wrap a longitude into the [-180, 180] interval. */
-function wrapLon(lon: number): number {
-  let l = lon;
-  while (l > 180) l -= 360;
-  while (l < -180) l += 360;
-  return l;
 }
 
 /** Compute the longitude where the day-night terminator crosses a
