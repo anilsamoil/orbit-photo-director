@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const MAP = 'src/map.ts';
+const BASEMAP_VISIBILITY = 'src/map/features/basemap/visibility.ts';
 const CORE = 'src/map/map-core/core.ts';
 const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
@@ -44,7 +45,7 @@ const MUTATIONS = [
   },
   {
     contract: 'hiding clouds swaps the dark basemap for Esri imagery',
-    file: MAP,
+    file: BASEMAP_VISIBILITY,
     find: "    'carto-dark-layer': useEsri ? 'none' : 'visible',",
     replace: "    'carto-dark-layer': 'visible',",
   },

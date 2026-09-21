@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { basemapVisibility } from '../src/map';
+import { basemapVisibility } from '../src/map/features/basemap';
 
 // The basemap arbiter picks which of the four basemap/cloud layers show.
 // Clouds ON keeps the dark Carto basemap, because the 55%-opacity GIBS

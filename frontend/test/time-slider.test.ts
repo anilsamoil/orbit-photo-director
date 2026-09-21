@@ -17,11 +17,11 @@ import {
   _getScrubTier2RunCountForTest,
   _isScrubTier2TimerArmedForTest,
   bindTimeSlider,
-  ensureImageryDateBadge,
   formatViewTimeReadout,
   rafCoalesce,
   setLookahead,
 } from '../src/map';
+import { ensureImageryDateBadge } from '../src/map/features/basemap';
 import type { Track } from '../src/types';
 
 const SLIDER_HTML = `

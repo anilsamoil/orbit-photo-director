@@ -11,13 +11,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  _setFcstTilesFailedForTest,
   _setForecastCloudsUiForTest,
-  _resetMapStateForTest,
   compactFrameKey,
   ensureImageryDateBadge,
   nearestForecastFrame,
-  setLookahead,
-} from '../src/map';
+} from '../src/map/features/basemap';
+import { _resetMapStateForTest, setLookahead } from '../src/map';
 import type { Manifest } from '../src/types';
 
 const NOW = Date.parse('2026-06-10T12:00:00Z');
@@ -156,8 +156,6 @@ describe('imagery badge wording follows the layer truth (V4-P2)', () => {
 // ---------------------------------------------------------------------------
 // Ship review 2026-06-11: tiles-failed badge reversion + sub-hour wording.
 // ---------------------------------------------------------------------------
-
-import { _setFcstTilesFailedForTest } from '../src/map';
 
 describe('ship-review additions', () => {
   let container: HTMLElement;

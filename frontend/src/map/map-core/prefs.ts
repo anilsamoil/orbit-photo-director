@@ -2,5 +2,7 @@
  *  here, so two features cannot collide on a key and one file lists what the
  *  map persists. */
 export const PREF_KEYS = {
+  cloudsVisible: 'opd-map-clouds-visible',
+  irVisible: 'opd-map-ir-visible',
   selectedSatellites: 'opd-selected-satellites',
 } as const;

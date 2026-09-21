@@ -96,13 +96,13 @@ describe('Feature C, live IR overlay', () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     expect(renderedMap().visibilityOf('geo-ir-layer')).toBe('none');
     expect(pressed('toggle-ir')).toBe('false');
-    expect(mapModule.readIrVisible()).toBe(false);
+    expect((await import('../src/map/features/basemap')).readIrVisible()).toBe(false);
 
     await importWithStoredPrefs({ 'opd-map-ir-visible': '1' });
     await mapModule.renderMap(MANIFEST_FIXTURE);
     expect(renderedMap().visibilityOf('geo-ir-layer')).toBe('visible');
     expect(pressed('toggle-ir')).toBe('true');
-    expect(mapModule.readIrVisible()).toBe(true);
+    expect((await import('../src/map/features/basemap')).readIrVisible()).toBe(true);
   });
 
   it('turning IR on turns the daily clouds off, and turning clouds on turns IR off', async () => {

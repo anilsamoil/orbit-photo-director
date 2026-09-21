@@ -1,12 +1,20 @@
 import type { Manifest, PassEntry, Track } from './types';
-import type { ForecastCloudsIndex } from './types';
 import { fetchArtifact } from './manifest';
 import { wrapLon } from './geo';
-import type { LayerId } from './map/map-core/catalog';
 import { createVendorMap } from './map/adapters/maplibre';
 import { initialCamera } from './map/map-core/camera';
 import { createClock } from './map/map-core/clock';
 import { createMapCore, type MapCore } from './map/map-core/core';
+import {
+  attachBasemap,
+  bindBasemapClock,
+  ensureImageryDateBadge,
+  refreshBasemap,
+  refreshForecastCloudLayer,
+  resetBasemapForTest,
+  setBasemapManifest,
+  setForecastSwapDeferred,
+} from './map/features/basemap';
 import { FEATURES } from './map/features';
 import { buildPassList } from './map/overlays/pass-list';
 import { buildLineFeatures } from './map/overlays/track-line';
@@ -44,6 +52,7 @@ import { openLaunchDetails, renderLegacyLaunchCard } from './launch-card';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
 const clock = createClock();
+bindBasemapClock(clock);
 let core: MapCore | null = null;
 let issMarker: MarkerHandle | null = null;
 let currentTrack: Track | null = null;
@@ -114,99 +123,6 @@ export function _getViewTimeMsForTest(): number | null {
 export function _setCurrentTrackForTest(track: Track | null): void {
   currentTrack = track;
   core?.setTrack(track);
-}
-
-/** Path-safe frame key for a manifest valid_time ISO string:
- *  "2026-06-10T06:00:00Z" → "20260610T060000Z" (matches the generator's
- *  compact_key — no colons in object paths, locked A1). */
-export function compactFrameKey(iso: string): string {
-  return iso.replace(/[-:]/g, '');
-}
-
-// Frame-matching policy constants (locked A4 as revised by the slider eng
-// review 2C). The hourly band + tolerances TRACK the generator's cadence
-// constants (generator/forecast_clouds.py HOURLY_HORIZON_H / COARSE_STEP_H):
-// hourly frames ≤6h of lookahead → ±30min match; 3-hourly beyond → ±90min.
-const FCST_HOURLY_BAND_H = 6;
-const FCST_TOL_HOURLY_MIN = 30;
-const FCST_TOL_COARSE_MIN = 90;
-// A frame older than this is never depicted as forecast (anti-stale guard).
-const FCST_MAX_FRAME_AGE_MIN = 45;
-
-/** Pick the forecast frame nearest the view instant. Frames more than
- *  FCST_MAX_FRAME_AGE_MIN in the PAST are never candidates — a stale frame
- *  depicted as forecast is the trust mismatch this feature exists to kill.
- *  Returns null when nothing qualifies (caller falls back to observed). */
-export function nearestForecastFrame(
-  validTimes: string[],
-  viewMs: number,
-  nowMs: number,
-): { iso: string; validMs: number } | null {
-  const lookaheadH = (viewMs - nowMs) / 3_600_000;
-  const tolMs = (lookaheadH <= FCST_HOURLY_BAND_H ? FCST_TOL_HOURLY_MIN : FCST_TOL_COARSE_MIN) * 60_000;
-  const minValidMs = nowMs - FCST_MAX_FRAME_AGE_MIN * 60_000;
-  let best: { iso: string; validMs: number } | null = null;
-  for (const iso of validTimes) {
-    const validMs = Date.parse(iso);
-    if (Number.isNaN(validMs) || validMs < minValidMs) continue;
-    if (best === null || Math.abs(validMs - viewMs) < Math.abs(best.validMs - viewMs)) {
-      best = { iso, validMs };
-    }
-  }
-  if (best === null || Math.abs(best.validMs - viewMs) > tolMs) return null;
-  return best;
-}
-
-/** Forecast-clouds UI master switch — OFF (operator revert, Anil
- *  2026-06-11): the 5° GFS frames render as flat gray slabs on the iPad
- *  ("you end up just seeing gray areas... that don't help you determine
- *  anything"). Scrubbed views keep the OBSERVED imagery + the honest
- *  "observed — not forecast" badge, and the ☁️ toggle keeps controlling
- *  current cloud cover exactly as pre-v1.9. The machinery stays dormant +
- *  tested (D3=A): if a sharper forecast source ever lands, re-enabling is
- *  this one flag. The generator-side flag (OPD_ENABLE_FORECAST_CLOUDS) is
- *  off in the daemon plist for the same reason. */
-const FORECAST_CLOUDS_UI = false;
-let forecastUiOverrideForTest: boolean | null = null;
-
-/** Test-only: exercise the dormant forecast machinery. */
-export function _setForecastCloudsUiForTest(on: boolean | null): void {
-  forecastUiOverrideForTest = on;
-}
-
-/** The forecast index the UI is allowed to see: the manifest's index when
- *  the master switch is on, undefined otherwise. EVERY forecast_clouds
- *  read routes through here — frame selection, tile layer, and badge
- *  revert to observed behavior together when the switch is off. */
-function activeForecastIndex(m: Manifest | null | undefined): ForecastCloudsIndex | undefined {
-  const enabled = forecastUiOverrideForTest ?? FORECAST_CLOUDS_UI;
-  return enabled ? m?.forecast_clouds : undefined;
-}
-
-/** Shared eligibility + selection gate (ship review 2026-06-11 — the badge
- *  previously re-implemented half of this; one gate, two callers). The
- *  index is a parameter so the badge stays pure given (manifest, scrub
- *  state); module state (scrub, tile health, clouds toggle) is read here. */
-function frameForIndex(
-  fc: ForecastCloudsIndex | undefined,
-  nowMs: number,
-): { iso: string; validMs: number } | null {
-  if (!clock.isScrubbed() || fcstTilesFailed || !cloudsVisible) return null;
-  if (!fc || !Array.isArray(fc.valid_times) || fc.valid_times.length === 0) return null;
-  return nearestForecastFrame(fc.valid_times, clock.viewMs(nowMs), nowMs);
-}
-
-/** The frame the CURRENT view should display, or null for the observed
- *  layer. At Now (not scrubbed) this is ALWAYS null — the live view stays
- *  on observed imagery (critical regression guard). */
-function forecastFrameForView(nowMs = clock.now()): { iso: string; validMs: number } | null {
-  return frameForIndex(activeForecastIndex(currentManifest), nowMs);
-}
-
-/** Test-only: simulate the one-way tile-failure fallback (the real flag is
- *  set by the MapLibre error handler, unreachable from happy-dom). */
-export function _setFcstTilesFailedForTest(failed: boolean): void {
-  fcstTilesFailed = failed;
 }
 
 /** Day-aware UTC readout for the slider (eng-review T6a): "13:30Z" today,
@@ -308,39 +224,6 @@ export function readNightLightsVisible(): boolean {
 }
 let nightLightsVisible: boolean = readNightLightsVisible();
 
-/** Live geostationary-IR overlay preference. Default OFF — opt-in experimental
- *  layer (Feature C, 2026-06-21); ships off, fetches tiles only when on, and is
- *  mutually exclusive with the daily clouds layer.
- *
- *  Was briefly flipped default-ON on 2026-08-24 and reverted the same day. Two
- *  reasons, both of which bite hardest during LOS — the condition this app
- *  exists for. (1) IR force-hides the daily clouds layer through
- *  applyCloudsVisibility's !irVisible gate, so the offline cloud overlay
- *  silently disappears and the Clouds button's first press is a no-op. (2) IR
- *  tiles are timestamped every ~10 min, so they churn through the
- *  opd-tiles-gibs-base LRU (maxEntries 200) and evict the ~170 precached z0-3
- *  clouds/VIIRS tiles that the offline story depends on — meaning the manual
- *  "toggle IR off" escape hatch fails exactly when it's needed. Re-enabling
- *  default-ON needs a graceful-degradation path first (drive an auto-fallback
- *  off the existing geoIrFeedDown signal) and a separate cache bucket. */
-const IR_PREF_KEY = 'opd-map-ir-visible';
-export function readIrVisible(): boolean {
-  try { return localStorage.getItem(IR_PREF_KEY) === '1'; } catch { return false; }
-}
-let irVisible: boolean = readIrVisible();
-/** The geo-IR satellite currently loaded in the source (re-picked on pan);
- *  null when the view center is in a no-coverage gap (poles / Europe-Africa). */
-let currentGeoIRSat: GeoIRSat | null = null;
-/** ISO time of the IR frame currently loaded — advances as new ~10-min frames
- *  publish so a stationary operator never sees stale imagery (Codex #1). */
-let currentGeoIRTime: string | null = null;
-/** Feed-health (Codex review): a geo-IR tile loaded since the last tile-set.
- *  If the layer is visible but the map settles with NOTHING loaded (every tile
- *  errored), the feed is down — surface that so an outage can't masquerade as
- *  clear-sky IR. Especially relevant for RealEarth (a university service). */
-let geoIrAnyLoaded = false;
-let geoIrFeedDown = false;
-
 /** Esri Reference labels overlay preference. Default ON — country / city
  *  labels are a near-universal-utility overlay (Chris feedback 2026-05-27);
  *  operators who don't want them can toggle off. */
@@ -390,32 +273,6 @@ export function readMultiOrbitVisible(): boolean {
 }
 let multiOrbitVisible: boolean = readMultiOrbitVisible();
 
-/** Cloud overlay visibility preference. Persisted to localStorage so Pettit's
- *  "make so can turn off/on as needed" stays sticky across reloads. Default
- *  on (clouds visible) matches v1.0+ behavior. */
-const CLOUDS_PREF_KEY = 'opd-map-clouds-visible';
-export function readCloudsVisible(): boolean {
-  try {
-    const v = localStorage.getItem(CLOUDS_PREF_KEY);
-    return v === null ? true : v === '1';
-  } catch {
-    return true;
-  }
-}
-let cloudsVisible: boolean = readCloudsVisible();
-
-// --- V4-P2 forecast cloud frames -------------------------------------------
-// The manifest the map last rendered — the forecast-frame machinery needs
-// the forecast_clouds index outside renderMap's scope.
-let currentManifest: Manifest | null = null;
-// One-way session flag, mirroring esriTilesFailed: a forecast tile failing
-// to load drops the layer back to observed for the rest of the session
-// (locked A4 layer-2 fallback).
-let fcstTilesFailed = false;
-// Frame currently loaded into the fcst-clouds source, so scrub moves that
-// resolve to the same frame don't churn the source.
-let fcstCurrentFrameKey: string | null = null;
-
 /** Bearing mode for the map. 'north' = standard north-up. 'iss-up' = rotate
  *  the map so the ISS direction-of-travel points up — matches Chris's
  *  mental model in WORF: "I'm looking down, this is what's coming next."
@@ -454,15 +311,10 @@ export function _resetMapStateForTest(): void {
   toggleBound = false;
   currentTrack = null;
   core?.setTrack(null);
-  lastImageryBadgeArgs = null;
-  currentManifest = null;
-  fcstTilesFailed = false;
-  fcstCurrentFrameKey = null;
-  cloudsVisible = true;
+  resetBasemapForTest();
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
-  try { localStorage.removeItem(IR_PREF_KEY); } catch { /* noop */ }
   _resetScrubTierStateForTest();
 }
 
@@ -477,13 +329,10 @@ import {
   GIBS_GEO_IR_MAX_ZOOM,
   GIBS_MAX_ZOOM,
   VIIRS_BLACK_MARBLE_MAX_ZOOM,
-  geoIRTileUrl,
   geoIRTimeForNow,
   gibsGeoIRUrl,
   gibsTrueColorUrl,
-  pickGeoIRSat,
   yesterdayIso,
-  type GeoIRSat,
 } from './tile-precache';
 import { registerViirsAlphaProtocol, viirsAlphaUrl } from './map/adapters/maplibre/viirs-alpha';
 
@@ -890,7 +739,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   const passes = await fetchArtifact<PassEntry[]>(manifest, 'passes', '', profileName);
   const track = await fetchArtifact<Track>(manifest, 'track');
   currentTrack = track;
-  currentManifest = manifest; // V4-P2: forecast-frame machinery reads the index
+  setBasemapManifest(manifest);
 
   const isFirstInit = !core;
   if (!core) {
@@ -900,29 +749,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       camera: initialCamera(container.clientWidth || window.innerWidth),
     });
     core = createMapCore(vendor, clock);
-    // A2 from /plan-eng-review 2026-05-21: silent fallback to Carto Dark
-    // if Esri imagery tiles fail to load. Listens for source-data errors;
-    // if the failing source is the Esri basemap, flip the session flag
-    // and re-apply visibility (which will keep Carto visible). One-way:
-    // once Esri has failed in this session, we don't retry until reload.
-    core.on('error', (e) => {
-      const errSource = e.sourceId;
-      if (errSource === 'fcst-clouds' && !fcstTilesFailed) {
-        // Locked A4 layer-2 fallback: one forecast tile failure drops the
-        // session back to the observed layer (one-way, like Esri below).
-        fcstTilesFailed = true;
-        // eslint-disable-next-line no-console
-        console.warn('[map] forecast cloud tile load failed; observed layer for the rest of this session');
-        applyCloudsVisibility();
-        refreshImageryDateBadgeForView();
-      }
-      if (errSource === 'esri-imagery' && !esriTilesFailed) {
-        esriTilesFailed = true;
-        // eslint-disable-next-line no-console
-        console.warn('[map] Esri imagery tile load failed; falling back to Carto Dark basemap for the rest of this session');
-        applyCloudsVisibility();
-      }
-    });
+    attachBasemap(core);
     await vendor.whenLoaded();
   }
   core.setTrack(track);
@@ -1384,10 +1211,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindTimeToggle();
   bindTimeSlider();
   bindBearingToggle();
-  bindCloudToggle();
   bindTerminatorToggle();
   bindNightLightsToggle();
-  bindIrToggle();
   bindLabelsToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
@@ -1396,21 +1221,9 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // distance threshold changes. Slot 11 refactors this to the debounced
   // event-bus subscriber.
   bindProfileChangedListener();
-  // Apply persisted cloud + terminator preferences on first map render.
-  // refreshForecastCloudLayer wraps applyCloudsVisibility and additionally
-  // wires the V4-P2 forecast frame when a scrub is active across a manifest
-  // refresh (renderMap re-runs on every newer manifest since v1.7.12.0).
-  refreshForecastCloudLayer();
+  refreshBasemap();
   applyTerminatorVisibility();
   applyNightLightsVisibility();
-  // Feature C: restore persisted IR state — re-pick the satellite for the view
-  // and show/hide the raster. Zero tiles fetched when IR is off (the default).
-  // (The basemap arbiter already accounts for irVisible via the call above.)
-  repickGeoIRForView();
-  applyIrVisibility();
-  // Re-render the badge now that currentGeoIRSat is set — otherwise a persisted
-  // IR-on session flashes a false "no coverage" on first paint (Codex #3).
-  refreshImageryDateBadgeForView();
   applyLabelsVisibility();
   // Apply persisted bearing preference ONLY on first map creation. Calling
   // easeTo on every Map-tab click (which re-runs renderMap) was eating
@@ -1925,8 +1738,6 @@ function runScrubTier2(): void {
   const safely = (fn: () => void): void => {
     try { fn(); } catch { /* surface isolated — others still refresh */ }
   };
-  safely(refreshForecastCloudLayer);
-  safely(refreshImageryDateBadgeForView);
   const isLive = !clock.isScrubbed();
   document.querySelectorAll<HTMLButtonElement>('.time-step-btn').forEach((b) => {
     b.classList.toggle('active', b.id === 'time-now' && isLive);
@@ -2060,9 +1871,13 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
     setLookahead(minutes, recenter);
   };
   // Drag-in-progress tracking: suppresses the 30s timer's value sync.
-  slider.addEventListener('pointerdown', () => { sliderDragging = true; });
+  slider.addEventListener('pointerdown', () => {
+    sliderDragging = true;
+    setForecastSwapDeferred(true);
+  });
   slider.addEventListener('pointerup', () => {
     sliderDragging = false;
+    setForecastSwapDeferred(false);
     // Settle deferred tier-2 work first (terminator/pins/satellites/track),
     // then the frame swap deferred during the drag (the release's
     // same-instant guard can skip the full refresh path entirely).
@@ -2071,6 +1886,7 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   });
   slider.addEventListener('pointercancel', () => {
     sliderDragging = false;
+    setForecastSwapDeferred(false);
     clock.settle.flush();
     refreshForecastCloudLayer();
   });
@@ -2080,6 +1896,7 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   // forever. Bound once — sliderBound guards re-binding.
   window.addEventListener('blur', () => {
     sliderDragging = false;
+    setForecastSwapDeferred(false);
     clock.settle.flush();
     // Mirror pointerup (adversarial F3): the leading tier-2 run during the
     // drag deferred its forecast frame swap (visibility-only while
@@ -2170,16 +1987,6 @@ export function bindTimeToggle(): void {
   toggleBound = true;
 }
 
-/** Show / hide both the GIBS cloud raster layer AND the coastline overlay's
- *  toggle target. Pettit asked for cloud-toggle specifically; coastline
- *  stays on because it doesn't compete with the cloud signal. Idempotent —
- *  safe to call before MapLibre has loaded the layers. */
-/** Track whether Esri tiles have failed to load. If they have, we never
- *  swap to the Esri basemap again this session — fall back to Carto Dark
- *  silently (A2 from /plan-eng-review 2026-05-21). Prevents the operator
- *  from ending up on a blank map when Esri's CDN is down. */
-let esriTilesFailed = false;
-
 /** Follow-ISS state (v1.5.2.0 — Chris feedback 2026-05-21). When true, the
  *  1Hz live-position tick re-centers the map on the ISS sub-point. NOT
  *  persisted — ephemeral by design (a session-local view mode, not a
@@ -2192,162 +1999,6 @@ let esriTilesFailed = false;
  *  dragstart, so the recurring follow tick won't break itself.
  */
 let followISS = true;  // default ON — tracks ISS on every fresh load; user drag/button turns it off
-
-/** Ensure the fcst-clouds source/layer exist and carry the frame the view
- *  needs, then re-apply visibility (V4-P2). Safe no-op before the map
- *  exists; any failure leaves the observed layer in charge (locked A4). */
-function refreshForecastCloudLayer(): void {
-  if (!core) return;
-  const frame = forecastFrameForView();
-  const fc = activeForecastIndex(currentManifest);
-  if (frame && fc) {
-    const key = compactFrameKey(frame.iso);
-    // Allowlist the manifest-derived path pieces (defense-in-depth, ship
-    // review 2026-06-11): a drifted/poisoned manifest must fail CLOSED to
-    // the observed layer, not build cross-origin or traversal URLs. The
-    // shapes mirror the generator contract + the SW cache regex.
-    if (!/^clouds-fcst\/\d{8}T\d{6}Z$/.test(fc.prefix) || !/^\d{8}T\d{6}Z$/.test(key)) {
-      applyCloudsVisibility();
-      return;
-    }
-    const url = `/${fc.prefix}/${key}/{z}/{x}/{y}.png`;
-    try {
-      if (!core.hasSource('fcst-clouds')) {
-        core.addRasterSource('fcst-clouds', {
-          type: 'raster',
-          tiles: [url],
-          tileSize: 256,
-          maxzoom: fc.max_zoom,
-        });
-        core.ensureLayer({
-          id: 'fcst-clouds-layer',
-          type: 'raster',
-          source: 'fcst-clouds',
-          layout: { visibility: 'none' },
-          paint: { 'raster-opacity': 0.55 }, // matches gibs-clouds-layer
-        });
-        fcstCurrentFrameKey = key;
-      } else if (fcstCurrentFrameKey !== key) {
-        // Defer frame SWAPS while the finger is on the slider (ship review
-        // 2026-06-11): a 36h drag crosses ~20 frame boundaries in under a
-        // second, and each setTiles clears the source's tile cache — a
-        // burst of aborted fetches + raster flicker. The current frame
-        // stays up during the drag; pointerup re-runs this refresh and
-        // swaps once, at the settled position.
-        if (sliderDragging) {
-          applyCloudsVisibility();
-          return;
-        }
-        core.setRasterTiles('fcst-clouds', [url]);
-        fcstCurrentFrameKey = key;
-      }
-    } catch {
-      /* style may not be loaded yet — the next refresh wires it */
-    }
-  }
-  applyCloudsVisibility();
-}
-
-export type LayerVisibility = 'visible' | 'none';
-
-export type BasemapState = {
-  cloudsVisible: boolean;
-  irVisible: boolean;
-  forecastFrameActive: boolean;
-  esriTilesFailed: boolean;
-};
-
-/** The one decision that picks the basemap and the cloud layers, as data.
- *
- *  v1.5.1.0: when clouds are OFF, swap from Carto Dark to Esri World Imagery
- *  so the operator can see real satellite/feature data (Chris ask 2026-05-21).
- *  Carto Dark stays as the basemap when clouds are ON because the dark
- *  background makes the 55%-opacity GIBS cloud overlay legible.
- *
- *  Esri imagery shows only when NO cloud overlay shows, neither the daily
- *  clouds NOR the IR thermal layer, which is designed for the dark Carto
- *  backdrop and not for bright Esri imagery. That is what makes the mutual
- *  exclusion real rather than just layer-level (Codex/eng R1).
- *
- *  V4-P2: an active forecast frame REPLACES the observed cloud layer, and both
- *  honor the clouds toggle.
- */
-export function basemapVisibility(state: BasemapState): Record<
-  'gibs-clouds-layer' | 'fcst-clouds-layer' | 'esri-imagery-layer' | 'carto-dark-layer',
-  LayerVisibility
-> {
-  const { cloudsVisible: clouds, irVisible: ir, forecastFrameActive: fcst } = state;
-  const useEsri = !clouds && !ir && !state.esriTilesFailed;
-  return {
-    'gibs-clouds-layer': clouds && !fcst && !ir ? 'visible' : 'none',
-    'fcst-clouds-layer': clouds && fcst && !ir ? 'visible' : 'none',
-    'esri-imagery-layer': useEsri ? 'visible' : 'none',
-    'carto-dark-layer': useEsri ? 'none' : 'visible',
-  };
-}
-
-function applyCloudsVisibility(): void {
-  if (!core) return;
-  // Defensive try: the style may not be loaded yet, and test seams install
-  // map doubles without the layer API.
-  let forecastFrameActive = false;
-  try {
-    forecastFrameActive = core.hasLayer('fcst-clouds-layer')
-      && forecastFrameForView() !== null;
-  } catch { /* treat as observed-layer mode */ }
-  const visibility = basemapVisibility({
-    cloudsVisible,
-    irVisible,
-    forecastFrameActive,
-    esriTilesFailed,
-  });
-  // P1 from review: source-swap via setLayoutProperty visibility, not
-  // setStyle rebuild — keeps all overlays + layer state intact.
-  try {
-    for (const [layerId, vis] of Object.entries(visibility) as [LayerId, LayerVisibility][]) {
-      core.setVisibility(layerId, vis);
-    }
-  } catch {
-    /* layers may not be loaded yet on the first call — applyCloudsVisibility
-       runs again after renderMap binds */
-  }
-}
-
-let cloudToggleBound = false;
-function bindCloudToggle(): void {
-  if (cloudToggleBound) return;
-  const btn = document.getElementById('toggle-clouds');
-  if (!btn) return;
-  const reflect = () => {
-    btn.classList.toggle('active', cloudsVisible);
-    btn.setAttribute(
-      'aria-pressed', cloudsVisible ? 'true' : 'false',
-    );
-    btn.title = cloudsVisible
-      ? 'Clouds shown (dark basemap) — click to hide clouds and show satellite imagery'
-      : 'Clouds hidden (satellite imagery) — click to show clouds and dark basemap';
-  };
-  reflect();
-  btn.addEventListener('click', () => {
-    cloudsVisible = !cloudsVisible;
-    try { localStorage.setItem(CLOUDS_PREF_KEY, cloudsVisible ? '1' : '0'); } catch { /* noop */ }
-    reflect();
-    // Mutual exclusion with IR (Feature C): showing the daily clouds turns the
-    // IR layer off (one cloud view at a time); the basemap arbiter follows via
-    // refreshForecastCloudLayer → applyCloudsVisibility below.
-    if (cloudsVisible && irVisible) {
-      irVisible = false;
-      try { localStorage.setItem(IR_PREF_KEY, '0'); } catch { /* noop */ }
-      applyIrVisibility();
-      reflectIrButton();
-    }
-    // Wire (not just show) the forecast layer: toggling clouds ON while
-    // scrubbed must CREATE the fcst source if the scrub happened with
-    // clouds off (Codex adversarial 2026-06-11).
-    refreshForecastCloudLayer();
-  });
-  cloudToggleBound = true;
-}
 
 /** Show / hide the VIIRS Black Marble night-lights overlay. Idempotent —
  *  safe to call before MapLibre has finished loading the layer. v2
@@ -2417,150 +2068,6 @@ function bindNightLightsToggle(): void {
     applyNightLightsVisibility();
   });
   nightLightsToggleBound = true;
-}
-
-// ── Live geostationary IR overlay (Feature C, 2026-06-21) ────────────────────
-
-/** Re-point the geo-IR source at the satellite covering the current view
- *  center. Touches tiles only when IR is ON and the satellite changed, so
- *  panning with IR off issues zero tile requests (eng R5). */
-function repickGeoIRForView(): void {
-  if (!core || !irVisible) return;
-  let lat: number;
-  let lng: number;
-  try { [lng, lat] = core.center(); } catch { return; }
-  const sat = pickGeoIRSat(lat, lng);
-  const time = geoIRTimeForNow();
-  // Reset tiles when the satellite OR the 10-min frame time changes, so a
-  // stationary operator still gets fresh imagery rather than a frame frozen at
-  // toggle-on (Codex #1).
-  const changed = (sat?.layer ?? null) !== (currentGeoIRSat?.layer ?? null) || time !== currentGeoIRTime;
-  currentGeoIRSat = sat;
-  if (sat && changed) {
-    currentGeoIRTime = time;
-    geoIrAnyLoaded = false; // new tiles → re-evaluate feed health
-    geoIrFeedDown = false;
-    try {
-      core.setRasterTiles('geo-ir', [geoIRTileUrl(sat, time)]);
-    } catch { /* source not ready */ }
-  } else if (!sat) {
-    currentGeoIRTime = null;
-  }
-}
-
-/** Show/hide the geo-IR raster. Hidden when off OR in a no-coverage gap
- *  (currentGeoIRSat === null) so the operator never sees blank/stale tiles —
- *  the badge explains the gap (eng R7). */
-function applyIrVisibility(): void {
-  if (!core) return;
-  const showRaster = irVisible && currentGeoIRSat !== null;
-  try {
-    core.setVisibility('geo-ir-layer', showRaster ? 'visible' : 'none');
-  } catch { /* layer not loaded yet */ }
-}
-
-/** Sync the clouds button's active/aria state (its own reflect is a closure;
- *  the IR toggle needs to update it when mutual-exclusion flips clouds off). */
-function reflectCloudsButtonState(): void {
-  const btn = document.getElementById('toggle-clouds');
-  if (!btn) return;
-  btn.classList.toggle('active', cloudsVisible);
-  btn.setAttribute('aria-pressed', cloudsVisible ? 'true' : 'false');
-  btn.title = cloudsVisible
-    ? 'Clouds shown (dark basemap) — click to hide clouds and show satellite imagery'
-    : 'Clouds hidden (satellite imagery) — click to show clouds and dark basemap';
-}
-
-/** Drive the whole IR state: re-pick the satellite, set raster visibility,
- *  re-run the shared basemap/clouds arbiter (depends on irVisible), refresh
- *  the badge. */
-function refreshIr(): void {
-  repickGeoIRForView();
-  applyIrVisibility();
-  applyCloudsVisibility();
-  refreshImageryDateBadgeForView();
-}
-
-let irToggleBound = false;
-function reflectIrButton(): void {
-  const btn = document.getElementById('toggle-ir');
-  if (!btn) return;
-  btn.classList.toggle('active', irVisible);
-  btn.setAttribute('aria-pressed', irVisible ? 'true' : 'false');
-  btn.title = irVisible
-    ? 'Live IR cloud-tops shown (replaces daily clouds; misses low cloud) — click to hide'
-    : 'Show live geostationary IR cloud-tops (~10 min, day + night; replaces the daily clouds layer)';
-}
-
-let irErrorLogged = false;
-function armIrErrorHandler(): void {
-  if (!core) return;
-  core.on('error', ({ sourceId }) => {
-    if (sourceId !== 'geo-ir') return;
-    if (irErrorLogged) return;
-    irErrorLogged = true;
-    // Geostationary IR tiles legitimately 404 at the satellite DISK EDGES and
-    // for the most-recent (not-yet-published) 10-min frame — that is NOT a
-    // "layer down" signal. Log once but DO NOT disable IR: a single edge tile
-    // must never kill the whole overlay (it stays valid where tiles exist).
-    console.warn('[map] some geo-IR tiles 404 (disk edge / unpublished frame); IR left on.');
-  });
-}
-
-function bindIrToggle(): void {
-  if (irToggleBound) return;
-  const btn = document.getElementById('toggle-ir');
-  if (!btn) return;
-  armIrErrorHandler();
-  reflectIrButton();
-  // Advance the IR frame as new 10-min imagery publishes, even if the operator
-  // never pans (Codex #1). Cheap: a no-op unless IR is on and the frame rolled.
-  clock.every(120_000, () => {
-    if (!irVisible) return;
-    repickGeoIRForView();
-    applyIrVisibility();
-    refreshImageryDateBadgeForView();
-  });
-  // Re-pick the satellite as the operator pans — GATED on irVisible so panning
-  // with IR off issues zero tile requests (eng R5).
-  if (core) {
-    core.on('moveend', () => {
-      if (!irVisible) return;
-      repickGeoIRForView();
-      applyIrVisibility();
-      refreshImageryDateBadgeForView();
-    });
-    // Feed-health (Codex review): a loaded geo-IR tile clears any "feed down"
-    // state; if the map settles (idle) with IR visible but nothing loaded, the
-    // feed is down — so an outage shows "feed unavailable", not fake clear sky.
-    core.on('data', ({ sourceId, tileLoaded }) => {
-      if (sourceId === 'geo-ir' && tileLoaded) {
-        geoIrAnyLoaded = true;
-        if (geoIrFeedDown) { geoIrFeedDown = false; refreshImageryDateBadgeForView(); }
-      }
-    });
-    core.on('idle', () => {
-      if (irVisible && currentGeoIRSat && !geoIrAnyLoaded && !geoIrFeedDown) {
-        geoIrFeedDown = true;
-        refreshImageryDateBadgeForView();
-      }
-    });
-  }
-  btn.addEventListener('click', () => {
-    if (irErrorLogged) irErrorLogged = false; // re-arm on explicit re-toggle
-    irVisible = !irVisible;
-    try { localStorage.setItem(IR_PREF_KEY, irVisible ? '1' : '0'); } catch { /* noop */ }
-    // Mutual exclusion: turning IR on turns the daily clouds OFF (one cloud
-    // view at a time); the shared basemap arbiter follows in refreshIr().
-    if (irVisible && cloudsVisible) {
-      cloudsVisible = false;
-      try { localStorage.setItem(CLOUDS_PREF_KEY, '0'); } catch { /* noop */ }
-      reflectCloudsButtonState();
-    }
-    reflectIrButton();
-    refreshIr();
-  });
-  irToggleBound = true;
 }
 
 /** Show / hide the Esri Reference labels overlay. v2 (Chris feedback
@@ -3206,129 +2713,6 @@ export function createIssMarkerElement(): HTMLElement {
 
   wrap.appendChild(svg);
   return wrap;
-}
-
-/** Inject (or update) a small "Imagery: YYYY-MM-DD" badge in the map
- *  container so the user knows how recent the cloud composite they're
- *  looking at actually is. Important offline — a GIBS tile cached past
- *  day-roll otherwise reads as today's clouds. Idempotent.
- */
-// Last (container, manifest) the imagery badge rendered with, so the badge
-// can re-render when the SCRUB state changes without renderMap re-running
-// (T5 — the badge text depends on isScrubbed()).
-let lastImageryBadgeArgs: { container: HTMLElement; manifest: Manifest } | null = null;
-
-/** Honest, coarse age of the shown cloud imagery — answers "how old is the
- *  satellite cloud photo?" (Jack 2026-06-21) at the point of use, so the
- *  operator weights a day-old daily composite correctly. Pure for testing. */
-export function formatImageryAge(compositeMs: number, nowMs: number): string {
-  const ageMin = Math.max(0, Math.floor((nowMs - compositeMs) / 60_000));
-  if (ageMin < 90) return `~${ageMin}m old`;
-  if (ageMin < 24 * 60) return `~${Math.round(ageMin / 60)}h old`;
-  const ageD = Math.round(ageMin / 1440);
-  return `~${ageD} day${ageD === 1 ? '' : 's'} old`;
-}
-
-export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifest): void {
-  lastImageryBadgeArgs = { container, manifest };
-  let badge = container.querySelector<HTMLElement>('.map-imagery-date');
-  if (!badge) {
-    badge = document.createElement('div');
-    badge.className = 'map-imagery-date';
-    container.appendChild(badge);
-  }
-  // IR active: the badge reflects the IR layer (eng R9), carrying the low-cloud
-  // caveat at point-of-use (eng R3), or the no-coverage note in a gap (eng R7).
-  if (irVisible) {
-    if (!currentGeoIRSat) {
-      badge.textContent = 'IR: no geostationary coverage here';
-    } else if (geoIrFeedDown) {
-      // Visible but every tile errored → an outage, NOT clear sky (Codex review).
-      badge.textContent = `IR · ${currentGeoIRSat.label} · feed unavailable`;
-    } else if (clock.isScrubbed()) {
-      // IR is always CURRENT cloud-tops; under a scrubbed/future view it must
-      // NOT read as a forecast for the scrubbed time (Codex #2).
-      badge.textContent = `IR · ${currentGeoIRSat.label} · LIVE now (not the scrubbed time) · misses low cloud`;
-    } else {
-      // GIBS frames carry a computed timestamp → show its age. RealEarth
-      // (Meteosat) always serves the newest frame with no pinned time/age →
-      // "latest", not a false specific age (Codex review).
-      const fresh = currentGeoIRSat.source === 'realearth'
-        ? 'latest'
-        : (currentGeoIRTime ? formatImageryAge(Date.parse(currentGeoIRTime), clock.now()) : '');
-      badge.textContent = `IR · ${currentGeoIRSat.label}${fresh ? ` · ${fresh}` : ''} · misses low cloud`;
-    }
-    badge.hidden = false;
-    return;
-  }
-  const hour = manifest.cloud_composite_hour;
-  if (!hour) {
-    badge.hidden = true;
-    badge.textContent = '';
-    return;
-  }
-  const t = Date.parse(hour);
-  if (Number.isNaN(t)) {
-    badge.hidden = true;
-    return;
-  }
-  const date = new Date(t).toISOString().slice(0, 10);
-  // Badge wording follows the LAYER truth (T5 → V4-P2). Three states while
-  // scrubbed: a forecast frame is active → name it (+Nh · coarse · run);
-  // index present but the view is past coverage → observed + ends-clamp;
-  // no frames at all → the original T5 observed-not-forecast wording, so
-  // the operator never plans against yesterday's clouds believing they're
-  // tomorrow's (the trust mismatch Chris reported 2026-05-20).
-  if (!clock.isScrubbed()) {
-    // Now-view: the daily true-color cloud composite. Surface its age so the
-    // operator never reads a day-old picture as current (Jack 2026-06-21).
-    badge.textContent = `Imagery: ${date} · ${formatImageryAge(t, clock.now())}`;
-  } else {
-    // Scrubbed: the wording follows the layer truth (V4-P2). The gate here
-    // intentionally reads the PARAM manifest (not currentManifest) so the
-    // badge and its tests stay pure given (manifest, scrub state).
-    const nowMs = clock.now();
-    const fc = activeForecastIndex(manifest);
-    const frame = frameForIndex(fc, nowMs);
-    const eligible = !!fc && cloudsVisible && !fcstTilesFailed
-      && Array.isArray(fc.valid_times) && fc.valid_times.length > 0;
-    if (frame && fc) {
-      const aheadH = Math.round((frame.validMs - nowMs) / 3_600_000);
-      const runHH = fc.gfs_run.slice(11, 13);
-      // "coarse" disclosed by design (A6 gate 2026-06-10): 5° cells are
-      // synoptic blobs — pre-empt the deep-zoom expectation gap. Sub-hour
-      // horizons say "now" — "+0h" would label a slightly-past frame as
-      // future (ship review 2026-06-11).
-      const horizon = aheadH < 1 ? 'now' : `+${aheadH}h`;
-      badge.textContent = `Clouds: GFS forecast ${horizon} · coarse (${runHH}z)`;
-    } else if (eligible && lastValidTimeMs(fc!) < clock.viewMs(nowMs)) {
-      // Index exists but the view is past the last frame (locked A4 clamp
-      // wording — rare with the +48h tail, real on a stale manifest).
-      const endH = Math.max(0, Math.round((lastValidTimeMs(fc!) - nowMs) / 3_600_000));
-      badge.textContent = `Clouds: observed ${date} — forecast ends +${endH}h`;
-    } else {
-      badge.textContent = `Clouds: observed ${date} — not forecast`;
-    }
-  }
-  badge.hidden = false;
-}
-
-/** Latest parseable valid_time in a forecast index (−∞ when none). */
-function lastValidTimeMs(fc: ForecastCloudsIndex): number {
-  let max = Number.NEGATIVE_INFINITY;
-  for (const iso of fc.valid_times) {
-    const t = Date.parse(iso);
-    if (!Number.isNaN(t) && t > max) max = t;
-  }
-  return max;
-}
-
-/** Re-render the imagery badge for the current scrub state (called from
- *  setLookahead). No-op until renderMap has drawn the badge once. */
-function refreshImageryDateBadgeForView(): void {
-  if (lastImageryBadgeArgs) {
-    ensureImageryDateBadge(lastImageryBadgeArgs.container, lastImageryBadgeArgs.manifest);
-  }
 }
 
 /** Compact short-labels + sub-points for the topbar multi-sat row.

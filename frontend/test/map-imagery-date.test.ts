@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { _resetMapStateForTest, ensureImageryDateBadge, formatImageryAge, setLookahead } from '../src/map';
+import { ensureImageryDateBadge, formatImageryAge } from '../src/map/features/basemap';
+import { _resetMapStateForTest, setLookahead } from '../src/map';
 import type { Manifest } from '../src/types';
 
 const baseManifest: Manifest = {
