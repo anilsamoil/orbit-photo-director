@@ -22,9 +22,10 @@ import type {
   VendorEvents,
   VendorMap,
 } from './vendor-map';
+import { EMPTY_VIEW, type SelectedSatellite, type View } from './view';
 
 /** Popups the map owns one of at a time; opening another closes the last. */
-export type PopupOwner = 'target' | 'launch';
+export type PopupOwner = 'target' | 'launch' | 'pin';
 
 export type PopupOptions = {
   at: LngLat;
@@ -38,6 +39,10 @@ export type PopupOptions = {
  *  on first write, and only satellite tracks can be removed. */
 export interface MapCore {
   readonly clock: Clock;
+
+  view(): View;
+  setTrack(track: View['track']): void;
+  setSatellites(satellites: readonly SelectedSatellite[]): void;
 
   ensureLayer(spec: LayerSpec): void;
   hasLayer(id: LayerId): boolean;
@@ -77,6 +82,7 @@ export interface MapCore {
 }
 
 export function createMapCore(vendor: VendorMap, clock: Clock): MapCore {
+  let view: View = EMPTY_VIEW;
   const owned: Partial<Record<PopupOwner, PopupHandle>> = {};
 
   const closePopup = (owner: PopupOwner): void => {
@@ -87,6 +93,14 @@ export function createMapCore(vendor: VendorMap, clock: Clock): MapCore {
 
   return {
     clock,
+
+    view: () => view,
+    setTrack(track) {
+      view = { ...view, track };
+    },
+    setSatellites(satellites) {
+      view = { ...view, satellites };
+    },
 
     ensureLayer(spec) {
       if (vendor.hasLayer(spec.id)) return;

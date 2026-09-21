@@ -4,6 +4,8 @@ import { LAYER_ORDER, satTrackLayerId, satTrackSourceId } from '../src/map/map-c
 import { createClock } from '../src/map/map-core/clock';
 import { createMapCore, type MapCore } from '../src/map/map-core/core';
 import type { LineLayer } from '../src/map/map-core/layer-spec';
+import type { SelectedSatellite } from '../src/map/map-core/view';
+import type { Track } from '../src/types';
 import { createVendorDouble, type VendorDouble } from './vendor-map-double';
 
 // MapCore is what a feature is handed. These tests hold each facade method
@@ -142,10 +144,13 @@ describe('popups', () => {
   it('keeps owners apart', () => {
     core.openPopup({ at: [0, 0], content: body(), owner: 'target' });
     core.openPopup({ at: [1, 1], content: body(), owner: 'launch' });
+    core.openPopup({ at: [2, 2], content: body(), owner: 'pin' });
     core.closePopup('target');
-    expect(vendor.popups.map((p) => p.removed)).toEqual([true, false]);
+    expect(vendor.popups.map((p) => p.removed)).toEqual([true, false, false]);
     core.closePopup('launch');
-    expect(vendor.popups.map((p) => p.removed)).toEqual([true, true]);
+    expect(vendor.popups.map((p) => p.removed)).toEqual([true, true, false]);
+    core.closePopup('pin');
+    expect(vendor.popups.map((p) => p.removed)).toEqual([true, true, true]);
   });
 
   it('does not let a late close from a replaced popup drop the replacement', () => {
@@ -168,6 +173,30 @@ describe('popups', () => {
     core.openPopup({ at: [3, 4], content, maxWidth: '360px', owner: 'target' });
     expect(vendor.popups[0]).toMatchObject({ at: [3, 4], content, maxWidth: '360px' });
     expect('owner' in vendor.popups[0]!).toBe(false);
+  });
+});
+
+describe('view', () => {
+  const track = { tle_epoch: '2026-05-04T00:00:00Z', tle_age_hours: 12 } as Track;
+  const tiangong: SelectedSatellite = { name: 'Tiangong', color: '#ffb000', track };
+
+  it('opens with no track and no satellites', () => {
+    expect(core.view()).toEqual({ track: null, satellites: [] });
+  });
+
+  it('holds the last track and satellite list written, each write leaving the other alone', () => {
+    core.setTrack(track);
+    core.setSatellites([tiangong]);
+    expect(core.view()).toEqual({ track, satellites: [tiangong] });
+    core.setTrack(null);
+    expect(core.view()).toEqual({ track: null, satellites: [tiangong] });
+  });
+
+  it('replaces the record instead of mutating what a reader already holds', () => {
+    const before = core.view();
+    core.setTrack(track);
+    expect(before.track).toBeNull();
+    expect(core.view()).not.toBe(before);
   });
 });
 
