@@ -5,7 +5,7 @@
  *  describe block feed it a violating snippet and prove the rule can fail.
  *  A boundary check that cannot fail is worse than no check, because it
  *  reads like protection. */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, posix, relative, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -240,6 +240,29 @@ export function overlayImportViolations(path: string, sourceText: string): strin
     .map((entry) => `${path} imports ${entry.specifier}`);
 }
 
+/** `FEATURES` and the directories under features/ are the same set, and a
+ *  feature's id is its directory name, so the registry can be read from
+ *  the tree and the tree from the registry. */
+export function registryViolations(directories: readonly string[], ids: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const directory of directories) {
+    if (!ids.includes(directory)) out.push(`features/${directory}/ is not in FEATURES`);
+  }
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) out.push(`FEATURES holds '${id}' more than once`);
+    else if (!directories.includes(id)) out.push(`FEATURES holds '${id}' with no features/${id}/ directory`);
+    seen.add(id);
+  }
+  return out;
+}
+
+function isMapFeature(value: unknown): value is { id: string; mount: (core: unknown) => void } {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.id === 'string' && typeof candidate.mount === 'function';
+}
+
 function sourceFiles(): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   const walk = (dir: string): void => {
@@ -315,6 +338,37 @@ describe('import boundaries in frontend/src', () => {
 
   it('the rules above are running against real files under src/map/', () => {
     expect(files.some((file) => file.path.startsWith('map/map-core/'))).toBe(true);
+  });
+});
+
+describe('the feature registry', () => {
+  const root = join(SRC, 'map/features');
+  const directories = readdirSync(root)
+    .filter((name) => statSync(join(root, name)).isDirectory())
+    .sort();
+
+  it('has at least the two features that shipped', () => {
+    expect(directories).toEqual(expect.arrayContaining(['pin-drop', 'satellites']));
+  });
+
+  it('lists every feature directory once, under its directory name', async () => {
+    const { FEATURES } = await import('../src/map/features');
+    expect(registryViolations(directories, FEATURES.map((feature) => feature.id))).toEqual([]);
+  });
+
+  it('each directory exports the MapFeature that FEATURES holds from its index.ts', async () => {
+    const { FEATURES } = await import('../src/map/features');
+    for (const directory of directories) {
+      const exported: Record<string, unknown> = await import(`../src/map/features/${directory}/index.ts`);
+      const entry = Object.values(exported).find((value) => isMapFeature(value) && value.id === directory);
+      expect(entry, `features/${directory}/index.ts exports no MapFeature with id '${directory}'`).toBeDefined();
+      expect(FEATURES, `FEATURES does not hold the object features/${directory}/index.ts exports`).toContain(entry);
+    }
+  });
+
+  it('each feature carries a test named after its directory', () => {
+    const missing = directories.filter((directory) => !existsSync(join(root, directory, `${directory}.test.ts`)));
+    expect(missing).toEqual([]);
   });
 });
 
@@ -494,5 +548,15 @@ describe('the boundary rules can fail', () => {
 
   it('reads the PREF_KEYS entries a file touches', () => {
     expect(prefKeyReferences('localStorage.getItem(PREF_KEYS.a); const k = PREF_KEYS.b; other.c;')).toEqual(['a', 'b']);
+  });
+
+  it('flags an unregistered directory, a registered id with no directory, and a repeated id', () => {
+    expect(registryViolations(['labels', 'pin-drop', 'satellites'], ['pin-drop', 'terminator', 'pin-drop'])).toEqual([
+      'features/labels/ is not in FEATURES',
+      'features/satellites/ is not in FEATURES',
+      "FEATURES holds 'terminator' with no features/terminator/ directory",
+      "FEATURES holds 'pin-drop' more than once",
+    ]);
+    expect(registryViolations(['pin-drop', 'satellites'], ['satellites', 'pin-drop'])).toEqual([]);
   });
 });
