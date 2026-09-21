@@ -257,6 +257,31 @@ export function registryViolations(directories: readonly string[], ids: readonly
   return out;
 }
 
+const CLOCK = 'map/map-core/clock.ts';
+
+/** The map renders one instant, `core.clock.viewMs()`, and the wall clock
+ *  behind it is read in exactly one place. A `Date.now()` in a feature is
+ *  a second clock that silently ignores the scrub. */
+export function wallClockViolations(path: string, sourceText: string): string[] {
+  if (!path.startsWith('map/') || path === CLOCK) return [];
+  const parsed = ts.createSourceFile('probe.ts', sourceText, ts.ScriptTarget.ES2022, true);
+  const out: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'now') {
+      const object = node.expression.expression;
+      if (isIdentifierNamed(object, 'Date') || isIdentifierNamed(object, 'performance')) {
+        out.push(`${path} reads the wall clock with ${node.expression.getText()}()`);
+      }
+    }
+    if (ts.isNewExpression(node) && isIdentifierNamed(node.expression, 'Date') && (node.arguments?.length ?? 0) === 0) {
+      out.push(`${path} reads the wall clock with new Date()`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  return out;
+}
+
 function isMapFeature(value: unknown): value is { id: string; mount: (core: unknown) => void } {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -334,6 +359,13 @@ describe('import boundaries in frontend/src', () => {
   it('nothing under src/map/ carries an escape hatch or a deferred decision', () => {
     const violations = files.flatMap((file) => escapeHatchViolations(file.path, file.text));
     expect(violations).toEqual([]);
+  });
+
+  it('nothing under src/map/ reads the wall clock except clock.ts', () => {
+    const violations = files.flatMap((file) => wallClockViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+    const clock = files.find((file) => file.path === CLOCK);
+    expect(clock?.text).toContain('Date.now()');
   });
 
   it('the rules above are running against real files under src/map/', () => {
@@ -548,6 +580,24 @@ describe('the boundary rules can fail', () => {
 
   it('reads the PREF_KEYS entries a file touches', () => {
     expect(prefKeyReferences('localStorage.getItem(PREF_KEYS.a); const k = PREF_KEYS.b; other.c;')).toEqual(['a', 'b']);
+  });
+
+  it('flags every wall-clock read under src/map/ except in clock.ts, and lets a dated Date through', () => {
+    const text = [
+      'const a = Date.now();',
+      'const b = new Date();',
+      'const c = performance.now();',
+      "const d = new Date('2026-05-04T12:00:00Z');",
+      "const e = Date.parse('2026-05-04T12:00:00Z');",
+      'const f = core.clock.now();',
+    ].join('\n');
+    expect(wallClockViolations('map/features/x/index.ts', text)).toEqual([
+      'map/features/x/index.ts reads the wall clock with Date.now()',
+      'map/features/x/index.ts reads the wall clock with new Date()',
+      'map/features/x/index.ts reads the wall clock with performance.now()',
+    ]);
+    expect(wallClockViolations('map/map-core/clock.ts', text)).toEqual([]);
+    expect(wallClockViolations('countdown.ts', text)).toEqual([]);
   });
 
   it('flags an unregistered directory, a registered id with no directory, and a repeated id', () => {
