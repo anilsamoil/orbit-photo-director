@@ -2,17 +2,13 @@ import type { Manifest, PassEntry, Track } from './types';
 import type { ForecastCloudsIndex } from './types';
 import { fetchArtifact } from './manifest';
 import { wrapLon } from './geo';
-import {
-  beforeIdFor,
-  satTrackLayerId,
-  satTrackSourceId,
-  type GeoJsonSourceId,
-  type LayerId,
-} from './map/map-core/catalog';
+import { satTrackLayerId, satTrackSourceId, type LayerId } from './map/map-core/catalog';
 import { createVendorMap } from './map/adapters/maplibre';
 import { initialCamera } from './map/map-core/camera';
+import { createClock } from './map/map-core/clock';
+import { createMapCore, type MapCore } from './map/map-core/core';
 import { boundsOf, type Point } from './map/map-core/geometry';
-import type { LayerSpec, StyleSpec } from './map/map-core/layer-spec';
+import type { StyleSpec } from './map/map-core/layer-spec';
 import type {
   Hit,
   MarkerHandle,
@@ -56,35 +52,15 @@ import { isLaunchPass, legacyLaunchInHorizon, selectLaunches } from './launch-se
 import { openLaunchDetails, renderLegacyLaunchCard } from './launch-card';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
-let vendor: VendorMap | null = null;
+const clock = createClock();
+let core: MapCore | null = null;
 let issMarker: MarkerHandle | null = null;
-let liveTimer: number | null = null;
-// Refreshes the UTC time chips on the time-step buttons every 30s so
-// labels stay accurate as the wall clock advances.
-let timeLabelTimer: number | null = null;
 let currentTrack: Track | null = null;
 // Cached most-recently-fetched passes list — kept so when the operator
 // hits a time-scrub button we can re-derive the target-pin opacity (and
 // future-orbit ground track) without re-fetching the manifest.
 let currentPasses: PassEntry[] = [];
 let launchSubscriptionBound = false;
-// Orbit time-scrub: null = live "Now" mode (1Hz marker tick + standard
-// 2-orbit track). Non-null = the map is pinned to an ABSOLUTE UTC instant
-// and shows ONLY the orbit centered there, ISS marker frozen at that
-// instant (per Q2 → A in the 2026-05-20 decision).
-//
-// T1 (eng-review 2026-06-10): this was `let lookaheadMinutes = 0` — a
-// RELATIVE offset that every refresh re-resolved against the advancing
-// wall clock, so a view parked on the 19:42Z pass silently became the
-// 19:52Z view ten minutes later. Buttons + short glances hid the drift;
-// the continuous slider invites parking, so the instant is now absolute
-// and the wall clock catching up snaps the view back to live
-// (maybeSnapToLive, called from the 1Hz live timer).
-//
-// Still capped at now+36h via clampLookahead() — matches the upcoming
-// passes.json horizon so we don't scrub into orbits with no target data.
-// Cannot go into the past (Q3/3A — "back" is toward Now; floor at 0).
-let viewTimeMs: number | null = null;
 
 // Exported (6A, 2026-06-10): the cap, the clamp, and the UTC formatter are
 // the contract the time controls (steppers + slider) and their tests share.
@@ -106,23 +82,19 @@ export function formatUtcHm(ms: number): string {
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
 }
 
-/** The absolute instant the map renders (live now when not scrubbed). */
-function currentViewMs(nowMs = Date.now()): number {
-  return viewTimeMs ?? nowMs;
-}
-
 /** Minutes from live-now to the pinned view instant (0 when live).
  *  Fractional by design: the pinned instant doesn't move, so this offset
  *  shrinks as the wall clock advances toward it. */
-function lookaheadMinutesNow(nowMs = Date.now()): number {
-  if (viewTimeMs === null) return 0;
-  return Math.max(0, (viewTimeMs - nowMs) / 60_000);
+function lookaheadMinutesNow(nowMs = clock.now()): number {
+  const view = clock.viewTime();
+  if (view.kind !== 'scrubbed') return 0;
+  return Math.max(0, (view.atMs - nowMs) / 60_000);
 }
 
 /** True when the map is pinned to a future instant (scrub active). Gates
  *  follow-ISS recentering and live ticking; exported for tests. */
 export function isScrubbed(): boolean {
-  return viewTimeMs !== null;
+  return clock.isScrubbed();
 }
 
 /** Snap back to live mode once the wall clock reaches the pinned instant
@@ -130,16 +102,17 @@ export function isScrubbed(): boolean {
  *  beats rendering a frozen scene that slowly falls behind. Called from the
  *  1Hz live timer; returns true when a snap happened. Exported for unit
  *  tests (the timer itself needs a full map env). */
-export function maybeSnapToLive(nowMs = Date.now()): boolean {
-  if (viewTimeMs !== null && nowMs >= viewTimeMs) {
+export function maybeSnapToLive(nowMs = clock.now()): boolean {
+  const view = clock.viewTime();
+  if (view.kind === 'scrubbed' && nowMs >= view.atMs) {
     setLookahead(0, /*recenter=*/false);
     // Follow × snap interleaving (red-team 2026-06-10): with follow-ISS
     // active, the next 1Hz tick would setCenter (instant) from the parked
     // future view to the live sub-point — a silent jump cut. Give the
     // operator one animated ease instead, mirroring the follow-entry cue.
-    if (followISS && vendor && currentTrack) {
+    if (followISS && core && currentTrack) {
       const pos = markerPositionFor(currentTrack);
-      if (pos) vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+      if (pos) core.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
     }
     return true;
   }
@@ -148,7 +121,8 @@ export function maybeSnapToLive(nowMs = Date.now()): boolean {
 
 /** Test-only: the pinned absolute view instant (null = live). */
 export function _getViewTimeMsForTest(): number | null {
-  return viewTimeMs;
+  const view = clock.viewTime();
+  return view.kind === 'scrubbed' ? view.atMs : null;
 }
 
 /** Test-only: install a Track so track-dependent affordances (e.g. the
@@ -232,15 +206,15 @@ function frameForIndex(
   fc: ForecastCloudsIndex | undefined,
   nowMs: number,
 ): { iso: string; validMs: number } | null {
-  if (!isScrubbed() || fcstTilesFailed || !cloudsVisible) return null;
+  if (!clock.isScrubbed() || fcstTilesFailed || !cloudsVisible) return null;
   if (!fc || !Array.isArray(fc.valid_times) || fc.valid_times.length === 0) return null;
-  return nearestForecastFrame(fc.valid_times, currentViewMs(nowMs), nowMs);
+  return nearestForecastFrame(fc.valid_times, clock.viewMs(nowMs), nowMs);
 }
 
 /** The frame the CURRENT view should display, or null for the observed
  *  layer. At Now (not scrubbed) this is ALWAYS null — the live view stays
  *  on observed imagery (critical regression guard). */
-function forecastFrameForView(nowMs = Date.now()): { iso: string; validMs: number } | null {
+function forecastFrameForView(nowMs = clock.now()): { iso: string; validMs: number } | null {
   return frameForIndex(activeForecastIndex(currentManifest), nowMs);
 }
 
@@ -318,7 +292,7 @@ function readActiveDistanceThresholdKm(): number {
  *  pin immediately (no wait for a daemon tick). Pure DOM effect — no
  *  network. Exported so main.ts can drive it too when needed. */
 export function applyDistanceThreshold(): void {
-  if (!vendor) return;
+  if (!core) return;
   refreshTargetsSource();
   refreshMyTargetsSource();
 }
@@ -375,7 +349,6 @@ let currentGeoIRSat: GeoIRSat | null = null;
 /** ISO time of the IR frame currently loaded — advances as new ~10-min frames
  *  publish so a stationary operator never sees stale imagery (Codex #1). */
 let currentGeoIRTime: string | null = null;
-let irTickerStarted = false;
 /** Feed-health (Codex review): a geo-IR tile loaded since the last tile-set.
  *  If the layer is visible but the map settles with NOTHING loaded (every tile
  *  errored), the feed is down — surface that so an outage can't masquerade as
@@ -486,17 +459,17 @@ let bearingMode: BearingMode = readBearingMode();
 export function _resetMapStateForTest(): void {
   mapLaunchModeUnsubscribe?.();
   mapLaunchModeUnsubscribe = null;
-  dismissMapModePopup('target');
-  dismissMapModePopup('launch');
+  core?.closePopup('target');
+  core?.closePopup('launch');
   mapLaunchStyleUnsubscribe?.();
   mapLaunchStyleUnsubscribe = null;
-  mapLaunchStyleVendor = null;
+  mapLaunchStyleCore = null;
   setMapLaunchMode(false);
   bearingMode = 'north';
   nightLightsVisible = false;
   labelsVisible = true;
   followISS = false;   // tests assume follow off; production default is ON
-  viewTimeMs = null;
+  clock.setViewTime({ kind: 'live' });
   sliderBound = false;
   sliderLastAppliedMinutes = -1;
   sliderDragging = false;
@@ -994,19 +967,20 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   currentTrack = track;
   currentManifest = manifest; // V4-P2: forecast-frame machinery reads the index
 
-  const isFirstInit = !vendor;
-  if (!vendor) {
-    vendor = createVendorMap({
+  const isFirstInit = !core;
+  if (!core) {
+    const vendor = createVendorMap({
       container,
       style: buildStyle(),
       camera: initialCamera(container.clientWidth || window.innerWidth),
     });
+    core = createMapCore(vendor, clock);
     // A2 from /plan-eng-review 2026-05-21: silent fallback to Carto Dark
     // if Esri imagery tiles fail to load. Listens for source-data errors;
     // if the failing source is the Esri basemap, flip the session flag
     // and re-apply visibility (which will keep Carto visible). One-way:
     // once Esri has failed in this session, we don't retry until reload.
-    vendor.on('error', (e) => {
+    core.on('error', (e) => {
       const errSource = e.sourceId;
       if (errSource === 'fcst-clouds' && !fcstTilesFailed) {
         // Locked A4 layer-2 fallback: one forecast tile failure drops the
@@ -1040,7 +1014,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // standard track_points 2-orbit polyline; at +N>0 shows a single ±45min
   // window centered on the future time, SGP4-derived.
   refreshGroundTrackSource(track);
-  ensureLayer({
+  core.ensureLayer({
     id: 'iss-track-layer',
     type: 'line',
     source: 'iss-track',
@@ -1114,7 +1088,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // score-dot layer pairs every dot with a dark #0b0d12 stroke. Wider dark
   // stroke under a narrower white one reads as a haloed ring on any
   // luminance.
-  ensureLayer({
+  core.ensureLayer({
     id: 'my-targets-casing',
     type: 'circle',
     source: 'my-targets',
@@ -1127,7 +1101,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       'circle-stroke-opacity': 0.7,
     },
   });
-  ensureLayer({
+  core.ensureLayer({
     id: 'my-targets-layer',
     type: 'circle',
     source: 'my-targets',
@@ -1144,8 +1118,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // Targets layer — features carry closest_approach_ms so the paint
   // expression can dim out-of-window passes per Q3 → C (filter+dim).
   refreshTargetsSource();
-  if (!vendor.hasLayer('targets-layer')) {
-    ensureLayer({
+  if (!core.hasLayer('targets-layer')) {
+    core.ensureLayer({
       id: 'targets-layer',
       type: 'circle',
       source: 'targets',
@@ -1190,9 +1164,9 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     //
     // Uses setDOMContent + textContent (NOT setHTML) so a user-controlled target
     // name like "<img onerror=...>" from personal-targets.csv stays literal.
-    vendor.on('click', (e) => {
-      if (!vendor) return;
-      const layers = (['targets-layer', 'my-targets-layer'] as const).filter((id) => vendor!.hasLayer(id));
+    core.on('click', (e) => {
+      if (!core) return;
+      const layers = (['targets-layer', 'my-targets-layer'] as const).filter((id) => core!.hasLayer(id));
       if (layers.length === 0) return;
       // ~7px bbox around the tap — fingertip-generous, yet tight enough that
       // "nearest" rarely needs to disambiguate (review R10/R16).
@@ -1206,17 +1180,17 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       // layer-scoped handlers so we don't double-open a target popup over them
       // (Codex review). Their handlers still fire; we just bow out.
       const priorityLayers = (['ascent-pad-layer', 'lookup-pin-layer', 'dropped-pin-layer'] as const)
-        .filter((id) => vendor!.hasLayer(id));
+        .filter((id) => core!.hasLayer(id));
       if (priorityLayers.length > 0
-        && vendor.queryAt(bbox, priorityLayers).length > 0) {
+        && core.queryAt(bbox, priorityLayers).length > 0) {
         return;
       }
-      const feats = vendor.queryAt(bbox, layers);
+      const feats = core.queryAt(bbox, layers);
       if (feats.length === 0) return; // not a target tap — let other handlers run
       const hit = pickTargetAtTap(
         feats,
         { x: e.point.x, y: e.point.y },
-        (ll) => vendor!.project(ll),
+        (ll) => core!.project(ll),
       );
       if (!hit) return;
       const props = hit.props;
@@ -1229,7 +1203,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         if (shot > 0) props.shot_count = shot;
       }
 
-      // INTENTIONALLY live (Date.now()): the popup's countdown answers "when is
+      // INTENTIONALLY live (clock.now()): the popup's countdown answers "when is
       // this pass from NOW" alongside the absolute UTC time — same live-domain
       // rule as the topbar even while the map is scrubbed.
       let popup: PopupHandle | null = null;
@@ -1241,8 +1215,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
             window.dispatchEvent(new CustomEvent('opd-edit-target', { detail: { targetId: id } }));
           }
         : undefined;
-      const popupBody = buildTargetPopupContent(props, Date.now(), onEdit, currentTrack);
-      popup = trackMapModePopup('target', () => vendor!.openPopup({ at: hit.lngLat, content: popupBody, maxWidth: '360px' }));
+      const popupBody = buildTargetPopupContent(props, clock.now(), onEdit, currentTrack);
+      popup = core.openPopup({ at: hit.lngLat, content: popupBody, maxWidth: '360px', owner: 'target' });
 
       // Async live "now" cloud — patched onto the popup's single weather row
       // once it resolves. Guard on isConnected so a resolve after the popup
@@ -1255,11 +1229,11 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     });
     // Pointer cursor over BOTH target layers (review R3 — the ring layer had none).
     for (const layerId of ['targets-layer', 'my-targets-layer'] as const) {
-      vendor.onLayer('mouseenter', layerId, () => {
-        if (vendor) vendor.setCursor('pointer');
+      core.onLayer('mouseenter', layerId, () => {
+        if (core) core.setCursor('pointer');
       });
-      vendor.onLayer('mouseleave', layerId, () => {
-        if (vendor) vendor.setCursor('');
+      core.onLayer('mouseleave', layerId, () => {
+        if (core) core.setCursor('');
       });
     }
   }
@@ -1275,7 +1249,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // so bright pinpoint lights pop. When terminator is ON, the existing
   // terminator-night-fill handles night-side dimming and this layer hides
   // (otherwise the day side would also be dimmed).
-  ensureLayer({
+  core.ensureLayer({
     id: 'night-lights-global-dim-layer',
     type: 'background',
     layout: { visibility: 'none' },
@@ -1284,7 +1258,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       'background-opacity': 0.30,
     },
   });
-  ensureLayer({
+  core.ensureLayer({
     id: 'terminator-night-fill-layer',
     type: 'fill',
     source: 'terminator-night-fill',
@@ -1325,14 +1299,14 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   //     background gone, 0.95 opacity paints bright city lights cleanly
   //     without darkening basemap or clouds. Solves the saga that started
   //     in v2.
-  ensureLayer({
+  core.ensureLayer({
     id: 'viirs-night-lights-layer',
     type: 'raster',
     source: 'viirs-night-lights',
     layout: { visibility: 'none' },
     paint: { 'raster-opacity': 0.95 },
   });
-  ensureLayer({
+  core.ensureLayer({
     id: 'terminator-line-layer',
     type: 'line',
     source: 'terminator-line',
@@ -1349,7 +1323,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       'line-blur': 40,
     },
   });
-  ensureLayer({
+  core.ensureLayer({
     id: 'subsolar-point-layer',
     type: 'circle',
     source: 'subsolar-point',
@@ -1366,7 +1340,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // Launch candidates share a gold marker/corridor identity. A corridor is
   // supplied only with trajectory provenance; legacy rows retain only a pad.
   refreshAscentTrajectorySource();
-  ensureLayer({
+  core.ensureLayer({
     id: 'ascent-trajectory-layer',
     type: 'line',
     source: 'ascent-trajectory',
@@ -1377,8 +1351,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       'line-opacity': 0.9,
     },
   });
-  if (!vendor.hasLayer('ascent-pad-layer')) {
-    ensureLayer({
+  if (!core.hasLayer('ascent-pad-layer')) {
+    core.ensureLayer({
       id: 'ascent-pad-layer',
       type: 'circle',
       source: 'ascent-pad',
@@ -1391,7 +1365,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         'circle-opacity': 0.95,
       },
     });
-    vendor.onLayer('click', 'ascent-pad-layer', (e) => {
+    core.onLayer('click', 'ascent-pad-layer', (e) => {
       const f = e.features[0];
       if (!f || f.geometry.type !== 'Point') return;
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
@@ -1403,20 +1377,20 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       const pass = currentPasses.find((p) => p.target_id === props.target_id);
       if (!pass || launchStore.getState().artifact) return;
       const body = renderLegacyLaunchCard(pass, true);
-      trackMapModePopup('launch', () => vendor!.openPopup({ at: coords, content: body }));
+      core!.openPopup({ at: coords, content: body, owner: 'launch' });
     });
-    vendor.onLayer('mouseenter', 'ascent-pad-layer', () => {
-      if (vendor) vendor.setCursor('pointer');
+    core.onLayer('mouseenter', 'ascent-pad-layer', () => {
+      if (core) core.setCursor('pointer');
     });
-    vendor.onLayer('mouseleave', 'ascent-pad-layer', () => {
-      if (vendor) vendor.setCursor('');
+    core.onLayer('mouseleave', 'ascent-pad-layer', () => {
+      if (core) core.setCursor('');
     });
   }
   syncMapLaunchMode();
   if (!launchSubscriptionBound) {
     launchSubscriptionBound = true;
     launchStore.subscribe(() => {
-      if (!vendor?.hasSource('ascent-pad')) return;
+      if (!core?.hasSource('ascent-pad')) return;
       refreshAscentTrajectorySource();
       refreshTargetsSource();
     });
@@ -1428,7 +1402,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   if (!issMarker) {
     const initial = markerPositionFor(track) ?? { lat: 0, lon: 0 };
     const el = createIssMarkerElement();
-    issMarker = vendor.addMarker(el, [initial.lon, initial.lat]);
+    issMarker = core.addMarker(el, [initial.lon, initial.lat]);
   } else {
     // Reposition the EXISTING marker from the fresh track (red-team
     // 2026-06-10): a manifest refresh during a parked scrub rebuilds the
@@ -1440,43 +1414,41 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
   }
 
-  // Live ISS position update (every 1s while map is open).
-  // While scrubbed, the marker is pinned at the absolute view instant and
-  // updates only when the controls move it or new track data arrives.
-  if (liveTimer !== null) {
-    clearInterval(liveTimer);
-  }
-  liveTimer = window.setInterval(() => {
-    if (!vendor || !issMarker || !currentTrack) return;
-    // Wall clock caught the pinned instant → return to live mode (T1).
-    if (maybeSnapToLive()) return;
-    // Live ISS marker updates every 1s ONLY in live mode. When the
-    // operator has scrubbed, the marker is pinned at the absolute view
-    // instant (Q2 → A) — no point recomputing every second since the
-    // pinned time isn't moving.
-    if (!isScrubbed()) {
-      const pos = markerPositionFor(currentTrack);
-      if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
-    }
-    if (bearingMode === 'iss-up') applyBearing(false);
-  }, 1000);
+  if (isFirstInit) {
+    // Live ISS position update (every 1s while map is open).
+    // While scrubbed, the marker is pinned at the absolute view instant and
+    // updates only when the controls move it or new track data arrives.
+    clock.every(1000, (nowMs) => {
+      if (!core || !issMarker || !currentTrack) return;
+      // Wall clock caught the pinned instant → return to live mode (T1).
+      if (maybeSnapToLive(nowMs)) return;
+      // Live ISS marker updates every 1s ONLY in live mode. When the
+      // operator has scrubbed, the marker is pinned at the absolute view
+      // instant (Q2 → A) — no point recomputing every second since the
+      // pinned time isn't moving.
+      if (!clock.isScrubbed()) {
+        const pos = markerPositionFor(currentTrack, nowMs);
+        if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
+      }
+      if (bearingMode === 'iss-up') applyBearing(false);
+    });
 
-  // Refresh the UTC labels on the time-step buttons every 30s so the
-  // displayed "click would take you to HH:MMZ" stays accurate without
-  // a per-second redraw on the unattended Mac.
-  if (timeLabelTimer !== null) clearInterval(timeLabelTimer);
-  timeLabelTimer = window.setInterval(() => {
-    updateTimeStepLabels();
-    // Refresh terminator + subsolar point with the new wall-clock time
-    // (live mode only; when scrubbed, the terminator is pinned to the
-    // absolute view instant and must NOT drift). ~10ms, cheap.
-    if (!isScrubbed()) refreshTerminatorSources();
-  }, 30_000);
+    // Refresh the UTC labels on the time-step buttons every 30s so the
+    // displayed "click would take you to HH:MMZ" stays accurate without
+    // a per-second redraw on the unattended Mac.
+    clock.every(30_000, () => {
+      updateTimeStepLabels();
+      // Refresh terminator + subsolar point with the new wall-clock time
+      // (live mode only; when scrubbed, the terminator is pinned to the
+      // absolute view instant and must NOT drift). ~10ms, cheap.
+      if (!clock.isScrubbed()) refreshTerminatorSources();
+    });
+  }
   updateTimeStepLabels();
 
   // Esri Reference labels overlay (v2 — Chris feedback 2026-05-27). Default
   // visibility is governed by labelsVisible preference (default ON), applied below.
-  ensureLayer({
+  core.ensureLayer({
     id: 'esri-labels-reference-layer',
     type: 'raster',
     source: 'esri-labels-reference',
@@ -1502,14 +1474,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // Restore persisted satellite selections (fire-and-forget; UI updates
   // as each fetch resolves). Also kick off the 60s track refresh tick.
   void restorePersistedSatellites();
-  if (!_satTrackTickerStarted) {
-    _satTrackTickerStarted = true;
-    window.setInterval(() => {
+  if (isFirstInit) {
+    clock.every(60_000, () => {
       // Live mode only: while scrubbed the track window is pinned to the
       // view instant (4A) — rebuilding yields identical geometry.
-      if (isScrubbed()) return;
+      if (clock.isScrubbed()) return;
       try { refreshSatelliteTracks(); } catch { /* noop */ }
-    }, 60_000);
+    });
   }
   // Apply persisted cloud + terminator preferences on first map render.
   // refreshForecastCloudLayer wraps applyCloudsVisibility and additionally
@@ -1540,8 +1511,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
  *  lookahead toggle. Returns null if the polynomial doesn't cover the
  *  requested time (clamps to end-of-window).
  */
-function markerPositionFor(track: Track): { lat: number; lon: number } | null {
-  const nowMs = Date.now();
+function markerPositionFor(track: Track, nowMs = clock.now()): { lat: number; lon: number } | null {
   return markerPositionAt(track, lookaheadMinutesNow(nowMs), nowMs);
 }
 
@@ -1589,7 +1559,7 @@ export function markerPositionAt(
  *  animates the bearing on first init), so it won't fight the operator's
  *  current pan/zoom. */
 export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
-  if (!vendor) return;
+  if (!core) return;
   await renderMap(manifest);
 }
 
@@ -1597,10 +1567,10 @@ export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
  *  At Now (lookahead=0) renders the standard 2-orbit polynomial track;
  *  at +N>0 renders just the ±45min window around (now + N min) via SGP4. */
 function refreshGroundTrackSource(track: Track): void {
-  if (!vendor) return;
-  const nowMs = Date.now();
+  if (!core) return;
+  const nowMs = clock.now();
   const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutesNow(nowMs), nowMs);
-  upsertGeoJson('iss-track', {
+  core.setGeoJson('iss-track', {
     type: 'FeatureCollection',
     features,
   });
@@ -1611,19 +1581,19 @@ function refreshGroundTrackSource(track: Track): void {
  *  renderMap on first
  *  render and from setLookahead on every time-scrub click. */
 function refreshTerminatorSources(): void {
-  if (!vendor) return;
-  const when = new Date(currentViewMs());
-  upsertGeoJson('terminator-line', {
+  if (!core) return;
+  const when = new Date(clock.viewMs());
+  core.setGeoJson('terminator-line', {
     type: 'FeatureCollection',
     features: terminatorFeatures(when),
   });
-  upsertGeoJson('subsolar-point', {
+  core.setGeoJson('subsolar-point', {
     type: 'FeatureCollection',
     features: [subsolarFeature(when)],
   });
   // v2 (Chris 2026-05-27): night-side polygon fill paired with the line.
   // Same upsert pattern as the line — refreshed every 30s + on time-scrub.
-  upsertGeoJson('terminator-night-fill', {
+  core.setGeoJson('terminator-night-fill', {
     type: 'FeatureCollection',
     features: terminatorNightPolygonFeatures(when),
   });
@@ -1713,16 +1683,16 @@ export function buildLaunchMapFeatures(state: LaunchState, now: number): { lines
  *  Side-effecting wrapper around buildAscentFeatures — pushes the
  *  features to the map sources. */
 function refreshAscentTrajectorySource(): void {
-  if (!vendor) return;
+  if (!core) return;
   const state = launchStore.getState();
-  const now = Date.now();
+  const now = clock.now();
   const { lines, pads } = state.artifact ? buildLaunchMapFeatures(state, now)
     : buildAscentFeatures(currentPasses.filter((pass) => legacyLaunchInHorizon(pass, now, 7 * 24 * 3600_000)));
-  upsertGeoJson('ascent-trajectory', {
+  core.setGeoJson('ascent-trajectory', {
     type: 'FeatureCollection',
     features: lines,
   });
-  upsertGeoJson('ascent-pad', {
+  core.setGeoJson('ascent-pad', {
     type: 'FeatureCollection',
     features: pads,
   });
@@ -1731,7 +1701,7 @@ function refreshAscentTrajectorySource(): void {
 /** Launch mode replaces ordinary target pins; all other overlays keep their
  * current settings. Recheck recreated layers without changing map time. */
 function applyMapLaunchVisibility(): void {
-  if (!vendor) return;
+  if (!core) return;
   const enabled = getMapLaunchMode();
   try {
     for (const [layer, launch] of [
@@ -1739,8 +1709,8 @@ function applyMapLaunchVisibility(): void {
       ['targets-layer', false], ['my-targets-layer', false], ['my-targets-casing', false],
     ] as const) {
       const visibility = enabled === launch ? 'visible' : 'none';
-      if (vendor.hasLayer(layer) && vendor.visibilityOf(layer) !== visibility) {
-        vendor.setVisibility(layer, visibility);
+      if (core.hasLayer(layer) && core.visibilityOf(layer) !== visibility) {
+        core.setVisibility(layer, visibility);
       }
     }
   } catch { /* layers not loaded yet */ }
@@ -1748,61 +1718,37 @@ function applyMapLaunchVisibility(): void {
 
 let mapLaunchModeUnsubscribe: (() => void) | null = null;
 let mapLaunchStyleUnsubscribe: Unsubscribe | null = null;
-let mapLaunchStyleVendor: VendorMap | null = null;
-type MapModePopupKind = 'target' | 'launch';
-const mapModePopups: Partial<Record<MapModePopupKind, PopupHandle>> = {};
-
-function dismissMapModePopup(kind: MapModePopupKind): void {
-  const popup = mapModePopups[kind];
-  delete mapModePopups[kind];
-  popup?.remove();
-}
-
-/** Keep only the target/launch popup that belongs to the active map mode.
- * Popup.remove() performs MapLibre's listener/DOM cleanup; other popup types
- * retain their own lifecycle. A delayed old close cannot clear a replacement. */
-function trackMapModePopup<T extends PopupHandle>(kind: MapModePopupKind, open: () => T): T {
-  dismissMapModePopup(kind);
-  const popup = open();
-  mapModePopups[kind] = popup;
-  popup.onClose(() => {
-    if (mapModePopups[kind] === popup) delete mapModePopups[kind];
-  });
-  return popup;
-}
+let mapLaunchStyleCore: MapCore | null = null;
 
 function syncMapLaunchMode(): void {
   if (!mapLaunchModeUnsubscribe) {
     mapLaunchModeUnsubscribe = subscribeMapLaunchMode((enabled) => {
-      dismissMapModePopup(enabled ? 'target' : 'launch');
-      if (!vendor) return;
+      core?.closePopup(enabled ? 'target' : 'launch');
+      if (!core) return;
       // Sources may predate this mode switch after an offline or profile
       // refresh. Rebuild only sources that the loaded style already owns.
-      if (vendor.hasSource('ascent-pad')) refreshAscentTrajectorySource();
-      if (vendor.hasSource('targets')) refreshTargetsSource();
-      if (vendor.hasSource('my-targets')) refreshMyTargetsSource();
+      if (core.hasSource('ascent-pad')) refreshAscentTrajectorySource();
+      if (core.hasSource('targets')) refreshTargetsSource();
+      if (core.hasSource('my-targets')) refreshMyTargetsSource();
       applyMapLaunchVisibility();
     });
   }
-  if (vendor && mapLaunchStyleVendor !== vendor) {
+  if (core && mapLaunchStyleCore !== core) {
     mapLaunchStyleUnsubscribe?.();
-    mapLaunchStyleUnsubscribe = vendor.on('styledata', applyMapLaunchVisibility);
-    mapLaunchStyleVendor = vendor;
+    mapLaunchStyleUnsubscribe = core.on('styledata', applyMapLaunchVisibility);
+    mapLaunchStyleCore = core;
   }
   applyMapLaunchVisibility();
 }
 
 /** Test hook for actual startup/subscription behavior without WebGL. */
-export {
-  syncMapLaunchMode as _syncMapLaunchModeForTest,
-  trackMapModePopup as _trackMapModePopupForTest,
-};
+export { syncMapLaunchMode as _syncMapLaunchModeForTest };
 
 /** Focus the current launch revision's site and supplied corridor. The ISS
  * marker keeps the time selected by the operator's existing map controls. */
 export function focusLaunchOnMap(eventId: string): boolean {
-  if (!vendor) return false;
-  const selection = selectLaunches(launchStore.getState(), Date.now(), 'map')
+  if (!core) return false;
+  const selection = selectLaunches(launchStore.getState(), clock.now(), 'map')
     .find(({ item }) => item.event_id === eventId);
   if (!selection) return false;
   const { site, trajectory } = selection.item;
@@ -1817,26 +1763,20 @@ export function focusLaunchOnMap(eventId: string): boolean {
       points.push([longitude, point.lat]);
     }
   }
-  if (points.length === 1) vendor.easeTo({ center: points[0], zoom: 4, duration: 600 });
-  else vendor.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
+  if (points.length === 1) core.easeTo({ center: points[0], zoom: 4, duration: 600 });
+  else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
   return true;
 }
 
 /** Show / hide the terminator overlay (line + subsolar dot). Idempotent. */
 function applyTerminatorVisibility(): void {
-  if (!vendor) return;
+  if (!core) return;
   const vis = terminatorVisible ? 'visible' : 'none';
   try {
-    if (vendor.hasLayer('terminator-line-layer')) {
-      vendor.setVisibility('terminator-line-layer', vis);
-    }
-    if (vendor.hasLayer('subsolar-point-layer')) {
-      vendor.setVisibility('subsolar-point-layer', vis);
-    }
+    core.setVisibility('terminator-line-layer', vis);
+    core.setVisibility('subsolar-point-layer', vis);
     // v2: night-side fill toggles with the same control as line + dot.
-    if (vendor.hasLayer('terminator-night-fill-layer')) {
-      vendor.setVisibility('terminator-night-fill-layer', vis);
-    }
+    core.setVisibility('terminator-night-fill-layer', vis);
   } catch { /* layers not loaded yet */ }
   // v3.6: when terminator state changes, the global-dim layer may also need
   // to toggle (it's visible only when lights ON + terminator OFF).
@@ -1849,13 +1789,11 @@ function applyTerminatorVisibility(): void {
  *  the terminator overlay is active (the existing terminator-night-fill
  *  handles night-side dimming in that case). Idempotent. */
 function applyGlobalDimVisibility(): void {
-  if (!vendor) return;
+  if (!core) return;
   const dimVisible = nightLightsVisible && !terminatorVisible;
   const vis = dimVisible ? 'visible' : 'none';
   try {
-    if (vendor.hasLayer('night-lights-global-dim-layer')) {
-      vendor.setVisibility('night-lights-global-dim-layer', vis);
-    }
+    core.setVisibility('night-lights-global-dim-layer', vis);
   } catch { /* layer not loaded yet */ }
 }
 
@@ -1869,8 +1807,8 @@ function applyGlobalDimVisibility(): void {
  *  the threshold on every refresh so 'profile-changed' subscribers can
  *  call this without staging a separate threshold cache. */
 function refreshTargetsSource(): void {
-  if (!vendor) return;
-  const viewMs = currentViewMs();
+  if (!core) return;
+  const viewMs = clock.viewMs();
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
   const thresholdKm = readActiveDistanceThresholdKm();
   const distanceVisible = filterPassesByDistance(currentPasses.filter((p) => !isLaunchPass(p)), thresholdKm);
@@ -1913,7 +1851,7 @@ function refreshTargetsSource(): void {
       geometry: { type: 'Point' as const, coordinates: [p.target_lon, p.target_lat] },
     };
   });
-  upsertGeoJson('targets', {
+  core.setGeoJson('targets', {
     type: 'FeatureCollection',
     features,
   });
@@ -1927,7 +1865,7 @@ function refreshTargetsSource(): void {
  *  layer fixes that: every personal target gets a pin the moment it's saved
  *  locally, even before the next daemon tick produces passes for it. */
 function refreshMyTargetsSource(): void {
-  if (!vendor) return;
+  if (!core) return;
   let additions: PersonalTarget[] = [];
   try {
     const profile = loadProfile(parseProfileFromURL(window.location.href));
@@ -1951,7 +1889,7 @@ function refreshMyTargetsSource(): void {
       },
       geometry: { type: 'Point' as const, coordinates: [t.lon, t.lat] },
     }));
-  upsertGeoJson('my-targets', { type: 'FeatureCollection', features });
+  core.setGeoJson('my-targets', { type: 'FeatureCollection', features });
 }
 
 
@@ -1987,22 +1925,22 @@ function computeIssHeading(track: Track, nowMs: number): number | null {
 const BEARING_NOOP_THRESHOLD_DEG = 0.5;
 
 function applyBearing(animate: boolean): void {
-  if (!vendor) return;
-  const current = vendor.bearing();
+  if (!core) return;
+  const current = core.bearing();
   if (bearingMode === 'north') {
     if (Math.abs(current) < BEARING_NOOP_THRESHOLD_DEG) return;
-    if (animate) vendor.easeTo({ bearing: 0, duration: 600 });
-    else vendor.setBearing(0);
+    if (animate) core.easeTo({ bearing: 0, duration: 600 });
+    else core.setBearing(0);
     return;
   }
   if (!currentTrack) return;
-  const heading = computeIssHeading(currentTrack, currentViewMs());
+  const heading = computeIssHeading(currentTrack, clock.viewMs());
   if (heading === null) return;
   // Smallest angle between current and target, accounting for the 0=360 wrap.
   const delta = Math.abs(((heading - current + 540) % 360) - 180);
   if (delta < BEARING_NOOP_THRESHOLD_DEG) return;
-  if (animate) vendor.easeTo({ bearing: heading, duration: 600 });
-  else vendor.setBearing(heading);
+  if (animate) core.easeTo({ bearing: heading, duration: 600 });
+  else core.setBearing(heading);
 }
 
 /** Refresh the UTC time chips on each time-step button.
@@ -2014,7 +1952,7 @@ function applyBearing(animate: boolean): void {
  *  shows the actual current wall clock.
  */
 function updateTimeStepLabels(): void {
-  const nowMs = Date.now();
+  const nowMs = clock.now();
   // Whole-minute offset from live now to the view instant. The pinned
   // instant is absolute, so this shrinks as the wall clock advances —
   // the chips always answer "where would a click land me FROM HERE."
@@ -2072,15 +2010,10 @@ function updateTimeStepLabels(): void {
 // trailing-flushed on release): everything else. The release path and all
 // non-drag callers (steppers, snap-to-live, tests) are unchanged inline.
 const SCRUB_TIER2_THROTTLE_MS = 150;
-let scrubTier2Timer: ReturnType<typeof setTimeout> | null = null;
-let scrubTier2LastRunMs = 0;
-let scrubTier2Pending = false;
 
 let scrubTier2RunCount = 0; // test observability — counts REAL tier-2 runs
 
 function runScrubTier2(): void {
-  scrubTier2LastRunMs = Date.now();
-  scrubTier2Pending = false;
   scrubTier2RunCount += 1;
   // Each refresher is isolated (adversarial F5, 2026-06-11): pre-throttle,
   // a throw here retried on the next 16ms frame; now the retry would be
@@ -2093,7 +2026,7 @@ function runScrubTier2(): void {
   safely(refreshSatelliteMarkers);
   safely(refreshForecastCloudLayer);
   safely(refreshImageryDateBadgeForView);
-  const isLive = viewTimeMs === null;
+  const isLive = !clock.isScrubbed();
   document.querySelectorAll<HTMLButtonElement>('.time-step-btn').forEach((b) => {
     b.classList.toggle('active', b.id === 'time-now' && isLive);
   });
@@ -2105,41 +2038,11 @@ function runScrubTier2(): void {
   }
 }
 
-function scheduleScrubTier2(): void {
-  // Math.max guards an NTP step-back mid-drag (adversarial F6): a negative
-  // elapsed would otherwise arm a minutes-long trailing timer.
-  const since = Math.max(0, Date.now() - scrubTier2LastRunMs);
-  if (since >= SCRUB_TIER2_THROTTLE_MS) {
-    runScrubTier2();
-    return;
-  }
-  scrubTier2Pending = true;
-  if (scrubTier2Timer === null) {
-    scrubTier2Timer = setTimeout(() => {
-      scrubTier2Timer = null;
-      if (scrubTier2Pending) runScrubTier2();
-    }, SCRUB_TIER2_THROTTLE_MS - since);
-  }
-}
-
-/** Run any deferred tier-2 work NOW (drag release / cancel / blur). The
- *  'change' event's same-instant guard can skip the full refresh path
- *  entirely, so without this flush a drag could end with the terminator,
- *  pins, and satellites frozen ~150ms in the past — permanently. */
-function flushScrubTier2(): void {
-  if (scrubTier2Timer !== null) {
-    clearTimeout(scrubTier2Timer);
-    scrubTier2Timer = null;
-  }
-  if (scrubTier2Pending) runScrubTier2();
-}
+const scrubTier2 = clock.throttle(SCRUB_TIER2_THROTTLE_MS, runScrubTier2);
 
 /** Test-only: reset throttle state between vitest runs. */
 export function _resetScrubTierStateForTest(): void {
-  if (scrubTier2Timer !== null) clearTimeout(scrubTier2Timer);
-  scrubTier2Timer = null;
-  scrubTier2LastRunMs = 0;
-  scrubTier2Pending = false;
+  scrubTier2.reset();
   scrubTier2RunCount = 0;
 }
 
@@ -2150,21 +2053,21 @@ export function _getScrubTier2RunCountForTest(): number {
 
 /** Test-only: whether a trailing tier-2 timer is currently armed. */
 export function _isScrubTier2TimerArmedForTest(): boolean {
-  return scrubTier2Timer !== null;
+  return scrubTier2.armed;
 }
 
 export function setLookahead(newMinutes: number, recenter: boolean): void {
   const clamped = clampLookahead(newMinutes);
-  if (clamped === 0 && viewTimeMs === null) {
+  if (clamped === 0 && !clock.isScrubbed()) {
     // Already live: skip the refresh churn — but HONOR a requested
     // recenter (Codex structured review P2, 2026-06-10): a slider drag
     // back to 0 lands here already-live (the rAF 'input' applied 0 before
     // the finger lifted), and the release's recenter must still bring the
     // camera home; otherwise the controls say Now while the camera stays
     // parked on the prior future view.
-    if (recenter && vendor && issMarker && currentTrack) {
+    if (recenter && core && issMarker && currentTrack) {
       const pos = markerPositionFor(currentTrack);
-      if (pos) vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+      if (pos) core.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
     }
     updateTimeStepLabels();
     return;
@@ -2175,17 +2078,19 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   // absolute instant against a newer now (that re-pin is exactly the
   // relative-drift class T1 killed) nor re-run the full refresh cascade
   // for a no-op time change. A requested recenter is still honored.
-  if (clamped !== 0 && viewTimeMs !== null
+  if (clamped !== 0 && clock.isScrubbed()
       && clamped === clampLookahead(lookaheadMinutesNow())) {
-    if (recenter && vendor && issMarker && currentTrack) {
+    if (recenter && core && issMarker && currentTrack) {
       const pos = markerPositionFor(currentTrack);
-      if (pos) vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+      if (pos) core.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
     }
     updateTimeStepLabels();
     return;
   }
   // 0 = return to live mode; >0 = pin the view to an ABSOLUTE instant (T1).
-  viewTimeMs = clamped === 0 ? null : Date.now() + clamped * 60_000;
+  clock.setViewTime(clamped === 0
+    ? { kind: 'live' }
+    : { kind: 'scrubbed', atMs: clock.now() + clamped * 60_000 });
   // Drag fast path (7A): per-frame work is only what the finger steers —
   // marker + readout. The heavy surface refreshes ride the tier-2
   // throttle and are flushed on release. The slider's own listeners never
@@ -2195,11 +2100,11 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   // full inline path: the ease and an immediate full refresh are exactly
   // what that tap is asking for.
   if (sliderDragging && !recenter) {
-    if (currentTrack && vendor && issMarker) {
+    if (currentTrack && core && issMarker) {
       const pos = markerPositionFor(currentTrack);
       if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
     }
-    scheduleScrubTier2();
+    scrubTier2.schedule();
     updateTimeStepLabels();
     return;
   }
@@ -2231,12 +2136,12 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
     // reflects the view time, not real-time-now (v1.4.2.0).
     refreshTerminatorSources();
     // Move + freeze marker at the new view time.
-    if (vendor && issMarker) {
+    if (core && issMarker) {
       const pos = markerPositionFor(currentTrack);
       if (pos) {
         issMarker.setLngLat([pos.lon, pos.lat]);
         if (recenter) {
-          vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+          core.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
         }
       }
     }
@@ -2291,12 +2196,12 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
     // Settle deferred tier-2 work first (terminator/pins/satellites/track),
     // then the frame swap deferred during the drag (the release's
     // same-instant guard can skip the full refresh path entirely).
-    flushScrubTier2();
+    scrubTier2.flush();
     refreshForecastCloudLayer();
   });
   slider.addEventListener('pointercancel', () => {
     sliderDragging = false;
-    flushScrubTier2();
+    scrubTier2.flush();
     refreshForecastCloudLayer();
   });
   // Belt-and-braces (Codex adversarial 2026-06-10): a drag that loses
@@ -2305,7 +2210,7 @@ export function bindTimeSlider(raf?: (cb: () => void) => unknown): void {
   // forever. Bound once — sliderBound guards re-binding.
   window.addEventListener('blur', () => {
     sliderDragging = false;
-    flushScrubTier2();
+    scrubTier2.flush();
     // Mirror pointerup (adversarial F3): the leading tier-2 run during the
     // drag deferred its forecast frame swap (visibility-only while
     // dragging); without this, a blur-ended drag leaves the fcst raster on
@@ -2335,7 +2240,7 @@ function syncTimeSliderControls(nowMs: number, curMin: number): void {
     // not implement the snapping, so tests see them equal).
     sliderLastAppliedMinutes = Number(slider.value);
   }
-  const scrubbed = isScrubbed();
+  const scrubbed = clock.isScrubbed();
   // T6b (eng-review 2026-06-10): deep scrubs compound TLE propagation
   // error. isTleStale shares the banner's rounded-boundary semantics so
   // the topbar and the readout can never disagree at the threshold.
@@ -2349,7 +2254,7 @@ function syncTimeSliderControls(nowMs: number, curMin: number): void {
     : undefined;
   const tleStale = scrubbed && isTleStale(ageAtView);
   const baseText = scrubbed
-    ? formatViewTimeReadout(currentViewMs(nowMs), nowMs)
+    ? formatViewTimeReadout(clock.viewMs(nowMs), nowMs)
     : 'Now';
   const readoutText = tleStale ? `${baseText} · stale TLE` : baseText;
   slider.setAttribute('aria-valuetext', readoutText);
@@ -2422,7 +2327,7 @@ let followISS = true;  // default ON — tracks ISS on every fresh load; user dr
  *  needs, then re-apply visibility (V4-P2). Safe no-op before the map
  *  exists; any failure leaves the observed layer in charge (locked A4). */
 function refreshForecastCloudLayer(): void {
-  if (!vendor) return;
+  if (!core) return;
   const frame = forecastFrameForView();
   const fc = activeForecastIndex(currentManifest);
   if (frame && fc) {
@@ -2437,14 +2342,14 @@ function refreshForecastCloudLayer(): void {
     }
     const url = `/${fc.prefix}/${key}/{z}/{x}/{y}.png`;
     try {
-      if (!vendor.hasSource('fcst-clouds')) {
-        vendor.addSource('fcst-clouds', {
+      if (!core.hasSource('fcst-clouds')) {
+        core.addRasterSource('fcst-clouds', {
           type: 'raster',
           tiles: [url],
           tileSize: 256,
           maxzoom: fc.max_zoom,
         });
-        ensureLayer({
+        core.ensureLayer({
           id: 'fcst-clouds-layer',
           type: 'raster',
           source: 'fcst-clouds',
@@ -2463,7 +2368,7 @@ function refreshForecastCloudLayer(): void {
           applyCloudsVisibility();
           return;
         }
-        vendor.setRasterTiles('fcst-clouds', [url]);
+        core.setRasterTiles('fcst-clouds', [url]);
         fcstCurrentFrameKey = key;
       }
     } catch {
@@ -2512,12 +2417,12 @@ export function basemapVisibility(state: BasemapState): Record<
 }
 
 function applyCloudsVisibility(): void {
-  if (!vendor) return;
+  if (!core) return;
   // Defensive try: the style may not be loaded yet, and test seams install
   // map doubles without the layer API.
   let forecastFrameActive = false;
   try {
-    forecastFrameActive = vendor.hasLayer('fcst-clouds-layer')
+    forecastFrameActive = core.hasLayer('fcst-clouds-layer')
       && forecastFrameForView() !== null;
   } catch { /* treat as observed-layer mode */ }
   const visibility = basemapVisibility({
@@ -2530,7 +2435,7 @@ function applyCloudsVisibility(): void {
   // setStyle rebuild — keeps all overlays + layer state intact.
   try {
     for (const [layerId, vis] of Object.entries(visibility) as [LayerId, LayerVisibility][]) {
-      if (vendor.hasLayer(layerId)) vendor.setVisibility(layerId, vis);
+      core.setVisibility(layerId, vis);
     }
   } catch {
     /* layers may not be loaded yet on the first call — applyCloudsVisibility
@@ -2578,12 +2483,10 @@ function bindCloudToggle(): void {
  *  safe to call before MapLibre has finished loading the layer. v2
  *  (Chris feedback 2026-05-27). */
 function applyNightLightsVisibility(): void {
-  if (!vendor) return;
+  if (!core) return;
   const vis = nightLightsVisible ? 'visible' : 'none';
   try {
-    if (vendor.hasLayer('viirs-night-lights-layer')) {
-      vendor.setVisibility('viirs-night-lights-layer', vis);
-    }
+    core.setVisibility('viirs-night-lights-layer', vis);
   } catch { /* layer not loaded yet */ }
   // v3.6: night-lights flip may toggle the global-dim layer (active only
   // when lights ON + terminator OFF).
@@ -2597,8 +2500,8 @@ function applyNightLightsVisibility(): void {
  *  re-toggle later. */
 let nightLightsErrorLogged = false;
 function armNightLightsErrorHandler(): void {
-  if (!vendor) return;
-  vendor.on('error', ({ sourceId }) => {
+  if (!core) return;
+  core.on('error', ({ sourceId }) => {
     if (sourceId !== 'viirs-night-lights') return;
     if (nightLightsErrorLogged) return;
     nightLightsErrorLogged = true;
@@ -2636,7 +2539,7 @@ function bindNightLightsToggle(): void {
     // GIBS is back up after a transient outage.
     if (nightLightsErrorLogged) {
       nightLightsErrorLogged = false;
-      if (vendor) vendor.setRasterTiles('viirs-night-lights', [viirsAlphaUrl('2016-01-01')]);
+      if (core) core.setRasterTiles('viirs-night-lights', [viirsAlphaUrl('2016-01-01')]);
     }
     nightLightsVisible = !nightLightsVisible;
     try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, nightLightsVisible ? '1' : '0'); } catch { /* noop */ }
@@ -2652,10 +2555,10 @@ function bindNightLightsToggle(): void {
  *  center. Touches tiles only when IR is ON and the satellite changed, so
  *  panning with IR off issues zero tile requests (eng R5). */
 function repickGeoIRForView(): void {
-  if (!vendor || !irVisible) return;
+  if (!core || !irVisible) return;
   let lat: number;
   let lng: number;
-  try { [lng, lat] = vendor.center(); } catch { return; }
+  try { [lng, lat] = core.center(); } catch { return; }
   const sat = pickGeoIRSat(lat, lng);
   const time = geoIRTimeForNow();
   // Reset tiles when the satellite OR the 10-min frame time changes, so a
@@ -2668,7 +2571,7 @@ function repickGeoIRForView(): void {
     geoIrAnyLoaded = false; // new tiles → re-evaluate feed health
     geoIrFeedDown = false;
     try {
-      vendor.setRasterTiles('geo-ir', [geoIRTileUrl(sat, time)]);
+      core.setRasterTiles('geo-ir', [geoIRTileUrl(sat, time)]);
     } catch { /* source not ready */ }
   } else if (!sat) {
     currentGeoIRTime = null;
@@ -2679,12 +2582,10 @@ function repickGeoIRForView(): void {
  *  (currentGeoIRSat === null) so the operator never sees blank/stale tiles —
  *  the badge explains the gap (eng R7). */
 function applyIrVisibility(): void {
-  if (!vendor) return;
+  if (!core) return;
   const showRaster = irVisible && currentGeoIRSat !== null;
   try {
-    if (vendor.hasLayer('geo-ir-layer')) {
-      vendor.setVisibility('geo-ir-layer', showRaster ? 'visible' : 'none');
-    }
+    core.setVisibility('geo-ir-layer', showRaster ? 'visible' : 'none');
   } catch { /* layer not loaded yet */ }
 }
 
@@ -2723,8 +2624,8 @@ function reflectIrButton(): void {
 
 let irErrorLogged = false;
 function armIrErrorHandler(): void {
-  if (!vendor) return;
-  vendor.on('error', ({ sourceId }) => {
+  if (!core) return;
+  core.on('error', ({ sourceId }) => {
     if (sourceId !== 'geo-ir') return;
     if (irErrorLogged) return;
     irErrorLogged = true;
@@ -2744,19 +2645,16 @@ function bindIrToggle(): void {
   reflectIrButton();
   // Advance the IR frame as new 10-min imagery publishes, even if the operator
   // never pans (Codex #1). Cheap: a no-op unless IR is on and the frame rolled.
-  if (!irTickerStarted) {
-    irTickerStarted = true;
-    window.setInterval(() => {
-      if (!irVisible) return;
-      repickGeoIRForView();
-      applyIrVisibility();
-      refreshImageryDateBadgeForView();
-    }, 120_000);
-  }
+  clock.every(120_000, () => {
+    if (!irVisible) return;
+    repickGeoIRForView();
+    applyIrVisibility();
+    refreshImageryDateBadgeForView();
+  });
   // Re-pick the satellite as the operator pans — GATED on irVisible so panning
   // with IR off issues zero tile requests (eng R5).
-  if (vendor) {
-    vendor.on('moveend', () => {
+  if (core) {
+    core.on('moveend', () => {
       if (!irVisible) return;
       repickGeoIRForView();
       applyIrVisibility();
@@ -2765,13 +2663,13 @@ function bindIrToggle(): void {
     // Feed-health (Codex review): a loaded geo-IR tile clears any "feed down"
     // state; if the map settles (idle) with IR visible but nothing loaded, the
     // feed is down — so an outage shows "feed unavailable", not fake clear sky.
-    vendor.on('data', ({ sourceId, tileLoaded }) => {
+    core.on('data', ({ sourceId, tileLoaded }) => {
       if (sourceId === 'geo-ir' && tileLoaded) {
         geoIrAnyLoaded = true;
         if (geoIrFeedDown) { geoIrFeedDown = false; refreshImageryDateBadgeForView(); }
       }
     });
-    vendor.on('idle', () => {
+    core.on('idle', () => {
       if (irVisible && currentGeoIRSat && !geoIrAnyLoaded && !geoIrFeedDown) {
         geoIrFeedDown = true;
         refreshImageryDateBadgeForView();
@@ -2798,12 +2696,10 @@ function bindIrToggle(): void {
 /** Show / hide the Esri Reference labels overlay. v2 (Chris feedback
  *  2026-05-27). Default ON. Idempotent. */
 function applyLabelsVisibility(): void {
-  if (!vendor) return;
+  if (!core) return;
   const vis = labelsVisible ? 'visible' : 'none';
   try {
-    if (vendor.hasLayer('esri-labels-reference-layer')) {
-      vendor.setVisibility('esri-labels-reference-layer', vis);
-    }
+    core.setVisibility('esri-labels-reference-layer', vis);
   } catch { /* layer not loaded yet */ }
 }
 
@@ -2865,8 +2761,8 @@ export function applyFollowISS(pos: { lat: number; lon: number }): void {
   // 1Hz caller passes the LIVE ISS position; recentering on it while the
   // marker shows a future instant makes the camera chase a position that
   // isn't on screen. Follow resumes when the view returns to live.
-  if (!followISS || !vendor || isScrubbed()) return;
-  vendor.setCenter([pos.lon, pos.lat]);
+  if (!followISS || !core || clock.isScrubbed()) return;
+  core.setCenter([pos.lon, pos.lat]);
 }
 
 /** Exit follow silently. Called by user dragstart/zoomstart handlers and
@@ -2929,18 +2825,18 @@ function bindFollowToggle(): void {
     // drawn. markerPositionFor honors the scrub and falls back through
     // SGP4 → polynomial exactly like every other marker consumer.
     const pos = markerPositionFor(currentTrack);
-    if (pos && vendor) {
-      vendor.flyTo({ center: [pos.lon, pos.lat], duration: 800 });
+    if (pos && core) {
+      core.flyTo({ center: [pos.lon, pos.lat], duration: 800 });
     }
   });
-  if (vendor) {
+  if (core) {
     // User-initiated drag breaks follow. Programmatic setCenter (from
     // applyFollowISS) does NOT fire dragstart so this is safe.
-    vendor.on('dragstart', () => { exitFollowISS(); });
+    core.on('dragstart', () => { exitFollowISS(); });
     // User-initiated zoom also breaks follow — operator is zooming for
     // a reason that conflicts with auto-recenter. Programmatic
     // setCenter doesn't trigger zoomstart, so this is safe too.
-    vendor.on('zoomstart', ({ byUser }) => {
+    core.on('zoomstart', ({ byUser }) => {
       // Only respect zoomstart that came from a real user event.
       if (byUser) exitFollowISS();
     });
@@ -2960,9 +2856,10 @@ export function _resetFollowStateForTest(): void {
 export function _setFollowEnvForTest(
   m: { setCenter(c: [number, number]): void } | null,
   follow: boolean,
-): void {
-  vendor = m as unknown as VendorMap | null;
+): MapCore | null {
+  core = m ? createMapCore(m as unknown as VendorMap, clock) : null;
   followISS = follow;
+  return core;
 }
 
 let multiOrbitToggleBound = false;
@@ -3018,27 +2915,13 @@ function bindBearingToggle(): void {
   bearingToggleBound = true;
 }
 
-/** Add a layer once, at its catalog position. The catalog decides where it
- *  paints, so no call site names a beforeId and the stacking is the same
- *  whatever order the callers run in. */
-function ensureLayer(spec: LayerSpec): void {
-  if (!vendor || vendor.hasLayer(spec.id)) return;
-  vendor.addLayer(spec, beforeIdFor(spec.id, vendor.paintedLayers()));
-}
-
-function upsertGeoJson(id: GeoJsonSourceId, data: GeoJSON.FeatureCollection): void {
-  if (!vendor) return;
-  if (vendor.hasSource(id)) vendor.setGeoJson(id, data);
-  else vendor.addSource(id, { type: 'geojson', data });
-}
-
 /** Force the map to recompute its canvas size. Call after the container becomes
  *  visible (e.g., after the user clicks the Map tab). MapLibre samples the
  *  container size at init; if it was display:none, the canvas is stuck at 0×0
  *  until a resize event fires.
  */
 export function resizeMap(): void {
-  if (vendor) vendor.resize();
+  if (core) core.resize();
 }
 
 /** Shape of MapLibre feature properties on a target pin. Mirrors the
@@ -3196,7 +3079,7 @@ export function buildTargetPopupContent(
       // Only scan the requested target, after yielding to paint the response.
       // Hundreds of saved locations must not each trigger a scan on boot.
       window.setTimeout(() => {
-        const queryMs = Date.now();
+        const queryMs = clock.now();
         try {
           if (!liveIssPositionSGP4(track, queryMs)) {
             results.textContent = 'Orbit data is unavailable. Reconnect and refresh to check passes.';
@@ -3337,7 +3220,7 @@ function formatRelativeMinutes(deltaMinutes: number): string {
 export function dropLookupPin(result: {
   lat: number; lon: number; alt_km: number; timestamp_utc: Date;
 }): void {
-  if (!vendor) return;
+  if (!core) return;
   const fc: GeoJSON.FeatureCollection = {
     type: 'FeatureCollection',
     features: [{
@@ -3349,9 +3232,9 @@ export function dropLookupPin(result: {
       geometry: { type: 'Point', coordinates: [result.lon, result.lat] },
     }],
   };
-  upsertGeoJson('lookup-pin', fc);
-  if (!vendor.hasLayer('lookup-pin-layer')) {
-    ensureLayer({
+  core.setGeoJson('lookup-pin', fc);
+  if (!core.hasLayer('lookup-pin-layer')) {
+    core.ensureLayer({
       id: 'lookup-pin-layer',
       type: 'circle',
       source: 'lookup-pin',
@@ -3363,7 +3246,7 @@ export function dropLookupPin(result: {
         'circle-opacity': 0.9,
       },
     });
-    vendor.onLayer('click', 'lookup-pin-layer', (e) => {
+    core.onLayer('click', 'lookup-pin-layer', (e) => {
       const f = e.features[0];
       if (!f || f.geometry.type !== 'Point') return;
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
@@ -3377,18 +3260,18 @@ export function dropLookupPin(result: {
       const alt = document.createElement('div');
       alt.textContent = `Altitude: ${(props.alt_km ?? 0).toFixed(1)} km`;
       body.append(title, ts, alt);
-      vendor!.openPopup({ at: coords, content: body });
+      core!.openPopup({ at: coords, content: body });
     });
-    vendor.onLayer('mouseenter', 'lookup-pin-layer', () => {
-      if (vendor) vendor.setCursor('pointer');
+    core.onLayer('mouseenter', 'lookup-pin-layer', () => {
+      if (core) core.setCursor('pointer');
     });
-    vendor.onLayer('mouseleave', 'lookup-pin-layer', () => {
-      if (vendor) vendor.setCursor('');
+    core.onLayer('mouseleave', 'lookup-pin-layer', () => {
+      if (core) core.setCursor('');
     });
   }
   // Center + ensure visible zoom. Don't override the user's bearing/tilt.
-  const targetZoom = Math.max(vendor.zoom(), 4);
-  vendor.easeTo({ center: [result.lon, result.lat], zoom: targetZoom, duration: 800 });
+  const targetZoom = Math.max(core.zoom(), 4);
+  core.easeTo({ center: [result.lon, result.lat], zoom: targetZoom, duration: 800 });
 }
 
 /** Build the ISS marker DOM: a stylized ISS silhouette (central truss + two
@@ -3492,7 +3375,7 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
     } else if (geoIrFeedDown) {
       // Visible but every tile errored → an outage, NOT clear sky (Codex review).
       badge.textContent = `IR · ${currentGeoIRSat.label} · feed unavailable`;
-    } else if (isScrubbed()) {
+    } else if (clock.isScrubbed()) {
       // IR is always CURRENT cloud-tops; under a scrubbed/future view it must
       // NOT read as a forecast for the scrubbed time (Codex #2).
       badge.textContent = `IR · ${currentGeoIRSat.label} · LIVE now (not the scrubbed time) · misses low cloud`;
@@ -3502,7 +3385,7 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
       // "latest", not a false specific age (Codex review).
       const fresh = currentGeoIRSat.source === 'realearth'
         ? 'latest'
-        : (currentGeoIRTime ? formatImageryAge(Date.parse(currentGeoIRTime), Date.now()) : '');
+        : (currentGeoIRTime ? formatImageryAge(Date.parse(currentGeoIRTime), clock.now()) : '');
       badge.textContent = `IR · ${currentGeoIRSat.label}${fresh ? ` · ${fresh}` : ''} · misses low cloud`;
     }
     badge.hidden = false;
@@ -3526,15 +3409,15 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
   // no frames at all → the original T5 observed-not-forecast wording, so
   // the operator never plans against yesterday's clouds believing they're
   // tomorrow's (the trust mismatch Chris reported 2026-05-20).
-  if (!isScrubbed()) {
+  if (!clock.isScrubbed()) {
     // Now-view: the daily true-color cloud composite. Surface its age so the
     // operator never reads a day-old picture as current (Jack 2026-06-21).
-    badge.textContent = `Imagery: ${date} · ${formatImageryAge(t, Date.now())}`;
+    badge.textContent = `Imagery: ${date} · ${formatImageryAge(t, clock.now())}`;
   } else {
     // Scrubbed: the wording follows the layer truth (V4-P2). The gate here
     // intentionally reads the PARAM manifest (not currentManifest) so the
     // badge and its tests stay pure given (manifest, scrub state).
-    const nowMs = Date.now();
+    const nowMs = clock.now();
     const fc = activeForecastIndex(manifest);
     const frame = frameForIndex(fc, nowMs);
     const eligible = !!fc && cloudsVisible && !fcstTilesFailed
@@ -3548,7 +3431,7 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
       // future (ship review 2026-06-11).
       const horizon = aheadH < 1 ? 'now' : `+${aheadH}h`;
       badge.textContent = `Clouds: GFS forecast ${horizon} · coarse (${runHH}z)`;
-    } else if (eligible && lastValidTimeMs(fc!) < currentViewMs(nowMs)) {
+    } else if (eligible && lastValidTimeMs(fc!) < clock.viewMs(nowMs)) {
       // Index exists but the view is past the last frame (locked A4 clamp
       // wording — rare with the +48h tail, real on a stale manifest).
       const endH = Math.max(0, Math.round((lastValidTimeMs(fc!) - nowMs) / 3_600_000));
@@ -3599,17 +3482,17 @@ const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_THRESHOLD_PX = 8;
 
 function bindPinDrop(): void {
-  if (pinDropBound || !vendor) return;
+  if (pinDropBound || !core) return;
 
   // Desktop: right-click (contextmenu).
-  vendor.on('contextmenu', ({ lngLat: [lng, lat] }) => {
+  core.on('contextmenu', ({ lngLat: [lng, lat] }) => {
     handlePinDrop(lng, lat);
   });
 
   // Touch: long-press. MapLibre's `touchstart` fires before MapLibre decides
   // it's a drag vs a tap; we start a 500ms timer and cancel it on touchmove
   // beyond an 8px threshold (treated as a pan).
-  vendor.on('touchstart', ({ lngLat: [lng, lat], touches }) => {
+  core.on('touchstart', ({ lngLat: [lng, lat], touches }) => {
     if (touches.length !== 1) return;
     const touch = touches[0];
     if (!touch) return;
@@ -3619,7 +3502,7 @@ function bindPinDrop(): void {
       handlePinDrop(lng, lat);
     }, LONG_PRESS_MS);
   });
-  vendor.on('touchmove', ({ touches }) => {
+  core.on('touchmove', ({ touches }) => {
     if (longPressTimer === null || !longPressStartXY) return;
     const touch = touches[0];
     if (!touch) return;
@@ -3630,7 +3513,7 @@ function bindPinDrop(): void {
       longPressTimer = null;
     }
   });
-  vendor.on('touchend', () => {
+  core.on('touchend', () => {
     if (longPressTimer !== null) {
       window.clearTimeout(longPressTimer);
       longPressTimer = null;
@@ -3643,9 +3526,9 @@ function bindPinDrop(): void {
 
 /** Drop a pin at (lng, lat), compute upcoming passes, show popup. */
 function handlePinDrop(lng: number, lat: number): void {
-  if (!vendor || !currentTrack) return;
+  if (!core || !currentTrack) return;
   // Round to zoom-appropriate precision (A3 from /plan-eng-review).
-  const rounded = roundForZoom(lat, lng, vendor.zoom());
+  const rounded = roundForZoom(lat, lng, core.zoom());
   const pinLat = rounded.lat;
   const pinLon = rounded.lon;
 
@@ -3662,13 +3545,13 @@ function handlePinDrop(lng: number, lat: number): void {
       geometry: { type: 'Point', coordinates: [pinLon, pinLat] },
     }],
   };
-  upsertGeoJson('dropped-pin', fc);
+  core.setGeoJson('dropped-pin', fc);
 
   // Add layer on first drop. Distinct cyan color + downward-triangle-with-dot
   // style differentiates from target pins (score-colored) and lookup pin
   // (magenta).
-  if (!vendor.hasLayer('dropped-pin-layer')) {
-    ensureLayer({
+  if (!core.hasLayer('dropped-pin-layer')) {
+    core.ensureLayer({
       id: 'dropped-pin-layer',
       type: 'circle',
       source: 'dropped-pin',
@@ -3680,15 +3563,15 @@ function handlePinDrop(lng: number, lat: number): void {
         'circle-opacity': 1.0,
       },
     });
-    vendor.onLayer('click', 'dropped-pin-layer', () => {
+    core.onLayer('click', 'dropped-pin-layer', () => {
       // Clicking the pin dismisses (matches the "active query" mental model).
       dismissDroppedPin();
     });
-    vendor.onLayer('mouseenter', 'dropped-pin-layer', () => {
-      if (vendor) vendor.setCursor('pointer');
+    core.onLayer('mouseenter', 'dropped-pin-layer', () => {
+      if (core) core.setCursor('pointer');
     });
-    vendor.onLayer('mouseleave', 'dropped-pin-layer', () => {
-      if (vendor) vendor.setCursor('');
+    core.onLayer('mouseleave', 'dropped-pin-layer', () => {
+      if (core) core.setCursor('');
     });
   }
 
@@ -3697,7 +3580,7 @@ function handlePinDrop(lng: number, lat: number): void {
   // (Pettit #6 — multi-satellite). Each satellite gets its own section
   // in the popup; ISS is the default.
   //
-  // INTENTIONALLY live (Date.now(), not view-time): "next passes over this
+  // INTENTIONALLY live (clock.now(), not view-time): "next passes over this
   // point" is a planning query from NOW — a scrubbed map answers "what does
   // +6h look like", but the operator dropping a pin wants upcoming shooting
   // windows from the present. Same live-domain rule as the topbar (4A).
@@ -3705,14 +3588,14 @@ function handlePinDrop(lng: number, lat: number): void {
     {
       name: 'ISS',
       color: '#5cd0ff',
-      passes: findUpcomingPasses(currentTrack, pinLat, pinLon, Date.now()),
+      passes: findUpcomingPasses(currentTrack, pinLat, pinLon, clock.now()),
     },
   ];
   for (const sat of getSelectedSatellitesForPasses()) {
     sectionsForPopup.push({
       name: sat.name,
       color: sat.color,
-      passes: findUpcomingPasses(sat.track, pinLat, pinLon, Date.now()),
+      passes: findUpcomingPasses(sat.track, pinLat, pinLon, clock.now()),
     });
   }
 
@@ -3727,17 +3610,17 @@ function handlePinDrop(lng: number, lat: number): void {
 
   // Replace any prior popup.
   if (droppedPinPopup) droppedPinPopup.remove();
-  droppedPinPopup = vendor.openPopup({ at: [pinLon, pinLat], content: body, maxWidth: '340px' });
+  droppedPinPopup = core.openPopup({ at: [pinLon, pinLat], content: body, maxWidth: '340px' });
 }
 
 /** Remove the dropped pin + popup. */
 function dismissDroppedPin(): void {
-  if (!vendor) return;
+  if (!core) return;
   if (droppedPinPopup) {
     droppedPinPopup.remove();
     droppedPinPopup = null;
   }
-  upsertGeoJson('dropped-pin', { type: 'FeatureCollection', features: [] });
+  core.setGeoJson('dropped-pin', { type: 'FeatureCollection', features: [] });
 }
 
 /** One satellite's passes for the pin-drop popup. v1.6.0.0 — Q2 from
@@ -3773,7 +3656,7 @@ export function buildPinDropPopup(
   title.textContent = `📍 ${latStr}, ${lonStr}`;
   body.appendChild(title);
 
-  const nowMs = Date.now();
+  const nowMs = clock.now();
   let anyPasses = false;
 
   for (const section of sections) {
@@ -4005,7 +3888,6 @@ interface SatelliteState {
 const selectedSatellites = new Map<string, SatelliteState>();
 let pickerOpen = false;
 let satellitePickerBound = false;
-let _satTrackTickerStarted = false;
 const SATELLITE_SELECTION_KEY = 'opd-selected-satellites';
 
 /** Synthetic Track for a non-ISS satellite. Wraps the TLE so the existing
@@ -4047,7 +3929,7 @@ function persistSelectedKeys(): void {
 
 /** Build the ground-track polyline samples for a non-ISS satellite over
  *  one full orbit (~95min default) at 30s cadence, starting at `viewMs`.
- *  Returns features ready for upsertGeoJson — already split at
+ *  Returns features ready for core.setGeoJson — already split at
  *  antimeridian + world-copy duplicated.
  *
  *  4A (eng-review 2026-06-10): the window starts at the map's VIEW time,
@@ -4059,7 +3941,7 @@ function persistSelectedKeys(): void {
  *  Exported for unit tests; viewMs injectable. */
 export function buildSatelliteTrackFeatures(
   tle: TLEPair,
-  viewMs: number = currentViewMs(),
+  viewMs: number = clock.viewMs(),
 ): GeoJSON.Feature[] {
   const track = trackFromTLE(tle);
   const stepSec = 30;
@@ -4074,13 +3956,13 @@ export function buildSatelliteTrackFeatures(
 }
 
 function refreshSatelliteTracks(): void {
-  if (!vendor) return;
+  if (!core) return;
   for (const [key, state] of selectedSatellites.entries()) {
     const sourceId = satTrackSourceId(key);
     const layerId = satTrackLayerId(key);
     const features = buildSatelliteTrackFeatures(state.tle);
-    upsertGeoJson(sourceId, { type: 'FeatureCollection', features });
-    ensureLayer({
+    core.setGeoJson(sourceId, { type: 'FeatureCollection', features });
+    core.ensureLayer({
       id: layerId,
       type: 'line',
       source: sourceId,
@@ -4095,10 +3977,10 @@ function refreshSatelliteTracks(): void {
 }
 
 function refreshSatelliteMarkers(): void {
-  if (!vendor) return;
+  if (!core) return;
   // One-clock surface (4A): markers render at the VIEW time — live now in
   // live mode, the pinned instant while scrubbed.
-  const viewMs = currentViewMs();
+  const viewMs = clock.viewMs();
   for (const state of selectedSatellites.values()) {
     const track = trackFromTLE(state.tle);
     const pos = liveIssPositionSGP4(track, viewMs);
@@ -4108,7 +3990,7 @@ function refreshSatelliteMarkers(): void {
       el.className = 'sat-marker';
       el.style.background = state.meta.track_color;
       el.title = `${state.meta.icon} ${state.meta.name}`;
-      state.marker = vendor.addMarker(el, [pos.lon, pos.lat]);
+      state.marker = core.addMarker(el, [pos.lon, pos.lat]);
     } else {
       state.marker.setLngLat([pos.lon, pos.lat]);
     }
@@ -4116,7 +3998,7 @@ function refreshSatelliteMarkers(): void {
 }
 
 function removeSatelliteVisuals(key: string): void {
-  if (!vendor) return;
+  if (!core) return;
   const state = selectedSatellites.get(key);
   if (state?.marker) {
     state.marker.remove();
@@ -4125,8 +4007,8 @@ function removeSatelliteVisuals(key: string): void {
   const layerId = satTrackLayerId(key);
   const sourceId = satTrackSourceId(key);
   try {
-    if (vendor.hasLayer(layerId)) vendor.removeLayer(layerId);
-    if (vendor.hasSource(sourceId)) vendor.removeSource(sourceId);
+    core.removeLayer(layerId);
+    core.removeSource(sourceId);
   } catch { /* noop */ }
 }
 
@@ -4340,13 +4222,9 @@ async function restorePersistedSatellites(): Promise<void> {
  *  map surface); ticking live positions over them would put two times on
  *  one map. Cheap: 1 SGP4 call per satellite × ~5 satellites max = ~0.5ms. */
 export function tickSatelliteMarkers(): void {
-  if (isScrubbed()) return;
+  if (clock.isScrubbed()) return;
   refreshSatelliteMarkers();
 }
-
-// tickSatelliteTracks was previously exported but is now only invoked
-// internally via the 60s setInterval set up in renderMap (P1). No need
-// for an external entrypoint.
 
 /** Lookup currently-selected satellites for the pin-drop popup (Q2):
  *  the popup needs to iterate per satellite to compute passes. */
@@ -4364,12 +4242,12 @@ export function getSelectedSatellitesForPasses(): { name: string; color: string;
 
 /** Compact short-labels + sub-points for the topbar multi-sat row.
  *
- *  INTENTIONALLY live (Date.now()), not view-time: the topbar is the LIVE
+ *  INTENTIONALLY live (clock.now()), not view-time: the topbar is the LIVE
  *  domain — its ISS readout also stays on the wall clock while the map is
  *  scrubbed. Only the map surface follows the scrub (4A, 2026-06-10).
  *  Returns "Tg 32.5°N, 118.3°E" style strings. */
 export function getSatelliteTopbarReadouts(): { label: string; text: string; color: string }[] {
-  const nowMs = Date.now();
+  const nowMs = clock.now();
   const out: { label: string; text: string; color: string }[] = [];
   for (const state of selectedSatellites.values()) {
     const track = trackFromTLE(state.tle);

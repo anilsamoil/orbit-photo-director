@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const MAP = 'src/map.ts';
+const CORE = 'src/map/map-core/core.ts';
 const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
 
@@ -33,9 +34,9 @@ const MUTATIONS = [
   },
   {
     contract: 'a layer added later still paints at its catalog position',
-    file: MAP,
-    find: '  vendor.addLayer(spec, beforeIdFor(spec.id, vendor.paintedLayers()));',
-    replace: '  vendor.addLayer(spec);',
+    file: CORE,
+    find: '      vendor.addLayer(spec, beforeIdFor(spec.id, vendor.paintedLayers()));',
+    replace: '      vendor.addLayer(spec);',
   },
   {
     contract: 'hiding clouds swaps the dark basemap for Esri imagery',

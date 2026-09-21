@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _getViewTimeMsForTest, _resetMapStateForTest, _setFollowEnvForTest,
-  _syncMapLaunchModeForTest, _trackMapModePopupForTest, applyFollowISS, focusLaunchOnMap, setLookahead,
+  _syncMapLaunchModeForTest, applyFollowISS, focusLaunchOnMap, setLookahead,
 } from '../src/map';
+import type { MapCore, PopupOwner } from '../src/map/map-core/core';
 import { getMapLaunchMode, setMapLaunchMode } from '../src/map-launch-mode';
 import { launchStore } from '../src/launch-store';
 import { launch, NOW, state } from './launch-fixtures';
@@ -16,9 +17,15 @@ function fakeMap() {
   const sources = new Map(['ascent-pad', 'ascent-trajectory', 'targets', 'my-targets', 'iss-track', 'clouds']
     .map((id) => [id, { setData: vi.fn() }]));
   const styleListeners = new Set<() => void>();
+  const popupQueue: ReturnType<typeof fakePopup>[] = [];
   return {
-    visibility, sources,
+    visibility, sources, popupQueue,
     setCenter: vi.fn(), easeTo: vi.fn(), fitBounds: vi.fn(),
+    openPopup: vi.fn(() => {
+      const popup = popupQueue.shift();
+      if (!popup) throw new Error('no fake popup queued');
+      return popup;
+    }),
     hasLayer: vi.fn((id: string) => visibility.has(id)),
     visibilityOf: vi.fn((id: string) => visibility.get(id)),
     setVisibility: vi.fn((id: string, next: string) => {
@@ -48,9 +55,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+let core: MapCore;
 function install() {
   const value = fakeMap();
-  _setFollowEnvForTest(value, false);
+  core = _setFollowEnvForTest(value, false)!;
   _syncMapLaunchModeForTest();
   return value;
 }
@@ -67,6 +75,14 @@ function fakePopup() {
     onClose: vi.fn((listener: () => void) => { close = listener; }),
     finishClose: () => close?.(),
   };
+}
+
+/** Open a popup through the real facade; the fake vendor hands back this popup. */
+function openPopup(value: ReturnType<typeof fakeMap>, owner?: PopupOwner) {
+  const popup = fakePopup();
+  value.popupQueue.push(popup);
+  core.openPopup({ at: [0, 0], content: document.createElement('div'), owner });
+  return popup;
 }
 
 describe('map Launches mode layers', () => {
@@ -152,12 +168,12 @@ describe('map Launches mode layers', () => {
   });
 
   it('dismisses ordinary/personal target popups when Launches is selected and launch popups on return', () => {
-    install();
-    const target = _trackMapModePopupForTest('target', fakePopup);
-    const unrelated = fakePopup(); // Lookup/ISS/satellite popups are not mode-owned.
+    const value = install();
+    const target = openPopup(value, 'target');
+    const unrelated = openPopup(value); // Lookup/ISS/satellite popups are not mode-owned.
     setMapLaunchMode(true);
     expect(target.remove).toHaveBeenCalledOnce();
-    const launchPopup = _trackMapModePopupForTest('launch', fakePopup);
+    const launchPopup = openPopup(value, 'launch');
     expect(launchPopup.remove).not.toHaveBeenCalled();
     setMapLaunchMode(false);
     expect(launchPopup.remove).toHaveBeenCalledOnce();
@@ -166,9 +182,9 @@ describe('map Launches mode layers', () => {
   });
 
   it('cleans replacement popups without letting an old close lose the new reference', () => {
-    install();
-    const old = _trackMapModePopupForTest('target', fakePopup);
-    const replacement = _trackMapModePopupForTest('target', fakePopup);
+    const value = install();
+    const old = openPopup(value, 'target');
+    const replacement = openPopup(value, 'target');
     expect(old.remove).toHaveBeenCalledOnce();
     old.finishClose(); // A queued close from the removed instance arrives late.
     setMapLaunchMode(true);
@@ -177,8 +193,8 @@ describe('map Launches mode layers', () => {
   });
 
   it('forgets a popup closed normally so mode changes do not remove it again', () => {
-    install();
-    const target = _trackMapModePopupForTest('target', fakePopup);
+    const value = install();
+    const target = openPopup(value, 'target');
     target.finishClose();
     setMapLaunchMode(true);
     expect(target.remove).not.toHaveBeenCalled();
