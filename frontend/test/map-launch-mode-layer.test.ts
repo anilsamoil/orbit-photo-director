@@ -19,15 +19,18 @@ function fakeMap() {
   return {
     visibility, sources,
     setCenter: vi.fn(), easeTo: vi.fn(), fitBounds: vi.fn(),
-    getLayer: vi.fn((id: string) => visibility.has(id)),
-    getLayoutProperty: vi.fn((id: string) => visibility.get(id)),
-    setLayoutProperty: vi.fn((id: string, _key: string, next: string) => {
+    hasLayer: vi.fn((id: string) => visibility.has(id)),
+    visibilityOf: vi.fn((id: string) => visibility.get(id)),
+    setVisibility: vi.fn((id: string, next: string) => {
       visibility.set(id, next);
       for (const listener of [...styleListeners]) listener();
     }),
-    getSource: vi.fn((id: string) => sources.get(id)),
-    on: vi.fn((event: string, listener: () => void) => { if (event === 'styledata') styleListeners.add(listener); }),
-    off: vi.fn((event: string, listener: () => void) => { if (event === 'styledata') styleListeners.delete(listener); }),
+    hasSource: vi.fn((id: string) => sources.has(id)),
+    setGeoJson: vi.fn((id: string, data: unknown) => { sources.get(id)?.setData(data); }),
+    on: vi.fn((event: string, listener: () => void) => {
+      if (event === 'styledata') styleListeners.add(listener);
+      return () => { styleListeners.delete(listener); };
+    }),
     fireStyleData: () => { for (const listener of [...styleListeners]) listener(); },
   };
 }
@@ -61,7 +64,7 @@ function fakePopup() {
   let close: (() => void) | undefined;
   return {
     remove: vi.fn(),
-    once: vi.fn((_type: 'close', listener: () => void) => { close = listener; }),
+    onClose: vi.fn((listener: () => void) => { close = listener; }),
     finishClose: () => close?.(),
   };
 }
@@ -112,8 +115,8 @@ describe('map Launches mode layers', () => {
     for (const id of [...targetLayers, ...launchLayers]) value.visibility.set(id, 'visible');
     value.fireStyleData();
     expectMode(value, false);
-    // setLayoutProperty can itself emit styledata; unchanged values stop reentry.
-    expect(value.setLayoutProperty.mock.calls.length).toBeLessThan(30);
+    // setVisibility can itself emit styledata; unchanged values stop reentry.
+    expect(value.setVisibility.mock.calls.length).toBeLessThan(30);
   });
 
   it('does not accumulate mode subscriptions across map rerenders', () => {
@@ -150,11 +153,11 @@ describe('map Launches mode layers', () => {
 
   it('dismisses ordinary/personal target popups when Launches is selected and launch popups on return', () => {
     install();
-    const target = _trackMapModePopupForTest(fakePopup(), 'target');
+    const target = _trackMapModePopupForTest('target', fakePopup);
     const unrelated = fakePopup(); // Lookup/ISS/satellite popups are not mode-owned.
     setMapLaunchMode(true);
     expect(target.remove).toHaveBeenCalledOnce();
-    const launchPopup = _trackMapModePopupForTest(fakePopup(), 'launch');
+    const launchPopup = _trackMapModePopupForTest('launch', fakePopup);
     expect(launchPopup.remove).not.toHaveBeenCalled();
     setMapLaunchMode(false);
     expect(launchPopup.remove).toHaveBeenCalledOnce();
@@ -164,8 +167,8 @@ describe('map Launches mode layers', () => {
 
   it('cleans replacement popups without letting an old close lose the new reference', () => {
     install();
-    const old = _trackMapModePopupForTest(fakePopup(), 'target');
-    const replacement = _trackMapModePopupForTest(fakePopup(), 'target');
+    const old = _trackMapModePopupForTest('target', fakePopup);
+    const replacement = _trackMapModePopupForTest('target', fakePopup);
     expect(old.remove).toHaveBeenCalledOnce();
     old.finishClose(); // A queued close from the removed instance arrives late.
     setMapLaunchMode(true);
@@ -175,7 +178,7 @@ describe('map Launches mode layers', () => {
 
   it('forgets a popup closed normally so mode changes do not remove it again', () => {
     install();
-    const target = _trackMapModePopupForTest(fakePopup(), 'target');
+    const target = _trackMapModePopupForTest('target', fakePopup);
     target.finishClose();
     setMapLaunchMode(true);
     expect(target.remove).not.toHaveBeenCalled();

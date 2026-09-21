@@ -1,18 +1,25 @@
-import maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
-
 import type { Manifest, PassEntry, Track } from './types';
 import type { ForecastCloudsIndex } from './types';
 import { fetchArtifact } from './manifest';
 import { wrapLon } from './geo';
 import {
-  asLayerId,
   beforeIdFor,
   satTrackLayerId,
   satTrackSourceId,
   type LayerId,
   type SourceId,
 } from './map/map-core/catalog';
+import { createVendorMap } from './map/adapters/maplibre';
+import { initialCamera } from './map/map-core/camera';
+import { boundsOf, type Point } from './map/map-core/geometry';
+import type { LayerSpec, StyleSpec } from './map/map-core/layer-spec';
+import type {
+  Hit,
+  MarkerHandle,
+  PopupHandle,
+  Unsubscribe,
+  VendorMap,
+} from './map/map-core/vendor-map';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from './pass-filter';
 import { liveIssNow, liveIssPosition } from './iss';
 import { isTleStale } from './banner';
@@ -49,8 +56,8 @@ import { isLaunchPass, legacyLaunchInHorizon, selectLaunches } from './launch-se
 import { openLaunchDetails, renderLegacyLaunchCard } from './launch-card';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
-let map: maplibregl.Map | null = null;
-let issMarker: maplibregl.Marker | null = null;
+let vendor: VendorMap | null = null;
+let issMarker: MarkerHandle | null = null;
 let liveTimer: number | null = null;
 // Refreshes the UTC time chips on the time-step buttons every 30s so
 // labels stay accurate as the wall clock advances.
@@ -130,9 +137,9 @@ export function maybeSnapToLive(nowMs = Date.now()): boolean {
     // active, the next 1Hz tick would setCenter (instant) from the parked
     // future view to the live sub-point — a silent jump cut. Give the
     // operator one animated ease instead, mirroring the follow-entry cue.
-    if (followISS && map && currentTrack) {
+    if (followISS && vendor && currentTrack) {
       const pos = markerPositionFor(currentTrack);
-      if (pos) map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+      if (pos) vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
     }
     return true;
   }
@@ -311,7 +318,7 @@ function readActiveDistanceThresholdKm(): number {
  *  pin immediately (no wait for a daemon tick). Pure DOM effect — no
  *  network. Exported so main.ts can drive it too when needed. */
 export function applyDistanceThreshold(): void {
-  if (!map) return;
+  if (!vendor) return;
   refreshTargetsSource();
   refreshMyTargetsSource();
 }
@@ -481,8 +488,9 @@ export function _resetMapStateForTest(): void {
   mapLaunchModeUnsubscribe = null;
   dismissMapModePopup('target');
   dismissMapModePopup('launch');
-  mapLaunchStyleMap?.off('styledata', applyMapLaunchVisibility);
-  mapLaunchStyleMap = null;
+  mapLaunchStyleUnsubscribe?.();
+  mapLaunchStyleUnsubscribe = null;
+  mapLaunchStyleVendor = null;
   setMapLaunchMode(false);
   bearingMode = 'north';
   nightLightsVisible = false;
@@ -529,10 +537,9 @@ import { registerViirsAlphaProtocol, viirsAlphaUrl } from './map/adapters/maplib
 
 registerViirsAlphaProtocol();
 
-export function buildStyle(): maplibregl.StyleSpecification {
+export function buildStyle(): StyleSpec {
   const dateIso = yesterdayIso();
   return {
-    version: 8,
     sources: {
       'carto-dark': {
         type: 'raster',
@@ -972,72 +979,6 @@ function futureOrbitGroundTrackFeatures(
   return out;
 }
 
-/** Width the operator tuned the initial framing against (iPad-class viewport). */
-const MAP_REFERENCE_WIDTH_PX = 1024;
-/** Zoom that felt right at MAP_REFERENCE_WIDTH_PX — see the 2026-05-17 note. */
-const MAP_REFERENCE_ZOOM = 2;
-
-/** Initial zoom that shows the same slice of Earth regardless of screen width.
- *
- *  Web-mercator zoom is independent of viewport size: at z=2 the world is
- *  512*2^2 = 2048px across, so a 1024px iPad sees half the globe while a 390px
- *  iPhone sees 19% of it. Same zoom number, wildly different framing — which is
- *  why the map read as over-zoomed on iPhone (operator report 2026-08-24) while
- *  looking correct on iPad. Scaling by log2(width/reference) holds the visible
- *  fraction constant instead of the zoom number.
- *
- *  Clamped at MAP_REFERENCE_ZOOM on the upper end so iPad and desktop keep
- *  exactly the framing they have today; only narrower screens widen out.
- */
-export function initialZoomForViewport(widthPx: number): number {
-  const w = Number.isFinite(widthPx) && widthPx > 0 ? widthPx : MAP_REFERENCE_WIDTH_PX;
-  const scaled = MAP_REFERENCE_ZOOM + Math.log2(w / MAP_REFERENCE_WIDTH_PX);
-  return Math.min(MAP_REFERENCE_ZOOM, Math.max(0, scaled));
-}
-
-/** Camera and gesture options the map is constructed with.
- *
- *  center [0,0] is deliberate: the first recenter comes from main.ts's 1Hz
- *  applyFollowISS tick, not from construction. projection, bearing, and pitch
- *  are absent so MapLibre's mercator / 0 / 0 defaults apply.
- *
- *  z=1.5 fit the whole world but made panning feel like a no-op (you were
- *  already at the edge of the visible tile space). z=2 leaves room to drag
- *  without losing the "see the orbit at a glance" affordance. Operator
- *  reported 2026-05-17 pan felt locked at z=1.5.
- *
- *  Pettit feedback 2026-05-19: "Having the map view scroll left and right so
- *  that ISS location can be placed where you want (so if near right hand side
- *  map not to have orbit clipped where you have to piece together with the
- *  left hand side)." Explicit renderWorldCopies (default true; pin it so
- *  MapLibre majors can't silently flip it) + groundTrackFeatures duplicates
- *  the ground track at lon ±360 offsets so the polyline renders continuously
- *  across world copies. The gesture flags are explicit for the same reason.
- */
-export function mapCameraOptions(viewportWidthPx: number): {
-  center: [number, number];
-  zoom: number;
-  attributionControl: { compact: true };
-  renderWorldCopies: true;
-  dragPan: true;
-  dragRotate: true;
-  scrollZoom: true;
-  touchZoomRotate: true;
-  touchPitch: true;
-} {
-  return {
-    center: [0, 0],
-    zoom: initialZoomForViewport(viewportWidthPx),
-    attributionControl: { compact: true },
-    renderWorldCopies: true,
-    dragPan: true,
-    dragRotate: true,
-    scrollZoom: true,
-    touchZoomRotate: true,
-    touchPitch: true,
-  };
-}
-
 export async function renderMap(manifest: Manifest): Promise<void> {
   const container = document.getElementById('map');
   if (!container) return;
@@ -1053,28 +994,20 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   currentTrack = track;
   currentManifest = manifest; // V4-P2: forecast-frame machinery reads the index
 
-  const isFirstInit = !map;
-  if (!map) {
-    map = new maplibregl.Map({
+  const isFirstInit = !vendor;
+  if (!vendor) {
+    vendor = createVendorMap({
       container,
       style: buildStyle(),
-      ...mapCameraOptions(container.clientWidth || window.innerWidth),
+      camera: initialCamera(container.clientWidth || window.innerWidth),
     });
-    map.addControl(new maplibregl.NavigationControl(), 'top-left');
-    // E2E hook (gated behind ?e2e in the URL): expose the map so automated
-    // WebKit/iPad interaction tests can project a known target's lng/lat to
-    // screen coords and tap the exact pin. Inert in normal use — attaches only
-    // when ?e2e is present, adds no UI, and never runs for real operators.
-    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('e2e')) {
-      (window as unknown as { __opdMap?: maplibregl.Map }).__opdMap = map;
-    }
     // A2 from /plan-eng-review 2026-05-21: silent fallback to Carto Dark
     // if Esri imagery tiles fail to load. Listens for source-data errors;
     // if the failing source is the Esri basemap, flip the session flag
     // and re-apply visibility (which will keep Carto visible). One-way:
     // once Esri has failed in this session, we don't retry until reload.
-    map.on('error', (e) => {
-      const errSource = (e as { sourceId?: string } | undefined)?.sourceId;
+    vendor.on('error', (e) => {
+      const errSource = e.sourceId;
       if (errSource === 'fcst-clouds' && !fcstTilesFailed) {
         // Locked A4 layer-2 fallback: one forecast tile failure drops the
         // session back to the observed layer (one-way, like Esri below).
@@ -1091,9 +1024,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         applyCloudsVisibility();
       }
     });
-    await new Promise<void>((resolve) => {
-      map!.once('load', () => resolve());
-    });
+    await vendor.whenLoaded();
   }
 
   // Imagery-date badge: tells the user how recent the cloud composite the
@@ -1213,7 +1144,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // Targets layer — features carry closest_approach_ms so the paint
   // expression can dim out-of-window passes per Q3 → C (filter+dim).
   refreshTargetsSource();
-  if (!map.getLayer('targets-layer')) {
+  if (!vendor.hasLayer('targets-layer')) {
     ensureLayer({
       id: 'targets-layer',
       type: 'circle',
@@ -1259,33 +1190,33 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     //
     // Uses setDOMContent + textContent (NOT setHTML) so a user-controlled target
     // name like "<img onerror=...>" from personal-targets.csv stays literal.
-    map.on('click', (e) => {
-      if (!map) return;
-      const layers = ['targets-layer', 'my-targets-layer'].filter((id) => map!.getLayer(id));
+    vendor.on('click', (e) => {
+      if (!vendor) return;
+      const layers = (['targets-layer', 'my-targets-layer'] as const).filter((id) => vendor!.hasLayer(id));
       if (layers.length === 0) return;
       // ~7px bbox around the tap — fingertip-generous, yet tight enough that
       // "nearest" rarely needs to disambiguate (review R10/R16).
       const pad = 7;
-      const bbox: [maplibregl.PointLike, maplibregl.PointLike] = [
-        [e.point.x - pad, e.point.y - pad],
-        [e.point.x + pad, e.point.y + pad],
+      const bbox: [Point, Point] = [
+        { x: e.point.x - pad, y: e.point.y - pad },
+        { x: e.point.x + pad, y: e.point.y + pad },
       ];
       // Higher-priority interactive layers own their taps: if the tap also
       // landed on an ascent pad / lookup pin / dropped pin, defer to their own
       // layer-scoped handlers so we don't double-open a target popup over them
       // (Codex review). Their handlers still fire; we just bow out.
-      const priorityLayers = ['ascent-pad-layer', 'lookup-pin-layer', 'dropped-pin-layer']
-        .filter((id) => map!.getLayer(id));
+      const priorityLayers = (['ascent-pad-layer', 'lookup-pin-layer', 'dropped-pin-layer'] as const)
+        .filter((id) => vendor!.hasLayer(id));
       if (priorityLayers.length > 0
-        && map.queryRenderedFeatures(bbox, { layers: priorityLayers }).length > 0) {
+        && vendor.queryAt(bbox, priorityLayers).length > 0) {
         return;
       }
-      const feats = map.queryRenderedFeatures(bbox, { layers });
+      const feats = vendor.queryAt(bbox, layers);
       if (feats.length === 0) return; // not a target tap — let other handlers run
       const hit = pickTargetAtTap(
-        feats as unknown as Parameters<typeof pickTargetAtTap>[0],
+        feats,
         { x: e.point.x, y: e.point.y },
-        (ll) => map!.project(ll),
+        (ll) => vendor!.project(ll),
       );
       if (!hit) return;
       const props = hit.props;
@@ -1301,17 +1232,17 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       // INTENTIONALLY live (Date.now()): the popup's countdown answers "when is
       // this pass from NOW" alongside the absolute UTC time — same live-domain
       // rule as the topbar even while the map is scrubbed.
-      const popup = new maplibregl.Popup({ maxWidth: '360px' });
+      let popup: PopupHandle | null = null;
       const onEdit = props.is_personal && props.target_id
         ? (id: string) => {
-            popup.remove();
+            popup?.remove();
             // Deep-link to the Profile-pane edit form (review R11). The pane
             // listener switches tabs + opens the form pre-filled for this id.
             window.dispatchEvent(new CustomEvent('opd-edit-target', { detail: { targetId: id } }));
           }
         : undefined;
       const popupBody = buildTargetPopupContent(props, Date.now(), onEdit, currentTrack);
-      trackMapModePopup(popup, 'target').setLngLat(hit.lngLat).setDOMContent(popupBody).addTo(map);
+      popup = trackMapModePopup('target', () => vendor!.openPopup({ at: hit.lngLat, content: popupBody, maxWidth: '360px' }));
 
       // Async live "now" cloud — patched onto the popup's single weather row
       // once it resolves. Guard on isConnected so a resolve after the popup
@@ -1323,12 +1254,12 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       });
     });
     // Pointer cursor over BOTH target layers (review R3 — the ring layer had none).
-    for (const layerId of ['targets-layer', 'my-targets-layer']) {
-      map.on('mouseenter', layerId, () => {
-        if (map) map.getCanvas().style.cursor = 'pointer';
+    for (const layerId of ['targets-layer', 'my-targets-layer'] as const) {
+      vendor.onLayer('mouseenter', layerId, () => {
+        if (vendor) vendor.setCursor('pointer');
       });
-      map.on('mouseleave', layerId, () => {
-        if (map) map.getCanvas().style.cursor = '';
+      vendor.onLayer('mouseleave', layerId, () => {
+        if (vendor) vendor.setCursor('');
       });
     }
   }
@@ -1446,7 +1377,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       'line-opacity': 0.9,
     },
   });
-  if (!map.getLayer('ascent-pad-layer')) {
+  if (!vendor.hasLayer('ascent-pad-layer')) {
     ensureLayer({
       id: 'ascent-pad-layer',
       type: 'circle',
@@ -1460,8 +1391,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
         'circle-opacity': 0.95,
       },
     });
-    map.on('click', 'ascent-pad-layer', (e) => {
-      const f = e.features?.[0];
+    vendor.onLayer('click', 'ascent-pad-layer', (e) => {
+      const f = e.features[0];
       if (!f || f.geometry.type !== 'Point') return;
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
       const props = f.properties ?? {};
@@ -1472,23 +1403,20 @@ export async function renderMap(manifest: Manifest): Promise<void> {
       const pass = currentPasses.find((p) => p.target_id === props.target_id);
       if (!pass || launchStore.getState().artifact) return;
       const body = renderLegacyLaunchCard(pass, true);
-      trackMapModePopup(new maplibregl.Popup(), 'launch')
-        .setLngLat(coords)
-        .setDOMContent(body)
-        .addTo(map!);
+      trackMapModePopup('launch', () => vendor!.openPopup({ at: coords, content: body }));
     });
-    map.on('mouseenter', 'ascent-pad-layer', () => {
-      if (map) map.getCanvas().style.cursor = 'pointer';
+    vendor.onLayer('mouseenter', 'ascent-pad-layer', () => {
+      if (vendor) vendor.setCursor('pointer');
     });
-    map.on('mouseleave', 'ascent-pad-layer', () => {
-      if (map) map.getCanvas().style.cursor = '';
+    vendor.onLayer('mouseleave', 'ascent-pad-layer', () => {
+      if (vendor) vendor.setCursor('');
     });
   }
   syncMapLaunchMode();
   if (!launchSubscriptionBound) {
     launchSubscriptionBound = true;
     launchStore.subscribe(() => {
-      if (!map?.getSource('ascent-pad')) return;
+      if (!vendor?.hasSource('ascent-pad')) return;
       refreshAscentTrajectorySource();
       refreshTargetsSource();
     });
@@ -1500,9 +1428,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   if (!issMarker) {
     const initial = markerPositionFor(track) ?? { lat: 0, lon: 0 };
     const el = createIssMarkerElement();
-    issMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
-      .setLngLat([initial.lon, initial.lat])
-      .addTo(map);
+    issMarker = vendor.addMarker(el, [initial.lon, initial.lat]);
   } else {
     // Reposition the EXISTING marker from the fresh track (red-team
     // 2026-06-10): a manifest refresh during a parked scrub rebuilds the
@@ -1521,7 +1447,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     clearInterval(liveTimer);
   }
   liveTimer = window.setInterval(() => {
-    if (!map || !issMarker || !currentTrack) return;
+    if (!vendor || !issMarker || !currentTrack) return;
     // Wall clock caught the pinned instant → return to live mode (T1).
     if (maybeSnapToLive()) return;
     // Live ISS marker updates every 1s ONLY in live mode. When the
@@ -1663,7 +1589,7 @@ export function markerPositionAt(
  *  animates the bearing on first init), so it won't fight the operator's
  *  current pan/zoom. */
 export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
-  if (!map) return;
+  if (!vendor) return;
   await renderMap(manifest);
 }
 
@@ -1671,10 +1597,10 @@ export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
  *  At Now (lookahead=0) renders the standard 2-orbit polynomial track;
  *  at +N>0 renders just the ±45min window around (now + N min) via SGP4. */
 function refreshGroundTrackSource(track: Track): void {
-  if (!map) return;
+  if (!vendor) return;
   const nowMs = Date.now();
   const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutesNow(nowMs), nowMs);
-  upsertGeoJson(map, 'iss-track', {
+  upsertGeoJson('iss-track', {
     type: 'FeatureCollection',
     features,
   });
@@ -1685,19 +1611,19 @@ function refreshGroundTrackSource(track: Track): void {
  *  renderMap on first
  *  render and from setLookahead on every time-scrub click. */
 function refreshTerminatorSources(): void {
-  if (!map) return;
+  if (!vendor) return;
   const when = new Date(currentViewMs());
-  upsertGeoJson(map, 'terminator-line', {
+  upsertGeoJson('terminator-line', {
     type: 'FeatureCollection',
     features: terminatorFeatures(when),
   });
-  upsertGeoJson(map, 'subsolar-point', {
+  upsertGeoJson('subsolar-point', {
     type: 'FeatureCollection',
     features: [subsolarFeature(when)],
   });
   // v2 (Chris 2026-05-27): night-side polygon fill paired with the line.
   // Same upsert pattern as the line — refreshed every 30s + on time-scrub.
-  upsertGeoJson(map, 'terminator-night-fill', {
+  upsertGeoJson('terminator-night-fill', {
     type: 'FeatureCollection',
     features: terminatorNightPolygonFeatures(when),
   });
@@ -1787,16 +1713,16 @@ export function buildLaunchMapFeatures(state: LaunchState, now: number): { lines
  *  Side-effecting wrapper around buildAscentFeatures — pushes the
  *  features to the map sources. */
 function refreshAscentTrajectorySource(): void {
-  if (!map) return;
+  if (!vendor) return;
   const state = launchStore.getState();
   const now = Date.now();
   const { lines, pads } = state.artifact ? buildLaunchMapFeatures(state, now)
     : buildAscentFeatures(currentPasses.filter((pass) => legacyLaunchInHorizon(pass, now, 7 * 24 * 3600_000)));
-  upsertGeoJson(map, 'ascent-trajectory', {
+  upsertGeoJson('ascent-trajectory', {
     type: 'FeatureCollection',
     features: lines,
   });
-  upsertGeoJson(map, 'ascent-pad', {
+  upsertGeoJson('ascent-pad', {
     type: 'FeatureCollection',
     features: pads,
   });
@@ -1805,7 +1731,7 @@ function refreshAscentTrajectorySource(): void {
 /** Launch mode replaces ordinary target pins; all other overlays keep their
  * current settings. Recheck recreated layers without changing map time. */
 function applyMapLaunchVisibility(): void {
-  if (!map) return;
+  if (!vendor) return;
   const enabled = getMapLaunchMode();
   try {
     for (const [layer, launch] of [
@@ -1813,21 +1739,18 @@ function applyMapLaunchVisibility(): void {
       ['targets-layer', false], ['my-targets-layer', false], ['my-targets-casing', false],
     ] as const) {
       const visibility = enabled === launch ? 'visible' : 'none';
-      if (map.getLayer(layer) && map.getLayoutProperty(layer, 'visibility') !== visibility) {
-        map.setLayoutProperty(layer, 'visibility', visibility);
+      if (vendor.hasLayer(layer) && vendor.visibilityOf(layer) !== visibility) {
+        vendor.setVisibility(layer, visibility);
       }
     }
   } catch { /* layers not loaded yet */ }
 }
 
 let mapLaunchModeUnsubscribe: (() => void) | null = null;
-let mapLaunchStyleMap: maplibregl.Map | null = null;
+let mapLaunchStyleUnsubscribe: Unsubscribe | null = null;
+let mapLaunchStyleVendor: VendorMap | null = null;
 type MapModePopupKind = 'target' | 'launch';
-interface MapModePopup {
-  remove(): unknown;
-  once(type: 'close', listener: () => void): unknown;
-}
-const mapModePopups: Partial<Record<MapModePopupKind, MapModePopup>> = {};
+const mapModePopups: Partial<Record<MapModePopupKind, PopupHandle>> = {};
 
 function dismissMapModePopup(kind: MapModePopupKind): void {
   const popup = mapModePopups[kind];
@@ -1838,10 +1761,11 @@ function dismissMapModePopup(kind: MapModePopupKind): void {
 /** Keep only the target/launch popup that belongs to the active map mode.
  * Popup.remove() performs MapLibre's listener/DOM cleanup; other popup types
  * retain their own lifecycle. A delayed old close cannot clear a replacement. */
-function trackMapModePopup<T extends MapModePopup>(popup: T, kind: MapModePopupKind): T {
+function trackMapModePopup<T extends PopupHandle>(kind: MapModePopupKind, open: () => T): T {
   dismissMapModePopup(kind);
+  const popup = open();
   mapModePopups[kind] = popup;
-  popup.once('close', () => {
+  popup.onClose(() => {
     if (mapModePopups[kind] === popup) delete mapModePopups[kind];
   });
   return popup;
@@ -1851,19 +1775,19 @@ function syncMapLaunchMode(): void {
   if (!mapLaunchModeUnsubscribe) {
     mapLaunchModeUnsubscribe = subscribeMapLaunchMode((enabled) => {
       dismissMapModePopup(enabled ? 'target' : 'launch');
-      if (!map) return;
+      if (!vendor) return;
       // Sources may predate this mode switch after an offline or profile
       // refresh. Rebuild only sources that the loaded style already owns.
-      if (map.getSource('ascent-pad')) refreshAscentTrajectorySource();
-      if (map.getSource('targets')) refreshTargetsSource();
-      if (map.getSource('my-targets')) refreshMyTargetsSource();
+      if (vendor.hasSource('ascent-pad')) refreshAscentTrajectorySource();
+      if (vendor.hasSource('targets')) refreshTargetsSource();
+      if (vendor.hasSource('my-targets')) refreshMyTargetsSource();
       applyMapLaunchVisibility();
     });
   }
-  if (map && mapLaunchStyleMap !== map) {
-    mapLaunchStyleMap?.off('styledata', applyMapLaunchVisibility);
-    map.on('styledata', applyMapLaunchVisibility);
-    mapLaunchStyleMap = map;
+  if (vendor && mapLaunchStyleVendor !== vendor) {
+    mapLaunchStyleUnsubscribe?.();
+    mapLaunchStyleUnsubscribe = vendor.on('styledata', applyMapLaunchVisibility);
+    mapLaunchStyleVendor = vendor;
   }
   applyMapLaunchVisibility();
 }
@@ -1877,7 +1801,7 @@ export {
 /** Focus the current launch revision's site and supplied corridor. The ISS
  * marker keeps the time selected by the operator's existing map controls. */
 export function focusLaunchOnMap(eventId: string): boolean {
-  if (!map) return false;
+  if (!vendor) return false;
   const selection = selectLaunches(launchStore.getState(), Date.now(), 'map')
     .find(({ item }) => item.event_id === eventId);
   if (!selection) return false;
@@ -1893,29 +1817,25 @@ export function focusLaunchOnMap(eventId: string): boolean {
       points.push([longitude, point.lat]);
     }
   }
-  if (points.length === 1) map.easeTo({ center: points[0], zoom: 4, duration: 600 });
-  else {
-    const bounds = new maplibregl.LngLatBounds(points[0], points[0]);
-    for (const point of points.slice(1)) bounds.extend(point);
-    map.fitBounds(bounds, { padding: 50, maxZoom: 5, duration: 600 });
-  }
+  if (points.length === 1) vendor.easeTo({ center: points[0], zoom: 4, duration: 600 });
+  else vendor.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
   return true;
 }
 
 /** Show / hide the terminator overlay (line + subsolar dot). Idempotent. */
 function applyTerminatorVisibility(): void {
-  if (!map) return;
+  if (!vendor) return;
   const vis = terminatorVisible ? 'visible' : 'none';
   try {
-    if (map.getLayer('terminator-line-layer')) {
-      map.setLayoutProperty('terminator-line-layer', 'visibility', vis);
+    if (vendor.hasLayer('terminator-line-layer')) {
+      vendor.setVisibility('terminator-line-layer', vis);
     }
-    if (map.getLayer('subsolar-point-layer')) {
-      map.setLayoutProperty('subsolar-point-layer', 'visibility', vis);
+    if (vendor.hasLayer('subsolar-point-layer')) {
+      vendor.setVisibility('subsolar-point-layer', vis);
     }
     // v2: night-side fill toggles with the same control as line + dot.
-    if (map.getLayer('terminator-night-fill-layer')) {
-      map.setLayoutProperty('terminator-night-fill-layer', 'visibility', vis);
+    if (vendor.hasLayer('terminator-night-fill-layer')) {
+      vendor.setVisibility('terminator-night-fill-layer', vis);
     }
   } catch { /* layers not loaded yet */ }
   // v3.6: when terminator state changes, the global-dim layer may also need
@@ -1929,12 +1849,12 @@ function applyTerminatorVisibility(): void {
  *  the terminator overlay is active (the existing terminator-night-fill
  *  handles night-side dimming in that case). Idempotent. */
 function applyGlobalDimVisibility(): void {
-  if (!map) return;
+  if (!vendor) return;
   const dimVisible = nightLightsVisible && !terminatorVisible;
   const vis = dimVisible ? 'visible' : 'none';
   try {
-    if (map.getLayer('night-lights-global-dim-layer')) {
-      map.setLayoutProperty('night-lights-global-dim-layer', 'visibility', vis);
+    if (vendor.hasLayer('night-lights-global-dim-layer')) {
+      vendor.setVisibility('night-lights-global-dim-layer', vis);
     }
   } catch { /* layer not loaded yet */ }
 }
@@ -1949,7 +1869,7 @@ function applyGlobalDimVisibility(): void {
  *  the threshold on every refresh so 'profile-changed' subscribers can
  *  call this without staging a separate threshold cache. */
 function refreshTargetsSource(): void {
-  if (!map) return;
+  if (!vendor) return;
   const viewMs = currentViewMs();
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
   const thresholdKm = readActiveDistanceThresholdKm();
@@ -1993,7 +1913,7 @@ function refreshTargetsSource(): void {
       geometry: { type: 'Point' as const, coordinates: [p.target_lon, p.target_lat] },
     };
   });
-  upsertGeoJson(map, 'targets', {
+  upsertGeoJson('targets', {
     type: 'FeatureCollection',
     features,
   });
@@ -2007,7 +1927,7 @@ function refreshTargetsSource(): void {
  *  layer fixes that: every personal target gets a pin the moment it's saved
  *  locally, even before the next daemon tick produces passes for it. */
 function refreshMyTargetsSource(): void {
-  if (!map) return;
+  if (!vendor) return;
   let additions: PersonalTarget[] = [];
   try {
     const profile = loadProfile(parseProfileFromURL(window.location.href));
@@ -2031,7 +1951,7 @@ function refreshMyTargetsSource(): void {
       },
       geometry: { type: 'Point' as const, coordinates: [t.lon, t.lat] },
     }));
-  upsertGeoJson(map, 'my-targets', { type: 'FeatureCollection', features });
+  upsertGeoJson('my-targets', { type: 'FeatureCollection', features });
 }
 
 
@@ -2067,12 +1987,12 @@ function computeIssHeading(track: Track, nowMs: number): number | null {
 const BEARING_NOOP_THRESHOLD_DEG = 0.5;
 
 function applyBearing(animate: boolean): void {
-  if (!map) return;
-  const current = map.getBearing();
+  if (!vendor) return;
+  const current = vendor.bearing();
   if (bearingMode === 'north') {
     if (Math.abs(current) < BEARING_NOOP_THRESHOLD_DEG) return;
-    if (animate) map.easeTo({ bearing: 0, duration: 600 });
-    else map.setBearing(0);
+    if (animate) vendor.easeTo({ bearing: 0, duration: 600 });
+    else vendor.setBearing(0);
     return;
   }
   if (!currentTrack) return;
@@ -2081,8 +2001,8 @@ function applyBearing(animate: boolean): void {
   // Smallest angle between current and target, accounting for the 0=360 wrap.
   const delta = Math.abs(((heading - current + 540) % 360) - 180);
   if (delta < BEARING_NOOP_THRESHOLD_DEG) return;
-  if (animate) map.easeTo({ bearing: heading, duration: 600 });
-  else map.setBearing(heading);
+  if (animate) vendor.easeTo({ bearing: heading, duration: 600 });
+  else vendor.setBearing(heading);
 }
 
 /** Refresh the UTC time chips on each time-step button.
@@ -2242,9 +2162,9 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
     // the finger lifted), and the release's recenter must still bring the
     // camera home; otherwise the controls say Now while the camera stays
     // parked on the prior future view.
-    if (recenter && map && issMarker && currentTrack) {
+    if (recenter && vendor && issMarker && currentTrack) {
       const pos = markerPositionFor(currentTrack);
-      if (pos) map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+      if (pos) vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
     }
     updateTimeStepLabels();
     return;
@@ -2257,9 +2177,9 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   // for a no-op time change. A requested recenter is still honored.
   if (clamped !== 0 && viewTimeMs !== null
       && clamped === clampLookahead(lookaheadMinutesNow())) {
-    if (recenter && map && issMarker && currentTrack) {
+    if (recenter && vendor && issMarker && currentTrack) {
       const pos = markerPositionFor(currentTrack);
-      if (pos) map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+      if (pos) vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
     }
     updateTimeStepLabels();
     return;
@@ -2275,7 +2195,7 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
   // full inline path: the ease and an immediate full refresh are exactly
   // what that tap is asking for.
   if (sliderDragging && !recenter) {
-    if (currentTrack && map && issMarker) {
+    if (currentTrack && vendor && issMarker) {
       const pos = markerPositionFor(currentTrack);
       if (pos) issMarker.setLngLat([pos.lon, pos.lat]);
     }
@@ -2311,12 +2231,12 @@ export function setLookahead(newMinutes: number, recenter: boolean): void {
     // reflects the view time, not real-time-now (v1.4.2.0).
     refreshTerminatorSources();
     // Move + freeze marker at the new view time.
-    if (map && issMarker) {
+    if (vendor && issMarker) {
       const pos = markerPositionFor(currentTrack);
       if (pos) {
         issMarker.setLngLat([pos.lon, pos.lat]);
         if (recenter) {
-          map.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
+          vendor.easeTo({ center: [pos.lon, pos.lat], duration: 600 });
         }
       }
     }
@@ -2502,7 +2422,7 @@ let followISS = true;  // default ON — tracks ISS on every fresh load; user dr
  *  needs, then re-apply visibility (V4-P2). Safe no-op before the map
  *  exists; any failure leaves the observed layer in charge (locked A4). */
 function refreshForecastCloudLayer(): void {
-  if (!map) return;
+  if (!vendor) return;
   const frame = forecastFrameForView();
   const fc = activeForecastIndex(currentManifest);
   if (frame && fc) {
@@ -2517,8 +2437,8 @@ function refreshForecastCloudLayer(): void {
     }
     const url = `/${fc.prefix}/${key}/{z}/{x}/{y}.png`;
     try {
-      if (!map.getSource('fcst-clouds')) {
-        map.addSource('fcst-clouds', {
+      if (!vendor.hasSource('fcst-clouds')) {
+        vendor.addSource('fcst-clouds', {
           type: 'raster',
           tiles: [url],
           tileSize: 256,
@@ -2543,20 +2463,8 @@ function refreshForecastCloudLayer(): void {
           applyCloudsVisibility();
           return;
         }
-        const src = map.getSource('fcst-clouds') as maplibregl.RasterTileSource & {
-          setTiles?: (tiles: string[]) => unknown;
-        };
-        if (typeof src.setTiles === 'function') {
-          src.setTiles([url]);
-          fcstCurrentFrameKey = key;
-        } else {
-          // MapLibre without RasterTileSource.setTiles: rebuild once.
-          if (map.getLayer('fcst-clouds-layer')) map.removeLayer('fcst-clouds-layer');
-          map.removeSource('fcst-clouds');
-          fcstCurrentFrameKey = null;
-          refreshForecastCloudLayer();
-          return;
-        }
+        vendor.setRasterTiles('fcst-clouds', [url]);
+        fcstCurrentFrameKey = key;
       }
     } catch {
       /* style may not be loaded yet — the next refresh wires it */
@@ -2604,12 +2512,12 @@ export function basemapVisibility(state: BasemapState): Record<
 }
 
 function applyCloudsVisibility(): void {
-  if (!map) return;
+  if (!vendor) return;
   // Defensive try: the style may not be loaded yet, and test seams install
   // map doubles without the layer API.
   let forecastFrameActive = false;
   try {
-    forecastFrameActive = map.getLayer('fcst-clouds-layer') != null
+    forecastFrameActive = vendor.hasLayer('fcst-clouds-layer')
       && forecastFrameForView() !== null;
   } catch { /* treat as observed-layer mode */ }
   const visibility = basemapVisibility({
@@ -2621,8 +2529,8 @@ function applyCloudsVisibility(): void {
   // P1 from review: source-swap via setLayoutProperty visibility, not
   // setStyle rebuild — keeps all overlays + layer state intact.
   try {
-    for (const [layerId, vis] of Object.entries(visibility)) {
-      if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', vis);
+    for (const [layerId, vis] of Object.entries(visibility) as [LayerId, LayerVisibility][]) {
+      if (vendor.hasLayer(layerId)) vendor.setVisibility(layerId, vis);
     }
   } catch {
     /* layers may not be loaded yet on the first call — applyCloudsVisibility
@@ -2670,11 +2578,11 @@ function bindCloudToggle(): void {
  *  safe to call before MapLibre has finished loading the layer. v2
  *  (Chris feedback 2026-05-27). */
 function applyNightLightsVisibility(): void {
-  if (!map) return;
+  if (!vendor) return;
   const vis = nightLightsVisible ? 'visible' : 'none';
   try {
-    if (map.getLayer('viirs-night-lights-layer')) {
-      map.setLayoutProperty('viirs-night-lights-layer', 'visibility', vis);
+    if (vendor.hasLayer('viirs-night-lights-layer')) {
+      vendor.setVisibility('viirs-night-lights-layer', vis);
     }
   } catch { /* layer not loaded yet */ }
   // v3.6: night-lights flip may toggle the global-dim layer (active only
@@ -2689,9 +2597,8 @@ function applyNightLightsVisibility(): void {
  *  re-toggle later. */
 let nightLightsErrorLogged = false;
 function armNightLightsErrorHandler(): void {
-  if (!map) return;
-  map.on('error', (e) => {
-    const sourceId = (e as { sourceId?: string }).sourceId;
+  if (!vendor) return;
+  vendor.on('error', ({ sourceId }) => {
     if (sourceId !== 'viirs-night-lights') return;
     if (nightLightsErrorLogged) return;
     nightLightsErrorLogged = true;
@@ -2729,12 +2636,7 @@ function bindNightLightsToggle(): void {
     // GIBS is back up after a transient outage.
     if (nightLightsErrorLogged) {
       nightLightsErrorLogged = false;
-      if (map) {
-        const src = map.getSource('viirs-night-lights') as maplibregl.RasterTileSource | undefined;
-        if (src && 'setTiles' in src) {
-          src.setTiles([viirsAlphaUrl('2016-01-01')]);
-        }
-      }
+      if (vendor) vendor.setRasterTiles('viirs-night-lights', [viirsAlphaUrl('2016-01-01')]);
     }
     nightLightsVisible = !nightLightsVisible;
     try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, nightLightsVisible ? '1' : '0'); } catch { /* noop */ }
@@ -2750,10 +2652,10 @@ function bindNightLightsToggle(): void {
  *  center. Touches tiles only when IR is ON and the satellite changed, so
  *  panning with IR off issues zero tile requests (eng R5). */
 function repickGeoIRForView(): void {
-  if (!map || !irVisible) return;
+  if (!vendor || !irVisible) return;
   let lat: number;
   let lng: number;
-  try { const c = map.getCenter(); lat = c.lat; lng = c.lng; } catch { return; }
+  try { [lng, lat] = vendor.center(); } catch { return; }
   const sat = pickGeoIRSat(lat, lng);
   const time = geoIRTimeForNow();
   // Reset tiles when the satellite OR the 10-min frame time changes, so a
@@ -2766,8 +2668,7 @@ function repickGeoIRForView(): void {
     geoIrAnyLoaded = false; // new tiles → re-evaluate feed health
     geoIrFeedDown = false;
     try {
-      const src = map.getSource('geo-ir') as maplibregl.RasterTileSource | undefined;
-      if (src && 'setTiles' in src) src.setTiles([geoIRTileUrl(sat, time)]);
+      vendor.setRasterTiles('geo-ir', [geoIRTileUrl(sat, time)]);
     } catch { /* source not ready */ }
   } else if (!sat) {
     currentGeoIRTime = null;
@@ -2778,11 +2679,11 @@ function repickGeoIRForView(): void {
  *  (currentGeoIRSat === null) so the operator never sees blank/stale tiles —
  *  the badge explains the gap (eng R7). */
 function applyIrVisibility(): void {
-  if (!map) return;
+  if (!vendor) return;
   const showRaster = irVisible && currentGeoIRSat !== null;
   try {
-    if (map.getLayer('geo-ir-layer')) {
-      map.setLayoutProperty('geo-ir-layer', 'visibility', showRaster ? 'visible' : 'none');
+    if (vendor.hasLayer('geo-ir-layer')) {
+      vendor.setVisibility('geo-ir-layer', showRaster ? 'visible' : 'none');
     }
   } catch { /* layer not loaded yet */ }
 }
@@ -2822,9 +2723,8 @@ function reflectIrButton(): void {
 
 let irErrorLogged = false;
 function armIrErrorHandler(): void {
-  if (!map) return;
-  map.on('error', (e) => {
-    const sourceId = (e as { sourceId?: string }).sourceId;
+  if (!vendor) return;
+  vendor.on('error', ({ sourceId }) => {
     if (sourceId !== 'geo-ir') return;
     if (irErrorLogged) return;
     irErrorLogged = true;
@@ -2855,8 +2755,8 @@ function bindIrToggle(): void {
   }
   // Re-pick the satellite as the operator pans — GATED on irVisible so panning
   // with IR off issues zero tile requests (eng R5).
-  if (map) {
-    map.on('moveend', () => {
+  if (vendor) {
+    vendor.on('moveend', () => {
       if (!irVisible) return;
       repickGeoIRForView();
       applyIrVisibility();
@@ -2865,14 +2765,13 @@ function bindIrToggle(): void {
     // Feed-health (Codex review): a loaded geo-IR tile clears any "feed down"
     // state; if the map settles (idle) with IR visible but nothing loaded, the
     // feed is down — so an outage shows "feed unavailable", not fake clear sky.
-    map.on('data', (e) => {
-      const ev = e as { sourceId?: string; tile?: { state?: string } };
-      if (ev.sourceId === 'geo-ir' && ev.tile?.state === 'loaded') {
+    vendor.on('data', ({ sourceId, tileLoaded }) => {
+      if (sourceId === 'geo-ir' && tileLoaded) {
         geoIrAnyLoaded = true;
         if (geoIrFeedDown) { geoIrFeedDown = false; refreshImageryDateBadgeForView(); }
       }
     });
-    map.on('idle', () => {
+    vendor.on('idle', () => {
       if (irVisible && currentGeoIRSat && !geoIrAnyLoaded && !geoIrFeedDown) {
         geoIrFeedDown = true;
         refreshImageryDateBadgeForView();
@@ -2899,11 +2798,11 @@ function bindIrToggle(): void {
 /** Show / hide the Esri Reference labels overlay. v2 (Chris feedback
  *  2026-05-27). Default ON. Idempotent. */
 function applyLabelsVisibility(): void {
-  if (!map) return;
+  if (!vendor) return;
   const vis = labelsVisible ? 'visible' : 'none';
   try {
-    if (map.getLayer('esri-labels-reference-layer')) {
-      map.setLayoutProperty('esri-labels-reference-layer', 'visibility', vis);
+    if (vendor.hasLayer('esri-labels-reference-layer')) {
+      vendor.setVisibility('esri-labels-reference-layer', vis);
     }
   } catch { /* layer not loaded yet */ }
 }
@@ -2966,8 +2865,8 @@ export function applyFollowISS(pos: { lat: number; lon: number }): void {
   // 1Hz caller passes the LIVE ISS position; recentering on it while the
   // marker shows a future instant makes the camera chase a position that
   // isn't on screen. Follow resumes when the view returns to live.
-  if (!followISS || !map || isScrubbed()) return;
-  map.setCenter([pos.lon, pos.lat]);
+  if (!followISS || !vendor || isScrubbed()) return;
+  vendor.setCenter([pos.lon, pos.lat]);
 }
 
 /** Exit follow silently. Called by user dragstart/zoomstart handlers and
@@ -3030,21 +2929,20 @@ function bindFollowToggle(): void {
     // drawn. markerPositionFor honors the scrub and falls back through
     // SGP4 → polynomial exactly like every other marker consumer.
     const pos = markerPositionFor(currentTrack);
-    if (pos && map) {
-      map.flyTo({ center: [pos.lon, pos.lat], duration: 800, essential: true });
+    if (pos && vendor) {
+      vendor.flyTo({ center: [pos.lon, pos.lat], duration: 800 });
     }
   });
-  if (map) {
+  if (vendor) {
     // User-initiated drag breaks follow. Programmatic setCenter (from
     // applyFollowISS) does NOT fire dragstart so this is safe.
-    map.on('dragstart', () => { exitFollowISS(); });
+    vendor.on('dragstart', () => { exitFollowISS(); });
     // User-initiated zoom also breaks follow — operator is zooming for
     // a reason that conflicts with auto-recenter. Programmatic
     // setCenter doesn't trigger zoomstart, so this is safe too.
-    map.on('zoomstart', (e: unknown) => {
+    vendor.on('zoomstart', ({ byUser }) => {
       // Only respect zoomstart that came from a real user event.
-      const orig = (e as { originalEvent?: unknown } | undefined)?.originalEvent;
-      if (orig) exitFollowISS();
+      if (byUser) exitFollowISS();
     });
   }
   followToggleBound = true;
@@ -3063,7 +2961,7 @@ export function _setFollowEnvForTest(
   m: { setCenter(c: [number, number]): void } | null,
   follow: boolean,
 ): void {
-  map = m as unknown as maplibregl.Map | null;
+  vendor = m as unknown as VendorMap | null;
   followISS = follow;
 }
 
@@ -3120,31 +3018,18 @@ function bindBearingToggle(): void {
   bearingToggleBound = true;
 }
 
-type CatalogLayer = maplibregl.LayerSpecification & { id: LayerId; source?: SourceId };
-
 /** Add a layer once, at its catalog position. The catalog decides where it
  *  paints, so no call site names a beforeId and the stacking is the same
  *  whatever order the callers run in. */
-function ensureLayer(spec: CatalogLayer): void {
-  if (!map || map.getLayer(spec.id)) return;
-  map.addLayer(spec, beforeIdFor(spec.id, paintedLayerIds(map)));
+function ensureLayer(spec: LayerSpec): void {
+  if (!vendor || vendor.hasLayer(spec.id)) return;
+  vendor.addLayer(spec, beforeIdFor(spec.id, vendor.paintedLayers()));
 }
 
-function paintedLayerIds(m: maplibregl.Map): LayerId[] {
-  return m.getStyle().layers.map((layer) => asLayerId(layer.id));
-}
-
-function upsertGeoJson(
-  m: maplibregl.Map,
-  id: string,
-  data: GeoJSON.FeatureCollection,
-): void {
-  const existing = m.getSource(id);
-  if (existing && 'setData' in existing) {
-    (existing as maplibregl.GeoJSONSource).setData(data);
-  } else {
-    m.addSource(id, { type: 'geojson', data });
-  }
+function upsertGeoJson(id: SourceId, data: GeoJSON.FeatureCollection): void {
+  if (!vendor) return;
+  if (vendor.hasSource(id)) vendor.setGeoJson(id, data);
+  else vendor.addSource(id, { type: 'geojson', data });
 }
 
 /** Force the map to recompute its canvas size. Call after the container becomes
@@ -3153,7 +3038,7 @@ function upsertGeoJson(
  *  until a resize event fires.
  */
 export function resizeMap(): void {
-  if (map) map.resize();
+  if (vendor) vendor.resize();
 }
 
 /** Shape of MapLibre feature properties on a target pin. Mirrors the
@@ -3368,12 +3253,7 @@ export interface TargetHit {
   lngLat: [number, number];
 }
 
-/** Minimal shape of the MapLibre features we hit-test — kept structural so
- *  this is unit-testable without a real map. */
-interface HitFeature {
-  properties: Record<string, unknown> | null;
-  geometry: { type: string; coordinates: number[] };
-}
+type PointHit = Hit & { geometry: GeoJSON.Point };
 
 /** Resolve which target a tap selected and merge its property bags.
  *
@@ -3388,14 +3268,14 @@ interface HitFeature {
  *       `personal:`-prefixed id as personal even if the ring layer wasn't hit.
  *  Returns null when nothing point-like was hit. */
 export function pickTargetAtTap(
-  features: HitFeature[],
+  features: Hit[],
   tap: { x: number; y: number },
   project: (lngLat: [number, number]) => { x: number; y: number },
 ): TargetHit | null {
-  const pts = features.filter((f) => f.geometry?.type === 'Point' && f.properties);
+  const pts = features.filter((f): f is PointHit => f.geometry?.type === 'Point' && !!f.properties);
 
   // Nearest pin to the tap decides the winning target.
-  let nearest: HitFeature | null = null;
+  let nearest: PointHit | null = null;
   let nearestD = Infinity;
   for (const f of pts) {
     const ll = f.geometry.coordinates as [number, number];
@@ -3457,7 +3337,7 @@ function formatRelativeMinutes(deltaMinutes: number): string {
 export function dropLookupPin(result: {
   lat: number; lon: number; alt_km: number; timestamp_utc: Date;
 }): void {
-  if (!map) return;
+  if (!vendor) return;
   const fc: GeoJSON.FeatureCollection = {
     type: 'FeatureCollection',
     features: [{
@@ -3469,8 +3349,8 @@ export function dropLookupPin(result: {
       geometry: { type: 'Point', coordinates: [result.lon, result.lat] },
     }],
   };
-  upsertGeoJson(map, 'lookup-pin', fc);
-  if (!map.getLayer('lookup-pin-layer')) {
+  upsertGeoJson('lookup-pin', fc);
+  if (!vendor.hasLayer('lookup-pin-layer')) {
     ensureLayer({
       id: 'lookup-pin-layer',
       type: 'circle',
@@ -3483,8 +3363,8 @@ export function dropLookupPin(result: {
         'circle-opacity': 0.9,
       },
     });
-    map.on('click', 'lookup-pin-layer', (e) => {
-      const f = e.features?.[0];
+    vendor.onLayer('click', 'lookup-pin-layer', (e) => {
+      const f = e.features[0];
       if (!f || f.geometry.type !== 'Point') return;
       const coords = (f.geometry.coordinates as [number, number]).slice() as [number, number];
       const props = f.properties as { timestamp_iso?: string; alt_km?: number };
@@ -3497,21 +3377,18 @@ export function dropLookupPin(result: {
       const alt = document.createElement('div');
       alt.textContent = `Altitude: ${(props.alt_km ?? 0).toFixed(1)} km`;
       body.append(title, ts, alt);
-      new maplibregl.Popup()
-        .setLngLat(coords)
-        .setDOMContent(body)
-        .addTo(map!);
+      vendor!.openPopup({ at: coords, content: body });
     });
-    map.on('mouseenter', 'lookup-pin-layer', () => {
-      if (map) map.getCanvas().style.cursor = 'pointer';
+    vendor.onLayer('mouseenter', 'lookup-pin-layer', () => {
+      if (vendor) vendor.setCursor('pointer');
     });
-    map.on('mouseleave', 'lookup-pin-layer', () => {
-      if (map) map.getCanvas().style.cursor = '';
+    vendor.onLayer('mouseleave', 'lookup-pin-layer', () => {
+      if (vendor) vendor.setCursor('');
     });
   }
   // Center + ensure visible zoom. Don't override the user's bearing/tilt.
-  const targetZoom = Math.max(map.getZoom(), 4);
-  map.easeTo({ center: [result.lon, result.lat], zoom: targetZoom, duration: 800 });
+  const targetZoom = Math.max(vendor.zoom(), 4);
+  vendor.easeTo({ center: [result.lon, result.lat], zoom: targetZoom, duration: 800 });
 }
 
 /** Build the ISS marker DOM: a stylized ISS silhouette (central truss + two
@@ -3713,7 +3590,7 @@ function refreshImageryDateBadgeForView(): void {
 // State: module-level so the pin survives renderMap re-runs (i.e., Map tab
 // re-entry within the same page session). Cleared on full page reload.
 
-let droppedPinPopup: maplibregl.Popup | null = null;
+let droppedPinPopup: PopupHandle | null = null;
 let pinDropBound = false;
 // Long-press tracking for touch devices.
 let longPressTimer: number | null = null;
@@ -3722,41 +3599,38 @@ const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_THRESHOLD_PX = 8;
 
 function bindPinDrop(): void {
-  if (pinDropBound || !map) return;
+  if (pinDropBound || !vendor) return;
 
-  // Desktop: right-click (contextmenu). Suppress the browser menu.
-  map.on('contextmenu', (e) => {
-    e.preventDefault();
-    handlePinDrop(e.lngLat.lng, e.lngLat.lat);
+  // Desktop: right-click (contextmenu).
+  vendor.on('contextmenu', ({ lngLat: [lng, lat] }) => {
+    handlePinDrop(lng, lat);
   });
 
   // Touch: long-press. MapLibre's `touchstart` fires before MapLibre decides
   // it's a drag vs a tap; we start a 500ms timer and cancel it on touchmove
   // beyond an 8px threshold (treated as a pan).
-  map.on('touchstart', (e) => {
-    if (!e.originalEvent || e.originalEvent.touches.length !== 1) return;
-    const touch = e.originalEvent.touches[0];
+  vendor.on('touchstart', ({ lngLat: [lng, lat], touches }) => {
+    if (touches.length !== 1) return;
+    const touch = touches[0];
     if (!touch) return;
-    longPressStartXY = { x: touch.clientX, y: touch.clientY };
-    const lng = e.lngLat.lng;
-    const lat = e.lngLat.lat;
+    longPressStartXY = { x: touch.x, y: touch.y };
     longPressTimer = window.setTimeout(() => {
       longPressTimer = null;
       handlePinDrop(lng, lat);
     }, LONG_PRESS_MS);
   });
-  map.on('touchmove', (e) => {
+  vendor.on('touchmove', ({ touches }) => {
     if (longPressTimer === null || !longPressStartXY) return;
-    const touch = e.originalEvent.touches[0];
+    const touch = touches[0];
     if (!touch) return;
-    const dx = touch.clientX - longPressStartXY.x;
-    const dy = touch.clientY - longPressStartXY.y;
+    const dx = touch.x - longPressStartXY.x;
+    const dy = touch.y - longPressStartXY.y;
     if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_THRESHOLD_PX) {
       window.clearTimeout(longPressTimer);
       longPressTimer = null;
     }
   });
-  map.on('touchend', () => {
+  vendor.on('touchend', () => {
     if (longPressTimer !== null) {
       window.clearTimeout(longPressTimer);
       longPressTimer = null;
@@ -3769,9 +3643,9 @@ function bindPinDrop(): void {
 
 /** Drop a pin at (lng, lat), compute upcoming passes, show popup. */
 function handlePinDrop(lng: number, lat: number): void {
-  if (!map || !currentTrack) return;
+  if (!vendor || !currentTrack) return;
   // Round to zoom-appropriate precision (A3 from /plan-eng-review).
-  const rounded = roundForZoom(lat, lng, map.getZoom());
+  const rounded = roundForZoom(lat, lng, vendor.zoom());
   const pinLat = rounded.lat;
   const pinLon = rounded.lon;
 
@@ -3788,12 +3662,12 @@ function handlePinDrop(lng: number, lat: number): void {
       geometry: { type: 'Point', coordinates: [pinLon, pinLat] },
     }],
   };
-  upsertGeoJson(map, 'dropped-pin', fc);
+  upsertGeoJson('dropped-pin', fc);
 
   // Add layer on first drop. Distinct cyan color + downward-triangle-with-dot
   // style differentiates from target pins (score-colored) and lookup pin
   // (magenta).
-  if (!map.getLayer('dropped-pin-layer')) {
+  if (!vendor.hasLayer('dropped-pin-layer')) {
     ensureLayer({
       id: 'dropped-pin-layer',
       type: 'circle',
@@ -3806,15 +3680,15 @@ function handlePinDrop(lng: number, lat: number): void {
         'circle-opacity': 1.0,
       },
     });
-    map.on('click', 'dropped-pin-layer', () => {
+    vendor.onLayer('click', 'dropped-pin-layer', () => {
       // Clicking the pin dismisses (matches the "active query" mental model).
       dismissDroppedPin();
     });
-    map.on('mouseenter', 'dropped-pin-layer', () => {
-      if (map) map.getCanvas().style.cursor = 'pointer';
+    vendor.onLayer('mouseenter', 'dropped-pin-layer', () => {
+      if (vendor) vendor.setCursor('pointer');
     });
-    map.on('mouseleave', 'dropped-pin-layer', () => {
-      if (map) map.getCanvas().style.cursor = '';
+    vendor.onLayer('mouseleave', 'dropped-pin-layer', () => {
+      if (vendor) vendor.setCursor('');
     });
   }
 
@@ -3853,20 +3727,17 @@ function handlePinDrop(lng: number, lat: number): void {
 
   // Replace any prior popup.
   if (droppedPinPopup) droppedPinPopup.remove();
-  droppedPinPopup = new maplibregl.Popup({ maxWidth: '340px' })
-    .setLngLat([pinLon, pinLat])
-    .setDOMContent(body)
-    .addTo(map);
+  droppedPinPopup = vendor.openPopup({ at: [pinLon, pinLat], content: body, maxWidth: '340px' });
 }
 
 /** Remove the dropped pin + popup. */
 function dismissDroppedPin(): void {
-  if (!map) return;
+  if (!vendor) return;
   if (droppedPinPopup) {
     droppedPinPopup.remove();
     droppedPinPopup = null;
   }
-  upsertGeoJson(map, 'dropped-pin', { type: 'FeatureCollection', features: [] });
+  upsertGeoJson('dropped-pin', { type: 'FeatureCollection', features: [] });
 }
 
 /** One satellite's passes for the pin-drop popup. v1.6.0.0 — Q2 from
@@ -4128,7 +3999,7 @@ interface SatelliteState {
   tle: TLEPair;
   matchCount: number;
   stale: boolean;
-  marker: maplibregl.Marker | null;
+  marker: MarkerHandle | null;
 }
 
 const selectedSatellites = new Map<string, SatelliteState>();
@@ -4203,12 +4074,12 @@ export function buildSatelliteTrackFeatures(
 }
 
 function refreshSatelliteTracks(): void {
-  if (!map) return;
+  if (!vendor) return;
   for (const [key, state] of selectedSatellites.entries()) {
     const sourceId = satTrackSourceId(key);
     const layerId = satTrackLayerId(key);
     const features = buildSatelliteTrackFeatures(state.tle);
-    upsertGeoJson(map, sourceId, { type: 'FeatureCollection', features });
+    upsertGeoJson(sourceId, { type: 'FeatureCollection', features });
     ensureLayer({
       id: layerId,
       type: 'line',
@@ -4224,7 +4095,7 @@ function refreshSatelliteTracks(): void {
 }
 
 function refreshSatelliteMarkers(): void {
-  if (!map) return;
+  if (!vendor) return;
   // One-clock surface (4A): markers render at the VIEW time — live now in
   // live mode, the pinned instant while scrubbed.
   const viewMs = currentViewMs();
@@ -4237,9 +4108,7 @@ function refreshSatelliteMarkers(): void {
       el.className = 'sat-marker';
       el.style.background = state.meta.track_color;
       el.title = `${state.meta.icon} ${state.meta.name}`;
-      state.marker = new maplibregl.Marker({ element: el, anchor: 'center' })
-        .setLngLat([pos.lon, pos.lat])
-        .addTo(map);
+      state.marker = vendor.addMarker(el, [pos.lon, pos.lat]);
     } else {
       state.marker.setLngLat([pos.lon, pos.lat]);
     }
@@ -4247,7 +4116,7 @@ function refreshSatelliteMarkers(): void {
 }
 
 function removeSatelliteVisuals(key: string): void {
-  if (!map) return;
+  if (!vendor) return;
   const state = selectedSatellites.get(key);
   if (state?.marker) {
     state.marker.remove();
@@ -4256,8 +4125,8 @@ function removeSatelliteVisuals(key: string): void {
   const layerId = satTrackLayerId(key);
   const sourceId = satTrackSourceId(key);
   try {
-    if (map.getLayer(layerId)) map.removeLayer(layerId);
-    if (map.getSource(sourceId)) map.removeSource(sourceId);
+    if (vendor.hasLayer(layerId)) vendor.removeLayer(layerId);
+    if (vendor.hasSource(sourceId)) vendor.removeSource(sourceId);
   } catch { /* noop */ }
 }
 

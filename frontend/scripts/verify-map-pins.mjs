@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const MAP = 'src/map.ts';
 const CATALOG = 'src/map/map-core/catalog.ts';
+const CAMERA = 'src/map/map-core/camera.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -33,8 +34,8 @@ const MUTATIONS = [
   {
     contract: 'a layer added later still paints at its catalog position',
     file: MAP,
-    find: '  map.addLayer(spec, beforeIdFor(spec.id, paintedLayerIds(map)));',
-    replace: '  map.addLayer(spec);',
+    find: '  vendor.addLayer(spec, beforeIdFor(spec.id, vendor.paintedLayers()));',
+    replace: '  vendor.addLayer(spec);',
   },
   {
     contract: 'hiding clouds swaps the dark basemap for Esri imagery',
@@ -44,9 +45,9 @@ const MUTATIONS = [
   },
   {
     contract: 'the map opens at lon 0, lat 0',
-    file: MAP,
-    find: '    center: [0, 0],\n    zoom: initialZoomForViewport(viewportWidthPx),',
-    replace: '    center: [10, 0],\n    zoom: initialZoomForViewport(viewportWidthPx),',
+    file: CAMERA,
+    find: '  return { center: [0, 0], zoom: initialZoomForViewport(viewportWidthPx) };',
+    replace: '  return { center: [10, 0], zoom: initialZoomForViewport(viewportWidthPx) };',
   },
   {
     contract: 'the cloud raster paints at 55% opacity',

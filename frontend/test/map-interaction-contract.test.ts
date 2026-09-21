@@ -165,7 +165,7 @@ describe('selecting a target', () => {
   it('opens one popup naming the target the operator tapped', () => {
     const map = renderedMap();
     map.renderedFeatures = { 'targets-layer': [target] };
-    map.fire('click', { point: { x: -72.5, y: -13.16 } });
+    map.fire('click', { point: { x: -72.5, y: -13.16 }, lngLat: { lng: -72.5, lat: -13.16 } });
     const { popups } = currentMaplibreDouble();
     expect(popups).toHaveLength(1);
     expect(popups[0]?.added).toBe(map);
@@ -176,7 +176,7 @@ describe('selecting a target', () => {
   it('hit-tests the two target layers and defers to the higher-priority pins', () => {
     const map = renderedMap();
     map.renderedFeatures = { 'targets-layer': [target] };
-    map.fire('click', { point: { x: -72.5, y: -13.16 } });
+    map.fire('click', { point: { x: -72.5, y: -13.16 }, lngLat: { lng: -72.5, lat: -13.16 } });
     expect(map.queryCalls.map((call) => call.layers)).toEqual([
       ['ascent-pad-layer'],
       ['targets-layer', 'my-targets-layer'],
@@ -184,7 +184,7 @@ describe('selecting a target', () => {
   });
 
   it('opens no popup when the tap lands on empty ocean', () => {
-    renderedMap().fire('click', { point: { x: 10, y: 10 } });
+    renderedMap().fire('click', { point: { x: 10, y: 10 }, lngLat: { lng: 10, lat: 10 } });
     expect(currentMaplibreDouble().popups).toHaveLength(0);
   });
 });

@@ -80,7 +80,8 @@ export type RasterSource = {
 
 export type GeoJsonSource = {
   type: 'geojson';
-  data: GeoJSON.FeatureCollection;
+  data: GeoJSON.FeatureCollection | string;
+  attribution?: string;
 };
 
 export type SourceSpec = RasterSource | GeoJsonSource;

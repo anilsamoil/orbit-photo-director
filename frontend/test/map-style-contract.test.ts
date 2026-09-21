@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildStyle } from '../src/map';
+import { maplibreStyle } from '../src/map/adapters/maplibre';
+import type { SourceId } from '../src/map/map-core/catalog';
 
 // Characterization of the style MapLibre is constructed with. Layer array
 // order is paint order, bottom first, so the id list below is behavior: the
@@ -10,7 +12,7 @@ import { buildStyle } from '../src/map';
 
 type LayerRow = [id: string, source: string | null, visibility: string];
 
-function firstTileUrl(sourceId: string): string {
+function firstTileUrl(sourceId: SourceId): string {
   const source = buildStyle().sources[sourceId];
   if (!source || !('tiles' in source)) throw new Error(`no raster source ${sourceId}`);
   return source.tiles?.[0] ?? '';
@@ -37,8 +39,8 @@ describe('buildStyle', () => {
     ]);
   });
 
-  it('is a style spec version 8 document', () => {
-    expect(buildStyle().version).toBe(8);
+  it('reaches MapLibre as a style spec version 8 document', () => {
+    expect(maplibreStyle(buildStyle()).version).toBe(8);
   });
 
   it('paints five layers, bottom first, each wired to its own source', () => {
@@ -85,7 +87,7 @@ describe('buildStyle', () => {
     const maxzoom = Object.fromEntries(
       Object.entries(sources).map(([id, source]) => [
         id,
-        'maxzoom' in source ? source.maxzoom : null,
+        source && 'maxzoom' in source ? source.maxzoom : null,
       ]),
     );
     expect(maxzoom).toEqual({
@@ -114,7 +116,7 @@ describe('buildStyle', () => {
 
   it('attributes every source it renders', () => {
     const unattributed = Object.entries(buildStyle().sources)
-      .filter(([, source]) => !('attribution' in source) || !source.attribution)
+      .filter(([, source]) => !source || !('attribution' in source) || !source.attribution)
       .map(([id]) => id);
     expect(unattributed).toEqual([]);
   });

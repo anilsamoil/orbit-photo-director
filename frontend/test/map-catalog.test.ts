@@ -169,6 +169,7 @@ describe('the catalog against what renderMap paints', () => {
     const drop = { lat: 51.5, lon: -0.12, alt_km: 420, timestamp_utc: new Date('2026-05-04T12:10:00Z') };
     const rightClick = () => renderedMap().fire('contextmenu', {
       preventDefault: () => {},
+      point: { x: 2.35, y: 48.85 },
       lngLat: { lng: 2.35, lat: 48.85 },
     });
 

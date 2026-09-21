@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { maplibreMapOptions, maplibreStyle } from '../src/map/adapters/maplibre';
+import { initialCamera } from '../src/map/map-core/camera';
 import {
   MANIFEST_FIXTURE,
   TRACK_FIXTURE,
@@ -130,13 +132,13 @@ describe('renderMap bring-up', () => {
     ]);
   });
 
-  it('constructs the map from buildStyle and mapCameraOptions, not an inline literal', async () => {
+  it('constructs the map from buildStyle and initialCamera, not an inline literal', async () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     const container = document.getElementById('map')!;
     const { style, container: constructedContainer, ...camera } = renderedMap().options;
     expect(constructedContainer).toBe(container);
-    expect(style).toEqual(mapModule.buildStyle());
-    expect(camera).toEqual(mapModule.mapCameraOptions(container.clientWidth || window.innerWidth));
+    expect(style).toEqual(maplibreStyle(mapModule.buildStyle()));
+    expect(camera).toEqual(maplibreMapOptions(initialCamera(container.clientWidth || window.innerWidth)));
   });
 
   it('adds the navigation control to the top left', async () => {

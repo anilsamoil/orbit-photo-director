@@ -1,4 +1,5 @@
 import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { asLayerId, type LayerId, type SourceId } from '../../map-core/catalog';
 import type { BBox, LngLat, Point } from '../../map-core/geometry';
