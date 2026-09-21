@@ -13,6 +13,7 @@ const CORE = 'src/map/map-core/core.ts';
 const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
 const PIN_DROP = 'src/map/features/pin-drop/index.ts';
+const SATELLITES = 'src/map/features/satellites/index.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -25,6 +26,7 @@ const PIN_FILES = [
   'test/map-ir.test.ts',
   'test/map-night-lights.test.ts',
   'test/map-pin-drop-contract.test.ts',
+  'test/map-satellites-contract.test.ts',
 ];
 
 const MUTATIONS = [
@@ -99,6 +101,24 @@ const MUTATIONS = [
     file: PIN_DROP,
     find: '    if (Math.hypot(finger.x - press.start.x, finger.y - press.start.y) > LONG_PRESS_MOVE_THRESHOLD_PX) release();',
     replace: '    if (Math.hypot(finger.x - press.start.x, finger.y - press.start.y) > 1000) release();',
+  },
+  {
+    contract: 'a satellite track window starts at the view instant, not the wall clock',
+    file: SATELLITES,
+    find: '      const fromMs = core.clock.viewMs();',
+    replace: '      const fromMs = core.clock.now();',
+  },
+  {
+    contract: 'a satellite marker sits at its sub-point for the view instant',
+    file: SATELLITES,
+    find: '      const atMs = core.clock.viewMs();',
+    replace: '      const atMs = core.clock.now();',
+  },
+  {
+    contract: 'unchecking a satellite forgets it for the next visit',
+    file: SATELLITES,
+    find: '      tracked.delete(key);\n      publish();\n      persistSelectedKeys(tracked.keys());',
+    replace: '      tracked.delete(key);\n      publish();',
   },
 ];
 
