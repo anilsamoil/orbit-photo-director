@@ -328,7 +328,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       include: ['src/**/*.ts'],
-      exclude: ['src/main.ts', 'src/map.ts', 'src/**/*.test.ts'],
+      exclude: ['src/main.ts', 'src/map/index.ts', 'src/**/*.test.ts'],
       thresholds: { lines: 80, functions: 80, branches: 75, statements: 80 },
     },
   },

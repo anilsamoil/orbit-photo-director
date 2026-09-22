@@ -1,3 +1,4 @@
+import { liveIssPositionSGP4 } from '../../../iss-sgp4';
 import { fetchSatelliteTLE, metaKey, type SatelliteMeta, type TLEPair } from '../../../satellites';
 import { satTrackLayerId, satTrackSourceId } from '../../map-core/catalog';
 import type { MapCore } from '../../map-core/core';
@@ -9,6 +10,28 @@ import { metaForKey, persistSelectedKeys, readSelectedKeys } from './selection';
 
 const TRACK_REFRESH_MS = 60_000;
 const MARKER_REFRESH_MS = 1_000;
+
+const runtime: { core: MapCore | null } = { core: null };
+
+/** Live sub-points for the topbar. The topbar stays on the wall clock while the map is scrubbed. */
+export function getSatelliteTopbarReadouts(): { label: string; text: string; color: string }[] {
+  const core = runtime.core;
+  if (!core) return [];
+  const nowMs = core.clock.now();
+  const out: { label: string; text: string; color: string }[] = [];
+  for (const { label, color, track } of core.view().satellites) {
+    const pos = liveIssPositionSGP4(track, nowMs);
+    if (!pos) continue;
+    const ns = pos.lat >= 0 ? 'N' : 'S';
+    const ew = pos.lon >= 0 ? 'E' : 'W';
+    out.push({
+      label,
+      text: `${Math.abs(pos.lat).toFixed(1)}°${ns}, ${Math.abs(pos.lon).toFixed(1)}°${ew}`,
+      color,
+    });
+  }
+  return out;
+}
 
 interface Tracked {
   meta: SatelliteMeta;
@@ -25,6 +48,7 @@ interface Tracked {
 export const satellites: MapFeature = {
   id: 'satellites',
   mount(core: MapCore) {
+    runtime.core = core;
     const tracked = new Map<string, Tracked>();
 
     const publish = (): void => {

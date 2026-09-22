@@ -35,7 +35,7 @@ import { fetchKpData, initKpWidget, refreshAuroraVisibility, renderKpWidget } fr
 import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
-import { subscribeProfileChanged } from './profile-events';
+import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
 import { getAccountProfile, getAuthorizedProfiles, resolveAccountProfile } from './profile-session';
 import { deleteProfileTarget } from './profile-api';
 import { markProfileTargetsChanged } from './profile-target-sync';
@@ -1232,7 +1232,7 @@ function bindTabs(): void {
   // Profile tab, render the pane, then open the inline edit form. Setting the
   // edit flag is honored by buildPersonalRow even if it lands before the pane
   // finishes rendering, so the ordering is race-safe.
-  window.addEventListener('opd-edit-target', (e) => {
+  window.addEventListener(EDIT_TARGET_EVENT, (e) => {
     const detail = (e as CustomEvent<{ targetId?: unknown }>).detail;
     const targetId = detail && typeof detail.targetId === 'string' ? detail.targetId : null;
     if (!targetId) return;

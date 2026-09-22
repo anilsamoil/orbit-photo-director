@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const MAP = 'src/map.ts';
+const MAP = 'src/map/index.ts';
 const BASEMAP_VISIBILITY = 'src/map/features/basemap/visibility.ts';
 const CORE = 'src/map/map-core/core.ts';
 const CATALOG = 'src/map/map-core/catalog.ts';
