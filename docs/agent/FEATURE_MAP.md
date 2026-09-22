@@ -1,6 +1,6 @@
 # Feature map
 
-Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Six capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
+Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Seven capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
 
 Paths below are relative to `frontend/`. Tests run with `bun run test <path>` from `frontend/`.
 
@@ -84,13 +84,25 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | Tests | `src/map/features/terminator/terminator.test.ts` mounts on the vendor double. `test/terminator.test.ts` is the domain math. `test/map-night-lights.test.ts` (dim interplay). `test/map-overlay-prefs.test.ts`. `test/map-render-contract.test.ts`. `test/map-mount-order.test.ts`. |
 | Traps | `bindTerminatorClock` runs at `map.ts` load, before `runScrubTier2`, so a scrub refreshes geometry with no `renderMap` once a core exists. The 30 s live tick starts in `mount`, not at import. `_resetMapStateForTest` does not reset terminator visibility or remove the key. `new Date(clock.viewMs())` is the allowed form; a bare `new Date()` fails the clock rule. Mounting without `bindTerminatorClock` throws. A scrub now rebuilds terminator geometry even when `currentTrack` is null. |
 
+### ground-track
+
+| | |
+| --- | --- |
+| Directory | `src/map/features/ground-track/` |
+| Entrypoint | `groundTrack` in `index.ts`, id `'ground-track'` |
+| User reaches it | Always on. Dock `#toggle-multi-orbit` is off by default. Click shows the later orbits in the manifest samples; click again returns to the current orbit. The choice survives reload. A scrub replaces the line with one orbit around the pinned instant. |
+| What it draws | `iss-track-layer`, a dashed line. Illumination picks the hue (cyan day, magenta twilight, grey-blue eclipse) and `orbit_index` picks the shade and the opacity (0.85, 0.55, 0.35, 0.2, then 0.12). The source `iss-track` is created on the first write. |
+| Control it in code | `bindGroundTrackClock` shares the composition root's clock and rebuilds on every view-time change. `refreshGroundTrack(core)` writes the GeoJSON from `core.view().track`, adds the layer, and binds the toggle, retrying the button when it was missing. `renderMap` calls it where the layer used to be added, so it stays the first runtime layer. The persisted key is `PREF_KEYS.multiOrbitVisible` (default off; only `'1'`). |
+| Files | `index.ts` clock bind, toggle, mount; `layers.ts` the paint; `geometry.ts` orbit buckets, illumination splits, and the polynomial fallback. Domain math is `src/iss.ts`, `src/iss-sgp4.ts`, and `src/terminator.ts`. Antimeridian copies are `src/map/overlays/track-line.ts`. |
+| Tests | `src/map/features/ground-track/ground-track.test.ts` mounts on the vendor double. `test/map-ground-track-contract.test.ts` drives paint, the toggle, the polynomial fallback, and the scrubbed window through `renderMap`. `test/map-orbit-split.test.ts` is the bucket and illumination math. `test/map-overlay-prefs.test.ts`. `test/map-render-contract.test.ts`. |
+| Traps | `bindGroundTrackClock` runs at `map.ts` load, before `runScrubTier2`, so the track refreshes on a scrub that never calls `renderMap` once a core exists. A scrubbed view whose instant is already in the past draws the current orbit, not a window around that instant. The scrubbed window is one orbit even when multi-orbit is on, and it is empty when the track has no usable TLE. `_resetMapStateForTest` does not reset the in-memory multi-orbit flag. The `0, 0.85` opacity step in `layers.ts` is what `verify-map-pins.mjs` mutates. |
+
 ## Capabilities still in `src/map.ts`
 
 Each row names the symbols in `map.ts` that own the capability today, the domain modules it leans on, and the directory it becomes. `renderMap` is the composition root until the last row moves. Layer ids are in `src/map/map-core/catalog.ts`; each capability's layers paint at their `LAYER_ORDER` position whatever order they are added.
 
 | Capability | User reaches it | Owned by | Domain modules | Tests | Becomes |
 | --- | --- | --- | --- | --- | --- |
-| ISS ground track, with four future orbits on request | Always on; dock `#toggle-multi-orbit` | `groundTrackFeatures`, `splitTrackByOrbit`, `splitByIllumination`, `futureOrbitGroundTrackFeatures`, `refreshGroundTrackSource`, `bindMultiOrbitToggle`, `readMultiOrbitVisible` | `src/iss.ts`, `src/iss-sgp4.ts`, `src/track-offset.ts` | `test/map-orbit-split.test.ts`, `test/iss.test.ts`, `test/iss-sgp4.test.ts`, `test/track-offset.test.ts` | `features/ground-track/` |
 | ISS marker | Always on | `createIssMarkerElement`, `markerPositionFor`, `markerPositionAt` | `src/iss.ts`, `src/iss-sgp4.ts` | `test/iss-marker.test.ts` | `features/iss-marker/` |
 | Targets: shot-queue pins, personal targets, tap popups, photo-lookup pin, distance filter | Always on; tap a pin; a photo lookup resolves and `main.ts` calls `dropLookupPin` | `refreshTargetsSource`, `refreshMyTargetsSource`, `pickTargetAtTap`, `buildTargetPopupContent`, `patchPopupWeather`, `dropLookupPin`, `applyDistanceThreshold` | `src/pass-filter.ts`, `src/profile*.ts`, `src/photo-lookup.ts` | `test/map-tap.test.ts`, `test/map-popup.test.ts`, `test/map-interaction-contract.test.ts`, `test/map-distance-filter.test.ts`, `test/photo-lookup.test.ts` | `features/targets/` |
 | Launch corridor: ascent trajectory and pad, the launch-mode tool | A launch card's map action; `main.ts` calls `focusLaunchOnMap(eventId)` when the map pane is showing | `buildAscentFeatures`, `buildLaunchMapFeatures`, `refreshAscentTrajectorySource`, `applyMapLaunchVisibility`, `syncMapLaunchMode`, `focusLaunchOnMap` | `src/map-launch-mode.ts`, `src/launch-map-brief.ts`, `src/launch-store.ts` | `test/ascent-features.test.ts`, `test/launch-map-brief.test.ts`, `test/map-launch-mode-layer.test.ts` | `features/launch-corridor/` |

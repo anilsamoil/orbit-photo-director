@@ -1,6 +1,6 @@
 # Target architecture
 
-The shape the map should have. `ARCHITECTURE_NOW.md` describes what existed at the start; this describes what replaces it and in what order. Slices 0 to 10 have shipped; each slice's record under "Phase 3 slices" says what it actually did.
+The shape the map should have. `ARCHITECTURE_NOW.md` describes what existed at the start; this describes what replaces it and in what order. Slices 0 to 11 have shipped; each slice's record under "Phase 3 slices" says what it actually did.
 
 ## The shape in one paragraph
 
@@ -202,7 +202,9 @@ The second half made the catalog say which sources are raster and which are GeoJ
 
 **Slices 9 to 10, night lights and terminator.** Shipped as two commits. `features/night-lights/` owns the VIIRS raster, its dock toggle, and the tile-error hide-and-retry. `features/terminator/` owns the night fill, the gold line, the subsolar point, the dock toggle, and the 30 s live rebuild. The dim they share is `overlays/global-dim.ts`: one const flags object, `dimVisible = flags.nightLights && !flags.terminator`, because a feature cannot import another feature. `PREF_KEYS` gained `nightLightsVisible` (default off) and `terminatorVisible` (default on). `buildStyle` still owns the VIIRS source. `map.ts` calls `bindTerminatorClock` at load, before `runScrubTier2`, and still `ensureLayer`s the five night overlay specs at the historical site so `addLayerCalls` stay dim, fill, VIIRS, line, subsolar. Feature `ensureLayer` is idempotent after that. The 30 s tick starts in terminator `mount`, not at import, so loading `map.ts` does not arm an interval. `test/map-mount-order.test.ts` mounts terminator, night lights and labels in reverse on the vendor double and asserts painted ids match `LAYER_ORDER`; that is the wave-two proof that `beforeIdFor` holds. The render-contract handler list moved the night-lights `error:*` from after `styledata` to after pin-drop, which is feature-mount time; the same handler is still bound. One delta, not a contract: terminator geometry now refreshes on a scrub even when `currentTrack` is null. The lever's 95% opacity mutation now points at `features/night-lights/layers.ts`, and the dim mutation at `overlays/global-dim.ts`. `map.ts` is 2415 lines and 20 module-level `let`s, from 2684 and 25. Typecheck clean, 1876 tests green, lever 15 of 15.
 
-**Slices 11 to 16, wave three.** `ground-track`, `iss-marker`, `targets`, `launch-corridor`, `time-scrub`, `follow-iss`. Delete `map.ts`.
+**Slice 11, the ground track.** Shipped as three commits: pin, move, record. `test/map-ground-track-contract.test.ts` came first and held the paint, the multi-orbit toggle, the polynomial fallback, and the scrubbed one-orbit window through `renderMap`. `features/ground-track/` owns the geometry, the layer, the dock toggle, and the scrub rebuild. `PREF_KEYS` gained `multiOrbitVisible` (default off). `map.ts` calls `bindGroundTrackClock` at load, before `runScrubTier2`, and calls `refreshGroundTrack` where the layer used to be added, so `iss-track-layer` stays the first runtime add. The scrub no longer rebuilds the track inside `runScrubTier2`; the clock listener does, and it is registered before that tier, so the track still updates before the target pins. A scrubbed instant already in the past still draws the current orbit. The lever gained the 85% opacity mutation against `features/ground-track/layers.ts`. `map.ts` is 2078 lines and 18 module-level `let`s, from 2415 and 20. Typecheck clean, 1883 tests green, lever 16 of 16.
+
+**Slices 12 to 16, wave three.** `iss-marker`, `targets`, `launch-corridor`, `time-scrub`, `follow-iss`. Delete `map.ts`.
 
 ## What this gives up
 
