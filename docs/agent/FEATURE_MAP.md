@@ -1,6 +1,6 @@
 # Feature map
 
-Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Three capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
+Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Four capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
 
 Paths below are relative to `frontend/`. Tests run with `bun run test <path>` from `frontend/`.
 
@@ -45,13 +45,25 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | Tests | `src/map/features/basemap/basemap.test.ts` mounts on the vendor double. `test/map-basemap.test.ts` is the 16-row decision table. `test/map-ir.test.ts` drives IR through `renderMap`. `test/map-imagery-date.test.ts`, `test/forecast-frame.test.ts`, `test/time-slider.test.ts` (badge follows the scrub). `test/map-style-contract.test.ts` still pins `buildStyle`. `test/tile-precache.test.ts`, `test/tile-precache-ir.test.ts`. |
 | Traps | `FORECAST_CLOUDS_UI` is false. Scrubbed views keep observed imagery and the "observed — not forecast" badge. `_setForecastCloudsUiForTest(true)` is how the forecast tests turn the machinery on. IR and clouds are mutually exclusive. The IR frame time is `geoIRTimeForNow()` (wall clock, inside `tile-precache.ts`), and under a scrub the badge says `LIVE now (not the scrubbed time)`. The badge listener is registered by `bindBasemapClock` at `map.ts` load, before `runScrubTier2`, so `setLookahead` refreshes it with no `renderMap`; putting that listener only in `mount` goes red. `pointerup`, `pointercancel`, and `blur` clear the defer flag, flush settle, then call `refreshForecastCloudLayer` again, because a same-instant release can skip `setViewTime`. `attachBasemap` runs before `whenLoaded`. `resetBasemapForTest` does not clear the in-memory IR flag or `esriTilesFailed`. The `carto-dark-layer` line in `visibility.ts` is what `verify-map-pins.mjs` mutates. |
 
+### labels
+
+| | |
+| --- | --- |
+| Directory | `src/map/features/labels/` |
+| Entrypoint | `labels` in `index.ts`, id `'labels'` |
+| User reaches it | Dock `#toggle-labels`. On by default. Click hides country and city names; click again shows them. The choice survives reload. |
+| What it draws | `esri-labels-reference-layer`, a transparent Esri reference raster at 85% opacity, painted above the other overlays and below satellite tracks and pins. The source `esri-labels-reference` stays in `buildStyle`. |
+| Control it in code | `refreshLabels(core)` adds the layer if it is missing and applies the preference. `renderMap` calls it on every render, before `FEATURES` mount, so a manifest refresh does not drop the layer. The persisted key is `PREF_KEYS.labelsVisible` (default on; only `'0'` hides). |
+| Files | `index.ts` is the whole feature: the layer spec, the reader, the toggle, and `refreshLabels`. |
+| Tests | `src/map/features/labels/labels.test.ts` mounts on the vendor double. `test/map-overlay-prefs.test.ts` pins the default. `test/map-interaction-contract.test.ts` clicks the dock through `renderMap`. `test/map-render-contract.test.ts` and `test/map-style-contract.test.ts` pin paint order and that the source, not the layer, is in `buildStyle`. |
+| Traps | The layer is not in `buildStyle`. Adding it there changes the first paint and fails the style contract. `resetLabelsForTest` sets the in-memory flag back to shown and removes the key; it does not unbind the button. The default-on branch in `readLabelsVisible` is what `verify-map-pins.mjs` mutates. |
+
 ## Capabilities still in `src/map.ts`
 
 Each row names the symbols in `map.ts` that own the capability today, the domain modules it leans on, and the directory it becomes. `renderMap` is the composition root until the last row moves. Layer ids are in `src/map/map-core/catalog.ts`; each capability's layers paint at their `LAYER_ORDER` position whatever order they are added.
 
 | Capability | User reaches it | Owned by | Domain modules | Tests | Becomes |
 | --- | --- | --- | --- | --- | --- |
-| Labels overlay | Dock `#toggle-labels` | `applyLabelsVisibility`, `bindLabelsToggle`, `readLabelsVisible` | | `test/map-overlay-prefs.test.ts`, `test/map-render-contract.test.ts` | `features/labels/` |
 | Night lights (VIIRS Black Marble, with the global dim) | Dock `#toggle-night-lights` | `applyNightLightsVisibility`, `bindNightLightsToggle`, `applyGlobalDimVisibility`, `armNightLightsErrorHandler`, `readNightLightsVisible` | `src/map/adapters/maplibre/viirs-alpha.ts` (the `viirs-alpha://` protocol) | `test/map-night-lights.test.ts`, `test/viirs-alpha.test.ts` | `features/night-lights/` |
 | Day-night terminator and subsolar point | Dock `#toggle-terminator` | `refreshTerminatorSources`, `applyTerminatorVisibility`, `bindTerminatorToggle`, `readTerminatorVisible` | `src/terminator.ts` | `test/terminator.test.ts`, `test/map-night-lights.test.ts` (dim interplay), `test/map-render-contract.test.ts` | `features/terminator/` |
 | ISS ground track, with four future orbits on request | Always on; dock `#toggle-multi-orbit` | `groundTrackFeatures`, `splitTrackByOrbit`, `splitByIllumination`, `futureOrbitGroundTrackFeatures`, `refreshGroundTrackSource`, `bindMultiOrbitToggle`, `readMultiOrbitVisible` | `src/iss.ts`, `src/iss-sgp4.ts`, `src/track-offset.ts` | `test/map-orbit-split.test.ts`, `test/iss.test.ts`, `test/iss-sgp4.test.ts`, `test/track-offset.test.ts` | `features/ground-track/` |
