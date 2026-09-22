@@ -4,23 +4,23 @@ Orbit Photo Director plans Earth photography from the ISS. A Python generator (`
 
 ## Read first
 
-1. `docs/agent/FEATURE_MAP.md`: every map capability, its directory or its `map.ts` symbols, how a user reaches it, what to run, what bites.
+1. `docs/agent/FEATURE_MAP.md`: every map capability, its directory, how a user reaches it, what to run, what bites.
 2. `frontend/src/map/features/satellites/`: the exemplar feature. `pin-drop/` is the smaller one.
 3. `docs/agent/ARCHITECTURE_TARGET.md`: the shape, the slice plan, and what each shipped slice did. `ARCHITECTURE_NOW.md` is the snapshot before any of it; `FOLLOWUPS.md` is where real bugs found during structure work are recorded instead of fixed.
 
 ## Nouns
 
-Use these words and no synonyms. A `feature` is one user-facing map capability in one directory under `frontend/src/map/features/`. Its `entrypoint` is the one `MapFeature` object its `index.ts` exports, `id` equal to the directory name. `map-core` (`frontend/src/map/map-core/`) owns the layer catalog, the facade, the clock, the view record, the storage keys and the camera; it never knows which features exist. An `overlay` (`frontend/src/map/overlays/`) is drawing that features share. A `tool` is an interaction mode; the app has one, launch mode. The `adapter` (`frontend/src/map/adapters/maplibre/`) is the only place a MapLibre type appears. `frontend/src/map.ts` is the legacy module and today's composition root: `renderMap` builds the core and mounts `FEATURES`, and it is being emptied one feature at a time.
+Use these words and no synonyms. A `feature` is one user-facing map capability in one directory under `frontend/src/map/features/`. Its `entrypoint` is the one `MapFeature` object its `index.ts` exports, `id` equal to the directory name. `map-core` (`frontend/src/map/map-core/`) owns the layer catalog, the facade, the clock, the view record, the storage keys and the camera; it never knows which features exist. An `overlay` (`frontend/src/map/overlays/`) is drawing that features share. A `tool` is an interaction mode; the app has one, launch mode. The `adapter` (`frontend/src/map/adapters/maplibre/`) is the only place a MapLibre type appears. `frontend/src/map/index.ts` is the composition root: `renderMap` builds the core, mounts `FEATURES`, and wires features that must not import each other.
 
 ## Rules the build enforces
 
 `frontend/test/architecture-boundaries.test.ts` fails the suite on any of these, and each rule has a self-test that feeds it a violation. Read the message it prints; it names the file and the rule.
 
-- `maplibre-gl` is imported only under `adapters/` (and `map.ts` until it is gone). Adapters are imported only by the composition root.
+- `maplibre-gl` is imported only under `adapters/`. Adapters are imported only by the composition root.
 - `map-core` imports no feature, no adapter, not the legacy module.
 - A feature imports map-core, overlays, its own files and domain leaves outside `src/map/`. Not another feature, not `features/index.ts`, not the composition root, not `main.ts`. An overlay imports no feature.
 - Every directory under `features/` is in `FEATURES` once, under its directory name, exporting the object `FEATURES` holds, with a `<name>.test.ts` beside it.
-- No module-level `let` or `var` under `src/map/`, except the one `let core` the composition root `map/index.ts` will hold.
+- No module-level `let` or `var` under `src/map/`, except the one `let core` in `map/index.ts`.
 - No `Date.now()`, bare `new Date()` or `performance.now()` under `src/map/` outside `map-core/clock.ts`. Ask `core.clock`.
 - No storage key literal (`opd-...`) and no `localStorage` call with a key that is not a `PREF_KEYS` entry under `src/map/`.
 - No `as any`, `@ts-ignore`, `TODO` or `FIXME` under `src/map/`.
