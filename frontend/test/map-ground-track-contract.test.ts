@@ -76,7 +76,7 @@ function orbitIndexes(features: GeoJSON.Feature[]): number[] {
 function hasLon(features: GeoJSON.Feature[], lon: number): boolean {
   return features.some((feature) => {
     const coords = (feature.geometry as GeoJSON.LineString).coordinates;
-    return coords.some(([x]) => Math.abs(x - lon) < 1e-6 || Math.abs(x - lon - 360) < 1e-6 || Math.abs(x - lon + 360) < 1e-6);
+    return coords.some(([x]) => x !== undefined && (Math.abs(x - lon) < 1e-6 || Math.abs(x - lon - 360) < 1e-6 || Math.abs(x - lon + 360) < 1e-6));
   });
 }
 

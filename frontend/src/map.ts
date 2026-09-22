@@ -15,6 +15,7 @@ import {
   setBasemapManifest,
   setForecastSwapDeferred,
 } from './map/features/basemap';
+import { bindGroundTrackClock, refreshGroundTrack } from './map/features/ground-track';
 import { refreshLabels, resetLabelsForTest } from './map/features/labels';
 import {
   GLOBAL_DIM_LAYER,
@@ -32,7 +33,6 @@ import {
 } from './map/features/terminator';
 import { FEATURES } from './map/features';
 import { buildPassList } from './map/overlays/pass-list';
-import { buildLineFeatures } from './map/overlays/track-line';
 import { boundsOf, type Point } from './map/map-core/geometry';
 import type { StyleSpec } from './map/map-core/layer-spec';
 import type {
@@ -43,7 +43,7 @@ import type {
   VendorMap,
 } from './map/map-core/vendor-map';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from './pass-filter';
-import { ISS_ORBIT_PERIOD_SECONDS, liveIssNow, liveIssPosition } from './iss';
+import { liveIssNow, liveIssPosition } from './iss';
 import { isTleStale } from './banner';
 import { issPositionWithAltSGP4, liveIssPositionSGP4 } from './iss-sgp4';
 import { formatTrackOffset } from './track-offset';
@@ -51,10 +51,6 @@ import { fetchLiveCloud } from './cloud';
 import { getShotCount } from './shot-counts';
 import { formatUtcHm } from './countdown';
 import { greatCircleBearingDeg, findUpcomingPasses } from './pin-drop';
-import {
-  classifyIssIllumination,
-  type IssIllumination,
-} from './terminator';
 import { loadProfile, parseProfileFromURL, type PersonalTarget } from './profile';
 import { applyTargetFilter, getTargetFilter } from './target-filter-pref';
 import { subscribeProfileChanged } from './profile-events';
@@ -66,6 +62,7 @@ import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './ma
 const clock = createClock();
 bindBasemapClock(clock);
 bindTerminatorClock(clock);
+bindGroundTrackClock(clock);
 let core: MapCore | null = null;
 let issMarker: MarkerHandle | null = null;
 let currentTrack: Track | null = null;
@@ -223,25 +220,6 @@ function bindProfileChangedListener(): void {
   });
   profileChangedBound = true;
 }
-
-/** Multi-orbit display preference (v1.5.0.0 — Pettit feedback 2026-05-19:
- *  "multi-orbit display"). When ON, the ground-track polyline splits
- *  track_points into 4 per-orbit segments and renders each with
- *  progressively reduced opacity (current orbit solid, +1/+2/+3 fading
- *  out) so the operator sees the full ~6h forward envelope, not just
- *  the next 95-min orbit. Default OFF — explicit opt-in so existing
- *  users keep the familiar single-orbit look until they reach for the
- *  toggle. */
-const MULTI_ORBIT_PREF_KEY = 'opd-map-multi-orbit-visible';
-export function readMultiOrbitVisible(): boolean {
-  try {
-    const v = localStorage.getItem(MULTI_ORBIT_PREF_KEY);
-    return v === '1';
-  } catch {
-    return false;
-  }
-}
-let multiOrbitVisible: boolean = readMultiOrbitVisible();
 
 /** Bearing mode for the map. 'north' = standard north-up. 'iss-up' = rotate
  *  the map so the ISS direction-of-travel points up — matches Chris's
@@ -487,212 +465,6 @@ export function buildStyle(): StyleSpec {
   };
 }
 
-/** Split `track_points` (each `[t_seconds, lat, lon]`) into per-orbit
- *  buckets. Bucket `k` holds samples with `t in [k*period, (k+1)*period)`.
- *  Used by the multi-orbit display (v1.5.0.0) to render each orbit as
- *  a separate feature with its own `orbit_index` property, enabling a
- *  data-driven opacity ramp in the MapLibre layer paint.
- *
- *  v1.5.3.0: return type widened from `[lat, lon][]` to `[t, lat, lon][]`
- *  so downstream illumination-state splitting has access to the sample
- *  time. Existing callers extract `[lat, lon]` at the line-feature
- *  build step.
- *
- *  Exported for unit testing.
- */
-export function splitTrackByOrbit(
-  trackPoints: [number, number, number][],
-  periodSeconds: number = ISS_ORBIT_PERIOD_SECONDS,
-): [number, number, number][][] {
-  const buckets: [number, number, number][][] = [];
-  for (const point of trackPoints) {
-    const t = point[0];
-    const idx = Math.floor(t / periodSeconds);
-    if (!buckets[idx]) buckets[idx] = [];
-    buckets[idx].push(point);
-  }
-  // Replace any holes (no samples for an orbit) with empty arrays to
-  // keep indices stable when callers map across the array.
-  for (let i = 0; i < buckets.length; i++) {
-    if (!buckets[i]) buckets[i] = [];
-  }
-  return buckets;
-}
-
-/** Split a run of [t_seconds, lat, lon] samples into contiguous runs of
- *  the same ISS-illumination state (v1.5.3.0 — Chris ask). Each output
- *  segment carries its illumination value so the caller can build line
- *  features tagged with that property.
- *
- *  Why this matters: the iss-track layer's paint uses a data-driven
- *  `match` on `illumination` to color cyan for day passes, magenta for
- *  the "twilight" warning state (ISS sunlit + ground dark — bad for
- *  photos), and grey-blue for night passes. Splitting at the boundary
- *  produces clean color transitions instead of trying to interpolate.
- *
- *  Each segment includes a 1-sample OVERLAP with the next segment so
- *  the rendered lines visually connect at the boundary (otherwise a
- *  tiny gap shows up between segments of different colors).
- *
- *  Exported for unit testing.
- */
-export function splitByIllumination(
-  samples: [number, number, number][],
-  trackStartMs: number,
-): { illumination: IssIllumination; coords: [number, number][] }[] {
-  if (samples.length === 0) return [];
-  const out: { illumination: IssIllumination; coords: [number, number][] }[] = [];
-  let cur: { illumination: IssIllumination; coords: [number, number][] } | null = null;
-  for (const [t, lat, lon] of samples) {
-    const when = new Date(trackStartMs + t * 1000);
-    const illum = classifyIssIllumination(when, lat, lon);
-    if (cur === null || cur.illumination !== illum) {
-      // Boundary crossed (or first sample). Close current segment if it
-      // has samples by also appending this boundary sample to it — the
-      // 1-sample overlap stitches the visual at the color transition.
-      if (cur && cur.coords.length > 0) {
-        cur.coords.push([lat, lon]);
-        out.push(cur);
-      } else if (cur) {
-        out.push(cur);
-      }
-      cur = { illumination: illum, coords: [[lat, lon]] };
-    } else {
-      cur.coords.push([lat, lon]);
-    }
-  }
-  if (cur && cur.coords.length > 0) out.push(cur);
-  return out;
-}
-
-/** Wrap line features for one orbit's samples with an `orbit_index`
- *  property AND an optional `illumination` property. Re-uses
- *  `buildLineFeatures` for antimeridian + world-copy handling, then
- *  stamps every feature with the orbit index + illumination so the
- *  layer paint expression can drive opacity per orbit (v1.5.0.0) AND
- *  color per ISS-illumination state (v1.5.3.0).
- */
-function buildOrbitLineFeatures(
-  samples: [number, number][],
-  orbitIndex: number,
-  illumination: IssIllumination = 'iss-day',
-): GeoJSON.Feature[] {
-  return buildLineFeatures(samples).map((f) => ({
-    ...f,
-    properties: {
-      ...(f.properties ?? {}),
-      orbit_index: orbitIndex,
-      illumination,
-    },
-  }));
-}
-
-/** Render the ground track polyline for the CURRENT orbit window.
- *  Prefers `track_points` (raw SGP4 samples covering ~4 orbits as of
- *  v1.5.0.0) when present. Falls back to evaluating the polynomial
- *  across its full duration for older manifests.
- *
- *  When `multiOrbitVisible` is true, splits track_points into per-orbit
- *  features so the layer paint can apply a fading-opacity ramp. When
- *  false, returns the full track as a single segment (the legacy
- *  one-feature path with `orbit_index: 0` on everything).
- */
-function groundTrackFeatures(track: Track): GeoJSON.Feature[] {
-  if (track.track_points && track.track_points.length > 0) {
-    // v1.5.3.0: track_start_ms anchors the illumination math. track_points
-    // t_seconds are offsets from iss_polynomial.start (the generator
-    // computes both from the same reference time).
-    const trackStartMs = Date.parse(track.iss_polynomial.start);
-    if (multiOrbitVisible) {
-      const orbits = splitTrackByOrbit(track.track_points);
-      const out: GeoJSON.Feature[] = [];
-      for (let k = 0; k < orbits.length; k++) {
-        const orbitSamples = orbits[k];
-        if (!orbitSamples || orbitSamples.length < 2) continue;
-        const illumSegments = splitByIllumination(orbitSamples, trackStartMs);
-        for (const seg of illumSegments) {
-          if (seg.coords.length < 2) continue;
-          out.push(...buildOrbitLineFeatures(seg.coords, k, seg.illumination));
-        }
-      }
-      return out;
-    }
-    // Single-orbit (legacy) view: only the first orbit's samples,
-    // still illumination-aware.
-    const firstOrbit = track.track_points.filter(([t]) => t < ISS_ORBIT_PERIOD_SECONDS);
-    const illumSegments = splitByIllumination(firstOrbit, trackStartMs);
-    const out: GeoJSON.Feature[] = [];
-    for (const seg of illumSegments) {
-      if (seg.coords.length < 2) continue;
-      out.push(...buildOrbitLineFeatures(seg.coords, 0, seg.illumination));
-    }
-    return out;
-  }
-  // Polynomial fallback for older manifests without track_points.
-  // No illumination split here — older manifests pre-date this feature;
-  // legacy snapshots show cyan-only track. The Track type guarantees
-  // iss_polynomial is present in this branch.
-  const dur = track.iss_polynomial.duration_seconds;
-  const stepSec = 30;
-  const evalPoly = (coeffs: number[], t: number): number => {
-    let acc = 0;
-    for (const c of coeffs) acc = acc * t + c;
-    return acc;
-  };
-  const out: [number, number][] = [];
-  for (let t = 0; t <= dur; t += stepSec) {
-    const lat = evalPoly(track.iss_polynomial.lat_coeffs, t);
-    const lon = evalPoly(track.iss_polynomial.lon_coeffs, t);
-    out.push([lat, lon]);
-  }
-  return buildOrbitLineFeatures(out, 0);
-}
-
-/** Render a SINGLE orbit's ground track at a future time, SGP4-derived.
- *
- *  Used by the time-scrub controls — stepper buttons (v1.4.0.0) and the
- *  continuous slider (2026-06-10) — via setLookahead. For
- *  lookaheadMinutes > 0, we sample the ISS ground track in a ±45-min
- *  window centered on (nowMs + lookahead*60s) at 30s resolution
- *  (fractional minutes fine — callers pass the offset to the pinned
- *  absolute view instant). The result is exactly
- *  one orbit's worth of polyline — the visual answer to "what would
- *  ISS be flying over at that future time?"
- *
- *  Returns empty list if the track has no usable TLE (older manifest).
- */
-function futureOrbitGroundTrackFeatures(
-  track: Track, lookaheadMinutes: number, nowMs: number,
-): GeoJSON.Feature[] {
-  if (lookaheadMinutes <= 0) return groundTrackFeatures(track);
-  const centerMs = nowMs + lookaheadMinutes * 60_000;
-  const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
-  const stepMs = 30_000;
-  // v1.5.4.0 (Chris feedback 2026-05-21): also tag the future-window
-  // samples with their illumination state so the cyan/magenta/grey-blue
-  // coloring persists when the operator scrubs T+45/T+90. Previously
-  // future view returned plain LineString features → fell back to default
-  // cyan at 0.85, losing the illumination signal.
-  //
-  // Sample tuples are [t_seconds_since_track_start, lat, lon] so
-  // splitByIllumination can derive the wall-clock time at each sample
-  // (matches the groundTrackFeatures Now-view path).
-  const trackStartMs = Date.parse(track.iss_polynomial.start);
-  const samples: [number, number, number][] = [];
-  for (let t = centerMs - halfWindowMs; t <= centerMs + halfWindowMs; t += stepMs) {
-    const pos = issPositionWithAltSGP4(track, t);
-    if (!pos) continue;
-    const tSec = (t - trackStartMs) / 1000;
-    samples.push([tSec, pos.lat, pos.lon]);
-  }
-  const illumSegments = splitByIllumination(samples, trackStartMs);
-  const out: GeoJSON.Feature[] = [];
-  for (const seg of illumSegments) {
-    if (seg.coords.length < 2) continue;
-    out.push(...buildOrbitLineFeatures(seg.coords, 0, seg.illumination));
-  }
-  return out;
-}
 
 export async function renderMap(manifest: Manifest): Promise<void> {
   const container = document.getElementById('map');
@@ -731,72 +503,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // the track + target sources from this cached list without re-fetching.
   currentPasses = passes;
 
-  // Ground track layer — lookahead-aware. At Now (lookahead=0) shows the
-  // standard track_points 2-orbit polyline; at +N>0 shows a single ±45min
-  // window centered on the future time, SGP4-derived.
-  refreshGroundTrackSource(track);
-  core.ensureLayer({
-    id: 'iss-track-layer',
-    type: 'line',
-    source: 'iss-track',
-    paint: {
-      // v1.5.4.0 (Chris ask 2026-05-21): each orbit gets a slightly
-      // different color hue layered on top of the illumination signal.
-      // Hue family is determined by illumination state (cyan=day,
-      // magenta=twilight, grey-blue=eclipse); per-orbit sub-shade
-      // shifts the color so the operator can also tell orbits apart
-      // visually (not just by opacity).
-      //
-      // Matrix is 3 illumination × 4 orbit_index = 12 cells. Default
-      // (no illumination property) falls through to cyan day orbit-0
-      // so legacy code paths still render correctly.
-      'line-color': [
-        'match',
-        ['coalesce', ['get', 'illumination'], 'iss-day'],
-        'iss-day', [
-          'match', ['coalesce', ['get', 'orbit_index'], 0],
-          0, '#5cd0ff',  // cyan
-          1, '#5ce0c8',  // cyan-teal
-          2, '#7cd99c',  // soft green
-          3, '#a8d680',  // yellow-green
-          '#5cd0ff',
-        ],
-        'iss-twilight', [
-          'match', ['coalesce', ['get', 'orbit_index'], 0],
-          0, '#d65cff',  // magenta
-          1, '#d680e0',  // soft pink-magenta
-          2, '#cc94c8',  // muted mauve
-          3, '#bca0a8',  // dusty pink
-          '#d65cff',
-        ],
-        'iss-eclipse', [
-          'match', ['coalesce', ['get', 'orbit_index'], 0],
-          0, '#7a8aa8',  // grey-blue
-          1, '#7392ac',  // slightly cooler
-          2, '#6c9aac',  // more teal
-          3, '#65a0a0',  // dusty teal
-          '#7a8aa8',
-        ],
-        '#5cd0ff',  // fallback
-      ],
-      'line-width': 2,
-      // v1.5.0.0: data-driven opacity. With multi-orbit OFF every
-      // feature has orbit_index=0 and renders at 0.85 (the prior
-      // single-orbit look). With multi-orbit ON, orbit 0 is solid,
-      // +1/+2/+3 fade out so the operator sees current is dominant
-      // and future orbits are context, not noise.
-      'line-opacity': [
-        'match',
-        ['coalesce', ['get', 'orbit_index'], 0],
-        0, 0.85,
-        1, 0.55,
-        2, 0.35,
-        3, 0.2,
-        0.12,
-      ],
-      'line-dasharray': [2, 1],
-    },
-  });
+  refreshGroundTrack(core);
 
   // "My targets" ring layer (Jack feedback 2026-06-01) — every personal
   // target as a hollow white ring, independent of whether it has a pass.
@@ -1076,7 +783,6 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindTimeToggle();
   bindTimeSlider();
   bindBearingToggle();
-  bindMultiOrbitToggle();
   bindFollowToggle();
   if (isFirstInit) for (const feature of FEATURES) feature.mount(core);
   // Slot 7: re-filter the targets layer when the active profile's
@@ -1149,19 +855,6 @@ export function markerPositionAt(
 export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
   if (!core) return;
   await renderMap(manifest);
-}
-
-/** Rebuild the iss-track geojson source based on the current lookahead.
- *  At Now (lookahead=0) renders the standard 2-orbit polynomial track;
- *  at +N>0 renders just the ±45min window around (now + N min) via SGP4. */
-function refreshGroundTrackSource(track: Track): void {
-  if (!core) return;
-  const nowMs = clock.now();
-  const features = futureOrbitGroundTrackFeatures(track, lookaheadMinutesNow(nowMs), nowMs);
-  core.setGeoJson('iss-track', {
-    type: 'FeatureCollection',
-    features,
-  });
 }
 
 /** Build the ascent-trajectory geojson features from a pass list.
@@ -1545,11 +1238,7 @@ function runScrubTier2(): void {
   document.querySelectorAll<HTMLButtonElement>('.time-step-btn').forEach((b) => {
     b.classList.toggle('active', b.id === 'time-now' && isLive);
   });
-  if (currentTrack) {
-    const track = currentTrack;
-    safely(() => refreshGroundTrackSource(track));
-    safely(refreshTargetsSource);
-  }
+  if (currentTrack) safely(refreshTargetsSource);
 }
 
 clock.onViewTime(runScrubTier2);
@@ -1913,32 +1602,6 @@ export function _setFollowEnvForTest(
   core = m ? createMapCore(m as unknown as VendorMap, clock) : null;
   followISS = follow;
   return core;
-}
-
-let multiOrbitToggleBound = false;
-function bindMultiOrbitToggle(): void {
-  if (multiOrbitToggleBound) return;
-  const btn = document.getElementById('toggle-multi-orbit');
-  if (!btn) return;
-  const reflect = () => {
-    btn.classList.toggle('active', multiOrbitVisible);
-    btn.setAttribute('aria-pressed', multiOrbitVisible ? 'true' : 'false');
-    btn.title = multiOrbitVisible
-      ? 'Showing 4 future orbits — click to show just the current orbit'
-      : 'Showing current orbit only — click to show next 4 orbits';
-  };
-  reflect();
-  btn.addEventListener('click', () => {
-    multiOrbitVisible = !multiOrbitVisible;
-    try { localStorage.setItem(MULTI_ORBIT_PREF_KEY, multiOrbitVisible ? '1' : '0'); } catch { /* noop */ }
-    reflect();
-    // Rebuild the iss-track source with the new orbit-segmentation.
-    // refreshGroundTrackSource reads `multiOrbitVisible` via the closure
-    // chain into groundTrackFeatures (when lookahead=0; the time-scrub
-    // path uses a single ±45min window so the toggle is a no-op there).
-    if (currentTrack) refreshGroundTrackSource(currentTrack);
-  });
-  multiOrbitToggleBound = true;
 }
 
 let bearingToggleBound = false;

@@ -18,6 +18,7 @@ const SATELLITES = 'src/map/features/satellites/index.ts';
 const LABELS = 'src/map/features/labels/index.ts';
 const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
 const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
+const GROUND_TRACK = 'src/map/features/ground-track/layers.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -31,6 +32,7 @@ const PIN_FILES = [
   'test/map-night-lights.test.ts',
   'test/map-pin-drop-contract.test.ts',
   'test/map-satellites-contract.test.ts',
+  'test/map-ground-track-contract.test.ts',
 ];
 
 const MUTATIONS = [
@@ -81,6 +83,12 @@ const MUTATIONS = [
     file: GLOBAL_DIM,
     find: '  const dimVisible = flags.nightLights && !flags.terminator;',
     replace: '  const dimVisible = flags.nightLights;',
+  },
+  {
+    contract: 'the current orbit paints at 85% opacity',
+    file: GROUND_TRACK,
+    find: '      0, 0.85,\n      1, 0.55,',
+    replace: '      0, 0.5,\n      1, 0.55,',
   },
   {
     contract: 'the IR raster ships hidden so no tile is fetched until the operator asks',
