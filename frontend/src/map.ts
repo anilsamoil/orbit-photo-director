@@ -16,6 +16,20 @@ import {
   setForecastSwapDeferred,
 } from './map/features/basemap';
 import { refreshLabels, resetLabelsForTest } from './map/features/labels';
+import {
+  GLOBAL_DIM_LAYER,
+  NIGHT_LIGHTS_LAYER,
+  refreshNightLights,
+  resetNightLightsForTest,
+} from './map/features/night-lights';
+import {
+  SUBSOLAR_LAYER,
+  TERMINATOR_FILL_LAYER,
+  TERMINATOR_LINE_LAYER,
+  bindTerminatorClock,
+  refreshTerminator,
+  refreshTerminatorGeometry,
+} from './map/features/terminator';
 import { FEATURES } from './map/features';
 import { buildPassList } from './map/overlays/pass-list';
 import { buildLineFeatures } from './map/overlays/track-line';
@@ -39,9 +53,6 @@ import { formatUtcHm } from './countdown';
 import { greatCircleBearingDeg, findUpcomingPasses } from './pin-drop';
 import {
   classifyIssIllumination,
-  subsolarFeature,
-  terminatorFeatures,
-  terminatorNightPolygonFeatures,
   type IssIllumination,
 } from './terminator';
 import { loadProfile, parseProfileFromURL, type PersonalTarget } from './profile';
@@ -54,6 +65,7 @@ import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './ma
 
 const clock = createClock();
 bindBasemapClock(clock);
+bindTerminatorClock(clock);
 let core: MapCore | null = null;
 let issMarker: MarkerHandle | null = null;
 let currentTrack: Track | null = null;
@@ -212,35 +224,6 @@ function bindProfileChangedListener(): void {
   profileChangedBound = true;
 }
 
-/** VIIRS Black Marble night-lights overlay preference. Default OFF — this is
- *  a heavy, niche layer (asks the operator to opt in). v2 (Chris feedback
- *  2026-05-27). Same persistence pattern as cloud + terminator. */
-const NIGHT_LIGHTS_PREF_KEY = 'opd-map-night-lights-visible';
-export function readNightLightsVisible(): boolean {
-  try {
-    return localStorage.getItem(NIGHT_LIGHTS_PREF_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-let nightLightsVisible: boolean = readNightLightsVisible();
-
-/** Day-night terminator visibility preference. Same pattern as the cloud
- *  toggle (v1.2.9.0) — persisted to localStorage. Default ON because
- *  Pettit explicitly asked for day-night shading; it complements the
- *  time-scrub naturally (without it, operator can't tell day-side from
- *  night-side at +6h scrubbed views). */
-const TERMINATOR_PREF_KEY = 'opd-map-terminator-visible';
-export function readTerminatorVisible(): boolean {
-  try {
-    const v = localStorage.getItem(TERMINATOR_PREF_KEY);
-    return v === null ? true : v === '1';
-  } catch {
-    return true;
-  }
-}
-let terminatorVisible: boolean = readTerminatorVisible();
-
 /** Multi-orbit display preference (v1.5.0.0 — Pettit feedback 2026-05-19:
  *  "multi-orbit display"). When ON, the ground-track polyline splits
  *  track_points into 4 per-orbit segments and renders each with
@@ -288,7 +271,6 @@ export function _resetMapStateForTest(): void {
   mapLaunchStyleCore = null;
   setMapLaunchMode(false);
   bearingMode = 'north';
-  nightLightsVisible = false;
   followISS = false;   // tests assume follow off; production default is ON
   clock.setViewTime({ kind: 'live' });
   sliderBound = false;
@@ -299,8 +281,8 @@ export function _resetMapStateForTest(): void {
   core?.setTrack(null);
   resetBasemapForTest();
   resetLabelsForTest();
+  resetNightLightsForTest();
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
-  try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
   _resetScrubTierStateForTest();
 }
 
@@ -977,104 +959,12 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     }
   }
 
-  // Day-night terminator overlay (v1.4.2.0 — Pettit feedback 2026-05-19).
-  // v2 (Chris feedback 2026-05-27): added a night-side polygon fill at 55%
-  // opacity (was previously line-only, which was visually subtle vs GoISSWatch's
-  // clean dark night-side). The line gains a 40px line-blur halo so the
-  // day/night boundary is a soft gradient rather than a hard edge.
-  refreshTerminatorSources();
-  // v3.6 (Anil 2026-05-29): global dim for lights-only mode. When night-lights
-  // is ON but terminator is OFF, this background fill darkens the whole map
-  // so bright pinpoint lights pop. When terminator is ON, the existing
-  // terminator-night-fill handles night-side dimming and this layer hides
-  // (otherwise the day side would also be dimmed).
-  core.ensureLayer({
-    id: 'night-lights-global-dim-layer',
-    type: 'background',
-    layout: { visibility: 'none' },
-    paint: {
-      'background-color': '#000000',
-      'background-opacity': 0.30,
-    },
-  });
-  core.ensureLayer({
-    id: 'terminator-night-fill-layer',
-    type: 'fill',
-    source: 'terminator-night-fill',
-    paint: {
-      'fill-color': '#000000',
-      // v2 hotfix (Anil same-day feedback after v1.6.16.0): opacity
-      // bumped to 0.55 obscured the underlying basemap too aggressively.
-      // Drop to 0.30 — still reads as "night side" at a glance, but
-      // labels, coastlines, and city lights stay legible underneath.
-      // Prior journey: 0.35 (initial) → 0.55 (v2 spec) → 0.30 (this fix).
-      'fill-opacity': 0.30,
-      'fill-antialias': true,
-    },
-  });
-  // VIIRS Black Marble night-lights overlay (v2 — Chris feedback 2026-05-27).
-  // Default visibility 'none' — operator opts in via toggle-night-lights button.
-  //
-  // Opacity journey:
-  //   v2 (1.6.16.0): 0.95 — assumed PNG had alpha so dark areas would be
-  //     transparent. WRONG — verified via curl 2026-05-27 that the GIBS
-  //     VIIRS_Black_Marble PNG is RGB with no alpha channel and a dark navy
-  //     background (~rgb 4,5,15). At 0.95 the raster's background obscured
-  //     the basemap, clouds, and the entire day side.
-  //   v3.1 (1.6.19.0): added an opaque #0b0d12 day-mask polygon ABOVE the
-  //     raster to hide lights on the sun side. Regressed: day side went
-  //     fully black (mask hid basemap+clouds+raster) and clouds appeared
-  //     "inactive" because the 0.95 raster on the night side left only ~5%
-  //     cloud signal visible.
-  //   v3.3 (1.6.21.0): drop the day-mask entirely and lower the raster to
-  //     0.55. At 0.55 the raster's dark-navy background is dim enough that
-  //     the basemap (Carto Dark or Esri imagery) and the GIBS cloud overlay
-  //     show through everywhere, while city lights — which are much brighter
-  //     than the background — remain clearly visible. Compromise between
-  //     light legibility and seeing what's underneath.
-  //   v3.4 (1.6.22.0): stale-comment cleanup; opacity unchanged at 0.55.
-  //   v3.5 (this commit): added viirs-alpha protocol that luminance-keys the
-  //     tile to transparent for dark background pixels. With the dark
-  //     background gone, 0.95 opacity paints bright city lights cleanly
-  //     without darkening basemap or clouds. Solves the saga that started
-  //     in v2.
-  core.ensureLayer({
-    id: 'viirs-night-lights-layer',
-    type: 'raster',
-    source: 'viirs-night-lights',
-    layout: { visibility: 'none' },
-    paint: { 'raster-opacity': 0.95 },
-  });
-  core.ensureLayer({
-    id: 'terminator-line-layer',
-    type: 'line',
-    source: 'terminator-line',
-    paint: {
-      'line-color': '#ffd45c',  // warm gold; reads clearly over both
-      'line-width': 1.4,         // dark basemap and bright cloud overlay
-      'line-opacity': 0.7,
-      'line-dasharray': [3, 2],
-      // v2 (Chris 2026-05-27): 40px line-blur softens the day/night
-      // boundary — instead of a hard line between the satellite imagery
-      // and the 55%-opacity night fill, the operator sees a gentle
-      // gradient over ~40 device pixels. Pairs visually with the
-      // terminatorNightPolygonFeatures fill below.
-      'line-blur': 40,
-    },
-  });
-  core.ensureLayer({
-    id: 'subsolar-point-layer',
-    type: 'circle',
-    source: 'subsolar-point',
-    paint: {
-      'circle-radius': 8,
-      'circle-color': '#ffd45c',
-      'circle-stroke-color': '#0b0d12',
-      'circle-stroke-width': 1.5,
-      'circle-opacity': 0.95,
-    },
-  });
-  applyTerminatorVisibility();
+  refreshTerminatorGeometry(core);
+  core.ensureLayer(GLOBAL_DIM_LAYER);
+  core.ensureLayer(TERMINATOR_FILL_LAYER);
+  core.ensureLayer(NIGHT_LIGHTS_LAYER);
+  core.ensureLayer(TERMINATOR_LINE_LAYER);
+  core.ensureLayer(SUBSOLAR_LAYER);
 
   // Launch candidates share a gold marker/corridor identity. A corridor is
   // supplied only with trajectory provenance; legacy rows retain only a pad.
@@ -1177,10 +1067,6 @@ export async function renderMap(manifest: Manifest): Promise<void> {
     // a per-second redraw on the unattended Mac.
     clock.every(30_000, () => {
       updateTimeStepLabels();
-      // Refresh terminator + subsolar point with the new wall-clock time
-      // (live mode only; when scrubbed, the terminator is pinned to the
-      // absolute view instant and must NOT drift). ~10ms, cheap.
-      if (!clock.isScrubbed()) refreshTerminatorSources();
     });
   }
   updateTimeStepLabels();
@@ -1190,8 +1076,6 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   bindTimeToggle();
   bindTimeSlider();
   bindBearingToggle();
-  bindTerminatorToggle();
-  bindNightLightsToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
   if (isFirstInit) for (const feature of FEATURES) feature.mount(core);
@@ -1200,8 +1084,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   // event-bus subscriber.
   bindProfileChangedListener();
   refreshBasemap();
-  applyTerminatorVisibility();
-  applyNightLightsVisibility();
+  refreshTerminator(core);
+  refreshNightLights(core);
   // Apply persisted bearing preference ONLY on first map creation. Calling
   // easeTo on every Map-tab click (which re-runs renderMap) was eating
   // user pan/zoom gestures that landed in the 600ms animation window —
@@ -1278,35 +1162,6 @@ function refreshGroundTrackSource(track: Track): void {
     type: 'FeatureCollection',
     features,
   });
-}
-
-/** Rebuild the terminator line + subsolar point sources at the current
- *  view time (the pinned absolute instant, or live now). Called from
- *  renderMap on first
- *  render and from setLookahead on every time-scrub click. */
-function refreshTerminatorSources(): void {
-  if (!core) return;
-  const when = new Date(clock.viewMs());
-  core.setGeoJson('terminator-line', {
-    type: 'FeatureCollection',
-    features: terminatorFeatures(when),
-  });
-  core.setGeoJson('subsolar-point', {
-    type: 'FeatureCollection',
-    features: [subsolarFeature(when)],
-  });
-  // v2 (Chris 2026-05-27): night-side polygon fill paired with the line.
-  // Same upsert pattern as the line — refreshed every 30s + on time-scrub.
-  core.setGeoJson('terminator-night-fill', {
-    type: 'FeatureCollection',
-    features: terminatorNightPolygonFeatures(when),
-  });
-  // v3.3 (2026-05-27): the day-mask source + layer were removed. The mask
-  // (terminator-day-mask-layer) was added in v3.1 to hide VIIRS night-lights
-  // on the sun side, but its opaque #0b0d12 fill also hid the basemap and
-  // clouds. v3.3 instead lowers the raster opacity to 0.55 so the basemap +
-  // clouds show through everywhere, with lights still legible on the night
-  // side. terminatorDayPolygonFeatures is no longer called from anywhere.
 }
 
 /** Build the ascent-trajectory geojson features from a pass list.
@@ -1470,35 +1325,6 @@ export function focusLaunchOnMap(eventId: string): boolean {
   if (points.length === 1) core.easeTo({ center: points[0], zoom: 4, duration: 600 });
   else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
   return true;
-}
-
-/** Show / hide the terminator overlay (line + subsolar dot). Idempotent. */
-function applyTerminatorVisibility(): void {
-  if (!core) return;
-  const vis = terminatorVisible ? 'visible' : 'none';
-  try {
-    core.setVisibility('terminator-line-layer', vis);
-    core.setVisibility('subsolar-point-layer', vis);
-    // v2: night-side fill toggles with the same control as line + dot.
-    core.setVisibility('terminator-night-fill-layer', vis);
-  } catch { /* layers not loaded yet */ }
-  // v3.6: when terminator state changes, the global-dim layer may also need
-  // to toggle (it's visible only when lights ON + terminator OFF).
-  applyGlobalDimVisibility();
-}
-
-/** Show / hide the global dim layer (v3.6 — 2026-05-29). Visible only when
- *  night-lights is on AND the terminator is off — restores the "night world"
- *  feel when lights are toggled alone, without dimming the day side when
- *  the terminator overlay is active (the existing terminator-night-fill
- *  handles night-side dimming in that case). Idempotent. */
-function applyGlobalDimVisibility(): void {
-  if (!core) return;
-  const dimVisible = nightLightsVisible && !terminatorVisible;
-  const vis = dimVisible ? 'visible' : 'none';
-  try {
-    core.setVisibility('night-lights-global-dim-layer', vis);
-  } catch { /* layer not loaded yet */ }
 }
 
 /** Rebuild the targets geojson source. Each feature carries `in_window`
@@ -1723,7 +1549,6 @@ function runScrubTier2(): void {
     const track = currentTrack;
     safely(() => refreshGroundTrackSource(track));
     safely(refreshTargetsSource);
-    safely(refreshTerminatorSources);
   }
 }
 
@@ -1976,100 +1801,6 @@ export function bindTimeToggle(): void {
  *  dragstart, so the recurring follow tick won't break itself.
  */
 let followISS = true;  // default ON — tracks ISS on every fresh load; user drag/button turns it off
-
-/** Show / hide the VIIRS Black Marble night-lights overlay. Idempotent —
- *  safe to call before MapLibre has finished loading the layer. v2
- *  (Chris feedback 2026-05-27). */
-function applyNightLightsVisibility(): void {
-  if (!core) return;
-  const vis = nightLightsVisible ? 'visible' : 'none';
-  try {
-    core.setVisibility('viirs-night-lights-layer', vis);
-  } catch { /* layer not loaded yet */ }
-  // v3.6: night-lights flip may toggle the global-dim layer (active only
-  // when lights ON + terminator OFF).
-  applyGlobalDimVisibility();
-}
-
-/** Arm a minimal error listener for the VIIRS night-lights source. With
- *  the year-fallback gone (v2 hotfix — 2016-01-01 is hardcoded), there's
- *  no walk-back logic; if the canonical date fails it means GIBS itself
- *  is down. Log once per session and hide the layer so the operator can
- *  re-toggle later. */
-let nightLightsErrorLogged = false;
-function armNightLightsErrorHandler(): void {
-  if (!core) return;
-  core.on('error', ({ sourceId }) => {
-    if (sourceId !== 'viirs-night-lights') return;
-    if (nightLightsErrorLogged) return;
-    nightLightsErrorLogged = true;
-    console.warn(
-      '[map] VIIRS Black Marble 2016-01-01 tiles failed to load; ' +
-      'GIBS may be down. Hiding night-lights layer — operator can re-toggle.',
-    );
-    nightLightsVisible = false;
-    try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, '0'); } catch { /* noop */ }
-    applyNightLightsVisibility();
-    reflectNightLightsButton();
-  });
-}
-
-let nightLightsToggleBound = false;
-function reflectNightLightsButton(): void {
-  const btn = document.getElementById('toggle-night-lights');
-  if (!btn) return;
-  btn.classList.toggle('active', nightLightsVisible);
-  btn.setAttribute('aria-pressed', nightLightsVisible ? 'true' : 'false');
-  btn.title = nightLightsVisible
-    ? 'VIIRS night lights shown — click to hide'
-    : 'VIIRS night lights hidden — click to show (annual composite, slow first load)';
-}
-function bindNightLightsToggle(): void {
-  if (nightLightsToggleBound) return;
-  const btn = document.getElementById('toggle-night-lights');
-  if (!btn) return;
-  // Arm the error listener once — if the 2016 canonical date 404s we log
-  // a single warning and hide the layer (no walk-back to attempt).
-  armNightLightsErrorHandler();
-  reflectNightLightsButton();
-  btn.addEventListener('click', () => {
-    // Allow re-arming the warn-once gate on explicit re-toggle — maybe
-    // GIBS is back up after a transient outage.
-    if (nightLightsErrorLogged) {
-      nightLightsErrorLogged = false;
-      if (core) core.setRasterTiles('viirs-night-lights', [viirsAlphaUrl('2016-01-01')]);
-    }
-    nightLightsVisible = !nightLightsVisible;
-    try { localStorage.setItem(NIGHT_LIGHTS_PREF_KEY, nightLightsVisible ? '1' : '0'); } catch { /* noop */ }
-    reflectNightLightsButton();
-    applyNightLightsVisibility();
-  });
-  nightLightsToggleBound = true;
-}
-
-let terminatorToggleBound = false;
-function bindTerminatorToggle(): void {
-  if (terminatorToggleBound) return;
-  const btn = document.getElementById('toggle-terminator');
-  if (!btn) return;
-  const reflect = () => {
-    btn.classList.toggle('active', terminatorVisible);
-    btn.setAttribute(
-      'aria-pressed', terminatorVisible ? 'true' : 'false',
-    );
-    btn.title = terminatorVisible
-      ? 'Day-night terminator shown — click to hide'
-      : 'Day-night terminator hidden — click to show';
-  };
-  reflect();
-  btn.addEventListener('click', () => {
-    terminatorVisible = !terminatorVisible;
-    try { localStorage.setItem(TERMINATOR_PREF_KEY, terminatorVisible ? '1' : '0'); } catch { /* noop */ }
-    reflect();
-    applyTerminatorVisibility();
-  });
-  terminatorToggleBound = true;
-}
 
 /** Apply the follow-ISS pan if active. Called from main.ts's 1Hz live-
  *  position tick (`updateIssNow`). No-op when follow is off or the map

@@ -5,5 +5,7 @@ export const PREF_KEYS = {
   cloudsVisible: 'opd-map-clouds-visible',
   irVisible: 'opd-map-ir-visible',
   labelsVisible: 'opd-map-labels-visible',
+  nightLightsVisible: 'opd-map-night-lights-visible',
+  terminatorVisible: 'opd-map-terminator-visible',
   selectedSatellites: 'opd-selected-satellites',
 } as const;

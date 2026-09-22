@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { readCloudsVisible, readIrVisible } from '../src/map/features/basemap';
 import { readLabelsVisible } from '../src/map/features/labels';
+import { readNightLightsVisible } from '../src/map/features/night-lights';
+import { readTerminatorVisible } from '../src/map/features/terminator';
 import {
   readBearingMode,
   readMultiOrbitVisible,
-  readNightLightsVisible,
-  readTerminatorVisible,
 } from '../src/map';
 
 // Every map overlay toggle persists to its own localStorage key, and the

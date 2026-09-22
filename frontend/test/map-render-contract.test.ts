@@ -168,7 +168,6 @@ describe('renderMap bring-up', () => {
       'mouseenter:ascent-pad-layer',
       'mouseleave:ascent-pad-layer',
       'styledata:*',
-      'error:*',
       'dragstart:*',
       'zoomstart:*',
       'error:*',
@@ -182,6 +181,7 @@ describe('renderMap bring-up', () => {
       'click:dropped-pin-layer',
       'mouseenter:dropped-pin-layer',
       'mouseleave:dropped-pin-layer',
+      'error:*',
     ]);
   });
 

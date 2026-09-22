@@ -16,6 +16,8 @@ const CAMERA = 'src/map/map-core/camera.ts';
 const PIN_DROP = 'src/map/features/pin-drop/index.ts';
 const SATELLITES = 'src/map/features/satellites/index.ts';
 const LABELS = 'src/map/features/labels/index.ts';
+const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
+const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -70,15 +72,15 @@ const MUTATIONS = [
   },
   {
     contract: 'the night lights raster paints at 95% opacity',
-    file: MAP,
-    find: "    source: 'viirs-night-lights',\n    layout: { visibility: 'none' },\n    paint: { 'raster-opacity': 0.95 },",
-    replace: "    source: 'viirs-night-lights',\n    layout: { visibility: 'none' },\n    paint: { 'raster-opacity': 0.55 },",
+    file: NIGHT_LIGHTS,
+    find: "  source: 'viirs-night-lights',\n  layout: { visibility: 'none' },\n  paint: { 'raster-opacity': 0.95 },",
+    replace: "  source: 'viirs-night-lights',\n  layout: { visibility: 'none' },\n  paint: { 'raster-opacity': 0.55 },",
   },
   {
     contract: 'the global dim shows only with lights on and the terminator off',
-    file: MAP,
-    find: '  const dimVisible = nightLightsVisible && !terminatorVisible;',
-    replace: '  const dimVisible = nightLightsVisible;',
+    file: GLOBAL_DIM,
+    find: '  const dimVisible = flags.nightLights && !flags.terminator;',
+    replace: '  const dimVisible = flags.nightLights;',
   },
   {
     contract: 'the IR raster ships hidden so no tile is fetched until the operator asks',
