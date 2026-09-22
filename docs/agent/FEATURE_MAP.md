@@ -1,6 +1,6 @@
 # Feature map
 
-Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Four capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
+Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Six capabilities are features in the target sense, one directory each under `frontend/src/map/features/`. The rest still live in the legacy module `frontend/src/map.ts` and are listed by the symbols that own them, so a name search finds them; the slice plan in `ARCHITECTURE_TARGET.md` says which directory each one becomes.
 
 Paths below are relative to `frontend/`. Tests run with `bun run test <path>` from `frontend/`.
 
@@ -58,14 +58,38 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | Tests | `src/map/features/labels/labels.test.ts` mounts on the vendor double. `test/map-overlay-prefs.test.ts` pins the default. `test/map-interaction-contract.test.ts` clicks the dock through `renderMap`. `test/map-render-contract.test.ts` and `test/map-style-contract.test.ts` pin paint order and that the source, not the layer, is in `buildStyle`. |
 | Traps | The layer is not in `buildStyle`. Adding it there changes the first paint and fails the style contract. `resetLabelsForTest` sets the in-memory flag back to shown and removes the key; it does not unbind the button. The default-on branch in `readLabelsVisible` is what `verify-map-pins.mjs` mutates. |
 
+### night-lights
+
+| | |
+| --- | --- |
+| Directory | `src/map/features/night-lights/` |
+| Entrypoint | `nightLights` in `index.ts`, id `'night-lights'` |
+| User reaches it | Dock `#toggle-night-lights`. Off by default. Click shows the 2016 VIIRS Black Marble composite; click again hides it. A tile error hides it and remembers off. The choice survives reload. |
+| What it draws | `viirs-night-lights-layer`, a raster at 95% opacity, and `night-lights-global-dim-layer`, a 30% black background. The dim is shared with the terminator: it paints only when lights are on and the terminator is off. The source `viirs-night-lights` stays in `buildStyle`. |
+| Control it in code | `refreshNightLights(core)` adds both layers if they are missing and applies the preference. `renderMap` still `ensureLayer`s the dim, fill, VIIRS, line and subsolar specs at the historical site so the add sequence does not move, then calls `refreshNightLights` on every render. The persisted key is `PREF_KEYS.nightLightsVisible` (default off; only `'1'` shows). |
+| Files | `index.ts` toggle, error handler, mount; `layers.ts` the two specs and `CANONICAL_VIIRS_DATE`. The whole-map dim formula is `src/map/overlays/global-dim.ts`, because a feature cannot import another feature. Tile URLs are `src/tile-precache.ts`; the `viirs-alpha://` protocol is the adapter. |
+| Tests | `src/map/features/night-lights/night-lights.test.ts` mounts on the vendor double. `test/map-night-lights.test.ts` drives opacity, dim interplay and the error path through `renderMap`. `test/map-overlay-prefs.test.ts` pins the default. `test/viirs-alpha.test.ts`. `test/map-mount-order.test.ts` mounts terminator, night lights and labels in reverse and asserts catalog order. |
+| Traps | Night-lights cannot import the adapter; a retry after a tile error sets `viirs-alpha://${gibsBlackMarbleUrl(CANONICAL_VIIRS_DATE)}`. The error handler logs one `console.warn` and stops. `resetNightLightsForTest` turns the in-memory flag off and removes the key; it does not clear `errorLogged` or unbind the button. The 95% opacity line in `layers.ts` and the `flags.nightLights && !flags.terminator` line in `global-dim.ts` are what `verify-map-pins.mjs` mutates. |
+
+### terminator
+
+| | |
+| --- | --- |
+| Directory | `src/map/features/terminator/` |
+| Entrypoint | `terminator` in `index.ts`, id `'terminator'` |
+| User reaches it | Dock `#toggle-terminator`. On by default. Click hides the line, the night fill and the subsolar point; click again shows them. The choice survives reload. |
+| What it draws | `terminator-night-fill-layer` (30% black fill), `terminator-line-layer` (gold dashed blur), `subsolar-point-layer` (gold circle). Geometry is rebuilt at `core.clock.viewMs()`. |
+| Control it in code | `bindTerminatorClock` shares the composition root's clock and rebuilds on every view-time change. `refreshTerminatorGeometry(core)` writes the GeoJSON only; `renderMap` then adds the five night overlay layers in the documented sequence. `refreshTerminator(core)` writes geometry, ensures the three layers and applies the preference. The persisted key is `PREF_KEYS.terminatorVisible` (default on; only `'0'` hides). |
+| Files | `index.ts` clock bind, toggle, mount; `layers.ts` the three specs. Domain math is `src/terminator.ts`. The dim flag is `src/map/overlays/global-dim.ts`. |
+| Tests | `src/map/features/terminator/terminator.test.ts` mounts on the vendor double. `test/terminator.test.ts` is the domain math. `test/map-night-lights.test.ts` (dim interplay). `test/map-overlay-prefs.test.ts`. `test/map-render-contract.test.ts`. `test/map-mount-order.test.ts`. |
+| Traps | `bindTerminatorClock` runs at `map.ts` load, before `runScrubTier2`, so a scrub refreshes geometry with no `renderMap` once a core exists. The 30 s live tick starts in `mount`, not at import. `_resetMapStateForTest` does not reset terminator visibility or remove the key. `new Date(clock.viewMs())` is the allowed form; a bare `new Date()` fails the clock rule. Mounting without `bindTerminatorClock` throws. A scrub now rebuilds terminator geometry even when `currentTrack` is null. |
+
 ## Capabilities still in `src/map.ts`
 
 Each row names the symbols in `map.ts` that own the capability today, the domain modules it leans on, and the directory it becomes. `renderMap` is the composition root until the last row moves. Layer ids are in `src/map/map-core/catalog.ts`; each capability's layers paint at their `LAYER_ORDER` position whatever order they are added.
 
 | Capability | User reaches it | Owned by | Domain modules | Tests | Becomes |
 | --- | --- | --- | --- | --- | --- |
-| Night lights (VIIRS Black Marble, with the global dim) | Dock `#toggle-night-lights` | `applyNightLightsVisibility`, `bindNightLightsToggle`, `applyGlobalDimVisibility`, `armNightLightsErrorHandler`, `readNightLightsVisible` | `src/map/adapters/maplibre/viirs-alpha.ts` (the `viirs-alpha://` protocol) | `test/map-night-lights.test.ts`, `test/viirs-alpha.test.ts` | `features/night-lights/` |
-| Day-night terminator and subsolar point | Dock `#toggle-terminator` | `refreshTerminatorSources`, `applyTerminatorVisibility`, `bindTerminatorToggle`, `readTerminatorVisible` | `src/terminator.ts` | `test/terminator.test.ts`, `test/map-night-lights.test.ts` (dim interplay), `test/map-render-contract.test.ts` | `features/terminator/` |
 | ISS ground track, with four future orbits on request | Always on; dock `#toggle-multi-orbit` | `groundTrackFeatures`, `splitTrackByOrbit`, `splitByIllumination`, `futureOrbitGroundTrackFeatures`, `refreshGroundTrackSource`, `bindMultiOrbitToggle`, `readMultiOrbitVisible` | `src/iss.ts`, `src/iss-sgp4.ts`, `src/track-offset.ts` | `test/map-orbit-split.test.ts`, `test/iss.test.ts`, `test/iss-sgp4.test.ts`, `test/track-offset.test.ts` | `features/ground-track/` |
 | ISS marker | Always on | `createIssMarkerElement`, `markerPositionFor`, `markerPositionAt` | `src/iss.ts`, `src/iss-sgp4.ts` | `test/iss-marker.test.ts` | `features/iss-marker/` |
 | Targets: shot-queue pins, personal targets, tap popups, photo-lookup pin, distance filter | Always on; tap a pin; a photo lookup resolves and `main.ts` calls `dropLookupPin` | `refreshTargetsSource`, `refreshMyTargetsSource`, `pickTargetAtTap`, `buildTargetPopupContent`, `patchPopupWeather`, `dropLookupPin`, `applyDistanceThreshold` | `src/pass-filter.ts`, `src/profile*.ts`, `src/photo-lookup.ts` | `test/map-tap.test.ts`, `test/map-popup.test.ts`, `test/map-interaction-contract.test.ts`, `test/map-distance-filter.test.ts`, `test/photo-lookup.test.ts` | `features/targets/` |
