@@ -15,6 +15,7 @@ import {
   setBasemapManifest,
   setForecastSwapDeferred,
 } from './map/features/basemap';
+import { refreshLabels, resetLabelsForTest } from './map/features/labels';
 import { FEATURES } from './map/features';
 import { buildPassList } from './map/overlays/pass-list';
 import { buildLineFeatures } from './map/overlays/track-line';
@@ -224,20 +225,6 @@ export function readNightLightsVisible(): boolean {
 }
 let nightLightsVisible: boolean = readNightLightsVisible();
 
-/** Esri Reference labels overlay preference. Default ON — country / city
- *  labels are a near-universal-utility overlay (Chris feedback 2026-05-27);
- *  operators who don't want them can toggle off. */
-const LABELS_PREF_KEY = 'opd-map-labels-visible';
-export function readLabelsVisible(): boolean {
-  try {
-    const v = localStorage.getItem(LABELS_PREF_KEY);
-    return v === null ? true : v === '1';
-  } catch {
-    return true;
-  }
-}
-let labelsVisible: boolean = readLabelsVisible();
-
 /** Day-night terminator visibility preference. Same pattern as the cloud
  *  toggle (v1.2.9.0) — persisted to localStorage. Default ON because
  *  Pettit explicitly asked for day-night shading; it complements the
@@ -302,7 +289,6 @@ export function _resetMapStateForTest(): void {
   setMapLaunchMode(false);
   bearingMode = 'north';
   nightLightsVisible = false;
-  labelsVisible = true;
   followISS = false;   // tests assume follow off; production default is ON
   clock.setViewTime({ kind: 'live' });
   sliderBound = false;
@@ -312,9 +298,9 @@ export function _resetMapStateForTest(): void {
   currentTrack = null;
   core?.setTrack(null);
   resetBasemapForTest();
+  resetLabelsForTest();
   try { localStorage.removeItem(BEARING_PREF_KEY); } catch { /* noop */ }
   try { localStorage.removeItem(NIGHT_LIGHTS_PREF_KEY); } catch { /* noop */ }
-  try { localStorage.removeItem(LABELS_PREF_KEY); } catch { /* noop */ }
   _resetScrubTierStateForTest();
 }
 
@@ -1199,21 +1185,13 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   }
   updateTimeStepLabels();
 
-  // Esri Reference labels overlay (v2 — Chris feedback 2026-05-27). Default
-  // visibility is governed by labelsVisible preference (default ON), applied below.
-  core.ensureLayer({
-    id: 'esri-labels-reference-layer',
-    type: 'raster',
-    source: 'esri-labels-reference',
-    paint: { 'raster-opacity': 0.85 },
-  });
+  refreshLabels(core);
 
   bindTimeToggle();
   bindTimeSlider();
   bindBearingToggle();
   bindTerminatorToggle();
   bindNightLightsToggle();
-  bindLabelsToggle();
   bindMultiOrbitToggle();
   bindFollowToggle();
   if (isFirstInit) for (const feature of FEATURES) feature.mount(core);
@@ -1224,7 +1202,6 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   refreshBasemap();
   applyTerminatorVisibility();
   applyNightLightsVisibility();
-  applyLabelsVisibility();
   // Apply persisted bearing preference ONLY on first map creation. Calling
   // easeTo on every Map-tab click (which re-runs renderMap) was eating
   // user pan/zoom gestures that landed in the 600ms animation window —
@@ -2068,38 +2045,6 @@ function bindNightLightsToggle(): void {
     applyNightLightsVisibility();
   });
   nightLightsToggleBound = true;
-}
-
-/** Show / hide the Esri Reference labels overlay. v2 (Chris feedback
- *  2026-05-27). Default ON. Idempotent. */
-function applyLabelsVisibility(): void {
-  if (!core) return;
-  const vis = labelsVisible ? 'visible' : 'none';
-  try {
-    core.setVisibility('esri-labels-reference-layer', vis);
-  } catch { /* layer not loaded yet */ }
-}
-
-let labelsToggleBound = false;
-function bindLabelsToggle(): void {
-  if (labelsToggleBound) return;
-  const btn = document.getElementById('toggle-labels');
-  if (!btn) return;
-  const reflect = () => {
-    btn.classList.toggle('active', labelsVisible);
-    btn.setAttribute('aria-pressed', labelsVisible ? 'true' : 'false');
-    btn.title = labelsVisible
-      ? 'Country/city labels shown — click to hide'
-      : 'Country/city labels hidden — click to show';
-  };
-  reflect();
-  btn.addEventListener('click', () => {
-    labelsVisible = !labelsVisible;
-    try { localStorage.setItem(LABELS_PREF_KEY, labelsVisible ? '1' : '0'); } catch { /* noop */ }
-    reflect();
-    applyLabelsVisibility();
-  });
-  labelsToggleBound = true;
 }
 
 let terminatorToggleBound = false;

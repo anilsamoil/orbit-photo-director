@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { readCloudsVisible, readIrVisible } from '../src/map/features/basemap';
+import { readLabelsVisible } from '../src/map/features/labels';
 import {
   readBearingMode,
-  readLabelsVisible,
   readMultiOrbitVisible,
   readNightLightsVisible,
   readTerminatorVisible,

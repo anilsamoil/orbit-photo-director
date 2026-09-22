@@ -15,6 +15,7 @@ const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
 const PIN_DROP = 'src/map/features/pin-drop/index.ts';
 const SATELLITES = 'src/map/features/satellites/index.ts';
+const LABELS = 'src/map/features/labels/index.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -63,9 +64,9 @@ const MUTATIONS = [
   },
   {
     contract: 'labels default on when the operator has never chosen',
-    file: MAP,
-    find: '    const v = localStorage.getItem(LABELS_PREF_KEY);\n    return v === null ? true : v === \'1\';',
-    replace: '    const v = localStorage.getItem(LABELS_PREF_KEY);\n    return v === \'1\';',
+    file: LABELS,
+    find: "    const stored = localStorage.getItem(PREF_KEYS.labelsVisible);\n    return stored === null ? true : stored === '1';",
+    replace: "    const stored = localStorage.getItem(PREF_KEYS.labelsVisible);\n    return stored === '1';",
   },
   {
     contract: 'the night lights raster paints at 95% opacity',
