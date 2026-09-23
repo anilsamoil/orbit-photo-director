@@ -21,7 +21,7 @@ export function buildPassList(
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'dropped-pin-popup';
-  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:320px;max-height:60vh;overflow-y:auto';
+  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12';
 
   const title = document.createElement('strong');
   const latStr = `${Math.abs(lat).toFixed(precision)}°${lat >= 0 ? 'N' : 'S'}`;
@@ -43,7 +43,7 @@ export function buildPassList(
     list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace;color:#0b0d12';
     for (const p of section.passes) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:grid;grid-template-columns:55px 50px 55px 1fr 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee;align-items:baseline';
+      row.style.cssText = 'display:grid;grid-template-columns:55px 50px 55px minmax(0,1fr) 70px;gap:6px;padding:3px 0;border-bottom:1px solid #eee;align-items:baseline';
       const rel = document.createElement('span');
       rel.style.fontWeight = '600';
       rel.textContent = formatRelative(p.closestApproachMs - nowMs);
@@ -53,7 +53,7 @@ export function buildPassList(
       nadir.style.textAlign = 'right';
       nadir.textContent = `${Math.round(p.nadirKm)} km`;
       const shoot = document.createElement('span');
-      shoot.style.cssText = 'font-size:0.72rem;color:#444';
+      shoot.style.cssText = 'font-size:0.72rem;color:#444;min-width:0;overflow-wrap:anywhere';
       shoot.textContent = formatShootHint(p);
       const regime = document.createElement('span');
       regime.style.textAlign = 'right';
