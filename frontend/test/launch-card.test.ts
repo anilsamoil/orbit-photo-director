@@ -17,62 +17,54 @@ describe('launch-specific cards', () => {
     ['Day', '13 Sep 2026 UTC (day estimate; time unconfirmed)'],
     ['Month', 'Sep 2026 (month estimate)'],
     ['Year', '2026 (year estimate)'],
-    [null, 'Timing unconfirmed (see Details)'],
-  ])('uses friendly UTC without overstating %s schedule precision', (precision, expected) => {
+    [null, 'Not established'],
+  ])('states the launch window without overstating %s schedule precision', (precision, expected) => {
     const item = launch({ launch_window: { net: '2026-09-13T18:49:27Z', start: null, end: null, precision } });
     const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
-    expect(summaryRow(card, 'When')).toBe(expected);
-    if (precision === 'Minute' || precision === 'Second' || precision === null) {
-      expect(card.querySelector('details')?.textContent).toContain('2026-09-13 18:49:27 UTC');
-    }
+    expect(summaryRow(card, 'Launch window')).toBe(expected);
+    expect(summaryRow(card, 'Chance')).toBe('Unknown');
+    expect(card.querySelector('details')).toBeNull();
   });
-  it('keeps seconds for short capture intervals and both UTC dates across midnight', () => {
+  it('keeps seconds for a capture that crosses midnight', () => {
     const item = supported(); const capture = item.capture_intervals[0]!;
     capture.start = '2026-09-07T23:59:57Z';
     capture.peak = '2026-09-08T00:00:00Z';
     capture.end = '2026-09-08T00:00:03Z';
     const card = renderLaunchCard({ item, interval: capture, expired: false }, state([item]), NOW);
-    expect(summaryRow(card, 'When')).toBe('Conditional capture: 7 Sep 2026, 23:59:57 UTC – 8 Sep 2026, 00:00:03 UTC');
-    expect(card.querySelector('details')?.textContent).toContain('2026-09-07 23:59:57 UTC to 2026-09-08 00:00:03 UTC');
+    expect(summaryRow(card, 'Shoot')).toBe('7 Sep 2026, 23:59:57 UTC – 8 Sep 2026, 00:00:03 UTC');
   });
   it('shares the UTC date for a same-day capture range without dropping seconds', () => {
     const item = supported();
     const card = renderLaunchCard({ item, interval: item.capture_intervals[0]!, expired: false }, state([item]), NOW);
-    expect(summaryRow(card, 'When')).toBe('Conditional capture: 7 Sep 2026, 12:10:00–12:15:00 UTC');
+    expect(summaryRow(card, 'Shoot')).toBe('7 Sep 2026, 12:10:00–12:15:00 UTC');
+    expect(summaryRow(card, 'Window')).toBe('Cupola');
+    expect(summaryRow(card, 'Chance')).toBe('Possible');
   });
   it.each([
-    ['Minute', 'Launch window: 7 Sep 2026, 12:10–13:37 UTC'],
-    ['Second', 'Launch window: 7 Sep 2026, 12:10:00–13:37:00 UTC'],
-  ])('keeps the listed negative window at its %s precision', (precision, expected) => {
+    ['Minute', '7 Sep 2026, 12:10–13:37 UTC'],
+    ['Second', '7 Sep 2026, 12:10:00–13:37:00 UTC'],
+  ])('says not possible and keeps the listed window at %s precision', (precision, expected) => {
     const plan = assessment({ net: { ...assessment().net, verdict: 'too_far', reason: 'NOMINAL_ASCENT_TOO_FAR', look: null },
       window: { verdict: 'too_far', reason: 'NOMINAL_ASCENT_TOO_FAR' } });
     const item = launch({ assessment: plan, launch_window: { net: iso(10), start: iso(10), end: iso(97), precision } });
     const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
-    expect(summaryRow(card, 'When')).toBe(expected);
-    expect(card.querySelector('details')?.textContent).toContain('2026-09-07 13:37:00 UTC');
-  });
-  it.each([
-    ['Falcon 9 Block 5 | O3b mPower', 'Falcon 9 Block 5', 'Test site'],
-    ['FALCON 9 BLOCK 5 | O3b mPower', 'Falcon 9 Block 5', 'Test site'],
-    ['O3b mPower', 'Falcon 9 Block 5', 'Test site · Falcon 9 Block 5'],
-    ['Falcon 90 mission', 'Falcon 9', 'Test site · Falcon 9'],
-  ])('omits only a complete duplicate rocket name from Where: %s', (name, rocket, expected) => {
-    const item = launch({ name, rocket });
-    const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
-    expect(summaryRow(card, 'Where')).toBe(expected);
-    expect(card.querySelector('details')?.textContent).toContain(`${rocket} / Test site`);
+    expect(summaryRow(card, 'Shoot')).toBe('Not possible');
+    expect(summaryRow(card, 'Window')).toBe('Not possible');
+    expect(summaryRow(card, 'Direction')).toBe('Not possible');
+    expect(summaryRow(card, 'Launch window')).toBe(expected);
+    expect(summaryRow(card, 'Chance')).toBe('Not possible');
   });
   it('does not turn a day-only TBD schedule into a midnight launch time', () => {
     const item = launch({ reason_codes: ['LAUNCH_UNCONFIRMED', 'TIME_PRECISION_COARSE'],
       launch_window: { net: '2026-09-16T00:00:00Z', start: '2026-09-16T00:00:00Z', end: '2026-09-16T00:00:00Z', precision: 'Day' } });
     const s = state([item]);
     const card = renderLaunchCard({ item, interval: null, expired: false }, s, NOW);
+    expect(summaryRow(card, 'Launch window')).toBe('16 Sep 2026 UTC (day estimate; time unconfirmed)');
+    expect(card.textContent).not.toContain('2026-09-16 00:00:00 UTC');
     const facts = renderLaunchFacts(item, s, NOW);
-    for (const node of [card, facts]) {
-      expect(node.textContent).toContain('2026-09-16 UTC (day estimate; time unconfirmed)');
-      expect(node.textContent).not.toContain('2026-09-16 00:00:00 UTC');
-      expect(node.textContent).toContain('SCHEDULE UNCONFIRMED');
-    }
+    expect(facts.textContent).toContain('2026-09-16 UTC (day estimate; time unconfirmed)');
+    expect(facts.textContent).not.toContain('2026-09-16 00:00:00 UTC');
+    expect(facts.textContent).toContain('SCHEDULE UNCONFIRMED');
   });
   it('marks conflicting source bounds unknown rather than showing an inverted launch window', () => {
     const item = launch({ reason_codes: ['TIME_CONFLICT'], launch_window: { net: iso(10), start: iso(20), end: iso(-40), precision: 'minute' } });
@@ -81,48 +73,60 @@ describe('launch-specific cards', () => {
     expect(facts.textContent).toContain('Launch window endUnknown (conflicting source bounds)');
     expect(facts.textContent).toContain('Schedule precisionUnknown (time conflict)');
     expect(facts.textContent).not.toContain('2026-09-07 11:20:00 UTC');
-    expect(renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW).textContent).toContain('TIME_CONFLICT');
-    expect(summaryRow(renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW), 'When')).toBe('Launch time disputed (see Details)');
+    const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
+    expect(summaryRow(card, 'Launch window')).toBe('Unknown');
+    expect(summaryRow(card, 'Chance')).toBe('Unknown');
+    expect(card.textContent).not.toContain('11:20');
   });
-  it('keeps unknown timing unconfirmed with its source timestamp and MAP ONLY in Details', () => {
+  it('keeps an unconfirmed launch on the five lines without the raw schedule dump', () => {
     const item = launch();
     const card = renderLaunchCard({ item, interval: null, expired: false }, state([item]), NOW);
-    expect(card.querySelector('.launch-verdict')?.textContent).toBe('Chance unknown');
-    expect(card.querySelector('details')?.textContent).toContain('MAP ONLY');
-    expect(card.querySelector('.launch-summary')?.textContent).toContain('Timing unconfirmed (see Details)');
-    expect(card.querySelector('.launch-summary')?.textContent).not.toContain('12:10');
-    expect(card.querySelector('details')?.textContent).toContain('2026-09-07 12:10:00 UTC');
-    expect(card.querySelector('.launch-summary')?.textContent).toContain('Direction and angle not yet established');
-    expect(card.textContent).not.toMatch(/%|[★☆]|WORF|Cupola|exact|Remind|Shoot/);
+    expect(summaryRow(card, 'Shoot')).toBe('Not established');
+    expect(summaryRow(card, 'Direction')).toBe('Not established');
+    expect(summaryRow(card, 'Chance')).toBe('Unknown');
+    expect(card.querySelector('details')).toBeNull();
+    expect(card.textContent).not.toContain('12:10');
+    expect(card.textContent).not.toMatch(/%|[★☆]|exact|Remind|MAP ONLY/);
     expect(card.querySelector('.card-countdown,.card-score,.btn-remind')).toBeNull();
   });
-  it('shows supported conditional capture and all UTC facts with orbital frame', () => {
+  it('shows the capture time, Cupola or WORF, and the direction', () => {
     const item = supported(); const s = state([item]);
     const card = renderLaunchCard({ item, interval: interval(), expired: false }, s, NOW);
-    expect(card.textContent).toContain('Conditional capture:');
+    expect(summaryRow(card, 'Shoot')).toBe('7 Sep 2026, 12:10:00–12:15:00 UTC');
+    expect(summaryRow(card, 'Window')).toBe('Cupola');
+    expect(summaryRow(card, 'Direction')).toContain('ahead-right of ISS travel');
+    expect(summaryRow(card, 'Chance')).toBe('Possible');
     const facts = renderLaunchFacts(item, s, NOW);
     expect(facts.textContent).toContain('Orbital-relative (LVLH)');
     expect(facts.textContent).toContain('Conditional liftoff');
     expect(facts.textContent).toContain('2026-09-07 12:12:30 UTC');
     expect(facts.textContent).toContain('event-r1');
-    expect(facts.textContent).not.toMatch(/%|[★☆]|WORF|Cupola|body|access/);
   });
-  it('keeps stale/expired labels full contrast and missing bounds unknown', () => {
+  it('names WORF when the shot is within 30 degrees of straight down', () => {
+    const item = supported();
+    const capture = item.capture_intervals[0]!;
+    const look = capture.look;
+    if (!look) throw new Error('fixture look missing');
+    look.off_nadir_deg = 18;
+    const card = renderLaunchCard({ item, interval: item.capture_intervals[0]!, expired: false }, state([item]), NOW);
+    expect(summaryRow(card, 'Window')).toBe('WORF');
+  });
+  it('does not put stale labels on the operator card', () => {
     const item = launch(); const s = state([item], { availability: 'offline' });
     const card = renderLaunchCard({ item, interval: null, expired: true }, s, Date.parse(iso(180)));
-    expect(card.textContent).toContain('STALE / EXPIRED DATA');
-    expect(card.textContent).toContain('OFFLINE');
+    expect(summaryRow(card, 'Chance')).toBe('Passed');
     expect(card.classList.contains('stale')).toBe(false);
+    expect(card.textContent).not.toContain('STALE / EXPIRED DATA');
     const facts = renderLaunchFacts(item, s, NOW);
     expect(facts.textContent).toContain('Launch window startUnknown');
     expect(facts.textContent).toContain('Schedule precisionUnknown');
   });
-  it('recent schedule-only cards do not claim camera evidence is valid', () => {
+  it('does not claim a shot from schedule data alone', () => {
     const item = launch(); const s = state([item]);
     const card = renderLaunchCard({ item, interval: null, expired: false }, s, Date.parse(iso(120)));
+    expect(summaryRow(card, 'Shoot')).toBe('Not established');
+    expect(summaryRow(card, 'Chance')).toBe('Unknown');
     expect(card.textContent).not.toContain('STALE / EXPIRED DATA');
-    expect(card.textContent).toContain('MAP ONLY');
-    expect(card.querySelector('.launch-summary')?.textContent).toContain('Direction and angle not yet established');
     expect(renderLaunchFacts(item, s, NOW).textContent).toContain('Camera evidence valid until');
   });
   it('renders source and name as text, never HTML', () => {

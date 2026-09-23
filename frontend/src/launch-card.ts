@@ -50,12 +50,6 @@ function summaryNet(item: LaunchOpportunity): string {
     default: return 'Timing unconfirmed (see Details)';
   }
 }
-function summarySite(item: LaunchOpportunity): string {
-  const words = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-  const title = ` ${words(item.name)} `;
-  const rocket = words(item.rocket);
-  return rocket && title.includes(` ${rocket} `) ? item.site.name : `${item.site.name} · ${item.rocket}`;
-}
 function row(container: HTMLElement, label: string, value: string): void {
   const line = element('div', 'launch-fact');
   line.append(element('span', 'launch-fact-label', label), element('span', '', value));
@@ -152,8 +146,48 @@ export function openLaunchDetails(eventId: string): void {
   dialog.scrollTop = 0;
 }
 
+function photoWindow(offNadir: number | null | undefined): string {
+  if (typeof offNadir !== 'number' || !Number.isFinite(offNadir)) return 'Not established';
+  return offNadir < 30 ? 'WORF' : 'Cupola';
+}
+
+function listedLaunchWindow(item: LaunchOpportunity): string {
+  if (hasLaunchTimeConflict(item)) return 'Unknown';
+  const precision = item.launch_window.precision?.toLowerCase() ?? '';
+  const { start, end } = item.launch_window;
+  if (precision === 'day' || precision === 'month' || precision === 'year') return summaryNet(item);
+  if (start && end) return friendlyRange(start, end, precision === 'second');
+  if (precision === 'minute' || precision === 'second') return summaryNet(item);
+  return 'Not established';
+}
+
+/** The five lines an operator needs. Orbital rejection is one phrase. */
+export function operatorLaunchLines(selection: LaunchSelection, state: LaunchState, now: number): {
+  shoot: string; window: string; direction: string; launchWindow: string; chance: string;
+} {
+  const brief = launchBrief(selection, state, now);
+  const impossible = brief.verdict === 'no_chance';
+  const look = launchCameraEvidenceFresh(selection, state, now)
+    ? selection.interval?.look
+    : selection.item.assessment?.net.verdict === 'possible' ? selection.item.assessment.net.look : null;
+  const capture = selection.interval && launchCameraEvidenceFresh(selection, state, now)
+    ? friendlyRange(selection.interval.start, selection.interval.end, true)
+    : null;
+  const chance = brief.verdict === 'no_chance' ? 'Not possible'
+    : brief.verdict === 'chance' ? 'Possible'
+    : brief.verdict === 'passed' ? 'Passed'
+    : 'Unknown';
+  return {
+    shoot: impossible ? 'Not possible' : capture ?? (brief.verdict === 'chance' ? summaryNet(selection.item) : 'Not established'),
+    window: impossible ? 'Not possible' : photoWindow(look?.off_nadir_deg),
+    direction: impossible ? 'Not possible' : brief.direction ?? 'Not established',
+    launchWindow: listedLaunchWindow(selection.item),
+    chance,
+  };
+}
+
 export function renderLaunchCard(selection: LaunchSelection, state: LaunchState, now: number, onShowMap?: (eventId: string) => void): HTMLElement {
-  const { item, interval } = selection;
+  const { item } = selection;
   const brief = launchBrief(selection, state, now);
   const card = element('article', 'card launch launch-v2 launch-brief');
   card.dataset.launch = 'v2';
@@ -164,23 +198,14 @@ export function renderLaunchCard(selection: LaunchSelection, state: LaunchState,
   const name = element('button', 'card-name launch-name', item.name);
   name.type = 'button';
   name.addEventListener('click', () => openLaunchDetails(item.event_id));
-  const meta = element('div', 'card-meta');
-  const verdict = element('span', 'launch-verdict', brief.label);
-  verdict.dataset.verdict = brief.verdict;
-  meta.append(verdict);
+  const lines = operatorLaunchLines(selection, state, now);
   const summary = element('div', 'launch-summary');
-  summary.append(element('div', 'launch-brief-reason', brief.reason));
-  const currentCapture = interval && launchCameraEvidenceFresh(selection, state, now);
-  const assessedWindow = brief.verdict === 'no_chance' && item.assessment?.window.verdict === 'too_far';
-  row(summary, 'When', currentCapture
-    ? `Conditional capture: ${friendlyRange(interval.start, interval.end, true)}`
-    : assessedWindow && item.launch_window.start && item.launch_window.end
-      ? `Launch window: ${friendlyRange(item.launch_window.start, item.launch_window.end, item.launch_window.precision?.toLowerCase() === 'second')}`
-    : summaryNet(item));
-  row(summary, 'Where', summarySite(item));
-  if (brief.direction) row(summary, 'View', `${currentCapture ? 'At capture' : 'Launch site at liftoff'}: ${brief.direction}`);
-  else if (brief.verdict === 'unknown') row(summary, 'View', 'Direction and angle not yet established');
-  card.append(name, meta, summary);
+  row(summary, 'Shoot', lines.shoot);
+  row(summary, 'Window', lines.window);
+  row(summary, 'Direction', lines.direction);
+  row(summary, 'Launch window', lines.launchWindow);
+  row(summary, 'Chance', lines.chance);
+  card.append(name, summary);
   if (onShowMap) {
     const actions = element('div', 'launch-brief-actions');
     const corridor = item.trajectory.quality !== 'unknown' && !!item.trajectory.source && item.trajectory.points.length >= 2;
@@ -190,9 +215,6 @@ export function renderLaunchCard(selection: LaunchSelection, state: LaunchState,
     actions.append(showMap);
     card.append(actions);
   }
-  const details = element('details', 'launch-details');
-  details.append(element('summary', '', 'Details'), renderLaunchFacts(item, state, now));
-  card.append(details);
   return card;
 }
 
