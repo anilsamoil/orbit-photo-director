@@ -9,7 +9,6 @@ import {
   APPROACH_DAYS,
   NIGHT_FLOOR_MIN,
   SCAN_DAYS,
-  betaAngleDeg,
   betaCriticalDeg,
   betaNoticeText,
   nightMinutesPerOrbit,

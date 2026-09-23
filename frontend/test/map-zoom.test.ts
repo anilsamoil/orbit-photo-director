@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialZoomForViewport } from '../src/map';
+import { initialZoomForViewport } from '../src/map/map-core/camera';
 
 // Web-mercator world width in CSS px at a given zoom (MapLibre 512px tile units).
 const worldPx = (z: number) => 512 * 2 ** z;

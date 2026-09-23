@@ -12,13 +12,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { formatUtcHm } from '../src/countdown';
 import {
   LOOKAHEAD_MAX_MINUTES,
   _getViewTimeMsForTest,
   _resetMapStateForTest,
   bindTimeToggle,
   clampLookahead,
-  formatUtcHm,
   isScrubbed,
   maybeSnapToLive,
   setLookahead,

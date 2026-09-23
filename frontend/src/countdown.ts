@@ -20,6 +20,13 @@ export function formatUtcLabel(s: string): string {
   return `${hh}:${mm} UTC`;
 }
 
+/** UTC ISO 8601 time portion at minute precision, e.g., "12:34Z". */
+export function formatUtcHm(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
 /** Render a relative countdown.
  *
  *  > 60 min   → `In 1h 12m`

@@ -1,9 +1,9 @@
 /** Slot 7 of design rev 2 — distance-threshold filter.
  *
- *  Verifies the pure `filterPassesByDistance` helper (used by map.ts
- *  refreshTargetsSource AND main.ts queue/upcoming builders). The
- *  end-to-end map render is validated via /qa; here we just lock down
- *  the filter contract:
+ *  Verifies the pure `filterPassesByDistance` helper, shared by the map's
+ *  target pins and main.ts's queue and upcoming panes. The end-to-end map
+ *  render is validated via /qa; here we just lock down the filter
+ *  contract:
  *    - passes within the threshold pass through
  *    - passes beyond the threshold are excluded
  *    - non-finite / missing distance falls back to "render" (defensive)
@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { filterPassesByDistance } from '../src/map';
+import { filterPassesByDistance } from '../src/pass-filter';
 import type { PassEntry } from '../src/types';
 
 function makePass(distanceKm: number, name = 'Test'): PassEntry {

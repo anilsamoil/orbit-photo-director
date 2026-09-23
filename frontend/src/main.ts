@@ -24,7 +24,8 @@ import {
 import { buildPayload, drainQueue, postCalib, queuedCalibCount } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
-import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
+import { createPollScheduler, isOnline } from './network-status';
+import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from './pass-filter';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
 import { probeConnectivity } from './network-probe';
 import { buildIcs } from './ics';
@@ -34,7 +35,7 @@ import { fetchKpData, initKpWidget, refreshAuroraVisibility, renderKpWidget } fr
 import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
-import { subscribeProfileChanged } from './profile-events';
+import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
 import { getAccountProfile, getAuthorizedProfiles, resolveAccountProfile } from './profile-session';
 import { deleteProfileTarget } from './profile-api';
 import { markProfileTargetsChanged } from './profile-target-sync';
@@ -74,10 +75,6 @@ let currentlyOffline = false;
 // World-view basemap tiles (z0-3) are static, so precache them once per session
 // rather than every manifest tick. Latches true after the first online refresh.
 let worldBasePrecached = false;
-// Held to keep the scheduler's listeners alive and reachable. Production
-// code never tears down (single-page lifetime); reserved for future SW
-// upgrade flow that may want pollScheduler.stop() before reload.
-let pollScheduler: PollScheduler | null = null;
 // Re-entrancy guard. createPollScheduler explicitly does NOT serialize
 // onPoll calls (see network-status.ts); visibility-resume can fire
 // onPoll while a prior interval-driven refresh is still in flight.
@@ -414,24 +411,13 @@ function upcomingPasses(passes: PassEntry[], nowMs: number): PassEntry[] {
   return passes.filter((p) => Date.parse(p.closest_approach) > nowMs);
 }
 
-/** Apply the active profile's distance threshold to a passes array
- *  (Slot 7 of design rev 2). Falls back to 1500 km when no profile is
- *  loaded — matches the existing ISS_HORIZON_KM behavior so first-launch
- *  users see no behavioral change. Re-reads the threshold from the
- *  in-memory profile each call; the 'profile-changed' subscriber below
- *  refreshes currentProfile so this stays in sync with slider edits.
- *
- *  Pure function — same input → same output. Tested via the
- *  filterPassesByDistance helper in map.ts which this delegates to.
- */
-function applyDistanceFilter(passes: PassEntry[]): PassEntry[] {
-  const threshold = currentProfile?.distanceThresholdKm ?? 1500;
-  if (!Number.isFinite(threshold) || threshold <= 0) return passes;
-  return passes.filter((p) => {
-    const d = p.nadir_distance_km;
-    if (typeof d !== 'number' || !Number.isFinite(d)) return true;
-    return d <= threshold;
-  });
+/** The threshold the queue and upcoming panes filter by. Read from the
+ *  in-memory profile, which the 'profile-changed' subscriber below keeps
+ *  current, so slider edits flow through without a reload. The map reads
+ *  the same field straight from localStorage instead, which is why the two
+ *  can disagree — see docs/agent/FOLLOWUPS.md. */
+function queueDistanceThresholdKm(): number {
+  return currentProfile?.distanceThresholdKm ?? DEFAULT_DISTANCE_THRESHOLD_KM;
 }
 
 /** Render the Queue + Upcoming panes from current module state. Extracted so
@@ -473,7 +459,10 @@ function renderQueue(): void {
   }
   const filter = getTargetFilter();
   const ground = applyTargetFilter(
-    applyDistanceFilter(upcomingPasses(currentTop5.filter((p) => !isLaunchPass(p)), now)),
+    filterPassesByDistance(
+      upcomingPasses(currentTop5.filter((p) => !isLaunchPass(p)), now),
+      queueDistanceThresholdKm(),
+    ),
     filter,
   );
   const slots = queueSlots(sortPassesByOrder(ground, getSortOrder()), selectLaunches(launches, now, 'queue'));
@@ -615,7 +604,10 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const launches = launchStore.getState();
   const launchSelections = selectLaunches(launches, nowMs, 'upcoming');
   const visible = applyTargetFilter(
-    applyDistanceFilter(upcomingPasses(currentTop24h.filter((p) => !isLaunchPass(p)), nowMs)),
+    filterPassesByDistance(
+      upcomingPasses(currentTop24h.filter((p) => !isLaunchPass(p)), nowMs),
+      queueDistanceThresholdKm(),
+    ),
     filter,
   );
   // One global fallback mode. Legacy launches remain map-only and never
@@ -1087,8 +1079,6 @@ function updateIssNow(): void {
   // operator never opened the Map tab, this is a no-op (and shouldn't
   // force-download MapLibre).
   if (mapModule?.applyFollowISS) mapModule.applyFollowISS(pos);
-  // v1.6.0.0: also tick non-ISS satellite live markers at 1Hz.
-  if (mapModule?.tickSatelliteMarkers) mapModule.tickSatelliteMarkers();
 }
 
 /** Coarse ocean / continent label for an ISS sub-point. Intentionally crude
@@ -1242,7 +1232,7 @@ function bindTabs(): void {
   // Profile tab, render the pane, then open the inline edit form. Setting the
   // edit flag is honored by buildPersonalRow even if it lands before the pane
   // finishes rendering, so the ordering is race-safe.
-  window.addEventListener('opd-edit-target', (e) => {
+  window.addEventListener(EDIT_TARGET_EVENT, (e) => {
     const detail = (e as CustomEvent<{ targetId?: unknown }>).detail;
     const targetId = detail && typeof detail.targetId === 'string' ? detail.targetId : null;
     if (!targetId) return;
@@ -1653,7 +1643,7 @@ async function init(): Promise<void> {
   // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
   // watching and gives the user fresh data the moment they look at the
   // page after a long pause.
-  pollScheduler = createPollScheduler({
+  createPollScheduler({
     intervalMs: REFRESH_MS,
     onPoll: () => void refresh(),
   });

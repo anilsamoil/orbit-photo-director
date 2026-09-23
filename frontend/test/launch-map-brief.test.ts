@@ -101,7 +101,7 @@ describe('show launch on map', () => {
     setMapLaunchMode(false);
     vi.spyOn(Date, 'now').mockReturnValue(NOW);
     vi.spyOn(launchStore, 'getState').mockReturnValue(data);
-    const map = { setCenter: vi.fn(), easeTo: vi.fn(), fitBounds: vi.fn(), getLayer: vi.fn(() => true), getLayoutProperty: vi.fn(), setLayoutProperty: vi.fn() };
+    const map = { setCenter: vi.fn(), easeTo: vi.fn(), fitBounds: vi.fn(), hasLayer: vi.fn(() => true), visibilityOf: vi.fn(), setVisibility: vi.fn() };
     _setFollowEnvForTest(map, true);
     document.body.innerHTML = '<button id="toggle-follow-iss"></button>';
     return map;
@@ -112,7 +112,7 @@ describe('show launch on map', () => {
     expect(map.easeTo).toHaveBeenCalledWith(expect.objectContaining({ center: [-80.6, 28.5] }));
     expect(map.fitBounds).not.toHaveBeenCalled();
     expect(getMapLaunchMode()).toBe(true);
-    expect(map.setLayoutProperty).toHaveBeenCalledWith('ascent-pad-layer', 'visibility', 'visible');
+    expect(map.setVisibility).toHaveBeenCalledWith('ascent-pad-layer', 'visible');
     applyFollowISS({ lat: 0, lon: 0 });
     expect(map.setCenter).not.toHaveBeenCalled();
   });
@@ -126,7 +126,7 @@ describe('show launch on map', () => {
     const map = setup(state([item]));
     expect(focusLaunchOnMap(item.event_id)).toBe(true);
     const bounds = map.fitBounds.mock.calls[0]![0];
-    expect(bounds.getEast() - bounds.getWest()).toBe(2);
+    expect(bounds.east - bounds.west).toBe(2);
     expect(map.easeTo).not.toHaveBeenCalled();
   });
   it('ignores events removed by a newer revision', () => {

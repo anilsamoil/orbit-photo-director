@@ -30,6 +30,9 @@
 const DEBOUNCE_MS = 150;
 const PROFILE_KEY_PREFIX = 'opd-profile-';
 
+/** The map asks the profile pane to edit one saved target. */
+export const EDIT_TARGET_EVENT = 'opd-edit-target';
+
 export type ProfileChangedHandler = () => void;
 
 /** Subscribe to profile-changed events from both the in-tab CustomEvent

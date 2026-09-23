@@ -1,123 +1,142 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-// Inline import of the style spec sources from map.ts is awkward because
-// buildStyle isn't exported. Instead we assert behavior via DOM snapshot
-// of the map.ts module's effect on a fake MapLibre map (the same pattern
-// existing map-bearing.test.ts + map-popup.test.ts use).
+import { basemapVisibility } from '../src/map/features/basemap';
+
+// The basemap arbiter picks which of the four basemap/cloud layers show.
+// Clouds ON keeps the dark Carto basemap, because the 55%-opacity GIBS
+// overlay is only legible over it. Clouds OFF swaps to Esri imagery so the
+// operator can pick shoreline and pad features. IR is mutually exclusive
+// with both cloud layers and forces Carto. T3 from /plan-eng-review
+// 2026-05-21: offline with clouds off must fall back to Carto so the
+// operator never sees a blank map.
 //
-// What we're testing here is the visibility-swap contract:
-//  - When cloudsVisible = true → carto-dark visible, esri-imagery hidden,
-//    gibs-clouds visible.
-//  - When cloudsVisible = false (and esri hasn't failed) → carto-dark
-//    hidden, esri-imagery visible, gibs-clouds hidden.
-//  - When cloudsVisible = false AND esri has failed → carto-dark visible
-//    (fallback), esri-imagery hidden, gibs-clouds hidden.
-//
-// Following T3 from /plan-eng-review 2026-05-21: offline + clouds-off
-// must fall back to Carto so the operator never sees a blank map.
+// This suite calls the production function. An earlier revision duplicated
+// the logic here and drifted: the copy omitted the IR and forecast gates.
 
-interface FakeLayer {
-  id: string;
-  visibility: 'visible' | 'none';
-}
+const observed = { forecastFrameActive: false, esriTilesFailed: false };
 
-class FakeMap {
-  layers: Map<string, FakeLayer>;
-  errorHandlers: ((e: unknown) => void)[] = [];
-
-  constructor() {
-    this.layers = new Map([
-      ['carto-dark-layer', { id: 'carto-dark-layer', visibility: 'visible' }],
-      ['esri-imagery-layer', { id: 'esri-imagery-layer', visibility: 'none' }],
-      ['gibs-clouds-layer', { id: 'gibs-clouds-layer', visibility: 'visible' }],
-    ]);
-  }
-
-  getLayer(id: string): FakeLayer | undefined {
-    return this.layers.get(id);
-  }
-
-  setLayoutProperty(id: string, _prop: string, value: 'visible' | 'none'): void {
-    const layer = this.layers.get(id);
-    if (layer) layer.visibility = value;
-  }
-
-  on(event: string, handler: (e: unknown) => void): void {
-    if (event === 'error') this.errorHandlers.push(handler);
-  }
-
-  fireError(sourceId: string): void {
-    for (const h of this.errorHandlers) h({ sourceId });
-  }
-}
-
-/** Simulates the v1.5.1.0 applyCloudsVisibility logic. Kept inline so the
- *  test is honest about the contract being asserted rather than depending
- *  on a private export. The real implementation lives in
- *  frontend/src/map.ts:applyCloudsVisibility. */
-function applyVis(map: FakeMap, cloudsVisible: boolean, esriTilesFailed: boolean): void {
-  const useEsri = !cloudsVisible && !esriTilesFailed;
-  map.setLayoutProperty('gibs-clouds-layer', 'visibility', cloudsVisible ? 'visible' : 'none');
-  map.setLayoutProperty('esri-imagery-layer', 'visibility', useEsri ? 'visible' : 'none');
-  map.setLayoutProperty('carto-dark-layer', 'visibility', useEsri ? 'none' : 'visible');
-}
-
-describe('basemap visibility (v1.5.1.0 — clouds-off shows Esri imagery)', () => {
-  let map: FakeMap;
-
-  beforeEach(() => {
-    map = new FakeMap();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('clouds ON → Carto Dark basemap, GIBS overlay visible, Esri hidden', () => {
-    applyVis(map, true, false);
-    expect(map.getLayer('carto-dark-layer')?.visibility).toBe('visible');
-    expect(map.getLayer('esri-imagery-layer')?.visibility).toBe('none');
-    expect(map.getLayer('gibs-clouds-layer')?.visibility).toBe('visible');
-  });
-
-  it('clouds OFF → Esri imagery basemap, Carto hidden, GIBS hidden', () => {
-    applyVis(map, false, false);
-    expect(map.getLayer('carto-dark-layer')?.visibility).toBe('none');
-    expect(map.getLayer('esri-imagery-layer')?.visibility).toBe('visible');
-    expect(map.getLayer('gibs-clouds-layer')?.visibility).toBe('none');
-  });
-
-  it('clouds OFF + Esri has failed → falls back to Carto Dark (A2)', () => {
-    // T3 from /plan-eng-review 2026-05-21: offline / Esri-CDN-down must not
-    // leave the operator on a blank map. The session flag esriTilesFailed
-    // is set by an `error` event handler on the map; this test asserts the
-    // visibility logic respects it.
-    applyVis(map, false, true);
-    expect(map.getLayer('carto-dark-layer')?.visibility).toBe('visible');
-    expect(map.getLayer('esri-imagery-layer')?.visibility).toBe('none');
-    expect(map.getLayer('gibs-clouds-layer')?.visibility).toBe('none');
-  });
-
-  it('toggling clouds back ON after Esri failed → Carto + GIBS, Esri stays hidden', () => {
-    // Operator may toggle clouds off (Esri fails silently), then toggle
-    // clouds back on. We should NOT try Esri again until the page reloads.
-    applyVis(map, true, true);
-    expect(map.getLayer('carto-dark-layer')?.visibility).toBe('visible');
-    expect(map.getLayer('esri-imagery-layer')?.visibility).toBe('none');
-    expect(map.getLayer('gibs-clouds-layer')?.visibility).toBe('visible');
-  });
-
-  it('error event for non-Esri source does NOT set the fallback flag', () => {
-    // Distinguishes Esri failures from unrelated tile errors (e.g., GIBS
-    // can also error out; we don't want that to lock the basemap mode).
-    let flagged = false;
-    map.on('error', (e: unknown) => {
-      const sourceId = (e as { sourceId?: string } | undefined)?.sourceId;
-      if (sourceId === 'esri-imagery') flagged = true;
+describe('basemapVisibility', () => {
+  it('clouds ON shows Carto Dark and the GIBS overlay, hides Esri', () => {
+    expect(basemapVisibility({ cloudsVisible: true, irVisible: false, ...observed })).toEqual({
+      'carto-dark-layer': 'visible',
+      'esri-imagery-layer': 'none',
+      'gibs-clouds-layer': 'visible',
+      'fcst-clouds-layer': 'none',
     });
-    map.fireError('gibs-clouds');
-    expect(flagged).toBe(false);
-    map.fireError('esri-imagery');
-    expect(flagged).toBe(true);
+  });
+
+  it('clouds OFF swaps to Esri imagery and hides both cloud layers', () => {
+    expect(basemapVisibility({ cloudsVisible: false, irVisible: false, ...observed })).toEqual({
+      'carto-dark-layer': 'none',
+      'esri-imagery-layer': 'visible',
+      'gibs-clouds-layer': 'none',
+      'fcst-clouds-layer': 'none',
+    });
+  });
+
+  it('clouds OFF after an Esri tile failure falls back to Carto Dark (A2)', () => {
+    expect(basemapVisibility({
+      cloudsVisible: false,
+      irVisible: false,
+      forecastFrameActive: false,
+      esriTilesFailed: true,
+    })).toEqual({
+      'carto-dark-layer': 'visible',
+      'esri-imagery-layer': 'none',
+      'gibs-clouds-layer': 'none',
+      'fcst-clouds-layer': 'none',
+    });
+  });
+
+  it('clouds back ON after an Esri failure keeps Esri hidden for the session', () => {
+    expect(basemapVisibility({
+      cloudsVisible: true,
+      irVisible: false,
+      forecastFrameActive: false,
+      esriTilesFailed: true,
+    })).toEqual({
+      'carto-dark-layer': 'visible',
+      'esri-imagery-layer': 'none',
+      'gibs-clouds-layer': 'visible',
+      'fcst-clouds-layer': 'none',
+    });
+  });
+
+  it('IR ON hides the daily clouds and holds Carto, even with clouds ON (R1)', () => {
+    expect(basemapVisibility({ cloudsVisible: true, irVisible: true, ...observed })).toEqual({
+      'carto-dark-layer': 'visible',
+      'esri-imagery-layer': 'none',
+      'gibs-clouds-layer': 'none',
+      'fcst-clouds-layer': 'none',
+    });
+  });
+
+  it('IR ON blocks the Esri swap that clouds OFF would otherwise make (R1)', () => {
+    expect(basemapVisibility({ cloudsVisible: false, irVisible: true, ...observed })).toEqual({
+      'carto-dark-layer': 'visible',
+      'esri-imagery-layer': 'none',
+      'gibs-clouds-layer': 'none',
+      'fcst-clouds-layer': 'none',
+    });
+  });
+
+  it('an active forecast frame replaces the observed cloud layer (V4-P2)', () => {
+    expect(basemapVisibility({
+      cloudsVisible: true,
+      irVisible: false,
+      forecastFrameActive: true,
+      esriTilesFailed: false,
+    })).toEqual({
+      'carto-dark-layer': 'visible',
+      'esri-imagery-layer': 'none',
+      'gibs-clouds-layer': 'none',
+      'fcst-clouds-layer': 'visible',
+    });
+  });
+
+  it('clouds OFF hides the forecast frame and still swaps to Esri', () => {
+    expect(basemapVisibility({
+      cloudsVisible: false,
+      irVisible: false,
+      forecastFrameActive: true,
+      esriTilesFailed: false,
+    })).toEqual({
+      'carto-dark-layer': 'none',
+      'esri-imagery-layer': 'visible',
+      'gibs-clouds-layer': 'none',
+      'fcst-clouds-layer': 'none',
+    });
+  });
+
+  it('IR ON beats an active forecast frame', () => {
+    expect(basemapVisibility({
+      cloudsVisible: true,
+      irVisible: true,
+      forecastFrameActive: true,
+      esriTilesFailed: false,
+    })).toEqual({
+      'carto-dark-layer': 'visible',
+      'esri-imagery-layer': 'none',
+      'gibs-clouds-layer': 'none',
+      'fcst-clouds-layer': 'none',
+    });
+  });
+
+  it('never shows Carto and Esri at the same time, for any input', () => {
+    for (const cloudsVisible of [true, false]) {
+      for (const irVisible of [true, false]) {
+        for (const forecastFrameActive of [true, false]) {
+          for (const esriTilesFailed of [true, false]) {
+            const vis = basemapVisibility({
+              cloudsVisible, irVisible, forecastFrameActive, esriTilesFailed,
+            });
+            const basemaps = [vis['carto-dark-layer'], vis['esri-imagery-layer']];
+            expect(basemaps.filter((v) => v === 'visible')).toHaveLength(1);
+            const clouds = [vis['gibs-clouds-layer'], vis['fcst-clouds-layer']];
+            expect(clouds.filter((v) => v === 'visible').length).toBeLessThanOrEqual(1);
+          }
+        }
+      }
+    }
   });
 });

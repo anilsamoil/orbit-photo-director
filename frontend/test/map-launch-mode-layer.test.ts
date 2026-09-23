@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _getViewTimeMsForTest, _resetMapStateForTest, _setFollowEnvForTest,
-  _syncMapLaunchModeForTest, _trackMapModePopupForTest, applyFollowISS, focusLaunchOnMap, setLookahead,
+  _syncMapLaunchModeForTest, applyFollowISS, focusLaunchOnMap, setLookahead,
 } from '../src/map';
+import type { MapCore, PopupOwner } from '../src/map/map-core/core';
 import { getMapLaunchMode, setMapLaunchMode } from '../src/map-launch-mode';
 import { launchStore } from '../src/launch-store';
 import { launch, NOW, state } from './launch-fixtures';
@@ -16,18 +17,27 @@ function fakeMap() {
   const sources = new Map(['ascent-pad', 'ascent-trajectory', 'targets', 'my-targets', 'iss-track', 'clouds']
     .map((id) => [id, { setData: vi.fn() }]));
   const styleListeners = new Set<() => void>();
+  const popupQueue: ReturnType<typeof fakePopup>[] = [];
   return {
-    visibility, sources,
+    visibility, sources, popupQueue,
     setCenter: vi.fn(), easeTo: vi.fn(), fitBounds: vi.fn(),
-    getLayer: vi.fn((id: string) => visibility.has(id)),
-    getLayoutProperty: vi.fn((id: string) => visibility.get(id)),
-    setLayoutProperty: vi.fn((id: string, _key: string, next: string) => {
+    openPopup: vi.fn(() => {
+      const popup = popupQueue.shift();
+      if (!popup) throw new Error('no fake popup queued');
+      return popup;
+    }),
+    hasLayer: vi.fn((id: string) => visibility.has(id)),
+    visibilityOf: vi.fn((id: string) => visibility.get(id)),
+    setVisibility: vi.fn((id: string, next: string) => {
       visibility.set(id, next);
       for (const listener of [...styleListeners]) listener();
     }),
-    getSource: vi.fn((id: string) => sources.get(id)),
-    on: vi.fn((event: string, listener: () => void) => { if (event === 'styledata') styleListeners.add(listener); }),
-    off: vi.fn((event: string, listener: () => void) => { if (event === 'styledata') styleListeners.delete(listener); }),
+    hasSource: vi.fn((id: string) => sources.has(id)),
+    setGeoJson: vi.fn((id: string, data: unknown) => { sources.get(id)?.setData(data); }),
+    on: vi.fn((event: string, listener: () => void) => {
+      if (event === 'styledata') styleListeners.add(listener);
+      return () => { styleListeners.delete(listener); };
+    }),
     fireStyleData: () => { for (const listener of [...styleListeners]) listener(); },
   };
 }
@@ -45,9 +55,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+let core: MapCore;
 function install() {
   const value = fakeMap();
-  _setFollowEnvForTest(value, false);
+  core = _setFollowEnvForTest(value, false)!;
   _syncMapLaunchModeForTest();
   return value;
 }
@@ -61,9 +72,17 @@ function fakePopup() {
   let close: (() => void) | undefined;
   return {
     remove: vi.fn(),
-    once: vi.fn((_type: 'close', listener: () => void) => { close = listener; }),
+    onClose: vi.fn((listener: () => void) => { close = listener; }),
     finishClose: () => close?.(),
   };
+}
+
+/** Open a popup through the real facade; the fake vendor hands back this popup. */
+function openPopup(value: ReturnType<typeof fakeMap>, owner?: PopupOwner) {
+  const popup = fakePopup();
+  value.popupQueue.push(popup);
+  core.openPopup({ at: [0, 0], content: document.createElement('div'), owner });
+  return popup;
 }
 
 describe('map Launches mode layers', () => {
@@ -112,8 +131,8 @@ describe('map Launches mode layers', () => {
     for (const id of [...targetLayers, ...launchLayers]) value.visibility.set(id, 'visible');
     value.fireStyleData();
     expectMode(value, false);
-    // setLayoutProperty can itself emit styledata; unchanged values stop reentry.
-    expect(value.setLayoutProperty.mock.calls.length).toBeLessThan(30);
+    // setVisibility can itself emit styledata; unchanged values stop reentry.
+    expect(value.setVisibility.mock.calls.length).toBeLessThan(30);
   });
 
   it('does not accumulate mode subscriptions across map rerenders', () => {
@@ -149,12 +168,12 @@ describe('map Launches mode layers', () => {
   });
 
   it('dismisses ordinary/personal target popups when Launches is selected and launch popups on return', () => {
-    install();
-    const target = _trackMapModePopupForTest(fakePopup(), 'target');
-    const unrelated = fakePopup(); // Lookup/ISS/satellite popups are not mode-owned.
+    const value = install();
+    const target = openPopup(value, 'target');
+    const unrelated = openPopup(value); // Lookup/ISS/satellite popups are not mode-owned.
     setMapLaunchMode(true);
     expect(target.remove).toHaveBeenCalledOnce();
-    const launchPopup = _trackMapModePopupForTest(fakePopup(), 'launch');
+    const launchPopup = openPopup(value, 'launch');
     expect(launchPopup.remove).not.toHaveBeenCalled();
     setMapLaunchMode(false);
     expect(launchPopup.remove).toHaveBeenCalledOnce();
@@ -163,9 +182,9 @@ describe('map Launches mode layers', () => {
   });
 
   it('cleans replacement popups without letting an old close lose the new reference', () => {
-    install();
-    const old = _trackMapModePopupForTest(fakePopup(), 'target');
-    const replacement = _trackMapModePopupForTest(fakePopup(), 'target');
+    const value = install();
+    const old = openPopup(value, 'target');
+    const replacement = openPopup(value, 'target');
     expect(old.remove).toHaveBeenCalledOnce();
     old.finishClose(); // A queued close from the removed instance arrives late.
     setMapLaunchMode(true);
@@ -174,8 +193,8 @@ describe('map Launches mode layers', () => {
   });
 
   it('forgets a popup closed normally so mode changes do not remove it again', () => {
-    install();
-    const target = _trackMapModePopupForTest(fakePopup(), 'target');
+    const value = install();
+    const target = openPopup(value, 'target');
     target.finishClose();
     setMapLaunchMode(true);
     expect(target.remove).not.toHaveBeenCalled();

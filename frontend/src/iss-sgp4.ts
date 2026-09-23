@@ -7,7 +7,7 @@ import {
 } from 'satellite.js';
 
 import type { Track } from './types';
-import { wrapLon } from './iss';
+import { wrapLon } from './geo';
 
 // Map-keyed (perf audit 2026-06-11): a single-entry cache thrashed during
 // scrub drags whenever non-ISS satellites were selected — tier-2 satellite

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitTrackByOrbit } from '../src/map';
+import { splitByIllumination, splitTrackByOrbit } from '../src/map/features/ground-track';
 
 describe('splitTrackByOrbit (v1.5.0.0 multi-orbit display)', () => {
   it('returns empty when given no points', () => {
@@ -91,8 +91,6 @@ describe('splitTrackByOrbit (v1.5.0.0 multi-orbit display)', () => {
     expect(buckets[2]?.length).toBe(1);
   });
 });
-
-import { splitByIllumination } from '../src/map';
 
 describe('splitByIllumination (v1.5.3.0 — ISS illumination-aware track)', () => {
   // We use a known epoch where the subsolar point is near (0°, 0°) for

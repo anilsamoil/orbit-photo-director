@@ -661,7 +661,7 @@ describe('spriteConditionProvider (Unit 7 — moon-gated honest sprite watch)', 
   it('SUPPRESSED when a bright Moon is up (washes faint sprites)', () => {
     // Full moon instant + ISS sub-point AT the moon sub-point → moonlit.
     const FULL = '2026-06-29T23:57:00Z';
-    const sub = subsolarPointMoonProxy(FULL); // helper below
+    const sub = FULL_MOON_SUBPOINT;
     const moonlit = spritePass({
       closest_approach: FULL,
       iss_at_closest: { lat: sub.lat, lon: sub.lon, alt_km: 420 },
@@ -671,9 +671,5 @@ describe('spriteConditionProvider (Unit 7 — moon-gated honest sprite watch)', 
   });
 });
 
-// Moon sub-point proxy for the moonlit-suppression test (mirrors moon.ts).
-function subsolarPointMoonProxy(iso: string): { lat: number; lon: number } {
-  // Use the real moon subpoint via the moon module to place the observer.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  return { lat: -27, lon: 2 }; // ≈ full-moon subpoint 2026-06-29T23:57Z (from moon.test)
-}
+/** Full-moon subpoint for 2026-06-29T23:57Z, taken from moon.test.ts. */
+const FULL_MOON_SUBPOINT = { lat: -27, lon: 2 };

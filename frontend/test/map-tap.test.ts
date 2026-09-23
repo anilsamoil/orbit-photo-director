@@ -11,13 +11,14 @@
  */
 import { describe, it, expect } from 'vitest';
 import { pickTargetAtTap } from '../src/map';
+import type { Hit } from '../src/map/map-core/vendor-map';
 
 // Identity-ish projector: pin lng/lat map straight to screen x/y for the test.
 const project = (ll: [number, number]): { x: number; y: number } => ({ x: ll[0], y: ll[1] });
 const feat = (
   coords: [number, number],
   properties: Record<string, unknown>,
-): { properties: Record<string, unknown>; geometry: { type: string; coordinates: number[] } } => ({
+): Hit => ({
   properties,
   geometry: { type: 'Point', coordinates: coords },
 });
@@ -25,7 +26,7 @@ const feat = (
 describe('pickTargetAtTap', () => {
   it('returns null when nothing point-like was hit', () => {
     expect(pickTargetAtTap([], { x: 0, y: 0 }, project)).toBeNull();
-    const line = { properties: { target_id: 'x' }, geometry: { type: 'LineString', coordinates: [0, 0] } };
+    const line: Hit = { properties: { target_id: 'x' }, geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] } };
     expect(pickTargetAtTap([line], { x: 0, y: 0 }, project)).toBeNull();
   });
 
