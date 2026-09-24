@@ -176,18 +176,17 @@ describe('additive launch planning schema', () => {
 });
 
 describe('actionable shared launch card', () => {
-  it('shows verdict, reason, UTC time, site and supported view while hiding raw evidence in Details', () => {
+  it('shows the shoot, the window, the direction, the launch window, and the chance', () => {
     const item = planned();
     const card = renderLaunchCard(selection(item), state([item]), NOW);
     const summary = card.querySelector('.launch-summary')!;
     expect(card.dataset.verdict).toBe('chance');
-    expect(card.querySelector('.launch-verdict')?.textContent).toBe('Possible at liftoff');
-    expect(summary.textContent).toContain('7 Sep 2026, 12:10 UTC (tentative)');
-    expect(summary.textContent).toContain('Test site');
+    expect(summary.textContent).toContain('Shoot');
+    expect(summary.textContent).toContain('Cupola');
     expect(summary.textContent).toContain('55.0° from straight down');
+    expect(summary.textContent).toContain('ChancePossible');
     expect(summary.textContent).not.toMatch(/MAP ONLY|VALIDATION_PENDING|TRAJECTORY_UNKNOWN|revision|coverage/i);
-    expect(card.querySelector('details')?.open).toBe(false);
-    expect(card.querySelector('details')?.textContent).toContain('TRAJECTORY_UNKNOWN');
+    expect(card.querySelector('details')).toBeNull();
   });
 
   it('offers a site action without inventing a corridor from an unknown trajectory', () => {

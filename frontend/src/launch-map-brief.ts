@@ -1,6 +1,6 @@
 import type { LaunchState } from './launch-store';
 import { launchBrief, selectLaunches } from './launch-selectors';
-import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
+import { operatorLaunchLines, renderLaunchCard, renderLaunchCoverage } from './launch-card';
 
 const PRIMARY_OPEN_KEY = 'opd-map-launch-brief-open';
 
@@ -26,13 +26,12 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
   // A refresh can arrive before the native toggle event is delivered.
   if (previousPrimary) savePrimaryOpen(container, primaryWasOpen);
   const moreWasOpen = container.querySelector<HTMLDetailsElement>('.map-launch-more')?.open ?? false;
-  const openEvents = new Set(Array.from(container.querySelectorAll<HTMLElement>('.launch-brief'))
-    .filter((card) => card.querySelector<HTMLDetailsElement>('.launch-details')?.open)
-    .map((card) => card.dataset.eventId));
   const dataWasOpen = container.querySelector<HTMLDetailsElement>('.launch-data-details')?.open ?? false;
   container.className = 'map-launch-brief';
   const selections = selectLaunches(state, now, 'map');
   const nodes: HTMLElement[] = [];
+  const coverage = document.createElement('div');
+  renderLaunchCoverage(coverage, state, now, 'map');
   const next = selections[0];
   const nextCard = next ? renderLaunchCard(next, state, now, onShowMap) : null;
   if (next && nextCard) {
@@ -41,9 +40,10 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
     primary.open = primaryWasOpen;
     const summary = document.createElement('summary');
     const brief = launchBrief(next, state, now);
-    summary.textContent = `Next launch · ${brief.label}`;
+    const lines = operatorLaunchLines(next, state, now);
+    summary.textContent = `Next launch · ${lines.chance}`;
     summary.dataset.hasChance = String(brief.verdict === 'chance');
-    primary.append(summary, nextCard);
+    primary.append(summary, nextCard, coverage);
     primary.addEventListener('toggle', (event) => {
       if (event.target === primary && container.querySelector('.map-launch-primary') === primary) {
         savePrimaryOpen(container, primary.open);
@@ -62,22 +62,15 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
     more.append(summary, ...selections.slice(1).map((selection) => renderLaunchCard(selection, state, now, onShowMap)));
     nodes.push(more);
   }
-  const coverage = document.createElement('div');
-  renderLaunchCoverage(coverage, state, now, 'map');
   if (!next) {
     const empty = document.createElement('p');
     empty.textContent = state.artifact
       ? 'No upcoming launch is listed in the available schedule.'
       : 'Checking upcoming launches…';
     if (!state.artifact && state.availability !== 'loading') empty.textContent = 'Launch schedule unavailable. Reconnect to check upcoming launches.';
-    nodes.push(empty);
+    nodes.push(empty, coverage);
   }
-  if (nextCard) nextCard.querySelector('.launch-details')!.append(coverage);
-  else nodes.push(coverage);
   container.replaceChildren(...nodes);
-  for (const card of container.querySelectorAll<HTMLElement>('.launch-brief')) {
-    if (openEvents.has(card.dataset.eventId)) card.querySelector<HTMLDetailsElement>('.launch-details')!.open = true;
-  }
   coverage.querySelector<HTMLDetailsElement>('.launch-data-details')!.open = dataWasOpen;
   if (primaryHadFocus) container.querySelector<HTMLElement>('.map-launch-primary > summary')?.focus({ preventScroll: true });
 }

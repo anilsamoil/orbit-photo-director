@@ -16,21 +16,20 @@ describe('map launch brief', () => {
     renderMapLaunchBrief(box, data, NOW, show);
     const primary = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
     expect(primary.open).toBe(false);
-    expect(primary.querySelector('summary')?.textContent).toBe('Next launch · Chance unknown');
+    expect(primary.querySelector('summary')?.textContent).toBe('Next launch · Unknown');
     expect(primary.querySelector('article')?.getAttribute('data-event-id')).toBe('event-1');
-    expect(box.firstElementChild?.querySelector('.launch-details .launch-coverage')).not.toBeNull();
-    expect(Array.from(box.children).some((child) => child.classList.contains('launch-coverage'))).toBe(false);
+    expect(primary.querySelector('.launch-coverage')).not.toBeNull();
+    expect(primary.querySelector('.launch-details')).toBeNull();
+    expect(primary.querySelector('.launch-summary')?.textContent).not.toMatch(/revision|TRAJECTORY_UNKNOWN|MAP ONLY/);
     const more = box.querySelector<HTMLDetailsElement>('.map-launch-more')!;
     expect(more.open).toBe(false);
     expect(more.querySelector('summary')?.textContent).toBe('Other launches (1)');
     (box.querySelector('.launch-brief-actions button') as HTMLButtonElement).click();
     expect(show).toHaveBeenCalledWith('event-1');
     more.open = true;
-    box.querySelector<HTMLDetailsElement>('.launch-details')!.open = true;
     box.querySelector<HTMLDetailsElement>('.launch-data-details')!.open = true;
     renderMapLaunchBrief(box, data, NOW, show);
     expect(box.querySelector<HTMLDetailsElement>('.map-launch-more')?.open).toBe(true);
-    expect(box.querySelector<HTMLDetailsElement>('.launch-details')?.open).toBe(true);
     expect(box.querySelector<HTMLDetailsElement>('.launch-data-details')?.open).toBe(true);
   });
   it('remembers the current choice through an immediate refresh and a new page', () => {
@@ -72,12 +71,12 @@ describe('map launch brief', () => {
     const box = document.createElement('div');
     const items = [launch({ assessment: assessment() })];
     renderMapLaunchBrief(box, state(items), NOW, vi.fn());
-    expect(box.querySelector('.map-launch-primary > summary')?.textContent).toContain('Possible at liftoff');
+    expect(box.querySelector('.map-launch-primary > summary')?.textContent).toContain('Possible');
     expect(box.querySelector('.map-launch-primary > summary')?.getAttribute('data-has-chance')).toBe('true');
     renderMapLaunchBrief(box, state(items, { superseded: true }), NOW, vi.fn());
     expect(box.querySelector<HTMLDetailsElement>('.map-launch-primary')?.open).toBe(false);
     expect(box.querySelector('.map-launch-primary > summary')?.getAttribute('data-has-chance')).toBe('false');
-    expect(box.querySelector('.map-launch-primary > summary')?.textContent).not.toContain('Possible at liftoff');
+    expect(box.querySelector('.map-launch-primary > summary')?.textContent).not.toContain('Possible');
   });
   it('describes an unavailable schedule without claiming no launches exist', () => {
     const box = document.createElement('div');
