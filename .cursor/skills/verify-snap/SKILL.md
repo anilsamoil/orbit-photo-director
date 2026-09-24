@@ -29,7 +29,9 @@ Ready when stdout JSON has `"ok": true` and `"url": "http://127.0.0.1:43147"` (o
 
 Teardown: `.cursor/skills/verify-snap/helpers/control-snap.mjs cleanup` (kills only the recorded PID; keeps evidence under `.cursor/skills/verify-snap/artifacts/`).
 
-Isolation: default port `43147`. Do not drive a shared instance you did not launch. Concurrent runs need distinct `SNAP_VERIFY_PORT` values and separate checkouts (Vite verify cache: `frontend/.vite-cache-verify`).
+Isolation: default port `43147`. On Anil's Mac that port may be held by `opd-lan`; if launch sees a non-VERIFY manifest or the port is busy, use `SNAP_VERIFY_PORT` (live maintain used `43148`). `cleanup` only kills the recorded verify PID — it will not free `opd-lan`. Do not drive a shared instance you did not launch. Concurrent runs need distinct `SNAP_VERIFY_PORT` values and separate checkouts (Vite verify cache: `frontend/.vite-cache-verify`).
+
+Fixtures must stay fresh enough for `upcomingPasses` (wall-clock); stale VERIFY empties Queue even when doctor is green. VERIFY fixtures must include the `passes` artifact for the current map.
 
 ## Doctor
 

@@ -1,14 +1,17 @@
 # Map
 
-Map is the MapLibre view of the ISS ground track, targets, and overlays; the time slider scrubs the next 36 hours.
+Map is the MapLibre view of the ISS ground track, targets, and overlays; the time slider scrubs the next 36 hours. Architecture lives under `frontend/src/map/features/*` (basemap, ground-track, night-lights, terminator, labels, satellites, pin-drop, targets, launch-corridor, time-scrub, follow-iss, iss-marker) — not a monolithic `map.ts`.
 
 ## Sub-features
 
-- `map-open` opens the Map tab and lazy-loads MapLibre.
+- `map-open` opens the Map tab and lazy-loads MapLibre (`#view` gets class `view-map`).
 - `map-scrub` moves the time slider / step buttons away from Now.
 - `map-overlays` toggles clouds, IR, terminator, night lights, labels, multi-orbit.
-- `map-follow` recenters on the ISS marker.
-- `map-filter` toggles All / Mine / Launches on the map toolbar.
+- `map-follow` recenters on the ISS marker (`#toggle-follow-iss`).
+- `map-filter` toggles All / Mine / Launches via `#filter-all-map` / `#filter-mine-map` / `#filter-launches-map` (Launches may show `#map-launch-coverage`).
+- `map-satellites` opens the satellite picker (`#toggle-satellite-picker`).
+- `map-pin-drop` drops a pin via long-press / `contextmenu` on the map (no toolbar id).
+- `map-bearing` switches north-up vs ISS-up (`#bearing-north` / `#bearing-iss`).
 
 ## How to get to it (user POV)
 
@@ -20,13 +23,14 @@ Map is the MapLibre view of the ISS ground track, targets, and overlays; the tim
 Preconditions:
 
 - Instance healthy per doctor.
-- Fixture track artifact present (VERIFY).
+- Fixture track **and passes** artifacts present (VERIFY). Passes is required for the current map.
 
-- **Open Map.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id tab-map`. `#view` is `view-map`; `#map` exists in the DOM.
+- **Open Map.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id tab-map`. `#view` gets class `view-map`; `#map` exists in the DOM.
 - **Scrub forward.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id time-fwd-45`. `#time-fwd-45` becomes `active` (or readout leaves `Now`).
 - **Return to Now.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id time-now`. `#time-now` is `active`.
 - **Toggle terminator.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id toggle-terminator`. Button `active` class toggles.
 - **Follow ISS.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id toggle-follow-iss`. Control shows pressed/active state per UI.
+- **Optional (live-proven):** satellite picker `#toggle-satellite-picker`; Launches filter `#filter-launches-map` (may reveal `#map-launch-coverage`).
 - **Proof.** `.cursor/skills/verify-snap/helpers/control-snap.mjs browser snapshot --aria --path .cursor/skills/verify-snap/artifacts/map/map.aria.json` and `browser screenshot --path .cursor/skills/verify-snap/artifacts/map/map.png` with Map tab active and SNAP brand visible.
 
 ## Gotchas
@@ -35,3 +39,4 @@ Preconditions:
 - Basemap tiles need network (Carto/Esri); offline runs may show a dark map while controls still work.
 - IR and night-lights fetch external imagery; treat tile paint as best-effort, control state as the hard assertion.
 - Launches filter needs launch artifacts; without them the control still toggles but no launch pins appear.
+- VERIFY fixtures must include the `passes` artifact for the current map; doctor can be green while Map features fail without it.

@@ -5,7 +5,8 @@ Log shows calibration Shoot/Skip history used to improve scoring; empty until th
 ## Sub-features
 
 - `log-open` opens the Log tab.
-- `log-empty` shows the empty state when no entries exist.
+- `log-empty` shows the empty state when no entries exist (`#log-empty`).
+- `log-notice` shows the missing/auth/offline notice (`#log-notice`).
 - `log-list` renders merged log rows when `/api/log` returns data.
 - `log-pending` surfaces the pending-sync badge when offline queue has entries.
 
@@ -19,10 +20,10 @@ Log shows calibration Shoot/Skip history used to improve scoring; empty until th
 Preconditions:
 
 - Doctor healthy.
-- Fixture server does not implement `/api/log` — expect empty or error notice locally.
+- Fixture Vite stubs `/api/log` → `{entries:[]}`, so local proof is typically `#log-empty`. `#log-notice` is the missing/auth/offline path.
 
 - **Open Log.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id tab-log`. `#view` becomes the log view class; `#tab-log` is `active`.
-- **Empty state.** With no API, `#log-empty` is visible **or** `#log-notice` explains auth/load failure — both are acceptable local outcomes. Capture the visible status text.
+- **Empty or notice.** Expect `#log-empty` **or** `#log-notice` — both are acceptable local outcomes. Live proof saw `#log-empty`. Capture the visible status text.
 - **Proof.** Snapshot/screenshot under `.cursor/skills/verify-snap/artifacts/log/` showing Log active and the empty/notice message. Do not claim Shoot→Log round-trip verified without a Worker.
 
 ## Gotchas

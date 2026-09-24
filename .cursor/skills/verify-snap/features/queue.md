@@ -5,9 +5,9 @@ Queue shows the next ~90 minutes of ranked Earth photo opportunities as cards so
 ## Sub-features
 
 - `queue-open` opens the Queue tab from the topbar.
-- `queue-cards` renders fixture (or live) pass cards with target names and scores.
-- `queue-sort` toggles Time vs Score ordering.
-- `queue-filter` toggles All vs Mine target filter.
+- `queue-cards` renders fixture (or live) pass cards with target names and scores; may include up to 2 launch cards prepended into `#cards`.
+- `queue-sort` toggles Time vs Score ordering (prefs shared with Upcoming).
+- `queue-filter` toggles All vs Mine target filter (prefs shared with Upcoming and Map All/Mine).
 - `queue-keepsake` expands the Cupola keepsake pane.
 
 ## How to get to it (user POV)
@@ -19,8 +19,9 @@ Queue shows the next ~90 minutes of ranked Earth photo opportunities as cards so
 
 Preconditions:
 
-- `control-snap.mjs doctor` reports `"ok": true` at `http://127.0.0.1:43147`.
+- `control-snap.mjs doctor` reports `"ok": true` at the verify URL (default `http://127.0.0.1:43147`, or `SNAP_VERIFY_PORT` if remapped).
 - Fixture manifest version is `VERIFY` (includes target `Verify Tokyo`).
+- VERIFY fixtures must be fresh enough for `upcomingPasses` (wall-clock); stale VERIFY empties Queue even when doctor is green.
 
 - **Open Queue.** Choose `Queue`. Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id tab-queue`. `#view` class becomes `view-queue` and `#tab-queue` has class `active`.
 - **See cards.** After refresh, `#cards` contains at least one child and text includes `Verify Tokyo`. Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser prove-queue --path .cursor/skills/verify-snap/artifacts/queue`.
@@ -34,4 +35,5 @@ Preconditions:
 - Map is often the default active tab; failing to click Queue verifies Map instead.
 - Live `map.astroanil.dev` needs Cloudflare Access — use local fixtures unless Access cookies are available.
 - Shoot/Skip buttons POST `/api/log` and need Worker auth; card presence alone is the local proof for `queue-cards`.
-- Sort/filter prefs persist in localStorage across reloads within the same browser profile.
+- Sort/filter prefs persist in localStorage across reloads within the same browser profile (shared with Upcoming; All/Mine filter also shared with Map).
+- Up to 2 launch cards may be prepended into `#cards` ahead of pass cards when launch data is present.

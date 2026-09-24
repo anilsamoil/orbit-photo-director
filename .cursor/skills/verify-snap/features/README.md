@@ -5,7 +5,9 @@ This directory is the maintained source for verifying user-facing SNAP behavior 
 ## Baseline preconditions
 
 - Launch via `.cursor/skills/verify-snap/helpers/control-snap.mjs launch` (default `http://127.0.0.1:43147`).
+- On Anil's Mac, default port `43147` may be held by `opd-lan`. If launch sees a non-VERIFY manifest or the port is busy, set `SNAP_VERIFY_PORT` (live maintain used `43148`). `cleanup` only kills the recorded verify PID — it will not free `opd-lan`.
 - Fixtures version `VERIFY` must be served at `/manifest.json`, and `/api/browser/session` must return the verify stub profile (both handled by `vite.config.verify.mjs`).
+- Fixtures must stay fresh enough for `upcomingPasses` (wall-clock); stale VERIFY empties Queue even when doctor is green. VERIFY fixtures must include the `passes` artifact for the current map.
 - Run `control-snap.mjs doctor` and require `"ok": true`.
 - Never drive an instance that was not started by this verification run.
 - Production `map.astroanil.dev` is behind Cloudflare Access — local fixtures are the default verify path.
@@ -33,7 +35,7 @@ Each feature file starts with an H1 and one paragraph, then exactly four H2s: `S
 ## Features
 
 - [Queue](./queue.md) — next-90-minute shot cards, sort/filter, Keepsake toggle.
-- [Map](./map.md) — MapLibre map, time scrub, overlay toggles, follow ISS.
+- [Map](./map.md) — MapLibre map (feature-split under `frontend/src/map/features/*`), time scrub, overlay toggles, follow ISS, satellites, pin-drop, bearing.
 - [Upcoming](./upcoming.md) — next-36-hour forecast queue.
 - [Profile](./profile.md) — crew profile pane and photo lookup.
 - [Log](./log.md) — calibration log of Shoot/Skip entries.

@@ -19,8 +19,8 @@ Preconditions:
 
 - Doctor healthy; VERIFY fixtures include `top_24h` with `Verify Alaska Range` / `Verify Patagonia`.
 
-- **Open Upcoming.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id tab-upcoming`. `#view` is `view-upcoming`.
-- **See forecast cards.** `#upcoming-cards` has children; text includes a VERIFY target beyond the 90-minute set (e.g. `Verify Alaska` or `Verify Patagonia`).
+- **Open Upcoming.** Run `.cursor/skills/verify-snap/helpers/control-snap.mjs browser click --id tab-upcoming`. `#view` gets class `view-upcoming`.
+- **See forecast cards.** `#upcoming-cards` has children; text includes a VERIFY target beyond the 90-minute set (e.g. `Verify Alaska Range` or `Verify Patagonia` — use the full name, not truncated `Verify Alaska`).
 - **Sort / filter.** Click `#sort-score-upcoming` then `#filter-all-upcoming`; confirm `active` classes.
 - **Proof.** Snapshot/screenshot under `.cursor/skills/verify-snap/artifacts/upcoming/` showing Upcoming active and at least one forecast card name.
 

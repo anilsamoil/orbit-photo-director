@@ -1,8 +1,8 @@
 {
   "version": "VERIFY",
-  "generated_at": "2026-09-20T11:00:34Z",
-  "tle_epoch": "2026-09-20T05:00:34Z",
-  "cloud_composite_hour": "2026-09-20T10:00:34Z",
+  "generated_at": "2026-09-24T12:18:37Z",
+  "tle_epoch": "2026-09-24T06:18:37Z",
+  "cloud_composite_hour": "2026-09-24T12:17:37Z",
   "target_data_version": "verify-v1",
   "build_version": "1.22.0.12",
   "freshness": {
@@ -13,23 +13,28 @@
   "artifacts": {
     "top5": {
       "path": "v/VERIFY/top5.json",
-      "sha256": "b80ddc51cd4076c18a8db065f9da7ea05adb1d8979a6f57502717ec2c29c80b9",
-      "bytes": 1599
+      "sha256": "2ce20a3d2694ed95d33d0e6fb4d8fb3929944add707b35a4c1f604018a9412f5",
+      "bytes": 1595
     },
     "top_24h": {
       "path": "v/VERIFY/top_24h.json",
-      "sha256": "871df6cc78209f58148a2673a481f17c2437a35be6301ff09ae90d0557435e53",
-      "bytes": 2681
+      "sha256": "4763e093b3204d2f255b58a97ae14521312576a32e42f23488bb7279be1b0645",
+      "bytes": 1075
     },
     "track": {
       "path": "v/VERIFY/track.json",
-      "sha256": "f6aa82f1a93bf93bee12967b1dac1ec7c6dd0d82ee1ec52c543b3d1348346f3f",
-      "bytes": 1176
+      "sha256": "d1137751ccebb0273ca45113ef2bc7d7991492ddeaccead11f9638d0b9324763",
+      "bytes": 1166
     },
     "status": {
       "path": "v/VERIFY/status.json",
-      "sha256": "ebe0a2db00ef18122287fd995371bd931c2890bf9faf501dfd1f865e372a9242",
+      "sha256": "5ad33a9eade486ef58ef72d0676634087cf911a67b072ff24b2685110a06e708",
       "bytes": 400
+    },
+    "passes": {
+      "path": "v/VERIFY/passes.json",
+      "sha256": "bef5438ae0d9cd5381c00119204d74634c8e38ec1a866a1fd4e632a681a4c2dc",
+      "bytes": 2669
     }
   }
 }
