@@ -1,0 +1,5 @@
+# verify-snap local ignores
+.run-state.json
+.vite-verify.log
+helpers/node_modules/
+frontend/.vite-cache-verify/
