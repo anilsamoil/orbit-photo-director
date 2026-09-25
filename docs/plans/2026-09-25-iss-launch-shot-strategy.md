@@ -2,7 +2,7 @@
 
 This page is for the crew member who opens the map to decide whether to go to a window with a camera. A launch on a list is not that decision. A shot is a short time when the station's ground track passes near the pad, or along a known ascent track, close enough that the rocket or the plume can fill a frame.
 
-The map should answer with one card, or with none. The code that feeds the map today does not do that. On 25 September 2026 it would have shown six launches for the next week and called none of them possible. Two of those six are the only ones whose orbit, on a stale forecast, comes near a pad. They are buried in the same list as launches that are thousands of kilometres out of view.
+The map should answer with one card, or with none. On 25 September 2026 the publisher would have shown six launches for the next week and called none of them possible. Two of those six are the only ones whose orbit, on a stale forecast, comes near a pad. They are buried in the same list as launches that are thousands of kilometres out of view. That list is what the September plan asked for. It is the wrong product for taking a picture.
 
 The code sequence that gets from this list to one card is in [How to cut the launch list down to a shot](2026-09-25-iss-launch-shot-changes.md).
 
@@ -14,15 +14,15 @@ Call it a **go** only when every line below is true.
 
 - The Launch Library 2 status is `Go` or `Confirmed`. The published precision is minute or second. The headline NET falls inside the published window. A window that opens before the NET is normal. It is not a conflict. `filter_launches` in `generator/launch_data.py` already requires `Go` or `Confirmed`, and `build_planning_assessment` in `generator/launch_assessment.py` refuses anything else as `TIMING_UNCONFIRMED`.
 - The ISS TLE epoch is within 24 hours of the time you are judging. That limit is `EPHEMERIS_HORIZON_SECONDS` in `generator/launch_assessment.py`. Outside it, SGP4 is not a shooting instruction. Say **recheck**, or say nothing. Do not say go.
-- During the pad window, from 300 seconds before T-0 until 120 seconds after T-0, the closest ground range from the station to the pad is under 800 km. 800 km is `PASS_MAX_DISTANCE_KM` in `generator/config.py`, the cone the overhead launch search already uses. 300 seconds is `PASS_WINDOW_SECONDS` in `generator/launch_data.py`. The 120 seconds after T-0 is a planning bound so a liftoff that happens during the pass still counts. It is not a measured burn time.
-- At that closest instant the line of sight to the pad clears the Earth. The limb range is `_horizon_km` in `generator/launch_assessment.py`. At a station altitude near 420 km that limb is about 2200 km. A pad inside the limb and outside 800 km is above the horizon and still a poor overhead. It is not a go.
+- During the pad window, from 300 seconds before T-0 until 120 seconds after T-0, the closest ground range from the station to the pad is under 500 km. 500 km is `NADIR_HORIZON_KM` in `generator/config.py`. At that distance `nadir_proximity` in `generator/score.py` has already fallen to 0, so a farther pass is not an overhead frame even though `find_passes` will still emit one out to `PASS_MAX_DISTANCE_KM`, which is 800 km. At a station altitude of 420 km, `angle_off_nadir_deg` is about 30 degrees at 250 km, about 49 degrees at 500 km, and about 60 degrees at 800 km. 300 seconds is `PASS_WINDOW_SECONDS` in `generator/launch_data.py`. The 120 seconds after T-0 is a planning bound so a liftoff that happens during the pass still counts. It is not a measured burn time.
+- At that closest instant the line of sight to the pad clears the Earth. The limb range is `_horizon_km` in `generator/launch_assessment.py`. At a station altitude near 420 km that limb is about 2200 km. A pad inside the limb and outside 500 km is above the horizon and still a poor overhead. It is not a go.
 - For a daylight look at the ground, the existing cloud sample at the pad is clear. If the sample is missing, the result is recheck, not a go. A night look at engine light does not wait on that sample. The planning assessment does not apply cloud today. The legacy pass scorer does. See the open questions before treating cloud as already enforced.
 
 Call it a **no-go** when the schedule is admitted and the nominal ascent disk stays behind the Earth for the whole early ascent, with the margins `build_planning_assessment` already adds. That reason string is `NOMINAL_ASCENT_TOO_FAR`. A no-go is not a card.
 
 Call everything else **recheck** or omit it. Unknown is not a third kind of opportunity.
 
-One list. Rank by the closest-approach time. If nothing is a go inside the 24 hour TLE limit, the list is empty. At most one recheck line names the next launch whose stale forecast still comes inside 800 km, and the line says the forecast is too old to shoot from.
+One list. Rank by the closest-approach time. If nothing is a go inside the 24 hour TLE limit, the list is empty. At most one recheck line names the next launch whose stale forecast still comes inside 500 km, and the line says the forecast is too old to shoot from.
 
 ## What the feed showed on 25 September 2026
 
@@ -66,7 +66,7 @@ No row has `launch_azimuth_deg` or `trajectory_source`. The parser leaves both e
 
 These are different times and different aims. The card names which one it is.
 
-**The pad shot.** You are photographing the site, the engine light, and the first motion. The time that matters is the closest approach in the pad window above, not the NET by itself. On the 1 October examples the closest approach is about two minutes before T-0. You are over the coastline while the vehicle is still on the pad. By T-0 the station has moved on, and the pad is a steep oblique look. If the card's closest time is before T-0, be in the window early. The liftoff itself is the later, steeper look, and only if that later look still clears the limb. If the closest time is after T-0, you are arriving as the vehicle leaves. Stay with the pad until the range opens past 800 km.
+**The pad shot.** You are photographing the site, the engine light, and the first motion. The time that matters is the closest approach in the pad window above, not the NET by itself. On the 1 October examples the closest approach is about two minutes before T-0. You are over the coastline while the vehicle is still on the pad. By T-0 the station has moved on, and the pad is a steep oblique look. If the card's closest time is before T-0, be in the window early. The liftoff itself is the later, steeper look, and only if that later look still clears the limb. If the closest time is after T-0, you are arriving as the vehicle leaves. Stay with the pad while the range stays under 500 km. Past that the look is the oblique the go rule already refused.
 
 The legacy overhead path in `generator/main.py` already searches T-0 plus or minus `PASS_WINDOW_SECONDS` inside 800 km, then scores the pass like a ground target. The artifact the map reads does not use that search. `build_planning_assessment` looks at the pad at the NET instant and asks only whether it is inside the limb. That is how a 914 km oblique at T-0 can look like the whole opportunity, and how a 146 km pass two minutes earlier never becomes a verdict.
 
@@ -104,19 +104,23 @@ With Launches on, one of these.
 
 - No card, and the sentence that no launch shot is inside the trusted orbit forecast.
 - One go card. Shoot time is the closest-approach UTC and the offset from T-0. Window is WORF or Cupola from the 30 degree rule. Direction is the orbital sector and the off-nadir angle. Launch window is the feed window. Chance is Possible. If the overhead is before T-0, the Shoot line says so in the same line, including the off-nadir angle at T-0 when that look still clears the limb.
-- At most one recheck sentence for the next inside-800 km pass that fails only the 24 hour TLE test. It is not a Possible card and it has no pin.
+- At most one recheck sentence for the next inside-500 km pass that fails only the 24 hour TLE test. It is not a Possible card and it has no pin.
 
 A sourced corridor, when one exists, is a second line on that same card. It carries its own time offset and the look toward the rocket. The pad look stays on the first line.
 
 ## Why the current list fails
 
-The published assessment can say `possible` only for `SITE_IN_VIEW_AT_NET`, which means the pad is inside the limb at the single NET time. On this feed that fired zero times. The two passes that come inside 800 km do it before T-0, and the 24 hour TLE rule then labels them with the same `unknown` as a launch that is on the other side of the Earth. `launchBrief` turns `unknown` into the word Unknown and still renders the card. The crew member sees launches, not a shot.
+The seven-day list is the spec. PR 124 says the publisher accepts `map_only` only, and that no real positive photo opportunity was validated yet. The autoplan says to show tentative candidates on the map for seven days, and to draw a corridor only with supported provenance. PR 134 then asks for a plain possible, too-far, or unknown answer, where a directly visible pad is a conditional green chance at the advertised NET, and the queue gates stay separate. `build_launch_artifact` does that. `generator/main.py` does not import it. The map reads `/launch/latest.json`. The Earth tick can still search for an 800 km pad pass, and the launchd plist sets `OPD_ENABLE_ASCENT` to `1`, but the Launch Library parser never sets an azimuth or a trajectory source, so `predict_ascent_pass` returns none on every current row.
 
-Cloud, lightning, and the Cupola finder do not enter this decision. `build_launch_artifact` does not call them. `find_cupola_windows` in `generator/cupola.py` ranks daylight keepsake windows. `generator/lightning.py` is the sprite watch. They are real products. They are not a launch go.
+Commit `b49eb11` set the seven-day cap after a 10-row page hid launches, and after an unbounded search reached 56 days, where one reboost can move the station about 1000 km. Do not lengthen that cap to go looking for more cards.
+
+The published assessment can say `possible` only for `SITE_IN_VIEW_AT_NET`, which means the pad is inside the limb at the single NET time. On this feed that fired zero times. The two passes that come inside 500 km do it before T-0, and the 24 hour TLE rule then labels them with the same `unknown` as a launch that is on the other side of the Earth. `_parse_one_result` adds `TIME_CONFLICT` whenever the window opens before the NET, so the only clean window is one that starts at the NET. `launchBrief` turns `unknown` into the word Unknown and still renders the card. The map view does not require a fresh artifact to do that. The crew member sees launches, not a shot.
+
+Cloud, lightning, and the Cupola finder do not enter this decision. `build_launch_artifact` does not call them. `find_cupola_windows` in `generator/cupola.py` ranks daylight keepsake windows. `generator/lightning.py` is the sprite watch on the overhead score, and the ascent card does not use it. They are real products. They are not a launch go. If a sourced azimuth is ever added, `ascent_score_multiplier` still clamps a zero product up to `MULTIPLIER_FLOOR` of 0.3, which publishes a score of 30. Remove that upward clamp before treating an ascent card as a shot.
 
 ## Open questions
 
-- The 120 seconds after T-0 is a bound chosen so the pass can include liftoff. It is not in the code today. If a vehicle is still a useful pad target later than that, the bound should move, with a profile sample as the reason.
+- The go cut is 500 km, where the existing nadir score hits zero. At 420 km altitude that look is about 49 degrees off nadir, which the window rule calls Cupola. The WORF side of the same rule, 30 degrees, is about 250 km. Use 250 km if a Cupola oblique is not a shot you will take. The 120 seconds after T-0 is a bound chosen so the pass can include liftoff. It is not in the code today. If a vehicle is still a useful pad target later than that, the bound should move, with a profile sample as the reason.
 - A daylight go should require the existing cloud sample. The first code change should not add that sample until the list is already empty of non-shots. If a night engine-light shot must ignore pad cloud, say so before writing the check. The repo's plume path treats umbra as no reflected-sun shot, which is a different test.
 - Six-day SGP4 error is large enough to create or erase a 146 km pass. The recheck line can false-alarm. If that line causes another trip to the window for nothing, delete the line and keep only the fresh-TLE go.
 - Physical window access is not modeled. The 30 degree split is a hint from `generator/orbit.py`, repeated in the help panel. It does not know which pane is blocked, and it does not apply the almanac's 85 mm Russian-window rule. The card should keep the hint and should not say the window is clear.

@@ -1,6 +1,8 @@
 # How to cut the launch list down to a shot
 
-Use this when you are changing the publisher or the map so a crew member sees a go, or an empty list. The decision you are implementing is in [When an ISS launch shot is real](2026-09-25-iss-launch-shot-strategy.md). Do these units in order. Finish the proof for one unit before you start the next. Do not add a map layer, a new score, or a second list.
+Use this when you are changing the launch artifact or the map selection so a crew member sees a go, or an empty list. The decision you are implementing is in [When an ISS launch shot is real](2026-09-25-iss-launch-shot-strategy.md). Do these units in order. Finish the proof for one unit before you start the next. Do not add a map layer, a new score, or a second list.
+
+`generator/main.py` does not import `build_planning_assessment`. The map cards come from `/launch/latest.json`. Changing `find_passes` does not change those cards. Do not invent an azimuth so the plist flag `OPD_ENABLE_ASCENT` can emit a card. The parser never sets one, and `predict_ascent_pass` returns none without it.
 
 The baseline to beat is the 25 September 2026 run in that page. Six published items, zero `possible`, two Upcoming cards, six map rows when Launches is on.
 
@@ -28,13 +30,13 @@ Prove it with `pytest tests/test_launch_data.py tests/test_launch_assessment.py`
 
 In `build_planning_assessment` in `generator/launch_assessment.py`, keep `possible` behind the 24 hour TLE gate. Replace the positive test. Today `possible` means the pad is inside `_horizon_km` at the NET instant, reason `SITE_IN_VIEW_AT_NET`.
 
-The new positive test samples the pad from 300 seconds before T-0 until 120 seconds after T-0. 300 seconds is `PASS_WINDOW_SECONDS`. 800 km is `PASS_MAX_DISTANCE_KM`. The 120 second tail is the planning bound named in the strategy page. Step 15 seconds, the same cadence as `INTERPOLATION_CADENCE_SECONDS` in `generator/ascent.py`.
+The new positive test samples the pad from 300 seconds before T-0 until 120 seconds after T-0. 300 seconds is `PASS_WINDOW_SECONDS`. 500 km is `NADIR_HORIZON_KM`. The 120 second tail is the planning bound named in the strategy page. Step 15 seconds, the same cadence as `INTERPOLATION_CADENCE_SECONDS` in `generator/ascent.py`.
 
-Set `possible` only when the closest ground range in that window is under 800 km, the line of sight at that instant clears the limb, and the TLE epoch is within 24 hours of that instant. Store the look from `look_direction_at` at that instant, and store the offset from T-0 on the net object. If the closest range is 800 km or more, do not use the limb at NET as a fallback go.
+Set `possible` only when the closest ground range in that window is under 500 km, the line of sight at that instant clears the limb, and the TLE epoch is within 24 hours of that instant. Store the look from `look_direction_at` at that instant, and store the offset from T-0 on the net object. If the closest range is 500 km or more, do not use the limb at NET, and do not use the 800 km `find_passes` cone, as a fallback go.
 
 Keep `NOMINAL_ASCENT_TOO_FAR` as the negative, on the early-ascent disk the function already builds. Do not run that negative past the 24 hour gate. A stale TLE can invent a miss. Outside the gate, leave the reason `EPHEMERIS_OUTSIDE_HORIZON`.
 
-You see a launch whose closest approach is 150 km at 120 seconds before T-0, with a fresh TLE, get `possible` and that offset. The same geometry with a TLE older than 24 hours stays `unknown`. A launch whose closest approach in the window is 900 km stays off `possible` even if the pad is inside the limb at NET.
+You see a launch whose closest approach is 150 km at 120 seconds before T-0, with a fresh TLE, get `possible` and that offset. The same geometry with a TLE older than 24 hours stays `unknown`. A launch whose closest approach in the window is 600 km stays off `possible` even if that pass is inside 800 km and the pad is inside the limb at NET.
 
 Prove it with `pytest tests/test_launch_assessment.py`. Use a fixed TLE and a fixed pad. Do not call the network from the test.
 
@@ -55,7 +57,7 @@ Prove it with `cd frontend && bun test test/launch-card.test.ts test/launch-map-
 
 ## Add one recheck sentence, then stop
 
-After the closest-approach test exists, `renderMapLaunchBrief` may show one sentence when no go is in the list and exactly one item failed only `EPHEMERIS_OUTSIDE_HORIZON` while a side computation, using the same 800 km window, would have passed. The sentence names the launch, the NET date, and that the orbit forecast is older than 24 hours. It is not a Possible card, and it does not add a pin.
+After the closest-approach test exists, `renderMapLaunchBrief` may show one sentence when no go is in the list and exactly one item failed only `EPHEMERIS_OUTSIDE_HORIZON` while a side computation, using the same 500 km window, would have passed. The sentence names the launch, the NET date, and that the orbit forecast is older than 24 hours. It is not a Possible card, and it does not add a pin.
 
 If you cannot compute that side result without a second propagation policy, skip this unit. An empty list is the right ship. The strategy page records the false-alarm risk.
 
@@ -72,4 +74,4 @@ cd frontend && bun run typecheck && bun test test/launch-selectors.test.ts test/
 pytest tests/test_launch_data.py tests/test_launch_assessment.py tests/test_launch_evidence.py
 ```
 
-A go card is verified only when a fixture with a fresh TLE and a sub-800 km closest approach renders Shoot, Window, and Direction, and the 25 September feed still renders no Possible card.
+A go card is verified only when a fixture with a fresh TLE and a closest approach under 500 km renders Shoot, Window, and Direction, and the 25 September feed still renders no Possible card.
