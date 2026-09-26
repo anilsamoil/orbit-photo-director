@@ -20,7 +20,24 @@ function mount(viewClass: string): void {
       </section>
     </main>
     <footer id="status-banner" class="banner banner-loading">Loading</footer>
+    <button class="help-fab" type="button">?</button>
   `;
+  document.querySelector('#map-pane')!.insertAdjacentHTML('beforeend', `
+    <div id="map">
+      <div class="maplibregl-ctrl-bottom-right">
+        <div class="maplibregl-ctrl-attrib">coastlines</div>
+      </div>
+    </div>
+    <div class="map-legend">legend</div>
+    <div class="map-imagery-date">imagery</div>
+  `);
+}
+
+function px(selector: string, prop: string): number {
+  const value = getComputedStyle(document.querySelector(selector)!).getPropertyValue(prop);
+  const n = Number.parseFloat(value);
+  if (!Number.isFinite(n)) throw new Error(`${selector} ${prop} is ${value}`);
+  return n;
 }
 
 function ruleStyle(selector: string): CSSStyleDeclaration {
@@ -44,6 +61,14 @@ describe('map chrome layout', () => {
     expect(toolbar.position).toBe('absolute');
     expect(toolbar.backgroundColor).toBe('rgba(11, 13, 18, 0.7)');
     expect(ruleStyle('body:has(> #view.view-map) .brand-expansion').display).toBe('none');
+  });
+
+  it('keeps the legend, imagery date, and help button above the attribution', () => {
+    mount('view-map');
+    const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
+    expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
+    expect(px('.map-imagery-date', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
+    expect(px('.help-fab', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
   });
 
   it('leaves the queue top bar and banner in normal flow', () => {
