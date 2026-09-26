@@ -108,6 +108,12 @@ describe('plain launch shooting brief', () => {
 });
 
 describe('additive launch planning schema', () => {
+  it('accepts a launch window that opens before the NET', () => {
+    const item = planned();
+    item.launch_window.start = iso(5);
+    expect(parseLaunchArtifact(artifact([item])).items[0]?.assessment?.net.verdict).toBe('possible');
+  });
+
   it('accepts both older artifacts and the new complete planning assessment', () => {
     expect(parseLaunchArtifact(artifact()).items[0]?.assessment).toBeUndefined();
     expect(parseLaunchArtifact(artifact([planned()])).items[0]?.assessment?.net.verdict).toBe('possible');

@@ -235,7 +235,6 @@ export function parseLaunchArtifact(value: unknown): LaunchArtifact {
             'SOURCE_AGE_MTIME_ONLY', 'SOURCE_AGE_UNKNOWN', 'REPLAY_SOURCE_MISMATCH',
           ].includes(reason)));
         ordered(window.start, net.at);
-        ordered(net.at, window.start);
         ordered(net.at, window.end);
       }
       const model = assessment.model as LaunchAssessment['model'];

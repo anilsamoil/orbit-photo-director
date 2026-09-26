@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from generator.launch_assessment import build_planning_assessment
-from generator.launch_data import Launch
+from generator.launch_data import Launch, parse_response
 from generator.launch_evidence import EvaluationBudget, build_launch_artifact, canonical_bytes, utc
 from generator.launch_publish import _validate_artifact
 from generator.orbit import EARTH_RADIUS_KM, Position, propagate
@@ -255,6 +255,32 @@ def public_artifact(planning):
 def rehash(artifact):
     artifact["revision"] = hashlib.sha256(canonical_bytes(
         {k: v for k, v in artifact.items() if k != "revision"})).hexdigest()[:24]
+
+
+def test_early_window_reaches_the_ascent_screen(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(hours=2)
+    observer = propagate(sample_tle, net)
+    lon = observer.lon + 180
+    if lon > 180:
+        lon -= 360
+    row = {
+        "id": "ussf-385", "name": "Falcon 9 | USSF-385", "net": utc(net),
+        "window_start": utc(net - timedelta(hours=2, minutes=4, seconds=54)),
+        "window_end": utc(net + timedelta(minutes=55, seconds=6)),
+        "net_precision": {"name": "Second"}, "status": {"abbrev": "Go"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {"latitude": -observer.lat, "longitude": lon, "location": {"name": "Vandenberg"}},
+    }
+    parsed = parse_response({"results": [row]}, now=now)[0]
+    assert parsed.timing_reasons == ()
+    artifact = build_launch_artifact(
+        {"count": 1, "next": None, "results": [row]}, sample_tle, now, fetched_at=now,
+    )
+    item = artifact["items"][0]
+    assert item["assessment"]["net"]["reason"] == "NOMINAL_ASCENT_TOO_FAR"
+    assert "TIME_CONFLICT" not in item["reason_codes"]
+    _validate_artifact(artifact)
 
 
 def test_new_planning_and_legacy_artifacts_keep_map_only_admission(public_artifact):

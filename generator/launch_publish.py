@@ -118,7 +118,7 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
                 or uncertain_reasons.intersection(item["reason_codes"])
                 or uncertain_reasons.intersection(artifact["coverage"]["reasons"])
                 or start is None or end is None
-                or _parse_iso8601_z(start) != net_time or _parse_iso8601_z(end) < net_time
+                or _parse_iso8601_z(start) > net_time or _parse_iso8601_z(end) < net_time
                 or abs((checked - epoch).total_seconds()) > EPHEMERIS_HORIZON_SECONDS
                 or abs((net_time - epoch).total_seconds()) > EPHEMERIS_HORIZON_SECONDS
                 or not 0 <= (checked - _parse_iso8601_z(fetched)).total_seconds()
