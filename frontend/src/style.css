@@ -965,6 +965,63 @@ body.shotlist-bar-visible main {
 .banner-red { background: rgba(255, 100, 100, 0.15); color: var(--red); font-weight: 600; }
 .banner-loading { background: var(--surface); color: var(--text-dim); }
 
+/* Map tab: the bars leave the document flow so the canvas is the viewport.
+ * The scrim stays dark enough that light type holds on a bright basemap. */
+body:has(> #view.view-map) > .topbar,
+body:has(> #view.view-map) > .banner,
+.view-map .map-toolbar,
+.view-map .map-control-dock > .map-controls,
+.view-map .map-legend,
+.view-map #map-launch-coverage,
+.view-map .satellite-picker-panel,
+.view-map .map-imagery-date,
+body:has(> #view.view-map) .help-fab {
+  background: rgba(11, 13, 18, 0.7);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+body:has(> #view.view-map) > .topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 4px 8px;
+}
+body:has(> #view.view-map) .brand,
+body:has(> #view.view-map) .tabs { flex: 0 0 auto; }
+body:has(> #view.view-map) .brand-expansion { display: none; }
+body:has(> #view.view-map) .iss-now {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #f4f7fb;
+}
+body:has(> #view.view-map) .tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.55rem;
+  color: #f4f7fb;
+}
+body:has(> #view.view-map) .tab.active { color: var(--bg); }
+body:has(> #view.view-map) > .banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 0.2rem 3.4rem;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
+body:has(> #view.view-map) .help-fab { bottom: 36px; }
+
 .pending-badge {
   display: inline-block;
   margin-left: 0.4rem;
@@ -1022,9 +1079,7 @@ body.shotlist-bar-visible main {
   touch-action: pan-y;
 }
 
-/* The map fills the pane; these controls stack over it without reducing its
- * canvas. Keeping the overlay stack in flow lets the dock wrap without fixed
- * offsets or collisions with the launch/satellite popups beneath it. */
+/* The map fills the pane. Controls float on it. */
 .view-map #map-pane {
   position: relative;
   height: 100%;
@@ -1032,8 +1087,8 @@ body.shotlist-bar-visible main {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  padding: 8px;
+  gap: 0;
+  padding: 0;
   overflow: hidden;
   isolation: isolate;
 }
@@ -1046,18 +1101,22 @@ body.shotlist-bar-visible main {
   z-index: 0;
 }
 .view-map .map-toolbar {
-  position: relative;
+  position: absolute;
+  top: 64px;
+  left: 8px;
   z-index: 10;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  width: min(100%, 35rem);
-  padding: 4px;
-  border: 1px solid var(--border);
+  width: max-content;
+  max-width: calc(100% - 64px);
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
-  background: rgba(20, 24, 33, 0.94);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  color: #f4f7fb;
 }
 .view-map .map-toolbar > .map-controls,
 .view-map .map-control-dock > .map-controls {
@@ -1068,64 +1127,92 @@ body.shotlist-bar-visible main {
   min-width: 0;
 }
 .view-map .map-toolbar > .map-controls-filter {
-  grid-area: 1 / 1 / 2 / 3;
   align-self: center;
-  justify-self: start;
   gap: 1px;
   padding: 0;
   border: 0;
   background: transparent;
 }
+.view-map .map-toolbar .filter-btn,
+.view-map .map-toolbar .time-step-btn,
+.view-map .map-control-dock .time-btn {
+  min-width: 44px;
+  min-height: 44px;
+  color: #f4f7fb;
+}
+.view-map .map-toolbar .filter-btn.active,
+.view-map .map-toolbar .time-btn.active,
+.view-map .map-control-dock .time-btn.active {
+  color: var(--bg);
+}
 .view-map .map-toolbar .filter-btn {
-  min-height: 36px;
-  padding: 0.25rem 0.35rem;
+  padding: 0.25rem 0.45rem;
   font-size: 0.73rem;
 }
 @media (max-width: 360px) {
   .view-map .map-toolbar .filter-btn { padding-inline: 0.15rem; }
 }
-.view-map .map-toolbar > .map-controls-time { display: contents; }
-.view-map .map-toolbar .time-step-btn {
-  grid-row: 2;
+.view-map .map-toolbar > .map-controls-time {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
   min-width: 0;
-  min-height: 36px;
-  padding: 0.2rem;
+}
+.view-map .map-toolbar .time-step-btn {
+  min-width: 44px;
+  padding: 0.15rem 0.25rem;
 }
 .view-map .map-toolbar .time-slider-row {
-  grid-area: 1 / 3 / 2 / 6;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: minmax(24px, auto) minmax(16px, auto);
-  gap: 0 4px;
-  min-width: 0;
+  display: flex;
+  flex: 1 1 9rem;
+  flex-basis: auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 8rem;
   padding: 0;
 }
+.view-map .map-toolbar .time-slider {
+  margin: 0;
+  height: 44px;
+}
+.view-map .map-toolbar .time-slider-readout,
+.view-map .map-toolbar .time-slider-end,
+.view-map .map-toolbar .time-step-utc {
+  color: #f4f7fb;
+}
 .view-map .map-toolbar .time-slider-readout {
-  grid-area: 2 / 1 / 3 / 4;
   min-width: 0;
-  font-size: 0.65rem;
+  font-size: 0.68rem;
 }
 .view-map .map-control-dock {
-  position: relative;
+  position: absolute;
+  top: 64px;
+  right: 8px;
   z-index: 10;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
   gap: 4px;
   flex: 0 0 auto;
-  max-width: 100%;
+  width: max-content;
+  max-width: 56px;
+  max-height: calc(100% - 104px);
+  overflow-y: auto;
 }
 .view-map .map-control-dock > .map-controls {
-  flex-wrap: wrap;
+  flex-direction: column;
+  flex-wrap: nowrap;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--border);
-  background: rgba(20, 24, 33, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 .view-map .map-control-dock .time-btn {
-  min-width: 30px;
-  min-height: 36px;
-  padding: 0.2rem 0.3rem;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.2rem;
 }
 .view-map .map-control-dock .map-controls-bearing .time-btn {
   font-size: 0.75rem;
@@ -1140,47 +1227,53 @@ body.shotlist-bar-visible main {
   outline-offset: 2px;
 }
 .view-map #map-launch-coverage {
-  position: relative;
+  position: absolute;
+  top: 130px;
+  left: 8px;
   z-index: 11;
   flex: 0 1 auto;
-  width: min(100%, 35rem);
+  width: min(100% - 72px, 32rem);
   min-height: 0;
-  max-height: min(55%, 28rem);
+  max-height: min(50%, 22rem);
   overflow-y: auto;
   overscroll-behavior: contain;
   touch-action: pan-y;
   padding: 0.5rem;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
-  background: rgba(20, 24, 33, 0.96);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  color: #f4f7fb;
 }
 .view-map #map-launch-coverage[hidden] { display: none; }
 .view-map .satellite-picker-panel {
-  position: relative;
+  position: absolute;
   z-index: 12;
-  top: auto;
-  right: auto;
+  top: 130px;
+  right: 64px;
   flex: 0 1 auto;
-  width: min(100%, 20rem);
+  width: min(100% - 80px, 18rem);
   min-width: 0;
   min-height: 0;
-  max-width: 100%;
-  max-height: min(55%, 25rem);
+  max-width: calc(100% - 80px);
+  max-height: min(50%, 22rem);
   margin: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  color: #f4f7fb;
 }
 /* Reserve the upper corner for the toolbar and keep expanded attribution
  * readable in its own lower strip, separate from zoom, legend and imagery. */
 .view-map #map .maplibregl-ctrl-top-left {
-  top: auto;
-  left: auto;
-  right: 0;
-  bottom: 6.25rem;
+  top: 130px;
+  left: 8px;
+  right: auto;
+  bottom: auto;
 }
 .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl { margin: 0 8px 0 0; }
-.view-map #map .maplibregl-ctrl-bottom-right { max-width: calc(100% - 16px); }
+.view-map #map .maplibregl-ctrl-bottom-right {
+  bottom: 32px;
+  max-width: calc(100% - 16px);
+}
 .view-map #map .maplibregl-ctrl-attrib {
   max-width: 100%;
   max-height: 5.5rem;
@@ -1189,17 +1282,19 @@ body.shotlist-bar-visible main {
 .view-map .map-legend {
   position: absolute;
   left: 8px;
-  bottom: 6.25rem;
+  bottom: 36px;
   max-width: calc(100% - 60px);
   margin: 0;
   gap: 0.45rem;
   font-size: 0.65rem;
+  color: #f4f7fb;
 }
 .view-map .map-imagery-date {
   left: 8px;
   right: auto;
-  bottom: 8.25rem;
+  bottom: 64px;
   max-width: calc(100% - 60px);
+  color: #f4f7fb;
 }
 .map-launch-brief { padding: 0; }
 .map-launch-primary > .launch-brief {
