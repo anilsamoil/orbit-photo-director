@@ -158,7 +158,9 @@ export function selectLaunches(state: LaunchState, now: number, view: 'queue' | 
     if (expired && (view !== 'upcoming' || now - Date.parse(end) >= 30 * 60_000)) continue;
     result.push({ item, interval, expired });
   }
-  return result.sort(compare);
+  const selected = result.sort(compare);
+  if (view === 'queue') return selected;
+  return selected.filter((selection) => launchBrief(selection, state, now).verdict === 'chance');
 }
 
 export function isLaunchPass(pass: Pick<PassEntry, 'target_id' | 'launch'>): boolean {

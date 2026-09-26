@@ -6,7 +6,15 @@ import {
 import type { MapCore, PopupOwner } from '../src/map/map-core/core';
 import { getMapLaunchMode, setMapLaunchMode } from '../src/map-launch-mode';
 import { launchStore } from '../src/launch-store';
-import { launch, NOW, state } from './launch-fixtures';
+import { assessment, iso, launch, NOW, state } from './launch-fixtures';
+
+function possible(event_id = 'event-1') {
+  return launch({
+    event_id,
+    launch_window: { net: iso(10), start: iso(10), end: iso(11), precision: 'Minute' },
+    assessment: assessment(),
+  });
+}
 
 const launchLayers = ['ascent-pad-layer', 'ascent-trajectory-layer'];
 const targetLayers = ['targets-layer', 'my-targets-layer', 'my-targets-casing'];
@@ -46,7 +54,7 @@ beforeEach(() => {
   _resetMapStateForTest();
   _setFollowEnvForTest(null, false);
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
-  vi.spyOn(launchStore, 'getState').mockReturnValue(state());
+  vi.spyOn(launchStore, 'getState').mockReturnValue(state([possible()]));
 });
 afterEach(() => {
   _resetMapStateForTest();
@@ -107,7 +115,7 @@ describe('map Launches mode layers', () => {
   it('swaps launch and ordinary target pins, rebuilding current sources without changing orbit/clouds', () => {
     const value = install();
     expectMode(value, false);
-    vi.mocked(launchStore.getState).mockReturnValue(state([launch({ event_id: 'current-revision' })]));
+    vi.mocked(launchStore.getState).mockReturnValue(state([possible('current-revision')]));
     setMapLaunchMode(true);
     expectMode(value, true);
     const padData = value.sources.get('ascent-pad')!.setData.mock.calls.at(-1)![0];
