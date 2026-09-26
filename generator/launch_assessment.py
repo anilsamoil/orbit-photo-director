@@ -32,8 +32,7 @@ MAX_WINDOW_SECONDS = 6 * 3600
 # a conservative screen of the stated generic model, not a real-flight bound.
 MAX_OBSERVER_SPEED_KM_S = 12.0
 SCREEN_MARGIN_KM = 250.0
-# Tail after T-0 so a liftoff during the pass still counts. Not a burn time.
-PAD_TAIL_SECONDS = 120
+CLOSEST_AFTER_NET_SECONDS = 120
 ASSESSMENT_REASONS = frozenset({
     "PAD_CLOSEST_APPROACH", "SITE_IN_VIEW_AT_NET", "NOMINAL_ASCENT_TOO_FAR", "VIEW_UNCONFIRMED",
     "TIMING_UNCONFIRMED", "EPHEMERIS_UNAVAILABLE", "EPHEMERIS_OUTSIDE_HORIZON",
@@ -157,7 +156,7 @@ def build_planning_assessment(
         closest_when = None
         closest_position = None
         start = launch.t0 - timedelta(seconds=PASS_WINDOW_SECONDS)
-        span = PASS_WINDOW_SECONDS + PAD_TAIL_SECONDS
+        span = PASS_WINDOW_SECONDS + CLOSEST_AFTER_NET_SECONDS
         for offset in range(0, span + 1, INTERPOLATION_CADENCE_SECONDS):
             when = start + timedelta(seconds=offset)
             position = position_at(when)
