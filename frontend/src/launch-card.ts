@@ -87,7 +87,11 @@ export function renderLaunchFacts(item: LaunchOpportunity, state: LaunchState, n
     row(body, 'Planning valid until', utc(item.assessment.valid_until));
     row(body, 'At planned liftoff', `${item.assessment.net.verdict}: ${item.assessment.net.reason}`);
     row(body, 'Across launch window', `${item.assessment.window.verdict}: ${item.assessment.window.reason}`);
-    if (item.assessment.net.pad_distance_km !== null) row(body, 'ISS to launch site at NET', `${Math.round(item.assessment.net.pad_distance_km)} km`);
+    if (item.assessment.net.pad_distance_km !== null) {
+      const offset = item.assessment.net.t_offset_seconds;
+      const fromNet = typeof offset === 'number' && offset !== 0 ? ` at ${offset > 0 ? '+' : ''}${offset} s from NET` : ' at NET';
+      row(body, 'ISS to launch site', `${Math.round(item.assessment.net.pad_distance_km)} km${fromNet}`);
+    }
     if (item.assessment.model) {
       row(body, 'Nominal ascent model', item.assessment.model.name);
       row(body, 'Model duration', `${item.assessment.model.duration_seconds} seconds`);
@@ -161,6 +165,17 @@ function listedLaunchWindow(item: LaunchOpportunity): string {
   return 'Not established';
 }
 
+function closestShoot(selection: LaunchSelection): string | null {
+  const net = selection.item.assessment?.net;
+  if (net?.verdict !== 'possible' || typeof net.t_offset_seconds !== 'number') return null;
+  const whenMs = Date.parse(net.at) + net.t_offset_seconds * 1000;
+  if (!Number.isFinite(whenMs)) return null;
+  const offset = net.t_offset_seconds;
+  const relation = offset < 0 ? `${-offset} s before liftoff` : offset > 0 ? `${offset} s after liftoff` : 'at liftoff';
+  const early = offset < 0 ? '. Overhead is before liftoff' : '';
+  return `${friendlyUtc(new Date(whenMs).toISOString(), true)} (${relation})${early}`;
+}
+
 /** The five lines an operator needs. Orbital rejection is one phrase. */
 export function operatorLaunchLines(selection: LaunchSelection, state: LaunchState, now: number): {
   shoot: string; window: string; direction: string; launchWindow: string; chance: string;
@@ -178,7 +193,7 @@ export function operatorLaunchLines(selection: LaunchSelection, state: LaunchSta
     : brief.verdict === 'passed' ? 'Passed'
     : 'Unknown';
   return {
-    shoot: impossible ? 'Not possible' : capture ?? (brief.verdict === 'chance' ? summaryNet(selection.item) : 'Not established'),
+    shoot: impossible ? 'Not possible' : capture ?? closestShoot(selection) ?? (brief.verdict === 'chance' ? summaryNet(selection.item) : 'Not established'),
     window: impossible ? 'Not possible' : photoWindow(look?.off_nadir_deg),
     direction: impossible ? 'Not possible' : brief.direction ?? 'Not established',
     launchWindow: listedLaunchWindow(selection.item),

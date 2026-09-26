@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderCard, formatLaunchWindow } from '../src/card';
 import { openLaunchDetails, renderLaunchCard, renderLaunchFacts } from '../src/launch-card';
+import { selectLaunches } from '../src/launch-selectors';
 import { launchStore } from '../src/launch-store';
 import type { PassEntry } from '../src/types';
 import { assessment, interval, iso, launch, NOW, state, supported } from './launch-fixtures';
@@ -39,6 +40,34 @@ describe('launch-specific cards', () => {
     expect(summaryRow(card, 'Shoot')).toBe('7 Sep 2026, 12:10:00–12:15:00 UTC');
     expect(summaryRow(card, 'Window')).toBe('Cupola');
     expect(summaryRow(card, 'Chance')).toBe('Possible');
+  });
+  it('points the five lines at a 150 km pass before liftoff and leaves a 600 km pass off the list', () => {
+    const close = launch({
+      event_id: 'close',
+      launch_window: { net: iso(10), start: iso(8), end: iso(12), precision: 'Second' },
+      assessment: assessment({ net: {
+        ...assessment().net, pad_distance_km: 150, t_offset_seconds: -120,
+        look: { frame: 'orbital-lvlh', azimuth_deg: 80, off_nadir_deg: 19 },
+      } }),
+    });
+    const far = launch({
+      event_id: 'far',
+      launch_window: { net: iso(30), start: iso(30), end: iso(31), precision: 'Minute' },
+      assessment: assessment({ net: {
+        ...assessment().net, at: iso(30), verdict: 'unknown', reason: 'VIEW_UNCONFIRMED',
+        pad_distance_km: 600, t_offset_seconds: null, look: null,
+      } }),
+    });
+    const card = renderLaunchCard({ item: close, interval: null, expired: false }, state([close, far]), NOW);
+    expect(summaryRow(card, 'Shoot')).toBe('7 Sep 2026, 12:08:00 UTC (120 s before liftoff). Overhead is before liftoff');
+    expect(summaryRow(card, 'Window')).toBe('WORF');
+    expect(summaryRow(card, 'Direction')).toBe('right of ISS travel; 19.0° from straight down');
+    expect(summaryRow(card, 'Launch window')).toContain('12:08:00');
+    expect(summaryRow(card, 'Chance')).toBe('Possible');
+    expect(card.querySelectorAll('.launch-summary .launch-fact')).toHaveLength(5);
+    expect(card.textContent).not.toMatch(/1\/640|ISO 200|shutter/i);
+    expect(selectLaunches(state([close, far]), NOW, 'map').map((row) => row.item.event_id)).toEqual(['close']);
+    expect(selectLaunches(state([far]), NOW, 'map')).toEqual([]);
   });
   it.each([
     ['Minute', '7 Sep 2026, 12:10–13:37 UTC'],
