@@ -68,7 +68,7 @@ describe('map chrome layout', () => {
     const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
     expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
     expect(px('.map-imagery-date', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
-    expect(px('.help-fab', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
+    expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(creditsTop);
   });
 
   it('leaves the queue top bar and banner in normal flow', () => {
