@@ -1,21 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import { buildAscentFeatures, buildLaunchMapFeatures } from '../src/map';
 import type { PassEntry } from '../src/types';
-import { launch, NOW, state, supported } from './launch-fixtures';
+import { assessment, iso, launch, NOW, state, supported } from './launch-fixtures';
+
+function possiblePad(over: Parameters<typeof launch>[0] = {}) {
+  return launch({
+    launch_window: { net: iso(10), start: iso(10), end: iso(11), precision: 'Minute' },
+    assessment: assessment(),
+    ...over,
+  });
+}
 
 describe('launch map layers', () => {
   it('keeps unknown-trajectory sites with no fabricated corridor', () => {
-    const data = buildLaunchMapFeatures(state(), NOW);
+    const data = buildLaunchMapFeatures(state([possiblePad()]), NOW);
     expect(data.pads).toHaveLength(1);
     expect(data.pads[0]?.properties).toMatchObject({ event_id: 'event-1', revision: 'event-r1', label: 'LAUNCH / MAP ONLY' });
     expect(data.pads[0]?.geometry).toEqual({ type: 'Point', coordinates: [-80.6, 28.5] });
     expect(data.lines).toEqual([]);
   });
   it('does not trust stray points when quality is unknown or source absent', () => {
-    const item = launch({ trajectory: { ...supported().trajectory, quality: 'unknown' } });
-    expect(buildLaunchMapFeatures(state([item]), NOW).lines).toEqual([]);
+    const item = possiblePad({ trajectory: { ...supported().trajectory, quality: 'unknown' } });
+    const unknown = buildLaunchMapFeatures(state([item]), NOW);
+    expect(unknown.pads).toHaveLength(1);
+    expect(unknown.lines).toEqual([]);
     item.trajectory.quality = 'approximate'; item.trajectory.source = null;
-    expect(buildLaunchMapFeatures(state([item]), NOW).lines).toEqual([]);
+    const unsourced = buildLaunchMapFeatures(state([item]), NOW);
+    expect(unsourced.pads).toHaveLength(1);
+    expect(unsourced.lines).toEqual([]);
   });
   it('draws a sourced trajectory, splitting the antimeridian and preserving identity', () => {
     const item = supported({ trajectory: { quality: 'verified', source: 'Mission source', points: [
