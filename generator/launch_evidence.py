@@ -103,10 +103,13 @@ def evaluate_liftoff_window(
     start, end = launch.window_start, launch.window_end
     if start is None or end is None:
         reasons.append("WINDOW_UNKNOWN")
-    elif end < start or launch.t0 < start or launch.t0 > end or (end - start).total_seconds() > MAX_LIFTOFF_SECONDS:
-        reasons.append(
-            "TIME_CONFLICT" if end < start or launch.t0 < start or launch.t0 > end else "WINDOW_TOO_WIDE"
-        )
+    else:
+        net_outside = launch.t0 < start or launch.t0 > end
+        too_wide = (end - start).total_seconds() > MAX_LIFTOFF_SECONDS
+        if end < start or net_outside:
+            reasons.append("TIME_CONFLICT")
+        elif too_wide:
+            reasons.append("WINDOW_TOO_WIDE")
     if reasons:
         return {
             "intervals": [],
