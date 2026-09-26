@@ -98,6 +98,18 @@ describe('map launch brief', () => {
     expect(box.querySelector('article')).toBeNull();
     expect(box.querySelector('p')?.textContent).toBe('No upcoming launch is listed in the available schedule.');
     expect(box.textContent).not.toContain('older than 24 hours');
+    const stale = launch({
+      event_id: 'stale-pass',
+      launch_window: { net: iso(40), start: iso(40), end: iso(41), precision: 'Minute' },
+      assessment: assessment({ net: {
+        ...assessment().net, at: iso(40), verdict: 'unknown', reason: 'EPHEMERIS_OUTSIDE_HORIZON',
+        look: null, t_offset_seconds: null,
+      } }),
+    });
+    renderMapLaunchBrief(box, state([stale]), NOW, vi.fn());
+    expect(box.querySelector('article')).toBeNull();
+    expect(box.textContent).not.toContain('older than 24 hours');
+    expect(box.textContent).not.toContain('stale-pass');
   });
   it('describes an unavailable schedule without claiming no launches exist', () => {
     const box = document.createElement('div');
