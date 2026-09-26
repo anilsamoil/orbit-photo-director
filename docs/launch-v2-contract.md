@@ -40,6 +40,7 @@ type LaunchOpportunity = {
     net: {
       verdict: 'possible' | 'too_far' | 'unknown'; reason: string; at: string;
       pad_distance_km: number | null;
+      t_offset_seconds: number | null;
       look: {frame: 'orbital-lvlh'; azimuth_deg: number; off_nadir_deg: number} | null;
     };
     window: {verdict: 'too_far' | 'unknown'; reason: string};
@@ -49,7 +50,7 @@ type LaunchOpportunity = {
 
 UI ownership: one shared store and one pointer refresh cycle for all views, atomic replacement only after hash/schema/revision validation. Preserve last-good on fetch failure, but always label freshness against real clock. Persist only this common artifact for offline use. Launch cards bypass personal ground-target/distance filters; no duplicate legacy launch cards when v2 is available. Legacy launch renderer must suppress probability/score, false exact time and physical-window labels even in fallback.
 
-Queue90min: only valid, future geometry_supported capture intervals; maximum2launch cards in5slots, ground gets at least3when available. Stable start/event_id ordering. Upcoming36h and Map: include tentative candidates within actual coverage, use net when capture interval unknown. Keep unknown trajectory site marker but no fabricated corridor. Upcoming may retain clearly expired launch for30min. Full-contrast stale/unknown labels. No percent or star rating for launches. Gold hue plus text LAUNCH/ASCENT and explicit MAP ONLY status. Clicking marker/card opens the same facts/revision in all views; no real window-access promise. Direction is orbital-relative, not station body orientation.
+Queue90min: only valid, future geometry_supported capture intervals; maximum2launch cards in5slots, ground gets at least3when available. Stable start/event_id ordering. Upcoming36h and Map: include a launch only when the brief verdict is chance. Pins follow that selection. Keep unknown trajectory site marker but no fabricated corridor. Upcoming may retain clearly expired launch for30min. Full-contrast stale/unknown labels. No percent or star rating for launches. Gold hue plus text LAUNCH/ASCENT and explicit MAP ONLY status. Clicking marker/card opens the same facts/revision in all views; no real window-access promise. Direction is orbital-relative, not station body orientation.
 
 Coverage complete=false or bounded until must not look like a confident empty feed. A missing launch pointer cannot break the existing Earth map/queue. Existing calendar/export remains unchanged, do not export map-only timing as a guaranteed capture instruction.
 
@@ -67,10 +68,14 @@ of evaluation and the assessed event horizon. The existing 15-minute camera
 lease and `geometry_supported` Queue gates are unchanged. Timers withdraw stale
 planning results without requiring a new network response.
 
-Green at NET requires direct line of sight from ISS to the launch site. The
-orbital LVLH angle describes that site at NET, not a physical spacecraft window
-or rocket tracking instruction. Clouds, optical detectability and window access
-can still prevent a shot. The display never converts a nominal ascent-disk
+Green requires a Go or Confirmed launch, minute or second precision, a TLE
+within 24 hours, and a closest ground range under 500 km with a clear line of
+sight from 300 seconds before NET until 120 seconds after it. `t_offset_seconds`
+is that instant minus NET. The orbital LVLH angle describes the pad at that
+instant, not a physical spacecraft window or rocket tracking instruction. A pad
+that is only inside the limb at NET is not a shot. `SITE_IN_VIEW_AT_NET` remains
+accepted so an artifact from the previous publisher still parses. Clouds, optical
+detectability and window access can still prevent a shot. The display never converts a nominal ascent-disk
 intersection into a positive result.
 
 A negative uses each rocket family's generic first-insertion model: all bearings
