@@ -13,6 +13,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from .config import NADIR_HORIZON_KM
 from .launch_assessment import (
     ASSESSMENT_REASONS,
     EPHEMERIS_HORIZON_SECONDS,
@@ -77,7 +78,7 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
                 and math.isfinite(raw) and lower <= raw <= upper)
 
     keys(value, "checked_at valid_until tle_epoch model net window")
-    keys(value["net"], "verdict reason at pad_distance_km look")
+    keys(value["net"], "verdict reason at pad_distance_km t_offset_seconds look")
     keys(value["window"], "verdict reason")
     checked = _parse_iso8601_z(value["checked_at"])
     expires = _parse_iso8601_z(value["valid_until"])
@@ -118,7 +119,7 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
                 or uncertain_reasons.intersection(item["reason_codes"])
                 or uncertain_reasons.intersection(artifact["coverage"]["reasons"])
                 or start is None or end is None
-                or _parse_iso8601_z(start) != net_time or _parse_iso8601_z(end) < net_time
+                or _parse_iso8601_z(start) > net_time or _parse_iso8601_z(end) < net_time
                 or abs((checked - epoch).total_seconds()) > EPHEMERIS_HORIZON_SECONDS
                 or abs((net_time - epoch).total_seconds()) > EPHEMERIS_HORIZON_SECONDS
                 or not 0 <= (checked - _parse_iso8601_z(fetched)).total_seconds()
@@ -126,9 +127,19 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
                 or (expires - _parse_iso8601_z(fetched)).total_seconds() > PLANNING_VALID_SECONDS):
             raise ValueError("INVALID_LAUNCH_ASSESSMENT")
     look = net["look"]
+    offset = net["t_offset_seconds"]
+    if offset is not None and (
+        isinstance(offset, bool) or not isinstance(offset, int) or not -300 <= offset <= 120
+    ):
+        raise ValueError("INVALID_LAUNCH_ASSESSMENT")
     if net["verdict"] == "possible":
-        if (net["reason"] != "SITE_IN_VIEW_AT_NET" or net["pad_distance_km"] is None
-                or look is None):
+        legacy = net["reason"] == "SITE_IN_VIEW_AT_NET"
+        closest = (
+            net["reason"] == "PAD_CLOSEST_APPROACH" and isinstance(offset, int)
+            and not isinstance(offset, bool) and net["pad_distance_km"] is not None
+            and net["pad_distance_km"] < NADIR_HORIZON_KM
+        )
+        if not (legacy or closest) or net["pad_distance_km"] is None or look is None:
             raise ValueError("INVALID_LAUNCH_ASSESSMENT")
         keys(look, "frame azimuth_deg off_nadir_deg")
         if (look["frame"] != "orbital-lvlh" or not number(look["azimuth_deg"], 0, 360)

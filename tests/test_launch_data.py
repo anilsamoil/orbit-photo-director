@@ -103,6 +103,48 @@ def test_parse_response_skips_malformed_row_silently() -> None:
     assert launches[0].id == "ok-1"
 
 
+def _go_row(**over: object) -> dict:
+    row = {
+        "id": "ussf-385",
+        "name": "Falcon 9 | USSF-385",
+        "net": "2026-09-26T14:00:54Z",
+        "window_start": "2026-09-26T11:56:00Z",
+        "window_end": "2026-09-26T14:56:00Z",
+        "net_precision": {"name": "Second"},
+        "status": {"abbrev": "Go"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {"latitude": "34.632", "longitude": "-120.611", "location": {"name": "Vandenberg"}},
+    }
+    row.update(over)
+    return row
+
+
+def test_window_opening_before_net_is_not_a_time_conflict() -> None:
+    launch = parse_response(
+        {"results": [_go_row()]}, now=datetime(2026, 9, 26, 12, tzinfo=UTC),
+    )[0]
+    assert launch.timing_reasons == ()
+    assert launch.t0 == datetime(2026, 9, 26, 14, 0, 54, tzinfo=UTC)
+
+
+def test_net_outside_the_window_is_a_time_conflict() -> None:
+    after = parse_response(
+        {"results": [_go_row(window_end="2026-09-26T13:00:00Z")]},
+        now=datetime(2026, 9, 26, 12, tzinfo=UTC),
+    )[0]
+    before = parse_response(
+        {"results": [_go_row(window_start="2026-09-26T15:00:00Z", window_end="2026-09-26T16:00:00Z")]},
+        now=datetime(2026, 9, 26, 12, tzinfo=UTC),
+    )[0]
+    inverted = parse_response(
+        {"results": [_go_row(window_start="2026-09-26T16:00:00Z", window_end="2026-09-26T11:56:00Z")]},
+        now=datetime(2026, 9, 26, 12, tzinfo=UTC),
+    )[0]
+    assert after.timing_reasons == ("TIME_CONFLICT",)
+    assert before.timing_reasons == ("TIME_CONFLICT",)
+    assert inverted.timing_reasons == ("TIME_CONFLICT",)
+
+
 def test_parse_response_empty_results() -> None:
     assert parse_response({"results": []}) == []
     assert parse_response({}) == []

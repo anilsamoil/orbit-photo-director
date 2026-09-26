@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LaunchStore, LAUNCH_STORAGE_KEY, LAUNCH_OBSERVED_POINTER_KEY } from '../src/launch-store';
 import { parseLaunchArtifact, parseLaunchPointer } from '../src/launch-schema';
-import { launchBrief, launchCameraEvidenceFresh, launchCoverageLabel, launchFresh, launchScheduleFresh, selectLaunches } from '../src/launch-selectors';
+import { launchBrief, launchCoverageLabel, launchFresh, launchScheduleFresh, selectLaunches } from '../src/launch-selectors';
 import { artifact, assessment, envelope, iso, launch, NOW, supported } from './launch-fixtures';
 
 beforeEach(() => localStorage.clear());
@@ -9,14 +9,16 @@ beforeEach(() => localStorage.clear());
 describe('superseded launch evidence', () => {
   const planned = () => launch({ assessment: assessment(),
     launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' } });
-  const displayed = (store: LaunchStore) => launchBrief(selectLaunches(store.getState(), NOW, 'map')[0]!, store.getState(), NOW);
+  const displayed = (store: LaunchStore) => {
+    const item = store.getState().artifact!.items[0]!;
+    return launchBrief({ item, interval: item.capture_intervals[0] ?? null, expired: false }, store.getState(), NOW);
+  };
   const withdrawn = (store: LaunchStore) => {
     const state = store.getState();
     expect(state.artifact?.revision).toBe('r1');
-    expect(selectLaunches(state, NOW, 'map')).toHaveLength(1);
+    expect(selectLaunches(state, NOW, 'map')).toEqual([]);
     expect(displayed(store)).toMatchObject({ verdict: 'unknown', direction: null, scheduleCurrent: false });
     expect(displayed(store).reason).toContain('newer launch update');
-    expect(launchCameraEvidenceFresh(selectLaunches(state, NOW, 'map')[0]!, state, NOW)).toBe(false);
     expect(selectLaunches(state, NOW, 'queue')).toEqual([]);
   };
 
@@ -38,6 +40,7 @@ describe('superseded launch evidence', () => {
     const store = new LaunchStore(fetcher);
     await store.restore();
     expect(displayed(store).verdict).toBe(kind === 'too_far' ? 'no_chance' : 'chance');
+    expect(selectLaunches(store.getState(), NOW, 'map')).toHaveLength(kind === 'too_far' ? 0 : 1);
     const refreshing = store.refresh();
     await downloading;
     withdrawn(store); // Do not wait for a failed download to withdraw an obsolete instruction.
@@ -323,7 +326,7 @@ describe('common launch store', () => {
     await store.refresh(false);
     expect(fetcher).not.toHaveBeenCalled();
     expect(selectLaunches(store.getState(), NOW, 'queue')).toHaveLength(0);
-    expect(selectLaunches(store.getState(), NOW, 'map')).toHaveLength(1);
+    expect(selectLaunches(store.getState(), NOW, 'map')).toHaveLength(0);
     expect(launchFresh(store.getState(), NOW)).toBe(true);
     expect(launchFresh(store.getState(), Date.parse(iso(10)) - 1)).toBe(true);
     expect(launchFresh(store.getState(), Date.parse(iso(10)))).toBe(false);

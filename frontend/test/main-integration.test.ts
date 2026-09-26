@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as manifestModule from '../src/manifest';
 import type { Manifest, PassEntry, Track } from '../src/types';
-import { artifact as launchArtifact, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
+import { artifact as launchArtifact, assessment, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
 import * as profileApi from '../src/profile-api';
 
 const schedulerStops = vi.hoisted(() => new Set<() => void>());
@@ -764,7 +764,12 @@ describe('main.ts: All/Mine target filter', () => {
     const { launchStore } = await import('../src/launch-store');
     const { getMapLaunchMode } = await import('../src/map-launch-mode');
     const { init, renderQueue } = await import('../src/main');
-    vi.spyOn(launchStore, 'getState').mockReturnValue({ artifact: launchArtifact([launch()]), pointer: null, availability: 'ready' });
+    const possible = launch({
+      launch_window: { net: new Date(LAUNCH_NOW + 10 * 60_000).toISOString(), start: new Date(LAUNCH_NOW + 10 * 60_000).toISOString(), end: new Date(LAUNCH_NOW + 11 * 60_000).toISOString(), precision: 'Minute' },
+      assessment: assessment(),
+    });
+    possible.assessment!.net.at = possible.launch_window.net;
+    vi.spyOn(launchStore, 'getState').mockReturnValue({ artifact: launchArtifact([possible]), pointer: null, availability: 'ready' });
     vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
     seedSnapshot([]);
     vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise(() => {}));
@@ -897,10 +902,10 @@ describe('main.ts: common launch lane', () => {
       expect(document.querySelectorAll('#cards .card')).toHaveLength(5);
       expect(document.querySelectorAll('#cards [data-launch="v2"]')).toHaveLength(2);
       expect(document.querySelectorAll('[data-launch="legacy"]')).toHaveLength(0);
-      expect(document.querySelectorAll('#upcoming-cards [data-launch="v2"]')).toHaveLength(4);
+      expect(document.querySelectorAll('#upcoming-cards [data-launch="v2"]')).toHaveLength(3);
       localStorage.setItem('opd_target_filter_v1', 'mine'); renderQueue();
       expect(document.querySelectorAll('#cards .card')).toHaveLength(2);
-      expect(document.querySelectorAll('#upcoming-cards .card')).toHaveLength(4);
+      expect(document.querySelectorAll('#upcoming-cards .card')).toHaveLength(3);
       expect(document.getElementById('cards-launch-coverage')?.textContent).toContain('Coverage complete');
     } finally { clock.mockRestore(); }
   });
@@ -928,7 +933,12 @@ describe('main.ts: map pane vs manifest race (iPad QA loop 2026-06-11)', () => {
     vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
     await init();
     document.getElementById('view')!.insertAdjacentHTML('beforeend', '<section><div id="map"></div></section>');
-    vi.spyOn(launchStore, 'getState').mockReturnValue({ artifact: launchArtifact([launch()]), pointer: null, availability: 'ready' });
+    const possible = launch({
+      launch_window: { net: new Date(LAUNCH_NOW + 10 * 60_000).toISOString(), start: new Date(LAUNCH_NOW + 10 * 60_000).toISOString(), end: new Date(LAUNCH_NOW + 11 * 60_000).toISOString(), precision: 'Minute' },
+      assessment: assessment(),
+    });
+    possible.assessment!.net.at = possible.launch_window.net;
+    vi.spyOn(launchStore, 'getState').mockReturnValue({ artifact: launchArtifact([possible]), pointer: null, availability: 'ready' });
     vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
     renderQueue();
     const box = document.getElementById('map-launch-coverage')!;

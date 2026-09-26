@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from generator.launch_assessment import build_planning_assessment
-from generator.launch_data import Launch
+from generator.launch_data import Launch, parse_response
 from generator.launch_evidence import EvaluationBudget, build_launch_artifact, canonical_bytes, utc
 from generator.launch_publish import _validate_artifact
 from generator.orbit import EARTH_RADIUS_KM, Position, propagate
@@ -46,7 +46,8 @@ def test_visible_site_has_real_look_even_for_unknown_rocket(planning):
     launch = replace(launch, site_lat=observer.lat, site_lon=observer.lon, rocket_type="Unknown")
     result = build_planning_assessment(launch, tle, now, now, EvaluationBudget())
     assert result["net"]["verdict"] == "possible"
-    assert result["net"]["reason"] == "SITE_IN_VIEW_AT_NET"
+    assert result["net"]["reason"] == "PAD_CLOSEST_APPROACH"
+    assert result["net"]["t_offset_seconds"] == 0
     assert result["net"]["pad_distance_km"] == 0
     assert result["net"]["look"]["frame"] == "orbital-lvlh"
     assert result["net"]["look"]["off_nadir_deg"] == pytest.approx(0, abs=1e-5)
@@ -89,7 +90,8 @@ def test_hidden_site_without_rocket_model_remains_unknown(planning):
     result = assess((now, replace(launch, rocket_type="Unknown"), tle))
     assert result["net"] == {
         "verdict": "unknown", "reason": "PROFILE_UNKNOWN", "at": utc(launch.t0),
-        "pad_distance_km": round(math.pi * EARTH_RADIUS_KM, 1), "look": None,
+        "pad_distance_km": round(math.pi * EARTH_RADIUS_KM, 1), "t_offset_seconds": None,
+        "look": None,
     }
     assert result["model"] is None
 
@@ -203,8 +205,8 @@ def test_completed_net_possible_survives_window_budget_limit(planning):
     now, launch, tle = planning
     observer = propagate(tle, launch.t0)
     launch = replace(launch, site_lat=observer.lat, site_lon=observer.lon,
-                     window_start=launch.t0 + timedelta(minutes=1))
-    result = build_planning_assessment(launch, tle, now, now, EvaluationBudget(max_points=1))
+                     window_start=launch.t0 + timedelta(seconds=150))
+    result = build_planning_assessment(launch, tle, now, now, EvaluationBudget(max_points=29))
     assert result["net"]["verdict"] == "possible"
     assert result["window"]["reason"] == "EVALUATION_INCOMPLETE"
 
@@ -255,6 +257,86 @@ def public_artifact(planning):
 def rehash(artifact):
     artifact["revision"] = hashlib.sha256(canonical_bytes(
         {k: v for k, v in artifact.items() if k != "revision"})).hexdigest()[:24]
+
+
+def _range_km(at, launch, closest_at, closest_km):
+    if at == launch.t0 and closest_at != launch.t0:
+        return 1800
+    delta = abs((at - closest_at).total_seconds())
+    return closest_km + delta * 7
+
+
+def test_closest_approach_under_500_km_is_possible(planning):
+    now, launch, tle = planning
+    closest_at = launch.t0 - timedelta(seconds=120)
+
+    def observer(_, at):
+        km = _range_km(at, launch, closest_at, 150)
+        return Position(0, math.degrees(km / EARTH_RADIUS_KM), 420, at)
+
+    result = assess((now, replace(launch, site_lat=0, site_lon=0), tle), position=observer)
+    assert result["net"]["verdict"] == "possible"
+    assert result["net"]["reason"] == "PAD_CLOSEST_APPROACH"
+    assert result["net"]["t_offset_seconds"] == -120
+    assert result["net"]["pad_distance_km"] == pytest.approx(150, abs=0.2)
+    assert result["net"]["look"]["frame"] == "orbital-lvlh"
+    assert result["net"]["look"]["off_nadir_deg"] >= 0
+
+
+def test_stale_tle_stays_unknown_when_the_pass_would_be_close(planning):
+    now, launch, tle = planning
+    tle = replace(tle, epoch=now - timedelta(hours=25))
+    closest_at = launch.t0 - timedelta(seconds=120)
+
+    def observer(_, at):
+        km = _range_km(at, launch, closest_at, 150)
+        return Position(0, math.degrees(km / EARTH_RADIUS_KM), 420, at)
+
+    result = assess((now, replace(launch, site_lat=0, site_lon=0), tle), position=observer)
+    assert result["net"]["verdict"] == "unknown"
+    assert result["net"]["reason"] == "EPHEMERIS_OUTSIDE_HORIZON"
+    assert result["net"]["look"] is None
+
+
+def test_600_km_pass_stays_off_possible_inside_the_limb(planning):
+    now, launch, tle = planning
+    closest_at = launch.t0 - timedelta(seconds=120)
+
+    def observer(_, at):
+        km = _range_km(at, launch, closest_at, 600)
+        return Position(0, math.degrees(km / EARTH_RADIUS_KM), 420, at)
+
+    result = assess((now, replace(launch, site_lat=0, site_lon=0), tle), position=observer)
+    assert result["net"]["verdict"] != "possible"
+    assert result["net"]["reason"] != "SITE_IN_VIEW_AT_NET"
+    assert result["net"]["look"] is None
+    assert result["net"]["pad_distance_km"] == pytest.approx(600, abs=0.2)
+
+
+def test_early_window_reaches_the_ascent_screen(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(hours=2)
+    observer = propagate(sample_tle, net)
+    lon = observer.lon + 180
+    if lon > 180:
+        lon -= 360
+    row = {
+        "id": "ussf-385", "name": "Falcon 9 | USSF-385", "net": utc(net),
+        "window_start": utc(net - timedelta(hours=2, minutes=4, seconds=54)),
+        "window_end": utc(net + timedelta(minutes=55, seconds=6)),
+        "net_precision": {"name": "Second"}, "status": {"abbrev": "Go"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {"latitude": -observer.lat, "longitude": lon, "location": {"name": "Vandenberg"}},
+    }
+    parsed = parse_response({"results": [row]}, now=now)[0]
+    assert parsed.timing_reasons == ()
+    artifact = build_launch_artifact(
+        {"count": 1, "next": None, "results": [row]}, sample_tle, now, fetched_at=now,
+    )
+    item = artifact["items"][0]
+    assert item["assessment"]["net"]["reason"] == "NOMINAL_ASCENT_TOO_FAR"
+    assert "TIME_CONFLICT" not in item["reason_codes"]
+    _validate_artifact(artifact)
 
 
 def test_new_planning_and_legacy_artifacts_keep_map_only_admission(public_artifact):

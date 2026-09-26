@@ -188,7 +188,7 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
             ws = _parse_iso8601_z(ws_raw)
             we = _parse_iso8601_z(we_raw)
             net_window_seconds = max(0, int((we - ws).total_seconds() // 2))
-            if we < ws or not ws <= t0 <= we or ws < t0:
+            if we < ws or t0 < ws or t0 > we:
                 reasons.append("TIME_CONFLICT")
         else:
             ws = _parse_iso8601_z(ws_raw) if ws_raw else None

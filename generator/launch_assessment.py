@@ -1,6 +1,7 @@
 """Cache-only planning brief, separate from validated camera instructions.
 
-A directly visible launch site is a geometric possibility at the reported NET.
+A pad shot is possible only when the closest ground range in the pad window
+is inside the nadir horizon and the line of sight at that instant clears Earth.
 An unknown flight direction can still support a *nominal early-ascent* negative:
 every point in a rocket family's modeled downrange disk remains behind Earth.
 Neither result establishes plume brightness, station-window access, later burns,
@@ -13,8 +14,10 @@ import math
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from .ascent import INTERPOLATION_CADENCE_SECONDS
 from .ascent_profiles import match_rocket
-from .launch_data import LL2_GO_STATUS_ABBREVS, Launch
+from .config import NADIR_HORIZON_KM
+from .launch_data import LL2_GO_STATUS_ABBREVS, PASS_WINDOW_SECONDS, Launch
 from .launch_geometry import look_direction_at
 from .orbit import EARTH_RADIUS_KM, TLE, Position, _ensure_utc, great_circle_km, propagate
 
@@ -29,8 +32,9 @@ MAX_WINDOW_SECONDS = 6 * 3600
 # a conservative screen of the stated generic model, not a real-flight bound.
 MAX_OBSERVER_SPEED_KM_S = 12.0
 SCREEN_MARGIN_KM = 250.0
+CLOSEST_AFTER_NET_SECONDS = 120
 ASSESSMENT_REASONS = frozenset({
-    "SITE_IN_VIEW_AT_NET", "NOMINAL_ASCENT_TOO_FAR", "VIEW_UNCONFIRMED",
+    "PAD_CLOSEST_APPROACH", "SITE_IN_VIEW_AT_NET", "NOMINAL_ASCENT_TOO_FAR", "VIEW_UNCONFIRMED",
     "TIMING_UNCONFIRMED", "EPHEMERIS_UNAVAILABLE", "EPHEMERIS_OUTSIDE_HORIZON",
     "SOURCE_UNAVAILABLE", "PROFILE_UNKNOWN", "EVALUATION_INCOMPLETE", "GEOMETRY_INVALID",
 })
@@ -98,7 +102,7 @@ def build_planning_assessment(
         "model": model,
         "net": {
             "verdict": "unknown", "reason": "VIEW_UNCONFIRMED", "at": _utc(launch.t0),
-            "pad_distance_km": None, "look": None,
+            "pad_distance_km": None, "t_offset_seconds": None, "look": None,
         },
         "window": {"verdict": "unknown", "reason": "VIEW_UNCONFIRMED"},
     }
@@ -148,14 +152,35 @@ def build_planning_assessment(
         return True
 
     try:
-        position = position_at(launch.t0)
-        distance = great_circle_km(position.lat, position.lon, launch.site_lat, launch.site_lon)
-        assessment["net"]["pad_distance_km"] = round(distance, 1)
-        if distance < _horizon_km(position.alt_km):
-            assessment["net"].update(
-                verdict="possible", reason="SITE_IN_VIEW_AT_NET",
-                look=look_direction_at(tle, launch.t0, launch.site_lat, launch.site_lon, 0),
+        closest_distance = None
+        closest_when = None
+        closest_position = None
+        start = launch.t0 - timedelta(seconds=PASS_WINDOW_SECONDS)
+        span = PASS_WINDOW_SECONDS + CLOSEST_AFTER_NET_SECONDS
+        for offset in range(0, span + 1, INTERPOLATION_CADENCE_SECONDS):
+            when = start + timedelta(seconds=offset)
+            position = position_at(when)
+            distance = great_circle_km(
+                position.lat, position.lon, launch.site_lat, launch.site_lon,
             )
+            if closest_distance is None or distance < closest_distance:
+                closest_distance = distance
+                closest_when = when
+                closest_position = position
+        shown = round(closest_distance, 1)
+        assessment["net"]["pad_distance_km"] = shown
+        fresh = abs((closest_when - tle.epoch).total_seconds()) <= EPHEMERIS_HORIZON_SECONDS
+        if (fresh and shown < NADIR_HORIZON_KM
+                and closest_distance < _horizon_km(closest_position.alt_km)):
+            assessment["net"].update(
+                verdict="possible", reason="PAD_CLOSEST_APPROACH",
+                t_offset_seconds=int((closest_when - launch.t0).total_seconds()),
+                look=look_direction_at(
+                    tle, closest_when, launch.site_lat, launch.site_lon, 0,
+                ),
+            )
+        elif not fresh:
+            assessment["net"]["reason"] = "EPHEMERIS_OUTSIDE_HORIZON"
         elif model is None:
             assessment["net"]["reason"] = "PROFILE_UNKNOWN"
         else:

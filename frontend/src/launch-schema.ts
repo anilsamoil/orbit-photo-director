@@ -34,7 +34,7 @@ export interface LaunchAssessment {
   model: { name: string; duration_seconds: number; max_altitude_km: number; max_downrange_km: number } | null;
   net: {
     verdict: 'possible' | 'too_far' | 'unknown'; reason: string; at: string;
-    pad_distance_km: number | null; look: CaptureInterval['look'];
+    pad_distance_km: number | null; t_offset_seconds?: number | null; look: CaptureInterval['look'];
   };
   window: { verdict: 'too_far' | 'unknown'; reason: string };
 }
@@ -50,7 +50,7 @@ export interface LaunchArtifact {
 }
 
 const ASSESSMENT_REASONS = new Set([
-  'SITE_IN_VIEW_AT_NET', 'NOMINAL_ASCENT_TOO_FAR', 'VIEW_UNCONFIRMED', 'TIMING_UNCONFIRMED',
+  'PAD_CLOSEST_APPROACH', 'SITE_IN_VIEW_AT_NET', 'NOMINAL_ASCENT_TOO_FAR', 'VIEW_UNCONFIRMED', 'TIMING_UNCONFIRMED',
   'EPHEMERIS_UNAVAILABLE', 'EPHEMERIS_OUTSIDE_HORIZON', 'SOURCE_UNAVAILABLE', 'PROFILE_UNKNOWN',
   'EVALUATION_INCOMPLETE', 'GEOMETRY_INVALID',
 ]);
@@ -204,17 +204,22 @@ export function parseLaunchArtifact(value: unknown): LaunchArtifact {
         requireValue(string(model.name) && model.name.length <= 100 && number(model.duration_seconds, 1, 3600)
           && number(model.max_altitude_km, 0, 2000) && number(model.max_downrange_km, 0, 20000));
       }
-      const net = record(assessment.net, 'verdict reason at pad_distance_km look');
+      const net = record(assessment.net, 'verdict reason at pad_distance_km look', 't_offset_seconds');
       requireValue(['possible', 'too_far', 'unknown'].includes(String(net.verdict)) && ASSESSMENT_REASONS.has(String(net.reason)));
       timestamp(net.at);
       requireValue(net.at === window.net);
       requireValue(net.pad_distance_km === null || number(net.pad_distance_km, 0, 21000));
+      if (Object.hasOwn(net, 't_offset_seconds') && net.t_offset_seconds !== null) {
+        requireValue(Number.isInteger(net.t_offset_seconds) && number(net.t_offset_seconds, -300, 120));
+      }
       if (net.look !== null) {
         const look = record(net.look, 'frame azimuth_deg off_nadir_deg');
         requireValue(look.frame === 'orbital-lvlh' && number(look.azimuth_deg, 0, 360) && look.azimuth_deg !== 360 && number(look.off_nadir_deg, 0, 180));
       }
       if (net.verdict === 'possible') {
-        requireValue(net.reason === 'SITE_IN_VIEW_AT_NET' && net.look !== null && net.pad_distance_km !== null
+        const closest = net.reason === 'PAD_CLOSEST_APPROACH' && Number.isInteger(net.t_offset_seconds)
+          && number(net.t_offset_seconds, -300, 120) && typeof net.pad_distance_km === 'number' && net.pad_distance_km < 500;
+        requireValue((net.reason === 'SITE_IN_VIEW_AT_NET' || closest) && net.look !== null && net.pad_distance_km !== null
           && assessment.tle_epoch !== null);
       } else requireValue(net.look === null);
       const assessedWindow = record(assessment.window, 'verdict reason');
@@ -235,7 +240,6 @@ export function parseLaunchArtifact(value: unknown): LaunchArtifact {
             'SOURCE_AGE_MTIME_ONLY', 'SOURCE_AGE_UNKNOWN', 'REPLAY_SOURCE_MISMATCH',
           ].includes(reason)));
         ordered(window.start, net.at);
-        ordered(net.at, window.start);
         ordered(net.at, window.end);
       }
       const model = assessment.model as LaunchAssessment['model'];

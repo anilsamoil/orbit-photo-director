@@ -28,7 +28,8 @@ export function assessment(over: Partial<LaunchAssessment> = {}): LaunchAssessme
   return {
     checked_at: iso(-5), valid_until: iso(170), tle_epoch: iso(-60),
     model: { name: 'Nominal ascent envelope', duration_seconds: 600, max_altitude_km: 400, max_downrange_km: 1500 },
-    net: { verdict: 'possible', reason: 'SITE_IN_VIEW_AT_NET', at: iso(10), pad_distance_km: 1000,
+    net: { verdict: 'possible', reason: 'PAD_CLOSEST_APPROACH', at: iso(10), pad_distance_km: 150,
+      t_offset_seconds: 0,
       look: { frame: 'orbital-lvlh', azimuth_deg: 45, off_nadir_deg: 55 } },
     window: { verdict: 'unknown', reason: 'VIEW_UNCONFIRMED' }, ...over,
   };
