@@ -298,7 +298,7 @@ const HELP_SECTIONS: HelpSection[] = [
       { icon: '🚀', label: 'Ascent', text: 'Rocket climb paths for active launches you could catch.' },
       { icon: '🛰️', label: 'Satellites', text: 'Track other craft — Tiangong, Hubble, Starship, and more.' },
       { icon: '📍', label: 'Follow ISS', text: 'Recenter on the station; pan away to release.' },
-      { icon: 'N↑ / ISS↑', label: 'Bearing', text: 'North up, or rotate so the ISS direction of travel points up.' },
+      { icon: 'N↑ / ISS↑', label: 'Bearing', text: 'ISS up is the default and rotates the map so the direction of travel points up. North up keeps north at the top.' },
     ],
   },
   {

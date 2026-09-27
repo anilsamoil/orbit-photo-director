@@ -10,7 +10,7 @@ Defects and stale documentation found while writing `ARCHITECTURE_NOW.md`. None 
 
 **GIBS imagery never advances past the date it was built with.** `buildStyle` bakes `yesterdayIso()` into the `gibs-clouds` tile URL at `map.ts:568`, and no code calls `setTiles` on that source. A tab left open across UTC midnight keeps painting the previous day's composite. The imagery badge is the only signal to the operator.
 
-**HTML ships the opposite defaults from the code.** `index.html:122` gives `#bearing-north` the `active` class, while `readBearingMode` at `map.ts:497` defaults to `iss-up`. The follow button ships without `active`, while `followISS` starts `true` at `map.ts:2573`. The first paint therefore shows a control state that does not match the map until the bind functions run.
+**The follow button ships off while follow starts on.** `#bearing-iss` now ships `active`, matching `readBearingMode` in `follow-iss/index.ts`, which defaults to `iss-up`. The follow button still ships without `active`, while follow starts on. The first paint shows follow off until bind runs.
 
 **The test reset helper disagrees with production.** `_resetMapStateForTest` at `map.ts:517` sets `bearingMode = 'north'`. Production defaults to `iss-up`. Any test that relies on the reset is asserting against a default the app never has.
 
