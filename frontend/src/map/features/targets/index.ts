@@ -1,7 +1,7 @@
 import { fetchLiveCloud } from '../../../cloud';
 import { getMapLaunchMode } from '../../../map-launch-mode';
 import { isLaunchPass } from '../../../launch-selectors';
-import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from '../../../pass-filter';
+import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from '../../../pass-filter';
 import { loadProfile, parseProfileFromURL, type PersonalTarget } from '../../../profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from '../../../profile-events';
 import { getShotCount } from '../../../shot-counts';
@@ -61,6 +61,15 @@ export function setTargetPasses(passes: PassEntry[]): void {
   state.passes = passes;
 }
 
+function readRemovedCuratedIds(): string[] {
+  try {
+    const profile = loadProfile(parseProfileFromURL(window.location.href));
+    return profile?.removedCuratedIds ?? [];
+  } catch {
+    return [];
+  }
+}
+
 function readActiveDistanceThresholdKm(): number {
   try {
     const name = parseProfileFromURL(window.location.href);
@@ -78,7 +87,10 @@ export function refreshTargetsSource(): void {
   const viewMs = mapClock().viewMs();
   const halfWindowMs = PASS_WINDOW_HALF_MINUTES * 60_000;
   const thresholdKm = readActiveDistanceThresholdKm();
-  const distanceVisible = filterPassesByDistance(state.passes.filter((pass) => !isLaunchPass(pass)), thresholdKm);
+  const distanceVisible = filterPassesByDistance(
+    filterRemovedCurated(state.passes.filter((pass) => !isLaunchPass(pass)), readRemovedCuratedIds()),
+    thresholdKm,
+  );
   const visible = applyTargetFilter(distanceVisible, getTargetFilter());
   const features = visible.map((pass) => {
     const closestMs = Date.parse(pass.closest_approach);

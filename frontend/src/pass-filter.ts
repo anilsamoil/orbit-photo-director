@@ -25,3 +25,16 @@ export function filterPassesByDistance(
     return d <= thresholdKm;
   });
 }
+
+/** Drop curated targets the operator hid. The daemon does not receive
+ *  `removedCuratedIds` yet, so the same feed still contains them. Queue,
+ *  Upcoming, and the map pins all have to apply the list themselves or the
+ *  next rebuild paints the card again. */
+export function filterRemovedCurated<T extends { target_id: string }>(
+  passes: T[],
+  removedIds: readonly string[],
+): T[] {
+  if (removedIds.length === 0) return passes;
+  const removed = new Set(removedIds);
+  return passes.filter((p) => !removed.has(p.target_id));
+}

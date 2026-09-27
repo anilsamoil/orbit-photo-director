@@ -25,7 +25,7 @@ import { buildPayload, drainQueue, postCalib, queuedCalibCount } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline } from './network-status';
-import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance } from './pass-filter';
+import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from './pass-filter';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
 import { probeConnectivity } from './network-probe';
 import { buildIcs } from './ics';
@@ -458,9 +458,10 @@ function renderQueue(): void {
     else renderLaunchCoverage(notice, launches, now, 'upcoming');
   }
   const filter = getTargetFilter();
+  const hidden = currentProfile?.removedCuratedIds ?? [];
   const ground = applyTargetFilter(
     filterPassesByDistance(
-      upcomingPasses(currentTop5.filter((p) => !isLaunchPass(p)), now),
+      upcomingPasses(filterRemovedCurated(currentTop5.filter((p) => !isLaunchPass(p)), hidden), now),
       queueDistanceThresholdKm(),
     ),
     filter,
@@ -601,11 +602,12 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const empty = document.getElementById('upcoming-empty');
   if (!cards || !empty) return;
   const filter = getTargetFilter();
+  const hidden = currentProfile?.removedCuratedIds ?? [];
   const launches = launchStore.getState();
   const launchSelections = selectLaunches(launches, nowMs, 'upcoming');
   const visible = applyTargetFilter(
     filterPassesByDistance(
-      upcomingPasses(currentTop24h.filter((p) => !isLaunchPass(p)), nowMs),
+      upcomingPasses(filterRemovedCurated(currentTop24h.filter((p) => !isLaunchPass(p)), hidden), nowMs),
       queueDistanceThresholdKm(),
     ),
     filter,
@@ -899,8 +901,9 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
  *
  *  Defensive no-ops:
  *  - no active profile (shouldn't happen — init() always creates one)
- *  - id already-removed (curated: daemon multiplex would have filtered
- *    it before render; personal: target already gone from additions) —
+ *  - id already-removed (curated: renderQueue/renderUpcoming already
+ *    drop removedCuratedIds, because the daemon still defaults that list
+ *    to empty; personal: target already gone from additions) —
  *    we still remove the card from DOM so the operator's tap does
  *    something.
  */
