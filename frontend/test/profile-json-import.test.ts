@@ -406,7 +406,7 @@ describe('Import preview', () => {
 
 describe('handleJsonImportReplace', () => {
   it('saves merged profile locally and PUTs imported additions to the server', async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
       new Response(JSON.stringify({ ok: true, count: 2 }), { status: 200 }),
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -423,14 +423,18 @@ describe('handleJsonImportReplace', () => {
 
     // Targets PUT, then the imported hide list so other devices match.
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
-    const [url, init] = calls[0];
+    const targetsCall = fetchMock.mock.calls[0];
+    const hideCall = fetchMock.mock.calls[1];
+    if (!targetsCall || !hideCall) throw new Error('expected a targets PUT and a hide PUT');
+    const [url, init] = targetsCall;
     expect(String(url)).toContain(`/api/browser/profiles/${PROFILE}/targets`);
     expect(init.method).toBe('PUT');
-    const body = JSON.parse(init.body as string);
+    if (typeof init.body !== 'string') throw new Error('targets PUT body was not a string');
+    const body = JSON.parse(init.body);
     expect(body.targets).toHaveLength(2);
     expect(body.targets.map((t: { name: string }) => t.name)).toEqual(['Site A', 'Site B']);
-    const hideBody = JSON.parse(calls[1][1].body as string);
+    if (typeof hideCall[1].body !== 'string') throw new Error('hide PUT body was not a string');
+    const hideBody = JSON.parse(hideCall[1].body);
     expect(hideBody.removedCuratedIds).toEqual([]);
     expect(typeof hideBody.removedCuratedUpdatedAt).toBe('string');
 
@@ -483,7 +487,9 @@ describe('handleJsonImportReplace', () => {
   });
 
   it('writes the imported distanceThresholdKm + removedCuratedIds into the active profile', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, count: 0 }), { status: 200 }));
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      new Response(JSON.stringify({ ok: true, count: 0 }), { status: 200 }),
+    );
     vi.stubGlobal('fetch', fetchMock);
     const imported = createDefaultProfile(PROFILE);
     imported.additions = [];
@@ -501,8 +507,10 @@ describe('handleJsonImportReplace', () => {
     const after = loadProfile(PROFILE)!;
     expect(after.distanceThresholdKm).toBe(800);
     expect(after.removedCuratedIds).toEqual(['hidden-1', 'hidden-2']);
-    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
-    const hideBody = JSON.parse(calls[1][1].body as string);
+    const hideCall = fetchMock.mock.calls[1];
+    if (!hideCall) throw new Error('expected a hide PUT');
+    if (typeof hideCall[1].body !== 'string') throw new Error('hide PUT body was not a string');
+    const hideBody = JSON.parse(hideCall[1].body);
     expect(hideBody.removedCuratedIds).toEqual(['hidden-1', 'hidden-2']);
   });
 });
