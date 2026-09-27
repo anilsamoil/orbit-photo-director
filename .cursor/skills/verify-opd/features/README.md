@@ -27,11 +27,11 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 ## Features
 
 - [Status banner](./banner.md) covers the footer after the manifest loads.
-- [Top bar](./topbar.md) covers the live ISS readout and the Kp badge.
+- [Top bar](./topbar.md) covers the fixed header, the live ISS readout, the Kp badge, and the scrolling tab strip.
 - [Queue](./queue.md) covers the next passes, score, sort, remind, shoot, the mine filter, and keepsake windows.
 - [Upcoming](./upcoming.md) covers the later passes, score sort, and hide.
-- [Map](./map.md) covers the globe, ISS track, target popup, dropped pin, legend, imagery date, attribution, time controls, tool rail, satellite picker, and launch dialog.
-- [Help](./help.md) covers the corner help button and the dialog.
+- [Map](./map.md) covers the globe, ISS track, target popup, dropped pin, legend, imagery date, collapsed credits, time controls, tool rail, satellite picker, and launch dialog.
+- [Help](./help.md) covers the ? button above the map credits, the corner button on the other tabs, and the dialog.
 - [Profile](./profile.md) covers the signed-in profile, distance threshold, add target, and photo lookup.
 - [Log](./log.md) covers the calibration row written by Shoot.
 - [Service worker](./service-worker.md) covers `sw.js` on a preview build.

@@ -214,31 +214,94 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
   return notes;
 }
 
+async function dismissShotlist(send) {
+  const covering = await evaluate(send, `document.body.classList.contains('shotlist-bar-visible')`);
+  if (!covering) return;
+  await click(send, '.shotlist-clear');
+  await waitFor(
+    send,
+    `!document.body.classList.contains('shotlist-bar-visible') ? { ok: true } : null`,
+    'shot list cleared',
+  );
+}
+
 async function driveBanner(send, evidenceDir) {
   const text = await evaluate(send, `document.getElementById('status-banner').textContent`);
-  if (!text || text.includes('Sign in') || text.includes('Could not verify')) {
+  if (!text || /sign in/i.test(text) || text.includes('Could not verify') || !text.includes('Last updated')) {
     throw new Error(`banner is not a data state: ${text}`);
   }
+  const pinned = await evaluate(send, `getComputedStyle(document.getElementById('status-banner')).position`);
+  if (pinned !== 'fixed') throw new Error(`map banner is ${pinned}, expected fixed`);
   await shot(send, evidenceDir, 'banner');
   return `banner: ${text.trim()}`;
 }
 
 async function driveTopbar(send, evidenceDir) {
-  await waitFor(
+  const header = await waitFor(
     send,
     `(() => {
+      const bar = document.querySelector('.topbar');
       const iss = document.getElementById('iss-now');
       const kp = document.getElementById('kp-widget');
-      if (!iss || !iss.textContent.trim()) return null;
+      if (!bar || !iss || !iss.textContent.trim()) return null;
       if (!kp || kp.hidden) return null;
-      return { ok: true, iss: iss.textContent.trim(), kp: kp.textContent.trim() };
+      const kpText = kp.textContent.trim();
+      if (!kpText.includes('Kp 3.0')) return null;
+      if (getComputedStyle(bar).position !== 'fixed') return null;
+      return { ok: true, iss: iss.textContent.trim(), kp: kpText };
     })()`,
     'topbar ISS and Kp',
     20000,
   );
   const sunHidden = await evaluate(send, `document.getElementById('sun-widget')?.hidden !== false`);
   await shot(send, evidenceDir, 'topbar');
-  return `topbar: iss and kp visible, sun hidden=${sunHidden}`;
+  await click(send, '#tab-queue');
+  const queueBox = await evaluate(send, `(() => {
+    const bar = document.querySelector('.topbar');
+    const main = document.querySelector('main');
+    const banner = document.getElementById('status-banner');
+    return {
+      className: main && main.className,
+      pad: main && getComputedStyle(main).paddingTop,
+      height: bar && getComputedStyle(bar).height,
+      banner: banner && getComputedStyle(banner).position,
+    };
+  })()`);
+  if (queueBox.className !== 'view-queue') throw new Error(`queue view ${JSON.stringify(queueBox)}`);
+  const pad = Number.parseFloat(queueBox.pad);
+  const height = Number.parseFloat(queueBox.height);
+  if (!Number.isFinite(pad) || !Number.isFinite(height) || Math.abs(pad - height) > 1) {
+    throw new Error(`queue pad ${JSON.stringify(queueBox)}`);
+  }
+  if (queueBox.banner === 'fixed') throw new Error(`queue banner still fixed ${JSON.stringify(queueBox)}`);
+  await shot(send, evidenceDir, 'topbar-queue');
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 390,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  try {
+    await waitFor(
+      send,
+      `(() => {
+        const tabs = document.querySelector('.tabs');
+        if (!tabs || tabs.scrollWidth <= tabs.clientWidth + 1) return null;
+        return { ok: true, scrollWidth: tabs.scrollWidth, clientWidth: tabs.clientWidth };
+      })()`,
+      'tab strip scrolls',
+      5000,
+    );
+    await shot(send, evidenceDir, 'topbar-narrow');
+  } finally {
+    await send('Emulation.setDeviceMetricsOverride', {
+      width: 1400,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+  }
+  return `topbar: ${header.kp}, sun hidden=${sunHidden}, queue padded, tabs scroll`;
 }
 
 async function driveQueue(send, evidenceDir, meta) {
@@ -253,7 +316,11 @@ async function driveQueue(send, evidenceDir, meta) {
   );
   await shot(send, evidenceDir, 'queue');
   await click(send, '#cards .card-score');
-  await waitFor(send, `document.querySelector('#cards .score-breakdown') ? { ok: true } : null`, 'score breakdown');
+  await waitFor(
+    send,
+    `(() => { const panel = document.querySelector('#cards .score-breakdown'); return panel && !panel.hidden ? { ok: true } : null; })()`,
+    'score breakdown',
+  );
   await shot(send, evidenceDir, 'queue-score');
   await click(send, '#sort-score-queue');
   const scoreActive = await evaluate(send, `document.getElementById('sort-score-queue').classList.contains('active')`);
@@ -349,14 +416,45 @@ async function driveMap(send, evidenceDir, meta) {
   await shot(send, evidenceDir, 'map-globe');
   await shot(send, evidenceDir, 'map-legend');
   await shot(send, evidenceDir, 'map-imagery-date');
-  await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib-button')?.click(); true`);
-  const attrib = await evaluate(send, `(() => {
-    const node = document.querySelector('.maplibregl-ctrl-attrib');
-    return (node ? node.textContent : 'missing').slice(0, 400);
-  })()`);
-  if (!/OpenStreetMap|CARTO|NASA|Earthdata/i.test(String(attrib))) {
-    throw new Error(`attribution missing: ${attrib}`);
-  }
+  await dismissShotlist(send);
+  const collapsed = await waitFor(
+    send,
+    `(() => {
+      const node = document.querySelector('.maplibregl-ctrl-attrib');
+      const button = document.querySelector('.maplibregl-ctrl-attrib-button');
+      const help = document.querySelector('.help-fab');
+      if (!node || !button || !help) return null;
+      if (node.classList.contains('maplibregl-compact-show')) return null;
+      const box = button.getBoundingClientRect();
+      const helpBox = help.getBoundingClientRect();
+      if (helpBox.width < 40 || box.width < 40 || box.width > 48 || box.height < 40 || box.height > 48) return null;
+      if (helpBox.bottom > box.top + 8) return null;
+      const legend = document.querySelector('.map-legend')?.getBoundingClientRect();
+      return legend ? { ok: true, legendBottom: legend.bottom } : null;
+    })()`,
+    'credits collapsed',
+    10000,
+  );
+  await shot(send, evidenceDir, 'map-attribution-collapsed');
+  await click(send, '.maplibregl-ctrl-attrib-button');
+  await waitFor(
+    send,
+    `(() => {
+      const node = document.querySelector('.maplibregl-ctrl-attrib');
+      const help = document.querySelector('.help-fab')?.getBoundingClientRect();
+      const legend = document.querySelector('.map-legend')?.getBoundingClientRect();
+      if (!node || !help || !legend) return null;
+      if (!node.classList.contains('maplibregl-compact-show')) return null;
+      const text = node.textContent || '';
+      if (!/OpenStreetMap|CARTO|NASA|Earthdata/i.test(text)) return null;
+      if (node.getBoundingClientRect().width < 200) return null;
+      if (help.bottom > node.getBoundingClientRect().top + 8) return null;
+      if (legend.bottom >= ${collapsed.legendBottom} - 4) return null;
+      return { ok: true, text: text.slice(0, 200) };
+    })()`,
+    'credits expanded',
+    10000,
+  );
   await shot(send, evidenceDir, 'map-attribution');
   const before = await evaluate(send, `document.getElementById('time-slider-readout').textContent`);
   await click(send, '#time-fwd-45');
@@ -370,6 +468,11 @@ async function driveMap(send, evidenceDir, meta) {
   );
   await shot(send, evidenceDir, 'map-time');
   await click(send, '#time-now');
+  await waitFor(
+    send,
+    `document.getElementById('time-slider-readout')?.textContent.trim() === 'Now' ? { ok: true } : null`,
+    'time now',
+  );
   await click(send, '#toggle-ir');
   await waitFor(send, `document.getElementById('toggle-ir').classList.contains('active') ? { ok: true } : null`, 'IR on');
   await click(send, '#toggle-night-lights');
@@ -411,7 +514,7 @@ async function driveMap(send, evidenceDir, meta) {
   await mouseClick(send, drop.x, drop.y, 'right');
   await waitFor(
     send,
-    `document.querySelector('.maplibregl-popup')?.innerText.includes('Closest') || document.querySelector('.dropped-pin, .maplibregl-popup') ? { ok: true, text: document.querySelector('.maplibregl-popup')?.innerText || '' } : null`,
+    `[...document.querySelectorAll('.maplibregl-popup')].some((node) => (node.innerText || '').includes('Closest')) ? { ok: true } : null`,
     'pin drop',
     10000,
   );
@@ -433,6 +536,20 @@ async function driveMap(send, evidenceDir, meta) {
 }
 
 async function driveHelp(send, evidenceDir) {
+  await dismissShotlist(send);
+  await waitFor(
+    send,
+    `(() => {
+      const help = document.querySelector('.help-fab')?.getBoundingClientRect();
+      const button = document.querySelector('.maplibregl-ctrl-attrib-button')?.getBoundingClientRect();
+      if (!help || !button || help.width < 40) return null;
+      if (help.bottom > button.top + 8) return null;
+      return { ok: true };
+    })()`,
+    'help above credits',
+    20000,
+  );
+  await shot(send, evidenceDir, 'help-placement');
   await click(send, '#help-fab');
   await waitFor(send, `document.querySelector('.help-modal') ? { ok: true } : null`, 'help dialog');
   const label = await evaluate(send, `document.querySelector('.help-modal')?.getAttribute('aria-label') || ''`);

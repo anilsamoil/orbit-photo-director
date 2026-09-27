@@ -15,7 +15,7 @@ Log lists shoot and skip records for the signed-in profile. It is empty until Qu
 Preconditions:
 
 - `doctor` prints `ok`.
-- `drive queue` has already clicked Shoot in this browser session. `drive all` does that before `drive log`. A lone `drive log` on a fresh page finds an empty log and fails.
+- `drive queue` has already clicked Shoot on this proxy. `drive all` does that before `drive log`. A lone `drive log` before any Shoot finds an empty log and fails.
 
 - **Open Log.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive log` only as part of `drive all`, or after `drive queue` on the same `up`. The shoot is stored by the proxy, so a new Chrome still sees it.
 - **Proof.** `evidence/log.png` shows Verify Reef or the id `verify-reef`.

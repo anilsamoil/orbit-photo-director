@@ -24,7 +24,7 @@ Preconditions:
 - **Open Profile.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive profile`. The pane text contains Anil and the distance slider exists.
 - **Threshold.** Set the slider to 800. The display reads `800 km`.
 - **Add a target.** Enter Verify Harbor with the fixture latitude and longitude, then choose Add target. The profile list contains Verify Harbor.
-- **Lookup.** Paste the timestamp from `fixtures/meta.json` field `lookupTimestamp`, choose Resolve, and then Pin on map. The result text contains `ISS at`. The map view shows `lookup-pin-layer`.
+- **Lookup.** Paste the timestamp from `fixtures/meta.json` field `lookupTimestamp` and choose Resolve. The result text contains `ISS at` and the view switches to the map with `lookup-pin-layer`. Pin on map repeats that drop.
 - **Proof.** `evidence/profile.png`, `evidence/profile-target.png`, `evidence/profile-lookup.png`, and `evidence/profile-lookup-map.png`.
 
 ## Gotchas
