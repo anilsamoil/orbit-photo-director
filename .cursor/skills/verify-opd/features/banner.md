@@ -5,7 +5,7 @@ The footer tells you whether the shot queue data is current. After a healthy loa
 ## Sub-features
 
 - `banner-ready` replaces Loading with an update age once the manifest arrives.
-- `banner-blocked` stays on the sign-in message when the session fixture is missing.
+- `banner-blocked` is the red sign-in footer. It needs a session response that is not ok. This proxy always returns Anil, so `drive banner` does not show that footer.
 
 ## How to get to it (user POV)
 

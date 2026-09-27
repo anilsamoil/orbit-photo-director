@@ -438,6 +438,10 @@ function startStatic(outDir, port) {
 async function sw() {
   const home = homeDir();
   mkdirSync(home, { recursive: true });
+  const evidence = resolve(home, 'evidence');
+  mkdirSync(evidence, { recursive: true });
+  const proof = resolve(evidence, 'service-worker.txt');
+  if (existsSync(proof)) rmSync(proof);
   const outDir = resolve(home, 'preview-dist');
   const previewPort = Number(process.env.OPD_VERIFY_PREVIEW_PORT || 41733);
   const build = spawnSync(bunBin(), ['run', 'build', '--', '--outDir', outDir, '--emptyOutDir'], {
@@ -459,10 +463,8 @@ async function sw() {
       child.on('exit', (code) => resolveStatus(code ?? 1));
     });
     if (status === 0) {
-      const evidence = resolve(home, 'evidence');
-      mkdirSync(evidence, { recursive: true });
-      writeFileSync(resolve(evidence, 'service-worker.txt'), `verify-sw-upgrade.sh passed against http://127.0.0.1:${previewPort}\n`);
-      console.log(`service worker checks passed. log ${evidence}/service-worker.txt`);
+      writeFileSync(proof, `verify-sw-upgrade.sh passed against http://127.0.0.1:${previewPort}\n${new Date().toISOString()}\n`);
+      console.log(`service worker checks passed. log ${proof}`);
     }
   } finally {
     await new Promise((resolveClose) => server.close(() => resolveClose()));

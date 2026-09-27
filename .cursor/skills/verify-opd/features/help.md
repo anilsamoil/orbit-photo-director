@@ -9,7 +9,7 @@ The ? button opens a dialog that explains the five tabs and the map controls.
 
 ## How to get to it (user POV)
 
-- On Map the ? button sits just above the collapsed (i) credits button. On Queue, Upcoming, Profile, and Log it sits in the bottom-right corner.
+- On Map the ? button sits just above the collapsed (i) credits button. On Queue, Upcoming, Profile, and Log it sits in the bottom-right corner, about 1rem from the edges.
 
 ## Driving it with opd-verify
 
@@ -17,9 +17,9 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Open help.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive help`. On Map the bottom edge of the ? button is above the (i) button. The dialog with accessible name `Help — how to use SNAP` is visible.
-- **Close help.** The close button removes that dialog.
-- **Proof.** `evidence/help-placement.png` shows the ? above the (i). `evidence/help.png` shows the open dialog.
+- **Open help.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive help`. The script returns to Map and collapses the credits if a previous step opened them. The bottom edge of the ? button is above the collapsed (i) button. The dialog with accessible name `Help — how to use SNAP` is visible.
+- **Close help.** The close button removes that dialog. The script then opens Queue and checks that the ? button sits within 24px of the right and bottom edges.
+- **Proof.** `evidence/help-placement.png` shows the ? above the collapsed (i). `evidence/help.png` shows the open dialog. `evidence/help-queue.png` shows the corner button on Queue.
 
 ## Gotchas
 
