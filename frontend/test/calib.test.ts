@@ -48,6 +48,13 @@ describe('buildPayload', () => {
     expect(p.action).toBe('shoot');
     expect(p.score_at_time).toBe(87);
     expect(p.pass_time.endsWith('Z')).toBe(true);
+    expect(p.target_name).toBeUndefined();
+  });
+
+  it('stores the target name on the write payload', () => {
+    const p = buildPayload('shoot', 'tokyo-night', '2024-10-17T12:00:00Z', 87, 'Tokyo at night');
+    expect(p.target_name).toBe('Tokyo at night');
+    expect(p.target_id).toBe('tokyo-night');
   });
 
   it('defaults profile to "anil" when no current profile is set', () => {

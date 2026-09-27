@@ -182,6 +182,55 @@ describe('POST /api/log', () => {
     expect(r.status).toBe(400);
   });
 
+  it('stores target_name and returns it, and still accepts records without it', async () => {
+    const headers = { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' };
+    const named = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        target_id: 'tokyo-night',
+        target_name: 'Tokyo at night',
+        pass_time: '2024-10-17T12:00:00Z',
+        action: 'shoot',
+      }),
+    });
+    expect(named.status).toBe(200);
+    const legacy = await fetchWorker(env, '/api/log', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        target_id: 'old-row',
+        pass_time: '2024-10-17T13:00:00Z',
+        action: 'shoot',
+      }),
+    });
+    expect(legacy.status).toBe(200);
+    const listed = await fetchWorker(env, '/api/log', { headers });
+    const body = (await listed.json()) as { entries: Array<{ target_id: string; target_name?: string }> };
+    const tokyo = body.entries.find((entry) => entry.target_id === 'tokyo-night');
+    const old = body.entries.find((entry) => entry.target_id === 'old-row');
+    expect(tokyo?.target_name).toBe('Tokyo at night');
+    expect(old?.target_name).toBeUndefined();
+  });
+
+  it('rejects a target_name that is empty, not a string, or longer than 200 characters', async () => {
+    const headers = { 'content-type': 'application/json', 'x-calib-token': 'test-secret-123' };
+    const bodies = [
+      { target_id: 't', target_name: '', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' },
+      { target_id: 't', target_name: 12, pass_time: '2024-10-17T12:00:00Z', action: 'shoot' },
+      { target_id: 't', target_name: 'a'.repeat(201), pass_time: '2024-10-17T12:00:00Z', action: 'shoot' },
+    ];
+    for (const body of bodies) {
+      const response = await fetchWorker(env, '/api/log', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(env.CALIB.logSize()).toBe(0);
+  });
+
   it('accepts a valid shoot record', async () => {
     const r = await fetchWorker(env, '/api/log', {
       method: 'POST',

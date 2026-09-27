@@ -42,6 +42,7 @@ interface LogRequest {
   rating?: number; // 1-5, present when action === 'rate'
   observed_obstruction?: 'clear' | 'cloudy' | 'sun-glint' | 'thin cirrus' | 'haze' | 'other';
   dedupe_key?: string;
+  target_name?: string;
   /** Slot 8 (design rev 2): per-astronaut log scoping. Missing on legacy
    *  records (pre-v1.6.3.0 frontends) — those are read back as belonging
    *  to the implicit "anil" profile. Same regex as /api/profiles/<name>.
@@ -206,6 +207,9 @@ function isLogRequest(value: unknown): value is LogRequest {
   }
   if (v.dedupe_key !== undefined) {
     if (typeof v.dedupe_key !== 'string' || v.dedupe_key.length > MAX_FIELD_LEN) return false;
+  }
+  if (v.target_name !== undefined) {
+    if (typeof v.target_name !== 'string' || v.target_name.length === 0 || v.target_name.length > MAX_FIELD_LEN) return false;
   }
   if (v.profile !== undefined) {
     // Slot 8: optional per-astronaut tag. Reuses the same regex as profile

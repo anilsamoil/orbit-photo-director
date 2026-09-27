@@ -290,6 +290,7 @@ export type CalibAction = 'shoot' | 'skip' | 'rate';
 
 export interface CalibPayload {
   target_id: string;
+  target_name?: string;
   pass_time: string;
   action: CalibAction;
   score_at_time?: number;
