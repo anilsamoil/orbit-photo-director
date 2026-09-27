@@ -1,6 +1,6 @@
 # Upcoming
 
-Upcoming lists passes beyond the next 90 minutes. The fixture puts Verify Mesa about eight hours ahead.
+Upcoming lists later passes. The pane title starts with Next 36 hours. The fixture puts Verify Mesa about eight hours ahead.
 
 ## Sub-features
 
@@ -25,5 +25,5 @@ Preconditions:
 
 ## Gotchas
 
-- Hide writes the curated id into this Chrome profile. Every drive deletes that profile before Chrome starts, so the next `drive upcoming` shows Verify Mesa again and then hides it.
+- Hide removes the card from the list for this page. The fixture feed still contains Verify Mesa. The next drive deletes the Chrome profile first, so the card is visible again and the script hides it again.
 - `drive all` hides the card inside that one page. The screenshot `upcoming-hidden.png` is the proof. The following drive starts from a visible card.

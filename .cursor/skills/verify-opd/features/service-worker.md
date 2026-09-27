@@ -27,6 +27,7 @@ Preconditions:
 ## Gotchas
 
 - `scripts/verify-sw-upgrade.sh https://map.astroanil.dev` fails closed while Cloudflare Access answers with a login redirect. That failure is not a bad build. Use `opd-verify sw`, or send Access service-token headers yourself.
+- `docs/SW_UPGRADE_VERIFY.md` section 4 still treats a controller swap without navigation as a `clientsClaim` failure. The build sets `clientsClaim: true` in `frontend/vite.config.ts`, and `sw` requires `clientsClaim()` in `/sw.js`. That swap is the current behavior. The opening comment on the VitePWA block still says `clientsClaim: false`.
 - `sw` does not start the dev server from `up`, and it does not need `doctor`.
 - The build output stays under `$OPD_VERIFY_HOME/preview-dist`. It is not a product source change.
 - Vite preview labels `sw.js` as `text/javascript`. `scripts/verify-sw-upgrade.sh` requires `application/javascript`, matching `worker/src/index.ts`. The skill's static server sets that type. Do not point the script at `vite preview` and expect this check to pass.

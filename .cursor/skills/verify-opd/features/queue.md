@@ -24,7 +24,7 @@ Preconditions:
 - The manifest `generated_at` is under 60 minutes old, or Shoot stays disabled.
 
 - **Open Queue.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive queue`. The card list contains Verify Reef and Verify Delta.
-- **Score.** The first score control opens a breakdown panel.
+- **Score.** The first score control opens a breakdown panel. The panel is visible, not only present while `hidden`.
 - **Sort.** The Score button gains the active class.
 - **Remind and Shoot.** Remind shows pressed. Shoot shows a toast that contains `Shoot logged`.
 - **Mine filter.** The empty state names your targets. All brings the cards back.

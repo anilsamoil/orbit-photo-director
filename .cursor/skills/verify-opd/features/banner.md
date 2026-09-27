@@ -9,7 +9,7 @@ The footer tells you whether the shot queue data is current. After a healthy loa
 
 ## How to get to it (user POV)
 
-- Open the app. The banner is the footer on every tab.
+- Open the app. The banner is the footer on every tab. On Map it is pinned to the bottom of the viewport. On the other tabs it stays in normal flow under the page.
 
 ## Driving it with opd-verify
 
@@ -17,7 +17,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Read the footer.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive banner`. The footer text no longer contains Loading or Sign in.
+- **Read the footer.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive banner`. The footer contains `Last updated`, it does not contain a sign-in sentence, and on Map its position is `fixed`.
 - **Proof.** The command writes `evidence/banner.png`. The PNG shows the footer and the SNAP title.
 
 ## Gotchas

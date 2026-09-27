@@ -55,7 +55,7 @@ node .cursor/skills/verify-opd/scripts/opd-verify.mjs sw
 
 `sw` builds the frontend into `$OPD_VERIFY_HOME/preview-dist`, serves those files on port 41733, and runs `scripts/verify-sw-upgrade.sh` against that origin. It does not use the dev server from `up`. The static server sends `application/javascript` for `.js`, which is what the worker and `verify-sw-upgrade.sh` require. Vite preview sends `text/javascript`, so this command does not use it.
 
-The map drive opens `/?e2e`. That query is how `frontend/src/map/adapters/maplibre/index.ts` publishes `window.__opdMap`. The script frames a pin with that handle, then clicks the canvas with a real mouse event.
+The map drive opens `/?e2e`. That query is how `frontend/src/map/adapters/maplibre/index.ts` publishes `window.__opdMap`. Credits start collapsed to the 44x44 (i) button (`collapseAttribution` in that file). The script checks the collapsed button, opens the credit line, then frames a pin and clicks the canvas with a real mouse event.
 
 `frontend/scripts/verify-map-pins.mjs` rewrites product source and runs unit tests. Do not run it from this skill. `frontend/scripts/verify-popup-scroll.mjs` drives a synthetic popup page, not SNAP. The live popup proof is `drive map`.
 
