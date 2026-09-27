@@ -10,8 +10,8 @@ const repoRoot = resolve(here, '../../../..');
 const satellite = require(resolve(repoRoot, 'frontend/node_modules/satellite.js'));
 
 const FALLBACK_TLE = {
-  line1: '1 25544U 98067A   24290.79041667  .00031560  00000-0  56270-3 0  9990',
-  line2: '2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.49814196479596',
+  line1: '1 25544U 98067A   26270.17419514  .00009528  00000+0  18291-3 0  9996',
+  line2: '2 25544  51.6315 155.3455 0007168 193.0559 167.0244 15.48664528587569',
 };
 
 function sha256(text) {

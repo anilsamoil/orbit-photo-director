@@ -1,3 +1,5 @@
+import { rememberIssTle } from './iss-tle';
+
 /** Multi-satellite tracking (v1.6.0.0 — Pettit feedback #6).
  *
  *  Curated hot-list + custom NORAD/name search. TLEs fetched from
@@ -231,6 +233,9 @@ export async function fetchSatelliteTLE(
     fetchedAtMs: now,
   };
   writeCache(meta, entry);
+  if (meta.resolution.kind === 'catnr' && meta.resolution.catnr === 25544) {
+    rememberIssTle(parsed.tle);
+  }
   return { tle: parsed.tle, match_count: parsed.match_count, stale: false };
 }
 

@@ -95,8 +95,15 @@ export function validateTarget(t: unknown, profileName: string): string | null {
   return null;
 }
 
+const REMOVED_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const MAX_REMOVED_PER_PROFILE = 200;
+
 function targetsKey(profileName: string): string {
   return `profiles/${profileName}/targets.json`;
+}
+
+function removedKey(profileName: string): string {
+  return `profiles/${profileName}/removed-curated.json`;
 }
 
 /** Read the stored target list. R2 miss → []. R2 read error → throws so
@@ -116,6 +123,49 @@ async function writeTargets(env: Env, profileName: string, list: PersonalTarget[
   await env.CALIB.put(targetsKey(profileName), JSON.stringify(list), {
     httpMetadata: { contentType: 'application/json' },
   });
+}
+
+interface RemovedCurated {
+  ids: string[];
+  updatedAt: string;
+}
+
+/** Null when this profile has never stored a hide list. A legacy targets
+ *  array is left untouched. */
+async function readRemoved(env: Env, profileName: string): Promise<RemovedCurated | null> {
+  const obj = await env.CALIB.get(removedKey(profileName));
+  if (!obj) return null;
+  const data = (await obj.json()) as unknown;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    throw new Error(`stored removed curated ids for "${profileName}" is not an object`);
+  }
+  const ids = (data as { ids?: unknown }).ids;
+  const updatedAt = (data as { updatedAt?: unknown }).updatedAt;
+  if (!Array.isArray(ids) || typeof updatedAt !== 'string') {
+    throw new Error(`stored removed curated ids for "${profileName}" is malformed`);
+  }
+  return { ids: ids.filter((id): id is string => typeof id === 'string'), updatedAt };
+}
+
+async function writeRemoved(env: Env, profileName: string, removed: RemovedCurated): Promise<void> {
+  await env.CALIB.put(removedKey(profileName), JSON.stringify(removed), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+}
+
+function parseRemovedCurated(raw: unknown, updatedAt: unknown): { ids: string[]; updatedAt: string } | { error: string } {
+  if (!Array.isArray(raw)) return { error: 'removed_curated_ids_must_be_array' };
+  if (raw.length > MAX_REMOVED_PER_PROFILE) return { error: 'too_many_removed' };
+  if (typeof updatedAt !== 'string' || !ISO_Z_RE.test(updatedAt)) return { error: 'invalid_removed_updated_at' };
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'string' || !REMOVED_ID_RE.test(item)) return { error: 'invalid_removed_id' };
+    if (seen.has(item)) continue;
+    seen.add(item);
+    ids.push(item);
+  }
+  return { ids, updatedAt };
 }
 
 /** Pure-function entry point used by `index.ts` router. Returns the
@@ -167,7 +217,12 @@ export async function handleProfilesRequest(request: Request, env: Env): Promise
 
 async function handleGetTargets(env: Env, profileName: string): Promise<Response> {
   const list = await readTargets(env, profileName);
-  return jsonResponse({ targets: list });
+  const removed = await readRemoved(env, profileName);
+  return jsonResponse({
+    targets: list,
+    removedCuratedIds: removed ? removed.ids : null,
+    removedCuratedUpdatedAt: removed ? removed.updatedAt : null,
+  });
 }
 
 async function handlePutTargets(
@@ -184,7 +239,23 @@ async function handlePutTargets(
   if (typeof body !== 'object' || body === null) {
     return jsonResponse({ error: 'invalid_payload' }, 400);
   }
-  const targets = (body as { targets?: unknown }).targets;
+  const record = body as { targets?: unknown; removedCuratedIds?: unknown; removedCuratedUpdatedAt?: unknown };
+  const hasTargets = 'targets' in record;
+  const hasRemoved = 'removedCuratedIds' in record;
+  if (!hasTargets && !hasRemoved) {
+    return jsonResponse({ error: 'targets_must_be_array' }, 400);
+  }
+  let removed: { ids: string[]; updatedAt: string } | null = null;
+  if (hasRemoved) {
+    const parsed = parseRemovedCurated(record.removedCuratedIds, record.removedCuratedUpdatedAt);
+    if ('error' in parsed) return jsonResponse({ error: parsed.error }, 400);
+    removed = parsed;
+  }
+  if (!hasTargets) {
+    await writeRemoved(env, profileName, removed!);
+    return jsonResponse({ ok: true, count: removed!.ids.length });
+  }
+  const targets = record.targets;
   if (!Array.isArray(targets)) {
     return jsonResponse({ error: 'targets_must_be_array' }, 400);
   }
@@ -213,6 +284,7 @@ async function handlePutTargets(
     }
     seen.add(t.id);
   }
+  if (removed) await writeRemoved(env, profileName, removed);
   await writeTargets(env, profileName, targets as PersonalTarget[]);
   return jsonResponse({ ok: true, count: targets.length });
 }

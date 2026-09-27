@@ -45,7 +45,7 @@ node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive all
 
 One feature is `drive banner`, `drive topbar`, `drive queue`, `drive upcoming`, `drive map`, `drive help`, `drive profile`, `drive log`, or `drive phone`.
 
-Each drive deletes `$OPD_VERIFY_HOME/chrome-profile` before Chrome starts. Toggles, the shot list, and hidden curated targets begin at their defaults. A second `drive all` does not inherit the first run's pressed buttons. Inside one drive, Hide writes `removedCuratedIds` on localStorage `opd-profile-anil`. A reload in that same Chrome profile keeps the card and its map pin hidden.
+Each drive deletes `$OPD_VERIFY_HOME/chrome-profile` before Chrome starts. Toggles, the shot list, and hidden curated targets begin at their defaults. A second `drive all` does not inherit the first run's pressed buttons. Inside one drive, Hide writes `removedCuratedIds` on localStorage `opd-profile-anil` and PUTs that list to the proxy. A reload in that same Chrome profile keeps the card and its map pin hidden. A new browser profile that loads after the PUT receives the same list from `GET /api/browser/profiles/anil/targets` and hides the card too. Restore PUTs the shorter list.
 
 The service worker is a separate command because Vite dev does not emit `sw.js`:
 
@@ -67,7 +67,7 @@ Screenshots and the service-worker log go to `$OPD_VERIFY_HOME/evidence`, which 
 
 Browser proof is a PNG plus the script's stdout line for that feature. Service-worker proof is `evidence/service-worker.txt` and a zero exit from `scripts/verify-sw-upgrade.sh`. A shoot is proved twice: the toast on the queue card, and the same target on the Log tab. An added profile target is proved by the name remaining in the profile list after the add request returns.
 
-The fixture answers `/manifest.json`, versioned artifacts, `/launch/latest.json`, `/api/browser/session`, `/api/kp`, `/api/log`, and `/api/browser/profiles/anil/targets`. Map tiles, the sun image, and a live CelesTrak TLE are real network calls. If CelesTrak is unreachable, the fixture uses the October 2024 TLE in `scripts/fixtures.mjs`. Propagating that TLE to the current date makes SGP4 fail, and photo lookup shows `Calculation failed — TLE may be missing or malformed.` `drive profile` needs the CelesTrak TLE. `doctor` still passes on the fallback.
+The fixture answers `/manifest.json`, versioned artifacts, `/launch/latest.json`, `/api/browser/session`, `/api/kp`, `/api/log`, and `/api/browser/profiles/anil/targets`. Map tiles, the sun image, and a live CelesTrak TLE are real network calls. If CelesTrak is unreachable, the fixture uses the 2026-09-27 ISS TLE in `scripts/fixtures.mjs`. Photo lookup prefers the last good TLE in localStorage, then the published track, then the bundled element set in `frontend/src/iss-tle.ts`. When every one of those is too old to propagate, the chip says `orbit data is out of date, reconnect to refresh`. `doctor` still passes on the fallback.
 
 ## Cleanup
 

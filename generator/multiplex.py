@@ -7,8 +7,8 @@ in `targets.json`. This module extends that tick so each astronaut named in
 (passes_<name>.json, status_<name>.json, ...) scored against
   curated 137  +  the astronaut's personal targets from R2
                   (fetched via Worker API: GET /api/profiles/<name>/targets)
-                  − their `removedCuratedIds` (read path wired with default
-                  [] — POST not in v1; slot 6 ships that).
+                  − their `removedCuratedIds` (GET field; null until the
+                  browser has synced a hide list).
 
 Storage / API
 =============
@@ -43,8 +43,8 @@ better degraded than 404.
 
 Out of scope (slot 6+)
 ======================
-- `removedCuratedIds` filter (frontend doesn't POST this yet; daemon
-  reads it with a default of [] so it's ready when slot 6 ships).
+- `removedCuratedIds` filter. The browser PUTs the list. GET returns
+  it. This module drops those curated ids from the profile target list.
 - Per-target rating UI / rephoto priority (v2 TODO).
 - Per-profile auth tokens (shared CALIB_TOKEN is fine for v1, premise 12).
 """
@@ -205,11 +205,8 @@ def fetch_profile_targets(profile_name: str) -> dict[str, Any]:
     Returns a dict with:
       - `targets`: list of daemon-internal target dicts (PersonalTargets
                    converted to the curated schema, validated)
-      - `removed_curated_ids`: list of curated target ids the profile
-                               wants hidden. Read path wired with default
-                               [] — frontend doesn't POST this yet (slot
-                               6's job); we read it now so we're ready
-                               when it ships.
+      - `removed_curated_ids`: curated target ids the profile has hidden.
+                               Missing or null on the GET body means none.
       - `source`: "api" on success, "curated-only" on auth/network failure
 
     Never raises: a fetch failure logs a warning and returns a curated-only
@@ -268,10 +265,6 @@ def fetch_profile_targets(profile_name: str) -> dict[str, Any]:
         if target is not None:
             valid.append(target)
 
-    # `removedCuratedIds` is not yet sent by the frontend (slot 6 will
-    # start POSTing it). The Worker returns `{targets}` only today. We
-    # accept either a top-level `removedCuratedIds` (forward-compat for
-    # when slot 6 lands) OR default to [].
     raw_removed = body.get("removedCuratedIds", [])
     removed: list[str] = []
     if isinstance(raw_removed, list):

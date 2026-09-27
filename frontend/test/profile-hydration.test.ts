@@ -125,6 +125,54 @@ describe('getProfileTargets', () => {
 // ---------------------------------------------------------------------------
 
 describe('hydratePersonalTargets', () => {
+  it('keeps a newer local hide list and sends it when the server copy is older', async () => {
+    saveProfile({
+      ...createDefaultProfile(PROFILE),
+      removedCuratedIds: ['aurora-scandinavia'],
+      removedCuratedUpdatedAt: '2026-09-27T12:00:00.000Z',
+    });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        return new Response(JSON.stringify({ ok: true, count: 1 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        targets: [],
+        removedCuratedIds: [],
+        removedCuratedUpdatedAt: '2026-09-27T00:00:00.000Z',
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await _test.hydratePersonalTargets(PROFILE);
+    await vi.waitFor(() => {
+      expect(fetchMock.mock.calls.some((call) => (call[1] as RequestInit | undefined)?.method === 'PUT')).toBe(true);
+    });
+    expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual(['aurora-scandinavia']);
+    const put = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === 'PUT');
+    expect(JSON.parse(String((put![1] as RequestInit).body)).removedCuratedIds).toEqual(['aurora-scandinavia']);
+  });
+
+  it('uploads a local hide list when the server has never stored one', async () => {
+    saveProfile({ ...createDefaultProfile(PROFILE), removedCuratedIds: ['verify-mesa'] });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        return new Response(JSON.stringify({ ok: true, count: 1 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        targets: [],
+        removedCuratedIds: null,
+        removedCuratedUpdatedAt: null,
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await _test.hydratePersonalTargets(PROFILE);
+    await vi.waitFor(() => {
+      expect(fetchMock.mock.calls.some((call) => (call[1] as RequestInit | undefined)?.method === 'PUT')).toBe(true);
+    });
+    expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual(['verify-mesa']);
+    const put = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === 'PUT');
+    expect(JSON.parse(String((put![1] as RequestInit).body)).removedCuratedIds).toEqual(['verify-mesa']);
+  });
+
   it('adopts the server hide list onto a device that has not hidden anything', async () => {
     saveProfile(createDefaultProfile(PROFILE));
     vi.stubGlobal('fetch', vi.fn(async () =>

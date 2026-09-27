@@ -446,16 +446,17 @@ describe('curated toggle flow', () => {
     vi.stubGlobal('fetch', fetchMock);
     await _test.handleToggleCurated(PROFILE, 'aurora-scandinavia', true);
     expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual(['aurora-scandinavia']);
-    const hideCall = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === 'PUT');
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const hideCall = calls.find((call) => call[1]?.method === 'PUT');
     expect(hideCall).toBeTruthy();
-    const hideBody = JSON.parse(String((hideCall![1] as RequestInit).body));
+    const hideBody = JSON.parse(String(hideCall![1].body));
     expect(hideBody.removedCuratedIds).toEqual(['aurora-scandinavia']);
     expect(typeof hideBody.removedCuratedUpdatedAt).toBe('string');
 
     await _test.handleToggleCurated(PROFILE, 'aurora-scandinavia', false);
     expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual([]);
-    const restoreCall = [...fetchMock.mock.calls].reverse().find((call) => (call[1] as RequestInit | undefined)?.method === 'PUT');
-    const restoreBody = JSON.parse(String((restoreCall![1] as RequestInit).body));
+    const restoreCall = [...calls].reverse().find((call) => call[1]?.method === 'PUT');
+    const restoreBody = JSON.parse(String(restoreCall![1].body));
     expect(restoreBody.removedCuratedIds).toEqual([]);
   });
 

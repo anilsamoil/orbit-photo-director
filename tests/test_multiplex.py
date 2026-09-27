@@ -236,6 +236,27 @@ def test_fetch_profile_targets_reads_removed_curated_ids_when_present(
     assert out["removed_curated_ids"] == ["tokyo-night", "lake-baikal"]
 
 
+def test_worker_hide_list_round_trips_out_of_the_profile_target_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker GET shape is what the daemon scores. A hidden id leaves the list."""
+    monkeypatch.setenv("OPD_CALIB_TOKEN", "test-token")
+    body = {
+        "targets": [],
+        "removedCuratedIds": ["tokyo-night"],
+        "removedCuratedUpdatedAt": "2026-09-27T15:00:00.000Z",
+    }
+    curated = [{"id": "tokyo-night"}, {"id": "lake-baikal"}]
+    with patch("generator.multiplex.requests.get", return_value=_MockResponse(body)):
+        fetched = fetch_profile_targets("anil")
+    listed = build_profile_target_list(
+        curated,
+        fetched["targets"],
+        fetched["removed_curated_ids"],
+    )
+    assert [target["id"] for target in listed] == ["lake-baikal"]
+
+
 def test_fetch_profile_targets_handles_non_object_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -534,9 +555,7 @@ def test_run_tick_score_parity_for_curated_target(
 def test_run_tick_profile_removed_curated_ids_excluded(
     settings_in_tmp: Settings, cached_tle: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per design doc: `removedCuratedIds` correctly excluded. Frontend
-    doesn't POST this yet (slot 6's job) but the daemon read path is
-    wired so it works when slot 6 ships. Defensive test."""
+    """A profile hide list drops that curated target from the published passes."""
     monkeypatch.setenv("OPD_CALIB_TOKEN", "test-token")
     now = datetime(2024, 10, 17, 12, 0, 0, tzinfo=UTC)
 

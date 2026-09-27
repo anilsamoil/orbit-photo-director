@@ -38,6 +38,7 @@ import {
   deleteProfileTarget,
   getProfileTargets,
   postProfileTarget,
+  putRemovedCuratedIds,
   putProfileTargets,
 } from './profile-api';
 import { parseTargetCsv, type ParsedValidRow, type ParseTargetCsvResult } from './csv-parse';
@@ -235,12 +236,29 @@ async function hydrateUnchangedProfile(profileName: string): Promise<void> {
       missing.push(checked.target);
     }
   }
-  if (missing.length === 0) return;
-
-  const merged: Profile = {
-    ...fresh,
-    additions: [...fresh.additions, ...missing],
-  };
+  let merged: Profile = missing.length > 0
+    ? { ...fresh, additions: [...fresh.additions, ...missing] }
+    : fresh;
+  const serverIds = apiResult.data.removedCuratedIds;
+  const serverAt = apiResult.data.removedCuratedUpdatedAt;
+  if (serverIds === null && fresh.removedCuratedIds.length > 0) {
+    const at = fresh.removedCuratedUpdatedAt ?? new Date().toISOString();
+    void putRemovedCuratedIds(profileName, fresh.removedCuratedIds, at);
+  } else if (Array.isArray(serverIds)) {
+    const localAt = Date.parse(fresh.removedCuratedUpdatedAt ?? '');
+    const remoteAt = Date.parse(serverAt ?? '');
+    const localNewer = Number.isFinite(localAt) && (!Number.isFinite(remoteAt) || localAt > remoteAt);
+    if (localNewer && fresh.removedCuratedUpdatedAt) {
+      void putRemovedCuratedIds(profileName, fresh.removedCuratedIds, fresh.removedCuratedUpdatedAt);
+    } else if (!sameIds(fresh.removedCuratedIds, serverIds) || fresh.removedCuratedUpdatedAt !== (serverAt ?? undefined)) {
+      merged = {
+        ...merged,
+        removedCuratedIds: serverIds,
+        removedCuratedUpdatedAt: serverAt ?? undefined,
+      };
+    }
+  }
+  if (merged === fresh) return;
   try {
     saveProfile(merged);
   } catch (e) {
@@ -252,6 +270,12 @@ async function hydrateUnchangedProfile(profileName: string): Promise<void> {
     return;
   }
   if (editingTargetId === null) rerenderCrudSection(profileName);
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false;
+  return true;
 }
 
 /** Slot 8b — one-shot GET against `/api/log` filtered to the active
@@ -1008,7 +1032,7 @@ function buildCuratedRemovedSection(profileName: string): HTMLElement {
 
   const desc = document.createElement('p');
   desc.className = 'profile-crud-empty';
-  desc.textContent = 'Exclude curated targets from your scored view. Type to search by name; pick a match to hide. The daemon picks the change up on its next tick.';
+  desc.textContent = 'Exclude curated targets from your scored view. Type to search by name and pick a match to hide it. The hide is saved to your profile, so every signed-in device drops it, and the generator removes it from the published queue the next time it runs. Restore brings it back everywhere.';
   wrap.appendChild(desc);
 
   // v3 — typeahead UI (Anil 2026-05-26). Replaces the paste-exact-id
@@ -1362,16 +1386,11 @@ function buildRemovedChip(profileName: string, id: string): HTMLElement {
 }
 
 /** Toggle a curated id's removed-state. `intendedHide=true` means
- *  the operator just clicked Hide; `false` means Restore. We compute
- *  the next profile via toggleCuratedRemoved (which is symmetric) and
- *  verify the resulting state matches the operator's intent — that
- *  guards against a stale local view where the id was already in the
- *  opposite state.
- *
- *  Curated removal is a local-only setting in v1 (the daemon multiplexer
- *  in slot 4 reads it from the profile JSON the daemon already fetches).
- *  No API call required — saveProfile() persists, and the daemon picks
- *  it up on the next tick. */
+ *  the operator just clicked Hide; `false` means Restore. The local
+ *  list changes immediately. The same list is PUT to the profile API
+ *  so the generator and other devices pick it up. A failed PUT keeps
+ *  the local list. The next hydrate retries when this device's stamp
+ *  is newer than the server copy. */
 async function handleToggleCurated(
   profileName: string,
   curatedId: string,
@@ -1379,8 +1398,6 @@ async function handleToggleCurated(
 ): Promise<void> {
   const before = safeLoadProfile(profileName);
   if (!before) return;
-  // toggleCuratedRemoved is symmetric; check current state to avoid a
-  // double-flip if the operator double-clicks.
   const currentlyRemoved = before.removedCuratedIds.includes(curatedId);
   if (intendedHide && currentlyRemoved) {
     rerenderCrudSection(profileName);
@@ -1390,7 +1407,8 @@ async function handleToggleCurated(
     rerenderCrudSection(profileName);
     return;
   }
-  const next = toggleCuratedRemoved(before, curatedId);
+  const updatedAt = new Date().toISOString();
+  const next = { ...toggleCuratedRemoved(before, curatedId), removedCuratedUpdatedAt: updatedAt };
   try {
     saveProfile(next);
   } catch (e) {
@@ -1398,9 +1416,12 @@ async function handleToggleCurated(
     return;
   }
   rerenderCrudSection(profileName);
+  const synced = await putRemovedCuratedIds(profileName, next.removedCuratedIds, updatedAt);
   showToast(
-    intendedHide ? `Hid curated "${curatedId}"` : `Restored curated "${curatedId}"`,
-    'success',
+    synced.ok
+      ? (intendedHide ? `Hid curated "${curatedId}"` : `Restored curated "${curatedId}"`)
+      : 'Saved on this device. Other devices update once the profile syncs.',
+    synced.ok ? 'success' : 'warn',
   );
 }
 
@@ -2025,11 +2046,13 @@ async function handleJsonImportReplace(
   // Build the merged Profile: keep current name (operator imports INTO this
   // profile), adopt imported additions / removedCuratedIds /
   // distanceThresholdKm. `instantBuffer` stays empty (slot 5b territory).
+  const updatedAt = new Date().toISOString();
   const merged: Profile = {
     version: parse.profile.version,
     name: currentProfileName,
     additions: parse.profile.additions,
     removedCuratedIds: parse.profile.removedCuratedIds,
+    removedCuratedUpdatedAt: updatedAt,
     distanceThresholdKm: parse.profile.distanceThresholdKm,
     instantBuffer: [],
   };
@@ -2046,9 +2069,12 @@ async function handleJsonImportReplace(
   // Server-side replace via PUT
   const apiResult = await putProfileTargets(currentProfileName, merged.additions);
   if (apiResult.ok) {
+    const hidden = await putRemovedCuratedIds(currentProfileName, merged.removedCuratedIds, updatedAt);
     showToast(
-      `Imported ${merged.additions.length} target${merged.additions.length === 1 ? '' : 's'}.`,
-      'success',
+      hidden.ok
+        ? `Imported ${merged.additions.length} target${merged.additions.length === 1 ? '' : 's'}.`
+        : 'Imported targets. Hidden curated targets stay on this device until the profile syncs.',
+      hidden.ok ? 'success' : 'warn',
     );
     return;
   }

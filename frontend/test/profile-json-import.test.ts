@@ -421,16 +421,18 @@ describe('handleJsonImportReplace', () => {
       appVersion: '1.6.12.0',
     });
 
-    // Server PUT fired once with the imported additions
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    const url = call[0];
-    const init = call[1];
+    // Targets PUT, then the imported hide list so other devices match.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const [url, init] = calls[0];
     expect(String(url)).toContain(`/api/browser/profiles/${PROFILE}/targets`);
     expect(init.method).toBe('PUT');
     const body = JSON.parse(init.body as string);
     expect(body.targets).toHaveLength(2);
     expect(body.targets.map((t: { name: string }) => t.name)).toEqual(['Site A', 'Site B']);
+    const hideBody = JSON.parse(calls[1][1].body as string);
+    expect(hideBody.removedCuratedIds).toEqual([]);
+    expect(typeof hideBody.removedCuratedUpdatedAt).toBe('string');
 
     // Local profile reflects the import
     const after = loadProfile(PROFILE)!;
@@ -481,10 +483,8 @@ describe('handleJsonImportReplace', () => {
   });
 
   it('writes the imported distanceThresholdKm + removedCuratedIds into the active profile', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ ok: true, count: 0 }), { status: 200 })),
-    );
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, count: 0 }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
     const imported = createDefaultProfile(PROFILE);
     imported.additions = [];
     imported.distanceThresholdKm = 800;
@@ -501,6 +501,9 @@ describe('handleJsonImportReplace', () => {
     const after = loadProfile(PROFILE)!;
     expect(after.distanceThresholdKm).toBe(800);
     expect(after.removedCuratedIds).toEqual(['hidden-1', 'hidden-2']);
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const hideBody = JSON.parse(calls[1][1].body as string);
+    expect(hideBody.removedCuratedIds).toEqual(['hidden-1', 'hidden-2']);
   });
 });
 

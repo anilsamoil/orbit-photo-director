@@ -33,7 +33,7 @@ Preconditions:
 
 - Without `/api/browser/session` the app never reaches this pane. It stops on the sign-in footer.
 - The signed-in pane does not show the local New profile field. That field is the signed-out profile picker.
-- The October 2024 fallback TLE does not resolve at the current date. Photo lookup then shows `Calculation failed — TLE may be missing or malformed.` `up` has to reach CelesTrak for this drive to finish. A CelesTrak TLE resolves near now.
-- `track.tle_epoch` must match the epoch inside the TLE lines within 2 seconds. Photo lookup refuses the calculation when they disagree, and the result chip says the TLE may be malformed.
+- The fallback TLE in `scripts/fixtures.mjs` is the 2026-09-27 ISS element set. Photo lookup resolves a timestamp near now with that TLE when CelesTrak is down. A timestamp every stored TLE is too old to propagate shows `orbit data is out of date, reconnect to refresh`.
+- `track.tle_epoch` must match the epoch inside the TLE lines within 2 seconds. Photo lookup skips a track whose epoch disagrees and tries the cached or bundled TLE. When none of them parse, the result chip says the TLE may be malformed.
 - Add target posts to the fixture `/api/browser/profiles/anil/targets`. The name must remain after that response.
 - `drive profile` by itself starts with an empty hidden list and hides `verify-mesa` from the paste box. `drive all` reaches this pane after Upcoming has already hidden that id, so the chip is already there and Restore is the step that changes it.

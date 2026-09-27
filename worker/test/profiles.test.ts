@@ -336,6 +336,24 @@ describe('PUT /api/profiles/<name>/targets', () => {
     expect(afterPost.removedCuratedIds).toEqual(['aurora-scandinavia', 'verify-mesa']);
   });
 
+  it('does not store a hide list when the same PUT has invalid targets', async () => {
+    const env = makeEnv();
+    const put = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        targets: [{ nope: true }],
+        removedCuratedIds: ['aurora-scandinavia'],
+        removedCuratedUpdatedAt: '2026-09-27T15:00:00.000Z',
+      }),
+    });
+    expect(put.status).toBe(400);
+    const got = (await (await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() })).json()) as {
+      removedCuratedIds: string[] | null;
+    };
+    expect(got.removedCuratedIds).toBeNull();
+  });
+
   it('rejects body with no targets field', async () => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
