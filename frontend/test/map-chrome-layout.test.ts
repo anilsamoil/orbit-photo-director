@@ -42,12 +42,29 @@ function px(selector: string, prop: string): number {
 }
 
 function ruleStyle(selector: string): CSSStyleDeclaration {
+  const [first] = rulesFor(selector);
+  if (!first) throw new Error(`missing rule ${selector}`);
+  return first;
+}
+
+function rulesFor(selector: string): CSSStyleDeclaration[] {
   const sheet = document.styleSheets[0];
   if (!sheet) throw new Error('missing stylesheet');
-  for (const rule of sheet.cssRules) {
-    if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule.style;
-  }
-  throw new Error(`missing rule ${selector}`);
+  const found: CSSStyleDeclaration[] = [];
+  const visit = (rules: CSSRuleList) => {
+    for (const rule of rules) {
+      if (rule instanceof CSSStyleRule && rule.selectorText === selector) found.push(rule.style);
+      if ('cssRules' in rule && rule.cssRules) visit(rule.cssRules as CSSRuleList);
+    }
+  };
+  visit(sheet.cssRules);
+  return found;
+}
+
+function reservedPx(maxHeight: string): number {
+  const match = maxHeight.match(/- (\d+)px\)$/);
+  if (!match) throw new Error(`no reserved px in ${maxHeight}`);
+  return Number(match[1]);
 }
 
 describe('map chrome layout', () => {
@@ -169,6 +186,28 @@ describe('map chrome layout', () => {
     expect(px('.map-legend', 'bottom')).toBeLessThan(100);
     expect(px('.map-imagery-date', 'bottom')).toBeLessThan(136);
     expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeLessThan(100);
+  });
+
+  it('keeps the dock above the help button in both credit states', () => {
+    mount('view-map');
+    const helpHeight = px('.help-fab', 'height');
+    const dockTop = ruleStyle('.view-map .map-control-dock').top;
+    const topExtra = Number(dockTop.match(/\+ (\d+)px\)/)?.[1] ?? 0);
+    const check = (helpSelector: string, dockSelector: string) => {
+      const helpBottom = Number.parseFloat(ruleStyle(helpSelector).bottom);
+      const needed = helpBottom + helpHeight;
+      const docks = rulesFor(dockSelector);
+      expect(docks.length).toBeGreaterThan(0);
+      expect(docks.some((style) => style.maxHeight.includes('safe-area-inset-bottom'))).toBe(true);
+      for (const style of docks) {
+        expect(reservedPx(style.maxHeight) - topExtra).toBeGreaterThanOrEqual(needed);
+      }
+    };
+    check('.view-map ~ .help-fab', '.view-map .map-control-dock');
+    check(
+      '.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab',
+      '.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock',
+    );
   });
 
   it('lifts the legend, imagery date, and help above expanded credits', () => {

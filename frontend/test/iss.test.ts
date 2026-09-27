@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { wrapLon } from '../src/geo';
@@ -16,6 +17,16 @@ const fixture = fixtureRaw as {
 // state from one describe block can't bleed into another. iss-sgp4.test.ts
 // does the same — both are needed because test file order isn't guaranteed.
 beforeEach(() => _resetSatrecCacheForTests());
+
+describe('iss-now tooltip', () => {
+  it('names SGP4 first and the polynomial fit as the fallback', () => {
+    const html = readFileSync('index.html', 'utf8');
+    const title = html.match(/id="iss-now"[^>]*title="([^"]*)"/)?.[1] ?? '';
+    expect(title).toMatch(/SGP4/);
+    expect(title).toMatch(/polynomial fit/);
+    expect(title.indexOf('SGP4')).toBeLessThan(title.indexOf('polynomial'));
+  });
+});
 
 describe('wrapLon', () => {
   it('passes through in-range', () => {

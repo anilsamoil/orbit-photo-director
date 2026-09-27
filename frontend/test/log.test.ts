@@ -58,6 +58,21 @@ describe('mergeLogEntries', () => {
     expect(merged[0]?.rating).toBe(5);
   });
 
+  it('shows the stored name, else a loaded target name, else the id', () => {
+    const list = document.createElement('div');
+    const empty = document.createElement('div');
+    const stats = document.createElement('div');
+    const names = new Map<string, string>([['tokyo-night', 'Tokyo at night']]);
+    const rows = mergeLogEntries([
+      { target_id: 'tokyo-night', target_name: 'Stored Tokyo', pass_time: '2024-10-17T12:00:00Z', action: 'shoot', received_at: '2024-10-17T12:00:30Z' },
+      { target_id: 'tokyo-night', pass_time: '2024-10-17T13:00:00Z', action: 'shoot', received_at: '2024-10-17T13:00:30Z' },
+      { target_id: 'gone-target', pass_time: '2024-10-17T14:00:00Z', action: 'shoot', received_at: '2024-10-17T14:00:30Z' },
+    ], names);
+    renderLog(list, empty, stats, rows, () => {});
+    const labels = [...list.querySelectorAll('.row-target')].map((node) => node.textContent);
+    expect(labels).toEqual(['gone-target', 'Tokyo at night', 'Stored Tokyo']);
+  });
+
   it('orphan rate (no matching shoot) is dropped', () => {
     const entries: LogEntry[] = [
       { target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'rate', rating: 4, received_at: '2024-10-17T12:00:00Z' },

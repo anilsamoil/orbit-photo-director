@@ -974,6 +974,48 @@ async function driveLog(send, evidenceDir) {
   return 'log: shoot row visible';
 }
 
+async function setCredits(send, open) {
+  const isOpen = await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === true`);
+  if (isOpen !== open) await click(send, '.maplibregl-ctrl-attrib-button');
+  await waitFor(
+    send,
+    `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === ${open ? 'true' : 'false'} ? { ok: true } : null`,
+    open ? 'credits expanded' : 'credits collapsed',
+    10000,
+  );
+}
+
+async function assertDockClearsCredits(send, label) {
+  const boxes = await evaluate(send, `(() => {
+    const dock = document.querySelector('.map-control-dock');
+    const help = document.querySelector('.help-fab');
+    const credits = document.querySelector('.maplibregl-ctrl-attrib');
+    const button = document.querySelector('.map-control-dock .time-btn');
+    if (!dock || !help || !credits || !button) return null;
+    const dockBox = dock.getBoundingClientRect();
+    const helpBox = help.getBoundingClientRect();
+    const creditsBox = credits.getBoundingClientRect();
+    const buttonBox = button.getBoundingClientRect();
+    const overlaps = (a, b) => a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
+    return {
+      ok: dockBox.bottom <= helpBox.top + 1
+        && dockBox.bottom <= creditsBox.top + 1
+        && !overlaps(dockBox, helpBox)
+        && !overlaps(dockBox, creditsBox)
+        && helpBox.width >= 44
+        && helpBox.height >= 44
+        && buttonBox.width >= 44
+        && buttonBox.height >= 44,
+      dockBottom: dockBox.bottom,
+      helpTop: helpBox.top,
+      creditsTop: creditsBox.top,
+      help: { width: helpBox.width, height: helpBox.height },
+      button: { width: buttonBox.width, height: buttonBox.height },
+    };
+  })()`);
+  if (!boxes?.ok) throw new Error(`${label} ${JSON.stringify(boxes)}`);
+}
+
 async function drivePhone(send, evidenceDir, meta) {
   await dismissShotlist(send);
   await click(send, '#tab-map');
@@ -1012,20 +1054,12 @@ async function drivePhone(send, evidenceDir, meta) {
     if (!Number.isFinite(pad) || pad < 47) throw new Error(`top bar padding ${portrait.pad} with safe area`);
   }
   await shot(send, evidenceDir, 'phone-portrait');
+  await setCredits(send, true);
+  await assertDockClearsCredits(send, 'phone portrait credits expanded');
+  await shot(send, evidenceDir, 'phone-portrait-credits');
   await setViewport(send, 844, 390, true);
   await sleep(300);
-  const creditsOpen = await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === true`);
-  if (creditsOpen) await click(send, '.maplibregl-ctrl-attrib-button');
-  await waitFor(
-    send,
-    `(() => {
-      const node = document.querySelector('.maplibregl-ctrl-attrib');
-      if (!node || node.classList.contains('maplibregl-compact-show')) return null;
-      return { ok: true };
-    })()`,
-    'phone credits collapsed',
-    10000,
-  );
+  await setCredits(send, false);
   const landscape = await evaluate(send, `(() => {
     const dock = document.querySelector('.map-control-dock');
     const help = document.querySelector('.help-fab');
@@ -1052,6 +1086,10 @@ async function drivePhone(send, evidenceDir, meta) {
   })()`);
   if (!landscape?.ok) throw new Error(`phone dock ${JSON.stringify(landscape)}`);
   await shot(send, evidenceDir, 'phone-landscape');
+  await setCredits(send, true);
+  await assertDockClearsCredits(send, 'phone landscape credits expanded');
+  await shot(send, evidenceDir, 'phone-landscape-credits');
+  await setCredits(send, false);
   const pressed = await evaluate(send, `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')`);
   if (pressed !== 'false') {
     await click(send, '#toggle-follow-iss');
@@ -1094,5 +1132,5 @@ async function drivePhone(send, evidenceDir, meta) {
   );
   await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
   await setViewport(send, 1400, 900, false);
-  return `phone: 44px targets, dock clear, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
+  return `phone: 44px targets, dock clear with credits collapsed and expanded, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
 }

@@ -18,7 +18,7 @@
         <span class="brand-name">SNAP</span>
         <span class="brand-expansion">(SNAP's Not an Astro Photographer)</span>
       </div>
-      <div id="iss-now" class="iss-now" title="Live ISS sub-point from polynomial fit"></div>
+      <div id="iss-now" class="iss-now" title="Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position"></div>
       <div id="kp-widget" class="kp-badge" hidden></div>
       <div id="sun-widget" class="sun-badge" hidden></div>
       <span id="profile-badge" class="profile-badge" title="Active astronaut profile" hidden></span>
@@ -119,8 +119,8 @@
         </div>
         <div class="map-control-dock">
           <div class="map-controls map-controls-bearing">
-            <button id="bearing-north" class="time-btn active" type="button" title="North up (default)">N&uarr;</button>
-            <button id="bearing-iss" class="time-btn" type="button" title="Rotate map so ISS direction-of-travel points up">ISS&uarr;</button>
+            <button id="bearing-north" class="time-btn" type="button" title="North up">N&uarr;</button>
+            <button id="bearing-iss" class="time-btn active" type="button" title="ISS up (default). Rotate so the direction of travel points up">ISS&uarr;</button>
             <button id="toggle-follow-iss" class="time-btn" type="button" title="Recenter on ISS — click again or pan to release">&#x1F4CD;</button>
           </div>
           <div class="map-controls map-controls-overlay">

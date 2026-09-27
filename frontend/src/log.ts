@@ -105,15 +105,12 @@ export async function fetchLogResult(
   }
 }
 
-/** Group raw log entries by (target_id, pass_time). Each group becomes ONE
- *  row in the UI: the original Shoot/Skip event, optionally enriched with
- *  rating+obstruction from a subsequent Rate event.
- *
- *  Skip events are kept (you can rate a Skip too — "would have been clear,
- *  glad I did"), but Skips without a Shoot don't appear in queue-rating UX
- *  workflows.
- */
-export function mergeLogEntries(entries: LogEntry[]): MergedRow[] {
+function logTargetName(entry: LogEntry, names: ReadonlyMap<string, string>): string {
+  if (entry.target_name) return entry.target_name;
+  return names.get(entry.target_id) || entry.target_id;
+}
+
+export function mergeLogEntries(entries: LogEntry[], names: ReadonlyMap<string, string> = new Map()): MergedRow[] {
   const byKey = new Map<string, MergedRow>();
   for (const e of entries) {
     const key = `${e.target_id}|${e.pass_time}`;
@@ -122,7 +119,7 @@ export function mergeLogEntries(entries: LogEntry[]): MergedRow[] {
       if (!byKey.has(key)) {
         byKey.set(key, {
           target_id: e.target_id,
-          target_name: e.target_name ?? e.target_id,
+          target_name: logTargetName(e, names),
           pass_time: e.pass_time,
           action: e.action,
           score_at_time: e.score_at_time,
@@ -251,7 +248,7 @@ function span(text: string): HTMLElement {
  *  submits OR cancels. On submit, posts a Rate event and resolves true.
  */
 export function openRateModal(row: MergedRow, baseUrl = ''): Promise<boolean> {
-  const initialPayload = buildPayload('rate', row.target_id, row.pass_time, row.score_at_time ?? 0);
+  const initialPayload = buildPayload('rate', row.target_id, row.pass_time, row.score_at_time ?? 0, row.target_name);
   return new Promise((resolve) => {
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
@@ -315,7 +312,7 @@ export function openRateModal(row: MergedRow, baseUrl = ''): Promise<boolean> {
     submit.type = 'button';
     submit.textContent = 'Save';
     submit.addEventListener('click', async () => {
-      if (initialPayload.profile !== buildPayload('rate', row.target_id, row.pass_time, row.score_at_time ?? 0).profile) {
+      if (initialPayload.profile !== buildPayload('rate', row.target_id, row.pass_time, row.score_at_time ?? 0, row.target_name).profile) {
         submit.disabled = true;
         submit.textContent = 'Profile changed — close and reopen this rating';
         return;

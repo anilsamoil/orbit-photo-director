@@ -182,7 +182,8 @@ export function buildPayload(
   action: CalibAction,
   targetId: string,
   passTimeIso: string,
-  scoreAtTime: number
+  scoreAtTime: number,
+  targetName?: string,
 ): CalibPayload {
   // Stamp the active profile so the Worker can route reads per astronaut.
   // Null profile (boot not yet complete, or main.ts has not set it) falls
@@ -192,6 +193,7 @@ export function buildPayload(
   const profile = getAccountProfile()?.name ?? getCurrentProfile()?.name ?? DEFAULT_PROFILE_NAME;
   return {
     target_id: targetId,
+    ...(targetName ? { target_name: targetName } : {}),
     pass_time: passTimeIso,
     action,
     score_at_time: scoreAtTime,

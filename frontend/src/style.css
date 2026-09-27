@@ -77,10 +77,6 @@ body {
   white-space: nowrap;
 }
 
-/* Live ISS sub-point in the topbar — tells the user where the station is
- * right now, in seconds, so an empty queue isn't ambiguous ("over Pacific
- * means few targets, not a stale tick"). Hidden until first polynomial
- * sample arrives so we never render a stale or undefined value. */
 .iss-now {
   font-size: 0.78rem;
   color: var(--text-dim);
@@ -1181,6 +1177,9 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   max-width: 56px;
   max-height: calc(100% - var(--topbar-height) - 137px);
   overflow-y: auto;
+}
+.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
+  max-height: calc(100% - var(--topbar-height) - 157px);
 }
 .view-map .map-control-dock > .map-controls {
   flex-direction: column;
@@ -2924,6 +2923,9 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   }
   .view-map .map-control-dock {
     max-height: calc(100% - var(--topbar-height) - env(safe-area-inset-bottom) - 137px);
+  }
+  .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
+    max-height: calc(100% - var(--topbar-height) - env(safe-area-inset-bottom) - 157px);
   }
   .view-map #map .maplibregl-ctrl-bottom-right {
     bottom: calc(28px + env(safe-area-inset-bottom));

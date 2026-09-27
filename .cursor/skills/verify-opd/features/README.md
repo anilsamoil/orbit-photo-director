@@ -34,5 +34,5 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 - [Help](./help.md) covers the ? button above the map credits, the corner button on the other tabs, and the dialog.
 - [Profile](./profile.md) covers the signed-in profile, distance threshold, add target, hidden curated targets, and photo lookup.
 - [Log](./log.md) covers the calibration row written by Shoot.
-- [Phone](./phone.md) covers a 390x844 portrait and an 844x390 landscape, 44px targets, the dock clearing the (i) and ? buttons, and a long-press pin popup.
+- [Phone](./phone.md) covers a 390x844 portrait and an 844x390 landscape, 44px targets, the dock clearing the (i) and ? buttons with credits collapsed and expanded, and a long-press pin popup.
 - [Service worker](./service-worker.md) covers `sw.js` on a preview build.

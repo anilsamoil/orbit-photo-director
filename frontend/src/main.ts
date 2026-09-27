@@ -832,7 +832,7 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
     const rating = value ?? 0;
     if (rating < 1) return;
     const ratePayload = {
-      ...buildPayload('rate', p.target_id, p.closest_approach, p.score),
+      ...buildPayload('rate', p.target_id, p.closest_approach, p.score, p.target_name),
       rating,
       dedupe_key: `${p.target_id}|${p.closest_approach}|rate|${rating}`,
     };
@@ -844,7 +844,7 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
     );
     return;
   }
-  const payload = buildPayload(action, p.target_id, p.closest_approach, p.score);
+  const payload = buildPayload(action, p.target_id, p.closest_approach, p.score, p.target_name);
   const result = await postCalib(payload);
   // postCalib may have queued the action (offline / token missing / 5xx);
   // refresh the badge regardless so the user sees the new count immediately.
@@ -1046,21 +1046,11 @@ function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success')
   }, 2400);
 }
 
-/** Update the topbar's live ISS sub-point. Called every second from
- *  rerenderCountdowns so the user always sees where the station is right
- *  now — solves "is the queue empty because of geography or because it's
- *  stale?" without making them open the Map tab.
- *
- *  In window: polynomial. Past window: SGP4 from track.tle (V2). Both
- *  paths return null only when the polynomial start is malformed AND the
- *  TLE is missing/malformed — at which point "live track expired" is the
- *  right thing to show. */
 function updateIssNow(): void {
   const el = document.getElementById('iss-now');
   if (!el || !currentTrack) return;
   const pos = liveIssNow(currentTrack, Date.now());
   if (!pos) {
-    // Both polynomial AND SGP4 returned null — track shape is unusable.
     el.classList.add('ready');
     el.innerHTML = '<span class="iss-label">ISS</span><span class="iss-region">live track expired</span>';
     return;
@@ -1310,6 +1300,24 @@ function loadLookupPane(): void {
 }
 
 let logLoadSequence = 0;
+async function loadedTargetNames(): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const remember = (id: string, name: string | undefined) => {
+    if (id && name) names.set(id, name);
+  };
+  let catalog: { id: string; name: string }[] = [];
+  try {
+    const { ensureCatalogLoaded } = await import('./profile-crud');
+    catalog = await ensureCatalogLoaded();
+  } catch {
+    catalog = [];
+  }
+  for (const target of catalog) remember(target.id, target.name);
+  for (const target of getCurrentProfile()?.additions ?? []) remember(target.id, target.name);
+  for (const pass of [...currentTop24h, ...currentTop5]) remember(pass.target_id, pass.target_name);
+  return names;
+}
+
 async function loadLogPane(): Promise<void> {
   const listEl = document.getElementById('log-list');
   const emptyEl = document.getElementById('log-empty');
@@ -1349,7 +1357,10 @@ async function loadLogPane(): Promise<void> {
     }
     return;
   }
-  const merged = mergeLogEntries(result.entries);
+  const names = await loadedTargetNames();
+  if (sequence !== logLoadSequence
+    || profileName !== (getAccountProfile()?.name ?? getCurrentProfile()?.name)) return;
+  const merged = mergeLogEntries(result.entries, names);
   renderLog(listEl, emptyEl, statsEl, merged, async (row: MergedRow) => {
     if (profileName !== (getAccountProfile()?.name ?? getCurrentProfile()?.name)) return;
     const ok = await openRateModal(row);
