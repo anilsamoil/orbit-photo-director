@@ -125,6 +125,19 @@ describe('getProfileTargets', () => {
 // ---------------------------------------------------------------------------
 
 describe('hydratePersonalTargets', () => {
+  it('adopts the server hide list onto a device that has not hidden anything', async () => {
+    saveProfile(createDefaultProfile(PROFILE));
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({
+        targets: [],
+        removedCuratedIds: ['verify-mesa'],
+        removedCuratedUpdatedAt: '2026-09-27T00:00:00.000Z',
+      }), { status: 200 }),
+    ));
+    await _test.hydratePersonalTargets(PROFILE);
+    expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual(['verify-mesa']);
+  });
+
   it('populates local additions when local is empty and server has targets', async () => {
     saveProfile(createDefaultProfile(PROFILE));
     const serverTargets = [

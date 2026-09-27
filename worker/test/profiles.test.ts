@@ -289,6 +289,53 @@ describe('PUT /api/profiles/<name>/targets', () => {
     expect(getBody.targets[1]?.name).toBe('Kyoto');
   });
 
+  it('stores removed curated ids and returns them without dropping targets', async () => {
+    const env = makeEnv();
+    const list = [validTarget({ name: 'Tokyo' })];
+    const putTargets = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ targets: list }),
+    });
+    expect(putTargets.status).toBe(200);
+
+    const putHidden = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        removedCuratedIds: ['aurora-scandinavia', 'verify-mesa'],
+        removedCuratedUpdatedAt: '2026-09-27T15:00:00.000Z',
+      }),
+    });
+    expect(putHidden.status).toBe(200);
+
+    const got = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
+    const body = (await got.json()) as {
+      targets: Array<{ name: string }>;
+      removedCuratedIds: string[] | null;
+      removedCuratedUpdatedAt: string | null;
+    };
+    expect(body.targets.map((target) => target.name)).toEqual(['Tokyo']);
+    expect(body.removedCuratedIds).toEqual(['aurora-scandinavia', 'verify-mesa']);
+    expect(body.removedCuratedUpdatedAt).toBe('2026-09-27T15:00:00.000Z');
+
+    const posted = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(validTarget({
+        id: 'personal:jack:bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',
+        name: 'Kyoto',
+      })),
+    });
+    expect(posted.status).toBe(200);
+    const afterPost = (await (await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() })).json()) as {
+      targets: Array<{ name: string }>;
+      removedCuratedIds: string[];
+    };
+    expect(afterPost.targets.map((target) => target.name)).toEqual(['Tokyo', 'Kyoto']);
+    expect(afterPost.removedCuratedIds).toEqual(['aurora-scandinavia', 'verify-mesa']);
+  });
+
   it('rejects body with no targets field', async () => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {

@@ -439,16 +439,32 @@ describe('curated toggle flow', () => {
     mountSection(PROFILE);
   });
 
-  it('persists hide → restore round-trip without an API call', async () => {
-    const fetchMock = vi.fn();
+  it('persists a hide locally and PUTs the id list so other devices can read it', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, count: 1 }), { status: 200 }),
+    );
     vi.stubGlobal('fetch', fetchMock);
     await _test.handleToggleCurated(PROFILE, 'aurora-scandinavia', true);
     expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual(['aurora-scandinavia']);
+    const hideCall = fetchMock.mock.calls.find((call) => (call[1] as RequestInit | undefined)?.method === 'PUT');
+    expect(hideCall).toBeTruthy();
+    const hideBody = JSON.parse(String((hideCall![1] as RequestInit).body));
+    expect(hideBody.removedCuratedIds).toEqual(['aurora-scandinavia']);
+    expect(typeof hideBody.removedCuratedUpdatedAt).toBe('string');
+
     await _test.handleToggleCurated(PROFILE, 'aurora-scandinavia', false);
     expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual([]);
-    // Curated removal is local-only (daemon reads from profile JSON);
-    // verify we didn't accidentally make an API call.
-    expect(fetchMock).not.toHaveBeenCalled();
+    const restoreCall = [...fetchMock.mock.calls].reverse().find((call) => (call[1] as RequestInit | undefined)?.method === 'PUT');
+    const restoreBody = JSON.parse(String((restoreCall![1] as RequestInit).body));
+    expect(restoreBody.removedCuratedIds).toEqual([]);
+  });
+
+  it('keeps the local hide when the profile PUT fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
+    }));
+    await _test.handleToggleCurated(PROFILE, 'aurora-scandinavia', true);
+    expect(loadProfile(PROFILE)!.removedCuratedIds).toEqual(['aurora-scandinavia']);
   });
 });
 
