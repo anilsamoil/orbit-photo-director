@@ -70,6 +70,31 @@ function toVendorSource(spec: SourceSpec): maplibregl.SourceSpecification {
   return spec;
 }
 
+/** MapLibre's first compact layout adds `maplibregl-compact-show`, which
+ *  opens the credit line. That class arrives with the attribution text,
+ *  after the map constructor returns. Removing it once leaves the info
+ *  button collapsed. Later layout updates do not add it back. */
+function collapseAttribution(container: HTMLElement): void {
+  let observer: MutationObserver | undefined;
+  const collapse = (): boolean => {
+    const node = container.querySelector('.maplibregl-ctrl-attrib');
+    if (!node?.classList.contains('maplibregl-compact-show')) return false;
+    observer?.disconnect();
+    node.classList.remove('maplibregl-compact-show');
+    return true;
+  };
+  if (collapse()) return;
+  observer = new MutationObserver(() => {
+    collapse();
+  });
+  observer.observe(container, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['class'],
+  });
+}
+
 function exposeForEndToEnd(map: maplibregl.Map): void {
   if (typeof window === 'undefined') return;
   if (!new URLSearchParams(window.location.search).has('e2e')) return;
@@ -83,6 +108,7 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
     ...maplibreMapOptions(options.camera),
   });
   map.addControl(new maplibregl.NavigationControl(), 'top-left');
+  collapseAttribution(options.container);
   exposeForEndToEnd(map);
 
   return {

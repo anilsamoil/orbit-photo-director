@@ -1,8 +1,3 @@
-/**
- * Map-tab chrome floats over the canvas. Queue keeps the bars in normal flow.
- * happy-dom applies plain selectors. `:has()` is read from the CSSOM because
- * happy-dom does not match it.
- */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -12,7 +7,10 @@ const css = readFileSync(resolve('src/style.css'), 'utf8');
 function mount(viewClass: string): void {
   document.head.innerHTML = `<style>${css}</style>`;
   document.body.innerHTML = `
-    <header class="topbar"><span class="brand-expansion">SNAP</span></header>
+    <header class="topbar">
+      <span class="brand-expansion">SNAP</span>
+      <nav class="tabs"><button class="tab" type="button">Queue</button></nav>
+    </header>
     <main id="view" class="${viewClass}">
       <section id="map-pane">
         <div class="map-toolbar"></div>
@@ -25,7 +23,10 @@ function mount(viewClass: string): void {
   document.querySelector('#map-pane')!.insertAdjacentHTML('beforeend', `
     <div id="map">
       <div class="maplibregl-ctrl-bottom-right">
-        <div class="maplibregl-ctrl-attrib">coastlines</div>
+        <div class="maplibregl-ctrl maplibregl-ctrl-attrib maplibregl-compact">
+          <button class="maplibregl-ctrl-attrib-button" type="button">i</button>
+          <div class="maplibregl-ctrl-attrib-inner">coastlines</div>
+        </div>
       </div>
     </div>
     <div class="map-legend">legend</div>
@@ -52,7 +53,7 @@ function ruleStyle(selector: string): CSSStyleDeclaration {
 describe('map chrome layout', () => {
   it('floats the top bar and status banner over the map and stacks the dock as a rail', () => {
     mount('view-map');
-    expect(ruleStyle('body:has(> #view.view-map) > .topbar').position).toBe('fixed');
+    expect(ruleStyle('.topbar').position).toBe('fixed');
     expect(ruleStyle('body:has(> #view.view-map) > .banner').position).toBe('fixed');
     const dock = getComputedStyle(document.querySelector('.map-control-dock')!);
     const toolbar = getComputedStyle(document.querySelector('.map-toolbar')!);
@@ -63,18 +64,123 @@ describe('map chrome layout', () => {
     expect(ruleStyle('body:has(> #view.view-map) .brand-expansion').display).toBe('none');
   });
 
-  it('keeps the legend, imagery date, and help button above the attribution', () => {
+  it('keeps the legend and help clear of the collapsed info button', () => {
     mount('view-map');
+    const buttonTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib-button', 'height');
+    expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(buttonTop);
+    expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(px('.maplibregl-ctrl-bottom-right', 'bottom'));
+    expect(px('.map-imagery-date', 'bottom')).toBeGreaterThan(px('.map-legend', 'bottom'));
+  });
+
+  it('leaves the queue status banner in normal flow', () => {
+    mount('view-queue');
+    expect(getComputedStyle(document.querySelector('.banner')!).position).not.toBe('fixed');
+    expect(getComputedStyle(document.querySelector('.map-control-dock')!).flexDirection).not.toBe('column');
+  });
+
+  it('uses one top bar box on every tab', () => {
+    const views = ['view-map', 'view-queue', 'view-upcoming', 'view-profile', 'view-log'];
+    const boxes = views.map((view) => {
+      mount(view);
+      const bar = getComputedStyle(document.querySelector('.topbar')!);
+      const tab = getComputedStyle(document.querySelector('.tab')!);
+      const box = {
+        position: bar.position,
+        top: bar.top,
+        left: bar.left,
+        right: bar.right,
+        padding: bar.padding,
+        flexWrap: bar.flexWrap,
+        minHeight: tab.minHeight,
+        tabPadding: tab.padding,
+        weight: tab.fontWeight,
+      };
+      document.querySelector('.tab')!.classList.add('active');
+      return { ...box, activeWeight: getComputedStyle(document.querySelector('.tab')!).fontWeight };
+    });
+    expect(new Set(boxes.map((box) => JSON.stringify(box))).size).toBe(1);
+    expect(boxes[0]).toEqual({
+      position: 'fixed',
+      top: '0px',
+      left: '0px',
+      right: '0px',
+      padding: '4px 8px',
+      flexWrap: 'nowrap',
+      minHeight: '44px',
+      tabPadding: '0px 8.8px',
+      weight: '600',
+      activeWeight: '600',
+    });
+    mount('view-queue');
+    const bar = document.querySelector('.topbar')!;
+    const main = document.querySelector('main')!;
+    expect(getComputedStyle(main).paddingTop).toBe(getComputedStyle(bar).height);
+    mount('view-map');
+    expect(getComputedStyle(document.querySelector('main')!).paddingTop).toBe('0px');
+  });
+
+  it('scrolls the tab strip inside the bar when the labels are wider than the screen', () => {
+    mount('view-queue');
+    document.querySelector('.topbar')!.innerHTML = `
+      <div class="brand"><span class="brand-mark">J</span><span class="brand-name">SNAP</span></div>
+      <div class="kp-badge">Kp 4</div>
+      <div class="sun-badge"></div>
+      <span class="profile-badge">Christopher</span>
+      <nav class="tabs">
+        <button class="tab" type="button">Queue</button>
+        <button class="tab" type="button">Upcoming</button>
+        <button class="tab" type="button">Map</button>
+        <button class="tab" type="button">Profile</button>
+        <button class="tab" type="button">Log</button>
+      </nav>
+    `;
+    const tabs = getComputedStyle(document.querySelector('.tabs')!);
+    const tab = getComputedStyle(document.querySelector('.tab')!);
+    expect(tabs.overflowX).toBe('auto');
+    expect(Number.parseFloat(tabs.minWidth)).toBe(0);
+    expect(tabs.flexShrink).toBe('1');
+    expect(tab.flexShrink).toBe('0');
+    expect(tab.minHeight).toBe('44px');
+    expect(getComputedStyle(document.querySelector('.brand')!).flexShrink).toBe('0');
+  });
+
+  it('draws one centered info icon on the credit toggle, collapsed and expanded', () => {
+    mount('view-map');
+    const read = () => getComputedStyle(document.querySelector('.maplibregl-ctrl-attrib-button')!);
+    const collapsed = read();
+    expect(collapsed.backgroundRepeat).toBe('no-repeat');
+    expect(collapsed.backgroundPosition).toBe('center center');
+    document.querySelector('.maplibregl-ctrl-attrib')!.classList.add('maplibregl-compact-show');
+    const expanded = read();
+    expect(expanded.backgroundRepeat).toBe('no-repeat');
+    expect(expanded.backgroundPosition).toBe('center center');
+  });
+
+  it('collapses credits to a 44px info button and does not keep the wide band', () => {
+    mount('view-map');
+    const corner = getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!);
+    const button = getComputedStyle(document.querySelector('.maplibregl-ctrl-attrib-button')!);
+    const attrib = getComputedStyle(document.querySelector('.maplibregl-ctrl-attrib')!);
+    expect(corner.left).toBe('auto');
+    expect(corner.right).toBe('8px');
+    expect(button.width).toBe('44px');
+    expect(button.height).toBe('44px');
+    expect(Number.parseFloat(attrib.width)).toBeLessThanOrEqual(44);
+    expect(px('.map-legend', 'bottom')).toBeLessThan(100);
+    expect(px('.map-imagery-date', 'bottom')).toBeLessThan(136);
+    expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeLessThan(100);
+  });
+
+  it('lifts the legend, imagery date, and help above expanded credits', () => {
+    mount('view-map');
+    document.querySelector('.maplibregl-ctrl-attrib')!.classList.add('maplibregl-compact-show');
     const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
     expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
     expect(px('.map-imagery-date', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
-    expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(creditsTop);
-  });
-
-  it('leaves the queue top bar and banner in normal flow', () => {
-    mount('view-queue');
-    expect(getComputedStyle(document.querySelector('.topbar')!).position).not.toBe('fixed');
-    expect(getComputedStyle(document.querySelector('.banner')!).position).not.toBe('fixed');
-    expect(getComputedStyle(document.querySelector('.map-control-dock')!).flexDirection).not.toBe('column');
+    expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).left).toBe('8px');
+    const helpBottom = Number.parseFloat(
+      ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab').bottom,
+    );
+    expect(helpBottom).toBeGreaterThanOrEqual(creditsTop);
   });
 });
