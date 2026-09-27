@@ -5,7 +5,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 ## Sub-features
 
 - `map-globe` shows the MapLibre canvas, the ISS marker, and the ground track.
-- `map-legend` shows launch, day, twilight, and eclipse.
+- `map-legend` shows launch, day, twilight, eclipse, and Anil's targets. The Anil swatch is `#8b93ff`.
 - `map-imagery` shows the imagery or clouds date badge.
 - `map-attribution` starts as a 44x44 (i) button. A tap expands the credit line (OpenStreetMap, CARTO, or NASA). The legend, the imagery date, and the ? button sit above that button and move up when the line opens.
 - `map-time` moves the readout off Now with T+45, then returns it to Now.
@@ -13,6 +13,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 - `map-satellites` opens the picker and lists Tiangong and Hubble.
 - `map-target-popup` opens the Verify Reef popup.
 - `map-pin-drop` right-clicks the map and opens a pass popup.
+- `map-hide-pin` hides Verify Reef from Queue and the targets source drops `verify-reef`.
 - `map-launch` turns on Launches and opens the Verify Ascent dialog.
 
 ## How to get to it (user POV)
@@ -34,8 +35,10 @@ Preconditions:
 - **Satellites.** The picker lists Tiangong and Hubble. The script closes it without adding a NORAD id.
 - **Target popup.** The script frames Verify Reef and clicks that point. A popup contains Verify Reef.
 - **Dropped pin.** A right-click away from that pin opens a popup whose text contains `Closest`.
-- **Launch.** Launches reports `aria-pressed` true. A click on Verify Pad opens a dialog whose text contains Verify Ascent.
-- **Proof.** `evidence/map-globe.png`, `evidence/map-legend.png`, `evidence/map-imagery-date.png`, `evidence/map-attribution-collapsed.png`, `evidence/map-attribution.png`, `evidence/map-time.png`, `evidence/map-tool-rail.png`, `evidence/map-satellites.png`, `evidence/map-target-popup.png`, `evidence/map-pin-drop.png`, and `evidence/map-launch.png`.
+- **Launch.** Launches reports `aria-pressed` true. A click on Verify Pad opens a dialog whose text contains Verify Ascent. The script turns Launches off again.
+- **Legend category.** The legend text contains `Anil's targets`. The `.map-legend-anil` swatch is `rgb(139, 147, 255)`. The `targets-layer` circle color expression names `anils-targets` and `#8b93ff`.
+- **Hidden pin.** After the launch dialog closes, the targets source still contains `verify-reef`. Hide on the Verify Reef queue card removes that id from the source.
+- **Proof.** `evidence/map-globe.png`, `evidence/map-legend.png`, `evidence/map-imagery-date.png`, `evidence/map-attribution-collapsed.png`, `evidence/map-attribution.png`, `evidence/map-time.png`, `evidence/map-tool-rail.png`, `evidence/map-satellites.png`, `evidence/map-target-popup.png`, `evidence/map-pin-drop.png`, `evidence/map-launch.png`, and `evidence/map-pin-hidden.png`.
 
 ## Gotchas
 
@@ -45,3 +48,5 @@ Preconditions:
 - Launch mode hides target pins. Drive the target popup before Launches.
 - The launch pointer is valid for 14 minutes from `up`. After that, `doctor` fails and the dialog will not open.
 - Adding a satellite from the picker fetches CelesTrak. This drive only opens the list.
+- Repo-root `targets.json` has eight `anils-targets` places, painted the same indigo on the map, on card chips, and in the target popup. The verify fixture categories are `coast` and `terrain`, so this drive checks the legend and the layer paint. It does not look for those eight names.
+- A long press drops the same kind of pin as the right-click. The popup stays open through the click that follows the finger lift. `drive phone` is the touch proof. This drive right-clicks.

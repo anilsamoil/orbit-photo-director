@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log'];
+export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone'];
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -115,6 +115,69 @@ async function mouseClick(send, x, y, button = 'left') {
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons: 0, clickCount: 1 });
 }
 
+async function setViewport(send, width, height, mobile) {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile,
+  });
+}
+
+async function safeAreaOverride(send, insets) {
+  try {
+    await send('Emulation.setSafeAreaInsetsOverride', { insets });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function removedCuratedIds(send) {
+  const ids = await evaluate(send, `(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem('opd-profile-anil') || '{}');
+      return Array.isArray(parsed.removedCuratedIds) ? parsed.removedCuratedIds : [];
+    } catch {
+      return [];
+    }
+  })()`);
+  return Array.isArray(ids) ? ids : [];
+}
+
+async function hideNamed(send, container, name) {
+  const id = await evaluate(send, `(() => {
+    const root = document.querySelector(${JSON.stringify(container)});
+    const card = [...(root ? root.querySelectorAll('.card') : [])].find((el) => (el.innerText || '').includes(${JSON.stringify(name)}));
+    const button = card && card.querySelector('.btn-hide');
+    if (!card || !button) return '';
+    button.click();
+    return card.dataset.targetId || '';
+  })()`);
+  if (!id) throw new Error(`no hide button for ${name}`);
+  return id;
+}
+
+async function reloadSettled(send) {
+  await send('Page.reload');
+  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', 30000);
+  await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!text || text.includes('Loading')) return null;
+      return { ok: true };
+    })()`,
+    'banner after reload',
+    30000,
+  );
+}
+
+function touchPoint(x, y) {
+  return { x: Math.round(x), y: Math.round(y), radiusX: 1, radiusY: 1, force: 1, id: 1 };
+}
+
 async function pointForLngLat(send, lng, lat) {
   return evaluate(send, `(() => {
     const map = window.__opdMap;
@@ -200,6 +263,7 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
         else if (feature === 'help') notes.push(await driveHelp(cdp.send, evidenceDir));
         else if (feature === 'profile') notes.push(await driveProfile(cdp.send, evidenceDir, meta));
         else if (feature === 'log') notes.push(await driveLog(cdp.send, evidenceDir));
+        else if (feature === 'phone') notes.push(await drivePhone(cdp.send, evidenceDir, meta));
         else throw new Error(`unknown feature ${feature}`);
       }
     } finally {
@@ -360,7 +424,16 @@ async function driveQueue(send, evidenceDir, meta) {
     'keepsake pane',
   );
   await shot(send, evidenceDir, 'queue-keepsake');
-  return 'queue: cards, score, remind, shoot, mine filter, keepsake';
+  const deltaId = await hideNamed(send, '#cards', meta.names.queue[1]);
+  await waitFor(
+    send,
+    `!document.getElementById('cards')?.innerText.includes(${JSON.stringify(meta.names.queue[1])}) ? { ok: true } : null`,
+    'queue hide',
+  );
+  const stored = await removedCuratedIds(send);
+  if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
+  await shot(send, evidenceDir, 'queue-hide');
+  return 'queue: cards, score, remind, shoot, mine filter, keepsake, hide';
 }
 
 async function driveUpcoming(send, evidenceDir, meta) {
@@ -374,19 +447,37 @@ async function driveUpcoming(send, evidenceDir, meta) {
   await click(send, '#sort-score-upcoming');
   const active = await evaluate(send, `document.getElementById('sort-score-upcoming').classList.contains('active')`);
   if (!active) throw new Error('upcoming score sort did not become active');
-  await click(send, '#upcoming-cards .btn-hide');
+  const mesaId = await hideNamed(send, '#upcoming-cards', meta.names.upcoming[0]);
   await waitFor(
     send,
     `!document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
     'upcoming hide',
   );
   await shot(send, evidenceDir, 'upcoming-hidden');
-  return 'upcoming: card, score sort, hide';
+  await click(send, '#sort-time-upcoming');
+  await waitFor(
+    send,
+    `!document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
+    'upcoming hide after re-render',
+  );
+  const stored = await removedCuratedIds(send);
+  if (!stored.includes(mesaId)) throw new Error(`upcoming hide missing ${mesaId} in ${JSON.stringify(stored)}`);
+  await reloadSettled(send);
+  await click(send, '#tab-upcoming');
+  await waitFor(
+    send,
+    `document.getElementById('upcoming-cards') && !document.getElementById('upcoming-cards').innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
+    'upcoming hide after reload',
+  );
+  const storedAfter = await removedCuratedIds(send);
+  if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
+  await shot(send, evidenceDir, 'upcoming-reloaded');
+  return `upcoming: card, score sort, hide persisted ${mesaId}`;
 }
 
 async function driveMap(send, evidenceDir, meta) {
   await click(send, '#tab-map');
-  await waitFor(
+  const ready = await waitFor(
     send,
     `(() => {
       const map = window.__opdMap;
@@ -412,6 +503,19 @@ async function driveMap(send, evidenceDir, meta) {
     'map ready',
     45000,
   );
+  if (!String(ready.legend || '').includes("Anil's targets")) {
+    throw new Error(`legend missing Anil's targets: ${ready.legend}`);
+  }
+  const anil = await evaluate(send, `(() => {
+    const node = document.querySelector('.map-legend-anil');
+    const swatch = node ? getComputedStyle(node).backgroundColor : '';
+    const paint = window.__opdMap.getPaintProperty('targets-layer', 'circle-color');
+    return { swatch, paint: JSON.stringify(paint) };
+  })()`);
+  if (anil.swatch !== 'rgb(139, 147, 255)') throw new Error(`anil swatch ${anil.swatch}`);
+  if (!String(anil.paint).includes('anils-targets') || !String(anil.paint).includes('#8b93ff')) {
+    throw new Error(`anil paint ${anil.paint}`);
+  }
   await sleep(1200);
   await shot(send, evidenceDir, 'map-globe');
   await shot(send, evidenceDir, 'map-legend');
@@ -532,7 +636,38 @@ async function driveMap(send, evidenceDir, meta) {
   );
   await shot(send, evidenceDir, 'map-launch');
   await click(send, '.launch-dialog .btn');
-  return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog';
+  await click(send, '#filter-launches-map');
+  await waitFor(
+    send,
+    `document.getElementById('filter-launches-map').getAttribute('aria-pressed') === 'false' ? { ok: true } : null`,
+    'launch mode off',
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const source = window.__opdMap && window.__opdMap.getSource('targets');
+      const data = source && (source._data || (source.serialize ? source.serialize().data : null));
+      const ids = (data && data.features ? data.features : []).map((feature) => feature.properties && feature.properties.target_id);
+      return ids.includes('verify-reef') ? { ok: true } : null;
+    })()`,
+    'reef pin before hide',
+  );
+  await click(send, '#tab-queue');
+  await hideNamed(send, '#cards', meta.names.queue[0]);
+  await click(send, '#tab-map');
+  await waitFor(
+    send,
+    `(() => {
+      const source = window.__opdMap && window.__opdMap.getSource('targets');
+      const data = source && (source._data || (source.serialize ? source.serialize().data : null));
+      const ids = (data && data.features ? data.features : []).map((feature) => feature.properties && feature.properties.target_id);
+      return ids.includes('verify-reef') ? null : { ok: true, ids };
+    })()`,
+    'reef pin hidden',
+    10000,
+  );
+  await shot(send, evidenceDir, 'map-pin-hidden');
+  return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin';
 }
 
 async function driveHelp(send, evidenceDir) {
@@ -594,6 +729,22 @@ async function driveProfile(send, evidenceDir, meta) {
     'added target',
   );
   await shot(send, evidenceDir, 'profile-target');
+  const heading = await evaluate(send, `[...document.querySelectorAll('#profile-body .profile-crud-subhead')].some((node) => node.textContent === 'Hidden curated targets')`);
+  if (!heading) throw new Error('profile has no hidden curated section');
+  const mesaChip = await evaluate(send, `!!document.querySelector('[data-curated-id="verify-mesa"]')`);
+  if (!mesaChip) {
+    await evaluate(send, `(() => {
+      const details = document.getElementById('profile-curated-paste-fallback');
+      if (details) details.open = true;
+      const input = document.getElementById('profile-curated-input');
+      if (input) input.value = 'verify-mesa';
+    })()`);
+    await click(send, '#profile-curated-hide-btn');
+    await waitFor(send, `document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'hidden mesa chip');
+  }
+  await shot(send, evidenceDir, 'profile-hidden');
+  await evaluate(send, `document.querySelector('[data-curated-id="verify-mesa"] button')?.click()`);
+  await waitFor(send, `!document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'mesa restored');
   const lookupValue = JSON.stringify(meta.lookupTimestamp);
   await waitFor(
     send,
@@ -623,7 +774,7 @@ async function driveProfile(send, evidenceDir, meta) {
     20000,
   );
   await shot(send, evidenceDir, 'profile-lookup-map');
-  return 'profile: threshold, add target, photo lookup';
+  return 'profile: threshold, add target, hidden curated restore, photo lookup';
 }
 
 async function driveLog(send, evidenceDir) {
@@ -638,4 +789,125 @@ async function driveLog(send, evidenceDir) {
   );
   await shot(send, evidenceDir, 'log');
   return 'log: shoot row visible';
+}
+
+async function drivePhone(send, evidenceDir, meta) {
+  await dismissShotlist(send);
+  await click(send, '#tab-map');
+  await waitFor(
+    send,
+    `window.__opdMap && document.querySelector('.iss-marker') && document.querySelector('.map-legend') ? { ok: true } : null`,
+    'phone map',
+    45000,
+  );
+  await setViewport(send, 390, 844, true);
+  const inset = await safeAreaOverride(send, { top: 47, left: 0, bottom: 34, right: 0 });
+  await sleep(300);
+  const portrait = await evaluate(send, `(() => {
+    const box = (selector) => {
+      const node = document.querySelector(selector);
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    };
+    const tab = box('.tab');
+    const kp = box('#kp-widget');
+    const help = box('.help-fab');
+    const info = box('.maplibregl-ctrl-attrib-button');
+    const pad = getComputedStyle(document.querySelector('.topbar')).paddingTop;
+    return { tab, kp, help, info, pad };
+  })()`);
+  const tall = (box, label) => {
+    if (!box || box.width < 44 || box.height < 44) throw new Error(`${label} is ${JSON.stringify(box)}`);
+  };
+  tall(portrait.tab, 'tab');
+  tall(portrait.kp, 'kp');
+  tall(portrait.help, 'help');
+  tall(portrait.info, 'credits button');
+  if (inset) {
+    const pad = Number.parseFloat(portrait.pad);
+    if (!Number.isFinite(pad) || pad < 47) throw new Error(`top bar padding ${portrait.pad} with safe area`);
+  }
+  await shot(send, evidenceDir, 'phone-portrait');
+  await setViewport(send, 844, 390, true);
+  await sleep(300);
+  const creditsOpen = await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === true`);
+  if (creditsOpen) await click(send, '.maplibregl-ctrl-attrib-button');
+  await waitFor(
+    send,
+    `(() => {
+      const node = document.querySelector('.maplibregl-ctrl-attrib');
+      if (!node || node.classList.contains('maplibregl-compact-show')) return null;
+      return { ok: true };
+    })()`,
+    'phone credits collapsed',
+    10000,
+  );
+  const landscape = await evaluate(send, `(() => {
+    const dock = document.querySelector('.map-control-dock');
+    const help = document.querySelector('.help-fab');
+    const info = document.querySelector('.maplibregl-ctrl-attrib-button');
+    const button = document.querySelector('.map-control-dock .time-btn');
+    if (!dock || !help || !info || !button) return null;
+    const dockBox = dock.getBoundingClientRect();
+    const helpBox = help.getBoundingClientRect();
+    const infoBox = info.getBoundingClientRect();
+    const buttonBox = button.getBoundingClientRect();
+    return {
+      ok: dockBox.bottom <= helpBox.top + 1
+        && dockBox.bottom <= infoBox.top + 1
+        && dock.scrollHeight > dock.clientHeight + 1
+        && buttonBox.width >= 44
+        && buttonBox.height >= 44,
+      dockBottom: dockBox.bottom,
+      helpTop: helpBox.top,
+      infoTop: infoBox.top,
+      scrollHeight: dock.scrollHeight,
+      clientHeight: dock.clientHeight,
+      button: { width: buttonBox.width, height: buttonBox.height },
+    };
+  })()`);
+  if (!landscape?.ok) throw new Error(`phone dock ${JSON.stringify(landscape)}`);
+  await shot(send, evidenceDir, 'phone-landscape');
+  const pressed = await evaluate(send, `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')`);
+  if (pressed !== 'false') {
+    await click(send, '#toggle-follow-iss');
+    await waitFor(
+      send,
+      `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'false' ? { ok: true } : null`,
+      'phone follow off',
+    );
+  }
+  await evaluate(send, `[...document.querySelectorAll('.maplibregl-popup-close-button')].forEach((button) => button.click())`);
+  let lon = meta.reef.lon + 30;
+  if (lon > 180) lon -= 360;
+  await frameLngLat(send, lon, meta.reef.lat, 4);
+  const point = await pointForLngLat(send, lon, meta.reef.lat);
+  if (!point?.ok) throw new Error('could not project the long-press point');
+  try {
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  } catch {
+  }
+  const finger = touchPoint(point.x, point.y);
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [finger] });
+  await sleep(560);
+  const held = await evaluate(send, `document.querySelector('.maplibregl-popup')?.innerText.includes('Closest') ? true : document.body.innerText.slice(0, 80)`);
+  if (held !== true) throw new Error(`long press did not open a pass popup: ${JSON.stringify(held)}`);
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [finger] });
+  await sleep(80);
+  await mouseClick(send, finger.x, finger.y);
+  const stayed = await evaluate(send, `document.querySelector('.maplibregl-popup')?.innerText.includes('Closest') === true`);
+  if (!stayed) throw new Error('pin popup closed on the click that follows the long press');
+  await shot(send, evidenceDir, 'phone-long-press');
+  await sleep(750);
+  await mouseClick(send, finger.x, finger.y);
+  await waitFor(
+    send,
+    `document.querySelector('.maplibregl-popup')?.innerText.includes('Closest') ? null : { ok: true }`,
+    'pin popup dismissed',
+    5000,
+  );
+  await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  await setViewport(send, 1400, 900, false);
+  return `phone: 44px targets, dock clear, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
 }

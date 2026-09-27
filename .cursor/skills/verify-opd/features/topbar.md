@@ -30,3 +30,4 @@ Preconditions:
 
 - Kp is the fixture value 3, drawn to one decimal as `Kp 3.0`, not a live SWPC fetch.
 - A hidden sun badge is an egress miss, not a failed drive, as long as stdout says `sun hidden=true` or the badge is actually visible.
+- `drive phone` checks the 44px tab target and the top safe-area padding. This drive checks that the strip scrolls at 390x800.
