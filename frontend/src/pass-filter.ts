@@ -26,10 +26,10 @@ export function filterPassesByDistance(
   });
 }
 
-/** Drop curated targets the operator hid. The daemon does not receive
- *  `removedCuratedIds` yet, so the same feed still contains them. Queue,
- *  Upcoming, and the map pins all have to apply the list themselves or the
- *  next rebuild paints the card again. */
+/** Drop curated targets the operator hid. The generator drops the same
+ *  ids from the published queue on its next run. Queue, Upcoming, and the
+ *  map pins apply the list themselves so the card disappears on this
+ *  device before that run, and on any device that has loaded the profile. */
 export function filterRemovedCurated<T extends { target_id: string }>(
   passes: T[],
   removedIds: readonly string[],

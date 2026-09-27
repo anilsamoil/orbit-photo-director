@@ -22,7 +22,8 @@
 import exifr from 'exifr';
 
 import type { Track } from './types';
-import { issPositionWithAltSGP4 } from './iss-sgp4';
+import { issLookupCandidates, propagateBestIssTle } from './iss-tle';
+import { CURATED_SATELLITES, fetchSatelliteTLE } from './satellites';
 import { downloadKml, googleEarthWebUrl, type LookupResult } from './kml';
 
 // Re-export so callers can import the type from a single module.
@@ -146,36 +147,53 @@ export async function extractExifTimestamp(file: File): Promise<ExifExtractResul
   return { date: null, reason: 'no-datetime-original', fieldsFound, fileMeta };
 }
 
-/** Resolve a timestamp to an ISS LookupResult using the supplied track's TLE.
- *  Returns null if the track has no TLE or SGP4 fails.
+export const STALE_ORBIT_MESSAGE = 'orbit data is out of date, reconnect to refresh';
+export const MALFORMED_TLE_MESSAGE = 'Calculation failed — TLE may be missing or malformed.';
+
+export type LookupOutcome =
+  | { ok: true; result: LookupResult }
+  | { ok: false; issue: 'malformed' | 'stale' | 'missing' };
+
+/** Resolve a timestamp to an ISS position.
+ *  Tries the last live TLE, the satellite cache, the published track, then
+ *  the bundled element set. The one whose epoch is closest to `ts` and
+ *  still propagates wins.
  *
- *  Confidence is from |timestamp - tle.epoch|:
- *    < 24h  -> 'high'   (SGP4 accuracy ~1 km)
- *    24-72h -> 'medium' (~10 km, fine for the photographer use case)
- *    > 72h  -> 'low'    (degraded; warn operator)
+ *  Confidence is from |timestamp - chosen epoch|:
+ *    < 24h  -> 'high'
+ *    24-72h -> 'medium'
+ *    > 72h  -> 'low'
  */
-export function resolveTimestampToIssPosition(
+export function lookupIssPosition(
   ts: Date, track: Track | null, source: 'paste' | 'exif',
-): LookupResult | null {
-  if (!track || !track.tle || !track.tle_epoch) return null;
-  const epochMs = Date.parse(track.tle_epoch);
-  if (!Number.isFinite(epochMs)) return null;
-  const pos = issPositionWithAltSGP4(track, ts.getTime());
-  if (!pos) return null;
-  const tle_age_at_lookup_hours = Math.abs(ts.getTime() - epochMs) / 3_600_000;
+): LookupOutcome {
+  if (!track) return { ok: false, issue: 'missing' };
+  const pos = propagateBestIssTle(issLookupCandidates(track), ts.getTime());
+  if (!pos.ok) return { ok: false, issue: pos.reason };
+  const tle_age_at_lookup_hours = Math.abs(ts.getTime() - pos.epochMs) / 3_600_000;
   let confidence: 'high' | 'medium' | 'low';
   if (tle_age_at_lookup_hours < 24) confidence = 'high';
   else if (tle_age_at_lookup_hours < 72) confidence = 'medium';
   else confidence = 'low';
   return {
-    timestamp_utc: ts,
-    lat: pos.lat,
-    lon: pos.lon,
-    alt_km: pos.alt_km,
-    tle_age_at_lookup_hours,
-    confidence,
-    source,
+    ok: true,
+    result: {
+      timestamp_utc: ts,
+      lat: pos.lat,
+      lon: pos.lon,
+      alt_km: pos.alt_km,
+      tle_age_at_lookup_hours,
+      confidence,
+      source,
+    },
   };
+}
+
+export function resolveTimestampToIssPosition(
+  ts: Date, track: Track | null, source: 'paste' | 'exif',
+): LookupResult | null {
+  const outcome = lookupIssPosition(ts, track, source);
+  return outcome.ok ? outcome.result : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -270,6 +288,24 @@ export function renderLookupTab(
     onResolve(result);
   };
 
+  const resolveAt = async (ts: Date, source: 'paste' | 'exif') => {
+    const track = getTrack();
+    if (!track) {
+      showError('Track data not loaded yet — wait a moment and try again.');
+      return;
+    }
+    let outcome = lookupIssPosition(ts, track, source);
+    if (!outcome.ok) {
+      const live = await fetchSatelliteTLE(CURATED_SATELLITES[0]!);
+      if (live && !live.stale) outcome = lookupIssPosition(ts, track, source);
+    }
+    if (!outcome.ok) {
+      showError(outcome.issue === 'stale' ? STALE_ORBIT_MESSAGE : MALFORMED_TLE_MESSAGE);
+      return;
+    }
+    showResult(outcome.result);
+  };
+
   const doResolveFromText = () => {
     const text = input.value;
     const ts = parseTimestamp(text);
@@ -277,17 +313,7 @@ export function renderLookupTab(
       showError("Couldn't parse — try `2024-10-17T12:23:00Z`.");
       return;
     }
-    const track = getTrack();
-    if (!track) {
-      showError('Track data not loaded yet — wait a moment and try again.');
-      return;
-    }
-    const result = resolveTimestampToIssPosition(ts, track, 'paste');
-    if (!result) {
-      showError('Calculation failed — TLE may be missing or malformed.');
-      return;
-    }
-    showResult(result);
+    void resolveAt(ts, 'paste');
   };
 
   resolveBtn.addEventListener('click', doResolveFromText);
@@ -326,18 +352,7 @@ export function renderLookupTab(
       showError(msg);
       return;
     }
-    const ts = exif.date;
-    const track = getTrack();
-    if (!track) {
-      showError('Track data not loaded yet — wait a moment and try again.');
-      return;
-    }
-    const result = resolveTimestampToIssPosition(ts, track, 'exif');
-    if (!result) {
-      showError('Calculation failed — TLE may be missing or malformed.');
-      return;
-    }
-    showResult(result);
+    await resolveAt(exif.date, 'exif');
   };
 
   // Drag/drop handling. Use dragover for visual hover state, drop for

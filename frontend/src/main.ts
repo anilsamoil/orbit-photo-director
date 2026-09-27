@@ -37,7 +37,8 @@ import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
 import { getAccountProfile, getAuthorizedProfiles, resolveAccountProfile } from './profile-session';
-import { deleteProfileTarget } from './profile-api';
+import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
+import { rememberPublishedIssTle } from './iss-tle';
 import { markProfileTargetsChanged } from './profile-target-sync';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
@@ -237,6 +238,7 @@ async function doRefresh(): Promise<void> {
     currentTop5 = top5;
     currentTop24h = top24h;
     currentTrack = track;
+    rememberPublishedIssTle(track);
     currentStatus = status ?? null;
     renderPendingMapPane();
 
@@ -527,6 +529,7 @@ function bootFromSnapshot(): boolean {
   currentTop5 = snap.top5;
   currentTop24h = snap.top_24h;
   currentTrack = snap.track;
+  rememberPublishedIssTle(snap.track);
   currentStatus = snap.status;
   // Init the version-skip cache from the loaded snapshot so the first
   // refresh doesn't write a redundant identical-version snapshot.
@@ -811,9 +814,8 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
   // v3 — Hide path (Anil 2026-05-26). One-tap dismiss for curated cards.
   // We MUTATE the profile + save synchronously and rip the card from the
   // DOM immediately so the operator sees instant feedback rather than
-  // waiting for the next manifest refresh (~1 min away). The daemon
-  // multiplex (slot 4) will filter the id out on the next tick so the
-  // hide persists across refreshes.
+  // waiting for the next manifest refresh (~1 min away). The same id list
+  // is PUT to the profile. The generator drops those targets on its next run.
   if (action === 'hide') {
     await handleHideAction(p);
     return;
@@ -938,7 +940,8 @@ async function handleHideAction(p: PassEntry): Promise<void> {
     // if the id isn't in additions, so we can call it unconditionally.
     next = removePersonalTarget(profile, p.target_id);
   } else if (!profile.removedCuratedIds.includes(p.target_id)) {
-    next = toggleCuratedRemoved(profile, p.target_id);
+    const updatedAt = new Date().toISOString();
+    next = { ...toggleCuratedRemoved(profile, p.target_id), removedCuratedUpdatedAt: updatedAt };
   }
   if (next !== profile) {
     try {
@@ -1012,6 +1015,16 @@ async function handleHideAction(p: PassEntry): Promise<void> {
       `Hidden "${p.target_name}" — restore in Profile tab`,
       'success',
     );
+    if (next.removedCuratedUpdatedAt && next.removedCuratedIds !== profile.removedCuratedIds) {
+      const synced = await putRemovedCuratedIds(
+        profile.name,
+        next.removedCuratedIds,
+        next.removedCuratedUpdatedAt,
+      );
+      if (!synced.ok) {
+        showToast('Saved on this device. Other devices update once the profile syncs.', 'warn');
+      }
+    }
   }
 }
 

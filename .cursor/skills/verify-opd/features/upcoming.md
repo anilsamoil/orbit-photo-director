@@ -26,6 +26,6 @@ Preconditions:
 
 ## Gotchas
 
-- Hide writes the target id into `removedCuratedIds` on `opd-profile-anil`. Queue, Upcoming, and the map pins all drop that id on the next paint. The fixture feed still contains Verify Mesa.
+- Hide writes the target id into `removedCuratedIds` on `opd-profile-anil` and PUTs the list to the profile API. Queue, Upcoming, and the map pins all drop that id on the next paint. The fixture feed still contains Verify Mesa. A new browser that loads after the PUT gets the list from the profile GET and hides it too.
 - The next drive deletes the Chrome profile first, so the card is visible again and the script hides it again.
 - `drive all` hides Verify Mesa here, after Queue has already hidden Verify Delta. Both stay hidden for the rest of that page, including the reload in this drive. Profile later restores Verify Mesa.

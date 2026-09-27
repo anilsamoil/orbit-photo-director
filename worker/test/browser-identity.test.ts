@@ -83,7 +83,7 @@ describe('account-owned browser profiles', () => {
     const assertion = await jwt('owner-id', 'owner@example.com');
     expect((await session(assertion)).profile.name).toBe('anil');
     records.set('profiles/anil/targets.json', JSON.stringify([target('anil')]));
-    expect(await (await call('/api/browser/profiles/anil/targets', assertion)).json()).toEqual({ targets: [target('anil')] });
+    expect(await (await call('/api/browser/profiles/anil/targets', assertion)).json()).toEqual({ targets: [target('anil')], removedCuratedIds: null, removedCuratedUpdatedAt: null });
     expect(bucket.put).not.toHaveBeenCalled();
   });
   it('uses only the verified identity for the display label and supports safe session reads', async () => {
@@ -112,7 +112,7 @@ describe('account-owned browser profiles', () => {
     const assertion = await jwt(); const name = (await session(assertion)).profile.name;
     const path = `/api/browser/profiles/${name}/targets`;
     expect((await call(path, assertion, 'POST', target(name))).status).toBe(200);
-    expect(await (await call(path, assertion)).json()).toEqual({ targets: [target(name)] });
+    expect(await (await call(path, assertion)).json()).toEqual({ targets: [target(name)], removedCuratedIds: null, removedCuratedUpdatedAt: null });
     for (const method of ['POST', 'PUT', 'DELETE']) {
       for (const headers of [{ origin: 'https://evil.example' }, { origin: '' }, { 'sec-fetch-site': 'cross-site' }])
         expect((await call(path, assertion, method, undefined, headers)).status).toBe(403);
@@ -166,10 +166,10 @@ describe('explicit delegated profiles', () => {
     for (const prefix of ['/api/browser/profiles', '/api/profiles']) {
       const path = `${prefix}/jessica/targets`;
       expect((await call(path, assertion, 'POST', target('jessica'))).status).toBe(200);
-      expect(await (await call(path, assertion)).json()).toEqual({ targets: [target('jessica')] });
+      expect(await (await call(path, assertion)).json()).toEqual({ targets: [target('jessica')], removedCuratedIds: null, removedCuratedUpdatedAt: null });
       expect((await call(path, assertion, 'PUT', { targets: [target('jessica')] })).status).toBe(200);
       expect((await call(`${path}/personal%3Ajessica%3Atest`, assertion, 'DELETE')).status).toBe(200);
-      expect(await (await call(path, assertion)).json()).toEqual({ targets: [] });
+      expect(await (await call(path, assertion)).json()).toEqual({ targets: [], removedCuratedIds: null, removedCuratedUpdatedAt: null });
     }
     vi.mocked(bucket.get).mockClear(); vi.mocked(bucket.put).mockClear();
     for (const [token, name] of [[assertion, 'jack'], [await jwt(), 'jessica']]) {

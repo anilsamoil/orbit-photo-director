@@ -144,6 +144,8 @@ function startProxy(home) {
   ]);
   const logEntries = [];
   const personalTargets = [];
+  let removedCuratedIds = null;
+  let removedCuratedUpdatedAt = null;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
@@ -197,7 +199,12 @@ function startProxy(home) {
     }
     const targetRoute = path.match(/^\/api\/browser\/profiles\/([^/]+)\/targets(?:\/([^/]+))?$/);
     if (targetRoute && req.method === 'GET') {
-      json(res, 200, { ok: true, targets: personalTargets });
+      json(res, 200, {
+        ok: true,
+        targets: personalTargets,
+        removedCuratedIds,
+        removedCuratedUpdatedAt,
+      });
       return;
     }
     if (targetRoute && req.method === 'POST') {
@@ -207,8 +214,20 @@ function startProxy(home) {
     }
     if (targetRoute && req.method === 'PUT') {
       const body = JSON.parse(await readBody(req) || '{}');
-      personalTargets.splice(0, personalTargets.length, ...(body.targets || []));
-      json(res, 200, { ok: true, count: personalTargets.length });
+      const hasTargets = Array.isArray(body.targets);
+      const hasRemoved = Array.isArray(body.removedCuratedIds);
+      if (!hasTargets && !hasRemoved) {
+        json(res, 400, { error: 'targets_must_be_array' });
+        return;
+      }
+      if (hasTargets) personalTargets.splice(0, personalTargets.length, ...body.targets);
+      if (hasRemoved) {
+        removedCuratedIds = body.removedCuratedIds.filter((id) => typeof id === 'string');
+        removedCuratedUpdatedAt = typeof body.removedCuratedUpdatedAt === 'string'
+          ? body.removedCuratedUpdatedAt
+          : new Date().toISOString();
+      }
+      json(res, 200, { ok: true, count: hasRemoved && !hasTargets ? removedCuratedIds.length : personalTargets.length });
       return;
     }
     if (targetRoute && req.method === 'DELETE') {

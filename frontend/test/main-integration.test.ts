@@ -490,6 +490,14 @@ describe('main.ts: hide-from-card (v3)', () => {
     expect(profile.removedCuratedIds).toContain('aurora-scandinavia');
   });
 
+  it('handleHideAction sends the hide list to the profile API', async () => {
+    const put = vi.spyOn(profileApi, 'putRemovedCuratedIds').mockResolvedValue({ ok: true, data: { count: 1 } });
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    await handleHideAction(buildPass({ target_id: 'aurora-scandinavia', target_name: 'Aurora — Scandinavia' }));
+    expect(put).toHaveBeenCalledWith('anil', ['aurora-scandinavia'], expect.any(String));
+  });
+
   it('handleHideAction removes the matching card from the DOM immediately', async () => {
     const { init, handleHideAction } = await import('../src/main');
     await init();

@@ -107,7 +107,7 @@ describe('Google Access calibration authorization', () => {
     expect(bucket.put).not.toHaveBeenCalled();
     expect((await worker.fetch(request('POST', target), env, {} as ExecutionContext)).status).toBe(200);
     const read = await worker.fetch(request('GET'), env, {} as ExecutionContext);
-    expect(await read.json()).toEqual({ targets: [target] });
+    expect(await read.json()).toEqual({ targets: [target], removedCuratedIds: null, removedCuratedUpdatedAt: null });
     expect((await worker.fetch(request('PUT', { targets: [target] }), env, {} as ExecutionContext)).status).toBe(200);
     const removed = await worker.fetch(request('DELETE', undefined, {}, `/${encodeURIComponent(target.id)}`), env, {} as ExecutionContext);
     expect(await removed.json()).toMatchObject({ ok: true, removed: true, count: 0 });

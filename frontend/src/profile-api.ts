@@ -29,21 +29,44 @@ function accountGuard(profileName: string): ApiResult<never> | null {
  *  a fresh device (empty localStorage) sees the targets the server
  *  already holds. The Worker handler (worker/src/profiles.ts) returns
  *  `{ ok: true, targets: PersonalTarget[] }`. */
+export interface ProfileTargetsBody {
+  targets: PersonalTarget[];
+  /** Absent when the server build does not know about hides.
+   *  Null when this profile has never stored a hide list.
+   *  An array, including empty, is the list every device should show. */
+  removedCuratedIds?: string[] | null;
+  removedCuratedUpdatedAt?: string | null;
+}
+
 export async function getProfileTargets(
   profileName: string,
   baseUrl = '',
-): Promise<ApiResult<{ targets: PersonalTarget[] }>> {
+): Promise<ApiResult<ProfileTargetsBody>> {
   const denied = accountGuard(profileName); if (denied) return denied;
   try {
     const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
       ...SESSION_REQUEST, method: 'GET',
     });
-    const parsed = await parseJsonResult<{ targets: PersonalTarget[] }>(resp, false);
+    const parsed = await parseJsonResult<ProfileTargetsBody>(resp, false);
     if (!parsed.ok) return parsed;
     if (!Array.isArray(parsed.data?.targets)) {
       return { ok: false, reason: 'http', status: resp.status, detail: 'invalid_response' };
     }
-    return { ok: true, data: { targets: parsed.data.targets } };
+    const body = parsed.data;
+    let removedCuratedIds: string[] | null | undefined;
+    let removedCuratedUpdatedAt: string | null | undefined;
+    if (body && 'removedCuratedIds' in body) {
+      if (body.removedCuratedIds === null) {
+        removedCuratedIds = null;
+        removedCuratedUpdatedAt = null;
+      } else if (Array.isArray(body.removedCuratedIds)) {
+        removedCuratedIds = body.removedCuratedIds.filter((id): id is string => typeof id === 'string');
+        removedCuratedUpdatedAt = typeof body.removedCuratedUpdatedAt === 'string'
+          ? body.removedCuratedUpdatedAt
+          : null;
+      }
+    }
+    return { ok: true, data: { targets: body.targets, removedCuratedIds, removedCuratedUpdatedAt } };
   } catch (e) {
     return { ok: false, reason: 'network', detail: errMsg(e) };
   }
@@ -62,6 +85,27 @@ export async function putProfileTargets(
       ...SESSION_REQUEST, method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ targets }),
+    });
+    return await parseJsonResult<{ count: number }>(resp);
+  } catch (e) {
+    return { ok: false, reason: 'network', detail: errMsg(e) };
+  }
+}
+
+/** Replace the hide list. Omits `targets` so a hide does not rewrite
+ *  personal targets stored by another device. */
+export async function putRemovedCuratedIds(
+  profileName: string,
+  removedCuratedIds: readonly string[],
+  removedCuratedUpdatedAt: string,
+  baseUrl = '',
+): Promise<ApiResult<{ count: number }>> {
+  const denied = accountGuard(profileName); if (denied) return denied;
+  try {
+    const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
+      ...SESSION_REQUEST, method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ removedCuratedIds, removedCuratedUpdatedAt }),
     });
     return await parseJsonResult<{ count: number }>(resp);
   } catch (e) {
@@ -130,7 +174,9 @@ async function parseJsonResult<T>(resp: Response, writeReceipt = true): Promise<
     const isValidation = err.startsWith('invalid_')
       || err === 'targets_must_be_array'
       || err === 'too_many_targets'
-      || err === 'duplicate_id';
+      || err === 'too_many_removed'
+      || err === 'duplicate_id'
+      || err === 'removed_curated_ids_must_be_array';
     return {
       ok: false,
       reason: isValidation ? 'validation' : 'http',

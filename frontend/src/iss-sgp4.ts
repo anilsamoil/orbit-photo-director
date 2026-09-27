@@ -74,6 +74,50 @@ function satrecEpochMs(satrec: SatRec): number {
   return Date.UTC(yr, 0, 1) + (satrec.epochdays - 1) * 86_400_000;
 }
 
+export type IssPropagation =
+  | { ok: true; lat: number; lon: number; alt_km: number }
+  | { ok: false; reason: 'missing' | 'malformed' | 'stale' };
+
+/** Epoch encoded in the TLE lines, or null when the lines do not parse. */
+export function tleEpochMs(tle: { line1: string; line2: string } | undefined): number | null {
+  const satrec = parseTLE(tle);
+  if (!satrec) return null;
+  return satrecEpochMs(satrec);
+}
+
+/** Propagate `track.tle` to `whenMs`. A non-zero SGP4 error means the
+ *  element set is too old to use at that time. A parse failure or an
+ *  epoch that disagrees with `track.tle_epoch` is a malformed element set. */
+export function propagateIssDetailed(track: Track, whenMs: number): IssPropagation {
+  if (!track.tle) return { ok: false, reason: 'missing' };
+  const satrec = parseTLE(track.tle);
+  if (!satrec) return { ok: false, reason: 'malformed' };
+  if (track.tle_epoch) {
+    const declared = Date.parse(track.tle_epoch);
+    if (Number.isFinite(declared) && Math.abs(satrecEpochMs(satrec) - declared) > 2_000) {
+      return { ok: false, reason: 'malformed' };
+    }
+  }
+  const when = new Date(whenMs);
+  const result = propagate(satrec, when);
+  if (satrec.error !== 0) return { ok: false, reason: 'stale' };
+  if (!result || typeof result.position === 'boolean' || !result.position) {
+    return { ok: false, reason: 'malformed' };
+  }
+  const { x, y, z } = result.position;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    return { ok: false, reason: 'malformed' };
+  }
+  const ecf = eciToEcf(result.position, gstime(when));
+  const r = Math.sqrt(ecf.x * ecf.x + ecf.y * ecf.y + ecf.z * ecf.z);
+  if (r === 0 || !Number.isFinite(r)) return { ok: false, reason: 'malformed' };
+  const lat = (Math.asin(ecf.z / r) * 180) / Math.PI;
+  const lon = (Math.atan2(ecf.y, ecf.x) * 180) / Math.PI;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false, reason: 'malformed' };
+  const EARTH_RADIUS_KM = 6378.137;
+  return { ok: true, lat, lon: wrapLon(lon), alt_km: r - EARTH_RADIUS_KM };
+}
+
 /** Like liveIssPositionSGP4 but also returns altitude in km above Earth's
  *  centre-to-surface radius. Used by the photo-lookup tab (Pettit feedback
  *  2026-05-19) — KML output needs alt for the relativeToGround placemark
@@ -83,30 +127,9 @@ export function issPositionWithAltSGP4(
   track: Track,
   whenMs: number,
 ): { lat: number; lon: number; alt_km: number } | null {
-  const satrec = parseTLE(track.tle);
-  if (!satrec) return null;
-  if (track.tle_epoch) {
-    const declared = Date.parse(track.tle_epoch);
-    if (Number.isFinite(declared)) {
-      if (Math.abs(satrecEpochMs(satrec) - declared) > 2_000) return null;
-    }
-  }
-  const when = new Date(whenMs);
-  const result = propagate(satrec, when);
-  if (!result || typeof result.position === 'boolean' || !result.position) return null;
-  if (satrec.error !== 0) return null;
-  const { x, y, z } = result.position;
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
-  const ecf = eciToEcf(result.position, gstime(when));
-  const r = Math.sqrt(ecf.x * ecf.x + ecf.y * ecf.y + ecf.z * ecf.z);
-  if (r === 0 || !Number.isFinite(r)) return null;
-  const lat = (Math.asin(ecf.z / r) * 180) / Math.PI;
-  const lon = (Math.atan2(ecf.y, ecf.x) * 180) / Math.PI;
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  // Spherical Earth radius matches the Python generator's EARTH_RADIUS_KM
-  // (orbit.py:8). r is from origin in km; subtract to get altitude.
-  const EARTH_RADIUS_KM = 6378.137;
-  return { lat, lon: wrapLon(lon), alt_km: r - EARTH_RADIUS_KM };
+  const result = propagateIssDetailed(track, whenMs);
+  if (!result.ok) return null;
+  return { lat: result.lat, lon: result.lon, alt_km: result.alt_km };
 }
 
 export function liveIssPositionSGP4(

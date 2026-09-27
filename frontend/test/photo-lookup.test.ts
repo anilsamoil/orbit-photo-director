@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  MALFORMED_TLE_MESSAGE,
+  STALE_ORBIT_MESSAGE,
   parseTimestamp,
+  renderLookupTab,
   resolveTimestampToIssPosition,
 } from '../src/photo-lookup';
 import { _resetSatrecCacheForTests } from '../src/iss-sgp4';
@@ -26,6 +29,8 @@ const SAMPLE_TRACK: Track = {
 
 beforeEach(() => {
   _resetSatrecCacheForTests();
+  localStorage.removeItem('opd-iss-tle-last-good');
+  localStorage.removeItem('opd-tle-25544');
 });
 
 describe('parseTimestamp', () => {
@@ -73,10 +78,12 @@ describe('resolveTimestampToIssPosition', () => {
     expect(r).toBeNull();
   });
 
-  it('returns null when track has no tle', () => {
+  it('uses the bundled TLE when the published track has no element set', () => {
     const noTle: Track = { ...SAMPLE_TRACK, tle: undefined };
     const r = resolveTimestampToIssPosition(new Date('2024-10-17T12:00:00Z'), noTle, 'paste');
-    expect(r).toBeNull();
+    expect(r).not.toBeNull();
+    expect(r!.alt_km).toBeGreaterThan(300);
+    expect(r!.alt_km).toBeLessThan(500);
   });
 
   it('returns high confidence for timestamps within 24h of epoch', () => {
@@ -129,9 +136,48 @@ describe('resolveTimestampToIssPosition', () => {
     expect(fromExif?.source).toBe('exif');
   });
 
-  it('returns null when tle_epoch is missing or unparseable', () => {
+  it('still propagates when tle_epoch is unparseable but the lines match the query', () => {
     const noEpoch: Track = { ...SAMPLE_TRACK, tle_epoch: 'garbage' };
-    const r = resolveTimestampToIssPosition(new Date(), noEpoch, 'paste');
-    expect(r).toBeNull();
+    const r = resolveTimestampToIssPosition(new Date('2024-10-17T06:58:11Z'), noEpoch, 'paste');
+    expect(r).not.toBeNull();
+    expect(r?.lat).toBeGreaterThan(-52);
+    expect(r?.lat).toBeLessThan(52);
+  });
+
+  it('propagates a published TLE at its own epoch plus two days', () => {
+    const epochMs = Date.parse('2024-10-16T18:58:12.000Z');
+    const r = resolveTimestampToIssPosition(new Date(epochMs + 2 * 86_400_000), SAMPLE_TRACK, 'paste');
+    expect(r).not.toBeNull();
+    expect(r!.alt_km).toBeGreaterThan(380);
+    expect(r!.alt_km).toBeLessThan(450);
+  });
+
+  it('shows the out-of-date message when every TLE is too old to propagate', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('celestrak blocked');
+    }));
+    document.body.innerHTML = `
+      <input id="lookup-input" />
+      <button id="lookup-resolve" type="button">Resolve</button>
+      <div id="lookup-dropzone"></div>
+      <button id="lookup-file-btn" type="button"></button>
+      <input id="lookup-file-input" type="file" />
+      <div id="lookup-result" hidden></div>
+    `;
+    renderLookupTab(document.body, () => SAMPLE_TRACK, () => {});
+    const input = document.querySelector<HTMLInputElement>('#lookup-input')!;
+    input.value = '2035-06-01T00:00:00Z';
+    document.querySelector<HTMLButtonElement>('#lookup-resolve')!.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('.lookup-error')?.textContent).toBe(STALE_ORBIT_MESSAGE);
+    });
+    expect(document.body.textContent).not.toContain(MALFORMED_TLE_MESSAGE);
+  });
+
+  it('uses a cached or bundled TLE when the published October 2024 TLE cannot reach 2026', () => {
+    const r = resolveTimestampToIssPosition(new Date('2026-09-29T04:10:50.460Z'), SAMPLE_TRACK, 'paste');
+    expect(r).not.toBeNull();
+    expect(r!.alt_km).toBeGreaterThan(300);
+    expect(r!.alt_km).toBeLessThan(500);
   });
 });

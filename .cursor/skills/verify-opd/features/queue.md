@@ -30,7 +30,7 @@ Preconditions:
 - **Remind and Shoot.** Remind shows pressed. Shoot shows a toast that contains `Shoot logged`.
 - **Mine filter.** The empty state names your targets. All brings the cards back.
 - **Keepsake.** The keepsake button reveals Verify Keepsake.
-- **Hide.** Hide on the Verify Delta card removes that card. `removedCuratedIds` in `opd-profile-anil` contains `verify-delta`. The same list is what Upcoming and the map pins read.
+- **Hide.** Hide on the Verify Delta card removes that card. `removedCuratedIds` in `opd-profile-anil` contains `verify-delta`. The same list is what Upcoming and the map pins read. The card also PUTs that list to the profile API.
 - **Proof.** `evidence/queue.png`, `evidence/queue-score.png`, `evidence/queue-shoot.png`, `evidence/queue-mine.png`, `evidence/queue-keepsake.png`, and `evidence/queue-hide.png`.
 
 ## Gotchas

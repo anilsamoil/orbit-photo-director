@@ -33,6 +33,9 @@ export interface Profile {
    *  Renders apply this as a filter against the curated 137. v2 may add
    *  per-target version-fingerprint matching to handle curated renames. */
   removedCuratedIds: string[];
+  /** ISO timestamp of the last hide or restore on this device. Absent until
+   *  the operator changes the list. A newer stamp wins over the server copy. */
+  removedCuratedUpdatedAt?: string;
   /** Distance horizon for the queue/upcoming filter (km). 1500 km matches
    *  the existing ISS_HORIZON_KM. Lower values prune oblique grazing
    *  passes. v1: hidden in the Profile tab settings panel (Slot 7). */
