@@ -137,11 +137,6 @@ function startProxy(home) {
   const state = readState(home);
   const fixtureDir = resolve(home, 'fixtures');
   const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
-  const names = new Map([
-    ['verify-reef', 'Verify Reef'],
-    ['verify-delta', 'Verify Delta'],
-    ['verify-mesa', 'Verify Mesa'],
-  ]);
   const logEntries = [];
   const personalTargets = [];
   let removedCuratedIds = null;
@@ -185,15 +180,18 @@ function startProxy(home) {
         json(res, 400, { ok: false, error: 'invalid_action' });
         return;
       }
-      logEntries.push({
+      const entry = {
         target_id: payload.target_id,
-        target_name: names.get(payload.target_id) || payload.target_id,
         pass_time: payload.pass_time,
         action: payload.action,
         score_at_time: payload.score_at_time,
         rating: payload.rating,
         received_at: new Date().toISOString(),
-      });
+      };
+      if (typeof payload.target_name === 'string' && payload.target_name.length > 0 && payload.target_name.length <= 200) {
+        entry.target_name = payload.target_name;
+      }
+      logEntries.push(entry);
       json(res, 200, { ok: true });
       return;
     }

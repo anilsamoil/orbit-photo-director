@@ -13,7 +13,7 @@ Profile holds the signed-in astronaut, the distance threshold, personal targets,
 ## How to get to it (user POV)
 
 - Choose the Profile tab.
-- Photo lookup is the section under the target form, not its own tab.
+- Photo lookup is the last section of the Profile pane, below the sign-in note. The target form, Your targets, hidden curated targets, CSV import, and JSON backup sit above it. It is not its own tab.
 
 ## Driving it with opd-verify
 
@@ -35,7 +35,7 @@ Preconditions:
 
 - Without `/api/browser/session` the app never reaches this pane. It stops on the sign-in footer.
 - The signed-in pane does not show the local New profile field. That field is the signed-out profile picker.
-- The fallback TLE in `scripts/fixtures.mjs` is the 2026-09-27 ISS element set. Photo lookup resolves a timestamp near now with the published track, the last-good copy of that track, or that bundled set. The choice is the candidate that still propagates and whose epoch is closest to the photo time. There is also `opd-tle-25544`. A failed first pass fetches one live ISS TLE before the chip is shown.
+- The fallback TLE in `scripts/fixtures.mjs` is the 2026-09-27 ISS element set. Photo lookup resolves a timestamp near now with the published track, the last-good copy of that track, or that bundled set. The choice is the candidate that still propagates and whose epoch is closest to the photo time. There is also `opd-tle-25544`. A failed first pass asks once for the ISS set, from that 6 hour cache or from CelesTrak, and retries only when the set is not stale.
 - `track.tle_epoch` must match the epoch inside the TLE lines within 2 seconds. Photo lookup treats a track whose epoch disagrees as malformed and tries the other candidates. The bundled set always parses, so the malformed chip does not appear while that set is in the page.
 - Add target posts to the fixture `/api/browser/profiles/anil/targets`. The name is painted before the response returns. This drive checks that the name is on screen. It does not wait for the toast.
-- `drive profile` by itself starts with an empty hidden list only when this proxy has not stored one. The proxy keeps the list until `down`. `drive all` reaches this pane after Upcoming has already hidden `verify-mesa`, so the chip is already there and Restore is the step that changes it.
+- `drive profile` by itself starts with an empty hidden list only when this proxy has not stored one. The proxy keeps that list, and any personal target from Add target, until `down`. A second `drive profile` on the same proxy already lists Verify Harbor, so the add step does not prove a new row. Run `down`, then `up`, before a drive that expects an empty list. `drive all` reaches this pane after Upcoming has already hidden `verify-mesa`, so the chip is already there and Restore is the step that changes it.
