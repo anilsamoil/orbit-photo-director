@@ -669,6 +669,44 @@ describe('main.ts: hide-from-card (v3)', () => {
     );
     expect(matches).toHaveLength(1);
   });
+
+  it('keeps a hidden upcoming card hidden after a same-feed render and a reload', async () => {
+    const hidden = buildPass({ target_id: 'aurora-scandinavia', target_name: 'Aurora Scandinavia' });
+    const kept = buildPass({ target_id: 'tokyo-night', target_name: 'Tokyo at night' });
+    seedSnapshot([hidden, kept], [hidden, kept]);
+
+    const { init, handleHideAction, renderQueue } = await import('../src/main');
+    await init();
+
+    const upcomingIds = () => [...document.querySelectorAll('#upcoming-cards .card')].map(
+      (el) => (el as HTMLElement).dataset.targetId,
+    );
+    expect(upcomingIds()).toContain('aurora-scandinavia');
+    expect(upcomingIds()).toContain('tokyo-night');
+
+    await handleHideAction(hidden);
+    renderQueue();
+
+    expect(upcomingIds()).not.toContain('aurora-scandinavia');
+    expect(upcomingIds()).toContain('tokyo-night');
+    expect([...document.querySelectorAll('#cards .card')].map((el) => (el as HTMLElement).dataset.targetId))
+      .not.toContain('aurora-scandinavia');
+
+    for (const id of liveIntervals) window.clearInterval(id);
+    liveIntervals.clear();
+    vi.resetModules();
+    document.body.innerHTML = DOM;
+    const reloaded = await import('../src/main');
+    await reloaded.init();
+
+    const afterReload = [...document.querySelectorAll('#upcoming-cards .card')].map(
+      (el) => (el as HTMLElement).dataset.targetId,
+    );
+    expect(afterReload).not.toContain('aurora-scandinavia');
+    expect(afterReload).toContain('tokyo-night');
+    const profile = JSON.parse(localStorage.getItem('opd-profile-anil')!);
+    expect(profile.removedCuratedIds).toContain('aurora-scandinavia');
+  });
 });
 
 describe('main.ts: updatePendingSyncBadge', () => {

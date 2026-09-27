@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ANILS_TARGET_PAINT, ANILS_TARGETS_CATEGORY } from '../../../category-style';
+import { saveProfile } from '../../../profile';
 import type { PassEntry } from '../../../types';
 import { createVendorDouble } from '../../../../test/vendor-map-double';
 import { createClock } from '../../map-core/clock';
@@ -46,5 +48,74 @@ describe('targets', () => {
     expect(source.data.features).toHaveLength(1);
     expect(source.data.features[0]?.geometry).toMatchObject({ type: 'Point', coordinates: [-40, 12] });
     expect(source.data.features[0]?.properties).toMatchObject({ in_window: true, has_pass: true });
+  });
+
+  it('omits a curated pin whose id is in removedCuratedIds', () => {
+    history.replaceState(null, '', '/?u=anil');
+    saveProfile({
+      version: 1,
+      name: 'anil',
+      additions: [],
+      removedCuratedIds: ['city'],
+      distanceThresholdKm: 1500,
+      instantBuffer: [],
+    });
+    const vendor = createVendorDouble();
+    const clock = createClock(() => NOW);
+    const core = createMapCore(vendor, clock);
+    api().bindTargetsClock(clock);
+    api().noteTargetCore(core);
+    api().setTargetPasses([
+      {
+        target_id: 'city',
+        target_name: 'City',
+        target_lat: 12,
+        target_lon: -40,
+        closest_approach: '2026-05-04T12:20:00Z',
+        nadir_distance_km: 10,
+        score: 80,
+      } as PassEntry,
+      {
+        target_id: 'kept',
+        target_name: 'Kept',
+        target_lat: 1,
+        target_lon: 2,
+        closest_approach: '2026-05-04T12:20:00Z',
+        nadir_distance_km: 10,
+        score: 40,
+      } as PassEntry,
+    ]);
+    api().refreshTargetsSource();
+    const source = vendor.sources.get('targets');
+    if (!source || source.type !== 'geojson' || typeof source.data === 'string') throw new Error('targets source missing');
+    const ids = source.data.features.map((feature) => feature.properties?.target_id);
+    expect(ids).toEqual(['kept']);
+  });
+
+  it('carries the category onto the pin and paints Anil\'s targets in the category color', () => {
+    const vendor = createVendorDouble();
+    const clock = createClock(() => NOW);
+    const core = createMapCore(vendor, clock);
+    api().bindTargetsClock(clock);
+    api().noteTargetCore(core);
+    api().setTargetPasses([{
+      target_id: 'k2',
+      target_name: 'K2',
+      target_lat: 35.88,
+      target_lon: 76.51,
+      closest_approach: '2026-05-04T12:20:00Z',
+      nadir_distance_km: 10,
+      score: 80,
+      category: ANILS_TARGETS_CATEGORY,
+    } as PassEntry]);
+    api().refreshTargetsSource();
+    const source = vendor.sources.get('targets');
+    if (!source || source.type !== 'geojson' || typeof source.data === 'string') throw new Error('targets source missing');
+    expect(source.data.features[0]?.properties).toMatchObject({ category: ANILS_TARGETS_CATEGORY });
+    const layer = api().targetsLayer();
+    if (!layer.paint) throw new Error('targets layer has no paint');
+    const encoded = JSON.stringify(layer.paint['circle-color']);
+    expect(encoded).toContain(ANILS_TARGETS_CATEGORY);
+    expect(encoded).toContain(ANILS_TARGET_PAINT.color);
   });
 });

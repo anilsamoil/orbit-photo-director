@@ -98,7 +98,7 @@ export interface VendorMap {
   setCursor(cursor: Cursor): void;
 
   addMarker(element: HTMLElement, at: LngLat): MarkerHandle;
-  openPopup(options: { at: LngLat; content: HTMLElement; maxWidth?: string }): PopupHandle;
+  openPopup(options: { at: LngLat; content: HTMLElement; maxWidth?: string; closeOnClick?: boolean }): PopupHandle;
 }
 
 export type VendorMapOptions = {

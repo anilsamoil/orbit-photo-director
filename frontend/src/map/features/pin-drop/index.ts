@@ -38,18 +38,38 @@ export const pinDrop: MapFeature = {
       const body = buildPassList(pin.lat, pin.lon, pin.precision, sections, nowMs);
       const profile = parseProfileFromURL(window.location.href);
       body.appendChild(buildPinAddFooter(pin.lat, pin.lon, pin.precision, profile, dismiss));
-      core.openPopup({ at: [pin.lon, pin.lat], content: body, maxWidth: '340px', owner: 'pin' });
+      core.openPopup({
+        at: [pin.lon, pin.lat],
+        content: body,
+        maxWidth: '340px',
+        closeOnClick: false,
+        owner: 'pin',
+      });
     };
 
+    let swallowPinClick = false;
+    let swallowTimer: ReturnType<typeof setTimeout> | null = null;
+    const armSwallow = (): void => {
+      swallowPinClick = true;
+      if (swallowTimer) clearTimeout(swallowTimer);
+      swallowTimer = setTimeout(() => {
+        swallowPinClick = false;
+      }, 700);
+    };
+    const takeSwallow = (): boolean => swallowPinClick;
+
     core.on('contextmenu', ({ lngLat }) => drop(lngLat));
-    bindLongPress(core, drop);
-    core.onLayer('click', 'dropped-pin-layer', dismiss);
+    bindLongPress(core, drop, armSwallow);
+    core.onLayer('click', 'dropped-pin-layer', () => {
+      if (takeSwallow()) return;
+      dismiss();
+    });
     core.onLayer('mouseenter', 'dropped-pin-layer', () => core.setCursor('pointer'));
     core.onLayer('mouseleave', 'dropped-pin-layer', () => core.setCursor(''));
   },
 };
 
-function bindLongPress(core: MapCore, drop: (at: LngLat) => void): void {
+function bindLongPress(core: MapCore, drop: (at: LngLat) => void, onDrop: () => void): void {
   let press: { start: Point; timer: ReturnType<typeof setTimeout> } | null = null;
   const release = (): void => {
     if (press) clearTimeout(press.timer);
@@ -64,6 +84,7 @@ function bindLongPress(core: MapCore, drop: (at: LngLat) => void): void {
       start: finger,
       timer: setTimeout(() => {
         press = null;
+        onDrop();
         drop(lngLat);
       }, LONG_PRESS_MS),
     };

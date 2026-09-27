@@ -1,4 +1,5 @@
 import type { PassEntry } from './types';
+import { categoryPaint } from './category-style';
 import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
 import { renderStarBlock, scoreToStars, starsToLabel } from './score-stars';
 import { formatTrackOffset } from './track-offset';
@@ -122,6 +123,15 @@ export function renderCard(
 
   const meta = document.createElement('div');
   meta.className = 'card-meta';
+  const paint = categoryPaint(p.category);
+  if (paint) {
+    card.style.borderLeft = `3px solid ${paint.color}`;
+    const chip = makeTag('category-paint', paint.label);
+    chip.style.background = paint.color;
+    chip.style.color = paint.ink;
+    chip.style.borderColor = paint.color;
+    meta.appendChild(chip);
+  }
   meta.appendChild(makeTag(`regime-${p.pass_regime}`, p.pass_regime));
   meta.appendChild(makeTag(obstructionClass(p.obstruction_class), p.obstruction_class));
   meta.appendChild(makeTag('', `${formatUtcLabel(p.closest_approach)}`));

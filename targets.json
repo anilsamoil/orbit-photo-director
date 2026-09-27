@@ -1913,5 +1913,125 @@
     "category": "community-personal",
     "notes": "CSA astronaut J. Kutryk (Crew-13) hometown \u2014 Alberta. Above 51.6\u00b0 so oblique only",
     "caption_hook": "For Josh \u2014 looking north toward Beauvallon"
+  },
+  {
+    "id": "maroon-bells-aspens",
+    "name": "Maroon Bells aspens \u2014 Maroon Lake",
+    "geom": {
+      "type": "point",
+      "lat": 39.09699,
+      "lon": -106.94519
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Seasonal. Peak fall color late September to early October. Point is Maroon Lake on the USGS Maroon Bells quad (39.09699 N, 106.94519 W), the valley of aspens facing the bells. Maroon Peak summit is 39.07085 N, 106.98899 W.",
+    "caption_hook": "Maroon Lake aspens under the Bells, peak color late September"
+  },
+  {
+    "id": "kebler-pass-aspens",
+    "name": "Kebler Pass aspens",
+    "geom": {
+      "type": "point",
+      "lat": 38.84972,
+      "lon": -107.10028
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Seasonal. Peak fall color late September to early October. GNIS gap Kebler Pass, 38\u00b050'59\"N 107\u00b006'01\"W, one of the largest aspen groves in Colorado, West Elk Mountains west of Crested Butte.",
+    "caption_hook": "Kebler Pass aspen grove at peak color"
+  },
+  {
+    "id": "dallas-divide-aspens",
+    "name": "Dallas Divide aspens \u2014 San Juans",
+    "geom": {
+      "type": "point",
+      "lat": 38.09444,
+      "lon": -107.88833
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Seasonal. Peak fall color late September to early October. Highway 62 saddle between Ridgway and Placerville, the aspen corridor for Telluride and Ouray. GNIS 38\u00b005'40\"N 107\u00b053'18\"W.",
+    "caption_hook": "San Juan aspens on Dallas Divide, Telluride and Ouray below"
+  },
+  {
+    "id": "k2",
+    "name": "K2",
+    "geom": {
+      "type": "point",
+      "lat": 35.8825,
+      "lon": 76.51333
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Karakoram 8000 m. Summit 8611 m on the Pakistan-China border, 35.88250 N, 76.51333 E.",
+    "caption_hook": "K2, the Karakoram's high point, from the station"
+  },
+  {
+    "id": "broad-peak",
+    "name": "Broad Peak",
+    "geom": {
+      "type": "point",
+      "lat": 35.81361,
+      "lon": 76.56528
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Karakoram 8000 m. Summit 8051 m, about 8 km from K2. 35.81361 N, 76.56528 E.",
+    "caption_hook": "Broad Peak's long summit ridge beside K2"
+  },
+  {
+    "id": "gasherbrum-i",
+    "name": "Gasherbrum I (Hidden Peak)",
+    "geom": {
+      "type": "point",
+      "lat": 35.72444,
+      "lon": 76.69639
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Karakoram 8000 m. Hidden Peak, 8080 m, surveyed as K5. 35.72444 N, 76.69639 E.",
+    "caption_hook": "Hidden Peak at the head of the Baltoro"
+  },
+  {
+    "id": "gasherbrum-ii",
+    "name": "Gasherbrum II",
+    "geom": {
+      "type": "point",
+      "lat": 35.75833,
+      "lon": 76.65333
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Karakoram 8000 m. Summit 8034 m, surveyed as K4. 35.75833 N, 76.65333 E.",
+    "caption_hook": "Gasherbrum II on the Pakistan-China border"
+  },
+  {
+    "id": "everest-south-base-camp",
+    "name": "Everest South Base Camp",
+    "geom": {
+      "type": "point",
+      "lat": 28.00722,
+      "lon": 86.85944
+    },
+    "priority": 5,
+    "regime": "day",
+    "tier": 1,
+    "category": "anils-targets",
+    "notes": "Nepal South Base Camp, about 5364 m, 28.00722 N, 86.85944 E. North Base Camp is in Tibet at 28.14139 N, 86.85139 E and is not this point.",
+    "caption_hook": "Khumbu icefall and the tents at Nepal's Everest base camp"
   }
 ]

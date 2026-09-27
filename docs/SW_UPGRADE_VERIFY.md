@@ -68,26 +68,26 @@ snapshot path crashed. Console will tell you which.
 
 ### 4. SW upgrade lifecycle (multi-tab)
 
-This is the V2-P0 multi-tab safety property:
-**existing tabs keep their old SW until natural navigation; new tabs get
-the new SW immediately.**
+`clientsClaim` is `true` in `frontend/vite.config.ts` (since 2026-08-24),
+and `skipWaiting` is `true`. After an update, an open tab's controller
+swaps to the new service worker without a navigation. That swap is
+expected. The JavaScript already running in the tab stays the old bundle
+until you reload.
 
-1. Open a SECOND tab to `map.astroanil.dev`.
-2. Both tabs should show the same SW URL (`/sw.js`) and Status:
-   activated.
-3. Take note of the asset hash in the page source: `assets/index-XXXX.js`
-4. Now deploy a new build to R2 (or wait for the next deploy).
-5. In Tab 1, open DevTools → Application → Service Workers. Click
-   "Update" — you should see "Status: redundant" on the OLD SW and a NEW
-   SW appear with status "activated" but **NOT** controlling Tab 1 yet.
-6. Tab 1's page source should still show the OLD asset hash.
-7. Tab 1 → soft-navigate (e.g., click a tab) — SW should swap to NEW.
-8. Tab 1 → reload — NEW asset hash now visible.
-9. **Critical:** during steps 5-7, Tab 2 should ALSO still be on the OLD
-   SW. The new tab you open AFTER the deploy gets the new SW.
+1. Open a second tab to `map.astroanil.dev`.
+2. Confirm both tabs show `/sw.js` with status activated.
+3. Note the asset hash in the page source, `assets/index-XXXX.js`.
+4. Deploy a new build to R2, or wait for the next deploy.
+5. In Tab 1, open DevTools → Application → Service Workers and click
+   **Update**.
+6. Confirm the old worker is redundant and the new worker is activated
+   and controlling Tab 1. No navigation is required. Tab 2 swaps the
+   same way.
+7. Reload Tab 1. Confirm the page source shows the new asset hash.
+8. Open a tab after the deploy. Confirm it is on the new worker.
 
-❌ Fail mode: Tab 1 swaps controllers without nav → `clientsClaim`
-regression in vite.config.ts.
+❌ Fail mode: Tab 1 stays on the old controller until a navigation or a
+reload. That is a `clientsClaim: false` regression in `vite.config.ts`.
 
 ### 5. localStorage snapshot survives the upgrade
 

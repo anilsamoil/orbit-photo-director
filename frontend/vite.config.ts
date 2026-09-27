@@ -21,15 +21,13 @@ export default defineConfig({
   },
   plugins: [
     VitePWA({
-      // registerType: 'prompt' — vite-plugin-pwa's 'autoUpdate' silently
-      // injects e.clientsClaim() into the SW, which forces the new SW to
-      // take over existing tabs immediately. V2 plan explicitly forbids
-      // this (it's the multi-tab race the plan was designed to prevent).
-      // 'prompt' lets the workbox config below decide skipWaiting/claim
-      // honestly. We don't show a UI prompt and don't import
-      // virtual:pwa-register — workbox.skipWaiting:true (below) is what
-      // makes the new SW activate on install; clientsClaim:false keeps
-      // existing tabs on their old SW until natural navigation.
+      // registerType: 'prompt' so vite-plugin-pwa does not inject its own
+      // clientsClaim via 'autoUpdate'. This file's workbox block is the
+      // one place that flag is set. There is no update prompt and nothing
+      // imports virtual:pwa-register. skipWaiting: true activates the new
+      // worker on install. clientsClaim: true (since 2026-08-24) makes
+      // that worker take control of open tabs without a navigation. A
+      // controller swap with no navigation is the current behavior.
       registerType: 'prompt',
       injectRegister: 'auto',
 

@@ -130,6 +130,9 @@ body {
  * /api/kp returns no data (worker hides itself rather than rendering
  * a fake reading). */
 .kp-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
@@ -156,8 +159,8 @@ body {
  * SDO HMI continuum image (visible-light sun, sunspots visible). Sits
  * next to the Kp badge in the topbar; click opens the SWPC dashboard. */
 .sun-badge {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   overflow: hidden;
   cursor: pointer;
@@ -226,6 +229,7 @@ body {
   border: 0;
   color: var(--text-dim);
   min-height: 44px;
+  min-width: 44px;
   padding: 0 0.55rem;
   font: inherit;
   font-weight: 600;
@@ -357,7 +361,7 @@ main.view-map { padding-top: 0; }
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
-.launch-data-details summary { cursor: pointer; min-height: 24px; }
+.launch-data-details summary { cursor: pointer; min-height: 44px; }
 .launch-data-details p { margin: 0.5rem 0 0; line-height: 1.5; }
 .card.launch-brief {
   background: var(--surface);
@@ -379,7 +383,7 @@ main.view-map { padding-top: 0; }
 .launch-brief-actions { grid-area: actions; display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .launch-brief-actions .btn { min-height: 44px; }
 .launch-details { grid-area: details; border-top: 1px solid var(--border); padding-top: 0.5rem; color: var(--text-dim); font-size: 0.85rem; }
-.launch-details > summary { cursor: pointer; min-height: 32px; display: list-item; }
+.launch-details > summary { cursor: pointer; min-height: 44px; display: list-item; }
 .launch-details .launch-facts { margin-top: 0.5rem; }
 .launch-dialog {
   width: min(640px, calc(100vw - 2rem));
@@ -544,6 +548,7 @@ main.view-map { padding-top: 0; }
   text-align: left;
   font-family: inherit;
   cursor: pointer;
+  min-height: 44px;
   border-radius: 4px;
   transition: background 80ms ease;
 }
@@ -683,6 +688,8 @@ main.view-map { padding-top: 0; }
 .card-rating-star {
   background: transparent;
   border: 0;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0 0.1rem;
   font-size: 1.15rem;
   line-height: 1;
@@ -1076,7 +1083,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 }
 .view-map .map-toolbar {
   position: absolute;
-  top: 64px;
+  top: calc(var(--topbar-height) + 5px);
   left: 8px;
   z-index: 10;
   display: flex;
@@ -1162,7 +1169,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 }
 .view-map .map-control-dock {
   position: absolute;
-  top: 64px;
+  top: calc(var(--topbar-height) + 5px);
   right: 8px;
   z-index: 10;
   display: flex;
@@ -1172,7 +1179,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   flex: 0 0 auto;
   width: max-content;
   max-width: 56px;
-  max-height: calc(100% - 104px);
+  max-height: calc(100% - var(--topbar-height) - 137px);
   overflow-y: auto;
 }
 .view-map .map-control-dock > .map-controls {
@@ -1202,7 +1209,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 }
 .view-map #map-launch-coverage {
   position: absolute;
-  top: 130px;
+  top: calc(var(--topbar-height) + 71px);
   left: 8px;
   z-index: 11;
   flex: 0 1 auto;
@@ -1222,7 +1229,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map .satellite-picker-panel {
   position: absolute;
   z-index: 12;
-  top: 130px;
+  top: calc(var(--topbar-height) + 71px);
   right: 64px;
   flex: 0 1 auto;
   width: min(100% - 80px, 18rem);
@@ -1238,7 +1245,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 /* Zoom stays under the toolbar. Credits own the strip above the status
  * line. Legend, imagery date, and help sit above that strip. */
 .view-map #map .maplibregl-ctrl-top-left {
-  top: 130px;
+  top: calc(var(--topbar-height) + 71px);
   left: 8px;
   right: auto;
   bottom: auto;
@@ -1255,6 +1262,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map #map .maplibregl-ctrl-bottom-right .maplibregl-ctrl {
   float: none;
   margin: 0;
+}
+.view-map #map .maplibregl-ctrl-attrib a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
 }
 .view-map #map .maplibregl-ctrl-attrib-button {
   width: 44px;
@@ -1319,6 +1331,10 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab {
   bottom: 100px;
 }
+.view-map .maplibregl-ctrl-group button {
+  width: 44px;
+  height: 44px;
+}
 .map-launch-brief { padding: 0; }
 .map-launch-primary > .launch-brief {
   padding: 0.6rem 0.75rem;
@@ -1338,7 +1354,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .map-launch-primary > .launch-brief .launch-summary { gap: 0.25rem; font-size: 0.82rem; }
 .map-launch-primary > .launch-brief .launch-brief-reason { font-size: 0.84rem; line-height: 1.4; }
 .map-launch-more { margin-top: 0.35rem; }
-.map-launch-primary > summary, .map-launch-more > summary { cursor: pointer; min-height: 32px; color: var(--text-dim); font-size: 0.85rem; }
+.map-launch-primary > summary, .map-launch-more > summary { cursor: pointer; min-height: 44px; color: var(--text-dim); font-size: 0.85rem; }
 .map-launch-primary > summary[data-has-chance="true"], .map-launch-more > summary[data-has-chance="true"] { color: var(--green); }
 .map-launch-primary > .launch-brief, .map-launch-more .launch-brief { margin-top: 0.5rem; }
 
@@ -1700,6 +1716,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .map-legend-launch { background: #ffd45c; border: 1px solid #0b0d12; }
 .map-legend-twilight { background: #d65cff; }
 .map-legend-eclipse { background: #7a8aa8; }
+.map-legend-anil { background: #8b93ff; border: 1px solid #fff; }
 
 .time-btn {
   background: transparent;
@@ -1743,6 +1760,8 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   background: transparent;
   border: 0;
   color: var(--text-dim);
+  min-width: 44px;
+  min-height: 44px;
   padding: 0.3rem 0.85rem;
   font: inherit;
   font-size: 0.78rem;
@@ -1789,6 +1808,8 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   background: transparent;
   border: 0;
   color: var(--text-dim);
+  min-width: 44px;
+  min-height: 44px;
   padding: 0.3rem 0.85rem;
   font: inherit;
   font-size: 0.78rem;
@@ -1817,6 +1838,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-dim);
+  min-height: 44px;
   padding: 0.3rem 0.85rem;
   font: inherit;
   font-size: 0.78rem;
@@ -1923,6 +1945,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+  min-height: 44px;
   padding: 0.25rem 0.55rem;
   border-radius: 999px;
   background: rgba(91, 208, 255, 0.12);
@@ -1982,6 +2005,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   padding: 0.35rem 0.55rem;
   font: inherit;
   min-width: 10rem;
+  min-height: 44px;
 }
 .profile-btn {
   background: var(--surface-2);
@@ -1989,6 +2013,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.4rem 0.8rem;
+  min-height: 44px;
   font: inherit;
   cursor: pointer;
 }
@@ -2007,6 +2032,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .profile-threshold-slider {
   width: 100%;
   max-width: 360px;
+  height: 44px;
 }
 
 /* Slot 6 — Profile-tab CRUD: add form + personal list + curated chips.
@@ -2189,6 +2215,9 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .profile-curated-paste-fallback summary {
   cursor: pointer;
   color: var(--text-dim);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
   padding: 0.2rem 0;
 }
 
@@ -2202,6 +2231,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
+  min-height: 44px;
   padding: 0.35rem 0.7rem;
   border-radius: 6px;
   cursor: pointer;
@@ -2529,6 +2559,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text);
+  min-height: 44px;
   padding: 0.3rem 0.7rem;
   border-radius: 6px;
   font: inherit;
@@ -2627,11 +2658,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* Sit above the iOS home-indicator / safe-area inset when present. */
-@supports (padding: env(safe-area-inset-bottom)) {
-  .help-fab { bottom: calc(1rem + env(safe-area-inset-bottom)); }
-}
-
 /* Help modal: wider than the rating modal, with a scrollable body so the
  * full feature list fits on a phone without pushing the close button off.
  * Flex column (overriding .modal's grid) so the header stays fixed and the
@@ -2643,7 +2669,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   display: flex;
   flex-direction: column;
   max-width: 460px;
-  max-height: 80vh;
+  max-height: calc(100dvh - 2rem);
   gap: 0.6rem;
 }
 .help-header {
@@ -2848,7 +2874,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .pin-add-form { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .pin-add-name {
   flex: 1 1 100%;
-  min-height: 2.2rem;
+  min-height: 44px;
   padding: 0.2rem 0.45rem;
   border: 1px solid rgba(0, 0, 0, 0.3);
   border-radius: 6px;
@@ -2856,7 +2882,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 }
 .pin-add-save, .pin-add-cancel {
   flex: 1 1 45%;
-  min-height: 2.2rem;
+  min-height: 44px;
   border: 1px solid rgba(0, 0, 0, 0.25);
   border-radius: 6px;
   font: inherit;
@@ -2887,3 +2913,39 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   cursor: pointer;
 }
 .beta-notice:hover { background: rgba(255, 200, 80, 0.14); }
+
+@supports (padding-top: env(safe-area-inset-top)) {
+  :root {
+    --topbar-height: calc(4px + env(safe-area-inset-top) + 0.2rem + 44px + 0.2rem + 4px + 1px);
+  }
+  .topbar { padding-top: calc(4px + env(safe-area-inset-top)); }
+  body:has(> #view.view-map) > .banner {
+    padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
+  }
+  .view-map .map-control-dock {
+    max-height: calc(100% - var(--topbar-height) - env(safe-area-inset-bottom) - 137px);
+  }
+  .view-map #map .maplibregl-ctrl-bottom-right {
+    bottom: calc(28px + env(safe-area-inset-bottom));
+  }
+  .view-map .map-legend { bottom: calc(36px + env(safe-area-inset-bottom)); }
+  .view-map .map-imagery-date { bottom: calc(72px + env(safe-area-inset-bottom)); }
+  .view-map ~ .help-fab { bottom: calc(80px + env(safe-area-inset-bottom)); }
+  .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-legend {
+    bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+  .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-imagery-date {
+    bottom: calc(136px + env(safe-area-inset-bottom));
+  }
+  .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab {
+    bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+  .help-fab { bottom: calc(1rem + env(safe-area-inset-bottom)); }
+  .modal-backdrop {
+    padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(1rem + env(safe-area-inset-bottom));
+  }
+  .launch-dialog,
+  .modal.help-modal {
+    max-height: calc(100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+}

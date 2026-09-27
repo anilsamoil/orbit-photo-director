@@ -20,7 +20,7 @@ export type VendorDouble = VendorMap & {
   visibility: Map<LayerId, Visibility>;
   tilesSetOn: Map<SourceId, string[][]>;
   markers: { element: HTMLElement; at: LngLat; removed: boolean }[];
-  popups: { at: LngLat; content: HTMLElement; maxWidth?: string; removed: boolean; close: () => void }[];
+  popups: { at: LngLat; content: HTMLElement; maxWidth?: string; closeOnClick?: boolean; removed: boolean; close: () => void }[];
   cameraCalls: { method: string; args: unknown[] }[];
   cursor: string;
   fire<K extends keyof VendorEvents>(event: K, payload: VendorEvents[K]): void;
