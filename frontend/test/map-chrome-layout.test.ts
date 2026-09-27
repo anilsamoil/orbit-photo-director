@@ -1,8 +1,3 @@
-/**
- * The top bar has one box on every tab. Map paint still floats over the canvas.
- * happy-dom applies plain selectors. `:has()` is read from the CSSOM because
- * happy-dom does not match it.
- */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -58,7 +53,7 @@ function ruleStyle(selector: string): CSSStyleDeclaration {
 describe('map chrome layout', () => {
   it('floats the top bar and status banner over the map and stacks the dock as a rail', () => {
     mount('view-map');
-    expect(ruleStyle('body:has(> #view.view-map) > .topbar').position).toBe('fixed');
+    expect(ruleStyle('.topbar').position).toBe('fixed');
     expect(ruleStyle('body:has(> #view.view-map) > .banner').position).toBe('fixed');
     const dock = getComputedStyle(document.querySelector('.map-control-dock')!);
     const toolbar = getComputedStyle(document.querySelector('.map-toolbar')!);
@@ -69,12 +64,12 @@ describe('map chrome layout', () => {
     expect(ruleStyle('body:has(> #view.view-map) .brand-expansion').display).toBe('none');
   });
 
-  it('keeps the legend, imagery date, and help button above the attribution', () => {
+  it('keeps the legend and help clear of the collapsed info button', () => {
     mount('view-map');
-    const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
-    expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
-    expect(px('.map-imagery-date', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
-    expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(creditsTop);
+    const buttonTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib-button', 'height');
+    expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(buttonTop);
+    expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(px('.maplibregl-ctrl-bottom-right', 'bottom'));
+    expect(px('.map-imagery-date', 'bottom')).toBeGreaterThan(px('.map-legend', 'bottom'));
   });
 
   it('leaves the queue status banner in normal flow', () => {
@@ -140,12 +135,15 @@ describe('map chrome layout', () => {
   });
 
   it('lifts the legend, imagery date, and help above expanded credits', () => {
-    const legend = ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-legend');
-    const imagery = ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-imagery-date');
-    const help = ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab');
-    const creditsTop = 28 + 64;
-    expect(Number.parseFloat(legend.bottom)).toBeGreaterThanOrEqual(creditsTop);
-    expect(Number.parseFloat(imagery.bottom)).toBeGreaterThanOrEqual(creditsTop);
-    expect(Number.parseFloat(help.bottom)).toBeGreaterThanOrEqual(creditsTop);
+    mount('view-map');
+    document.querySelector('.maplibregl-ctrl-attrib')!.classList.add('maplibregl-compact-show');
+    const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
+    expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
+    expect(px('.map-imagery-date', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
+    expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).left).toBe('8px');
+    const helpBottom = Number.parseFloat(
+      ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab').bottom,
+    );
+    expect(helpBottom).toBeGreaterThanOrEqual(creditsTop);
   });
 });

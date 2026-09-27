@@ -1,4 +1,5 @@
 :root {
+  --topbar-height: calc(4px + 0.2rem + 44px + 0.2rem + 4px + 1px);
   color-scheme: dark;
   --bg: #0b0d12;
   --surface: #141821;
@@ -44,34 +45,18 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  flex-wrap: nowrap;
+  gap: 6px;
+  height: var(--topbar-height);
+  padding: 4px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
-
-/* iPhone topbar overlap fix (reported anilsamoilenko 2026-05-17). With
- * 4 flex children (brand + iss-now + kp-badge + tabs), iPhone widths
- * (375-430px) couldn't fit the unwrapped content, causing the tabs to
- * visually overlap the iss-now coordinates string. Stepwise narrow-
- * viewport rules:
- *
- * < 500px (iPhone landscape + smaller): hide the verbose ISS region
- *   suffix ("over Pacific Ocean"); keep the coordinates. Shrink
- *   horizontal padding so every pixel counts for content.
- * < 430px (iPhone portrait, the common case): hide the brand text
- *   ("SNAP"); keep the 🛰️ emoji as a visual anchor.
- *   Tab buttons get tighter padding so the four-tab row stays one line.
- *
- * The flex-wrap: wrap on .topbar above gives us a graceful fallback
- * even at unanticipated widths: if anything still doesn't fit, the
- * tabs row drops to a second line rather than overlapping.
- *
- * The actual @media rules live AFTER the .tabs/.tab base rules below.
- * A same-specificity rule placed BEFORE the base it overrides is dead on
- * source order — that bug (media block here, base .tab 150 lines later) is
- * why the tab row overflowed on iPhone despite the "shrink" rule existing. */
 
 .brand {
   display: flex;
@@ -234,11 +219,16 @@ body {
 }
 
 .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: 0;
   color: var(--text-dim);
-  padding: 0.4rem 0.9rem;
+  min-height: 44px;
+  padding: 0 0.55rem;
   font: inherit;
+  font-weight: 600;
   cursor: pointer;
   border-radius: 4px;
 }
@@ -246,7 +236,6 @@ body {
 .tab.active {
   background: var(--accent);
   color: var(--bg);
-  font-weight: 600;
 }
 
 /* Responsive topbar — placed AFTER the base .topbar/.tabs/.tab rules so the
@@ -260,22 +249,18 @@ body {
 }
 @media (max-width: 500px) {
   .iss-now .iss-region { display: none; }
-  .topbar { padding: 0.6rem 0.7rem; }
 }
 @media (max-width: 430px) {
   .brand-name { display: none; }
-  /* 5 tabs (Queue/Upcoming/Map/Profile/Log) fit one line at iPhone widths.
-   * Tighten horizontal padding + font; keep vertical padding for the tap
-   * target. */
-  .tab { padding: 0.5rem 0.4rem; font-size: 0.82rem; }
-  .tabs { gap: 0.12rem; }
-  .topbar { gap: 0.35rem; }
+  .tab { font-size: 0.82rem; }
 }
 
 main {
   flex: 1;
   overflow: auto;
+  padding-top: var(--topbar-height);
 }
+main.view-map { padding-top: 0; }
 
 .pane {
   padding: 1rem;
@@ -965,8 +950,6 @@ body.shotlist-bar-visible main {
 .banner-red { background: rgba(255, 100, 100, 0.15); color: var(--red); font-weight: 600; }
 .banner-loading { background: var(--surface); color: var(--text-dim); }
 
-/* Map tab: the bars leave the document flow so the canvas is the viewport.
- * The scrim stays dark enough that light type holds on a bright basemap. */
 body:has(> #view.view-map) > .topbar,
 body:has(> #view.view-map) > .banner,
 .view-map .map-toolbar,
@@ -981,33 +964,17 @@ body:has(> #view.view-map) .help-fab {
   backdrop-filter: blur(14px) saturate(1.2);
   border-color: rgba(255, 255, 255, 0.16);
 }
-body:has(> #view.view-map) > .topbar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 30;
-  flex-wrap: nowrap;
-  gap: 6px;
-  padding: 4px 8px;
-}
-body:has(> #view.view-map) .brand,
-body:has(> #view.view-map) .tabs { flex: 0 0 auto; }
-body:has(> #view.view-map) .brand-expansion { display: none; }
-body:has(> #view.view-map) .iss-now {
+.brand,
+.tabs { flex: 0 0 auto; }
+.iss-now {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #f4f7fb;
 }
-body:has(> #view.view-map) .tab {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 0.55rem;
-  color: #f4f7fb;
-}
+body:has(> #view.view-map) .brand-expansion { display: none; }
+body:has(> #view.view-map) .iss-now { color: #f4f7fb; }
+body:has(> #view.view-map) .tab { color: #f4f7fb; }
 body:has(> #view.view-map) .tab.active { color: var(--bg); }
 body:has(> #view.view-map) > .banner {
   position: fixed;
@@ -1271,20 +1238,51 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl { margin: 0 8px 0 0; }
 .view-map #map .maplibregl-ctrl-bottom-right {
   bottom: 28px;
+  right: 8px;
+  left: auto;
+  width: auto;
+  max-width: calc(100% - 16px);
+  max-height: none;
+}
+.view-map #map .maplibregl-ctrl-bottom-right .maplibregl-ctrl {
+  float: none;
+  margin: 0;
+}
+.view-map #map .maplibregl-ctrl-attrib-button {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+}
+.view-map #map .maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  max-height: 44px;
+  overflow: hidden;
+}
+.view-map #map .maplibregl-ctrl-attrib.maplibregl-compact-show {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-height: 44px;
+  max-height: 64px;
+  height: auto;
+  margin: 0;
+  padding: 8px 52px 8px 8px;
+  overflow: auto;
+}
+.view-map #map .maplibregl-ctrl-bottom-right:has(.maplibregl-compact-show) {
   left: 8px;
   right: 8px;
-  max-width: none;
   max-height: 64px;
-}
-.view-map #map .maplibregl-ctrl-attrib {
-  max-width: 100%;
-  max-height: 64px;
-  overflow-y: auto;
 }
 .view-map .map-legend {
   position: absolute;
   left: 8px;
-  bottom: 100px;
+  bottom: 36px;
   max-width: calc(100% - 60px);
   margin: 0;
   gap: 0.45rem;
@@ -1294,11 +1292,20 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map .map-imagery-date {
   left: 8px;
   right: auto;
-  bottom: 136px;
+  bottom: 72px;
   max-width: calc(100% - 60px);
   color: #f4f7fb;
 }
 .view-map ~ .help-fab {
+  bottom: 80px;
+}
+.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-legend {
+  bottom: 100px;
+}
+.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-imagery-date {
+  bottom: 136px;
+}
+.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab {
   bottom: 100px;
 }
 .map-launch-brief { padding: 0; }
