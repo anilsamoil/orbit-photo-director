@@ -50,12 +50,7 @@ export const pinDrop: MapFeature = {
         swallowPinClick = false;
       }, 700);
     };
-    const takeSwallow = (): boolean => {
-      if (!swallowPinClick) return false;
-      swallowPinClick = false;
-      if (swallowTimer) clearTimeout(swallowTimer);
-      return true;
-    };
+    const takeSwallow = (): boolean => swallowPinClick;
 
     core.on('contextmenu', ({ lngLat }) => drop(lngLat));
     bindLongPress(core, drop, armSwallow);

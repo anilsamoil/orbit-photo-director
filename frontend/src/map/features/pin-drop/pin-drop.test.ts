@@ -105,10 +105,12 @@ describe('lifting the finger', () => {
     vi.advanceTimersByTime(500);
     vendor.fire('touchend', { touches: [] });
     vendor.fireLayer('click', 'dropped-pin-layer', undefined);
+    vendor.fireLayer('click', 'dropped-pin-layer', undefined);
 
     expect(pinSource(vendor)?.features).toHaveLength(1);
     expect(openPopup(vendor)?.removed).toBe(false);
 
+    vi.advanceTimersByTime(700);
     vendor.fireLayer('click', 'dropped-pin-layer', undefined);
     expect(pinSource(vendor)?.features).toEqual([]);
     expect(vendor.popups.at(-1)?.removed).toBe(true);
