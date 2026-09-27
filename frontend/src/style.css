@@ -548,6 +548,7 @@ main.view-map { padding-top: 0; }
   text-align: left;
   font-family: inherit;
   cursor: pointer;
+  min-height: 44px;
   border-radius: 4px;
   transition: background 80ms ease;
 }
@@ -687,6 +688,8 @@ main.view-map { padding-top: 0; }
 .card-rating-star {
   background: transparent;
   border: 0;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0 0.1rem;
   font-size: 1.15rem;
   line-height: 1;
@@ -1259,6 +1262,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map #map .maplibregl-ctrl-bottom-right .maplibregl-ctrl {
   float: none;
   margin: 0;
+}
+.view-map #map .maplibregl-ctrl-attrib a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
 }
 .view-map #map .maplibregl-ctrl-attrib-button {
   width: 44px;
