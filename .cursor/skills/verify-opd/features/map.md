@@ -9,7 +9,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 - `map-imagery` shows the imagery or clouds date badge.
 - `map-attribution` starts as a 44x44 (i) button. A tap expands the credit line (OpenStreetMap, CARTO, or NASA). The legend, the imagery date, and the ? button sit above that button and move up when the line opens.
 - `map-time` moves the readout off Now with T+45, then returns it to Now.
-- `map-tools` toggles IR, night lights, labels, multi-orbit, ISS-up, and follow.
+- `map-tools` toggles IR, night lights, labels, multi-orbit, and follow, and confirms ISS up is the selected bearing.
 - `map-satellites` opens the picker and lists Tiangong and Hubble.
 - `map-target-popup` opens the Verify Reef popup.
 - `map-pin-drop` right-clicks the map and opens a pass popup.
@@ -31,7 +31,7 @@ Preconditions:
 - **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present.
 - **Credits.** On load the control has no `maplibregl-compact-show` class and the (i) button is 44x44. The script then opens it. The credit text matches OpenStreetMap, CARTO, or NASA, and the legend moves up.
 - **Time.** T+45 changes `#time-slider-readout`. Now sets that readout back to `Now`.
-- **Tool rail.** IR becomes active, night lights become active, labels become inactive, multi-orbit becomes active, ISS-up is already the default and stays active, and follow reports `aria-pressed` false.
+- **Tool rail.** IR becomes active, night lights become active, labels become inactive, multi-orbit becomes active, ISS up is already the default and stays active, and its title is `ISS up (default). Rotate so the direction of travel points up`. Follow reports `aria-pressed` false.
 - **Satellites.** The picker lists Tiangong and Hubble. The script closes it without adding a NORAD id.
 - **Target popup.** The script frames Verify Reef and clicks that point. A popup contains Verify Reef.
 - **Dropped pin.** A right-click away from that pin opens a popup whose text contains `Closest`.
@@ -46,7 +46,7 @@ Preconditions:
 - A pan collapses the credit line again. The script opens the credits and takes `map-attribution.png` before it moves the map.
 - IR replaces the daily clouds layer. Do not expect both buttons to stay active.
 - Launch mode hides target pins. Drive the target popup before Launches.
-- The launch pointer is valid for about 13 minutes from `up`. The fixture stamps `valid_until` one minute before `up` and 14 minutes after that stamp. After it passes, `doctor` fails and the dialog will not open. Run `down`, then `up`.
+- The launch pointer is valid for about 13 minutes from `up`. The fixture stamps `generated_at` one minute before `up` and `valid_until` 14 minutes after that stamp. After `valid_until`, `doctor` fails and `drive` stops before Chrome starts. Run `down`, then `up`.
 - Adding a satellite from the picker fetches CelesTrak. This drive only opens the list.
 - Repo-root `targets.json` has eight `anils-targets` places, painted the same indigo on the map, on card chips, and in the target popup. The verify fixture categories are `coast` and `terrain`, so this drive checks the legend and the layer paint. It does not look for those eight names.
 - A long press drops the same kind of pin as the right-click. The popup stays open through the click that follows the finger lift. `drive phone` is the touch proof. This drive right-clicks.

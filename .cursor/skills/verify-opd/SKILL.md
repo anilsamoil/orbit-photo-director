@@ -7,7 +7,7 @@ description: Drive the SNAP frontend for Orbit Photo Director in a local browser
 
 SNAP is the browser app in `frontend/`. This skill starts an isolated Vite server, serves a disposable shot queue at the manifest boundary, and drives the page the way an astronaut would. Read `features/README.md` before a drive, then follow one feature file.
 
-The live site `https://map.astroanil.dev` sits behind Cloudflare Access. An unauthenticated request is not the app. Do not point this skill at that URL. `scripts/verify-sw-upgrade.sh` in the repo root is for a preview build this skill starts, or for a deploy you can already authenticate to.
+The live site `https://map.astroanil.dev` sits behind Cloudflare Access. An unauthenticated request is not the app. Do not point this skill at that URL. `scripts/verify-sw-upgrade.sh` in the repo root is for a preview build this skill starts, or for an origin that answers without Cloudflare Access. The script sends no Access headers.
 
 ## Launch
 
@@ -25,7 +25,7 @@ One instance per `OPD_VERIFY_HOME`. The default home is `/tmp/opd-verify/default
 
 The command needs `bun`, installed `frontend/node_modules`, `lsof`, and Chrome. Set `OPD_VERIFY_CHROME` when `google-chrome` is not on `PATH`. The drive uses the Node `WebSocket` global. Node 22 has it.
 
-The proxy signs the browser in as profile `anil` with display name `Anil`. That identity is a fixture. It is not a Google session. Queue cards, the launch, and the log entries are generated for this run and are named `Verify Reef`, `Verify Delta`, `Verify Mesa`, `Verify Keepsake`, and `Verify Ascent`.
+The proxy signs the browser in as profile `anil` with display name `Anil`. That identity is a fixture. It is not a Google session. The fixture names are `Verify Reef`, `Verify Delta`, `Verify Mesa`, `Verify Keepsake`, and `Verify Ascent`. Reef and Delta are Queue cards. Mesa is an Upcoming card. Keepsake is the Cupola window. Ascent is the launch.
 
 ## Doctor
 
@@ -45,7 +45,7 @@ node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive all
 
 One feature is `drive banner`, `drive topbar`, `drive queue`, `drive upcoming`, `drive map`, `drive help`, `drive profile`, `drive log`, or `drive phone`.
 
-Each drive deletes `$OPD_VERIFY_HOME/chrome-profile` before Chrome starts. Pressed buttons and the shot list start over with that profile. Hidden curated targets do not. The proxy keeps `removedCuratedIds` until `down`. A fresh Chrome loads that list from `GET /api/browser/profiles/anil/targets` at boot and hides those cards before any click. Run `down`, then `up`, before a drive that expects every fixture card. A second `drive all` on the same proxy inherits the hides from the first. Inside one drive, Hide writes `removedCuratedIds` on localStorage `opd-profile-anil` and PUTs that list. The upcoming step reloads the same Chrome, checks that the card stays hidden, then opens a second Chrome profile and checks that the card is already hidden. Restore on Profile PUTs the shorter list. A third Chrome profile then shows the restored card. The queue and map steps also wait until that GET contains the id they hid.
+Each drive deletes `$OPD_VERIFY_HOME/chrome-profile` before Chrome starts. Pressed buttons and the shot list start over with that profile. Hidden curated targets do not, and neither do personal targets added with the form. The proxy keeps `removedCuratedIds` and `personalTargets` until `down`. A fresh Chrome loads that list from `GET /api/browser/profiles/anil/targets` at boot and hides those cards before any click. Run `down`, then `up`, before a drive that expects every fixture card. A second `drive all` on the same proxy inherits the hides from the first. Inside one drive, Hide writes `removedCuratedIds` on localStorage `opd-profile-anil` and PUTs that list. The upcoming step reloads the same Chrome, checks that the card stays hidden, then opens a second Chrome profile and checks that the card is already hidden. Restore on Profile PUTs the shorter list. A third Chrome profile then shows the restored card. The queue and map steps also wait until that GET contains the id they hid.
 
 The service worker is a separate command because Vite dev does not emit `sw.js`:
 
@@ -63,11 +63,11 @@ The map drive opens `/?e2e`. That query is how `frontend/src/map/adapters/maplib
 
 ## Evidence
 
-Screenshots and the service-worker log go to `$OPD_VERIFY_HOME/evidence`, which defaults to `/tmp/opd-verify/default/evidence`. Capture the action and the next screen. A screenshot of the final tab alone does not prove the click.
+Screenshots and the service-worker pass stamp go to `$OPD_VERIFY_HOME/evidence`, which defaults to `/tmp/opd-verify/default/evidence`. Capture the action and the next screen. A screenshot of the final tab alone does not prove the click.
 
 Browser proof is a PNG plus the script's stdout line for that feature. Service-worker proof is `evidence/service-worker.txt` and a zero exit from `scripts/verify-sw-upgrade.sh`. A shoot is proved twice: the toast on the queue card, and the same target on the Log tab. An added profile target is proved by the name appearing in the profile list. The pane paints the name before the POST returns.
 
-The fixture answers `/manifest.json`, versioned artifacts, `/launch/latest.json`, `/api/browser/session`, `/api/kp`, `/api/log`, and `/api/browser/profiles/anil/targets`. Map tiles, the sun image, and a live CelesTrak TLE are real network calls. If CelesTrak is unreachable, the fixture uses the 2026-09-27 ISS TLE in `scripts/fixtures.mjs`. Photo lookup on the Profile tab collects the last-good TLE in localStorage `opd-iss-tle-last-good`, the satellite cache `opd-tle-25544`, the published track, and the bundled element set in `frontend/src/iss-tle.ts`. It uses the candidate that still propagates and whose epoch is closest to the photo time. If none propagate, it fetches one live ISS TLE and tries again. When the result is still stale, the lookup chip says `orbit data is out of date, reconnect to refresh`. That sentence is not on the top bar. `drive profile` checks a last-good element set whose epoch matches the photo time, then checks that sentence with `2035-06-01T00:00:00.000Z`. `doctor` still passes on the fallback.
+The fixture answers `/manifest.json`, versioned artifacts, `/launch/latest.json`, `/api/browser/session`, `/api/kp`, `/api/log`, and `/api/browser/profiles/anil/targets`. Map tiles, the sun image, and a live CelesTrak TLE are real network calls. If CelesTrak is unreachable, the fixture uses the 2026-09-27 ISS TLE in `scripts/fixtures.mjs`. Photo lookup on the Profile tab collects the last-good TLE in localStorage `opd-iss-tle-last-good`, the satellite cache `opd-tle-25544`, the published track, and the bundled element set in `frontend/src/iss-tle.ts`. It uses the candidate that still propagates and whose epoch is closest to the photo time. If none propagate, it asks once for the ISS set, from that 6 hour cache or from CelesTrak, and retries only when the set is not stale. When the result is still stale, the lookup chip says `orbit data is out of date, reconnect to refresh`. That sentence is not on the top bar. `drive profile` checks a last-good element set whose epoch matches the photo time, then checks that sentence with `2035-06-01T00:00:00.000Z`. `doctor` still passes on the fallback.
 
 ## Cleanup
 

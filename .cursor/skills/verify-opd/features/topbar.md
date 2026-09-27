@@ -4,7 +4,7 @@ The top bar is one fixed header on every tab. It shows where the station is and 
 
 ## Sub-features
 
-- `iss-now` fills `#iss-now` from the published track. The text starts with `ISS` and the latitude, with no space between the label and the number, as in `ISS15.4°S`. `ISS live track expired` does not pass. The stale-orbit sentence is on Profile photo lookup, not here.
+- `iss-now` fills `#iss-now` from the published track. The text starts with `ISS` and the latitude, with no space between the label and the number, as in `ISS15.4°S`. Its title is `Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position`. `ISS live track expired` does not pass. The stale-orbit sentence is on Profile photo lookup, not here.
 - `kp-badge` shows `Kp 3.0` from the fixture `/api/kp` value `3`.
 - `topbar-box` keeps the same fixed box on Map, Queue, Upcoming, Profile, and Log. Non-map pages pad `main` by the bar height. Map padding is 0.
 - `topbar-tabs` scrolls the tab strip sideways when the labels are wider than the bar.
@@ -21,7 +21,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Read the header.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive topbar`. The bar is `position: fixed`. `#iss-now` matches `ISS` plus a latitude. `#kp-widget` reads `Kp 3.0`. Stdout includes the readout.
+- **Read the header.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive topbar`. The bar is `position: fixed`. `#iss-now` matches `ISS` plus a latitude, and its title is the SGP4 sentence above. `#kp-widget` reads `Kp 3.0`. Stdout includes the readout.
 - **Other tabs.** Queue pads `main` by the bar height, and the footer is no longer pinned.
 - **Narrow window.** At 390x800 the tab strip `scrollWidth` is wider than the strip.
 - **Proof.** `evidence/topbar.png` is Map. `evidence/topbar-queue.png` is Queue. `evidence/topbar-narrow.png` is the phone width. Stdout reports whether the sun badge stayed hidden.

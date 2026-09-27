@@ -365,7 +365,7 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
         else if (feature === 'map') notes.push(await driveMap(cdp.send, evidenceDir, meta, baseUrl));
         else if (feature === 'help') notes.push(await driveHelp(cdp.send, evidenceDir));
         else if (feature === 'profile') notes.push(await driveProfile(cdp.send, evidenceDir, meta, baseUrl, home));
-        else if (feature === 'log') notes.push(await driveLog(cdp.send, evidenceDir));
+        else if (feature === 'log') notes.push(await driveLog(cdp.send, evidenceDir, baseUrl));
         else if (feature === 'phone') notes.push(await drivePhone(cdp.send, evidenceDir, meta));
         else throw new Error(`unknown feature ${feature}`);
       }
@@ -413,6 +413,7 @@ async function driveTopbar(send, evidenceDir) {
       if (!bar || !iss || !kp) return null;
       const issText = iss.textContent.trim();
       if (!/^ISS\\d/.test(issText) || /live track expired/i.test(issText)) return null;
+      if (iss.getAttribute('title') !== ${JSON.stringify('Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position')}) return null;
       if (!kp || kp.hidden) return null;
       const kpText = kp.textContent.trim();
       if (!kpText.includes('Kp 3.0')) return null;
@@ -700,7 +701,12 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   await click(send, '#toggle-multi-orbit');
   await waitFor(send, `document.getElementById('toggle-multi-orbit').classList.contains('active') ? { ok: true } : null`, 'multi orbit on');
   await click(send, '#bearing-iss');
-  await waitFor(send, `document.getElementById('bearing-iss').classList.contains('active') ? { ok: true } : null`, 'iss up');
+  await waitFor(send, `(() => {
+    const button = document.getElementById('bearing-iss');
+    if (!button || !button.classList.contains('active')) return null;
+    if (button.getAttribute('title') !== 'ISS up (default). Rotate so the direction of travel points up') return null;
+    return { ok: true };
+  })()`, 'iss up');
   await click(send, '#toggle-follow-iss');
   await waitFor(send, `document.getElementById('toggle-follow-iss').getAttribute('aria-pressed') === 'false' ? { ok: true } : null`, 'follow released');
   await shot(send, evidenceDir, 'map-tool-rail');
@@ -960,7 +966,7 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
   return `profile: threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, stale orbit message`;
 }
 
-async function driveLog(send, evidenceDir) {
+async function driveLog(send, evidenceDir, baseUrl) {
   await click(send, '#tab-log');
   await waitFor(
     send,
@@ -970,8 +976,13 @@ async function driveLog(send, evidenceDir) {
     })()`,
     'log row',
   );
+  const listed = await fetch(`${baseUrl}/api/log`).then((response) => response.json());
+  const shoot = Array.isArray(listed.entries)
+    ? listed.entries.find((entry) => entry.action === 'shoot' && entry.target_id === 'verify-reef')
+    : null;
+  if (!shoot || shoot.target_name !== 'Verify Reef') throw new Error(`log stored name ${JSON.stringify(shoot)}`);
   await shot(send, evidenceDir, 'log');
-  return 'log: shoot row visible';
+  return 'log: shoot row visible, stored target name Verify Reef';
 }
 
 async function setCredits(send, open) {
