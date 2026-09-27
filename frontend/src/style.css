@@ -1700,6 +1700,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .map-legend-launch { background: #ffd45c; border: 1px solid #0b0d12; }
 .map-legend-twilight { background: #d65cff; }
 .map-legend-eclipse { background: #7a8aa8; }
+.map-legend-anil { background: #8b93ff; border: 1px solid #fff; }
 
 .time-btn {
   background: transparent;

@@ -1,3 +1,4 @@
+import { ANILS_TARGET_PAINT, ANILS_TARGETS_CATEGORY } from '../../../category-style';
 import { getMapLaunchMode } from '../../../map-launch-mode';
 import type { CircleLayer } from '../../map-core/layer-spec';
 
@@ -43,16 +44,31 @@ export function targetsLayer(): CircleLayer {
     source: 'targets',
     layout: { visibility: getMapLaunchMode() ? 'none' : 'visible' },
     paint: {
-      'circle-radius': 6,
-      'circle-color': [
-        'interpolate',
-        ['linear'],
-        ['get', 'score'],
-        0, '#ff6464',
-        30, '#ffce4d',
-        60, '#5be37a',
+      'circle-radius': [
+        'case',
+        ['==', ['get', 'category'], ANILS_TARGETS_CATEGORY],
+        8,
+        6,
       ],
-      'circle-stroke-color': '#0b0d12',
+      'circle-color': [
+        'case',
+        ['==', ['get', 'category'], ANILS_TARGETS_CATEGORY],
+        ANILS_TARGET_PAINT.color,
+        [
+          'interpolate',
+          ['linear'],
+          ['get', 'score'],
+          0, '#ff6464',
+          30, '#ffce4d',
+          60, '#5be37a',
+        ],
+      ],
+      'circle-stroke-color': [
+        'case',
+        ['==', ['get', 'category'], ANILS_TARGETS_CATEGORY],
+        '#ffffff',
+        '#0b0d12',
+      ],
       'circle-stroke-width': 1.5,
       'circle-opacity': [
         'case',

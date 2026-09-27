@@ -1,4 +1,5 @@
 import { isTleStale } from '../../../banner';
+import { categoryPaint } from '../../../category-style';
 import { liveIssPositionSGP4 } from '../../../iss-sgp4';
 import { findUpcomingPasses } from '../../../pin-drop';
 import { formatTrackOffset } from '../../../track-offset';
@@ -22,6 +23,7 @@ export interface TargetPopupProps {
   has_pass?: boolean;
   is_personal?: boolean;
   shot_count?: number;
+  category?: string;
   angle_off_nadir_deg?: number;
   iss_relative_bearing_deg?: number;
 }
@@ -81,6 +83,15 @@ export function buildTargetPopupContent(
   const nameEl = document.createElement('strong');
   nameEl.textContent = props.target_name ?? 'unknown';
   body.appendChild(nameEl);
+
+  const paint = categoryPaint(props.category);
+  if (paint) {
+    addRow(
+      'map-popup-category',
+      paint.label,
+      `margin-top:4px;display:inline-block;font-weight:600;padding:1px 6px;border-radius:999px;background:${paint.color};color:${paint.ink}`,
+    );
+  }
 
   const hasPass = props.has_pass === true;
 

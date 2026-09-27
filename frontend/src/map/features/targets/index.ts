@@ -113,6 +113,7 @@ export function refreshTargetsSource(): void {
         has_pass: true,
         angle_off_nadir_deg: pass.angle_off_nadir_deg,
         iss_relative_bearing_deg: pass.iss_relative_bearing_deg,
+        category: pass.category ?? '',
       },
       geometry: { type: 'Point' as const, coordinates: [pass.target_lon, pass.target_lat] },
     };

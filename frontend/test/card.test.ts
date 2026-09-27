@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { _resetOpenBreakdownsForTest, _resetOpenThumbnailsForTest, formatForecastHorizon, formatObsAge, renderCard, renderCards } from '../src/card';
+import { ANILS_TARGET_PAINT, ANILS_TARGETS_CATEGORY } from '../src/category-style';
 import type { PassEntry } from '../src/types';
 
 const samplePass = (overrides: Partial<PassEntry> = {}): PassEntry => ({
@@ -156,6 +157,19 @@ describe('renderCard', () => {
   it('tags obstruction class correctly', () => {
     const el = renderCard(samplePass({ obstruction_class: 'cloudy' }), NOW, false, () => undefined);
     expect(el.querySelector('.tag.obs-cloudy')).toBeTruthy();
+  });
+
+  it('paints Anil\'s targets on Queue and Upcoming cards and leaves other categories plain', () => {
+    const anil = samplePass({ category: ANILS_TARGETS_CATEGORY, target_name: 'K2' });
+    for (const variant of ['observed', 'forecast'] as const) {
+      const el = renderCard(anil, NOW, false, () => undefined, { variant });
+      const chip = el.querySelector('.tag.category-paint');
+      expect(chip?.textContent).toBe(ANILS_TARGET_PAINT.label);
+      expect(chip?.getAttribute('style')).toContain(ANILS_TARGET_PAINT.color);
+      expect(el.style.borderLeft).toContain(ANILS_TARGET_PAINT.color);
+    }
+    const other = renderCard(samplePass({ category: 'volcano' }), NOW, false, () => undefined);
+    expect(other.querySelector('.tag.category-paint')).toBeNull();
   });
 
   it('renders the 🔥 fire tag when fire_activity is present (v1.21.0.0)', () => {

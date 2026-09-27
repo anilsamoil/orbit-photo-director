@@ -5,6 +5,7 @@ import {
   patchPopupWeather,
   type TargetPopupProps,
 } from '../src/map';
+import { ANILS_TARGET_PAINT, ANILS_TARGETS_CATEGORY } from '../src/category-style';
 
 describe('cloudSourceLabel', () => {
   it('returns "GFS forecast" for the forecast source', () => {
@@ -39,6 +40,29 @@ describe('cloudSourceLabel', () => {
 
   it('passes through unrecognized sources verbatim', () => {
     expect(cloudSourceLabel('future-source-name')).toBe('future-source-name');
+  });
+});
+
+describe('buildTargetPopupContent — category chip', () => {
+  const NOW = Date.parse('2024-10-17T12:00:00Z');
+
+  it('shows Anil\'s targets on a pass popup and omits the chip for other categories', () => {
+    const painted = buildTargetPopupContent({
+      target_name: 'K2',
+      has_pass: true,
+      score: 70,
+      category: ANILS_TARGETS_CATEGORY,
+    }, NOW);
+    const chip = painted.querySelector('.map-popup-category');
+    expect(chip?.textContent).toBe(ANILS_TARGET_PAINT.label);
+    expect(chip?.getAttribute('style')).toContain(ANILS_TARGET_PAINT.color);
+    const plain = buildTargetPopupContent({
+      target_name: 'Etna',
+      has_pass: true,
+      score: 70,
+      category: 'volcano',
+    }, NOW);
+    expect(plain.querySelector('.map-popup-category')).toBeNull();
   });
 });
 

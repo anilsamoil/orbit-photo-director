@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ANILS_TARGET_PAINT, ANILS_TARGETS_CATEGORY } from '../../../category-style';
 import { saveProfile } from '../../../profile';
 import type { PassEntry } from '../../../types';
 import { createVendorDouble } from '../../../../test/vendor-map-double';
@@ -89,5 +90,31 @@ describe('targets', () => {
     if (!source || source.type !== 'geojson' || typeof source.data === 'string') throw new Error('targets source missing');
     const ids = source.data.features.map((feature) => feature.properties?.target_id);
     expect(ids).toEqual(['kept']);
+  });
+
+  it('carries the category onto the pin and paints Anil\'s targets in the category color', () => {
+    const vendor = createVendorDouble();
+    const clock = createClock(() => NOW);
+    const core = createMapCore(vendor, clock);
+    api().bindTargetsClock(clock);
+    api().noteTargetCore(core);
+    api().setTargetPasses([{
+      target_id: 'k2',
+      target_name: 'K2',
+      target_lat: 35.88,
+      target_lon: 76.51,
+      closest_approach: '2026-05-04T12:20:00Z',
+      nadir_distance_km: 10,
+      score: 80,
+      category: ANILS_TARGETS_CATEGORY,
+    } as PassEntry]);
+    api().refreshTargetsSource();
+    const source = vendor.sources.get('targets');
+    if (!source || source.type !== 'geojson' || typeof source.data === 'string') throw new Error('targets source missing');
+    expect(source.data.features[0]?.properties).toMatchObject({ category: ANILS_TARGETS_CATEGORY });
+    const layer = api().targetsLayer();
+    const encoded = JSON.stringify(layer.paint['circle-color']);
+    expect(encoded).toContain(ANILS_TARGETS_CATEGORY);
+    expect(encoded).toContain(ANILS_TARGET_PAINT.color);
   });
 });
