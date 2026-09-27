@@ -145,6 +145,109 @@ async function removedCuratedIds(send) {
   return Array.isArray(ids) ? ids : [];
 }
 
+async function serverRemoved(baseUrl) {
+  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`);
+  if (!response.ok) throw new Error(`profile GET ${response.status}`);
+  return response.json();
+}
+
+async function waitServerRemoved(baseUrl, includes, excludes) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < 10000) {
+    last = await serverRemoved(baseUrl);
+    const ids = Array.isArray(last.removedCuratedIds) ? last.removedCuratedIds : [];
+    const hasAll = includes.every((id) => ids.includes(id));
+    const hasNone = excludes.every((id) => !ids.includes(id));
+    if (hasAll && hasNone && typeof last.removedCuratedUpdatedAt === 'string') return last;
+    await sleep(200);
+  }
+  throw new Error(`profile GET did not reach ${JSON.stringify({ includes, excludes })}. Last: ${JSON.stringify(last)}`);
+}
+
+async function freshProfile(baseUrl, home, run) {
+  const debugPort = 19000 + Math.floor(Math.random() * 1000);
+  const profile = resolve(home, `chrome-guest-${debugPort}`);
+  rmSync(profile, { recursive: true, force: true });
+  mkdirSync(profile, { recursive: true });
+  const child = spawn(chromeBin(), [
+    '--headless=new',
+    '--use-gl=angle',
+    '--use-angle=swiftshader',
+    '--enable-webgl',
+    '--ignore-gpu-blocklist',
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+    `--remote-debugging-port=${debugPort}`,
+    `--user-data-dir=${profile}`,
+    '--window-size=1400,900',
+    '--no-first-run',
+    'about:blank',
+  ], { detached: true, stdio: 'ignore' });
+  child.unref();
+  try {
+    const cdp = await connectCdp(debugPort);
+    try {
+      await cdp.send('Page.enable');
+      await cdp.send('Page.navigate', { url: `${baseUrl}/?e2e` });
+      await waitFor(cdp.send, `document.readyState === 'complete' ? { ok: true } : null`, 'guest page load', 30000);
+      await waitFor(
+        cdp.send,
+        `(() => {
+          const text = document.getElementById('status-banner')?.textContent || '';
+          if (!text || text.includes('Loading')) return null;
+          return { ok: true };
+        })()`,
+        'guest banner',
+        30000,
+      );
+      await run(cdp.send);
+    } finally {
+      cdp.close();
+    }
+  } finally {
+    try {
+      process.kill(child.pid, 'SIGTERM');
+    } catch {
+      /* guest already exited */
+    }
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await sleep(150);
+      try {
+        rmSync(profile, { recursive: true, force: true });
+        break;
+      } catch {
+        /* Chrome can still hold the profile directory for a moment. */
+      }
+    }
+  }
+}
+
+async function expectFreshHide(baseUrl, home, { id, name, updatedAt, visible }) {
+  await freshProfile(baseUrl, home, async (send) => {
+    await click(send, '#tab-upcoming');
+    await waitFor(
+      send,
+      `(() => {
+        const cards = document.getElementById('upcoming-cards');
+        if (!cards) return null;
+        let stored = {};
+        try { stored = JSON.parse(localStorage.getItem('opd-profile-anil') || '{}'); } catch { return null; }
+        const ids = Array.isArray(stored.removedCuratedIds) ? stored.removedCuratedIds : [];
+        if (stored.removedCuratedUpdatedAt !== ${JSON.stringify(updatedAt)}) return null;
+        const hidden = ids.includes(${JSON.stringify(id)});
+        const shown = (cards.textContent || '').includes(${JSON.stringify(name)});
+        if (${visible ? 'true' : 'false'}) {
+          if (hidden || !shown) return null;
+        } else if (!hidden || shown) return null;
+        return { ok: true };
+      })()`,
+      visible ? 'fresh profile restored the card' : 'fresh profile hid the card',
+      30000,
+    );
+  });
+}
+
 async function hideNamed(send, container, name) {
   const id = await evaluate(send, `(() => {
     const root = document.querySelector(${JSON.stringify(container)});
@@ -257,11 +360,11 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
       for (const feature of selected) {
         if (feature === 'banner') notes.push(await driveBanner(cdp.send, evidenceDir));
         else if (feature === 'topbar') notes.push(await driveTopbar(cdp.send, evidenceDir));
-        else if (feature === 'queue') notes.push(await driveQueue(cdp.send, evidenceDir, meta));
-        else if (feature === 'upcoming') notes.push(await driveUpcoming(cdp.send, evidenceDir, meta));
-        else if (feature === 'map') notes.push(await driveMap(cdp.send, evidenceDir, meta));
+        else if (feature === 'queue') notes.push(await driveQueue(cdp.send, evidenceDir, meta, baseUrl));
+        else if (feature === 'upcoming') notes.push(await driveUpcoming(cdp.send, evidenceDir, meta, baseUrl, home));
+        else if (feature === 'map') notes.push(await driveMap(cdp.send, evidenceDir, meta, baseUrl));
         else if (feature === 'help') notes.push(await driveHelp(cdp.send, evidenceDir));
-        else if (feature === 'profile') notes.push(await driveProfile(cdp.send, evidenceDir, meta));
+        else if (feature === 'profile') notes.push(await driveProfile(cdp.send, evidenceDir, meta, baseUrl, home));
         else if (feature === 'log') notes.push(await driveLog(cdp.send, evidenceDir));
         else if (feature === 'phone') notes.push(await drivePhone(cdp.send, evidenceDir, meta));
         else throw new Error(`unknown feature ${feature}`);
@@ -307,7 +410,9 @@ async function driveTopbar(send, evidenceDir) {
       const bar = document.querySelector('.topbar');
       const iss = document.getElementById('iss-now');
       const kp = document.getElementById('kp-widget');
-      if (!bar || !iss || !iss.textContent.trim()) return null;
+      if (!bar || !iss || !kp) return null;
+      const issText = iss.textContent.trim();
+      if (!/^ISS\\d/.test(issText) || /live track expired/i.test(issText)) return null;
       if (!kp || kp.hidden) return null;
       const kpText = kp.textContent.trim();
       if (!kpText.includes('Kp 3.0')) return null;
@@ -365,10 +470,10 @@ async function driveTopbar(send, evidenceDir) {
       mobile: false,
     });
   }
-  return `topbar: ${header.kp}, sun hidden=${sunHidden}, queue padded, tabs scroll`;
+  return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, tabs scroll`;
 }
 
-async function driveQueue(send, evidenceDir, meta) {
+async function driveQueue(send, evidenceDir, meta, baseUrl) {
   await click(send, '#tab-queue');
   await waitFor(
     send,
@@ -432,11 +537,12 @@ async function driveQueue(send, evidenceDir, meta) {
   );
   const stored = await removedCuratedIds(send);
   if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
+  await waitServerRemoved(baseUrl, [deltaId], []);
   await shot(send, evidenceDir, 'queue-hide');
   return 'queue: cards, score, remind, shoot, mine filter, keepsake, hide';
 }
 
-async function driveUpcoming(send, evidenceDir, meta) {
+async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   await click(send, '#tab-upcoming');
   await waitFor(
     send,
@@ -472,10 +578,17 @@ async function driveUpcoming(send, evidenceDir, meta) {
   const storedAfter = await removedCuratedIds(send);
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
-  return `upcoming: card, score sort, hide persisted ${mesaId}`;
+  const server = await waitServerRemoved(baseUrl, [mesaId], []);
+  await expectFreshHide(baseUrl, home, {
+    id: mesaId,
+    name: meta.names.upcoming[0],
+    updatedAt: server.removedCuratedUpdatedAt,
+    visible: false,
+  });
+  return `upcoming: card, score sort, hide persisted ${mesaId}, fresh profile hid it`;
 }
 
-async function driveMap(send, evidenceDir, meta) {
+async function driveMap(send, evidenceDir, meta, baseUrl) {
   await click(send, '#tab-map');
   const ready = await waitFor(
     send,
@@ -666,22 +779,28 @@ async function driveMap(send, evidenceDir, meta) {
     'reef pin hidden',
     10000,
   );
+  await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin';
 }
 
 async function driveHelp(send, evidenceDir) {
   await dismissShotlist(send);
+  await click(send, '#tab-map');
+  const creditsOpen = await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === true`);
+  if (creditsOpen) await click(send, '.maplibregl-ctrl-attrib-button');
   await waitFor(
     send,
     `(() => {
+      const node = document.querySelector('.maplibregl-ctrl-attrib');
       const help = document.querySelector('.help-fab')?.getBoundingClientRect();
       const button = document.querySelector('.maplibregl-ctrl-attrib-button')?.getBoundingClientRect();
+      if (!node || node.classList.contains('maplibregl-compact-show')) return null;
       if (!help || !button || help.width < 40) return null;
       if (help.bottom > button.top + 8) return null;
       return { ok: true };
     })()`,
-    'help above credits',
+    'help above collapsed credits',
     20000,
   );
   await shot(send, evidenceDir, 'help-placement');
@@ -692,10 +811,31 @@ async function driveHelp(send, evidenceDir) {
   await shot(send, evidenceDir, 'help');
   await click(send, '.help-close');
   await waitFor(send, `!document.querySelector('.help-modal') ? { ok: true } : null`, 'help closed');
-  return 'help: opened and closed';
+  await click(send, '#tab-queue');
+  await waitFor(
+    send,
+    `(() => {
+      const help = document.querySelector('.help-fab')?.getBoundingClientRect();
+      if (!help || help.width < 40) return null;
+      const rightGap = window.innerWidth - help.right;
+      const bottomGap = window.innerHeight - help.bottom;
+      if (rightGap < 0 || rightGap > 24 || bottomGap < 0 || bottomGap > 24) return null;
+      return { ok: true, rightGap, bottomGap };
+    })()`,
+    'help corner on queue',
+    10000,
+  );
+  await shot(send, evidenceDir, 'help-queue');
+  return 'help: opened, closed, queue corner';
 }
 
-async function driveProfile(send, evidenceDir, meta) {
+const LAST_GOOD_TLE = {
+  line1: '1 25544U 98067A   26272.17419514  .00009528  00000+0  18291-3 0  9998',
+  line2: '2 25544  51.6315 155.3455 0007168 193.0559 167.0244 15.48664528587569',
+  at: '2026-09-29T04:10:50.460Z',
+};
+
+async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
   await click(send, '#tab-profile');
   await waitFor(
     send,
@@ -745,6 +885,13 @@ async function driveProfile(send, evidenceDir, meta) {
   await shot(send, evidenceDir, 'profile-hidden');
   await evaluate(send, `document.querySelector('[data-curated-id="verify-mesa"] button')?.click()`);
   await waitFor(send, `!document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'mesa restored');
+  const restored = await waitServerRemoved(baseUrl, [], ['verify-mesa']);
+  await expectFreshHide(baseUrl, home, {
+    id: 'verify-mesa',
+    name: meta.names.upcoming[0],
+    updatedAt: restored.removedCuratedUpdatedAt,
+    visible: true,
+  });
   const lookupValue = JSON.stringify(meta.lookupTimestamp);
   await waitFor(
     send,
@@ -774,7 +921,43 @@ async function driveProfile(send, evidenceDir, meta) {
     20000,
   );
   await shot(send, evidenceDir, 'profile-lookup-map');
-  return 'profile: threshold, add target, hidden curated restore, photo lookup';
+  await click(send, '#tab-profile');
+  await evaluate(send, `localStorage.setItem('opd-iss-tle-last-good', ${JSON.stringify(JSON.stringify({ line1: LAST_GOOD_TLE.line1, line2: LAST_GOOD_TLE.line2 }))})`);
+  await evaluate(send, `(() => {
+    const input = document.getElementById('lookup-input');
+    input.value = ${JSON.stringify(LAST_GOOD_TLE.at)};
+    document.getElementById('lookup-resolve').click();
+  })()`);
+  const lastGood = await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('lookup-result')?.textContent || '';
+      if (text.includes('TLE age 0.0 h') && text.includes('ISS at')) return { ok: true, text };
+      if (text.includes('orbit data is out of date')) return { error: text.slice(0, 300) };
+      return null;
+    })()`,
+    'last-good lookup',
+    30000,
+  );
+  await click(send, '#tab-profile');
+  await shot(send, evidenceDir, 'profile-lookup-last-good');
+  await evaluate(send, `(() => {
+    const input = document.getElementById('lookup-input');
+    input.value = '2035-06-01T00:00:00.000Z';
+    document.getElementById('lookup-resolve').click();
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.querySelector('#lookup-result .lookup-error')?.textContent || '';
+      return text === 'orbit data is out of date, reconnect to refresh' ? { ok: true, text } : null;
+    })()`,
+    'stale orbit message',
+    45000,
+  );
+  await click(send, '#tab-profile');
+  await shot(send, evidenceDir, 'profile-lookup-stale');
+  return `profile: threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, stale orbit message`;
 }
 
 async function driveLog(send, evidenceDir) {
@@ -783,7 +966,7 @@ async function driveLog(send, evidenceDir) {
     send,
     `(() => {
       const text = document.getElementById('log-list')?.innerText || '';
-      return text.includes('verify-reef') || text.includes('Verify Reef') ? { ok: true, text } : null;
+      return text.includes('Verify Reef') && /\\bshoot\\b/i.test(text) ? { ok: true, text } : null;
     })()`,
     'log row',
   );
@@ -879,10 +1062,12 @@ async function drivePhone(send, evidenceDir, meta) {
     );
   }
   await evaluate(send, `[...document.querySelectorAll('.maplibregl-popup-close-button')].forEach((button) => button.click())`);
-  let lon = meta.reef.lon + 30;
+  let lon = Math.round(meta.reef.lon + 30);
   if (lon > 180) lon -= 360;
-  await frameLngLat(send, lon, meta.reef.lat, 4);
-  const point = await pointForLngLat(send, lon, meta.reef.lat);
+  if (lon < -180) lon += 360;
+  const lat = Math.round(meta.reef.lat);
+  await frameLngLat(send, lon, lat, 4);
+  const point = await pointForLngLat(send, lon, lat);
   if (!point?.ok) throw new Error('could not project the long-press point');
   try {
     await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
