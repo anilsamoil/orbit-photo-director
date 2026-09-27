@@ -1,5 +1,5 @@
 /**
- * Map-tab chrome floats over the canvas. Queue keeps the bars in normal flow.
+ * The top bar has one box on every tab. Map paint still floats over the canvas.
  * happy-dom applies plain selectors. `:has()` is read from the CSSOM because
  * happy-dom does not match it.
  */
@@ -12,7 +12,10 @@ const css = readFileSync(resolve('src/style.css'), 'utf8');
 function mount(viewClass: string): void {
   document.head.innerHTML = `<style>${css}</style>`;
   document.body.innerHTML = `
-    <header class="topbar"><span class="brand-expansion">SNAP</span></header>
+    <header class="topbar">
+      <span class="brand-expansion">SNAP</span>
+      <nav class="tabs"><button class="tab" type="button">Queue</button></nav>
+    </header>
     <main id="view" class="${viewClass}">
       <section id="map-pane">
         <div class="map-toolbar"></div>
@@ -25,7 +28,10 @@ function mount(viewClass: string): void {
   document.querySelector('#map-pane')!.insertAdjacentHTML('beforeend', `
     <div id="map">
       <div class="maplibregl-ctrl-bottom-right">
-        <div class="maplibregl-ctrl-attrib">coastlines</div>
+        <div class="maplibregl-ctrl maplibregl-ctrl-attrib maplibregl-compact">
+          <button class="maplibregl-ctrl-attrib-button" type="button">i</button>
+          <div class="maplibregl-ctrl-attrib-inner">coastlines</div>
+        </div>
       </div>
     </div>
     <div class="map-legend">legend</div>
@@ -71,10 +77,75 @@ describe('map chrome layout', () => {
     expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(creditsTop);
   });
 
-  it('leaves the queue top bar and banner in normal flow', () => {
+  it('leaves the queue status banner in normal flow', () => {
     mount('view-queue');
-    expect(getComputedStyle(document.querySelector('.topbar')!).position).not.toBe('fixed');
     expect(getComputedStyle(document.querySelector('.banner')!).position).not.toBe('fixed');
     expect(getComputedStyle(document.querySelector('.map-control-dock')!).flexDirection).not.toBe('column');
+  });
+
+  it('uses one top bar box on every tab', () => {
+    const views = ['view-map', 'view-queue', 'view-upcoming', 'view-profile', 'view-log'];
+    const boxes = views.map((view) => {
+      mount(view);
+      const bar = getComputedStyle(document.querySelector('.topbar')!);
+      const tab = getComputedStyle(document.querySelector('.tab')!);
+      const box = {
+        position: bar.position,
+        top: bar.top,
+        left: bar.left,
+        right: bar.right,
+        padding: bar.padding,
+        flexWrap: bar.flexWrap,
+        minHeight: tab.minHeight,
+        tabPadding: tab.padding,
+        weight: tab.fontWeight,
+      };
+      document.querySelector('.tab')!.classList.add('active');
+      return { ...box, activeWeight: getComputedStyle(document.querySelector('.tab')!).fontWeight };
+    });
+    expect(new Set(boxes.map((box) => JSON.stringify(box))).size).toBe(1);
+    expect(boxes[0]).toEqual({
+      position: 'fixed',
+      top: '0px',
+      left: '0px',
+      right: '0px',
+      padding: '4px 8px',
+      flexWrap: 'nowrap',
+      minHeight: '44px',
+      tabPadding: '0px 8.8px',
+      weight: '600',
+      activeWeight: '600',
+    });
+    mount('view-queue');
+    const bar = document.querySelector('.topbar')!;
+    const main = document.querySelector('main')!;
+    expect(getComputedStyle(main).paddingTop).toBe(getComputedStyle(bar).height);
+    mount('view-map');
+    expect(getComputedStyle(document.querySelector('main')!).paddingTop).toBe('0px');
+  });
+
+  it('collapses credits to a 44px info button and does not keep the wide band', () => {
+    mount('view-map');
+    const corner = getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!);
+    const button = getComputedStyle(document.querySelector('.maplibregl-ctrl-attrib-button')!);
+    const attrib = getComputedStyle(document.querySelector('.maplibregl-ctrl-attrib')!);
+    expect(corner.left).toBe('auto');
+    expect(corner.right).toBe('8px');
+    expect(button.width).toBe('44px');
+    expect(button.height).toBe('44px');
+    expect(Number.parseFloat(attrib.width)).toBeLessThanOrEqual(44);
+    expect(px('.map-legend', 'bottom')).toBeLessThan(100);
+    expect(px('.map-imagery-date', 'bottom')).toBeLessThan(136);
+    expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeLessThan(100);
+  });
+
+  it('lifts the legend, imagery date, and help above expanded credits', () => {
+    const legend = ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-legend');
+    const imagery = ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-imagery-date');
+    const help = ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab');
+    const creditsTop = 28 + 64;
+    expect(Number.parseFloat(legend.bottom)).toBeGreaterThanOrEqual(creditsTop);
+    expect(Number.parseFloat(imagery.bottom)).toBeGreaterThanOrEqual(creditsTop);
+    expect(Number.parseFloat(help.bottom)).toBeGreaterThanOrEqual(creditsTop);
   });
 });

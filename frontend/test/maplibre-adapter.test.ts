@@ -57,6 +57,23 @@ describe('construction', () => {
     });
   });
 
+  it('removes the expanded credit class MapLibre adds on first layout', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `<details class="maplibregl-ctrl maplibregl-ctrl-attrib maplibregl-compact maplibregl-compact-show" open>
+      <summary class="maplibregl-ctrl-attrib-button"></summary>
+      <div class="maplibregl-ctrl-attrib-inner">Imagery from NASA GIBS</div>
+    </details>`;
+    createVendorMap({
+      container,
+      style: STYLE,
+      camera: { center: [10, 20], zoom: 3 },
+    });
+    const attrib = container.querySelector('.maplibregl-ctrl-attrib');
+    expect(attrib?.classList.contains('maplibregl-compact')).toBe(true);
+    expect(attrib?.classList.contains('maplibregl-compact-show')).toBe(false);
+    expect(attrib?.querySelector('.maplibregl-ctrl-attrib-inner')?.textContent).toBe('Imagery from NASA GIBS');
+  });
+
   it('adds the navigation control top-left', () => {
     expect(map.controls.map((entry) => entry.position)).toEqual(['top-left']);
     expect(currentMaplibreDouble().maplibregl.NavigationControl).toHaveBeenCalledTimes(1);
