@@ -109,6 +109,7 @@ describe('lifting the finger', () => {
 
     expect(pinSource(vendor)?.features).toHaveLength(1);
     expect(openPopup(vendor)?.removed).toBe(false);
+    expect(openPopup(vendor)?.closeOnClick).toBe(false);
 
     vi.advanceTimersByTime(700);
     vendor.fireLayer('click', 'dropped-pin-layer', undefined);

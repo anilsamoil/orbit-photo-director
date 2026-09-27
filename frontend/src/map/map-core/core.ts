@@ -31,6 +31,7 @@ export type PopupOptions = {
   at: LngLat;
   content: HTMLElement;
   maxWidth?: string;
+  closeOnClick?: boolean;
   owner?: PopupOwner;
 };
 

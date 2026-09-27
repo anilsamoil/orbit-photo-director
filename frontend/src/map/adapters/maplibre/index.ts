@@ -179,8 +179,12 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
         },
       };
     },
-    openPopup: ({ at, content, maxWidth }): PopupHandle => {
-      const popup = new maplibregl.Popup(maxWidth === undefined ? undefined : { maxWidth })
+    openPopup: ({ at, content, maxWidth, closeOnClick }): PopupHandle => {
+      const popupOptions = {
+        ...(maxWidth === undefined ? {} : { maxWidth }),
+        ...(closeOnClick === undefined ? {} : { closeOnClick }),
+      };
+      const popup = new maplibregl.Popup(Object.keys(popupOptions).length === 0 ? undefined : popupOptions)
         .setLngLat(at)
         .setDOMContent(content)
         .addTo(map);

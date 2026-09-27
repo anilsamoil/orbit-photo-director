@@ -38,7 +38,13 @@ export const pinDrop: MapFeature = {
       const body = buildPassList(pin.lat, pin.lon, pin.precision, sections, nowMs);
       const profile = parseProfileFromURL(window.location.href);
       body.appendChild(buildPinAddFooter(pin.lat, pin.lon, pin.precision, profile, dismiss));
-      core.openPopup({ at: [pin.lon, pin.lat], content: body, maxWidth: '340px', owner: 'pin' });
+      core.openPopup({
+        at: [pin.lon, pin.lat],
+        content: body,
+        maxWidth: '340px',
+        closeOnClick: false,
+        owner: 'pin',
+      });
     };
 
     let swallowPinClick = false;
