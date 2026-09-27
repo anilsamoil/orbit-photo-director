@@ -113,6 +113,7 @@ describe('targets', () => {
     if (!source || source.type !== 'geojson' || typeof source.data === 'string') throw new Error('targets source missing');
     expect(source.data.features[0]?.properties).toMatchObject({ category: ANILS_TARGETS_CATEGORY });
     const layer = api().targetsLayer();
+    if (!layer.paint) throw new Error('targets layer has no paint');
     const encoded = JSON.stringify(layer.paint['circle-color']);
     expect(encoded).toContain(ANILS_TARGETS_CATEGORY);
     expect(encoded).toContain(ANILS_TARGET_PAINT.color);

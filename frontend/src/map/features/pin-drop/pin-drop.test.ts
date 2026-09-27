@@ -103,16 +103,17 @@ describe('lifting the finger', () => {
     const { vendor } = mounted();
     vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }] });
     vi.advanceTimersByTime(500);
-    vendor.fire('touchend', { touches: [] });
-    vendor.fireLayer('click', 'dropped-pin-layer', undefined);
-    vendor.fireLayer('click', 'dropped-pin-layer', undefined);
+    vendor.fire('touchend', undefined);
+    const lift = { point: { x: 10, y: 10 }, lngLat: PARIS.lngLat, features: [] };
+    vendor.fireLayer('click', 'dropped-pin-layer', lift);
+    vendor.fireLayer('click', 'dropped-pin-layer', lift);
 
     expect(pinSource(vendor)?.features).toHaveLength(1);
     expect(openPopup(vendor)?.removed).toBe(false);
     expect(openPopup(vendor)?.closeOnClick).toBe(false);
 
     vi.advanceTimersByTime(700);
-    vendor.fireLayer('click', 'dropped-pin-layer', undefined);
+    vendor.fireLayer('click', 'dropped-pin-layer', lift);
     expect(pinSource(vendor)?.features).toEqual([]);
     expect(vendor.popups.at(-1)?.removed).toBe(true);
   });
