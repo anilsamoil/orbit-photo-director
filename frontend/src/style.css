@@ -1261,6 +1261,9 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   height: 44px;
   min-width: 44px;
   min-height: 44px;
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: 24px 24px;
 }
 .view-map #map .maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) {
   width: 44px;

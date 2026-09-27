@@ -144,6 +144,18 @@ describe('map chrome layout', () => {
     expect(getComputedStyle(document.querySelector('.brand')!).flexShrink).toBe('0');
   });
 
+  it('draws one centered info icon on the credit toggle, collapsed and expanded', () => {
+    mount('view-map');
+    const read = () => getComputedStyle(document.querySelector('.maplibregl-ctrl-attrib-button')!);
+    const collapsed = read();
+    expect(collapsed.backgroundRepeat).toBe('no-repeat');
+    expect(collapsed.backgroundPosition).toBe('center center');
+    document.querySelector('.maplibregl-ctrl-attrib')!.classList.add('maplibregl-compact-show');
+    const expanded = read();
+    expect(expanded.backgroundRepeat).toBe('no-repeat');
+    expect(expanded.backgroundPosition).toBe('center center');
+  });
+
   it('collapses credits to a 44px info button and does not keep the wide band', () => {
     mount('view-map');
     const corner = getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!);
