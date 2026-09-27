@@ -14,7 +14,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 
 - Start each feature from the healthy instance unless its preconditions say otherwise.
 - Prefer the ids and accessible names in the feature file.
-- `drive all` walks banner, topbar, queue, upcoming, map, help, profile, and log in that order on one page.
+- `drive all` walks banner, topbar, queue, upcoming, map, help, profile, log, and phone in that order on one page.
 - `sw` builds a preview and is not part of `drive all`.
 - `down` deletes the Chrome profile and keeps `evidence/`.
 
@@ -34,4 +34,5 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 - [Help](./help.md) covers the ? button above the map credits, the corner button on the other tabs, and the dialog.
 - [Profile](./profile.md) covers the signed-in profile, distance threshold, add target, and photo lookup.
 - [Log](./log.md) covers the calibration row written by Shoot.
+- [Phone](./phone.md) covers a 390x844 portrait and an 844x390 landscape, 44px targets, the dock clearing the (i) and ? buttons, and a long-press pin popup.
 - [Service worker](./service-worker.md) covers `sw.js` on a preview build.

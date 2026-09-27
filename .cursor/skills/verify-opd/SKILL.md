@@ -43,9 +43,9 @@ Open the feature file and run its command. A full browser pass is:
 node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive all
 ```
 
-One feature is `drive banner`, `drive topbar`, `drive queue`, `drive upcoming`, `drive map`, `drive help`, `drive profile`, or `drive log`.
+One feature is `drive banner`, `drive topbar`, `drive queue`, `drive upcoming`, `drive map`, `drive help`, `drive profile`, `drive log`, or `drive phone`.
 
-Each drive deletes `$OPD_VERIFY_HOME/chrome-profile` before Chrome starts. Toggles, the shot list, and hidden upcoming cards begin at their defaults. A second `drive all` does not inherit the first run's pressed buttons.
+Each drive deletes `$OPD_VERIFY_HOME/chrome-profile` before Chrome starts. Toggles, the shot list, and hidden curated targets begin at their defaults. A second `drive all` does not inherit the first run's pressed buttons. Inside one drive, Hide writes `removedCuratedIds` on localStorage `opd-profile-anil`. A reload in that same Chrome profile keeps the card and its map pin hidden.
 
 The service worker is a separate command because Vite dev does not emit `sw.js`:
 
@@ -55,7 +55,9 @@ node .cursor/skills/verify-opd/scripts/opd-verify.mjs sw
 
 `sw` builds the frontend into `$OPD_VERIFY_HOME/preview-dist`, serves those files on port 41733, and runs `scripts/verify-sw-upgrade.sh` against that origin. It does not use the dev server from `up`. The static server sends `application/javascript` for `.js`, which is what the worker and `verify-sw-upgrade.sh` require. Vite preview sends `text/javascript`, so this command does not use it.
 
-The map drive opens `/?e2e`. That query is how `frontend/src/map/adapters/maplibre/index.ts` publishes `window.__opdMap`. Credits start collapsed to the 44x44 (i) button (`collapseAttribution` in that file). The script checks the collapsed button, opens the credit line, then frames a pin and clicks the canvas with a real mouse event.
+The map drive opens `/?e2e`. That query is how `frontend/src/map/adapters/maplibre/index.ts` publishes `window.__opdMap`. Credits start collapsed to the 44x44 (i) button (`collapseAttribution` in that file). The script checks the collapsed button, opens the credit line, then frames a pin and clicks the canvas with a real mouse event. It also checks the Anil's targets legend swatch and, after the launch dialog, hides Verify Reef and requires that id to leave the targets source.
+
+`drive phone` uses a 390x844 portrait viewport and then an 844x390 landscape viewport. It checks 44px targets, that the control dock stays above the (i) and ? buttons, and that a long press keeps the pin popup open through the following click. `drive all` includes this pass and restores the 1400x900 viewport afterwards. When Chrome accepts a safe-area override, the top bar padding includes it. Stdout says `safe-area applied` or `safe-area unsupported`.
 
 `frontend/scripts/verify-map-pins.mjs` rewrites product source and runs unit tests. Do not run it from this skill. `frontend/scripts/verify-popup-scroll.mjs` drives a synthetic popup page, not SNAP. The live popup proof is `drive map`.
 
@@ -65,7 +67,7 @@ Screenshots and the service-worker log go to `$OPD_VERIFY_HOME/evidence`, which 
 
 Browser proof is a PNG plus the script's stdout line for that feature. Service-worker proof is `evidence/service-worker.txt` and a zero exit from `scripts/verify-sw-upgrade.sh`. A shoot is proved twice: the toast on the queue card, and the same target on the Log tab. An added profile target is proved by the name remaining in the profile list after the add request returns.
 
-The fixture answers `/manifest.json`, versioned artifacts, `/launch/latest.json`, `/api/browser/session`, `/api/kp`, `/api/log`, and `/api/browser/profiles/anil/targets`. Map tiles, the sun image, and a live CelesTrak TLE are real network calls. If CelesTrak is unreachable, the fixture uses the TLE in `scripts/fixtures.mjs` and photo lookup reports low confidence. That is still a completed lookup.
+The fixture answers `/manifest.json`, versioned artifacts, `/launch/latest.json`, `/api/browser/session`, `/api/kp`, `/api/log`, and `/api/browser/profiles/anil/targets`. Map tiles, the sun image, and a live CelesTrak TLE are real network calls. If CelesTrak is unreachable, the fixture uses the October 2024 TLE in `scripts/fixtures.mjs`. Propagating that TLE to the current date makes SGP4 fail, and photo lookup shows `Calculation failed — TLE may be missing or malformed.` `drive profile` needs the CelesTrak TLE. `doctor` still passes on the fallback.
 
 ## Cleanup
 
