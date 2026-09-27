@@ -229,6 +229,7 @@ body {
   padding: 0 0.55rem;
   font: inherit;
   font-weight: 600;
+  flex: 0 0 auto;
   cursor: pointer;
   border-radius: 4px;
 }
@@ -964,8 +965,15 @@ body:has(> #view.view-map) .help-fab {
   backdrop-filter: blur(14px) saturate(1.2);
   border-color: rgba(255, 255, 255, 0.16);
 }
-.brand,
-.tabs { flex: 0 0 auto; }
+.brand { flex: 0 0 auto; }
+.tabs {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
 .iss-now {
   flex: 1 1 auto;
   min-width: 0;

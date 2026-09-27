@@ -119,6 +119,31 @@ describe('map chrome layout', () => {
     expect(getComputedStyle(document.querySelector('main')!).paddingTop).toBe('0px');
   });
 
+  it('scrolls the tab strip inside the bar when the labels are wider than the screen', () => {
+    mount('view-queue');
+    document.querySelector('.topbar')!.innerHTML = `
+      <div class="brand"><span class="brand-mark">J</span><span class="brand-name">SNAP</span></div>
+      <div class="kp-badge">Kp 4</div>
+      <div class="sun-badge"></div>
+      <span class="profile-badge">Christopher</span>
+      <nav class="tabs">
+        <button class="tab" type="button">Queue</button>
+        <button class="tab" type="button">Upcoming</button>
+        <button class="tab" type="button">Map</button>
+        <button class="tab" type="button">Profile</button>
+        <button class="tab" type="button">Log</button>
+      </nav>
+    `;
+    const tabs = getComputedStyle(document.querySelector('.tabs')!);
+    const tab = getComputedStyle(document.querySelector('.tab')!);
+    expect(tabs.overflowX).toBe('auto');
+    expect(Number.parseFloat(tabs.minWidth)).toBe(0);
+    expect(tabs.flexShrink).toBe('1');
+    expect(tab.flexShrink).toBe('0');
+    expect(tab.minHeight).toBe('44px');
+    expect(getComputedStyle(document.querySelector('.brand')!).flexShrink).toBe('0');
+  });
+
   it('collapses credits to a 44px info button and does not keep the wide band', () => {
     mount('view-map');
     const corner = getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!);
