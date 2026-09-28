@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { driveWebkitDevices } from './webkit-devices.mjs';
+import { refreshLaunchClock } from './fixtures.mjs';
+import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone', 'tracked'];
+
+const DESKTOP = { width: 1400, height: 900, mobile: false };
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -320,58 +323,86 @@ export function startChrome(home, debugPort) {
   return child.pid;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
+const LOG_HOOK = `window.__opdLogs = [];
+  window.addEventListener('error', (event) => window.__opdLogs.push(String(event.message)));
+  const original = console.error;
+  console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
+
+function slideLaunch(home) {
+  const until = refreshLaunchClock(resolve(home, 'fixtures'));
+  const stateFile = resolve(home, 'state.json');
+  if (!existsSync(stateFile)) return until;
+  const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+  state.launchValidUntil = until;
+  writeFileSync(stateFile, JSON.stringify(state));
+  return until;
+}
+
+async function resetFixtureProfile(baseUrl) {
+  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ targets: [], removedCuratedIds: [] }),
+  });
+  if (!response.ok) throw new Error(`profile reset ${response.status}`);
+}
+
+async function openApp(send, baseUrl) {
+  await send('Page.enable');
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: LOG_HOOK });
+  await send('Page.navigate', { url: `${baseUrl}/?e2e` });
+  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'page load', 30000);
+  await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      if (!banner) return null;
+      const text = banner.textContent || '';
+      if (text.includes('Loading')) return null;
+      return { ok: true, text };
+    })()`,
+    'banner left Loading',
+    30000,
+  );
+}
+
+async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport) {
   mkdirSync(evidenceDir, { recursive: true });
+  const selected = features.includes('all') ? BROWSER_FEATURES : features;
+  const notes = [];
+  for (const feature of selected) {
+    if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir));
+    else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
+    else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
+    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl));
+    else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
+    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
+    else if (feature === 'phone') notes.push(await drivePhone(send, evidenceDir, meta, viewport));
+    else if (feature === 'tracked') notes.push(await driveTracked(send, evidenceDir, meta, viewport));
+    else throw new Error(`unknown feature ${feature}`);
+  }
+  return notes;
+}
+
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
+  slideLaunch(home);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
-  const home = resolve(evidenceDir, '..');
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
-  const notes = [];
   try {
     const cdp = await connectCdp(debugPort);
     try {
-      await cdp.send('Page.enable');
-      await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
-        source: `window.__opdLogs = [];
-          window.addEventListener('error', (event) => window.__opdLogs.push(String(event.message)));
-          const original = console.error;
-          console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`,
-      });
       await cdp.send('Emulation.setDeviceMetricsOverride', {
-        width: 1400,
-        height: 900,
+        width: DESKTOP.width,
+        height: DESKTOP.height,
         deviceScaleFactor: 1,
-        mobile: false,
+        mobile: DESKTOP.mobile,
       });
-      await cdp.send('Page.navigate', { url: `${baseUrl}/?e2e` });
-      await waitFor(cdp.send, `document.readyState === 'complete' ? { ok: true } : null`, 'page load', 30000);
-      await waitFor(
-        cdp.send,
-        `(() => {
-          const banner = document.getElementById('status-banner');
-          if (!banner) return null;
-          const text = banner.textContent || '';
-          if (text.includes('Loading')) return null;
-          return { ok: true, text };
-        })()`,
-        'banner left Loading',
-        30000,
-      );
-      const selected = features.includes('all') ? BROWSER_FEATURES : features;
-      for (const feature of selected) {
-        if (feature === 'banner') notes.push(await driveBanner(cdp.send, evidenceDir));
-        else if (feature === 'topbar') notes.push(await driveTopbar(cdp.send, evidenceDir));
-        else if (feature === 'queue') notes.push(await driveQueue(cdp.send, evidenceDir, meta, baseUrl));
-        else if (feature === 'upcoming') notes.push(await driveUpcoming(cdp.send, evidenceDir, meta, baseUrl, home));
-        else if (feature === 'map') notes.push(await driveMap(cdp.send, evidenceDir, meta, baseUrl));
-        else if (feature === 'help') notes.push(await driveHelp(cdp.send, evidenceDir));
-        else if (feature === 'profile') notes.push(await driveProfile(cdp.send, evidenceDir, meta, baseUrl, home));
-        else if (feature === 'log') notes.push(await driveLog(cdp.send, evidenceDir, baseUrl));
-        else if (feature === 'phone') notes.push(await drivePhone(cdp.send, evidenceDir, meta));
-        else if (feature === 'tracked') notes.push(await driveTracked(cdp.send, evidenceDir, meta));
-        else throw new Error(`unknown feature ${feature}`);
-      }
-      notes.push(await driveWebkitDevices({ baseUrl, evidenceDir }));
+      await openApp(cdp.send, baseUrl);
+      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
+      return notes.map((note) => `desktop: ${note}`);
     } finally {
       cdp.close();
     }
@@ -381,7 +412,46 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
     } catch {
     }
   }
+}
+
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
+  const browser = await launchWebkit();
+  const notes = [];
+  try {
+    for (const spec of WEBKIT_DEVICES) {
+      const viewport = deviceViewport(spec);
+      const surfaceDir = resolve(evidenceDir, spec.slug);
+      slideLaunch(home);
+      await resetFixtureProfile(baseUrl);
+      const context = await browser.newContext({ ...deviceDescriptor(spec) });
+      if (spec.standalone) {
+        await context.addInitScript(() => {
+          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
+        });
+      }
+      const page = await context.newPage();
+      try {
+        const send = playwrightSend(page);
+        await openApp(send, baseUrl);
+        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
+        notes.push(...featureNotes.map((note) => `${spec.slug}: ${note}`));
+      } finally {
+        await context.close();
+      }
+      notes.push(`${spec.slug}: ${await proveDeniedFooter(browser, spec, baseUrl, surfaceDir)}`);
+    }
+  } finally {
+    await browser.close();
+  }
   return notes;
+}
+
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
+  mkdirSync(evidenceDir, { recursive: true });
+  const home = resolve(evidenceDir, '..');
+  const desktop = await driveChrome({ baseUrl, evidenceDir, meta, features, home });
+  const webkit = await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home });
+  return [...desktop, ...webkit];
 }
 
 async function dismissShotlist(send) {
@@ -406,7 +476,7 @@ async function driveBanner(send, evidenceDir) {
   return `banner: ${text.trim()}`;
 }
 
-async function driveTopbar(send, evidenceDir) {
+async function driveTopbar(send, evidenceDir, home) {
   const header = await waitFor(
     send,
     `(() => {
@@ -467,12 +537,7 @@ async function driveTopbar(send, evidenceDir) {
     );
     await shot(send, evidenceDir, 'topbar-narrow');
   } finally {
-    await send('Emulation.setDeviceMetricsOverride', {
-      width: 1400,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
+    await setViewport(send, home.width, home.height, home.mobile);
   }
   return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, tabs scroll`;
 }
@@ -745,11 +810,17 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
     10000,
   );
   await shot(send, evidenceDir, 'map-pin-drop');
+  await evaluate(send, `[...document.querySelectorAll('.maplibregl-popup-close-button')].forEach((button) => button.click())`);
+  await waitFor(send, `document.querySelector('.maplibregl-popup') ? null : { ok: true }`, 'popups closed before launch', 5000);
   await click(send, '#filter-launches-map');
   await waitFor(send, `document.getElementById('filter-launches-map').getAttribute('aria-pressed') === 'true' ? { ok: true } : null`, 'launch mode');
-  await frameLngLat(send, meta.pad.lon, meta.pad.lat, 4);
-  const padPoint = await pointForLngLat(send, meta.pad.lon, meta.pad.lat);
-  await mouseClick(send, padPoint.x, padPoint.y);
+  const briefName = await evaluate(send, `!!document.querySelector('.map-launch-brief .launch-name')`);
+  if (briefName) await click(send, '.map-launch-brief .launch-name');
+  else {
+    await frameLngLat(send, meta.pad.lon, meta.pad.lat, 4);
+    const padPoint = await pointForLngLat(send, meta.pad.lon, meta.pad.lat);
+    await mouseClick(send, padPoint.x, padPoint.y);
+  }
   await waitFor(
     send,
     `document.querySelector('.launch-dialog')?.innerText.includes(${JSON.stringify(meta.names.launch)}) ? { ok: true } : null`,
@@ -793,8 +864,15 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin';
 }
 
-async function driveTracked(send, evidenceDir, meta) {
-  await setViewport(send, 1400, 900, false);
+const UNAVAILABLE_LEGEND = {
+  aged_out: 'Starship: public orbit expired',
+  lookup_failed: 'Starship: orbit lookup failed',
+  missing: 'Starship: no public orbit yet',
+  unavailable: 'Starship: no public orbit yet',
+};
+
+async function driveTracked(send, evidenceDir, meta, home) {
+  await setViewport(send, home.width, home.height, home.mobile);
   await click(send, '#tab-map');
   const ready = await waitFor(
     send,
@@ -874,12 +952,10 @@ async function driveTracked(send, evidenceDir, meta) {
       await shot(send, evidenceDir, `tracked-${name}`);
       if (!framed || !framed.ok) throw new Error(`starship marker off-screen on ${name}: ${JSON.stringify(framed)}`);
     }
-    await setViewport(send, 1400, 900, false);
+    await setViewport(send, home.width, home.height, home.mobile);
     return `tracked: marker and ground track for ${meta.standIn} on desktop, iPad, and iPhone`;
   }
-  const sentence = meta.trackedMode === 'aged_out'
-    ? 'Starship: public orbit expired'
-    : 'Starship: no public orbit yet';
+  const sentence = UNAVAILABLE_LEGEND[meta.trackedMode] || UNAVAILABLE_LEGEND.unavailable;
   if (meta.trackedMode === 'missing') {
     const published = await evaluate(send, `fetch('/manifest.json').then((response) => response.json()).then((body) => Boolean(body.artifacts && body.artifacts.tracked))`);
     if (published) throw new Error('missing tracked mode still published a tracked artifact');
@@ -891,28 +967,55 @@ async function driveTracked(send, evidenceDir, meta) {
   if (marker !== 'absent') throw new Error(`${meta.trackedMode || 'unavailable'} state still drew a marker`);
   const layer = await evaluate(send, `window.__opdMap?.getLayer('sat-track-layer-starship') ? 'present' : 'absent'`);
   if (layer !== 'absent') throw new Error(`${meta.trackedMode || 'unavailable'} state still drew a starship track`);
-  await frameLngLat(send, meta.iss.lon, meta.iss.lat, 3);
+  if ((await evaluate(send, `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')`)) !== 'false') {
+    await click(send, '#toggle-follow-iss');
+    await waitFor(
+      send,
+      `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'false' ? { ok: true } : null`,
+      'tracked follow off',
+    );
+  }
+  await click(send, '#toggle-follow-iss');
+  await waitFor(
+    send,
+    `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'true' ? { ok: true } : null`,
+    'tracked follow on',
+  );
   await waitFor(
     send,
     `(() => {
       const box = document.querySelector('.iss-marker')?.getBoundingClientRect();
-      if (!box) return null;
+      if (!box) return { missing: true };
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
-      if (cx < 40 || cy < 40 || cx > innerWidth - 40 || cy > innerHeight - 80) return null;
+      if (cx < 40 || cy < 40 || cx > innerWidth - 40 || cy > innerHeight - 80) {
+        const map = window.__opdMap;
+        const center = map.getCenter();
+        const canvas = map.getCanvas().getBoundingClientRect();
+        const marker = document.querySelector('.iss-marker');
+        return {
+          cx, cy, w: innerWidth, h: innerHeight,
+          lng: center.lng, lat: center.lat, zoom: map.getZoom(),
+          canvas: { x: canvas.x, y: canvas.y, w: canvas.width, h: canvas.height },
+          transform: marker.style.transform,
+        };
+      }
       return { ok: true };
     })()`,
     'iss marker framed',
     10000,
   );
-  const shotName = meta.trackedMode === 'aged_out'
-    ? 'tracked-aged-out'
-    : meta.trackedMode === 'missing'
-      ? 'tracked-missing'
-      : 'tracked-no-orbit';
+  const shotName = {
+    aged_out: 'tracked-aged-out',
+    missing: 'tracked-missing',
+    lookup_failed: 'tracked-lookup-failed',
+  }[meta.trackedMode] || 'tracked-no-orbit';
   await shot(send, evidenceDir, shotName);
   if (meta.trackedMode === 'aged_out') {
     return 'tracked: public orbit expired, no marker, ISS marker and track still up';
+  }
+  if (meta.trackedMode === 'lookup_failed') {
+    return 'tracked: orbit lookup failed, no marker, ISS marker and track still up';
   }
   if (meta.trackedMode === 'missing') {
     return 'tracked: missing artifact falls back to no public orbit yet, ISS marker and track still up';
@@ -1082,18 +1185,21 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
     input.value = '2035-06-01T00:00:00.000Z';
     document.getElementById('lookup-resolve').click();
   })()`);
-  await waitFor(
+  const far = await waitFor(
     send,
     `(() => {
-      const text = document.querySelector('#lookup-result .lookup-error')?.textContent || '';
-      return text === 'orbit data is out of date, reconnect to refresh' ? { ok: true, text } : null;
+      const text = document.getElementById('lookup-result')?.innerText || '';
+      const error = document.querySelector('#lookup-result .lookup-error')?.textContent || '';
+      if (error === 'orbit data is out of date, reconnect to refresh') return { ok: true, kind: 'stale', text: error };
+      if (text.includes('low confidence') && text.includes('TLE age') && text.includes('ISS at')) return { ok: true, kind: 'low', text };
+      return null;
     })()`,
-    'stale orbit message',
+    '2035 lookup',
     45000,
   );
   await click(send, '#tab-profile');
-  await shot(send, evidenceDir, 'profile-lookup-stale');
-  return `profile: threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, stale orbit message`;
+  await shot(send, evidenceDir, 'profile-lookup-2035');
+  return `profile: threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, 2035 ${far.kind}`;
 }
 
 async function driveLog(send, evidenceDir, baseUrl) {
@@ -1157,7 +1263,7 @@ async function assertDockClearsCredits(send, label) {
   if (!boxes?.ok) throw new Error(`${label} ${JSON.stringify(boxes)}`);
 }
 
-async function drivePhone(send, evidenceDir, meta) {
+async function drivePhone(send, evidenceDir, meta, home) {
   await dismissShotlist(send);
   await click(send, '#tab-map');
   await waitFor(
@@ -1272,6 +1378,6 @@ async function drivePhone(send, evidenceDir, meta) {
     5000,
   );
   await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
-  await setViewport(send, 1400, 900, false);
+  await setViewport(send, home.width, home.height, home.mobile);
   return `phone: 44px targets, dock clear with credits collapsed and expanded, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
 }

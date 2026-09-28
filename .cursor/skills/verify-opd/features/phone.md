@@ -25,6 +25,8 @@ Preconditions:
 - **Long press.** Follow is off. The press point is the reef latitude, and the reef longitude plus 30 degrees, both rounded to whole degrees, at zoom 4. A touch held there opens a popup whose text contains `Closest`. A click at that point just after the finger lift leaves the popup open. A click after the ignore window removes it. The window is 700ms from the drop, not from the lift.
 - **Proof.** `evidence/phone-portrait.png`, `evidence/phone-portrait-credits.png`, `evidence/phone-landscape.png`, `evidence/phone-landscape-credits.png`, and `evidence/phone-long-press.png`. Stdout says `safe-area applied` or `safe-area unsupported`.
 
+Desktop Chrome runs the 390x844 and 844x390 viewports first. WebKit iPhone 13 and iPad Pro 11 then run the same steps on those device descriptors. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+
 ## Gotchas
 
 - `drive all` runs this after Log. The script restores the 1400x900 viewport before it returns.

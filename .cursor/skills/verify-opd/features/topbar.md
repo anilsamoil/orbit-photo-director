@@ -26,6 +26,8 @@ Preconditions:
 - **Narrow window.** At 390x800 the tab strip `scrollWidth` is wider than the strip.
 - **Proof.** `evidence/topbar.png` is Map. `evidence/topbar-queue.png` is Queue. `evidence/topbar-narrow.png` is the phone width. Stdout reports whether the sun badge stayed hidden.
 
+Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+
 ## Gotchas
 
 - Kp is the fixture value 3, drawn to one decimal as `Kp 3.0`, not a live SWPC fetch.

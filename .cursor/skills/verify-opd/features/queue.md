@@ -34,6 +34,8 @@ Preconditions:
 - **Hide.** Hide on the Verify Delta card removes that card. `removedCuratedIds` in `opd-profile-anil` contains `verify-delta`. The same list is what Upcoming and the map pins read. The script waits until `GET /api/browser/profiles/anil/targets` contains `verify-delta`. This step does not open a second Chrome. Upcoming's fresh-profile check is for Verify Mesa, the card that step hides.
 - **Proof.** `evidence/queue.png`, `evidence/queue-score.png`, `evidence/queue-shoot.png`, `evidence/queue-mine.png`, `evidence/queue-keepsake.png`, and `evidence/queue-hide.png`.
 
+Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+
 ## Gotchas
 
 - Shoot on a stale manifest is disabled. `up` stamps `generated_at` 30 seconds before it starts, and a reused `up` does not rebuild that stamp. `doctor` fails about 13 minutes after `up`, while the manifest is still under the 60-minute Shoot gate.

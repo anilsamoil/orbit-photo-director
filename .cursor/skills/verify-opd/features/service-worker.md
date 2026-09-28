@@ -25,6 +25,8 @@ Preconditions:
 - **Build and check.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs sw`. The command builds into `$OPD_VERIFY_HOME/preview-dist`, serves it with the worker's JavaScript content type, and runs `scripts/verify-sw-upgrade.sh` against that origin.
 - **Proof.** Exit code 0, and `evidence/service-worker.txt` names that origin on the first line and the time on the second. The command deletes an older proof file before the build. The static server is inside this process and closes before the command returns.
 
+This command does not open a browser. iPhone and iPad coverage is the WebKit pass on `drive` and `drive all`, not this preview.
+
 ## Gotchas
 
 - `scripts/verify-sw-upgrade.sh https://map.astroanil.dev` fails closed while Cloudflare Access answers with a login redirect. That failure is not a bad build. The script sends no auth headers. Use `opd-verify sw` for a local preview.

@@ -14,7 +14,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 
 - Start each feature from the healthy instance unless its preconditions say otherwise.
 - Prefer the ids and accessible names in the feature file.
-- `drive all` walks banner, topbar, queue, upcoming, map, help, profile, log, phone, and tracked in that order on one desktop Chrome page, then runs the WebKit iPhone 13 and iPad Pro 11 pass described in the skill. A single feature drive does that WebKit pass too.
+- `drive all` walks banner, topbar, queue, upcoming, map, help, profile, log, phone, and tracked in that order on desktop Chrome, then runs those same steps on WebKit iPhone 13 and iPad Pro 11. A single feature drive does the same three surfaces. WebKit missing fails the drive.
 - `sw` builds a preview and is not part of `drive all`.
 - `down` deletes the Chrome profile and keeps `evidence/`.
 

@@ -21,6 +21,8 @@ Preconditions:
 - **Close help.** The close button removes that dialog. The script then opens Queue and checks that the ? button sits within 24px of the right and bottom edges.
 - **Proof.** `evidence/help-placement.png` shows the ? above the collapsed (i). `evidence/help.png` shows the open dialog. `evidence/help-queue.png` shows the corner button on Queue.
 
+Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+
 ## Gotchas
 
 - Escape also closes the dialog. The script uses the close button so the proof names a control.

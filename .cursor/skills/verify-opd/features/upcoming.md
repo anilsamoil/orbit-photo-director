@@ -25,6 +25,8 @@ Preconditions:
 - **Another browser.** After `GET /api/browser/profiles/anil/targets` contains `verify-mesa`, a new Chrome profile opens the same proxy. Upcoming does not show Verify Mesa, and its localStorage timestamp matches the GET.
 - **Proof.** `evidence/upcoming.png` shows Verify Ascent above Verify Mesa. `evidence/upcoming-hidden.png` shows Mesa gone and Ascent still listed. `evidence/upcoming-reloaded.png` shows Mesa still gone.
 
+Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+
 ## Gotchas
 
 - Hide writes the target id into `removedCuratedIds` on `opd-profile-anil` and PUTs the list to the profile API. Queue, Upcoming, and the map pins all drop that id on the next paint. The fixture feed still contains Verify Mesa. A new browser that loads after the PUT gets the list from the profile GET and hides it too. This drive opens that browser.

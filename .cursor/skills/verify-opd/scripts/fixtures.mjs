@@ -278,7 +278,7 @@ export async function buildFixtures(dir, now = Date.now()) {
   };
 
   const requestedTracked = process.env.OPD_VERIFY_TRACKED || '';
-  const trackedMode = ['elements', 'aged_out', 'missing'].includes(requestedTracked) ? requestedTracked : 'unavailable';
+  const trackedMode = ['elements', 'aged_out', 'missing', 'lookup_failed'].includes(requestedTracked) ? requestedTracked : 'unavailable';
   let standIn = null;
   let tracked = null;
   if (trackedMode === 'elements') {
@@ -308,7 +308,7 @@ export async function buildFixtures(dir, now = Date.now()) {
         label: 'Starship',
         color: '#ff5c5c',
         state: 'unavailable',
-        reason: trackedMode === 'aged_out' ? 'aged_out' : 'no_public_orbit',
+        reason: trackedMode === 'aged_out' || trackedMode === 'lookup_failed' ? trackedMode : 'no_public_orbit',
       }],
     };
   }
@@ -385,6 +385,34 @@ export async function buildFixtures(dir, now = Date.now()) {
   };
   writeFileSync(resolve(dir, 'meta.json'), JSON.stringify(meta, null, 2));
   return { manifest, meta, pointer, launchBody };
+}
+
+export function refreshLaunchClock(dir, wallMs = Date.now()) {
+  const launchPath = resolve(dir, 'launch.json');
+  const pointerPath = resolve(dir, 'launch-latest.json');
+  const launch = JSON.parse(readFileSync(launchPath, 'utf8'));
+  const generated = new Date(wallMs - 60_000).toISOString();
+  const until = new Date(wallMs - 60_000 + 14 * 60_000).toISOString();
+  const assessmentUntil = new Date(wallMs - 60_000 + 2 * 60 * 60_000).toISOString();
+  launch.generated_at = generated;
+  launch.valid_until = until;
+  if (launch.coverage) launch.coverage.fetched_at = generated;
+  for (const item of launch.items || []) {
+    for (const source of item.sources || []) source.fetched_at = generated;
+    if (item.assessment) {
+      item.assessment.checked_at = generated;
+      item.assessment.valid_until = assessmentUntil;
+      item.assessment.tle_epoch = generated;
+    }
+  }
+  const text = JSON.stringify(launch);
+  writeFileSync(launchPath, text);
+  const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
+  pointer.generated_at = generated;
+  pointer.valid_until = until;
+  pointer.sha256 = sha256(text);
+  writeFileSync(pointerPath, JSON.stringify(pointer));
+  return until;
 }
 
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
