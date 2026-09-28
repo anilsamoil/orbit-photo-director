@@ -1,5 +1,6 @@
 import type { Manifest, PassEntry, Track } from '../types';
 import { fetchArtifact } from '../manifest';
+import { loadTrackedRecords } from '../tracked';
 import { createVendorMap } from './adapters/maplibre';
 import { registerViirsAlphaProtocol, viirsAlphaUrl } from './adapters/maplibre/viirs-alpha';
 import { initialCamera } from './map-core/camera';
@@ -40,6 +41,7 @@ import {
   tickIssMarker,
 } from './features/iss-marker';
 import { refreshLabels, resetLabelsForTest } from './features/labels';
+import { applyTracked } from './features/tracked';
 import {
   ascentPadLayer,
   ascentTrajectoryLayer,
@@ -366,6 +368,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   const profileName = parseProfileFromURL(window.location.href);
   const passes = await fetchArtifact<PassEntry[]>(manifest, 'passes', '', profileName);
   const track = await fetchArtifact<Track>(manifest, 'track');
+  const trackedRecords = await loadTrackedRecords(manifest);
   setBasemapManifest(manifest);
 
   const isFirstInit = !core;
@@ -415,6 +418,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   syncMapLaunchMode();
   bindLaunchStore();
   syncIssMarker(core);
+  applyTracked(core, trackedRecords);
 
   if (isFirstInit) {
     clock.every(1000, (nowMs) => {
