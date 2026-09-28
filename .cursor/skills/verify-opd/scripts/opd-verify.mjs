@@ -158,6 +158,7 @@ function startProxy(home) {
       '/v/verify/status.json': 'status.json',
       '/v/verify/targets.json': 'targets.json',
       '/v/verify/cupola_windows.json': 'cupola_windows.json',
+      '/v/verify/tracked.json': 'tracked.json',
     }[path];
     if (artifact) return sendFile(artifact);
     if (path === '/launch/latest.json') return sendFile('launch-latest.json');

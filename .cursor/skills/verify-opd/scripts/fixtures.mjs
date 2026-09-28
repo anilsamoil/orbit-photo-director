@@ -64,6 +64,33 @@ async function loadTle() {
   }
 }
 
+async function loadStandInTle() {
+  const url = 'https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?FILE=starlink&FORMAT=tle';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok || !response.body) throw new Error(`supgp starlink ${response.status}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    while (text.split(/\r?\n/).filter((line) => line.trim()).length < 3 && text.length < 8000) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    await reader.cancel().catch(() => {});
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const name = lines.find((line) => !line.startsWith('1 ') && !line.startsWith('2 '));
+    const line1 = lines.find((line) => line.startsWith('1 '));
+    const line2 = lines.find((line) => line.startsWith('2 '));
+    if (!name || !line1 || !line2) throw new Error('supgp starlink body had no TLE');
+    return { name, line1, line2, source: 'supgp-starlink' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function tleEpochIso(satrec) {
   const year = satrec.epochyr + (satrec.epochyr < 57 ? 2000 : 1900);
   const ms = Date.UTC(year, 0, 1) + (satrec.epochdays - 1) * 86_400_000;
@@ -250,8 +277,44 @@ export async function buildFixtures(dir, now = Date.now()) {
     ],
   };
 
+  const trackedMode = process.env.OPD_VERIFY_TRACKED === 'elements' ? 'elements' : 'unavailable';
+  let standIn = null;
+  let tracked;
+  if (trackedMode === 'elements') {
+    standIn = await loadStandInTle();
+    const standRec = satellite.twoline2satrec(standIn.line1, standIn.line2);
+    const standEpoch = tleEpochIso(standRec);
+    tracked = {
+      objects: [{
+        id: 'starship',
+        label: 'Starship',
+        color: '#ff5c5c',
+        state: 'elements',
+        source: 'supgp',
+        name: standIn.name,
+        norad: Number(standIn.line1.slice(2, 7)),
+        intldes: standIn.line1.slice(9, 17).trim(),
+        line1: standIn.line1,
+        line2: standIn.line2,
+        epoch: standEpoch,
+        age_hours: Math.round((Math.abs(now - Date.parse(standEpoch)) / 3_600_000) * 100) / 100,
+      }],
+    };
+  } else {
+    tracked = {
+      objects: [{
+        id: 'starship',
+        label: 'Starship',
+        color: '#ff5c5c',
+        state: 'unavailable',
+        reason: 'no_public_orbit',
+      }],
+    };
+  }
+
   const files = {
     'passes.json': artifact([...top5, ...top24h]),
+    'tracked.json': artifact(tracked),
     'top5.json': artifact(top5),
     'top_24h.json': artifact(top24h),
     'track.json': artifact(track),
@@ -279,6 +342,7 @@ export async function buildFixtures(dir, now = Date.now()) {
       status: { path: 'v/verify/status.json', sha256: files['status.json'].sha256, bytes: files['status.json'].bytes },
       targets: { path: 'v/verify/targets.json', sha256: files['targets.json'].sha256, bytes: files['targets.json'].bytes },
       cupola_windows: { path: 'v/verify/cupola_windows.json', sha256: files['cupola_windows.json'].sha256, bytes: files['cupola_windows.json'].bytes },
+      tracked: { path: 'v/verify/tracked.json', sha256: files['tracked.json'].sha256, bytes: files['tracked.json'].bytes },
     },
   };
   writeFileSync(resolve(dir, 'manifest.json'), JSON.stringify(manifest));
@@ -309,6 +373,8 @@ export async function buildFixtures(dir, now = Date.now()) {
       launch: 'Verify Ascent',
     },
     launchValidUntil: pointerUntil,
+    trackedMode,
+    standIn: standIn ? standIn.name : null,
   };
   writeFileSync(resolve(dir, 'meta.json'), JSON.stringify(meta, null, 2));
   return { manifest, meta, pointer, launchBody };

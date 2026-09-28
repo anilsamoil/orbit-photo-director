@@ -110,6 +110,19 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | Tests | `src/map/features/iss-marker/iss-marker.test.ts` mounts on the vendor double. `test/iss-marker.test.ts` and `test/map-render-contract.test.ts` drive it through `renderMap`. |
 | Traps | The 1 Hz tick stays in the composition root. `maybeSnapToLive` returns before `tickIssMarker` and before `applyBearing`, so a snap does not also move the marker or rotate the map in that second. A drag moves the marker on the `setLookahead` call itself; `clock.onViewTime` is coalesced and is not the marker path. The early `setLookahead` returns ease the camera and do not call `moveIssMarkerToView`. |
 
+### tracked
+
+| | |
+| --- | --- |
+| Directory | `src/map/features/tracked/` |
+| Entrypoint | `tracked` in `index.ts`, id `'tracked'` |
+| User reaches it | Always on. The legend line `#tracked-legend-text` is the status. A vehicle with elements also has a diamond marker and a dotted ground track. |
+| What it draws | For each `state: "elements"` row in `tracked.json`, source `sat-track-<id>` and layer `sat-track-layer-<id>` (the shared satellite slot, above the labels) plus an HTML marker, class `tracked-marker`. One orbit, sampled from the view instant for that vehicle's own period. Unavailable rows change the legend and draw nothing. |
+| Control it in code | `loadTrackedRecords(manifest)` reads the artifact, or the Starship no-orbit row when the artifact is missing. `applyTracked(core, records)` redraws. `renderMap` calls both. The generator owns the list. |
+| Files | `index.ts` mount, clock, legend; `layers.ts` the orbit, the layer, the marker. Parsing and the status sentence are `src/tracked.ts`. Propagation is `src/iss-sgp4.ts`. |
+| Tests | `src/map/features/tracked/tracked.test.ts` mounts on the vendor double. `test/tracked.test.ts` is the artifact parse, the status sentences, and the orbit period. |
+| Traps | The track window starts at `core.clock.viewMs()`. Live, the marker moves every 1 s and the window every 60 s. A scrubbed ticker does not move either. The picker Starship row is a separate CelesTrak search and is not this feature. |
+
 ### targets
 
 | | |

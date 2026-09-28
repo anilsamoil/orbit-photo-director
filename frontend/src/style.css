@@ -1680,6 +1680,31 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
 }
 
+.tracked-marker {
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+.tracked-marker-dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: var(--tracked-color, #ff5c5c);
+  border: 2px solid #0b0d12;
+  transform: rotate(45deg);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+.tracked-marker-label {
+  position: absolute;
+  left: 18px;
+  top: -2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tracked-color, #ff5c5c);
+  white-space: nowrap;
+  text-shadow: 0 1px 2px #0b0d12, 0 0 4px #0b0d12;
+}
+
 .map-legend {
   position: static;
   align-self: flex-start;
@@ -1716,6 +1741,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .map-legend-twilight { background: #d65cff; }
 .map-legend-eclipse { background: #7a8aa8; }
 .map-legend-anil { background: #8b93ff; border: 1px solid #fff; }
+.map-legend-starship { background: #ff5c5c; border: 1px solid #0b0d12; }
 
 .time-btn {
   background: transparent;

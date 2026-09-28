@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone'];
+export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone', 'tracked'];
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -293,7 +293,7 @@ async function pointForLngLat(send, lng, lat) {
 }
 
 async function frameLngLat(send, lng, lat, zoom) {
-  await evaluate(send, `window.__opdMap.easeTo({ center: [${lng}, ${lat}], zoom: ${zoom}, duration: 0 }); true`);
+  await evaluate(send, `window.__opdMap.jumpTo({ center: [${lng}, ${lat}], zoom: ${zoom} }); true`);
   await sleep(400);
 }
 
@@ -367,6 +367,7 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
         else if (feature === 'profile') notes.push(await driveProfile(cdp.send, evidenceDir, meta, baseUrl, home));
         else if (feature === 'log') notes.push(await driveLog(cdp.send, evidenceDir, baseUrl));
         else if (feature === 'phone') notes.push(await drivePhone(cdp.send, evidenceDir, meta));
+        else if (feature === 'tracked') notes.push(await driveTracked(cdp.send, evidenceDir, meta));
         else throw new Error(`unknown feature ${feature}`);
       }
     } finally {
@@ -788,6 +789,104 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin';
+}
+
+async function driveTracked(send, evidenceDir, meta) {
+  await setViewport(send, 1400, 900, false);
+  await click(send, '#tab-map');
+  const ready = await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdMap;
+      const iss = document.querySelector('.iss-marker');
+      const legend = document.getElementById('tracked-legend-text')?.textContent || '';
+      const track = !!(map && map.getLayer && map.getLayer('iss-track-layer'));
+      if (!map || !iss || !track || !legend.includes('Starship')) return null;
+      return { ok: true, legend };
+    })()`,
+    'tracked legend',
+    45000,
+  );
+  if (meta.trackedMode === 'elements') {
+    if (!meta.standIn || !ready.legend.includes(meta.standIn)) {
+      throw new Error(`stand-in legend ${ready.legend} expected ${meta.standIn}`);
+    }
+    const placed = await waitFor(
+      send,
+      `(() => {
+        const marker = document.querySelector('.tracked-marker');
+        const label = marker?.querySelector('.tracked-marker-label')?.textContent;
+        const map = window.__opdMap;
+        const layer = map && map.getLayer && map.getLayer('sat-track-layer-starship');
+        const source = map && map.getSource && map.getSource('sat-track-starship');
+        const data = source && (source._data || (source.serialize ? source.serialize().data : null));
+        const line = data && data.features && data.features[0] && data.features[0].geometry;
+        const coord = line && line.coordinates && line.coordinates[0];
+        if (!marker || label !== 'Starship' || !layer || !coord) return null;
+        return { ok: true, lng: coord[0], lat: coord[1], title: marker.title };
+      })()`,
+      'starship marker and track',
+      20000,
+    );
+    await click(send, '#bearing-north');
+    await sleep(700);
+    const sizes = [
+      ['desktop', 1400, 900, false],
+      ['ipad', 1024, 768, true],
+      ['iphone', 390, 844, false],
+    ];
+    for (const [name, width, height, mobile] of sizes) {
+      await setViewport(send, width, height, mobile);
+      await sleep(400);
+      const zoom = name === 'iphone' ? 2.2 : 2.6;
+      await evaluate(send, `window.__opdMap.resize(); window.__opdMap.jumpTo({ center: [${placed.lng}, ${placed.lat}], zoom: ${zoom} }); true`);
+      await sleep(400);
+      await evaluate(send, `(() => {
+        const box = document.querySelector('.tracked-marker')?.getBoundingClientRect();
+        if (!box) return false;
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+        window.__opdMap.panBy([cx - innerWidth / 2, cy - innerHeight / 2], { duration: 0 });
+        return true;
+      })()`);
+      await sleep(400);
+      const framed = await evaluate(send, `(() => {
+        const box = document.querySelector('.tracked-marker')?.getBoundingClientRect();
+        if (!box || box.width < 8) return null;
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+        return {
+          ok: cx > 48 && cy > 48 && cx < innerWidth - 48 && cy < innerHeight - 48,
+          cx, cy,
+        };
+      })()`);
+      await shot(send, evidenceDir, `tracked-${name}`);
+      if (!framed || !framed.ok) throw new Error(`starship marker off-screen on ${name}: ${JSON.stringify(framed)}`);
+    }
+    await setViewport(send, 1400, 900, false);
+    return `tracked: marker and ground track for ${meta.standIn} on desktop, iPad, and iPhone`;
+  }
+  if (!ready.legend.includes('Starship: no public orbit yet')) {
+    throw new Error(`no-orbit legend ${ready.legend}`);
+  }
+  const absent = await evaluate(send, `document.querySelector('.tracked-marker') ? 'present' : 'absent'`);
+  if (absent !== 'absent') throw new Error('no-orbit state still drew a marker');
+  await frameLngLat(send, meta.iss.lon, meta.iss.lat, 3);
+  await waitFor(
+    send,
+    `(() => {
+      const box = document.querySelector('.iss-marker')?.getBoundingClientRect();
+      if (!box) return null;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      if (cx < 40 || cy < 40 || cx > innerWidth - 40 || cy > innerHeight - 80) return null;
+      return { ok: true };
+    })()`,
+    'iss marker framed',
+    10000,
+  );
+  await shot(send, evidenceDir, 'tracked-no-orbit');
+  return 'tracked: Starship no public orbit yet, ISS marker and track still up';
 }
 
 async function driveHelp(send, evidenceDir) {

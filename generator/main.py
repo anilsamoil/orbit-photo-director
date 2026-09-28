@@ -3,7 +3,7 @@
   2. Fetch + cache SatCORPS cloud composite (or use cached < TTL)
   3. Load targets
   4. For each target: find passes in next pass_window_hours; score each
-  5. Write versioned artifacts (passes.json, track.json, status.json, iss_polynomial.json)
+  5. Write versioned artifacts (passes.json, track.json, status.json, tracked.json)
   6. Atomic write manifest.json pointer
   7. (Caller) rclone sync to R2
 """
@@ -86,6 +86,7 @@ from .orbit import (
     tle_age_hours,
 )
 from .score import compute_score, top_n
+from .tracked import unavailable_artifact_text, write_tracked_artifact
 from .water_mask import load_water_mask
 
 # Hard-fail threshold: above this TLE age, sgp4 predictions degrade so badly
@@ -1151,6 +1152,13 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             log.warning("cupola windows failed (%s); manifest omits cupola_windows", exc)
 
+    tracked_path = v_dir / "tracked.json"
+    try:
+        write_tracked_artifact(settings.cache_dir, n, tracked_path)
+    except OSError as exc:
+        log.warning("tracked objects failed (%s); publishing the no-data state", exc)
+        tracked_path.write_text(unavailable_artifact_text())
+
     # 6. Manifest
     artifacts_block: dict[str, Path] = {
         "passes": canonical_artifacts["passes"],
@@ -1159,6 +1167,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         "track": v_dir / "track.json",
         "status": canonical_artifacts["status"],
         "targets": v_dir / "targets.json",
+        "tracked": tracked_path,
     }
     if cupola_windows_path is not None:
         artifacts_block["cupola_windows"] = cupola_windows_path

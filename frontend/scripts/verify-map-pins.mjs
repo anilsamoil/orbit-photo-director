@@ -15,6 +15,7 @@ const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
 const PIN_DROP = 'src/map/features/pin-drop/index.ts';
 const SATELLITES = 'src/map/features/satellites/index.ts';
+const TRACKED = 'src/map/features/tracked/index.ts';
 const LABELS = 'src/map/features/labels/index.ts';
 const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
 const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
@@ -33,6 +34,7 @@ const PIN_FILES = [
   'test/map-pin-drop-contract.test.ts',
   'test/map-satellites-contract.test.ts',
   'test/map-ground-track-contract.test.ts',
+  'src/map/features/tracked/tracked.test.ts',
 ];
 
 const MUTATIONS = [
@@ -125,6 +127,18 @@ const MUTATIONS = [
     file: SATELLITES,
     find: '      const atMs = core.clock.viewMs();',
     replace: '      const atMs = core.clock.now();',
+  },
+  {
+    contract: 'a tracked vehicle orbit starts at the view instant, not the wall clock',
+    file: TRACKED,
+    find: '  const fromMs = core.clock.viewMs();',
+    replace: '  const fromMs = core.clock.now();',
+  },
+  {
+    contract: 'a tracked vehicle marker sits at its sub-point for the view instant',
+    file: TRACKED,
+    find: '  const atMs = core.clock.viewMs();',
+    replace: '  const atMs = core.clock.now();',
   },
   {
     contract: 'unchecking a satellite forgets it for the next visit',

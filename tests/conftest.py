@@ -107,6 +107,14 @@ def repo_with_targets(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _offline_tracked_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "generator.tracked.http_get",
+        lambda url, timeout=15.0: (404, "No GP data found"),
+    )
+
+
 @pytest.fixture
 def settings_in_tmp(tmp_path: Path, repo_with_targets: Path) -> Settings:
     """Settings rooted at tmp_path with the small targets fixture."""
