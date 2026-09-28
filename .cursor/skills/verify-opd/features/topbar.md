@@ -4,7 +4,7 @@ The top bar is one fixed header on every tab. It shows where the station is and 
 
 ## Sub-features
 
-- `iss-now` fills `#iss-now` from the published track. The text starts with `ISS` and the latitude, with no space between the label and the number, as in `ISS15.4°S`. Its title is `Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position`. `ISS live track expired` does not pass. The stale-orbit sentence is on Profile photo lookup, not here.
+- `iss-now` fills `#iss-now` from the published track. The text starts with `ISS` and the latitude, with no space between the label and the number, as in `ISS15.4°S`. Its title is `Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position`. When the track has no position, the label `ISS` is immediately followed by `live track expired`, so the text is `ISSlive track expired`. That text does not pass. The stale-orbit sentence is on Profile photo lookup, not here.
 - `kp-badge` shows `Kp 3.0` from the fixture `/api/kp` value `3`.
 - `topbar-box` keeps the same fixed box on Map, Queue, Upcoming, Profile, and Log. Non-map pages pad `main` by the bar height. Map padding is 0.
 - `topbar-tabs` scrolls the tab strip sideways when the labels are wider than the bar.

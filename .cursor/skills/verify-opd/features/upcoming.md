@@ -1,6 +1,6 @@
 # Upcoming
 
-Upcoming lists launches with a shooting chance, then passes from 90 minutes to 36 hours out. The pane title starts with Next 36 hours. The fixture puts the Verify Ascent launch card above Verify Mesa. Mesa is about eight hours ahead. Ascent stays after Mesa is hidden.
+Upcoming lists launches with a shooting chance, then future passes from the `top_24h` artifact. The generator writes that artifact from 90 minutes out through the 36 hour window. The page drops a pass once its closest approach is in the past. The pane title starts with Next 36 hours. The fixture puts the Verify Ascent launch card above Verify Mesa. Mesa is about eight hours ahead. Ascent stays after Mesa is hidden.
 
 ## Sub-features
 

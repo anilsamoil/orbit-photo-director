@@ -5,7 +5,7 @@ The footer tells you whether the shot queue data is current. After a healthy loa
 ## Sub-features
 
 - `banner-ready` replaces Loading with an update age once the manifest arrives.
-- `banner-blocked` is the red sign-in footer. A session that is not ok, or a redirect, says `Please sign in again to open your own profile. Your saved data has been kept.` A 200 body whose `ok` is not true says `Could not verify your profile. Please reload when connected.` The Chrome pass uses the signed-in Anil fixture, so `drive banner` shows neither sentence. The WebKit pass at the end of every drive sets `opd-verify-session=deny` and requires the footer Sign in link and Reload button.
+- `banner-blocked` is the red sign-in footer. A redirect, a 401, a 403, or any other failed response except a non-JSON 404 says `Please sign in again to open your own profile. Your saved data has been kept.` A non-JSON 404, or a 200 HTML body that contains `id="status-banner"`, is a local copy. The app opens the `?u=` profile (`anil` when `u` is missing) and the footer has no Sign in link. A 200 JSON body whose `ok` is not true says `Could not verify your profile. Please reload when connected.` The Chrome pass uses the signed-in Anil fixture, so `drive banner` shows neither sentence. The WebKit pass at the end of every drive sets `opd-verify-session=deny` and requires the footer Sign in link and Reload button.
 
 ## How to get to it (user POV)
 
