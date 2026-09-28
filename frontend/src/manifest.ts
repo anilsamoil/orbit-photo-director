@@ -19,6 +19,8 @@ export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
   if (!resp.ok) {
     throw new Error(`manifest fetch failed: ${resp.status}`);
   }
+  const type = resp.headers.get('content-type') ?? '';
+  if (type.includes('text/html')) throw new Error('this address has no shot queue');
   return (await resp.json()) as Manifest;
 }
 

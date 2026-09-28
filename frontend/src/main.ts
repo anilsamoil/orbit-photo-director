@@ -36,7 +36,7 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
-import { getAccountProfile, getAuthorizedProfiles, resolveAccountProfile } from './profile-session';
+import { getAccountProfile, getAuthorizedProfiles, resolveAccountProfile, SessionSignInRequired } from './profile-session';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
 import { rememberPublishedIssTle } from './iss-tle';
 import { markProfileTargetsChanged } from './profile-target-sync';
@@ -87,6 +87,40 @@ let refreshInFlight: Promise<void> | null = null;
 // counter on R2), so skipping unchanged writes drops ~350K localStorage
 // writes over an 8-month mission to ~5K.
 let lastSavedManifestVersion: string | null = null;
+
+function recoveryHref(): string {
+  try {
+    return getAccessRecoveryPath(new URL(window.location.href).searchParams.get('u') ?? undefined);
+  } catch {
+    return getAccessRecoveryPath();
+  }
+}
+
+function showSessionRecovery(text: string): void {
+  const el = document.getElementById('status-banner');
+  if (!el) return;
+  el.className = 'banner banner-red';
+  el.onclick = null;
+  el.style.cursor = '';
+  const copy = document.createElement('p');
+  copy.className = 'banner-copy';
+  copy.textContent = text;
+  const actions = document.createElement('div');
+  actions.className = 'banner-actions';
+  const signIn = document.createElement('a');
+  signIn.className = 'banner-action';
+  signIn.href = recoveryHref();
+  signIn.textContent = 'Sign in';
+  const reload = document.createElement('button');
+  reload.className = 'banner-action';
+  reload.type = 'button';
+  reload.textContent = 'Reload';
+  reload.addEventListener('click', () => {
+    window.location.assign(recoveryHref());
+  });
+  actions.append(signIn, reload);
+  el.replaceChildren(copy, actions);
+}
 
 function setBanner(state: BannerState): void {
   const el = document.getElementById('status-banner');
@@ -1479,8 +1513,13 @@ export function renderTopbarProfileBadge(name: string | null): void {
   }
   el.hidden = false;
   const account = getAccountProfile();
-  el.textContent = `👤 ${account?.displayName ?? name}${account?.isVerified === false ? ' · Offline' : ''}`;
-  el.title = account ? (getAuthorizedProfiles().length > 1 ? 'Choose your profile or a crew profile' : 'Open your profile') : `Active profile: ${name} — click to switch`;
+  const offline = account?.localOnly ? '' : account?.isVerified === false ? ' · Offline' : '';
+  el.textContent = `👤 ${account?.displayName ?? name}${offline}`;
+  el.title = account?.localOnly
+    ? 'This copy has no Google sign-in. Saved targets and ratings stay on this device.'
+    : account
+      ? (getAuthorizedProfiles().length > 1 ? 'Choose your profile or a crew profile' : 'Open your profile')
+      : `Active profile: ${name} — click to switch`;
   // Bug 1 — make the chip discoverable as a profile switcher. Click
   // (or Enter / Space when focused) activates the Profile tab and
   // scrolls the picker section into view. a11y: role=button + tabindex
@@ -1541,17 +1580,9 @@ async function init(): Promise<void> {
   } catch (e) {
     currentProfile = null;
     console.warn('[profile] account initialization failed:', e);
-    setBanner({ level: 'red', text: e instanceof Error ? e.message : 'Could not verify your profile. Please reload.' });
-    const container = document.getElementById('map-pane') ?? document.querySelector('main');
-    if (container) {
-      const message = document.createElement('p');
-      message.textContent = 'Your saved targets and ratings have been kept. ';
-      const retry = document.createElement('a');
-      retry.href = '/api/app';
-      retry.textContent = 'Sign in and reload';
-      message.appendChild(retry);
-      container.appendChild(message);
-    }
+    const text = e instanceof Error ? e.message : 'Could not verify your profile. Please reload.';
+    if (e instanceof SessionSignInRequired) showSessionRecovery(text);
+    else setBanner({ level: 'red', text });
     return;
   }
   renderTopbarProfileBadge(currentProfile?.name ?? null);

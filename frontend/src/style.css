@@ -953,6 +953,33 @@ body.shotlist-bar-visible main {
 .banner-orange { background: rgba(255, 154, 60, 0.13); color: var(--orange); font-weight: 600; }
 .banner-red { background: rgba(255, 100, 100, 0.15); color: var(--red); font-weight: 600; }
 .banner-loading { background: var(--surface); color: var(--text-dim); }
+.banner-copy { margin: 0; }
+.banner-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+.banner-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.2rem 0.9rem;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+body:has(#status-banner .banner-actions) .help-fab {
+  bottom: calc(7.75rem + env(safe-area-inset-bottom));
+}
 
 body:has(> #view.view-map) > .topbar,
 body:has(> #view.view-map) > .banner,
