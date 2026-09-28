@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
 const frontendDir = resolve(repoRoot, 'frontend');
 const featureDir = resolve(here, '../features');
-const FEATURE_FILES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone', 'service-worker'];
+const FEATURE_FILES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone', 'tracked', 'service-worker'];
 
 function homeDir() {
   return process.env.OPD_VERIFY_HOME || '/tmp/opd-verify/default';
@@ -145,7 +145,13 @@ function startProxy(home) {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
     const sendFile = (name) => {
-      const body = readFileSync(resolve(fixtureDir, name));
+      const file = resolve(fixtureDir, name);
+      if (!existsSync(file)) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end('missing');
+        return;
+      }
+      const body = readFileSync(file);
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(body);
     };

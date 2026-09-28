@@ -277,9 +277,10 @@ export async function buildFixtures(dir, now = Date.now()) {
     ],
   };
 
-  const trackedMode = process.env.OPD_VERIFY_TRACKED === 'elements' ? 'elements' : 'unavailable';
+  const requestedTracked = process.env.OPD_VERIFY_TRACKED || '';
+  const trackedMode = ['elements', 'aged_out', 'missing'].includes(requestedTracked) ? requestedTracked : 'unavailable';
   let standIn = null;
-  let tracked;
+  let tracked = null;
   if (trackedMode === 'elements') {
     standIn = await loadStandInTle();
     const standRec = satellite.twoline2satrec(standIn.line1, standIn.line2);
@@ -300,21 +301,20 @@ export async function buildFixtures(dir, now = Date.now()) {
         age_hours: Math.round((Math.abs(now - Date.parse(standEpoch)) / 3_600_000) * 100) / 100,
       }],
     };
-  } else {
+  } else if (trackedMode !== 'missing') {
     tracked = {
       objects: [{
         id: 'starship',
         label: 'Starship',
         color: '#ff5c5c',
         state: 'unavailable',
-        reason: 'no_public_orbit',
+        reason: trackedMode === 'aged_out' ? 'aged_out' : 'no_public_orbit',
       }],
     };
   }
 
   const files = {
     'passes.json': artifact([...top5, ...top24h]),
-    'tracked.json': artifact(tracked),
     'top5.json': artifact(top5),
     'top_24h.json': artifact(top24h),
     'track.json': artifact(track),
@@ -323,6 +323,7 @@ export async function buildFixtures(dir, now = Date.now()) {
     'cupola_windows.json': artifact({ version: 'verify', generated_at: generated, windows: [cupolaPass] }),
     'launch.json': artifact(launchBody),
   };
+  if (tracked) files['tracked.json'] = artifact(tracked);
   for (const [name, entry] of Object.entries(files)) {
     writeFileSync(resolve(dir, name), entry.text);
   }
@@ -342,9 +343,15 @@ export async function buildFixtures(dir, now = Date.now()) {
       status: { path: 'v/verify/status.json', sha256: files['status.json'].sha256, bytes: files['status.json'].bytes },
       targets: { path: 'v/verify/targets.json', sha256: files['targets.json'].sha256, bytes: files['targets.json'].bytes },
       cupola_windows: { path: 'v/verify/cupola_windows.json', sha256: files['cupola_windows.json'].sha256, bytes: files['cupola_windows.json'].bytes },
-      tracked: { path: 'v/verify/tracked.json', sha256: files['tracked.json'].sha256, bytes: files['tracked.json'].bytes },
     },
   };
+  if (files['tracked.json']) {
+    manifest.artifacts.tracked = {
+      path: 'v/verify/tracked.json',
+      sha256: files['tracked.json'].sha256,
+      bytes: files['tracked.json'].bytes,
+    };
+  }
   writeFileSync(resolve(dir, 'manifest.json'), JSON.stringify(manifest));
   const launchText = files['launch.json'].text;
   const pointer = {

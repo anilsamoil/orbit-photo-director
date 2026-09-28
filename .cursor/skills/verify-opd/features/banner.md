@@ -5,7 +5,7 @@ The footer tells you whether the shot queue data is current. After a healthy loa
 ## Sub-features
 
 - `banner-ready` replaces Loading with an update age once the manifest arrives.
-- `banner-blocked` is the red sign-in footer. It needs a session response that is not ok. This proxy always returns Anil, so `drive banner` does not show that footer.
+- `banner-blocked` is a red footer. A session that is not ok, or a redirect, says `Please sign in again to open your own profile. Your saved data has been kept.` A 200 body whose `ok` is not true says `Could not verify your profile. Please reload when connected.` This proxy always returns Anil, so `drive banner` shows neither sentence.
 
 ## How to get to it (user POV)
 
@@ -22,5 +22,5 @@ Preconditions:
 
 ## Gotchas
 
-- A red sign-in footer means `/api/browser/session` did not return the Anil fixture. Fix the proxy before driving anything else.
+- A red sign-in footer means `/api/browser/session` was not ok. A 200 body with `ok` not true uses the verify sentence instead. Fix the proxy before driving anything else.
 - The banner can lag the cards by a moment. Wait until Loading is gone.
