@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { driveWebkitDevices } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone', 'tracked'];
 
@@ -370,6 +371,7 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
         else if (feature === 'tracked') notes.push(await driveTracked(cdp.send, evidenceDir, meta));
         else throw new Error(`unknown feature ${feature}`);
       }
+      notes.push(await driveWebkitDevices({ baseUrl, evidenceDir }));
     } finally {
       cdp.close();
     }
