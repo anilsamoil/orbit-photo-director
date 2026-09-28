@@ -2723,6 +2723,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   max-width: 460px;
   max-height: calc(100dvh - 2rem);
   gap: 0.6rem;
+  overflow: hidden;
 }
 .help-header {
   flex: 0 0 auto;
@@ -2752,8 +2753,10 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   flex: 1 1 auto;
   min-height: 0;       /* lets the flex child shrink below content so overflow-y scrolls */
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: grid;
   gap: 0.5rem;
+  padding-bottom: 0.25rem;
 }
 .help-section-title {
   margin: 0.5rem 0 0.1rem;
@@ -2997,7 +3000,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   }
   .help-fab { bottom: calc(1rem + env(safe-area-inset-bottom)); }
   .modal-backdrop {
-    padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(1rem + env(safe-area-inset-bottom));
+    padding:
+      calc(1rem + env(safe-area-inset-top))
+      calc(1rem + env(safe-area-inset-right))
+      calc(1rem + env(safe-area-inset-bottom))
+      calc(1rem + env(safe-area-inset-left));
   }
   .launch-dialog,
   .modal.help-modal {

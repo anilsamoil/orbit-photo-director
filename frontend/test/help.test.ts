@@ -27,6 +27,18 @@ describe('openHelpModal', () => {
     }
   });
 
+  it('names the legend states, the footer recovery, and the Safari data clear', () => {
+    openHelpModal();
+    const text = document.querySelector('.help-body')?.textContent ?? '';
+    expect(text).toContain('Starship: no public orbit yet');
+    expect(text).toContain('Starship: public orbit expired');
+    expect(text).toContain('Starship: orbit lookup failed');
+    expect(text).toContain('Sign in and Reload are in that footer');
+    expect(text).toContain('Settings > Apps > Safari > Advanced > Website Data');
+    expect(text).toContain('remove astroanil');
+    expect(text).toContain('live track expired');
+  });
+
   it('explains the score, the zoom preview, and photo lookup', () => {
     openHelpModal();
     const text = document.querySelector('.help-body')?.textContent ?? '';
