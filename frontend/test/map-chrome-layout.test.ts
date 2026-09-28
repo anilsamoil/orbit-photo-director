@@ -156,7 +156,7 @@ describe('map chrome layout', () => {
     const tab = getComputedStyle(document.querySelector('.tab')!);
     expect(bar.overflowX).toBe('auto');
     expect(bar.overflowY).toBe('hidden');
-    expect(tabs.overflowX).toBe('visible');
+    expect(rulesFor('.tabs').some((style) => style.overflowX === 'auto')).toBe(false);
     expect(tabs.flexShrink).toBe('0');
     expect(getComputedStyle(document.querySelector('.profile-badge')!).flexShrink).toBe('0');
     expect(getComputedStyle(document.querySelector('.kp-badge')!).flexShrink).toBe('0');

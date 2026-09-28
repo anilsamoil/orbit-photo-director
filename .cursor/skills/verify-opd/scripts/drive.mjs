@@ -518,28 +518,120 @@ async function driveTopbar(send, evidenceDir, home) {
   }
   if (queueBox.banner === 'fixed') throw new Error(`queue banner still fixed ${JSON.stringify(queueBox)}`);
   await shot(send, evidenceDir, 'topbar-queue');
-  await send('Emulation.setDeviceMetricsOverride', {
-    width: 390,
-    height: 800,
-    deviceScaleFactor: 1,
-    mobile: true,
-  });
+  const frames = [
+    [402, 874, 'topbar-iphone-17-pro'],
+    [874, 402, 'topbar-iphone-17-pro-land'],
+    [390, 844, 'topbar-iphone-13'],
+    [844, 390, 'topbar-iphone-13-land'],
+    [834, 1194, 'topbar-ipad'],
+  ];
   try {
-    await waitFor(
-      send,
-      `(() => {
-        const tabs = document.querySelector('.tabs');
-        if (!tabs || tabs.scrollWidth <= tabs.clientWidth + 1) return null;
-        return { ok: true, scrollWidth: tabs.scrollWidth, clientWidth: tabs.clientWidth };
-      })()`,
-      'tab strip scrolls',
-      5000,
-    );
-    await shot(send, evidenceDir, 'topbar-narrow');
+    for (const [width, height, name] of frames) {
+      await setViewport(send, width, height, true);
+      const reach = await waitFor(send, topbarReachExpression(), `topbar reach ${width}x${height}`, 8000);
+      await shot(send, evidenceDir, name);
+      if (width === 402 && height === 874) {
+        await tapTopbarControl(send, '#tab-queue');
+        const queue = await evaluate(send, `document.querySelector('main')?.className`);
+        if (queue !== 'view-queue') throw new Error(`queue tap landed on ${queue}`);
+        await tapTopbarControl(send, '#tab-upcoming');
+        const upcoming = await evaluate(send, `document.querySelector('main')?.className`);
+        if (upcoming !== 'view-upcoming') throw new Error(`upcoming tap landed on ${upcoming}`);
+      }
+      if (reach.scrollWidth <= reach.clientWidth && width <= 402) {
+        throw new Error(`topbar did not scroll at ${width}x${height}: ${JSON.stringify(reach)}`);
+      }
+    }
+    const inset = await safeAreaOverride(send, { top: 59, left: 59, bottom: 34, right: 47 });
+    if (inset) {
+      await setViewport(send, 874, 402, true);
+      const pad = await evaluate(send, `(() => {
+        const bar = getComputedStyle(document.querySelector('.topbar'));
+        return { left: bar.paddingLeft, right: bar.paddingRight, top: bar.paddingTop };
+      })()`);
+      const left = Number.parseFloat(pad.left);
+      const right = Number.parseFloat(pad.right);
+      const top = Number.parseFloat(pad.top);
+      if (left < 59 || right < 47 || top < 59) throw new Error(`safe area padding ${JSON.stringify(pad)}`);
+    }
   } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    await evaluate(send, `(() => {
+      const badge = document.getElementById('profile-badge');
+      if (badge) badge.textContent = '👤 Anil';
+    })()`);
     await setViewport(send, home.width, home.height, home.mobile);
   }
-  return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, tabs scroll`;
+  return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, bar scrolls`;
+}
+
+function topbarReachExpression() {
+  return `(() => {
+    const bar = document.querySelector('.topbar');
+    const badge = document.getElementById('profile-badge');
+    if (!bar || !badge) return null;
+    badge.hidden = false;
+    badge.textContent = '👤 anilsamoilenko-astro';
+    const selectors = ['#tab-queue', '#tab-upcoming', '#tab-map', '#tab-profile', '#tab-log', '#kp-widget', '#profile-badge'];
+    const targets = selectors
+      .map((sel) => document.querySelector(sel))
+      .filter((el) => el && !el.hidden && getComputedStyle(el).display !== 'none');
+    const misses = [];
+    for (const el of targets) {
+      bar.scrollLeft = 0;
+      let rect = el.getBoundingClientRect();
+      const start = bar.getBoundingClientRect();
+      if (rect.left < start.left - 1 || rect.right > start.right + 1) {
+        bar.scrollLeft += rect.left - start.left;
+        rect = el.getBoundingClientRect();
+      }
+      const current = bar.getBoundingClientRect();
+      const fully = rect.width >= 44 && rect.height >= 44 && rect.left >= current.left - 1 && rect.right <= current.right + 1;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + Math.min(rect.height / 2, 22));
+      const owner = hit && hit.closest(selectors.join(','));
+      if (!fully || owner !== el) {
+        misses.push({ id: el.id, fully, hit: owner ? owner.id : (hit && hit.className) || null, scroll: bar.scrollLeft });
+      }
+    }
+    const nodes = [...bar.children].filter((el) => !el.hidden && getComputedStyle(el).display !== 'none');
+    const overlaps = [];
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const a = nodes[i].getBoundingClientRect();
+        const b = nodes[j].getBoundingClientRect();
+        const ix = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const iy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        if (ix > 1 && iy > 1) overlaps.push([nodes[i].id || nodes[i].className, nodes[j].id || nodes[j].className]);
+      }
+    }
+    if (misses.length || overlaps.length) return { misses, overlaps };
+    const scrollWidth = bar.scrollWidth;
+    const clientWidth = bar.clientWidth;
+    bar.scrollLeft = 0;
+    return { ok: true, scrollWidth, clientWidth };
+  })()`;
+}
+
+async function tapTopbarControl(send, selector) {
+  const point = await evaluate(send, `(() => {
+    const bar = document.querySelector('.topbar');
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!bar || !el) return null;
+    bar.scrollLeft = 0;
+    let rect = el.getBoundingClientRect();
+    const start = bar.getBoundingClientRect();
+    if (rect.left < start.left - 1 || rect.right > start.right + 1) {
+      bar.scrollLeft += rect.left - start.left;
+      rect = el.getBoundingClientRect();
+    }
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || hit.closest(${JSON.stringify(selector)}) !== el) return { hit: hit && (hit.id || hit.className) };
+    return { ok: true, x, y };
+  })()`);
+  if (!point?.ok) throw new Error(`topbar tap ${selector} hit ${JSON.stringify(point)}`);
+  await mouseClick(send, point.x, point.y);
 }
 
 async function driveQueue(send, evidenceDir, meta, baseUrl) {

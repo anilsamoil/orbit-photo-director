@@ -20,7 +20,7 @@ Preconditions:
 - **Read the footer.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive banner`. The footer contains `Last updated`, it does not contain a sign-in sentence, and on Map its position is `fixed`.
 - **Proof.** The command writes `evidence/banner.png`. The PNG shows the footer and the SNAP title. The same command then writes the WebKit device shots named in the skill. On the denied session, Sign in and Reload are on the footer, a tap hits that control, and Sign in or Reload navigates to `/api/app` without clearing `opd-calib-queue`.
 
-Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`. The denied footer shot is `banner-auth.png` in each of those directories.
+Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`. The denied footer shot is `banner-auth.png` in each of those directories.
 
 ## Gotchas
 

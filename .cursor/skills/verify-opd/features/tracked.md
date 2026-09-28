@@ -31,7 +31,7 @@ Preconditions:
 - **Missing artifact.** Bring the instance down, set `OPD_VERIFY_TRACKED=missing`, and run `up` again, then `drive tracked`. The manifest has no `tracked` entry. The legend is `Starship: no public orbit yet`. Nothing is drawn for Starship.
 - **Age-out.** Bring the instance down, set `OPD_VERIFY_TRACKED=aged_out`, and run `up` again, then `drive tracked`. The legend is `Starship: public orbit expired`. The marker and `sat-track-layer-starship` are absent. The ISS marker and track stay.
 - **Lookup failed.** Bring the instance down, set `OPD_VERIFY_TRACKED=lookup_failed`, and run `up` again, then `drive tracked`. The legend is `Starship: orbit lookup failed`. The marker and the Starship track are absent. The ISS marker and track stay.
-- **Devices.** Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+- **Devices.** Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 

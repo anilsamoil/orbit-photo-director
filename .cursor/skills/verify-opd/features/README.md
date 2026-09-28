@@ -14,7 +14,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 
 - Start each feature from the healthy instance unless its preconditions say otherwise.
 - Prefer the ids and accessible names in the feature file.
-- `drive all` walks banner, topbar, queue, upcoming, map, help, profile, log, phone, and tracked in that order on desktop Chrome, then runs those same steps on WebKit iPhone 13 and iPad Pro 11. A single feature drive does the same three surfaces. WebKit missing fails the drive.
+- `drive all` walks banner, topbar, queue, upcoming, map, help, profile, log, phone, and tracked in that order on desktop Chrome, then runs those same steps on WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11. A single feature drive does the same four surfaces. WebKit missing fails the drive.
 - `sw` builds a preview and is not part of `drive all`.
 - `down` deletes the Chrome profile and keeps `evidence/`.
 
@@ -27,7 +27,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 ## Features
 
 - [Status banner](./banner.md) covers the footer after the manifest loads.
-- [Top bar](./topbar.md) covers the fixed header, the live ISS readout, the Kp badge, and the scrolling tab strip.
+- [Top bar](./topbar.md) covers the fixed header, the live ISS readout, the Kp badge, and the row that scrolls when the tabs and a long username do not fit.
 - [Queue](./queue.md) covers the next passes, score, sort, remind, shoot, the mine filter, keepsake windows, and Hide.
 - [Upcoming](./upcoming.md) covers launch cards, the later passes, score sort, and hide.
 - [Map](./map.md) covers the globe, ISS track, target popup, dropped pin, legend, imagery date, collapsed credits, time controls, tool rail, satellite picker, launch dialog, and the pin that Hide removes.

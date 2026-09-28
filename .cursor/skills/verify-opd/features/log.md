@@ -20,7 +20,7 @@ Preconditions:
 - **Open Log.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive log` only as part of `drive all`, or after `drive queue` on the same `up`. The shoot is stored by the proxy, so a new Chrome still sees it.
 - **Proof.** `evidence/log.png` shows a row titled Verify Reef with a `shoot` tag. A row that only contains the id, or a skip row, does not pass. The script also reads `GET /api/log` and requires the stored shoot `target_name` to be Verify Reef.
 
-Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 
