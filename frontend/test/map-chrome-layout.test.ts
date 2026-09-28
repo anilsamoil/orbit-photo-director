@@ -136,13 +136,13 @@ describe('map chrome layout', () => {
     expect(getComputedStyle(document.querySelector('main')!).paddingTop).toBe('0px');
   });
 
-  it('scrolls the tab strip inside the bar when the labels are wider than the screen', () => {
+  it('scrolls the top bar when a long username and the tabs are wider than the screen', () => {
     mount('view-queue');
     document.querySelector('.topbar')!.innerHTML = `
       <div class="brand"><span class="brand-mark">J</span><span class="brand-name">SNAP</span></div>
       <div class="kp-badge">Kp 4</div>
       <div class="sun-badge"></div>
-      <span class="profile-badge">Christopher</span>
+      <span class="profile-badge">anilsamoilenko-astro</span>
       <nav class="tabs">
         <button class="tab" type="button">Queue</button>
         <button class="tab" type="button">Upcoming</button>
@@ -151,14 +151,20 @@ describe('map chrome layout', () => {
         <button class="tab" type="button">Log</button>
       </nav>
     `;
+    const bar = getComputedStyle(document.querySelector('.topbar')!);
     const tabs = getComputedStyle(document.querySelector('.tabs')!);
     const tab = getComputedStyle(document.querySelector('.tab')!);
-    expect(tabs.overflowX).toBe('auto');
-    expect(Number.parseFloat(tabs.minWidth)).toBe(0);
-    expect(tabs.flexShrink).toBe('1');
+    expect(bar.overflowX).toBe('auto');
+    expect(bar.overflowY).toBe('hidden');
+    expect(rulesFor('.tabs').some((style) => style.overflowX === 'auto')).toBe(false);
+    expect(tabs.flexShrink).toBe('0');
+    expect(getComputedStyle(document.querySelector('.profile-badge')!).flexShrink).toBe('0');
+    expect(getComputedStyle(document.querySelector('.kp-badge')!).flexShrink).toBe('0');
     expect(tab.flexShrink).toBe('0');
     expect(tab.minHeight).toBe('44px');
     expect(getComputedStyle(document.querySelector('.brand')!).flexShrink).toBe('0');
+    expect(css).toContain('env(safe-area-inset-left)');
+    expect(css).toContain('env(safe-area-inset-right)');
   });
 
   it('draws one centered info icon on the credit toggle, collapsed and expanded', () => {

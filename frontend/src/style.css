@@ -56,7 +56,13 @@ body {
   padding: 4px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
 }
+.topbar::-webkit-scrollbar { display: none; }
 
 .brand {
   display: flex;
@@ -995,18 +1001,13 @@ body:has(> #view.view-map) .help-fab {
   backdrop-filter: blur(14px) saturate(1.2);
   border-color: rgba(255, 255, 255, 0.16);
 }
-.brand { flex: 0 0 auto; }
-.tabs {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-}
-.tabs::-webkit-scrollbar { display: none; }
+.brand,
+.kp-badge,
+.sun-badge,
+.profile-badge { flex: 0 0 auto; }
+.tabs { flex: 0 0 auto; }
 .iss-now {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 0 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2973,7 +2974,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   :root {
     --topbar-height: calc(4px + env(safe-area-inset-top) + 0.2rem + 44px + 0.2rem + 4px + 1px);
   }
-  .topbar { padding-top: calc(4px + env(safe-area-inset-top)); }
+  .topbar {
+    padding-top: calc(4px + env(safe-area-inset-top));
+    padding-left: calc(8px + env(safe-area-inset-left));
+    padding-right: calc(8px + env(safe-area-inset-right));
+  }
   body:has(> #view.view-map) > .banner {
     padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
   }

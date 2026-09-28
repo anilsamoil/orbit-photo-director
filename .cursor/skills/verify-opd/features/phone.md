@@ -1,6 +1,6 @@
 # Phone
 
-Phone checks the Map page at 390x844 portrait, then 844x390 landscape. Desktop Chrome sets those sizes. WebKit iPhone 13 and iPad Pro 11 run the same checks, and this drive sets those sizes again on each device. `drive topbar` uses 390x800 for the tab strip, then restores the surface size. `drive tracked` with `OPD_VERIFY_TRACKED=elements` also frames 1400x900, 1024x768, and 390x844, then restores the surface size.
+Phone checks the Map page at 390x844 portrait, then 844x390 landscape. Desktop Chrome sets those sizes. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same checks, and this drive sets those sizes again on each device. `drive topbar` checks 402x874, 874x402, 390x844, 844x390, and 834x1194, then restores the surface size. `drive tracked` with `OPD_VERIFY_TRACKED=elements` also frames 1400x900, 1024x768, and 390x844, then restores the surface size.
 
 ## Sub-features
 
@@ -25,7 +25,7 @@ Preconditions:
 - **Long press.** Follow is off. The press point is the reef latitude, and the reef longitude plus 30 degrees, both rounded to whole degrees, at zoom 4. A touch held there opens a popup whose text contains `Closest`. A click at that point just after the finger lift leaves the popup open. A click after the ignore window removes it. The window is 700ms from the drop, not from the lift.
 - **Proof.** `evidence/phone-portrait.png`, `evidence/phone-portrait-credits.png`, `evidence/phone-landscape.png`, `evidence/phone-landscape-credits.png`, and `evidence/phone-long-press.png`. Stdout says `safe-area applied` or `safe-area unsupported`.
 
-Desktop Chrome runs the 390x844 and 844x390 viewports first. WebKit iPhone 13 and iPad Pro 11 run those same viewport checks. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
+Desktop Chrome runs the 390x844 and 844x390 viewports first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run those same viewport checks. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 

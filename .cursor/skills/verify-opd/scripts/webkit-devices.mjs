@@ -9,12 +9,32 @@ const { devices, webkit } = require('playwright');
 export const WEBKIT_DEVICES = [
   { name: 'iPhone 13', slug: 'iphone-13', standalone: true, tap: 'sign-in' },
   { name: 'iPad Pro 11', slug: 'ipad-pro-11', standalone: false, tap: 'reload' },
+  {
+    name: 'iPhone 17 Pro',
+    slug: 'iphone-17-pro',
+    standalone: true,
+    tap: 'sign-in',
+    viewport: { width: 402, height: 874 },
+    deviceScaleFactor: 3,
+  },
 ];
 
 export function deviceDescriptor(spec) {
-  const device = devices[spec.name];
-  if (!device?.viewport) throw new Error(`Playwright has no ${spec.name} descriptor`);
-  return device;
+  const known = devices[spec.name];
+  if (known?.viewport && !spec.viewport) return known;
+  if (spec.viewport) {
+    const base = known?.viewport ? known : devices['iPhone 13'];
+    return {
+      ...base,
+      viewport: { width: spec.viewport.width, height: spec.viewport.height },
+      deviceScaleFactor: spec.deviceScaleFactor ?? base.deviceScaleFactor,
+      isMobile: true,
+      hasTouch: true,
+      defaultBrowserType: 'webkit',
+    };
+  }
+  if (known?.viewport) return known;
+  throw new Error(`Playwright has no ${spec.name} descriptor`);
 }
 
 export function deviceViewport(spec) {
@@ -113,8 +133,7 @@ async function hit(page, locator) {
 
 export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
   mkdirSync(evidenceDir, { recursive: true });
-  const device = devices[spec.name];
-  if (!device) throw new Error(`Playwright has no ${spec.name} descriptor`);
+  const device = deviceDescriptor(spec);
   const context = await browser.newContext({ ...device });
   await context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
   if (spec.standalone) {
