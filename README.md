@@ -2,9 +2,9 @@
 
 Earth-photography planner for an 8-month ISS mission. Mac-side Python generator publishes a ranked shot queue to [map.astroanil.dev](https://map.astroanil.dev). The astronaut opens the URL from orbit and sees:
 
-- the next 5 shots in the next 90 minutes (target, countdown, `P(unobstructed)`, day/night/terminator regime)
-- the live ISS dot + ground track + cloud overlay (secondary view), with a time slider that scrubs the whole map — track, marker, terminator, satellites, target pins, and (once forecast frames are enabled) the cloud layer itself — to any instant in the next 36 hours
-- a confidence banner that escalates with snapshot age (green <1h → yellow <3h → orange <12h → red beyond) so it's always honest about how trustworthy the data on screen is
+- the Queue for the next 90 minutes (target, countdown, `P(unobstructed)`, day/night/terminator regime). The published pool is five ground slots. The page drops past passes and can place launch cards in front. Map is the tab that opens.
+- the live ISS dot, ground track, and observed cloud overlay, with a time slider that scrubs the track, marker, terminator, satellites, and target pins to any instant in the next 36 hours. Clouds stay the observed layer.
+- a footer that says how old the loaded data is. Online it is green under 90 minutes, yellow until 2 hours, then red. Offline it says LOS and uses green under 1 hour, yellow under 3 hours, orange under 12 hours, then red.
 
 The product is the shot queue, not the map.
 
@@ -20,7 +20,7 @@ Every existing ISS tracker is built for ground viewers aiming up: "when can I se
 ┌────────────────────────────┐         ┌──────────────────────┐         ┌────────────────────────┐
 │ Mac on Earth (unattended)  │  rclone │  Cloudflare R2       │ HTTPS   │  ISS browser (you)     │
 │                            │  sync   │  + Worker for        │  +      │                        │
-│  python generator (30min)  ├────────►│    /api/log endpoint │ Worker  │  shot queue cards      │
+│  python generator (60min)  ├────────►│    /api/log endpoint │ Worker  │  shot queue cards      │
 │  + daemon.py watchdog      │  every  │  + custom domain     │  POST   │  + map (secondary)     │
 │  + OpenClaw notify pipe    │  60 min │  map.astroanil.dev   │         │  + manifest-driven     │
 └────────────────────────────┘         └──────────────────────┘         └────────────────────────┘
@@ -63,7 +63,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) for ground-side support procedures.
 
 ## Status
 
-V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0 + Lane F SW at v1.1.0.1 + past-pass Queue filter at v1.1.0.2. V3.0 rocket-launch photography (OVERHEAD geometry) at v1.2.0.0 — 🚀 LAUNCH cards in Queue + Upcoming with reserved-slot guarantee, stale-launches banner overlay, LL2 schema-drift detection, operator-facing copy renamed Offline → LOS. V3-P2 ASCENT geometry shipped (2026-05-17 soak) — rocket-plume capture cards with `launch.kind="ascent"`; v1.6.1.0 adds the on-map trajectory layer (🚀 topbar toggle, altitude-coded polyline + pad pin). Continuous time-slider (Chris feedback 2026-06-09) at v1.8.0.0 — one-drag scrub to any instant in the next 36h, absolute view-time pinning, one-clock satellite/follow consistency, scrub honesty badges. Forecast cloud overlay synced to the time-scrub at v1.9.0.0 (flag `OPD_ENABLE_FORECAST_CLOUDS`, default off pending soak) — scrubbed views swap the cloud raster to the GFS forecast frame nearest the view instant, with a three-state badge naming the active layer. Kill-switch DNS (Lane G) still deferred; pre-launch e2e checklist (Lane H) partial via `scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md` — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
+V1 shipped at v1.0.0.0. V2 (offline-resilient frontend) at v1.1.0.0 + Lane F SW at v1.1.0.1 + past-pass Queue filter at v1.1.0.2. V3.0 rocket-launch photography (OVERHEAD geometry) at v1.2.0.0 — 🚀 LAUNCH cards in Queue + Upcoming with reserved-slot guarantee, stale-launches banner overlay, LL2 schema-drift detection, operator-facing copy renamed Offline → LOS. V3-P2 ASCENT geometry shipped (2026-05-17 soak) — ascent cards with `launch.kind="ascent"` (a visible pad is a possible shot, not a plume promise); v1.6.1.0 adds the on-map trajectory layer (map Launches button, gold polyline + pad pin). Continuous time-slider (Chris feedback 2026-06-09) at v1.8.0.0 — one-drag scrub to any instant in the next 36h, absolute view-time pinning, one-clock satellite/follow consistency, scrub honesty badges. Forecast frames can be published at v1.9.0.0 (generator flag `OPD_ENABLE_FORECAST_CLOUDS`, default off). The page keeps the observed cloud layer, and a scrubbed badge says the clouds are observed, not forecast. Kill-switch DNS (Lane G) still deferred; pre-launch e2e checklist (Lane H) partial via `scripts/verify-sw-upgrade.sh` + `docs/SW_UPGRADE_VERIFY.md` — see `TODOS.md`. Pre-launch checklist in `docs/RUNBOOK.md`.
 
 ## License
 

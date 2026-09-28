@@ -1,8 +1,9 @@
 /** In-page help panel (the ⟨?⟩ corner button).
  *
- *  A fixed bottom-right "?" button opens a modal that explains the app's
- *  features for a new astronaut — the five tabs, how to read a pass card,
- *  the map overlays, and the photo-lookup tool. Content is plain data
+ *  A fixed bottom-right "?" button opens a modal that explains the app
+ *  for the astronaut using it. The tabs, legend, Cupola windows, targets,
+ *  credits, top bar, and sign-in footer are in the sections below the
+ *  title. Content is plain data
  *  rendered with textContent (no operator input, but textContent keeps it
  *  XSS-safe by construction and matches the rest of the modal code).
  *
@@ -38,12 +39,11 @@ const HELP_SECTIONS: HelpSection[] = [
     items: [
       {
         icon: '🛰️',
-        label: 'SNAP (SNAP\'s Not an Astro Photographer)',
+        label: 'SNAP',
         text:
-          'A shot planner for Earth photography from the ISS. SNAP\'s ' +
-          'Not an Astro Photographer — it won\'t take the shot for you, but ' +
-          'it tells you what your camera targets are about to pass under, ' +
-          'when, and whether the light and clouds make the shot worth taking.',
+          'A shot planner for Earth photography from the ISS. The Map opens ' +
+          'first. Queue is what to shoot in the next 90 minutes. The app ' +
+          'does not take the photo.',
       },
     ],
   },
@@ -54,38 +54,41 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '',
         label: 'Queue',
         text:
-          'Next 90 minutes — what to shoot now. Cards are sorted by time ' +
-          'or score. This is your "raise the camera" list.',
+          'Next 90 minutes. Sort by Time or Score. Show All targets or only ' +
+          'Mine. Cards offer Shoot, Skip, Remind, and Hide. A launch card ' +
+          'can sit in front when a launch is in view. It lists the window, ' +
+          'direction, and chance. A visible pad is a possible shot.',
       },
       {
         icon: '',
         label: 'Upcoming',
         text:
-          'Next 36 hours — what to plan for. Same scoring as Queue but on ' +
-          'forecast cloud, so it is less certain by design.',
+          'Next 36 hours, scored with forecast cloud, so it is less certain ' +
+          'than Queue. Same Time, Score, All, and Mine controls. Cards have ' +
+          'Remind and Hide. They do not have Shoot or Skip. A notice appears ' +
+          'when orbital night goes away.',
       },
       {
         icon: '',
         label: 'Map',
         text:
-          'Live ISS position and ground track, your targets, and overlays ' +
-          '(clouds, day/night, night-lights, labels, rocket ascent paths). ' +
-          'A time slider scrubs the whole map up to 36 hours ahead.',
+          'Live ISS position, the ground track, and your targets. The time ' +
+          'slider looks ahead up to 36 hours. Launches, on the map toolbar, ' +
+          'draws the ascent path and the pad in gold.',
       },
       {
         icon: '',
         label: 'Profile',
         text:
-          'Your targets and settings. Add or hide targets, set how far ' +
-          "off-nadir you'll accept, and use the photo-lookup tool.",
+          'Your account, how far off straight-down you will accept, your ' +
+          'own targets, hidden shared targets, and photo lookup.',
       },
       {
         icon: '',
         label: 'Log',
         text:
-          'Your shoot/skip history. You rate a shot right after tapping Shoot ' +
-          'on its card; you can also revisit and rate past shoots here. Those ' +
-          'ratings tune which passes get surfaced for you.',
+          'Your shoot and skip history. Rate a shoot from its row. A number ' +
+          'on the Log tab is how many entries are still waiting to sync.',
       },
     ],
   },
@@ -95,56 +98,33 @@ const HELP_SECTIONS: HelpSection[] = [
       {
         icon: '⏱️',
         label: 'Countdown',
-        text: 'Time until the ISS is at closest approach to that target.',
+        text:
+          'Time until closest approach, the moment the station is nearest ' +
+          'that target.',
       },
       {
         icon: '⭐',
         label: 'Score',
         text:
-          'p(clear sky) × lighting fit × how close to straight-down × your ' +
-          'priority. Tap the score to see the breakdown.',
+          'Tap the stars for the breakdown. The number mixes the chance of ' +
+          'a clear view, the lighting fit, how close the target is to ' +
+          'straight-down, your priority, and how fresh the orbit data is.',
       },
       {
         icon: '🌍',
-        label: 'Zoom preview + station weather',
+        label: 'Zoom preview',
         text:
-          'Tap the globe to expand a satellite thumbnail of the target with ' +
-          'the ISS track drawn over it, so you know what to look for. Beside ' +
-          'it, when the target is near an airport, you get the nearest ' +
-          'station\'s current cloud cover (METAR) and a short plain-language ' +
-          'forecast (TAF) — ground truth that measures the cloud base from ' +
-          'below, catching low cloud or fog the satellite can miss. Far from ' +
-          'any station (open ocean, remote coast) it stays quiet; needs a ' +
-          'connection, so it is blank offline.',
+          'Tap the globe on a card for a satellite thumbnail and the ' +
+          'nearest station weather.',
       },
       {
         icon: '📐',
         label: 'Nadir distance',
         text:
           'How far the target sits from the point directly below the ISS. ' +
-          'Smaller is a more straight-down, less oblique shot.',
-      },
-      {
-        icon: '🧭',
-        label: 'Look angle & window',
-        text:
-          'The direction tag reads like the CEO target sheets: "26° right of ' +
-          'track" means aim the camera 26° off straight-down, to the right of ' +
-          'your ground path (at closest approach the target is abeam, so that ' +
-          'one number is both the tilt and how far off-track it is). Under ~30° ' +
-          'off-nadir you can shoot from the WORF (Destiny nadir window); beyond ' +
-          'that it is a Cupola shot.',
-      },
-      {
-        icon: '🔥',
-        label: 'Fire tag',
-        text:
-          'A "🔥 N fires · X km" tag means NASA satellites detected a ' +
-          'significant active fire complex within 100 km of the target in the ' +
-          'last 24 hours (several confident detections, or one very hot fire ' +
-          'front) — expect visible smoke plumes on the pass. Small isolated ' +
-          'burns are filtered out so the tag only fires when it is worth a ' +
-          'frame. Source: NASA FIRMS (MODIS).',
+          'The look tag also gives the off-nadir angle and which side, as ' +
+          'in "29° right of track", plus the window. Under 30° off-nadir ' +
+          'the window is WORF. Wider than that, it is Cupola.',
       },
     ],
   },
@@ -155,150 +135,124 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '📸',
         label: 'Shoot',
         text:
-          'Log that you took the shot — then a quick 1–5 star "how\'d it come ' +
-          'out?" row appears right on the card so you grade the capture in the ' +
-          'moment. Your shoot/skip history and those ratings tune which passes ' +
-          'get surfaced for you.',
+          'Log that you took the shot. The card then asks "how\'d it come ' +
+          'out?" Tap a star. Shoot stays off when the published data is ' +
+          'too old to trust.',
       },
       {
         icon: '⏭️',
         label: 'Skip',
-        text: 'Log that you passed on it — also feeds the tuning, the other way.',
+        text: 'Log that you passed on it. Skip is not on Upcoming cards.',
       },
       {
         icon: '🔔',
         label: 'Remind',
         text:
-          'Add this pass to your shot list for a calendar reminder (see ' +
-          'Calendar reminders below). Tap again to remove it.',
+          'Add this pass to the shot list for a calendar reminder. Tap ' +
+          'again to remove it.',
       },
       {
         icon: '🙈',
         label: 'Hide',
         text:
-          'Remove a target from your view. Curated (shared) targets are ' +
-          'restorable from the Profile tab; your own personal targets are ' +
-          'deleted, so re-add them in Profile if you change your mind.',
+          'On a shared target, Hide removes it from your view until you ' +
+          'Restore it on Profile. On one of your own targets, Hide deletes ' +
+          'it. Add it again on Profile if you want it back. Hide on a ' +
+          'keepsake window only dismisses that card.',
       },
       {
         icon: '🔑',
-        label: 'Calibration sign-in',
+        label: 'Sign-in for ratings',
         text:
-          'Shoot, Skip and ratings use your Google sign-in. Offline entries ' +
-          'queue locally and sync when connected and signed in. No extra ' +
-          'calibration token is needed.',
+          'Shoot, Skip, and ratings use your Google sign-in. Offline ' +
+          'entries wait on this device and sync when you are connected and ' +
+          'signed in. No extra calibration token is needed.',
       },
     ],
   },
   {
-    title: 'Calendar reminders (🔔)',
+    title: 'Calendar reminders',
     items: [
-      {
-        icon: '🔔',
-        label: 'Build a shot list',
-        text:
-          'Tap 🔔 Remind on any Queue or Upcoming pass to add it to a shot ' +
-          'list for the day. A bar appears at the bottom: "N selected — Add ' +
-          'to Calendar."',
-      },
       {
         icon: '📅',
         label: 'Add to Calendar',
         text:
-          'Tap Add to Calendar and your phone opens an "Add All to Calendar" ' +
-          'sheet. Each pass becomes an event with two alarms: 5 minutes before, ' +
-          'and at closest approach. They fire even with the app closed and the ' +
-          'phone locked, because the OS calendar handles them — not the app. ' +
-          'The reminders are only live once you tap Add in Calendar.',
+          'Tap Remind on a Queue or Upcoming pass. A bar at the bottom ' +
+          'counts the selection. Tap Add to Calendar. Each pass becomes an ' +
+          'event with two alarms, 5 minutes before the pass and at closest ' +
+          'approach.',
       },
     ],
   },
   {
-    title: 'Keepsake (📸)',
+    title: 'Cupola windows',
     items: [
       {
         icon: '📸',
-        label: 'What it is',
+        label: 'Keepsake',
         text:
-          'Tap "📸 Keepsake" in the Queue header to pull up the next ' +
-          'handful of daylit moments with a clear, bright Earth and a ' +
-          'land-and-ocean mix behind the station — built for batch-shooting ' +
-          'floating keepsakes in the Cupola. The button is a show/hide toggle ' +
-          '(it fills in and the caret flips ▾ when open); it stays out of the ' +
-          'way until you ask for it.',
+          'On Queue, Keepsake lists windows for a photo of something ' +
+          'floating in the Cupola, with a daylit, low-cloud Earth and a mix ' +
+          'of land and ocean behind the station. A window can show a golden ' +
+          'hour tag. These windows are not a row in the map legend.',
+      },
+    ],
+  },
+  {
+    title: 'Map legend',
+    items: [
+      {
+        icon: '🎨',
+        label: 'Rows',
+        text:
+          'The legend reads launch, day, twilight, eclipse, and Anil\'s ' +
+          'targets. The ISS marker and your white rings are not rows.',
+      },
+      {
+        icon: '🚀',
+        label: 'Starship',
+        text:
+          'The last row is the tracked Starship. It says "Starship: no ' +
+          'public orbit yet" when there is no public element set, ' +
+          '"Starship: public orbit expired" when that set is too old, or ' +
+          '"Starship: orbit lookup failed" when the lookup does not return. ' +
+          'A missing list uses the same no-public-orbit sentence. When a ' +
+          'public orbit is available, the row names it, and the map draws a ' +
+          'red diamond labeled Starship plus a dotted track. "(last good)" ' +
+          'means the last set that still worked. The Starship checkbox ' +
+          'under the satellite button is a separate search.',
+      },
+    ],
+  },
+  {
+    title: 'Map controls',
+    items: [
+      {
+        icon: '☁️',
+        label: 'Clouds',
+        text:
+          'The clouds button shows the observed cloud picture. Scrubbing ' +
+          'time does not swap it for a forecast.',
+      },
+      {
+        icon: '🌡️',
+        label: 'IR',
+        text:
+          'IR is off until you turn it on. It shows live cloud-top ' +
+          'temperature and switches among GOES / Himawari / Meteosat to ' +
+          'match the view. It misses low cloud and fog. The badge says so.',
       },
       {
         icon: '☀️',
-        label: 'Daylit & low cloud',
+        label: 'Right edge',
         text:
-          'Every window is in full daylight (no night, no terminator) so the ' +
-          'Earth behind your trinket is bright, with 30% cloud cover or less at ' +
-          'nadir. Windows are ranked lowest-cloud first — less is always better.',
+          'Also on the right edge: the day-night line, night lights (off ' +
+          'until you turn them on), place labels, extra ISS orbits, and ' +
+          'other satellites (Tiangong, Hubble, X-37B, or a name you add). ' +
+          'ISS up is the default and points the direction of travel up. ' +
+          'North up keeps north at the top. The target button recenters on ' +
+          'the station. Pan away to release it.',
       },
-      {
-        icon: '🌊',
-        label: 'Land + ocean mix',
-        text:
-          'The view is a coastline scene — some land, some water, not open ' +
-          'ocean and not all land — for a varied backdrop. A 🌊 tag shows how ' +
-          'much water is in frame.',
-      },
-      {
-        icon: '🌇',
-        label: 'Golden hour is a bonus',
-        text:
-          'Any kind of daylight works; when the sun is low and warm a window ' +
-          'gets a 🌇 golden-hour tag. It is a flag, never a filter — golden ' +
-          'windows are just shorter and harder to catch.',
-      },
-      {
-        icon: '🔔',
-        label: 'Remind & batch',
-        text:
-          'Each window is a normal card: tap 🔔 to add it to your shot list, ' +
-          'then Add to Calendar exports the whole session in one go — alongside ' +
-          'your target passes — with the same 5-minutes-before and at-time ' +
-          'alarms. Stage the camera and float up when one fires.',
-      },
-      {
-        icon: '📶',
-        label: 'Fetched live',
-        text:
-          'Windows are pulled from the station\'s latest forecast when you tap ' +
-          'the button; if you are offline the panel asks you to reconnect.',
-      },
-    ],
-  },
-  {
-    title: 'Sorting & filtering',
-    items: [
-      {
-        icon: '🔀',
-        label: 'Time / Score',
-        text:
-          'Order cards chronologically (what is next on the timeline) or by ' +
-          'score (best opportunity first).',
-      },
-      {
-        icon: '👥',
-        label: 'All / Mine',
-        text: 'Show every shared target, or just the ones in your profile.',
-      },
-    ],
-  },
-  {
-    title: 'Map overlays (right-edge buttons)',
-    items: [
-      { icon: '☁️', label: 'Clouds', text: 'Cloud cover — observed at Now, forecast at scrubbed times when available.' },
-      { icon: '🌡️', label: 'IR (live cloud-tops)', text: 'The "IR" button — optional, off by default. Near-real-time infrared cloud-tops (~30 min old, day AND night), far fresher than the daily cloud photo. While on it replaces the daily clouds and auto-switches satellite (GOES / Himawari / Meteosat) to match your view, covering the whole globe except the poles. IR reads cloud-top temperature, so it MISSES low cloud and fog — the badge says so. Pair it with a target\'s nearest-station report (which catches exactly that low cloud) for the fullest picture.' },
-      { icon: '☀️', label: 'Terminator', text: 'The day/night line and the sub-solar point.' },
-      { icon: '🌃', label: 'Night-lights', text: 'City lights on the night side (off by default).' },
-      { icon: '🏷️', label: 'Labels', text: 'Country and city names.' },
-      { icon: '↻', label: 'Multi-orbit', text: 'The next several ISS orbits, not just the current one.' },
-      { icon: '🚀', label: 'Ascent', text: 'Rocket climb paths for active launches you could catch.' },
-      { icon: '🛰️', label: 'Satellites', text: 'Track other craft — Tiangong, Hubble, Starship, and more.' },
-      { icon: '📍', label: 'Follow ISS', text: 'Recenter on the station; pan away to release.' },
-      { icon: 'N↑ / ISS↑', label: 'Bearing', text: 'ISS up is the default and rotates the map so the direction of travel points up. North up keeps north at the top.' },
     ],
   },
   {
@@ -308,118 +262,110 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '🕐',
         label: 'Time slider',
         text:
-          'Drag the slider under the time buttons to any moment in the next ' +
-          '36 hours. The ground track, ISS marker, day/night line, tracked ' +
-          'satellites, and target pins all follow as you drag; release and ' +
-          'the camera settles on where the ISS will be. The readout shows ' +
-          'the UTC view time ("+1d 03:15Z" past midnight).',
-      },
-      {
-        icon: '⏩',
-        label: 'Step buttons',
-        text:
-          'The ±45 / ±90 min buttons jump by half an orbit or a full one ' +
-          'from wherever you are. Now returns to the live view.',
-      },
-      {
-        icon: '📌',
-        label: 'The view stays put',
-        text:
-          'A scrubbed view is pinned to the UTC instant you chose — it does ' +
-          'not drift as the clock advances. When real time catches up to ' +
-          'your pinned moment, the map returns to live on its own.',
-      },
-      {
-        icon: '⚠️',
-        label: 'Honest limits',
-        text:
-          'While scrubbed, the imagery badge names what the cloud layer is ' +
-          'showing. "Clouds: GFS forecast +6h · coarse" means the clouds ' +
-          'swapped to a real forecast for your view time — coarse ' +
-          'weather-model shapes for planning, not photo detail. "Clouds: ' +
-          'observed — not forecast" (or "— forecast ends +Nh") means the ' +
-          'forecast does not cover your view time, so you are seeing the ' +
-          'latest real composite instead. A "stale TLE" tag appears when the ' +
-          'orbit solution plus your scrub depth passes 48 hours — projected ' +
-          'positions degrade with distance. In the live view the badge dates ' +
-          'the cloud photo and how old it is ("Imagery: 2026-06-20 · ~1 day ' +
-          'old"): the daily true-color is a backdrop, often a day or two ' +
-          'behind — for clear-sky timing trust the per-pass cloud score and ' +
-          'the station weather, not the picture.',
+          'Drag the slider, or step 45 or 90 minutes, to any moment in the ' +
+          'next 36 hours. The track, the station, the day-night line, other ' +
+          'satellites, and the pins follow. The backward steps stop at now. ' +
+          'The view stays on the time you chose until real time catches up. ' +
+          'The imagery badge keeps the observed clouds and says they are ' +
+          'not forecast. A stale TLE tag appears when the orbit solution is ' +
+          'over 48 hours old.',
       },
     ],
   },
   {
-    title: 'Drop a pin on the map',
+    title: 'Pins',
     items: [
       {
         icon: '📌',
-        label: 'When is the ISS over here?',
+        label: 'Drop a pin',
         text:
-          'Long-press anywhere on the map (or right-click on desktop) to drop ' +
-          'a pin. You get the next few passes over that exact spot in the ' +
-          'coming 36 hours, each with its time, off-nadir angle, and which ' +
-          'window to shoot from.',
+          'Long-press the map, or right-click on desktop, to drop a pin and ' +
+          'see the next passes over that spot, with time and off-nadir angle.',
       },
-    ],
-  },
-  {
-    title: 'Tap a target pin',
-    items: [
       {
         icon: '👆',
-        label: 'What a tap shows',
+        label: 'Tap a target pin',
         text:
-          'Tap any target dot or your own white ring to open a card right on ' +
-          'the map: its name, the upcoming pass time, how far off the ground ' +
-          'track it sits ("29° right of track"), the cloud picture, and a ' +
-          '"✓ shot N×" line if you have already photographed it. The cloud ' +
-          'line fills in the live now-value a moment after the card opens — ' +
-          '"Cloud: now 42% · at pass 18%" — so you get current sky AND the ' +
-          'forecast for the pass. Offline it just shows the forecast and stays ' +
-          'quiet about "now".',
+          'Tap a target dot or your white ring. The card shows the pass ' +
+          'time, how far off the ground track it sits, and the cloud at the ' +
+          'pass. A live cloud reading can fill in a moment later. "No ' +
+          'upcoming pass in window" means there is no pass in range. When ' +
+          'pins overlap, the tap picks the nearest one to your finger.',
       },
       {
-        icon: '🎯',
-        label: 'No upcoming pass',
+        icon: '✏️',
+        label: 'Edit a target',
         text:
-          'A target with no pass in the next window says "No upcoming pass in ' +
-          'window" instead of a score — a zero score would be misleading. It ' +
-          'still shows the cloud picture for the spot.',
-      },
-      {
-        icon: '🤏',
-        label: 'If two pins overlap',
-        text:
-          'When pins sit on top of each other, a tap picks the nearest one to ' +
-          'your finger. This is the reliable replacement for the old behaviour ' +
-          'that "worked sometimes but not always".',
+          'Tap one of your own targets, then Edit target. Profile opens ' +
+          'with that place ready to change. Curated targets have no Edit ' +
+          'button. Saving pulls the server list first and changes that one ' +
+          'place, so an edit from two devices does not wipe the other list.',
       },
     ],
   },
   {
-    title: 'Edit a target',
+    title: 'Your targets',
     items: [
       {
-        icon: '✏️',
-        label: 'Fix a typo without re-adding',
+        icon: '⚪',
+        label: 'Personal targets',
         text:
-          'Tap one of your own targets (a white ring), then Edit target in the ' +
-          'card — it jumps to the Profile tab with the name, lat, lon, and ' +
-          'priority ready to change. Or open Profile › Your targets and tap ' +
-          'Edit on any row. Fix the longitude (or anything else), tap Save, and ' +
-          'it syncs to the Worker; the map and queue pick it up on the next ' +
-          'hourly update. Only your own targets are editable — curated targets ' +
-          'have no Edit button.',
+          'On Profile, add a place by name or by latitude and longitude. It ' +
+          'shows as a white ring. Mine on Queue, Upcoming, and Map keeps ' +
+          'only those places. New rings get a geometric pass. They do not ' +
+          'get a cloud forecast.',
+      },
+    ],
+  },
+  {
+    title: 'Credits',
+    items: [
+      {
+        icon: 'ℹ️',
+        label: '(i) button',
+        text:
+          'The credits control sits at the bottom of the map and starts ' +
+          'collapsed. Tap it to read who made the base map, the imagery, ' +
+          'and the labels.',
+      },
+    ],
+  },
+  {
+    title: 'Top bar',
+    items: [
+      {
+        icon: '🛰️',
+        label: 'ISS readout',
+        text:
+          'The top bar shows ISS, then latitude, longitude, and the region ' +
+          'below the station, as in "12.3°N, 45.6°E over Africa". If the ' +
+          'position cannot be computed, it says "live track expired". When ' +
+          'the feeds load, a Kp badge and a sun thumbnail appear beside it. ' +
+          'Your name opens Profile. Tracked satellites you turn on can ' +
+          'appear after a vertical bar.',
+      },
+    ],
+  },
+  {
+    title: 'Sign in and reload',
+    items: [
+      {
+        icon: '🔐',
+        label: 'Session expired',
+        text:
+          'If the session is missing when the app starts, the footer says ' +
+          'to sign in again. Sign in and Reload are in that footer. Each ' +
+          'one opens the sign-in page. Ratings already saved on this device ' +
+          'stay here.',
       },
       {
-        icon: '🛟',
-        label: 'Safe to edit from two devices',
+        icon: '🧹',
+        label: 'Stuck on an old version',
         text:
-          'Saving an edit pulls the current server list first, changes just ' +
-          'that one target, and writes the whole list back — so an edit on ' +
-          'your iPad will not wipe a target you added on your phone. If the ' +
-          'save fails, the target rolls back to exactly what it was.',
+          'If the site looks stuck on an old version, or buttons do not ' +
+          'respond in Safari, clear this site\'s data. On iPhone or iPad, ' +
+          'open Settings > Apps > Safari > Advanced > Website Data, remove ' +
+          'astroanil, and reopen the site.',
       },
     ],
   },
@@ -428,35 +374,31 @@ const HELP_SECTIONS: HelpSection[] = [
     items: [
       {
         icon: '✈️',
-        label: 'What still works',
+        label: 'Last sync',
         text:
-          'The app and your last-synced passes load with no connection. The ' +
-          'banner shows how long since the last sync ("LOS · 3h ago") and ' +
-          'flags stale data, because pass times drift as the clock advances.',
+          'With no connection the app still opens the last queue it saved. ' +
+          'The footer says LOS and how old that copy is.',
       },
       {
         icon: '🗺️',
-        label: 'Map tiles are cached, not complete',
+        label: 'Map tiles',
         text:
-          'Offline, the map only has the imagery you already loaded online, ' +
-          'plus a world view. Zoom into a spot or pan to an area you did not ' +
-          'view online and the basemap can go black there. Cloud and ' +
-          'night-light layers only have tiles for places you viewed with that ' +
-          'layer turned ON while online — so toggling a layer on offline over ' +
-          'a fresh area may show nothing. That is the cache, not a fault: load ' +
-          'the areas you care about while you still have signal.',
+          'Offline, the map only has imagery you already loaded, plus a ' +
+          'world view. Pan or zoom somewhere new and the basemap can go ' +
+          'black there. That is the cache. Load the areas you care about ' +
+          'while you still have a signal.',
       },
     ],
   },
   {
-    title: 'Photo lookup (Profile tab)',
+    title: 'Photo lookup',
     items: [
       {
         icon: '📷',
         label: 'Where was the ISS?',
         text:
-          'Paste a UTC timestamp or drop a photo with EXIF, and get a map ' +
-          'pin plus a .kml for Google Earth showing where the station was.',
+          'On Profile, paste a UTC time or drop a photo with EXIF. The map ' +
+          'drops a pin where the station was.',
       },
     ],
   },

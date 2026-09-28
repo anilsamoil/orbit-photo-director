@@ -1,6 +1,6 @@
 # Help
 
-The ? button opens a dialog that explains the five tabs and the map controls.
+The ? button opens a dialog that explains the five tabs, the map legend (including the three Starship orbit sentences), Cupola keepsake windows, personal targets, the credits button, the top-bar ISS readout, and Sign in and Reload in the footer. The dialog body scrolls. Safe-area insets pad the backdrop on every side, and the close button stays on screen.
 
 ## Sub-features
 
