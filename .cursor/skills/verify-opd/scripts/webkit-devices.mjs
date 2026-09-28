@@ -6,13 +6,99 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
 const { devices, webkit } = require('playwright');
 
-const DEVICES = [
-  { name: 'iPhone 13', standalone: true, tap: 'sign-in' },
-  { name: 'iPad Pro 11', standalone: false, tap: 'reload' },
+export const WEBKIT_DEVICES = [
+  { name: 'iPhone 13', slug: 'iphone-13', standalone: true, tap: 'sign-in' },
+  { name: 'iPad Pro 11', slug: 'ipad-pro-11', standalone: false, tap: 'reload' },
 ];
 
-function slug(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+export function deviceDescriptor(spec) {
+  const device = devices[spec.name];
+  if (!device?.viewport) throw new Error(`Playwright has no ${spec.name} descriptor`);
+  return device;
+}
+
+export function deviceViewport(spec) {
+  const device = deviceDescriptor(spec);
+  return {
+    width: device.viewport.width,
+    height: device.viewport.height,
+    mobile: Boolean(device.isMobile),
+  };
+}
+
+export async function launchWebkit() {
+  try {
+    return await webkit.launch();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`WebKit did not launch. From frontend run npx playwright install --with-deps webkit. ${message}`);
+  }
+}
+
+export function playwrightSend(page) {
+  return async function send(method, params = {}) {
+    if (method === 'Runtime.evaluate') {
+      try {
+        const value = await page.evaluate(params.expression);
+        return { result: { value } };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        return { exceptionDetails: { text }, result: {} };
+      }
+    }
+    if (method === 'Page.captureScreenshot') {
+      const buffer = await page.screenshot({ type: 'png' });
+      return { data: buffer.toString('base64') };
+    }
+    if (method === 'Page.navigate') {
+      await page.goto(params.url, { waitUntil: 'domcontentloaded' });
+      return {};
+    }
+    if (method === 'Page.reload') {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      return {};
+    }
+    if (method === 'Page.enable') return {};
+    if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+      await page.addInitScript(params.source);
+      return {};
+    }
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      await page.setViewportSize({ width: params.width, height: params.height });
+      return {};
+    }
+    if (method === 'Emulation.setSafeAreaInsetsOverride') {
+      throw new Error('safe area unsupported');
+    }
+    if (method === 'Emulation.setTouchEmulationEnabled') return {};
+    if (method === 'Input.dispatchMouseEvent') {
+      const button = params.button || 'left';
+      await page.mouse.move(params.x, params.y);
+      if (params.type === 'mousePressed') await page.mouse.down({ button, clickCount: params.clickCount || 1 });
+      else if (params.type === 'mouseReleased') await page.mouse.up({ button, clickCount: params.clickCount || 1 });
+      return {};
+    }
+    if (method === 'Input.dispatchTouchEvent') {
+      const point = (params.touchPoints || [])[0];
+      if (!point) return {};
+      const type = params.type === 'touchStart' ? 'touchstart' : params.type === 'touchEnd' ? 'touchend' : 'touchmove';
+      await page.evaluate(({ type: touchType, x, y }) => {
+        const target = document.elementFromPoint(x, y) || document.body;
+        const touch = document.createTouch(window, target, 1, x, y, x, y, x, y);
+        const changed = document.createTouchList(touch);
+        const active = touchType === 'touchend' ? document.createTouchList() : changed;
+        target.dispatchEvent(new TouchEvent(touchType, {
+          bubbles: true,
+          cancelable: true,
+          touches: active,
+          targetTouches: active,
+          changedTouches: changed,
+        }));
+      }, { type, x: point.x, y: point.y });
+      return {};
+    }
+    throw new Error(`webkit send has no ${method}`);
+  };
 }
 
 async function hit(page, locator) {
@@ -25,26 +111,11 @@ async function hit(page, locator) {
   }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
 }
 
-async function signedIn(browser, spec, baseUrl, evidenceDir) {
-  const context = await browser.newContext({ ...devices[spec.name] });
-  const page = await context.newPage();
-  try {
-    await page.goto(`${baseUrl}/?e2e`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => {
-      const text = document.getElementById('status-banner')?.textContent || '';
-      return text.includes('Last updated');
-    }, { timeout: 30000 });
-    const text = await page.locator('#status-banner').innerText();
-    if (/sign in/i.test(text)) throw new Error(`${spec.name} signed-in banner asked to sign in`);
-    await page.screenshot({ path: `${evidenceDir}/webkit-${slug(spec.name)}.png` });
-    return `${spec.name} signed in`;
-  } finally {
-    await context.close();
-  }
-}
-
-async function denied(browser, spec, baseUrl, evidenceDir) {
-  const context = await browser.newContext({ ...devices[spec.name] });
+export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
+  mkdirSync(evidenceDir, { recursive: true });
+  const device = devices[spec.name];
+  if (!device) throw new Error(`Playwright has no ${spec.name} descriptor`);
+  const context = await browser.newContext({ ...device });
   await context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
   if (spec.standalone) {
     await context.addInitScript(() => {
@@ -62,7 +133,7 @@ async function denied(browser, spec, baseUrl, evidenceDir) {
     if (signHit?.text !== 'Sign in' || signHit.tag !== 'A') throw new Error(`${spec.name} Sign in hit ${JSON.stringify(signHit)}`);
     if (reloadHit?.text !== 'Reload' || reloadHit.tag !== 'BUTTON') throw new Error(`${spec.name} Reload hit ${JSON.stringify(reloadHit)}`);
     await page.evaluate(() => localStorage.setItem('opd-calib-queue', '[{"private":"unsent"}]'));
-    await page.screenshot({ path: `${evidenceDir}/webkit-${slug(spec.name)}-auth.png` });
+    await page.screenshot({ path: resolve(evidenceDir, 'banner-auth.png') });
     const control = spec.tap === 'reload' ? reload : signIn;
     await control.click();
     await page.waitForURL(/\/api\/app/, { timeout: 8000 });
@@ -71,26 +142,5 @@ async function denied(browser, spec, baseUrl, evidenceDir) {
     return `${spec.name} ${spec.tap} reached ${page.url()}`;
   } finally {
     await context.close();
-  }
-}
-
-export async function driveWebkitDevices({ baseUrl, evidenceDir }) {
-  mkdirSync(evidenceDir, { recursive: true });
-  let browser;
-  try {
-    browser = await webkit.launch();
-  } catch (error) {
-    throw new Error(`WebKit did not launch. From frontend run npx playwright install webkit. ${error instanceof Error ? error.message : error}`);
-  }
-  try {
-    const notes = [];
-    for (const spec of DEVICES) {
-      if (!devices[spec.name]) throw new Error(`Playwright has no ${spec.name} descriptor`);
-      notes.push(await signedIn(browser, spec, baseUrl, evidenceDir));
-      notes.push(await denied(browser, spec, baseUrl, evidenceDir));
-    }
-    return notes.join('; ');
-  } finally {
-    await browser.close();
   }
 }

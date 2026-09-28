@@ -34,11 +34,13 @@ Preconditions:
 - **Tool rail.** IR becomes active, night lights become active, labels become inactive, multi-orbit becomes active, ISS up is already the default and stays active, and its title is `ISS up (default). Rotate so the direction of travel points up`. Follow reports `aria-pressed` false.
 - **Satellites.** The picker lists Tiangong and Hubble. The script closes it without adding a NORAD id.
 - **Target popup.** The script frames Verify Reef and clicks that point. A popup contains Verify Reef.
-- **Dropped pin.** A right-click away from that pin opens a popup whose text contains `Closest`.
-- **Launch.** Launches reports `aria-pressed` true. A click on Verify Pad opens a dialog whose text contains Verify Ascent. The script turns Launches off again.
+- **Dropped pin.** A right-click away from that pin opens a popup whose text contains `Closest`. The script closes that popup before Launches, so the pad click is not covered on a phone.
+- **Launch.** Launches reports `aria-pressed` true. Turning it on opens the map brief. The script clicks the launch name in that brief. The dialog text contains Verify Ascent. The script turns Launches off again.
 - **Legend category.** The legend text contains `Anil's targets`. The `.map-legend-anil` swatch is `rgb(139, 147, 255)`. The `targets-layer` circle color expression names `anils-targets` and `#8b93ff`.
 - **Hidden pin.** After the launch dialog closes, the targets source still contains `verify-reef`. Hide on the Verify Reef queue card removes that id from the source. The script waits until `GET /api/browser/profiles/anil/targets` contains `verify-reef`. The new-browser check for a hidden card is `drive upcoming`.
 - **Proof.** `evidence/map-globe.png`, `evidence/map-legend.png`, `evidence/map-imagery-date.png`, `evidence/map-attribution-collapsed.png`, `evidence/map-attribution.png`, `evidence/map-time.png`, `evidence/map-tool-rail.png`, `evidence/map-satellites.png`, `evidence/map-target-popup.png`, `evidence/map-pin-drop.png`, `evidence/map-launch.png`, and `evidence/map-pin-hidden.png`.
+
+Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 
@@ -46,7 +48,7 @@ Preconditions:
 - A pan collapses the credit line again. The script opens the credits and takes `map-attribution.png` before it moves the map.
 - IR replaces the daily clouds layer. Do not expect both buttons to stay active.
 - Launch mode hides target pins. Drive the target popup before Launches.
-- The launch pointer is valid for about 13 minutes from `up`. The fixture stamps `generated_at` one minute before `up` and `valid_until` 14 minutes after that stamp. After `valid_until`, `doctor` fails and `drive` stops before Chrome starts. Run `down`, then `up`.
+- The launch pointer is valid for about 13 minutes. Each surface slides that clock forward before the page loads. Target coordinates stay the ones from `up`.
 - Adding a satellite from the picker fetches CelesTrak. This drive only opens the list.
 - Repo-root `targets.json` has eight `anils-targets` places, painted the same indigo on the map, on card chips, and in the target popup. The verify fixture categories are `coast` and `terrain`, so this drive checks the legend and the layer paint. It does not look for those eight names.
 - A long press drops the same kind of pin as the right-click. The popup stays open through the click that follows the finger lift. `drive phone` is the touch proof. This drive right-clicks.

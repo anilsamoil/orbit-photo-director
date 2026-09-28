@@ -8,7 +8,7 @@ Profile holds the signed-in astronaut, the distance threshold, personal targets,
 - `profile-threshold` moves the viable distance display to 800 km.
 - `profile-add` adds a target named Verify Harbor.
 - `profile-hidden` shows Hidden curated targets. Restore removes `verify-mesa` from that list, the GET drops that id, and a new Chrome profile shows the card again.
-- `profile-lookup` resolves the fixture timestamp and drops a lookup pin on the map. It then resolves a last-good TLE at that TLE's own epoch, and a 2035 timestamp that shows the stale-orbit sentence.
+- `profile-lookup` resolves the fixture timestamp and drops a lookup pin on the map. It then resolves a last-good TLE at that TLE's own epoch, and a 2035 timestamp. A 2035 time that still propagates shows `low confidence — TLE age` and `ISS at`. A 2035 time where every element set fails SGP4 shows `orbit data is out of date, reconnect to refresh`.
 
 ## How to get to it (user POV)
 
@@ -28,8 +28,9 @@ Preconditions:
 - **Hidden curated targets.** A `.profile-crud-subhead` in `#profile-body` has text `Hidden curated targets`. The stylesheet uppercases subheads, so `innerText` reads `HIDDEN CURATED TARGETS`. `Your targets` is an earlier subhead of the same class. If `verify-mesa` is not already listed, the script opens Or paste an exact id, enters `verify-mesa`, and chooses Hide. Restore on that chip removes it. The script waits until the GET no longer contains `verify-mesa`, then a new Chrome profile shows Verify Mesa on Upcoming.
 - **Lookup.** Paste the timestamp from `fixtures/meta.json` field `lookupTimestamp` and choose Resolve. The result text contains `ISS at` and the view switches to the map with `lookup-pin-layer`. Pin on map repeats that drop.
 - **Last-good TLE.** The script writes `opd-iss-tle-last-good` with an element set whose epoch is `2026-09-29T04:10:50.460Z`, resolves that timestamp, and requires `TLE age 0.0 h`. That epoch is closer to the photo time than the published track or the bundled set.
-- **Stale orbit.** The script then resolves `2035-06-01T00:00:00.000Z`. The chip text is `orbit data is out of date, reconnect to refresh`.
-- **Proof.** `evidence/profile.png`, `evidence/profile-target.png`, `evidence/profile-hidden.png`, `evidence/profile-lookup.png`, `evidence/profile-lookup-map.png`, `evidence/profile-lookup-last-good.png`, and `evidence/profile-lookup-stale.png`.
+- **2035 lookup.** The script then resolves `2035-06-01T00:00:00.000Z`. The current 2026 element sets still propagate that far, so the chip is `low confidence — TLE age ...` and the line contains `ISS at`. The stale sentence appears only when SGP4 rejects every candidate. The script accepts either chip.
+- **Proof.** `evidence/profile.png`, `evidence/profile-target.png`, `evidence/profile-hidden.png`, `evidence/profile-lookup.png`, `evidence/profile-lookup-map.png`, `evidence/profile-lookup-last-good.png`, and `evidence/profile-lookup-2035.png`.
+- **Devices.** Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 

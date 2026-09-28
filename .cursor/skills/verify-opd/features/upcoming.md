@@ -1,6 +1,6 @@
 # Upcoming
 
-Upcoming lists launches with a shooting chance, then passes from 90 minutes to 36 hours out. The pane title starts with Next 36 hours. The fixture puts the Verify Ascent launch card above Verify Mesa. Mesa is about eight hours ahead. Ascent stays after Mesa is hidden.
+Upcoming lists launches with a shooting chance, then future passes from the `top_24h` artifact. The generator writes that artifact from 90 minutes out through the 36 hour window. The page drops a pass once its closest approach is in the past. The pane title starts with Next 36 hours. The fixture puts the Verify Ascent launch card above Verify Mesa. Mesa is about eight hours ahead. Ascent stays after Mesa is hidden.
 
 ## Sub-features
 
@@ -24,6 +24,8 @@ Preconditions:
 - **Reload.** The script reloads the page and opens Upcoming again. Verify Mesa stays gone, and the same id is still in `removedCuratedIds`.
 - **Another browser.** After `GET /api/browser/profiles/anil/targets` contains `verify-mesa`, a new Chrome profile opens the same proxy. Upcoming does not show Verify Mesa, and its localStorage timestamp matches the GET.
 - **Proof.** `evidence/upcoming.png` shows Verify Ascent above Verify Mesa. `evidence/upcoming-hidden.png` shows Mesa gone and Ascent still listed. `evidence/upcoming-reloaded.png` shows Mesa still gone.
+
+Desktop Chrome runs first. WebKit iPhone 13 and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 

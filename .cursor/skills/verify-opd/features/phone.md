@@ -1,11 +1,11 @@
 # Phone
 
-Phone is the same SNAP page at an iPhone size. Portrait is 390x844. Landscape is 844x390. The other drives stay at 1400x900 except for the narrow tab-strip check in `drive topbar`.
+Phone checks the Map page at 390x844 portrait, then 844x390 landscape. Desktop Chrome sets those sizes. WebKit iPhone 13 and iPad Pro 11 run the same checks, and this drive sets those sizes again on each device. `drive topbar` uses 390x800 for the tab strip, then restores the surface size. `drive tracked` with `OPD_VERIFY_TRACKED=elements` also frames 1400x900, 1024x768, and 390x844, then restores the surface size.
 
 ## Sub-features
 
 - `phone-targets` checks that a tab, the Kp badge, the ? button, and the collapsed (i) button are at least 44px in portrait.
-- `phone-dock` opens the credits in portrait, then checks landscape with the credits collapsed and with them open. The landscape dock scrolls. In both credit states the dock stays above the ? button and the credit line, and the targets stay at least 44px.
+- `phone-dock` opens the credits in portrait and requires the dock to stay above the ? button and the open credit line. Landscape with credits collapsed requires the dock above the ? button and the (i) button, a scrolling dock, and a dock button of at least 44px. Landscape with credits open repeats the clearance check and requires 44px on the ? button and a dock button.
 - `phone-press` long-presses a whole-degree point. The pass popup stays open through the click that follows the finger lift. A later click on that same pin dismisses it.
 - `phone-inset` sets a safe-area inset when Chrome accepts the emulation override. The top bar's top padding then includes that inset.
 
@@ -24,6 +24,8 @@ Preconditions:
 - **Landscape.** The viewport is 844x390 and the credits are collapsed. The dock's bottom edge is above the ? button and the (i) button. The dock's `scrollHeight` is greater than its `clientHeight`. A dock button is at least 44px. The script then opens the credit line again and repeats the clearance check, including 44px on the ? button and a dock button. It collapses the credits before the long press.
 - **Long press.** Follow is off. The press point is the reef latitude, and the reef longitude plus 30 degrees, both rounded to whole degrees, at zoom 4. A touch held there opens a popup whose text contains `Closest`. A click at that point just after the finger lift leaves the popup open. A click after the ignore window removes it. The window is 700ms from the drop, not from the lift.
 - **Proof.** `evidence/phone-portrait.png`, `evidence/phone-portrait-credits.png`, `evidence/phone-landscape.png`, `evidence/phone-landscape-credits.png`, and `evidence/phone-long-press.png`. Stdout says `safe-area applied` or `safe-area unsupported`.
+
+Desktop Chrome runs the 390x844 and 844x390 viewports first. WebKit iPhone 13 and iPad Pro 11 run those same viewport checks. Their shots are `evidence/iphone-13/` and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 

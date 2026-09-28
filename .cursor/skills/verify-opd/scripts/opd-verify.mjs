@@ -6,7 +6,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures } from './drive.mjs';
-import { buildFixtures } from './fixtures.mjs';
+import { buildFixtures, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -389,6 +389,12 @@ function down() {
 
 async function drive(feature) {
   const home = homeDir();
+  const until = refreshLaunchClock(resolve(home, 'fixtures'));
+  const early = readState(home);
+  if (early) {
+    early.launchValidUntil = until;
+    writeState(early);
+  }
   await doctor(home);
   const state = readState(home);
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
@@ -494,6 +500,7 @@ function checkMap() {
     for (const heading of ['## Sub-features', '## How to get to it (user POV)', '## Driving it with opd-verify', '## Gotchas']) {
       if (!body.includes(heading)) problems.push(`${id}.md missing ${heading}`);
     }
+    if (!body.includes('iPhone') || !body.includes('iPad')) problems.push(`${id}.md has no iPhone/iPad coverage`);
   }
   if (!skill.includes('name: verify-opd')) problems.push('SKILL.md missing name');
   if (!skill.includes('opd-verify.mjs up')) problems.push('SKILL.md missing up');
