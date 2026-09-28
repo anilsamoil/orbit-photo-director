@@ -1,5 +1,3 @@
-"""Tracked vehicles: match a published element set, or say there isn't one."""
-
 from __future__ import annotations
 
 import json

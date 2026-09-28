@@ -1,7 +1,6 @@
 import type { Manifest } from './types';
 import { fetchArtifact } from './manifest';
 
-/** A CelesTrak element set the generator actually received. */
 export type TrackedElements = {
   readonly state: 'elements';
   readonly id: string;
@@ -18,7 +17,6 @@ export type TrackedElements = {
   readonly from_cache?: boolean;
 };
 
-/** No line to propagate. The map says so instead of inventing a position. */
 export type TrackedUnavailable = {
   readonly state: 'unavailable';
   readonly id: string;
@@ -33,7 +31,6 @@ const REASONS = ['no_public_orbit', 'aged_out', 'lookup_failed'] as const;
 const COLOR = /^#[0-9a-fA-F]{6}$/;
 const ID = /^[a-z0-9-]+$/;
 
-/** Shown when the manifest has no tracked artifact yet. */
 export const UNPUBLISHED_TRACKED: readonly TrackedRecord[] = [
   {
     id: 'starship',
@@ -44,7 +41,6 @@ export const UNPUBLISHED_TRACKED: readonly TrackedRecord[] = [
   },
 ];
 
-/** Legend and marker tooltip. Unavailable rows name the gap. */
 export function statusText(record: TrackedRecord): string {
   if (record.state === 'unavailable') {
     if (record.reason === 'aged_out') return `${record.label}: public orbit expired`;

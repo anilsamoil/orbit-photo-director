@@ -1,8 +1,7 @@
 """Extra vehicles published beside the ISS track.
 
 Element sets come only from CelesTrak GP or SupGP text. A miss, a stale
-epoch, or a failed lookup becomes a status row. This module does not build
-an orbit from an altitude, a period, or a news blurb.
+epoch, or a failed lookup becomes a status row.
 """
 
 from __future__ import annotations
@@ -76,17 +75,15 @@ TrackedRecord = TrackedElements | TrackedUnavailable
 
 _STARSHIP_NAME = re.compile(r"^STARSHIP(?:[\s-]|$)", re.IGNORECASE)
 _SHIP_NAME = re.compile(r"^SHIP[\s-]+\d+\b", re.IGNORECASE)
+SAME_DAY_MAX_AGE_HOURS = 12.0
 
-# Twelve hours covers a same-day flight of about ten hours and then drops
-# the vehicle. The ISS publish path uses a 96 hour hard fail because that
-# station stays up.
 STARSHIP = TrackedSpec(
     id="starship",
     label="Starship",
     color="#ff5c5c",
     name_patterns=(_STARSHIP_NAME, _SHIP_NAME),
     name_queries=("STARSHIP", "SHIP"),
-    max_age_hours=12.0,
+    max_age_hours=SAME_DAY_MAX_AGE_HOURS,
 )
 
 TRACKED_SPECS: tuple[TrackedSpec, ...] = (STARSHIP,)
@@ -134,7 +131,6 @@ def parse_element_sets(text: str, source: str) -> list[ElementSet]:
 
 
 def query_urls(spec: TrackedSpec) -> list[tuple[str, str]]:
-    """SupGP first. SpaceX elements usually show up there before the public GP."""
     urls: list[tuple[str, str]] = []
 
     def add(source: str, **params: object) -> None:
@@ -164,7 +160,7 @@ def resolve_spec(
     for source, url in query_urls(spec):
         try:
             status, text = get(url, 15.0)
-        except Exception as exc:  # noqa: BLE001
+        except OSError as exc:
             log.warning("tracked query failed for %s: %s", url, exc)
             saw_error = True
             continue
@@ -211,7 +207,6 @@ def write_tracked_artifact(
     dest: Path,
     get: GetText | None = None,
 ) -> None:
-    """`get` is resolved at call time so tests can patch `http_get`."""
     getter = http_get if get is None else get
     records = [_resolve_one(spec, cache_dir, now, getter) for spec in TRACKED_SPECS]
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -234,7 +229,7 @@ def _resolve_one(
 ) -> TrackedRecord:
     try:
         return resolve_spec(spec, cache_dir, now, get)
-    except Exception as exc:  # noqa: BLE001
+    except OSError as exc:
         log.warning("tracked resolve failed for %s: %s", spec.id, exc)
         return TrackedUnavailable(spec.id, spec.label, spec.color, "lookup_failed")
 

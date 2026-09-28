@@ -1152,12 +1152,10 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             log.warning("cupola windows failed (%s); manifest omits cupola_windows", exc)
 
-    # Extra vehicles (Starship first). A miss or a stale element set is a
-    # status row in tracked.json. It must not fail the ISS tick.
     tracked_path = v_dir / "tracked.json"
     try:
         write_tracked_artifact(settings.cache_dir, n, tracked_path)
-    except Exception as exc:  # noqa: BLE001
+    except OSError as exc:
         log.warning("tracked objects failed (%s); publishing the no-data state", exc)
         tracked_path.write_text(unavailable_artifact_text())
 

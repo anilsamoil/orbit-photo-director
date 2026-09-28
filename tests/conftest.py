@@ -109,11 +109,6 @@ def repo_with_targets(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _offline_tracked_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Starship lookup must not hit CelesTrak during a tick test.
-
-    A live 404 is the honest no-data row. Tests that want elements pass
-    their own getter or patch `http_get` again.
-    """
     monkeypatch.setattr(
         "generator.tracked.http_get",
         lambda url, timeout=15.0: (404, "No GP data found"),
