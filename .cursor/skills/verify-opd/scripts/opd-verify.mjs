@@ -170,6 +170,11 @@ function startProxy(home) {
     if (path === '/launch/latest.json') return sendFile('launch-latest.json');
     if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
     if (path === '/api/browser/session') {
+      const denied = (req.headers.cookie ?? '').split(';').some((part) => part.trim() === 'opd-verify-session=deny');
+      if (denied) {
+        json(res, 401, { error: 'unauthorized' });
+        return;
+      }
       json(res, 200, { ok: true, profile: { name: 'anil', displayName: 'Anil' } });
       return;
     }

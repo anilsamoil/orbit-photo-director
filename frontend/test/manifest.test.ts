@@ -52,6 +52,14 @@ describe('fetchManifest', () => {
     expect(m.version).toBe('20241017T120000Z');
   });
 
+  it('rejects an app shell served in place of the queue', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<footer id="status-banner"></footer>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    })));
+    await expect(fetchManifest()).rejects.toThrow('this address has no shot queue');
+  });
+
   it('throws on non-2xx', async () => {
     vi.stubGlobal(
       'fetch',

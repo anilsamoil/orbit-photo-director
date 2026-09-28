@@ -4,6 +4,15 @@ export interface AccountProfile {
   displayName: string;
   /** False only when resuming this tab's last verified profile offline. */
   isVerified?: boolean;
+  /** This origin served the app shell instead of an account API. */
+  localOnly?: boolean;
+}
+
+export class SessionSignInRequired extends Error {
+  constructor() {
+    super('Please sign in again to open your own profile. Your saved data has been kept.');
+    this.name = 'SessionSignInRequired';
+  }
 }
 
 const CACHE_KEY = 'opd-account-session-v1';
@@ -23,15 +32,71 @@ export function canSelectProfile(name: string): boolean {
   return account?.isVerified === true && authorizedProfiles.some((profile) => profile.name === name);
 }
 
+const LOCAL_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+function profileNameFromUrl(urlHref: string): string {
+  try {
+    const requested = new URL(urlHref).searchParams.get('u');
+    if (requested && LOCAL_NAME.test(requested)) return requested;
+  } catch { /* keep the device default */ }
+  return 'anil';
+}
+
+function adoptLocalProfile(name: string): AccountProfile {
+  const profile: AccountProfile = { name, displayName: name, isVerified: false, localOnly: true };
+  account = profile;
+  signedInAccount = profile;
+  authorizedProfiles = [profile];
+  try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(profile)); } catch { /* storage disabled */ }
+  return profile;
+}
+
+type SessionDecision =
+  | { kind: 'local'; name: string }
+  | { kind: 'sign-in' }
+  | { kind: 'json'; body: unknown };
+
+async function decideSessionResponse(response: Response, urlHref: string): Promise<SessionDecision> {
+  if (response.type === 'opaqueredirect' || response.redirected
+    || response.status === 302 || response.status === 401 || response.status === 403) {
+    return { kind: 'sign-in' };
+  }
+  const type = response.headers?.get('content-type') ?? '';
+  if (response.status === 404 && !type.includes('json')) return { kind: 'local', name: profileNameFromUrl(urlHref) };
+  if (response.ok && type.includes('text/html')) {
+    const html = await response.text();
+    if (html.includes('id="status-banner"')) return { kind: 'local', name: profileNameFromUrl(urlHref) };
+    return { kind: 'sign-in' };
+  }
+  if (!response.ok) return { kind: 'sign-in' };
+  return { kind: 'json', body: await response.json() };
+}
+
 function resumeOfflineProfile(): AccountProfile | null {
   try {
     const cached: unknown = JSON.parse(sessionStorage.getItem(CACHE_KEY) ?? 'null');
     if (validProfile(cached)) {
-      account = { name: cached.name, displayName: cached.displayName, isVerified: false };
+      account = {
+        name: cached.name,
+        displayName: cached.displayName,
+        isVerified: false,
+        ...(cached.localOnly ? { localOnly: true } : {}),
+      };
+      if (account.localOnly) {
+        signedInAccount = account;
+        authorizedProfiles = [account];
+      }
       return account;
     }
   } catch { /* no usable tab-local offline session */ }
   return null;
+}
+
+function sessionJson(value: unknown): { profile: unknown; profiles: unknown } | null {
+  if (!value || typeof value !== 'object') return null;
+  const body = value as { ok?: unknown; profile?: unknown; profiles?: unknown };
+  if (body.ok !== true) return null;
+  return { profile: body.profile, profiles: body.profiles };
 }
 
 function validProfile(value: unknown): value is AccountProfile {
@@ -85,11 +150,11 @@ export async function resolveAccountProfile(urlHref = window.location.href): Pro
       if (cached) return cached;
       throw error;
     }
-    if (!response.ok || response.redirected || response.type === 'opaqueredirect') {
-      throw new Error('Please sign in again to open your own profile. Your saved data has been kept.');
-    }
-    const body = await response.json();
-    if (body?.ok !== true || !validProfile(body.profile)) {
+    const decided = await decideSessionResponse(response, urlHref);
+    if (decided.kind === 'local') return adoptLocalProfile(decided.name);
+    if (decided.kind === 'sign-in') throw new SessionSignInRequired();
+    const body = sessionJson(decided.body);
+    if (!body || !validProfile(body.profile)) {
       throw new Error('Could not verify your profile. Please reload when connected.');
     }
     const own = { name: body.profile.name, displayName: body.profile.displayName, isVerified: true };

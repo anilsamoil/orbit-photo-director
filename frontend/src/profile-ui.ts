@@ -160,7 +160,9 @@ function buildPickerSection(): HTMLElement {
     const managingCrew = own !== null && own.name !== account.name;
     heading.textContent = `${account.isVerified === false ? 'Active profile' : managingCrew ? 'Crew profile' : 'Your profile'} · ${account.displayName}`;
     const info = document.createElement('p');
-    info.textContent = account.isVerified === false
+    info.textContent = account.localOnly
+      ? 'This copy has no Google sign-in. Your saved targets and ratings stay on this device.'
+      : account.isVerified === false
       ? 'Offline · using this tab’s last verified profile. Reconnect and reload to sync.'
       : managingCrew
         ? `Signed in as ${own.displayName}. You are managing ${account.displayName}’s targets, settings and ratings.`
