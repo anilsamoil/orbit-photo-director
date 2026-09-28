@@ -828,6 +828,15 @@ async function driveTracked(send, evidenceDir, meta) {
       'starship marker and track',
       20000,
     );
+    const follow = await evaluate(send, `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')`);
+    if (follow !== 'false') {
+      await click(send, '#toggle-follow-iss');
+      await waitFor(
+        send,
+        `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'false' ? { ok: true } : null`,
+        'tracked follow off',
+      );
+    }
     await click(send, '#bearing-north');
     await sleep(700);
     const sizes = [
@@ -866,11 +875,20 @@ async function driveTracked(send, evidenceDir, meta) {
     await setViewport(send, 1400, 900, false);
     return `tracked: marker and ground track for ${meta.standIn} on desktop, iPad, and iPhone`;
   }
-  if (!ready.legend.includes('Starship: no public orbit yet')) {
-    throw new Error(`no-orbit legend ${ready.legend}`);
+  const sentence = meta.trackedMode === 'aged_out'
+    ? 'Starship: public orbit expired'
+    : 'Starship: no public orbit yet';
+  if (meta.trackedMode === 'missing') {
+    const published = await evaluate(send, `fetch('/manifest.json').then((response) => response.json()).then((body) => Boolean(body.artifacts && body.artifacts.tracked))`);
+    if (published) throw new Error('missing tracked mode still published a tracked artifact');
   }
-  const absent = await evaluate(send, `document.querySelector('.tracked-marker') ? 'present' : 'absent'`);
-  if (absent !== 'absent') throw new Error('no-orbit state still drew a marker');
+  if (!ready.legend.includes(sentence)) {
+    throw new Error(`${meta.trackedMode || 'unavailable'} legend ${ready.legend}`);
+  }
+  const marker = await evaluate(send, `document.querySelector('.tracked-marker') ? 'present' : 'absent'`);
+  if (marker !== 'absent') throw new Error(`${meta.trackedMode || 'unavailable'} state still drew a marker`);
+  const layer = await evaluate(send, `window.__opdMap?.getLayer('sat-track-layer-starship') ? 'present' : 'absent'`);
+  if (layer !== 'absent') throw new Error(`${meta.trackedMode || 'unavailable'} state still drew a starship track`);
   await frameLngLat(send, meta.iss.lon, meta.iss.lat, 3);
   await waitFor(
     send,
@@ -885,7 +903,18 @@ async function driveTracked(send, evidenceDir, meta) {
     'iss marker framed',
     10000,
   );
-  await shot(send, evidenceDir, 'tracked-no-orbit');
+  const shotName = meta.trackedMode === 'aged_out'
+    ? 'tracked-aged-out'
+    : meta.trackedMode === 'missing'
+      ? 'tracked-missing'
+      : 'tracked-no-orbit';
+  await shot(send, evidenceDir, shotName);
+  if (meta.trackedMode === 'aged_out') {
+    return 'tracked: public orbit expired, no marker, ISS marker and track still up';
+  }
+  if (meta.trackedMode === 'missing') {
+    return 'tracked: missing artifact falls back to no public orbit yet, ISS marker and track still up';
+  }
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
 }
 
