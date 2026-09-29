@@ -1059,3 +1059,90 @@ describe('main.ts: map pane vs manifest race (iPad QA loop 2026-06-11)', () => {
     expect(vi.mocked(mapModule.renderMap)).not.toHaveBeenCalled();
   });
 });
+
+describe('main.ts: expired session banner holds through the countdown', () => {
+  async function refreshStaleManifest(access: 'expired' | 'live' | 'down'): Promise<void> {
+    const staleAt = new Date(Date.now() - 200 * 60_000).toISOString();
+    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest({
+      version: '20260504T120000Z',
+      generated_at: staleAt,
+    }));
+    vi.mocked(manifestModule.fetchTop5).mockResolvedValue([buildPass()]);
+    vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+    const aurora = await import('../src/aurora');
+    vi.mocked(aurora.fetchKpData).mockResolvedValue(null);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const target = String(url);
+      if (target.includes('/__opd_probe')) return new Response(null, { status: 204 });
+      if (target.includes('/api/app')) {
+        if (access === 'expired') return { type: 'opaqueredirect', status: 0, ok: false };
+        if (access === 'down') throw new TypeError('Failed to fetch');
+        return new Response('ok', { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }));
+    const { refresh } = await import('../src/main');
+    await refresh();
+  }
+
+  it('keeps the tap-to-sign-in banner after the countdown tick and an offline repaint', async () => {
+    await refreshStaleManifest('expired');
+    const banner = document.getElementById('status-banner')!;
+    expect(banner.textContent).toContain('SIGN IN AGAIN');
+    expect(banner.textContent).not.toContain('STALE');
+
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    banner.click();
+    expect(assign).toHaveBeenCalledWith('/api/app');
+    assign.mockClear();
+
+    const { rerenderCountdowns, renderOfflineBanner } = await import('../src/main');
+    rerenderCountdowns();
+    expect(banner.textContent).toBe('SIGN IN AGAIN — session expired, data frozen 3h 20m ago. Tap here.');
+    banner.click();
+    expect(assign).toHaveBeenCalledTimes(1);
+
+    renderOfflineBanner();
+    expect(banner.textContent).toBe('SIGN IN AGAIN — session expired, data frozen 3h 20m ago. Tap here.');
+    banner.click();
+    expect(assign).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces the sign-in banner when the access probe says the session is live', async () => {
+    await refreshStaleManifest('expired');
+    await refreshStaleManifest('live');
+    const text = document.getElementById('status-banner')?.textContent ?? '';
+    expect(text).toBe('STALE — last updated 3h 20m ago — values may be wrong');
+  });
+
+  it('replaces the sign-in banner when a young manifest arrives', async () => {
+    await refreshStaleManifest('expired');
+    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest({
+      version: '20260504T180000Z',
+      generated_at: new Date().toISOString(),
+    }));
+    const { refresh } = await import('../src/main');
+    await refresh();
+    const text = document.getElementById('status-banner')?.textContent ?? '';
+    expect(text).toContain('Last updated');
+    expect(text).not.toContain('SIGN IN AGAIN');
+  });
+
+  it('does not claim an expired session when the access probe cannot connect', async () => {
+    await refreshStaleManifest('down');
+    const text = document.getElementById('status-banner')?.textContent ?? '';
+    expect(text).toBe('STALE — last updated 3h 20m ago — values may be wrong');
+  });
+
+  it('keeps the sign-in banner when a later access probe fails', async () => {
+    await refreshStaleManifest('expired');
+    await refreshStaleManifest('down');
+    expect(document.getElementById('status-banner')?.textContent).toBe(
+      'SIGN IN AGAIN — session expired, data frozen 3h 20m ago. Tap here.',
+    );
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    document.getElementById('status-banner')?.click();
+    expect(assign).toHaveBeenCalledWith('/api/app');
+  });
+});
