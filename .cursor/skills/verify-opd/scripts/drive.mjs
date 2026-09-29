@@ -525,12 +525,15 @@ async function driveTopbar(send, evidenceDir, home) {
     [844, 390, 'topbar-iphone-13-land'],
     [834, 1194, 'topbar-ipad'],
   ];
+  let panned = 0;
   try {
     for (const [width, height, name] of frames) {
       await setViewport(send, width, height, true);
       const reach = await waitFor(send, topbarReachExpression(), `topbar reach ${width}x${height}`, 8000);
       await shot(send, evidenceDir, name);
       if (width === 402 && height === 874) {
+        panned = await panTopbarFromLeft(send);
+        await shot(send, evidenceDir, 'topbar-pan-left');
         await tapTopbarControl(send, '#tab-queue');
         const queue = await evaluate(send, `document.querySelector('main')?.className`);
         if (queue !== 'view-queue') throw new Error(`queue tap landed on ${queue}`);
@@ -562,7 +565,109 @@ async function driveTopbar(send, evidenceDir, home) {
     })()`);
     await setViewport(send, home.width, home.height, home.mobile);
   }
-  return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, bar scrolls`;
+  return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, bar scrolls, left pan ${panned}`;
+}
+
+async function panTopbarFromLeft(send) {
+  const start = await evaluate(send, `(() => {
+    const bar = document.querySelector('.topbar');
+    const kp = document.getElementById('kp-widget');
+    if (!bar || !kp || kp.hidden) return null;
+    bar.scrollLeft = 0;
+    const barBox = bar.getBoundingClientRect();
+    const kpBox = kp.getBoundingClientRect();
+    const x = Math.round(kpBox.left + Math.min(kpBox.width / 2, 22));
+    const y = Math.round(kpBox.top + kpBox.height / 2);
+    if (x >= barBox.left + barBox.width / 2) return { side: 'right', x, mid: barBox.left + barBox.width / 2 };
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || hit.closest('#kp-widget') !== kp) return { hit: hit && (hit.id || hit.className), x, y };
+    return { ok: true, x, y, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth };
+  })()`);
+  if (!start?.ok) throw new Error(`topbar pan start ${JSON.stringify(start)}`);
+  if (start.scrollWidth <= start.clientWidth) return 0;
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+  const steps = 8;
+  for (let i = 1; i <= steps; i += 1) {
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: start.x - Math.round((140 * i) / steps),
+      y: start.y,
+      button: 'left',
+      buttons: 1,
+    });
+  }
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: start.x - 140,
+    y: start.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+  const moved = await evaluate(send, `document.querySelector('.topbar').scrollLeft`);
+  if (!(moved > 40)) throw new Error(`left-half topbar drag scrolled ${moved} from ${JSON.stringify(start)}`);
+  await evaluate(send, `document.querySelector('.topbar').scrollLeft = 0`);
+  return moved;
+}
+
+async function assertMapChromeHidden(send) {
+  const state = await evaluate(send, `(() => {
+    const toolbar = document.querySelector('.map-toolbar');
+    const toggle = document.getElementById('map-chrome-toggle');
+    const banner = document.getElementById('status-banner');
+    const tab = document.getElementById('tab-map');
+    if (!toolbar || !toggle || !banner || !tab) return null;
+    const toggleBox = toggle.getBoundingClientRect();
+    return {
+      hidden: document.body.classList.contains('map-chrome-hidden'),
+      pane: document.getElementById('map-pane')?.classList.contains('map-chrome-hidden') === true,
+      toolbar: getComputedStyle(toolbar).display,
+      label: (toggle.textContent || '').trim(),
+      expanded: toggle.getAttribute('aria-expanded'),
+      toggleW: toggleBox.width,
+      toggleH: toggleBox.height,
+      banner: getComputedStyle(banner).display,
+      tab: getComputedStyle(tab).display,
+    };
+  })()`);
+  if (!state?.hidden || !state.pane || state.toolbar !== 'none' || state.label !== 'Controls' || state.expanded !== 'false') {
+    throw new Error(`map chrome should be hidden ${JSON.stringify(state)}`);
+  }
+  if (state.toggleW < 44 || state.toggleH < 44) throw new Error(`controls button ${JSON.stringify(state)}`);
+  if (state.banner === 'none' || state.tab === 'none') throw new Error(`shell hidden with the map chrome ${JSON.stringify(state)}`);
+}
+
+async function showMapChrome(send) {
+  await click(send, '#map-chrome-toggle');
+  await waitFor(
+    send,
+    `(() => {
+      const toolbar = document.querySelector('.map-toolbar');
+      const toggle = document.getElementById('map-chrome-toggle');
+      if (!toolbar || !toggle) return null;
+      if (document.body.classList.contains('map-chrome-hidden')) return null;
+      if (getComputedStyle(toolbar).display === 'none') return null;
+      if ((toggle.textContent || '').trim() !== 'Hide') return null;
+      if (toggle.getAttribute('aria-expanded') !== 'true') return null;
+      return { ok: true };
+    })()`,
+    'map chrome shown',
+  );
+}
+
+async function revealMapChrome(send, evidenceDir, shotName) {
+  const hidden = await evaluate(send, `document.body.classList.contains('map-chrome-hidden')`);
+  if (!hidden) {
+    await click(send, '#map-chrome-toggle');
+    await waitFor(
+      send,
+      `document.body.classList.contains('map-chrome-hidden') && (document.getElementById('map-chrome-toggle')?.textContent || '').trim() === 'Controls' ? { ok: true } : null`,
+      'map chrome hidden',
+    );
+  }
+  await assertMapChromeHidden(send);
+  if (shotName) await shot(send, evidenceDir, shotName);
+  await showMapChrome(send);
 }
 
 function topbarReachExpression() {
@@ -780,6 +885,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   if (!String(ready.legend || '').includes("Anil's targets")) {
     throw new Error(`legend missing Anil's targets: ${ready.legend}`);
   }
+  await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   const anil = await evaluate(send, `(() => {
     const node = document.querySelector('.map-legend-anil');
     const swatch = node ? getComputedStyle(node).backgroundColor : '';
@@ -1365,6 +1471,7 @@ async function drivePhone(send, evidenceDir, meta, home) {
     45000,
   );
   await setViewport(send, 390, 844, true);
+  await revealMapChrome(send, evidenceDir, 'phone-chrome-hidden');
   const inset = await safeAreaOverride(send, { top: 47, left: 0, bottom: 34, right: 0 });
   await sleep(300);
   const portrait = await evaluate(send, `(() => {

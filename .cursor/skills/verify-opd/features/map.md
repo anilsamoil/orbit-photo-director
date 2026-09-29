@@ -19,7 +19,8 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 ## How to get to it (user POV)
 
 - Choose the Map tab. The page also lands here on first load.
-- Use the time buttons in the top-left toolbar, the dock on the right, the legend at the bottom-left, and the (i) credits button at the bottom-right.
+- The map opens clear. One `Controls` button sits at the bottom center. The legend, time toolbar, tool dock, imagery date, zoom buttons, credits, launch panel, satellite picker, and `?` button are hidden. The top bar and the status footer stay, including Sign in and Reload when the session is dead.
+- Tap `Controls`. The chrome comes back and the button reads `Hide`. Tap `Hide` and the map is clear again. The choice is stored on this device as `opd-map-chrome` (`shown` or `hidden`). A missing key stays hidden.
 
 ## Driving it with opd-verify
 
@@ -28,7 +29,7 @@ Preconditions:
 - `doctor` prints `ok`.
 - The launch fixture `valid_until` is still in the future.
 
-- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present.
+- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present. On a fresh profile the legend is in the page and `display: none`. `#map-chrome-toggle` reads `Controls`, is at least 44px, and `aria-expanded` is `false`. The status footer and the Map tab stay visible. `evidence/map-chrome-hidden.png` is that clear map. The script taps `Controls`. The button reads `Hide`, the toolbar is shown, and the rest of this drive uses that chrome.
 - **Credits.** On load the control has no `maplibregl-compact-show` class and the (i) button is 44x44. The script then opens it. The credit text matches OpenStreetMap, CARTO, or NASA, and the legend moves up.
 - **Time.** T+45 changes `#time-slider-readout`. Now sets that readout back to `Now`.
 - **Tool rail.** IR becomes active, night lights become active, labels become inactive, multi-orbit becomes active, ISS up is already the default and stays active, and its title is `ISS up (default). Rotate so the direction of travel points up`. Follow reports `aria-pressed` false.
@@ -38,7 +39,7 @@ Preconditions:
 - **Launch.** Launches reports `aria-pressed` true. Turning it on opens the map brief. The script clicks the launch name in that brief. The dialog text contains Verify Ascent. The script turns Launches off again.
 - **Legend category.** The legend text contains `Anil's targets`. The `.map-legend-anil` swatch is `rgb(139, 147, 255)`. The `targets-layer` circle color expression names `anils-targets` and `#8b93ff`.
 - **Hidden pin.** After the launch dialog closes, the targets source still contains `verify-reef`. Hide on the Verify Reef queue card removes that id from the source. The script waits until `GET /api/browser/profiles/anil/targets` contains `verify-reef`. The new-browser check for a hidden card is `drive upcoming`.
-- **Proof.** `evidence/map-globe.png`, `evidence/map-legend.png`, `evidence/map-imagery-date.png`, `evidence/map-attribution-collapsed.png`, `evidence/map-attribution.png`, `evidence/map-time.png`, `evidence/map-tool-rail.png`, `evidence/map-satellites.png`, `evidence/map-target-popup.png`, `evidence/map-pin-drop.png`, `evidence/map-launch.png`, and `evidence/map-pin-hidden.png`.
+- **Proof.** `evidence/map-chrome-hidden.png`, `evidence/map-globe.png`, `evidence/map-legend.png`, `evidence/map-imagery-date.png`, `evidence/map-attribution-collapsed.png`, `evidence/map-attribution.png`, `evidence/map-time.png`, `evidence/map-tool-rail.png`, `evidence/map-satellites.png`, `evidence/map-target-popup.png`, `evidence/map-pin-drop.png`, `evidence/map-launch.png`, and `evidence/map-pin-hidden.png`.
 
 Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 

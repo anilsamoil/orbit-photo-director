@@ -9,6 +9,8 @@
 import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { bindHelp } from './help';
+import { bindMapChrome } from './map-chrome';
+import { bindTopbarPan } from './topbar-pan';
 import { formatCountdown, parseUtcIso } from './countdown';
 import {
   ACCESS_REAUTH_PATH,
@@ -1566,6 +1568,8 @@ function bindProfileBadgeAffordance(el: HTMLElement): void {
 }
 
 async function init(): Promise<void> {
+  bindMapChrome();
+  bindTopbarPan(document.querySelector('.topbar'));
   // Authenticate before loading any personal cache, target or rating queue.
   // A shared ?u= link selects a crew profile only when the session allows it.
   try {

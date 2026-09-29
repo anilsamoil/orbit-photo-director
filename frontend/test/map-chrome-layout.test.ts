@@ -156,6 +156,9 @@ describe('map chrome layout', () => {
     const tab = getComputedStyle(document.querySelector('.tab')!);
     expect(bar.overflowX).toBe('auto');
     expect(bar.overflowY).toBe('hidden');
+    expect(bar.touchAction).toBe('none');
+    expect(getComputedStyle(document.querySelector('.tab')!).touchAction).toBe('none');
+    expect(getComputedStyle(document.querySelector('.profile-badge')!).touchAction).toBe('none');
     expect(rulesFor('.tabs').some((style) => style.overflowX === 'auto')).toBe(false);
     expect(tabs.flexShrink).toBe('0');
     expect(getComputedStyle(document.querySelector('.profile-badge')!).flexShrink).toBe('0');
@@ -165,6 +168,26 @@ describe('map chrome layout', () => {
     expect(getComputedStyle(document.querySelector('.brand')!).flexShrink).toBe('0');
     expect(css).toContain('env(safe-area-inset-left)');
     expect(css).toContain('env(safe-area-inset-right)');
+  });
+
+  it('hides map controls until Controls is used and leaves the bar and banner up', () => {
+    mount('view-map');
+    document.body.classList.add('map-chrome-hidden');
+    document.querySelector('#map-pane')!.classList.add('map-chrome-hidden');
+    const hidden = (selector: string) => getComputedStyle(document.querySelector(selector)!).display;
+    expect(hidden('.map-toolbar')).toBe('none');
+    expect(hidden('.map-control-dock')).toBe('none');
+    expect(hidden('.map-legend')).toBe('none');
+    expect(hidden('.map-imagery-date')).toBe('none');
+    expect(hidden('.maplibregl-ctrl-bottom-right')).toBe('none');
+    expect(hidden('.help-fab')).toBe('none');
+    expect(hidden('.topbar')).not.toBe('none');
+    expect(hidden('#status-banner')).not.toBe('none');
+    document.body.classList.remove('map-chrome-hidden');
+    document.querySelector('#map-pane')!.classList.remove('map-chrome-hidden');
+    expect(hidden('.map-toolbar')).not.toBe('none');
+    expect(hidden('.help-fab')).not.toBe('none');
+    expect(hidden('#status-banner')).not.toBe('none');
   });
 
   it('draws one centered info icon on the credit toggle, collapsed and expanded', () => {
