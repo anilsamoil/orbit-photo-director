@@ -11,7 +11,7 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%B0%EF%B8%8F%3C/text%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
-  <body>
+  <body class="map-chrome-hidden">
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">🛰️</span>
@@ -77,7 +77,7 @@
         <div id="upcoming-empty" class="empty" hidden>No upcoming passes in the next 36 hours.</div>
       </section>
 
-      <section id="map-pane" class="pane">
+      <section id="map-pane" class="pane map-chrome-hidden">
         <div id="map" class="map"></div>
         <div class="map-toolbar">
           <div class="map-controls map-controls-filter" role="group" aria-label="Target filter">
@@ -151,6 +151,7 @@
           <span class="map-legend-item"><span class="map-legend-dot map-legend-anil"></span>Anil's targets</span>
           <span class="map-legend-item" id="tracked-legend"><span class="map-legend-dot map-legend-starship"></span><span id="tracked-legend-text">Starship: no public orbit yet</span></span>
         </div>
+        <button id="map-chrome-toggle" class="map-chrome-toggle" type="button" aria-expanded="false" title="Show map controls">Controls</button>
       </section>
 
       <section id="profile-pane" class="pane">
