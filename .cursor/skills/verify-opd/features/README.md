@@ -26,7 +26,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 
 ## Features
 
-- [Status banner](./banner.md) covers the footer after the manifest loads.
+- [Status banner](./banner.md) covers the footer after the manifest loads, including the held `SIGN IN AGAIN` footer.
 - [Top bar](./topbar.md) covers the fixed header, the live ISS readout, the Kp badge, and the row that scrolls when the tabs and a long username do not fit. A drag that starts on the ISS readout or the Kp chip scrolls that row.
 - [Queue](./queue.md) covers the next passes, score, sort, remind, shoot, the mine filter, keepsake windows, and Hide.
 - [Upcoming](./upcoming.md) covers launch cards, the later passes, score sort, and hide.

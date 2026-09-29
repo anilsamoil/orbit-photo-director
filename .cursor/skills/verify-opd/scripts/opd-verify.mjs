@@ -90,6 +90,15 @@ async function waitForHttp(url, timeoutMs = 30000) {
   throw new Error(`${url} not ready: ${last}`);
 }
 
+function cookieValue(req, name) {
+  const raw = req.headers.cookie ?? '';
+  for (const part of raw.split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return rest.join('=');
+  }
+  return '';
+}
+
 function json(res, status, body) {
   const text = JSON.stringify(body);
   res.writeHead(status, {
@@ -155,7 +164,20 @@ function startProxy(home) {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(body);
     };
-    if (path === '/manifest.json') return sendFile('manifest.json');
+    if (path === '/manifest.json') {
+      if (cookieValue(req, 'opd-verify-session') !== 'expired') return sendFile('manifest.json');
+      const manifest = JSON.parse(readFileSync(resolve(fixtureDir, 'manifest.json'), 'utf8'));
+      manifest.generated_at = new Date(Date.now() - 200 * 60_000).toISOString();
+      if (manifest.freshness && typeof manifest.freshness === 'object') manifest.freshness.ok = true;
+      const body = JSON.stringify(manifest);
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
+    }
     const artifact = {
       '/v/verify/passes.json': 'passes.json',
       '/v/verify/top5.json': 'top5.json',
@@ -245,6 +267,25 @@ function startProxy(home) {
       const index = personalTargets.findIndex((target) => target.id === id);
       if (index >= 0) personalTargets.splice(index, 1);
       json(res, 200, { ok: true });
+      return;
+    }
+    if (path === '/api/app' && cookieValue(req, 'opd-verify-session') === 'expired') {
+      if (url.searchParams.get('reauth') === '1') {
+        const page = '<!doctype html><title>reauth</title><p>reauth</p>';
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'content-length': Buffer.byteLength(page),
+        });
+        res.end(page);
+        return;
+      }
+      const next = new URL('/api/app', 'http://127.0.0.1');
+      next.searchParams.set('reauth', '1');
+      const profile = url.searchParams.get('u');
+      if (profile) next.searchParams.set('u', profile);
+      res.writeHead(302, { location: `${next.pathname}${next.search}`, 'cache-control': 'no-store' });
+      res.end();
       return;
     }
     await proxyRequest(state, req, res);
