@@ -11,8 +11,8 @@ Starship is always on the map. The legend names the state. A published element s
 
 ## How to get to it (user POV)
 
-- Choose the Map tab.
-- Read the legend row with the red swatch. That sentence is the status. The swatch is a circle painted `#ff5c5c`. The diamond is the map marker, and it appears only while the row has elements.
+- Choose the Map tab. The legend is hidden until `Controls`.
+- Tap `Controls`. Read the legend row with the red swatch. That sentence is the status. The swatch is a circle painted `#ff5c5c`. The diamond is the map marker, and it appears only while the row has elements. The diamond and the dotted track are on the map before that tap when an element set is published.
 - When elements exist, the diamond sits on the sub-point and the dotted line is one orbit.
 
 ## Driving it with opd-verify
@@ -26,7 +26,7 @@ Preconditions:
 - `OPD_VERIFY_TRACKED=lookup_failed` on `up` publishes `reason: lookup_failed` and no element lines.
 - `OPD_VERIFY_TRACKED=missing` on `up` omits `tracked` from the manifest.
 
-- **No orbit.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive tracked`. The legend text is `Starship: no public orbit yet`. There is no `.tracked-marker` and no `sat-track-layer-starship`. The ISS marker and `iss-track-layer` are present.
+- **No orbit.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive tracked`. The script taps `Controls` when the legend is hidden. The legend text is `Starship: no public orbit yet`. There is no `.tracked-marker` and no `sat-track-layer-starship`. The ISS marker and `iss-track-layer` are present.
 - **Elements.** Bring the instance down, set `OPD_VERIFY_TRACKED=elements`, and run `up` again, then `drive tracked`. The marker label is `Starship`. The legend names the stand-in catalog name. `sat-track-layer-starship` exists. The script turns follow off, frames that track, and saves desktop, iPad, and iPhone screenshots.
 - **Missing artifact.** Bring the instance down, set `OPD_VERIFY_TRACKED=missing`, and run `up` again, then `drive tracked`. The manifest has no `tracked` entry. The legend is `Starship: no public orbit yet`. Nothing is drawn for Starship.
 - **Age-out.** Bring the instance down, set `OPD_VERIFY_TRACKED=aged_out`, and run `up` again, then `drive tracked`. The legend is `Starship: public orbit expired`. The marker and `sat-track-layer-starship` are absent. The ISS marker and track stay.

@@ -11,7 +11,7 @@ Phone checks the Map page at 390x844 portrait, then 844x390 landscape. Desktop C
 
 ## How to get to it (user POV)
 
-- Open the Map tab on a phone. The map is clear except for the bottom-center `Controls` button, the top bar, and the status footer. Tap `Controls` and the dock, the ? button, and the (i) credits come back. The dock stops above both while the credits are collapsed and while they are expanded. Tap `Hide` and those controls leave again.
+- Open the Map tab on a phone. A fresh profile, or any stored value other than `shown`, leaves the map clear except for the bottom-center `Controls` button, the top bar, and the status footer. A device that already stored `opd-map-chrome` as `shown` opens on `Hide` with the chrome up. Tap `Controls` and the dock, the ? button, and the (i) credits come back. The dock stops above both while the credits are collapsed and while they are expanded. Tap `Hide` and those controls leave again.
 - Press and hold the map to drop a pin. The popup stays up when the finger lifts.
 
 ## Driving it with opd-verify
