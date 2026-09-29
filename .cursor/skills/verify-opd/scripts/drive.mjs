@@ -473,7 +473,19 @@ async function driveBanner(send, evidenceDir) {
   const pinned = await evaluate(send, `getComputedStyle(document.getElementById('status-banner')).position`);
   if (pinned !== 'fixed') throw new Error(`map banner is ${pinned}, expected fixed`);
   await shot(send, evidenceDir, 'banner');
-  return `banner: ${text.trim()}`;
+  await click(send, '#tab-queue');
+  const queueBanner = await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view')?.className;
+      const banner = document.getElementById('status-banner');
+      if (!banner || view !== 'view-queue') return null;
+      return { ok: true, position: getComputedStyle(banner).position };
+    })()`,
+    'queue banner',
+  );
+  if (queueBanner.position !== 'static') throw new Error(`queue banner ${queueBanner.position}`);
+  return `banner: ${text.trim()}, queue ${queueBanner.position}`;
 }
 
 async function driveTopbar(send, evidenceDir, home) {
@@ -526,13 +538,16 @@ async function driveTopbar(send, evidenceDir, home) {
     [834, 1194, 'topbar-ipad'],
   ];
   let panned = 0;
+  let issPanned = 0;
   try {
     for (const [width, height, name] of frames) {
       await setViewport(send, width, height, true);
       const reach = await waitFor(send, topbarReachExpression(), `topbar reach ${width}x${height}`, 8000);
       await shot(send, evidenceDir, name);
       if (width === 402 && height === 874) {
-        panned = await panTopbarFromLeft(send);
+        const pans = await panTopbarFromLeft(send);
+        panned = pans.kp;
+        issPanned = pans.iss;
         await shot(send, evidenceDir, 'topbar-pan-left');
         await tapTopbarControl(send, '#tab-queue');
         const queue = await evaluate(send, `document.querySelector('main')?.className`);
@@ -565,25 +580,25 @@ async function driveTopbar(send, evidenceDir, home) {
     })()`);
     await setViewport(send, home.width, home.height, home.mobile);
   }
-  return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, bar scrolls, left pan ${panned}`;
+  return `topbar: ${header.iss}, ${header.kp}, sun hidden=${sunHidden}, queue padded, bar scrolls, left pan ${panned} iss pan ${issPanned}`;
 }
 
-async function panTopbarFromLeft(send) {
+async function panTopbarFrom(send, elementId) {
   const start = await evaluate(send, `(() => {
     const bar = document.querySelector('.topbar');
-    const kp = document.getElementById('kp-widget');
-    if (!bar || !kp || kp.hidden) return null;
+    const chip = document.getElementById(${JSON.stringify(elementId)});
+    if (!bar || !chip || chip.hidden) return null;
     bar.scrollLeft = 0;
     const barBox = bar.getBoundingClientRect();
-    const kpBox = kp.getBoundingClientRect();
-    const x = Math.round(kpBox.left + Math.min(kpBox.width / 2, 22));
-    const y = Math.round(kpBox.top + kpBox.height / 2);
+    const chipBox = chip.getBoundingClientRect();
+    const x = Math.round(chipBox.left + Math.min(chipBox.width / 2, 22));
+    const y = Math.round(chipBox.top + chipBox.height / 2);
     if (x >= barBox.left + barBox.width / 2) return { side: 'right', x, mid: barBox.left + barBox.width / 2 };
     const hit = document.elementFromPoint(x, y);
-    if (!hit || hit.closest('#kp-widget') !== kp) return { hit: hit && (hit.id || hit.className), x, y };
+    if (!hit || hit.closest(${JSON.stringify(`#${elementId}`)}) !== chip) return { hit: hit && (hit.id || hit.className), x, y };
     return { ok: true, x, y, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth };
   })()`);
-  if (!start?.ok) throw new Error(`topbar pan start ${JSON.stringify(start)}`);
+  if (!start?.ok) throw new Error(`topbar pan start ${elementId} ${JSON.stringify(start)}`);
   if (start.scrollWidth <= start.clientWidth) return 0;
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
   const steps = 8;
@@ -605,9 +620,16 @@ async function panTopbarFromLeft(send) {
     clickCount: 1,
   });
   const moved = await evaluate(send, `document.querySelector('.topbar').scrollLeft`);
-  if (!(moved > 40)) throw new Error(`left-half topbar drag scrolled ${moved} from ${JSON.stringify(start)}`);
+  if (!(moved > 40)) throw new Error(`${elementId} drag scrolled ${moved} from ${JSON.stringify(start)}`);
   await evaluate(send, `document.querySelector('.topbar').scrollLeft = 0`);
   return moved;
+}
+
+async function panTopbarFromLeft(send) {
+  return {
+    kp: await panTopbarFrom(send, 'kp-widget'),
+    iss: await panTopbarFrom(send, 'iss-now'),
+  };
 }
 
 async function assertMapChromeHidden(send) {
@@ -668,6 +690,49 @@ async function revealMapChrome(send, evidenceDir, shotName) {
   await assertMapChromeHidden(send);
   if (shotName) await shot(send, evidenceDir, shotName);
   await showMapChrome(send);
+}
+
+async function waitChromeChoice(send, shown) {
+  await waitFor(
+    send,
+    `(() => {
+      const toggle = document.getElementById('map-chrome-toggle');
+      if (!toggle) return null;
+      const hidden = document.body.classList.contains('map-chrome-hidden');
+      const key = localStorage.getItem('opd-map-chrome');
+      const label = (toggle.textContent || '').trim();
+      if (shown) {
+        if (hidden || label !== 'Hide' || key !== 'shown') return null;
+      } else if (!hidden || label !== 'Controls' || key !== 'hidden') {
+        return null;
+      }
+      return { ok: true };
+    })()`,
+    shown ? 'map chrome stored shown' : 'map chrome stored hidden',
+    20000,
+  );
+}
+
+async function proveMapChromeMemory(send) {
+  await waitChromeChoice(send, true);
+  await reloadSettled(send);
+  await waitChromeChoice(send, true);
+  await click(send, '#map-chrome-toggle');
+  await waitChromeChoice(send, false);
+  await reloadSettled(send);
+  await waitChromeChoice(send, false);
+  await showMapChrome(send);
+  await waitFor(
+    send,
+    `window.__opdMap && window.__opdMap.getLayer && window.__opdMap.getLayer('iss-track-layer') ? { ok: true } : null`,
+    'map after chrome reload',
+    45000,
+  );
+}
+
+async function ensureMapChromeShown(send) {
+  const hidden = await evaluate(send, `document.body.classList.contains('map-chrome-hidden')`);
+  if (hidden) await showMapChrome(send);
 }
 
 function topbarReachExpression() {
@@ -886,6 +951,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
     throw new Error(`legend missing Anil's targets: ${ready.legend}`);
   }
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
+  await proveMapChromeMemory(send);
   const anil = await evaluate(send, `(() => {
     const node = document.querySelector('.map-legend-anil');
     const swatch = node ? getComputedStyle(node).backgroundColor : '';
@@ -1059,7 +1125,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
-  return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin';
+  return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
 }
 
 const UNAVAILABLE_LEGEND = {
@@ -1085,6 +1151,7 @@ async function driveTracked(send, evidenceDir, meta, home) {
     'tracked legend',
     45000,
   );
+  await ensureMapChromeShown(send);
   if (meta.trackedMode === 'elements') {
     if (!meta.standIn || !ready.legend.includes(meta.standIn)) {
       throw new Error(`stand-in legend ${ready.legend} expected ${meta.standIn}`);
@@ -1224,6 +1291,7 @@ async function driveTracked(send, evidenceDir, meta, home) {
 async function driveHelp(send, evidenceDir) {
   await dismissShotlist(send);
   await click(send, '#tab-map');
+  await ensureMapChromeShown(send);
   const creditsOpen = await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === true`);
   if (creditsOpen) await click(send, '.maplibregl-ctrl-attrib-button');
   await waitFor(

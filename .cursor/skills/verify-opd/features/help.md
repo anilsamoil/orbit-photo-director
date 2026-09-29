@@ -9,7 +9,7 @@ The ? button opens a dialog that explains the five tabs, the map legend (includi
 
 ## How to get to it (user POV)
 
-- On Map the ? button sits just above the collapsed (i) credits button. On Queue, Upcoming, Profile, and Log it sits in the bottom-right corner, about 1rem from the edges. A browser that supports `env()` adds `env(safe-area-inset-bottom)` to that offset. While the footer has Sign in and Reload, the same button moves up to `calc(7.75rem + env(safe-area-inset-bottom))`, including on Map.
+- On a fresh Map the ? button is hidden with the rest of the map chrome. Tap `Controls` first. The button then sits just above the collapsed (i) credits button. On Queue, Upcoming, Profile, and Log it sits in the bottom-right corner, about 1rem from the edges, even when the map chrome is still hidden. A browser that supports `env()` adds `env(safe-area-inset-bottom)` to that offset. While the footer has Sign in and Reload, the same button moves up to `calc(7.75rem + env(safe-area-inset-bottom))`, including on Map.
 
 ## Driving it with opd-verify
 
@@ -17,7 +17,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Open help.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive help`. The script returns to Map and collapses the credits if a previous step opened them. The bottom edge of the ? button is above the collapsed (i) button. The dialog with accessible name `Help — how to use SNAP` is visible.
+- **Open help.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive help`. The script returns to Map, taps `Controls` when the chrome is hidden, and collapses the credits if a previous step opened them. The bottom edge of the ? button is above the collapsed (i) button. The dialog with accessible name `Help — how to use SNAP` is visible.
 - **Close help.** The close button removes that dialog. The script then opens Queue and checks that the ? button sits within 24px of the right and bottom edges.
 - **Proof.** `evidence/help-placement.png` shows the ? above the collapsed (i). `evidence/help.png` shows the open dialog. `evidence/help-queue.png` shows the corner button on Queue.
 
