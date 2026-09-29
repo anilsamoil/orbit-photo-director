@@ -89,6 +89,10 @@ let refreshInFlight: Promise<void> | null = null;
 // counter on R2), so skipping unchanged writes drops ~350K localStorage
 // writes over an 8-month mission to ~5K.
 let lastSavedManifestVersion: string | null = null;
+/** Footer is showing sign-in recovery. Status ticks must not clear it. */
+let sessionBannerHeld = false;
+/** Last access probe threw, so a held sign-in banner is still the honest one. */
+let accessProbeUnknown = false;
 
 function recoveryHref(): string {
   try {
@@ -101,6 +105,7 @@ function recoveryHref(): string {
 function showSessionRecovery(text: string): void {
   const el = document.getElementById('status-banner');
   if (!el) return;
+  sessionBannerHeld = true;
   el.className = 'banner banner-red';
   el.onclick = null;
   el.style.cursor = '';
@@ -125,21 +130,22 @@ function showSessionRecovery(text: string): void {
 }
 
 function setBanner(state: BannerState): void {
+  if (sessionBannerHeld) return;
   const el = document.getElementById('status-banner');
   if (!el) return;
   el.className = `banner banner-${state.level}`;
   el.textContent = state.text;
-  // Any non-auth banner clears the tap-to-reauth affordance, so a stale banner
-  // from an ordinary LOS never looks tappable.
   el.onclick = null;
   el.style.cursor = '';
 }
 
 /** Make the banner a one-tap escape to the Cloudflare Access login. */
 function setAuthBanner(state: BannerState): void {
+  sessionBannerHeld = false;
   setBanner(state);
   const el = document.getElementById('status-banner');
   if (!el) return;
+  sessionBannerHeld = true;
   el.style.cursor = 'pointer';
   el.onclick = () => {
     // Full navigation, not fetch: we WANT the browser to follow the 302 to the
@@ -164,6 +170,7 @@ function setAuthBanner(state: BannerState): void {
  *  problem, or the operator taps through to a login page that cannot load.
  */
 async function isAccessSessionExpired(): Promise<boolean> {
+  accessProbeUnknown = false;
   try {
     const r = await fetch(ACCESS_REAUTH_PATH, {
       method: 'GET',
@@ -173,6 +180,7 @@ async function isAccessSessionExpired(): Promise<boolean> {
     });
     return r.type === 'opaqueredirect';
   } catch {
+    accessProbeUnknown = true;
     return false;
   }
 }
@@ -185,10 +193,17 @@ const AUTH_PROBE_AGE_MINUTES = 150;
  *  session (fixable in one tap) rather than a real comms gap. */
 async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean> {
   const ageMin = (Date.now() - parseUtcIso(generatedAtIso).getTime()) / 60000;
-  if (ageMin < AUTH_PROBE_AGE_MINUTES) return false;
-  if (!(await isAccessSessionExpired())) return false;
-  setAuthBanner(bannerAuthExpired(ageMin));
-  return true;
+  if (ageMin < AUTH_PROBE_AGE_MINUTES) {
+    sessionBannerHeld = false;
+    return false;
+  }
+  if (await isAccessSessionExpired()) {
+    setAuthBanner(bannerAuthExpired(ageMin));
+    return true;
+  }
+  if (accessProbeUnknown && sessionBannerHeld) return true;
+  sessionBannerHeld = false;
+  return false;
 }
 
 /** Render or hide the topbar "N pending sync" badge based on the calib queue.

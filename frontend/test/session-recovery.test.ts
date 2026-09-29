@@ -52,6 +52,16 @@ it.each([401, 403, 302])('session HTTP %s puts Sign in and Reload on the footer,
   expect(localStorage.getItem('opd-profile-anil')).toBe(savedProfile);
 });
 
+it('a later status paint leaves Sign in and Reload on the footer', async () => {
+  await bootDenied(401);
+  const { renderOfflineBanner } = await import('../src/main');
+  renderOfflineBanner();
+  expect(document.querySelector('#status-banner a')?.textContent).toBe('Sign in');
+  expect(document.querySelector('#status-banner button')?.textContent).toBe('Reload');
+  expect(document.getElementById('status-banner')?.textContent).toContain('Please sign in again');
+  expect(document.getElementById('status-banner')?.textContent).not.toContain('no cached data');
+});
+
 it('an opaque Access redirect uses the same footer controls', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ type: 'opaqueredirect', status: 0, ok: false, redirected: false })));
   const { init } = await import('../src/main');

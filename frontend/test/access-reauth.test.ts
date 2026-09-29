@@ -61,7 +61,7 @@ describe('Cloudflare Access re-auth escape hatch', () => {
   it('treats probe failure as NOT-expired', async () => {
     // A genuine LOS must not be reported as a login problem, or the operator
     // taps through to a login page that cannot load.
-    expect(await mainSrc()).toMatch(/catch\s*\{\s*return false;\s*\}/);
+    expect(await mainSrc()).toMatch(/accessProbeUnknown = true;\s*return false;/);
   });
 
   it('does not overwrite the auth banner with the ordinary STALE banner', async () => {

@@ -1070,6 +1070,8 @@ describe('main.ts: expired session banner holds through the countdown', () => {
     vi.mocked(manifestModule.fetchTop5).mockResolvedValue([buildPass()]);
     vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
     vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+    const aurora = await import('../src/aurora');
+    vi.mocked(aurora.fetchKpData).mockResolvedValue(null);
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const target = String(url);
       if (target.includes('/__opd_probe')) return new Response(null, { status: 204 });
@@ -1105,5 +1107,42 @@ describe('main.ts: expired session banner holds through the countdown', () => {
     expect(banner.textContent).toBe('SIGN IN AGAIN — session expired, data frozen 3h 20m ago. Tap here.');
     banner.click();
     expect(assign).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces the sign-in banner when the access probe says the session is live', async () => {
+    await refreshStaleManifest('expired');
+    await refreshStaleManifest('live');
+    const text = document.getElementById('status-banner')?.textContent ?? '';
+    expect(text).toBe('STALE — last updated 3h 20m ago — values may be wrong');
+  });
+
+  it('replaces the sign-in banner when a young manifest arrives', async () => {
+    await refreshStaleManifest('expired');
+    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest({
+      version: '20260504T180000Z',
+      generated_at: new Date().toISOString(),
+    }));
+    const { refresh } = await import('../src/main');
+    await refresh();
+    const text = document.getElementById('status-banner')?.textContent ?? '';
+    expect(text).toContain('Last updated');
+    expect(text).not.toContain('SIGN IN AGAIN');
+  });
+
+  it('does not claim an expired session when the access probe cannot connect', async () => {
+    await refreshStaleManifest('down');
+    const text = document.getElementById('status-banner')?.textContent ?? '';
+    expect(text).toBe('STALE — last updated 3h 20m ago — values may be wrong');
+  });
+
+  it('keeps the sign-in banner when a later access probe fails', async () => {
+    await refreshStaleManifest('expired');
+    await refreshStaleManifest('down');
+    expect(document.getElementById('status-banner')?.textContent).toBe(
+      'SIGN IN AGAIN — session expired, data frozen 3h 20m ago. Tap here.',
+    );
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    document.getElementById('status-banner')?.click();
+    expect(assign).toHaveBeenCalledWith('/api/app');
   });
 });
