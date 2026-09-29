@@ -18,7 +18,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Open Upcoming.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive upcoming`. The list contains Verify Ascent and Verify Mesa.
+- **Open Upcoming.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive upcoming`. The script requires Verify Ascent above Verify Mesa in the list text.
 - **Sort.** The Score button gains the active class.
 - **Hide.** The Hide control removes Verify Mesa from the list. Time sort paints the list again and the card stays gone. `removedCuratedIds` in localStorage `opd-profile-anil` contains `verify-mesa`.
 - **Reload.** The script reloads the page and opens Upcoming again. Verify Mesa stays gone, and the same id is still in `removedCuratedIds`.

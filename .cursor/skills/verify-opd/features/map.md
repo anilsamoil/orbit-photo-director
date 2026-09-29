@@ -7,7 +7,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 - `map-globe` shows the MapLibre canvas, the ISS marker, and the ground track.
 - `map-legend` shows launch, day, twilight, eclipse, Anil's targets, and the Starship status. The Anil swatch is `#8b93ff`. The Starship swatch is `#ff5c5c`.
 - `map-imagery` shows the imagery or clouds date badge.
-- `map-attribution` starts as a 44x44 (i) button. A tap expands the credit line (OpenStreetMap, CARTO, or NASA). The legend, the imagery date, and the ? button sit above that button and move up when the line opens.
+- `map-attribution` starts as a 44x44 (i) button. A tap expands the credit line (OpenStreetMap, CARTO, or NASA). While the line is collapsed, the legend shares that button's band on the left. The imagery date and the ? button sit above it. All three move up when the line opens.
 - `map-time` moves the readout off Now with T+45, then returns it to Now.
 - `map-tools` toggles IR, night lights, labels, multi-orbit, and follow, and confirms ISS up is the selected bearing.
 - `map-satellites` opens the picker and lists Tiangong and Hubble.

@@ -959,50 +959,49 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   return 'queue: cards, score, remind, shoot, mine filter, keepsake, hide';
 }
 
+function upcomingListExpression(mesa, ascent, { hidden }) {
+  return `(() => {
+    const text = document.getElementById('upcoming-cards')?.innerText || '';
+    const ascentAt = text.indexOf(${JSON.stringify(ascent)});
+    const mesaAt = text.indexOf(${JSON.stringify(mesa)});
+    if (ascentAt < 0) return null;
+    if (${hidden ? 'true' : 'false'}) {
+      if (mesaAt >= 0) return null;
+    } else if (mesaAt < 0 || ascentAt > mesaAt) return null;
+    return { ok: true };
+  })()`;
+}
+
 async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
+  const mesa = meta.names.upcoming[0];
+  const ascent = meta.names.launch;
   await click(send, '#tab-upcoming');
-  await waitFor(
-    send,
-    `document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming card',
-  );
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: false }), 'upcoming card');
   await shot(send, evidenceDir, 'upcoming');
   await click(send, '#sort-score-upcoming');
   const active = await evaluate(send, `document.getElementById('sort-score-upcoming').classList.contains('active')`);
   if (!active) throw new Error('upcoming score sort did not become active');
-  const mesaId = await hideNamed(send, '#upcoming-cards', meta.names.upcoming[0]);
-  await waitFor(
-    send,
-    `!document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming hide',
-  );
+  const mesaId = await hideNamed(send, '#upcoming-cards', mesa);
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: true }), 'upcoming hide');
   await shot(send, evidenceDir, 'upcoming-hidden');
   await click(send, '#sort-time-upcoming');
-  await waitFor(
-    send,
-    `!document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming hide after re-render',
-  );
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: true }), 'upcoming hide after re-render');
   const stored = await removedCuratedIds(send);
   if (!stored.includes(mesaId)) throw new Error(`upcoming hide missing ${mesaId} in ${JSON.stringify(stored)}`);
   await reloadSettled(send);
   await click(send, '#tab-upcoming');
-  await waitFor(
-    send,
-    `document.getElementById('upcoming-cards') && !document.getElementById('upcoming-cards').innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming hide after reload',
-  );
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: true }), 'upcoming hide after reload');
   const storedAfter = await removedCuratedIds(send);
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
   const server = await waitServerRemoved(baseUrl, [mesaId], []);
   await expectFreshHide(baseUrl, home, {
     id: mesaId,
-    name: meta.names.upcoming[0],
+    name: mesa,
     updatedAt: server.removedCuratedUpdatedAt,
     visible: false,
   });
-  return `upcoming: card, score sort, hide persisted ${mesaId}, fresh profile hid it`;
+  return `upcoming: ${ascent} above ${mesa}, score sort, hide persisted ${mesaId}, fresh profile hid it`;
 }
 
 async function driveMap(send, evidenceDir, meta, baseUrl) {
