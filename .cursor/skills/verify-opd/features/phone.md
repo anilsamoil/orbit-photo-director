@@ -29,7 +29,8 @@ Desktop Chrome runs the 390x844 and 844x390 viewports first. WebKit iPhone 13, i
 
 ## Gotchas
 
-- `drive all` runs this after Log. The script restores the 1400x900 viewport before it returns.
+- `drive all` runs this after Log. The script restores the surface size before it returns. On desktop that size is 1400x900. On a WebKit device it is that device's viewport.
 - Safe-area insets stay zero unless Chrome accepts `Emulation.setSafeAreaInsetsOverride`. `safe-area unsupported` is a completed drive. The 44px and dock checks still run.
 - `drive map` right-clicks to open a pass popup. The ignore window is armed for this long press. Hold the touch for longer than 500ms before the finger lifts.
 - The verify fixture has no `anils-targets` pass. This drive does not look for those pins.
+- The WebKit pass after these checks opens a denied session. That footer says `Please sign in again` and shows Sign in and Reload. `init` returns before the countdown. The held footer that `drive banner` checks starts with `SIGN IN AGAIN`. That drive waits out a countdown tick and a failed refresh, then clicks the footer through to `/api/app`.

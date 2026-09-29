@@ -35,7 +35,7 @@ Preconditions:
 
 ## Gotchas
 
-- `up` reuses fixtures. A mode change needs `down`, then `up`, or a different `OPD_VERIFY_HOME`.
+- `up` reuses fixtures. A mode change needs `down`, then `up`. A second run needs its own `OPD_VERIFY_HOME` and `OPD_VERIFY_PORT`. The default ports stay taken while the first proxy is up.
 - Any other value of `OPD_VERIFY_TRACKED`, including unset, publishes the no-orbit row.
 - The stand-in fetch reads only the first element set from the SupGP starlink file. If that fetch fails, `up` fails. The drive does not substitute a made-up orbit.
 - `lookup_failed` prints `Starship: orbit lookup failed`. Publish it with `OPD_VERIFY_TRACKED=lookup_failed` before `up`.

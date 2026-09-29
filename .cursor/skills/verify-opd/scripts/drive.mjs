@@ -371,7 +371,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   const selected = features.includes('all') ? BROWSER_FEATURES : features;
   const notes = [];
   for (const feature of selected) {
-    if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir));
+    if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir, baseUrl));
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
     else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
@@ -465,7 +465,7 @@ async function dismissShotlist(send) {
   );
 }
 
-async function driveBanner(send, evidenceDir) {
+async function driveBanner(send, evidenceDir, baseUrl) {
   const text = await evaluate(send, `document.getElementById('status-banner').textContent`);
   if (!text || /sign in/i.test(text) || text.includes('Could not verify') || !text.includes('Last updated')) {
     throw new Error(`banner is not a data state: ${text}`);
@@ -485,7 +485,92 @@ async function driveBanner(send, evidenceDir) {
     'queue banner',
   );
   if (queueBanner.position !== 'static') throw new Error(`queue banner ${queueBanner.position}`);
-  return `banner: ${text.trim()}, queue ${queueBanner.position}`;
+  const held = await proveHeldSignIn(send, evidenceDir, baseUrl);
+  return `banner: ${text.trim()}, queue ${queueBanner.position}, held ${held}`;
+}
+
+async function setSessionCookie(send, value) {
+  const assignment = value
+    ? `document.cookie = ${JSON.stringify(`opd-verify-session=${value}; path=/`)}`
+    : `document.cookie = 'opd-verify-session=; path=/; max-age=0'`;
+  await evaluate(send, assignment);
+}
+
+async function waitForHref(send, pattern, label) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < 8000) {
+    try {
+      last = await evaluate(send, `location.href`);
+      if (typeof last === 'string' && pattern.test(last)) return last;
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error);
+    }
+    await sleep(200);
+  }
+  throw new Error(`${label} timed out. Last: ${last}`);
+}
+
+async function proveHeldSignIn(send, evidenceDir, baseUrl) {
+  await setSessionCookie(send, 'expired');
+  await send('Page.navigate', { url: `${baseUrl}/?e2e&u=anil` });
+  const held = await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!text.startsWith('SIGN IN AGAIN') || !text.includes('Tap here.')) return null;
+      if (text.includes('STALE') || text.includes('LOS') || banner.querySelector('a, button')) return null;
+      return { ok: true, text };
+    })()`,
+    'held SIGN IN AGAIN banner',
+    30000,
+  );
+  const before = held.text;
+  await sleep(1200);
+  const afterTick = await evaluate(send, `document.getElementById('status-banner').textContent`);
+  if (afterTick !== before) throw new Error(`countdown replaced the held banner: ${afterTick}`);
+  await evaluate(send, `(() => {
+    window.__opdHoldFetches = 0;
+    window.__opdHoldFetch = window.fetch;
+    window.fetch = (input) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (String(url).includes('manifest.json')) window.__opdHoldFetches += 1;
+      return Promise.reject(new TypeError('Failed to fetch'));
+    };
+    document.dispatchEvent(new Event('visibilitychange'));
+    return true;
+  })()`);
+  const los = await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!window.__opdHoldFetches) return null;
+      return { ok: true, text, calls: window.__opdHoldFetches };
+    })()`,
+    'held banner through a failed refresh',
+    8000,
+  );
+  if (los.text !== before) throw new Error(`failed refresh replaced the held banner: ${los.text}`);
+  await evaluate(send, `window.fetch = window.__opdHoldFetch`);
+  await shot(send, evidenceDir, 'banner-hold');
+  await click(send, '#status-banner');
+  const href = await waitForHref(send, /\/api\/app/, 'held banner click');
+  if (!href.includes('u=anil')) throw new Error(`held click dropped the profile: ${href}`);
+  await setSessionCookie(send, '');
+  await send('Page.navigate', { url: `${baseUrl}/?e2e` });
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('status-banner')?.textContent || '';
+      if (!text.includes('Last updated') || /sign in/i.test(text)) return null;
+      return { ok: true };
+    })()`,
+    'banner restored after the hold',
+    30000,
+  );
+  return before;
 }
 
 async function driveTopbar(send, evidenceDir, home) {
@@ -874,50 +959,49 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   return 'queue: cards, score, remind, shoot, mine filter, keepsake, hide';
 }
 
+function upcomingListExpression(mesa, ascent, { hidden }) {
+  return `(() => {
+    const text = document.getElementById('upcoming-cards')?.innerText || '';
+    const ascentAt = text.indexOf(${JSON.stringify(ascent)});
+    const mesaAt = text.indexOf(${JSON.stringify(mesa)});
+    if (ascentAt < 0) return null;
+    if (${hidden ? 'true' : 'false'}) {
+      if (mesaAt >= 0) return null;
+    } else if (mesaAt < 0 || ascentAt > mesaAt) return null;
+    return { ok: true };
+  })()`;
+}
+
 async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
+  const mesa = meta.names.upcoming[0];
+  const ascent = meta.names.launch;
   await click(send, '#tab-upcoming');
-  await waitFor(
-    send,
-    `document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming card',
-  );
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: false }), 'upcoming card');
   await shot(send, evidenceDir, 'upcoming');
   await click(send, '#sort-score-upcoming');
   const active = await evaluate(send, `document.getElementById('sort-score-upcoming').classList.contains('active')`);
   if (!active) throw new Error('upcoming score sort did not become active');
-  const mesaId = await hideNamed(send, '#upcoming-cards', meta.names.upcoming[0]);
-  await waitFor(
-    send,
-    `!document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming hide',
-  );
+  const mesaId = await hideNamed(send, '#upcoming-cards', mesa);
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: true }), 'upcoming hide');
   await shot(send, evidenceDir, 'upcoming-hidden');
   await click(send, '#sort-time-upcoming');
-  await waitFor(
-    send,
-    `!document.getElementById('upcoming-cards')?.innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming hide after re-render',
-  );
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: true }), 'upcoming hide after re-render');
   const stored = await removedCuratedIds(send);
   if (!stored.includes(mesaId)) throw new Error(`upcoming hide missing ${mesaId} in ${JSON.stringify(stored)}`);
   await reloadSettled(send);
   await click(send, '#tab-upcoming');
-  await waitFor(
-    send,
-    `document.getElementById('upcoming-cards') && !document.getElementById('upcoming-cards').innerText.includes(${JSON.stringify(meta.names.upcoming[0])}) ? { ok: true } : null`,
-    'upcoming hide after reload',
-  );
+  await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: true }), 'upcoming hide after reload');
   const storedAfter = await removedCuratedIds(send);
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
   const server = await waitServerRemoved(baseUrl, [mesaId], []);
   await expectFreshHide(baseUrl, home, {
     id: mesaId,
-    name: meta.names.upcoming[0],
+    name: mesa,
     updatedAt: server.removedCuratedUpdatedAt,
     visible: false,
   });
-  return `upcoming: card, score sort, hide persisted ${mesaId}, fresh profile hid it`;
+  return `upcoming: ${ascent} above ${mesa}, score sort, hide persisted ${mesaId}, fresh profile hid it`;
 }
 
 async function driveMap(send, evidenceDir, meta, baseUrl) {
