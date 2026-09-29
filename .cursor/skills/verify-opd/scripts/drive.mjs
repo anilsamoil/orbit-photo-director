@@ -693,6 +693,7 @@ async function revealMapChrome(send, evidenceDir, shotName) {
 }
 
 async function waitChromeChoice(send, shown) {
+  const expectShown = shown ? 'true' : 'false';
   await waitFor(
     send,
     `(() => {
@@ -701,7 +702,7 @@ async function waitChromeChoice(send, shown) {
       const hidden = document.body.classList.contains('map-chrome-hidden');
       const key = localStorage.getItem('opd-map-chrome');
       const label = (toggle.textContent || '').trim();
-      if (shown) {
+      if (${expectShown}) {
         if (hidden || label !== 'Hide' || key !== 'shown') return null;
       } else if (!hidden || label !== 'Controls' || key !== 'hidden') {
         return null;
