@@ -9,7 +9,7 @@ The ? button opens a dialog that explains the six tabs, the map legend (includin
 
 ## How to get to it (user POV)
 
-- On a fresh Map the ? button is hidden with the rest of the map chrome. Tap `Controls` first. The button then sits just above the collapsed (i) credits button. On Queue, Upcoming, Profile, and Log it sits in the bottom-right corner, about 1rem from the edges, even when the map chrome is still hidden. A browser that supports `env()` adds `env(safe-area-inset-bottom)` to that offset. While the footer has Sign in and Reload, the same button moves up to `calc(7.75rem + env(safe-area-inset-bottom))`, including on Map.
+- On a fresh Map the ? button is hidden with the rest of the map chrome. Tap `Controls` first. The button then sits just above the collapsed (i) credits button. On Queue, Upcoming, ISS view, Profile, and Log it sits in the bottom-right corner, about 1rem from the edges, even when the map chrome is still hidden. A browser that supports `env()` adds `env(safe-area-inset-bottom)` to that offset. While the footer has Sign in and Reload, the same button moves up to `calc(7.75rem + env(safe-area-inset-bottom))`, including on Map.
 
 ## Driving it with opd-verify
 
