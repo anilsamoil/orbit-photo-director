@@ -1,4 +1,4 @@
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 import type { LngLat, Point } from '../../map-core/geometry';
 import type { Hit, LayerEvents, LayerTap, Tap, VendorEvents } from '../../map-core/vendor-map';
@@ -40,22 +40,22 @@ export function mapListener<K extends keyof VendorEvents>(
   const deliver = handler as Handler<unknown>;
   switch (event) {
     case 'click':
-      return (e: maplibregl.MapMouseEvent) => deliver(toTap(e));
+      return ((e: maplibregl.MapMouseEvent) => deliver(toTap(e))) as maplibregl.Listener;
     case 'contextmenu':
-      return (e: maplibregl.MapMouseEvent) => {
+      return ((e: maplibregl.MapMouseEvent) => {
         e.preventDefault();
         deliver(toTap(e));
-      };
+      }) as maplibregl.Listener;
     case 'touchstart':
-      return (e: maplibregl.MapTouchEvent) => deliver({ lngLat: toLngLat(e.lngLat), touches: toTouches(e) });
+      return ((e: maplibregl.MapTouchEvent) => deliver({ lngLat: toLngLat(e.lngLat), touches: toTouches(e) })) as maplibregl.Listener;
     case 'touchmove':
-      return (e: maplibregl.MapTouchEvent) => deliver({ touches: toTouches(e) });
+      return ((e: maplibregl.MapTouchEvent) => deliver({ touches: toTouches(e) })) as maplibregl.Listener;
     case 'zoomstart':
-      return (e: { originalEvent?: unknown } | undefined) => deliver({ byUser: Boolean(e?.originalEvent) });
+      return ((e: { originalEvent?: unknown } | undefined) => deliver({ byUser: Boolean(e?.originalEvent) })) as maplibregl.Listener;
     case 'error':
-      return (e: unknown) => deliver({ sourceId: sourceIdOf(e) });
+      return ((e: unknown) => deliver({ sourceId: sourceIdOf(e) })) as maplibregl.Listener;
     case 'data':
-      return (e: unknown) => deliver({ sourceId: sourceIdOf(e), tileLoaded: tileLoaded(e) });
+      return ((e: unknown) => deliver({ sourceId: sourceIdOf(e), tileLoaded: tileLoaded(e) })) as maplibregl.Listener;
     default:
       return () => deliver(undefined);
   }
@@ -67,10 +67,10 @@ export function layerListener<K extends keyof LayerEvents>(
 ): maplibregl.Listener {
   const deliver = handler as Handler<unknown>;
   if (event === 'click') {
-    return (e: maplibregl.MapLayerMouseEvent) => {
+    return ((e: maplibregl.MapLayerMouseEvent) => {
       const tap: LayerTap = { ...toTap(e), features: (e.features ?? []).map(toHit) };
       deliver(tap);
-    };
+    }) as maplibregl.Listener;
   }
   return () => deliver(undefined);
 }

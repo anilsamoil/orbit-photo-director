@@ -320,6 +320,7 @@ function maplibreDouble() {
     LngLatBounds: RecordingLngLatBounds,
     addProtocol: vi.fn(),
     removeProtocol: vi.fn(),
+    setWorkerUrl: vi.fn(),
   };
   return { maplibregl, constructed, markers, popups };
 }
@@ -334,17 +335,36 @@ type Slot = { [SLOT]?: MaplibreDouble };
 
 /** The factory a test file hands to `vi.mock('maplibre-gl', ...)`.
  *
- *  map.ts registers the viirs-alpha protocol against the default export at
- *  import time, so a double has to exist before the module graph loads. The
- *  proxy keeps that captured binding pointing at whichever double the
- *  running test installed. */
-export function maplibreModuleMock(): { default: unknown } {
+ *  MapLibre 6 is a namespace of named exports. The proxy resolves each name
+ *  when it is read, so a double installed after the module graph loads still
+ *  receives `Map`, `addProtocol`, and `setWorkerUrl`. */
+export function maplibreModuleMock(): object {
   resetMaplibreDouble();
-  return {
-    default: new Proxy({}, {
-      get: (_target, prop) => currentMaplibreDouble().maplibregl[prop as keyof MaplibreDouble['maplibregl']],
-    }),
-  };
+  const namespace: Record<string, unknown> = new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop) => {
+      if (prop === '__esModule') return true;
+      if (prop === 'default') return namespace;
+      return currentMaplibreDouble().maplibregl[prop as keyof MaplibreDouble['maplibregl']];
+    },
+    has: (_target, prop) => {
+      if (prop === '__esModule' || prop === 'default' || prop === Symbol.toStringTag) return true;
+      return prop in currentMaplibreDouble().maplibregl;
+    },
+    getOwnPropertyDescriptor: (_target, prop) => {
+      if (typeof prop !== 'string') return undefined;
+      if (!(prop in currentMaplibreDouble().maplibregl) && prop !== '__esModule' && prop !== 'default') return undefined;
+      return {
+        configurable: true,
+        enumerable: true,
+        value: prop === '__esModule'
+          ? true
+          : prop === 'default'
+            ? namespace
+            : currentMaplibreDouble().maplibregl[prop as keyof MaplibreDouble['maplibregl']],
+      };
+    },
+  });
+  return namespace;
 }
 
 export function resetMaplibreDouble(): MaplibreDouble {
