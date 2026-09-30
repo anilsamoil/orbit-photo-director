@@ -26,7 +26,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Horizon.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive iss`. The view class is `view-iss`. Horizon is pressed. The card contains `Horizon locked` and `14 mm`. Telemetry starts collapsed and does not cover the frame. One info button is collapsed. The frame lists country, city, and water labels. `Port` sits left of the frame and `Starboard` sits right of it. The Cupola select leaves windows 1 through 6 disabled, with Port on window 1 and Starboard on window 4. Window 7 reads `Window 7 · Nadir`. `evidence/iss-horizon.png` is that frame. Opening telemetry still leaves the card off the frame, then the drive collapses it again.
+- **Horizon.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive iss`. The view class is `view-iss`. Horizon is pressed. The card contains `Horizon locked` and `14 mm`. Telemetry starts collapsed and does not cover the frame. One info button is collapsed. The frame lists country, city, and water labels. `Port` sits left of the frame and `Starboard` sits right of it. The Cupola select leaves windows 1 through 6 disabled, with Port on window 1 and Starboard on window 4. Window 7 reads `Window 7 · Nadir`. `evidence/iss-horizon.png` is that frame. Opening telemetry still leaves the card off the frame. `evidence/iss-telemetry-open.png` is that open card, then the drive collapses it again.
 - **Straight down.** The drive taps Straight down. The card contains `Nadir locked`. `evidence/iss-nadir.png` is that frame.
 - **Leave and return.** Map opens with the scene gone. Queue opens. ISS view opens again with Straight down still pressed. `evidence/iss-return.png` is that return.
 - **Proof.** Stdout starts with `iss:`.
@@ -38,4 +38,5 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 - The picture is a spherical model with static Blue Marble and Black Marble 2016. It is not a live photo and not the Cupola window.
 - The scene needs WebGL2. A browser without it shows `WebGL2 is unavailable` and this drive fails on the Horizon wait.
 - The preset is remembered only in the page session. A new browser starts on Horizon again.
+- The fixture element set is old, so the open card's first line is `Estimated view · orbit data old`. A current element set uses `ISS perspective` on that line. The drive still requires `Horizon locked` and `14 mm`.
 - G1 is not closed by this drive. Emulated WebKit is not a physical iPad Safari or iPhone Safari pass.
