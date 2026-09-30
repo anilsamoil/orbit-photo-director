@@ -173,3 +173,24 @@ export function liveIssPositionSGP4(
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   return { lat, lon: wrapLon(lon) };
 }
+
+export type IssViewFix = { lat: number; lon: number; alt_km: number };
+
+export type IssViewSample =
+  | { ok: true; now: IssViewFix; before: IssViewFix; after: IssViewFix }
+  | { ok: false; reason: 'missing' | 'malformed' | 'stale' };
+
+export function sampleIssViewOrbit(track: Track, whenMs: number): IssViewSample {
+  const before = propagateIssDetailed(track, whenMs - 500);
+  const now = propagateIssDetailed(track, whenMs);
+  const after = propagateIssDetailed(track, whenMs + 500);
+  if (!before.ok) return before;
+  if (!now.ok) return now;
+  if (!after.ok) return after;
+  return {
+    ok: true,
+    before: { lat: before.lat, lon: before.lon, alt_km: before.alt_km },
+    now: { lat: now.lat, lon: now.lon, alt_km: now.alt_km },
+    after: { lat: after.lat, lon: after.lon, alt_km: after.alt_km },
+  };
+}

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { _resetSatrecCacheForTests, liveIssPositionSGP4, parseTLE } from '../src/iss-sgp4';
-import { liveIssPosition } from '../src/iss';
+import { _resetSatrecCacheForTests, issPositionWithAltSGP4, liveIssPositionSGP4, parseTLE, sampleIssViewOrbit } from '../src/iss-sgp4';
+import { liveIssNow, liveIssPosition } from '../src/iss';
 import type { Track } from '../src/types';
 
 import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
@@ -134,5 +134,33 @@ describe('liveIssPositionSGP4', () => {
     );
     expect(past).not.toBeNull();
     expect(Math.abs(past!.lat)).toBeLessThan(53);
+  });
+});
+
+describe('sampleIssViewOrbit', () => {
+  it('returns the same fix propagate already publishes, plus half-second neighbours', () => {
+    const track = buildTrack();
+    const when = startMs + 60_000;
+    const sample = sampleIssViewOrbit(track, when);
+    const now = issPositionWithAltSGP4(track, when);
+    const before = issPositionWithAltSGP4(track, when - 500);
+    const after = issPositionWithAltSGP4(track, when + 500);
+    const live = liveIssNow(track, when);
+    expect(sample.ok).toBe(true);
+    expect(now).not.toBeNull();
+    expect(before).not.toBeNull();
+    expect(after).not.toBeNull();
+    expect(live).not.toBeNull();
+    if (!sample.ok || !now || !before || !after || !live) return;
+    expect(sample.now).toEqual(now);
+    expect(sample.before).toEqual(before);
+    expect(sample.after).toEqual(after);
+    expect(live).toEqual({ lat: now.lat, lon: now.lon });
+    expect(sample.now).not.toEqual(sample.before);
+  });
+
+  it('reports a missing element set without inventing a position', () => {
+    const sample = sampleIssViewOrbit(buildTrack({ tle: undefined }), startMs);
+    expect(sample).toEqual({ ok: false, reason: 'missing' });
   });
 });

@@ -11,6 +11,8 @@
  *   swallows errors, no-op on empty pass list
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import {
   GIBS_MAX_ZOOM,
@@ -21,10 +23,14 @@ import {
   buildPrecacheUrls,
   buildWorldBaseUrls,
   buildWorldOverlayUrls,
+  buildIssStaticUrls,
   fillTileUrl,
+  gibsBlackMarbleUrl,
+  gibsBlueMarbleUrl,
   gibsTrueColorUrl,
   lonLatToTile,
   precacheTilesForTargets,
+  precacheIssStaticTiles,
   precacheWorldBaseTiles,
 } from '../src/tile-precache';
 import type { PassEntry } from '../src/types';
@@ -388,5 +394,39 @@ describe('precacheTilesForTargets', () => {
     resolveAll();
     await Promise.resolve();
     await Promise.resolve();
+  });
+});
+
+describe('ISS static marbles', () => {
+  it('uses the Level8 JPEG and 2016 PNG templates', () => {
+    expect(gibsBlueMarbleUrl()).toBe(
+      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_NextGeneration/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg',
+    );
+    expect(gibsBlackMarbleUrl('2016-01-01')).toBe(
+      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png',
+    );
+    expect(gibsBlueMarbleUrl()).not.toContain('.jpg');
+    expect(buildWorldOverlayUrls().some((url) => url.includes('BlueMarble'))).toBe(false);
+  });
+
+  it('builds a bounded pyramid and skips the fetch while offline', () => {
+    const urls = buildIssStaticUrls(1);
+    expect(urls).toHaveLength(10);
+    expect(urls[0]).toBe(fillTileUrl(gibsBlueMarbleUrl(), 0, 0, 0));
+    expect(urls[1]).toContain('VIIRS_Black_Marble/default/2016-01-01');
+    expect(buildIssStaticUrls(3)).toHaveLength(170);
+    const fetchSpy = vi.fn().mockImplementation(() => Promise.resolve(new Response('', { status: 200 })));
+    vi.stubGlobal('fetch', fetchSpy);
+    _resetPrecacheInflightForTest();
+    precacheIssStaticTiles(() => false, 1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    precacheIssStaticTiles(() => true, 0);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+    const vite = readFileSync(resolve(__dirname, '../vite.config.ts'), 'utf8');
+    const issCache = vite.indexOf("cacheName: 'opd-tiles-iss-static'");
+    const shared = vite.indexOf("cacheName: 'opd-tiles-gibs-base'");
+    expect(issCache).toBeGreaterThan(0);
+    expect(issCache).toBeLessThan(shared);
   });
 });

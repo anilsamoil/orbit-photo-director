@@ -25,6 +25,7 @@
  *      city / region" → "specific terrain features" zoom progression.
  */
 
+import { BLACK_MARBLE_2016_TEMPLATE, BLUE_MARBLE_TEMPLATE } from './iss-g1/lighting';
 import type { PassEntry } from './types';
 
 /** GIBS true-color tile URL pattern. {date} is replaced per render.
@@ -40,6 +41,10 @@ export function gibsTrueColorUrl(dateIso: string): string {
 export function yesterdayIso(): string {
   const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
   return d.toISOString().slice(0, 10);
+}
+
+export function gibsBlueMarbleUrl(): string {
+  return BLUE_MARBLE_TEMPLATE;
 }
 
 /** VIIRS Black Marble annual night-lights composite (v2 — Chris feedback
@@ -357,6 +362,28 @@ export function precacheWorldBaseTiles(
   // Default carto basemap + the switchable Esri/clouds/night-lights layers, so
   // the world view renders offline whichever layers the operator turns on.
   fireAndForgetPrecache([...buildWorldBaseUrls(), ...buildWorldOverlayUrls()]);
+}
+
+export function buildIssStaticUrls(maxZoom: number): string[] {
+  const urls: string[] = [];
+  for (let z = 0; z <= maxZoom; z += 1) {
+    const n = 2 ** z;
+    for (let x = 0; x < n; x += 1) {
+      for (let y = 0; y < n; y += 1) {
+        urls.push(fillTileUrl(BLUE_MARBLE_TEMPLATE, z, x, y));
+        urls.push(fillTileUrl(BLACK_MARBLE_2016_TEMPLATE, z, x, y));
+      }
+    }
+  }
+  return urls;
+}
+
+export function precacheIssStaticTiles(
+  isOnlineFn: () => boolean = () => navigator.onLine,
+  maxZoom = 3,
+): void {
+  if (!isOnlineFn()) return;
+  fireAndForgetPrecache(buildIssStaticUrls(maxZoom));
 }
 
 /** Test-only: clear in-flight tracking between vitest runs. */

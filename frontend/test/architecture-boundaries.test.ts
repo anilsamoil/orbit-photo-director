@@ -49,6 +49,7 @@ function isVendor(specifier: string): boolean {
 
 const ADAPTER_DIR = 'map/adapters/maplibre/';
 const COMPOSITION_ROOT = 'map/index.ts';
+const ISS_ROOT = 'iss-view/index.ts';
 
 /** Only the adapter names `maplibre-gl`. Everything else reaches the map
  *  through domain types, which is what keeps the 800 KB vendor chunk
@@ -67,11 +68,30 @@ export function vendorImportViolations(path: string, sourceText: string): string
 /** An adapter is wired in once, by the composition root. A feature or
  *  map-core module that imports one has reached past the facade to the
  *  vendor. */
+function isIssRendererSpecifier(specifier: string): boolean {
+  return /(?:^|\/)adapters\/maplibre\/iss-view$/.test(specifier);
+}
+
 export function adapterImportViolations(path: string, sourceText: string): string[] {
   if (path === COMPOSITION_ROOT || path.startsWith(ADAPTER_DIR)) return [];
   return importsOf(sourceText)
     .filter((entry) => /(^|\/)adapters\//.test(entry.specifier))
+    .filter((entry) => path !== ISS_ROOT || !isIssRendererSpecifier(entry.specifier))
     .map((entry) => `${path} imports ${entry.specifier}`);
+}
+
+function isIssEntry(specifier: string): boolean {
+  return specifier === './iss-view'
+    || specifier === './iss-view/index'
+    || specifier === '../iss-view'
+    || specifier === '../iss-view/index';
+}
+
+export function eagerIssImportViolations(path: string, sourceText: string): string[] {
+  if (path.startsWith('iss-view/')) return [];
+  return importsOf(sourceText)
+    .filter((entry) => !entry.dynamic && isIssEntry(entry.specifier))
+    .map((entry) => `${path} statically imports ${entry.specifier}`);
 }
 
 function isMapEntry(specifier: string): boolean {
@@ -350,8 +370,13 @@ describe('import boundaries in frontend/src', () => {
     expect(adapter.some((file) => importsOf(file.text).some((entry) => isVendor(entry.specifier)))).toBe(true);
   });
 
-  it('adapters are imported only by the composition root', () => {
+  it('adapters are imported only by the composition root or the ISS scene root', () => {
     const violations = files.flatMap((file) => adapterImportViolations(file.path, file.text));
+    expect(violations).toEqual([]);
+  });
+
+  it('nothing statically imports the ISS scene', () => {
+    const violations = files.flatMap((file) => eagerIssImportViolations(file.path, file.text));
     expect(violations).toEqual([]);
   });
 
@@ -500,6 +525,20 @@ describe('the boundary rules can fail', () => {
       'map.ts imports ./map/adapters/maplibre/viirs-alpha',
     ]);
     expect(adapterImportViolations('map/adapters/maplibre/index.ts', "import { x } from './viirs-alpha';")).toEqual([]);
+    expect(adapterImportViolations('iss-view/index.ts', "import { createIssRenderer } from '../map/adapters/maplibre/iss-view';")).toEqual([]);
+    expect(adapterImportViolations('iss-view/index.ts', "import { createVendorMap } from '../map/adapters/maplibre';")).toEqual([
+      'iss-view/index.ts imports ../map/adapters/maplibre',
+    ]);
+    expect(adapterImportViolations('iss-view/model.ts', "import { createIssRenderer } from '../map/adapters/maplibre/iss-view';")).toEqual([
+      'iss-view/model.ts imports ../map/adapters/maplibre/iss-view',
+    ]);
+  });
+
+  it('flags a static import of the ISS scene and allows a dynamic one', () => {
+    expect(eagerIssImportViolations('main.ts', "import { mountIssScene } from './iss-view';")).toEqual([
+      'main.ts statically imports ./iss-view',
+    ]);
+    expect(eagerIssImportViolations('main.ts', "const scene = await import('./iss-view');")).toEqual([]);
   });
 
   it('flags a static import of the map entry', () => {
