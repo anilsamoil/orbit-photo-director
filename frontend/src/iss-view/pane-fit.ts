@@ -21,7 +21,6 @@ export type PaneFit = {
   bodyMaxPx: number | null;
 };
 
-/** Stage height is reserved for the side labels before the telemetry body scrolls. */
 export function fitIssPane(measure: PaneMeasure): PaneFit {
   const contentW = Math.max(1, measure.paneWidthPx - measure.padXPx - measure.sideWidthPx);
   const room = measure.paneHeightPx - measure.padYPx - measure.toolbarPx - measure.buttonPx - measure.gapPx * 2;

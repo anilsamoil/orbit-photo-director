@@ -1506,7 +1506,7 @@ async function driveIss(send, evidenceDir, viewport) {
     'iss telemetry collapsed again',
     10000,
   );
-  const zoomed = await proveIssOpticalFov(send);
+  const zoomed = await proveIssOpticalFov(send, evidenceDir);
   await proveIssLandscape(send, evidenceDir);
   const fovAfterLandscape = await evaluate(send, `window.__opdIss?.getVerticalFieldOfView?.()`);
   if (typeof fovAfterLandscape !== 'number' || Math.abs(fovAfterLandscape - zoomed) > 0.5) {
@@ -1567,7 +1567,7 @@ async function driveIss(send, evidenceDir, viewport) {
   return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}° (${String(horizon.text).slice(0, 80)})`;
 }
 
-async function proveIssOpticalFov(send) {
+async function proveIssOpticalFov(send, evidenceDir) {
   const before = await evaluate(send, `(() => {
     const map = window.__opdIss;
     const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
@@ -1581,6 +1581,7 @@ async function proveIssOpticalFov(send) {
     };
   })()`);
   if (!before) throw new Error('iss fov baseline missing');
+  await shot(send, evidenceDir, 'iss-fov-before');
   await send('Input.dispatchMouseEvent', {
     type: 'mouseWheel',
     x: before.x,
@@ -1618,6 +1619,7 @@ async function proveIssOpticalFov(send) {
     throw new Error(`iss fov reset after tick ${JSON.stringify({ before, narrowed, held })}`);
   }
   if (Math.abs(held.roll - 180) > 0.5) throw new Error(`iss roll after fov ${held.roll}`);
+  await shot(send, evidenceDir, 'iss-fov-after');
   return held.fov;
 }
 

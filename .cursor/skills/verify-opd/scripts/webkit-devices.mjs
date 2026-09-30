@@ -95,7 +95,25 @@ export function playwrightSend(page) {
       const button = params.button || 'left';
       await page.mouse.move(params.x, params.y);
       if (params.type === 'mouseWheel') {
-        await page.mouse.wheel(params.deltaX || 0, params.deltaY || 0);
+        const deltaX = params.deltaX || 0;
+        const deltaY = params.deltaY || 0;
+        try {
+          await page.mouse.wheel(deltaX, deltaY);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/not supported/i.test(message)) throw error;
+          await page.evaluate(({ x, y, wheelX, wheelY }) => {
+            const target = document.elementFromPoint(x, y) || document.body;
+            target.dispatchEvent(new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              clientX: x,
+              clientY: y,
+              deltaX: wheelX,
+              deltaY: wheelY,
+            }));
+          }, { x: params.x, y: params.y, wheelX: deltaX, wheelY: deltaY });
+        }
         return {};
       }
       if (params.type === 'mousePressed') await page.mouse.down({ button, clickCount: params.clickCount || 1 });
