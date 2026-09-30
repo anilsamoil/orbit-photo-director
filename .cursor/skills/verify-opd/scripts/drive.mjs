@@ -1425,12 +1425,54 @@ async function driveIss(send, evidenceDir) {
       const starboardHitsGlobe = starboardBox.bottom > frame.top + 8 && starboardBox.top < frame.bottom - 8 && starboardBox.left < frame.right - 8;
       if (portHitsGlobe || starboardHitsGlobe) return null;
       if (Math.abs((portBox.top + portBox.height / 2) - globeMid) > frame.height / 2) return null;
+      const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
+      const scene = document.querySelector('[data-iss-scene]');
+      if (!hostBox || !scene) return null;
+      if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+      const within = (box) => box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
+      if (!within(frame) || !within(card) || !within(portBox) || !within(starboardBox)) return null;
+      const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
+      for (let i = 0; i < places.length; i += 1) {
+        for (let j = i + 1; j < places.length; j += 1) {
+          const a = places[i];
+          const b = places[j];
+          if (a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5) return null;
+        }
+      }
       return { ok: true, text };
     })()`,
     'iss horizon',
     45000,
   );
   await shot(send, evidenceDir, 'iss-horizon');
+  await sleep(1100);
+  await waitFor(
+    send,
+    `(() => {
+      const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
+      const scene = document.querySelector('[data-iss-scene]');
+      const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+      const card = document.querySelector('[data-iss-card]')?.getBoundingClientRect();
+      const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
+      const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
+      if (!hostBox || !scene || !frame || !card || !port || !starboard) return null;
+      if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+      const within = (box) => box.width > 1 && box.height > 1 && box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
+      if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
+      const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
+      if (places.length < 1) return null;
+      for (let i = 0; i < places.length; i += 1) {
+        for (let j = i + 1; j < places.length; j += 1) {
+          const a = places[i];
+          const b = places[j];
+          if (a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5) return null;
+        }
+      }
+      return { ok: true, labels: places.length };
+    })()`,
+    'iss contained after render ticks',
+    10000,
+  );
   await click(send, '[data-iss-telemetry]');
   await waitFor(
     send,
@@ -1441,6 +1483,14 @@ async function driveIss(send, evidenceDir) {
       if (toggle?.getAttribute('aria-expanded') !== 'true' || !frame || !card) return null;
       const covers = card.left < frame.right - 1 && card.right > frame.left + 1 && card.top < frame.bottom - 1 && card.bottom > frame.top + 1;
       if (covers) return null;
+      const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
+      const scene = document.querySelector('[data-iss-scene]');
+      const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
+      const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
+      if (!hostBox || !scene || !port || !starboard) return null;
+      if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+      const within = (box) => box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
+      if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
       return { ok: true };
     })()`,
     'iss telemetry open stays off the earth',

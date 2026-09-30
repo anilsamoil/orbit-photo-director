@@ -272,8 +272,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       fail(status.textContent ?? 'Orbit unavailable');
       return;
     }
-    layout();
-    const fit = sceneFit(host.clientWidth || 640, host.clientHeight || 400);
+    const fit = layout();
     renderer.resize(fit.widthPx, fit.heightPx);
     try {
       await renderer.aim({
@@ -311,7 +310,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function setTelemetryOpen(open: boolean): void {
     telemetryBody.hidden = !open;
     telemetry.setAttribute('aria-expanded', open ? 'true' : 'false');
-    layout();
+    if (phase === 'running' && rendererReady) void paint();
+    else layout();
   }
 
   function writeCard(card: SceneCard): void {
@@ -323,15 +323,18 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     utc.textContent = clock?.[2] ?? '';
   }
 
-  function layout(): void {
+  function layout(): { widthPx: number; heightPx: number; verticalFovDeg: number } {
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
-    if (width < 10 || height < 10) {
-      const fit = sceneFit(640, 400);
-      frame.style.width = `${fit.widthPx}px`;
-      frame.style.height = `${fit.heightPx}px`;
-      return;
-    }
+    const fit = width < 10 || height < 10 ? sceneFit(640, 400) : fitInPane(width, height);
+    const widthPx = Math.max(1, Math.floor(fit.widthPx));
+    const heightPx = Math.max(1, Math.floor(fit.heightPx));
+    frame.style.width = `${widthPx}px`;
+    frame.style.height = `${heightPx}px`;
+    return { widthPx, heightPx, verticalFovDeg: fit.verticalFovDeg };
+  }
+
+  function fitInPane(width: number, height: number): { widthPx: number; heightPx: number; verticalFovDeg: number } {
     const style = getComputedStyle(root);
     const padX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
     const padY = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
@@ -340,9 +343,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const stageStyle = getComputedStyle(stage);
     const stageGap = Number.parseFloat(stageStyle.columnGap || stageStyle.gap) || 0;
     const sides = port.offsetWidth + starboard.offsetWidth + stageGap * 2;
-    const fit = sceneFit(Math.max(160, width - padX - sides), Math.max(160, height - padY - chrome));
-    frame.style.width = `${fit.widthPx}px`;
-    frame.style.height = `${fit.heightPx}px`;
+    return sceneFit(Math.max(1, width - padX - sides), Math.max(1, height - padY - chrome));
   }
 
   function syncPreset(): void {
