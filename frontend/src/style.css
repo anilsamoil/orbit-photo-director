@@ -3089,15 +3089,36 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 [data-iss-scene] {
   position: absolute;
   inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  box-sizing: border-box;
+  padding:
+    max(0.55rem, env(safe-area-inset-top))
+    max(0.75rem, env(safe-area-inset-right))
+    max(0.75rem, env(safe-area-inset-bottom))
+    max(0.75rem, env(safe-area-inset-left));
+  overflow: auto;
+}
+
+[data-iss-toolbar] {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.35rem;
+  z-index: 2;
 }
 
 [data-iss-presets] {
-  position: absolute;
-  top: max(0.65rem, env(safe-area-inset-top));
-  left: 50%;
-  transform: translateX(-50%);
+  position: static;
+  grid-column: 2;
+  transform: none;
   z-index: 2;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 0.35rem;
 }
 
@@ -3121,9 +3142,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 }
 
 [data-iss-utc] {
-  position: absolute;
-  top: max(0.65rem, env(safe-area-inset-top));
-  right: max(0.85rem, env(safe-area-inset-right));
+  position: static;
+  grid-column: 3;
+  justify-self: end;
   z-index: 2;
   margin: 0;
   min-height: 44px;
@@ -3138,23 +3159,117 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   display: none;
 }
 
+[data-iss-cupola] {
+  min-height: 44px;
+  min-width: 44px;
+  max-width: 16rem;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(20, 24, 33, 0.88);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+
+[data-iss-stage] {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-width: 0;
+}
+
+[data-iss-port],
+[data-iss-starboard] {
+  margin: 0;
+  flex: 0 0 auto;
+  max-width: 1.1rem;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1;
+  color: rgba(244, 247, 251, 0.62);
+  pointer-events: none;
+  user-select: none;
+}
+
 [data-iss-frame] {
-  position: absolute;
-  inset: 0;
-  margin: auto;
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0;
+  min-width: 0;
+}
+
+.iss-place {
+  pointer-events: none;
+  white-space: nowrap;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  color: #f7f4ea;
+  text-shadow:
+    0 0 2px #02040c,
+    0 0 6px #02040c,
+    0 1px 2px rgba(2, 4, 12, 0.95);
+  line-height: 1;
+}
+
+.iss-place-country {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.iss-place-city {
+  font-size: 12px;
+}
+
+.iss-place-water {
+  font-size: 12px;
+  font-style: italic;
+  color: #d7e7f6;
 }
 
 [data-iss-card] {
-  position: absolute;
-  left: max(0.75rem, env(safe-area-inset-left));
-  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  position: static;
+  align-self: flex-start;
   z-index: 2;
-  max-width: min(26rem, calc(100% - 1.5rem));
+  width: min(28rem, 100%);
+  max-width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: #f4f7fb;
+}
+
+[data-iss-telemetry] {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 0.95rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(20, 24, 33, 0.88);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+[data-iss-telemetry-body] {
+  margin-top: 0.35rem;
   background: rgba(12, 16, 24, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   padding: 0.7rem 0.9rem 0.45rem;
-  color: #f4f7fb;
+}
+
+[data-iss-telemetry-body][hidden] {
+  display: none;
 }
 
 [data-iss-status] {
@@ -3208,6 +3323,42 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 #iss-pane .maplibregl-ctrl-attrib-button {
   width: 44px;
   height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  color: transparent;
+  font-size: 0;
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: 24px 24px;
+}
+
+#iss-pane .maplibregl-ctrl-attrib summary.maplibregl-ctrl-attrib-button {
+  list-style: none;
+}
+
+#iss-pane .maplibregl-ctrl-attrib summary.maplibregl-ctrl-attrib-button::-webkit-details-marker {
+  display: none;
+}
+
+#iss-pane .maplibregl-ctrl-attrib summary.maplibregl-ctrl-attrib-button::marker {
+  content: '';
+}
+
+#iss-pane .maplibregl-ctrl-attrib.maplibregl-compact::before,
+#iss-pane .maplibregl-ctrl-attrib.maplibregl-compact::after {
+  content: none;
+  display: none;
+  background: none;
+}
+
+#iss-pane .maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  max-height: 44px;
+  overflow: hidden;
 }
 
 @media (max-width: 720px) {
@@ -3215,38 +3366,18 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
     overflow: auto;
   }
 
-  #iss-host,
-  [data-iss-scene] {
-    position: relative;
-    min-height: 100%;
-  }
-
-  [data-iss-scene] {
+  [data-iss-toolbar] {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 0.5rem 0.75rem 1rem;
   }
 
-  [data-iss-presets],
-  [data-iss-utc],
-  [data-iss-frame],
-  [data-iss-card] {
-    position: static;
-    transform: none;
-    inset: auto;
+  [data-iss-presets] {
+    grid-column: auto;
   }
 
   [data-iss-utc] {
     align-self: flex-end;
-  }
-
-  [data-iss-frame] {
-    margin: 0.6rem 0;
-  }
-
-  [data-iss-card] {
-    width: min(100%, 28rem);
-    max-width: 100%;
+    grid-column: auto;
   }
 }

@@ -1,11 +1,14 @@
 import './worker-url';
-import { LngLat, Map, addProtocol, type Map as MapLibreMap } from 'maplibre-gl';
+import { LngLat, Map, Marker, addProtocol, type Map as MapLibreMap } from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import type { SkySpecification } from '@maplibre/maplibre-gl-style-spec';
 
 import { TANGENT_PITCH_DEG } from '../../../iss-g1/model';
 import { bucketFor, createComposer, type Composer, type DecodedTile } from '../../../iss-view/compose';
 import type { ImageryState } from '../../../iss-view/model';
+import { PLACE_LABELS } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
+import { collapseAttribution } from './attribution';
 
 export const ISS_VIEW_MAX_PITCH_DEG = TANGENT_PITCH_DEG;
 
@@ -55,6 +58,12 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
     throw error;
   }
   map.setMaxPitch(ISS_VIEW_MAX_PITCH_DEG);
+  collapseAttribution(frame);
+  exposeIssForEndToEnd(map);
+  const placeMarkers: Marker[] = [];
+  const armLabels = (): void => ensurePlaceLabels(map, frame, placeMarkers);
+  if (map.loaded()) armLabels();
+  else map.once('load', armLabels);
   map.on('error', (event) => {
     const note = imageryNote(event.error);
     if (note) hooks.onImagery(note);
@@ -63,6 +72,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
     hooks.onContextLost();
   });
   const removed = { done: false };
+  let litTiles = '';
 
   return {
     ready() {
@@ -80,14 +90,17 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
       map.setMaxPitch(ISS_VIEW_MAX_PITCH_DEG);
       map.setVerticalFieldOfView(aim.verticalFovDeg);
       const bucket = bucketFor(aim.lightingUtcMs);
-      const tiles = [`${PROTOCOL}://lit/${bucket}/{z}/{y}/{x}`];
+      const tile = `${PROTOCOL}://lit/${bucket}/{z}/{y}/{x}`;
       const existing = map.getSource('iss-lit');
       if (existing && 'setTiles' in existing && typeof existing.setTiles === 'function') {
-        existing.setTiles(tiles);
+        if (litTiles !== tile) {
+          existing.setTiles([tile]);
+          litTiles = tile;
+        }
       } else if (!existing) {
         map.addSource('iss-lit', {
           type: 'raster',
-          tiles,
+          tiles: [tile],
           tileSize: 256,
           maxzoom: LIT_MAX_ZOOM,
           attribution: 'NASA Blue Marble Next Generation and VIIRS Black Marble 2016',
@@ -98,6 +111,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
           source: 'iss-lit',
           paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 },
         });
+        litTiles = tile;
       }
       const solved = map.calculateCameraOptionsFromTo(
         new LngLat(aim.pose.camera.lonDeg, aim.pose.camera.latDeg),
@@ -111,9 +125,31 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
     destroy() {
       if (removed.done) return;
       removed.done = true;
+      for (const marker of placeMarkers) marker.remove();
+      placeMarkers.length = 0;
       map.remove();
     },
   };
+}
+
+function exposeIssForEndToEnd(map: MapLibreMap): void {
+  if (typeof window === 'undefined') return;
+  if (!new URLSearchParams(window.location.search).has('e2e')) return;
+  (window as unknown as { __opdIss?: MapLibreMap }).__opdIss = map;
+}
+
+function ensurePlaceLabels(map: MapLibreMap, frame: HTMLElement, markers: Marker[]): void {
+  frame.dataset.issPlaceLayers = 'country city water';
+  if (markers.length > 0) return;
+  for (const place of PLACE_LABELS) {
+    const label = document.createElement('span');
+    label.className = `iss-place iss-place-${place.kind}`;
+    label.textContent = place.name;
+    const marker = new Marker({ element: label, anchor: 'center', opacityWhenCovered: 0 })
+      .setLngLat([place.lon, place.lat])
+      .addTo(map);
+    markers.push(marker);
+  }
 }
 
 function registerProtocol(): void {

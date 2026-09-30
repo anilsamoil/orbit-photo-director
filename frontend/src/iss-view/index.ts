@@ -1,4 +1,5 @@
 import { createIssRenderer } from '../map/adapters/maplibre/iss-view';
+import { CUPOLA_WINDOWS, cupolaPreset } from './cupola';
 import {
   groundLightAt,
   sceneCard,
@@ -64,13 +65,45 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   presets.setAttribute('aria-label', 'Camera');
   const horizon = presetButton('horizon', 'Horizon');
   const nadir = presetButton('nadir', 'Straight down');
-  presets.append(horizon, nadir);
+  const cupola = document.createElement('select');
+  cupola.dataset.issCupola = '';
+  cupola.setAttribute('aria-label', 'Cupola window');
+  const cupolaPlaceholder = document.createElement('option');
+  cupolaPlaceholder.value = '';
+  cupolaPlaceholder.textContent = 'Cupola window';
+  cupola.append(cupolaPlaceholder);
+  for (const entry of CUPOLA_WINDOWS) {
+    const option = document.createElement('option');
+    option.value = String(entry.id);
+    option.textContent = entry.label;
+    option.disabled = entry.preset === null;
+    cupola.append(option);
+  }
+  presets.append(horizon, nadir, cupola);
   const utc = document.createElement('p');
   utc.dataset.issUtc = '';
+  const toolbar = document.createElement('div');
+  toolbar.dataset.issToolbar = '';
+  toolbar.append(presets, utc);
   const frame = document.createElement('div');
   frame.dataset.issFrame = '';
+  const stage = document.createElement('div');
+  stage.dataset.issStage = '';
+  const port = sideLabel('issPort', 'Port');
+  const starboard = sideLabel('issStarboard', 'Starboard');
+  stage.append(port, frame, starboard);
   const card = document.createElement('article');
   card.dataset.issCard = '';
+  const telemetry = document.createElement('button');
+  telemetry.type = 'button';
+  telemetry.dataset.issTelemetry = '';
+  telemetry.textContent = 'Telemetry';
+  telemetry.setAttribute('aria-expanded', 'false');
+  telemetry.setAttribute('aria-controls', 'iss-telemetry-body');
+  const telemetryBody = document.createElement('div');
+  telemetryBody.id = 'iss-telemetry-body';
+  telemetryBody.dataset.issTelemetryBody = '';
+  telemetryBody.hidden = true;
   const status = document.createElement('p');
   status.dataset.issStatus = '';
   status.textContent = 'Loading ISS view';
@@ -95,14 +128,27 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const summary = document.createElement('summary');
   summary.textContent = 'Details';
   details.append(summary, detail);
-  card.append(status, actions, details);
-  root.append(presets, utc, frame, card);
+  telemetryBody.append(status, actions, details);
+  card.append(telemetry, telemetryBody);
+  root.append(toolbar, stage, card);
   host.append(root);
   syncPreset();
+  syncCupola();
   layout();
 
   horizon.addEventListener('click', () => choose('horizon'));
   nadir.addEventListener('click', () => choose('nadir'));
+  cupola.addEventListener('change', () => {
+    const preset = cupolaPreset(Number(cupola.value));
+    if (preset === null) {
+      syncCupola();
+      return;
+    }
+    choose(preset);
+  });
+  telemetry.addEventListener('click', () => {
+    setTelemetryOpen(telemetryBody.hidden);
+  });
   retry.addEventListener('click', () => scene.retry());
   mapButton.addEventListener('click', () => options.onMap?.());
   document.addEventListener('visibilitychange', onVisibility);
@@ -248,6 +294,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function choose(mode: CameraMode): void {
     session.mode = mode;
     syncPreset();
+    syncCupola();
     if (phase === 'running') void paint();
   }
 
@@ -257,7 +304,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     status.textContent = reason;
     retry.hidden = false;
     mapButton.hidden = false;
+    setTelemetryOpen(true);
     stopTimer();
+  }
+
+  function setTelemetryOpen(open: boolean): void {
+    telemetryBody.hidden = !open;
+    telemetry.setAttribute('aria-expanded', open ? 'true' : 'false');
+    layout();
   }
 
   function writeCard(card: SceneCard): void {
@@ -270,7 +324,23 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function layout(): void {
-    const fit = sceneFit(host.clientWidth || 640, host.clientHeight || 400);
+    const width = root.clientWidth || host.clientWidth || 640;
+    const height = root.clientHeight || host.clientHeight || 400;
+    if (width < 10 || height < 10) {
+      const fit = sceneFit(640, 400);
+      frame.style.width = `${fit.widthPx}px`;
+      frame.style.height = `${fit.heightPx}px`;
+      return;
+    }
+    const style = getComputedStyle(root);
+    const padX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+    const padY = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+    const gap = Number.parseFloat(style.rowGap || style.gap) || 0;
+    const chrome = toolbar.offsetHeight + card.offsetHeight + gap * 2;
+    const stageStyle = getComputedStyle(stage);
+    const stageGap = Number.parseFloat(stageStyle.columnGap || stageStyle.gap) || 0;
+    const sides = port.offsetWidth + starboard.offsetWidth + stageGap * 2;
+    const fit = sceneFit(Math.max(160, width - padX - sides), Math.max(160, height - padY - chrome));
     frame.style.width = `${fit.widthPx}px`;
     frame.style.height = `${fit.heightPx}px`;
   }
@@ -278,6 +348,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function syncPreset(): void {
     horizon.setAttribute('aria-pressed', session.mode === 'horizon' ? 'true' : 'false');
     nadir.setAttribute('aria-pressed', session.mode === 'nadir' ? 'true' : 'false');
+  }
+
+  function syncCupola(): void {
+    cupola.value = session.mode === 'nadir' ? '7' : '';
   }
 
   function setPhase(next: IssScenePhase): void {
@@ -307,6 +381,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     window.clearInterval(timer);
     timer = 0;
   }
+}
+
+function sideLabel(name: 'issPort' | 'issStarboard', text: string): HTMLParagraphElement {
+  const label = document.createElement('p');
+  label.dataset[name] = '';
+  label.textContent = text;
+  return label;
 }
 
 function presetButton(mode: CameraMode, label: string): HTMLButtonElement {

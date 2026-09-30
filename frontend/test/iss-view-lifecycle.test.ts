@@ -226,5 +226,46 @@ describe('ISS renderer pitch stays off the product map', () => {
     expect(product).not.toContain('maxPitch');
     expect(scene).toContain('maxPitch: ISS_VIEW_MAX_PITCH_DEG');
     expect(scene).toContain("type: 'vertical-perspective'");
+    expect(scene).toContain('ensurePlaceLabels');
+    expect(scene).toContain('iss-place-');
+    expect(scene).toContain('collapseAttribution');
+  });
+});
+
+describe('ISS chrome starts out of the way', () => {
+  it('opens with telemetry collapsed and window 7 as the only cupola aim', async () => {
+    const host = document.createElement('div');
+    const fake = fakeRenderer();
+    const scene = mount(host, fake.factory);
+    await ready(scene);
+    const toggle = host.querySelector('[data-iss-telemetry]');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(host.querySelector('[data-iss-telemetry-body]')?.hasAttribute('hidden')).toBe(true);
+    const cupola = host.querySelector('[data-iss-cupola]') as HTMLSelectElement;
+    const disabled = [...cupola.options].filter((option) => option.disabled).map((option) => option.value);
+    expect(disabled).toEqual(['1', '2', '3', '4', '5', '6']);
+    expect(cupola.querySelector('option[value="1"]')?.textContent).toBe('Window 1 · Port · Coming soon');
+    expect(cupola.querySelector('option[value="2"]')?.textContent).toBe('Window 2 · Forward port · Coming soon');
+    expect(cupola.querySelector('option[value="3"]')?.textContent).toBe('Window 3 · Forward starboard · Coming soon');
+    expect(cupola.querySelector('option[value="4"]')?.textContent).toBe('Window 4 · Starboard · Coming soon');
+    expect(cupola.querySelector('option[value="5"]')?.textContent).toBe('Window 5 · Aft starboard · Coming soon');
+    expect(cupola.querySelector('option[value="6"]')?.textContent).toBe('Window 6 · Aft port · Coming soon');
+    expect(cupola.querySelector('option[value="7"]')?.textContent).toBe('Window 7 · Nadir');
+    expect(cupola.querySelector('option[value="7"]')?.hasAttribute('disabled')).toBe(false);
+    expect(host.querySelector('[data-iss-port]')?.textContent).toBe('Port');
+    expect(host.querySelector('[data-iss-starboard]')?.textContent).toBe('Starboard');
+    const stage = host.querySelector('[data-iss-stage]');
+    expect(stage?.children[0]).toBe(host.querySelector('[data-iss-port]'));
+    expect(stage?.children[1]).toBe(host.querySelector('[data-iss-frame]'));
+    expect(stage?.children[2]).toBe(host.querySelector('[data-iss-starboard]'));
+    scene.update(shot('m1'));
+    await ready(scene);
+    cupola.value = '7';
+    cupola.dispatchEvent(new Event('change'));
+    expect(scene.mode()).toBe('nadir');
+    expect(host.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed')).toBe('true');
+    (host.querySelector('[data-iss-preset="horizon"]') as HTMLElement).click();
+    expect(scene.mode()).toBe('horizon');
+    expect(cupola.value).toBe('');
   });
 });
