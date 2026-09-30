@@ -1,7 +1,6 @@
 import { RENDER_RADIUS_M } from '../iss-g1/model';
 import { GROUND_SHAPES, type GroundShape } from './place-shapes';
 
-/** A name drawn on the ISS scene. */
 export type PlaceKind = 'country' | 'city' | 'water';
 
 export type PlaceLabel = {
@@ -11,7 +10,6 @@ export type PlaceLabel = {
   lat: number;
 };
 
-/** Megacities from Natural Earth scalerank 0. */
 export const PLACE_CITIES: readonly PlaceLabel[] = [
   { kind: 'city', name: 'Beijing', lon: 116.39, lat: 39.9 },
   { kind: 'city', name: 'Bogota', lon: -74.09, lat: 4.6 },

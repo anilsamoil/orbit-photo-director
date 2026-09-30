@@ -1,10 +1,5 @@
 import type { CameraMode } from './model';
 
-/** The cupola plate, looking Earthward, puts port at 12 o'clock and
- *  starboard opposite. Forward sits between windows 2 and 3. Aft sits
- *  between windows 5 and 6. Window 7 is the center nadir pane.
- *  Side windows have no camera preset. The plate does not supply a
- *  clock-to-body azimuth. */
 export type CupolaWindow = {
   id: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   label: string;
