@@ -6,6 +6,7 @@ import type { SkySpecification } from '@maplibre/maplibre-gl-style-spec';
 import { TANGENT_PITCH_DEG } from '../../../iss-g1/model';
 import { bucketFor, createComposer, type Composer, type DecodedTile } from '../../../iss-view/compose';
 import type { ImageryState } from '../../../iss-view/model';
+import { placeScreenLabels } from '../../../iss-view/label-layout';
 import { placesOnDisk, type PlaceLabel } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
 import { collapseAttribution } from './attribution';
@@ -152,7 +153,7 @@ function syncPlaceMarkers(map: MapLibreMap, markers: { key: string; marker: Mark
     aim.pose.bearingDeg,
     aim.pose.analyticPitchDeg,
   );
-  const chosen: { key: string; place: PlaceLabel; score: number }[] = [];
+  const chosen: { key: string; place: PlaceLabel; score: number; x: number; y: number }[] = [];
   for (const place of candidates) {
     const projected = map.project([place.lon, place.lat]);
     if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
@@ -160,32 +161,61 @@ function syncPlaceMarkers(map: MapLibreMap, markers: { key: string; marker: Mark
     const score = (projected.x - width / 2) ** 2 + (projected.y - height / 2) ** 2;
     const key = `${place.kind}:${place.name}`;
     const current = chosen.find((entry) => entry.key === key);
-    if (!current) chosen.push({ key, place, score });
+    if (!current) chosen.push({ key, place, score, x: projected.x, y: projected.y });
     else if (score < current.score) {
       current.place = place;
       current.score = score;
+      current.x = projected.x;
+      current.y = projected.y;
     }
   }
+  const placed = placeScreenLabels(
+    chosen.map((entry) => {
+      const size = measurePlace(map.getContainer(), entry.place);
+      return { kind: entry.place.kind, name: entry.place.name, x: entry.x, y: entry.y, width: size.width, height: size.height };
+    }),
+    { width, height },
+  );
+  const placedKeys = new Set(placed.map((label) => `${label.kind}:${label.name}`));
   for (let index = markers.length - 1; index >= 0; index -= 1) {
     const entry = markers[index];
-    if (!entry || chosen.some((item) => item.key === entry.key)) continue;
+    if (!entry || placedKeys.has(entry.key)) continue;
     entry.marker.remove();
     markers.splice(index, 1);
   }
-  for (const entry of chosen) {
-    const existing = markers.find((item) => item.key === entry.key);
+  for (const label of placed) {
+    const key = `${label.kind}:${label.name}`;
+    const entry = chosen.find((item) => item.key === key);
+    if (!entry) continue;
+    const existing = markers.find((item) => item.key === key);
     if (existing) {
       existing.marker.setLngLat([entry.place.lon, entry.place.lat]);
+      existing.marker.setOffset([label.offsetX, label.offsetY]);
       continue;
     }
-    const label = document.createElement('span');
-    label.className = `iss-place iss-place-${entry.place.kind}`;
-    label.textContent = entry.place.name;
+    const node = document.createElement('span');
+    node.className = `iss-place iss-place-${entry.place.kind}`;
+    node.textContent = entry.place.name;
     markers.push({
-      key: entry.key,
-      marker: new Marker({ element: label, anchor: 'top' }).setLngLat([entry.place.lon, entry.place.lat]).addTo(map),
+      key,
+      marker: new Marker({ element: node, anchor: 'top', offset: [label.offsetX, label.offsetY] })
+        .setLngLat([entry.place.lon, entry.place.lat])
+        .addTo(map),
     });
   }
+}
+
+function measurePlace(host: HTMLElement, place: PlaceLabel): { width: number; height: number } {
+  const label = document.createElement('span');
+  label.className = `iss-place iss-place-${place.kind}`;
+  label.textContent = place.name;
+  label.style.position = 'absolute';
+  label.style.visibility = 'hidden';
+  host.append(label);
+  const width = label.offsetWidth;
+  const height = label.offsetHeight;
+  label.remove();
+  return { width, height };
 }
 
 function registerProtocol(): void {
