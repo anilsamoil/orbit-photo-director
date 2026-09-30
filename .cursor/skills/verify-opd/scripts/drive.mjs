@@ -1776,9 +1776,22 @@ async function drivePhone(send, evidenceDir, meta, home) {
   }
   const finger = touchPoint(point.x, point.y);
   await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [finger] });
-  await sleep(560);
-  const held = await evaluate(send, `document.querySelector('.maplibregl-popup')?.innerText.includes('Closest') ? true : document.body.innerText.slice(0, 80)`);
-  if (held !== true) throw new Error(`long press did not open a pass popup: ${JSON.stringify(held)}`);
+  await waitFor(
+    send,
+    `(() => {
+      const popup = document.querySelector('.maplibregl-popup');
+      const text = popup?.innerText || '';
+      if (text.includes('Closest')) return { ok: true };
+      const hit = document.elementFromPoint(${finger.x}, ${finger.y});
+      return {
+        popup: text.slice(0, 120),
+        hit: hit ? (hit.id || String(hit.className) || hit.tagName) : null,
+        popups: document.querySelectorAll('.maplibregl-popup').length,
+      };
+    })()`,
+    'long press popup',
+    5000,
+  );
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [finger] });
   await sleep(80);
   await mouseClick(send, finger.x, finger.y);
