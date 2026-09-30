@@ -7,7 +7,11 @@ The tab immediately after Map opens a modeled view from the station. Horizon is 
 - `iss-tab` is `#tab-iss`, labeled `ISS view`, directly after `#tab-map`.
 - `iss-horizon` presses `[data-iss-preset="horizon"]` and the card says `Horizon locked`.
 - `iss-nadir` presses `[data-iss-preset="nadir"]`, labeled `Straight down`, and the card says `Nadir locked`.
-- `iss-card` shows `14 mm`, the cloud-free Blue Marble and Black Marble 2016 line, and a UTC clock.
+- `iss-card` starts collapsed. The toggle is `Telemetry`, `aria-expanded` is `false`, and the body is hidden. Opening it keeps the card off the Earth frame. The card shows `14 mm`, the cloud-free Blue Marble and Black Marble 2016 line, and a UTC clock.
+- `iss-credits` is one `.maplibregl-ctrl-attrib-button` inside the scene, without `maplibregl-compact-show`.
+- `iss-labels` sets `data-iss-place-layers` to `country city water` on the frame. The names are markers on the globe.
+- `iss-sides` puts `Port` on the left of the frame and `Starboard` on the right. Ground track forward stays at the top, so port is screen-left.
+- `iss-cupola` is `[data-iss-cupola]`. Window 7 is `Window 7 · Nadir` and selects Straight down. Windows 1 through 6 carry the plate names and stay disabled.
 - `iss-leave` returns to Map and Queue with no `[data-iss-scene]` left mounted. Opening ISS view again keeps Straight down for the session.
 
 ## How to get to it (user POV)
@@ -22,7 +26,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Horizon.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive iss`. The view class is `view-iss`. Horizon is pressed. The card contains `Horizon locked` and `14 mm`. `evidence/iss-horizon.png` is that frame.
+- **Horizon.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive iss`. The view class is `view-iss`. Horizon is pressed. The card contains `Horizon locked` and `14 mm`. Telemetry starts collapsed and does not cover the frame. One info button is collapsed. The frame lists country, city, and water labels. `Port` sits left of the frame and `Starboard` sits right of it. The Cupola select leaves windows 1 through 6 disabled, with Port on window 1 and Starboard on window 4. Window 7 reads `Window 7 · Nadir`. `evidence/iss-horizon.png` is that frame. Opening telemetry still leaves the card off the frame, then the drive collapses it again.
 - **Straight down.** The drive taps Straight down. The card contains `Nadir locked`. `evidence/iss-nadir.png` is that frame.
 - **Leave and return.** Map opens with the scene gone. Queue opens. ISS view opens again with Straight down still pressed. `evidence/iss-return.png` is that return.
 - **Proof.** Stdout starts with `iss:`.

@@ -1393,12 +1393,67 @@ async function driveIss(send, evidenceDir) {
       if (!pressed || pressed.getAttribute('aria-pressed') !== 'true') return null;
       if (!text.includes('Horizon locked')) return null;
       if (!text.includes('14 mm')) return null;
+      if (document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') !== 'false') return null;
+      const body = document.querySelector('[data-iss-telemetry-body]');
+      if (!body?.hasAttribute('hidden')) return null;
+      const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+      const card = document.querySelector('[data-iss-card]')?.getBoundingClientRect();
+      if (!frame || !card || frame.width < 40 || frame.height < 40) return null;
+      const covers = card.left < frame.right - 1 && card.right > frame.left + 1 && card.top < frame.bottom - 1 && card.bottom > frame.top + 1;
+      if (covers) return null;
+      const buttons = document.querySelectorAll('[data-iss-scene] .maplibregl-ctrl-attrib-button');
+      const attrib = document.querySelector('[data-iss-scene] .maplibregl-ctrl-attrib');
+      if (buttons.length !== 1 || !attrib || attrib.classList.contains('maplibregl-compact-show')) return null;
+      const layers = document.querySelector('[data-iss-place-layers]')?.getAttribute('data-iss-place-layers') || '';
+      if (!layers.includes('country') || !layers.includes('city') || !layers.includes('water')) return null;
+      const cupola = document.querySelector('[data-iss-cupola]');
+      if (!cupola) return null;
+      const soon = [...cupola.querySelectorAll('option')].filter((option) => option.disabled && /^Window [1-6]/.test(option.textContent || ''));
+      const window7 = cupola.querySelector('option[value="7"]');
+      if (soon.length !== 6 || !window7 || window7.disabled) return null;
+      if (!/Port/.test(soon[0].textContent || '') || !/Starboard/.test(soon[3].textContent || '')) return null;
+      if (window7.textContent !== 'Window 7 · Nadir') return null;
+      const port = document.querySelector('[data-iss-port]');
+      const starboard = document.querySelector('[data-iss-starboard]');
+      if (port?.textContent !== 'Port' || starboard?.textContent !== 'Starboard') return null;
+      const portBox = port.getBoundingClientRect();
+      const starboardBox = starboard.getBoundingClientRect();
+      if (portBox.width < 4 || starboardBox.width < 4) return null;
+      if (portBox.right > frame.left + 2 || starboardBox.left < frame.right - 2) return null;
+      const globeMid = frame.top + frame.height / 2;
+      const portHitsGlobe = portBox.bottom > frame.top + 8 && portBox.top < frame.bottom - 8 && portBox.right > frame.left + 8;
+      const starboardHitsGlobe = starboardBox.bottom > frame.top + 8 && starboardBox.top < frame.bottom - 8 && starboardBox.left < frame.right - 8;
+      if (portHitsGlobe || starboardHitsGlobe) return null;
+      if (Math.abs((portBox.top + portBox.height / 2) - globeMid) > frame.height / 2) return null;
       return { ok: true, text };
     })()`,
     'iss horizon',
     45000,
   );
   await shot(send, evidenceDir, 'iss-horizon');
+  await click(send, '[data-iss-telemetry]');
+  await waitFor(
+    send,
+    `(() => {
+      const toggle = document.querySelector('[data-iss-telemetry]');
+      const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+      const card = document.querySelector('[data-iss-card]')?.getBoundingClientRect();
+      if (toggle?.getAttribute('aria-expanded') !== 'true' || !frame || !card) return null;
+      const covers = card.left < frame.right - 1 && card.right > frame.left + 1 && card.top < frame.bottom - 1 && card.bottom > frame.top + 1;
+      if (covers) return null;
+      return { ok: true };
+    })()`,
+    'iss telemetry open stays off the earth',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-telemetry-open');
+  await click(send, '[data-iss-telemetry]');
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+    'iss telemetry collapsed again',
+    10000,
+  );
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
     send,

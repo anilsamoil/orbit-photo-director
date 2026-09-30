@@ -1,11 +1,14 @@
 import './worker-url';
-import { LngLat, Map, addProtocol, type Map as MapLibreMap } from 'maplibre-gl';
+import { LngLat, Map, Marker, addProtocol, type Map as MapLibreMap } from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import type { SkySpecification } from '@maplibre/maplibre-gl-style-spec';
 
 import { TANGENT_PITCH_DEG } from '../../../iss-g1/model';
 import { bucketFor, createComposer, type Composer, type DecodedTile } from '../../../iss-view/compose';
 import type { ImageryState } from '../../../iss-view/model';
+import { placesOnDisk, type PlaceLabel } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
+import { collapseAttribution } from './attribution';
 
 export const ISS_VIEW_MAX_PITCH_DEG = TANGENT_PITCH_DEG;
 
@@ -55,6 +58,14 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
     throw error;
   }
   map.setMaxPitch(ISS_VIEW_MAX_PITCH_DEG);
+  collapseAttribution(frame);
+  exposeIssForEndToEnd(map);
+  const placeMarkers: { key: string; marker: Marker }[] = [];
+  const armLabels = (): void => {
+    frame.dataset.issPlaceLayers = 'country city water';
+  };
+  if (map.loaded()) armLabels();
+  else map.once('load', armLabels);
   map.on('error', (event) => {
     const note = imageryNote(event.error);
     if (note) hooks.onImagery(note);
@@ -63,6 +74,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
     hooks.onContextLost();
   });
   const removed = { done: false };
+  let litTiles = '';
 
   return {
     ready() {
@@ -80,14 +92,17 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
       map.setMaxPitch(ISS_VIEW_MAX_PITCH_DEG);
       map.setVerticalFieldOfView(aim.verticalFovDeg);
       const bucket = bucketFor(aim.lightingUtcMs);
-      const tiles = [`${PROTOCOL}://lit/${bucket}/{z}/{y}/{x}`];
+      const tile = `${PROTOCOL}://lit/${bucket}/{z}/{y}/{x}`;
       const existing = map.getSource('iss-lit');
       if (existing && 'setTiles' in existing && typeof existing.setTiles === 'function') {
-        existing.setTiles(tiles);
+        if (litTiles !== tile) {
+          existing.setTiles([tile]);
+          litTiles = tile;
+        }
       } else if (!existing) {
         map.addSource('iss-lit', {
           type: 'raster',
-          tiles,
+          tiles: [tile],
           tileSize: 256,
           maxzoom: LIT_MAX_ZOOM,
           attribution: 'NASA Blue Marble Next Generation and VIIRS Black Marble 2016',
@@ -98,6 +113,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
           source: 'iss-lit',
           paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 },
         });
+        litTiles = tile;
       }
       const solved = map.calculateCameraOptionsFromTo(
         new LngLat(aim.pose.camera.lonDeg, aim.pose.camera.latDeg),
@@ -106,14 +122,70 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
         0,
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg });
+      syncPlaceMarkers(map, placeMarkers, aim);
       await idle(map);
     },
     destroy() {
       if (removed.done) return;
       removed.done = true;
+      for (const entry of placeMarkers) entry.marker.remove();
+      placeMarkers.splice(0, placeMarkers.length);
       map.remove();
     },
   };
+}
+
+function exposeIssForEndToEnd(map: MapLibreMap): void {
+  if (typeof window === 'undefined') return;
+  if (!new URLSearchParams(window.location.search).has('e2e')) return;
+  (window as unknown as { __opdIss?: MapLibreMap }).__opdIss = map;
+}
+
+function syncPlaceMarkers(map: MapLibreMap, markers: { key: string; marker: Marker }[], aim: IssAim): void {
+  const width = map.getCanvas().clientWidth;
+  const height = map.getCanvas().clientHeight;
+  if (width < 10 || height < 10) return;
+  const candidates = placesOnDisk(
+    aim.pose.camera.latDeg,
+    aim.pose.camera.lonDeg,
+    aim.pose.altitudeM,
+    aim.pose.bearingDeg,
+    aim.pose.analyticPitchDeg,
+  );
+  const chosen: { key: string; place: PlaceLabel; score: number }[] = [];
+  for (const place of candidates) {
+    const projected = map.project([place.lon, place.lat]);
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
+    if (projected.x < 18 || projected.y < 18 || projected.x > width - 18 || projected.y > height - 18) continue;
+    const score = (projected.x - width / 2) ** 2 + (projected.y - height / 2) ** 2;
+    const key = `${place.kind}:${place.name}`;
+    const current = chosen.find((entry) => entry.key === key);
+    if (!current) chosen.push({ key, place, score });
+    else if (score < current.score) {
+      current.place = place;
+      current.score = score;
+    }
+  }
+  for (let index = markers.length - 1; index >= 0; index -= 1) {
+    const entry = markers[index];
+    if (!entry || chosen.some((item) => item.key === entry.key)) continue;
+    entry.marker.remove();
+    markers.splice(index, 1);
+  }
+  for (const entry of chosen) {
+    const existing = markers.find((item) => item.key === entry.key);
+    if (existing) {
+      existing.marker.setLngLat([entry.place.lon, entry.place.lat]);
+      continue;
+    }
+    const label = document.createElement('span');
+    label.className = `iss-place iss-place-${entry.place.kind}`;
+    label.textContent = entry.place.name;
+    markers.push({
+      key: entry.key,
+      marker: new Marker({ element: label, anchor: 'top' }).setLngLat([entry.place.lon, entry.place.lat]).addTo(map),
+    });
+  }
 }
 
 function registerProtocol(): void {
