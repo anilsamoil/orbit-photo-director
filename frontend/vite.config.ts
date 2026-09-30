@@ -207,6 +207,21 @@ export default defineConfig({
             },
           },
           {
+            // Static ISS marbles, matched before the shared GIBS caches so a
+            // Blue Marble pyramid cannot evict queue clouds or daily true color.
+            // 256 entries covers z0-3 of both products (170) with room to spare.
+            urlPattern: /^https:\/\/gibs\.earthdata\.nasa\.gov\/wmts\/epsg3857\/best\/(?:BlueMarble_NextGeneration\/default\/GoogleMapsCompatible_Level8|VIIRS_Black_Marble\/default\/2016-01-01\/GoogleMapsCompatible_Level8)\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opd-tiles-iss-static',
+              expiration: {
+                maxEntries: 256,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             // World-view GIBS tiles (z0-3) for BOTH the cloud overlay and VIIRS
             // night-lights: a dedicated cache so the world view of those layers
             // survives offline regardless of natural-pan LRU. Without it, a
