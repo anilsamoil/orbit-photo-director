@@ -1,6 +1,6 @@
 ---
 name: verify-opd
-description: Drive the SNAP frontend for Orbit Photo Director in a local browser and prove Queue, Upcoming, Map, Profile, Log, help, the status banner, and the service worker. Use when a frontend change needs a user-level check, before shipping map UI, or when asked to verify SNAP locally.
+description: Drive the SNAP frontend for Orbit Photo Director in a local browser and prove Queue, Upcoming, Map, ISS view, Profile, Log, help, the status banner, and the service worker. Use when a frontend change needs a user-level check, before shipping map UI, or when asked to verify SNAP locally.
 ---
 
 # Verify SNAP
@@ -43,7 +43,7 @@ Open the feature file and run its command. A full browser pass is:
 node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive all
 ```
 
-One feature is `drive banner`, `drive topbar`, `drive queue`, `drive upcoming`, `drive map`, `drive help`, `drive profile`, `drive log`, `drive phone`, or `drive tracked`.
+One feature is `drive banner`, `drive topbar`, `drive queue`, `drive upcoming`, `drive map`, `drive iss`, `drive help`, `drive profile`, `drive log`, `drive phone`, or `drive tracked`.
 
 Each drive deletes `$OPD_VERIFY_HOME/chrome-profile` before Chrome starts. Pressed buttons and the shot list start over with that profile. Hidden curated targets do not, and neither do personal targets added with the form. The proxy keeps `removedCuratedIds` and `personalTargets` until `down`. A fresh Chrome loads that list from `GET /api/browser/profiles/anil/targets` at boot and hides those cards before any click. Run `down`, then `up`, before a drive that expects every fixture card. A second `drive all` on the same proxy inherits the hides from the first. Inside one drive, Hide writes `removedCuratedIds` on localStorage `opd-profile-anil` and PUTs that list. The upcoming step reloads the same Chrome, checks that the card stays hidden, then opens a second Chrome profile and checks that the card is already hidden. Restore on Profile PUTs the shorter list. A third Chrome profile then shows the restored card. The queue and map steps also wait until that GET contains the id they hid.
 

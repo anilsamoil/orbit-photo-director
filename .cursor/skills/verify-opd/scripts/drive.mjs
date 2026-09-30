@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
-export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'help', 'profile', 'log', 'phone', 'tracked'];
+export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
 const DESKTOP = { width: 1400, height: 900, mobile: false };
 
@@ -376,6 +376,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
     else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl));
+    else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
     else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
@@ -828,7 +829,7 @@ function topbarReachExpression() {
     if (!bar || !badge) return null;
     badge.hidden = false;
     badge.textContent = '👤 anilsamoilenko-astro';
-    const selectors = ['#tab-queue', '#tab-upcoming', '#tab-map', '#tab-profile', '#tab-log', '#kp-widget', '#profile-badge'];
+    const selectors = ['#tab-queue', '#tab-upcoming', '#tab-map', '#tab-iss', '#tab-profile', '#tab-log', '#kp-widget', '#profile-badge'];
     const targets = selectors
       .map((sel) => document.querySelector(sel))
       .filter((el) => el && !el.hidden && getComputedStyle(el).display !== 'none');
@@ -1377,6 +1378,63 @@ async function driveTracked(send, evidenceDir, meta, home) {
     return 'tracked: missing artifact falls back to no public orbit yet, ISS marker and track still up';
   }
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
+}
+
+async function driveIss(send, evidenceDir) {
+  await dismissShotlist(send);
+  await click(send, '#tab-iss');
+  const horizon = await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view');
+      const pressed = document.querySelector('[data-iss-preset="horizon"]');
+      const text = document.querySelector('[data-iss-status]')?.textContent || '';
+      if (!view || view.className !== 'view-iss') return null;
+      if (!pressed || pressed.getAttribute('aria-pressed') !== 'true') return null;
+      if (!text.includes('Horizon locked')) return null;
+      if (!text.includes('14 mm')) return null;
+      return { ok: true, text };
+    })()`,
+    'iss horizon',
+    45000,
+  );
+  await shot(send, evidenceDir, 'iss-horizon');
+  await click(send, '[data-iss-preset="nadir"]');
+  await waitFor(
+    send,
+    `(() => {
+      const pressed = document.querySelector('[data-iss-preset="nadir"]');
+      const text = document.querySelector('[data-iss-status]')?.textContent || '';
+      if (!pressed || pressed.getAttribute('aria-pressed') !== 'true') return null;
+      if (!text.includes('Nadir locked')) return null;
+      return { ok: true };
+    })()`,
+    'iss straight down',
+    20000,
+  );
+  await shot(send, evidenceDir, 'iss-nadir');
+  await click(send, '#tab-map');
+  await waitFor(
+    send,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') ? { ok: true } : null`,
+    'map after iss',
+    20000,
+  );
+  await click(send, '#tab-queue');
+  await waitFor(
+    send,
+    `document.getElementById('view')?.className === 'view-queue' ? { ok: true } : null`,
+    'queue after iss',
+  );
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-iss-scene]') ? { ok: true } : null`,
+    'iss remembers straight down',
+    45000,
+  );
+  await shot(send, evidenceDir, 'iss-return');
+  return `iss: horizon then straight down, map and queue still open, session kept nadir (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function driveHelp(send, evidenceDir) {
