@@ -26,6 +26,7 @@
         <button id="tab-queue" class="tab" type="button">Queue</button>
         <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
         <button id="tab-map" class="tab active" type="button">Map</button>
+        <button id="tab-iss" class="tab" type="button">ISS view</button>
         <button id="tab-profile" class="tab" type="button">Profile</button>
         <button id="tab-log" class="tab" type="button">Log<span id="pending-sync-badge" class="pending-badge" hidden></span></button>
       </nav>
@@ -154,6 +155,10 @@
         <button id="map-chrome-toggle" class="map-chrome-toggle" type="button" aria-expanded="false" title="Show map controls">Controls</button>
       </section>
 
+      <section id="iss-pane" class="pane">
+        <div id="iss-host"></div>
+      </section>
+
       <section id="profile-pane" class="pane">
         <div class="pane-header">
           <h2 class="pane-title">Profile &mdash; per-astronaut settings</h2>
@@ -163,9 +168,8 @@
         <p class="pane-sub">Your Google sign-in also syncs personal targets and shot ratings. No extra token needed.</p>
         <!-- Photo lookup lives under Profile (v1.6.6.0). It's a side
              feature — paste a timestamp or drop a photo with EXIF and
-             get a pin on the map. Was its own tab; the move keeps the
-             topbar tight (5 tabs vs 6) and groups operator-tools under
-             Profile where they belong. -->
+             get a pin on the map. Was its own tab; it stays under
+             Profile with the other operator tools. -->
         <div id="lookup-pane" class="lookup-section">
           <div class="lookup-section-header">
             <h3 class="lookup-section-title">Photo lookup &mdash; where was ISS?</h3>

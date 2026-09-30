@@ -2,6 +2,8 @@
 
 Every user-facing map capability, where its code is, how to reach it as a user and as an agent, what to run, and what bites. Twelve capabilities are features, one directory each under `frontend/src/map/features/`. `frontend/src/map/index.ts` is the composition root: `renderMap`, `buildStyle`, the one `let core`, and the wiring between features.
 
+ISS view is not one of those features. It is the top-level tab immediately after Map. `frontend/src/main.ts` passes the accepted manifest and track into `mountIssScene` from `frontend/src/iss-view/index.ts` through a dynamic import, and disposes that scene on leave. The renderer stays in `frontend/src/map/adapters/maplibre/iss-view.ts`. Horizon is the session default. Straight down is the other preset. `frontend/test/iss-view-nav.test.ts` drives the tab. `.cursor/skills/verify-opd` drive `iss` walks it in the browser.
+
 Paths below are relative to `frontend/`. Tests run with `bun run test <path>` from `frontend/`.
 
 ## Features

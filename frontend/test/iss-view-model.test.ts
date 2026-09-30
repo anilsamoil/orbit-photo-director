@@ -227,13 +227,14 @@ describe('ISS scene card', () => {
   });
 });
 
-describe('public nav stays at five tabs', () => {
-  it('does not add an ISS tab or a main import', () => {
+describe('public nav places ISS view after Map', () => {
+  it('lists the sixth tab immediately after Map and loads the scene lazily', () => {
     const html = readFileSync(resolve(__dirname, '../index.html'), 'utf8');
     const main = readFileSync(resolve(__dirname, '../src/main.ts'), 'utf8');
-    expect(html.match(/id="tab-/g)).toHaveLength(5);
-    expect(html).not.toContain('tab-iss');
-    expect(main).not.toContain('iss-view');
+    const ids = [...html.matchAll(/id="(tab-[^"]+)"/g)].map((match) => match[1]);
+    expect(ids).toEqual(['tab-queue', 'tab-upcoming', 'tab-map', 'tab-iss', 'tab-profile', 'tab-log']);
+    expect(main).toContain("import('./iss-view')");
+    expect(main).not.toMatch(/import\s*\{[^}]*\}\s*from\s*'\.\/iss-view'/);
     expect(main).not.toContain('precacheIssStaticTiles');
   });
 });
