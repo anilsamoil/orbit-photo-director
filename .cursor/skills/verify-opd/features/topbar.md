@@ -4,7 +4,7 @@ The top bar is one fixed header on every tab. It shows where the station is and 
 
 ## Sub-features
 
-- `iss-now` fills `#iss-now` from the published track. The text starts with `ISS` and the latitude, with no space between the label and the number, as in `ISS15.4°S`. Its title is `Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position`. When the track has no position, the label `ISS` is immediately followed by `live track expired`, so the text is `ISSlive track expired`. That text does not pass. The stale-orbit sentence is on Profile photo lookup, not here.
+- `iss-now` fills `#iss-now` from the published track. The text starts with `ISS` and the latitude, with no space between the label and the number, then the longitude, as in `ISS15.4°S, 118.3°E`. A span after that reads `over` plus a coarse region (hidden at 500px and narrower; the text stays in the node). Its title is `Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position`. When the track has no position, the label `ISS` is immediately followed by `live track expired`, so the text is `ISSlive track expired`. That text does not pass. The stale-orbit sentence is on Profile photo lookup, not here.
 - `kp-badge` shows `Kp 3.0` from the fixture `/api/kp` value `3`.
 - `topbar-box` keeps the same fixed box on Map, Queue, Upcoming, ISS view, Profile, and Log. Non-map pages pad `main` by the bar height. Map padding is 0.
 - `topbar-tabs` keeps Queue, Upcoming, Map, ISS view, Profile, and Log at their full width. The bar scrolls when those buttons, the Kp badge, and a long username do not fit. After the bar scrolls a control into view, `elementFromPoint` at its center is that control.
@@ -21,7 +21,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Read the header.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive topbar`. The bar is `position: fixed`. `#iss-now` matches `ISS` plus a latitude, and its title is the SGP4 sentence above. `#kp-widget` reads `Kp 3.0`. Stdout includes the readout.
+- **Read the header.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive topbar`. The bar is `position: fixed`. `#iss-now` starts with `ISS` plus a latitude, and its title is the SGP4 sentence above. `#kp-widget` reads `Kp 3.0`. Stdout prints the full readout, longitude and region included.
 - **Other tabs.** Queue pads `main` by the bar height, and the footer is no longer pinned.
 - **Narrow window.** The drive sets the badge text to `👤 anilsamoilenko-astro` and checks 402x874, 874x402, 390x844, 844x390, and 834x1194. Each tab, the Kp badge, and the username chip is fully inside the bar after scrolling only `.topbar`, and `elementFromPoint` at its center is that control. At 402x874 and at 390x844 the bar `scrollWidth` is greater than its `clientWidth`. Each of those controls is at least 44px, and `elementFromPoint` at its center resolves to that control or a child of it. On the 402px frame a mouse drag that starts on the Kp chip, then one that starts on `#iss-now`, each in the left half of the bar, moves `.topbar.scrollLeft` by more than 40px. `evidence/topbar-pan-left.png` is the bar after both drags are returned to the start. Queue is already the open view. A click on Queue stays there, and a click on Upcoming switches the view. The drive then restores the badge text to `👤 Anil`.
 - **Safe area.** When the browser accepts an inset override, left, right, and top padding on the bar include that inset.
