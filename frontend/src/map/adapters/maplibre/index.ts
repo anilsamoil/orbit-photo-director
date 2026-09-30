@@ -1,5 +1,7 @@
-import maplibregl from 'maplibre-gl';
+import './worker-url';
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import type { LayerSpecification, SourceSpecification, StyleSpecification } from '@maplibre/maplibre-gl-style-spec';
 
 import {
   asLayerId,
@@ -54,19 +56,19 @@ export function maplibreMapOptions(camera: InitialCamera): {
 
 /** The style as MapLibre receives it. Domain layer specs are a structural
  *  subset of the vendor's, differing only in how expressions are typed. */
-export function maplibreStyle(style: StyleSpec): maplibregl.StyleSpecification {
+export function maplibreStyle(style: StyleSpec): StyleSpecification {
   return {
     version: 8,
-    sources: style.sources as Record<string, maplibregl.SourceSpecification>,
+    sources: style.sources as StyleSpecification['sources'],
     layers: style.layers.map(toVendorLayer),
   };
 }
 
-function toVendorLayer(spec: LayerSpec): maplibregl.LayerSpecification {
-  return spec as unknown as maplibregl.LayerSpecification;
+function toVendorLayer(spec: LayerSpec): LayerSpecification {
+  return spec as unknown as LayerSpecification;
 }
 
-function toVendorSource(spec: SourceSpec): maplibregl.SourceSpecification {
+function toVendorSource(spec: SourceSpec): SourceSpecification {
   return spec;
 }
 

@@ -1188,7 +1188,9 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
     send,
     `(() => {
       const source = window.__opdMap && window.__opdMap.getSource('targets');
-      const data = source && (source._data || (source.serialize ? source.serialize().data : null));
+      const raw = source && source._data;
+      const serialized = source && source.serialize ? source.serialize().data : null;
+      const data = (raw && raw.geojson) || (raw && raw.features ? raw : null) || (serialized && serialized.geojson) || serialized;
       const ids = (data && data.features ? data.features : []).map((feature) => feature.properties && feature.properties.target_id);
       return ids.includes('verify-reef') ? { ok: true } : null;
     })()`,
@@ -1201,7 +1203,9 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
     send,
     `(() => {
       const source = window.__opdMap && window.__opdMap.getSource('targets');
-      const data = source && (source._data || (source.serialize ? source.serialize().data : null));
+      const raw = source && source._data;
+      const serialized = source && source.serialize ? source.serialize().data : null;
+      const data = (raw && raw.geojson) || (raw && raw.features ? raw : null) || (serialized && serialized.geojson) || serialized;
       const ids = (data && data.features ? data.features : []).map((feature) => feature.properties && feature.properties.target_id);
       return ids.includes('verify-reef') ? null : { ok: true, ids };
     })()`,
@@ -1249,7 +1253,9 @@ async function driveTracked(send, evidenceDir, meta, home) {
         const map = window.__opdMap;
         const layer = map && map.getLayer && map.getLayer('sat-track-layer-starship');
         const source = map && map.getSource && map.getSource('sat-track-starship');
-        const data = source && (source._data || (source.serialize ? source.serialize().data : null));
+        const raw = source && source._data;
+        const serialized = source && source.serialize ? source.serialize().data : null;
+        const data = (raw && raw.geojson) || (raw && raw.features ? raw : null) || (serialized && serialized.geojson) || serialized;
         const line = data && data.features && data.features[0] && data.features[0].geometry;
         const coord = line && line.coordinates && line.coordinates[0];
         if (!marker || label !== 'Starship' || !layer || !coord) return null;

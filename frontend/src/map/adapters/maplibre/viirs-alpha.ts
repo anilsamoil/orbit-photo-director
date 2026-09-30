@@ -7,7 +7,7 @@
  *  source, not an RGB PNG. Where canvas APIs are missing (happy-dom) the
  *  handler passes the original bytes through. */
 
-import maplibregl from 'maplibre-gl';
+import { addProtocol } from 'maplibre-gl';
 
 import { gibsBlackMarbleUrl } from '../../../tile-precache';
 
@@ -101,7 +101,7 @@ async function keyTileBytes(bytes: ArrayBuffer): Promise<ArrayBuffer | null> {
 }
 
 export function registerViirsAlphaProtocol(): void {
-  maplibregl.addProtocol(VIIRS_ALPHA_PROTOCOL, async (params, _abortController) => {
+  addProtocol(VIIRS_ALPHA_PROTOCOL, async (params, _abortController) => {
     const upstream = params.url.replace(`${VIIRS_ALPHA_PROTOCOL}://`, '');
     const response = await fetch(upstream);
     if (!response.ok) {
