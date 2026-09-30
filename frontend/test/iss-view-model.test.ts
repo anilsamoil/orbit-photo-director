@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { liveIssNow } from '../src/iss';
 import { issPositionWithAltSGP4 } from '../src/iss-sgp4';
 import {
+  EARTH_VIEW_ROLL_DEG,
+  earthFrameSides,
   frameFromFixes,
   groundLightFromElevation,
   lightingDelayed,
@@ -168,6 +170,16 @@ describe('ISS scene pose', () => {
     expect(frame.pose.camera.lonDeg).toBeCloseTo(published.lon, 6);
     expect(frame.modelAltKm).toBeCloseTo(published.alt_km, 6);
     expect(sceneFrame(track({ tle: undefined }), when, 'nadir')).toEqual({ ok: false, reason: 'missing' });
+  });
+});
+
+describe('ISS earth roll', () => {
+  it('turns the frame 180° and moves port to the right', () => {
+    expect(EARTH_VIEW_ROLL_DEG).toBe(180);
+    expect(earthFrameSides(0)).toEqual({ left: 'port', right: 'starboard' });
+    expect(earthFrameSides(180)).toEqual({ left: 'starboard', right: 'port' });
+    expect(earthFrameSides(-180)).toEqual({ left: 'starboard', right: 'port' });
+    expect(earthFrameSides(EARTH_VIEW_ROLL_DEG)).toEqual({ left: 'starboard', right: 'port' });
   });
 });
 

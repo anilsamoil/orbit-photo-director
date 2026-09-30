@@ -10,7 +10,7 @@ The tab immediately after Map opens a modeled view from the station. Horizon is 
 - `iss-card` starts collapsed. The toggle is `Telemetry`, `aria-expanded` is `false`, and the body is hidden. Opening it keeps the card off the Earth frame. The card shows `14 mm`, the cloud-free Blue Marble and Black Marble 2016 line, and a UTC clock.
 - `iss-credits` is one `.maplibregl-ctrl-attrib-button` inside the scene, without `maplibregl-compact-show`.
 - `iss-labels` sets `data-iss-place-layers` to `country city water` on the frame. The names are markers on the globe.
-- `iss-sides` puts `Port` on the left of the frame and `Starboard` on the right. Ground track forward stays at the top, so port is screen-left.
+- `iss-sides` puts `Starboard` on the left of the frame and `Port` on the right. The Earth camera is rolled 180°, so ground-track forward is at the bottom and port stays on the station's port side.
 - `iss-cupola` is `[data-iss-cupola]`. Window 7 is `Window 7 · Nadir` and selects Straight down. Windows 1 through 6 carry the plate names and stay disabled.
 - `iss-leave` returns to Map and Queue with no `[data-iss-scene]` left mounted. Opening ISS view again keeps Straight down for the session.
 
@@ -26,8 +26,8 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Horizon.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive iss`. The view class is `view-iss`. Horizon is pressed. The card contains `Horizon locked` and `14 mm`. Telemetry starts collapsed and does not cover the frame. The frame, the card, `Port`, and `Starboard` stay inside `#iss-host`, and the scene does not scroll. One info button is collapsed. The frame lists country, city, and water labels. Place names do not cover each other. `Port` sits left of the frame and `Starboard` sits right of it. The Cupola select leaves windows 1 through 6 disabled, with Port on window 1 and Starboard on window 4. Window 7 reads `Window 7 · Nadir`. `evidence/iss-horizon.png` is that frame. The same containment holds after another second of render ticks, with at least one place name on screen. Opening telemetry still leaves the card, the frame, and both side labels inside the host. `evidence/iss-telemetry-open.png` is that open card, then the drive collapses it again.
-- **Straight down.** The drive taps Straight down. The card contains `Nadir locked`. `evidence/iss-nadir.png` is that frame.
+- **Horizon.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive iss`. The view class is `view-iss`. Horizon is pressed. The card contains `Horizon locked` and `14 mm`. Telemetry starts collapsed and does not cover the frame. The frame, the card, `Port`, and `Starboard` stay inside `#iss-host`, and the scene does not scroll. One info button is collapsed. The frame lists country, city, and water labels. Place names do not cover each other. `Starboard` sits left of the frame and `Port` sits right of it. `window.__opdIss.getRoll()` is 180. The Cupola select leaves windows 1 through 6 disabled, with Port on window 1 and Starboard on window 4. Window 7 reads `Window 7 · Nadir`. `evidence/iss-horizon.png` is that frame. The same containment holds after another second of render ticks, with at least one place name on screen. Opening telemetry still leaves the card, the frame, and both side labels inside the host. `evidence/iss-telemetry-open.png` is that open card, then the drive collapses it again.
+- **Straight down.** The drive taps Straight down. The card contains `Nadir locked`. Roll stays 180, and a point ahead along the ground track projects below the frame center. `Starboard` stays left of the frame and `Port` stays right of it. `evidence/iss-nadir.png` is that frame.
 - **Leave and return.** Map opens with the scene gone. Queue opens. ISS view opens again with Straight down still pressed. `evidence/iss-return.png` is that return.
 - **Proof.** Stdout starts with `iss:`.
 

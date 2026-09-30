@@ -1419,10 +1419,12 @@ async function driveIss(send, evidenceDir) {
       const portBox = port.getBoundingClientRect();
       const starboardBox = starboard.getBoundingClientRect();
       if (portBox.width < 4 || starboardBox.width < 4) return null;
-      if (portBox.right > frame.left + 2 || starboardBox.left < frame.right - 2) return null;
+      if (starboardBox.right > frame.left + 2 || portBox.left < frame.right - 2) return null;
+      const roll = window.__opdIss?.getRoll?.();
+      if (typeof roll !== 'number' || Math.abs((((roll % 360) + 360) % 360) - 180) > 0.5) return null;
       const globeMid = frame.top + frame.height / 2;
-      const portHitsGlobe = portBox.bottom > frame.top + 8 && portBox.top < frame.bottom - 8 && portBox.right > frame.left + 8;
-      const starboardHitsGlobe = starboardBox.bottom > frame.top + 8 && starboardBox.top < frame.bottom - 8 && starboardBox.left < frame.right - 8;
+      const starboardHitsGlobe = starboardBox.bottom > frame.top + 8 && starboardBox.top < frame.bottom - 8 && starboardBox.right > frame.left + 8;
+      const portHitsGlobe = portBox.bottom > frame.top + 8 && portBox.top < frame.bottom - 8 && portBox.left < frame.right - 8;
       if (portHitsGlobe || starboardHitsGlobe) return null;
       if (Math.abs((portBox.top + portBox.height / 2) - globeMid) > frame.height / 2) return null;
       const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
@@ -1512,7 +1514,23 @@ async function driveIss(send, evidenceDir) {
       const text = document.querySelector('[data-iss-status]')?.textContent || '';
       if (!pressed || pressed.getAttribute('aria-pressed') !== 'true') return null;
       if (!text.includes('Nadir locked')) return null;
-      return { ok: true };
+      const map = window.__opdIss;
+      if (!map?.getRoll || !map.project || !map.getCenter || !map.getBearing) return null;
+      const roll = ((map.getRoll() % 360) + 360) % 360;
+      if (Math.abs(roll - 180) > 0.5) return null;
+      const center = map.getCenter();
+      const bearing = map.getBearing() * Math.PI / 180;
+      const lat = center.lat + Math.cos(bearing) * 0.35;
+      const lng = center.lng + (Math.sin(bearing) * 0.35) / Math.max(0.2, Math.cos(center.lat * Math.PI / 180));
+      const here = map.project(center);
+      const ahead = map.project([lng, lat]);
+      if (!(ahead.y > here.y + 4)) return null;
+      const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+      const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
+      const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
+      if (!frame || !port || !starboard) return null;
+      if (starboard.right > frame.left + 2 || port.left < frame.right - 2) return null;
+      return { ok: true, roll, aheadY: ahead.y, hereY: here.y };
     })()`,
     'iss straight down',
     20000,

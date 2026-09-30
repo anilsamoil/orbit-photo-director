@@ -1,6 +1,8 @@
 import { createIssRenderer } from '../map/adapters/maplibre/iss-view';
 import { CUPOLA_WINDOWS, cupolaPreset } from './cupola';
 import {
+  EARTH_VIEW_ROLL_DEG,
+  earthFrameSides,
   groundLightAt,
   sceneCard,
   sceneFit,
@@ -91,7 +93,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   stage.dataset.issStage = '';
   const port = sideLabel('issPort', 'Port');
   const starboard = sideLabel('issStarboard', 'Starboard');
-  stage.append(port, frame, starboard);
+  const sides = earthFrameSides(EARTH_VIEW_ROLL_DEG);
+  const left = sides.left === 'port' ? port : starboard;
+  const right = sides.right === 'port' ? port : starboard;
+  stage.append(left, frame, right);
   const card = document.createElement('article');
   card.dataset.issCard = '';
   const telemetry = document.createElement('button');
