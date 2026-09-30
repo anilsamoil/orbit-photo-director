@@ -48,7 +48,7 @@ const HELP_SECTIONS: HelpSection[] = [
     ],
   },
   {
-    title: 'The five tabs',
+    title: 'The six tabs',
     items: [
       {
         icon: '',
@@ -75,6 +75,16 @@ const HELP_SECTIONS: HelpSection[] = [
           'Live ISS position, the ground track, and your targets. The time ' +
           'slider looks ahead up to 36 hours. Launches, on the map toolbar, ' +
           'draws the ascent path and the pad in gold.',
+      },
+      {
+        icon: '',
+        label: 'ISS view',
+        text:
+          'A modeled live view from the station. Horizon opens first. ' +
+          'Straight down looks at the ground under the station. The frame ' +
+          'is a fitted 14 mm full-frame picture with cloud-free Blue Marble ' +
+          'and Black Marble 2016. It is a spherical model, not the window ' +
+          'and not a live photo.',
       },
       {
         icon: '',

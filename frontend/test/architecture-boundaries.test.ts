@@ -392,6 +392,16 @@ describe('import boundaries in frontend/src', () => {
     expect(dynamic.length).toBeGreaterThan(0);
   });
 
+  it('main.ts reaches the ISS scene only through a dynamic import', () => {
+    const main = files.find((file) => file.path === 'main.ts');
+    expect(main).toBeDefined();
+    const iss = importsOf(main?.text ?? '').filter((entry) => isIssEntry(entry.specifier));
+    expect(iss).toEqual([
+      { specifier: './iss-view', dynamic: true },
+      { specifier: './iss-view', dynamic: true },
+    ]);
+  });
+
   it('map-core imports no feature, no adapter, no vendor and not the legacy map module', () => {
     const violations = files.flatMap((file) => mapCoreImportViolations(file.path, file.text));
     expect(violations).toEqual([]);

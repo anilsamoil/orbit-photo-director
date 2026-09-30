@@ -1985,23 +1985,33 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
  * its parent #profile-pane is hidden by these rules). */
 .view-queue #upcoming-pane,
 .view-queue #map-pane,
+.view-queue #iss-pane,
 .view-queue #profile-pane,
 .view-queue #log-pane,
 .view-upcoming #queue-pane,
 .view-upcoming #map-pane,
+.view-upcoming #iss-pane,
 .view-upcoming #profile-pane,
 .view-upcoming #log-pane,
 .view-map #queue-pane,
 .view-map #upcoming-pane,
+.view-map #iss-pane,
 .view-map #profile-pane,
 .view-map #log-pane,
+.view-iss #queue-pane,
+.view-iss #upcoming-pane,
+.view-iss #map-pane,
+.view-iss #profile-pane,
+.view-iss #log-pane,
 .view-profile #queue-pane,
 .view-profile #upcoming-pane,
 .view-profile #map-pane,
+.view-profile #iss-pane,
 .view-profile #log-pane,
 .view-log #queue-pane,
 .view-log #upcoming-pane,
 .view-log #map-pane,
+.view-log #iss-pane,
 .view-log #profile-pane {
   display: none;
 }
@@ -3053,5 +3063,190 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   .launch-dialog,
   .modal.help-modal {
     max-height: calc(100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+}
+
+.view-iss #iss-pane {
+  position: relative;
+  min-height: calc(100dvh - var(--topbar-height) - 4.5rem);
+  padding: 0;
+  background: #02040c;
+  overflow: hidden;
+}
+
+#iss-host {
+  position: absolute;
+  inset: 0;
+}
+
+#iss-host > button {
+  min-height: 44px;
+  min-width: 44px;
+  margin: 0.5rem;
+  padding: 0 0.9rem;
+}
+
+[data-iss-scene] {
+  position: absolute;
+  inset: 0;
+}
+
+[data-iss-presets] {
+  position: absolute;
+  top: max(0.65rem, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  gap: 0.35rem;
+}
+
+[data-iss-preset] {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 0.95rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(20, 24, 33, 0.88);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+[data-iss-preset][aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: transparent;
+}
+
+[data-iss-utc] {
+  position: absolute;
+  top: max(0.65rem, env(safe-area-inset-top));
+  right: max(0.85rem, env(safe-area-inset-right));
+  z-index: 2;
+  margin: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f4f7fb;
+}
+
+[data-iss-utc]:empty {
+  display: none;
+}
+
+[data-iss-frame] {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+
+[data-iss-card] {
+  position: absolute;
+  left: max(0.75rem, env(safe-area-inset-left));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  z-index: 2;
+  max-width: min(26rem, calc(100% - 1.5rem));
+  background: rgba(12, 16, 24, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 0.7rem 0.9rem 0.45rem;
+  color: #f4f7fb;
+}
+
+[data-iss-status] {
+  margin: 0;
+  white-space: pre-line;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+[data-iss-actions] {
+  display: flex;
+  gap: 0.5rem;
+}
+
+[data-iss-actions] button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 0.9rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(20, 24, 33, 0.9);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+[data-iss-actions] button[hidden] {
+  display: none;
+}
+
+[data-iss-details] {
+  margin-top: 0.15rem;
+}
+
+[data-iss-details] summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+[data-iss-detail] {
+  margin: 0 0 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+#iss-pane .maplibregl-ctrl-attrib-button {
+  width: 44px;
+  height: 44px;
+}
+
+@media (max-width: 720px) {
+  .view-iss #iss-pane {
+    overflow: auto;
+  }
+
+  #iss-host,
+  [data-iss-scene] {
+    position: relative;
+    min-height: 100%;
+  }
+
+  [data-iss-scene] {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.5rem 0.75rem 1rem;
+  }
+
+  [data-iss-presets],
+  [data-iss-utc],
+  [data-iss-frame],
+  [data-iss-card] {
+    position: static;
+    transform: none;
+    inset: auto;
+  }
+
+  [data-iss-utc] {
+    align-self: flex-end;
+  }
+
+  [data-iss-frame] {
+    margin: 0.6rem 0;
+  }
+
+  [data-iss-card] {
+    width: min(100%, 28rem);
+    max-width: 100%;
   }
 }

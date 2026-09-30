@@ -14,7 +14,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 
 - Start each feature from the healthy instance unless its preconditions say otherwise.
 - Prefer the ids and accessible names in the feature file.
-- `drive all` walks banner, topbar, queue, upcoming, map, help, profile, log, phone, and tracked in that order on desktop Chrome, then runs those same steps on WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11. A single feature drive does the same four surfaces. WebKit missing fails the drive.
+- `drive all` walks banner, topbar, queue, upcoming, map, iss, help, profile, log, phone, and tracked in that order on desktop Chrome, then runs those same steps on WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11. A single feature drive does the same four surfaces. WebKit missing fails the drive.
 - `sw` builds a preview and is not part of `drive all`.
 - `down` deletes the Chrome profile and keeps `evidence/`.
 
@@ -31,6 +31,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 - [Queue](./queue.md) covers the next passes, score, sort, remind, shoot, the mine filter, keepsake windows, and Hide.
 - [Upcoming](./upcoming.md) covers launch cards, the later passes, score sort, and hide.
 - [Map](./map.md) covers the globe, ISS track, target popup, dropped pin, legend, imagery date, collapsed credits, time controls, tool rail, satellite picker, launch dialog, and the pin that Hide removes. The map opens with that chrome hidden behind Controls.
+- [ISS view](./iss.md) covers the tab after Map, the Horizon camera, Straight down, the perspective card, and returning to Map and Queue.
 - [Help](./help.md) covers the ? button, hidden on a fresh Map until Controls, the corner button on the other tabs, and the dialog.
 - [Profile](./profile.md) covers the signed-in profile, distance threshold, add target, hidden curated targets, and photo lookup.
 - [Log](./log.md) covers the calibration row written by Shoot.

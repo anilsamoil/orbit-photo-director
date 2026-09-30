@@ -19,12 +19,18 @@ describe('openHelpModal', () => {
     expect(document.querySelector('.help-body')).toBeTruthy();
   });
 
-  it('lists the five tabs in the content', () => {
+  it('lists the six tabs with ISS view after Map', () => {
     openHelpModal();
     const text = document.querySelector('.help-body')?.textContent ?? '';
-    for (const tab of ['Queue', 'Upcoming', 'Map', 'Profile', 'Log']) {
+    for (const tab of ['Queue', 'Upcoming', 'Map', 'ISS view', 'Profile', 'Log']) {
       expect(text).toContain(tab);
     }
+    const map = text.indexOf('Map');
+    const iss = text.indexOf('ISS view');
+    const profile = text.indexOf('Profile');
+    expect(map).toBeGreaterThanOrEqual(0);
+    expect(iss).toBeGreaterThan(map);
+    expect(profile).toBeGreaterThan(iss);
   });
 
   it('names the legend states, the footer recovery, and the Safari data clear', () => {

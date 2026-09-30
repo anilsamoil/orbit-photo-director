@@ -290,6 +290,7 @@ async function doRefresh(): Promise<void> {
     currentTop24h = top24h;
     currentTrack = track;
     rememberPublishedIssTle(track);
+    publishIssSnapshot();
     currentStatus = status ?? null;
     renderPendingMapPane();
 
@@ -1227,11 +1228,90 @@ function bindFilterToggles(): void {
   });
 }
 
+type IssPaneScene = {
+  update(snapshot: { manifestVersion: string; generatedAtMs: number; track: Track }): void;
+  dispose(): void;
+};
+
+let issTicket = 0;
+let issScene: IssPaneScene | null = null;
+
+function releaseIssPane(): void {
+  issTicket += 1;
+  const scene = issScene;
+  issScene = null;
+  scene?.dispose();
+  document.getElementById('iss-host')?.replaceChildren();
+}
+
+function publishIssSnapshot(): void {
+  if (!issScene || !currentManifest || !currentTrack) return;
+  const generatedAtMs = Date.parse(currentManifest.generated_at);
+  issScene.update({
+    manifestVersion: currentManifest.version,
+    generatedAtMs: Number.isFinite(generatedAtMs) ? generatedAtMs : 0,
+    track: currentTrack,
+  });
+}
+
+function openIssPane(): void {
+  if (issScene) {
+    publishIssSnapshot();
+    return;
+  }
+  const ticket = ++issTicket;
+  void attachIssPane(ticket);
+}
+
+async function attachIssPane(ticket: number): Promise<void> {
+  const host = document.getElementById('iss-host');
+  if (!host) return;
+  let mod: typeof import('./iss-view');
+  try {
+    mod = await import('./iss-view');
+  } catch (error) {
+    if (ticket !== issTicket || document.getElementById('view')?.className !== 'view-iss') return;
+    showIssBootError(host);
+    console.error('[iss] iss pane failed to load:', error);
+    return;
+  }
+  if (ticket !== issTicket || document.getElementById('view')?.className !== 'view-iss' || issScene) return;
+  host.replaceChildren();
+  issScene = mod.mountIssScene(host, {
+    nowMs: () => Date.now(),
+    onMap: () => {
+      document.getElementById('tab-map')?.click();
+    },
+  });
+  publishIssSnapshot();
+}
+
+function showIssBootError(host: HTMLElement): void {
+  host.replaceChildren();
+  const note = document.createElement('p');
+  note.dataset.issStatus = '';
+  note.textContent = 'ISS view needs one online load';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.dataset.issRetry = '';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', () => openIssPane());
+  const mapButton = document.createElement('button');
+  mapButton.type = 'button';
+  mapButton.dataset.issMap = '';
+  mapButton.textContent = 'Map';
+  mapButton.addEventListener('click', () => {
+    document.getElementById('tab-map')?.click();
+  });
+  host.append(note, retry, mapButton);
+}
+
 function bindTabs(): void {
   const view = document.getElementById('view');
   const tabQueue = document.getElementById('tab-queue');
   const tabUpcoming = document.getElementById('tab-upcoming');
   const tabMap = document.getElementById('tab-map');
+  const tabIss = document.getElementById('tab-iss');
   const tabProfile = document.getElementById('tab-profile');
   const tabLog = document.getElementById('tab-log');
   if (!view || !tabQueue || !tabUpcoming || !tabMap || !tabLog) return;
@@ -1240,16 +1320,23 @@ function bindTabs(): void {
   // still want the rest of the dispatcher to wire up cleanly.
   // tab-lookup was removed in v1.6.6.0 — photo lookup now lives INSIDE
   // the Profile pane. Operators reach it via tab-profile.
-  const allTabs = [tabQueue, tabUpcoming, tabMap, tabProfile, tabLog]
+  const allTabs = [tabQueue, tabUpcoming, tabMap, tabIss, tabProfile, tabLog]
     .filter((t): t is HTMLElement => t !== null);
   const setActive = (className: string, activeTab: HTMLElement) => {
     view.className = className;
     allTabs.forEach((t) => t.classList.toggle('active', t === activeTab));
   };
 
-  tabQueue.addEventListener('click', () => setActive('view-queue', tabQueue));
-  tabUpcoming.addEventListener('click', () => setActive('view-upcoming', tabUpcoming));
+  tabQueue.addEventListener('click', () => {
+    releaseIssPane();
+    setActive('view-queue', tabQueue);
+  });
+  tabUpcoming.addEventListener('click', () => {
+    releaseIssPane();
+    setActive('view-upcoming', tabUpcoming);
+  });
   tabMap.addEventListener('click', () => {
+    releaseIssPane();
     loadMapPane().catch((err) => {
       // A failed lazy import (LOS mid-chunk-download) must not be a silent
       // black pane — log it; the next tab click retries the import.
@@ -1269,8 +1356,15 @@ function bindTabs(): void {
         .catch(() => { /* leave the store empty — badges stay quiet */ });
     }
   });
+  if (tabIss) {
+    tabIss.addEventListener('click', () => {
+      setActive('view-iss', tabIss);
+      openIssPane();
+    });
+  }
   if (tabProfile) {
     tabProfile.addEventListener('click', () => {
+      releaseIssPane();
       setActive('view-profile', tabProfile);
       void loadProfilePane();
       // Photo lookup widget lives inside the Profile pane now. Bind on
@@ -1280,6 +1374,7 @@ function bindTabs(): void {
     });
   }
   tabLog.addEventListener('click', () => {
+    releaseIssPane();
     setActive('view-log', tabLog);
     void loadLogPane();
   });
@@ -1295,6 +1390,7 @@ function bindTabs(): void {
     if (!targetId) return;
     const profileName = getCurrentProfile()?.name;
     if (!profileName) return;
+    releaseIssPane();
     if (tabProfile) setActive('view-profile', tabProfile);
     void loadProfilePane().then(async () => {
       const crud = await import('./profile-crud');

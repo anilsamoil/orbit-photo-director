@@ -60,16 +60,22 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   root.dataset.issPhase = phase;
   const presets = document.createElement('div');
   presets.dataset.issPresets = '';
+  presets.setAttribute('role', 'group');
+  presets.setAttribute('aria-label', 'Camera');
   const horizon = presetButton('horizon', 'Horizon');
   const nadir = presetButton('nadir', 'Straight down');
   presets.append(horizon, nadir);
+  const utc = document.createElement('p');
+  utc.dataset.issUtc = '';
   const frame = document.createElement('div');
   frame.dataset.issFrame = '';
+  const card = document.createElement('article');
+  card.dataset.issCard = '';
   const status = document.createElement('p');
   status.dataset.issStatus = '';
   status.textContent = 'Loading ISS view';
-  const detail = document.createElement('p');
-  detail.dataset.issDetail = '';
+  const actions = document.createElement('div');
+  actions.dataset.issActions = '';
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.dataset.issRetry = '';
@@ -80,7 +86,17 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   mapButton.dataset.issMap = '';
   mapButton.textContent = 'Map';
   mapButton.hidden = true;
-  root.append(presets, frame, status, detail, retry, mapButton);
+  actions.append(retry, mapButton);
+  const detail = document.createElement('p');
+  detail.dataset.issDetail = '';
+  const details = document.createElement('details');
+  details.dataset.issDetails = '';
+  details.hidden = true;
+  const summary = document.createElement('summary');
+  summary.textContent = 'Details';
+  details.append(summary, detail);
+  card.append(status, actions, details);
+  root.append(presets, utc, frame, card);
   host.append(root);
   syncPreset();
   layout();
@@ -248,6 +264,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const lines = [card.title, card.lens, card.position, card.lock, card.lighting, card.imagery].filter((line) => line.length > 0);
     status.textContent = lines.join('\n');
     detail.textContent = card.detail;
+    details.hidden = card.detail.length === 0;
+    const clock = /^(\d{4}-\d{2}-\d{2} )(\d{2}:\d{2}:\d{2} UTC)/.exec(card.position);
+    utc.textContent = clock?.[2] ?? '';
   }
 
   function layout(): void {
