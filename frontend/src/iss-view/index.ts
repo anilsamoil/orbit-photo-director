@@ -7,12 +7,14 @@ import {
   sceneCard,
   sceneFit,
   sceneFrame,
+  sensorField,
   type CameraMode,
   type ImageryState,
   type SceneCard,
   type SceneFrame,
   type SceneSnapshot,
 } from './model';
+import { fitIssPane } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
 const sessionPreset: { mode: CameraMode } = { mode: 'horizon' };
@@ -56,6 +58,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let held: IssScenePhase = 'running';
   let timer = 0;
   let paintSerial = 0;
+  const lensFovDeg = sensorField().vertical;
+  let opticalFovDeg = lensFovDeg;
+  const pointers = new Map<number, { x: number; y: number }>();
+  let pinchDistance = 0;
   const bootGeneration = generation;
 
   const root = document.createElement('section');
@@ -154,6 +160,27 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   telemetry.addEventListener('click', () => {
     setTelemetryOpen(telemetryBody.hidden);
   });
+  frame.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    setOpticalFov(opticalFovDeg * Math.exp(event.deltaY * 0.0015));
+  }, { passive: false });
+  frame.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse') return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size >= 2) pinchDistance = pointerDistance();
+    frame.setPointerCapture(event.pointerId);
+  });
+  frame.addEventListener('pointermove', (event) => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size < 2 || pinchDistance <= 0) return;
+    const next = pointerDistance();
+    if (next <= 0) return;
+    setOpticalFov(opticalFovDeg * (pinchDistance / next));
+    pinchDistance = next;
+  });
+  frame.addEventListener('pointerup', forgetPointer);
+  frame.addEventListener('pointercancel', forgetPointer);
   retry.addEventListener('click', () => scene.retry());
   mapButton.addEventListener('click', () => options.onMap?.());
   document.addEventListener('visibilitychange', onVisibility);
@@ -282,7 +309,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     try {
       await renderer.aim({
         pose: posed.pose,
-        verticalFovDeg: fit.verticalFovDeg,
+        verticalFovDeg: opticalFovDeg,
         widthPx: fit.widthPx,
         heightPx: fit.heightPx,
         lightingUtcMs: when,
@@ -328,27 +355,67 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     utc.textContent = clock?.[2] ?? '';
   }
 
-  function layout(): { widthPx: number; heightPx: number; verticalFovDeg: number } {
+  function layout(): { widthPx: number; heightPx: number } {
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
-    const fit = width < 10 || height < 10 ? sceneFit(640, 400) : fitInPane(width, height);
+    const fit = width < 10 || height < 10 ? { ...sceneFit(640, 400), bodyMaxPx: null } : fitInPane(width, height);
     const widthPx = Math.max(1, Math.floor(fit.widthPx));
     const heightPx = Math.max(1, Math.floor(fit.heightPx));
     frame.style.width = `${widthPx}px`;
     frame.style.height = `${heightPx}px`;
-    return { widthPx, heightPx, verticalFovDeg: fit.verticalFovDeg };
+    telemetryBody.style.maxHeight = fit.bodyMaxPx === null ? '' : `${fit.bodyMaxPx}px`;
+    return { widthPx, heightPx };
   }
 
-  function fitInPane(width: number, height: number): { widthPx: number; heightPx: number; verticalFovDeg: number } {
+  function fitInPane(width: number, height: number): { widthPx: number; heightPx: number; bodyMaxPx: number | null } {
     const style = getComputedStyle(root);
-    const padX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
-    const padY = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
-    const gap = Number.parseFloat(style.rowGap || style.gap) || 0;
-    const chrome = toolbar.offsetHeight + card.offsetHeight + gap * 2;
+    const padX = px(style.paddingLeft) + px(style.paddingRight);
+    const padY = px(style.paddingTop) + px(style.paddingBottom);
+    const gap = px(style.rowGap || style.gap);
     const stageStyle = getComputedStyle(stage);
-    const stageGap = Number.parseFloat(stageStyle.columnGap || stageStyle.gap) || 0;
-    const sides = port.offsetWidth + starboard.offsetWidth + stageGap * 2;
-    return sceneFit(Math.max(1, width - padX - sides), Math.max(1, height - padY - chrome));
+    const stageGap = px(stageStyle.columnGap || stageStyle.gap);
+    const bodyStyle = getComputedStyle(telemetryBody);
+    const bodyMargin = px(bodyStyle.marginTop) + px(bodyStyle.marginBottom);
+    const bodyBorder = px(bodyStyle.borderTopWidth) + px(bodyStyle.borderBottomWidth);
+    const open = !telemetryBody.hidden;
+    return fitIssPane({
+      paneWidthPx: width,
+      paneHeightPx: height,
+      padXPx: padX,
+      padYPx: padY,
+      gapPx: gap,
+      toolbarPx: toolbar.offsetHeight,
+      buttonPx: telemetry.offsetHeight,
+      bodyPx: open ? telemetryBody.scrollHeight + bodyBorder + bodyMargin : 0,
+      bodyMarginPx: open ? bodyMargin : 0,
+      sideWidthPx: port.offsetWidth + starboard.offsetWidth + stageGap * 2,
+      labelPx: Math.max(port.offsetHeight, starboard.offsetHeight),
+    });
+  }
+
+  function setOpticalFov(value: number): void {
+    const next = clampFov(value);
+    if (next === opticalFovDeg) return;
+    opticalFovDeg = next;
+    if (phase === 'running' && rendererReady) void paint();
+  }
+
+  function clampFov(value: number): number {
+    if (!Number.isFinite(value)) return opticalFovDeg;
+    return Math.min(lensFovDeg, Math.max(12, value));
+  }
+
+  function pointerDistance(): number {
+    const points = [...pointers.values()];
+    const first = points[0];
+    const second = points[1];
+    if (!first || !second) return 0;
+    return Math.hypot(first.x - second.x, first.y - second.y);
+  }
+
+  function forgetPointer(event: PointerEvent): void {
+    pointers.delete(event.pointerId);
+    pinchDistance = pointers.size >= 2 ? pointerDistance() : 0;
   }
 
   function syncPreset(): void {
@@ -402,6 +469,11 @@ function presetButton(mode: CameraMode, label: string): HTMLButtonElement {
   button.dataset.issPreset = mode;
   button.textContent = label;
   return button;
+}
+
+function px(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function explainBoot(error: unknown): string {

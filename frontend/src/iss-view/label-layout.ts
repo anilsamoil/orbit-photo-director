@@ -21,8 +21,17 @@ const GAP = 4;
 export function placeScreenLabels(labels: readonly ScreenLabel[], frame: { width: number; height: number }): PlacedLabel[] {
   const cities = labels.filter((label) => label.kind === 'city');
   const areas = labels.filter((label) => label.kind !== 'city');
-  const placed: PlacedLabel[] = cities.map((label) => ({ ...label, offsetX: 0, offsetY: 0 }));
-  const occupied = placed.map((label) => rectOf(label));
+  const placed: PlacedLabel[] = [];
+  const occupied: Rect[] = [];
+  const ranked = [...cities].sort(byName);
+  for (const city of ranked) {
+    const next = { ...city, offsetX: 0, offsetY: 0 };
+    const box = rectOf(next);
+    if (!inside(box, frame)) continue;
+    if (occupied.some((held) => overlaps(box, held))) continue;
+    placed.push(next);
+    occupied.push(box);
+  }
   const ordered = [...areas].sort((a, b) => score(a, frame) - score(b, frame));
   for (const area of ordered) {
     const slot = openSlot(area, occupied, frame);
@@ -32,6 +41,12 @@ export function placeScreenLabels(labels: readonly ScreenLabel[], frame: { width
     occupied.push(rectOf(next));
   }
   return placed;
+}
+
+function byName(a: ScreenLabel, b: ScreenLabel): number {
+  if (a.name < b.name) return -1;
+  if (a.name > b.name) return 1;
+  return 0;
 }
 
 function score(label: ScreenLabel, frame: { width: number; height: number }): number {
