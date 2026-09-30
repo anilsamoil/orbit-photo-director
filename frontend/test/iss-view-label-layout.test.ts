@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { placeScreenLabels, type PlacedLabel } from '../src/iss-view/label-layout';
+import { sceneFrame } from '../src/iss-view/model';
+import { placesOnDisk } from '../src/iss-view/place-labels';
+import type { Track } from '../src/types';
+
+import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
 
 function rect(label: PlacedLabel): { left: number; top: number; right: number; bottom: number } {
   const x = label.x + label.offsetX;
@@ -93,5 +98,141 @@ describe('ISS place label collision', () => {
     expect(water).toBeTruthy();
     if (!city || !water) return;
     expect(overlaps(rect(city), rect(water))).toBe(false);
+  });
+
+  it('keeps the earlier city name and drops the overlapping city', () => {
+    const pairs = [
+      [
+        { kind: 'city' as const, name: 'São Paulo', x: 219.9497726553395, y: 107.2729192765149, width: 61.765625, height: 12 },
+        { kind: 'city' as const, name: 'Rio de Janeiro', x: 199.02209900195777, y: 111.0458603502833, width: 89.515625, height: 12 },
+        'Rio de Janeiro',
+        'São Paulo',
+      ],
+      [
+        { kind: 'city' as const, name: 'Paris', x: 199.97328942638316, y: 110.73189586087013, width: 31.765625, height: 12 },
+        { kind: 'city' as const, name: 'London', x: 223.6025405934202, y: 108.60941076090614, width: 46.328125, height: 12 },
+        'London',
+        'Paris',
+      ],
+      [
+        { kind: 'city' as const, name: 'Washington D.C.', x: 316.1459086666145, y: 86.36259218180246, width: 103.828125, height: 12 },
+        { kind: 'city' as const, name: 'New York', x: 279.8154752448632, y: 97.36383015526505, width: 59.125, height: 12 },
+        'New York',
+        'Washington D.C.',
+      ],
+    ] as const;
+    for (const [first, second, kept, dropped] of pairs) {
+      const placed = placeScreenLabels([first, second], { width: 340, height: 226 });
+      const winner = placed.find((label) => label.name === kept);
+      expect(placed.map((label) => label.name)).toEqual([kept]);
+      expect(winner?.offsetX).toBe(0);
+      expect(winner?.offsetY).toBe(0);
+      expect(placed.some((label) => label.name === dropped)).toBe(false);
+    }
+  });
+
+  it('drops a long city name that leaves the frame and keeps the city that fits', () => {
+    const placed = placeScreenLabels(
+      [
+        { kind: 'city', name: 'Washington D.C.', x: 80, y: 16, width: 104, height: 12 },
+        { kind: 'city', name: 'Boston', x: 40, y: 40, width: 48, height: 12 },
+      ],
+      { width: 120, height: 80 },
+    );
+    expect(placed.map((label) => label.name)).toEqual(['Boston']);
+    expect(placed[0]?.offsetX).toBe(0);
+    expect(placed[0]?.offsetY).toBe(0);
+  });
+
+  it('moves a country off the admitted city after the other city is dropped', () => {
+    const placed = placeScreenLabels(
+      [
+        { kind: 'country', name: 'Brazil', x: 210, y: 108, width: 70, height: 16 },
+        { kind: 'city', name: 'São Paulo', x: 219.9497726553395, y: 107.2729192765149, width: 61.765625, height: 12 },
+        { kind: 'city', name: 'Rio de Janeiro', x: 199.02209900195777, y: 111.0458603502833, width: 89.515625, height: 12 },
+      ],
+      { width: 340, height: 226 },
+    );
+    const rio = placed.find((label) => label.name === 'Rio de Janeiro');
+    const brazil = placed.find((label) => label.name === 'Brazil');
+    expect(rio?.offsetX).toBe(0);
+    expect(rio?.offsetY).toBe(0);
+    expect(placed.some((label) => label.name === 'São Paulo')).toBe(false);
+    expect(brazil).toBeTruthy();
+    if (!rio || !brazil) return;
+    expect(overlaps(rect(rio), rect(brazil))).toBe(false);
+  });
+});
+
+const fixture = fixtureRaw as {
+  tle: { line1: string; line2: string };
+  iss_polynomial: Track['iss_polynomial'];
+};
+
+describe('ISS city collision on a horizon orbit', () => {
+  it('separates city pairs from the 2024-10-17 horizon passes', () => {
+    const track: Track = {
+      iss_polynomial: fixture.iss_polynomial,
+      tle: fixture.tle,
+      tle_epoch: '2024-10-16T18:58:11.999Z',
+      tle_age_hours: 17,
+      tle_freshness_factor: 1,
+    };
+    const passes = [
+      {
+        utc: '2024-10-17T16:00:00.000Z',
+        lat: -37.26028841192257,
+        lon: -54.034093970133,
+        kept: 'Rio de Janeiro',
+        dropped: 'São Paulo',
+        a: { kind: 'city' as const, name: 'Rio de Janeiro', x: 199.02209900195777, y: 111.0458603502833, width: 89.515625, height: 12 },
+        b: { kind: 'city' as const, name: 'São Paulo', x: 219.9497726553395, y: 107.2729192765149, width: 61.765625, height: 12 },
+      },
+      {
+        utc: '2024-10-17T17:58:30.000Z',
+        lat: 36.22146266241252,
+        lon: -11.634905516130965,
+        kept: 'London',
+        dropped: 'Paris',
+        a: { kind: 'city' as const, name: 'London', x: 223.6025405934202, y: 108.60941076090614, width: 46.328125, height: 12 },
+        b: { kind: 'city' as const, name: 'Paris', x: 199.97328942638316, y: 110.73189586087013, width: 31.765625, height: 12 },
+      },
+      {
+        utc: '2024-10-17T20:59:30.000Z',
+        lat: 23.561272825097774,
+        lon: -72.88689070429011,
+        kept: 'New York',
+        dropped: 'Washington D.C.',
+        a: { kind: 'city' as const, name: 'New York', x: 279.8154752448632, y: 97.36383015526505, width: 59.125, height: 12 },
+        b: { kind: 'city' as const, name: 'Washington D.C.', x: 316.1459086666145, y: 86.36259218180246, width: 103.828125, height: 12 },
+      },
+    ];
+    for (const pass of passes) {
+      const posed = sceneFrame(track, Date.parse(pass.utc), 'horizon', 0);
+      expect(posed.ok).toBe(true);
+      if (!posed.ok) continue;
+      expect(posed.pose.camera.latDeg).toBeCloseTo(pass.lat, 4);
+      expect(posed.pose.camera.lonDeg).toBeCloseTo(pass.lon, 4);
+      const visible = placesOnDisk(
+        posed.pose.camera.latDeg,
+        posed.pose.camera.lonDeg,
+        posed.pose.altitudeM,
+        posed.pose.bearingDeg,
+        posed.pose.analyticPitchDeg,
+      );
+      expect(visible.some((place) => place.name === pass.kept)).toBe(true);
+      expect(visible.some((place) => place.name === pass.dropped)).toBe(true);
+      const placed = placeScreenLabels([pass.a, pass.b], { width: 340, height: 226 });
+      expect(placed.map((label) => label.name)).toEqual([pass.kept]);
+      const boxes = placed.map(rect);
+      for (let i = 0; i < boxes.length; i += 1) {
+        for (let j = i + 1; j < boxes.length; j += 1) {
+          const left = boxes[i];
+          const right = boxes[j];
+          if (!left || !right) continue;
+          expect(overlaps(left, right)).toBe(false);
+        }
+      }
+    }
   });
 });

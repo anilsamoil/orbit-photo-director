@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { mountIssScene, type IssScene } from '../src/iss-view';
+import { sensorField, type SceneSnapshot } from '../src/iss-view/model';
 import type { IssAim, IssRenderer, IssRendererFactory, IssRendererHooks } from '../src/iss-view/renderer';
-import type { SceneSnapshot } from '../src/iss-view/model';
 import type { Track } from '../src/types';
 
 import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
@@ -161,6 +161,114 @@ describe('ISS frame fit', () => {
     const pane = 402 - 12 * 2;
     const sides = 11 + 11 + 8 * 2;
     expect(Number.parseFloat(frame.style.width)).toBeLessThanOrEqual(pane - sides);
+    scene.dispose();
+    host.remove();
+  });
+
+  it('keeps a real Earth frame when short landscape telemetry is open or closed', async () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const fake = renderer(host);
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      createRenderer: fake.factory,
+      drive: 'manual',
+      session: { mode: 'nadir' },
+    });
+    const root = host.querySelector('[data-iss-scene]') as HTMLElement;
+    const stage = host.querySelector('[data-iss-stage]') as HTMLElement;
+    const toolbar = host.querySelector('[data-iss-toolbar]') as HTMLElement;
+    const card = host.querySelector('[data-iss-card]') as HTMLElement;
+    const port = host.querySelector('[data-iss-port]') as HTMLElement;
+    const starboard = host.querySelector('[data-iss-starboard]') as HTMLElement;
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    const body = host.querySelector('[data-iss-telemetry-body]') as HTMLElement;
+    const button = host.querySelector('[data-iss-telemetry]') as HTMLElement;
+    root.style.padding = '12px';
+    root.style.gap = '8px';
+    stage.style.gap = '8px';
+    body.style.margin = '0';
+    box(host, 874, 271);
+    box(root, 874, 271);
+    Object.defineProperty(toolbar, 'offsetHeight', { configurable: true, get: () => 52 });
+    Object.defineProperty(button, 'offsetHeight', { configurable: true, get: () => 44 });
+    Object.defineProperty(card, 'offsetHeight', { configurable: true, get: () => (body.hidden ? 44 : 227) });
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => (body.hidden ? 0 : 183) });
+    Object.defineProperty(port, 'offsetWidth', { configurable: true, get: () => 11 });
+    Object.defineProperty(starboard, 'offsetWidth', { configurable: true, get: () => 11 });
+    Object.defineProperty(port, 'offsetHeight', { configurable: true, get: () => 38 });
+    Object.defineProperty(starboard, 'offsetHeight', { configurable: true, get: () => 84 });
+    scene.update(shot());
+    await paint(scene);
+    expect(frame.style.width).toBe('202px');
+    expect(frame.style.height).toBe('135px');
+    expect(body.style.maxHeight).toBe('');
+    button.click();
+    await paint(scene);
+    for (let tick = 0; tick < 4; tick += 1) await scene.paint();
+    expect(frame.style.width).toBe('126px');
+    expect(frame.style.height).toBe('84px');
+    expect(body.style.maxHeight).toBe('51px');
+    expect(fake.sizes.at(-1)).toEqual({ widthPx: 126, heightPx: 84 });
+    expect(fake.aims.at(-1)?.widthPx).toBe(126);
+    expect(fake.aims.at(-1)?.heightPx).toBe(84);
+    button.click();
+    await paint(scene);
+    expect(frame.style.width).toBe('202px');
+    expect(frame.style.height).toBe('135px');
+    expect(body.style.maxHeight).toBe('');
+    scene.dispose();
+    host.remove();
+  });
+
+  it('keeps a pinched field of view through later aims', async () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const fake = renderer(host);
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      createRenderer: fake.factory,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+    });
+    const root = host.querySelector('[data-iss-scene]') as HTMLElement;
+    const stage = host.querySelector('[data-iss-stage]') as HTMLElement;
+    const toolbar = host.querySelector('[data-iss-toolbar]') as HTMLElement;
+    const card = host.querySelector('[data-iss-card]') as HTMLElement;
+    const port = host.querySelector('[data-iss-port]') as HTMLElement;
+    const starboard = host.querySelector('[data-iss-starboard]') as HTMLElement;
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    const button = host.querySelector('[data-iss-telemetry]') as HTMLElement;
+    root.style.padding = '12px';
+    root.style.gap = '8px';
+    stage.style.gap = '8px';
+    box(host, 1400, 769);
+    box(root, 1400, 769);
+    Object.defineProperty(toolbar, 'offsetHeight', { configurable: true, get: () => 44 });
+    Object.defineProperty(button, 'offsetHeight', { configurable: true, get: () => 44 });
+    Object.defineProperty(card, 'offsetHeight', { configurable: true, get: () => 44 });
+    Object.defineProperty(port, 'offsetWidth', { configurable: true, get: () => 11 });
+    Object.defineProperty(starboard, 'offsetWidth', { configurable: true, get: () => 11 });
+    scene.update(shot());
+    await paint(scene);
+    const lens = sensorField().vertical;
+    const first = fake.aims.at(-1);
+    expect(first?.verticalFovDeg).toBeCloseTo(lens, 5);
+    const altitude = first?.pose.altitudeM;
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, bubbles: true, cancelable: true }));
+    await paint(scene);
+    const zoomed = fake.aims.at(-1);
+    expect(zoomed?.verticalFovDeg).toBeLessThan(lens - 5);
+    expect(zoomed?.pose.altitudeM).toBe(altitude);
+    const chosen = zoomed?.verticalFovDeg;
+    button.click();
+    await paint(scene);
+    await scene.paint();
+    expect(fake.aims.at(-1)?.verticalFovDeg).toBe(chosen);
+    expect(fake.aims.at(-1)?.pose.altitudeM).toBe(altitude);
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: 4000, bubbles: true, cancelable: true }));
+    await paint(scene);
+    expect(fake.aims.at(-1)?.verticalFovDeg).toBeCloseTo(lens, 5);
     scene.dispose();
     host.remove();
   });
