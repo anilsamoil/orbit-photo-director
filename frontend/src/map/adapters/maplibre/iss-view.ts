@@ -5,7 +5,7 @@ import type { SkySpecification } from '@maplibre/maplibre-gl-style-spec';
 
 import { TANGENT_PITCH_DEG } from '../../../iss-g1/model';
 import { bucketFor, createComposer, type Composer, type DecodedTile } from '../../../iss-view/compose';
-import type { ImageryState } from '../../../iss-view/model';
+import { EARTH_VIEW_ROLL_DEG, type ImageryState } from '../../../iss-view/model';
 import { placeScreenLabels } from '../../../iss-view/label-layout';
 import { placesOnDisk, type PlaceLabel } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
@@ -122,7 +122,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
         new LngLat(aim.pose.targetLonDeg, aim.pose.targetLatDeg),
         0,
       );
-      map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg });
+      map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg, roll: EARTH_VIEW_ROLL_DEG });
       syncPlaceMarkers(map, placeMarkers, aim);
       await idle(map);
     },

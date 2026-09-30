@@ -18,6 +18,16 @@ import type { Track } from '../types';
 
 export type CameraMode = CameraPreset;
 
+/** Cupola floor look. 180° about the boresight puts ground-track forward at the bottom of the frame. */
+export const EARTH_VIEW_ROLL_DEG = 180;
+
+/** Screen sides of the station body. Roll 0 keeps port on the left. Roll 180 moves port to the right. */
+export function earthFrameSides(rollDeg: number): { left: 'port' | 'starboard'; right: 'port' | 'starboard' } {
+  const wrapped = ((rollDeg % 360) + 360) % 360;
+  if (wrapped === 180) return { left: 'starboard', right: 'port' };
+  return { left: 'port', right: 'starboard' };
+}
+
 export type SceneSnapshot = {
   manifestVersion: string;
   generatedAtMs: number;

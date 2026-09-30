@@ -225,6 +225,7 @@ describe('ISS renderer pitch stays off the product map', () => {
     const scene = readFileSync(resolve(__dirname, '../src/map/adapters/maplibre/iss-view.ts'), 'utf8');
     expect(product).not.toContain('maxPitch');
     expect(scene).toContain('maxPitch: ISS_VIEW_MAX_PITCH_DEG');
+    expect(scene).toContain('roll: EARTH_VIEW_ROLL_DEG');
     expect(scene).toContain("type: 'vertical-perspective'");
     expect(scene).toContain('syncPlaceMarkers');
     expect(scene).toContain('iss-place-');
@@ -255,15 +256,17 @@ describe('ISS chrome starts out of the way', () => {
     expect(host.querySelector('[data-iss-port]')?.textContent).toBe('Port');
     expect(host.querySelector('[data-iss-starboard]')?.textContent).toBe('Starboard');
     const stage = host.querySelector('[data-iss-stage]');
-    expect(stage?.children[0]).toBe(host.querySelector('[data-iss-port]'));
+    expect(stage?.children[0]).toBe(host.querySelector('[data-iss-starboard]'));
     expect(stage?.children[1]).toBe(host.querySelector('[data-iss-frame]'));
-    expect(stage?.children[2]).toBe(host.querySelector('[data-iss-starboard]'));
+    expect(stage?.children[2]).toBe(host.querySelector('[data-iss-port]'));
     scene.update(shot('m1'));
     await ready(scene);
     cupola.value = '7';
     cupola.dispatchEvent(new Event('change'));
     expect(scene.mode()).toBe('nadir');
     expect(host.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(stage?.children[0]).toBe(host.querySelector('[data-iss-starboard]'));
+    expect(stage?.children[2]).toBe(host.querySelector('[data-iss-port]'));
     (host.querySelector('[data-iss-preset="horizon"]') as HTMLElement).click();
     expect(scene.mode()).toBe('horizon');
     expect(cupola.value).toBe('');
