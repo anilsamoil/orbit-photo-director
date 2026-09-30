@@ -38,5 +38,5 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 - The picture is a spherical model with static Blue Marble and Black Marble 2016. It is not a live photo and not the Cupola window.
 - The scene needs WebGL2. A browser without it shows `WebGL2 is unavailable` and this drive fails on the Horizon wait.
 - The preset is remembered only in the page session. A new browser starts on Horizon again.
-- The fixture element set is old, so the open card's first line is `Estimated view · orbit data old`. A current element set uses `ISS perspective` on that line. The drive still requires `Horizon locked` and `14 mm`.
+- The fixture uses a live CelesTrak ISS element set when that fetch works. While that set is not over 48 hours old, the open card's first line is `ISS perspective`. If CelesTrak is unreachable, the fixture uses the 2026-09-27 set in `scripts/fixtures.mjs`, and that line is `Estimated view · orbit data old`. The drive still requires `Horizon locked` and `14 mm`.
 - G1 is not closed by this drive. Emulated WebKit is not a physical iPad Safari or iPhone Safari pass.
