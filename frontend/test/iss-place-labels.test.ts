@@ -1,21 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
 import { CUPOLA_WINDOWS, cupolaPreset } from '../src/iss-view/cupola';
-import { PLACE_LABELS, placeLabelCollection } from '../src/iss-view/place-labels';
+import { namesAt, placesOnDisk } from '../src/iss-view/place-labels';
 
 describe('ISS place labels', () => {
-  it('names a major country, a major city, and an ocean', () => {
-    const collection = placeLabelCollection();
-    const japan = collection.features.find((feature) => feature.properties?.name === 'Japan');
-    const tokyo = collection.features.find((feature) => feature.properties?.name === 'Tokyo');
-    const pacific = collection.features.find((feature) => feature.properties?.name === 'North Pacific Ocean');
-    expect(japan?.properties?.kind).toBe('country');
-    expect(japan?.geometry).toEqual({ type: 'Point', coordinates: [138.44, 36.14] });
-    expect(tokyo?.properties?.kind).toBe('city');
-    expect(tokyo?.geometry).toEqual({ type: 'Point', coordinates: [139.75, 35.69] });
-    expect(pacific?.properties?.kind).toBe('water');
-    expect(pacific?.geometry).toMatchObject({ type: 'Point' });
-    expect(PLACE_LABELS.every((place) => place.name.length > 0 && Number.isFinite(place.lon) && Number.isFinite(place.lat))).toBe(true);
+  it('names the country or the water under the station', () => {
+    expect(namesAt(36.2, 138.4)).toEqual({ country: 'Japan', water: '' });
+    expect(namesAt(35.69, 139.75)).toEqual({ country: 'Japan', water: '' });
+    expect(namesAt(39, -97)).toEqual({ country: 'United States', water: '' });
+    expect(namesAt(40.75, -73.98)).toEqual({ country: 'United States', water: '' });
+    expect(namesAt(41.3, -44.4)).toEqual({ country: '', water: 'North Atlantic Ocean' });
+    expect(namesAt(40, -40).water).toBe('North Atlantic Ocean');
+  });
+
+  it('keeps the nadir disk on the ground under the station', () => {
+    const places = placesOnDisk(41.3, -44.4, 420_000, 90, 0);
+    expect(places.some((place) => place.kind === 'water' && place.name === 'North Atlantic Ocean')).toBe(true);
+    expect(places.some((place) => place.name === 'Chile' || place.name === 'Japan')).toBe(false);
+    const tokyo = placesOnDisk(35.69, 139.75, 420_000, 40, 0);
+    expect(tokyo.some((place) => place.kind === 'country' && place.name === 'Japan')).toBe(true);
+    expect(tokyo.some((place) => place.kind === 'city' && place.name === 'Tokyo')).toBe(true);
   });
 });
 

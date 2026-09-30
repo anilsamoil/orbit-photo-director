@@ -6,7 +6,7 @@ import type { SkySpecification } from '@maplibre/maplibre-gl-style-spec';
 import { TANGENT_PITCH_DEG } from '../../../iss-g1/model';
 import { bucketFor, createComposer, type Composer, type DecodedTile } from '../../../iss-view/compose';
 import type { ImageryState } from '../../../iss-view/model';
-import { PLACE_LABELS } from '../../../iss-view/place-labels';
+import { placesOnDisk, type PlaceLabel } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
 import { collapseAttribution } from './attribution';
 
@@ -60,8 +60,10 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   map.setMaxPitch(ISS_VIEW_MAX_PITCH_DEG);
   collapseAttribution(frame);
   exposeIssForEndToEnd(map);
-  const placeMarkers: Marker[] = [];
-  const armLabels = (): void => ensurePlaceLabels(map, frame, placeMarkers);
+  const placeMarkers: { key: string; marker: Marker }[] = [];
+  const armLabels = (): void => {
+    frame.dataset.issPlaceLayers = 'country city water';
+  };
   if (map.loaded()) armLabels();
   else map.once('load', armLabels);
   map.on('error', (event) => {
@@ -120,13 +122,14 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
         0,
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg });
+      syncPlaceMarkers(map, placeMarkers, aim);
       await idle(map);
     },
     destroy() {
       if (removed.done) return;
       removed.done = true;
-      for (const marker of placeMarkers) marker.remove();
-      placeMarkers.length = 0;
+      for (const entry of placeMarkers) entry.marker.remove();
+      placeMarkers.splice(0, placeMarkers.length);
       map.remove();
     },
   };
@@ -138,17 +141,50 @@ function exposeIssForEndToEnd(map: MapLibreMap): void {
   (window as unknown as { __opdIss?: MapLibreMap }).__opdIss = map;
 }
 
-function ensurePlaceLabels(map: MapLibreMap, frame: HTMLElement, markers: Marker[]): void {
-  frame.dataset.issPlaceLayers = 'country city water';
-  if (markers.length > 0) return;
-  for (const place of PLACE_LABELS) {
+function syncPlaceMarkers(map: MapLibreMap, markers: { key: string; marker: Marker }[], aim: IssAim): void {
+  const width = map.getCanvas().clientWidth;
+  const height = map.getCanvas().clientHeight;
+  if (width < 10 || height < 10) return;
+  const candidates = placesOnDisk(
+    aim.pose.camera.latDeg,
+    aim.pose.camera.lonDeg,
+    aim.pose.altitudeM,
+    aim.pose.bearingDeg,
+    aim.pose.analyticPitchDeg,
+  );
+  const chosen: { key: string; place: PlaceLabel; score: number }[] = [];
+  for (const place of candidates) {
+    const projected = map.project([place.lon, place.lat]);
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
+    if (projected.x < 18 || projected.y < 18 || projected.x > width - 18 || projected.y > height - 18) continue;
+    const score = (projected.x - width / 2) ** 2 + (projected.y - height / 2) ** 2;
+    const key = `${place.kind}:${place.name}`;
+    const current = chosen.find((entry) => entry.key === key);
+    if (!current) chosen.push({ key, place, score });
+    else if (score < current.score) {
+      current.place = place;
+      current.score = score;
+    }
+  }
+  for (let index = markers.length - 1; index >= 0; index -= 1) {
+    const entry = markers[index];
+    if (!entry || chosen.some((item) => item.key === entry.key)) continue;
+    entry.marker.remove();
+    markers.splice(index, 1);
+  }
+  for (const entry of chosen) {
+    const existing = markers.find((item) => item.key === entry.key);
+    if (existing) {
+      existing.marker.setLngLat([entry.place.lon, entry.place.lat]);
+      continue;
+    }
     const label = document.createElement('span');
-    label.className = `iss-place iss-place-${place.kind}`;
-    label.textContent = place.name;
-    const marker = new Marker({ element: label, anchor: 'center', opacityWhenCovered: 0 })
-      .setLngLat([place.lon, place.lat])
-      .addTo(map);
-    markers.push(marker);
+    label.className = `iss-place iss-place-${entry.place.kind}`;
+    label.textContent = entry.place.name;
+    markers.push({
+      key: entry.key,
+      marker: new Marker({ element: label, anchor: 'top' }).setLngLat([entry.place.lon, entry.place.lat]).addTo(map),
+    });
   }
 }
 

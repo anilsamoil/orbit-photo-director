@@ -226,7 +226,7 @@ describe('ISS renderer pitch stays off the product map', () => {
     expect(product).not.toContain('maxPitch');
     expect(scene).toContain('maxPitch: ISS_VIEW_MAX_PITCH_DEG');
     expect(scene).toContain("type: 'vertical-perspective'");
-    expect(scene).toContain('ensurePlaceLabels');
+    expect(scene).toContain('syncPlaceMarkers');
     expect(scene).toContain('iss-place-');
     expect(scene).toContain('collapseAttribution');
   });

@@ -3204,6 +3204,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   flex: 0 0 auto;
   margin: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .iss-place {

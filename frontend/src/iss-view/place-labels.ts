@@ -1,6 +1,7 @@
-/** Major country, city, and water names for the ISS scene.
- *  Points come from Natural Earth 110m label anchors and marine polygons.
- *  Cities are scalerank 0. Countries are label rank 2. Waters are oceans and major seas. */
+import { RENDER_RADIUS_M } from '../iss-g1/model';
+import { GROUND_SHAPES, type GroundShape } from './place-shapes';
+
+/** A name drawn on the ISS scene. */
 export type PlaceKind = 'country' | 'city' | 'water';
 
 export type PlaceLabel = {
@@ -10,108 +11,137 @@ export type PlaceLabel = {
   lat: number;
 };
 
-export const PLACE_LABELS: readonly PlaceLabel[] = [
-  { kind: 'country', name: "Argentina", lon: -64.17, lat: -33.5 },
-  { kind: 'country', name: "Australia", lon: 134.05, lat: -24.13 },
-  { kind: 'country', name: "Belgium", lon: 4.8, lat: 50.79 },
-  { kind: 'country', name: "Brazil", lon: -49.56, lat: -12.1 },
-  { kind: 'country', name: "Canada", lon: -101.91, lat: 60.32 },
-  { kind: 'country', name: "Chile", lon: -72.32, lat: -38.15 },
-  { kind: 'country', name: "China", lon: 106.34, lat: 32.5 },
-  { kind: 'country', name: "Colombia", lon: -73.17, lat: 3.37 },
-  { kind: 'country', name: "DR Congo", lon: 23.46, lat: -1.86 },
-  { kind: 'country', name: "Egypt", lon: 29.45, lat: 26.19 },
-  { kind: 'country', name: "Ethiopia", lon: 39.09, lat: 8.03 },
-  { kind: 'country', name: "France", lon: 2.55, lat: 46.7 },
-  { kind: 'country', name: "Germany", lon: 9.68, lat: 50.96 },
-  { kind: 'country', name: "India", lon: 79.36, lat: 22.69 },
-  { kind: 'country', name: "Indonesia", lon: 101.89, lat: -0.95 },
-  { kind: 'country', name: "Iran", lon: 54.93, lat: 32.17 },
-  { kind: 'country', name: "Italy", lon: 11.08, lat: 44.73 },
-  { kind: 'country', name: "Japan", lon: 138.44, lat: 36.14 },
-  { kind: 'country', name: "Kenya", lon: 37.91, lat: 0.55 },
-  { kind: 'country', name: "Mexico", lon: -102.29, lat: 23.92 },
-  { kind: 'country', name: "New Zealand", lon: 172.79, lat: -39.76 },
-  { kind: 'country', name: "Nigeria", lon: 7.5, lat: 9.44 },
-  { kind: 'country', name: "Pakistan", lon: 68.55, lat: 29.33 },
-  { kind: 'country', name: "Papua New Guinea", lon: 143.91, lat: -5.7 },
-  { kind: 'country', name: "Peru", lon: -72.9, lat: -12.98 },
-  { kind: 'country', name: "Philippines", lon: 122.47, lat: 11.2 },
-  { kind: 'country', name: "Portugal", lon: -8.27, lat: 39.61 },
-  { kind: 'country', name: "Russia", lon: 44.69, lat: 58.25 },
-  { kind: 'country', name: "Saudi Arabia", lon: 44.7, lat: 23.81 },
-  { kind: 'country', name: "South Africa", lon: 23.67, lat: -29.71 },
-  { kind: 'country', name: "South Korea", lon: 128.13, lat: 36.38 },
-  { kind: 'country', name: "Spain", lon: -3.46, lat: 40.09 },
-  { kind: 'country', name: "Turkey", lon: 34.51, lat: 39.35 },
-  { kind: 'country', name: "United Kingdom", lon: -2.12, lat: 54.4 },
-  { kind: 'country', name: "United States", lon: -97.48, lat: 39.54 },
-  { kind: 'country', name: "Vietnam", lon: 105.39, lat: 21.72 },
-  { kind: 'city', name: "Beijing", lon: 116.39, lat: 39.93 },
-  { kind: 'city', name: "Bogota", lon: -74.09, lat: 4.6 },
-  { kind: 'city', name: "Cairo", lon: 31.25, lat: 30.05 },
-  { kind: 'city', name: "Cape Town", lon: 18.43, lat: -33.92 },
-  { kind: 'city', name: "Hong Kong", lon: 114.18, lat: 22.31 },
-  { kind: 'city', name: "Istanbul", lon: 29.01, lat: 41.11 },
-  { kind: 'city', name: "Jakarta", lon: 106.83, lat: -6.17 },
-  { kind: 'city', name: "Kolkata", lon: 88.32, lat: 22.5 },
-  { kind: 'city', name: "Lagos", lon: 3.39, lat: 6.45 },
-  { kind: 'city', name: "London", lon: -0.12, lat: 51.5 },
-  { kind: 'city', name: "Los Angeles", lon: -118.18, lat: 33.99 },
-  { kind: 'city', name: "Mexico City", lon: -99.13, lat: 19.44 },
-  { kind: 'city', name: "Moscow", lon: 37.61, lat: 55.75 },
-  { kind: 'city', name: "Mumbai", lon: 72.86, lat: 19.02 },
-  { kind: 'city', name: "Nairobi", lon: 36.81, lat: -1.28 },
-  { kind: 'city', name: "New York", lon: -73.98, lat: 40.75 },
-  { kind: 'city', name: "Paris", lon: 2.33, lat: 48.87 },
-  { kind: 'city', name: "Rio de Janeiro", lon: -43.23, lat: -22.92 },
-  { kind: 'city', name: "Riyadh", lon: 46.77, lat: 24.64 },
-  { kind: 'city', name: "Rome", lon: 12.48, lat: 41.9 },
-  { kind: 'city', name: "Santiago", lon: -70.67, lat: -33.45 },
-  { kind: 'city', name: "Shanghai", lon: 121.43, lat: 31.22 },
-  { kind: 'city', name: "Singapore", lon: 103.85, lat: 1.29 },
-  { kind: 'city', name: "Sydney", lon: 151.18, lat: -33.92 },
-  { kind: 'city', name: "S\u00e3o Paulo", lon: -46.63, lat: -23.56 },
-  { kind: 'city', name: "Tokyo", lon: 139.75, lat: 35.69 },
-  { kind: 'city', name: "Washington D.C.", lon: -77.01, lat: 38.9 },
-  { kind: 'water', name: "Arabian Sea", lon: 62.37, lat: 11.91 },
-  { kind: 'water', name: "Arctic Ocean", lon: 171.64, lat: 80.21 },
-  { kind: 'water', name: "Baffin Bay", lon: -68.55, lat: 74.1 },
-  { kind: 'water', name: "Bay of Bengal", lon: 87.25, lat: 14.18 },
-  { kind: 'water', name: "Beaufort Sea", lon: -140.01, lat: 72.94 },
-  { kind: 'water', name: "Black Sea", lon: 34.43, lat: 43.94 },
-  { kind: 'water', name: "Caribbean Sea", lon: -74.18, lat: 15.3 },
-  { kind: 'water', name: "Caspian Sea", lon: 50.26, lat: 41.64 },
-  { kind: 'water', name: "Coral Sea", lon: 155.93, lat: -19.85 },
-  { kind: 'water', name: "Gulf of Alaska", lon: -150.36, lat: 57.5 },
-  { kind: 'water', name: "Gulf of Mexico", lon: -89.13, lat: 25.54 },
-  { kind: 'water', name: "Hudson Bay", lon: -85.99, lat: 60.13 },
-  { kind: 'water', name: "Indian Ocean", lon: 90.81, lat: -26.53 },
-  { kind: 'water', name: "Labrador Sea", lon: -54.65, lat: 53.62 },
-  { kind: 'water', name: "Mediterranean Sea", lon: 16.52, lat: 36.52 },
-  { kind: 'water', name: "North Atlantic Ocean", lon: -36.26, lat: 32.8 },
-  { kind: 'water', name: "North Pacific Ocean", lon: -129.97, lat: 27.93 },
-  { kind: 'water', name: "Persian Gulf", lon: 52.59, lat: 27.38 },
-  { kind: 'water', name: "Philippine Sea", lon: 133.21, lat: 19.55 },
-  { kind: 'water', name: "Red Sea", lon: 38.52, lat: 19.97 },
-  { kind: 'water', name: "Ross Sea", lon: -142.15, lat: -74.98 },
-  { kind: 'water', name: "Sea of Japan", lon: 135.07, lat: 42.73 },
-  { kind: 'water', name: "Sea of Okhotsk", lon: 146.9, lat: 51.18 },
-  { kind: 'water', name: "South Atlantic Ocean", lon: -25.96, lat: -31.51 },
-  { kind: 'water', name: "South China Sea", lon: 112.03, lat: 9.71 },
-  { kind: 'water', name: "South Pacific Ocean", lon: -125.59, lat: -27.79 },
-  { kind: 'water', name: "Southern Ocean", lon: 174.99, lat: -66.64 },
-  { kind: 'water', name: "Tasman Sea", lon: 161.21, lat: -39.9 },
-  { kind: 'water', name: "Weddell Sea", lon: -48.38, lat: -77.55 },
+/** Megacities from Natural Earth scalerank 0. */
+export const PLACE_CITIES: readonly PlaceLabel[] = [
+  { kind: 'city', name: 'Beijing', lon: 116.39, lat: 39.9 },
+  { kind: 'city', name: 'Bogota', lon: -74.09, lat: 4.6 },
+  { kind: 'city', name: 'Cairo', lon: 31.25, lat: 30.05 },
+  { kind: 'city', name: 'Cape Town', lon: 18.43, lat: -33.92 },
+  { kind: 'city', name: 'Hong Kong', lon: 114.18, lat: 22.31 },
+  { kind: 'city', name: 'Istanbul', lon: 28.97, lat: 41.02 },
+  { kind: 'city', name: 'Jakarta', lon: 106.83, lat: -6.17 },
+  { kind: 'city', name: 'Kolkata', lon: 88.37, lat: 22.57 },
+  { kind: 'city', name: 'Lagos', lon: 3.39, lat: 6.45 },
+  { kind: 'city', name: 'London', lon: -0.12, lat: 51.5 },
+  { kind: 'city', name: 'Los Angeles', lon: -118.23, lat: 34.05 },
+  { kind: 'city', name: 'Mexico City', lon: -99.13, lat: 19.44 },
+  { kind: 'city', name: 'Moscow', lon: 37.61, lat: 55.75 },
+  { kind: 'city', name: 'Mumbai', lon: 72.88, lat: 19.07 },
+  { kind: 'city', name: 'Nairobi', lon: 36.81, lat: -1.28 },
+  { kind: 'city', name: 'New York', lon: -74.0, lat: 40.72 },
+  { kind: 'city', name: 'Paris', lon: 2.35, lat: 48.86 },
+  { kind: 'city', name: 'Rio de Janeiro', lon: -43.21, lat: -22.91 },
+  { kind: 'city', name: 'Riyadh', lon: 46.72, lat: 24.63 },
+  { kind: 'city', name: 'Rome', lon: 12.48, lat: 41.9 },
+  { kind: 'city', name: 'Santiago', lon: -70.65, lat: -33.44 },
+  { kind: 'city', name: 'Shanghai', lon: 121.43, lat: 31.22 },
+  { kind: 'city', name: 'Singapore', lon: 103.85, lat: 1.29 },
+  { kind: 'city', name: 'Sydney', lon: 151.21, lat: -33.87 },
+  { kind: 'city', name: 'São Paulo', lon: -46.63, lat: -23.56 },
+  { kind: 'city', name: 'Tokyo', lon: 139.75, lat: 35.69 },
+  { kind: 'city', name: 'Washington D.C.', lon: -77.01, lat: 38.9 },
 ];
 
-export function placeLabelCollection(): GeoJSON.FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: PLACE_LABELS.map((place) => ({
-      type: 'Feature',
-      properties: { kind: place.kind, name: place.name },
-      geometry: { type: 'Point', coordinates: [place.lon, place.lat] },
-    })),
-  };
+const DEG = Math.PI / 180;
+
+export function namesAt(latDeg: number, lonDeg: number): { country: string; water: string } {
+  const country = firstHit('country', latDeg, lonDeg);
+  return { country, water: country ? '' : firstHit('water', latDeg, lonDeg) };
+}
+
+/** Labels on the Earth disk in front of this camera.
+ *  Straight down sees only a few degrees, so the subsatellite point is always included. */
+export function placesOnDisk(
+  latDeg: number,
+  lonDeg: number,
+  altitudeM: number,
+  bearingDeg: number,
+  pitchDeg: number,
+): PlaceLabel[] {
+  const reach = limbDeg(altitudeM) - 2;
+  if (!(reach > 1)) return [];
+  const labels: PlaceLabel[] = [];
+  pushGround(labels, latDeg, lonDeg);
+  for (let dLat = -reach; dLat <= reach; dLat += 2) {
+    for (let dLon = -reach; dLon <= reach; dLon += 2) {
+      const lat = latDeg + dLat;
+      const lon = wrapLon(lonDeg + dLon);
+      if (lat < -85 || lat > 85) continue;
+      const sep = separationDeg(latDeg, lonDeg, lat, lon);
+      if (sep < 0.8 || sep > reach) continue;
+      if (pitchDeg > 45 && bearingDelta(bearingDeg, bearingTo(latDeg, lonDeg, lat, lon)) > 100) continue;
+      pushGround(labels, lat, lon);
+    }
+  }
+  for (const city of PLACE_CITIES) {
+    const sep = separationDeg(latDeg, lonDeg, city.lat, city.lon);
+    if (sep > reach) continue;
+    if (pitchDeg > 45 && sep > 0.8 && bearingDelta(bearingDeg, bearingTo(latDeg, lonDeg, city.lat, city.lon)) > 100) continue;
+    labels.push(city);
+  }
+  return labels;
+}
+
+function pushGround(labels: PlaceLabel[], lat: number, lon: number): void {
+  const named = namesAt(lat, lon);
+  if (named.country) labels.push({ kind: 'country', name: named.country, lon, lat });
+  if (named.water) labels.push({ kind: 'water', name: named.water, lon, lat });
+}
+
+function firstHit(kind: 'country' | 'water', lat: number, lon: number): string {
+  for (const shape of GROUND_SHAPES) {
+    if (shape.kind !== kind || !shapeContains(shape, lon, lat)) continue;
+    return shape.name;
+  }
+  return '';
+}
+
+function shapeContains(shape: GroundShape, lon: number, lat: number): boolean {
+  const [minLon, minLat, maxLon, maxLat] = shape.bounds;
+  if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) return false;
+  const [outer, ...holes] = shape.rings;
+  if (!outer || !ringContains(outer, lon, lat)) return false;
+  return holes.every((hole) => !ringContains(hole, lon, lat));
+}
+
+function ringContains(ring: readonly number[], lon: number, lat: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+    const xi = ring[i] ?? 0;
+    const yi = ring[i + 1] ?? 0;
+    const xj = ring[j] ?? 0;
+    const yj = ring[j + 1] ?? 0;
+    if ((yi > lat) === (yj > lat) || yj === yi) continue;
+    const x = ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (lon < x) inside = !inside;
+  }
+  return inside;
+}
+
+function limbDeg(altitudeM: number): number {
+  const ratio = RENDER_RADIUS_M / (RENDER_RADIUS_M + Math.max(0, altitudeM));
+  if (!(ratio > 0) || ratio >= 1) return 0;
+  return (Math.acos(ratio) * 180) / Math.PI;
+}
+
+function separationDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = (lat2 - lat1) * DEG;
+  const dLon = (lon2 - lon1) * DEG;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.sin(dLon / 2) ** 2;
+  return (Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a))) * 2) / DEG;
+}
+
+function bearingTo(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const y = Math.sin((lon2 - lon1) * DEG) * Math.cos(lat2 * DEG);
+  const x = Math.cos(lat1 * DEG) * Math.sin(lat2 * DEG) - Math.sin(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.cos((lon2 - lon1) * DEG);
+  return (Math.atan2(y, x) / DEG + 360) % 360;
+}
+
+function bearingDelta(a: number, b: number): number {
+  const delta = Math.abs(a - b) % 360;
+  return delta > 180 ? 360 - delta : delta;
+}
+
+function wrapLon(lon: number): number {
+  return (((lon + 180) % 360) + 360) % 360 - 180;
 }
