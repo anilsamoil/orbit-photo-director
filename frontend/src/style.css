@@ -3205,6 +3205,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   margin: 0;
   min-width: 0;
   overflow: hidden;
+  touch-action: none;
 }
 
 .iss-place {
@@ -3262,7 +3263,12 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 }
 
 [data-iss-telemetry-body] {
+  box-sizing: border-box;
   margin-top: 0.35rem;
+  min-height: 0;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
   background: rgba(12, 16, 24, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;

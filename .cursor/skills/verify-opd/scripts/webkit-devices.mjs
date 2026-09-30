@@ -94,6 +94,10 @@ export function playwrightSend(page) {
     if (method === 'Input.dispatchMouseEvent') {
       const button = params.button || 'left';
       await page.mouse.move(params.x, params.y);
+      if (params.type === 'mouseWheel') {
+        await page.mouse.wheel(params.deltaX || 0, params.deltaY || 0);
+        return {};
+      }
       if (params.type === 'mousePressed') await page.mouse.down({ button, clickCount: params.clickCount || 1 });
       else if (params.type === 'mouseReleased') await page.mouse.up({ button, clickCount: params.clickCount || 1 });
       return {};

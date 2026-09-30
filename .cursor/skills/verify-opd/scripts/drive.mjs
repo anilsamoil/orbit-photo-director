@@ -376,7 +376,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
     else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl));
-    else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir));
+    else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
     else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
@@ -1380,7 +1380,7 @@ async function driveTracked(send, evidenceDir, meta, home) {
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
 }
 
-async function driveIss(send, evidenceDir) {
+async function driveIss(send, evidenceDir, viewport) {
   await dismissShotlist(send);
   await click(send, '#tab-iss');
   const horizon = await waitFor(
@@ -1506,6 +1506,13 @@ async function driveIss(send, evidenceDir) {
     'iss telemetry collapsed again',
     10000,
   );
+  const zoomed = await proveIssOpticalFov(send);
+  await proveIssLandscape(send, evidenceDir);
+  const fovAfterLandscape = await evaluate(send, `window.__opdIss?.getVerticalFieldOfView?.()`);
+  if (typeof fovAfterLandscape !== 'number' || Math.abs(fovAfterLandscape - zoomed) > 0.5) {
+    throw new Error(`iss fov changed across landscape telemetry ${zoomed} -> ${fovAfterLandscape}`);
+  }
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
     send,
@@ -1557,7 +1564,101 @@ async function driveIss(send, evidenceDir) {
     45000,
   );
   await shot(send, evidenceDir, 'iss-return');
-  return `iss: horizon then straight down, map and queue still open, session kept nadir (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}° (${String(horizon.text).slice(0, 80)})`;
+}
+
+async function proveIssOpticalFov(send) {
+  const before = await evaluate(send, `(() => {
+    const map = window.__opdIss;
+    const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+    if (!map?.getVerticalFieldOfView || !map.getZoom || !map.getRoll || !frame) return null;
+    return {
+      x: frame.left + frame.width / 2,
+      y: frame.top + frame.height / 2,
+      fov: map.getVerticalFieldOfView(),
+      zoom: map.getZoom(),
+      roll: ((map.getRoll() % 360) + 360) % 360,
+    };
+  })()`);
+  if (!before) throw new Error('iss fov baseline missing');
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseWheel',
+    x: before.x,
+    y: before.y,
+    deltaX: 0,
+    deltaY: -480,
+  });
+  const narrowed = await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdIss;
+      if (!map?.getVerticalFieldOfView || !map.getZoom || !map.getRoll) return null;
+      const fov = map.getVerticalFieldOfView();
+      const zoom = map.getZoom();
+      const roll = ((map.getRoll() % 360) + 360) % 360;
+      if (!(fov < ${before.fov} - 4)) return null;
+      if (!(zoom > ${before.zoom} + 0.2)) return null;
+      if (Math.abs(roll - 180) > 0.5) return null;
+      return { ok: true, fov, zoom, roll };
+    })()`,
+    'iss optical fov narrowed',
+    10000,
+  );
+  await sleep(1200);
+  const held = await evaluate(send, `(() => {
+    const map = window.__opdIss;
+    if (!map?.getVerticalFieldOfView || !map.getZoom || !map.getRoll) return null;
+    return {
+      fov: map.getVerticalFieldOfView(),
+      zoom: map.getZoom(),
+      roll: ((map.getRoll() % 360) + 360) % 360,
+    };
+  })()`);
+  if (!held || !(held.fov < before.fov - 4) || Math.abs(held.fov - narrowed.fov) > 0.5) {
+    throw new Error(`iss fov reset after tick ${JSON.stringify({ before, narrowed, held })}`);
+  }
+  if (Math.abs(held.roll - 180) > 0.5) throw new Error(`iss roll after fov ${held.roll}`);
+  return held.fov;
+}
+
+async function proveIssLandscape(send, evidenceDir) {
+  await setViewport(send, 874, 402, true);
+  const contained = `(() => {
+    const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
+    const scene = document.querySelector('[data-iss-scene]');
+    const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+    const card = document.querySelector('[data-iss-card]')?.getBoundingClientRect();
+    const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
+    const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
+    if (!hostBox || !scene || !frame || !card || !port || !starboard) return null;
+    if (frame.width < 80 || frame.height < 72) return null;
+    if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+    const within = (box) => box.width > 1 && box.height > 1 && box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
+    if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
+    const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
+    for (let i = 0; i < places.length; i += 1) {
+      for (let j = i + 1; j < places.length; j += 1) {
+        const a = places[i];
+        const b = places[j];
+        if (a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5) return null;
+      }
+    }
+    return { ok: true, width: frame.width, height: frame.height, labels: places.length };
+  })()`;
+  await waitFor(send, contained, 'iss landscape collapsed', 10000);
+  await click(send, '[data-iss-telemetry]');
+  const open = await waitFor(send, contained, 'iss landscape telemetry open', 10000);
+  await sleep(1200);
+  const held = await waitFor(send, contained, 'iss landscape telemetry after ticks', 10000);
+  await shot(send, evidenceDir, 'iss-landscape-telemetry');
+  await click(send, '[data-iss-telemetry]');
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+    'iss landscape telemetry collapsed',
+    10000,
+  );
+  if (open.height < 72 || held.height < 72) throw new Error(`iss landscape frame ${open.height} then ${held.height}`);
 }
 
 async function driveHelp(send, evidenceDir) {

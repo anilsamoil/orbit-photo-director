@@ -102,7 +102,10 @@ describe('ISS frame fit', () => {
     stage.style.gap = '8px';
     box(host, 1400, 769);
     box(root, 1400, 769);
+    const button = host.querySelector('[data-iss-telemetry]') as HTMLElement;
     Object.defineProperty(toolbar, 'offsetHeight', { configurable: true, get: () => 44 });
+    Object.defineProperty(button, 'offsetHeight', { configurable: true, get: () => 44 });
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => 136 });
     Object.defineProperty(card, 'offsetHeight', { configurable: true, get: () => (body.hidden ? 44 : 180) });
     Object.defineProperty(port, 'offsetWidth', { configurable: true, get: () => 11 });
     Object.defineProperty(starboard, 'offsetWidth', { configurable: true, get: () => 11 });
@@ -269,6 +272,17 @@ describe('ISS frame fit', () => {
     frame.dispatchEvent(new WheelEvent('wheel', { deltaY: 4000, bubbles: true, cancelable: true }));
     await paint(scene);
     expect(fake.aims.at(-1)?.verticalFovDeg).toBeCloseTo(lens, 5);
+    const wide = fake.aims.at(-1)?.verticalFovDeg ?? lens;
+    if (typeof frame.setPointerCapture !== 'function') frame.setPointerCapture = () => {};
+    frame.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 80, clientY: 80, bubbles: true }));
+    frame.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, pointerType: 'touch', clientX: 140, clientY: 80, bubbles: true }));
+    frame.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, pointerType: 'touch', clientX: 260, clientY: 80, bubbles: true }));
+    await paint(scene);
+    const pinched = fake.aims.at(-1)?.verticalFovDeg;
+    expect(pinched).toBeLessThan(wide - 5);
+    expect(fake.aims.at(-1)?.pose.altitudeM).toBe(altitude);
+    await scene.paint();
+    expect(fake.aims.at(-1)?.verticalFovDeg).toBe(pinched);
     scene.dispose();
     host.remove();
   });
