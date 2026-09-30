@@ -1,6 +1,6 @@
 # Tracked vehicles
 
-Starship is always on the map. The legend names the state. A published element set draws a red diamond and a dotted one-orbit ground track. The other states draw nothing at a guessed position. The ISS marker and `iss-track-layer` stay.
+The Starship legend row is always in the map legend. The legend names the state. A published element set draws a red diamond and a dotted one-orbit ground track. The other states draw no marker and no track. The ISS marker and `iss-track-layer` stay.
 
 ## Sub-features
 
