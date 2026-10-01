@@ -1509,14 +1509,14 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   const zoomed = await proveIssOpticalFov(send, evidenceDir);
   const pan = await proveIssPan(send, evidenceDir, zoomed);
-  await proveIssPanSession(send, evidenceDir, pan);
-  await proveIssWindows(send, evidenceDir);
   await proveIssLandscape(send, evidenceDir);
   const fovAfterLandscape = await evaluate(send, `window.__opdIss?.getVerticalFieldOfView?.()`);
   if (typeof fovAfterLandscape !== 'number' || Math.abs(fovAfterLandscape - zoomed) > 0.5) {
     throw new Error(`iss fov changed across landscape telemetry ${zoomed} -> ${fovAfterLandscape}`);
   }
   await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  await proveIssPanSession(send, evidenceDir, pan);
+  await proveIssWindows(send, evidenceDir);
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
     send,
