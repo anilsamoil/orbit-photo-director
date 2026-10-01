@@ -14,10 +14,23 @@ import {
   type SceneFrame,
   type SceneSnapshot,
 } from './model';
+import type { LookOffset } from '../iss-g1/model';
 import { fitIssPane } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
-const sessionPreset: { mode: CameraMode } = { mode: 'horizon' };
+type IssSession = {
+  mode: CameraMode;
+  azimuthDeg: number;
+  windowId: number | null;
+  look: LookOffset;
+};
+
+const sessionPreset: IssSession = {
+  mode: 'horizon',
+  azimuthDeg: 0,
+  windowId: null,
+  look: { rightDeg: 0, upDeg: 0 },
+};
 
 export type IssScenePhase = 'dormant' | 'loading' | 'running' | 'error' | 'suspended';
 
@@ -40,11 +53,16 @@ export type MountIssSceneOptions = {
   visible?: () => boolean;
   onMap?: () => void;
   drive?: 'manual' | 'live';
-  session?: { mode: CameraMode };
+  session?: {
+    mode: CameraMode;
+    azimuthDeg?: number;
+    windowId?: number | null;
+    look?: LookOffset;
+  };
 };
 
 export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions): IssScene {
-  const session = options.session ?? sessionPreset;
+  const session = bindSession(options.session ?? sessionPreset);
   const visible = options.visible ?? (() => document.visibilityState !== 'hidden');
   const factory = options.createRenderer ?? createIssRenderer;
   let generation = 1;
@@ -60,8 +78,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let paintSerial = 0;
   const lensFovDeg = sensorField().vertical;
   let opticalFovDeg = lensFovDeg;
+  let framePx = { widthPx: 640, heightPx: 400 };
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
+  let panOrigin: { id: number; x: number; y: number; rightDeg: number; upDeg: number } | null = null;
   const bootGeneration = generation;
 
   const root = document.createElement('section');
@@ -84,7 +104,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const option = document.createElement('option');
     option.value = String(entry.id);
     option.textContent = entry.label;
-    option.disabled = entry.preset === null;
     cupola.append(option);
   }
   presets.append(horizon, nadir, cupola);
@@ -147,15 +166,15 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   syncCupola();
   layout();
 
-  horizon.addEventListener('click', () => choose('horizon'));
-  nadir.addEventListener('click', () => choose('nadir'));
+  horizon.addEventListener('click', () => choose('horizon', 0, null));
+  nadir.addEventListener('click', () => choose('nadir', 0, null));
   cupola.addEventListener('change', () => {
     const preset = cupolaPreset(Number(cupola.value));
     if (preset === null) {
       syncCupola();
       return;
     }
-    choose(preset);
+    choose(preset.mode, preset.azimuthDeg, Number(cupola.value));
   });
   telemetry.addEventListener('click', () => {
     setTelemetryOpen(telemetryBody.hidden);
@@ -165,19 +184,42 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     setOpticalFov(opticalFovDeg * Math.exp(event.deltaY * 0.0015));
   }, { passive: false });
   frame.addEventListener('pointerdown', (event) => {
-    if (event.pointerType === 'mouse') return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (pointers.size >= 2) pinchDistance = pointerDistance();
-    frame.setPointerCapture(event.pointerId);
+    if (pointers.size >= 2) {
+      panOrigin = null;
+      pinchDistance = pointerDistance();
+    } else {
+      panOrigin = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        rightDeg: session.look.rightDeg,
+        upDeg: session.look.upDeg,
+      };
+    }
+    if (typeof frame.setPointerCapture === 'function') frame.setPointerCapture(event.pointerId);
   });
   frame.addEventListener('pointermove', (event) => {
     if (!pointers.has(event.pointerId)) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (pointers.size < 2 || pinchDistance <= 0) return;
-    const next = pointerDistance();
-    if (next <= 0) return;
-    setOpticalFov(opticalFovDeg * (pinchDistance / next));
-    pinchDistance = next;
+    if (pointers.size >= 2) {
+      if (pinchDistance <= 0) return;
+      const next = pointerDistance();
+      if (next <= 0) return;
+      setOpticalFov(opticalFovDeg * (pinchDistance / next));
+      pinchDistance = next;
+      return;
+    }
+    if (!panOrigin || panOrigin.id !== event.pointerId) return;
+    const width = framePx.widthPx;
+    const height = framePx.heightPx;
+    if (width < 1 || height < 1) return;
+    const dx = event.clientX - panOrigin.x;
+    const dy = event.clientY - panOrigin.y;
+    session.look.rightDeg = panOrigin.rightDeg - (dx / width) * horizontalFovDeg(opticalFovDeg, width, height);
+    session.look.upDeg = panOrigin.upDeg + (dy / height) * opticalFovDeg;
+    if (phase === 'running' && rendererReady) void paint();
   });
   frame.addEventListener('pointerup', forgetPointer);
   frame.addEventListener('pointercancel', forgetPointer);
@@ -288,7 +330,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const serial = ++paintSerial;
     const when = options.nowMs();
     const current = snapshot;
-    const posed = sceneFrame(current.track, when, session.mode, 0);
+    const posed = sceneFrame(current.track, when, session.mode, 0, {
+      azimuthDeg: session.azimuthDeg,
+      offset: session.look,
+    });
     if (token !== generation || epoch !== snapshotEpoch || serial !== paintSerial) return;
     frameState = posed;
     const light = posed.ok ? groundLightAt(when, posed.pose.camera.latDeg, posed.pose.camera.lonDeg) : null;
@@ -299,6 +344,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       light,
       imagery,
       lightingUtcMs: when,
+      windowLabel: sideWindowLabel(),
     }));
     if (!posed.ok) {
       fail(status.textContent ?? 'Orbit unavailable');
@@ -322,8 +368,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (token !== generation || epoch !== snapshotEpoch) return;
   }
 
-  function choose(mode: CameraMode): void {
+  function choose(mode: CameraMode, azimuthDeg: number, windowId: number | null): void {
     session.mode = mode;
+    session.azimuthDeg = azimuthDeg;
+    session.windowId = windowId;
+    session.look.rightDeg = 0;
+    session.look.upDeg = 0;
+    panOrigin = null;
     syncPreset();
     syncCupola();
     if (phase === 'running') void paint();
@@ -363,6 +414,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const heightPx = Math.max(1, Math.floor(fit.heightPx));
     frame.style.width = `${widthPx}px`;
     frame.style.height = `${heightPx}px`;
+    framePx = { widthPx, heightPx };
     telemetryBody.style.maxHeight = fit.bodyMaxPx === null ? '' : `${fit.bodyMaxPx}px`;
     return { widthPx, heightPx };
   }
@@ -416,15 +468,22 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function forgetPointer(event: PointerEvent): void {
     pointers.delete(event.pointerId);
     pinchDistance = pointers.size >= 2 ? pointerDistance() : 0;
+    if (pointers.size < 2) panOrigin = null;
+  }
+
+  function sideWindowLabel(): string | null {
+    if (session.windowId === null || session.mode !== 'horizon') return null;
+    const entry = CUPOLA_WINDOWS.find((item) => item.id === session.windowId);
+    return entry ? entry.label : null;
   }
 
   function syncPreset(): void {
-    horizon.setAttribute('aria-pressed', session.mode === 'horizon' ? 'true' : 'false');
+    horizon.setAttribute('aria-pressed', session.mode === 'horizon' && session.windowId === null ? 'true' : 'false');
     nadir.setAttribute('aria-pressed', session.mode === 'nadir' ? 'true' : 'false');
   }
 
   function syncCupola(): void {
-    cupola.value = session.mode === 'nadir' ? '7' : '';
+    cupola.value = session.windowId === null ? '' : String(session.windowId);
   }
 
   function setPhase(next: IssScenePhase): void {
@@ -484,6 +543,19 @@ function explainBoot(error: unknown): string {
   return message;
 }
 
-export function issPresetSession(): { mode: CameraMode } {
+export function issPresetSession(): IssSession {
   return sessionPreset;
+}
+
+function bindSession(seed: NonNullable<MountIssSceneOptions['session']>): IssSession {
+  const session = seed as IssSession;
+  if (!Number.isFinite(session.azimuthDeg)) session.azimuthDeg = 0;
+  if (session.windowId === undefined) session.windowId = null;
+  if (!session.look) session.look = { rightDeg: 0, upDeg: 0 };
+  return session;
+}
+
+function horizontalFovDeg(verticalDeg: number, widthPx: number, heightPx: number): number {
+  const vertical = verticalDeg * Math.PI / 180;
+  return 2 * Math.atan(Math.tan(vertical / 2) * (widthPx / heightPx)) * (180 / Math.PI);
 }

@@ -1408,10 +1408,11 @@ async function driveIss(send, evidenceDir, viewport) {
       if (!layers.includes('country') || !layers.includes('city') || !layers.includes('water')) return null;
       const cupola = document.querySelector('[data-iss-cupola]');
       if (!cupola) return null;
-      const soon = [...cupola.querySelectorAll('option')].filter((option) => option.disabled && /^Window [1-6]/.test(option.textContent || ''));
+      const side = [...cupola.querySelectorAll('option')].filter((option) => /^Window [1-6]/.test(option.textContent || ''));
       const window7 = cupola.querySelector('option[value="7"]');
-      if (soon.length !== 6 || !window7 || window7.disabled) return null;
-      if (!/Port/.test(soon[0].textContent || '') || !/Starboard/.test(soon[3].textContent || '')) return null;
+      if (side.length !== 6 || side.some((option) => option.disabled || /Coming soon/.test(option.textContent || ''))) return null;
+      if (!window7 || window7.disabled) return null;
+      if (!/Port/.test(side[0].textContent || '') || !/Starboard/.test(side[3].textContent || '')) return null;
       if (window7.textContent !== 'Window 7 · Nadir') return null;
       const port = document.querySelector('[data-iss-port]');
       const starboard = document.querySelector('[data-iss-starboard]');
@@ -1507,6 +1508,8 @@ async function driveIss(send, evidenceDir, viewport) {
     10000,
   );
   const zoomed = await proveIssOpticalFov(send, evidenceDir);
+  await proveIssPan(send, evidenceDir, zoomed);
+  await proveIssWindows(send, evidenceDir);
   await proveIssLandscape(send, evidenceDir);
   const fovAfterLandscape = await evaluate(send, `window.__opdIss?.getVerticalFieldOfView?.()`);
   if (typeof fovAfterLandscape !== 'number' || Math.abs(fovAfterLandscape - zoomed) > 0.5) {
@@ -1564,7 +1567,7 @@ async function driveIss(send, evidenceDir, viewport) {
     45000,
   );
   await shot(send, evidenceDir, 'iss-return');
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}° (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, pan held, windows 1-6 aimed (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -1621,6 +1624,104 @@ async function proveIssOpticalFov(send, evidenceDir) {
   if (Math.abs(held.roll - 180) > 0.5) throw new Error(`iss roll after fov ${held.roll}`);
   await shot(send, evidenceDir, 'iss-fov-after');
   return held.fov;
+}
+
+async function proveIssPan(send, evidenceDir, fovDeg) {
+  const start = await evaluate(send, `(() => {
+    const map = window.__opdIss;
+    const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+    if (!map?.getCenter || !map.getVerticalFieldOfView || !frame || frame.width < 40) return null;
+    const center = map.getCenter();
+    return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2, dx: Math.max(36, frame.width * 0.22), lat: center.lat, lng: center.lng, fov: map.getVerticalFieldOfView() };
+  })()`);
+  if (!start) throw new Error('iss pan baseline missing');
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x - start.dx, y: start.y, button: 'left', buttons: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: start.x - start.dx, y: start.y, button: 'left', buttons: 0, clickCount: 1 });
+  const panned = await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdIss;
+      if (!map?.getCenter || !map.getVerticalFieldOfView || !map.getRoll) return null;
+      const center = map.getCenter();
+      const fov = map.getVerticalFieldOfView();
+      const roll = ((map.getRoll() % 360) + 360) % 360;
+      const shift = Math.abs(center.lat - ${start.lat}) + Math.abs(center.lng - ${start.lng});
+      if (shift < 0.4) return null;
+      if (Math.abs(fov - ${fovDeg}) > 0.5) return null;
+      if (Math.abs(roll - 180) > 0.5) return null;
+      return { ok: true, lat: center.lat, lng: center.lng, fov, shift };
+    })()`,
+    'iss pan',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-pan');
+  await sleep(1200);
+  const held = await evaluate(send, `(() => {
+    const map = window.__opdIss;
+    if (!map?.getCenter || !map.getVerticalFieldOfView || !map.getRoll) return null;
+    const center = map.getCenter();
+    const fov = map.getVerticalFieldOfView();
+    const roll = ((map.getRoll() % 360) + 360) % 360;
+    return {
+      fromStart: Math.abs(center.lat - ${start.lat}) + Math.abs(center.lng - ${start.lng}),
+      fromPan: Math.abs(center.lat - ${panned.lat}) + Math.abs(center.lng - ${panned.lng}),
+      fov,
+      roll,
+    };
+  })()`);
+  if (!held || held.fromStart < 0.3 || Math.abs(held.fov - fovDeg) > 0.5 || Math.abs(held.roll - 180) > 0.5) {
+    throw new Error(`iss pan yanked ${JSON.stringify(held)}`);
+  }
+  if (held.fromPan > held.fromStart) throw new Error(`iss pan jumped farther than the drag ${JSON.stringify(held)}`);
+}
+
+const CUPOLA_AIMS = [
+  [1, 'Window 1 · Port'],
+  [2, 'Window 2 · Forward port'],
+  [3, 'Window 3 · Forward starboard'],
+  [4, 'Window 4 · Starboard'],
+  [5, 'Window 5 · Aft starboard'],
+  [6, 'Window 6 · Aft port'],
+];
+
+async function proveIssWindows(send, evidenceDir) {
+  const centers = [];
+  for (const [id, label] of CUPOLA_AIMS) {
+    await evaluate(send, `(() => {
+      const cupola = document.querySelector('[data-iss-cupola]');
+      if (!cupola) return;
+      cupola.value = '${id}';
+      cupola.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    const aim = await waitFor(
+      send,
+      `(() => {
+        const text = document.querySelector('[data-iss-status]')?.textContent || '';
+        if (!text.includes(${JSON.stringify(label)}) || text.includes('Coming soon')) return null;
+        const map = window.__opdIss;
+        if (!map?.getCenter || !map.getRoll) return null;
+        const roll = ((map.getRoll() % 360) + 360) % 360;
+        if (Math.abs(roll - 180) > 0.5) return null;
+        const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+        const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
+        const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
+        if (!frame || !port || !starboard) return null;
+        if (starboard.right > frame.left + 2 || port.left < frame.right - 2) return null;
+        const center = map.getCenter();
+        return { ok: true, lat: center.lat, lng: center.lng };
+      })()`,
+      `iss window ${id}`,
+      15000,
+    );
+    centers.push(aim);
+    await shot(send, evidenceDir, `iss-w${id}`);
+  }
+  const port = centers[0];
+  const starboard = centers[3];
+  if (Math.abs(port.lat - starboard.lat) + Math.abs(port.lng - starboard.lng) < 1) {
+    throw new Error(`iss port and starboard share an aim ${JSON.stringify({ port, starboard })}`);
+  }
 }
 
 async function proveIssLandscape(send, evidenceDir) {

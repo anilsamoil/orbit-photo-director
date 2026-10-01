@@ -49,6 +49,18 @@ export type ScenePose = {
   inwardDeg: number;
 };
 
+/** Screen shift of the boresight, in degrees, in the rolled view. */
+export type LookOffset = {
+  rightDeg: number;
+  upDeg: number;
+};
+
+/** Limb aims use azimuth around nadir. 0 is forward. Positive is starboard. */
+export type PoseAim = {
+  azimuthDeg?: number;
+  offset?: LookOffset;
+};
+
 export type PoseResult =
   | { ok: true; pose: ScenePose }
   | { ok: false; reason: 'degenerate-forward' | 'nonphysical-radius' };
@@ -163,6 +175,69 @@ function bearingOf(look: Vec3, latDeg: number, lonDeg: number): number {
   return degrees;
 }
 
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
+function rotateAround(axis: Vec3, vector: Vec3, rad: number): Vec3 {
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const along = dot(axis, vector);
+  return add(add(scale(vector, cos), scale(cross(axis, vector), sin)), scale(axis, along * (1 - cos)));
+}
+
+function aimHeading(forward: Vec3, zenith: Vec3, azimuthDeg: number): Vec3 {
+  if (Math.abs(azimuthDeg) < 1e-12) return forward;
+  const starboard = normalize(cross(scale(zenith, -1), forward));
+  if (!starboard) return forward;
+  const az = azimuthDeg * RAD;
+  return normalize(add(scale(forward, Math.cos(az)), scale(starboard, Math.sin(az)))) ?? forward;
+}
+
+function offsetLook(look: Vec3, headed: Vec3, zenith: Vec3, offset: LookOffset): Vec3 {
+  const amount = Math.hypot(offset.rightDeg, offset.upDeg);
+  if (amount < 1e-9) return look;
+  const nadir = scale(zenith, -1);
+  const screenDown = normalize(sub(headed, scale(look, dot(headed, look))))
+    ?? normalize(sub(nadir, scale(look, dot(nadir, look))));
+  if (!screenDown) return look;
+  const screenRight = normalize(cross(screenDown, look));
+  if (!screenRight) return look;
+  const screenUp = scale(screenDown, -1);
+  const move = add(scale(screenRight, offset.rightDeg), scale(screenUp, offset.upDeg));
+  const axis = normalize(cross(look, move));
+  if (!axis) return look;
+  return normalize(rotateAround(axis, look, amount * RAD)) ?? look;
+}
+
+function clampLookToEarth(camera: Vec3, look: Vec3, nadir: Vec3): Vec3 {
+  const radius = Math.hypot(camera[0], camera[1], camera[2]);
+  if (!(radius > 1)) return look;
+  const limb = Math.asin(Math.min(1, 1 / radius));
+  const fromNadir = Math.acos(Math.min(1, Math.max(-1, dot(look, nadir))));
+  if (fromNadir <= limb) return look;
+  const side = normalize(sub(look, scale(nadir, dot(look, nadir))));
+  if (!side) return look;
+  return add(scale(nadir, Math.cos(limb)), scale(side, Math.sin(limb)));
+}
+
+function earthHit(camera: Vec3, look: Vec3): Vec3 | null {
+  const direction = normalize(look);
+  if (!direction) return null;
+  const along = dot(camera, direction);
+  let disc = along * along - (dot(camera, camera) - 1);
+  if (disc < -1e-10) return null;
+  if (disc < 0) disc = 0;
+  const root = disc < 1e-14 ? 0 : Math.sqrt(disc);
+  const t = -along - root;
+  if (t <= 0) return null;
+  return add(camera, scale(direction, t));
+}
+
 export function groundTrackForward(before: SphericalFix, after: SphericalFix): { ok: true; forward: Vec3 } | { ok: false; reason: 'degenerate-forward' } {
   if (!finiteFix(before) || !finiteFix(after)) return { ok: false, reason: 'degenerate-forward' };
   const beforeRadius = (before.altKm + SGP4_RADIUS_KM) * 1000;
@@ -195,6 +270,7 @@ export function poseAt(
   after: SphericalFix,
   preset: CameraPreset,
   inwardDeg: number,
+  aim: PoseAim = {},
 ): PoseResult {
   if (!finiteFix(now) || inwardDeg < 0 || !Number.isFinite(inwardDeg)) return { ok: false, reason: 'degenerate-forward' };
   const altitudeM = altitudeAboveRenderSphereM(now.altKm);
@@ -212,12 +288,24 @@ export function poseAt(
   const camera = scale(up, radiusM / RENDER_RADIUS_M);
   const central = preset === 'horizon' ? depressionRad - inwardDeg * RAD : 0;
   if (central <= 0 && preset === 'horizon') return { ok: false, reason: 'nonphysical-radius' };
-  const target = preset === 'nadir'
+  const azimuthDeg = preset === 'horizon' && Number.isFinite(aim.azimuthDeg) ? aim.azimuthDeg ?? 0 : 0;
+  const headed = aimHeading(forward, up, azimuthDeg);
+  let ground = preset === 'nadir'
     ? up
-    : add(scale(up, Math.cos(central)), scale(forward, Math.sin(central)));
-  const where = geographic(target);
-  const look = sub(target, camera);
-  const bearingDeg = preset === 'nadir'
+    : add(scale(up, Math.cos(central)), scale(headed, Math.sin(central)));
+  const offset = aim.offset ?? { rightDeg: 0, upDeg: 0 };
+  const hasOffset = Math.hypot(offset.rightDeg, offset.upDeg) > 1e-9;
+  if (hasOffset) {
+    const baseLook = normalize(sub(ground, camera));
+    if (!baseLook) return { ok: false, reason: 'degenerate-forward' };
+    const turned = clampLookToEarth(camera, offsetLook(baseLook, headed, up, offset), scale(up, -1));
+    const hit = earthHit(camera, turned);
+    if (!hit) return { ok: false, reason: 'degenerate-forward' };
+    ground = hit;
+  }
+  const where = geographic(ground);
+  const look = sub(ground, camera);
+  const bearingDeg = preset === 'nadir' && !hasOffset
     ? bearingOf(forward, now.latDeg, now.lonDeg)
     : bearingOf(look, where.latDeg, where.lonDeg);
   return {
@@ -228,7 +316,7 @@ export function poseAt(
       targetLatDeg: where.latDeg,
       targetLonDeg: where.lonDeg,
       altitudeM,
-      analyticPitchDeg: preset === 'nadir' ? 0 : solverPitchDeg(camera, target),
+      analyticPitchDeg: preset === 'nadir' && !hasOffset ? 0 : solverPitchDeg(camera, ground),
       bearingDeg,
       horizonDepressionDeg: depressionRad / RAD,
       limbFromNadirDeg: limbRad / RAD,

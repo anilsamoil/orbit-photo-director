@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import { issPositionWithAltSGP4 } from '../src/iss-sgp4';
 import { mountIssScene, type IssScene } from '../src/iss-view';
-import type { IssRenderer, IssRendererFactory, IssRendererHooks } from '../src/iss-view/renderer';
+import { sceneFrame } from '../src/iss-view/model';
+import type { IssAim, IssRenderer, IssRendererFactory, IssRendererHooks } from '../src/iss-view/renderer';
 import type { SceneSnapshot } from '../src/iss-view/model';
 import type { Track } from '../src/types';
 
@@ -78,6 +79,12 @@ function mount(host: HTMLElement, factory: IssRendererFactory, now = startMs + 6
       host.dataset.map = 'opened';
     },
   });
+}
+
+function lastAim(aims: IssAim[]): IssAim {
+  const aim = aims[aims.length - 1];
+  if (!aim) throw new Error('missing aim');
+  return aim;
 }
 
 async function ready(scene: IssScene): Promise<void> {
@@ -234,7 +241,7 @@ describe('ISS renderer pitch stays off the product map', () => {
 });
 
 describe('ISS chrome starts out of the way', () => {
-  it('opens with telemetry collapsed and window 7 as the only cupola aim', async () => {
+  it('opens with telemetry collapsed and every cupola window aimed', async () => {
     const host = document.createElement('div');
     const fake = fakeRenderer();
     const scene = mount(host, fake.factory);
@@ -244,13 +251,13 @@ describe('ISS chrome starts out of the way', () => {
     expect(host.querySelector('[data-iss-telemetry-body]')?.hasAttribute('hidden')).toBe(true);
     const cupola = host.querySelector('[data-iss-cupola]') as HTMLSelectElement;
     const disabled = [...cupola.options].filter((option) => option.disabled).map((option) => option.value);
-    expect(disabled).toEqual(['1', '2', '3', '4', '5', '6']);
-    expect(cupola.querySelector('option[value="1"]')?.textContent).toBe('Window 1 · Port · Coming soon');
-    expect(cupola.querySelector('option[value="2"]')?.textContent).toBe('Window 2 · Forward port · Coming soon');
-    expect(cupola.querySelector('option[value="3"]')?.textContent).toBe('Window 3 · Forward starboard · Coming soon');
-    expect(cupola.querySelector('option[value="4"]')?.textContent).toBe('Window 4 · Starboard · Coming soon');
-    expect(cupola.querySelector('option[value="5"]')?.textContent).toBe('Window 5 · Aft starboard · Coming soon');
-    expect(cupola.querySelector('option[value="6"]')?.textContent).toBe('Window 6 · Aft port · Coming soon');
+    expect(disabled).toEqual([]);
+    expect(cupola.querySelector('option[value="1"]')?.textContent).toBe('Window 1 · Port');
+    expect(cupola.querySelector('option[value="2"]')?.textContent).toBe('Window 2 · Forward port');
+    expect(cupola.querySelector('option[value="3"]')?.textContent).toBe('Window 3 · Forward starboard');
+    expect(cupola.querySelector('option[value="4"]')?.textContent).toBe('Window 4 · Starboard');
+    expect(cupola.querySelector('option[value="5"]')?.textContent).toBe('Window 5 · Aft starboard');
+    expect(cupola.querySelector('option[value="6"]')?.textContent).toBe('Window 6 · Aft port');
     expect(cupola.querySelector('option[value="7"]')?.textContent).toBe('Window 7 · Nadir');
     expect(cupola.querySelector('option[value="7"]')?.hasAttribute('disabled')).toBe(false);
     expect(host.querySelector('[data-iss-port]')?.textContent).toBe('Port');
@@ -270,5 +277,85 @@ describe('ISS chrome starts out of the way', () => {
     (host.querySelector('[data-iss-preset="horizon"]') as HTMLElement).click();
     expect(scene.mode()).toBe('horizon');
     expect(cupola.value).toBe('');
+  });
+
+  it('pans inside the view, keeps the field of view, and clears the offset on a window', async () => {
+    const aims: IssAim[] = [];
+    let now = startMs + 60_000;
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => now,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aims.push(aim);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    await ready(scene);
+    scene.update(shot('pan'));
+    await scene.paint();
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    const before = lastAim(aims);
+    frame.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 1, clientX: 200, clientY: 120, pointerType: 'mouse', button: 0, bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 1, clientX: 80, clientY: 120, pointerType: 'mouse', bubbles: true,
+    }));
+    await scene.paint();
+    const panned = lastAim(aims);
+    expect(panned.pose.altitudeM).toBeCloseTo(before.pose.altitudeM, 3);
+    expect(panned.pose.camera.latDeg).toBeCloseTo(before.pose.camera.latDeg, 3);
+    expect(panned.pose.camera.lonDeg).toBeCloseTo(before.pose.camera.lonDeg, 3);
+    expect(panned.verticalFovDeg).toBeCloseTo(before.verticalFovDeg, 5);
+    const aimShift = Math.abs(panned.pose.targetLatDeg - before.pose.targetLatDeg) + Math.abs(panned.pose.targetLonDeg - before.pose.targetLonDeg);
+    expect(aimShift).toBeGreaterThan(0.5);
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    await scene.paint();
+    const zoomed = lastAim(aims);
+    expect(zoomed.verticalFovDeg).toBeLessThan(panned.verticalFovDeg - 1);
+    expect(zoomed.pose.targetLatDeg).toBeCloseTo(panned.pose.targetLatDeg, 3);
+    expect(zoomed.pose.targetLonDeg).toBeCloseTo(panned.pose.targetLonDeg, 3);
+    now += 120_000;
+    await scene.paint();
+    const later = lastAim(aims);
+    const cameraShift = Math.abs(later.pose.camera.latDeg - panned.pose.camera.latDeg) + Math.abs(later.pose.camera.lonDeg - panned.pose.camera.lonDeg);
+    const targetShift = Math.abs(later.pose.targetLatDeg - panned.pose.targetLatDeg) + Math.abs(later.pose.targetLonDeg - panned.pose.targetLonDeg);
+    expect(cameraShift).toBeGreaterThan(0.05);
+    expect(targetShift).toBeGreaterThan(0.05);
+    const forwardLater = sceneFrame(track(), now, 'horizon', 0);
+    expect(forwardLater.ok).toBe(true);
+    if (forwardLater.ok) {
+      const yanked = Math.abs(later.pose.targetLatDeg - forwardLater.pose.targetLatDeg) + Math.abs(later.pose.targetLonDeg - forwardLater.pose.targetLonDeg);
+      expect(yanked).toBeGreaterThan(0.5);
+    }
+    if (forwardLater.ok) expect(later.pose.altitudeM).toBeCloseTo(forwardLater.pose.altitudeM, 3);
+    expect(later.verticalFovDeg).toBeCloseTo(zoomed.verticalFovDeg, 5);
+    const cupola = host.querySelector('[data-iss-cupola]') as HTMLSelectElement;
+    cupola.value = '1';
+    cupola.dispatchEvent(new Event('change'));
+    await scene.paint();
+    const port = lastAim(aims);
+    expect(host.querySelector('[data-iss-status]')?.textContent).toContain('Window 1 · Port');
+    expect(host.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('false');
+    expect(port.pose.altitudeM).toBeCloseTo(later.pose.altitudeM, 3);
+    expect(port.pose.camera.latDeg).toBeCloseTo(later.pose.camera.latDeg, 3);
+    const portAim = sceneFrame(track(), now, 'horizon', 0, { azimuthDeg: -90 });
+    expect(portAim.ok).toBe(true);
+    if (portAim.ok) {
+      expect(port.pose.targetLatDeg).toBeCloseTo(portAim.pose.targetLatDeg, 3);
+      expect(port.pose.targetLonDeg).toBeCloseTo(portAim.pose.targetLonDeg, 3);
+    }
+    expect(port.verticalFovDeg).toBeCloseTo(zoomed.verticalFovDeg, 5);
+    frame.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 1, clientX: 80, clientY: 120, pointerType: 'mouse', bubbles: true,
+    }));
+    scene.dispose();
   });
 });
