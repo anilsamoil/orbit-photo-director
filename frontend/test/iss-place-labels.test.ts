@@ -24,20 +24,29 @@ describe('ISS place labels', () => {
 });
 
 describe('Cupola windows', () => {
-  it('points window 7 straight down and leaves the side windows unset', () => {
-    expect(cupolaPreset(7)).toBe('nadir');
-    expect([1, 2, 3, 4, 5, 6].map((id) => cupolaPreset(id))).toEqual([null, null, null, null, null, null]);
+  it('aims each side window around nadir and keeps window 7 straight down', () => {
+    expect(cupolaPreset(7)).toEqual({ mode: 'nadir', azimuthDeg: 0 });
+    expect(cupolaPreset(1)).toEqual({ mode: 'horizon', azimuthDeg: -90 });
+    expect(cupolaPreset(2)).toEqual({ mode: 'horizon', azimuthDeg: -30 });
+    expect(cupolaPreset(3)).toEqual({ mode: 'horizon', azimuthDeg: 30 });
+    expect(cupolaPreset(4)).toEqual({ mode: 'horizon', azimuthDeg: 90 });
+    expect(cupolaPreset(5)).toEqual({ mode: 'horizon', azimuthDeg: 150 });
+    expect(cupolaPreset(6)).toEqual({ mode: 'horizon', azimuthDeg: 210 });
     expect(cupolaPreset(8)).toBeNull();
+    const port = cupolaPreset(2);
+    const starboard = cupolaPreset(3);
+    expect(port && starboard && port.azimuthDeg + starboard.azimuthDeg).toBe(0);
+    expect(port && starboard && starboard.azimuthDeg - port.azimuthDeg).toBe(60);
   });
 
   it('names the plate from port through nadir', () => {
     expect(CUPOLA_WINDOWS.map((entry) => entry.label)).toEqual([
-      'Window 1 · Port · Coming soon',
-      'Window 2 · Forward port · Coming soon',
-      'Window 3 · Forward starboard · Coming soon',
-      'Window 4 · Starboard · Coming soon',
-      'Window 5 · Aft starboard · Coming soon',
-      'Window 6 · Aft port · Coming soon',
+      'Window 1 · Port',
+      'Window 2 · Forward port',
+      'Window 3 · Forward starboard',
+      'Window 4 · Starboard',
+      'Window 5 · Aft starboard',
+      'Window 6 · Aft port',
       'Window 7 · Nadir',
     ]);
   });

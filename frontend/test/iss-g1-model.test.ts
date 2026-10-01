@@ -140,6 +140,65 @@ describe('ISS camera geometry', () => {
     expect(camera.radiusM).toBeCloseTo(6_798_137, 0);
   });
 
+  it('turns the limb aim around nadir for the cupola side windows', () => {
+    const forward = poseAt(NOW, BEFORE, AFTER, 'horizon', 0);
+    const port = poseAt(NOW, BEFORE, AFTER, 'horizon', 0, { azimuthDeg: -90 });
+    const forwardPort = poseAt(NOW, BEFORE, AFTER, 'horizon', 0, { azimuthDeg: -30 });
+    const forwardStarboard = poseAt(NOW, BEFORE, AFTER, 'horizon', 0, { azimuthDeg: 30 });
+    const starboard = poseAt(NOW, BEFORE, AFTER, 'horizon', 0, { azimuthDeg: 90 });
+    const aftStarboard = poseAt(NOW, BEFORE, AFTER, 'horizon', 0, { azimuthDeg: 150 });
+    const aftPort = poseAt(NOW, BEFORE, AFTER, 'horizon', 0, { azimuthDeg: 210 });
+    expect(forward.ok && port.ok && forwardPort.ok && forwardStarboard.ok && starboard.ok && aftStarboard.ok && aftPort.ok).toBe(true);
+    if (!forward.ok || !port.ok || !forwardPort.ok || !forwardStarboard.ok || !starboard.ok || !aftStarboard.ok || !aftPort.ok) return;
+    for (const pose of [port, forwardPort, forwardStarboard, starboard, aftStarboard, aftPort]) {
+      expect(pose.pose.camera.latDeg).toBeCloseTo(0, 6);
+      expect(pose.pose.camera.lonDeg).toBeCloseTo(0, 6);
+      expect(pose.pose.altitudeM).toBeCloseTo(forward.pose.altitudeM, 4);
+    }
+    expect(port.pose.targetLatDeg).toBeCloseTo(20.41843, 3);
+    expect(port.pose.targetLonDeg).toBeCloseTo(0, 3);
+    expect(starboard.pose.targetLatDeg).toBeCloseTo(-20.41843, 3);
+    expect(starboard.pose.targetLonDeg).toBeCloseTo(0, 3);
+    expect(forwardPort.pose.targetLatDeg).toBeCloseTo(10.046, 2);
+    expect(forwardStarboard.pose.targetLatDeg).toBeCloseTo(-10.046, 2);
+    expect(forwardPort.pose.targetLonDeg).toBeCloseTo(forwardStarboard.pose.targetLonDeg, 3);
+    expect(forwardPort.pose.targetLonDeg).toBeGreaterThan(10);
+    expect(aftPort.pose.targetLatDeg).toBeCloseTo(10.046, 2);
+    expect(aftStarboard.pose.targetLatDeg).toBeCloseTo(-10.046, 2);
+    expect(aftPort.pose.targetLonDeg).toBeCloseTo(aftStarboard.pose.targetLonDeg, 3);
+    expect(aftPort.pose.targetLonDeg).toBeLessThan(-10);
+  });
+
+  it('pans the boresight in the rolled view and keeps that offset when the station moves', () => {
+    const base = poseAt(NOW, BEFORE, AFTER, 'nadir', 0);
+    const right = poseAt(NOW, BEFORE, AFTER, 'nadir', 0, { offset: { rightDeg: 8, upDeg: 0 } });
+    const up = poseAt(NOW, BEFORE, AFTER, 'nadir', 0, { offset: { rightDeg: 0, upDeg: 8 } });
+    expect(base.ok && right.ok && up.ok).toBe(true);
+    if (!base.ok || !right.ok || !up.ok) return;
+    expect(right.pose.altitudeM).toBeCloseTo(base.pose.altitudeM, 4);
+    expect(right.pose.camera.latDeg).toBeCloseTo(0, 6);
+    expect(right.pose.camera.lonDeg).toBeCloseTo(0, 6);
+    expect(right.pose.targetLatDeg).toBeCloseTo(0.54022, 3);
+    expect(right.pose.targetLonDeg).toBeCloseTo(0, 4);
+    expect(up.pose.targetLonDeg).toBeCloseTo(-0.54022, 3);
+    expect(up.pose.targetLatDeg).toBeCloseTo(0, 4);
+
+    const offset = { rightDeg: 6, upDeg: -3 };
+    const here = poseAt(NOW, BEFORE, AFTER, 'horizon', 0, { offset });
+    const hereBase = poseAt(NOW, BEFORE, AFTER, 'horizon', 0);
+    const thereNow: SphericalFix = { latDeg: 0, lonDeg: 10, altKm: 420 };
+    const there = poseAt(thereNow, { latDeg: 0, lonDeg: 9.9, altKm: 420 }, { latDeg: 0, lonDeg: 10.1, altKm: 420 }, 'horizon', 0, { offset });
+    const thereBase = poseAt(thereNow, { latDeg: 0, lonDeg: 9.9, altKm: 420 }, { latDeg: 0, lonDeg: 10.1, altKm: 420 }, 'horizon', 0);
+    expect(here.ok && hereBase.ok && there.ok && thereBase.ok).toBe(true);
+    if (!here.ok || !hereBase.ok || !there.ok || !thereBase.ok) return;
+    expect(there.pose.camera.lonDeg).toBeCloseTo(10, 4);
+    expect(there.pose.altitudeM).toBeCloseTo(here.pose.altitudeM, 3);
+    expect(there.pose.targetLatDeg - thereBase.pose.targetLatDeg).toBeCloseTo(here.pose.targetLatDeg - hereBase.pose.targetLatDeg, 3);
+    expect(there.pose.targetLonDeg - thereBase.pose.targetLonDeg).toBeCloseTo(here.pose.targetLonDeg - hereBase.pose.targetLonDeg, 3);
+    expect(angularSeparationDeg(here.pose.camera.latDeg, here.pose.camera.lonDeg, here.pose.targetLatDeg, here.pose.targetLonDeg))
+      .toBeCloseTo(angularSeparationDeg(there.pose.camera.latDeg, there.pose.camera.lonDeg, there.pose.targetLatDeg, there.pose.targetLonDeg), 2);
+  });
+
   it('reads a limb row as an angle in the vertical field', () => {
     const height = 600;
     const fov = 81.20258929000894;

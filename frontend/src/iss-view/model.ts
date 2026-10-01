@@ -8,6 +8,7 @@ import {
   SGP4_RADIUS_KM,
   RENDER_RADIUS_M,
   type CameraPreset,
+  type PoseAim,
   type ScenePose,
   type SphericalFix,
 } from '../iss-g1/model';
@@ -80,8 +81,9 @@ export function frameFromFixes(
   after: SphericalFix,
   mode: CameraMode,
   inwardDeg = 0,
+  aim: PoseAim = {},
 ): SceneFrame {
-  const posed = poseAt(now, before, after, mode, inwardDeg);
+  const posed = poseAt(now, before, after, mode, inwardDeg, aim);
   if (!posed.ok) return posed;
   return {
     ok: true,
@@ -92,10 +94,10 @@ export function frameFromFixes(
   };
 }
 
-export function sceneFrame(track: Track, whenMs: number, mode: CameraMode, inwardDeg = 0): SceneFrame {
+export function sceneFrame(track: Track, whenMs: number, mode: CameraMode, inwardDeg = 0, aim: PoseAim = {}): SceneFrame {
   const sample = sampleIssViewOrbit(track, whenMs);
   if (!sample.ok) return sample;
-  return frameFromFixes(toFix(sample.now), toFix(sample.before), toFix(sample.after), mode, inwardDeg);
+  return frameFromFixes(toFix(sample.now), toFix(sample.before), toFix(sample.after), mode, inwardDeg, aim);
 }
 
 export function separationFromSubpointDeg(frame: SceneFrame): number | null {
@@ -135,6 +137,7 @@ export function sceneCard(input: {
   light: GroundLight | null;
   imagery: ImageryState;
   lightingUtcMs: number;
+  windowLabel?: string | null;
 }): SceneCard {
   const estimated = input.frame.ok && orbitDataOld(input.snapshot.track, input.whenMs);
   const title = estimated ? 'Estimated view · orbit data old' : 'ISS perspective';
@@ -157,9 +160,11 @@ export function sceneCard(input: {
     title,
     lens,
     position: `${formatUtc(input.whenMs)} · ${formatLat(pose.camera.latDeg)} ${formatLon(pose.camera.lonDeg)} · ${input.frame.modelAltKm.toFixed(1)} km`,
-    lock: input.frame.mode === 'horizon'
-      ? 'Horizon locked · ground-track forward'
-      : 'Nadir locked · ground-track forward',
+    lock: input.windowLabel
+      ? input.windowLabel
+      : input.frame.mode === 'horizon'
+        ? 'Horizon locked · ground-track forward'
+        : 'Nadir locked · ground-track forward',
     lighting: `Modeled live day/night · ${lightLabel(light)}${delayed ? ' · Lighting delayed' : ''}`,
     imagery: imageryLine(input.imagery),
     detail: detailLine(input),
