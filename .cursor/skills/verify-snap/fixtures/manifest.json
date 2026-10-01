@@ -1,0 +1,40 @@
+{
+  "version": "VERIFY",
+  "generated_at": "2026-09-24T12:18:37Z",
+  "tle_epoch": "2026-09-24T06:18:37Z",
+  "cloud_composite_hour": "2026-09-24T12:17:37Z",
+  "target_data_version": "verify-v1",
+  "build_version": "1.22.0.12",
+  "freshness": {
+    "tle_hours": 6,
+    "cloud_hours": 1,
+    "ok": true
+  },
+  "artifacts": {
+    "top5": {
+      "path": "v/VERIFY/top5.json",
+      "sha256": "2ce20a3d2694ed95d33d0e6fb4d8fb3929944add707b35a4c1f604018a9412f5",
+      "bytes": 1595
+    },
+    "top_24h": {
+      "path": "v/VERIFY/top_24h.json",
+      "sha256": "4763e093b3204d2f255b58a97ae14521312576a32e42f23488bb7279be1b0645",
+      "bytes": 1075
+    },
+    "track": {
+      "path": "v/VERIFY/track.json",
+      "sha256": "d1137751ccebb0273ca45113ef2bc7d7991492ddeaccead11f9638d0b9324763",
+      "bytes": 1166
+    },
+    "status": {
+      "path": "v/VERIFY/status.json",
+      "sha256": "5ad33a9eade486ef58ef72d0676634087cf911a67b072ff24b2685110a06e708",
+      "bytes": 400
+    },
+    "passes": {
+      "path": "v/VERIFY/passes.json",
+      "sha256": "bef5438ae0d9cd5381c00119204d74634c8e38ec1a866a1fd4e632a681a4c2dc",
+      "bytes": 2669
+    }
+  }
+}
