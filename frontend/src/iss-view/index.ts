@@ -28,6 +28,28 @@ type IssSession = {
 };
 
 const AIM_STORAGE_KEY = 'opd-iss-aim';
+const AIM_KEY_FRACTION = 0.04;
+const AIM_NARROW = 1 - AIM_KEY_FRACTION;
+const AIM_WIDEN = 1 / AIM_NARROW;
+
+type AimKey =
+  | { kind: 'pan'; right: -1 | 0 | 1; up: -1 | 0 | 1 }
+  | { kind: 'fov'; factor: number }
+  | { kind: 'reset' };
+
+const AIM_KEYS: Record<string, AimKey> = {
+  ArrowLeft: { kind: 'pan', right: -1, up: 0 },
+  ArrowRight: { kind: 'pan', right: 1, up: 0 },
+  ArrowUp: { kind: 'pan', right: 0, up: 1 },
+  ArrowDown: { kind: 'pan', right: 0, up: -1 },
+  '+': { kind: 'fov', factor: AIM_NARROW },
+  '=': { kind: 'fov', factor: AIM_NARROW },
+  '-': { kind: 'fov', factor: AIM_WIDEN },
+  '_': { kind: 'fov', factor: AIM_WIDEN },
+  r: { kind: 'reset' },
+  R: { kind: 'reset' },
+  Escape: { kind: 'reset' },
+};
 
 const sessionPreset: IssSession = readStoredAim() ?? blankAim();
 
@@ -129,6 +151,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   toolbar.append(presets, utc);
   const frame = document.createElement('div');
   frame.dataset.issFrame = '';
+  frame.tabIndex = 0;
   const hint = document.createElement('p');
   hint.dataset.issHint = '';
   hint.textContent = 'Pinch or scroll the field · double-tap to reset';
@@ -265,6 +288,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   retry.addEventListener('click', () => scene.retry());
   mapButton.addEventListener('click', () => options.onMap?.());
   document.addEventListener('visibilitychange', onVisibility);
+  document.addEventListener('keydown', onAimKey);
 
   void boot(bootGeneration);
   if (options.drive !== 'manual') startTimer();
@@ -313,6 +337,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       stopFovHold();
       document.removeEventListener('visibilitychange', onVisibility);
+      document.removeEventListener('keydown', onAimKey);
       renderer?.destroy();
       renderer = null;
       rendererReady = false;
@@ -632,6 +657,40 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     else scene.resume();
   }
 
+  function onAimKey(event: KeyboardEvent): void {
+    if (phase !== 'running') return;
+    if (event.metaKey || event.ctrlKey) return;
+    if (!issViewFocused()) return;
+    if (typingTarget(event.target) || document.querySelector('.modal-backdrop')) return;
+    const action = AIM_KEYS[event.key];
+    if (!action) return;
+    event.preventDefault();
+    if (action.kind === 'reset') {
+      restoreAim();
+      return;
+    }
+    if (action.kind === 'fov') {
+      setOpticalFov(opticalFovDeg * action.factor);
+      return;
+    }
+    const width = framePx.widthPx;
+    const height = framePx.heightPx;
+    if (width < 1 || height < 1) return;
+    writeLook(nudgeLook(session.look, {
+      rightDeg: action.right * AIM_KEY_FRACTION * horizontalFovDeg(opticalFovDeg, width, height),
+      upDeg: action.up * AIM_KEY_FRACTION * opticalFovDeg,
+    }, session.mode, currentRoom()));
+    persistAim();
+    if (rendererReady) void paint();
+  }
+
+  function issViewFocused(): boolean {
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === document.documentElement) return true;
+    if (root.contains(active)) return true;
+    return active.id === 'tab-iss';
+  }
+
   function startTimer(): void {
     stopTimer();
     timer = window.setInterval(() => {
@@ -754,6 +813,14 @@ function writeStoredAim(session: IssSession): void {
   } catch {
     /* storage disabled */
   }
+}
+
+function typingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const node = target.closest('input, textarea, select, [contenteditable]');
+  if (!node) return false;
+  if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) return true;
+  return node instanceof HTMLElement && node.isContentEditable;
 }
 
 function clearStoredAim(): void {

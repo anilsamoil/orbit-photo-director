@@ -3238,6 +3238,10 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   touch-action: none;
 }
 
+[data-iss-frame]:focus {
+  outline: none;
+}
+
 [data-iss-fov] {
   position: absolute;
   z-index: 3;
