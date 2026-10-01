@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { sensorField, type SceneSnapshot } from '../src/iss-view/model';
+import { CUPOLA_WINDOWS } from '../src/iss-view/cupola';
+import { sceneFrame, sensorField, type SceneSnapshot } from '../src/iss-view/model';
 import { horizontalFovDeg, lookRoom } from '../src/iss-view/look';
 import { mountIssScene, type IssScene } from '../src/iss-view';
 import type { IssAim, IssRendererFactory } from '../src/iss-view/renderer';
@@ -233,30 +234,43 @@ describe('ISS keyboard aim', () => {
     if (!(frame instanceof HTMLElement)) throw new Error('missing frame');
     frame.focus();
     key(frame, 'ArrowRight');
+    key(frame, '3');
     expect(aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    expect(aim.windowId).toBeNull();
     scene.update(shot());
     await scene.paint();
     const input = add(document.createElement('input'));
     input.focus();
     const typed = key(input, 'ArrowRight');
+    const typedDigit = key(input, '1');
     expect(typed.defaultPrevented).toBe(false);
+    expect(typedDigit.defaultPrevented).toBe(false);
     expect(aim.look.rightDeg).toBe(0);
+    expect(aim.windowId).toBeNull();
     const area = add(document.createElement('textarea'));
     area.focus();
     key(area, 'ArrowUp');
+    key(area, '3');
     expect(aim.look.upDeg).toBe(0);
+    expect(aim.windowId).toBeNull();
     const editable = add(document.createElement('div'));
     editable.contentEditable = 'true';
     editable.focus();
     key(editable, 'ArrowRight');
+    key(editable, '2');
     expect(aim.look.rightDeg).toBe(0);
+    expect(aim.windowId).toBeNull();
     const cupola = host.querySelector('[data-iss-cupola]');
     if (!(cupola instanceof HTMLSelectElement)) throw new Error('missing cupola');
     expect(frame.tabIndex).toBe(0);
     cupola.focus();
     const selectKey = key(cupola, 'ArrowDown');
+    const selectDigit = key(cupola, '4');
     expect(selectKey.defaultPrevented).toBe(false);
+    expect(selectDigit.defaultPrevented).toBe(false);
     expect(aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    expect(aim.windowId).toBeNull();
+    expect(cupola.value).toBe('');
     frame.focus();
     key(frame, 'ArrowLeft');
     expect(aim.look.rightDeg).toBeLessThan(0);
@@ -264,14 +278,21 @@ describe('ISS keyboard aim', () => {
     frame.focus();
     const chord = key(frame, 'ArrowRight', { ctrlKey: true });
     const command = key(frame, '=', { metaKey: true });
+    const digitChord = key(frame, '5', { ctrlKey: true });
+    const digitCommand = key(frame, '6', { metaKey: true });
     expect(chord.defaultPrevented).toBe(false);
     expect(command.defaultPrevented).toBe(false);
+    expect(digitChord.defaultPrevented).toBe(false);
+    expect(digitCommand.defaultPrevented).toBe(false);
     expect(aim.look.rightDeg).toBe(0);
+    expect(aim.windowId).toBeNull();
     expect(aim.opticalFovDeg).toBeCloseTo(sensorField().vertical, 5);
     const outside = add(document.createElement('button'));
     outside.focus();
     key(outside, 'ArrowRight');
+    key(outside, '7');
     expect(aim.look.rightDeg).toBe(0);
+    expect(aim.windowId).toBeNull();
     const tab = add(document.createElement('button'));
     tab.id = 'tab-iss';
     tab.focus();
@@ -284,12 +305,90 @@ describe('ISS keyboard aim', () => {
     const held = aim.look.rightDeg;
     scene.suspend();
     key(document.body, 'ArrowRight');
+    key(document.body, '3');
     expect(aim.look.rightDeg).toBe(held);
+    expect(aim.windowId).toBeNull();
     scene.dispose();
     key(document.body, 'ArrowRight');
+    key(document.body, '1');
     expect(aim.look.rightDeg).toBe(held);
+    expect(aim.windowId).toBeNull();
     for (const node of extra) node.remove();
     extra.length = 0;
+  });
+
+  it('selects Cupola windows 1 through 7 on the same aim as the select', async () => {
+    const host = mountHost();
+    const aims: IssAim[] = [];
+    const view = await running(host, aims);
+    const lens = sensorField().vertical;
+    view.frame.focus();
+    key(view.frame, '=');
+    key(view.frame, 'ArrowRight');
+    expect(view.aim.look.rightDeg).toBeGreaterThan(0);
+    expect(view.aim.opticalFovDeg).toBeLessThan(lens);
+    (document.activeElement as HTMLElement).blur();
+    const fromBody = key(document.body, '1');
+    expect(fromBody.defaultPrevented).toBe(true);
+    expect(view.aim.windowId).toBe(1);
+    expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    expect(view.aim.opticalFovDeg).toBeCloseTo(lens, 5);
+    view.frame.focus();
+
+    for (const entry of CUPOLA_WINDOWS) {
+      const pressed = key(view.frame, String(entry.id));
+      expect(pressed.defaultPrevented).toBe(true);
+      expect(view.aim.windowId).toBe(entry.id);
+      expect(view.aim.mode).toBe(entry.mode);
+      expect(view.aim.azimuthDeg).toBe(entry.azimuthDeg);
+      expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+      expect(view.aim.opticalFovDeg).toBeCloseTo(lens, 5);
+      const cupola = host.querySelector('[data-iss-cupola]');
+      if (!(cupola instanceof HTMLSelectElement)) throw new Error('missing cupola');
+      expect(cupola.value).toBe(String(entry.id));
+      const chip = host.querySelector('[data-iss-window]');
+      expect(chip?.textContent).toBe(`W${entry.id}`);
+      expect(chip?.getAttribute('aria-label')).toBe(entry.label);
+      expect(chip?.hasAttribute('hidden')).toBe(false);
+      expect(host.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('false');
+      expect(host.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed')).toBe(entry.mode === 'nadir' ? 'true' : 'false');
+      await view.scene.paint();
+      const aimed = aims[aims.length - 1];
+      if (!aimed) throw new Error('missing aim');
+      const expected = sceneFrame(track(), now, entry.mode, 0, { azimuthDeg: entry.azimuthDeg });
+      expect(expected.ok).toBe(true);
+      if (expected.ok) {
+        expect(aimed.pose.targetLatDeg).toBeCloseTo(expected.pose.targetLatDeg, 3);
+        expect(aimed.pose.targetLonDeg).toBeCloseTo(expected.pose.targetLonDeg, 3);
+      }
+      expect(aimed.verticalFovDeg).toBeCloseTo(lens, 5);
+      if (entry.mode === 'horizon') {
+        expect(host.querySelector('[data-iss-status]')?.textContent).toContain(entry.label);
+      }
+    }
+
+    const cupola = host.querySelector('[data-iss-cupola]');
+    if (!(cupola instanceof HTMLSelectElement)) throw new Error('missing cupola');
+    cupola.value = '2';
+    cupola.dispatchEvent(new Event('change'));
+    expect(view.aim.windowId).toBe(2);
+    expect(view.aim.mode).toBe('horizon');
+    expect(view.aim.azimuthDeg).toBe(-30);
+    expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    expect(cupola.value).toBe('2');
+    expect(host.querySelector('[data-iss-window]')?.textContent).toBe('W2');
+    view.frame.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 1, clientX: 200, clientY: 120, pointerType: 'mouse', button: 0, bubbles: true,
+    }));
+    view.frame.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 1, clientX: 80, clientY: 120, pointerType: 'mouse', bubbles: true,
+    }));
+    expect(view.aim.look.rightDeg).toBeGreaterThan(0);
+    expect(view.aim.windowId).toBe(2);
+    view.frame.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 1, clientX: 80, clientY: 120, pointerType: 'mouse', bubbles: true,
+    }));
+    await finish(view.scene);
   });
 });
 
@@ -329,6 +428,62 @@ describe('ISS keyboard aim persistence', () => {
     expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
     expect(view.issPresetSession().look).toEqual({ rightDeg: 0, upDeg: 0 });
     expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(sensorField().vertical, 5);
+    scene.dispose();
+    host.remove();
+  });
+
+  it('writes opd-iss-aim when a digit selects a Cupola window', async () => {
+    const view = await import('../src/iss-view');
+    const host = document.createElement('div');
+    document.body.append(host);
+    const aims: IssAim[] = [];
+    const scene = view.mountIssScene(host, {
+      nowMs: () => now,
+      drive: 'manual',
+      createRenderer: renderer(aims),
+    });
+    scene.update(shot());
+    await scene.paint();
+    const frame = host.querySelector('[data-iss-frame]');
+    if (!(frame instanceof HTMLElement)) throw new Error('missing frame');
+    frame.focus();
+    key(frame, '=');
+    key(frame, 'ArrowRight');
+    key(frame, '3');
+    const stored = JSON.parse(sessionStorage.getItem('opd-iss-aim') ?? 'null') as {
+      mode: string;
+      azimuthDeg: number;
+      windowId: number;
+      look: LookOffset;
+      opticalFovDeg: number;
+    };
+    expect(stored.mode).toBe('horizon');
+    expect(stored.azimuthDeg).toBe(30);
+    expect(stored.windowId).toBe(3);
+    expect(stored.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    expect(stored.opticalFovDeg).toBeCloseTo(sensorField().vertical, 5);
+    expect(view.issPresetSession().windowId).toBe(3);
+    expect(view.issPresetSession().mode).toBe('horizon');
+    const chip = host.querySelector('[data-iss-window]');
+    expect(chip?.textContent).toBe('W3');
+    key(frame, '7');
+    const nadir = JSON.parse(sessionStorage.getItem('opd-iss-aim') ?? 'null') as {
+      mode: string;
+      azimuthDeg: number;
+      windowId: number;
+      look: LookOffset;
+    };
+    expect(nadir.mode).toBe('nadir');
+    expect(nadir.azimuthDeg).toBe(0);
+    expect(nadir.windowId).toBe(7);
+    expect(nadir.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    expect(host.querySelector('[data-iss-window]')?.textContent).toBe('W7');
+    expect(host.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect((host.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('7');
+    key(frame, 'r');
+    expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
+    expect(view.issPresetSession().windowId).toBeNull();
+    expect(view.issPresetSession().mode).toBe('horizon');
     scene.dispose();
     host.remove();
   });

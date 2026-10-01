@@ -1,5 +1,5 @@
 import { createIssRenderer } from '../map/adapters/maplibre/iss-view';
-import { CUPOLA_WINDOWS, cupolaPreset } from './cupola';
+import { CUPOLA_WINDOWS, cupolaPreset, type CupolaWindow } from './cupola';
 import {
   EARTH_VIEW_ROLL_DEG,
   earthFrameSides,
@@ -35,7 +35,8 @@ const AIM_WIDEN = 1 / AIM_NARROW;
 type AimKey =
   | { kind: 'pan'; right: -1 | 0 | 1; up: -1 | 0 | 1 }
   | { kind: 'fov'; factor: number }
-  | { kind: 'reset' };
+  | { kind: 'reset' }
+  | { kind: 'window'; id: CupolaWindow['id'] };
 
 const AIM_KEYS: Record<string, AimKey> = {
   ArrowLeft: { kind: 'pan', right: -1, up: 0 },
@@ -49,6 +50,13 @@ const AIM_KEYS: Record<string, AimKey> = {
   r: { kind: 'reset' },
   R: { kind: 'reset' },
   Escape: { kind: 'reset' },
+  '1': { kind: 'window', id: 1 },
+  '2': { kind: 'window', id: 2 },
+  '3': { kind: 'window', id: 3 },
+  '4': { kind: 'window', id: 4 },
+  '5': { kind: 'window', id: 5 },
+  '6': { kind: 'window', id: 6 },
+  '7': { kind: 'window', id: 7 },
 };
 
 const sessionPreset: IssSession = readStoredAim() ?? blankAim();
@@ -218,12 +226,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   nadir.addEventListener('click', () => choose('nadir', 0, null));
   reset.addEventListener('click', () => restoreAim());
   cupola.addEventListener('change', () => {
-    const preset = cupolaPreset(Number(cupola.value));
-    if (preset === null) {
-      syncCupola();
-      return;
-    }
-    choose(preset.mode, preset.azimuthDeg, Number(cupola.value));
+    aimCupola(Number(cupola.value));
   });
   telemetry.addEventListener('click', () => {
     setTelemetryOpen(telemetryBody.hidden);
@@ -431,6 +434,15 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       return;
     }
     if (token !== generation || epoch !== snapshotEpoch) return;
+  }
+
+  function aimCupola(id: number): void {
+    const preset = cupolaPreset(id);
+    if (preset === null) {
+      syncCupola();
+      return;
+    }
+    choose(preset.mode, preset.azimuthDeg, id);
   }
 
   function choose(mode: CameraMode, azimuthDeg: number, windowId: number | null): void {
@@ -671,6 +683,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     }
     if (action.kind === 'fov') {
       setOpticalFov(opticalFovDeg * action.factor);
+      return;
+    }
+    if (action.kind === 'window') {
+      aimCupola(action.id);
       return;
     }
     const width = framePx.widthPx;
