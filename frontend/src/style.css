@@ -3122,7 +3122,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   gap: 0.35rem;
 }
 
-[data-iss-preset] {
+[data-iss-preset],
+[data-iss-reset] {
   min-height: 44px;
   min-width: 44px;
   padding: 0 0.95rem;

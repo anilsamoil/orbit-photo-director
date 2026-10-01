@@ -82,6 +82,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
   let panOrigin: { id: number; x: number; y: number; rightDeg: number; upDeg: number } | null = null;
+  let tap: { x: number; y: number; moved: number } | null = null;
+  let priorTap: { x: number; y: number; at: number } | null = null;
   const bootGeneration = generation;
 
   const root = document.createElement('section');
@@ -106,7 +108,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     option.textContent = entry.label;
     cupola.append(option);
   }
-  presets.append(horizon, nadir, cupola);
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.dataset.issReset = '';
+  reset.textContent = 'Reset';
+  reset.setAttribute('aria-label', 'Reset pan and field of view');
+  presets.append(horizon, nadir, cupola, reset);
   const utc = document.createElement('p');
   utc.dataset.issUtc = '';
   const toolbar = document.createElement('div');
@@ -168,6 +175,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   horizon.addEventListener('click', () => choose('horizon', 0, null));
   nadir.addEventListener('click', () => choose('nadir', 0, null));
+  reset.addEventListener('click', () => restoreAim());
   cupola.addEventListener('change', () => {
     const preset = cupolaPreset(Number(cupola.value));
     if (preset === null) {
@@ -188,6 +196,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size >= 2) {
       panOrigin = null;
+      tap = null;
+      priorTap = null;
       pinchDistance = pointerDistance();
     } else {
       panOrigin = {
@@ -197,12 +207,16 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         rightDeg: session.look.rightDeg,
         upDeg: session.look.upDeg,
       };
+      tap = { x: event.clientX, y: event.clientY, moved: 0 };
     }
     if (typeof frame.setPointerCapture === 'function') frame.setPointerCapture(event.pointerId);
   });
   frame.addEventListener('pointermove', (event) => {
     if (!pointers.has(event.pointerId)) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (tap && pointers.size < 2) {
+      tap.moved = Math.max(tap.moved, Math.hypot(event.clientX - tap.x, event.clientY - tap.y));
+    }
     if (pointers.size >= 2) {
       if (pinchDistance <= 0) return;
       const next = pointerDistance();
@@ -221,8 +235,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     session.look.upDeg = panOrigin.upDeg + (dy / height) * opticalFovDeg;
     if (phase === 'running' && rendererReady) void paint();
   });
-  frame.addEventListener('pointerup', forgetPointer);
-  frame.addEventListener('pointercancel', forgetPointer);
+  frame.addEventListener('pointerup', (event) => finishPointer(event, true));
+  frame.addEventListener('pointercancel', (event) => finishPointer(event, false));
+  frame.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    restoreAim();
+  });
   retry.addEventListener('click', () => scene.retry());
   mapButton.addEventListener('click', () => options.onMap?.());
   document.addEventListener('visibilitychange', onVisibility);
@@ -375,9 +393,20 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     session.look.rightDeg = 0;
     session.look.upDeg = 0;
     panOrigin = null;
+    priorTap = null;
+    if (windowId !== null) opticalFovDeg = lensFovDeg;
     syncPreset();
     syncCupola();
     if (phase === 'running') void paint();
+  }
+
+  function restoreAim(): void {
+    session.look.rightDeg = 0;
+    session.look.upDeg = 0;
+    panOrigin = null;
+    priorTap = null;
+    opticalFovDeg = lensFovDeg;
+    if (phase === 'running' && rendererReady) void paint();
   }
 
   function fail(reason: string): void {
@@ -465,10 +494,27 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     return Math.hypot(first.x - second.x, first.y - second.y);
   }
 
-  function forgetPointer(event: PointerEvent): void {
+  function finishPointer(event: PointerEvent, tapAllowed: boolean): void {
+    const watch = tap;
+    const pinching = pointers.size >= 2;
     pointers.delete(event.pointerId);
     pinchDistance = pointers.size >= 2 ? pointerDistance() : 0;
     if (pointers.size < 2) panOrigin = null;
+    tap = null;
+    if (!tapAllowed || pinching || pointers.size > 0 || !watch || watch.moved > 18) {
+      priorTap = null;
+      return;
+    }
+    const at = event.timeStamp;
+    const prev = priorTap;
+    priorTap = { x: event.clientX, y: event.clientY, at };
+    if (!prev) return;
+    const gap = at - prev.at;
+    const apart = Math.hypot(event.clientX - prev.x, event.clientY - prev.y);
+    if (gap >= 0 && gap <= 450 && apart <= 36) {
+      priorTap = null;
+      restoreAim();
+    }
   }
 
   function sideWindowLabel(): string | null {
