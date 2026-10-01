@@ -1580,7 +1580,7 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -2100,6 +2100,68 @@ async function proveIssKeyboard(send) {
       return { ok: true, shift };
     })()`,
     'iss keyboard pan',
+    10000,
+  );
+  await pressKey(send, '=');
+  await waitFor(
+    send,
+    `(() => {
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || !(fov < ${before.fov} - 2)) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss keyboard field narrowed before a window',
+    10000,
+  );
+  await pressKey(send, '3');
+  await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdIss;
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const chip = document.querySelector('[data-iss-window]');
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (!map?.getCenter || !map.getVerticalFieldOfView || !cupola || !chip) return null;
+      if (cupola.value !== '3') return null;
+      if (chip.textContent !== 'W3' || chip.hidden) return null;
+      if (chip.getAttribute('aria-label') !== 'Window 3 · Forward starboard') return null;
+      if (horizon?.getAttribute('aria-pressed') !== 'false') return null;
+      const fov = map.getVerticalFieldOfView();
+      if (Math.abs(fov - ${before.fov}) > 0.5) return null;
+      const raw = sessionStorage.getItem('opd-iss-aim');
+      if (!raw) return null;
+      const aim = JSON.parse(raw);
+      if (aim.windowId !== 3 || aim.mode !== 'horizon' || aim.azimuthDeg !== 30) return null;
+      if (!aim.look || aim.look.rightDeg !== 0 || aim.look.upDeg !== 0) return null;
+      const center = map.getCenter();
+      const shift = Math.abs(center.lat - ${before.lat}) + Math.abs(center.lng - ${before.lng});
+      if (shift < 0.5) return null;
+      return { ok: true, fov, shift };
+    })()`,
+    'iss keyboard cupola window',
+    10000,
+  );
+  await pressKey(send, '7');
+  await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdIss;
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const chip = document.querySelector('[data-iss-window]');
+      const nadir = document.querySelector('[data-iss-preset="nadir"]');
+      if (!map?.getVerticalFieldOfView || !cupola || !chip) return null;
+      if (cupola.value !== '7' || chip.textContent !== 'W7' || chip.hidden) return null;
+      if (nadir?.getAttribute('aria-pressed') !== 'true') return null;
+      const fov = map.getVerticalFieldOfView();
+      if (Math.abs(fov - ${before.fov}) > 0.5) return null;
+      const raw = sessionStorage.getItem('opd-iss-aim');
+      if (!raw) return null;
+      const aim = JSON.parse(raw);
+      if (aim.windowId !== 7 || aim.mode !== 'nadir' || aim.azimuthDeg !== 0) return null;
+      if (!aim.look || aim.look.rightDeg !== 0 || aim.look.upDeg !== 0) return null;
+      return { ok: true };
+    })()`,
+    'iss keyboard nadir window',
     10000,
   );
   await pressKey(send, 'r');
