@@ -614,4 +614,83 @@ describe('ISS chrome starts out of the way', () => {
       vi.useRealTimers();
     }
   });
+
+  it('keeps a pinched optical field when the scene remounts', async () => {
+    sessionStorage.clear();
+    vi.resetModules();
+    const view = await import('../src/iss-view');
+    const aims: IssAim[] = [];
+    const host = document.createElement('div');
+    const scene = view.mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      drive: 'manual',
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aims.push(aim);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    await ready(scene);
+    scene.update(shot('fov-hold'));
+    await scene.paint();
+    const lens = lastAim(aims).verticalFovDeg;
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    if (typeof frame.setPointerCapture !== 'function') frame.setPointerCapture = () => {};
+    frame.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 1, pointerType: 'touch', clientX: 80, clientY: 80, bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 2, pointerType: 'touch', clientX: 140, clientY: 80, bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 2, pointerType: 'touch', clientX: 260, clientY: 80, bubbles: true,
+    }));
+    await scene.paint();
+    const narrowed = lastAim(aims).verticalFovDeg;
+    expect(narrowed).toBeLessThan(lens - 1);
+    expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(narrowed, 5);
+    const stored = JSON.parse(sessionStorage.getItem('opd-iss-aim') ?? 'null') as { opticalFovDeg: number } | null;
+    expect(stored?.opticalFovDeg).toBeCloseTo(narrowed, 5);
+    scene.dispose();
+    expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(narrowed, 5);
+
+    const host2 = document.createElement('div');
+    const aims2: IssAim[] = [];
+    const scene2 = view.mountIssScene(host2, {
+      nowMs: () => startMs + 60_000,
+      drive: 'manual',
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aims2.push(aim);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    await ready(scene2);
+    scene2.update(shot('fov-hold'));
+    await scene2.paint();
+    expect(lastAim(aims2).verticalFovDeg).toBeCloseTo(narrowed, 5);
+    expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(narrowed, 5);
+
+    (host2.querySelector('[data-iss-preset="nadir"]') as HTMLElement).click();
+    await scene2.paint();
+    expect(scene2.mode()).toBe('nadir');
+    expect(lastAim(aims2).verticalFovDeg).toBeCloseTo(narrowed, 5);
+
+    const cupola = host2.querySelector('[data-iss-cupola]') as HTMLSelectElement;
+    cupola.value = '1';
+    cupola.dispatchEvent(new Event('change'));
+    await scene2.paint();
+    expect(lastAim(aims2).verticalFovDeg).toBeCloseTo(lens, 5);
+    scene2.dispose();
+    sessionStorage.clear();
+    vi.resetModules();
+  });
 });
