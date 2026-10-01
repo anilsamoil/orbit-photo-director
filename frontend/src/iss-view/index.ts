@@ -312,7 +312,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       setPhase('dormant');
       stopTimer();
       stopFovHold();
-      if (session === sessionPreset) session.opticalFovDeg = lensFovDeg;
       document.removeEventListener('visibilitychange', onVisibility);
       renderer?.destroy();
       renderer = null;

@@ -1580,7 +1580,7 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov reset, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -1731,7 +1731,7 @@ async function proveIssPanSession(send, evidenceDir, pan) {
       const fromStart = Math.abs(center.lat - ${pan.lat}) + Math.abs(center.lng - ${pan.lng});
       const fromPan = Math.abs(center.lat - ${pan.panLat}) + Math.abs(center.lng - ${pan.panLng});
       if (fromStart < 0.3 || fromPan > fromStart) return null;
-      if (!(fov > ${pan.fov} + 4)) return null;
+      if (Math.abs(fov - ${pan.fov}) > 0.5) return null;
       const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
       const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
       const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
@@ -1739,7 +1739,7 @@ async function proveIssPanSession(send, evidenceDir, pan) {
       if (starboard.right > frame.left + 2 || port.left < frame.right - 2) return null;
       return { ok: true, fov, fromStart, fromPan };
     })()`,
-    'iss pan kept and fov reset',
+    'iss pan kept and fov held',
     45000,
   );
   await shot(send, evidenceDir, 'iss-pan-return');

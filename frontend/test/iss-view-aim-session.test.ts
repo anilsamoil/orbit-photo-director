@@ -143,7 +143,7 @@ describe('ISS aim session storage', () => {
     scene2.dispose();
   });
 
-  it('keeps the window across a tab return and leaves the stored field for reload', async () => {
+  it('keeps the window and the pinched field across a tab return', async () => {
     const view = await import('../src/iss-view');
     const aims: IssAim[] = [];
     const host = document.createElement('div');
@@ -163,7 +163,9 @@ describe('ISS aim session storage', () => {
     await scene.paint();
     const narrowed = lastAim(aims).verticalFovDeg;
     expect(narrowed).toBeLessThan(lens - 1);
+    expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(narrowed, 5);
     scene.dispose();
+    expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(narrowed, 5);
 
     const host2 = document.createElement('div');
     const aims2: IssAim[] = [];
@@ -174,7 +176,8 @@ describe('ISS aim session storage', () => {
     });
     expect((host2.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('3');
     await paint(scene2);
-    expect(lastAim(aims2).verticalFovDeg).toBeCloseTo(lens, 5);
+    expect(lastAim(aims2).verticalFovDeg).toBeCloseTo(narrowed, 5);
+    expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(narrowed, 5);
     expect(stored()?.windowId).toBe(3);
     expect(stored()?.opticalFovDeg).toBeCloseTo(narrowed, 5);
     scene2.dispose();
