@@ -1414,6 +1414,12 @@ async function driveIss(send, evidenceDir, viewport) {
       if (!window7 || window7.disabled) return null;
       if (!/Port/.test(side[0].textContent || '') || !/Starboard/.test(side[3].textContent || '')) return null;
       if (window7.textContent !== 'Window 7 · Nadir') return null;
+      const hint = document.querySelector('[data-iss-hint]');
+      if ((hint?.textContent || '') !== 'Pinch or scroll the field · double-tap to reset') return null;
+      if (document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('title') !== 'Horizon aim') return null;
+      if (document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('title') !== 'Aim straight down') return null;
+      if (cupola.getAttribute('title') !== 'Window field of view') return null;
+      if (!/double-tap/i.test(document.querySelector('[data-iss-reset]')?.getAttribute('title') || '')) return null;
       const port = document.querySelector('[data-iss-port]');
       const starboard = document.querySelector('[data-iss-starboard]');
       if (port?.textContent !== 'Port' || starboard?.textContent !== 'Starboard') return null;
@@ -1517,6 +1523,7 @@ async function driveIss(send, evidenceDir, viewport) {
   await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   await proveIssPanSession(send, evidenceDir, pan);
   await proveIssWindows(send, evidenceDir);
+  await proveIssWindowSession(send, evidenceDir);
   await proveIssAimReset(send, evidenceDir);
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
@@ -1571,7 +1578,7 @@ async function driveIss(send, evidenceDir, viewport) {
     45000,
   );
   await shot(send, evidenceDir, 'iss-return');
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, pan held, pan kept, fov reset, windows 1-6 aimed, window field, aim reset, double tap (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov reset, windows 1-6 aimed, window kept, window field, aim reset, double tap (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -1596,6 +1603,15 @@ async function proveIssOpticalFov(send, evidenceDir) {
     deltaX: 0,
     deltaY: -480,
   });
+  const live = await evaluate(send, `(() => {
+    const node = document.querySelector('[data-iss-fov]');
+    if (!node || node.getAttribute('data-iss-fov-state') !== 'live') return null;
+    const shown = Number.parseFloat(node.textContent || '');
+    if (!Number.isFinite(shown)) return null;
+    return { ok: true, shown };
+  })()`);
+  if (!live) throw new Error('iss fov readout missing');
+  await shot(send, evidenceDir, 'iss-fov-live');
   const narrowed = await waitFor(
     send,
     `(() => {
@@ -1626,6 +1642,15 @@ async function proveIssOpticalFov(send, evidenceDir) {
     throw new Error(`iss fov reset after tick ${JSON.stringify({ before, narrowed, held })}`);
   }
   if (Math.abs(held.roll - 180) > 0.5) throw new Error(`iss roll after fov ${held.roll}`);
+  if (Math.abs(live.shown - held.fov) > 0.2) {
+    throw new Error(`iss fov readout ${live.shown} vs field ${held.fov}`);
+  }
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-fov]')?.textContent ? null : { ok: true }`,
+    'iss fov readout idle',
+    3000,
+  );
   await shot(send, evidenceDir, 'iss-fov-after');
   return held.fov;
 }
@@ -1766,6 +1791,33 @@ async function proveIssWindows(send, evidenceDir) {
   if (Math.abs(port.lat - starboard.lat) + Math.abs(port.lng - starboard.lng) < 1) {
     throw new Error(`iss port and starboard share an aim ${JSON.stringify({ port, starboard })}`);
   }
+}
+
+async function proveIssWindowSession(send, evidenceDir) {
+  await click(send, '#tab-map');
+  await waitFor(
+    send,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') ? { ok: true } : null`,
+    'map before window return',
+    20000,
+  );
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `(() => {
+      const chip = document.querySelector('[data-iss-window]');
+      const cupola = document.querySelector('[data-iss-cupola]');
+      if (!chip || chip.hidden || (chip.textContent || '').trim() !== 'W6') return null;
+      if (!cupola || cupola.value !== '6') return null;
+      if (document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed') === 'true') return null;
+      const text = document.querySelector('[data-iss-status]')?.textContent || '';
+      if (!text.includes('Window 6 · Aft port')) return null;
+      return { ok: true };
+    })()`,
+    'iss window kept',
+    45000,
+  );
+  await shot(send, evidenceDir, 'iss-window-return');
 }
 
 async function proveIssAimReset(send, evidenceDir) {

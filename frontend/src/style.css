@@ -3238,6 +3238,64 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   touch-action: none;
 }
 
+[data-iss-fov] {
+  position: absolute;
+  z-index: 3;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 0.8rem);
+  margin: 0;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  color: #f4f7fb;
+  text-shadow:
+    0 0 2px #02040c,
+    0 0 6px #02040c,
+    0 1px 2px rgba(2, 4, 12, 0.95);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+[data-iss-fov][data-iss-fov-state='live'] {
+  opacity: 1;
+}
+
+[data-iss-fov]:empty {
+  display: none;
+}
+
+[data-iss-hint] {
+  position: absolute;
+  z-index: 3;
+  left: 0.4rem;
+  right: 52px;
+  bottom: 0.4rem;
+  margin: 0;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  color: rgba(244, 247, 251, 0.78);
+  text-shadow:
+    0 0 2px #02040c,
+    0 0 6px #02040c,
+    0 1px 2px rgba(2, 4, 12, 0.95);
+}
+
 .iss-place {
   pointer-events: none;
   white-space: nowrap;

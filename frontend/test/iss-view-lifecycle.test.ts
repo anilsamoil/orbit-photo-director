@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { issPositionWithAltSGP4 } from '../src/iss-sgp4';
 import { mountIssScene, type IssScene } from '../src/iss-view';
@@ -387,6 +387,10 @@ describe('ISS chrome starts out of the way', () => {
     expect(reset.textContent).toBe('Reset');
     expect(reset.getAttribute('aria-label')).toBe('Reset pan and the 14 mm field. Double-tap the view to do the same.');
     expect(reset.title).toContain('Double-tap');
+    expect((host.querySelector('[data-iss-preset="horizon"]') as HTMLButtonElement).title).toBe('Horizon aim');
+    expect((host.querySelector('[data-iss-preset="nadir"]') as HTMLButtonElement).title).toBe('Aim straight down');
+    expect((host.querySelector('[data-iss-cupola]') as HTMLSelectElement).title).toBe('Window field of view');
+    expect(host.querySelector('[data-iss-hint]')?.textContent).toBe('Pinch or scroll the field · double-tap to reset');
 
     frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
     await scene.paint();
@@ -558,5 +562,47 @@ describe('ISS chrome starts out of the way', () => {
       pointerId: 1, clientX: 2520, clientY: 200, pointerType: 'mouse', bubbles: true,
     }));
     scene.dispose();
+  });
+
+  it('shows the optical field while wheeling or pinching and clears it when idle', () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: () => Promise.resolve(),
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    try {
+      const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+      const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+      expect(readout.textContent).toBe('');
+      expect(readout.dataset.issFovState).toBe('idle');
+      frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+      expect(readout.textContent).toBe('38.4°');
+      expect(readout.dataset.issFovState).toBe('live');
+      vi.advanceTimersByTime(1000);
+      expect(readout.dataset.issFovState).toBe('idle');
+      expect(readout.textContent).toBe('38.4°');
+      vi.advanceTimersByTime(220);
+      expect(readout.textContent).toBe('');
+      expect(readout.dataset.issFovState).toBe('idle');
+
+      (host.querySelector('[data-iss-reset]') as HTMLButtonElement).click();
+      if (typeof frame.setPointerCapture !== 'function') frame.setPointerCapture = () => {};
+      frame.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 80, clientY: 80, bubbles: true }));
+      frame.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, pointerType: 'touch', clientX: 140, clientY: 80, bubbles: true }));
+      frame.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, pointerType: 'touch', clientX: 260, clientY: 80, bubbles: true }));
+      expect(readout.textContent).toBe('27.1°');
+      expect(readout.dataset.issFovState).toBe('live');
+    } finally {
+      scene.dispose();
+      vi.useRealTimers();
+    }
   });
 });

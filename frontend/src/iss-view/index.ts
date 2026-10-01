@@ -76,6 +76,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let imagery: ImageryState = { kind: 'ready' };
   let held: IssScenePhase = 'running';
   let timer = 0;
+  let fovHold = 0;
   let paintSerial = 0;
   const lensFovDeg = sensorField().vertical;
   let opticalFovDeg = lensFovDeg;
@@ -95,9 +96,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   presets.setAttribute('role', 'group');
   presets.setAttribute('aria-label', 'Camera');
   const horizon = presetButton('horizon', 'Horizon');
+  horizon.title = 'Horizon aim';
   const nadir = presetButton('nadir', 'Straight down');
+  nadir.title = 'Aim straight down';
   const cupola = document.createElement('select');
   cupola.dataset.issCupola = '';
+  cupola.title = 'Window field of view';
   cupola.setAttribute('aria-label', 'Cupola window');
   const cupolaPlaceholder = document.createElement('option');
   cupolaPlaceholder.value = '';
@@ -126,6 +130,15 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   toolbar.append(presets, utc);
   const frame = document.createElement('div');
   frame.dataset.issFrame = '';
+  const hint = document.createElement('p');
+  hint.dataset.issHint = '';
+  hint.textContent = 'Pinch or scroll the field · double-tap to reset';
+  hint.setAttribute('aria-hidden', 'true');
+  const fovReadout = document.createElement('p');
+  fovReadout.dataset.issFov = '';
+  fovReadout.dataset.issFovState = 'idle';
+  fovReadout.setAttribute('aria-hidden', 'true');
+  frame.append(fovReadout, hint);
   const stage = document.createElement('div');
   stage.dataset.issStage = '';
   const port = sideLabel('issPort', 'Port');
@@ -298,6 +311,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       paintSerial += 1;
       setPhase('dormant');
       stopTimer();
+      stopFovHold();
       document.removeEventListener('visibilitychange', onVisibility);
       renderer?.destroy();
       renderer = null;
@@ -484,10 +498,29 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function setOpticalFov(value: number): void {
     const next = clampFov(value);
+    showOpticalFov(next);
     if (next === opticalFovDeg) return;
     opticalFovDeg = next;
     writeLook(settleLook(session.look, session.mode, currentRoom()));
     if (phase === 'running' && rendererReady) void paint();
+  }
+
+  function showOpticalFov(degrees: number): void {
+    fovReadout.textContent = `${degrees.toFixed(1)}°`;
+    fovReadout.dataset.issFovState = 'live';
+    window.clearTimeout(fovHold);
+    fovHold = window.setTimeout(() => {
+      fovReadout.dataset.issFovState = 'idle';
+      fovHold = window.setTimeout(() => {
+        fovReadout.textContent = '';
+        fovHold = 0;
+      }, 220);
+    }, 1000);
+  }
+
+  function stopFovHold(): void {
+    window.clearTimeout(fovHold);
+    fovHold = 0;
   }
 
   function clampFov(value: number): number {

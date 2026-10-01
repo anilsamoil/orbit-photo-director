@@ -229,6 +229,43 @@ describe('ISS view tab', () => {
     expect(document.getElementById('tab-iss')?.classList.contains('active')).toBe(false);
   });
 
+  it('restores the last Cupola window, then Horizon, after leaving the tab', async () => {
+    await boot();
+    (document.getElementById('tab-iss') as HTMLElement).click();
+    await until('cupola mounted', () => {
+      expect(document.querySelector('[data-iss-cupola]')).toBeTruthy();
+    });
+    const cupola = document.querySelector('[data-iss-cupola]') as HTMLSelectElement;
+    cupola.value = '3';
+    cupola.dispatchEvent(new Event('change'));
+    expect(document.querySelector('[data-iss-window]')?.textContent).toBe('W3');
+    expect(document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('false');
+
+    (document.getElementById('tab-map') as HTMLElement).click();
+    expect(document.querySelector('[data-iss-scene]')).toBeNull();
+    (document.getElementById('tab-iss') as HTMLElement).click();
+    await until('window restored', () => {
+      const select = document.querySelector('[data-iss-cupola]') as HTMLSelectElement | null;
+      const chip = document.querySelector('[data-iss-window]');
+      expect(select?.value).toBe('3');
+      expect(chip?.textContent).toBe('W3');
+      expect(chip?.hasAttribute('hidden')).toBe(false);
+      expect(document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('false');
+    });
+
+    (document.querySelector('[data-iss-preset="horizon"]') as HTMLElement).click();
+    expect((document.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('');
+    expect(document.querySelector('[data-iss-window]')?.hasAttribute('hidden')).toBe(true);
+    (document.getElementById('tab-queue') as HTMLElement).click();
+    expect(document.querySelector('[data-iss-scene]')).toBeNull();
+    (document.getElementById('tab-iss') as HTMLElement).click();
+    await until('horizon restored', () => {
+      expect(document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('true');
+      expect((document.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('');
+      expect(document.querySelector('[data-iss-window]')?.hasAttribute('hidden')).toBe(true);
+    });
+  });
+
   it('stays on Loading until the accepted manifest arrives, then paints that snapshot', async () => {
     let resolveManifest: (value: Manifest) => void = () => {};
     vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise((resolve) => {
