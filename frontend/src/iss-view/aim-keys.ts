@@ -2,18 +2,19 @@ import { CUPOLA_WINDOWS, type CupolaWindow } from './cupola';
 import type { CameraMode } from './model';
 
 export const AIM_KEY_FRACTION = 0.04;
+const AIM_KEY_FINE_FRACTION = AIM_KEY_FRACTION / 4;
 
 const AIM_NARROW = 1 - AIM_KEY_FRACTION;
 const AIM_WIDEN = 1 / AIM_NARROW;
 
 export type AimAction =
-  | { kind: 'pan'; right: -1 | 0 | 1; up: -1 | 0 | 1 }
+  | { kind: 'pan'; right: -1 | 0 | 1; up: -1 | 0 | 1; fraction: number }
   | { kind: 'fov'; factor: number }
   | { kind: 'reset' }
   | { kind: 'window'; id: CupolaWindow['id'] }
   | { kind: 'preset'; mode: CameraMode };
 
-type AimRow = 'pan' | 'narrow' | 'widen' | 'reset' | 'cupola' | 'horizon' | 'nadir';
+type AimRow = 'pan' | 'fine' | 'narrow' | 'widen' | 'reset' | 'cupola' | 'horizon' | 'nadir';
 
 export type AimChord = {
   readonly keys: readonly string[];
@@ -22,10 +23,14 @@ export type AimChord = {
 };
 
 const AIM_CHORDS: readonly AimChord[] = [
-  { keys: ['ArrowLeft'], action: { kind: 'pan', right: -1, up: 0 }, row: 'pan' },
-  { keys: ['ArrowRight'], action: { kind: 'pan', right: 1, up: 0 }, row: 'pan' },
-  { keys: ['ArrowUp'], action: { kind: 'pan', right: 0, up: 1 }, row: 'pan' },
-  { keys: ['ArrowDown'], action: { kind: 'pan', right: 0, up: -1 }, row: 'pan' },
+  { keys: ['ArrowLeft'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FRACTION }, row: 'pan' },
+  { keys: ['ArrowRight'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FRACTION }, row: 'pan' },
+  { keys: ['ArrowUp'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FRACTION }, row: 'pan' },
+  { keys: ['ArrowDown'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FRACTION }, row: 'pan' },
+  { keys: ['Shift+ArrowLeft'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
+  { keys: ['Shift+ArrowRight'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
+  { keys: ['Shift+ArrowUp'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
+  { keys: ['Shift+ArrowDown'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
   { keys: ['+', '='], action: { kind: 'fov', factor: AIM_NARROW }, row: 'narrow' },
   { keys: ['-', '_'], action: { kind: 'fov', factor: AIM_WIDEN }, row: 'widen' },
   { keys: ['r', 'R', 'Escape'], action: { kind: 'reset' }, row: 'reset' },
@@ -40,6 +45,7 @@ const AIM_CHORDS: readonly AimChord[] = [
 
 const EFFECT: Record<AimRow, string> = {
   pan: 'Pan',
+  fine: 'Fine pan',
   narrow: 'Narrow FOV',
   widen: 'Widen',
   reset: 'Reset',
@@ -49,6 +55,7 @@ const EFFECT: Record<AimRow, string> = {
 };
 
 const ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+const SHIFT_ARROWS = ARROWS.map((arrow) => `Shift+${arrow}`);
 
 export const AIM_KEYS: Readonly<Record<string, AimAction>> = indexAimKeys(AIM_CHORDS);
 
@@ -176,7 +183,8 @@ export function bindAimKeys(options: {
       return;
     }
     if (!options.armed()) return;
-    const action = AIM_KEYS[event.key];
+    const shifted = event.shiftKey ? AIM_KEYS[`Shift+${event.key}`] : undefined;
+    const action = shifted ?? AIM_KEYS[event.key];
     if (!action) return;
     event.preventDefault();
     options.apply(action);
@@ -213,6 +221,7 @@ export function bindAimKeys(options: {
 function labelFor(row: AimRow, keys: readonly string[]): string {
   const shown = keys.filter((key) => !keys.some((other) => shiftedAlias(key, other)));
   if (row === 'pan' && shown.length === ARROWS.length && ARROWS.every((arrow) => shown.includes(arrow))) return 'Arrows';
+  if (row === 'fine' && shown.length === SHIFT_ARROWS.length && SHIFT_ARROWS.every((arrow) => shown.includes(arrow))) return 'Shift+arrows';
   if (row === 'cupola') {
     const parsed = shown.map((key) => Number.parseInt(key, 10));
     if (parsed.every((id) => Number.isInteger(id))) {

@@ -21,6 +21,18 @@ describe('ISS aim key table', () => {
     if (narrow?.kind !== 'fov' || widen?.kind !== 'fov') return;
     expect(narrow.factor).toBeLessThan(1);
     expect(widen.factor).toBeCloseTo(1 / narrow.factor, 8);
+    for (const arrow of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+      const plain = AIM_KEYS[arrow];
+      const fine = AIM_KEYS[`Shift+${arrow}`];
+      expect(plain?.kind).toBe('pan');
+      expect(fine?.kind).toBe('pan');
+      if (plain?.kind !== 'pan' || fine?.kind !== 'pan') continue;
+      expect(fine.right).toBe(plain.right);
+      expect(fine.up).toBe(plain.up);
+      expect(fine.fraction).toBeCloseTo(plain.fraction / 4, 8);
+      expect(fine.fraction).toBeGreaterThan(0);
+      expect(fine.fraction).toBeLessThan(plain.fraction);
+    }
   });
 
   it('rejects a key claimed by two chords', () => {
