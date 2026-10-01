@@ -1,5 +1,5 @@
 import { createIssRenderer } from '../map/adapters/maplibre/iss-view';
-import { CUPOLA_WINDOWS, cupolaPreset, type CupolaWindow } from './cupola';
+import { CUPOLA_WINDOWS, cupolaPreset } from './cupola';
 import {
   EARTH_VIEW_ROLL_DEG,
   earthFrameSides,
@@ -16,6 +16,7 @@ import {
 } from './model';
 import type { LookOffset } from '../iss-g1/model';
 import { horizontalFovDeg, lookRoom, nudgeLook, settleLook } from './look';
+import { AIM_KEY_FRACTION, bindAimKeys, type AimAction } from './aim-keys';
 import { fitIssPane } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
@@ -28,41 +29,6 @@ type IssSession = {
 };
 
 const AIM_STORAGE_KEY = 'opd-iss-aim';
-const AIM_KEY_FRACTION = 0.04;
-const AIM_NARROW = 1 - AIM_KEY_FRACTION;
-const AIM_WIDEN = 1 / AIM_NARROW;
-
-type AimKey =
-  | { kind: 'pan'; right: -1 | 0 | 1; up: -1 | 0 | 1 }
-  | { kind: 'fov'; factor: number }
-  | { kind: 'reset' }
-  | { kind: 'window'; id: CupolaWindow['id'] }
-  | { kind: 'preset'; mode: CameraMode };
-
-const AIM_KEYS: Record<string, AimKey> = {
-  ArrowLeft: { kind: 'pan', right: -1, up: 0 },
-  ArrowRight: { kind: 'pan', right: 1, up: 0 },
-  ArrowUp: { kind: 'pan', right: 0, up: 1 },
-  ArrowDown: { kind: 'pan', right: 0, up: -1 },
-  '+': { kind: 'fov', factor: AIM_NARROW },
-  '=': { kind: 'fov', factor: AIM_NARROW },
-  '-': { kind: 'fov', factor: AIM_WIDEN },
-  '_': { kind: 'fov', factor: AIM_WIDEN },
-  r: { kind: 'reset' },
-  R: { kind: 'reset' },
-  Escape: { kind: 'reset' },
-  '1': { kind: 'window', id: 1 },
-  '2': { kind: 'window', id: 2 },
-  '3': { kind: 'window', id: 3 },
-  '4': { kind: 'window', id: 4 },
-  '5': { kind: 'window', id: 5 },
-  '6': { kind: 'window', id: 6 },
-  '7': { kind: 'window', id: 7 },
-  h: { kind: 'preset', mode: 'horizon' },
-  H: { kind: 'preset', mode: 'horizon' },
-  s: { kind: 'preset', mode: 'nadir' },
-  S: { kind: 'preset', mode: 'nadir' },
-};
 
 const sessionPreset: IssSession = readStoredAim() ?? blankAim();
 
@@ -296,7 +262,11 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   retry.addEventListener('click', () => scene.retry());
   mapButton.addEventListener('click', () => options.onMap?.());
   document.addEventListener('visibilitychange', onVisibility);
-  document.addEventListener('keydown', onAimKey);
+  const aimKeys = bindAimKeys({
+    scene: root,
+    armed: () => phase === 'running',
+    apply: applyAim,
+  });
 
   void boot(bootGeneration);
   if (options.drive !== 'manual') startTimer();
@@ -345,7 +315,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       stopFovHold();
       document.removeEventListener('visibilitychange', onVisibility);
-      document.removeEventListener('keydown', onAimKey);
+      aimKeys.dispose();
       renderer?.destroy();
       renderer = null;
       rendererReady = false;
@@ -674,14 +644,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     else scene.resume();
   }
 
-  function onAimKey(event: KeyboardEvent): void {
-    if (phase !== 'running') return;
-    if (event.metaKey || event.ctrlKey) return;
-    if (!issViewFocused()) return;
-    if (typingTarget(event.target) || document.querySelector('.modal-backdrop')) return;
-    const action = AIM_KEYS[event.key];
-    if (!action) return;
-    event.preventDefault();
+  function applyAim(action: AimAction): void {
     if (action.kind === 'reset') {
       restoreAim();
       return;
@@ -707,13 +670,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     }, session.mode, currentRoom()));
     persistAim();
     if (rendererReady) void paint();
-  }
-
-  function issViewFocused(): boolean {
-    const active = document.activeElement;
-    if (active === null || active === document.body || active === document.documentElement) return true;
-    if (root.contains(active)) return true;
-    return active.id === 'tab-iss';
   }
 
   function startTimer(): void {
@@ -838,14 +794,6 @@ function writeStoredAim(session: IssSession): void {
   } catch {
     /* storage disabled */
   }
-}
-
-function typingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  const node = target.closest('input, textarea, select, [contenteditable]');
-  if (!node) return false;
-  if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) return true;
-  return node instanceof HTMLElement && node.isContentEditable;
 }
 
 function clearStoredAim(): void {
