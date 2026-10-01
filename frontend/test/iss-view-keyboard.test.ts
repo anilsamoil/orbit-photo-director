@@ -165,6 +165,83 @@ describe('ISS keyboard aim', () => {
     await finish(view.scene);
   });
 
+  it('pans a quarter of the arrow step when Shift is held', async () => {
+    const host = mountHost();
+    const aims: IssAim[] = [];
+    const view = await running(host, aims);
+    view.frame.focus();
+    key(view.frame, 'ArrowRight');
+    const plainRight = view.aim.look.rightDeg;
+    expect(plainRight).toBeGreaterThan(0);
+    key(view.frame, 'ArrowUp');
+    const plainUp = view.aim.look.upDeg;
+    expect(plainUp).toBeGreaterThan(0);
+    view.aim.look.rightDeg = 0;
+    view.aim.look.upDeg = 0;
+    await view.scene.paint();
+    const origin = aims[aims.length - 1];
+    if (!origin) throw new Error('missing origin aim');
+    const fine = key(view.frame, 'ArrowRight', { shiftKey: true });
+    expect(fine.defaultPrevented).toBe(true);
+    expect(view.aim.look.rightDeg).toBeCloseTo(plainRight / 4, 5);
+    expect(view.aim.look.rightDeg).toBeLessThan(plainRight);
+    expect(view.aim.look.upDeg).toBe(0);
+    await view.scene.paint();
+    const panned = aims[aims.length - 1];
+    if (!panned) throw new Error('missing fine aim');
+    const moved = Math.abs(panned.pose.targetLatDeg - origin.pose.targetLatDeg) + Math.abs(panned.pose.targetLonDeg - origin.pose.targetLonDeg);
+    expect(moved).toBeGreaterThan(0);
+    expect(panned.verticalFovDeg).toBeCloseTo(origin.verticalFovDeg, 5);
+    view.aim.look.rightDeg = 0;
+    key(view.frame, 'ArrowLeft', { shiftKey: true });
+    expect(view.aim.look.rightDeg).toBeCloseTo(-(plainRight / 4), 5);
+    view.aim.look.upDeg = 0;
+    key(view.frame, 'ArrowUp', { shiftKey: true });
+    expect(view.aim.look.upDeg).toBeCloseTo(plainUp / 4, 5);
+    const up = view.aim.look.upDeg;
+    key(view.frame, 'ArrowDown', { shiftKey: true });
+    expect(view.aim.look.upDeg).toBeCloseTo(up - plainUp / 4, 5);
+    const held = view.aim.look.rightDeg;
+    const input = add(document.createElement('input'));
+    input.focus();
+    const typed = key(input, 'ArrowRight', { shiftKey: true });
+    expect(typed.defaultPrevented).toBe(false);
+    expect(view.aim.look.rightDeg).toBe(held);
+    const area = add(document.createElement('textarea'));
+    area.focus();
+    expect(key(area, 'ArrowUp', { shiftKey: true }).defaultPrevented).toBe(false);
+    const editable = add(document.createElement('div'));
+    editable.contentEditable = 'true';
+    editable.focus();
+    expect(key(editable, 'ArrowLeft', { shiftKey: true }).defaultPrevented).toBe(false);
+    const cupola = host.querySelector('[data-iss-cupola]');
+    if (!(cupola instanceof HTMLSelectElement)) throw new Error('missing cupola');
+    cupola.focus();
+    expect(key(cupola, 'ArrowDown', { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(view.aim.look.rightDeg).toBe(held);
+    expect(view.aim.look.upDeg).toBeCloseTo(0, 5);
+    view.frame.focus();
+    expect(key(view.frame, 'ArrowRight', { shiftKey: true, ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(key(view.frame, 'ArrowRight', { shiftKey: true, metaKey: true }).defaultPrevented).toBe(false);
+    expect(view.aim.look.rightDeg).toBe(held);
+    const dialog = add(document.createElement('div'));
+    dialog.className = 'modal-backdrop';
+    expect(key(view.frame, 'ArrowRight', { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(view.aim.look.rightDeg).toBe(held);
+    dialog.remove();
+    const help = host.querySelector('[data-iss-aim-help]');
+    if (!(help instanceof HTMLButtonElement)) throw new Error('missing key help');
+    help.click();
+    const blocked = key(view.frame, 'ArrowRight', { shiftKey: true });
+    expect(blocked.defaultPrevented).toBe(true);
+    expect(view.aim.look.rightDeg).toBe(held);
+    help.click();
+    view.scene.suspend();
+    expect(key(view.frame, 'ArrowRight', { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(view.aim.look.rightDeg).toBe(held);
+    await finish(view.scene);
+  });
+
   it('narrows on + and =, widens on - and _, and clamps between 12° and the lens', async () => {
     const host = mountHost();
     const view = await running(host, []);
@@ -569,10 +646,10 @@ describe('ISS keyboard aim', () => {
     expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
     expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
     expect([...sheet.querySelectorAll('[data-iss-aim-keys]')].map((node) => node.textContent)).toEqual([
-      'Arrows', '+ / =', '-', 'r / Esc', '1–7', 'h', 's',
+      'Arrows', 'Shift+arrows', '+ / =', '-', 'r / Esc', '1–7', 'h', 's',
     ]);
     expect([...sheet.querySelectorAll('[data-iss-aim-effect]')].map((node) => node.textContent)).toEqual([
-      'Pan', 'Narrow FOV', 'Widen', 'Reset', 'Cupola', 'Horizon', 'Straight down',
+      'Pan', 'Fine pan', 'Narrow FOV', 'Widen', 'Reset', 'Cupola', 'Horizon', 'Straight down',
     ]);
 
     const arrow = key(view.frame, 'ArrowRight');

@@ -16,7 +16,7 @@ import {
 } from './model';
 import type { LookOffset } from '../iss-g1/model';
 import { horizontalFovDeg, lookRoom, nudgeLook, settleLook } from './look';
-import { AIM_KEY_FRACTION, bindAimKeys, type AimAction } from './aim-keys';
+import { bindAimKeys, type AimAction } from './aim-keys';
 import { fitIssPane } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
@@ -665,8 +665,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const height = framePx.heightPx;
     if (width < 1 || height < 1) return;
     writeLook(nudgeLook(session.look, {
-      rightDeg: action.right * AIM_KEY_FRACTION * horizontalFovDeg(opticalFovDeg, width, height),
-      upDeg: action.up * AIM_KEY_FRACTION * opticalFovDeg,
+      rightDeg: action.right * action.fraction * horizontalFovDeg(opticalFovDeg, width, height),
+      upDeg: action.up * action.fraction * opticalFovDeg,
     }, session.mode, currentRoom()));
     persistAim();
     if (rendererReady) void paint();

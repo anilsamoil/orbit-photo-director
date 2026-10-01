@@ -2281,7 +2281,8 @@ async function proveIssKeyHelp(send, evidenceDir) {
       if (!sheet || sheet.hidden) return null;
       if (button?.getAttribute('aria-expanded') !== 'true') return null;
       const text = sheet.textContent || '';
-      if (!text.includes('Arrows') || !text.includes('Straight down') || !text.includes('Narrow FOV')) return null;
+      if (!text.includes('Arrows') || !text.includes('Shift+arrows') || !text.includes('Fine pan')) return null;
+      if (!text.includes('Straight down') || !text.includes('Narrow FOV')) return null;
       if (!text.includes('1\u20137')) return null;
       return { ok: true };
     })()`,
