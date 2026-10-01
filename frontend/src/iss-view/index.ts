@@ -36,7 +36,8 @@ type AimKey =
   | { kind: 'pan'; right: -1 | 0 | 1; up: -1 | 0 | 1 }
   | { kind: 'fov'; factor: number }
   | { kind: 'reset' }
-  | { kind: 'window'; id: CupolaWindow['id'] };
+  | { kind: 'window'; id: CupolaWindow['id'] }
+  | { kind: 'preset'; mode: CameraMode };
 
 const AIM_KEYS: Record<string, AimKey> = {
   ArrowLeft: { kind: 'pan', right: -1, up: 0 },
@@ -57,6 +58,10 @@ const AIM_KEYS: Record<string, AimKey> = {
   '5': { kind: 'window', id: 5 },
   '6': { kind: 'window', id: 6 },
   '7': { kind: 'window', id: 7 },
+  h: { kind: 'preset', mode: 'horizon' },
+  H: { kind: 'preset', mode: 'horizon' },
+  s: { kind: 'preset', mode: 'nadir' },
+  S: { kind: 'preset', mode: 'nadir' },
 };
 
 const sessionPreset: IssSession = readStoredAim() ?? blankAim();
@@ -687,6 +692,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     }
     if (action.kind === 'window') {
       aimCupola(action.id);
+      return;
+    }
+    if (action.kind === 'preset') {
+      choose(action.mode, 0, null);
       return;
     }
     const width = framePx.widthPx;
