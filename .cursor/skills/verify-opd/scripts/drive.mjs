@@ -7,6 +7,7 @@ import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDe
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
 const DESKTOP = { width: 1400, height: 900, mobile: false };
+const ISS_LENS_FOV_DEG = 81.2;
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -1899,9 +1900,21 @@ async function proveIssAimReset(send, evidenceDir) {
   await shot(send, evidenceDir, 'iss-double-tap');
 }
 
+function issLensFovExpression() {
+  return `(() => {
+    const fov = window.__opdIss?.getVerticalFieldOfView?.();
+    if (typeof fov !== 'number' || Math.abs(fov - ${ISS_LENS_FOV_DEG}) > 0.5) return null;
+    return { ok: true, fov };
+  })()`;
+}
+
+async function readIssLensFov(send, label, timeoutMs = 45000) {
+  const ready = await waitFor(send, issLensFovExpression(), label, timeoutMs);
+  return ready.fov;
+}
+
 async function proveIssAimReload(send, evidenceDir) {
-  const lens = await evaluate(send, `window.__opdIss?.getVerticalFieldOfView?.()`);
-  if (typeof lens !== 'number' || !(lens > 40)) throw new Error(`iss lens fov missing ${lens}`);
+  const lens = await readIssLensFov(send, 'iss lens fov');
   await evaluate(send, `(() => {
     const cupola = document.querySelector('[data-iss-cupola]');
     if (!cupola) return;
@@ -1979,7 +1992,7 @@ async function proveIssAimReload(send, evidenceDir) {
       if (!chip || !chip.hidden) return null;
       if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
       const fov = window.__opdIss?.getVerticalFieldOfView?.();
-      if (typeof fov !== 'number' || Math.abs(fov - ${lens}) > 0.5) return null;
+      if (typeof fov !== 'number' || Math.abs(fov - ${ISS_LENS_FOV_DEG}) > 0.5 || Math.abs(fov - ${lens}) > 0.5) return null;
       return { ok: true, fov };
     })()`,
     'iss reset clears stored aim',
@@ -2003,7 +2016,7 @@ async function proveIssAimReload(send, evidenceDir) {
       if (!text.includes('Horizon locked')) return null;
       if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
       const fov = window.__opdIss?.getVerticalFieldOfView?.();
-      if (typeof fov !== 'number' || Math.abs(fov - ${lens}) > 0.5) return null;
+      if (typeof fov !== 'number' || Math.abs(fov - ${ISS_LENS_FOV_DEG}) > 0.5 || Math.abs(fov - ${lens}) > 0.5) return null;
       return { ok: true, fov };
     })()`,
     'iss horizon after cleared reload',
