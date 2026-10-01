@@ -1526,6 +1526,8 @@ async function driveIss(send, evidenceDir, viewport) {
       const text = document.querySelector('[data-iss-status]')?.textContent || '';
       if (!pressed || pressed.getAttribute('aria-pressed') !== 'true') return null;
       if (!text.includes('Nadir locked')) return null;
+      const chip = document.querySelector('[data-iss-window]');
+      if (!chip || !chip.hidden) return null;
       const map = window.__opdIss;
       if (!map?.getRoll || !map.project || !map.getCenter || !map.getBearing) return null;
       const roll = ((map.getRoll() % 360) + 360) % 360;
@@ -1739,6 +1741,8 @@ async function proveIssWindows(send, evidenceDir) {
       `(() => {
         const text = document.querySelector('[data-iss-status]')?.textContent || '';
         if (!text.includes(${JSON.stringify(label)}) || text.includes('Coming soon')) return null;
+        const chip = document.querySelector('[data-iss-window]');
+        if (!chip || chip.hidden || (chip.textContent || '').trim() !== 'W${id}') return null;
         const map = window.__opdIss;
         if (!map?.getCenter || !map.getRoll) return null;
         const roll = ((map.getRoll() % 360) + 360) % 360;
@@ -1771,6 +1775,9 @@ async function proveIssAimReset(send, evidenceDir) {
     const reset = document.querySelector('[data-iss-reset]');
     if (!map?.getCenter || !map.getVerticalFieldOfView || !frame || frame.width < 40 || !reset) return null;
     if ((reset.textContent || '').trim() !== 'Reset') return null;
+    if (!/double-tap/i.test(reset.getAttribute('title') || '')) return null;
+    const hint = document.querySelector('[data-iss-aim-hint]');
+    if (!hint || !/double-tap/i.test(hint.textContent || '')) return null;
     const center = map.getCenter();
     return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2, fov: map.getVerticalFieldOfView(), lat: center.lat, lng: center.lng };
   })()`);
@@ -1844,6 +1851,8 @@ function issAimRestored(lat, lng, fov) {
     const map = window.__opdIss;
     const cupola = document.querySelector('[data-iss-cupola]');
     if (!map?.getCenter || !map.getVerticalFieldOfView || cupola?.value !== '1') return null;
+    const chip = document.querySelector('[data-iss-window]');
+    if (!chip || chip.hidden || (chip.textContent || '').trim() !== 'W1') return null;
     const center = map.getCenter();
     const fromAim = Math.abs(center.lat - ${lat}) + Math.abs(center.lng - ${lng});
     const fovNow = map.getVerticalFieldOfView();

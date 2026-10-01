@@ -385,7 +385,9 @@ describe('ISS chrome starts out of the way', () => {
     const lens = lastAim(aims).verticalFovDeg;
     const reset = host.querySelector('[data-iss-reset]') as HTMLButtonElement;
     expect(reset.textContent).toBe('Reset');
-    expect(reset.getAttribute('aria-label')).toBe('Reset pan and field of view');
+    expect(reset.getAttribute('aria-label')).toBe('Reset pan and the 14 mm field. Double-tap the view to do the same.');
+    expect(reset.title).toContain('Double-tap');
+    expect(host.querySelector('[data-iss-aim-hint]')?.textContent).toBe('Double-tap the view to reset');
 
     frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
     await scene.paint();
@@ -485,6 +487,77 @@ describe('ISS chrome starts out of the way', () => {
     if (nadir.ok) {
       expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(nadir.pose.targetLatDeg, 3);
     }
+    scene.dispose();
+  });
+
+  it('shows the active Cupola pane and keeps a hard pan on Earth', async () => {
+    const aims: IssAim[] = [];
+    const now = startMs + 60_000;
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => now,
+      drive: 'manual',
+      session: { mode: 'nadir' },
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aims.push(aim);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    await ready(scene);
+    scene.update(shot('clamp'));
+    await scene.paint();
+    const chip = () => host.querySelector('[data-iss-window]') as HTMLElement;
+    expect(chip().hidden).toBe(true);
+
+    const cupola = host.querySelector('[data-iss-cupola]') as HTMLSelectElement;
+    cupola.value = '3';
+    cupola.dispatchEvent(new Event('change'));
+    await scene.paint();
+    expect(chip().hidden).toBe(false);
+    expect(chip().textContent).toBe('W3');
+    expect(chip().getAttribute('aria-label')).toBe('Window 3 · Forward starboard');
+
+    (host.querySelector('[data-iss-preset="horizon"]') as HTMLElement).click();
+    await scene.paint();
+    expect(chip().hidden).toBe(true);
+
+    cupola.value = '1';
+    cupola.dispatchEvent(new Event('change'));
+    await scene.paint();
+    expect(chip().textContent).toBe('W1');
+    (host.querySelector('[data-iss-reset]') as HTMLButtonElement).click();
+    await scene.paint();
+    expect(chip().textContent).toBe('W1');
+    expect(cupola.value).toBe('1');
+
+    (host.querySelector('[data-iss-preset="nadir"]') as HTMLElement).click();
+    await scene.paint();
+    expect(chip().hidden).toBe(true);
+    const nadirPitch = lastAim(aims).pose.analyticPitchDeg;
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    frame.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 1, clientX: 200, clientY: 200, pointerType: 'mouse', button: 0, bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 1, clientX: 2600, clientY: 200, pointerType: 'mouse', bubbles: true,
+    }));
+    await scene.paint();
+    const slammed = lastAim(aims).pose.analyticPitchDeg;
+    expect(slammed).toBeGreaterThan(nadirPitch + 20);
+    expect(slammed).toBeLessThan(78);
+    frame.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 1, clientX: 2520, clientY: 200, pointerType: 'mouse', bubbles: true,
+    }));
+    await scene.paint();
+    expect(lastAim(aims).pose.analyticPitchDeg).toBeLessThan(slammed - 2);
+    frame.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 1, clientX: 2520, clientY: 200, pointerType: 'mouse', bubbles: true,
+    }));
     scene.dispose();
   });
 });
