@@ -120,6 +120,11 @@ export function playwrightSend(page) {
       else if (params.type === 'mouseReleased') await page.mouse.up({ button, clickCount: params.clickCount || 1 });
       return {};
     }
+    if (method === 'Input.dispatchKeyEvent') {
+      if (params.type !== 'keyDown' || !params.key) return {};
+      await page.keyboard.press(params.key);
+      return {};
+    }
     if (method === 'Input.dispatchTouchEvent') {
       const point = (params.touchPoints || [])[0];
       if (!point) return {};
