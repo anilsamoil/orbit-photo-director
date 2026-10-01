@@ -24,14 +24,12 @@ type IssSession = {
   azimuthDeg: number;
   windowId: number | null;
   look: LookOffset;
+  opticalFovDeg: number;
 };
 
-const sessionPreset: IssSession = {
-  mode: 'horizon',
-  azimuthDeg: 0,
-  windowId: null,
-  look: { rightDeg: 0, upDeg: 0 },
-};
+const AIM_STORAGE_KEY = 'opd-iss-aim';
+
+const sessionPreset: IssSession = readStoredAim() ?? blankAim();
 
 export type IssScenePhase = 'dormant' | 'loading' | 'running' | 'error' | 'suspended';
 
@@ -59,6 +57,7 @@ export type MountIssSceneOptions = {
     azimuthDeg?: number;
     windowId?: number | null;
     look?: LookOffset;
+    opticalFovDeg?: number;
   };
 };
 
@@ -79,7 +78,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let fovHold = 0;
   let paintSerial = 0;
   const lensFovDeg = sensorField().vertical;
-  let opticalFovDeg = lensFovDeg;
+  let opticalFovDeg = session.opticalFovDeg;
   let framePx = { widthPx: 640, heightPx: 400 };
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
@@ -254,6 +253,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       rightDeg: -(dx / width) * horizontalFovDeg(opticalFovDeg, width, height),
       upDeg: (dy / height) * opticalFovDeg,
     }, session.mode, currentRoom()));
+    persistAim();
     if (phase === 'running' && rendererReady) void paint();
   });
   frame.addEventListener('pointerup', (event) => finishPointer(event, true));
@@ -312,6 +312,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       setPhase('dormant');
       stopTimer();
       stopFovHold();
+      if (session === sessionPreset) session.opticalFovDeg = lensFovDeg;
       document.removeEventListener('visibilitychange', onVisibility);
       renderer?.destroy();
       renderer = null;
@@ -417,18 +418,32 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     panOrigin = null;
     priorTap = null;
     if (windowId !== null) opticalFovDeg = lensFovDeg;
+    session.opticalFovDeg = opticalFovDeg;
     syncPreset();
     syncCupola();
+    persistAim();
     if (phase === 'running') void paint();
   }
 
   function restoreAim(): void {
+    session.mode = 'horizon';
+    session.azimuthDeg = 0;
+    session.windowId = null;
     session.look.rightDeg = 0;
     session.look.upDeg = 0;
     panOrigin = null;
     priorTap = null;
     opticalFovDeg = lensFovDeg;
+    session.opticalFovDeg = lensFovDeg;
+    syncPreset();
+    syncCupola();
+    clearStoredAim();
     if (phase === 'running' && rendererReady) void paint();
+  }
+
+  function persistAim(): void {
+    if (session !== sessionPreset) return;
+    writeStoredAim(session);
   }
 
   function fail(reason: string): void {
@@ -501,7 +516,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     showOpticalFov(next);
     if (next === opticalFovDeg) return;
     opticalFovDeg = next;
+    session.opticalFovDeg = next;
     writeLook(settleLook(session.look, session.mode, currentRoom()));
+    persistAim();
     if (phase === 'running' && rendererReady) void paint();
   }
 
@@ -667,6 +684,84 @@ function bindSession(seed: NonNullable<MountIssSceneOptions['session']>): IssSes
   if (!Number.isFinite(session.azimuthDeg)) session.azimuthDeg = 0;
   if (session.windowId === undefined) session.windowId = null;
   if (!session.look) session.look = { rightDeg: 0, upDeg: 0 };
+  if (!Number.isFinite(session.opticalFovDeg)) session.opticalFovDeg = sensorField().vertical;
   return session;
+}
+
+function blankAim(): IssSession {
+  return {
+    mode: 'horizon',
+    azimuthDeg: 0,
+    windowId: null,
+    look: { rightDeg: 0, upDeg: 0 },
+    opticalFovDeg: sensorField().vertical,
+  };
+}
+
+function readStoredAim(): IssSession | null {
+  try {
+    const raw = sessionStorage.getItem(AIM_STORAGE_KEY);
+    if (!raw) return null;
+    return parseStoredAim(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredAim(value: unknown): IssSession | null {
+  if (!value || typeof value !== 'object') return null;
+  const aim = value as {
+    mode?: unknown;
+    azimuthDeg?: unknown;
+    windowId?: unknown;
+    look?: unknown;
+    opticalFovDeg?: unknown;
+  };
+  const mode = aim.mode === 'horizon' || aim.mode === 'nadir' ? aim.mode : null;
+  if (!mode) return null;
+  if (typeof aim.azimuthDeg !== 'number' || !Number.isFinite(aim.azimuthDeg)) return null;
+  const windowId = storedWindowId(aim.windowId);
+  if (windowId === undefined) return null;
+  if (!aim.look || typeof aim.look !== 'object') return null;
+  const look = aim.look as { rightDeg?: unknown; upDeg?: unknown };
+  if (typeof look.rightDeg !== 'number' || typeof look.upDeg !== 'number') return null;
+  if (!Number.isFinite(look.rightDeg) || !Number.isFinite(look.upDeg)) return null;
+  if (typeof aim.opticalFovDeg !== 'number' || !Number.isFinite(aim.opticalFovDeg)) return null;
+  const lens = sensorField().vertical;
+  return {
+    mode,
+    azimuthDeg: aim.azimuthDeg,
+    windowId,
+    look: { rightDeg: look.rightDeg, upDeg: look.upDeg },
+    opticalFovDeg: Math.min(lens, Math.max(12, aim.opticalFovDeg)),
+  };
+}
+
+function storedWindowId(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 7) return value;
+  return undefined;
+}
+
+function writeStoredAim(session: IssSession): void {
+  try {
+    sessionStorage.setItem(AIM_STORAGE_KEY, JSON.stringify({
+      mode: session.mode,
+      azimuthDeg: session.azimuthDeg,
+      windowId: session.windowId,
+      look: { rightDeg: session.look.rightDeg, upDeg: session.look.upDeg },
+      opticalFovDeg: session.opticalFovDeg,
+    }));
+  } catch {
+    /* storage disabled */
+  }
+}
+
+function clearStoredAim(): void {
+  try {
+    sessionStorage.removeItem(AIM_STORAGE_KEY);
+  } catch {
+    /* storage disabled */
+  }
 }
 

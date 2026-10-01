@@ -153,6 +153,7 @@ async function until(label: string, check: () => void): Promise<void> {
 beforeEach(() => {
   document.body.innerHTML = DOM;
   localStorage.clear();
+  sessionStorage.clear();
   renderer.destroyed = 0;
   renderer.ready = () => Promise.resolve();
   vi.resetModules();

@@ -1578,7 +1578,8 @@ async function driveIss(send, evidenceDir, viewport) {
     45000,
   );
   await shot(send, evidenceDir, 'iss-return');
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov reset, windows 1-6 aimed, window kept, window field, aim reset, double tap (${String(horizon.text).slice(0, 80)})`;
+  await proveIssAimReload(send, evidenceDir);
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov reset, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -1873,7 +1874,7 @@ async function proveIssAimReset(send, evidenceDir) {
   await click(send, '[data-iss-reset]');
   await waitFor(
     send,
-    issAimRestored(beforeReset.lat, beforeReset.lng, beforeReset.fov),
+    issHorizonRestored(null, null, beforeReset.fov),
     'iss reset button',
     10000,
   );
@@ -1891,26 +1892,144 @@ async function proveIssAimReset(send, evidenceDir) {
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: spot.x, y: spot.y, button: 'left', buttons: 0, clickCount: 2 });
   await waitFor(
     send,
-    issAimRestored(beforeTap.lat, beforeTap.lng, beforeTap.fov),
+    issHorizonRestored(beforeTap.lat, beforeTap.lng, beforeTap.fov),
     'iss double tap reset',
     10000,
   );
   await shot(send, evidenceDir, 'iss-double-tap');
 }
 
-function issAimRestored(lat, lng, fov) {
+async function proveIssAimReload(send, evidenceDir) {
+  const lens = await evaluate(send, `window.__opdIss?.getVerticalFieldOfView?.()`);
+  if (typeof lens !== 'number' || !(lens > 40)) throw new Error(`iss lens fov missing ${lens}`);
+  await evaluate(send, `(() => {
+    const cupola = document.querySelector('[data-iss-cupola]');
+    if (!cupola) return;
+    cupola.value = '3';
+    cupola.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const chip = document.querySelector('[data-iss-window]');
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const text = document.querySelector('[data-iss-status]')?.textContent || '';
+      if (!chip || chip.hidden || (chip.textContent || '').trim() !== 'W3') return null;
+      if (!cupola || cupola.value !== '3') return null;
+      if (!text.includes('Window 3 · Forward starboard')) return null;
+      return { ok: true };
+    })()`,
+    'iss window 3 before reload',
+    15000,
+  );
+  const spot = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+    if (!frame || frame.width < 40) return null;
+    return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2 };
+  })()`);
+  if (!spot) throw new Error('iss reload fov target missing');
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: spot.x, y: spot.y, deltaX: 0, deltaY: -480 });
+  const narrowed = await waitFor(
+    send,
+    `(() => {
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || !(fov < ${lens} - 4)) return null;
+      const raw = sessionStorage.getItem('opd-iss-aim');
+      if (!raw) return null;
+      const aim = JSON.parse(raw);
+      if (aim.windowId !== 3 || aim.mode !== 'horizon') return null;
+      if (Math.abs(aim.opticalFovDeg - fov) > 0.5) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss aim stored before reload',
+    10000,
+  );
+  await reloadSettled(send);
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view');
+      if (!view || view.className !== 'view-iss') return null;
+      const chip = document.querySelector('[data-iss-window]');
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (!chip || chip.hidden || (chip.textContent || '').trim() !== 'W3') return null;
+      if (!cupola || cupola.value !== '3') return null;
+      if (horizon?.getAttribute('aria-pressed') === 'true') return null;
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || Math.abs(fov - ${narrowed.fov}) > 0.5) return null;
+      const raw = sessionStorage.getItem('opd-iss-aim');
+      if (!raw) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss aim restored after reload',
+    45000,
+  );
+  await shot(send, evidenceDir, 'iss-aim-restored');
+  await click(send, '[data-iss-reset]');
+  await waitFor(
+    send,
+    `(() => {
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const chip = document.querySelector('[data-iss-window]');
+      if (horizon?.getAttribute('aria-pressed') !== 'true') return null;
+      if (cupola?.value !== '') return null;
+      if (!chip || !chip.hidden) return null;
+      if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || Math.abs(fov - ${lens}) > 0.5) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss reset clears stored aim',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-aim-reset');
+  await reloadSettled(send);
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view');
+      if (!view || view.className !== 'view-iss') return null;
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const chip = document.querySelector('[data-iss-window]');
+      const text = document.querySelector('[data-iss-status]')?.textContent || '';
+      if (horizon?.getAttribute('aria-pressed') !== 'true') return null;
+      if (!cupola || cupola.value !== '') return null;
+      if (!chip || !chip.hidden) return null;
+      if (!text.includes('Horizon locked')) return null;
+      if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || Math.abs(fov - ${lens}) > 0.5) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss horizon after cleared reload',
+    45000,
+  );
+  await shot(send, evidenceDir, 'iss-aim-horizon');
+}
+
+function issHorizonRestored(lat, lng, fov) {
+  const centerCheck = lat === null ? 'true' : `(() => {
+    const center = map.getCenter();
+    return Math.abs(center.lat - ${lat}) + Math.abs(center.lng - ${lng}) <= 0.35;
+  })()`;
   return `(() => {
     const map = window.__opdIss;
     const cupola = document.querySelector('[data-iss-cupola]');
-    if (!map?.getCenter || !map.getVerticalFieldOfView || cupola?.value !== '1') return null;
+    const horizon = document.querySelector('[data-iss-preset="horizon"]');
+    if (!map?.getCenter || !map.getVerticalFieldOfView || cupola?.value !== '') return null;
+    if (horizon?.getAttribute('aria-pressed') !== 'true') return null;
     const chip = document.querySelector('[data-iss-window]');
-    if (!chip || chip.hidden || (chip.textContent || '').trim() !== 'W1') return null;
-    const center = map.getCenter();
-    const fromAim = Math.abs(center.lat - ${lat}) + Math.abs(center.lng - ${lng});
+    if (!chip || !chip.hidden) return null;
+    if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
+    if (!(${centerCheck})) return null;
     const fovNow = map.getVerticalFieldOfView();
-    if (fromAim > 0.35) return null;
     if (Math.abs(fovNow - ${fov}) > 0.5) return null;
-    return { ok: true, fromAim, fov: fovNow };
+    return { ok: true, fov: fovNow };
   })()`;
 }
 

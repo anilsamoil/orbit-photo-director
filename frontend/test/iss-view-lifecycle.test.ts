@@ -360,7 +360,7 @@ describe('ISS chrome starts out of the way', () => {
     scene.dispose();
   });
 
-  it('Reset and a double tap clear pan and restore the lens field', async () => {
+  it('Reset and a double tap return to Horizon and the lens field', async () => {
     const aims: IssAim[] = [];
     const now = startMs + 60_000;
     const host = document.createElement('div');
@@ -442,11 +442,16 @@ describe('ISS chrome starts out of the way', () => {
     }
     reset.click();
     await scene.paint();
-    expect(cupola.value).toBe('7');
+    const horizon = sceneFrame(track(), now, 'horizon', 0);
+    expect(horizon.ok).toBe(true);
+    expect(scene.mode()).toBe('horizon');
+    expect(cupola.value).toBe('');
+    expect(host.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(host.querySelector('[data-iss-window]')?.hasAttribute('hidden')).toBe(true);
     expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
-    if (nadir.ok) {
-      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(nadir.pose.targetLatDeg, 3);
-      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(nadir.pose.targetLonDeg, 3);
+    if (horizon.ok) {
+      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(horizon.pose.targetLatDeg, 3);
+      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(horizon.pose.targetLonDeg, 3);
     }
 
     frame.dispatchEvent(new PointerEvent('pointerdown', {
@@ -461,8 +466,8 @@ describe('ISS chrome starts out of the way', () => {
     frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
     await scene.paint();
     expect(lastAim(aims).verticalFovDeg).toBeLessThan(lens - 1);
-    if (nadir.ok) {
-      const still = Math.abs(lastAim(aims).pose.targetLatDeg - nadir.pose.targetLatDeg) + Math.abs(lastAim(aims).pose.targetLonDeg - nadir.pose.targetLonDeg);
+    if (horizon.ok) {
+      const still = Math.abs(lastAim(aims).pose.targetLatDeg - horizon.pose.targetLatDeg) + Math.abs(lastAim(aims).pose.targetLonDeg - horizon.pose.targetLonDeg);
       expect(still).toBeGreaterThan(0.5);
     }
     const tap = (x: number, y: number) => {
@@ -476,19 +481,22 @@ describe('ISS chrome starts out of the way', () => {
     tap(120, 80);
     tap(124, 84);
     await scene.paint();
+    expect(scene.mode()).toBe('horizon');
     expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
-    if (nadir.ok) {
-      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(nadir.pose.targetLatDeg, 3);
-      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(nadir.pose.targetLonDeg, 3);
+    if (horizon.ok) {
+      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(horizon.pose.targetLatDeg, 3);
+      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(horizon.pose.targetLonDeg, 3);
     }
 
     frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
     await scene.paint();
     frame.dispatchEvent(new MouseEvent('dblclick', { clientX: 120, clientY: 80, bubbles: true, cancelable: true }));
     await scene.paint();
+    expect(scene.mode()).toBe('horizon');
     expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
-    if (nadir.ok) {
-      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(nadir.pose.targetLatDeg, 3);
+    if (horizon.ok) {
+      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(horizon.pose.targetLatDeg, 3);
+      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(horizon.pose.targetLonDeg, 3);
     }
     scene.dispose();
   });
@@ -535,8 +543,9 @@ describe('ISS chrome starts out of the way', () => {
     expect(chip().textContent).toBe('W1');
     (host.querySelector('[data-iss-reset]') as HTMLButtonElement).click();
     await scene.paint();
-    expect(chip().textContent).toBe('W1');
-    expect(cupola.value).toBe('1');
+    expect(chip().hidden).toBe(true);
+    expect(cupola.value).toBe('');
+    expect(scene.mode()).toBe('horizon');
 
     (host.querySelector('[data-iss-preset="nadir"]') as HTMLElement).click();
     await scene.paint();
