@@ -2281,10 +2281,20 @@ async function proveIssKeyHelp(send, evidenceDir) {
       if (!sheet || sheet.hidden) return null;
       if (button?.getAttribute('aria-expanded') !== 'true') return null;
       const text = sheet.textContent || '';
-      if (!text.includes('Arrows') || !text.includes('Shift+arrows') || !text.includes('Fine pan')) return null;
-      if (!text.includes('Straight down') || !text.includes('Narrow FOV')) return null;
-      if (!text.includes('1\u20137')) return null;
-      return { ok: true };
+      if (!text.includes('Narrow FOV') || !text.includes('1\u20137')) return null;
+      const rows = [...sheet.querySelectorAll('li')].map((li) => [
+        li.querySelector('[data-iss-aim-keys]')?.textContent,
+        li.querySelector('[data-iss-aim-effect]')?.textContent,
+      ]);
+      const want = [
+        ['Arrows', 'Pan'],
+        ['W/A/D', 'Pan'],
+        ['Shift+arrows', 'Fine pan'],
+        ['Shift+W/A/D', 'Fine pan'],
+        ['s / S', 'Straight down'],
+      ];
+      if (!want.every(([keys, effect]) => rows.some((row) => row[0] === keys && row[1] === effect))) return null;
+      return { ok: true, rows: rows.length };
     })()`,
     'iss key help open',
     10000,

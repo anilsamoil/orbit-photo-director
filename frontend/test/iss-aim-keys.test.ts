@@ -16,6 +16,35 @@ describe('ISS aim key table', () => {
     expect(AIM_KEYS['7']).toEqual({ kind: 'window', id: 7 });
     expect(AIM_KEYS.h).toEqual({ kind: 'preset', mode: 'horizon' });
     expect(AIM_KEYS.s).toEqual({ kind: 'preset', mode: 'nadir' });
+    expect(AIM_KEYS.S).toEqual(AIM_KEYS.s);
+    expect(AIM_KEYS['Shift+s']).toBeUndefined();
+    expect(AIM_KEYS['Shift+S']).toBeUndefined();
+    const aliases: ReadonlyArray<readonly [string, string]> = [
+      ['w', 'ArrowUp'],
+      ['a', 'ArrowLeft'],
+      ['d', 'ArrowRight'],
+    ];
+    for (const [letter, arrow] of aliases) {
+      expect(AIM_KEYS[letter]).toEqual(AIM_KEYS[arrow]);
+      expect(AIM_KEYS[letter.toUpperCase()]).toEqual(AIM_KEYS[arrow]);
+      expect(AIM_KEYS[`Shift+${letter}`]).toEqual(AIM_KEYS[`Shift+${arrow}`]);
+      expect(AIM_KEYS[`Shift+${letter.toUpperCase()}`]).toEqual(AIM_KEYS[`Shift+${arrow}`]);
+    }
+    expect(aimHelpRows().map((row) => [row.label, row.effect])).toEqual([
+      ['Arrows', 'Pan'],
+      ['W/A/D', 'Pan'],
+      ['Shift+arrows', 'Fine pan'],
+      ['Shift+W/A/D', 'Fine pan'],
+      ['+ / =', 'Narrow FOV'],
+      ['-', 'Widen'],
+      ['r / Esc', 'Reset'],
+      ['1–7', 'Cupola'],
+      ['h', 'Horizon'],
+      ['s / S', 'Straight down'],
+    ]);
+    const straight = aimHelpRows().find((row) => row.effect === 'Straight down');
+    expect(straight?.keys).toEqual(['s', 'S']);
+    expect(aimHelpRows().find((row) => row.label === 'W/A/D')?.keys).toEqual(['w', 'W', 'a', 'A', 'd', 'D']);
     expect(narrow?.kind).toBe('fov');
     expect(widen?.kind).toBe('fov');
     if (narrow?.kind !== 'fov' || widen?.kind !== 'fov') return;

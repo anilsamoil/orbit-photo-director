@@ -14,7 +14,7 @@ export type AimAction =
   | { kind: 'window'; id: CupolaWindow['id'] }
   | { kind: 'preset'; mode: CameraMode };
 
-type AimRow = 'pan' | 'fine' | 'narrow' | 'widen' | 'reset' | 'cupola' | 'horizon' | 'nadir';
+type AimRow = 'pan' | 'letters' | 'fine' | 'fine-letters' | 'narrow' | 'widen' | 'reset' | 'cupola' | 'horizon' | 'nadir';
 
 export type AimChord = {
   readonly keys: readonly string[];
@@ -27,10 +27,16 @@ const AIM_CHORDS: readonly AimChord[] = [
   { keys: ['ArrowRight'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FRACTION }, row: 'pan' },
   { keys: ['ArrowUp'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FRACTION }, row: 'pan' },
   { keys: ['ArrowDown'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FRACTION }, row: 'pan' },
+  { keys: ['w', 'W'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FRACTION }, row: 'letters' },
+  { keys: ['a', 'A'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FRACTION }, row: 'letters' },
+  { keys: ['d', 'D'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FRACTION }, row: 'letters' },
   { keys: ['Shift+ArrowLeft'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
   { keys: ['Shift+ArrowRight'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
   { keys: ['Shift+ArrowUp'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
   { keys: ['Shift+ArrowDown'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
+  { keys: ['Shift+w', 'Shift+W'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine-letters' },
+  { keys: ['Shift+a', 'Shift+A'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine-letters' },
+  { keys: ['Shift+d', 'Shift+D'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine-letters' },
   { keys: ['+', '='], action: { kind: 'fov', factor: AIM_NARROW }, row: 'narrow' },
   { keys: ['-', '_'], action: { kind: 'fov', factor: AIM_WIDEN }, row: 'widen' },
   { keys: ['r', 'R', 'Escape'], action: { kind: 'reset' }, row: 'reset' },
@@ -45,7 +51,9 @@ const AIM_CHORDS: readonly AimChord[] = [
 
 const EFFECT: Record<AimRow, string> = {
   pan: 'Pan',
+  letters: 'Pan',
   fine: 'Fine pan',
+  'fine-letters': 'Fine pan',
   narrow: 'Narrow FOV',
   widen: 'Widen',
   reset: 'Reset',
@@ -56,6 +64,8 @@ const EFFECT: Record<AimRow, string> = {
 
 const ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
 const SHIFT_ARROWS = ARROWS.map((arrow) => `Shift+${arrow}`);
+const LETTERS = ['w', 'a', 'd'];
+const SHIFT_LETTERS = LETTERS.map((letter) => `Shift+${letter}`);
 
 export const AIM_KEYS: Readonly<Record<string, AimAction>> = indexAimKeys(AIM_CHORDS);
 
@@ -220,8 +230,11 @@ export function bindAimKeys(options: {
 
 function labelFor(row: AimRow, keys: readonly string[]): string {
   const shown = keys.filter((key) => !keys.some((other) => shiftedAlias(key, other)));
-  if (row === 'pan' && shown.length === ARROWS.length && ARROWS.every((arrow) => shown.includes(arrow))) return 'Arrows';
-  if (row === 'fine' && shown.length === SHIFT_ARROWS.length && SHIFT_ARROWS.every((arrow) => shown.includes(arrow))) return 'Shift+arrows';
+  if (row === 'pan' && sameKeys(shown, ARROWS)) return 'Arrows';
+  if (row === 'letters' && sameKeys(shown, LETTERS)) return 'W/A/D';
+  if (row === 'fine' && sameKeys(shown, SHIFT_ARROWS)) return 'Shift+arrows';
+  if (row === 'fine-letters' && sameKeys(shown, SHIFT_LETTERS)) return 'Shift+W/A/D';
+  if (row === 'nadir' && keys.includes('s') && keys.includes('S') && sameKeys(shown, ['s'])) return 's / S';
   if (row === 'cupola') {
     const parsed = shown.map((key) => Number.parseInt(key, 10));
     if (parsed.every((id) => Number.isInteger(id))) {
@@ -236,9 +249,18 @@ function labelFor(row: AimRow, keys: readonly string[]): string {
   return shown.map((key) => (key === 'Escape' ? 'Esc' : key)).join(' / ');
 }
 
+function sameKeys(shown: readonly string[], expected: readonly string[]): boolean {
+  return shown.length === expected.length && expected.every((key) => shown.includes(key));
+}
+
 function shiftedAlias(key: string, base: string): boolean {
   if (key === '_' && base === '-') return true;
-  return key.length === 1 && base.length === 1 && key !== base && key.toLowerCase() === base;
+  const head = (value: string) => (value.startsWith('Shift+') ? 'Shift+' : '');
+  if (head(key) !== head(base)) return false;
+  const bare = (value: string) => (value.startsWith('Shift+') ? value.slice('Shift+'.length) : value);
+  const left = bare(key);
+  const right = bare(base);
+  return left.length === 1 && right.length === 1 && left !== right && left.toLowerCase() === right;
 }
 
 function sceneFocused(scene: HTMLElement): boolean {
