@@ -15,6 +15,7 @@ import {
   type SceneSnapshot,
 } from './model';
 import type { LookOffset } from '../iss-g1/model';
+import { horizontalFovDeg, lookRoom, nudgeLook, settleLook } from './look';
 import { fitIssPane } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
@@ -81,7 +82,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let framePx = { widthPx: 640, heightPx: 400 };
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
-  let panOrigin: { id: number; x: number; y: number; rightDeg: number; upDeg: number } | null = null;
+  let panOrigin: { id: number; x: number; y: number } | null = null;
   let tap: { x: number; y: number; moved: number } | null = null;
   let priorTap: { x: number; y: number; at: number } | null = null;
   const bootGeneration = generation;
@@ -112,8 +113,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   reset.type = 'button';
   reset.dataset.issReset = '';
   reset.textContent = 'Reset';
-  reset.setAttribute('aria-label', 'Reset pan and field of view');
-  presets.append(horizon, nadir, cupola, reset);
+  reset.title = 'Reset pan and the 14 mm field. Double-tap the view to do the same.';
+  reset.setAttribute('aria-label', 'Reset pan and the 14 mm field. Double-tap the view to do the same.');
+  const windowChip = document.createElement('span');
+  windowChip.dataset.issWindow = '';
+  windowChip.hidden = true;
+  presets.append(horizon, nadir, cupola, windowChip, reset);
   const utc = document.createElement('p');
   utc.dataset.issUtc = '';
   const toolbar = document.createElement('div');
@@ -172,6 +177,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   syncPreset();
   syncCupola();
   layout();
+  writeLook(settleLook(session.look, session.mode, currentRoom()));
 
   horizon.addEventListener('click', () => choose('horizon', 0, null));
   nadir.addEventListener('click', () => choose('nadir', 0, null));
@@ -204,8 +210,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         id: event.pointerId,
         x: event.clientX,
         y: event.clientY,
-        rightDeg: session.look.rightDeg,
-        upDeg: session.look.upDeg,
       };
       tap = { x: event.clientX, y: event.clientY, moved: 0 };
     }
@@ -231,8 +235,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (width < 1 || height < 1) return;
     const dx = event.clientX - panOrigin.x;
     const dy = event.clientY - panOrigin.y;
-    session.look.rightDeg = panOrigin.rightDeg - (dx / width) * horizontalFovDeg(opticalFovDeg, width, height);
-    session.look.upDeg = panOrigin.upDeg + (dy / height) * opticalFovDeg;
+    panOrigin.x = event.clientX;
+    panOrigin.y = event.clientY;
+    writeLook(nudgeLook(session.look, {
+      rightDeg: -(dx / width) * horizontalFovDeg(opticalFovDeg, width, height),
+      upDeg: (dy / height) * opticalFovDeg,
+    }, session.mode, currentRoom()));
     if (phase === 'running' && rendererReady) void paint();
   });
   frame.addEventListener('pointerup', (event) => finishPointer(event, true));
@@ -478,6 +486,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const next = clampFov(value);
     if (next === opticalFovDeg) return;
     opticalFovDeg = next;
+    writeLook(settleLook(session.look, session.mode, currentRoom()));
     if (phase === 'running' && rendererReady) void paint();
   }
 
@@ -530,6 +539,33 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function syncCupola(): void {
     cupola.value = session.windowId === null ? '' : String(session.windowId);
+    syncWindow();
+  }
+
+  function syncWindow(): void {
+    if (session.windowId === null) {
+      windowChip.hidden = true;
+      windowChip.textContent = '';
+      windowChip.removeAttribute('title');
+      windowChip.removeAttribute('aria-label');
+      return;
+    }
+    const entry = CUPOLA_WINDOWS.find((item) => item.id === session.windowId);
+    const name = entry ? entry.label : `Window ${session.windowId}`;
+    windowChip.hidden = false;
+    windowChip.textContent = `W${session.windowId}`;
+    windowChip.title = name;
+    windowChip.setAttribute('aria-label', name);
+  }
+
+  function writeLook(next: LookOffset): void {
+    session.look.rightDeg = next.rightDeg;
+    session.look.upDeg = next.upDeg;
+  }
+
+  function currentRoom() {
+    const limb = frameState?.ok ? frameState.pose.limbFromNadirDeg : undefined;
+    return lookRoom(opticalFovDeg, framePx.widthPx, framePx.heightPx, limb);
   }
 
   function setPhase(next: IssScenePhase): void {
@@ -601,7 +637,3 @@ function bindSession(seed: NonNullable<MountIssSceneOptions['session']>): IssSes
   return session;
 }
 
-function horizontalFovDeg(verticalDeg: number, widthPx: number, heightPx: number): number {
-  const vertical = verticalDeg * Math.PI / 180;
-  return 2 * Math.atan(Math.tan(vertical / 2) * (widthPx / heightPx)) * (180 / Math.PI);
-}

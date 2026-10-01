@@ -3136,6 +3136,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   cursor: pointer;
 }
 
+[data-iss-reset] {
+  white-space: nowrap;
+}
+
+[data-iss-reset]::after {
+  content: ' · double-tap';
+  font-weight: 550;
+  color: rgba(244, 247, 251, 0.72);
+}
+
 [data-iss-preset][aria-pressed='true'] {
   background: var(--accent);
   color: var(--bg);
@@ -3171,6 +3181,25 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   color: var(--text);
   font: inherit;
   font-weight: 600;
+}
+
+[data-iss-window] {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+[data-iss-window][hidden] {
+  display: none;
 }
 
 [data-iss-stage] {
