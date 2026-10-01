@@ -279,7 +279,7 @@ describe('ISS chrome starts out of the way', () => {
     expect(cupola.value).toBe('');
   });
 
-  it('pans inside the view, keeps the field of view, and clears the offset on a window', async () => {
+  it('pans inside the view, keeps the field of view, and a window restores the lens', async () => {
     const aims: IssAim[] = [];
     let now = startMs + 60_000;
     const host = document.createElement('div');
@@ -352,10 +352,139 @@ describe('ISS chrome starts out of the way', () => {
       expect(port.pose.targetLatDeg).toBeCloseTo(portAim.pose.targetLatDeg, 3);
       expect(port.pose.targetLonDeg).toBeCloseTo(portAim.pose.targetLonDeg, 3);
     }
-    expect(port.verticalFovDeg).toBeCloseTo(zoomed.verticalFovDeg, 5);
+    expect(port.verticalFovDeg).toBeCloseTo(before.verticalFovDeg, 5);
+    expect(port.verticalFovDeg).toBeGreaterThan(zoomed.verticalFovDeg + 5);
     frame.dispatchEvent(new PointerEvent('pointerup', {
       pointerId: 1, clientX: 80, clientY: 120, pointerType: 'mouse', bubbles: true,
     }));
+    scene.dispose();
+  });
+
+  it('Reset and a double tap clear pan and restore the lens field', async () => {
+    const aims: IssAim[] = [];
+    const now = startMs + 60_000;
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => now,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aims.push(aim);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    await ready(scene);
+    scene.update(shot('reset'));
+    await scene.paint();
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    const lens = lastAim(aims).verticalFovDeg;
+    const reset = host.querySelector('[data-iss-reset]') as HTMLButtonElement;
+    expect(reset.textContent).toBe('Reset');
+    expect(reset.getAttribute('aria-label')).toBe('Reset pan and field of view');
+
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    await scene.paint();
+    const narrow = lastAim(aims).verticalFovDeg;
+    expect(narrow).toBeLessThan(lens - 1);
+    (host.querySelector('[data-iss-preset="horizon"]') as HTMLElement).click();
+    await scene.paint();
+    expect(lastAim(aims).verticalFovDeg).toBeCloseTo(narrow, 5);
+
+    const cupola = host.querySelector('[data-iss-cupola]') as HTMLSelectElement;
+    cupola.value = '1';
+    cupola.dispatchEvent(new Event('change'));
+    await scene.paint();
+    const port = sceneFrame(track(), now, 'horizon', 0, { azimuthDeg: -90 });
+    expect(port.ok).toBe(true);
+    if (port.ok) {
+      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(port.pose.targetLatDeg, 3);
+      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(port.pose.targetLonDeg, 3);
+    }
+    expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
+
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    await scene.paint();
+    cupola.value = '7';
+    cupola.dispatchEvent(new Event('change'));
+    await scene.paint();
+    expect(scene.mode()).toBe('nadir');
+    expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
+    const nadir = sceneFrame(track(), now, 'nadir', 0);
+    expect(nadir.ok).toBe(true);
+
+    frame.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 1, clientX: 200, clientY: 120, pointerType: 'touch', button: 0, bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 1, clientX: 40, clientY: 40, pointerType: 'touch', bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 1, clientX: 40, clientY: 40, pointerType: 'touch', bubbles: true,
+    }));
+    await scene.paint();
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    await scene.paint();
+    const dragged = lastAim(aims);
+    expect(dragged.verticalFovDeg).toBeLessThan(lens - 1);
+    if (nadir.ok) {
+      const held = Math.abs(dragged.pose.targetLatDeg - nadir.pose.targetLatDeg) + Math.abs(dragged.pose.targetLonDeg - nadir.pose.targetLonDeg);
+      expect(held).toBeGreaterThan(0.5);
+    }
+    reset.click();
+    await scene.paint();
+    expect(cupola.value).toBe('7');
+    expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
+    if (nadir.ok) {
+      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(nadir.pose.targetLatDeg, 3);
+      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(nadir.pose.targetLonDeg, 3);
+    }
+
+    frame.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 1, clientX: 200, clientY: 120, pointerType: 'touch', button: 0, bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 1, clientX: 40, clientY: 40, pointerType: 'touch', bubbles: true,
+    }));
+    frame.dispatchEvent(new PointerEvent('pointerup', {
+      pointerId: 1, clientX: 40, clientY: 40, pointerType: 'touch', bubbles: true,
+    }));
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    await scene.paint();
+    expect(lastAim(aims).verticalFovDeg).toBeLessThan(lens - 1);
+    if (nadir.ok) {
+      const still = Math.abs(lastAim(aims).pose.targetLatDeg - nadir.pose.targetLatDeg) + Math.abs(lastAim(aims).pose.targetLonDeg - nadir.pose.targetLonDeg);
+      expect(still).toBeGreaterThan(0.5);
+    }
+    const tap = (x: number, y: number) => {
+      frame.dispatchEvent(new PointerEvent('pointerdown', {
+        pointerId: 1, clientX: x, clientY: y, pointerType: 'touch', button: 0, bubbles: true,
+      }));
+      frame.dispatchEvent(new PointerEvent('pointerup', {
+        pointerId: 1, clientX: x, clientY: y, pointerType: 'touch', bubbles: true,
+      }));
+    };
+    tap(120, 80);
+    tap(124, 84);
+    await scene.paint();
+    expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
+    if (nadir.ok) {
+      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(nadir.pose.targetLatDeg, 3);
+      expect(lastAim(aims).pose.targetLonDeg).toBeCloseTo(nadir.pose.targetLonDeg, 3);
+    }
+
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    await scene.paint();
+    frame.dispatchEvent(new MouseEvent('dblclick', { clientX: 120, clientY: 80, bubbles: true, cancelable: true }));
+    await scene.paint();
+    expect(lastAim(aims).verticalFovDeg).toBeCloseTo(lens, 5);
+    if (nadir.ok) {
+      expect(lastAim(aims).pose.targetLatDeg).toBeCloseTo(nadir.pose.targetLatDeg, 3);
+    }
     scene.dispose();
   });
 });
