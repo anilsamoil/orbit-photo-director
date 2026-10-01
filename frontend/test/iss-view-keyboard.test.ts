@@ -536,6 +536,106 @@ describe('ISS keyboard aim', () => {
     expect(host.querySelector('[data-iss-window]')?.textContent).toBe('W7');
     await finish(view.scene);
   });
+
+  it('opens a shortcut sheet from the toolbar and leaves aim keys alone while it is open', async () => {
+    const host = mountHost();
+    const view = await running(host, []);
+    const lens = sensorField().vertical;
+    const button = host.querySelector('[data-iss-aim-help]');
+    const sheet = host.querySelector('[data-iss-aim-sheet]');
+    const scrim = host.querySelector('[data-iss-aim-scrim]');
+    const toolbar = host.querySelector('[data-iss-toolbar]');
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    expect(sheet).toBeInstanceOf(HTMLElement);
+    expect(scrim).toBeInstanceOf(HTMLButtonElement);
+    expect(toolbar).toBeInstanceOf(HTMLElement);
+    if (!(button instanceof HTMLButtonElement) || !(sheet instanceof HTMLElement) || !(scrim instanceof HTMLButtonElement)) return;
+    if (!(toolbar instanceof HTMLElement)) return;
+    expect(button.closest('[data-iss-toolbar]')).toBe(toolbar);
+    expect(toolbar.firstElementChild).toBe(button.parentElement);
+    expect(sheet.hidden).toBe(true);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.getAttribute('aria-label')).toBe('Keyboard shortcuts');
+
+    view.frame.focus();
+    key(view.frame, '=');
+    const narrowed = view.aim.opticalFovDeg;
+    expect(narrowed).toBeLessThan(lens);
+    expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
+    button.click();
+    expect(sheet.hidden).toBe(false);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(view.aim.opticalFovDeg).toBe(narrowed);
+    expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
+    expect([...sheet.querySelectorAll('[data-iss-aim-keys]')].map((node) => node.textContent)).toEqual([
+      'Arrows', '+ / =', '-', 'r / Esc', '1–7', 'h', 's',
+    ]);
+    expect([...sheet.querySelectorAll('[data-iss-aim-effect]')].map((node) => node.textContent)).toEqual([
+      'Pan', 'Narrow FOV', 'Widen', 'Reset', 'Cupola', 'Horizon', 'Straight down',
+    ]);
+
+    const arrow = key(view.frame, 'ArrowRight');
+    expect(arrow.defaultPrevented).toBe(true);
+    expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    const narrowAgain = key(view.frame, '=');
+    expect(narrowAgain.defaultPrevented).toBe(true);
+    expect(view.aim.opticalFovDeg).toBe(narrowed);
+    const preset = key(view.frame, 'h');
+    expect(preset.defaultPrevented).toBe(true);
+    expect(view.aim.mode).toBe('horizon');
+
+    const cupola = host.querySelector('[data-iss-cupola]');
+    expect(cupola).toBeInstanceOf(HTMLSelectElement);
+    if (!(cupola instanceof HTMLSelectElement)) return;
+    cupola.focus();
+    const digit = key(cupola, '3');
+    expect(digit.defaultPrevented).toBe(false);
+    expect(view.aim.windowId).toBeNull();
+    expect(sheet.hidden).toBe(false);
+
+    view.frame.focus();
+    scrim.click();
+    expect(sheet.hidden).toBe(true);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(view.aim.opticalFovDeg).toBe(narrowed);
+    expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
+
+    button.click();
+    const escape = key(view.frame, 'Escape');
+    expect(escape.defaultPrevented).toBe(true);
+    expect(sheet.hidden).toBe(true);
+    expect(view.aim.opticalFovDeg).toBe(narrowed);
+    expect(view.aim.mode).toBe('horizon');
+    const repeat = key(view.frame, 'Escape', { repeat: true });
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(view.aim.opticalFovDeg).toBe(narrowed);
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+    key(view.frame, 'Escape');
+    expect(view.aim.opticalFovDeg).toBeCloseTo(lens, 5);
+    expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
+
+    key(view.frame, '=');
+    button.click();
+    const dialog = add(document.createElement('div'));
+    dialog.className = 'modal-backdrop';
+    const blocked = key(document.body, 'Escape');
+    expect(blocked.defaultPrevented).toBe(false);
+    expect(sheet.hidden).toBe(false);
+    expect(view.aim.opticalFovDeg).toBeLessThan(lens);
+    dialog.remove();
+    button.click();
+    expect(sheet.hidden).toBe(true);
+
+    view.scene.dispose();
+    expect(host.querySelector('[data-iss-aim-help]')).toBeNull();
+    expect(host.querySelector('[data-iss-aim-sheet]')).toBeNull();
+    const after = key(document.body, 'ArrowRight');
+    expect(after.defaultPrevented).toBe(false);
+    expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
+    for (const node of extra) node.remove();
+    extra.length = 0;
+  });
 });
 
 describe('ISS keyboard aim persistence', () => {
@@ -570,6 +670,18 @@ describe('ISS keyboard aim persistence', () => {
     expect(stored.opticalFovDeg).toBeCloseTo(sensorField().vertical * 0.96, 5);
     expect(view.issPresetSession().look.rightDeg).toBeCloseTo(stored.look.rightDeg, 5);
     expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(stored.opticalFovDeg, 5);
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    const help = host.querySelector('[data-iss-aim-help]');
+    if (!(help instanceof HTMLButtonElement)) throw new Error('missing key help');
+    help.click();
+    expect(sessionStorage.getItem('opd-iss-aim')).toBe(raw);
+    const held = key(frame, 'ArrowRight');
+    expect(held.defaultPrevented).toBe(true);
+    expect(sessionStorage.getItem('opd-iss-aim')).toBe(raw);
+    expect(view.issPresetSession().look.rightDeg).toBeCloseTo(stored.look.rightDeg, 5);
+    help.click();
+    expect(host.querySelector('[data-iss-aim-sheet]')?.hasAttribute('hidden')).toBe(true);
+    expect(sessionStorage.getItem('opd-iss-aim')).toBe(raw);
     key(frame, 'r');
     expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
     expect(view.issPresetSession().look).toEqual({ rightDeg: 0, upDeg: 0 });

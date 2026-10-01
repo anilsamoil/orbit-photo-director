@@ -1580,7 +1580,7 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys, preset keys (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -2023,7 +2023,7 @@ async function proveIssAimReload(send, evidenceDir) {
     45000,
   );
   await shot(send, evidenceDir, 'iss-aim-horizon');
-  await proveIssKeyboard(send);
+  await proveIssKeyboard(send, evidenceDir);
 }
 
 function issHorizonRestored(lat, lng, fov) {
@@ -2051,7 +2051,7 @@ async function pressKey(send, key) {
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key });
 }
 
-async function proveIssKeyboard(send) {
+async function proveIssKeyboard(send, evidenceDir) {
   const before = await evaluate(send, `(() => {
     const map = window.__opdIss;
     if (!map?.getCenter || !map.getVerticalFieldOfView) return null;
@@ -2255,6 +2255,85 @@ async function proveIssKeyboard(send) {
     'iss keyboard horizon',
     10000,
   );
+  await proveIssKeyHelp(send, evidenceDir);
+}
+
+async function releaseKey(send, key) {
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key });
+}
+
+async function proveIssKeyHelp(send, evidenceDir) {
+  const before = await evaluate(send, `(() => {
+    const map = window.__opdIss;
+    if (!map?.getCenter || !map.getVerticalFieldOfView) return null;
+    const center = map.getCenter();
+    const fov = map.getVerticalFieldOfView();
+    if (typeof fov !== 'number') return null;
+    return { lat: center.lat, lng: center.lng, fov, stored: sessionStorage.getItem('opd-iss-aim') };
+  })()`);
+  if (!before) throw new Error('iss key help baseline missing');
+  await click(send, '[data-iss-aim-help]');
+  await waitFor(
+    send,
+    `(() => {
+      const sheet = document.querySelector('[data-iss-aim-sheet]');
+      const button = document.querySelector('[data-iss-aim-help]');
+      if (!sheet || sheet.hidden) return null;
+      if (button?.getAttribute('aria-expanded') !== 'true') return null;
+      const text = sheet.textContent || '';
+      if (!text.includes('Arrows') || !text.includes('Straight down') || !text.includes('Narrow FOV')) return null;
+      if (!text.includes('1\u20137')) return null;
+      return { ok: true };
+    })()`,
+    'iss key help open',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-key-help');
+  await click(send, '[data-iss-aim-scrim]');
+  await waitFor(
+    send,
+    issKeyHelpHeld(before),
+    'iss key help tap close',
+    10000,
+  );
+  await click(send, '[data-iss-aim-help]');
+  await waitFor(
+    send,
+    `(() => {
+      const sheet = document.querySelector('[data-iss-aim-sheet]');
+      if (!sheet || sheet.hidden) return null;
+      return { ok: true };
+    })()`,
+    'iss key help open again',
+    10000,
+  );
+  await pressKey(send, 'ArrowRight');
+  await pressKey(send, 'Escape');
+  await releaseKey(send, 'Escape');
+  await waitFor(
+    send,
+    issKeyHelpHeld(before),
+    'iss key help escape close',
+    10000,
+  );
+}
+
+function issKeyHelpHeld(before) {
+  return `(() => {
+    const map = window.__opdIss;
+    const sheet = document.querySelector('[data-iss-aim-sheet]');
+    const button = document.querySelector('[data-iss-aim-help]');
+    if (!map?.getCenter || !map.getVerticalFieldOfView || !sheet || !button) return null;
+    if (!sheet.hidden) return null;
+    if (button.getAttribute('aria-expanded') !== 'false') return null;
+    const center = map.getCenter();
+    const shift = Math.abs(center.lat - ${before.lat}) + Math.abs(center.lng - ${before.lng});
+    if (shift > 0.35) return null;
+    const fov = map.getVerticalFieldOfView();
+    if (Math.abs(fov - ${before.fov}) > 0.5) return null;
+    if (sessionStorage.getItem('opd-iss-aim') !== ${JSON.stringify(before.stored)}) return null;
+    return { ok: true, fov };
+  })()`;
 }
 
 async function nudgeIssAim(send) {
