@@ -387,7 +387,6 @@ describe('ISS chrome starts out of the way', () => {
     expect(reset.textContent).toBe('Reset');
     expect(reset.getAttribute('aria-label')).toBe('Reset pan and the 14 mm field. Double-tap the view to do the same.');
     expect(reset.title).toContain('Double-tap');
-    expect(host.querySelector('[data-iss-aim-hint]')?.textContent).toBe('Double-tap the view to reset');
 
     frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
     await scene.paint();

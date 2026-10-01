@@ -121,12 +121,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   presets.append(horizon, nadir, cupola, windowChip, reset);
   const utc = document.createElement('p');
   utc.dataset.issUtc = '';
-  const hint = document.createElement('p');
-  hint.dataset.issAimHint = '';
-  hint.textContent = 'Double-tap the view to reset';
   const toolbar = document.createElement('div');
   toolbar.dataset.issToolbar = '';
-  toolbar.append(presets, hint, utc);
+  toolbar.append(presets, utc);
   const frame = document.createElement('div');
   frame.dataset.issFrame = '';
   const stage = document.createElement('div');

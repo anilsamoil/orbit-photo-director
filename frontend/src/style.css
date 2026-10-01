@@ -3136,6 +3136,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   cursor: pointer;
 }
 
+[data-iss-reset] {
+  white-space: nowrap;
+}
+
+[data-iss-reset]::after {
+  content: ' · double-tap';
+  font-weight: 550;
+  color: rgba(244, 247, 251, 0.72);
+}
+
 [data-iss-preset][aria-pressed='true'] {
   background: var(--accent);
   color: var(--bg);
@@ -3190,15 +3200,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 
 [data-iss-window][hidden] {
   display: none;
-}
-
-[data-iss-aim-hint] {
-  grid-column: 1 / -1;
-  margin: 0;
-  text-align: center;
-  font-size: 0.75rem;
-  line-height: 1.2;
-  color: rgba(244, 247, 251, 0.62);
 }
 
 [data-iss-stage] {

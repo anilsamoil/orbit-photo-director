@@ -1776,8 +1776,8 @@ async function proveIssAimReset(send, evidenceDir) {
     if (!map?.getCenter || !map.getVerticalFieldOfView || !frame || frame.width < 40 || !reset) return null;
     if ((reset.textContent || '').trim() !== 'Reset') return null;
     if (!/double-tap/i.test(reset.getAttribute('title') || '')) return null;
-    const hint = document.querySelector('[data-iss-aim-hint]');
-    if (!hint || !/double-tap/i.test(hint.textContent || '')) return null;
+    const suffix = getComputedStyle(reset, '::after').content || '';
+    if (!/double-tap/i.test(suffix)) return null;
     const center = map.getCenter();
     return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2, fov: map.getVerticalFieldOfView(), lat: center.lat, lng: center.lng };
   })()`);
