@@ -1597,6 +1597,10 @@ async function proveIssOpticalFov(send, evidenceDir) {
     };
   })()`);
   if (!before) throw new Error('iss fov baseline missing');
+  const openLabel = await readFovLabel(send);
+  if (!openLabel || Math.abs(openLabel.shown - before.fov) > 0.15) {
+    throw new Error(`iss fov readout missing on open ${JSON.stringify({ before, openLabel })}`);
+  }
   await shot(send, evidenceDir, 'iss-fov-before');
   await send('Input.dispatchMouseEvent', {
     type: 'mouseWheel',
@@ -1605,14 +1609,8 @@ async function proveIssOpticalFov(send, evidenceDir) {
     deltaX: 0,
     deltaY: -480,
   });
-  const live = await evaluate(send, `(() => {
-    const node = document.querySelector('[data-iss-fov]');
-    if (!node || node.getAttribute('data-iss-fov-state') !== 'live') return null;
-    const shown = Number.parseFloat(node.textContent || '');
-    if (!Number.isFinite(shown)) return null;
-    return { ok: true, shown };
-  })()`);
-  if (!live) throw new Error('iss fov readout missing');
+  const live = await readFovLabel(send);
+  if (!live || !(live.shown < before.fov - 1)) throw new Error('iss fov readout missing');
   await shot(send, evidenceDir, 'iss-fov-live');
   const narrowed = await waitFor(
     send,
@@ -1647,14 +1645,23 @@ async function proveIssOpticalFov(send, evidenceDir) {
   if (Math.abs(live.shown - held.fov) > 0.2) {
     throw new Error(`iss fov readout ${live.shown} vs field ${held.fov}`);
   }
-  await waitFor(
-    send,
-    `document.querySelector('[data-iss-fov]')?.textContent ? null : { ok: true }`,
-    'iss fov readout idle',
-    3000,
-  );
+  const stayed = await readFovLabel(send);
+  if (!stayed || Math.abs(stayed.shown - held.fov) > 0.2) {
+    throw new Error(`iss fov readout cleared ${JSON.stringify({ held, stayed })}`);
+  }
   await shot(send, evidenceDir, 'iss-fov-after');
   return held.fov;
+}
+
+async function readFovLabel(send) {
+  return evaluate(send, `(() => {
+    const node = document.querySelector('[data-iss-fov]');
+    if (!node || node.getAttribute('data-iss-fov-state') !== 'live') return null;
+    const text = (node.textContent || '').trim();
+    const shown = Number.parseFloat(text);
+    if (!Number.isFinite(shown) || !text.endsWith('°')) return null;
+    return { ok: true, shown, text };
+  })()`);
 }
 
 async function proveIssPan(send, evidenceDir, fovDeg) {
@@ -2061,6 +2068,10 @@ async function proveIssKeyboard(send, evidenceDir) {
     return { lat: center.lat, lng: center.lng, fov };
   })()`);
   if (!before) throw new Error('iss keyboard baseline missing');
+  const labelBefore = await readFovLabel(send);
+  if (!labelBefore || Math.abs(labelBefore.shown - before.fov) > 0.2) {
+    throw new Error(`iss fov label missing before key ${JSON.stringify({ before, labelBefore })}`);
+  }
   await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
   await pressKey(send, '=');
   const narrowed = await waitFor(
@@ -2073,6 +2084,10 @@ async function proveIssKeyboard(send, evidenceDir) {
     'iss keyboard field narrowed',
     10000,
   );
+  const labelAfter = await readFovLabel(send);
+  if (!labelAfter || Math.abs(labelAfter.shown - narrowed.fov) > 0.2 || !(labelAfter.shown < labelBefore.shown - 1)) {
+    throw new Error(`iss fov label did not follow the key ${JSON.stringify({ narrowed, labelBefore, labelAfter })}`);
+  }
   await pressKey(send, '-');
   await waitFor(
     send,

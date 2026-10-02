@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CUPOLA_WINDOWS } from '../src/iss-view/cupola';
 import { sceneFrame, sensorField, type SceneSnapshot } from '../src/iss-view/model';
 import { horizontalFovDeg, lookRoom } from '../src/iss-view/look';
-import { mountIssScene, type IssScene } from '../src/iss-view';
+import { formatOpticalFov, mountIssScene, type IssScene } from '../src/iss-view';
 import type { IssAim, IssRendererFactory } from '../src/iss-view/renderer';
 import type { CameraMode } from '../src/iss-view/model';
 import type { LookOffset } from '../src/iss-g1/model';
@@ -90,6 +90,14 @@ function frameSize(frame: HTMLElement): { width: number; height: number } {
   if (!(width > 1) || !(height > 1)) throw new Error('frame has no size');
   return { width, height };
 }
+
+describe('optical field label', () => {
+  it('formats degrees with one decimal', () => {
+    expect(formatOpticalFov(72)).toBe('72.0°');
+    expect(formatOpticalFov(81.20258929000894)).toBe('81.2°');
+    expect(formatOpticalFov(12)).toBe('12.0°');
+  });
+});
 
 describe('ISS keyboard aim', () => {
   const extra: HTMLElement[] = [];
@@ -366,6 +374,7 @@ describe('ISS keyboard aim', () => {
     const view = await running(host, []);
     const lens = sensorField().vertical;
     view.frame.focus();
+    expect(host.querySelector('[data-iss-fov]')?.textContent).toBe(`${lens.toFixed(1)}°`);
     const narrowed = key(view.frame, '=');
     expect(narrowed.defaultPrevented).toBe(true);
     expect(view.aim.opticalFovDeg).toBeCloseTo(lens * 0.96, 5);
@@ -373,6 +382,7 @@ describe('ISS keyboard aim', () => {
     expect(host.querySelector('[data-iss-fov]')?.getAttribute('data-iss-fov-state')).toBe('live');
     key(view.frame, '-');
     expect(view.aim.opticalFovDeg).toBeCloseTo(lens, 5);
+    expect(host.querySelector('[data-iss-fov]')?.textContent).toBe(`${lens.toFixed(1)}°`);
     key(view.frame, '+');
     expect(view.aim.opticalFovDeg).toBeCloseTo(lens * 0.96, 5);
     key(view.frame, '_');
