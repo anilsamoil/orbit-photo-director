@@ -4030,7 +4030,9 @@ summary:focus-visible {
 @media (max-width: 899px) {
   #map-pane.map-inspector-open {
     --map-inspector-inline: 0px;
-    --map-inspector-block: min(40dvh, 260px);
+    /* 28px credit offset + 64px expanded band + 24px clearance, doubled so the map center stays above that strip. */
+    --map-hit-min: calc(2 * (28px + 64px + 24px + env(safe-area-inset-bottom, 0px)));
+    --map-inspector-block: min(40dvh, 260px, max(0px, calc(100dvh - var(--topbar-height) - var(--map-command-height) - var(--map-hit-min))));
   }
 
   #map-pane.map-inspector-open #map {
