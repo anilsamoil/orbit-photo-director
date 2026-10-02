@@ -78,6 +78,15 @@ async function running(host: HTMLElement, aims: IssAim[], aim = session()): Prom
   return { scene, aim, frame };
 }
 
+function stripIssHash(): void {
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  const params = new URLSearchParams(hash);
+  if (!params.has('iss')) return;
+  params.delete('iss');
+  const nextHash = params.toString();
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ''}`);
+}
+
 function key(target: EventTarget, name: string, init: KeyboardEventInit = {}): KeyboardEvent {
   const event = new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true, ...init });
   target.dispatchEvent(event);
@@ -104,6 +113,8 @@ describe('ISS keyboard aim', () => {
 
   beforeEach(() => {
     sessionStorage.clear();
+    localStorage.removeItem('opd-iss-aim');
+    stripIssHash();
   });
 
   function mountHost(): HTMLElement {
@@ -250,7 +261,7 @@ describe('ISS keyboard aim', () => {
     await finish(view.scene);
   });
 
-  it('pans with w a d on the arrow step, quarters that step with Shift, and leaves s as Straight down', async () => {
+  it('pans with w a s d on the arrow step and quarters that step with Shift', async () => {
     const host = mountHost();
     const aims: IssAim[] = [];
     const view = await running(host, aims);
@@ -261,6 +272,10 @@ describe('ISS keyboard aim', () => {
     const plainUp = view.aim.look.upDeg;
     view.aim.look.rightDeg = 0;
     view.aim.look.upDeg = 0;
+    key(view.frame, 'ArrowDown');
+    const plainDown = view.aim.look.upDeg;
+    expect(plainDown).toBeLessThan(0);
+    view.aim.look.upDeg = 0;
     const pairs: ReadonlyArray<readonly [string, 'rightDeg' | 'upDeg', number]> = [
       ['d', 'rightDeg', plainRight],
       ['D', 'rightDeg', plainRight],
@@ -268,6 +283,8 @@ describe('ISS keyboard aim', () => {
       ['A', 'rightDeg', -plainRight],
       ['w', 'upDeg', plainUp],
       ['W', 'upDeg', plainUp],
+      ['s', 'upDeg', plainDown],
+      ['S', 'upDeg', plainDown],
     ];
     for (const [name, axis, step] of pairs) {
       view.aim.look.rightDeg = 0;
@@ -276,6 +293,7 @@ describe('ISS keyboard aim', () => {
       expect(pressed.defaultPrevented).toBe(true);
       expect(view.aim.look[axis]).toBeCloseTo(step, 5);
       expect(view.aim.look[axis === 'rightDeg' ? 'upDeg' : 'rightDeg']).toBe(0);
+      expect(view.aim.mode).toBe('horizon');
     }
     view.aim.look.rightDeg = 0;
     view.aim.look.upDeg = 0;
@@ -307,27 +325,40 @@ describe('ISS keyboard aim', () => {
     view.aim.look.upDeg = 0;
     key(view.frame, 'w', { shiftKey: true });
     expect(view.aim.look.upDeg).toBeCloseTo(plainUp / 4, 5);
+    view.aim.look.rightDeg = 0;
     view.aim.look.upDeg = 0;
-    key(view.frame, 'ArrowDown');
-    expect(view.aim.look.upDeg).toBeLessThan(0);
-    const down = view.aim.look.upDeg;
     key(view.frame, 'ArrowDown', { shiftKey: true });
-    expect(view.aim.look.upDeg).toBeLessThan(down);
-    view.aim.look.rightDeg = plainRight;
-    view.aim.look.upDeg = plainUp;
-    key(view.frame, 's');
-    expect(view.aim.mode).toBe('nadir');
-    expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
-    key(view.frame, 'h');
-    key(view.frame, 'd');
-    expect(view.aim.look.rightDeg).toBeCloseTo(plainRight, 5);
+    const fineDown = view.aim.look.upDeg;
+    expect(fineDown).toBeLessThan(0);
+    expect(fineDown).toBeGreaterThan(plainDown);
+    view.aim.look.upDeg = 0;
+    const fineS = key(view.frame, 's', { shiftKey: true });
+    expect(fineS.defaultPrevented).toBe(true);
+    expect(view.aim.mode).toBe('horizon');
+    expect(view.aim.look.upDeg).toBeCloseTo(fineDown, 5);
+    expect(view.aim.look.rightDeg).toBe(0);
+    view.aim.look.upDeg = 0;
+    const fineShiftS = key(view.frame, 'S', { shiftKey: true });
+    expect(fineShiftS.defaultPrevented).toBe(true);
+    expect(view.aim.mode).toBe('horizon');
+    expect(view.aim.look.upDeg).toBeCloseTo(fineDown, 5);
+    view.aim.look.upDeg = plainDown;
+    key(view.frame, 'ArrowDown', { shiftKey: true });
+    const further = view.aim.look.upDeg;
+    expect(further).toBeLessThan(plainDown);
+    view.aim.look.upDeg = plainDown;
+    key(view.frame, 's', { shiftKey: true });
+    expect(view.aim.mode).toBe('horizon');
+    expect(view.aim.look.upDeg).toBeCloseTo(further, 5);
+    view.aim.look.upDeg = plainDown;
     key(view.frame, 'S', { shiftKey: true });
-    expect(view.aim.mode).toBe('nadir');
-    expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
-    key(view.frame, 'h');
-    key(view.frame, 'd');
+    expect(view.aim.mode).toBe('horizon');
+    expect(view.aim.look.upDeg).toBeCloseTo(further, 5);
+    view.aim.look.rightDeg = plainRight;
+    view.aim.look.upDeg = 0;
     const held = view.aim.look.rightDeg;
     expect(held).toBeCloseTo(plainRight, 5);
+    expect(view.aim.mode).toBe('horizon');
     const input = add(document.createElement('input'));
     input.focus();
     expect(key(input, 'd').defaultPrevented).toBe(false);
@@ -354,6 +385,7 @@ describe('ISS keyboard aim', () => {
     expect(key(view.frame, 'a').defaultPrevented).toBe(false);
     expect(key(view.frame, 's').defaultPrevented).toBe(false);
     expect(view.aim.look.rightDeg).toBeCloseTo(held, 5);
+    expect(view.aim.look.upDeg).toBe(0);
     expect(view.aim.mode).toBe('horizon');
     dialog.remove();
     const help = host.querySelector('[data-iss-aim-help]');
@@ -441,7 +473,7 @@ describe('ISS keyboard aim', () => {
     frame.focus();
     key(frame, 'ArrowRight');
     key(frame, '3');
-    key(frame, 's');
+    key(frame, 'n');
     expect(aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
     expect(aim.windowId).toBeNull();
     expect(aim.mode).toBe('horizon');
@@ -455,7 +487,7 @@ describe('ISS keyboard aim', () => {
     input.focus();
     const typed = key(input, 'ArrowRight');
     const typedDigit = key(input, '1');
-    const typedStraight = key(input, 's');
+    const typedStraight = key(input, 'n');
     const typedHorizon = key(input, 'H');
     expect(typed.defaultPrevented).toBe(false);
     expect(typedDigit.defaultPrevented).toBe(false);
@@ -468,7 +500,7 @@ describe('ISS keyboard aim', () => {
     area.focus();
     key(area, 'ArrowUp');
     key(area, '3');
-    key(area, 'S');
+    key(area, 'N');
     expect(aim.look.rightDeg).toBe(panned);
     expect(aim.look.upDeg).toBe(0);
     expect(aim.windowId).toBeNull();
@@ -489,7 +521,7 @@ describe('ISS keyboard aim', () => {
     cupola.focus();
     const selectKey = key(cupola, 'ArrowDown');
     const selectDigit = key(cupola, '4');
-    const selectPreset = key(cupola, 's');
+    const selectPreset = key(cupola, 'n');
     expect(selectKey.defaultPrevented).toBe(false);
     expect(selectDigit.defaultPrevented).toBe(false);
     expect(selectPreset.defaultPrevented).toBe(false);
@@ -501,7 +533,7 @@ describe('ISS keyboard aim', () => {
     key(frame, 'ArrowLeft');
     expect(aim.look.rightDeg).toBeLessThan(0);
     const chordLook = aim.look.rightDeg;
-    const presetChord = key(frame, 's', { ctrlKey: true });
+    const presetChord = key(frame, 'n', { ctrlKey: true });
     const presetCommand = key(frame, 'h', { metaKey: true });
     expect(presetChord.defaultPrevented).toBe(false);
     expect(presetCommand.defaultPrevented).toBe(false);
@@ -525,7 +557,7 @@ describe('ISS keyboard aim', () => {
     outside.focus();
     key(outside, 'ArrowRight');
     key(outside, '7');
-    key(outside, 's');
+    key(outside, 'n');
     expect(aim.look.rightDeg).toBe(0);
     expect(aim.windowId).toBeNull();
     expect(aim.mode).toBe('horizon');
@@ -542,7 +574,7 @@ describe('ISS keyboard aim', () => {
     scene.suspend();
     key(document.body, 'ArrowRight');
     key(document.body, '3');
-    key(document.body, 's');
+    key(document.body, 'n');
     expect(aim.look.rightDeg).toBe(held);
     expect(aim.windowId).toBeNull();
     expect(aim.mode).toBe('horizon');
@@ -643,7 +675,7 @@ describe('ISS keyboard aim', () => {
     expect(pinched).toBeLessThan(lens);
     expect(view.aim.look.rightDeg).toBeGreaterThan(0);
 
-    const straight = key(view.frame, 's');
+    const straight = key(view.frame, 'n');
     expect(straight.defaultPrevented).toBe(true);
     expect(view.aim.mode).toBe('nadir');
     expect(view.aim.azimuthDeg).toBe(0);
@@ -703,7 +735,7 @@ describe('ISS keyboard aim', () => {
     key(view.frame, '=');
     const pinchedAgain = view.aim.opticalFovDeg;
     expect(pinchedAgain).toBeLessThan(lens);
-    key(view.frame, 'S');
+    key(view.frame, 'N');
     expect(view.aim.mode).toBe('nadir');
     expect(view.aim.windowId).toBeNull();
     expect(view.aim.azimuthDeg).toBe(0);
@@ -727,7 +759,7 @@ describe('ISS keyboard aim', () => {
     const dialog = add(document.createElement('div'));
     dialog.className = 'modal-backdrop';
     const blockedH = key(view.frame, 'h');
-    const blockedS = key(view.frame, 's');
+    const blockedS = key(view.frame, 'n');
     expect(blockedH.defaultPrevented).toBe(false);
     expect(blockedS.defaultPrevented).toBe(false);
     expect(view.aim.look.rightDeg).toBe(held);
@@ -775,7 +807,7 @@ describe('ISS keyboard aim', () => {
     expect(view.aim.look).toEqual({ rightDeg: 0, upDeg: 0 });
     expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
     expect([...sheet.querySelectorAll('[data-iss-aim-keys]')].map((node) => node.textContent)).toEqual([
-      'Arrows', 'W/A/D', 'Shift+arrows', 'Shift+W/A/D', '+ / =', '-', 'r / Esc', '1–7', 'h', 's / S',
+      'Arrows', 'W/A/S/D', 'Shift+arrows', 'Shift+W/A/S/D', '+ / =', '-', 'r / Esc', '1–7', 'h', 'n',
     ]);
     expect([...sheet.querySelectorAll('[data-iss-aim-effect]')].map((node) => node.textContent)).toEqual([
       'Pan', 'Pan', 'Fine pan', 'Fine pan', 'Narrow FOV', 'Widen', 'Reset', 'Cupola', 'Horizon', 'Straight down',
@@ -847,6 +879,8 @@ describe('ISS keyboard aim', () => {
 describe('ISS keyboard aim persistence', () => {
   beforeEach(() => {
     sessionStorage.clear();
+    localStorage.removeItem('opd-iss-aim');
+    stripIssHash();
     vi.resetModules();
   });
 
@@ -974,7 +1008,7 @@ describe('ISS keyboard aim persistence', () => {
     key(frame, '=');
     key(frame, 'ArrowRight');
     const pinched = sensorField().vertical * 0.96;
-    key(frame, 's');
+    key(frame, 'n');
     const straight = JSON.parse(sessionStorage.getItem('opd-iss-aim') ?? 'null') as {
       mode: string;
       azimuthDeg: number;

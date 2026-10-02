@@ -618,6 +618,14 @@ describe('ISS chrome starts out of the way', () => {
 
   it('keeps a pinched optical field when the scene remounts', async () => {
     sessionStorage.clear();
+    localStorage.removeItem('opd-iss-aim');
+    const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : '';
+    const params = new URLSearchParams(hash);
+    if (params.has('iss')) {
+      params.delete('iss');
+      const nextHash = params.toString();
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ''}`);
+    }
     vi.resetModules();
     const view = await import('../src/iss-view');
     const aims: IssAim[] = [];
@@ -694,6 +702,14 @@ describe('ISS chrome starts out of the way', () => {
     expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe(`${lens.toFixed(1)}°`);
     scene2.dispose();
     sessionStorage.clear();
+    localStorage.removeItem('opd-iss-aim');
+    const left = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : '';
+    const leftParams = new URLSearchParams(left);
+    if (leftParams.has('iss')) {
+      leftParams.delete('iss');
+      const nextHash = leftParams.toString();
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ''}`);
+    }
     vi.resetModules();
   });
 });
