@@ -36,5 +36,5 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 - [Profile](./profile.md) covers the signed-in profile, distance threshold, add target, hidden curated targets, and photo lookup.
 - [Log](./log.md) covers the calibration row written by Shoot.
 - [Phone](./phone.md) covers a 390x844 portrait and an 844x390 landscape, 44px targets, the dock clearing the (i) and ? buttons with credits collapsed and expanded, and a long-press pin popup.
-- [Tracked vehicles](./tracked.md) covers the Starship legend, the no-orbit row, the missing-artifact fallback, the age-out sentence, and the marker plus ground track when an element set is published.
+- [Tracked vehicles](./tracked.md) covers the Starship legend, the no-orbit row, the missing-artifact fallback, the age-out sentence, the lookup-failed sentence, and the marker plus ground track when an element set is published.
 - [Service worker](./service-worker.md) covers `sw.js` on a preview build.

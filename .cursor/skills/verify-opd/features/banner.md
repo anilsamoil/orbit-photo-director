@@ -1,6 +1,6 @@
 # Status banner
 
-The footer tells you whether the shot queue data is current. After a healthy load it leaves the word Loading.
+The footer tells you whether the shot queue data is current. After a healthy load the word Loading is replaced by the update age.
 
 ## Sub-features
 
