@@ -80,11 +80,10 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '',
         label: 'ISS view',
         text:
-          'A modeled live view from the station. Horizon opens first. ' +
-          'Straight down looks at the ground under the station. The frame ' +
-          'is a fitted 14 mm full-frame picture with cloud-free Blue Marble ' +
-          'and Black Marble 2016. It is a spherical model, not the window ' +
-          'and not a live photo.',
+          'A modeled live view from the station. The frame is a fitted ' +
+          '14 mm full-frame picture with cloud-free Blue Marble and Black ' +
+          'Marble 2016. It is a spherical model, not the window and not a ' +
+          'live photo.',
       },
       {
         icon: '',
@@ -99,6 +98,73 @@ const HELP_SECTIONS: HelpSection[] = [
         text:
           'Your shoot and skip history. Rate a shoot from its row. A number ' +
           'on the Log tab is how many entries are still waiting to sync.',
+      },
+    ],
+  },
+  {
+    title: 'Aiming the ISS view',
+    items: [
+      {
+        icon: '',
+        label: 'Horizon',
+        text:
+          'Looks at the limb. This is the view when nothing is saved. ' +
+          'The Horizon button and h do the same: they clear a drag and ' +
+          'keep a pinched field.',
+      },
+      {
+        icon: '',
+        label: 'Straight down',
+        text:
+          'Looks at the ground under the station. Use the Straight down ' +
+          'button, or n / N. A pinch stays.',
+      },
+      {
+        icon: '',
+        label: 'Pan',
+        text:
+          'Drag the picture, or use the arrow keys. W, A, S, and D pan ' +
+          'the same way. Hold Shift for a smaller step.',
+      },
+      {
+        icon: '',
+        label: 'Field of view',
+        text: 'Pinch or scroll the picture. + narrows the field. - widens it.',
+      },
+      {
+        icon: '',
+        label: 'Cupola',
+        text:
+          'Windows 1 through 6 look around the limb. Window 7 looks ' +
+          'straight down. Keys 1 through 7 pick the same windows, and a ' +
+          'window returns the field to the 14 mm lens.',
+      },
+      {
+        icon: '',
+        label: 'Saved aim',
+        text:
+          'This device remembers the aim. The page address can share it: ' +
+          '#iss= holds that aim.',
+      },
+      {
+        icon: '',
+        label: 'Pad look',
+        text:
+          'When a pad is a possible shot, its name sits beside Telemetry. ' +
+          'The arrow points at the pad. A tap looks about 18° that way.',
+      },
+      {
+        icon: '',
+        label: 'Pad marker',
+        text:
+          'A gold pin marks the pad in the picture. An arrow on the edge ' +
+          'marks it when the pad is on the Earth but outside the picture.',
+      },
+      {
+        icon: '',
+        label: 'Ascent path',
+        text:
+          'The gold path appears only when that launch includes a trajectory.',
       },
     ],
   },

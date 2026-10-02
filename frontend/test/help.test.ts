@@ -33,6 +33,33 @@ describe('openHelpModal', () => {
     expect(profile).toBeGreaterThan(iss);
   });
 
+  it('describes ISS aiming and the pad look, and does not bring Reset back', () => {
+    openHelpModal();
+    const text = document.querySelector('.help-body')?.textContent ?? '';
+    const aiming = text.slice(text.indexOf('Aiming the ISS view'), text.indexOf('Reading a pass card'));
+    expect(aiming).toContain('Horizon');
+    expect(aiming).toContain('keep a pinched field');
+    expect(aiming).toContain('n / N');
+    expect(aiming).toContain('W, A, S, and D');
+    expect(aiming).toContain('Hold Shift');
+    expect(aiming).toContain('Pinch or scroll');
+    expect(aiming).toContain('Window 7');
+    expect(aiming).toContain('14 mm lens');
+    expect(aiming).toContain('#iss=');
+    expect(aiming).toContain('beside Telemetry');
+    expect(aiming).toContain('about 18°');
+    expect(aiming).toContain('gold pin');
+    expect(aiming).toContain('arrow on the edge');
+    expect(aiming).toContain('on the Earth but outside the picture');
+    expect(aiming).toContain('only when that launch includes a trajectory');
+    expect(aiming).not.toMatch(/Reset/);
+    expect(aiming.toLowerCase()).not.toContain('double-tap');
+    expect(aiming).not.toMatch(/S (selects|means|is) straight down/i);
+    expect(text).not.toContain('Horizon opens first');
+    expect(text).not.toMatch(/Reset/);
+    expect(text.toLowerCase()).not.toContain('double-tap');
+  });
+
   it('names the legend states, the footer recovery, and the Safari data clear', () => {
     openHelpModal();
     const text = document.querySelector('.help-body')?.textContent ?? '';
