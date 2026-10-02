@@ -77,7 +77,7 @@ describe('map chrome layout', () => {
     expect(dock.position).toBe('absolute');
     expect(dock.flexDirection).toBe('column');
     expect(toolbar.position).toBe('absolute');
-    expect(toolbar.backgroundColor).toBe('rgba(11, 13, 18, 0.7)');
+    expect(toolbar.backgroundColor).toBe('#10161c');
     expect(ruleStyle('body:has(> #view.view-map) .brand-expansion').display).toBe('none');
   });
 
@@ -121,12 +121,12 @@ describe('map chrome layout', () => {
       top: '0px',
       left: '0px',
       right: '0px',
-      padding: '4px 8px',
+      padding: '0px 16px',
       flexWrap: 'nowrap',
       minHeight: '44px',
-      tabPadding: '0px 8.8px',
-      weight: '600',
-      activeWeight: '600',
+      tabPadding: '0px 12px',
+      weight: '400',
+      activeWeight: '400',
     });
     mount('view-queue');
     const bar = document.querySelector('.topbar')!;
@@ -159,7 +159,7 @@ describe('map chrome layout', () => {
     expect(bar.touchAction).toBe('none');
     expect(getComputedStyle(document.querySelector('.tab')!).touchAction).toBe('none');
     expect(getComputedStyle(document.querySelector('.profile-badge')!).touchAction).toBe('none');
-    expect(rulesFor('.tabs').some((style) => style.overflowX === 'auto')).toBe(false);
+    expect(tabs.overflowX).not.toBe('auto');
     expect(tabs.flexShrink).toBe('0');
     expect(getComputedStyle(document.querySelector('.profile-badge')!).flexShrink).toBe('0');
     expect(getComputedStyle(document.querySelector('.kp-badge')!).flexShrink).toBe('0');
@@ -250,5 +250,16 @@ describe('map chrome layout', () => {
       ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab').bottom,
     );
     expect(helpBottom).toBeGreaterThanOrEqual(creditsTop);
+  });
+
+  it('reserves a map hit height when the narrow inspector would cover the credit strip', () => {
+    mount('view-map');
+    const blocks = rulesFor('#map-pane.map-inspector-open').map((style) => style.getPropertyValue('--map-inspector-block'));
+    expect(blocks).toContain(
+      'min(40dvh, 260px, max(0px, calc(100dvh - var(--topbar-height) - var(--map-command-height) - var(--map-hit-min))))',
+    );
+    expect(blocks).toContain('min(28dvh, 120px)');
+    const hit = rulesFor('#map-pane.map-inspector-open').map((style) => style.getPropertyValue('--map-hit-min')).find(Boolean);
+    expect(hit).toBe('calc(2 * (28px + 64px + 24px + env(safe-area-inset-bottom, 0px)))');
   });
 });

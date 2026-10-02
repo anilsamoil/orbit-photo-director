@@ -10,7 +10,9 @@ import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { bindHelp } from './help';
 import { bindMapChrome } from './map-chrome';
+import { bindLiveReadout } from './live-readout';
 import { bindTopbarPan } from './topbar-pan';
+import { paintEqualDigits } from './digits';
 import { formatCountdown, parseUtcIso } from './countdown';
 import {
   ACCESS_REAUTH_PATH,
@@ -735,8 +737,8 @@ function tryUpdateCountdownsInPlace(now: number): boolean {
       if (Number.isNaN(t)) return false;  // bad timestamp; safe path
       if (t <= now) return false;  // crossed past boundary; needs re-filter
       const countdownEl = card.querySelector('.card-countdown');
-      if (countdownEl) {
-        countdownEl.textContent = formatCountdown(passTime, now);
+      if (countdownEl instanceof HTMLElement) {
+        paintEqualDigits(countdownEl, formatCountdown(passTime, now));
       }
     }
   }
@@ -1325,6 +1327,12 @@ function bindTabs(): void {
   const setActive = (className: string, activeTab: HTMLElement) => {
     view.className = className;
     allTabs.forEach((t) => t.classList.toggle('active', t === activeTab));
+    const scroller = activeTab.parentElement;
+    if (scroller instanceof HTMLElement && scroller.classList.contains('tabs')) {
+      const edge = activeTab.offsetLeft + activeTab.offsetWidth - scroller.clientWidth;
+      if (activeTab.offsetLeft < scroller.scrollLeft) scroller.scrollLeft = activeTab.offsetLeft;
+      else if (edge > scroller.scrollLeft) scroller.scrollLeft = edge;
+    }
   };
 
   tabQueue.addEventListener('click', () => {
@@ -1681,6 +1689,8 @@ function bindProfileBadgeAffordance(el: HTMLElement): void {
 async function init(): Promise<void> {
   bindMapChrome();
   bindTopbarPan(document.querySelector('.topbar'));
+  bindTopbarPan(document.querySelector('.tabs'));
+  bindLiveReadout();
   // Authenticate before loading any personal cache, target or rating queue.
   // A shared ?u= link selects a crew profile only when the session allows it.
   try {

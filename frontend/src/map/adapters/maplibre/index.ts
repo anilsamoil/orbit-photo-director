@@ -73,6 +73,18 @@ function toVendorSource(spec: SourceSpec): SourceSpecification {
   return spec;
 }
 
+/** Park an open popup in the reserved inspector and resize the map under it. */
+function syncMapInspector(map: maplibregl.Map): void {
+  if (typeof map.getContainer !== 'function') return;
+  const pane = map.getContainer().closest('#map-pane');
+  if (!(pane instanceof HTMLElement)) return;
+  const open = map.getContainer().querySelector('.maplibregl-popup') !== null;
+  pane.classList.toggle('map-inspector-open', open);
+  const slot = document.getElementById('map-inspector');
+  if (slot) slot.hidden = !open;
+  requestAnimationFrame(() => map.resize());
+}
+
 function exposeForEndToEnd(map: maplibregl.Map): void {
   if (typeof window === 'undefined') return;
   if (!new URLSearchParams(window.location.search).has('e2e')) return;
@@ -166,6 +178,11 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
         .setLngLat(at)
         .setDOMContent(content)
         .addTo(map);
+      const release = () => {
+        syncMapInspector(map);
+      };
+      popup.on('close', release);
+      syncMapInspector(map);
       return {
         remove: () => {
           popup.remove();

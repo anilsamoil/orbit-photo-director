@@ -69,7 +69,7 @@ export function buildTargetPopupContent(
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'map-target-popup';
-  body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12;min-width:200px';
+  body.style.cssText = 'min-width:200px';
 
   const addRow = (cls: string, text: string, style: string): HTMLDivElement => {
     const row = document.createElement('div');
@@ -96,35 +96,35 @@ export function buildTargetPopupContent(
   const hasPass = props.has_pass === true;
 
   if (hasPass) {
-    addRow('map-popup-score', `score ${Math.round(props.score ?? 0)}`, 'font-weight:600;color:#0b0d12;margin-top:2px');
+    addRow('map-popup-score', `score ${Math.round(props.score ?? 0)}`, 'font-weight:700;margin-top:2px');
     if (props.closest_approach) {
       const passMs = Date.parse(props.closest_approach);
       if (Number.isFinite(passMs)) {
         const utc = props.closest_approach.replace('T', ' ').replace(/:\d{2}(\.\d+)?Z$/, 'Z');
         const rel = formatRelativeMinutes(Math.round((passMs - nowMs) / 60_000));
-        addRow('map-popup-row', `Pass: ${utc}${rel ? ` (${rel})` : ''}`, 'margin-top:6px;color:#444');
+        addRow('map-popup-row', `Pass: ${utc}${rel ? ` (${rel})` : ''}`, 'margin-top:6px');
       }
     }
     if (Number.isFinite(props.angle_off_nadir_deg) && Number.isFinite(props.iss_relative_bearing_deg)) {
-      addRow('map-popup-row', formatTrackOffset(props.angle_off_nadir_deg!, props.iss_relative_bearing_deg!), 'margin-top:2px;color:#444');
+      addRow('map-popup-row', formatTrackOffset(props.angle_off_nadir_deg!, props.iss_relative_bearing_deg!), 'margin-top:2px');
     }
     const regimeBits: string[] = [];
     if (props.pass_regime) regimeBits.push(props.pass_regime);
     if (props.obstruction_class) regimeBits.push(props.obstruction_class);
-    if (regimeBits.length > 0) addRow('map-popup-row', regimeBits.join(' · '), 'margin-top:2px;color:#444');
+    if (regimeBits.length > 0) addRow('map-popup-row', regimeBits.join(' · '), 'margin-top:2px');
   } else {
     addRow(
       'map-popup-row',
       props.is_personal ? 'Saved target · no scored forecast available' : 'No upcoming pass in window',
-      'margin-top:6px;color:#444',
+      'margin-top:6px',
     );
   }
 
   const atPass = hasPass && typeof props.cloud_fraction === 'number' ? Math.round(props.cloud_fraction) : null;
-  addRow('map-popup-weather', atPass != null ? `Cloud: at pass ${atPass}%` : 'Cloud: checking now…', 'margin-top:2px;color:#444');
+  addRow('map-popup-weather', atPass != null ? `Cloud: at pass ${atPass}%` : 'Cloud: checking now…', 'margin-top:2px');
 
   if (typeof props.shot_count === 'number' && props.shot_count > 0) {
-    addRow('map-popup-shot', `✓ shot ${props.shot_count}×`, 'margin-top:4px;color:#1a7a3a;font-weight:600');
+    addRow('map-popup-shot', `✓ shot ${props.shot_count}×`, 'margin-top:4px');
   }
 
   if (props.is_personal && props.target_id && onEdit) {
@@ -133,7 +133,7 @@ export function buildTargetPopupContent(
     btn.type = 'button';
     btn.className = 'map-popup-edit';
     btn.textContent = 'Edit target';
-    btn.style.cssText = 'margin-top:8px;font:inherit;cursor:pointer;border:1px solid #2a3142;background:#eef1f6;color:#0b0d12;border-radius:4px;padding:3px 8px';
+    btn.style.cssText = 'margin-top:8px;padding:0 12px';
     btn.addEventListener('click', () => onEdit(id));
     body.appendChild(btn);
   }

@@ -1,6 +1,7 @@
 import type { PassEntry } from './types';
 import { categoryPaint } from './category-style';
 import { formatCountdown, formatScore, formatUtcLabel } from './countdown';
+import { paintEqualDigits } from './digits';
 import { renderStarBlock, scoreToStars, starsToLabel } from './score-stars';
 import { formatTrackOffset } from './track-offset';
 import { isInShotlist } from './shotlist';
@@ -118,7 +119,7 @@ export function renderCard(
 
   const countdown = document.createElement('div');
   countdown.className = 'card-countdown';
-  countdown.textContent = formatCountdown(p.closest_approach, nowMs);
+  paintEqualDigits(countdown, formatCountdown(p.closest_approach, nowMs));
   countdown.title = `Closest approach: ${formatUtcLabel(p.closest_approach)}`;
 
   const meta = document.createElement('div');
