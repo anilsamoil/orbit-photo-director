@@ -17,6 +17,7 @@ import {
 import type { LookOffset } from '../iss-g1/model';
 import { horizontalFovDeg, lookRoom, nudgeLook, settleLook } from './look';
 import { bindAimKeys, type AimAction } from './aim-keys';
+import { paintEqualDigits } from '../digits';
 import { fitIssPane } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
@@ -479,7 +480,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     detail.textContent = card.detail;
     details.hidden = card.detail.length === 0;
     const clock = /^(\d{4}-\d{2}-\d{2} )(\d{2}:\d{2}:\d{2} UTC)/.exec(card.position);
-    utc.textContent = clock?.[2] ?? '';
+    paintEqualDigits(utc, clock?.[2] ?? '');
   }
 
   function layout(): { widthPx: number; heightPx: number } {

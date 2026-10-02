@@ -317,7 +317,7 @@ export function dropLookupPin(result: {
       const coords = (feature.geometry.coordinates as [number, number]).slice() as [number, number];
       const props = feature.properties as { timestamp_iso?: string; alt_km?: number };
       const body = document.createElement('div');
-      body.style.cssText = 'font:0.85rem/1.4 system-ui;color:#0b0d12';
+      body.className = 'map-target-popup';
       const title = document.createElement('strong');
       title.textContent = '🛰️ ISS position';
       const timestamp = document.createElement('div');

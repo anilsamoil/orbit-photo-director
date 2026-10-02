@@ -1,19 +1,42 @@
+@font-face {
+  font-family: 'D-DIN';
+  src: url('/fonts/D-DIN.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'D-DIN';
+  src: url('/fonts/D-DIN-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --topbar-height: calc(4px + 0.2rem + 44px + 0.2rem + 4px + 1px);
+  --topbar-height: 60px;
+  --map-command-height: 0px;
+  --map-inspector-inline: 0px;
+  --map-inspector-block: 0px;
   color-scheme: dark;
-  --bg: #0b0d12;
-  --surface: #141821;
-  --surface-2: #1c2230;
-  --border: #2a3142;
-  --text: #e6e8ef;
-  --text-dim: #9aa3b8;
-  --accent: #5cd0ff;
-  --green: #5be37a;
-  --yellow: #ffce4d;
+  --bg: #070a0d;
+  --surface: #10161c;
+  --surface-2: #18212a;
+  --border: #2d3b47;
+  --control-border: #617585;
+  --text: #eef3f7;
+  --text-dim: #a7b6c4;
+  --accent: #75c9ff;
+  --selected: #142635;
+  --green: #8ad8b0;
+  --yellow: #f2c174;
   --orange: #ff9a3c;
-  --red: #ff6464;
-  --grey: #6c7387;
-  font-family: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", sans-serif;
+  --red: #ff9595;
+  --grey: #617585;
+  --radius-control: 3px;
+  --radius-panel: 4px;
+  font-family: 'D-DIN', 'Arial Narrow', Arial, sans-serif;
 }
 
 * {
@@ -44,18 +67,18 @@ body {
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   z-index: 30;
   flex-wrap: nowrap;
-  gap: 6px;
+  gap: 12px;
   height: var(--topbar-height);
-  padding: 4px 8px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: #090d11;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
@@ -219,12 +242,48 @@ body {
 .toast.warn { border-color: rgba(255, 206, 77, 0.5); color: var(--yellow); }
 .toast.error { border-color: rgba(255, 100, 100, 0.5); color: var(--red); }
 
+.topbar-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.live-readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.live-readout-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
 .tabs {
   display: flex;
-  gap: 0.25rem;
-  background: var(--surface-2);
-  border-radius: 6px;
-  padding: 0.2rem;
+  gap: 2px;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .tab {
@@ -233,20 +292,25 @@ body {
   justify-content: center;
   background: transparent;
   border: 0;
+  border-bottom: 2px solid transparent;
   color: var(--text-dim);
   min-height: 44px;
   min-width: 44px;
-  padding: 0 0.55rem;
+  padding: 0 12px;
   font: inherit;
-  font-weight: 600;
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   flex: 0 0 auto;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 0;
 }
 
 .tab.active {
-  background: var(--accent);
-  color: var(--bg);
+  background: transparent;
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 /* Responsive topbar — placed AFTER the base .topbar/.tabs/.tab rules so the
@@ -1000,23 +1064,23 @@ body:has(> #view.view-map) > .banner,
 .view-map .satellite-picker-panel,
 .view-map .map-imagery-date,
 body:has(> #view.view-map) .help-fab {
-  background: rgba(11, 13, 18, 0.7);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2);
-  backdrop-filter: blur(14px) saturate(1.2);
-  border-color: rgba(255, 255, 255, 0.16);
+  background: #090d11;
+  border-color: var(--border);
 }
 .brand,
 .kp-badge,
 .sun-badge,
-.profile-badge { flex: 0 0 auto; }
+.profile-badge,
+.topbar-identity,
+.live-readout { flex: 0 0 auto; }
 .tabs { flex: 0 0 auto; }
 .iss-now {
-  flex: 1 0 auto;
+  flex: 0 0 auto;
 }
 body:has(> #view.view-map) .brand-expansion { display: none; }
-body:has(> #view.view-map) .iss-now { color: #f4f7fb; }
-body:has(> #view.view-map) .tab { color: #f4f7fb; }
-body:has(> #view.view-map) .tab.active { color: var(--bg); }
+body:has(> #view.view-map) .iss-now { color: var(--text); }
+body:has(> #view.view-map) .tab { color: var(--text); }
+body:has(> #view.view-map) .tab.active { color: var(--accent); }
 body:has(> #view.view-map) > .banner {
   position: fixed;
   bottom: 0;
@@ -1102,7 +1166,9 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map #map {
   position: absolute;
   inset: 0;
-  height: 100%;
+  right: var(--map-inspector-inline);
+  bottom: var(--map-command-height);
+  height: auto;
   min-height: 0;
   border-radius: 0;
   z-index: 0;
@@ -1204,12 +1270,12 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   gap: 4px;
   flex: 0 0 auto;
   width: max-content;
-  max-width: 56px;
-  max-height: calc(100% - var(--topbar-height) - 137px);
+  max-width: 76px;
+  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 137px);
   overflow-y: auto;
 }
 .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-  max-height: calc(100% - var(--topbar-height) - 157px);
+  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 157px);
 }
 .view-map .map-control-dock > .map-controls {
   flex-direction: column;
@@ -1376,6 +1442,7 @@ body:has(#status-banner .banner-actions) .view-map .map-chrome-toggle {
   bottom: calc(7.75rem + env(safe-area-inset-bottom));
 }
 #map-pane.map-chrome-hidden .map-toolbar,
+#map-pane.map-chrome-hidden .map-command,
 #map-pane.map-chrome-hidden .map-control-dock,
 #map-pane.map-chrome-hidden .map-legend,
 #map-pane.map-chrome-hidden .map-imagery-date,
@@ -3021,21 +3088,21 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 
 @supports (padding-top: env(safe-area-inset-top)) {
   :root {
-    --topbar-height: calc(4px + env(safe-area-inset-top) + 0.2rem + 44px + 0.2rem + 4px + 1px);
+    --topbar-height: calc(60px + env(safe-area-inset-top));
   }
   .topbar {
-    padding-top: calc(4px + env(safe-area-inset-top));
-    padding-left: calc(8px + env(safe-area-inset-left));
-    padding-right: calc(8px + env(safe-area-inset-right));
+    padding-top: env(safe-area-inset-top);
+    padding-left: calc(16px + env(safe-area-inset-left));
+    padding-right: calc(16px + env(safe-area-inset-right));
   }
   body:has(> #view.view-map) > .banner {
     padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
   }
   .view-map .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - env(safe-area-inset-bottom) - 137px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - env(safe-area-inset-bottom) - 137px);
   }
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - env(safe-area-inset-bottom) - 157px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - env(safe-area-inset-bottom) - 157px);
   }
   .view-map #map .maplibregl-ctrl-bottom-right {
     bottom: calc(28px + env(safe-area-inset-bottom));
@@ -3556,5 +3623,536 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   [data-iss-utc] {
     align-self: flex-end;
     grid-column: auto;
+  }
+}
+
+.digit {
+  display: inline-block;
+  width: 0.56em;
+  text-align: center;
+}
+
+.digit-sep {
+  display: inline-block;
+  width: 0.28em;
+  text-align: center;
+}
+
+.card,
+.toast,
+.launch-dialog,
+.modal,
+.score-breakdown,
+.beta-notice,
+.lookup-dropzone,
+.log-row {
+  border-radius: var(--radius-panel);
+}
+
+.btn,
+.banner-action,
+.lookup-btn,
+.filter-btn,
+.sort-btn,
+.time-btn,
+.cupola-toggle-btn,
+.tab,
+.map-chrome-toggle,
+.kp-badge,
+.help-fab,
+[data-iss-preset],
+[data-iss-reset],
+[data-iss-aim-help],
+[data-iss-telemetry],
+[data-iss-cupola],
+[data-iss-window],
+[data-iss-actions] button {
+  border-radius: var(--radius-control);
+}
+
+.help-fab {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.filter-btn.active,
+.sort-btn.active,
+.time-btn.active,
+.view-map .map-toolbar .filter-btn.active,
+.view-map .map-command .time-btn.active,
+.view-map .map-control-dock .time-btn.active {
+  background: var(--selected);
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.card-name {
+  font-size: 1.5rem;
+  font-weight: 400;
+}
+
+.pane-title,
+.log-title {
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.map-group-label,
+.satellite-picker-header,
+.toggle-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.map-group-label {
+  display: block;
+  width: 100%;
+  padding: 2px 4px 0;
+}
+
+body:has(> #view.view-map):not(.map-chrome-hidden) {
+  --map-command-height: 156px;
+}
+
+.view-map .map-toolbar,
+.view-map .map-control-dock > .map-controls,
+.view-map .map-command,
+.view-map .map-legend,
+.view-map .satellite-picker-panel,
+.view-map #map-launch-coverage,
+.view-map .map-imagery-date,
+.view-map .map-chrome-toggle {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.view-map .map-command {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  z-index: 16;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  height: var(--map-command-height);
+  max-height: var(--map-command-height);
+  margin: 0;
+  padding: 8px 8px calc(32px + env(safe-area-inset-bottom));
+  overflow: auto;
+  color: var(--text);
+}
+
+.view-map .map-command > .map-group-label {
+  flex: 1 0 100%;
+}
+
+.view-map .map-command .map-controls-time {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+
+.view-map .map-command .time-step-btn,
+.view-map .map-command .filter-btn,
+.view-map .map-command .time-btn {
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--text);
+  border: 1px solid var(--control-border);
+  background: transparent;
+}
+
+.view-map .map-command .time-slider-row {
+  display: flex;
+  flex: 1 1 12rem;
+  align-items: center;
+  gap: 8px;
+  min-width: 10rem;
+}
+
+.view-map .map-command .time-slider {
+  height: 44px;
+  accent-color: var(--accent);
+}
+
+.view-map .map-command .time-slider-readout,
+.view-map .map-command .time-slider-end,
+.view-map .map-command .time-step-utc {
+  color: var(--text-dim);
+}
+
+.view-map .map-toolbar .filter-btn {
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+}
+
+.view-map .map-control-dock .time-btn {
+  border: 1px solid transparent;
+  color: var(--text);
+}
+
+.view-map .map-control-dock .time-btn.active {
+  border-color: var(--accent);
+}
+
+#map-pane.map-inspector-open {
+  --map-inspector-inline: 320px;
+  --map-inspector-block: 0px;
+}
+
+#map-pane.map-inspector-open .map-inspector {
+  display: block;
+  position: absolute;
+  top: var(--topbar-height);
+  right: 0;
+  bottom: var(--map-command-height);
+  width: 320px;
+  z-index: 14;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  pointer-events: none;
+}
+
+#map-pane.map-inspector-open .maplibregl-popup {
+  position: fixed !important;
+  top: var(--topbar-height) !important;
+  right: 0 !important;
+  bottom: var(--map-command-height) !important;
+  left: auto !important;
+  transform: none !important;
+  width: 320px !important;
+  max-width: 320px !important;
+  height: auto !important;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  pointer-events: auto;
+}
+
+#map-pane.map-inspector-open .maplibregl-popup-tip {
+  display: none;
+}
+
+#map-pane.map-inspector-open .maplibregl-popup-content {
+  flex: 1 1 auto;
+  max-height: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 16px 16px 20px;
+}
+
+.maplibregl-popup-content {
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-panel);
+}
+
+.maplibregl-popup-close-button {
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  color: var(--text);
+}
+
+.map-target-popup,
+.map-popup-row,
+.map-popup-weather,
+.map-popup-score {
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+}
+
+.map-popup-row,
+.map-popup-weather {
+  color: var(--text-dim);
+}
+
+.map-popup-shot {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.map-popup-edit,
+.map-popup-next-passes,
+.pin-add-button,
+.pin-add-save,
+.pin-add-cancel {
+  min-height: 44px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pin-add-footer {
+  border-top-color: var(--border);
+}
+
+.pin-add-name {
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.pin-add-save {
+  background: var(--selected);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pin-add-error {
+  color: var(--red);
+}
+
+.pass-list,
+.pass-list li,
+.pass-list p {
+  color: var(--text);
+}
+
+body:has(> #view.view-map):not(.map-chrome-hidden) .view-map .map-legend {
+  bottom: calc(36px + var(--map-command-height) + env(safe-area-inset-bottom));
+}
+
+body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-legend {
+  bottom: calc(100px + var(--map-command-height) + env(safe-area-inset-bottom));
+}
+
+body:has(> #view.view-map):not(.map-chrome-hidden) .help-fab,
+body:has(> #view.view-map):not(.map-chrome-hidden) .view-map ~ .help-fab {
+  bottom: calc(80px + var(--map-command-height) + env(safe-area-inset-bottom));
+}
+
+body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab {
+  bottom: calc(100px + var(--map-command-height) + env(safe-area-inset-bottom));
+}
+
+#map-pane:not(.map-chrome-hidden) .map-chrome-toggle {
+  left: auto;
+  right: 12px;
+  transform: none;
+  bottom: calc(36px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-color: var(--control-border);
+  color: var(--text);
+}
+
+[data-iss-preset],
+[data-iss-reset],
+[data-iss-aim-help],
+[data-iss-telemetry],
+[data-iss-cupola] {
+  background: var(--surface);
+  border-color: var(--control-border);
+  color: var(--text);
+}
+
+[data-iss-preset][aria-pressed='true'] {
+  background: var(--selected);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+[data-iss-telemetry-body],
+[data-iss-aim-sheet] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+
+[data-iss-utc] {
+  font-variant-numeric: normal;
+  letter-spacing: 0;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-inspector,
+  .tab,
+  .btn,
+  .filter-btn,
+  .sort-btn,
+  .time-btn,
+  .toast {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tab,
+  .btn,
+  .filter-btn,
+  .sort-btn,
+  .time-btn {
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+}
+
+@media (max-width: 899px) {
+  #map-pane.map-inspector-open {
+    --map-inspector-inline: 0px;
+    --map-inspector-block: min(40dvh, 260px);
+  }
+
+  #map-pane.map-inspector-open #map {
+    bottom: calc(var(--map-command-height) + var(--map-inspector-block));
+  }
+
+  #map-pane.map-inspector-open .map-inspector,
+  #map-pane.map-inspector-open .maplibregl-popup {
+    top: auto !important;
+    right: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: var(--map-inspector-block) !important;
+    bottom: var(--map-command-height) !important;
+  }
+}
+
+@media (max-height: 520px) {
+  body:has(> #view.view-map):not(.map-chrome-hidden) {
+    --map-command-height: 104px;
+  }
+
+  .brand-expansion,
+  .live-readout,
+  .live-readout-toggle {
+    display: none;
+  }
+}
+
+@media (max-height: 520px) and (max-width: 899px) {
+  #map-pane.map-inspector-open {
+    --map-inspector-block: min(28dvh, 120px);
+  }
+}
+
+@media (max-width: 700px) {
+  :root {
+    --topbar-height: calc(env(safe-area-inset-top, 0px) + 89px);
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    align-content: flex-start;
+    align-items: center;
+    overflow: hidden;
+    gap: 0 8px;
+    height: var(--topbar-height);
+    padding-left: calc(8px + env(safe-area-inset-left));
+    padding-right: calc(8px + env(safe-area-inset-right));
+    touch-action: auto;
+  }
+
+  .topbar-identity {
+    flex: 1 1 auto;
+    height: 44px;
+    min-width: 0;
+  }
+
+  .live-readout-toggle {
+    display: inline-flex;
+    margin-left: auto;
+  }
+
+  .tabs {
+    flex: 1 0 100%;
+    height: 44px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    touch-action: pan-x;
+  }
+
+  .tabs,
+  .tabs * { touch-action: pan-x; }
+
+  .tabs::-webkit-scrollbar { display: none; }
+
+  .live-readout {
+    display: none;
+  }
+
+  .live-readout:not([hidden]) {
+    display: flex;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    background: #090d11;
+    border-bottom: 1px solid var(--border);
+    z-index: 32;
+  }
+
+  .brand-name { display: inline; }
+}
+
+@media (max-height: 520px) {
+  :root {
+    --topbar-height: calc(env(safe-area-inset-top, 0px) + 48px);
+  }
+
+  .topbar {
+    flex-wrap: nowrap;
+    height: var(--topbar-height);
+    overflow-x: auto;
+    touch-action: none;
+  }
+
+  .topbar-identity {
+    flex: 0 0 auto;
+    height: auto;
+  }
+
+  .tabs {
+    flex: 1 1 auto;
+    width: auto;
+    height: auto;
+    overflow-x: auto;
+  }
+
+  .live-readout,
+  .live-readout-toggle,
+  .brand-expansion {
+    display: none !important;
   }
 }

@@ -13,16 +13,21 @@
   </head>
   <body class="map-chrome-hidden">
     <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark">🛰️</span>
-        <span class="brand-name">SNAP</span>
-        <span class="brand-expansion">(SNAP's Not an Astro Photographer)</span>
+      <div class="topbar-identity">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">🛰️</span>
+          <span class="brand-name">SNAP</span>
+          <span class="brand-expansion">(SNAP's Not an Astro Photographer)</span>
+        </div>
+        <div id="live-readout" class="live-readout">
+          <div id="iss-now" class="iss-now" title="Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position"></div>
+          <div id="kp-widget" class="kp-badge" hidden></div>
+          <div id="sun-widget" class="sun-badge" hidden></div>
+          <span id="profile-badge" class="profile-badge" title="Active astronaut profile" hidden></span>
+        </div>
+        <button id="live-readout-toggle" class="live-readout-toggle" type="button" aria-expanded="false" aria-controls="live-readout">Status</button>
       </div>
-      <div id="iss-now" class="iss-now" title="Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position"></div>
-      <div id="kp-widget" class="kp-badge" hidden></div>
-      <div id="sun-widget" class="sun-badge" hidden></div>
-      <span id="profile-badge" class="profile-badge" title="Active astronaut profile" hidden></span>
-      <nav class="tabs">
+      <nav class="tabs" aria-label="Views">
         <button id="tab-queue" class="tab" type="button">Queue</button>
         <button id="tab-upcoming" class="tab" type="button">Upcoming</button>
         <button id="tab-map" class="tab active" type="button">Map</button>
@@ -82,10 +87,14 @@
         <div id="map" class="map"></div>
         <div class="map-toolbar">
           <div class="map-controls map-controls-filter" role="group" aria-label="Target filter">
+            <span class="map-group-label">Show</span>
             <button id="filter-all-map" class="filter-btn active" type="button" data-filter="all" title="Show all targets (shared + yours)">All</button>
             <button id="filter-mine-map" class="filter-btn" type="button" data-filter="mine" title="Show only your targets">Mine</button>
             <button id="filter-launches-map" class="filter-btn" type="button" aria-pressed="false" aria-expanded="false" aria-controls="map-launch-coverage" title="Show launches and their sites on the map">Launches</button>
           </div>
+        </div>
+        <div class="map-command" aria-label="View time">
+          <span class="map-group-label">Time</span>
           <div class="map-controls map-controls-time">
             <div class="time-slider-row">
               <span class="time-slider-end" aria-hidden="true">Now</span>
@@ -120,11 +129,13 @@
         </div>
         <div class="map-control-dock">
           <div class="map-controls map-controls-bearing">
+            <span class="map-group-label">Bearing</span>
             <button id="bearing-north" class="time-btn" type="button" title="North up">N&uarr;</button>
             <button id="bearing-iss" class="time-btn active" type="button" title="ISS up (default). Rotate so the direction of travel points up">ISS&uarr;</button>
             <button id="toggle-follow-iss" class="time-btn" type="button" title="Recenter on ISS — click again or pan to release">&#x1F4CD;</button>
           </div>
           <div class="map-controls map-controls-overlay">
+            <span class="map-group-label">Layers</span>
             <button id="toggle-clouds" class="time-btn active" type="button" title="Toggle GIBS cloud overlay">&#9729;</button>
             <button id="toggle-ir" class="time-btn time-btn-ir" type="button" title="Show live geostationary IR cloud-tops (~10 min, day + night; replaces the daily clouds layer, off by default)">IR</button>
             <button id="toggle-terminator" class="time-btn active" type="button" title="Toggle day-night terminator + subsolar point">&#9728;</button>
@@ -153,6 +164,7 @@
           <span class="map-legend-item" id="tracked-legend"><span class="map-legend-dot map-legend-starship"></span><span id="tracked-legend-text">Starship: no public orbit yet</span></span>
         </div>
         <button id="map-chrome-toggle" class="map-chrome-toggle" type="button" aria-expanded="false" title="Show map controls">Controls</button>
+        <aside id="map-inspector" class="map-inspector" hidden></aside>
       </section>
 
       <section id="iss-pane" class="pane">

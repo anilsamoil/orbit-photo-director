@@ -631,11 +631,18 @@ async function driveTopbar(send, evidenceDir, home) {
       await setViewport(send, width, height, true);
       const reach = await waitFor(send, topbarReachExpression(), `topbar reach ${width}x${height}`, 8000);
       await shot(send, evidenceDir, name);
-      if (width === 402 && height === 874) {
+      if (width === 834 && height === 1194) {
         const pans = await panTopbarFromLeft(send);
         panned = pans.kp;
         issPanned = pans.iss;
         await shot(send, evidenceDir, 'topbar-pan-left');
+        if (!(panned > 40) || !(issPanned > 40)) {
+          throw new Error(`wide bar did not pan from the left chips: ${JSON.stringify(pans)}`);
+        }
+      }
+      if (width === 402 && height === 874) {
+        const tabPan = await panScrollerFrom(send, '.tabs', '#tab-queue');
+        if (!(tabPan > 40)) throw new Error(`phone tab row did not pan: ${tabPan}`);
         await tapTopbarControl(send, '#tab-queue');
         const queue = await evaluate(send, `document.querySelector('main')?.className`);
         if (queue !== 'view-queue') throw new Error(`queue tap landed on ${queue}`);
@@ -645,6 +652,9 @@ async function driveTopbar(send, evidenceDir, home) {
       }
       if (reach.scrollWidth <= reach.clientWidth && width <= 402) {
         throw new Error(`topbar did not scroll at ${width}x${height}: ${JSON.stringify(reach)}`);
+      }
+      if (width === 834 && reach.barScrollWidth <= reach.barClientWidth) {
+        throw new Error(`wide topbar did not scroll at ${width}x${height}: ${JSON.stringify(reach)}`);
       }
     }
     const inset = await safeAreaOverride(send, { top: 59, left: 59, bottom: 34, right: 47 });
@@ -826,29 +836,50 @@ async function ensureMapChromeShown(send) {
 function topbarReachExpression() {
   return `(() => {
     const bar = document.querySelector('.topbar');
+    const tabs = document.querySelector('.tabs');
     const badge = document.getElementById('profile-badge');
-    if (!bar || !badge) return null;
+    const readout = document.getElementById('live-readout');
+    if (!bar || !tabs || !badge || !readout) return null;
     badge.hidden = false;
     badge.textContent = '👤 anilsamoilenko-astro';
+    const narrow = window.innerWidth <= 700 && window.innerHeight > 520;
+    if (narrow) {
+      const toggle = document.getElementById('live-readout-toggle');
+      if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+      if (readout.hidden) return null;
+    }
+    const shown = (el) => {
+      let node = el;
+      while (node && node !== document.documentElement) {
+        if (node.hidden) return false;
+        const style = getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        node = node.parentElement;
+      }
+      return true;
+    };
     const selectors = ['#tab-queue', '#tab-upcoming', '#tab-map', '#tab-iss', '#tab-profile', '#tab-log', '#kp-widget', '#profile-badge'];
     const targets = selectors
       .map((sel) => document.querySelector(sel))
-      .filter((el) => el && !el.hidden && getComputedStyle(el).display !== 'none');
+      .filter((el) => el && shown(el));
+    const tabsScroll = getComputedStyle(tabs).overflowX === 'auto' || getComputedStyle(tabs).overflowX === 'scroll';
+    const scrollerFor = (el) => (tabs.contains(el) && tabsScroll ? tabs : bar);
     const misses = [];
     for (const el of targets) {
-      bar.scrollLeft = 0;
+      const scroller = scrollerFor(el);
+      scroller.scrollLeft = 0;
       let rect = el.getBoundingClientRect();
-      const start = bar.getBoundingClientRect();
+      const start = scroller.getBoundingClientRect();
       if (rect.left < start.left - 1 || rect.right > start.right + 1) {
-        bar.scrollLeft += rect.left - start.left;
+        scroller.scrollLeft += rect.left - start.left;
         rect = el.getBoundingClientRect();
       }
-      const current = bar.getBoundingClientRect();
-      const fully = rect.width >= 44 && rect.height >= 44 && rect.left >= current.left - 1 && rect.right <= current.right + 1;
+      const current = scroller.getBoundingClientRect();
+      const fully = rect.width >= 44 && rect.height >= 44 && rect.left >= current.left - 1 && rect.right <= current.right + 1 && rect.top >= current.top - 1 && rect.bottom <= current.bottom + 8;
       const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + Math.min(rect.height / 2, 22));
       const owner = hit && hit.closest(selectors.join(','));
       if (!fully || owner !== el) {
-        misses.push({ id: el.id, fully, hit: owner ? owner.id : (hit && hit.className) || null, scroll: bar.scrollLeft });
+        misses.push({ id: el.id, fully, hit: owner ? owner.id : (hit && hit.className) || null, scroll: scroller.scrollLeft });
       }
     }
     const nodes = [...bar.children].filter((el) => !el.hidden && getComputedStyle(el).display !== 'none');
@@ -863,23 +894,27 @@ function topbarReachExpression() {
       }
     }
     if (misses.length || overlaps.length) return { misses, overlaps };
-    const scrollWidth = bar.scrollWidth;
-    const clientWidth = bar.clientWidth;
+    const phoneNav = narrow;
+    const scrollWidth = phoneNav ? tabs.scrollWidth : bar.scrollWidth;
+    const clientWidth = phoneNav ? tabs.clientWidth : bar.clientWidth;
     bar.scrollLeft = 0;
-    return { ok: true, scrollWidth, clientWidth };
+    tabs.scrollLeft = 0;
+    return { ok: true, scrollWidth, clientWidth, barScrollWidth: bar.scrollWidth, barClientWidth: bar.clientWidth };
   })()`;
 }
 
 async function tapTopbarControl(send, selector) {
   const point = await evaluate(send, `(() => {
     const bar = document.querySelector('.topbar');
+    const tabs = document.querySelector('.tabs');
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!bar || !el) return null;
-    bar.scrollLeft = 0;
+    const scroller = tabs && tabs.contains(el) ? tabs : bar;
+    scroller.scrollLeft = 0;
     let rect = el.getBoundingClientRect();
-    const start = bar.getBoundingClientRect();
+    const start = scroller.getBoundingClientRect();
     if (rect.left < start.left - 1 || rect.right > start.right + 1) {
-      bar.scrollLeft += rect.left - start.left;
+      scroller.scrollLeft += rect.left - start.left;
       rect = el.getBoundingClientRect();
     }
     const x = rect.left + rect.width / 2;
@@ -890,6 +925,48 @@ async function tapTopbarControl(send, selector) {
   })()`);
   if (!point?.ok) throw new Error(`topbar tap ${selector} hit ${JSON.stringify(point)}`);
   await mouseClick(send, point.x, point.y);
+}
+
+async function panScrollerFrom(send, scrollerSelector, elementId) {
+  const start = await evaluate(send, `(() => {
+    const bar = document.querySelector(${JSON.stringify(scrollerSelector)});
+    const chip = document.querySelector(${JSON.stringify(elementId)});
+    if (!bar || !chip || chip.hidden) return null;
+    bar.scrollLeft = 0;
+    const barBox = bar.getBoundingClientRect();
+    const chipBox = chip.getBoundingClientRect();
+    const x = Math.round(chipBox.left + Math.min(chipBox.width / 2, 22));
+    const y = Math.round(chipBox.top + chipBox.height / 2);
+    if (x >= barBox.left + barBox.width / 2) return { side: 'right', x, mid: barBox.left + barBox.width / 2 };
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || hit.closest(${JSON.stringify(elementId)}) !== chip) return { hit: hit && (hit.id || hit.className), x, y };
+    return { ok: true, x, y, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth };
+  })()`);
+  if (!start?.ok) throw new Error(`pan start ${elementId} ${JSON.stringify(start)}`);
+  if (start.scrollWidth <= start.clientWidth) return 0;
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+  const steps = 8;
+  for (let i = 1; i <= steps; i += 1) {
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: start.x - Math.round((140 * i) / steps),
+      y: start.y,
+      button: 'left',
+      buttons: 1,
+    });
+  }
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: start.x - 140,
+    y: start.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+  const moved = await evaluate(send, `document.querySelector(${JSON.stringify(scrollerSelector)}).scrollLeft`);
+  if (!(moved > 40)) throw new Error(`${elementId} drag scrolled ${moved} from ${JSON.stringify(start)}`);
+  await evaluate(send, `document.querySelector(${JSON.stringify(scrollerSelector)}).scrollLeft = 0`);
+  return moved;
 }
 
 async function driveQueue(send, evidenceDir, meta, baseUrl) {
@@ -2789,6 +2866,23 @@ async function drivePhone(send, evidenceDir, meta, home) {
   await revealMapChrome(send, evidenceDir, 'phone-chrome-hidden');
   const inset = await safeAreaOverride(send, { top: 47, left: 0, bottom: 34, right: 0 });
   await sleep(300);
+  await evaluate(send, `(() => {
+    const toggle = document.getElementById('live-readout-toggle');
+    if (!toggle || getComputedStyle(toggle).display === 'none') return;
+    if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const kp = document.getElementById('kp-widget');
+      if (!kp || kp.hidden || getComputedStyle(kp).display === 'none') return null;
+      const rect = kp.getBoundingClientRect();
+      if (rect.width < 44 || rect.height < 44) return null;
+      return { ok: true };
+    })()`,
+    'phone status readout',
+    8000,
+  );
   const portrait = await evaluate(send, `(() => {
     const box = (selector) => {
       const node = document.querySelector(selector);

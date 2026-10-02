@@ -1,5 +1,6 @@
 import { isTleStale } from '../../../banner';
 import { formatUtcHm } from '../../../countdown';
+import { paintEqualDigits } from '../../../digits';
 import type { Track } from '../../../types';
 import type { Clock } from '../../map-core/clock';
 import type { MapFeature } from '../../map-core/feature';
@@ -155,7 +156,7 @@ function syncTimeSliderControls(nowMs: number, curMin: number): void {
   slider.setAttribute('aria-valuetext', readoutText);
   const readout = document.getElementById('time-slider-readout');
   if (readout) {
-    readout.textContent = readoutText;
+    paintEqualDigits(readout, readoutText);
     readout.classList.toggle('time-slider-scrubbed', scrubbed);
     readout.classList.toggle('time-slider-stale', tleStale);
     readout.title = tleStale
@@ -182,7 +183,7 @@ export function updateTimeStepLabels(): void {
     if (!chip) continue;
     const targetMinutes = id === 'time-now' ? 0 : clampLookahead(curMin + step);
     const targetMs = nowMs + targetMinutes * 60_000;
-    chip.textContent = formatUtcHm(targetMs);
+    paintEqualDigits(chip, formatUtcHm(targetMs));
     const wouldBeNoop = id !== 'time-now' && clampLookahead(curMin + step) === curMin;
     btn.classList.toggle('time-step-noop', wouldBeNoop);
   }
