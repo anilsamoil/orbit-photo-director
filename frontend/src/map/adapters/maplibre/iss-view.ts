@@ -7,6 +7,12 @@ import { TANGENT_PITCH_DEG } from '../../../iss-g1/model';
 import { bucketFor, createComposer, type Composer, type DecodedTile } from '../../../iss-view/compose';
 import { EARTH_VIEW_ROLL_DEG, type ImageryState } from '../../../iss-view/model';
 import { placeScreenLabels } from '../../../iss-view/label-layout';
+import {
+  launchCorridorLines,
+  placeLaunchMarks,
+  siteOnDisk,
+  type LaunchSite,
+} from '../../../iss-view/launches';
 import { placesOnDisk, type PlaceLabel } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
 import { collapseAttribution } from './attribution';
@@ -62,6 +68,9 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   collapseAttribution(frame);
   exposeIssForEndToEnd(map);
   const placeMarkers: { key: string; marker: Marker }[] = [];
+  const launchMarkers: { key: string; marker: Marker }[] = [];
+  const launchEdges: HTMLButtonElement[] = [];
+  const launchState: { sites: readonly LaunchSite[]; aim: IssAim | null } = { sites: [], aim: null };
   const armLabels = (): void => {
     frame.dataset.issPlaceLayers = 'country city water';
   };
@@ -123,14 +132,21 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
         0,
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg, roll: EARTH_VIEW_ROLL_DEG });
+      launchState.aim = aim;
       syncPlaceMarkers(map, placeMarkers, aim);
+      syncLaunchOverlay(map, frame, launchMarkers, launchEdges, launchState, hooks);
       await idle(map);
+    },
+    showLaunches(sites) {
+      launchState.sites = sites;
+      syncLaunchOverlay(map, frame, launchMarkers, launchEdges, launchState, hooks);
     },
     destroy() {
       if (removed.done) return;
       removed.done = true;
       for (const entry of placeMarkers) entry.marker.remove();
       placeMarkers.splice(0, placeMarkers.length);
+      clearLaunchMarks(launchMarkers, launchEdges);
       map.remove();
     },
   };
@@ -203,6 +219,122 @@ function syncPlaceMarkers(map: MapLibreMap, markers: { key: string; marker: Mark
         .addTo(map),
     });
   }
+}
+
+function syncLaunchOverlay(
+  map: MapLibreMap,
+  frame: HTMLElement,
+  markers: { key: string; marker: Marker }[],
+  edges: HTMLButtonElement[],
+  launchState: { sites: readonly LaunchSite[]; aim: IssAim | null },
+  hooks: IssRendererHooks,
+): void {
+  const aim = launchState.aim;
+  const lines = launchCorridorLines(launchState.sites);
+  syncLaunchCorridor(map, lines);
+  frame.dataset.issLaunchCorridor = lines.length > 0 ? 'on' : 'off';
+  if (!aim) return;
+  const width = map.getCanvas().clientWidth;
+  const height = map.getCanvas().clientHeight;
+  const visible = launchState.sites.filter((site) => siteOnDisk(
+    aim.pose.camera.latDeg,
+    aim.pose.camera.lonDeg,
+    aim.pose.altitudeM,
+    site.lat,
+    site.lon,
+  ));
+  const placed = placeLaunchMarks(
+    visible,
+    (lon, lat) => {
+      const projected = map.project([lon, lat]);
+      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return null;
+      return { x: projected.x, y: projected.y };
+    },
+    width,
+    height,
+  );
+  const pinKeys = new Set(placed.pins.map((pin) => pin.eventId));
+  for (let index = markers.length - 1; index >= 0; index -= 1) {
+    const entry = markers[index];
+    if (!entry || pinKeys.has(entry.key)) continue;
+    entry.marker.remove();
+    markers.splice(index, 1);
+  }
+  for (const pin of placed.pins) {
+    const existing = markers.find((item) => item.key === pin.eventId);
+    if (existing) {
+      existing.marker.setLngLat([pin.lon, pin.lat]);
+      continue;
+    }
+    const node = document.createElement('button');
+    node.type = 'button';
+    node.className = 'iss-launch-pin';
+    node.title = pin.siteName;
+    node.setAttribute('aria-label', pin.siteName);
+    node.addEventListener('pointerdown', (event) => event.stopPropagation());
+    node.addEventListener('click', (event) => {
+      event.stopPropagation();
+      hooks.onLaunchLook?.(pin.eventId);
+    });
+    markers.push({
+      key: pin.eventId,
+      marker: new Marker({ element: node, anchor: 'center' }).setLngLat([pin.lon, pin.lat]).addTo(map),
+    });
+  }
+  for (const edge of edges) edge.remove();
+  edges.splice(0, edges.length);
+  for (const arrow of placed.arrows) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.issLaunchEdge = arrow.eventId;
+    button.title = `Look toward ${arrow.siteName}`;
+    button.setAttribute('aria-label', `Look toward ${arrow.siteName}`);
+    button.textContent = '↑';
+    button.style.left = `${arrow.x}px`;
+    button.style.top = `${arrow.y}px`;
+    button.style.setProperty('--iss-launch-aim', `${arrow.deg.toFixed(1)}deg`);
+    button.addEventListener('pointerdown', (event) => event.stopPropagation());
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      hooks.onLaunchLook?.(arrow.eventId);
+    });
+    frame.append(button);
+    edges.push(button);
+  }
+}
+
+function syncLaunchCorridor(map: MapLibreMap, lines: [number, number][][]): void {
+  const data = {
+    type: 'FeatureCollection' as const,
+    features: lines.map((coordinates) => ({
+      type: 'Feature' as const,
+      properties: {},
+      geometry: { type: 'LineString' as const, coordinates },
+    })),
+  };
+  try {
+    const existing = map.getSource('iss-launch-corridor');
+    if (!existing) {
+      map.addSource('iss-launch-corridor', { type: 'geojson', data });
+      map.addLayer({
+        id: 'iss-launch-corridor',
+        type: 'line',
+        source: 'iss-launch-corridor',
+        paint: { 'line-color': '#ffd45c', 'line-width': 3, 'line-opacity': 0.9 },
+      });
+      return;
+    }
+    if ('setData' in existing && typeof existing.setData === 'function') existing.setData(data);
+  } catch {
+    return;
+  }
+}
+
+function clearLaunchMarks(markers: { key: string; marker: Marker }[], edges: HTMLButtonElement[]): void {
+  for (const entry of markers) entry.marker.remove();
+  markers.splice(0, markers.length);
+  for (const edge of edges) edge.remove();
+  edges.splice(0, edges.length);
 }
 
 function measurePlace(host: HTMLElement, place: PlaceLabel): { width: number; height: number } {

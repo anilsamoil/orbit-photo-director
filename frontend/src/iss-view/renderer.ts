@@ -1,4 +1,5 @@
 import type { ScenePose } from '../iss-g1/model';
+import type { LaunchSite } from './launches';
 import type { ImageryState } from './model';
 
 export type IssAim = {
@@ -12,11 +13,13 @@ export type IssAim = {
 export type IssRendererHooks = {
   onImagery: (note: ImageryState) => void;
   onContextLost: () => void;
+  onLaunchLook?: (eventId: string) => void;
 };
 
 export type IssRenderer = {
   ready(): Promise<void>;
   aim(aim: IssAim): Promise<void>;
+  showLaunches?(sites: readonly LaunchSite[]): void;
   resize(widthPx: number, heightPx: number): void;
   destroy(): void;
 };

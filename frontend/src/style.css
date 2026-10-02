@@ -3472,7 +3472,27 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   color: #f4f7fb;
 }
 
-[data-iss-telemetry] {
+[data-iss-controls] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  max-width: 100%;
+}
+
+[data-iss-launches] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+[data-iss-launches][hidden] {
+  display: none;
+}
+
+[data-iss-telemetry],
+[data-iss-launch] {
   min-height: 44px;
   min-width: 44px;
   padding: 0 0.95rem;
@@ -3482,6 +3502,44 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   color: var(--text);
   font: inherit;
   font-weight: 600;
+  cursor: pointer;
+}
+
+[data-iss-launch] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+[data-iss-launch-arrow],
+[data-iss-launch-edge] {
+  display: inline-block;
+  color: #ffd45c;
+  transform: rotate(var(--iss-launch-aim, 0deg));
+}
+
+[data-iss-launch-edge] {
+  position: absolute;
+  z-index: 4;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  line-height: 44px;
+  cursor: pointer;
+}
+
+.iss-launch-pin {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid #0b0d12;
+  background: #ffd45c;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
   cursor: pointer;
 }
 
@@ -3653,6 +3711,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 [data-iss-preset],
 [data-iss-aim-help],
 [data-iss-telemetry],
+[data-iss-launch],
 [data-iss-cupola],
 [data-iss-window],
 [data-iss-actions] button {
@@ -3959,6 +4018,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctr
 [data-iss-preset],
 [data-iss-aim-help],
 [data-iss-telemetry],
+[data-iss-launch],
 [data-iss-cupola] {
   background: var(--surface);
   border-color: var(--control-border);
