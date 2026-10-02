@@ -1580,7 +1580,7 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, letter keys, shift s, keys help (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -2047,8 +2047,10 @@ function issHorizonRestored(lat, lng, fov) {
   })()`;
 }
 
-async function pressKey(send, key) {
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key });
+async function pressKey(send, key, shift = false) {
+  const params = { type: 'keyDown', key, code: key };
+  if (shift) params.modifiers = 8;
+  await send('Input.dispatchKeyEvent', params);
 }
 
 async function proveIssKeyboard(send, evidenceDir) {
@@ -2183,6 +2185,7 @@ async function proveIssKeyboard(send, evidenceDir) {
     'iss keyboard reset',
     10000,
   );
+  await proveIssLetterKeys(send);
   if (!(narrowed.fov < before.fov - 2)) throw new Error('iss keyboard field did not narrow');
   await pressKey(send, '=');
   const presetField = await waitFor(
@@ -2255,7 +2258,185 @@ async function proveIssKeyboard(send, evidenceDir) {
     'iss keyboard horizon',
     10000,
   );
+  await proveIssShiftStraightDown(send, before, presetField);
   await proveIssKeyHelp(send, evidenceDir);
+}
+
+function issAimLookExpression() {
+  return `(() => {
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    if (!raw) return null;
+    let aim;
+    try { aim = JSON.parse(raw); } catch { return null; }
+    const look = aim && aim.look;
+    if (!look || typeof look.rightDeg !== 'number' || typeof look.upDeg !== 'number') return null;
+    return { ok: true, right: look.rightDeg, up: look.upDeg, mode: aim.mode };
+  })()`;
+}
+
+async function aimLook(send, label) {
+  return waitFor(send, issAimLookExpression(), label, 10000);
+}
+
+function expectNear(actual, expected, label) {
+  const tol = Math.max(0.02, Math.abs(expected) * 0.05);
+  if (Math.abs(actual - expected) > tol) throw new Error(`${label}: ${actual} vs ${expected}`);
+}
+
+async function focusIssFrame(send) {
+  await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
+}
+
+async function proveIssLetterKeys(send) {
+  await focusIssFrame(send);
+  await pressKey(send, 'ArrowRight');
+  const arrowRight = await aimLook(send, 'iss arrow right step');
+  if (!(arrowRight.right > 0.05) || Math.abs(arrowRight.up) > 0.02) {
+    throw new Error(`iss arrow right step ${JSON.stringify(arrowRight)}`);
+  }
+  await pressKey(send, 'ArrowLeft');
+  const clearedRight = await aimLook(send, 'iss arrow right cleared');
+  expectNear(clearedRight.right, 0, 'iss arrow right cleared');
+  expectNear(clearedRight.up, 0, 'iss arrow right cleared up');
+
+  await pressKey(send, 'd');
+  const letterRight = await aimLook(send, 'iss d step');
+  expectNear(letterRight.right, arrowRight.right, 'iss d matches arrow right');
+  expectNear(letterRight.up, 0, 'iss d up');
+  await pressKey(send, 'a');
+  const clearedD = await aimLook(send, 'iss d cleared');
+  expectNear(clearedD.right, 0, 'iss d cleared');
+
+  await pressKey(send, 'a');
+  const letterLeft = await aimLook(send, 'iss a step');
+  expectNear(letterLeft.right, -arrowRight.right, 'iss a matches arrow left');
+  expectNear(letterLeft.up, 0, 'iss a up');
+  await pressKey(send, 'd');
+  const clearedA = await aimLook(send, 'iss a cleared');
+  expectNear(clearedA.right, 0, 'iss a cleared');
+
+  await pressKey(send, 'ArrowUp');
+  const arrowUp = await aimLook(send, 'iss arrow up step');
+  if (!(arrowUp.up > 0.05) || Math.abs(arrowUp.right) > 0.02) {
+    throw new Error(`iss arrow up step ${JSON.stringify(arrowUp)}`);
+  }
+  await pressKey(send, 'ArrowDown');
+  const clearedUp = await aimLook(send, 'iss arrow up cleared');
+  expectNear(clearedUp.up, 0, 'iss arrow up cleared');
+  expectNear(clearedUp.right, 0, 'iss arrow up cleared right');
+
+  await pressKey(send, 'w');
+  const letterUp = await aimLook(send, 'iss w step');
+  expectNear(letterUp.up, arrowUp.up, 'iss w matches arrow up');
+  expectNear(letterUp.right, 0, 'iss w right');
+  await pressKey(send, 'ArrowDown');
+  const clearedW = await aimLook(send, 'iss w cleared');
+  expectNear(clearedW.up, 0, 'iss w cleared');
+
+  await pressKey(send, 'ArrowRight', true);
+  const fineArrow = await aimLook(send, 'iss shift arrow right');
+  expectNear(fineArrow.right, arrowRight.right / 4, 'iss shift arrow is a quarter step');
+  expectNear(fineArrow.up, 0, 'iss shift arrow up');
+  await pressKey(send, 'ArrowLeft', true);
+  const clearedFineArrow = await aimLook(send, 'iss shift arrow cleared');
+  expectNear(clearedFineArrow.right, 0, 'iss shift arrow cleared');
+
+  await pressKey(send, 'd', true);
+  const fineD = await aimLook(send, 'iss shift d');
+  expectNear(fineD.right, arrowRight.right / 4, 'iss shift d is a quarter step');
+  await pressKey(send, 'a', true);
+  const clearedFineD = await aimLook(send, 'iss shift d cleared');
+  expectNear(clearedFineD.right, 0, 'iss shift d cleared');
+
+  await pressKey(send, 'a', true);
+  const fineA = await aimLook(send, 'iss shift a');
+  expectNear(fineA.right, -arrowRight.right / 4, 'iss shift a is a quarter step');
+  await pressKey(send, 'd', true);
+  const clearedFineA = await aimLook(send, 'iss shift a cleared');
+  expectNear(clearedFineA.right, 0, 'iss shift a cleared');
+
+  await pressKey(send, 'w', true);
+  const fineW = await aimLook(send, 'iss shift w');
+  expectNear(fineW.up, arrowUp.up / 4, 'iss shift w is a quarter step');
+  await pressKey(send, 'ArrowDown', true);
+  const clearedFineW = await aimLook(send, 'iss shift w cleared');
+  expectNear(clearedFineW.up, 0, 'iss shift w cleared');
+  expectNear(clearedFineW.right, 0, 'iss shift w cleared right');
+
+  await pressKey(send, 'r');
+  await waitFor(
+    send,
+    `(() => {
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (horizon?.getAttribute('aria-pressed') !== 'true') return null;
+      if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
+      return { ok: true };
+    })()`,
+    'iss letter keys reset',
+    10000,
+  );
+}
+
+async function proveIssShiftStraightDown(send, before, presetField) {
+  await focusIssFrame(send);
+  await pressKey(send, 'd');
+  const panned = await aimLook(send, 'iss pan before shift s');
+  if (!(panned.right > 0.05)) throw new Error(`iss pan before shift s ${JSON.stringify(panned)}`);
+  await pressKey(send, 's', true);
+  await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdIss;
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const chip = document.querySelector('[data-iss-window]');
+      const nadir = document.querySelector('[data-iss-preset="nadir"]');
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (!map?.getVerticalFieldOfView || !cupola || !chip) return null;
+      if (nadir?.getAttribute('aria-pressed') !== 'true') return null;
+      if (horizon?.getAttribute('aria-pressed') !== 'false') return null;
+      if (cupola.value !== '') return null;
+      if (!chip.hidden) return null;
+      const fov = map.getVerticalFieldOfView();
+      if (Math.abs(fov - ${presetField.fov}) > 0.5) return null;
+      const raw = sessionStorage.getItem('opd-iss-aim');
+      if (!raw) return null;
+      const aim = JSON.parse(raw);
+      if (aim.mode !== 'nadir' || aim.windowId !== null) return null;
+      if (!aim.look || aim.look.rightDeg !== 0 || aim.look.upDeg !== 0) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss shift s straight down',
+    10000,
+  );
+  await pressKey(send, 'H');
+  await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdIss;
+      const cupola = document.querySelector('[data-iss-cupola]');
+      const chip = document.querySelector('[data-iss-window]');
+      const nadir = document.querySelector('[data-iss-preset="nadir"]');
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (!map?.getCenter || !map.getVerticalFieldOfView || !cupola || !chip) return null;
+      if (horizon?.getAttribute('aria-pressed') !== 'true') return null;
+      if (nadir?.getAttribute('aria-pressed') !== 'false') return null;
+      if (cupola.value !== '') return null;
+      if (!chip.hidden) return null;
+      const fov = map.getVerticalFieldOfView();
+      if (Math.abs(fov - ${presetField.fov}) > 0.5) return null;
+      const raw = sessionStorage.getItem('opd-iss-aim');
+      if (!raw) return null;
+      const aim = JSON.parse(raw);
+      if (aim.mode !== 'horizon' || aim.windowId !== null) return null;
+      if (!aim.look || aim.look.rightDeg !== 0 || aim.look.upDeg !== 0) return null;
+      const center = map.getCenter();
+      const back = Math.abs(center.lat - ${before.lat}) + Math.abs(center.lng - ${before.lng});
+      if (back > 0.35) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss shift s returns horizon',
+    10000,
+  );
 }
 
 async function releaseKey(send, key) {

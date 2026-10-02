@@ -122,7 +122,8 @@ export function playwrightSend(page) {
     }
     if (method === 'Input.dispatchKeyEvent') {
       if (params.type !== 'keyDown' || !params.key) return {};
-      await page.keyboard.press(params.key);
+      const chord = params.modifiers & 8 ? `Shift+${params.key}` : params.key;
+      await page.keyboard.press(chord);
       return {};
     }
     if (method === 'Input.dispatchTouchEvent') {
