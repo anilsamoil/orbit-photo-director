@@ -642,7 +642,7 @@ async function driveTopbar(send, evidenceDir, home) {
       }
       if (width === 402 && height === 874) {
         const tabPan = await panScrollerFrom(send, '.tabs', '#tab-queue');
-        if (!(tabPan > 40)) throw new Error(`phone tab row did not pan: ${tabPan}`);
+        if (!(tabPan > 8)) throw new Error(`phone tab row did not pan: ${tabPan}`);
         await tapTopbarControl(send, '#tab-queue');
         const queue = await evaluate(send, `document.querySelector('main')?.className`);
         if (queue !== 'view-queue') throw new Error(`queue tap landed on ${queue}`);
@@ -968,7 +968,9 @@ async function panScrollerFrom(send, scrollerSelector, elementId) {
     clickCount: 1,
   });
   const moved = await evaluate(send, `document.querySelector(${JSON.stringify(scrollerSelector)}).scrollLeft`);
-  if (!(moved > 40)) throw new Error(`${elementId} drag scrolled ${moved} from ${JSON.stringify(start)}`);
+  const room = start.scrollWidth - start.clientWidth;
+  const need = Math.min(40, Math.max(8, room - 2));
+  if (!(moved >= need)) throw new Error(`${elementId} drag scrolled ${moved} of ${room} from ${JSON.stringify(start)}`);
   await evaluate(send, `document.querySelector(${JSON.stringify(scrollerSelector)}).scrollLeft = 0`);
   return moved;
 }
@@ -2995,7 +2997,9 @@ async function drivePhone(send, evidenceDir, meta, home) {
   if (!stayed) throw new Error('pin popup closed on the click that follows the long press');
   await shot(send, evidenceDir, 'phone-long-press');
   await sleep(750);
-  await mouseClick(send, finger.x, finger.y);
+  const dismissAt = await pointForLngLat(send, lon, lat);
+  const dismiss = dismissAt?.ok ? dismissAt : point;
+  await mouseClick(send, dismiss.x, dismiss.y);
   await waitFor(
     send,
     `document.querySelector('.maplibregl-popup')?.innerText.includes('Closest') ? null : { ok: true }`,

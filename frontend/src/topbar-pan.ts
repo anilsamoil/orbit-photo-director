@@ -10,6 +10,7 @@ export function bindTopbarPan(bar: HTMLElement | null): void {
 
   bar.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
+    if (bar.scrollWidth > bar.clientWidth + 1) event.stopPropagation();
     suppressClick = false;
     pointerId = event.pointerId;
     originX = event.clientX;
