@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { issPositionWithAltSGP4 } from '../src/iss-sgp4';
 import { mountIssScene, type IssScene } from '../src/iss-view';
-import { sceneFrame } from '../src/iss-view/model';
+import { sceneFrame, sensorField } from '../src/iss-view/model';
 import type { IssAim, IssRenderer, IssRendererFactory, IssRendererHooks } from '../src/iss-view/renderer';
 import type { SceneSnapshot } from '../src/iss-view/model';
 import type { Track } from '../src/types';
@@ -210,19 +210,21 @@ describe('ISS scene lifecycle', () => {
     again.update(shot('bad', { tle: undefined }));
     await again.paint();
     expect(again.phase()).toBe('error');
-    expect(host2.textContent).toContain('Orbit unavailable · no element set');
-    expect(host2.textContent).not.toMatch(/\d+\.\d+°/);
+    const failed = host2.querySelector('[data-iss-status]')?.textContent ?? '';
+    expect(failed).toContain('Orbit unavailable · no element set');
+    expect(failed).not.toMatch(/\d+\.\d+°/);
+    expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe(`${sensorField().vertical.toFixed(1)}°`);
     const generation = again.generation();
     again.retry();
     await again.paint();
     expect(again.generation()).toBeGreaterThan(generation);
     expect(again.phase()).toBe('error');
-    expect(host2.textContent).toContain('Orbit unavailable · no element set');
+    expect(host2.querySelector('[data-iss-status]')?.textContent).toContain('Orbit unavailable · no element set');
     again.update(shot('recovered'));
     await again.paint();
     expect(again.phase()).toBe('running');
-    expect(host2.textContent).toContain('ISS perspective');
-    expect(host2.textContent).toMatch(/\d+\.\d+°/);
+    expect(host2.querySelector('[data-iss-status]')?.textContent).toContain('ISS perspective');
+    expect(host2.querySelector('[data-iss-status]')?.textContent).toMatch(/\d+\.\d+°/);
   });
 });
 
@@ -573,7 +575,7 @@ describe('ISS chrome starts out of the way', () => {
     scene.dispose();
   });
 
-  it('shows the optical field while wheeling or pinching and clears it when idle', () => {
+  it('shows the optical field on the frame and updates it while wheeling or pinching', () => {
     vi.useFakeTimers();
     const host = document.createElement('div');
     const scene = mountIssScene(host, {
@@ -588,21 +590,20 @@ describe('ISS chrome starts out of the way', () => {
       }),
     });
     try {
+      const lens = `${sensorField().vertical.toFixed(1)}°`;
       const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
       const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
-      expect(readout.textContent).toBe('');
-      expect(readout.dataset.issFovState).toBe('idle');
+      expect(readout.textContent).toBe(lens);
+      expect(readout.dataset.issFovState).toBe('live');
       frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
       expect(readout.textContent).toBe('38.4°');
       expect(readout.dataset.issFovState).toBe('live');
-      vi.advanceTimersByTime(1000);
-      expect(readout.dataset.issFovState).toBe('idle');
+      vi.advanceTimersByTime(1500);
       expect(readout.textContent).toBe('38.4°');
-      vi.advanceTimersByTime(220);
-      expect(readout.textContent).toBe('');
-      expect(readout.dataset.issFovState).toBe('idle');
+      expect(readout.dataset.issFovState).toBe('live');
 
       (host.querySelector('[data-iss-reset]') as HTMLButtonElement).click();
+      expect(readout.textContent).toBe(lens);
       if (typeof frame.setPointerCapture !== 'function') frame.setPointerCapture = () => {};
       frame.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 80, clientY: 80, bubbles: true }));
       frame.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, pointerType: 'touch', clientX: 140, clientY: 80, bubbles: true }));
@@ -652,6 +653,7 @@ describe('ISS chrome starts out of the way', () => {
     await scene.paint();
     const narrowed = lastAim(aims).verticalFovDeg;
     expect(narrowed).toBeLessThan(lens - 1);
+    expect(host.querySelector('[data-iss-fov]')?.textContent).toBe(`${narrowed.toFixed(1)}°`);
     expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(narrowed, 5);
     const stored = JSON.parse(sessionStorage.getItem('opd-iss-aim') ?? 'null') as { opticalFovDeg: number } | null;
     expect(stored?.opticalFovDeg).toBeCloseTo(narrowed, 5);
@@ -689,6 +691,7 @@ describe('ISS chrome starts out of the way', () => {
     cupola.dispatchEvent(new Event('change'));
     await scene2.paint();
     expect(lastAim(aims2).verticalFovDeg).toBeCloseTo(lens, 5);
+    expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe(`${lens.toFixed(1)}°`);
     scene2.dispose();
     sessionStorage.clear();
     vi.resetModules();

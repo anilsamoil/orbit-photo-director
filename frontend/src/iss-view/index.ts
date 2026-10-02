@@ -76,7 +76,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let imagery: ImageryState = { kind: 'ready' };
   let held: IssScenePhase = 'running';
   let timer = 0;
-  let fovHold = 0;
   let paintSerial = 0;
   const lensFovDeg = sensorField().vertical;
   let opticalFovDeg = session.opticalFovDeg;
@@ -137,8 +136,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   hint.setAttribute('aria-hidden', 'true');
   const fovReadout = document.createElement('p');
   fovReadout.dataset.issFov = '';
-  fovReadout.dataset.issFovState = 'idle';
-  fovReadout.setAttribute('aria-hidden', 'true');
+  paintFov(opticalFovDeg);
   frame.append(fovReadout, hint);
   const stage = document.createElement('div');
   stage.dataset.issStage = '';
@@ -313,7 +311,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       paintSerial += 1;
       setPhase('dormant');
       stopTimer();
-      stopFovHold();
       document.removeEventListener('visibilitychange', onVisibility);
       aimKeys.dispose();
       renderer?.destroy();
@@ -430,6 +427,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     priorTap = null;
     if (windowId !== null) opticalFovDeg = lensFovDeg;
     session.opticalFovDeg = opticalFovDeg;
+    paintFov(opticalFovDeg);
     syncPreset();
     syncCupola();
     persistAim();
@@ -446,6 +444,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     priorTap = null;
     opticalFovDeg = lensFovDeg;
     session.opticalFovDeg = lensFovDeg;
+    paintFov(opticalFovDeg);
     syncPreset();
     syncCupola();
     clearStoredAim();
@@ -524,7 +523,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function setOpticalFov(value: number): void {
     const next = clampFov(value);
-    showOpticalFov(next);
+    paintFov(next);
     if (next === opticalFovDeg) return;
     opticalFovDeg = next;
     session.opticalFovDeg = next;
@@ -533,22 +532,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (phase === 'running' && rendererReady) void paint();
   }
 
-  function showOpticalFov(degrees: number): void {
-    fovReadout.textContent = `${degrees.toFixed(1)}°`;
+  function paintFov(degrees: number): void {
+    fovReadout.textContent = formatOpticalFov(degrees);
     fovReadout.dataset.issFovState = 'live';
-    window.clearTimeout(fovHold);
-    fovHold = window.setTimeout(() => {
-      fovReadout.dataset.issFovState = 'idle';
-      fovHold = window.setTimeout(() => {
-        fovReadout.textContent = '';
-        fovHold = 0;
-      }, 220);
-    }, 1000);
-  }
-
-  function stopFovHold(): void {
-    window.clearTimeout(fovHold);
-    fovHold = 0;
   }
 
   function clampFov(value: number): number {
@@ -712,6 +698,10 @@ function explainBoot(error: unknown): string {
   if (/fetch|import|worker|network|offline/i.test(message)) return 'ISS view needs one online load';
   if (message.startsWith('Orbit unavailable')) return message;
   return message;
+}
+
+export function formatOpticalFov(degrees: number): string {
+  return `${degrees.toFixed(1)}°`;
 }
 
 export function issPresetSession(): IssSession {
