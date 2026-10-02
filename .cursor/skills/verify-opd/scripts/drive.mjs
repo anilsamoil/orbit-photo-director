@@ -1580,7 +1580,7 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -2056,6 +2056,13 @@ function issHorizonRestored(lat, lng, fov) {
 
 async function pressKey(send, key) {
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key });
+}
+
+async function pressShifted(send, key) {
+  const code = /^[a-zA-Z]$/.test(key) ? `Key${key.toUpperCase()}` : key;
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers: 8 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers: 8 });
 }
 
 async function proveIssKeyboard(send, evidenceDir) {
@@ -2271,6 +2278,101 @@ async function proveIssKeyboard(send, evidenceDir) {
     10000,
   );
   await proveIssKeyHelp(send, evidenceDir);
+  await proveIssLetterPan(send, evidenceDir);
+}
+
+async function proveIssLetterPan(send, evidenceDir) {
+  await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
+  const origin = await readIssLook(send);
+  if (!origin || Math.abs(origin.right) > 0.05 || Math.abs(origin.up) > 0.05) {
+    throw new Error(`iss letter pan origin missing ${JSON.stringify(origin)}`);
+  }
+  await pressKey(send, 'd');
+  const coarseRight = await waitFor(send, issLookShifted(origin, 'right', 0.4), 'iss letter pan right', 10000);
+  await shot(send, evidenceDir, 'iss-letter-pan');
+  await pressKey(send, 'a');
+  await waitFor(send, issLookNear(origin, 0.08), 'iss letter pan left', 10000);
+  await pressKey(send, 'w');
+  const coarseUp = await waitFor(send, issLookShifted(origin, 'up', 0.4), 'iss letter pan up', 10000);
+  await pressKey(send, 'ArrowDown');
+  await waitFor(send, issLookNear(origin, 0.08), 'iss letter pan down stays on the arrow', 10000);
+  await pressShifted(send, 'd');
+  await waitFor(send, issLookQuarter(origin, 'right', coarseRight.right), 'iss fine letter pan right', 10000);
+  await pressShifted(send, 'a');
+  await waitFor(send, issLookNear(origin, 0.08), 'iss fine letter pan left', 10000);
+  await pressShifted(send, 'ArrowRight');
+  await waitFor(send, issLookQuarter(origin, 'right', coarseRight.right), 'iss fine arrow pan right', 10000);
+  await pressShifted(send, 'ArrowLeft');
+  await waitFor(send, issLookNear(origin, 0.08), 'iss fine arrow pan left', 10000);
+  await pressShifted(send, 'w');
+  await waitFor(send, issLookQuarter(origin, 'up', coarseUp.up), 'iss fine letter pan up', 10000);
+  await pressShifted(send, 'ArrowDown');
+  await waitFor(send, issLookNear(origin, 0.08), 'iss fine arrow pan down', 10000);
+}
+
+async function readIssLook(send) {
+  return evaluate(send, `(() => {
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    const map = window.__opdIss;
+    if (!raw || !map?.getVerticalFieldOfView || !map.getCenter) return null;
+    const aim = JSON.parse(raw);
+    if (!aim.look || typeof aim.look.rightDeg !== 'number' || typeof aim.look.upDeg !== 'number') return null;
+    const center = map.getCenter();
+    return { right: aim.look.rightDeg, up: aim.look.upDeg, fov: map.getVerticalFieldOfView(), lat: center.lat, lng: center.lng };
+  })()`);
+}
+
+function issLookShifted(origin, axis, minStep) {
+  const field = axis === 'right' ? 'rightDeg' : 'upDeg';
+  const other = axis === 'right' ? 'upDeg' : 'rightDeg';
+  return `(() => {
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    const map = window.__opdIss;
+    if (!raw || !map?.getVerticalFieldOfView) return null;
+    const aim = JSON.parse(raw);
+    if (!aim.look) return null;
+    const step = aim.look.${field};
+    if (!(step > ${minStep})) return null;
+    if (Math.abs(aim.look.${other}) > 0.08) return null;
+    if (Math.abs(map.getVerticalFieldOfView() - ${origin.fov}) > 0.5) return null;
+    if (document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed') !== 'true') return null;
+    return { ok: true, right: aim.look.rightDeg, up: aim.look.upDeg, fov: map.getVerticalFieldOfView() };
+  })()`;
+}
+
+function issLookQuarter(origin, axis, coarse) {
+  const field = axis === 'right' ? 'rightDeg' : 'upDeg';
+  const other = axis === 'right' ? 'upDeg' : 'rightDeg';
+  const low = coarse * 0.18;
+  const high = coarse * 0.32;
+  return `(() => {
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    const map = window.__opdIss;
+    if (!raw || !map?.getVerticalFieldOfView) return null;
+    const aim = JSON.parse(raw);
+    if (!aim.look) return null;
+    const step = aim.look.${field};
+    if (!(step > ${low}) || !(step < ${high})) return null;
+    if (Math.abs(aim.look.${other}) > 0.08) return null;
+    if (Math.abs(map.getVerticalFieldOfView() - ${origin.fov}) > 0.5) return null;
+    if (document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed') !== 'true') return null;
+    return { ok: true, right: aim.look.rightDeg, up: aim.look.upDeg, fov: map.getVerticalFieldOfView() };
+  })()`;
+}
+
+function issLookNear(origin, tolerance) {
+  return `(() => {
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    const map = window.__opdIss;
+    if (!raw || !map?.getVerticalFieldOfView) return null;
+    const aim = JSON.parse(raw);
+    if (!aim.look) return null;
+    if (Math.abs(aim.look.rightDeg) > ${tolerance}) return null;
+    if (Math.abs(aim.look.upDeg) > ${tolerance}) return null;
+    if (Math.abs(map.getVerticalFieldOfView() - ${origin.fov}) > 0.5) return null;
+    if (document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed') !== 'true') return null;
+    return { ok: true, right: aim.look.rightDeg, up: aim.look.upDeg, fov: map.getVerticalFieldOfView() };
+  })()`;
 }
 
 async function releaseKey(send, key) {
