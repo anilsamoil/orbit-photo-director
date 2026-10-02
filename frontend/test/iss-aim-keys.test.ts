@@ -15,13 +15,16 @@ describe('ISS aim key table', () => {
     expect(AIM_KEYS.Escape).toEqual(AIM_KEYS.r);
     expect(AIM_KEYS['7']).toEqual({ kind: 'window', id: 7 });
     expect(AIM_KEYS.h).toEqual({ kind: 'preset', mode: 'horizon' });
-    expect(AIM_KEYS.s).toEqual({ kind: 'preset', mode: 'nadir' });
-    expect(AIM_KEYS.S).toEqual(AIM_KEYS.s);
-    expect(AIM_KEYS['Shift+s']).toBeUndefined();
-    expect(AIM_KEYS['Shift+S']).toBeUndefined();
+    expect(AIM_KEYS.n).toEqual({ kind: 'preset', mode: 'nadir' });
+    expect(AIM_KEYS.N).toEqual(AIM_KEYS.n);
+    expect(AIM_KEYS.s).toEqual(AIM_KEYS.ArrowDown);
+    expect(AIM_KEYS.S).toEqual(AIM_KEYS.ArrowDown);
+    expect(AIM_KEYS['Shift+s']).toEqual(AIM_KEYS['Shift+ArrowDown']);
+    expect(AIM_KEYS['Shift+S']).toEqual(AIM_KEYS['Shift+ArrowDown']);
     const aliases: ReadonlyArray<readonly [string, string]> = [
       ['w', 'ArrowUp'],
       ['a', 'ArrowLeft'],
+      ['s', 'ArrowDown'],
       ['d', 'ArrowRight'],
     ];
     for (const [letter, arrow] of aliases) {
@@ -32,19 +35,19 @@ describe('ISS aim key table', () => {
     }
     expect(aimHelpRows().map((row) => [row.label, row.effect])).toEqual([
       ['Arrows', 'Pan'],
-      ['W/A/D', 'Pan'],
+      ['W/A/S/D', 'Pan'],
       ['Shift+arrows', 'Fine pan'],
-      ['Shift+W/A/D', 'Fine pan'],
+      ['Shift+W/A/S/D', 'Fine pan'],
       ['+ / =', 'Narrow FOV'],
       ['-', 'Widen'],
       ['r / Esc', 'Reset'],
       ['1–7', 'Cupola'],
       ['h', 'Horizon'],
-      ['s / S', 'Straight down'],
+      ['n', 'Straight down'],
     ]);
     const straight = aimHelpRows().find((row) => row.effect === 'Straight down');
-    expect(straight?.keys).toEqual(['s', 'S']);
-    expect(aimHelpRows().find((row) => row.label === 'W/A/D')?.keys).toEqual(['w', 'W', 'a', 'A', 'd', 'D']);
+    expect(straight?.keys).toEqual(['n', 'N']);
+    expect(aimHelpRows().find((row) => row.label === 'W/A/S/D')?.keys).toEqual(['w', 'W', 'a', 'A', 's', 'S', 'd', 'D']);
     expect(narrow?.kind).toBe('fov');
     expect(widen?.kind).toBe('fov');
     if (narrow?.kind !== 'fov' || widen?.kind !== 'fov') return;

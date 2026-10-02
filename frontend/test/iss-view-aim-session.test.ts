@@ -69,8 +69,81 @@ async function paint(scene: IssScene): Promise<void> {
   await scene.paint();
 }
 
-beforeEach(() => {
+function issParam(): string | null {
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  return new URLSearchParams(hash).get('iss');
+}
+
+function setIssParam(json: string | null): void {
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  const params = new URLSearchParams(hash);
+  if (json === null) params.delete('iss');
+  else params.set('iss', json);
+  const nextHash = params.toString();
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ''}`);
+}
+
+function forgetAimPlaces(): void {
   sessionStorage.clear();
+  localStorage.removeItem(AIM_KEY);
+  setIssParam(null);
+}
+
+function aimText(aim: StoredAim): string {
+  return JSON.stringify({
+    mode: aim.mode,
+    azimuthDeg: aim.azimuthDeg,
+    windowId: aim.windowId,
+    look: { rightDeg: aim.look.rightDeg, upDeg: aim.look.upDeg },
+    opticalFovDeg: aim.opticalFovDeg,
+  });
+}
+
+function press(target: EventTarget, name: string): void {
+  target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
+}
+
+const LINK_AIM: StoredAim = {
+  mode: 'horizon',
+  azimuthDeg: 30,
+  windowId: 3,
+  look: { rightDeg: -1.25, upDeg: 0.5 },
+  opticalFovDeg: 60,
+};
+
+const TAB_AIM: StoredAim = {
+  mode: 'horizon',
+  azimuthDeg: -30,
+  windowId: 1,
+  look: { rightDeg: 2, upDeg: 0 },
+  opticalFovDeg: 40,
+};
+
+function expectSession(session: StoredAim, aim: StoredAim): void {
+  expect(session.mode).toBe(aim.mode);
+  expect(session.azimuthDeg).toBe(aim.azimuthDeg);
+  expect(session.windowId).toBe(aim.windowId);
+  expect(session.look.rightDeg).toBe(aim.look.rightDeg);
+  expect(session.look.upDeg).toBe(aim.look.upDeg);
+  expect(session.opticalFovDeg).toBe(aim.opticalFovDeg);
+}
+
+async function mountStored(): Promise<{ view: typeof import('../src/iss-view'); scene: IssScene; host: HTMLElement; aims: IssAim[] }> {
+  const view = await import('../src/iss-view');
+  const host = document.createElement('div');
+  document.body.append(host);
+  const aims: IssAim[] = [];
+  const scene = view.mountIssScene(host, {
+    nowMs: () => now,
+    drive: 'manual',
+    createRenderer: renderer(aims),
+  });
+  await paint(scene);
+  return { view, scene, host, aims };
+}
+
+beforeEach(() => {
+  forgetAimPlaces();
   vi.resetModules();
 });
 
@@ -265,5 +338,143 @@ describe('ISS aim session storage', () => {
     expect(lastAim(aims).verticalFovDeg).toBeCloseTo(sensorField().vertical, 5);
     expect(sessionStorage.getItem(AIM_KEY)).toBeNull();
     scene.dispose();
+  });
+});
+
+describe('ISS aim lives in the tab, the link, and the device', () => {
+  it('writes both shelves at once and the hash after 1000ms', async () => {
+    const view = await import('../src/iss-view');
+    const host = document.createElement('div');
+    document.body.append(host);
+    const scene = view.mountIssScene(host, {
+      nowMs: () => now,
+      drive: 'manual',
+      createRenderer: renderer([]),
+    });
+    await paint(scene);
+    const frame = host.querySelector('[data-iss-frame]');
+    if (!(frame instanceof HTMLElement)) throw new Error('missing frame');
+    frame.focus();
+    vi.useFakeTimers();
+    try {
+      press(frame, 'ArrowRight');
+      const tab = sessionStorage.getItem(AIM_KEY);
+      const device = localStorage.getItem(AIM_KEY);
+      expect(tab).toBe(device);
+      expect(tab).not.toBeNull();
+      const parsed = JSON.parse(tab ?? '') as StoredAim;
+      expect(parsed.mode).toBe('horizon');
+      expect(parsed.look.rightDeg).toBeGreaterThan(0);
+      expect(parsed.look.upDeg).toBe(0);
+      expect(issParam()).toBeNull();
+      vi.advanceTimersByTime(1000);
+      expect(issParam()).toBe(tab);
+    } finally {
+      scene.dispose();
+      vi.useRealTimers();
+      host.remove();
+    }
+  });
+
+  it('reset clears both shelves and the hash, and a pending link stays gone', async () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const view = await import('../src/iss-view');
+    const scene = view.mountIssScene(host, {
+      nowMs: () => now,
+      drive: 'manual',
+      createRenderer: renderer([]),
+    });
+    await paint(scene);
+    const frame = host.querySelector('[data-iss-frame]');
+    if (!(frame instanceof HTMLElement)) throw new Error('missing frame');
+    frame.focus();
+    press(frame, 'ArrowRight');
+    expect(sessionStorage.getItem(AIM_KEY)).not.toBeNull();
+    expect(localStorage.getItem(AIM_KEY)).toBe(sessionStorage.getItem(AIM_KEY));
+    expect(issParam()).toBeNull();
+    press(frame, 'r');
+    expect(sessionStorage.getItem(AIM_KEY)).toBeNull();
+    expect(localStorage.getItem(AIM_KEY)).toBeNull();
+    expect(issParam()).toBeNull();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1200);
+    });
+    expect(sessionStorage.getItem(AIM_KEY)).toBeNull();
+    expect(localStorage.getItem(AIM_KEY)).toBeNull();
+    expect(issParam()).toBeNull();
+    scene.dispose();
+    host.remove();
+  });
+
+  it('restores a share link when the tab and the device have no aim', async () => {
+    sessionStorage.removeItem(AIM_KEY);
+    localStorage.removeItem(AIM_KEY);
+    setIssParam(aimText(LINK_AIM));
+    vi.resetModules();
+    const { view, scene, host, aims } = await mountStored();
+    expectSession(view.issPresetSession(), LINK_AIM);
+    expect(scene.mode()).toBe('horizon');
+    expect((host.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('3');
+    expect(host.querySelector('[data-iss-window]')?.textContent).toBe('W3');
+    expect(host.querySelector('[data-iss-fov]')?.textContent).toBe('60.0°');
+    const aimed = lastAim(aims);
+    const expected = sceneFrame(track(), now, 'horizon', 0, {
+      azimuthDeg: 30,
+      offset: { rightDeg: -1.25, upDeg: 0.5 },
+    });
+    expect(expected.ok).toBe(true);
+    if (expected.ok) {
+      expect(aimed.pose.targetLatDeg).toBeCloseTo(expected.pose.targetLatDeg, 3);
+      expect(aimed.pose.targetLonDeg).toBeCloseTo(expected.pose.targetLonDeg, 3);
+    }
+    expect(aimed.verticalFovDeg).toBe(60);
+    scene.dispose();
+    host.remove();
+  });
+
+  it('restores localStorage when the tab and the hash are empty', async () => {
+    sessionStorage.removeItem(AIM_KEY);
+    localStorage.setItem(AIM_KEY, aimText(LINK_AIM));
+    setIssParam(null);
+    vi.resetModules();
+    const { view, scene, host, aims } = await mountStored();
+    expectSession(view.issPresetSession(), LINK_AIM);
+    expect(scene.mode()).toBe('horizon');
+    expect((host.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('3');
+    expect(host.querySelector('[data-iss-fov]')?.textContent).toBe('60.0°');
+    expect(lastAim(aims).verticalFovDeg).toBe(60);
+    scene.dispose();
+    host.remove();
+  });
+
+  it('prefers sessionStorage over the hash', async () => {
+    sessionStorage.setItem(AIM_KEY, aimText(TAB_AIM));
+    localStorage.removeItem(AIM_KEY);
+    setIssParam(aimText(LINK_AIM));
+    vi.resetModules();
+    const { view, scene, host } = await mountStored();
+    expectSession(view.issPresetSession(), TAB_AIM);
+    expect(scene.mode()).toBe('horizon');
+    expect((host.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('1');
+    expect(host.querySelector('[data-iss-window]')?.textContent).toBe('W1');
+    expect(host.querySelector('[data-iss-fov]')?.textContent).toBe('40.0°');
+    scene.dispose();
+    host.remove();
+  });
+
+  it('prefers a share link over localStorage when the tab is empty', async () => {
+    sessionStorage.removeItem(AIM_KEY);
+    localStorage.setItem(AIM_KEY, aimText(TAB_AIM));
+    setIssParam(aimText(LINK_AIM));
+    vi.resetModules();
+    const { view, scene, host } = await mountStored();
+    expectSession(view.issPresetSession(), LINK_AIM);
+    expect(scene.mode()).toBe('horizon');
+    expect((host.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('3');
+    expect(host.querySelector('[data-iss-window]')?.textContent).toBe('W3');
+    expect(host.querySelector('[data-iss-fov]')?.textContent).toBe('60.0°');
+    scene.dispose();
+    host.remove();
   });
 });

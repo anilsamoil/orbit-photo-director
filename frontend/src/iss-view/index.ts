@@ -30,8 +30,19 @@ type IssSession = {
 };
 
 const AIM_STORAGE_KEY = 'opd-iss-aim';
+const AIM_LINK_PARAM = 'iss';
+const AIM_LINK_QUIET_MS = 1000;
 
-const sessionPreset: IssSession = readStoredAim() ?? blankAim();
+type StoredAim = {
+  read(): IssSession | null;
+  save(session: IssSession): void;
+  clear(): void;
+  flush(): void;
+};
+
+const storedAim: StoredAim = createStoredAim();
+
+const sessionPreset: IssSession = storedAim.read() ?? blankAim();
 
 export type IssScenePhase = 'dormant' | 'loading' | 'running' | 'error' | 'suspended';
 
@@ -314,6 +325,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       aimKeys.dispose();
+      storedAim.flush();
       renderer?.destroy();
       renderer = null;
       rendererReady = false;
@@ -448,13 +460,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     paintFov(opticalFovDeg);
     syncPreset();
     syncCupola();
-    clearStoredAim();
+    storedAim.clear();
     if (phase === 'running' && rendererReady) void paint();
   }
 
   function persistAim(): void {
     if (session !== sessionPreset) return;
-    writeStoredAim(session);
+    storedAim.save(session);
   }
 
   function fail(reason: string): void {
@@ -728,13 +740,104 @@ function blankAim(): IssSession {
   };
 }
 
-function readStoredAim(): IssSession | null {
+type AimShelf = 'sessionStorage' | 'localStorage';
+
+function createStoredAim(): StoredAim {
+  let pending: string | null = null;
+  let timer = 0;
+
+  function flush(): void {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (pending === null) return;
+    const json = pending;
+    pending = null;
+    writeLink(json);
+  }
+
+  return {
+    read(): IssSession | null {
+      return parseAimJson(readShelf('sessionStorage'))
+        ?? parseAimJson(readLink())
+        ?? parseAimJson(readShelf('localStorage'));
+    },
+    save(session: IssSession): void {
+      const json = aimJson(session);
+      writeShelf('sessionStorage', json);
+      writeShelf('localStorage', json);
+      pending = json;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(flush, AIM_LINK_QUIET_MS);
+    },
+    clear(): void {
+      writeShelf('sessionStorage', null);
+      writeShelf('localStorage', null);
+      pending = null;
+      window.clearTimeout(timer);
+      timer = 0;
+      writeLink(null);
+    },
+    flush,
+  };
+}
+
+function aimJson(session: IssSession): string {
+  return JSON.stringify({
+    mode: session.mode,
+    azimuthDeg: session.azimuthDeg,
+    windowId: session.windowId,
+    look: { rightDeg: session.look.rightDeg, upDeg: session.look.upDeg },
+    opticalFovDeg: session.opticalFovDeg,
+  });
+}
+
+function parseAimJson(text: string | null): IssSession | null {
+  if (!text) return null;
   try {
-    const raw = sessionStorage.getItem(AIM_STORAGE_KEY);
-    if (!raw) return null;
-    return parseStoredAim(JSON.parse(raw));
+    return parseStoredAim(JSON.parse(text));
   } catch {
     return null;
+  }
+}
+
+function readShelf(shelf: AimShelf): string | null {
+  try {
+    return window[shelf].getItem(AIM_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeShelf(shelf: AimShelf, json: string | null): void {
+  try {
+    const storage = window[shelf];
+    if (json === null) storage.removeItem(AIM_STORAGE_KEY);
+    else storage.setItem(AIM_STORAGE_KEY, json);
+  } catch {
+    return;
+  }
+}
+
+function readLink(): string | null {
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  return new URLSearchParams(hash).get(AIM_LINK_PARAM);
+}
+
+function writeLink(json: string | null): void {
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  const params = new URLSearchParams(hash);
+  const current = params.has(AIM_LINK_PARAM) ? params.get(AIM_LINK_PARAM) : null;
+  if (current === json) return;
+  if (json === null) params.delete(AIM_LINK_PARAM);
+  else params.set(AIM_LINK_PARAM, json);
+  const nextHash = params.toString();
+  const next = `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ''}`;
+  try {
+    window.history.replaceState(window.history.state, '', next);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'SecurityError') return;
+    if (error instanceof Error && error.name === 'SecurityError') return;
+    throw error;
   }
 }
 
@@ -773,25 +876,4 @@ function storedWindowId(value: unknown): number | null | undefined {
   return undefined;
 }
 
-function writeStoredAim(session: IssSession): void {
-  try {
-    sessionStorage.setItem(AIM_STORAGE_KEY, JSON.stringify({
-      mode: session.mode,
-      azimuthDeg: session.azimuthDeg,
-      windowId: session.windowId,
-      look: { rightDeg: session.look.rightDeg, upDeg: session.look.upDeg },
-      opticalFovDeg: session.opticalFovDeg,
-    }));
-  } catch {
-    /* storage disabled */
-  }
-}
-
-function clearStoredAim(): void {
-  try {
-    sessionStorage.removeItem(AIM_STORAGE_KEY);
-  } catch {
-    /* storage disabled */
-  }
-}
 

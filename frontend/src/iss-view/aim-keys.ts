@@ -29,6 +29,7 @@ const AIM_CHORDS: readonly AimChord[] = [
   { keys: ['ArrowDown'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FRACTION }, row: 'pan' },
   { keys: ['w', 'W'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FRACTION }, row: 'letters' },
   { keys: ['a', 'A'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FRACTION }, row: 'letters' },
+  { keys: ['s', 'S'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FRACTION }, row: 'letters' },
   { keys: ['d', 'D'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FRACTION }, row: 'letters' },
   { keys: ['Shift+ArrowLeft'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
   { keys: ['Shift+ArrowRight'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
@@ -36,6 +37,7 @@ const AIM_CHORDS: readonly AimChord[] = [
   { keys: ['Shift+ArrowDown'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine' },
   { keys: ['Shift+w', 'Shift+W'], action: { kind: 'pan', right: 0, up: 1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine-letters' },
   { keys: ['Shift+a', 'Shift+A'], action: { kind: 'pan', right: -1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine-letters' },
+  { keys: ['Shift+s', 'Shift+S'], action: { kind: 'pan', right: 0, up: -1, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine-letters' },
   { keys: ['Shift+d', 'Shift+D'], action: { kind: 'pan', right: 1, up: 0, fraction: AIM_KEY_FINE_FRACTION }, row: 'fine-letters' },
   { keys: ['+', '='], action: { kind: 'fov', factor: AIM_NARROW }, row: 'narrow' },
   { keys: ['-', '_'], action: { kind: 'fov', factor: AIM_WIDEN }, row: 'widen' },
@@ -46,7 +48,7 @@ const AIM_CHORDS: readonly AimChord[] = [
     row: 'cupola',
   })),
   { keys: ['h', 'H'], action: { kind: 'preset', mode: 'horizon' }, row: 'horizon' },
-  { keys: ['s', 'S'], action: { kind: 'preset', mode: 'nadir' }, row: 'nadir' },
+  { keys: ['n', 'N'], action: { kind: 'preset', mode: 'nadir' }, row: 'nadir' },
 ];
 
 const EFFECT: Record<AimRow, string> = {
@@ -64,8 +66,9 @@ const EFFECT: Record<AimRow, string> = {
 
 const ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
 const SHIFT_ARROWS = ARROWS.map((arrow) => `Shift+${arrow}`);
-const LETTERS = ['w', 'a', 'd'];
+const LETTERS = ['w', 'a', 's', 'd'];
 const SHIFT_LETTERS = LETTERS.map((letter) => `Shift+${letter}`);
+const LETTERS_LABEL = LETTERS.join('/').toUpperCase();
 
 export const AIM_KEYS: Readonly<Record<string, AimAction>> = indexAimKeys(AIM_CHORDS);
 
@@ -231,10 +234,9 @@ export function bindAimKeys(options: {
 function labelFor(row: AimRow, keys: readonly string[]): string {
   const shown = keys.filter((key) => !keys.some((other) => shiftedAlias(key, other)));
   if (row === 'pan' && sameKeys(shown, ARROWS)) return 'Arrows';
-  if (row === 'letters' && sameKeys(shown, LETTERS)) return 'W/A/D';
+  if (row === 'letters' && sameKeys(shown, LETTERS)) return LETTERS_LABEL;
   if (row === 'fine' && sameKeys(shown, SHIFT_ARROWS)) return 'Shift+arrows';
-  if (row === 'fine-letters' && sameKeys(shown, SHIFT_LETTERS)) return 'Shift+W/A/D';
-  if (row === 'nadir' && keys.includes('s') && keys.includes('S') && sameKeys(shown, ['s'])) return 's / S';
+  if (row === 'fine-letters' && sameKeys(shown, SHIFT_LETTERS)) return `Shift+${LETTERS_LABEL}`;
   if (row === 'cupola') {
     const parsed = shown.map((key) => Number.parseInt(key, 10));
     if (parsed.every((id) => Number.isInteger(id))) {
