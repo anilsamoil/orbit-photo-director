@@ -863,7 +863,11 @@ function topbarReachExpression() {
       .map((sel) => document.querySelector(sel))
       .filter((el) => el && shown(el));
     const tabsScroll = getComputedStyle(tabs).overflowX === 'auto' || getComputedStyle(tabs).overflowX === 'scroll';
-    const scrollerFor = (el) => (tabs.contains(el) && tabsScroll ? tabs : bar);
+    const scrollerFor = (el) => {
+      if (tabs.contains(el) && tabsScroll) return tabs;
+      if (narrow && readout.contains(el)) return readout;
+      return bar;
+    };
     const misses = [];
     for (const el of targets) {
       const scroller = scrollerFor(el);

@@ -4082,7 +4082,7 @@ summary:focus-visible {
     flex-wrap: wrap;
     align-content: flex-start;
     align-items: center;
-    overflow: hidden;
+    overflow: visible;
     gap: 0 8px;
     height: var(--topbar-height);
     padding-left: calc(8px + env(safe-area-inset-left));
