@@ -178,6 +178,12 @@ function startProxy(home) {
       res.end(body);
       return;
     }
+    if (path === '/v/verify/track.json' && cookieValue(req, 'opd-verify-tle') === 'stale') {
+      const track = JSON.parse(readFileSync(resolve(fixtureDir, 'track.json'), 'utf8'));
+      track.tle_age_hours = 72;
+      json(res, 200, track);
+      return;
+    }
     const artifact = {
       '/v/verify/passes.json': 'passes.json',
       '/v/verify/top5.json': 'top5.json',
