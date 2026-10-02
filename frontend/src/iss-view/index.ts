@@ -16,6 +16,8 @@ import {
 } from './model';
 import type { LookOffset } from '../iss-g1/model';
 import { horizontalFovDeg, lookRoom, nudgeLook, settleLook } from './look';
+import { launchSites, lookToward, type LaunchSite } from './launches';
+import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { paintEqualDigits } from '../digits';
 import { fitIssPane } from './pane-fit';
@@ -65,6 +67,7 @@ export type MountIssSceneOptions = {
   visible?: () => boolean;
   onMap?: () => void;
   drive?: 'manual' | 'live';
+  launches?: () => readonly LaunchSite[];
   session?: {
     mode: CameraMode;
     azimuthDeg?: number;
@@ -76,6 +79,7 @@ export type MountIssSceneOptions = {
 
 export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions): IssScene {
   const session = bindSession(options.session ?? sessionPreset);
+  const readLaunches = options.launches ?? (() => launchSites(launchStore.getState(), options.nowMs()));
   const visible = options.visible ?? (() => document.visibilityState !== 'hidden');
   const factory = options.createRenderer ?? createIssRenderer;
   let generation = 1;
@@ -187,11 +191,18 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   summary.textContent = 'Details';
   details.append(summary, detail);
   telemetryBody.append(status, actions, details);
-  card.append(telemetry, telemetryBody);
+  const controls = document.createElement('div');
+  controls.dataset.issControls = '';
+  const launchesHost = document.createElement('div');
+  launchesHost.dataset.issLaunches = '';
+  launchesHost.hidden = true;
+  controls.append(telemetry, launchesHost);
+  card.append(controls, telemetryBody);
   root.append(toolbar, stage, card);
   host.append(root);
   syncPreset();
   syncCupola();
+  syncLaunchButtons(readLaunches());
   layout();
   writeLook(settleLook(session.look, session.mode, currentRoom()));
 
@@ -259,6 +270,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     apply: applyAim,
   });
 
+  const stopLaunches = options.launches
+    ? () => {}
+    : launchStore.subscribe(() => syncLaunchButtons(readLaunches()));
+
   void boot(bootGeneration);
   if (options.drive !== 'manual') startTimer();
 
@@ -306,6 +321,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       aimKeys.dispose();
+      stopLaunches();
       storedAim.flush();
       renderer?.destroy();
       renderer = null;
@@ -320,6 +336,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   async function boot(token: number): Promise<void> {
     try {
       renderer = factory(frame, {
+        onLaunchLook(eventId) {
+          const site = readLaunches().find((entry) => entry.eventId === eventId);
+          if (site) aimToward(site);
+        },
         onImagery(note) {
           if (token !== generation || !snapshot || !frameState) return;
           imagery = note;
@@ -400,6 +420,55 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       return;
     }
     if (token !== generation || epoch !== snapshotEpoch) return;
+    syncLaunchButtons(readLaunches());
+  }
+
+  function syncLaunchButtons(sites: readonly LaunchSite[]): void {
+    const pose = frameState?.ok ? frameState.pose : null;
+    const signature = sites.map((site) => site.eventId).join('|');
+    if (launchesHost.dataset.issLaunchIds !== signature) {
+      launchesHost.dataset.issLaunchIds = signature;
+      launchesHost.replaceChildren();
+      for (const site of sites) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.issLaunch = site.eventId;
+        button.title = `Look toward ${site.siteName}`;
+        button.setAttribute('aria-label', `Look toward ${site.siteName}`);
+        const arrow = document.createElement('span');
+        arrow.dataset.issLaunchArrow = '';
+        arrow.setAttribute('aria-hidden', 'true');
+        arrow.textContent = '↑';
+        const label = document.createElement('span');
+        label.textContent = site.siteName;
+        button.append(arrow, label);
+        button.addEventListener('click', () => aimToward(site));
+        launchesHost.append(button);
+      }
+    }
+    launchesHost.hidden = sites.length === 0;
+    if (pose) {
+      for (const site of sites) {
+        const arrow = launchesHost.querySelector(`[data-iss-launch="${CSS.escape(site.eventId)}"] [data-iss-launch-arrow]`);
+        if (!(arrow instanceof HTMLElement)) continue;
+        const look = lookToward(pose.bearingDeg, pose.camera.latDeg, pose.camera.lonDeg, site.lat, site.lon);
+        arrow.style.setProperty('--iss-launch-aim', `${look.arrowDeg.toFixed(1)}deg`);
+      }
+    }
+    renderer?.showLaunches?.(sites);
+  }
+
+  function aimToward(site: LaunchSite): void {
+    if (!frameState?.ok) return;
+    const pose = frameState.pose;
+    const look = lookToward(pose.bearingDeg, pose.camera.latDeg, pose.camera.lonDeg, site.lat, site.lon);
+    const step = 18;
+    writeLook(nudgeLook(session.look, {
+      rightDeg: look.right * step,
+      upDeg: look.up * step,
+    }, session.mode, currentRoom()));
+    persistAim();
+    if (phase === 'running' && rendererReady) void paint();
   }
 
   function aimCupola(id: number): void {
@@ -505,7 +574,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       padYPx: padY,
       gapPx: gap,
       toolbarPx: toolbar.offsetHeight,
-      buttonPx: telemetry.offsetHeight,
+      buttonPx: launchesHost.hidden ? telemetry.offsetHeight : controls.offsetHeight,
       bodyPx: open ? telemetryBody.scrollHeight + bodyBorder + bodyMargin : 0,
       bodyMarginPx: open ? bodyMargin : 0,
       sideWidthPx: port.offsetWidth + starboard.offsetWidth + stageGap * 2,

@@ -1618,6 +1618,14 @@ async function driveIss(send, evidenceDir, viewport) {
     'iss telemetry collapsed again',
     10000,
   );
+  await proveIssLaunchLook(send, evidenceDir);
+  await click(send, '[data-iss-preset="horizon"]');
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed') === 'true' ? { ok: true } : null`,
+    'iss horizon after launch look',
+    10000,
+  );
   const zoomed = await proveIssOpticalFov(send, evidenceDir);
   const pan = await proveIssPan(send, evidenceDir, zoomed);
   await proveIssLandscape(send, evidenceDir);
@@ -1684,7 +1692,52 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, launch look, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)})`;
+}
+
+async function proveIssLaunchLook(send, evidenceDir) {
+  const before = await waitFor(
+    send,
+    `(() => {
+      const button = document.querySelector('[data-iss-launch]');
+      const telemetry = document.querySelector('[data-iss-telemetry]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!button || !telemetry || !frame) return null;
+      if (!button.textContent.includes('Verify Pad')) return null;
+      const arrow = button.querySelector('[data-iss-launch-arrow]');
+      const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
+      if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
+      const b = button.getBoundingClientRect();
+      const t = telemetry.getBoundingClientRect();
+      const frameBox = frame.getBoundingClientRect();
+      if (b.width < 44 || b.height < 44 || t.width < 44) return null;
+      const controls = button.closest('[data-iss-controls]');
+      if (!controls || !controls.contains(telemetry)) return null;
+      const covers = b.left < frameBox.right - 1 && b.right > frameBox.left + 1 && b.top < frameBox.bottom - 1 && b.bottom > frameBox.top + 1;
+      if (covers) return null;
+      if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
+      if (!document.querySelector('.iss-launch-pin, [data-iss-launch-edge]')) return null;
+      const center = window.__opdIss?.getCenter?.();
+      if (!center) return null;
+      return { ok: true, lng: center.lng, lat: center.lat };
+    })()`,
+    'iss launch near telemetry',
+    15000,
+  );
+  await shot(send, evidenceDir, 'iss-launch-look');
+  await click(send, '[data-iss-launch]');
+  await waitFor(
+    send,
+    `(() => {
+      const center = window.__opdIss?.getCenter?.();
+      if (!center) return null;
+      const moved = Math.hypot(center.lng - ${Number(before.lng)}, center.lat - ${Number(before.lat)});
+      if (!(moved > 0.15)) return null;
+      return { ok: true, moved };
+    })()`,
+    'iss launch look moved',
+    10000,
+  );
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
