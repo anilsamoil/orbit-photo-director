@@ -570,6 +570,33 @@ describe('main.ts: hide-from-card (v3)', () => {
     expect(document.querySelector('.card[data-target-id="etna-volcano"]')).toBeNull();
   });
 
+  it('shows #empty as soon as hide removes the last queue card', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    const cardsHost = document.getElementById('cards')!;
+    const empty = document.getElementById('empty')!;
+    const mount = (id: string) => {
+      const card = document.createElement('article');
+      card.className = 'card';
+      card.dataset.targetId = id;
+      cardsHost.appendChild(card);
+    };
+    mount('tokyo-night');
+    mount('etna-volcano');
+    empty.hidden = true;
+
+    const hidingOne = handleHideAction(buildPass({ target_id: 'tokyo-night', target_name: 'Tokyo at night' }));
+    expect(cardsHost.children).toHaveLength(1);
+    expect(empty.hidden).toBe(true);
+    await hidingOne;
+
+    const hidingLast = handleHideAction(buildPass({ target_id: 'etna-volcano', target_name: 'Etna' }));
+    expect(cardsHost.children).toHaveLength(0);
+    expect(empty.hidden).toBe(false);
+    expect(empty.textContent).toContain('No passes in the next 90 minutes');
+    await hidingLast;
+  });
+
   it('handleHideAction removes the same id from BOTH Queue and Upcoming containers', async () => {
     const { init, handleHideAction } = await import('../src/main');
     await init();
