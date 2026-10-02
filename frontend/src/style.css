@@ -3269,8 +3269,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   gap: 0.35rem;
 }
 
-[data-iss-preset],
-[data-iss-reset] {
+[data-iss-preset] {
   min-height: 44px;
   min-width: 44px;
   padding: 0 0.95rem;
@@ -3281,16 +3280,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-}
-
-[data-iss-reset] {
-  white-space: nowrap;
-}
-
-[data-iss-reset]::after {
-  content: ' · double-tap';
-  font-weight: 550;
-  color: rgba(244, 247, 251, 0.72);
 }
 
 [data-iss-preset][aria-pressed='true'] {
@@ -3662,7 +3651,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 .kp-badge,
 .help-fab,
 [data-iss-preset],
-[data-iss-reset],
 [data-iss-aim-help],
 [data-iss-telemetry],
 [data-iss-cupola],
@@ -3969,7 +3957,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctr
 }
 
 [data-iss-preset],
-[data-iss-reset],
 [data-iss-aim-help],
 [data-iss-telemetry],
 [data-iss-cupola] {
