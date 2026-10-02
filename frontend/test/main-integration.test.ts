@@ -376,6 +376,64 @@ describe('main.ts: renderOfflineBanner branches', () => {
   });
 });
 
+describe('main.ts: stale-TLE banner survives the countdown tick', () => {
+  async function refreshWithTleAge(tleAgeHours: number, version: string): Promise<void> {
+    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest({ version }));
+    vi.mocked(manifestModule.fetchTop5).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTrack).mockResolvedValue({ ...buildTrack(), tle_age_hours: tleAgeHours });
+    const aurora = await import('../src/aurora');
+    vi.mocked(aurora.fetchKpData).mockResolvedValue(null);
+    const { refresh } = await import('../src/main');
+    await refresh();
+  }
+
+  it('keeps the TLE suffix on the next 1Hz tick while the TLE is still stale', async () => {
+    await refreshWithTleAge(72, '20260504T120000Z');
+    const banner = document.getElementById('status-banner')!;
+    const painted = banner.textContent ?? '';
+    expect(painted).toContain('Last updated');
+    expect(painted).toContain('TLE 72h old');
+    expect(banner.className).toContain('banner-orange');
+
+    const { rerenderCountdowns } = await import('../src/main');
+    rerenderCountdowns();
+    const afterTick = banner.textContent ?? '';
+    expect(afterTick).toContain('Last updated');
+    expect(afterTick).toContain('TLE 72h old');
+    expect(banner.className).toContain('banner-orange');
+    expect(afterTick.match(/TLE \d+h old/g)).toEqual(['TLE 72h old']);
+
+    rerenderCountdowns();
+    expect(banner.textContent).toBe(afterTick);
+  });
+
+  it('does not add a TLE suffix on the tick when the TLE is fresh', async () => {
+    await refreshWithTleAge(12, '20260504T120000Z');
+    const banner = document.getElementById('status-banner')!;
+    expect(banner.textContent).not.toContain('TLE');
+
+    const { rerenderCountdowns } = await import('../src/main');
+    rerenderCountdowns();
+    expect(banner.textContent).not.toContain('TLE');
+    expect(banner.textContent).toContain('Last updated');
+  });
+
+  it('drops the TLE suffix on the tick once a fresh TLE arrives', async () => {
+    await refreshWithTleAge(72, '20260504T120000Z');
+    const banner = document.getElementById('status-banner')!;
+    expect(banner.textContent).toContain('TLE 72h old');
+
+    await refreshWithTleAge(12, '20260504T130000Z');
+    expect(banner.textContent).not.toContain('TLE');
+
+    const { rerenderCountdowns } = await import('../src/main');
+    rerenderCountdowns();
+    expect(banner.textContent).not.toContain('TLE');
+    expect(banner.textContent).toContain('Last updated');
+  });
+});
+
 describe('main.ts: past-pass filter on Queue + Upcoming render', () => {
   // Chris reported (2026-05-10): generator publishes top5 as the next-90-min
   // slice from the manifest tick time; by the time the user looks 30-60 min
