@@ -26,13 +26,13 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 
 ## Features
 
-- [Status banner](./banner.md) covers the footer after the manifest loads, including the held `SIGN IN AGAIN` footer.
+- [Status banner](./banner.md) covers the footer after the manifest loads, the orange `TLE Nh old` suffix held across the one-second tick, and the held `SIGN IN AGAIN` footer.
 - [Top bar](./topbar.md) covers the fixed header, the live ISS readout, the Kp badge, and the row that scrolls when the tabs and a long username do not fit. A drag that starts on the ISS readout or the Kp chip scrolls that row.
 - [Queue](./queue.md) covers the next passes, score, sort, remind, shoot, the mine filter, keepsake windows, and Hide.
 - [Upcoming](./upcoming.md) covers launch cards, the later passes, score sort, and hide.
 - [Map](./map.md) covers the globe, ISS track, target popup, dropped pin, legend, imagery date, collapsed credits, the Time strip under the map, tool rail, satellite picker, launch dialog, and the pin that Hide removes. The map opens with that chrome hidden behind Controls. An open popup reserves the inspector, and on a phone the pin click still lands on the canvas.
 - [ISS view](./iss.md) covers the tab after Map, Horizon and Straight down, optical field of view that stays across a tab return and a reload, pan that stays for the page session, Cupola windows 1 through 7 and the lens field they restore, `r` and Escape that return to Horizon and clear sessionStorage, arrow keys, W/A/S/D for that same pan, Shift+arrows and Shift+W/A/S/D for a quarter-step pan, `+`/`-`, digit keys `1` through `7` that select Cupola windows, and `h` and `n` that select Horizon and Straight down while the view is focused, the collapsed Telemetry card, place labels, Port and Starboard, and returning to Map and Queue.
-- [Help](./help.md) covers the ? button, hidden on a fresh Map until Controls, the corner button on the other tabs, and the dialog.
+- [Help](./help.md) covers the ? button, hidden on a fresh Map until Controls, the corner button on the other tabs, and the dialog, including Aiming the ISS view (`n / N`, WASD, `#iss=`, the pad beside Telemetry, the gold pin and edge arrow, and the trajectory corridor).
 - [Profile](./profile.md) covers the signed-in profile, distance threshold, add target, hidden curated targets, and photo lookup.
 - [Log](./log.md) covers the calibration row written by Shoot.
 - [Phone](./phone.md) covers a 390x844 portrait and an 844x390 landscape, 44px targets, the dock clearing the (i) and ? buttons with credits collapsed and expanded, and a long-press pin popup.

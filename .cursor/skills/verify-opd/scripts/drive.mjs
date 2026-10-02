@@ -433,10 +433,10 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
 }
 
 async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
-  const browser = await launchWebkit();
   const notes = [];
-  try {
-    for (const spec of WEBKIT_DEVICES) {
+  for (const spec of WEBKIT_DEVICES) {
+    const browser = await launchWebkit();
+    try {
       const viewport = deviceViewport(spec);
       const surfaceDir = resolve(evidenceDir, spec.slug);
       slideLaunch(home);
@@ -457,9 +457,9 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
         await context.close();
       }
       notes.push(`${spec.slug}: ${await proveDeniedFooter(browser, spec, baseUrl, surfaceDir)}`);
+    } finally {
+      await browser.close();
     }
-  } finally {
-    await browser.close();
   }
   return notes;
 }
@@ -503,8 +503,52 @@ async function driveBanner(send, evidenceDir, baseUrl) {
     'queue banner',
   );
   if (queueBanner.position !== 'static') throw new Error(`queue banner ${queueBanner.position}`);
+  const tle = await proveStaleTle(send, evidenceDir, baseUrl);
   const held = await proveHeldSignIn(send, evidenceDir, baseUrl);
-  return `banner: ${text.trim()}, queue ${queueBanner.position}, held ${held}`;
+  return `banner: ${text.trim()}, queue ${queueBanner.position}, tle ${tle}, held ${held}`;
+}
+
+async function setTleCookie(send, stale) {
+  const assignment = stale
+    ? `document.cookie = 'opd-verify-tle=stale; path=/'`
+    : `document.cookie = 'opd-verify-tle=; path=/; max-age=0'`;
+  await evaluate(send, assignment);
+}
+
+async function proveStaleTle(send, evidenceDir, baseUrl) {
+  const suffix = 'TLE 72h old — live track may drift';
+  await setTleCookie(send, true);
+  await send('Page.navigate', { url: `${baseUrl}/?e2e&u=anil` });
+  const shown = await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!text.includes('Last updated') || !text.includes(${JSON.stringify(suffix)})) return null;
+      if (!banner.classList.contains('banner-orange')) return null;
+      return { ok: true, text };
+    })()`,
+    'stale TLE banner',
+    30000,
+  );
+  const before = shown.text;
+  await sleep(1200);
+  const afterTick = await evaluate(send, `document.getElementById('status-banner').textContent`);
+  if (afterTick !== before) throw new Error(`countdown dropped the TLE suffix: ${afterTick}`);
+  await shot(send, evidenceDir, 'banner-tle');
+  await setTleCookie(send, false);
+  await send('Page.navigate', { url: `${baseUrl}/?e2e&u=anil` });
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('status-banner')?.textContent || '';
+      if (!text.includes('Last updated') || text.includes('TLE 72h old')) return null;
+      return { ok: true };
+    })()`,
+    'banner after stale TLE',
+    30000,
+  );
+  return '72h held';
 }
 
 async function setSessionCookie(send, value) {
@@ -2752,6 +2796,28 @@ async function driveHelp(send, evidenceDir) {
   await waitFor(send, `document.querySelector('.help-modal') ? { ok: true } : null`, 'help dialog');
   const label = await evaluate(send, `document.querySelector('.help-modal')?.getAttribute('aria-label') || ''`);
   if (!String(label).includes('Help')) throw new Error(`help dialog label missing: ${label}`);
+  const helpText = await evaluate(send, `document.querySelector('.help-body')?.textContent || ''`);
+  const aimingStart = String(helpText).indexOf('Aiming the ISS view');
+  const aimingEnd = String(helpText).indexOf('Reading a pass card');
+  const aiming = aimingStart >= 0 && aimingEnd > aimingStart ? String(helpText).slice(aimingStart, aimingEnd) : '';
+  const aimingPhrases = [
+    'Horizon',
+    'keep a pinched field',
+    'n / N',
+    'W, A, S, and D',
+    'Hold Shift',
+    '#iss=',
+    'beside Telemetry',
+    'about 18°',
+    'gold pin',
+    'arrow on the edge',
+    'only when that launch includes a trajectory',
+  ];
+  const missing = aimingPhrases.filter((phrase) => !aiming.includes(phrase));
+  if (missing.length) throw new Error(`help aiming missing ${missing.join(', ')}`);
+  if (/Reset/.test(String(helpText)) || String(helpText).toLowerCase().includes('double-tap') || String(helpText).includes('Horizon opens first')) {
+    throw new Error('help dialog brought back removed aiming copy');
+  }
   await shot(send, evidenceDir, 'help');
   await click(send, '.help-close');
   await waitFor(send, `!document.querySelector('.help-modal') ? { ok: true } : null`, 'help closed');
@@ -2770,7 +2836,7 @@ async function driveHelp(send, evidenceDir) {
     10000,
   );
   await shot(send, evidenceDir, 'help-queue');
-  return 'help: opened, closed, queue corner';
+  return 'help: opened, aiming, closed, queue corner';
 }
 
 const LAST_GOOD_TLE = {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest } from 'node:http';
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
@@ -109,6 +110,12 @@ function json(res, status, body) {
   res.end(text);
 }
 
+function staleTrackText(fixtureDir) {
+  const track = JSON.parse(readFileSync(resolve(fixtureDir, 'track.json'), 'utf8'));
+  track.tle_age_hours = 72;
+  return JSON.stringify(track);
+}
+
 function readBody(req) {
   return new Promise((resolveBody, rejectBody) => {
     const chunks = [];
@@ -165,11 +172,33 @@ function startProxy(home) {
       res.end(body);
     };
     if (path === '/manifest.json') {
-      if (cookieValue(req, 'opd-verify-session') !== 'expired') return sendFile('manifest.json');
+      const expired = cookieValue(req, 'opd-verify-session') === 'expired';
+      const staleTle = cookieValue(req, 'opd-verify-tle') === 'stale';
+      if (!expired && !staleTle) return sendFile('manifest.json');
       const manifest = JSON.parse(readFileSync(resolve(fixtureDir, 'manifest.json'), 'utf8'));
-      manifest.generated_at = new Date(Date.now() - 200 * 60_000).toISOString();
-      if (manifest.freshness && typeof manifest.freshness === 'object') manifest.freshness.ok = true;
+      if (expired) {
+        manifest.generated_at = new Date(Date.now() - 200 * 60_000).toISOString();
+        if (manifest.freshness && typeof manifest.freshness === 'object') manifest.freshness.ok = true;
+      }
+      if (staleTle) {
+        const trackBody = staleTrackText(fixtureDir);
+        manifest.artifacts.track = {
+          path: 'v/verify/track-stale.json',
+          sha256: createHash('sha256').update(trackBody).digest('hex'),
+          bytes: Buffer.byteLength(trackBody),
+        };
+      }
       const body = JSON.stringify(manifest);
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
+    }
+    if (path === '/v/verify/track-stale.json') {
+      const body = staleTrackText(fixtureDir);
       res.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
