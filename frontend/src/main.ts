@@ -712,7 +712,10 @@ function rerenderCountdowns(): void {
     renderQueue();
   }
   setBanner(bannerWithLaunchesOverlay(
-    bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now),
+    bannerWithTleOverlay(
+      bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, now),
+      currentTrack?.tle_age_hours,
+    ),
     launchesStaleHours(currentStatus, now),
   ));
 }
