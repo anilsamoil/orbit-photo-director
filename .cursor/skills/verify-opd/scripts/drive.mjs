@@ -286,6 +286,22 @@ function touchPoint(x, y) {
   return { x: Math.round(x), y: Math.round(y), radiusX: 1, radiusY: 1, force: 1, id: 1 };
 }
 
+async function assertCanvasHit(send, x, y, label) {
+  const hit = await evaluate(send, `(() => {
+    const node = document.elementFromPoint(${x}, ${y});
+    const canvas = document.querySelector('#map .maplibregl-canvas');
+    if (!node || !canvas) return { ok: false, hit: node ? (node.id || String(node.className) || node.tagName) : null };
+    const blocked = node.closest('.maplibregl-ctrl-attrib, .maplibregl-ctrl-bottom-right, .map-command, .map-inspector, .maplibregl-popup, .map-toolbar, .map-control-dock, .help-fab, .map-legend, .map-imagery-date, .map-chrome-toggle');
+    const onCanvas = node === canvas || canvas.contains(node);
+    return {
+      ok: onCanvas && !blocked,
+      hit: node.id || String(node.className) || node.tagName,
+      blocked: blocked ? (blocked.id || String(blocked.className) || blocked.tagName) : null,
+    };
+  })()`);
+  if (!hit?.ok) throw new Error(`${label} missed the canvas ${JSON.stringify(hit)}`);
+}
+
 async function pointForLngLat(send, lng, lat) {
   return evaluate(send, `(() => {
     const map = window.__opdMap;
@@ -732,15 +748,17 @@ async function panTopbarFromLeft(send) {
 async function assertMapChromeHidden(send) {
   const state = await evaluate(send, `(() => {
     const toolbar = document.querySelector('.map-toolbar');
+    const timeStrip = document.querySelector('.map-command');
     const toggle = document.getElementById('map-chrome-toggle');
     const banner = document.getElementById('status-banner');
     const tab = document.getElementById('tab-map');
-    if (!toolbar || !toggle || !banner || !tab) return null;
+    if (!toolbar || !timeStrip || !toggle || !banner || !tab) return null;
     const toggleBox = toggle.getBoundingClientRect();
     return {
       hidden: document.body.classList.contains('map-chrome-hidden'),
       pane: document.getElementById('map-pane')?.classList.contains('map-chrome-hidden') === true,
       toolbar: getComputedStyle(toolbar).display,
+      timeStrip: getComputedStyle(timeStrip).display,
       label: (toggle.textContent || '').trim(),
       expanded: toggle.getAttribute('aria-expanded'),
       toggleW: toggleBox.width,
@@ -749,7 +767,7 @@ async function assertMapChromeHidden(send) {
       tab: getComputedStyle(tab).display,
     };
   })()`);
-  if (!state?.hidden || !state.pane || state.toolbar !== 'none' || state.label !== 'Controls' || state.expanded !== 'false') {
+  if (!state?.hidden || !state.pane || state.toolbar !== 'none' || state.timeStrip !== 'none' || state.label !== 'Controls' || state.expanded !== 'false') {
     throw new Error(`map chrome should be hidden ${JSON.stringify(state)}`);
   }
   if (state.toggleW < 44 || state.toggleH < 44) throw new Error(`controls button ${JSON.stringify(state)}`);
@@ -762,10 +780,12 @@ async function showMapChrome(send) {
     send,
     `(() => {
       const toolbar = document.querySelector('.map-toolbar');
+      const timeStrip = document.querySelector('.map-command');
       const toggle = document.getElementById('map-chrome-toggle');
-      if (!toolbar || !toggle) return null;
+      if (!toolbar || !timeStrip || !toggle) return null;
       if (document.body.classList.contains('map-chrome-hidden')) return null;
       if (getComputedStyle(toolbar).display === 'none') return null;
+      if (getComputedStyle(timeStrip).display === 'none') return null;
       if ((toggle.textContent || '').trim() !== 'Hide') return null;
       if (toggle.getAttribute('aria-expanded') !== 'true') return null;
       return { ok: true };
@@ -1236,6 +1256,8 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await shot(send, evidenceDir, 'map-target-popup');
   const drop = await pointForLngLat(send, meta.delta.lon, meta.delta.lat);
+  if (!drop?.ok) throw new Error('could not project the pin-drop point');
+  await assertCanvasHit(send, drop.x, drop.y, 'pin drop');
   await mouseClick(send, drop.x, drop.y, 'right');
   await waitFor(
     send,
@@ -2999,6 +3021,7 @@ async function drivePhone(send, evidenceDir, meta, home) {
   await sleep(750);
   const dismissAt = await pointForLngLat(send, lon, lat);
   const dismiss = dismissAt?.ok ? dismissAt : point;
+  await assertCanvasHit(send, dismiss.x, dismiss.y, 'pin dismiss');
   await mouseClick(send, dismiss.x, dismiss.y);
   await waitFor(
     send,

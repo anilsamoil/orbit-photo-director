@@ -7,7 +7,7 @@ The top bar is one fixed header on every tab. Wider than 700px, identity, the IS
 - `iss-now` fills `#iss-now` from the published track. The text starts with `ISS` and the latitude, with no space between the label and the number, then the longitude, as in `ISS15.4°S, 118.3°E`. A span after that reads `over` plus a coarse region (hidden at 500px and narrower; the text stays in the node). Its title is `Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position`. When the track has no position, the label `ISS` is immediately followed by `live track expired`, so the text is `ISSlive track expired`. That text does not pass. The stale-orbit sentence is on Profile photo lookup, not here.
 - `kp-badge` shows `Kp 3.0` from the fixture `/api/kp` value `3`.
 - `topbar-box` keeps the same fixed box on Map, Queue, Upcoming, ISS view, Profile, and Log. Non-map pages pad `main` by the bar height. Map padding is 0.
-- `topbar-tabs` keeps Queue, Upcoming, Map, ISS view, Profile, and Log at their full width. The bar scrolls when those buttons, the Kp badge, and a long username do not fit. After the bar scrolls a control into view, `elementFromPoint` at its center is that control.
+- `topbar-tabs` keeps Queue, Upcoming, Map, ISS view, Profile, and Log at their full width. Wider than 700px, the one row scrolls when those tabs and the readout do not fit. At 700px and below, with room for two rows, `.tabs` scrolls on its own. The Kp badge and the username sit in the Status readout, not in that tab row. After a scroller brings a control into view, `elementFromPoint` at its center is that control.
 - `sun-badge` stays hidden when the NASA sun image does not load.
 
 ## How to get to it (user POV)

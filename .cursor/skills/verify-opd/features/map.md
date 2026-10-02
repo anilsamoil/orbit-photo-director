@@ -8,7 +8,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 - `map-legend` shows launch, day, twilight, eclipse, Anil's targets, and the Starship status. The Anil swatch is `#8b93ff`. The Starship swatch is `#ff5c5c`.
 - `map-imagery` shows the imagery or clouds date badge.
 - `map-attribution` starts as a 44x44 (i) button. A tap expands the credit line (OpenStreetMap, CARTO, or NASA). While the line is collapsed, the legend shares that button's band on the left. The imagery date and the ? button sit above it. All three move up when the line opens.
-- `map-time` moves the readout off Now with T+45, then returns it to Now.
+- `map-time` is the Time strip under the map (`.map-command`). It is not in the top Show toolbar. T+45 moves the readout off Now, then Now returns it.
 - `map-tools` toggles IR, night lights, labels, multi-orbit, and follow, and confirms ISS up is the selected bearing.
 - `map-satellites` opens the picker and lists Tiangong and Hubble.
 - `map-target-popup` opens the Verify Reef popup.
@@ -19,7 +19,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 ## How to get to it (user POV)
 
 - Choose the Map tab. The page also lands here on first load.
-- The map opens clear. One `Controls` button sits at the bottom center. The legend, time toolbar, tool dock, imagery date, zoom buttons, credits, launch panel, satellite picker, and `?` button are hidden. The top bar and the status footer stay, including Sign in and Reload when the session is dead.
+- The map opens clear. One `Controls` button sits at the bottom center. The legend, the Time strip under the map, the Show toolbar, the tool dock, the imagery date, the zoom buttons, the credits, the launch panel, the satellite picker, and the `?` button are hidden. The top bar and the status footer stay, including Sign in and Reload when the session is dead.
 - Tap `Controls`. The chrome comes back and the button reads `Hide`. Tap `Hide` and the map is clear again. The choice is stored on this device as `opd-map-chrome` (`shown` or `hidden`). A missing key stays hidden.
 
 ## Driving it with opd-verify
@@ -29,13 +29,13 @@ Preconditions:
 - `doctor` prints `ok`.
 - The launch fixture `valid_until` is still in the future.
 
-- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present. On a fresh profile the legend is in the page and `display: none`. `#map-chrome-toggle` reads `Controls`, is at least 44px, and `aria-expanded` is `false`. The status footer and the Map tab stay visible. `evidence/map-chrome-hidden.png` is that clear map. The script taps `Controls`. The button reads `Hide`, `opd-map-chrome` is `shown`, and a reload keeps that chrome. The script taps `Hide`, the key is `hidden`, and a reload keeps the clear map. It taps `Controls` again, and the rest of this drive uses that chrome.
+- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present. On a fresh profile the legend is in the page and `display: none`. The Show toolbar and the Time strip (`.map-command`) are `display: none` with it. `#map-chrome-toggle` reads `Controls`, is at least 44px, and `aria-expanded` is `false`. The status footer and the Map tab stay visible. `evidence/map-chrome-hidden.png` is that clear map. The script taps `Controls`. The button reads `Hide`, the Time strip is visible under the map, `opd-map-chrome` is `shown`, and a reload keeps that chrome. The script taps `Hide`, the key is `hidden`, and a reload keeps the clear map. It taps `Controls` again, and the rest of this drive uses that chrome.
 - **Credits.** On load the control has no `maplibregl-compact-show` class and the (i) button is 44x44. The script then opens it. The credit text matches OpenStreetMap, CARTO, or NASA, and the legend moves up.
 - **Time.** T+45 changes `#time-slider-readout`. Now sets that readout back to `Now`.
 - **Tool rail.** IR becomes active, night lights become active, labels become inactive, multi-orbit becomes active, ISS up is already the default and stays active, and its title is `ISS up (default). Rotate so the direction of travel points up`. Follow reports `aria-pressed` false.
 - **Satellites.** The picker lists Tiangong and Hubble. The script closes it without adding a NORAD id.
 - **Target popup.** The script frames Verify Reef and clicks that point. A popup contains Verify Reef.
-- **Dropped pin.** A right-click away from that pin opens a popup whose text contains `Closest`. The script closes that popup before Launches, so the pad click is not covered on a phone.
+- **Dropped pin.** A right-click away from that pin opens a popup whose text contains `Closest`. The Verify Reef popup is still open, so the map has reserved the inspector. On a wide layout that inspector is a 320px column. At 899px and below it is a bottom sheet, and the map keeps a hit band above the credit strip so the projected point lands on the canvas, not on the credits. The script checks `elementFromPoint` at that point is the MapLibre canvas, then right-clicks. It closes the popups before Launches, so the pad click is not covered on a phone.
 - **Launch.** Launches reports `aria-pressed` true. Turning it on opens the map brief. The script clicks the launch name in that brief. The dialog text contains Verify Ascent. The script turns Launches off again.
 - **Legend category.** The legend text contains `Anil's targets`. The `.map-legend-anil` swatch is `rgb(139, 147, 255)`. The `targets-layer` circle color expression names `anils-targets` and `#8b93ff`.
 - **Hidden pin.** After the launch dialog closes, the targets source still contains `verify-reef`. Hide on the Verify Reef queue card removes that id from the source. The script waits until `GET /api/browser/profiles/anil/targets` contains `verify-reef`. The new-browser check for a hidden card is `drive upcoming`.
