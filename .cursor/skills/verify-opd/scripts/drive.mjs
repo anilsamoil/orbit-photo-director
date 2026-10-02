@@ -1521,11 +1521,10 @@ async function driveIss(send, evidenceDir, viewport) {
       if (!/Port/.test(side[0].textContent || '') || !/Starboard/.test(side[3].textContent || '')) return null;
       if (window7.textContent !== 'Window 7 · Nadir') return null;
       const hint = document.querySelector('[data-iss-hint]');
-      if ((hint?.textContent || '') !== 'Pinch or scroll the field · double-tap to reset') return null;
+      if ((hint?.textContent || '') !== 'Pinch or scroll the field') return null;
       if (document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('title') !== 'Horizon aim') return null;
       if (document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('title') !== 'Aim straight down') return null;
       if (cupola.getAttribute('title') !== 'Window field of view') return null;
-      if (!/double-tap/i.test(document.querySelector('[data-iss-reset]')?.getAttribute('title') || '')) return null;
       const port = document.querySelector('[data-iss-port]');
       const starboard = document.querySelector('[data-iss-starboard]');
       if (port?.textContent !== 'Port' || starboard?.textContent !== 'Starboard') return null;
@@ -1630,7 +1629,7 @@ async function driveIss(send, evidenceDir, viewport) {
   await proveIssPanSession(send, evidenceDir, pan);
   await proveIssWindows(send, evidenceDir);
   await proveIssWindowSession(send, evidenceDir);
-  await proveIssAimReset(send, evidenceDir);
+  await proveIssWindowField(send, evidenceDir);
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
     send,
@@ -1685,7 +1684,7 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim reset, double tap, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -1934,20 +1933,15 @@ async function proveIssWindowSession(send, evidenceDir) {
   await shot(send, evidenceDir, 'iss-window-return');
 }
 
-async function proveIssAimReset(send, evidenceDir) {
+async function proveIssWindowField(send, evidenceDir) {
   const baseline = await evaluate(send, `(() => {
     const map = window.__opdIss;
     const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
-    const reset = document.querySelector('[data-iss-reset]');
-    if (!map?.getCenter || !map.getVerticalFieldOfView || !frame || frame.width < 40 || !reset) return null;
-    if ((reset.textContent || '').trim() !== 'Reset') return null;
-    if (!/double-tap/i.test(reset.getAttribute('title') || '')) return null;
-    const suffix = getComputedStyle(reset, '::after').content || '';
-    if (!/double-tap/i.test(suffix)) return null;
+    if (!map?.getCenter || !map.getVerticalFieldOfView || !frame || frame.width < 40) return null;
     const center = map.getCenter();
     return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2, fov: map.getVerticalFieldOfView(), lat: center.lat, lng: center.lng };
   })()`);
-  if (!baseline) throw new Error('iss reset baseline missing');
+  if (!baseline) throw new Error('iss window field baseline missing');
   await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: baseline.x, y: baseline.y, deltaX: 0, deltaY: -480 });
   await waitFor(
     send,
@@ -1983,33 +1977,6 @@ async function proveIssAimReset(send, evidenceDir) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-window-fov');
-  const beforeReset = await nudgeIssAim(send);
-  await click(send, '[data-iss-reset]');
-  await waitFor(
-    send,
-    issHorizonRestored(null, null, beforeReset.fov),
-    'iss reset button',
-    10000,
-  );
-  await shot(send, evidenceDir, 'iss-reset');
-  const beforeTap = await nudgeIssAim(send);
-  const spot = await evaluate(send, `(() => {
-    const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
-    if (!frame || frame.width < 40) return null;
-    return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2 };
-  })()`);
-  if (!spot) throw new Error('iss double tap target missing');
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: spot.x, y: spot.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: spot.x, y: spot.y, button: 'left', buttons: 0, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: spot.x, y: spot.y, button: 'left', buttons: 1, clickCount: 2 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: spot.x, y: spot.y, button: 'left', buttons: 0, clickCount: 2 });
-  await waitFor(
-    send,
-    issHorizonRestored(beforeTap.lat, beforeTap.lng, beforeTap.fov),
-    'iss double tap reset',
-    10000,
-  );
-  await shot(send, evidenceDir, 'iss-double-tap');
 }
 
 function issLensFovExpression() {
@@ -2094,7 +2061,8 @@ async function proveIssAimReload(send, evidenceDir) {
     45000,
   );
   await shot(send, evidenceDir, 'iss-aim-restored');
-  await click(send, '[data-iss-reset]');
+  await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
+  await pressKey(send, 'r');
   await waitFor(
     send,
     `(() => {
@@ -2110,10 +2078,10 @@ async function proveIssAimReload(send, evidenceDir) {
       if (typeof fov !== 'number' || Math.abs(fov - ${ISS_LENS_FOV_DEG}) > 0.5 || Math.abs(fov - ${lens}) > 0.5) return null;
       return { ok: true, fov };
     })()`,
-    'iss reset clears stored aim',
+    'iss r key clears stored aim',
     10000,
   );
-  await shot(send, evidenceDir, 'iss-aim-reset');
+  await shot(send, evidenceDir, 'iss-aim-cleared');
   await reloadSettled(send);
   await click(send, '#tab-iss');
   await waitFor(
@@ -2140,28 +2108,6 @@ async function proveIssAimReload(send, evidenceDir) {
   );
   await shot(send, evidenceDir, 'iss-aim-horizon');
   await proveIssKeyboard(send, evidenceDir);
-}
-
-function issHorizonRestored(lat, lng, fov) {
-  const centerCheck = lat === null ? 'true' : `(() => {
-    const center = map.getCenter();
-    return Math.abs(center.lat - ${lat}) + Math.abs(center.lng - ${lng}) <= 0.35;
-  })()`;
-  return `(() => {
-    const map = window.__opdIss;
-    const cupola = document.querySelector('[data-iss-cupola]');
-    const horizon = document.querySelector('[data-iss-preset="horizon"]');
-    if (!map?.getCenter || !map.getVerticalFieldOfView || cupola?.value !== '') return null;
-    if (horizon?.getAttribute('aria-pressed') !== 'true') return null;
-    const chip = document.querySelector('[data-iss-window]');
-    if (!chip || !chip.hidden) return null;
-    if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
-    if (localStorage.getItem('opd-iss-aim') !== null) return null;
-    if (!(${centerCheck})) return null;
-    const fovNow = map.getVerticalFieldOfView();
-    if (Math.abs(fovNow - ${fov}) > 0.5) return null;
-    return { ok: true, fov: fovNow };
-  })()`;
 }
 
 async function pressKey(send, key) {
@@ -2686,37 +2632,6 @@ function issKeyHelpHeld(before) {
     if (localStorage.getItem('opd-iss-aim') !== ${JSON.stringify(before.stored)}) return null;
     return { ok: true, fov };
   })()`;
-}
-
-async function nudgeIssAim(send) {
-  const home = await evaluate(send, `(() => {
-    const map = window.__opdIss;
-    const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
-    if (!map?.getCenter || !map.getVerticalFieldOfView || !frame || frame.width < 40) return null;
-    const center = map.getCenter();
-    return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2, dx: Math.max(36, frame.width * 0.22), lat: center.lat, lng: center.lng, fov: map.getVerticalFieldOfView() };
-  })()`);
-  if (!home) throw new Error('iss nudge baseline missing');
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: home.x, y: home.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: home.x - home.dx, y: home.y, button: 'left', buttons: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: home.x - home.dx, y: home.y, button: 'left', buttons: 0, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: home.x, y: home.y, deltaX: 0, deltaY: -480 });
-  await waitFor(
-    send,
-    `(() => {
-      const map = window.__opdIss;
-      if (!map?.getCenter || !map.getVerticalFieldOfView) return null;
-      const center = map.getCenter();
-      const fov = map.getVerticalFieldOfView();
-      const shift = Math.abs(center.lat - ${home.lat}) + Math.abs(center.lng - ${home.lng});
-      if (shift < 0.4) return null;
-      if (!(fov < ${home.fov} - 4)) return null;
-      return { ok: true, shift, fov };
-    })()`,
-    'iss pan and pinch',
-    10000,
-  );
-  return home;
 }
 
 async function proveIssLandscape(send, evidenceDir) {
