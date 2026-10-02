@@ -1325,12 +1325,12 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   position: absolute;
   z-index: 12;
   top: calc(var(--topbar-height) + 71px);
-  right: 64px;
+  right: 88px;
   flex: 0 1 auto;
-  width: min(100% - 80px, 18rem);
+  width: min(100% - 104px, 18rem);
   min-width: 0;
   min-height: 0;
-  max-width: calc(100% - 80px);
+  max-width: calc(100% - 104px);
   max-height: min(50%, 22rem);
   margin: 0;
   overflow-y: auto;
@@ -3748,7 +3748,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   height: var(--map-command-height);
   max-height: var(--map-command-height);
   margin: 0;
-  padding: 8px 8px calc(32px + env(safe-area-inset-bottom));
+  padding: 8px 72px calc(32px + env(safe-area-inset-bottom)) 8px;
   overflow: auto;
   color: var(--text);
 }
@@ -3758,13 +3758,17 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 .view-map .map-command .map-controls-time {
+  position: static;
+  top: auto;
+  right: auto;
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 100%;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
-  width: 100%;
+  width: auto;
+  max-width: none;
 }
 
 .view-map .map-command .time-step-btn,
@@ -4063,6 +4067,13 @@ summary:focus-visible {
 }
 
 @media (max-width: 700px) {
+  .view-map .map-imagery-date {
+    bottom: calc(108px + env(safe-area-inset-bottom));
+  }
+  .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-imagery-date {
+    bottom: calc(172px + env(safe-area-inset-bottom));
+  }
+
   :root {
     --topbar-height: calc(env(safe-area-inset-top, 0px) + 89px);
   }
