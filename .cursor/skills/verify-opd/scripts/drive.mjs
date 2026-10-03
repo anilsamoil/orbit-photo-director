@@ -822,6 +822,10 @@ async function assertMapChromeHidden(send) {
       expanded: toggle.getAttribute('aria-expanded'),
       toggleW: toggleBox.width,
       toggleH: toggleBox.height,
+      right: getComputedStyle(toggle).right,
+      minWidth: getComputedStyle(toggle).minWidth,
+      minHeight: getComputedStyle(toggle).minHeight,
+      rightGap: document.getElementById('map-pane').getBoundingClientRect().right - toggleBox.right,
       banner: getComputedStyle(banner).display,
       tab: getComputedStyle(tab).display,
     };
@@ -829,8 +833,18 @@ async function assertMapChromeHidden(send) {
   if (!state?.hidden || !state.pane || state.toolbar !== 'none' || state.timeStrip !== 'none' || state.label !== 'Controls' || state.expanded !== 'false') {
     throw new Error(`map chrome should be hidden ${JSON.stringify(state)}`);
   }
-  if (state.toggleW < 44 || state.toggleH < 44) throw new Error(`controls button ${JSON.stringify(state)}`);
+  assertHideControlBox(state, 'hidden');
   if (state.banner === 'none' || state.tab === 'none') throw new Error(`shell hidden with the map chrome ${JSON.stringify(state)}`);
+}
+
+function assertHideControlBox(box, label) {
+  if (!box || box.minWidth !== '88px' || box.minHeight !== '44px' || box.right !== '12px') {
+    throw new Error(`hide control box ${label} ${JSON.stringify(box)}`);
+  }
+  const width = box.width ?? box.toggleW;
+  const height = box.height ?? box.toggleH;
+  if (width < 88 || height < 44) throw new Error(`hide control size ${label} ${JSON.stringify(box)}`);
+  if (Math.abs(box.rightGap - 12) > 1) throw new Error(`hide control offset ${label} ${JSON.stringify(box)}`);
 }
 
 async function showMapChrome(send) {
@@ -1093,7 +1107,11 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     send,
     `(() => {
       const empty = document.getElementById('empty');
-      return empty && !empty.hidden && empty.textContent.includes('your targets') ? { ok: true } : null;
+      const shared = localStorage.getItem('opd_target_filter_v1');
+      const queue = localStorage.getItem('opd_queue_filter_v1');
+      if (!empty || empty.hidden || !empty.textContent.includes('your targets')) return null;
+      if (shared !== 'mine' || queue !== 'mine') return { shared, queue };
+      return { ok: true };
     })()`,
     'mine filter empty',
   );
@@ -1107,6 +1125,9 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
       const active = [...document.querySelectorAll('#queue-pane .filter-btn.active')].map((button) => button.id);
       if (cards.includes(${JSON.stringify(meta.names.queue[0])}) || cards.includes(${JSON.stringify(meta.names.queue[1])})) return null;
       if (active.length !== 1 || active[0] !== 'filter-launches-queue') return null;
+      const shared = localStorage.getItem('opd_target_filter_v1');
+      const queue = localStorage.getItem('opd_queue_filter_v1');
+      if (queue !== 'launches' || shared !== 'mine') return { shared, queue };
       const emptyOk = empty && !empty.hidden && /launch/i.test(empty.textContent || '');
       const launchOk = cards.includes(${JSON.stringify(meta.names.launch)});
       return emptyOk || launchOk ? { ok: true } : null;
@@ -1120,7 +1141,11 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     `(() => {
       const text = document.getElementById('cards')?.innerText || '';
       const active = [...document.querySelectorAll('#queue-pane .filter-btn.active')].map((button) => button.id);
-      return text.includes(${JSON.stringify(meta.names.queue[0])}) && text.includes(${JSON.stringify(meta.names.queue[1])}) && active.length === 1 && active[0] === 'filter-all-queue' ? { ok: true } : null;
+      const shared = localStorage.getItem('opd_target_filter_v1');
+      const queue = localStorage.getItem('opd_queue_filter_v1');
+      const cardsBack = text.includes(${JSON.stringify(meta.names.queue[0])}) && text.includes(${JSON.stringify(meta.names.queue[1])});
+      if (!cardsBack || active.length !== 1 || active[0] !== 'filter-all-queue' || shared !== 'all' || queue !== 'all') return null;
+      return { ok: true };
     })()`,
     'all filter',
   );
@@ -1222,7 +1247,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     'queue restored Verify Reef',
     30000,
   );
-  return `queue: cards, score, remind, shoot, mine filter, launches filter, keepsake, hide, empty (${emptied.text})`;
+  return `queue: cards, score, remind, shoot, mine writes opd_target_filter_v1, launches leaves it, keepsake, hide, empty (${emptied.text})`;
 }
 
 function upcomingListExpression(mesa, ascent, { hidden }) {
@@ -1487,7 +1512,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
-  return 'map: globe, legend, imagery, still hide control, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
+  return 'map: globe, legend, imagery, hide control 88x44 at 12px, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
 }
 
 const UNAVAILABLE_LEGEND = {
@@ -3292,9 +3317,20 @@ async function assertMapInfoControlsGone(send) {
 async function assertChromeToggleStationary(send) {
   const read = `(() => {
     const toggle = document.getElementById('map-chrome-toggle');
-    if (!toggle) return null;
+    const pane = document.getElementById('map-pane');
+    if (!toggle || !pane) return null;
     const box = toggle.getBoundingClientRect();
-    return { left: box.left, top: box.top, width: box.width, height: box.height };
+    const style = getComputedStyle(toggle);
+    return {
+      left: box.left,
+      top: box.top,
+      width: box.width,
+      height: box.height,
+      right: style.right,
+      minWidth: style.minWidth,
+      minHeight: style.minHeight,
+      rightGap: pane.getBoundingClientRect().right - box.right,
+    };
   })()`;
   const before = await evaluate(send, read);
   await click(send, '#map-chrome-toggle');
@@ -3314,6 +3350,9 @@ async function assertChromeToggleStationary(send) {
   if (!before || !hidden || !after || !same(before, hidden) || !same(before, after)) {
     throw new Error(`hide control moved ${JSON.stringify({ before, hidden, after })}`);
   }
+  assertHideControlBox(before, 'shown');
+  assertHideControlBox(hidden, 'controls');
+  assertHideControlBox(after, 'shown again');
 }
 
 async function drivePhone(send, evidenceDir, meta, home) {
@@ -3468,5 +3507,5 @@ async function drivePhone(send, evidenceDir, meta, home) {
   );
   await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
   await setViewport(send, home.width, home.height, home.mobile);
-  return `phone: 44px targets, map info controls hidden, hide control still, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
+  return `phone: 44px targets, map info controls hidden, hide control 88x44 at 12px, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
 }
