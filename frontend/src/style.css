@@ -3526,11 +3526,24 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  max-width: min(12rem, 100%);
+}
+
+[data-iss-launch-label] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-iss-launch-picker] {
-  max-width: min(22rem, 100%);
+  width: min(16rem, 100%);
+  max-width: min(16rem, 100%);
+  min-width: 44px;
+  flex: 0 1 16rem;
   padding: 0 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(20, 24, 33, 0.88);
