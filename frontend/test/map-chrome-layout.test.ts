@@ -186,8 +186,35 @@ describe('map chrome layout', () => {
     document.body.classList.remove('map-chrome-hidden');
     document.querySelector('#map-pane')!.classList.remove('map-chrome-hidden');
     expect(hidden('.map-toolbar')).not.toBe('none');
-    expect(hidden('.help-fab')).not.toBe('none');
+    expect(hidden('.help-fab')).toBe('none');
+    expect(hidden('.maplibregl-ctrl-bottom-right')).toBe('none');
     expect(hidden('#status-banner')).not.toBe('none');
+    mount('view-queue');
+    expect(getComputedStyle(document.querySelector('.help-fab')!).display).not.toBe('none');
+  });
+
+  it('keeps the hide control in the same place when the control bar opens', () => {
+    mount('view-map');
+    document.body.classList.add('map-chrome-hidden');
+    document.querySelector('#map-pane')!.classList.add('map-chrome-hidden');
+    document.querySelector('#map-pane')!.insertAdjacentHTML(
+      'beforeend',
+      '<button id="map-chrome-toggle" class="map-chrome-toggle" type="button">Controls</button>',
+    );
+    const button = document.querySelector('#map-chrome-toggle')!;
+    const place = () => {
+      const style = getComputedStyle(button);
+      return [style.position, style.left, style.right, style.top, style.bottom, style.transform].join('|');
+    };
+    const hiddenPlace = place();
+    document.body.classList.remove('map-chrome-hidden');
+    document.querySelector('#map-pane')!.classList.remove('map-chrome-hidden');
+    button.textContent = 'Hide';
+    expect(place()).toBe(hiddenPlace);
+    const style = getComputedStyle(button);
+    expect(style.right).toBe('12px');
+    expect(style.minWidth).toBe('88px');
+    expect(hiddenPlace).not.toContain('50%');
   });
 
   it('draws one centered info icon on the credit toggle, collapsed and expanded', () => {
@@ -217,26 +244,18 @@ describe('map chrome layout', () => {
     expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeLessThan(100);
   });
 
-  it('keeps the dock above the help button in both credit states', () => {
+  it('gives the right control bar the space the map info controls used', () => {
     mount('view-map');
-    const helpHeight = px('.help-fab', 'height');
-    const dockTop = ruleStyle('.view-map .map-control-dock').top;
-    const topExtra = Number(dockTop.match(/\+ (\d+)px\)/)?.[1] ?? 0);
-    const check = (helpSelector: string, dockSelector: string) => {
-      const helpBottom = Number.parseFloat(ruleStyle(helpSelector).bottom);
-      const needed = helpBottom + helpHeight;
-      const docks = rulesFor(dockSelector);
-      expect(docks.length).toBeGreaterThan(0);
-      expect(docks.some((style) => style.maxHeight.includes('safe-area-inset-bottom'))).toBe(true);
-      for (const style of docks) {
-        expect(reservedPx(style.maxHeight) - topExtra).toBeGreaterThanOrEqual(needed);
-      }
-    };
-    check('.view-map ~ .help-fab', '.view-map .map-control-dock');
-    check(
-      '.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab',
+    expect(getComputedStyle(document.querySelector('.help-fab')!).display).toBe('none');
+    expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).display).toBe('none');
+    const reserves = [
+      '.view-map .map-control-dock',
       '.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock',
-    );
+    ].flatMap((selector) => rulesFor(selector).map((style) => reservedPx(style.maxHeight)));
+    expect(reserves.length).toBeGreaterThan(0);
+    expect(Math.max(...reserves)).toBeLessThanOrEqual(16);
+    expect(css).not.toContain('- 169px');
+    expect(css).not.toContain('- 189px');
   });
 
   it('lifts the legend, imagery date, and help above expanded credits', () => {

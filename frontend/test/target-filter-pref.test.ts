@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   applyTargetFilter,
+  getQueueFilter,
   getTargetFilter,
   isPersonalPass,
+  setQueueFilter,
   setTargetFilter,
 } from '../src/target-filter-pref';
 
@@ -30,6 +32,39 @@ describe('getTargetFilter / setTargetFilter', () => {
   it('treats any unrecognized stored value as "all"', () => {
     localStorage.setItem('opd_target_filter_v1', 'garbage');
     expect(getTargetFilter()).toBe('all');
+  });
+});
+
+describe('getQueueFilter / setQueueFilter', () => {
+  it('defaults to "all"', () => {
+    expect(getQueueFilter()).toBe('all');
+  });
+
+  it('follows a saved Mine choice when the queue has no choice of its own', () => {
+    setTargetFilter('mine');
+    expect(getQueueFilter()).toBe('mine');
+  });
+
+  it('round-trips launches without replacing the shared target filter', () => {
+    setTargetFilter('mine');
+    setQueueFilter('launches');
+    expect(getQueueFilter()).toBe('launches');
+    expect(getTargetFilter()).toBe('mine');
+  });
+
+  it('writes All and Mine through to the shared target filter', () => {
+    setQueueFilter('launches');
+    setQueueFilter('mine');
+    expect(getQueueFilter()).toBe('mine');
+    expect(getTargetFilter()).toBe('mine');
+    setQueueFilter('all');
+    expect(getTargetFilter()).toBe('all');
+  });
+
+  it('treats an unrecognized queue value as the shared target filter', () => {
+    localStorage.setItem('opd_queue_filter_v1', 'garbage');
+    setTargetFilter('mine');
+    expect(getQueueFilter()).toBe('mine');
   });
 });
 
