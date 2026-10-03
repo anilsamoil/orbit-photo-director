@@ -114,6 +114,21 @@ async function shot(send, evidenceDir, name) {
   return file;
 }
 
+async function revealInView(send, selector) {
+  const seen = await evaluate(send, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return { ok: false, reason: 'missing' };
+    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const rect = el.getBoundingClientRect();
+    const text = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+    const style = getComputedStyle(el);
+    const inView = !el.hidden && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 8 && rect.height > 8 && rect.top >= -1 && rect.bottom <= window.innerHeight + 1;
+    return { ok: inView, top: Math.round(rect.top), bottom: Math.round(rect.bottom), viewport: window.innerHeight, text };
+  })()`);
+  if (!seen?.ok) throw new Error(`${selector} is not in view ${JSON.stringify(seen)}`);
+  return seen;
+}
+
 async function mouseClick(send, x, y, button = 'left') {
   const buttons = button === 'right' ? 2 : 1;
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, buttons, clickCount: 1 });
@@ -1104,8 +1119,85 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   const stored = await removedCuratedIds(send);
   if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
   await waitServerRemoved(baseUrl, [deltaId], []);
+  const reefName = meta.names.queue[0];
+  const partial = await evaluate(send, `(() => {
+    const empty = document.getElementById('empty');
+    const cards = document.getElementById('cards');
+    const text = cards?.innerText || '';
+    return {
+      ok: !!empty && empty.hidden === true && !!cards && cards.childElementCount > 0 && text.includes(${JSON.stringify(reefName)}) && !text.includes(${JSON.stringify(meta.names.queue[1])}),
+      hidden: empty ? empty.hidden : null,
+      count: cards ? cards.childElementCount : null,
+    };
+  })()`);
+  if (!partial?.ok) throw new Error(`hiding one queue card showed #empty ${JSON.stringify(partial)}`);
   await shot(send, evidenceDir, 'queue-hide');
-  return 'queue: cards, score, remind, shoot, mine filter, keepsake, hide';
+  const reefId = await hideNamed(send, '#cards', reefName);
+  const emptied = await waitFor(
+    send,
+    `(() => {
+      const empty = document.getElementById('empty');
+      const cards = document.getElementById('cards');
+      if (!empty || empty.hidden || !cards || cards.childElementCount !== 0) return null;
+      const text = (empty.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (text !== 'No passes in the next 90 minutes.') return null;
+      return { ok: true, text };
+    })()`,
+    'queue empty on last hide',
+  );
+  await click(send, '#tab-queue');
+  const visibleEmpty = await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view');
+      const empty = document.getElementById('empty');
+      if (!view || !empty) return { view: view ? view.className : null };
+      if (view.className !== 'view-queue' || empty.hidden) return { view: view.className, hidden: empty.hidden };
+      empty.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const rect = empty.getBoundingClientRect();
+      const text = (empty.textContent || '').replace(/\\s+/g, ' ').trim();
+      const inView = text === 'No passes in the next 90 minutes.' && rect.height >= 8 && rect.top >= -1 && rect.bottom <= window.innerHeight + 1;
+      return inView ? { ok: true, text, top: Math.round(rect.top), bottom: Math.round(rect.bottom) } : { view: view.className, hidden: empty.hidden, h: Math.round(rect.height), top: Math.round(rect.top), bottom: Math.round(rect.bottom), text };
+    })()`,
+    'queue empty in view',
+    10000,
+  );
+  await shot(send, evidenceDir, 'queue-empty');
+  await waitServerRemoved(baseUrl, [deltaId, reefId], []);
+  const restoredAt = new Date().toISOString();
+  const restoredIds = await evaluate(send, `(() => {
+    const key = 'opd-profile-anil';
+    const profile = JSON.parse(localStorage.getItem(key) || '{}');
+    const ids = Array.isArray(profile.removedCuratedIds) ? profile.removedCuratedIds : [];
+    profile.removedCuratedIds = ids.filter((id) => id !== ${JSON.stringify(reefId)});
+    profile.removedCuratedUpdatedAt = ${JSON.stringify(restoredAt)};
+    localStorage.setItem(key, JSON.stringify(profile));
+    return profile.removedCuratedIds;
+  })()`);
+  if (!Array.isArray(restoredIds) || restoredIds.includes(reefId) || !restoredIds.includes(deltaId)) {
+    throw new Error(`queue restore ids ${JSON.stringify(restoredIds)}`);
+  }
+  const put = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ removedCuratedIds: restoredIds, removedCuratedUpdatedAt: restoredAt }),
+  });
+  if (!put.ok) throw new Error(`queue restore PUT ${put.status}`);
+  await waitServerRemoved(baseUrl, [deltaId], [reefId]);
+  await reloadSettled(send);
+  await waitFor(
+    send,
+    `(() => {
+      const empty = document.getElementById('empty');
+      const text = document.getElementById('cards')?.innerText || '';
+      if (!empty || !empty.hidden) return null;
+      if (!text.includes(${JSON.stringify(reefName)}) || text.includes(${JSON.stringify(meta.names.queue[1])})) return null;
+      return { ok: true };
+    })()`,
+    'queue restored Verify Reef',
+    30000,
+  );
+  return `queue: cards, score, remind, shoot, mine filter, keepsake, hide, empty (${emptied.text})`;
 }
 
 function upcomingListExpression(mesa, ascent, { hidden }) {
@@ -1662,7 +1754,7 @@ async function driveIss(send, evidenceDir, viewport) {
     'iss telemetry collapsed again',
     10000,
   );
-  await proveIssLaunchLook(send, evidenceDir);
+  const launchLook = await proveIssLaunchLook(send, evidenceDir);
   await click(send, '[data-iss-preset="horizon"]');
   await waitFor(
     send,
@@ -1736,7 +1828,7 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, launch look, fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)})`;
 }
 
 async function proveIssLaunchLook(send, evidenceDir) {
@@ -1780,7 +1872,14 @@ async function proveIssLaunchLook(send, evidenceDir) {
       if (!(picker instanceof HTMLSelectElement) || !button || !frame || !card) return null;
       if (picker.value !== ${JSON.stringify(before.value)}) return null;
       if (!button.textContent.includes('Verify Pad')) return null;
-      if (card.hasAttribute('hidden') || !card.textContent.includes('Verify')) return null;
+      if (card.hasAttribute('hidden')) return null;
+      const name = card.querySelector('[data-iss-launch-name]')?.textContent || '';
+      const site = card.querySelector('[data-iss-launch-site]')?.textContent || '';
+      const timeLabel = card.querySelector('[data-iss-launch-time-label]')?.textContent || '';
+      const timeValue = card.querySelector('[data-iss-launch-time-value]')?.textContent || '';
+      if (name !== 'Verify Ascent' || site !== 'Verify Pad') return null;
+      if (timeLabel !== 'Launch window' && timeLabel !== 'NET, tentative') return null;
+      if (!timeValue) return null;
       const arrow = button.querySelector('[data-iss-launch-arrow]');
       const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
       if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
@@ -1804,12 +1903,75 @@ async function proveIssLaunchLook(send, evidenceDir) {
       if (!center) return null;
       const moved = Math.hypot(center.lng - ${Number(before.lng)}, center.lat - ${Number(before.lat)});
       if (!(moved < 0.15)) return null;
-      return { ok: true, lng: center.lng, lat: center.lat };
+      return { ok: true, lng: center.lng, lat: center.lat, name, site, timeLabel, timeValue, visibility, held: moved };
     })()`,
     'iss launch selected',
     15000,
   );
+  const cardShot = await revealInView(send, '[data-iss-launch-card]');
+  if (!cardShot.text.includes(selected.name) || !cardShot.text.includes(selected.site) || !cardShot.text.includes(selected.visibility) || !cardShot.text.includes(selected.timeLabel)) {
+    throw new Error(`launch card shot would miss the facts ${JSON.stringify(cardShot)}`);
+  }
   await shot(send, evidenceDir, 'iss-launch-look');
+  const pickerBox = await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return null;
+    const option = picker.selectedOptions[0];
+    if (option) option.dataset.opdVerifyOption = 'held';
+    window.__opdPickerWatch = null;
+    const menuOpen = () => {
+      try { return picker.matches(':open') === true; } catch { return false; }
+    };
+    const arm = () => {
+      if (window.__opdPickerWatch) return;
+      let error = '';
+      try {
+        if (!menuOpen()) picker.showPicker();
+      } catch (thrown) {
+        error = String(thrown);
+      }
+      const samples = [];
+      const started = performance.now();
+      const utc = () => document.querySelector('[data-iss-utc]')?.textContent || '';
+      const sample = (kind) => samples.push({
+        kind,
+        t: Math.round(performance.now() - started),
+        open: menuOpen(),
+        value: picker.value,
+        held: picker.selectedOptions[0]?.dataset.opdVerifyOption || '',
+        utc: utc(),
+      });
+      sample('start');
+      window.__opdPickerWatch = new Promise((resolve) => {
+        const timer = setInterval(() => sample('tick'), 200);
+        setTimeout(() => {
+          clearInterval(timer);
+          sample('end');
+          resolve({ samples, error });
+        }, 1600);
+      });
+    };
+    window.__opdArmLaunchPicker = arm;
+    picker.addEventListener('pointerdown', arm, { once: true });
+    picker.addEventListener('mousedown', arm, { once: true });
+    const rect = picker.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  if (!pickerBox) throw new Error('launch picker missing before open');
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pickerBox.x, y: pickerBox.y, button: 'left', buttons: 1, clickCount: 1 });
+  await sleep(100);
+  const armedByMouse = await evaluate(send, `Boolean(window.__opdPickerWatch)`);
+  if (!armedByMouse) await evaluate(send, `window.__opdArmLaunchPicker && window.__opdArmLaunchPicker()`);
+  const watched = await evaluate(send, `window.__opdPickerWatch || { missing: true }`);
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pickerBox.x, y: pickerBox.y, button: 'left', buttons: 0, clickCount: 1 });
+  const samples = Array.isArray(watched?.samples) ? watched.samples : [];
+  const sawOpen = samples.some((sample) => sample.open === true);
+  const afterTick = samples.find((sample) => sample.utc && sample.utc !== samples[0]?.utc);
+  if (!afterTick || afterTick.value !== before.value || afterTick.held !== 'held' || (!sawOpen && !watched?.error)) {
+    throw new Error(`launch picker did not hold the selection across a clock tick ${JSON.stringify(watched)}`);
+  }
+  const menuNote = sawOpen ? 'menu opened' : 'menu :open not observed';
+  await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.blur()`);
   await click(send, '[data-iss-launch]');
   await waitFor(
     send,
@@ -1823,6 +1985,54 @@ async function proveIssLaunchLook(send, evidenceDir) {
     'iss launch look moved',
     10000,
   );
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.value = 'none';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement) || picker.value !== '') return null;
+      if ((picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
+      if (document.querySelector('[data-iss-launch]')) return null;
+      const card = document.querySelector('[data-iss-launch-card]');
+      if (card && !card.hidden) return null;
+      if (document.querySelector('.iss-launch-pin, [data-iss-launch-edge]')) return null;
+      const frame = document.querySelector('[data-iss-frame]');
+      if (frame?.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      return { ok: true };
+    })()`,
+    'launch None cleared',
+    10000,
+  );
+  await revealInView(send, '[data-iss-launch-picker]');
+  await shot(send, evidenceDir, 'iss-launch-none');
+  await reloadSettled(send);
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const scene = document.querySelector('[data-iss-scene]');
+      if (!(picker instanceof HTMLSelectElement) || !scene) return null;
+      if (picker.value !== '' || (picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
+      if (document.querySelector('[data-iss-launch]')) return null;
+      const card = document.querySelector('[data-iss-launch-card]');
+      if (card && !card.hidden) return null;
+      return { ok: true };
+    })()`,
+    'launch choice cleared on reload',
+    45000,
+  );
+  const choose = await revealInView(send, '[data-iss-launch-picker]');
+  const chooseLabel = await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.selectedOptions?.[0]?.textContent || ''`);
+  if (chooseLabel !== 'Choose launch') throw new Error(`reload shot missed Choose launch ${JSON.stringify({ choose, chooseLabel })}`);
+  await shot(send, evidenceDir, 'iss-launch-reloaded');
+  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / ${menuNote}; selection held across a UTC tick / None / reload Choose launch`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -2848,6 +3058,8 @@ async function driveHelp(send, evidenceDir) {
     'W, A, S, and D',
     'Hold Shift',
     '#iss=',
+    'The Launch menu sits beside Telemetry',
+    'None clears it.',
     'beside Telemetry',
     'about 18°',
     'gold pin',
@@ -2877,7 +3089,7 @@ async function driveHelp(send, evidenceDir) {
     10000,
   );
   await shot(send, evidenceDir, 'help-queue');
-  return 'help: opened, aiming, closed, queue corner';
+  return 'help: opened, aiming, launch line, closed, queue corner';
 }
 
 const LAST_GOOD_TLE = {
