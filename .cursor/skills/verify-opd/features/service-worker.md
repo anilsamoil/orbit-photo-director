@@ -30,7 +30,7 @@ This command does not open a browser. It does not cover iPhone or iPad. `drive` 
 ## Gotchas
 
 - `scripts/verify-sw-upgrade.sh https://map.astroanil.dev` fails closed while Cloudflare Access answers with a login redirect. That failure is not a bad build. The script sends no auth headers. Use `opd-verify sw` for a local preview.
-- `docs/SW_UPGRADE_VERIFY.md` section 4 expects an open tab's controller to swap to the new worker with no navigation. `frontend/vite.config.ts` sets `clientsClaim: true`, and the VitePWA comment says that swap is the current behavior. `sw` requires `clientsClaim()` in `/sw.js`. A tab that stays on the old controller until a navigation or a reload is the failure mode in that doc.
+- `docs/SW_UPGRADE_VERIFY.md` section 4 expects an open tab's controller to swap to the new worker and the tab to reload onto the current shell. `frontend/vite.config.ts` sets `clientsClaim: true`. `sw` requires `clientsClaim()` in `/sw.js`. A tab that stays on the previous build after the new worker activates is the failure mode in that doc.
 - `sw` does not start the dev server from `up`, and it does not need `doctor`.
 - The build output stays under `$OPD_VERIFY_HOME/preview-dist`. It is not a product source change.
 - Vite preview labels `sw.js` as `text/javascript`. `scripts/verify-sw-upgrade.sh` requires `application/javascript`, matching `worker/src/index.ts`. The skill's static server sets that type. Do not point the script at `vite preview` and expect this check to pass.

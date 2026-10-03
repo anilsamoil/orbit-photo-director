@@ -63,16 +63,19 @@ without intent.
 3. Observe: queue cards render in <1s with "LOS · X min ago" banner
 4. The queue should match what you saw before going offline
 
-❌ Fail mode: blank page on reload → SW didn't precache app shell, OR the
-snapshot path crashed. Console will tell you which.
+❌ Fail mode: blank page on reload → `opd-shell` has no `index.html` (this
+worker never finished an online load), or the snapshot path crashed.
+Console will tell you which. `index.html` is not a Workbox precache entry.
 
 ### 4. SW upgrade lifecycle (multi-tab)
 
 `clientsClaim` is `true` in `frontend/vite.config.ts` (since 2026-08-24),
-and `skipWaiting` is `true`. After an update, an open tab's controller
-swaps to the new service worker without a navigation. That swap is
-expected. The JavaScript already running in the tab stays the old bundle
-until you reload.
+and `skipWaiting` is `true`. After an update, the new worker activates and
+reloads open tabs (`public/sw-shell.js`) so they load the current
+`index.html` instead of the previous precached shell. App navigations are
+network-first with an offline fallback; `sw.js`, `registerSW.js`, and
+`index.html` are served `no-cache`. A tab that stays on the previous build
+after that reload is a regression.
 
 1. Open a second tab to `map.astroanil.dev`.
 2. Confirm both tabs show `/sw.js` with status activated.
@@ -80,14 +83,16 @@ until you reload.
 4. Deploy a new build to R2, or wait for the next deploy.
 5. In Tab 1, open DevTools → Application → Service Workers and click
    **Update**.
-6. Confirm the old worker is redundant and the new worker is activated
-   and controlling Tab 1. No navigation is required. Tab 2 swaps the
-   same way.
-7. Reload Tab 1. Confirm the page source shows the new asset hash.
-8. Open a tab after the deploy. Confirm it is on the new worker.
+6. Confirm the old worker is redundant and the new worker is activated.
+   The tab reloads itself onto the current `index.html`. Confirm the page
+   source shows the new asset hash without a second manual reload. Tab 2
+   reloads the same way.
+7. Open a tab after the deploy. Confirm it is on the new worker and the
+   new asset hash.
 
-❌ Fail mode: Tab 1 stays on the old controller until a navigation or a
-reload. That is a `clientsClaim: false` regression in `vite.config.ts`.
+❌ Fail mode: a tab stays on the previous build after the new worker
+activates. `sw.js` was served immutable, or the shell is still a precache
+cache-first hit.
 
 ### 5. localStorage snapshot survives the upgrade
 

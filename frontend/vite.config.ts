@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { defineConfig } from 'vite';
-import { NAVIGATION_FALLBACK_DENYLIST } from './src/sw-navigation';
+import { createAppShellHandler, createAppShellMatcher, NAVIGATION_FALLBACK_DENYLIST } from './src/sw-navigation';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // Read the repo-root VERSION file at build time so the app version stamped
@@ -25,9 +25,9 @@ export default defineConfig({
       // clientsClaim via 'autoUpdate'. This file's workbox block is the
       // one place that flag is set. There is no update prompt and nothing
       // imports virtual:pwa-register. skipWaiting: true activates the new
-      // worker on install. clientsClaim: true (since 2026-08-24) makes
-      // that worker take control of open tabs without a navigation. A
-      // controller swap with no navigation is the current behavior.
+      // worker on install. clientsClaim: true makes that worker take
+      // control of open tabs. public/sw-shell.js then navigates those tabs
+      // onto the current index.html.
       registerType: 'prompt',
       injectRegister: 'auto',
 
@@ -60,15 +60,15 @@ export default defineConfig({
       },
 
       workbox: {
-        // Precache the app shell at install time. Hashed assets (index-X.js,
-        // index-X.css, etc.) get content-hash filenames from Vite, so they're
-        // safe to precache aggressively.
-        // v1.4.3.0: added `geojson` so the coastline overlay
-        // (ne_110m_coastline.geojson, ~80KB) is part of the offline shell.
-        // Without this, the world-map outline goes missing as soon as the
-        // operator loses connectivity, even though the basemap tiles and
-        // ground track already work offline.
-        globPatterns: ['**/*.{js,css,html,svg,ico,woff2,geojson}'],
+        // Precache hashed assets only. index.html is not in this list: a
+        // precached shell is cache-first, and Safari will keep serving that
+        // copy after a deploy until website data is cleared. Navigations use
+        // the Network-backed app-shell route below. public/sw-shell.js seeds
+        // the offline copy and reloads open tabs when the new worker activates.
+        // v1.4.3.0: geojson stays precached so the coastline overlay
+        // (ne_110m_coastline.geojson, ~80KB) survives loss of signal.
+        globPatterns: ['**/*.{js,css,svg,ico,woff2,geojson}'],
+        importScripts: ['sw-shell.js'],
 
         // skipWaiting: new SW activates as soon as installed (doesn't sit in
         // 'waiting' state).
@@ -89,10 +89,18 @@ export default defineConfig({
 
         // Don't precache the source-map files — they're huge and only useful
         // when the dev tools are open.
-        globIgnores: ['**/*.map'],
+        globIgnores: ['**/*.map', 'sw-shell.js', 'registerSW.js'],
 
         // Runtime cache routing per the locked V2 plan.
         runtimeCaching: [
+          {
+            // App navigations. Registered after precache, which no longer
+            // contains index.html, so this route is the one that answers
+            // `/`, `/?u=`, and `/anil`. Denylisted paths are not matched and
+            // reach the network as themselves (Access 302, /api/app).
+            urlPattern: createAppShellMatcher(NAVIGATION_FALLBACK_DENYLIST),
+            handler: createAppShellHandler(),
+          },
           {
             // manifest.json: NetworkFirst. Falls back to cache when offline OR
             // when the network is so slow it'd hang the boot path. The
@@ -302,14 +310,17 @@ export default defineConfig({
         // Don't cache cross-origin opaque responses by default — opaque
         // responses inflate cache size and can mask 404s as cached "successes".
         // The runtimeCaching rules above scope the tile sources we DO want.
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: NAVIGATION_FALLBACK_DENYLIST,
+        // vite-plugin-pwa defaults navigateFallback to index.html, which serves
+        // the precached shell cache-first. Null clears that default. The
+        // app-shell route answers navigations and still uses the denylist.
+        navigateFallback: null,
       },
 
       // Don't include extra static assets in the precache from outside the
-      // build dir. (vite-plugin-pwa generates manifest.webmanifest + injects
-      // the <link rel="manifest"> + the registerSW <script> into index.html
-      // automatically as part of injectRegister: 'auto'.)
+      // build dir. (vite-plugin-pwa injects the manifest link and the
+      // registerSW script tag. public/registerSW.js is the script; it
+      // registers with updateViaCache: 'none' and checks again when the
+      // page becomes visible.)
       includeAssets: [],
     }),
   ],

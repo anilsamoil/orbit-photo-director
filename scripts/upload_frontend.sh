@@ -20,6 +20,7 @@ content_type_for() {
     *.js)          echo "application/javascript; charset=utf-8" ;;
     *.js.map|*.css.map) echo "application/json" ;;
     *.json)        echo "application/json" ;;
+    *.webmanifest) echo "application/manifest+json" ;;
     *.svg)         echo "image/svg+xml" ;;
     *.png)         echo "image/png" ;;
     *.woff|*.woff2) echo "font/woff2" ;;
@@ -29,17 +30,28 @@ content_type_for() {
 
 cache_control_for() {
   case "$1" in
-    *index.html) echo "public, max-age=60" ;;          # short — manifest pointer
-    /assets/*)   echo "public, max-age=31536000, immutable" ;;  # hashed names
-    *.js|*.css)  echo "public, max-age=31536000, immutable" ;;
-    *)           echo "public, max-age=300" ;;
+    *.html|sw.js|registerSW.js|sw-shell.js|manifest.webmanifest)
+      echo "no-cache, max-age=0, must-revalidate" ;;
+    assets/*|*/assets/*|workbox-*.js|*.css|*.js|*.map)
+      echo "public, max-age=31536000, immutable" ;;
+    *)
+      echo "public, max-age=300" ;;
   esac
+}
+
+is_shell_entry() {
+  case "$1" in
+    index.html|sw.js|registerSW.js|sw-shell.js|manifest.webmanifest) return 0 ;;
+  esac
+  return 1
 }
 
 COUNT=0
 FAILED_FILES=()
-while IFS= read -r FILE; do
-  REL_PATH="${FILE#$DIST_DIR/}"
+upload_one() {
+  local FILE="$1"
+  local REL_PATH="${FILE#$DIST_DIR/}"
+  local CT CC WRANGLER_ERR
   CT=$(content_type_for "$REL_PATH")
   CC=$(cache_control_for "$REL_PATH")
   # Capture stderr so we can surface real errors instead of silently
@@ -54,11 +66,31 @@ while IFS= read -r FILE; do
     echo "  ✗ $REL_PATH" >&2
     echo "    $WRANGLER_ERR" | head -5 | sed 's/^/    /' >&2
     FAILED_FILES+=("$REL_PATH")
-    continue
+    return
   }
   COUNT=$((COUNT + 1))
   echo "  ✓ $REL_PATH"
+}
+
+SHELL_FILES=()
+while IFS= read -r FILE; do
+  REL_PATH="${FILE#$DIST_DIR/}"
+  if is_shell_entry "$REL_PATH"; then
+    SHELL_FILES+=("$FILE")
+    continue
+  fi
+  upload_one "$FILE"
 done < <(find "$DIST_DIR" -type f)
+
+# Helper and registration before the document, sw.js last. The new worker
+# imports sw-shell.js and seeds index.html as soon as sw.js is fetched.
+for name in manifest.webmanifest sw-shell.js registerSW.js index.html sw.js; do
+  for FILE in "${SHELL_FILES[@]}"; do
+    if [ "${FILE#$DIST_DIR/}" = "$name" ]; then
+      upload_one "$FILE"
+    fi
+  done
+done
 
 if [ "${#FAILED_FILES[@]}" -gt 0 ]; then
   echo "" >&2

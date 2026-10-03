@@ -323,7 +323,7 @@ function pathToKey(pathname: string): string {
 }
 
 const CACHE_BY_EXT: Record<string, string> = {
-  html: 'public, max-age=60',
+  html: 'no-cache, max-age=0, must-revalidate',
   json: 'public, max-age=10',
   css: 'public, max-age=31536000, immutable',
   js: 'public, max-age=31536000, immutable',
@@ -332,13 +332,27 @@ const CACHE_BY_EXT: Record<string, string> = {
   svg: 'public, max-age=86400',
   woff: 'public, max-age=31536000, immutable',
   woff2: 'public, max-age=31536000, immutable',
+  webmanifest: 'no-cache, max-age=0, must-revalidate',
 };
+
+/** Unhashed files Safari must revalidate. A year-long immutable response for sw.js lets an already-registered worker keep its precached shell until website data is cleared. */
+const REVALIDATE = 'no-cache, max-age=0, must-revalidate';
+const SHELL_FILENAMES = new Set(['sw.js', 'registerSW.js', 'sw-shell.js', 'manifest.webmanifest']);
+
+function cacheControlFor(key: string, stored: string | undefined): string {
+  const base = key.split('/').pop() ?? key;
+  if (key.endsWith('.html') || SHELL_FILENAMES.has(base)) return REVALIDATE;
+  if (stored) return stored;
+  const ext = base.includes('.') ? (base.split('.').pop()?.toLowerCase() ?? '') : '';
+  return CACHE_BY_EXT[ext] ?? 'public, max-age=300';
+}
 
 const CONTENT_TYPE_BY_EXT: Record<string, string> = {
   html: 'text/html; charset=utf-8',
   json: 'application/json',
   css: 'text/css; charset=utf-8',
   js: 'application/javascript; charset=utf-8',
+  webmanifest: 'application/manifest+json',
   map: 'application/json',
   png: 'image/png',
   svg: 'image/svg+xml',
@@ -366,7 +380,7 @@ async function handleStatic(pathname: string, env: Env): Promise<Response> {
   }
   const ext = key.split('.').pop()?.toLowerCase() ?? '';
   const ct = obj.httpMetadata?.contentType ?? CONTENT_TYPE_BY_EXT[ext] ?? 'application/octet-stream';
-  const cc = obj.httpMetadata?.cacheControl ?? CACHE_BY_EXT[ext] ?? 'public, max-age=300';
+  const cc = cacheControlFor(key, obj.httpMetadata?.cacheControl);
   return new Response(obj.body, {
     status: 200,
     headers: {
