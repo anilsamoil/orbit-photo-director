@@ -3478,9 +3478,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 
 [data-iss-card] {
   position: static;
-  align-self: flex-start;
+  align-self: stretch;
   z-index: 2;
-  width: min(28rem, 100%);
+  width: 100%;
   max-width: 100%;
   background: transparent;
   border: 0;
@@ -3641,6 +3641,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 
 [data-iss-telemetry-body] {
   box-sizing: border-box;
+  width: min(28rem, 100%);
   margin-top: 0.35rem;
   min-height: 0;
   max-width: 100%;

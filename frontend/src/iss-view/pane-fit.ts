@@ -38,7 +38,8 @@ export function fitIssPane(measure: PaneMeasure): PaneFit {
   const belowReserve = launchCardPlace === 'below' ? cardHeight + cardGap : 0;
   const contentW = Math.max(1, measure.paneWidthPx - measure.padXPx - measure.sideWidthPx - sideReserve);
   const room = measure.paneHeightPx - measure.padYPx - measure.toolbarPx - measure.buttonPx - measure.gapPx * 2 - belowReserve;
-  const reserve = Math.max(measure.labelPx, 1);
+  const sideCardPx = launchCardPlace === 'side' ? cardHeight : 0;
+  const reserve = Math.max(measure.labelPx, sideCardPx, 1);
   const naturalStage = room - measure.bodyPx;
   const stageBudget = naturalStage >= reserve ? naturalStage : reserve;
   const fitted = sceneFit(contentW, Math.max(1, stageBudget));

@@ -331,9 +331,9 @@ describe('ISS frame fit', () => {
     await paint(fitted.scene);
     for (let tick = 0; tick < 4; tick += 1) await fitted.scene.paint();
     expect(fitted.root.dataset.issLaunchPlace).toBe('side');
-    expect(fitted.frame.style.width).toBe('126px');
-    expect(fitted.frame.style.height).toBe('84px');
-    expect(fitted.body.style.maxHeight).toBe('51px');
+    expect(fitted.frame.style.width).toBe('132px');
+    expect(fitted.frame.style.height).toBe('88px');
+    expect(fitted.body.style.maxHeight).toBe('47px');
     fitted.button.click();
     await paint(fitted.scene);
     expect(fitted.frame.style.width).toBe('164px');
