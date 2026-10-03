@@ -476,6 +476,26 @@ function queueDistanceThresholdKm(): number {
   return currentProfile?.distanceThresholdKm ?? DEFAULT_DISTANCE_THRESHOLD_KM;
 }
 
+/** Copy and visibility for an empty Queue. A hide rips the last card out
+ *  of the DOM without a full render, so it paints this itself. */
+function showQueueEmpty(empty: HTMLElement, now: number): void {
+  // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
+  // by generator lag (every pick has aged out of the 90-min window),
+  // not orbital geometry. Surface a specific hint so the operator
+  // knows to wait for the next tick rather than wondering whether
+  // there are simply no passes coming.
+  // 'mine' filter empties differently — it's a filter choice, not lag —
+  // so name that cause instead of the generator-lag hint.
+  const filter = getTargetFilter();
+  if (filter === 'mine') {
+    empty.textContent = 'None of your targets pass in the next 90 minutes. Switch to All to see shared targets.';
+  } else {
+    const hint = currentManifest ? emptyQueueHint(currentManifest, now, currentlyOffline) : null;
+    empty.textContent = hint ?? 'No passes in the next 90 minutes.';
+  }
+  empty.hidden = false;
+}
+
 /** Render the Queue + Upcoming panes from current module state. Extracted so
  *  both the snapshot boot and a normal refresh share one render path. */
 function renderQueue(): void {
@@ -526,20 +546,7 @@ function renderQueue(): void {
   const visible = slots.ground;
   if (visible.length === 0 && slots.launches.length === 0) {
     cards.replaceChildren();
-    // V4-P3 hint: when manifest is 90+ min old, empty Queue is caused
-    // by generator lag (every pick has aged out of the 90-min window),
-    // not orbital geometry. Surface a specific hint so the operator
-    // knows to wait for the next tick rather than wondering whether
-    // there are simply no passes coming.
-    // 'mine' filter empties differently — it's a filter choice, not lag —
-    // so name that cause instead of the generator-lag hint.
-    if (filter === 'mine') {
-      empty.textContent = 'None of your targets pass in the next 90 minutes. Switch to All to see shared targets.';
-    } else {
-      const hint = currentManifest ? emptyQueueHint(currentManifest, now, currentlyOffline) : null;
-      empty.textContent = hint ?? 'No passes in the next 90 minutes.';
-    }
-    empty.hidden = false;
+    showQueueEmpty(empty, now);
   } else {
     empty.hidden = true;
     // Operator preference governs display order. Generator emits
@@ -1020,6 +1027,11 @@ async function handleHideAction(p: PassEntry): Promise<void> {
     if (el.dataset.targetId === p.target_id) {
       el.remove();
     }
+  }
+  const queueHost = document.getElementById('cards');
+  const queueEmpty = document.getElementById('empty');
+  if (queueHost && queueEmpty && queueHost.childElementCount === 0) {
+    showQueueEmpty(queueEmpty, Date.now());
   }
   if (isPersonal) {
     showToast(`Removing personal target "${p.target_name}"…`, 'warn');
