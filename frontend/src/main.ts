@@ -8,7 +8,7 @@
 
 import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
-import { bindHelp } from './help';
+import { bindHelp, syncHelpButton } from './help';
 import { bindMapChrome } from './map-chrome';
 import { bindLiveReadout } from './live-readout';
 import { bindTopbarPan } from './topbar-pan';
@@ -1366,6 +1366,7 @@ function bindTabs(): void {
       if (activeTab.offsetLeft < scroller.scrollLeft) scroller.scrollLeft = activeTab.offsetLeft;
       else if (edge > scroller.scrollLeft) scroller.scrollLeft = edge;
     }
+    syncHelpButton();
   };
 
   tabQueue.addEventListener('click', () => {

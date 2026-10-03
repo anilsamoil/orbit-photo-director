@@ -29,12 +29,12 @@ import { collapseAttribution } from './attribution';
 import { layerListener, mapListener, toHit, toLngLat } from './events';
 
 /** The MapLibre constructor options for an initial camera. Every gesture is
- *  on, the world repeats across the antimeridian, and attribution is the
- *  compact control. */
+ *  on, the world repeats across the antimeridian, and the map page does not
+ *  mount the attribution control. */
 export function maplibreMapOptions(camera: InitialCamera): {
   center: LngLat;
   zoom: number;
-  attributionControl: { compact: true };
+  attributionControl: false;
   renderWorldCopies: true;
   dragPan: true;
   dragRotate: true;
@@ -45,7 +45,7 @@ export function maplibreMapOptions(camera: InitialCamera): {
   return {
     center: camera.center,
     zoom: camera.zoom,
-    attributionControl: { compact: true },
+    attributionControl: false,
     renderWorldCopies: true,
     dragPan: true,
     dragRotate: true,

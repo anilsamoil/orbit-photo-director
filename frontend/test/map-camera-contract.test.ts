@@ -47,8 +47,8 @@ describe('maplibreMapOptions', () => {
     });
   });
 
-  it('compacts the attribution control so it does not cover the dock', () => {
-    expect(maplibreMapOptions(initialCamera(1024)).attributionControl).toEqual({ compact: true });
+  it('leaves the attribution control off so the map page has no info button', () => {
+    expect(maplibreMapOptions(initialCamera(1024)).attributionControl).toBe(false);
   });
 
   it('sets no projection, bearing, or pitch, inheriting mercator and zero', () => {

@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 
 describe('construction', () => {
-  it('hands MapLibre a version-8 style, the camera, every gesture on, and the compact attribution', () => {
+  it('hands MapLibre a version-8 style, the camera, every gesture on, and no attribution control', () => {
     expect(map.options).toEqual({
       container: expect.any(HTMLDivElement),
       style: maplibreStyle(STYLE),
@@ -47,7 +47,7 @@ describe('construction', () => {
     expect(maplibreMapOptions({ center: [1, 2], zoom: 4 })).toEqual({
       center: [1, 2],
       zoom: 4,
-      attributionControl: { compact: true },
+      attributionControl: false,
       renderWorldCopies: true,
       dragPan: true,
       dragRotate: true,

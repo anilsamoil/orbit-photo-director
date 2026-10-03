@@ -884,10 +884,18 @@ function scrollHelpToAnchor(modal: HTMLElement, anchor: string): void {
   target.scrollIntoView({ block: 'start' });
 }
 
+/** The map page has no corner ?. Queue, Upcoming, ISS view, Profile, and Log keep it. */
+export function syncHelpButton(): void {
+  const fab = document.getElementById('help-fab');
+  if (!(fab instanceof HTMLButtonElement)) return;
+  fab.hidden = document.getElementById('view')?.classList.contains('view-map') === true;
+}
+
 /** Wire the fixed "?" corner button to the help modal. Call once at boot.
  *  No-ops if the button isn't in the DOM (older test fixtures). */
 export function bindHelp(): void {
   const fab = document.getElementById('help-fab');
   if (!fab) return;
+  syncHelpButton();
   fab.addEventListener('click', () => openHelpModal());
 }
