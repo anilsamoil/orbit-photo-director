@@ -1785,7 +1785,15 @@ async function proveIssLaunchLook(send, evidenceDir) {
       const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
       if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
       if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
-      if (!document.querySelector('.iss-launch-pin, [data-iss-launch-edge]')) return null;
+      const visibility = card.querySelector('[data-iss-launch-visibility]')?.textContent || '';
+      const mark = document.querySelector('.iss-launch-pin, [data-iss-launch-edge]');
+      if (visibility === 'Site below horizon') {
+        if (mark) return null;
+      } else if (visibility === 'Site in frame' || visibility === 'Site outside frame') {
+        if (!mark) return null;
+      } else {
+        return null;
+      }
       const b = button.getBoundingClientRect();
       const frameBox = frame.getBoundingClientRect();
       const cardBox = card.getBoundingClientRect();

@@ -3490,7 +3490,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 
 [data-iss-controls] {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.35rem;
   align-items: center;
   max-width: 100%;
@@ -3522,10 +3522,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   cursor: pointer;
 }
 
+[data-iss-telemetry] {
+  flex: 0 0 auto;
+}
+
 [data-iss-launch] {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  flex: 0 0 auto;
+  min-width: 44px;
   max-width: min(12rem, 100%);
 }
 
@@ -3535,11 +3541,19 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   white-space: nowrap;
 }
 
-[data-iss-launch-picker] {
-  width: min(16rem, 100%);
-  max-width: min(16rem, 100%);
+[data-iss-launch-picker-wrap] {
+  flex: 1 1 0;
   min-width: 44px;
-  flex: 0 1 16rem;
+  max-width: 16rem;
+  min-height: 44px;
+  overflow: hidden;
+}
+
+[data-iss-launch-picker] {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  flex: none;
   padding: 0 0.7rem;
   overflow: hidden;
   text-overflow: ellipsis;

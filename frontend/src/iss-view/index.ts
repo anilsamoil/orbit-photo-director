@@ -232,7 +232,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const picker = document.createElement('select');
   picker.dataset.issLaunchPicker = '';
   picker.setAttribute('aria-label', 'Launch');
-  controls.append(telemetry, picker, launchesHost);
+  const pickerWrap = document.createElement('div');
+  pickerWrap.dataset.issLaunchPickerWrap = '';
+  pickerWrap.append(picker);
+  controls.append(telemetry, pickerWrap, launchesHost);
   card.append(controls, telemetryBody);
   root.append(toolbar, view, card);
   host.append(root);
@@ -511,8 +514,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         while (picker.options.length > rows.length) picker.remove(picker.options.length - 1);
         rows.forEach((row, index) => {
           const option = picker.options[index] ?? picker.appendChild(document.createElement('option'));
-          if (option.value !== row.value) option.value = row.value;
           if (option.textContent !== row.label) option.textContent = row.label;
+          if (option.getAttribute('value') !== row.value) option.setAttribute('value', row.value);
         });
       }
       if (picker.value !== selectedEventId) picker.value = selectedEventId;
