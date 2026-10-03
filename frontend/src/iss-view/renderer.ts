@@ -1,5 +1,5 @@
 import type { ScenePose } from '../iss-g1/model';
-import type { LaunchSite } from './launches';
+import type { LaunchSite, LaunchVisibility } from './launches';
 import type { ImageryState } from './model';
 
 export type IssAim = {
@@ -14,6 +14,7 @@ export type IssRendererHooks = {
   onImagery: (note: ImageryState) => void;
   onContextLost: () => void;
   onLaunchLook?: (eventId: string) => void;
+  onLaunchVisibility?: (eventId: string, visibility: LaunchVisibility) => void;
 };
 
 export type IssRenderer = {

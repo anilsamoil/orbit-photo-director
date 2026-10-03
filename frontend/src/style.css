@@ -3338,13 +3338,29 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   display: none;
 }
 
+[data-iss-view] {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+}
+
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-view] {
+  flex-direction: column;
+  align-items: center;
+}
+
 [data-iss-stage] {
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -3462,9 +3478,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 
 [data-iss-card] {
   position: static;
-  align-self: flex-start;
+  align-self: stretch;
   z-index: 2;
-  width: min(28rem, 100%);
+  width: 100%;
   max-width: 100%;
   background: transparent;
   border: 0;
@@ -3474,7 +3490,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 
 [data-iss-controls] {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.35rem;
   align-items: center;
   max-width: 100%;
@@ -3492,7 +3508,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 }
 
 [data-iss-telemetry],
-[data-iss-launch] {
+[data-iss-launch],
+[data-iss-launch-picker] {
   min-height: 44px;
   min-width: 44px;
   padding: 0 0.95rem;
@@ -3505,10 +3522,89 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   cursor: pointer;
 }
 
+[data-iss-telemetry] {
+  flex: 0 0 auto;
+}
+
 [data-iss-launch] {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  flex: 0 0 auto;
+  min-width: 44px;
+  max-width: min(12rem, 100%);
+}
+
+[data-iss-launch-label] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-iss-launch-picker-wrap] {
+  flex: 1 1 0;
+  min-width: 44px;
+  max-width: 16rem;
+  min-height: 44px;
+  overflow: hidden;
+}
+
+[data-iss-launch-picker] {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  flex: none;
+  padding: 0 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(20, 24, 33, 0.88);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+
+[data-iss-launch-card] {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  width: min(22rem, 100%);
+  max-width: 100%;
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  background: rgba(12, 16, 24, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  color: #f4f7fb;
+}
+
+[data-iss-scene][data-iss-launch-place='side'] [data-iss-launch-card] {
+  width: min(22rem, 40vw);
+  align-self: center;
+}
+
+[data-iss-launch-card][hidden] {
+  display: none;
+}
+
+[data-iss-launch-card] h2,
+[data-iss-launch-card] p {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+[data-iss-launch-name] {
+  font-size: 1rem;
+}
+
+[data-iss-launch-time] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
 [data-iss-launch-arrow],
@@ -3533,18 +3629,33 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 }
 
 .iss-launch-pin {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.iss-launch-pin::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
   width: 14px;
   height: 14px;
-  padding: 0;
+  transform: translate(-50%, -50%);
   border-radius: 50%;
   border: 2px solid #0b0d12;
   background: #ffd45c;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
-  cursor: pointer;
 }
 
 [data-iss-telemetry-body] {
   box-sizing: border-box;
+  width: min(28rem, 100%);
   margin-top: 0.35rem;
   min-height: 0;
   max-width: 100%;
@@ -3712,6 +3823,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
 [data-iss-aim-help],
 [data-iss-telemetry],
 [data-iss-launch],
+[data-iss-launch-picker],
 [data-iss-cupola],
 [data-iss-window],
 [data-iss-actions] button {
@@ -4019,6 +4131,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctr
 [data-iss-aim-help],
 [data-iss-telemetry],
 [data-iss-launch],
+[data-iss-launch-picker],
 [data-iss-cupola] {
   background: var(--surface);
   border-color: var(--control-border);
@@ -4032,6 +4145,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctr
 }
 
 [data-iss-telemetry-body],
+[data-iss-launch-card],
 [data-iss-aim-sheet] {
   background: var(--surface);
   border: 1px solid var(--border);
