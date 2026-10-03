@@ -1425,7 +1425,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   right: 12px;
   bottom: calc(36px + env(safe-area-inset-bottom));
   z-index: 20;
-  min-width: 44px;
+  min-width: 88px;
   min-height: 44px;
   padding: 0 0.9rem;
   border: 1px solid rgba(255, 255, 255, 0.16);

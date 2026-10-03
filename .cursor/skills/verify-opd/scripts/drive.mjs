@@ -1369,9 +1369,50 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await shot(send, evidenceDir, 'map-satellites');
   await click(send, '#toggle-satellite-picker');
+  await waitFor(
+    send,
+    `(() => {
+      const panel = document.getElementById('satellite-picker-panel');
+      return !panel || panel.hidden ? { ok: true } : null;
+    })()`,
+    'satellite picker closed',
+  );
   await frameLngLat(send, meta.reef.lon, meta.reef.lat, 4);
+  await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdMap;
+      if (!map || !map.project || !map.queryRenderedFeatures) return null;
+      const projected = map.project([${meta.reef.lon}, ${meta.reef.lat}]);
+      const canvas = map.getCanvas();
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const x = rect.left + projected.x;
+      const y = rect.top + projected.y;
+      const node = document.elementFromPoint(x, y);
+      const onCanvas = node === canvas || canvas.contains(node);
+      const layers = ['targets-layer', 'my-targets-layer'].filter((id) => map.getLayer(id));
+      const pad = 7;
+      const hits = layers.length
+        ? map.queryRenderedFeatures([[projected.x - pad, projected.y - pad], [projected.x + pad, projected.y + pad]], { layers })
+        : [];
+      const reef = hits.some((feature) => feature.properties && feature.properties.target_id === 'verify-reef');
+      if (!onCanvas || !reef) {
+        return {
+          hit: node ? (node.id || String(node.className) || node.tagName) : null,
+          onCanvas,
+          reef,
+          hits: hits.length,
+        };
+      }
+      return { ok: true };
+    })()`,
+    'reef pin ready',
+    15000,
+  );
   const reefPoint = await pointForLngLat(send, meta.reef.lon, meta.reef.lat);
   if (!reefPoint?.ok) throw new Error('could not project Verify Reef');
+  await assertCanvasHit(send, reefPoint.x, reefPoint.y, 'target popup');
   await mouseClick(send, reefPoint.x, reefPoint.y);
   await waitFor(
     send,
@@ -3265,7 +3306,11 @@ async function assertChromeToggleStationary(send) {
   const hidden = await evaluate(send, read);
   await showMapChrome(send);
   const after = await evaluate(send, read);
-  const same = (a, b) => Math.abs(a.left - b.left) <= 1 && Math.abs(a.top - b.top) <= 1 && Math.abs(a.width - b.width) <= 1 && Math.abs(a.height - b.height) <= 1;
+  const same = (a, b) => Math.abs((a.left + a.width) - (b.left + b.width)) <= 1
+    && Math.abs(a.left - b.left) <= 1
+    && Math.abs(a.top - b.top) <= 1
+    && Math.abs(a.width - b.width) <= 1
+    && Math.abs(a.height - b.height) <= 1;
   if (!before || !hidden || !after || !same(before, hidden) || !same(before, after)) {
     throw new Error(`hide control moved ${JSON.stringify({ before, hidden, after })}`);
   }

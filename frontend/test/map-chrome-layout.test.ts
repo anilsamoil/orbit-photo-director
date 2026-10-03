@@ -211,7 +211,9 @@ describe('map chrome layout', () => {
     document.querySelector('#map-pane')!.classList.remove('map-chrome-hidden');
     button.textContent = 'Hide';
     expect(place()).toBe(hiddenPlace);
-    expect(getComputedStyle(button).right).toBe('12px');
+    const style = getComputedStyle(button);
+    expect(style.right).toBe('12px');
+    expect(style.minWidth).toBe('88px');
     expect(hiddenPlace).not.toContain('50%');
   });
 
