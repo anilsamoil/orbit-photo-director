@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+const html = readFileSync(resolve('index.html'), 'utf8');
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(resolve('src/style.css'), 'utf8');
@@ -269,6 +271,23 @@ describe('map chrome layout', () => {
       ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab').bottom,
     );
     expect(helpBottom).toBeGreaterThanOrEqual(creditsTop);
+  });
+
+  it('drops the Time label and gives that row back to the map', () => {
+    const command = html.slice(html.indexOf('class="map-command"'), html.indexOf('map-control-dock'));
+    expect(command).not.toContain('>Time<');
+    expect(command).toContain('id="time-slider"');
+    const heights = rulesFor('body:has(> #view.view-map):not(.map-chrome-hidden)')
+      .map((style) => style.getPropertyValue('--map-command-height'));
+    expect(heights).toContain('calc(140px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('calc(92px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).not.toContain('156px');
+    expect(heights).not.toContain('104px');
+  });
+
+  it('ships the map page without the corner help button', () => {
+    expect(html).toContain('id="help-fab"');
+    expect(html).toMatch(/id="help-fab"[^>]*\shidden[\s>]/);
   });
 
   it('reserves a map hit height when the narrow inspector would cover the credit strip', () => {

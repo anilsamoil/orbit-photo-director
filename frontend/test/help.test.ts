@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { bindHelp, openHelpModal } from '../src/help';
+import { bindHelp, openHelpModal, syncHelpButton } from '../src/help';
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -206,6 +206,24 @@ describe('bindHelp', () => {
 
   it('no-ops when the button is absent (older fixtures)', () => {
     expect(() => bindHelp()).not.toThrow();
+  });
+
+  it('hides the corner button on the map and shows it on the other views', () => {
+    document.body.innerHTML = `
+      <main id="view" class="view-map"></main>
+      <button id="help-fab" type="button">?</button>
+    `;
+    syncHelpButton();
+    const fab = document.getElementById('help-fab') as HTMLButtonElement;
+    expect(fab.hidden).toBe(true);
+    document.getElementById('view')!.className = 'view-queue';
+    syncHelpButton();
+    expect(fab.hidden).toBe(false);
+    for (const view of ['view-upcoming', 'view-iss', 'view-profile', 'view-log']) {
+      document.getElementById('view')!.className = view;
+      syncHelpButton();
+      expect(fab.hidden).toBe(false);
+    }
   });
 });
 
