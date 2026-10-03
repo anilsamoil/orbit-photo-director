@@ -3446,8 +3446,18 @@ async function drivePhone(send, evidenceDir, meta, home) {
   if (!stayed) throw new Error('pin popup closed on the click that follows the long press');
   await shot(send, evidenceDir, 'phone-long-press');
   await sleep(750);
-  const dismissAt = await pointForLngLat(send, lon, lat);
-  const dismiss = dismissAt?.ok ? dismissAt : point;
+  const dismiss = await evaluate(send, `(() => {
+    const map = window.__opdMap;
+    const source = map && map.getSource && map.getSource('dropped-pin');
+    const data = source && source.serialize ? source.serialize().data : null;
+    const coords = data && data.features && data.features[0] && data.features[0].geometry && data.features[0].geometry.coordinates;
+    const canvas = map && map.getCanvas && map.getCanvas();
+    if (!coords || !canvas || !map.project) return null;
+    const projected = map.project(coords);
+    const rect = canvas.getBoundingClientRect();
+    return { ok: true, x: rect.left + projected.x, y: rect.top + projected.y };
+  })()`);
+  if (!dismiss?.ok) throw new Error('could not project the dropped pin');
   await assertCanvasHit(send, dismiss.x, dismiss.y, 'pin dismiss');
   await mouseClick(send, dismiss.x, dismiss.y);
   await waitFor(
