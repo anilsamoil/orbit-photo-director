@@ -687,10 +687,25 @@ describe('handleStatic (R2 fallback)', () => {
     expect(r.headers.get('content-type')).toContain('application/javascript');
   });
 
-  it('uses short cache for index.html', async () => {
-    await env.SITE.put('index.html', '<html></html>', {});
+  it('revalidates index.html even when the stored object is immutable', async () => {
+    await env.SITE.put('index.html', '<html></html>', {
+      httpMetadata: { cacheControl: 'public, max-age=31536000, immutable' },
+    });
     const r = await fetchWorker(env, '/');
-    expect(r.headers.get('cache-control')).toContain('max-age=60');
+    expect(r.headers.get('cache-control')).toBe('no-cache, max-age=0, must-revalidate');
+  });
+
+  it('revalidates the service worker and registration script even when R2 marked them immutable', async () => {
+    const immutable = { httpMetadata: { cacheControl: 'public, max-age=31536000, immutable' } };
+    await env.SITE.put('sw.js', 'self.skipWaiting()', immutable);
+    await env.SITE.put('registerSW.js', 'register()', immutable);
+    await env.SITE.put('sw-shell.js', 'seed()', immutable);
+    await env.SITE.put('manifest.webmanifest', '{}', immutable);
+    for (const path of ['/sw.js', '/registerSW.js', '/sw-shell.js', '/manifest.webmanifest']) {
+      const r = await fetchWorker(env, path);
+      expect(r.headers.get('cache-control')).toBe('no-cache, max-age=0, must-revalidate');
+    }
+    expect((await fetchWorker(env, '/manifest.webmanifest')).headers.get('content-type')).toContain('application/manifest+json');
   });
 
   it('serves the etag header for client-side cache validation', async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ACCESS_REAUTH_PATH, bannerAuthExpired } from '../src/banner';
-import { NAVIGATION_FALLBACK_DENYLIST } from '../src/sw-navigation';
+import { createAppShellMatcher, NAVIGATION_FALLBACK_DENYLIST } from '../src/sw-navigation';
 
 async function readSrc(rel: string): Promise<string> {
   const fs = await import('node:fs/promises');
@@ -18,8 +18,12 @@ describe('Cloudflare Access re-auth escape hatch', () => {
     // network. If ACCESS_REAUTH_PATH stops matching one, the escape hatch is
     // silently dead and the app is unrecoverable from inside.
     expect(NAVIGATION_FALLBACK_DENYLIST.some((rx) => rx.test(ACCESS_REAUTH_PATH))).toBe(true);
-    // And the SW config must still declare that denylist.
-    expect(await swCfg()).toMatch(/navigateFallbackDenylist:\s*NAVIGATION_FALLBACK_DENYLIST/);
+    const matcher = createAppShellMatcher(NAVIGATION_FALLBACK_DENYLIST);
+    expect(matcher({ request: { mode: 'navigate' }, url: { pathname: ACCESS_REAUTH_PATH, search: '' } })).toBe(false);
+    // The generated worker inlines this denylist. A precached navigateFallback
+    // would answer the reload itself and the operator could not sign back in.
+    expect(await swCfg()).toMatch(/createAppShellMatcher\(NAVIGATION_FALLBACK_DENYLIST\)/);
+    expect(await swCfg()).not.toMatch(/navigateFallback:\s*'\/index\.html'/);
   });
 
   it.each([
