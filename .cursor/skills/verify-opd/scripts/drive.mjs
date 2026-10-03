@@ -1487,7 +1487,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
-  return 'map: globe, legend, imagery, attribution, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
+  return 'map: globe, legend, imagery, still hide control, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
 }
 
 const UNAVAILABLE_LEGEND = {
@@ -3458,5 +3458,5 @@ async function drivePhone(send, evidenceDir, meta, home) {
   );
   await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
   await setViewport(send, home.width, home.height, home.mobile);
-  return `phone: 44px targets, dock clear with credits collapsed and expanded, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
+  return `phone: 44px targets, map info controls hidden, hide control still, long-press held, safe-area ${inset ? 'applied' : 'unsupported'}`;
 }
