@@ -12,6 +12,7 @@ import {
   groundLightFromElevation,
   lightingDelayed,
   renderAltitudeM,
+  issClockLines,
   sceneCard,
   sceneFit,
   sceneFrame,
@@ -180,6 +181,35 @@ describe('ISS earth roll', () => {
     expect(earthFrameSides(180)).toEqual({ left: 'starboard', right: 'port' });
     expect(earthFrameSides(-180)).toEqual({ left: 'starboard', right: 'port' });
     expect(earthFrameSides(EARTH_VIEW_ROLL_DEG)).toEqual({ left: 'starboard', right: 'port' });
+  });
+});
+
+describe('ISS clock lines', () => {
+  it('writes Houston time, GMT day, day and month, and weekday for one instant', () => {
+    expect(issClockLines(Date.parse('2026-10-03T12:01:00Z'))).toEqual({
+      houston: '07:01:00 CDT',
+      dayOfYear: 'GMT276',
+      dayMonth: '3 oct',
+      weekday: 'Saturday',
+    });
+    expect(issClockLines(Date.parse('2026-10-03T00:00:00Z'))).toEqual({
+      houston: '19:00:00 CDT',
+      dayOfYear: 'GMT276',
+      dayMonth: '3 oct',
+      weekday: 'Saturday',
+    });
+    expect(issClockLines(Date.parse('2026-01-01T06:00:00Z'))).toEqual({
+      houston: '00:00:00 CST',
+      dayOfYear: 'GMT001',
+      dayMonth: '1 jan',
+      weekday: 'Thursday',
+    });
+    expect(issClockLines(Date.parse('2024-12-31T23:59:59Z'))).toEqual({
+      houston: '17:59:59 CST',
+      dayOfYear: 'GMT366',
+      dayMonth: '31 dec',
+      weekday: 'Tuesday',
+    });
   });
 });
 

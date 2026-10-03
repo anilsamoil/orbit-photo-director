@@ -202,6 +202,10 @@ describe('ISS view tab', () => {
     expect(document.querySelector('[data-iss-status]')?.textContent).toContain('14 mm · full frame');
     expect(document.querySelector('[data-iss-status]')?.textContent).toContain('Cloud-free · Blue Marble + Black Marble 2016');
     expect(document.querySelector('[data-iss-utc]')?.textContent).toBe('12:01:00 UTC');
+    expect(document.querySelector('[data-iss-houston]')?.textContent).toBe('07:01:00 CDT');
+    expect(document.querySelector('[data-iss-gmt-day]')?.textContent).toBe('GMT291');
+    expect(document.querySelector('[data-iss-day-month]')?.textContent).toBe('17 oct');
+    expect(document.querySelector('[data-iss-weekday]')?.textContent).toBe('Thursday');
     expect(document.querySelector('[data-iss-detail]')?.textContent).toContain('manifest m-nav');
     expect(document.querySelector('[data-iss-detail]')?.textContent).toContain('spherical Earth model');
 

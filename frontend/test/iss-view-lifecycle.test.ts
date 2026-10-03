@@ -92,6 +92,12 @@ async function ready(scene: IssScene): Promise<void> {
   await scene.paint();
 }
 
+function clockLines(host: HTMLElement): string[] {
+  return ['[data-iss-houston]', '[data-iss-gmt-day]', '[data-iss-day-month]', '[data-iss-weekday]'].map((selector) => {
+    return host.querySelector(selector)?.textContent ?? '';
+  });
+}
+
 describe('ISS scene lifecycle', () => {
   it('stays loading until a snapshot arrives and then paints one pose', async () => {
     const host = document.createElement('div');
@@ -187,6 +193,41 @@ describe('ISS scene lifecycle', () => {
     expect(host.querySelector('[data-iss-scene]')).toBeNull();
   });
 
+  it('keeps Houston, GMT day, day and month, and weekday on the UTC instant after a scrub and an aim', async () => {
+    const host = document.createElement('div');
+    const fake = fakeRenderer();
+    const clock = { now: Date.parse('2024-10-17T12:01:00Z') };
+    const scene = mountIssScene(host, {
+      nowMs: () => clock.now,
+      createRenderer: fake.factory,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+    });
+    await ready(scene);
+    scene.update(shot('clock'));
+    await ready(scene);
+    const order = [...(host.querySelector('[data-iss-clock]')?.children ?? [])].map((node) => {
+      const el = node as HTMLElement;
+      if (el.hasAttribute('data-iss-utc')) return 'utc';
+      if (el.hasAttribute('data-iss-houston')) return 'houston';
+      if (el.hasAttribute('data-iss-gmt-day')) return 'gmt-day';
+      if (el.hasAttribute('data-iss-day-month')) return 'day-month';
+      if (el.hasAttribute('data-iss-weekday')) return 'weekday';
+      return el.tagName;
+    });
+    expect(order).toEqual(['utc', 'houston', 'gmt-day', 'day-month', 'weekday']);
+    expect(host.querySelector('[data-iss-utc]')?.textContent).toBe('12:01:00 UTC');
+    expect(clockLines(host)).toEqual(['07:01:00 CDT', 'GMT291', '17 oct', 'Thursday']);
+
+    clock.now = Date.parse('2026-01-01T06:00:00Z');
+    (host.querySelector('[data-iss-preset="nadir"]') as HTMLElement).click();
+    await ready(scene);
+    expect(host.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(host.querySelector('[data-iss-utc]')?.textContent).toBe('06:00:00 UTC');
+    expect(clockLines(host)).toEqual(['00:00:00 CST', 'GMT001', '1 jan', 'Thursday']);
+    scene.dispose();
+  });
+
   it('shows retry and map when the renderer or the element set fails', async () => {
     const host = document.createElement('div');
     const broken: IssRendererFactory = () => {
@@ -213,6 +254,11 @@ describe('ISS scene lifecycle', () => {
     const failed = host2.querySelector('[data-iss-status]')?.textContent ?? '';
     expect(failed).toContain('Orbit unavailable · no element set');
     expect(failed).not.toMatch(/\d+\.\d+°/);
+    expect(host2.querySelector('[data-iss-utc]')?.textContent).toBe('');
+    expect(host2.querySelector('[data-iss-houston]')?.textContent).toBe('');
+    expect(host2.querySelector('[data-iss-gmt-day]')?.textContent).toBe('');
+    expect(host2.querySelector('[data-iss-day-month]')?.textContent).toBe('');
+    expect(host2.querySelector('[data-iss-weekday]')?.textContent).toBe('');
     expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe(`${sensorField().vertical.toFixed(1)}°`);
     const generation = again.generation();
     again.retry();

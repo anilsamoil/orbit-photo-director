@@ -3182,7 +3182,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   width: 100%;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
-  align-items: center;
+  align-items: start;
   gap: 0.35rem;
   z-index: 2;
 }
@@ -3296,11 +3296,22 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   border-color: transparent;
 }
 
-[data-iss-utc] {
+[data-iss-clock] {
   position: static;
   grid-column: 3;
   justify-self: end;
   z-index: 2;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+  color: #f4f7fb;
+  pointer-events: none;
+}
+
+[data-iss-utc] {
+  position: static;
   margin: 0;
   min-height: 44px;
   display: flex;
@@ -3310,8 +3321,27 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   color: #f4f7fb;
 }
 
-[data-iss-utc]:empty {
+[data-iss-utc]:empty,
+[data-iss-houston]:empty,
+[data-iss-gmt-day]:empty,
+[data-iss-day-month]:empty,
+[data-iss-weekday]:empty {
   display: none;
+}
+
+[data-iss-houston],
+[data-iss-gmt-day],
+[data-iss-day-month],
+[data-iss-weekday] {
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  min-width: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: right;
+  white-space: nowrap;
 }
 
 [data-iss-cupola] {
@@ -3787,7 +3817,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
     grid-column: auto;
   }
 
-  [data-iss-utc] {
+  [data-iss-clock] {
     align-self: flex-end;
     grid-column: auto;
   }
