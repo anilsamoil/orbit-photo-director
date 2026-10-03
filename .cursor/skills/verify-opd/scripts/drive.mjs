@@ -1151,12 +1151,18 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   if (!partial.cardsText.includes(reef) || partial.cardsText.includes(delta)) {
     throw new Error(`partial hide left cards ${JSON.stringify(partial.cardsText.slice(0, 240))}`);
   }
+  await evaluate(send, `(() => {
+    const root = document.getElementById('cards');
+    const card = [...(root ? root.querySelectorAll('.card') : [])].find((el) => (el.innerText || '').includes(${JSON.stringify(reef)}));
+    if (card) card.scrollIntoView({ block: 'center', inline: 'nearest' });
+  })()`);
   await shot(send, evidenceDir, 'queue-hide');
   await waitServerRemoved(baseUrl, [partial.id], []);
   const last = await clickHide(send, '#cards', reef);
   if (last.childCount !== 0 || last.emptyHidden !== false || !last.emptyText.includes('No passes in the next 90 minutes.')) {
     throw new Error(`last hide did not show #empty on that click: ${JSON.stringify(last)}`);
   }
+  await evaluate(send, `document.getElementById('empty')?.scrollIntoView({ block: 'center', inline: 'nearest' })`);
   await shot(send, evidenceDir, 'queue-empty');
   const stored = await removedCuratedIds(send);
   if (!stored.includes(partial.id) || !stored.includes(last.id)) {
