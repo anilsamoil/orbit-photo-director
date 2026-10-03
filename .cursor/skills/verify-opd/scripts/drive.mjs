@@ -322,7 +322,13 @@ async function pointForLngLat(send, lng, lat) {
     const map = window.__opdMap;
     if (!map) return { ok: false, reason: 'no map' };
     const canvas = map.getCanvas();
-    const projected = map.project([${lng}, ${lat}]);
+    const center = map.getCenter();
+    let lng = ${lng};
+    if (center && Number.isFinite(center.lng)) {
+      while (lng - center.lng > 180) lng -= 360;
+      while (center.lng - lng > 180) lng += 360;
+    }
+    const projected = map.project([lng, ${lat}]);
     const rect = canvas.getBoundingClientRect();
     return { ok: true, x: rect.left + projected.x, y: rect.top + projected.y };
   })()`);

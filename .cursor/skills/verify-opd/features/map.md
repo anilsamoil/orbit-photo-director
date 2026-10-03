@@ -45,7 +45,7 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 
 ## Gotchas
 
-- Follow starts on and recenters on the ISS. The script turns follow off, frames the pin at zoom 4, and clicks once.
+- Follow starts on and recenters on the ISS. The script turns follow off, frames the pin at zoom 4, and clicks once. Clicks unwrap longitude toward that center before `project`. A fixture point across ±180 would otherwise land a world away, and `elementFromPoint` would miss the canvas.
 - The map ? button and the (i) credit button are not on this tab. Queue, Upcoming, ISS view, Profile, and Log still have the corner ? button. The ISS view keeps its own credit control.
 - IR replaces the daily clouds layer. Do not expect both buttons to stay active.
 - Launch mode hides target pins. Drive the target popup before Launches.
