@@ -1,6 +1,7 @@
 import { RENDER_RADIUS_M } from '../iss-g1/model';
+import { operatorLaunchLines } from '../launch-card';
 import { greatCircleBearingDeg } from '../pin-drop';
-import { selectLaunches } from '../launch-selectors';
+import { hasLaunchTimeConflict, selectLaunches, type LaunchSelection } from '../launch-selectors';
 import type { LaunchOpportunity } from '../launch-schema';
 import type { LaunchState } from '../launch-store';
 
@@ -34,18 +35,52 @@ export type LaunchArrow = {
   deg: number;
 };
 
+export type LaunchVisibility =
+  | 'Site in frame'
+  | 'Site outside frame'
+  | 'Site below horizon'
+  | 'View unavailable';
+
+export type LaunchTimeFact = {
+  label: 'Launch window' | 'NET, tentative';
+  text: string;
+};
+
+export type LaunchMark = {
+  visibility: LaunchVisibility;
+  pin: LaunchPin | null;
+  arrow: LaunchArrow | null;
+};
+
 const DEG = Math.PI / 180;
 const EDGE_PAD_PX = 28;
 
 export function launchSites(state: LaunchState, nowMs: number): LaunchSite[] {
-  return selectLaunches(state, nowMs, 'map').map(({ item }) => ({
+  return selectLaunches(state, nowMs, 'map').map(launchSiteFromSelection);
+}
+
+export function launchSiteFromSelection(selection: LaunchSelection): LaunchSite {
+  const item = selection.item;
+  return {
     eventId: item.event_id,
     name: item.name,
     siteName: item.site.name,
     lat: item.site.lat,
     lon: item.site.lon,
     corridor: sourcedCorridor(item),
-  }));
+  };
+}
+
+export function launchTimeFact(selection: LaunchSelection, state: LaunchState, nowMs: number): LaunchTimeFact {
+  return {
+    label: launchTimeLabel(selection.item),
+    text: operatorLaunchLines(selection, state, nowMs).launchWindow,
+  };
+}
+
+export function launchChoiceLabel(selection: LaunchSelection, state: LaunchState, nowMs: number): string {
+  const item = selection.item;
+  return `${item.name} · ${item.site.name} · ${launchTimeFact(selection, state, nowMs).text}`;
 }
 
 /** Degrees clockwise from screen-up. Ahead of the station, after the 180° roll, points down. */
@@ -138,6 +173,33 @@ export function placeLaunchMarks(
     });
   }
   return { pins, arrows };
+}
+
+export function classifyLaunchSite(
+  site: LaunchSite,
+  onDisk: boolean,
+  project: ((lon: number, lat: number) => LaunchScreen | null) | null,
+  width: number,
+  height: number,
+): LaunchMark {
+  if (!project) return { visibility: 'View unavailable', pin: null, arrow: null };
+  if (!onDisk) return { visibility: 'Site below horizon', pin: null, arrow: null };
+  const placed = placeLaunchMarks([site], project, width, height);
+  const pin = placed.pins[0] ?? null;
+  const arrow = placed.arrows[0] ?? null;
+  if (pin) return { visibility: 'Site in frame', pin, arrow: null };
+  if (arrow) return { visibility: 'Site outside frame', pin: null, arrow };
+  return { visibility: 'View unavailable', pin: null, arrow: null };
+}
+
+function launchTimeLabel(item: LaunchOpportunity): LaunchTimeFact['label'] {
+  if (hasLaunchTimeConflict(item)) return 'Launch window';
+  const precision = item.launch_window.precision?.toLowerCase() ?? '';
+  const { start, end } = item.launch_window;
+  if (precision === 'day' || precision === 'month' || precision === 'year') return 'NET, tentative';
+  if (start && end) return 'Launch window';
+  if (precision === 'minute' || precision === 'second') return 'NET, tentative';
+  return 'Launch window';
 }
 
 function sourcedCorridor(item: LaunchOpportunity): LaunchSite['corridor'] {

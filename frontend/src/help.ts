@@ -148,10 +148,19 @@ const HELP_SECTIONS: HelpSection[] = [
       },
       {
         icon: '',
+        label: 'Launch',
+        text:
+          'The Launch menu sits beside Telemetry. It lists a possible shot ' +
+          'for the next seven days. Choosing one keeps the aim and shows ' +
+          'that pad, its time, and whether the site is in the picture now. ' +
+          'None clears it.',
+      },
+      {
+        icon: '',
         label: 'Pad look',
         text:
-          'When a pad is a possible shot, its name sits beside Telemetry. ' +
-          'The arrow points at the pad. A tap looks about 18° that way.',
+          'The selected pad\'s name sits beside Telemetry. The arrow points ' +
+          'at the pad. A tap looks about 18° that way.',
       },
       {
         icon: '',

@@ -1743,29 +1743,62 @@ async function proveIssLaunchLook(send, evidenceDir) {
   const before = await waitFor(
     send,
     `(() => {
-      const button = document.querySelector('[data-iss-launch]');
+      const picker = document.querySelector('[data-iss-launch-picker]');
       const telemetry = document.querySelector('[data-iss-telemetry]');
       const frame = document.querySelector('[data-iss-frame]');
-      if (!button || !telemetry || !frame) return null;
+      if (!(picker instanceof HTMLSelectElement) || !telemetry || !frame) return null;
+      const option = [...picker.options].find((entry) => entry.textContent?.includes('Verify Pad'));
+      if (!option || picker.value) return null;
+      if (document.querySelector('[data-iss-launch], .iss-launch-pin, [data-iss-launch-edge]')) return null;
+      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      const box = picker.getBoundingClientRect();
+      const t = telemetry.getBoundingClientRect();
+      if (box.width < 44 || box.height < 44 || t.width < 44) return null;
+      const controls = picker.closest('[data-iss-controls]');
+      if (!controls || !controls.contains(telemetry)) return null;
+      const center = window.__opdIss?.getCenter?.();
+      if (!center) return null;
+      return { ok: true, lng: center.lng, lat: center.lat, value: option.value };
+    })()`,
+    'iss launch picker',
+    15000,
+  );
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.value = ${JSON.stringify(before.value)};
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
+  const selected = await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const button = document.querySelector('[data-iss-launch]');
+      const frame = document.querySelector('[data-iss-frame]');
+      const card = document.querySelector('[data-iss-launch-card]');
+      if (!(picker instanceof HTMLSelectElement) || !button || !frame || !card) return null;
+      if (picker.value !== ${JSON.stringify(before.value)}) return null;
       if (!button.textContent.includes('Verify Pad')) return null;
+      if (card.hasAttribute('hidden') || !card.textContent.includes('Verify')) return null;
       const arrow = button.querySelector('[data-iss-launch-arrow]');
       const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
       if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
-      const b = button.getBoundingClientRect();
-      const t = telemetry.getBoundingClientRect();
-      const frameBox = frame.getBoundingClientRect();
-      if (b.width < 44 || b.height < 44 || t.width < 44) return null;
-      const controls = button.closest('[data-iss-controls]');
-      if (!controls || !controls.contains(telemetry)) return null;
-      const covers = b.left < frameBox.right - 1 && b.right > frameBox.left + 1 && b.top < frameBox.bottom - 1 && b.bottom > frameBox.top + 1;
-      if (covers) return null;
       if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
       if (!document.querySelector('.iss-launch-pin, [data-iss-launch-edge]')) return null;
+      const b = button.getBoundingClientRect();
+      const frameBox = frame.getBoundingClientRect();
+      const cardBox = card.getBoundingClientRect();
+      if (b.width < 44 || b.height < 44) return null;
+      const covers = (box) => box.left < frameBox.right - 1 && box.right > frameBox.left + 1 && box.top < frameBox.bottom - 1 && box.bottom > frameBox.top + 1;
+      if (covers(b) || covers(cardBox)) return null;
       const center = window.__opdIss?.getCenter?.();
       if (!center) return null;
+      const moved = Math.hypot(center.lng - ${Number(before.lng)}, center.lat - ${Number(before.lat)});
+      if (!(moved < 0.15)) return null;
       return { ok: true, lng: center.lng, lat: center.lat };
     })()`,
-    'iss launch near telemetry',
+    'iss launch selected',
     15000,
   );
   await shot(send, evidenceDir, 'iss-launch-look');
@@ -1775,7 +1808,7 @@ async function proveIssLaunchLook(send, evidenceDir) {
     `(() => {
       const center = window.__opdIss?.getCenter?.();
       if (!center) return null;
-      const moved = Math.hypot(center.lng - ${Number(before.lng)}, center.lat - ${Number(before.lat)});
+      const moved = Math.hypot(center.lng - ${Number(selected.lng)}, center.lat - ${Number(selected.lat)});
       if (!(moved > 0.15)) return null;
       return { ok: true, moved };
     })()`,

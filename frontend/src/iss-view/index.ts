@@ -16,11 +16,19 @@ import {
 } from './model';
 import type { LookOffset } from '../iss-g1/model';
 import { horizontalFovDeg, lookRoom, nudgeLook, settleLook } from './look';
-import { launchSites, lookToward, type LaunchSite } from './launches';
+import {
+  launchChoiceLabel,
+  launchSiteFromSelection,
+  launchTimeFact,
+  lookToward,
+  type LaunchSite,
+  type LaunchVisibility,
+} from './launches';
+import { selectLaunches, type LaunchSelection } from '../launch-selectors';
 import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { paintEqualDigits } from '../digits';
-import { fitIssPane } from './pane-fit';
+import { fitIssPane, type LaunchCardPlace } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
 type IssSession = {
@@ -67,7 +75,7 @@ export type MountIssSceneOptions = {
   visible?: () => boolean;
   onMap?: () => void;
   drive?: 'manual' | 'live';
-  launches?: () => readonly LaunchSite[];
+  launches?: () => readonly LaunchSelection[];
   session?: {
     mode: CameraMode;
     azimuthDeg?: number;
@@ -79,7 +87,10 @@ export type MountIssSceneOptions = {
 
 export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions): IssScene {
   const session = bindSession(options.session ?? sessionPreset);
-  const readLaunches = options.launches ?? (() => launchSites(launchStore.getState(), options.nowMs()));
+  const readSelections = options.launches ?? (() => selectLaunches(launchStore.getState(), options.nowMs(), 'map'));
+  let selectedEventId = '';
+  let launchVisibility: LaunchVisibility = 'View unavailable';
+  let pickerSync = false;
   const visible = options.visible ?? (() => document.visibilityState !== 'hidden');
   const factory = options.createRenderer ?? createIssRenderer;
   let generation = 1;
@@ -154,6 +165,28 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const left = sides.left === 'port' ? port : starboard;
   const right = sides.right === 'port' ? port : starboard;
   stage.append(left, frame, right);
+  const view = document.createElement('div');
+  view.dataset.issView = '';
+  const launchCard = document.createElement('article');
+  launchCard.dataset.issLaunchCard = '';
+  launchCard.hidden = true;
+  const factName = document.createElement('h2');
+  factName.dataset.issLaunchName = '';
+  const factSite = document.createElement('p');
+  factSite.dataset.issLaunchSite = '';
+  const factTime = document.createElement('p');
+  factTime.dataset.issLaunchTime = '';
+  const factTimeLabel = document.createElement('span');
+  factTimeLabel.dataset.issLaunchTimeLabel = '';
+  const factTimeValue = document.createElement('span');
+  factTimeValue.dataset.issLaunchTimeValue = '';
+  factTime.append(factTimeLabel, factTimeValue);
+  const factVisibility = document.createElement('p');
+  factVisibility.dataset.issLaunchVisibility = '';
+  const factMissing = document.createElement('p');
+  factMissing.dataset.issLaunchMissing = '';
+  factMissing.textContent = 'Selected launch is no longer available';
+  view.append(stage, launchCard);
   const card = document.createElement('article');
   card.dataset.issCard = '';
   const telemetry = document.createElement('button');
@@ -196,13 +229,27 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const launchesHost = document.createElement('div');
   launchesHost.dataset.issLaunches = '';
   launchesHost.hidden = true;
-  controls.append(telemetry, launchesHost);
+  const picker = document.createElement('select');
+  picker.dataset.issLaunchPicker = '';
+  picker.setAttribute('aria-label', 'Launch');
+  controls.append(telemetry, picker, launchesHost);
   card.append(controls, telemetryBody);
-  root.append(toolbar, stage, card);
+  root.append(toolbar, view, card);
   host.append(root);
   syncPreset();
   syncCupola();
-  syncLaunchButtons(readLaunches());
+  picker.addEventListener('change', () => {
+    if (pickerSync) return;
+    const value = picker.value;
+    if (value === '' || value === selectedEventId) {
+      if (picker.value !== selectedEventId) picker.value = selectedEventId;
+      return;
+    }
+    selectedEventId = value === 'none' ? '' : value;
+    launchVisibility = 'View unavailable';
+    if (phase === 'running' && rendererReady) void paint();
+    else layout();
+  });
   layout();
   writeLook(settleLook(session.look, session.mode, currentRoom()));
 
@@ -272,7 +319,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   const stopLaunches = options.launches
     ? () => {}
-    : launchStore.subscribe(() => syncLaunchButtons(readLaunches()));
+    : launchStore.subscribe(() => {
+      if (phase === 'running' && rendererReady) void paint();
+      else layout();
+    });
 
   void boot(bootGeneration);
   if (options.drive !== 'manual') startTimer();
@@ -337,8 +387,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     try {
       renderer = factory(frame, {
         onLaunchLook(eventId) {
-          const site = readLaunches().find((entry) => entry.eventId === eventId);
-          if (site) aimToward(site);
+          const selection = readSelections().find((entry) => entry.item.event_id === eventId);
+          if (selection && selection.item.event_id === selectedEventId) aimToward(launchSiteFromSelection(selection));
+        },
+        onLaunchVisibility(eventId, visibility) {
+          if (eventId !== selectedEventId) return;
+          launchVisibility = visibility;
+          if (launchCard.dataset.issLaunchState === 'selected') factVisibility.textContent = visibility;
         },
         onImagery(note) {
           if (token !== generation || !snapshot || !frameState) return;
@@ -420,42 +475,125 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       return;
     }
     if (token !== generation || epoch !== snapshotEpoch) return;
-    syncLaunchButtons(readLaunches());
   }
 
-  function syncLaunchButtons(sites: readonly LaunchSite[]): void {
-    const pose = frameState?.ok ? frameState.pose : null;
-    const signature = sites.map((site) => site.eventId).join('|');
-    if (launchesHost.dataset.issLaunchIds !== signature) {
-      launchesHost.dataset.issLaunchIds = signature;
+  function syncLaunchChrome(): void {
+    const selections = readSelections();
+    const state = launchStore.getState();
+    const now = options.nowMs();
+    syncPicker(selections, state, now);
+    const choice = selections.find((entry) => entry.item.event_id === selectedEventId) ?? null;
+    const site = choice ? launchSiteFromSelection(choice) : null;
+    syncPad(site);
+    paintLaunchCard(choice, state, now);
+    renderer?.showLaunches?.(site ? [site] : []);
+  }
+
+  function syncPicker(selections: readonly LaunchSelection[], state: ReturnType<typeof launchStore.getState>, now: number): void {
+    const rows: { value: string; label: string }[] = [
+      { value: '', label: 'Choose launch' },
+      { value: 'none', label: 'None' },
+    ];
+    for (const selection of selections) {
+      rows.push({
+        value: selection.item.event_id,
+        label: launchChoiceLabel(selection, state, now),
+      });
+    }
+    if (selectedEventId && !selections.some((selection) => selection.item.event_id === selectedEventId)) {
+      rows.push({ value: selectedEventId, label: 'Selected launch is no longer available' });
+    }
+    const signature = rows.map((row) => `${row.value}\t${row.label}`).join('\n');
+    pickerSync = true;
+    try {
+      if (picker.dataset.issLaunchOptions !== signature) {
+        picker.dataset.issLaunchOptions = signature;
+        while (picker.options.length > rows.length) picker.remove(picker.options.length - 1);
+        rows.forEach((row, index) => {
+          const option = picker.options[index] ?? picker.appendChild(document.createElement('option'));
+          if (option.value !== row.value) option.value = row.value;
+          if (option.textContent !== row.label) option.textContent = row.label;
+        });
+      }
+      if (picker.value !== selectedEventId) picker.value = selectedEventId;
+    } finally {
+      pickerSync = false;
+    }
+  }
+
+  function syncPad(site: LaunchSite | null): void {
+    if (!site) {
+      launchesHost.hidden = true;
+      if (launchesHost.dataset.issLaunchIds) {
+        delete launchesHost.dataset.issLaunchIds;
+        launchesHost.replaceChildren();
+      }
+      return;
+    }
+    const current = launchesHost.querySelector('[data-iss-launch]');
+    let button: HTMLButtonElement;
+    if (current instanceof HTMLButtonElement && current.dataset.issLaunch === site.eventId) {
+      button = current;
+    } else {
       launchesHost.replaceChildren();
-      for (const site of sites) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.dataset.issLaunch = site.eventId;
-        button.title = `Look toward ${site.siteName}`;
-        button.setAttribute('aria-label', `Look toward ${site.siteName}`);
-        const arrow = document.createElement('span');
-        arrow.dataset.issLaunchArrow = '';
-        arrow.setAttribute('aria-hidden', 'true');
-        arrow.textContent = '↑';
-        const label = document.createElement('span');
-        label.textContent = site.siteName;
-        button.append(arrow, label);
-        button.addEventListener('click', () => aimToward(site));
-        launchesHost.append(button);
-      }
+      button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.issLaunch = site.eventId;
+      const arrow = document.createElement('span');
+      arrow.dataset.issLaunchArrow = '';
+      arrow.setAttribute('aria-hidden', 'true');
+      arrow.textContent = '↑';
+      const label = document.createElement('span');
+      label.dataset.issLaunchLabel = '';
+      button.append(arrow, label);
+      button.addEventListener('click', () => {
+        const current = readSelections().find((entry) => entry.item.event_id === selectedEventId);
+        if (current) aimToward(launchSiteFromSelection(current));
+      });
+      launchesHost.append(button);
+      launchesHost.dataset.issLaunchIds = site.eventId;
     }
-    launchesHost.hidden = sites.length === 0;
-    if (pose) {
-      for (const site of sites) {
-        const arrow = launchesHost.querySelector(`[data-iss-launch="${CSS.escape(site.eventId)}"] [data-iss-launch-arrow]`);
-        if (!(arrow instanceof HTMLElement)) continue;
-        const look = lookToward(pose.bearingDeg, pose.camera.latDeg, pose.camera.lonDeg, site.lat, site.lon);
-        arrow.style.setProperty('--iss-launch-aim', `${look.arrowDeg.toFixed(1)}deg`);
-      }
+    const label = button.querySelector('[data-iss-launch-label]');
+    if (label) label.textContent = site.siteName;
+    button.title = `Look toward ${site.siteName}`;
+    button.setAttribute('aria-label', `Look toward ${site.siteName}`);
+    launchesHost.hidden = false;
+    const pose = frameState?.ok ? frameState.pose : null;
+    if (!pose) return;
+    const arrow = button.querySelector('[data-iss-launch-arrow]');
+    if (!(arrow instanceof HTMLElement)) return;
+    const look = lookToward(pose.bearingDeg, pose.camera.latDeg, pose.camera.lonDeg, site.lat, site.lon);
+    arrow.style.setProperty('--iss-launch-aim', `${look.arrowDeg.toFixed(1)}deg`);
+  }
+
+  function paintLaunchCard(
+    choice: LaunchSelection | null,
+    state: ReturnType<typeof launchStore.getState>,
+    now: number,
+  ): void {
+    if (!selectedEventId) {
+      launchCard.hidden = true;
+      launchCard.dataset.issLaunchState = '';
+      return;
     }
-    renderer?.showLaunches?.(sites);
+    launchCard.hidden = false;
+    if (!choice) {
+      if (launchCard.dataset.issLaunchState !== 'missing') {
+        launchCard.dataset.issLaunchState = 'missing';
+        launchCard.replaceChildren(factMissing);
+      }
+      return;
+    }
+    if (launchCard.dataset.issLaunchState !== 'selected') {
+      launchCard.dataset.issLaunchState = 'selected';
+      launchCard.replaceChildren(factName, factSite, factTime, factVisibility);
+    }
+    const fact = launchTimeFact(choice, state, now);
+    factName.textContent = choice.item.name;
+    factSite.textContent = choice.item.site.name;
+    factTimeLabel.textContent = fact.label;
+    factTimeValue.textContent = fact.text;
+    factVisibility.textContent = launchVisibility;
   }
 
   function aimToward(site: LaunchSite): void {
@@ -544,9 +682,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function layout(): { widthPx: number; heightPx: number } {
+    syncLaunchChrome();
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
-    const fit = width < 10 || height < 10 ? { ...sceneFit(640, 400), bodyMaxPx: null } : fitInPane(width, height);
+    const fit = width < 10 || height < 10
+      ? { ...sceneFit(640, 400), bodyMaxPx: null, launchCardPlace: 'off' as const }
+      : fitInPane(width, height);
+    root.dataset.issLaunchPlace = fit.launchCardPlace;
     const widthPx = Math.max(1, Math.floor(fit.widthPx));
     const heightPx = Math.max(1, Math.floor(fit.heightPx));
     frame.style.width = `${widthPx}px`;
@@ -556,7 +698,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     return { widthPx, heightPx };
   }
 
-  function fitInPane(width: number, height: number): { widthPx: number; heightPx: number; bodyMaxPx: number | null } {
+  function fitInPane(width: number, height: number): {
+    widthPx: number;
+    heightPx: number;
+    bodyMaxPx: number | null;
+    launchCardPlace: LaunchCardPlace;
+  } {
     const style = getComputedStyle(root);
     const padX = px(style.paddingLeft) + px(style.paddingRight);
     const padY = px(style.paddingTop) + px(style.paddingBottom);
@@ -567,6 +714,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const bodyMargin = px(bodyStyle.marginTop) + px(bodyStyle.marginBottom);
     const bodyBorder = px(bodyStyle.borderTopWidth) + px(bodyStyle.borderBottomWidth);
     const open = !telemetryBody.hidden;
+    const viewStyle = getComputedStyle(view);
+    const cardGap = px(viewStyle.gap || viewStyle.columnGap || viewStyle.rowGap);
+    const cardShown = !launchCard.hidden;
     return fitIssPane({
       paneWidthPx: width,
       paneHeightPx: height,
@@ -574,11 +724,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       padYPx: padY,
       gapPx: gap,
       toolbarPx: toolbar.offsetHeight,
-      buttonPx: launchesHost.hidden ? telemetry.offsetHeight : controls.offsetHeight,
+      buttonPx: Math.max(controls.offsetHeight, telemetry.offsetHeight),
       bodyPx: open ? telemetryBody.scrollHeight + bodyBorder + bodyMargin : 0,
       bodyMarginPx: open ? bodyMargin : 0,
       sideWidthPx: port.offsetWidth + starboard.offsetWidth + stageGap * 2,
       labelPx: Math.max(port.offsetHeight, starboard.offsetHeight),
+      launchCardWidthPx: cardShown ? launchCard.offsetWidth : 0,
+      launchCardHeightPx: cardShown ? launchCard.offsetHeight : 0,
+      launchCardGapPx: cardShown ? cardGap : 0,
     });
   }
 

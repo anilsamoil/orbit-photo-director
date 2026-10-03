@@ -8,9 +8,11 @@ import { bucketFor, createComposer, type Composer, type DecodedTile } from '../.
 import { EARTH_VIEW_ROLL_DEG, type ImageryState } from '../../../iss-view/model';
 import { placeScreenLabels } from '../../../iss-view/label-layout';
 import {
+  classifyLaunchSite,
   launchCorridorLines,
-  placeLaunchMarks,
   siteOnDisk,
+  type LaunchArrow,
+  type LaunchPin,
   type LaunchSite,
 } from '../../../iss-view/launches';
 import { placesOnDisk, type PlaceLabel } from '../../../iss-view/place-labels';
@@ -138,7 +140,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
       await idle(map);
     },
     showLaunches(sites) {
-      launchState.sites = sites;
+      launchState.sites = sites.slice(0, 1);
       syncLaunchOverlay(map, frame, launchMarkers, launchEdges, launchState, hooks);
     },
     destroy() {
@@ -233,26 +235,33 @@ function syncLaunchOverlay(
   const lines = launchCorridorLines(launchState.sites);
   syncLaunchCorridor(map, lines);
   frame.dataset.issLaunchCorridor = lines.length > 0 ? 'on' : 'off';
-  if (!aim) return;
+  if (!aim) {
+    for (const site of launchState.sites) hooks.onLaunchVisibility?.(site.eventId, 'View unavailable');
+    clearLaunchMarks(markers, edges);
+    return;
+  }
   const width = map.getCanvas().clientWidth;
   const height = map.getCanvas().clientHeight;
-  const visible = launchState.sites.filter((site) => siteOnDisk(
-    aim.pose.camera.latDeg,
-    aim.pose.camera.lonDeg,
-    aim.pose.altitudeM,
-    site.lat,
-    site.lon,
-  ));
-  const placed = placeLaunchMarks(
-    visible,
-    (lon, lat) => {
-      const projected = map.project([lon, lat]);
-      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return null;
-      return { x: projected.x, y: projected.y };
-    },
-    width,
-    height,
-  );
+  const project = (lon: number, lat: number) => {
+    const projected = map.project([lon, lat]);
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return null;
+    return { x: projected.x, y: projected.y };
+  };
+  const pins: LaunchPin[] = [];
+  const arrows: LaunchArrow[] = [];
+  for (const site of launchState.sites) {
+    const mark = classifyLaunchSite(
+      site,
+      siteOnDisk(aim.pose.camera.latDeg, aim.pose.camera.lonDeg, aim.pose.altitudeM, site.lat, site.lon),
+      project,
+      width,
+      height,
+    );
+    hooks.onLaunchVisibility?.(site.eventId, mark.visibility);
+    if (mark.pin) pins.push(mark.pin);
+    if (mark.arrow) arrows.push(mark.arrow);
+  }
+  const placed = { pins, arrows };
   const pinKeys = new Set(placed.pins.map((pin) => pin.eventId));
   for (let index = markers.length - 1; index >= 0; index -= 1) {
     const entry = markers[index];
