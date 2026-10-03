@@ -1098,7 +1098,32 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     'mine filter empty',
   );
   await shot(send, evidenceDir, 'queue-mine');
+  await click(send, '#filter-launches-queue');
+  await waitFor(
+    send,
+    `(() => {
+      const cards = document.getElementById('cards')?.innerText || '';
+      const empty = document.getElementById('empty');
+      const active = [...document.querySelectorAll('#queue-pane .filter-btn.active')].map((button) => button.id);
+      if (cards.includes(${JSON.stringify(meta.names.queue[0])}) || cards.includes(${JSON.stringify(meta.names.queue[1])})) return null;
+      if (active.length !== 1 || active[0] !== 'filter-launches-queue') return null;
+      const emptyOk = empty && !empty.hidden && /launch/i.test(empty.textContent || '');
+      const launchOk = cards.includes(${JSON.stringify(meta.names.launch)});
+      return emptyOk || launchOk ? { ok: true } : null;
+    })()`,
+    'launches filter',
+  );
+  await shot(send, evidenceDir, 'queue-launches');
   await click(send, '#filter-all-queue');
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('cards')?.innerText || '';
+      const active = [...document.querySelectorAll('#queue-pane .filter-btn.active')].map((button) => button.id);
+      return text.includes(${JSON.stringify(meta.names.queue[0])}) && text.includes(${JSON.stringify(meta.names.queue[1])}) && active.length === 1 && active[0] === 'filter-all-queue' ? { ok: true } : null;
+    })()`,
+    'all filter',
+  );
   await click(send, '#cupola-toggle');
   await waitFor(
     send,
@@ -1197,7 +1222,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     'queue restored Verify Reef',
     30000,
   );
-  return `queue: cards, score, remind, shoot, mine filter, keepsake, hide, empty (${emptied.text})`;
+  return `queue: cards, score, remind, shoot, mine filter, launches filter, keepsake, hide, empty (${emptied.text})`;
 }
 
 function upcomingListExpression(mesa, ascent, { hidden }) {
@@ -1293,45 +1318,9 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   await shot(send, evidenceDir, 'map-legend');
   await shot(send, evidenceDir, 'map-imagery-date');
   await dismissShotlist(send);
-  const collapsed = await waitFor(
-    send,
-    `(() => {
-      const node = document.querySelector('.maplibregl-ctrl-attrib');
-      const button = document.querySelector('.maplibregl-ctrl-attrib-button');
-      const help = document.querySelector('.help-fab');
-      if (!node || !button || !help) return null;
-      if (node.classList.contains('maplibregl-compact-show')) return null;
-      const box = button.getBoundingClientRect();
-      const helpBox = help.getBoundingClientRect();
-      if (helpBox.width < 40 || box.width < 40 || box.width > 48 || box.height < 40 || box.height > 48) return null;
-      if (helpBox.bottom > box.top + 8) return null;
-      const legend = document.querySelector('.map-legend')?.getBoundingClientRect();
-      return legend ? { ok: true, legendBottom: legend.bottom } : null;
-    })()`,
-    'credits collapsed',
-    10000,
-  );
-  await shot(send, evidenceDir, 'map-attribution-collapsed');
-  await click(send, '.maplibregl-ctrl-attrib-button');
-  await waitFor(
-    send,
-    `(() => {
-      const node = document.querySelector('.maplibregl-ctrl-attrib');
-      const help = document.querySelector('.help-fab')?.getBoundingClientRect();
-      const legend = document.querySelector('.map-legend')?.getBoundingClientRect();
-      if (!node || !help || !legend) return null;
-      if (!node.classList.contains('maplibregl-compact-show')) return null;
-      const text = node.textContent || '';
-      if (!/OpenStreetMap|CARTO|NASA|Earthdata/i.test(text)) return null;
-      if (node.getBoundingClientRect().width < 200) return null;
-      if (help.bottom > node.getBoundingClientRect().top + 8) return null;
-      if (legend.bottom >= ${collapsed.legendBottom} - 4) return null;
-      return { ok: true, text: text.slice(0, 200) };
-    })()`,
-    'credits expanded',
-    10000,
-  );
-  await shot(send, evidenceDir, 'map-attribution');
+  await assertMapInfoControlsGone(send);
+  await assertChromeToggleStationary(send);
+  await shot(send, evidenceDir, 'map-controls');
   const before = await evaluate(send, `document.getElementById('time-slider-readout').textContent`);
   await click(send, '#time-fwd-45');
   await waitFor(
@@ -3026,23 +3015,22 @@ async function driveHelp(send, evidenceDir) {
   await dismissShotlist(send);
   await click(send, '#tab-map');
   await ensureMapChromeShown(send);
-  const creditsOpen = await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === true`);
-  if (creditsOpen) await click(send, '.maplibregl-ctrl-attrib-button');
+  await assertMapInfoControlsGone(send);
+  await shot(send, evidenceDir, 'help-placement');
+  await click(send, '#tab-queue');
   await waitFor(
     send,
     `(() => {
-      const node = document.querySelector('.maplibregl-ctrl-attrib');
       const help = document.querySelector('.help-fab')?.getBoundingClientRect();
-      const button = document.querySelector('.maplibregl-ctrl-attrib-button')?.getBoundingClientRect();
-      if (!node || node.classList.contains('maplibregl-compact-show')) return null;
-      if (!help || !button || help.width < 40) return null;
-      if (help.bottom > button.top + 8) return null;
-      return { ok: true };
+      if (!help || help.width < 40) return null;
+      const rightGap = window.innerWidth - help.right;
+      const bottomGap = window.innerHeight - help.bottom;
+      if (rightGap < 0 || rightGap > 24 || bottomGap < 0 || bottomGap > 24) return null;
+      return { ok: true, rightGap, bottomGap };
     })()`,
-    'help above collapsed credits',
-    20000,
+    'help corner on queue',
+    10000,
   );
-  await shot(send, evidenceDir, 'help-placement');
   await click(send, '#help-fab');
   await waitFor(send, `document.querySelector('.help-modal') ? { ok: true } : null`, 'help dialog');
   const label = await evaluate(send, `document.querySelector('.help-modal')?.getAttribute('aria-label') || ''`);
@@ -3245,46 +3233,42 @@ async function driveLog(send, evidenceDir, baseUrl) {
   return 'log: shoot row visible, stored target name Verify Reef';
 }
 
-async function setCredits(send, open) {
-  const isOpen = await evaluate(send, `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === true`);
-  if (isOpen !== open) await click(send, '.maplibregl-ctrl-attrib-button');
+async function assertMapInfoControlsGone(send) {
   await waitFor(
     send,
-    `document.querySelector('.maplibregl-ctrl-attrib')?.classList.contains('maplibregl-compact-show') === ${open ? 'true' : 'false'} ? { ok: true } : null`,
-    open ? 'credits expanded' : 'credits collapsed',
+    `(() => {
+      const help = document.querySelector('.help-fab');
+      const info = document.querySelector('#map .maplibregl-ctrl-bottom-right');
+      if (!help || getComputedStyle(help).display !== 'none') return null;
+      if (info && getComputedStyle(info).display !== 'none') return null;
+      return { ok: true };
+    })()`,
+    'map info controls hidden',
     10000,
   );
 }
 
-async function assertDockClearsCredits(send, label) {
-  const boxes = await evaluate(send, `(() => {
-    const dock = document.querySelector('.map-control-dock');
-    const help = document.querySelector('.help-fab');
-    const credits = document.querySelector('.maplibregl-ctrl-attrib');
-    const button = document.querySelector('.map-control-dock .time-btn');
-    if (!dock || !help || !credits || !button) return null;
-    const dockBox = dock.getBoundingClientRect();
-    const helpBox = help.getBoundingClientRect();
-    const creditsBox = credits.getBoundingClientRect();
-    const buttonBox = button.getBoundingClientRect();
-    const overlaps = (a, b) => a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
-    return {
-      ok: dockBox.bottom <= helpBox.top + 1
-        && dockBox.bottom <= creditsBox.top + 1
-        && !overlaps(dockBox, helpBox)
-        && !overlaps(dockBox, creditsBox)
-        && helpBox.width >= 44
-        && helpBox.height >= 44
-        && buttonBox.width >= 44
-        && buttonBox.height >= 44,
-      dockBottom: dockBox.bottom,
-      helpTop: helpBox.top,
-      creditsTop: creditsBox.top,
-      help: { width: helpBox.width, height: helpBox.height },
-      button: { width: buttonBox.width, height: buttonBox.height },
-    };
-  })()`);
-  if (!boxes?.ok) throw new Error(`${label} ${JSON.stringify(boxes)}`);
+async function assertChromeToggleStationary(send) {
+  const read = `(() => {
+    const toggle = document.getElementById('map-chrome-toggle');
+    if (!toggle) return null;
+    const box = toggle.getBoundingClientRect();
+    return { left: box.left, top: box.top, width: box.width, height: box.height };
+  })()`;
+  const before = await evaluate(send, read);
+  await click(send, '#map-chrome-toggle');
+  await waitFor(
+    send,
+    `document.body.classList.contains('map-chrome-hidden') && (document.getElementById('map-chrome-toggle')?.textContent || '').trim() === 'Controls' ? { ok: true } : null`,
+    'map chrome hidden for toggle place',
+  );
+  const hidden = await evaluate(send, read);
+  await showMapChrome(send);
+  const after = await evaluate(send, read);
+  const same = (a, b) => Math.abs(a.left - b.left) <= 1 && Math.abs(a.top - b.top) <= 1 && Math.abs(a.width - b.width) <= 1 && Math.abs(a.height - b.height) <= 1;
+  if (!before || !hidden || !after || !same(before, hidden) || !same(before, after)) {
+    throw new Error(`hide control moved ${JSON.stringify({ before, hidden, after })}`);
+  }
 }
 
 async function drivePhone(send, evidenceDir, meta, home) {
@@ -3326,48 +3310,44 @@ async function drivePhone(send, evidenceDir, meta, home) {
     };
     const tab = box('.tab');
     const kp = box('#kp-widget');
-    const help = box('.help-fab');
-    const info = box('.maplibregl-ctrl-attrib-button');
+    const help = document.querySelector('.help-fab');
+    const info = document.querySelector('#map .maplibregl-ctrl-bottom-right');
     const pad = getComputedStyle(document.querySelector('.topbar')).paddingTop;
-    return { tab, kp, help, info, pad };
+    return {
+      tab,
+      kp,
+      helpHidden: !help || getComputedStyle(help).display === 'none',
+      infoHidden: !info || getComputedStyle(info).display === 'none',
+      pad,
+    };
   })()`);
   const tall = (box, label) => {
     if (!box || box.width < 44 || box.height < 44) throw new Error(`${label} is ${JSON.stringify(box)}`);
   };
   tall(portrait.tab, 'tab');
   tall(portrait.kp, 'kp');
-  tall(portrait.help, 'help');
-  tall(portrait.info, 'credits button');
+  if (!portrait.helpHidden || !portrait.infoHidden) throw new Error(`map info controls still shown ${JSON.stringify(portrait)}`);
   if (inset) {
     const pad = Number.parseFloat(portrait.pad);
     if (!Number.isFinite(pad) || pad < 47) throw new Error(`top bar padding ${portrait.pad} with safe area`);
   }
   await shot(send, evidenceDir, 'phone-portrait');
-  await setCredits(send, true);
-  await assertDockClearsCredits(send, 'phone portrait credits expanded');
-  await shot(send, evidenceDir, 'phone-portrait-credits');
+  await assertChromeToggleStationary(send);
   await setViewport(send, 844, 390, true);
   await sleep(300);
-  await setCredits(send, false);
   const landscape = await evaluate(send, `(() => {
     const dock = document.querySelector('.map-control-dock');
     const help = document.querySelector('.help-fab');
-    const info = document.querySelector('.maplibregl-ctrl-attrib-button');
+    const info = document.querySelector('#map .maplibregl-ctrl-bottom-right');
     const button = document.querySelector('.map-control-dock .time-btn');
-    if (!dock || !help || !info || !button) return null;
-    const dockBox = dock.getBoundingClientRect();
-    const helpBox = help.getBoundingClientRect();
-    const infoBox = info.getBoundingClientRect();
+    if (!dock || !button) return null;
     const buttonBox = button.getBoundingClientRect();
     return {
-      ok: dockBox.bottom <= helpBox.top + 1
-        && dockBox.bottom <= infoBox.top + 1
+      ok: (!help || getComputedStyle(help).display === 'none')
+        && (!info || getComputedStyle(info).display === 'none')
         && dock.scrollHeight > dock.clientHeight + 1
         && buttonBox.width >= 44
         && buttonBox.height >= 44,
-      dockBottom: dockBox.bottom,
-      helpTop: helpBox.top,
-      infoTop: infoBox.top,
       scrollHeight: dock.scrollHeight,
       clientHeight: dock.clientHeight,
       button: { width: buttonBox.width, height: buttonBox.height },
@@ -3375,10 +3355,6 @@ async function drivePhone(send, evidenceDir, meta, home) {
   })()`);
   if (!landscape?.ok) throw new Error(`phone dock ${JSON.stringify(landscape)}`);
   await shot(send, evidenceDir, 'phone-landscape');
-  await setCredits(send, true);
-  await assertDockClearsCredits(send, 'phone landscape credits expanded');
-  await shot(send, evidenceDir, 'phone-landscape-credits');
-  await setCredits(send, false);
   const pressed = await evaluate(send, `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')`);
   if (pressed !== 'false') {
     await click(send, '#toggle-follow-iss');

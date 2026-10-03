@@ -46,7 +46,7 @@ import { rememberPublishedIssTle } from './iss-tle';
 import { markProfileTargetsChanged } from './profile-target-sync';
 import { clearSnapshot, readSnapshot, saveSnapshot, type Snapshot } from './snapshot';
 import { getSortOrder, setSortOrder, sortPassesByOrder, type SortOrder } from './sort-pref';
-import { applyTargetFilter, getTargetFilter, setTargetFilter, type TargetFilter } from './target-filter-pref';
+import { applyTargetFilter, getQueueFilter, getTargetFilter, setQueueFilter, setTargetFilter, type TargetFilter } from './target-filter-pref';
 import type { Manifest, PassEntry, Status, Track } from './types';
 import { fetchCupolaWindows, fetchManifest, fetchStatus, fetchTop24h, fetchTop5, fetchTrack } from './manifest';
 import { setupCupolaPane } from './cupola-pane';
@@ -486,9 +486,11 @@ function showQueueEmpty(empty: HTMLElement, now: number): void {
   // there are simply no passes coming.
   // 'mine' filter empties differently — it's a filter choice, not lag —
   // so name that cause instead of the generator-lag hint.
-  const filter = getTargetFilter();
+  const filter = getQueueFilter();
   if (filter === 'mine') {
     empty.textContent = 'None of your targets pass in the next 90 minutes. Switch to All to see shared targets.';
+  } else if (filter === 'launches') {
+    empty.textContent = 'No launches in the next 90 minutes.';
   } else {
     const hint = currentManifest ? emptyQueueHint(currentManifest, now, currentlyOffline) : null;
     empty.textContent = hint ?? 'No passes in the next 90 minutes.';
@@ -533,16 +535,19 @@ function renderQueue(): void {
     }
     else renderLaunchCoverage(notice, launches, now, 'upcoming');
   }
-  const filter = getTargetFilter();
+  const queueFilter = getQueueFilter();
   const hidden = currentProfile?.removedCuratedIds ?? [];
-  const ground = applyTargetFilter(
+  const ground = queueFilter === 'launches' ? [] : applyTargetFilter(
     filterPassesByDistance(
       upcomingPasses(filterRemovedCurated(currentTop5.filter((p) => !isLaunchPass(p)), hidden), now),
       queueDistanceThresholdKm(),
     ),
-    filter,
+    queueFilter === 'mine' ? 'mine' : 'all',
   );
-  const slots = queueSlots(sortPassesByOrder(ground, getSortOrder()), selectLaunches(launches, now, 'queue'));
+  const slots = queueSlots(
+    sortPassesByOrder(ground, getSortOrder()),
+    queueFilter === 'mine' ? [] : selectLaunches(launches, now, 'queue'),
+  );
   const visible = slots.ground;
   if (visible.length === 0 && slots.launches.length === 0) {
     cards.replaceChildren();
@@ -1205,16 +1210,21 @@ function bindSortToggles(): void {
   });
 }
 
-/** All/Mine remains a shared target preference. Launches is a Map-only
- * selection which starts off and never replaces the saved target filter. */
+/** Queue All / Mine / Launches is one choice. All and Mine stay the shared
+ *  target preference. Queue Launches does not replace it. Map Launches is
+ *  the separate map mode and starts off. */
 function bindFilterToggles(): void {
   const buttons = document.querySelectorAll<HTMLButtonElement>('.filter-btn[data-filter]');
   const launchButton = document.getElementById('filter-launches-map');
   if (buttons.length === 0 && !launchButton) return;
   const syncActiveState = (filter: TargetFilter) => {
     const launches = getMapLaunchMode();
+    const queueFilter = getQueueFilter();
     buttons.forEach((b) => {
-      const active = b.dataset.filter === filter && !(launches && b.closest('#map-pane'));
+      const onQueue = b.closest('#queue-pane') !== null;
+      const active = onQueue
+        ? b.dataset.filter === queueFilter
+        : b.dataset.filter === filter && !(launches && b.closest('#map-pane'));
       b.classList.toggle('active', active);
       b.setAttribute('aria-pressed', String(active));
     });
@@ -1232,10 +1242,18 @@ function bindFilterToggles(): void {
   launchButton?.addEventListener('click', () => setMapLaunchMode(!getMapLaunchMode()));
   buttons.forEach((b) => {
     b.addEventListener('click', () => {
+      if (b.dataset.filter === 'launches') {
+        setQueueFilter('launches');
+        syncActiveState(getTargetFilter());
+        renderQueue();
+        return;
+      }
       const filter = (b.dataset.filter as TargetFilter | undefined) ?? 'all';
-      setTargetFilter(filter);
+      const queueLocked = getQueueFilter() === 'launches' && b.closest('#queue-pane') === null;
+      if (queueLocked) setTargetFilter(filter);
+      else setQueueFilter(filter);
       if (b.closest('#map-pane')) setMapLaunchMode(false);
-      syncActiveState(filter);
+      syncActiveState(getTargetFilter());
       renderQueue();
       // If the map is loaded, refresh its score-dots so toggling from the
       // Map tab's own All/Mine control updates the dots immediately (the

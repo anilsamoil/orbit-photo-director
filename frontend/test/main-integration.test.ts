@@ -848,14 +848,15 @@ const DOM_WITH_FILTER = `
   <div id="status-banner"></div>
   <div id="toast" hidden></div>
   <main id="view">
-    <section>
+    <section id="queue-pane">
       <div class="filter-toggle">
-        <button id="filter-all-queue" class="filter-btn active" data-filter="all"></button>
-        <button id="filter-mine-queue" class="filter-btn" data-filter="mine"></button>
+        <button id="filter-all-queue" class="filter-btn active" type="button" data-filter="all">All</button>
+        <button id="filter-mine-queue" class="filter-btn" type="button" data-filter="mine">Mine</button>
+        <button id="filter-launches-queue" class="filter-btn" type="button" data-filter="launches">Launches</button>
       </div>
       <div id="cards"></div><div id="empty" hidden></div>
     </section>
-    <section>
+    <section id="upcoming-pane">
       <div class="filter-toggle">
         <button id="filter-all-upcoming" class="filter-btn active" data-filter="all"></button>
         <button id="filter-mine-upcoming" class="filter-btn" data-filter="mine"></button>
@@ -1009,10 +1010,64 @@ describe('main.ts: All/Mine target filter', () => {
     expect(document.getElementById('filter-mine-upcoming')!.classList.contains('active')).toBe(true);
     expect(document.getElementById('filter-all-queue')!.classList.contains('active')).toBe(false);
   });
+
+  it('keeps one queue filter among All, Mine, and Launches', async () => {
+    document.body.innerHTML = DOM_WITH_FILTER;
+    const { launchStore } = await import('../src/launch-store');
+    vi.spyOn(launchStore, 'getState').mockReturnValue({
+      artifact: launchArtifact([supported({ event_id: 'soon', name: 'Soon launch' })]),
+      pointer: null,
+      availability: 'ready',
+    });
+    vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
+    const mine = buildPass({
+      target_id: 'personal:josh:abc',
+      target_name: 'Josh Farm',
+      closest_approach: new Date(LAUNCH_NOW + 30 * 60_000).toISOString(),
+    });
+    const shared = buildPass({
+      target_id: 'tokyo-night',
+      target_name: 'Tokyo at night',
+      closest_approach: new Date(LAUNCH_NOW + 40 * 60_000).toISOString(),
+    });
+    seedSnapshot([mine, shared], [shared]);
+    vi.mocked(manifestModule.fetchManifest).mockReturnValue(new Promise(() => {}));
+    const { init } = await import('../src/main');
+    void init();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const names = () => [...document.querySelectorAll('#cards .card-name')].map((node) => node.textContent);
+    const active = () => [...document.querySelectorAll('#queue-pane .filter-btn.active')].map((node) => node.id);
+    const labels = [...document.querySelectorAll('#queue-pane .filter-btn')].map((node) => node.textContent);
+    expect(labels).toEqual(['All', 'Mine', 'Launches']);
+    await vi.waitFor(() => expect(names()).toEqual(expect.arrayContaining(['Josh Farm', 'Tokyo at night', 'Soon launch'])));
+    expect(active()).toEqual(['filter-all-queue']);
+    expect(document.querySelectorAll('#cards [data-launch="v2"]')).toHaveLength(1);
+
+    document.getElementById('filter-launches-queue')!.click();
+    expect(names()).toEqual(['Soon launch']);
+    expect(document.querySelectorAll('#cards .card')).toHaveLength(1);
+    expect(active()).toEqual(['filter-launches-queue']);
+    expect(document.getElementById('filter-all-upcoming')!.classList.contains('active')).toBe(true);
+    expect(localStorage.getItem('opd_target_filter_v1')).not.toBe('launches');
+    expect([...document.querySelectorAll('#upcoming-cards .card-name')].map((node) => node.textContent)).toContain('Tokyo at night');
+
+    document.getElementById('filter-mine-queue')!.click();
+    expect(names()).toEqual(['Josh Farm']);
+    expect(document.querySelectorAll('#cards [data-launch="v2"]')).toHaveLength(0);
+    expect(active()).toEqual(['filter-mine-queue']);
+    expect(document.getElementById('filter-mine-upcoming')!.classList.contains('active')).toBe(true);
+
+    document.getElementById('filter-all-queue')!.click();
+    expect(names()).toEqual(expect.arrayContaining(['Josh Farm', 'Tokyo at night', 'Soon launch']));
+    expect(active()).toEqual(['filter-all-queue']);
+    expect(active()).toHaveLength(1);
+  });
 });
 
 describe('main.ts: common launch lane', () => {
-  it('renders max two launches with three ground slots, no duplicate legacy, and ignores Mine for launches', async () => {
+  it('renders max two launches with three ground slots, no duplicate legacy, and keeps launches out of Mine', async () => {
     // Test the rendering boundary with a validated store snapshot. Cache
     // hashing/restoration has its own LaunchStore tests; invoking it here
     // interleaved async crypto/imports with earlier fire-and-forget init()
@@ -1035,7 +1090,9 @@ describe('main.ts: common launch lane', () => {
       expect(document.querySelectorAll('[data-launch="legacy"]')).toHaveLength(0);
       expect(document.querySelectorAll('#upcoming-cards [data-launch="v2"]')).toHaveLength(3);
       localStorage.setItem('opd_target_filter_v1', 'mine'); renderQueue();
-      expect(document.querySelectorAll('#cards .card')).toHaveLength(2);
+      expect(document.querySelectorAll('#cards .card')).toHaveLength(0);
+      expect(document.getElementById('empty')!.hidden).toBe(false);
+      expect(document.getElementById('empty')!.textContent).toContain('your targets');
       expect(document.querySelectorAll('#upcoming-cards .card')).toHaveLength(3);
       expect(document.getElementById('cards-launch-coverage')?.textContent).toContain('Coverage complete');
     } finally { clock.mockRestore(); }

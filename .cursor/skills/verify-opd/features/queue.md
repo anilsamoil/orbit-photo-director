@@ -9,7 +9,8 @@ Queue is the next passes to shoot. The fixture puts Verify Reef and Verify Delta
 - `queue-sort` selects Score.
 - `queue-remind` presses Remind and sets `aria-pressed` to true.
 - `queue-shoot` logs Shoot and shows the toast.
-- `queue-mine` shows the empty mine-filter message, then All restores the cards.
+- `queue-mine` shows the empty mine-filter message.
+- `queue-launches` is the third filter. It is the only active queue filter, the shared cards leave, and All brings them back. One of All, Mine, and Launches is active.
 - `queue-keepsake` opens the keepsake pane on Verify Keepsake.
 - `queue-hide` hides Verify Delta and stores `verify-delta` in `removedCuratedIds` on `opd-profile-anil`. Verify Reef stays, and `#empty` stays hidden.
 - `queue-empty` hides Verify Reef, the last card. That click shows `#empty` with `No passes in the next 90 minutes.` The script then restores Verify Reef and reloads, and leaves Verify Delta hidden.
@@ -30,11 +31,12 @@ Preconditions:
 - **Score.** The first score control opens a breakdown panel. The panel is visible, not only present while `hidden`.
 - **Sort.** The Score button gains the active class.
 - **Remind and Shoot.** Remind shows pressed. Shoot shows a toast that contains `Shoot logged`.
-- **Mine filter.** The empty state names your targets. All brings the cards back.
+- **Mine filter.** The empty state names your targets.
+- **Launches filter.** Launches is the only active queue filter. Verify Reef and Verify Delta leave the card list. The empty state names launches, or the list is only the launch card. All is the only active filter again and both cards return.
 - **Keepsake.** The keepsake button reveals Verify Keepsake.
 - **Hide.** Hide on the Verify Delta card removes that card. `removedCuratedIds` in `opd-profile-anil` contains `verify-delta`. The same list is what Upcoming and the map pins read. The script waits until `GET /api/browser/profiles/anil/targets` contains `verify-delta`. Verify Reef is still in `#cards`. `#empty` stays hidden. This step does not open a second Chrome. Upcoming's fresh-profile check is for Verify Mesa, the card that step hides.
 - **Last card.** Hide on Verify Reef removes the last card. On that click `#empty` is shown and its text is `No passes in the next 90 minutes.` The script scrolls `#empty` into view, requires the element inside the viewport, and writes `evidence/queue-empty.png`. A shot that does not contain that sentence does not pass. The launch-coverage notice above the cards can push `#empty` below a phone viewport. The script then puts Verify Reef back: `opd-profile-anil` and `PUT /api/browser/profiles/anil/targets` drop `verify-reef` and keep `verify-delta`, the page reloads, and Verify Reef is in `#cards` again with `#empty` hidden. The map step hides that pin itself.
-- **Proof.** `evidence/queue.png`, `evidence/queue-score.png`, `evidence/queue-shoot.png`, `evidence/queue-mine.png`, `evidence/queue-keepsake.png`, `evidence/queue-hide.png`, and `evidence/queue-empty.png`.
+- **Proof.** `evidence/queue.png`, `evidence/queue-score.png`, `evidence/queue-shoot.png`, `evidence/queue-mine.png`, `evidence/queue-launches.png`, `evidence/queue-keepsake.png`, `evidence/queue-hide.png`, and `evidence/queue-empty.png`.
 
 Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 

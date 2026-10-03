@@ -12,8 +12,10 @@
  */
 
 export type TargetFilter = 'all' | 'mine';
+export type QueueFilter = 'all' | 'mine' | 'launches';
 
 const STORAGE_KEY = 'opd_target_filter_v1';
+const QUEUE_FILTER_KEY = 'opd_queue_filter_v1';
 
 /** Read the saved filter. Defaults to 'all' on first visit or any error. */
 export function getTargetFilter(): TargetFilter {
@@ -32,6 +34,27 @@ export function setTargetFilter(filter: TargetFilter): void {
   } catch {
     /* private-mode Safari / strict-storage — ignore, session-only */
   }
+}
+
+/** Queue list filter. All and Mine stay the shared target preference.
+ *  Launches is the queue's third choice and does not replace that preference. */
+export function getQueueFilter(): QueueFilter {
+  try {
+    const saved = localStorage.getItem(QUEUE_FILTER_KEY);
+    if (saved === 'all' || saved === 'mine' || saved === 'launches') return saved;
+  } catch {
+    /* fall through to the shared target filter */
+  }
+  return getTargetFilter();
+}
+
+export function setQueueFilter(filter: QueueFilter): void {
+  try {
+    localStorage.setItem(QUEUE_FILTER_KEY, filter);
+  } catch {
+    /* private-mode Safari / strict-storage — ignore, session-only */
+  }
+  if (filter === 'all' || filter === 'mine') setTargetFilter(filter);
 }
 
 /** A pass belongs to the active astronaut's own list when its target_id

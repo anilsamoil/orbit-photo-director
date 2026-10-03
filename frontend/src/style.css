@@ -1272,11 +1272,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   flex: 0 0 auto;
   width: max-content;
   max-width: 76px;
-  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 169px);
+  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
   overflow-y: auto;
 }
 .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 189px);
+  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
 }
 .view-map .map-control-dock > .map-controls {
   flex-direction: column;
@@ -1348,6 +1348,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 }
 .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl { margin: 0 8px 0 0; }
 .view-map #map .maplibregl-ctrl-bottom-right {
+  display: none;
   bottom: 28px;
   right: 8px;
   left: auto;
@@ -1416,13 +1417,13 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   color: #f4f7fb;
 }
 .view-map ~ .help-fab {
+  display: none;
   bottom: 80px;
 }
 .view-map .map-chrome-toggle {
   position: absolute;
-  left: 50%;
+  right: 12px;
   bottom: calc(36px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
   z-index: 20;
   min-width: 44px;
   min-height: 44px;
@@ -1453,6 +1454,7 @@ body:has(#status-banner .banner-actions) .view-map .map-chrome-toggle {
 #map-pane.map-chrome-hidden .satellite-picker-panel {
   display: none;
 }
+body:has(#view.view-map) .help-fab,
 body.map-chrome-hidden:has(#view.view-map) .help-fab {
   display: none;
 }
@@ -1939,9 +1941,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
   outline-offset: 2px;
 }
 
-/* Target filter ("All / Mine") — same pill as the sort toggle, sits beside
- * it in the pane header. Lets an astronaut collapse the list to just their
- * own targets when the shared set is burying them. */
+/* Target filter ("All / Mine / Launches") — same pill as the sort toggle,
+ * beside it in the pane header. Launches is on the queue only. */
 .filter-toggle {
   display: inline-flex;
   gap: 0.15rem;
@@ -3100,10 +3101,10 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab {
     padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
   }
   .view-map .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - env(safe-area-inset-bottom) - 169px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - env(safe-area-inset-bottom) - 16px);
   }
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - env(safe-area-inset-bottom) - 189px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - env(safe-area-inset-bottom) - 16px);
   }
   .view-map #map .maplibregl-ctrl-bottom-right {
     bottom: calc(28px + env(safe-area-inset-bottom));
@@ -4118,10 +4119,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctr
 }
 
 #map-pane:not(.map-chrome-hidden) .map-chrome-toggle {
-  left: auto;
-  right: 12px;
-  transform: none;
-  bottom: calc(36px + env(safe-area-inset-bottom));
   background: var(--surface);
   border-color: var(--control-border);
   color: var(--text);

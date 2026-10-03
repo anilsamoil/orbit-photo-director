@@ -2,7 +2,7 @@
  *
  *  A fixed bottom-right "?" button opens a modal that explains the app
  *  for the astronaut using it. The tabs, legend, Cupola windows, targets,
- *  credits, top bar, and sign-in footer are in the sections below the
+ *  top bar, and sign-in footer are in the sections below the
  *  title. Content is plain data
  *  rendered with textContent (no operator input, but textContent keeps it
  *  XSS-safe by construction and matches the rest of the modal code).
@@ -399,19 +399,6 @@ const HELP_SECTIONS: HelpSection[] = [
           'shows as a white ring. Mine on Queue, Upcoming, and Map keeps ' +
           'only those places. New rings get a geometric pass. They do not ' +
           'get a cloud forecast.',
-      },
-    ],
-  },
-  {
-    title: 'Credits',
-    items: [
-      {
-        icon: 'ℹ️',
-        label: '(i) button',
-        text:
-          'The credits control sits at the bottom of the map and starts ' +
-          'collapsed. Tap it to read who made the base map, the imagery, ' +
-          'and the labels.',
       },
     ],
   },
