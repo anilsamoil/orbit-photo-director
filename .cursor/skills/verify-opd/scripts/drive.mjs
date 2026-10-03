@@ -254,16 +254,63 @@ async function expectFreshHide(baseUrl, home, { id, name, updatedAt, visible }) 
 }
 
 async function hideNamed(send, container, name) {
-  const id = await evaluate(send, `(() => {
+  const snap = await clickHide(send, container, name);
+  return snap.id;
+}
+
+async function clickHide(send, container, name) {
+  const snap = await evaluate(send, `(() => {
     const root = document.querySelector(${JSON.stringify(container)});
     const card = [...(root ? root.querySelectorAll('.card') : [])].find((el) => (el.innerText || '').includes(${JSON.stringify(name)}));
     const button = card && card.querySelector('.btn-hide');
-    if (!card || !button) return '';
+    if (!card || !button) return null;
+    const empty = document.getElementById('empty');
+    const id = card.dataset.targetId || '';
     button.click();
-    return card.dataset.targetId || '';
+    const host = document.getElementById('cards');
+    return {
+      id,
+      cardsText: host ? host.innerText || '' : '',
+      childCount: host ? host.childElementCount : -1,
+      emptyHidden: empty ? empty.hidden === true : null,
+      emptyText: empty ? empty.textContent || '' : '',
+    };
   })()`);
-  if (!id) throw new Error(`no hide button for ${name}`);
-  return id;
+  if (!snap?.id) throw new Error(`no hide button for ${name}`);
+  return snap;
+}
+
+async function restoreCuratedCard(send, baseUrl, id, visibleName) {
+  await click(send, '#tab-profile');
+  await waitFor(
+    send,
+    `document.getElementById('profile-body')?.innerText.includes('Anil') ? { ok: true } : null`,
+    'profile pane for restore',
+  );
+  const chip = `[data-curated-id="${id}"]`;
+  await waitFor(
+    send,
+    `document.querySelector(${JSON.stringify(chip)}) ? { ok: true } : null`,
+    `hidden chip ${id}`,
+  );
+  await click(send, `${chip} button`);
+  await waitFor(
+    send,
+    `!document.querySelector(${JSON.stringify(chip)}) ? { ok: true } : null`,
+    `restored ${id}`,
+  );
+  await waitServerRemoved(baseUrl, [], [id]);
+  await click(send, '#tab-queue');
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('cards')?.innerText || '';
+      const empty = document.getElementById('empty');
+      if (!text.includes(${JSON.stringify(visibleName)}) || !empty || empty.hidden !== true) return null;
+      return { ok: true };
+    })()`,
+    `queue card ${visibleName} restored`,
+  );
 }
 
 async function reloadSettled(send) {
@@ -1095,17 +1142,33 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     'keepsake pane',
   );
   await shot(send, evidenceDir, 'queue-keepsake');
-  const deltaId = await hideNamed(send, '#cards', meta.names.queue[1]);
-  await waitFor(
-    send,
-    `!document.getElementById('cards')?.innerText.includes(${JSON.stringify(meta.names.queue[1])}) ? { ok: true } : null`,
-    'queue hide',
-  );
-  const stored = await removedCuratedIds(send);
-  if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
-  await waitServerRemoved(baseUrl, [deltaId], []);
+  const reef = meta.names.queue[0];
+  const delta = meta.names.queue[1];
+  const partial = await clickHide(send, '#cards', delta);
+  if (partial.emptyHidden !== true || partial.childCount < 1) {
+    throw new Error(`#empty changed while ${reef} remained: ${JSON.stringify(partial)}`);
+  }
+  if (!partial.cardsText.includes(reef) || partial.cardsText.includes(delta)) {
+    throw new Error(`partial hide left cards ${JSON.stringify(partial.cardsText.slice(0, 240))}`);
+  }
   await shot(send, evidenceDir, 'queue-hide');
-  return 'queue: cards, score, remind, shoot, mine filter, keepsake, hide';
+  await waitServerRemoved(baseUrl, [partial.id], []);
+  const last = await clickHide(send, '#cards', reef);
+  if (last.childCount !== 0 || last.emptyHidden !== false || !last.emptyText.includes('No passes in the next 90 minutes.')) {
+    throw new Error(`last hide did not show #empty on that click: ${JSON.stringify(last)}`);
+  }
+  await shot(send, evidenceDir, 'queue-empty');
+  const stored = await removedCuratedIds(send);
+  if (!stored.includes(partial.id) || !stored.includes(last.id)) {
+    throw new Error(`queue hide missing ${partial.id} or ${last.id} in ${JSON.stringify(stored)}`);
+  }
+  await waitServerRemoved(baseUrl, [partial.id, last.id], []);
+  await restoreCuratedCard(send, baseUrl, last.id, reef);
+  const afterRestore = await removedCuratedIds(send);
+  if (!afterRestore.includes(partial.id) || afterRestore.includes(last.id)) {
+    throw new Error(`restore changed the hide list to ${JSON.stringify(afterRestore)}`);
+  }
+  return `queue: cards, score, remind, shoot, mine filter, keepsake, hide, last card #empty "${last.emptyText.trim()}"`;
 }
 
 function upcomingListExpression(mesa, ascent, { hidden }) {
