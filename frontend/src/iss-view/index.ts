@@ -40,6 +40,7 @@ type IssSession = {
   opticalFovDeg: number;
 };
 
+const EXPEDITION_EDITION = 'Expedition 75 Beta Edition';
 const AIM_STORAGE_KEY = 'opd-iss-aim';
 const AIM_LINK_PARAM = 'iss';
 const AIM_LINK_QUIET_MS = 1000;
@@ -151,9 +152,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const dayMonth = clockLine('issDayMonth');
   const weekday = clockLine('issWeekday');
   clockBlock.append(utc, houston, gmtDay, dayMonth, weekday);
+  const edition = document.createElement('p');
+  edition.dataset.issEdition = '';
+  edition.textContent = EXPEDITION_EDITION;
   const toolbar = document.createElement('div');
   toolbar.dataset.issToolbar = '';
-  toolbar.append(presets, clockBlock);
+  toolbar.append(presets, clockBlock, edition);
   const frame = document.createElement('div');
   frame.dataset.issFrame = '';
   frame.tabIndex = 0;

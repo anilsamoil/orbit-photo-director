@@ -3334,7 +3334,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 [data-iss-houston],
 [data-iss-gmt-day],
 [data-iss-day-month],
-[data-iss-weekday] {
+[data-iss-weekday],
+[data-iss-edition] {
   margin: 0;
   padding: 0;
   min-height: 0;
@@ -3344,6 +3345,14 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   line-height: 1.15;
   text-align: right;
   white-space: nowrap;
+}
+
+[data-iss-edition] {
+  grid-column: 3;
+  justify-self: end;
+  color: #f4f7fb;
+  pointer-events: none;
+  user-select: none;
 }
 
 [data-iss-cupola] {
@@ -3819,7 +3828,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
     grid-column: auto;
   }
 
-  [data-iss-clock] {
+  [data-iss-clock],
+  [data-iss-edition] {
     align-self: flex-end;
     grid-column: auto;
   }
