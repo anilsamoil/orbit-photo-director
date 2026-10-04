@@ -285,6 +285,24 @@ describe('map chrome layout', () => {
     expect(heights).not.toContain('104px');
   });
 
+  it('lays the time strip on the map', () => {
+    mount('view-map');
+    document.querySelector('#map-pane')!.insertAdjacentHTML(
+      'beforeend',
+      `<div class="map-command">
+        <div class="map-controls map-controls-time">
+          <input id="time-slider" class="time-slider" type="range" />
+        </div>
+      </div>`,
+    );
+    const command = getComputedStyle(document.querySelector('.map-command')!);
+    const controls = getComputedStyle(document.querySelector('.map-controls-time')!);
+    expect(command.backgroundColor).toBe('rgba(16, 22, 28, 0.55)');
+    expect(command.borderTopColor).toBe('transparent');
+    expect(controls.backgroundColor).toBe('transparent');
+    expect(ruleStyle('.view-map #map').bottom).toBe('0px');
+  });
+
   it('ships the map page without the corner help button', () => {
     expect(html).toContain('id="help-fab"');
     expect(html).toMatch(/id="help-fab"[^>]*\shidden[\s>]/);
