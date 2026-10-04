@@ -290,6 +290,28 @@ describe('map chrome layout', () => {
     expect(html).toMatch(/id="help-fab"[^>]*\shidden[\s>]/);
   });
 
+  it('keeps the Launches label inside its map toolbar button', () => {
+    mount('view-map');
+    document.querySelector('.map-toolbar')!.innerHTML = `
+      <div class="map-controls map-controls-filter">
+        <span class="map-group-label">Show</span>
+        <button id="filter-all-map" class="filter-btn" type="button">All</button>
+        <button id="filter-mine-map" class="filter-btn" type="button">Mine</button>
+        <button id="filter-launches-map" class="filter-btn" type="button">Launches</button>
+      </div>
+    `;
+    const launches = getComputedStyle(document.querySelector('#filter-launches-map')!);
+    expect(launches.flexShrink).toBe('0');
+    expect(launches.whiteSpace).toBe('nowrap');
+    expect(launches.minWidth).toBe('44px');
+    mount('view-queue');
+    document.querySelector('#map-pane')!.insertAdjacentHTML(
+      'beforeend',
+      '<button id="filter-launches-queue" class="filter-btn" type="button">Launches</button>',
+    );
+    expect(getComputedStyle(document.querySelector('#filter-launches-queue')!).flexShrink).toBe('');
+  });
+
   it('reserves a map hit height when the narrow inspector would cover the credit strip', () => {
     mount('view-map');
     const blocks = rulesFor('#map-pane.map-inspector-open').map((style) => style.getPropertyValue('--map-inspector-block'));

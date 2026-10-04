@@ -1220,8 +1220,10 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   color: var(--bg);
 }
 .view-map .map-toolbar .filter-btn {
+  flex-shrink: 0;
   padding: 0.25rem 0.45rem;
   font-size: 0.73rem;
+  white-space: nowrap;
 }
 @media (max-width: 360px) {
   .view-map .map-toolbar .filter-btn { padding-inline: 0.15rem; }
@@ -3179,6 +3181,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 [data-iss-toolbar] {
+  position: relative;
   width: 100%;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -3332,7 +3335,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 [data-iss-houston],
 [data-iss-gmt-day],
 [data-iss-day-month],
-[data-iss-weekday] {
+[data-iss-weekday],
+[data-iss-edition] {
   margin: 0;
   padding: 0;
   min-height: 0;
@@ -3342,6 +3346,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   line-height: 1.15;
   text-align: right;
   white-space: nowrap;
+}
+
+[data-iss-edition] {
+  position: absolute;
+  top: 46px;
+  left: 0;
+  z-index: 1;
+  color: #f4f7fb;
+  pointer-events: none;
+  user-select: none;
 }
 
 [data-iss-cupola] {
@@ -3820,6 +3834,13 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   [data-iss-clock] {
     align-self: flex-end;
     grid-column: auto;
+  }
+
+  [data-iss-edition] {
+    position: static;
+    top: auto;
+    left: auto;
+    align-self: flex-end;
   }
 }
 
