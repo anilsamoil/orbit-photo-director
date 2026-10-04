@@ -193,6 +193,21 @@ describe('ISS scene lifecycle', () => {
     expect(host.querySelector('[data-iss-scene]')).toBeNull();
   });
 
+  it('shows Expedition 75 Beta Edition off the earth window', async () => {
+    const host = document.createElement('div');
+    const fake = fakeRenderer();
+    const scene = mount(host, fake.factory);
+    await ready(scene);
+    const edition = host.querySelector('[data-iss-edition]');
+    expect(edition).toBeInstanceOf(HTMLParagraphElement);
+    expect(edition?.textContent).toBe('Expedition 75 Beta Edition');
+    expect(edition?.closest('[data-iss-toolbar]')).toBe(host.querySelector('[data-iss-toolbar]'));
+    expect(host.querySelector('[data-iss-frame]')?.contains(edition ?? null)).toBe(false);
+    const page = readFileSync(resolve(__dirname, '../index.html'), 'utf8');
+    expect(page).not.toContain('Expedition 75 Beta Edition');
+    scene.dispose();
+  });
+
   it('keeps Houston, GMT day, day and month, and weekday on the UTC instant after a scrub and an aim', async () => {
     const host = document.createElement('div');
     const fake = fakeRenderer();
