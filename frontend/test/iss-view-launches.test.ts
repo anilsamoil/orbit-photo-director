@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { mountIssScene } from '../src/iss-view';
 import {
@@ -20,7 +20,8 @@ import type { SceneSnapshot } from '../src/iss-view/model';
 import type { Track } from '../src/types';
 
 import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
-import { NOW, assessment, iso, launch, state, supported } from './launch-fixtures';
+import { launchStore } from '../src/launch-store';
+import { NOW, artifact, assessment, envelope, iso, launch, state, supported } from './launch-fixtures';
 
 const fixture = fixtureRaw as {
   tle: { line1: string; line2: string };
@@ -244,6 +245,7 @@ describe('selected launch in the ISS view', () => {
     expect(shown.at(-1)).toEqual(['cape']);
     expect(shown.at(-1)).toHaveLength(1);
     const button = host.querySelector('[data-iss-launch]') as HTMLButtonElement | null;
+    expect(button?.querySelector('[data-iss-launch-label]')?.textContent).toBe('Look toward Cape Canaveral');
     expect(button?.textContent).toContain('Cape Canaveral');
     expect(button?.closest('[data-iss-controls]')?.contains(telemetry)).toBe(true);
     const card = host.querySelector('[data-iss-launch-card]');
@@ -272,6 +274,7 @@ describe('selected launch in the ISS view', () => {
     await scene.paint();
     expect(shown.at(-1)).toEqual(['vandenberg']);
     expect(aims.at(-1)?.pose.targetLatDeg).toBe(replaced?.pose.targetLatDeg);
+    expect(host.querySelector('[data-iss-launch-label]')?.textContent).toBe('Look toward Vandenberg');
     expect(host.querySelector('[data-iss-launch]')?.textContent).toContain('Vandenberg');
     expect(host.querySelector('[data-iss-launch-card] [data-iss-launch-name]')?.textContent).toBe('Transporter');
     picker.value = 'none';
@@ -286,7 +289,7 @@ describe('selected launch in the ISS view', () => {
     host.remove();
   });
 
-  it('keeps the same id when metadata changes and clears the drawing when it leaves', async () => {
+  it('keeps the option while metadata changes, then clears the choice when the launch leaves', async () => {
     const shown: LaunchSite[][] = [];
     const aims: IssAim[] = [];
     const crew = selection(supported({
@@ -348,12 +351,44 @@ describe('selected launch in the ISS view', () => {
     const held = aims.at(-1)?.pose.targetLatDeg;
     catalog.items = [other];
     await scene.paint();
-    expect(picker.value).toBe('crew');
+    expect(picker.value).toBe('');
+    expect(picker.selectedOptions[0]?.textContent).toBe('Choose launch');
+    expect([...picker.options].some((entry) => entry.textContent === 'Selected launch is no longer available')).toBe(false);
     expect(host.querySelector('[data-iss-launch-missing]')?.textContent).toBe('Selected launch is no longer available');
+    expect(host.querySelector('[data-iss-launch-card]')?.hasAttribute('hidden')).toBe(false);
     expect(shown.at(-1)).toEqual([]);
     expect(host.querySelector('[data-iss-launch]')).toBeNull();
     expect(aims.at(-1)?.pose.targetLatDeg).toBe(held);
     expect([...picker.options].some((entry) => entry.value === 'other' && entry.selected)).toBe(false);
+    catalog.items = [crew, other];
+    await scene.paint();
+    expect(picker.value).toBe('');
+    expect(picker.selectedOptions[0]?.textContent).toBe('Choose launch');
+    expect([...picker.options].some((entry) => entry.value === 'crew' && !entry.selected)).toBe(true);
+    expect(host.querySelector('[data-iss-launch-missing]')?.textContent).toBe('Selected launch is no longer available');
+    expect(shown.at(-1)).toEqual([]);
+    expect(host.querySelector('[data-iss-launch]')).toBeNull();
+    expect(aims.at(-1)?.pose.targetLatDeg).toBe(held);
+    picker.value = 'other';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    await scene.paint();
+    expect(picker.value).toBe('other');
+    expect(host.querySelector('[data-iss-launch-missing]')).toBeNull();
+    expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Other');
+    expect(shown.at(-1)?.map((site) => site.eventId)).toEqual(['other']);
+    catalog.items = [crew];
+    await scene.paint();
+    expect(picker.value).toBe('');
+    expect([...picker.options].some((entry) => entry.value === 'crew' && entry.selected)).toBe(false);
+    expect(host.querySelector('[data-iss-launch-missing]')?.textContent).toBe('Selected launch is no longer available');
+    expect(shown.at(-1)).toEqual([]);
+    picker.value = 'none';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    await scene.paint();
+    expect(picker.value).toBe('');
+    expect(host.querySelector('[data-iss-launch-card]')?.hasAttribute('hidden')).toBe(true);
     scene.dispose();
     host.remove();
   });
@@ -412,6 +447,91 @@ describe('selected launch in the ISS view', () => {
     expect(shown.at(-1)?.map((site) => site.eventId)).toEqual(['sourced']);
     expect(launchCorridorLines(shown.at(-1) ?? [])).toEqual([[[-80.6, 28.5], [-80, 29]]]);
     scene.dispose();
+  });
+
+  it('holds the choice while a newer pointer downloads and does not restore it', async () => {
+    localStorage.clear();
+    const chance = (eventId: string, name: string, siteName: string, lat: number, lon: number, checkedAt: string) => launch({
+      event_id: eventId,
+      name,
+      site: { name: siteName, lat, lon },
+      assessment: assessment({ checked_at: checkedAt }),
+      launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' },
+      sources: [{ kind: 'schedule', url: 'https://example.org/launch', fetched_at: checkedAt }],
+    });
+    const crewAt = (checkedAt: string) => chance('crew', 'Crew', 'Cape Canaveral', 28.5, -80.6, checkedAt);
+    const otherAt = (checkedAt: string) => chance('other', 'Other', 'Mahia', -39.26, 177.86, checkedAt);
+    const first = await envelope(artifact([crewAt(iso(-5)), otherAt(iso(-5))]));
+    const dropped = await envelope(artifact([otherAt(iso(-1))], { revision: 'r2', generated_at: iso(-1) }));
+    const returned = await envelope(artifact([crewAt(iso(0)), otherAt(iso(0))], { revision: 'r3', generated_at: iso(0) }));
+    let phase: 'first' | 'hold' | 'back' = 'first';
+    let releaseBody: (response: Response) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      const latest = path.includes('launch/latest.json');
+      if (phase === 'first') return new Response(latest ? JSON.stringify(first.pointer) : first.body);
+      if (phase === 'hold') {
+        if (latest) return new Response(JSON.stringify(dropped.pointer));
+        return new Promise<Response>((resolve) => { releaseBody = resolve; });
+      }
+      return new Response(latest ? JSON.stringify(returned.pointer) : returned.body);
+    }));
+    const host = document.createElement('div');
+    document.body.append(host);
+    try {
+      await launchStore.refresh();
+      const scene = mountIssScene(host, {
+        nowMs: () => NOW,
+        createRenderer: () => ({
+          ready: () => Promise.resolve(),
+          aim: () => Promise.resolve(),
+          showLaunches() {},
+          resize: () => {},
+          destroy: () => {},
+        }),
+        drive: 'manual',
+        session: { mode: 'horizon' },
+      });
+      scene.update(shot());
+      await settle();
+      await scene.paint();
+      const picker = host.querySelector('[data-iss-launch-picker]');
+      expect(picker).toBeInstanceOf(HTMLSelectElement);
+      if (!(picker instanceof HTMLSelectElement)) return;
+      expect([...picker.options].some((entry) => entry.value === 'crew')).toBe(true);
+      picker.value = 'crew';
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await settle();
+      await scene.paint();
+      expect(picker.value).toBe('crew');
+      phase = 'hold';
+      const pending = launchStore.refresh();
+      await vi.waitFor(() => {
+        if (!launchStore.getState().superseded) throw new Error('pointer not observed');
+      });
+      await settle();
+      expect(picker.value).toBe('crew');
+      expect(host.querySelector('[data-iss-launch-missing]')).toBeNull();
+      expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Crew');
+      releaseBody(new Response(dropped.body));
+      await pending;
+      await settle();
+      expect(picker.value).toBe('');
+      expect(picker.selectedOptions[0]?.textContent).toBe('Choose launch');
+      expect(host.querySelector('[data-iss-launch-missing]')?.textContent).toBe('Selected launch is no longer available');
+      expect([...picker.options].some((entry) => entry.value === 'other' && entry.selected)).toBe(false);
+      phase = 'back';
+      await launchStore.refresh();
+      await settle();
+      expect(picker.value).toBe('');
+      expect([...picker.options].some((entry) => entry.value === 'crew' && !entry.selected)).toBe(true);
+      expect(host.querySelector('[data-iss-launch-missing]')?.textContent).toBe('Selected launch is no longer available');
+      expect(host.querySelector('[data-iss-launch]')).toBeNull();
+      scene.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+      host.remove();
+    }
   });
 });
 
