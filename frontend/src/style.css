@@ -1168,7 +1168,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   inset: 0;
   top: var(--topbar-height);
   right: var(--map-inspector-inline);
-  bottom: var(--map-command-height);
+  bottom: 0;
   height: auto;
   min-height: 0;
   border-radius: 0;
@@ -3971,6 +3971,8 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   padding: 8px 96px calc(32px + env(safe-area-inset-bottom)) 8px;
   overflow: auto;
   color: var(--text);
+  background: rgba(16, 22, 28, 0.55);
+  border-color: transparent;
 }
 
 .view-map .map-command .map-controls-time {
@@ -3985,6 +3987,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   min-width: 0;
   width: auto;
   max-width: none;
+  background: transparent;
 }
 
 .view-map .map-command .time-step-btn,

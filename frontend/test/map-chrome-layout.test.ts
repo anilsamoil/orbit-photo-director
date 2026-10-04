@@ -298,8 +298,8 @@ describe('map chrome layout', () => {
     const command = getComputedStyle(document.querySelector('.map-command')!);
     const controls = getComputedStyle(document.querySelector('.map-controls-time')!);
     expect(command.backgroundColor).toBe('rgba(16, 22, 28, 0.55)');
-    expect(command.borderTopColor).toBe('rgba(0, 0, 0, 0)');
-    expect(controls.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(command.borderTopColor).toBe('transparent');
+    expect(controls.backgroundColor).toBe('transparent');
     expect(ruleStyle('.view-map #map').bottom).toBe('0px');
   });
 
