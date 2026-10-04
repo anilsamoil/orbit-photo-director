@@ -65,6 +65,13 @@ export interface LaunchBrief {
   label: string; reason: string; direction: string | null; scheduleCurrent: boolean;
 }
 
+export function launchVerdictBlock(state: LaunchState, now: number): string | null {
+  if (state.availability === 'offline') return 'Offline — reconnect to check the launch time and ISS view.';
+  if (state.superseded) return 'A newer launch update is available; it needs checking before assessing a shot.';
+  if (!launchScheduleFresh(state, now)) return 'The launch schedule needs a refresh before assessing a shot.';
+  return null;
+}
+
 /** Planning verdict is distinct from camera evidence, schedule freshness and
  * Queue eligibility. A visible pad is a possible shot, never a plume promise. */
 export function launchBrief(selection: LaunchSelection, state: LaunchState, now: number): LaunchBrief {
@@ -74,9 +81,8 @@ export function launchBrief(selection: LaunchSelection, state: LaunchState, now:
     verdict, label, reason, direction, scheduleCurrent,
   });
   if (selection.expired) return brief('passed', 'Listed time has passed', 'No current shooting window. Check for an updated launch time.');
-  if (state.availability === 'offline') return brief('unknown', 'Chance unknown', 'Offline — reconnect to check the launch time and ISS view.');
-  if (state.superseded) return brief('unknown', 'Chance unknown', 'A newer launch update is available; it needs checking before assessing a shot.');
-  if (!scheduleCurrent) return brief('unknown', 'Chance unknown', 'The launch schedule needs a refresh before assessing a shot.');
+  const blocked = launchVerdictBlock(state, now);
+  if (blocked) return brief('unknown', 'Chance unknown', blocked);
   if (hasLaunchTimeConflict(item)) return brief('unknown', 'Chance unknown', 'Launch sources disagree about the time.');
   if (item.reason_codes.includes('LAUNCH_UNCONFIRMED')
     || ['day', 'month', 'year'].includes(item.launch_window.precision?.toLowerCase() ?? '')) {

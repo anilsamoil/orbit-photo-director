@@ -155,6 +155,53 @@ function proxyRequest(state, req, res) {
   });
 }
 
+function launchRung(fixtureDir, rung) {
+  const launch = JSON.parse(readFileSync(resolve(fixtureDir, 'launch.json'), 'utf8'));
+  const base = JSON.parse(readFileSync(resolve(fixtureDir, 'launch-latest.json'), 'utf8'));
+  if (rung !== 'gone' && rung !== 'back') return null;
+  const offset = rung === 'gone' ? 1000 : 2000;
+  const revision = rung === 'gone' ? 'verifyrev-gone' : 'verifyrev-back';
+  const generated = new Date(Date.parse(launch.generated_at) + offset).toISOString();
+  const until = new Date(Date.parse(launch.valid_until) + offset).toISOString();
+  const empty = rung === 'gone';
+  const items = empty ? [] : launch.items.map((item) => (
+    item.assessment ? { ...item, assessment: { ...item.assessment, checked_at: generated } } : item
+  ));
+  const bodyObj = {
+    ...launch,
+    revision,
+    generated_at: generated,
+    valid_until: until,
+    items,
+    coverage: {
+      ...launch.coverage,
+      received: empty ? 0 : launch.coverage.received,
+      parsed: empty ? 0 : launch.coverage.parsed,
+      evaluated: empty ? 0 : launch.coverage.evaluated,
+      visible: empty ? 0 : launch.coverage.visible,
+    },
+  };
+  const body = JSON.stringify(bodyObj);
+  const pointer = {
+    ...base,
+    revision,
+    generated_at: generated,
+    valid_until: until,
+    path: `launch/v/${revision}.json`,
+    sha256: createHash('sha256').update(body).digest('hex'),
+  };
+  return { pointer, body };
+}
+
+function sendJson(res, text) {
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'content-length': Buffer.byteLength(text),
+  });
+  res.end(text);
+}
+
 function startProxy(home) {
   const state = readState(home);
   const fixtureDir = resolve(home, 'fixtures');
@@ -243,7 +290,21 @@ function startProxy(home) {
       '/v/verify/tracked.json': 'tracked.json',
     }[path];
     if (artifact) return sendFile(artifact);
-    if (path === '/launch/latest.json') return sendFile('launch-latest.json');
+    if (path === '/launch/latest.json') {
+      const rung = cookieValue(req, 'opd-verify-launch');
+      const published = launchRung(fixtureDir, rung);
+      if (!published) return sendFile('launch-latest.json');
+      sendJson(res, JSON.stringify(published.pointer));
+      return;
+    }
+    if (path === '/launch/v/verifyrev-gone.json') {
+      sendJson(res, launchRung(fixtureDir, 'gone').body);
+      return;
+    }
+    if (path === '/launch/v/verifyrev-back.json') {
+      sendJson(res, launchRung(fixtureDir, 'back').body);
+      return;
+    }
     if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
     if (path === '/api/browser/session') {
       const denied = (req.headers.cookie ?? '').split(';').some((part) => part.trim() === 'opd-verify-session=deny');

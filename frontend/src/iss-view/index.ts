@@ -25,7 +25,7 @@ import {
   type LaunchSite,
   type LaunchVisibility,
 } from './launches';
-import { selectLaunches, type LaunchSelection } from '../launch-selectors';
+import { launchVerdictBlock, selectLaunches, type LaunchSelection } from '../launch-selectors';
 import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { paintEqualDigits } from '../digits';
@@ -87,10 +87,33 @@ export type MountIssSceneOptions = {
   };
 };
 
+type LaunchPick =
+  | { kind: 'open' }
+  | { kind: 'held'; eventId: string }
+  | { kind: 'cleared' };
+
+type LaunchPickEvent =
+  | { type: 'menu'; value: string }
+  | { type: 'catalog'; judged: boolean; present: boolean };
+
+function pickValue(pick: LaunchPick): string {
+  return pick.kind === 'held' ? pick.eventId : '';
+}
+
+function reduceLaunchPick(pick: LaunchPick, event: LaunchPickEvent): LaunchPick {
+  if (event.type === 'menu') {
+    if (event.value === '' || event.value === pickValue(pick)) return pick;
+    if (event.value === 'none') return { kind: 'open' };
+    return { kind: 'held', eventId: event.value };
+  }
+  if (pick.kind !== 'held' || !event.judged || event.present) return pick;
+  return { kind: 'cleared' };
+}
+
 export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions): IssScene {
   const session = bindSession(options.session ?? sessionPreset);
   const readSelections = options.launches ?? (() => selectLaunches(launchStore.getState(), options.nowMs(), 'map'));
-  let selectedEventId = '';
+  let pick: LaunchPick = { kind: 'open' };
   let launchVisibility: LaunchVisibility = 'View unavailable';
   let pickerSync = false;
   const visible = options.visible ?? (() => document.visibilityState !== 'hidden');
@@ -255,12 +278,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   syncCupola();
   picker.addEventListener('change', () => {
     if (pickerSync) return;
-    const value = picker.value;
-    if (value === '' || value === selectedEventId) {
-      if (picker.value !== selectedEventId) picker.value = selectedEventId;
+    const next = reduceLaunchPick(pick, { type: 'menu', value: picker.value });
+    if (next === pick) {
+      if (picker.value !== pickValue(pick)) picker.value = pickValue(pick);
       return;
     }
-    selectedEventId = value === 'none' ? '' : value;
+    pick = next;
     launchVisibility = 'View unavailable';
     if (phase === 'running' && rendererReady) void paint();
     else layout();
@@ -403,10 +426,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       renderer = factory(frame, {
         onLaunchLook(eventId) {
           const selection = readSelections().find((entry) => entry.item.event_id === eventId);
-          if (selection && selection.item.event_id === selectedEventId) aimToward(launchSiteFromSelection(selection));
+          if (selection && pick.kind === 'held' && selection.item.event_id === pick.eventId) {
+            aimToward(launchSiteFromSelection(selection));
+          }
         },
         onLaunchVisibility(eventId, visibility) {
-          if (eventId !== selectedEventId) return;
+          if (pick.kind !== 'held' || eventId !== pick.eventId) return;
           launchVisibility = visibility;
           if (launchCard.dataset.issLaunchState === 'selected') factVisibility.textContent = visibility;
         },
@@ -496,8 +521,16 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const selections = readSelections();
     const state = launchStore.getState();
     const now = options.nowMs();
+    const judged = !!options.launches || launchVerdictBlock(state, now) === null;
+    const current = pick;
+    const heldId = current.kind === 'held' ? current.eventId : '';
+    const present = heldId !== '' && selections.some((entry) => entry.item.event_id === heldId);
+    if (current.kind === 'held' && !judged) return;
+    pick = reduceLaunchPick(current, { type: 'catalog', judged, present });
+    const next = pick;
+    const choiceId = next.kind === 'held' ? next.eventId : '';
+    const choice = choiceId === '' ? null : selections.find((entry) => entry.item.event_id === choiceId) ?? null;
     syncPicker(selections, state, now);
-    const choice = selections.find((entry) => entry.item.event_id === selectedEventId) ?? null;
     const site = choice ? launchSiteFromSelection(choice) : null;
     syncPad(site);
     paintLaunchCard(choice, state, now);
@@ -515,10 +548,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         label: launchChoiceLabel(selection, state, now),
       });
     }
-    if (selectedEventId && !selections.some((selection) => selection.item.event_id === selectedEventId)) {
-      rows.push({ value: selectedEventId, label: 'Selected launch is no longer available' });
-    }
     const signature = rows.map((row) => `${row.value}\t${row.label}`).join('\n');
+    const value = pickValue(pick);
     pickerSync = true;
     try {
       if (picker.dataset.issLaunchOptions !== signature) {
@@ -530,7 +561,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
           if (option.getAttribute('value') !== row.value) option.setAttribute('value', row.value);
         });
       }
-      if (picker.value !== selectedEventId) picker.value = selectedEventId;
+      if (picker.value !== value) picker.value = value;
     } finally {
       pickerSync = false;
     }
@@ -562,16 +593,19 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       label.dataset.issLaunchLabel = '';
       button.append(arrow, label);
       button.addEventListener('click', () => {
-        const current = readSelections().find((entry) => entry.item.event_id === selectedEventId);
-        if (current) aimToward(launchSiteFromSelection(current));
+        const current = pick;
+        if (current.kind !== 'held') return;
+        const selected = readSelections().find((entry) => entry.item.event_id === current.eventId);
+        if (selected) aimToward(launchSiteFromSelection(selected));
       });
       launchesHost.append(button);
       launchesHost.dataset.issLaunchIds = site.eventId;
     }
+    const lookLabel = `Look toward ${site.siteName}`;
     const label = button.querySelector('[data-iss-launch-label]');
-    if (label) label.textContent = site.siteName;
-    button.title = `Look toward ${site.siteName}`;
-    button.setAttribute('aria-label', `Look toward ${site.siteName}`);
+    if (label) label.textContent = lookLabel;
+    button.title = lookLabel;
+    button.setAttribute('aria-label', lookLabel);
     launchesHost.hidden = false;
     const pose = frameState?.ok ? frameState.pose : null;
     if (!pose) return;
@@ -586,19 +620,20 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     state: ReturnType<typeof launchStore.getState>,
     now: number,
   ): void {
-    if (!selectedEventId) {
-      launchCard.hidden = true;
-      launchCard.dataset.issLaunchState = '';
-      return;
-    }
-    launchCard.hidden = false;
-    if (!choice) {
+    if (pick.kind === 'cleared') {
+      launchCard.hidden = false;
       if (launchCard.dataset.issLaunchState !== 'missing') {
         launchCard.dataset.issLaunchState = 'missing';
         launchCard.replaceChildren(factMissing);
       }
       return;
     }
+    if (pick.kind !== 'held' || !choice) {
+      launchCard.hidden = true;
+      launchCard.dataset.issLaunchState = '';
+      return;
+    }
+    launchCard.hidden = false;
     if (launchCard.dataset.issLaunchState !== 'selected') {
       launchCard.dataset.issLaunchState = 'selected';
       launchCard.replaceChildren(factName, factSite, factTime, factVisibility);

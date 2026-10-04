@@ -3553,6 +3553,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
+  min-width: 0;
 }
 
 [data-iss-launches][hidden] {
