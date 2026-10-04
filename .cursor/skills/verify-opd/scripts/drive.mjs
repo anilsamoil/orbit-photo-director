@@ -1932,7 +1932,10 @@ async function proveIssLaunchLook(send, evidenceDir) {
       const card = document.querySelector('[data-iss-launch-card]');
       if (!(picker instanceof HTMLSelectElement) || !button || !frame || !card) return null;
       if (picker.value !== ${JSON.stringify(before.value)}) return null;
+      if (button.querySelector('[data-iss-launch-label]')?.textContent !== 'Look toward Verify Pad') return null;
       if (!button.textContent.includes('Verify Pad')) return null;
+      const scene = button.closest('[data-iss-scene]');
+      if (scene && scene.scrollWidth > scene.clientWidth + 1) return null;
       if (card.hasAttribute('hidden')) return null;
       const name = card.querySelector('[data-iss-launch-name]')?.textContent || '';
       const site = card.querySelector('[data-iss-launch-site]')?.textContent || '';
@@ -2046,6 +2049,55 @@ async function proveIssLaunchLook(send, evidenceDir) {
     'iss launch look moved',
     10000,
   );
+  const aimed = await evaluate(send, `(() => {
+    const center = window.__opdIss?.getCenter?.();
+    return center ? { lng: center.lng, lat: center.lat } : null;
+  })()`);
+  if (!aimed) throw new Error('missing aim before launch loss');
+  await evaluate(send, `document.cookie = 'opd-verify-launch=gone; path=/'`);
+  await waitFor(
+    send,
+    `(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const card = document.querySelector('[data-iss-launch-card]');
+      const missing = document.querySelector('[data-iss-launch-missing]');
+      if (!(picker instanceof HTMLSelectElement) || !card || card.hidden) return null;
+      if (picker.value !== '' || (picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
+      if (missing?.textContent !== 'Selected launch is no longer available') return null;
+      if ([...picker.options].some((entry) => entry.textContent === 'Selected launch is no longer available')) return null;
+      if (document.querySelector('[data-iss-launch], .iss-launch-pin, [data-iss-launch-edge]')) return null;
+      const frame = document.querySelector('[data-iss-frame]');
+      if (frame?.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      const center = window.__opdIss?.getCenter?.();
+      if (!center) return null;
+      const drifted = Math.hypot(center.lng - ${Number(aimed.lng)}, center.lat - ${Number(aimed.lat)});
+      if (!(drifted < 0.15)) return null;
+      return { ok: true };
+    })()`,
+    'iss launch lost',
+    20000,
+  );
+  await evaluate(send, `document.cookie = 'opd-verify-launch=back; path=/'`);
+  await waitFor(
+    send,
+    `(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const missing = document.querySelector('[data-iss-launch-missing]');
+      if (!(picker instanceof HTMLSelectElement)) return null;
+      const ascent = [...picker.options].find((entry) => (entry.textContent || '').includes('Verify Ascent'));
+      if (!ascent || ascent.selected) return null;
+      if (picker.value !== '' || (picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
+      if (missing?.textContent !== 'Selected launch is no longer available') return null;
+      if (document.querySelector('[data-iss-launch]')) return null;
+      const frame = document.querySelector('[data-iss-frame]');
+      if (frame?.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      return { ok: true };
+    })()`,
+    'iss launch returned',
+    20000,
+  );
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
     if (!(picker instanceof HTMLSelectElement)) return false;
@@ -2093,7 +2145,7 @@ async function proveIssLaunchLook(send, evidenceDir) {
   const chooseLabel = await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.selectedOptions?.[0]?.textContent || ''`);
   if (chooseLabel !== 'Choose launch') throw new Error(`reload shot missed Choose launch ${JSON.stringify({ choose, chooseLabel })}`);
   await shot(send, evidenceDir, 'iss-launch-reloaded');
-  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / ${menuNote}; selection held across a UTC tick / None / reload Choose launch`;
+  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / ${menuNote}; selection held across a UTC tick / launch lost on verifyrev-gone, Choose launch, notice held / launch returned on verifyrev-back, not restored / None / reload Choose launch`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
