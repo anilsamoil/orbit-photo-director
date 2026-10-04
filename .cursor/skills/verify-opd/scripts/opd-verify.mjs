@@ -116,6 +116,12 @@ function staleTrackText(fixtureDir) {
   return JSON.stringify(track);
 }
 
+function missingTrackText(fixtureDir) {
+  const track = JSON.parse(readFileSync(resolve(fixtureDir, 'track.json'), 'utf8'));
+  delete track.tle;
+  return JSON.stringify(track);
+}
+
 function readBody(req) {
   return new Promise((resolveBody, rejectBody) => {
     const chunks = [];
@@ -221,7 +227,8 @@ function startProxy(home) {
     if (path === '/manifest.json') {
       const expired = cookieValue(req, 'opd-verify-session') === 'expired';
       const staleTle = cookieValue(req, 'opd-verify-tle') === 'stale';
-      if (!expired && !staleTle) return sendFile('manifest.json');
+      const missingTle = cookieValue(req, 'opd-verify-tle') === 'missing';
+      if (!expired && !staleTle && !missingTle) return sendFile('manifest.json');
       const manifest = JSON.parse(readFileSync(resolve(fixtureDir, 'manifest.json'), 'utf8'));
       if (expired) {
         manifest.generated_at = new Date(Date.now() - 200 * 60_000).toISOString();
@@ -231,6 +238,14 @@ function startProxy(home) {
         const trackBody = staleTrackText(fixtureDir);
         manifest.artifacts.track = {
           path: 'v/verify/track-stale.json',
+          sha256: createHash('sha256').update(trackBody).digest('hex'),
+          bytes: Buffer.byteLength(trackBody),
+        };
+      }
+      if (missingTle) {
+        const trackBody = missingTrackText(fixtureDir);
+        manifest.artifacts.track = {
+          path: 'v/verify/track-missing.json',
           sha256: createHash('sha256').update(trackBody).digest('hex'),
           bytes: Buffer.byteLength(trackBody),
         };
@@ -246,6 +261,16 @@ function startProxy(home) {
     }
     if (path === '/v/verify/track-stale.json') {
       const body = staleTrackText(fixtureDir);
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
+    }
+    if (path === '/v/verify/track-missing.json') {
+      const body = missingTrackText(fixtureDir);
       res.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',

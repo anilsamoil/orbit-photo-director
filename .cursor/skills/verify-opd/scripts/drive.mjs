@@ -8,6 +8,80 @@ export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map',
 
 const DESKTOP = { width: 1400, height: 900, mobile: false };
 const ISS_LENS_FOV_DEG = 81.2;
+const ISS_CLOCK_EXPR = `(() => {
+  const root = document.querySelector('[data-iss-clock]');
+  if (!root) return { step: 'missing' };
+  const names = [...root.children].map((el) => {
+    if (el.hasAttribute('data-iss-utc')) return 'utc';
+    if (el.hasAttribute('data-iss-houston')) return 'houston';
+    if (el.hasAttribute('data-iss-gmt-day')) return 'gmt-day';
+    if (el.hasAttribute('data-iss-day-month')) return 'day-month';
+    if (el.hasAttribute('data-iss-weekday')) return 'weekday';
+    return el.tagName;
+  });
+  if (names.join(',') !== 'utc,houston,gmt-day,day-month,weekday') return { step: 'order', names };
+  const text = (sel) => document.querySelector(sel)?.textContent || '';
+  const utc = text('[data-iss-utc]');
+  const status = document.querySelector('[data-iss-status]')?.textContent || '';
+  const stamp = /(\\d{4}-\\d{2}-\\d{2}) (\\d{2}:\\d{2}:\\d{2}) UTC/.exec(status);
+  if (!stamp) return { step: 'stamp', utc, status: status.slice(0, 180) };
+  if (utc !== stamp[2] + ' UTC') return { step: 'utc', utc, stamp: stamp[2] };
+  const when = Date.parse(stamp[1] + 'T' + stamp[2] + 'Z');
+  const date = new Date(when);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    timeZoneName: 'short',
+  }).formatToParts(date);
+  const part = (type) => parts.find((entry) => entry.type === type)?.value || '';
+  let hour = part('hour').padStart(2, '0');
+  if (hour === '24') hour = '00';
+  const zone = part('timeZoneName');
+  if (zone !== 'CDT' && zone !== 'CST') return { step: 'zone', zone };
+  const houston = hour + ':' + part('minute').padStart(2, '0') + ':' + part('second').padStart(2, '0') + ' ' + zone;
+  const houstonText = text('[data-iss-houston]');
+  if (houstonText !== houston) return { step: 'houston', houstonText, houston };
+  const yearStart = Date.UTC(date.getUTCFullYear(), 0, 1);
+  const day = Math.floor((Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) - yearStart) / 86400000) + 1;
+  const gmt = 'GMT' + String(day).padStart(3, '0');
+  const gmtText = text('[data-iss-gmt-day]');
+  if (gmtText !== gmt) return { step: 'gmt', gmtText, gmt };
+  if (!/^GMT\\d{3}$/.test(gmtText)) return { step: 'gmt-form', gmtText };
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const dayMonth = String(date.getUTCDate()) + ' ' + months[date.getUTCMonth()];
+  const dayMonthText = text('[data-iss-day-month]');
+  if (dayMonthText !== dayMonth) return { step: 'day', dayMonthText, dayMonth };
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const weekday = weekdays[date.getUTCDay()];
+  const weekdayText = text('[data-iss-weekday]');
+  if (weekdayText !== weekday) return { step: 'weekday', weekdayText, weekday };
+  if (getComputedStyle(root).pointerEvents !== 'none') return { step: 'pointer' };
+  const lines = ['[data-iss-houston]', '[data-iss-gmt-day]', '[data-iss-day-month]', '[data-iss-weekday]'];
+  for (const sel of lines) {
+    const el = document.querySelector(sel);
+    if (!el || el.tagName !== 'P') return { step: 'tag', sel };
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    if (!(box.height > 4 && box.height < 44 && box.width > 8)) return { step: 'box', sel, height: box.height, width: box.width };
+    if (style.pointerEvents !== 'none') return { step: 'line-pointer', sel, pointer: style.pointerEvents };
+    if (style.minHeight !== '0px') return { step: 'min', sel, minHeight: style.minHeight };
+  }
+  const utcBox = document.querySelector('[data-iss-utc]').getBoundingClientRect();
+  const under = document.querySelector('[data-iss-houston]').getBoundingClientRect();
+  if (under.top + 1 < utcBox.top) return { step: 'under', utcTop: utcBox.top, lineTop: under.top };
+  return { ok: true, utc, houston, gmt, dayMonth, weekday };
+})()`;
+
+function selectedSurfaceNames() {
+  const raw = (process.env.OPD_VERIFY_SURFACE || 'all').trim();
+  const known = ['desktop', ...WEBKIT_DEVICES.map((spec) => spec.slug)];
+  if (raw === 'all') return known;
+  if (!known.includes(raw)) throw new Error(`unknown OPD_VERIFY_SURFACE ${raw}. Choose ${known.join(', ')}, or all.`);
+  return [raw];
+}
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -454,8 +528,9 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
 }
 
 async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
+  const names = new Set(selectedSurfaceNames());
   const notes = [];
-  for (const spec of WEBKIT_DEVICES) {
+  for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
     try {
       const viewport = deviceViewport(spec);
@@ -488,9 +563,13 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
 export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
-  const desktop = await driveChrome({ baseUrl, evidenceDir, meta, features, home });
-  const webkit = await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home });
-  return [...desktop, ...webkit];
+  const names = new Set(selectedSurfaceNames());
+  const notes = [];
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home }));
+  if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }));
+  }
+  return notes;
 }
 
 async function dismissShotlist(send) {
@@ -1318,10 +1397,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
         badge: badge ? badge.textContent : null,
         track: !!(map && map.getLayer && map.getLayer('iss-track-layer')),
         view: document.getElementById('view')?.className,
+        issClock: !!document.querySelector('[data-iss-clock]'),
         logs: (window.__opdLogs || []).slice(-8),
         mapHtml: (document.getElementById('map')?.innerHTML || '').slice(0, 180),
       };
-      if (status.map && status.marker && status.legend && status.badge && String(status.badge).trim() && status.track) {
+      if (status.map && status.marker && status.legend && status.badge && String(status.badge).trim() && status.track && !status.issClock) {
         return { ok: true, badge: status.badge, legend: legend.innerText };
       }
       return status;
@@ -1755,6 +1835,7 @@ async function driveIss(send, evidenceDir, viewport) {
     'iss horizon',
     45000,
   );
+  const clock = await proveIssClock(send);
   await shot(send, evidenceDir, 'iss-horizon');
   await sleep(1100);
   await waitFor(
@@ -1866,11 +1947,12 @@ async function driveIss(send, evidenceDir, viewport) {
     'iss straight down',
     20000,
   );
+  await proveIssClock(send);
   await shot(send, evidenceDir, 'iss-nadir');
   await click(send, '#tab-map');
   await waitFor(
     send,
-    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') ? { ok: true } : null`,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') ? { ok: true } : null`,
     'map after iss',
     20000,
   );
@@ -1889,7 +1971,42 @@ async function driveIss(send, evidenceDir, viewport) {
   );
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)})`;
+  await proveIssClockCleared(send, evidenceDir);
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+}
+
+async function proveIssClock(send) {
+  return waitFor(send, ISS_CLOCK_EXPR, 'iss clock lines', 15000);
+}
+
+async function proveIssClockCleared(send, evidenceDir) {
+  await evaluate(send, `document.cookie = 'opd-verify-tle=missing; path=/'`);
+  try {
+    await reloadSettled(send);
+    await click(send, '#tab-iss');
+    await waitFor(
+      send,
+      `(() => {
+        const status = document.querySelector('[data-iss-status]')?.textContent || '';
+        if (!status.includes('Orbit unavailable')) return null;
+        const root = document.querySelector('[data-iss-clock]');
+        if (!root || root.children.length !== 5) return { step: 'block' };
+        const sels = ['[data-iss-utc]', '[data-iss-houston]', '[data-iss-gmt-day]', '[data-iss-day-month]', '[data-iss-weekday]'];
+        for (const sel of sels) {
+          const el = document.querySelector(sel);
+          if (!el || (el.textContent || '') !== '') return { step: 'text', sel, text: el ? el.textContent : null };
+        }
+        if (document.querySelector('[data-iss-houston]')?.getBoundingClientRect().height > 0) return { step: 'painted' };
+        return { ok: true, status: status.slice(0, 80) };
+      })()`,
+      'iss clock cleared',
+      45000,
+    );
+    await shot(send, evidenceDir, 'iss-clock-cleared');
+  } finally {
+    await evaluate(send, `document.cookie = 'opd-verify-tle=; path=/; max-age=0'`);
+  }
+  await reloadSettled(send);
 }
 
 async function proveIssLaunchLook(send, evidenceDir) {
@@ -2036,6 +2153,7 @@ async function proveIssLaunchLook(send, evidenceDir) {
   }
   const menuNote = sawOpen ? 'menu opened' : 'menu :open not observed';
   await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.blur()`);
+  await proveIssClock(send);
   await click(send, '[data-iss-launch]');
   await waitFor(
     send,
@@ -2284,7 +2402,7 @@ async function proveIssPanSession(send, evidenceDir, pan) {
   await click(send, '#tab-map');
   await waitFor(
     send,
-    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') ? { ok: true } : null`,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') ? { ok: true } : null`,
     'map before pan return',
     20000,
   );
@@ -2371,7 +2489,7 @@ async function proveIssWindowSession(send, evidenceDir) {
   await click(send, '#tab-map');
   await waitFor(
     send,
-    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') ? { ok: true } : null`,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') ? { ok: true } : null`,
     'map before window return',
     20000,
   );
