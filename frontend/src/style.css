@@ -1220,8 +1220,10 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   color: var(--bg);
 }
 .view-map .map-toolbar .filter-btn {
+  flex-shrink: 0;
   padding: 0.25rem 0.45rem;
   font-size: 0.73rem;
+  white-space: nowrap;
 }
 @media (max-width: 360px) {
   .view-map .map-toolbar .filter-btn { padding-inline: 0.15rem; }
