@@ -488,7 +488,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
     else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl));
-    else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport));
+    else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
     else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
@@ -1545,6 +1545,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   await shot(send, evidenceDir, 'map-pin-drop');
   await evaluate(send, `[...document.querySelectorAll('.maplibregl-popup-close-button')].forEach((button) => button.click())`);
   await waitFor(send, `document.querySelector('.maplibregl-popup') ? null : { ok: true }`, 'popups closed before launch', 5000);
+  await proveMapShowLaunches(send, evidenceDir);
   await click(send, '#filter-launches-map');
   await waitFor(send, `document.getElementById('filter-launches-map').getAttribute('aria-pressed') === 'true' ? { ok: true } : null`, 'launch mode');
   const briefName = await evaluate(send, `!!document.querySelector('.map-launch-brief .launch-name')`);
@@ -1763,7 +1764,7 @@ async function driveTracked(send, evidenceDir, meta, home) {
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
 }
 
-async function driveIss(send, evidenceDir, viewport) {
+async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await dismissShotlist(send);
   await click(send, '#tab-iss');
   const horizon = await waitFor(
@@ -1836,6 +1837,7 @@ async function driveIss(send, evidenceDir, viewport) {
     45000,
   );
   const clock = await proveIssClock(send);
+  const edition = await proveIssEdition(send, evidenceDir);
   await shot(send, evidenceDir, 'iss-horizon');
   await sleep(1100);
   await waitFor(
@@ -1896,7 +1898,7 @@ async function driveIss(send, evidenceDir, viewport) {
     'iss telemetry collapsed again',
     10000,
   );
-  const launchLook = await proveIssLaunchLook(send, evidenceDir);
+  const launchLook = await proveIssLaunchLook(send, evidenceDir, baseUrl);
   await click(send, '[data-iss-preset="horizon"]');
   await waitFor(
     send,
@@ -1972,7 +1974,7 @@ async function driveIss(send, evidenceDir, viewport) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
 }
 
 async function proveIssClock(send) {
@@ -2009,7 +2011,88 @@ async function proveIssClockCleared(send, evidenceDir) {
   await reloadSettled(send);
 }
 
-async function proveIssLaunchLook(send, evidenceDir) {
+const ISS_EDITION_EXPR = `(() => {
+  const edition = document.querySelector('[data-iss-edition]');
+  const help = document.querySelector('[data-iss-aim-help]');
+  const horizon = document.querySelector('[data-iss-preset="horizon"]');
+  const frame = document.querySelector('[data-iss-frame]');
+  const toolbar = document.querySelector('[data-iss-toolbar]');
+  if (!(edition instanceof HTMLParagraphElement) || !help || !horizon || !frame || !toolbar) return null;
+  if (edition.textContent !== 'Expedition 75 Beta Edition') return null;
+  if (frame.contains(edition)) return null;
+  if (help.getAttribute('aria-label') !== 'Keyboard shortcuts') return null;
+  const style = getComputedStyle(edition);
+  const editionBox = edition.getBoundingClientRect();
+  const helpBox = help.getBoundingClientRect();
+  const aimBox = horizon.getBoundingClientRect();
+  if (editionBox.width < 8 || editionBox.height < 8) return null;
+  const wide = window.innerWidth > 720;
+  if (wide) {
+    if (style.position !== 'absolute') return { step: 'wide-position', position: style.position, width: window.innerWidth };
+    if (editionBox.top < helpBox.bottom - 2) return { step: 'wide-below-help', editionTop: editionBox.top, helpBottom: helpBox.bottom };
+    if (Math.abs(editionBox.left - helpBox.left) > 8) return { step: 'wide-left', editionLeft: editionBox.left, helpLeft: helpBox.left };
+    if (editionBox.left >= aimBox.left - 1) return { step: 'wide-aim', editionLeft: editionBox.left, aimLeft: aimBox.left };
+    return { ok: true, place: 'under-help', width: window.innerWidth };
+  }
+  if (style.position !== 'static') return { step: 'narrow-position', position: style.position, width: window.innerWidth };
+  const others = [...toolbar.children].filter((node) => node !== edition && node.getBoundingClientRect().height > 0);
+  if (!others.length) return { step: 'narrow-siblings' };
+  const lowest = Math.max(...others.map((node) => node.getBoundingClientRect().bottom));
+  if (editionBox.top < lowest - 2) return { step: 'narrow-row', editionTop: editionBox.top, lowest, width: window.innerWidth };
+  return { ok: true, place: 'last-row', width: window.innerWidth };
+})()`;
+
+async function proveIssEdition(send, evidenceDir) {
+  const placed = await waitFor(send, ISS_EDITION_EXPR, 'iss edition line', 10000);
+  const seen = await revealInView(send, '[data-iss-edition]');
+  if (!seen.text.includes('Expedition 75 Beta Edition')) {
+    throw new Error(`edition shot would miss the line ${JSON.stringify(seen)}`);
+  }
+  await shot(send, evidenceDir, 'iss-edition');
+  return placed.place;
+}
+
+async function proveMapShowLaunches(send, evidenceDir) {
+  await revealInView(send, '#filter-launches-map');
+  await waitFor(
+    send,
+    `(() => {
+      const group = document.querySelector('.map-controls-filter');
+      const label = group && group.querySelector('.map-group-label');
+      const button = document.getElementById('filter-launches-map');
+      if (!group || !label || !button || !group.contains(button)) return null;
+      if ((label.textContent || '').trim() !== 'Show') return { step: 'label', text: label.textContent };
+      if ((button.textContent || '').trim() !== 'Launches') return { step: 'button', text: button.textContent };
+      const style = getComputedStyle(button);
+      if (style.whiteSpace !== 'nowrap' || Number(style.flexShrink) !== 0) {
+        return { step: 'style', whiteSpace: style.whiteSpace, flexShrink: style.flexShrink };
+      }
+      if (button.scrollWidth > button.clientWidth + 1) {
+        return { step: 'overflow', scrollWidth: button.scrollWidth, clientWidth: button.clientWidth };
+      }
+      const box = button.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      const text = range.getBoundingClientRect();
+      if (text.width < 8 || text.height < 4) return null;
+      if (text.left < box.left - 1 || text.right > box.right + 1 || text.top < box.top - 1 || text.bottom > box.bottom + 1) {
+        return {
+          step: 'text-box',
+          textLeft: text.left,
+          textRight: text.right,
+          boxLeft: box.left,
+          boxRight: box.right,
+        };
+      }
+      return { ok: true };
+    })()`,
+    'launches label inside show button',
+    10000,
+  );
+  await shot(send, evidenceDir, 'map-show-launches');
+}
+
+async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   const before = await waitFor(
     send,
     `(() => {
@@ -2089,6 +2172,11 @@ async function proveIssLaunchLook(send, evidenceDir) {
     'iss launch selected',
     15000,
   );
+  const siteShot = await revealInView(send, '[data-iss-launch]');
+  if (!siteShot.text.includes('Look toward Verify Pad')) {
+    throw new Error(`site button shot would miss the label ${JSON.stringify(siteShot)}`);
+  }
+  await shot(send, evidenceDir, 'iss-launch-site');
   const cardShot = await revealInView(send, '[data-iss-launch-card]');
   if (!cardShot.text.includes(selected.name) || !cardShot.text.includes(selected.site) || !cardShot.text.includes(selected.visibility) || !cardShot.text.includes(selected.timeLabel)) {
     throw new Error(`launch card shot would miss the facts ${JSON.stringify(cardShot)}`);
@@ -2172,11 +2260,45 @@ async function proveIssLaunchLook(send, evidenceDir) {
     return center ? { lng: center.lng, lat: center.lat } : null;
   })()`);
   if (!aimed) throw new Error('missing aim before launch loss');
-  await evaluate(send, `document.cookie = 'opd-verify-launch=gone; path=/'`);
+  await fetch(`${baseUrl}/api/verify/launch-release`, { method: 'POST' });
+  await evaluate(send, `document.cookie = 'opd-verify-launch=hold; path=/'; document.dispatchEvent(new Event('visibilitychange')); true`);
+  const heldDuringDownload = `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    const button = document.querySelector('[data-iss-launch]');
+    if (!(picker instanceof HTMLSelectElement) || !button) return null;
+    if (picker.value !== ${JSON.stringify(before.value)}) return null;
+    if (button.querySelector('[data-iss-launch-label]')?.textContent !== 'Look toward Verify Pad') return null;
+    if (document.querySelector('[data-iss-launch-missing]')) return null;
+    const card = document.querySelector('[data-iss-launch-card]');
+    if (!card || card.hidden) return null;
+    if ((card.textContent || '').includes('Selected launch is no longer available')) return null;
+    return { ok: true, value: picker.value };
+  })()`;
+  const holdStarted = Date.now();
+  let holdNoted = null;
+  while (Date.now() - holdStarted < 15000) {
+    const status = await fetch(`${baseUrl}/api/verify/launch-hold`).then((response) => response.json());
+    holdNoted = await evaluate(send, heldDuringDownload);
+    if (status.pending && holdNoted?.ok) {
+      await sleep(500);
+      const still = await fetch(`${baseUrl}/api/verify/launch-hold`).then((response) => response.json());
+      const again = await evaluate(send, heldDuringDownload);
+      if (still.pending && again?.ok) break;
+      holdNoted = again;
+    } else if (!status.pending) {
+      await evaluate(send, `document.dispatchEvent(new Event('visibilitychange')); true`);
+    }
+    await sleep(250);
+  }
+  const parked = await fetch(`${baseUrl}/api/verify/launch-hold`).then((response) => response.json());
+  if (!parked.pending || !holdNoted?.ok) {
+    throw new Error(`launch choice moved while the newer pointer was still downloading ${JSON.stringify({ parked, holdNoted })}`);
+  }
+  const released = await fetch(`${baseUrl}/api/verify/launch-release`, { method: 'POST' });
+  if (!released.ok) throw new Error(`launch hold release ${released.status}`);
   await waitFor(
     send,
     `(() => {
-      document.dispatchEvent(new Event('visibilitychange'));
       const picker = document.querySelector('[data-iss-launch-picker]');
       const card = document.querySelector('[data-iss-launch-card]');
       const missing = document.querySelector('[data-iss-launch-missing]');
@@ -2186,7 +2308,12 @@ async function proveIssLaunchLook(send, evidenceDir) {
       if ([...picker.options].some((entry) => entry.textContent === 'Selected launch is no longer available')) return null;
       if (document.querySelector('[data-iss-launch], .iss-launch-pin, [data-iss-launch-edge]')) return null;
       const frame = document.querySelector('[data-iss-frame]');
-      if (frame?.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      if (!frame || frame.contains(missing) || frame.contains(card)) return null;
+      const frameBox = frame.getBoundingClientRect();
+      const cardBox = card.getBoundingClientRect();
+      const covers = cardBox.left < frameBox.right - 1 && cardBox.right > frameBox.left + 1 && cardBox.top < frameBox.bottom - 1 && cardBox.bottom > frameBox.top + 1;
+      if (covers) return null;
+      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
       const center = window.__opdIss?.getCenter?.();
       if (!center) return null;
       const drifted = Math.hypot(center.lng - ${Number(aimed.lng)}, center.lat - ${Number(aimed.lat)});
@@ -2196,6 +2323,11 @@ async function proveIssLaunchLook(send, evidenceDir) {
     'iss launch lost',
     20000,
   );
+  const lostShot = await revealInView(send, '[data-iss-launch-missing]');
+  if (!lostShot.text.includes('Selected launch is no longer available')) {
+    throw new Error(`launch loss shot would miss the sentence ${JSON.stringify(lostShot)}`);
+  }
+  await shot(send, evidenceDir, 'iss-launch-lost');
   await evaluate(send, `document.cookie = 'opd-verify-launch=back; path=/'`);
   await waitFor(
     send,
@@ -2263,7 +2395,7 @@ async function proveIssLaunchLook(send, evidenceDir) {
   const chooseLabel = await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.selectedOptions?.[0]?.textContent || ''`);
   if (chooseLabel !== 'Choose launch') throw new Error(`reload shot missed Choose launch ${JSON.stringify({ choose, chooseLabel })}`);
   await shot(send, evidenceDir, 'iss-launch-reloaded');
-  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / ${menuNote}; selection held across a UTC tick / launch lost on verifyrev-gone, Choose launch, notice held / launch returned on verifyrev-back, not restored / None / reload Choose launch`;
+  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / launch lost when that body arrived, Choose launch, notice outside the frame / launch returned on verifyrev-back, not restored / None / reload Choose launch`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
@@ -3238,6 +3370,7 @@ async function proveIssLandscape(send, evidenceDir) {
     return { ok: true, width: frame.width, height: frame.height, labels: places.length };
   })()`;
   await waitFor(send, contained, 'iss landscape collapsed', 10000);
+  await waitFor(send, ISS_EDITION_EXPR, 'iss edition in short landscape', 10000);
   await click(send, '[data-iss-telemetry]');
   const open = await waitFor(send, contained, 'iss landscape telemetry open', 10000);
   await sleep(1200);
