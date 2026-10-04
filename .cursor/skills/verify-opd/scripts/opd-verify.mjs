@@ -158,12 +158,12 @@ function proxyRequest(state, req, res) {
 function launchRung(fixtureDir, rung) {
   const launch = JSON.parse(readFileSync(resolve(fixtureDir, 'launch.json'), 'utf8'));
   const base = JSON.parse(readFileSync(resolve(fixtureDir, 'launch-latest.json'), 'utf8'));
-  if (rung !== 'gone' && rung !== 'back') return null;
-  const offset = rung === 'gone' ? 1000 : 2000;
-  const revision = rung === 'gone' ? 'verifyrev-gone' : 'verifyrev-back';
+  if (rung !== 'gone' && rung !== 'back' && rung !== 'hold') return null;
+  const offset = rung === 'hold' ? 500 : rung === 'gone' ? 1000 : 2000;
+  const revision = rung === 'hold' ? 'verifyrev-hold' : rung === 'gone' ? 'verifyrev-gone' : 'verifyrev-back';
   const generated = new Date(Date.parse(launch.generated_at) + offset).toISOString();
   const until = new Date(Date.parse(launch.valid_until) + offset).toISOString();
-  const empty = rung === 'gone';
+  const empty = rung === 'gone' || rung === 'hold';
   const items = empty ? [] : launch.items.map((item) => (
     item.assessment ? { ...item, assessment: { ...item.assessment, checked_at: generated } } : item
   ));
@@ -210,6 +210,29 @@ function startProxy(home) {
   const personalTargets = [];
   let removedCuratedIds = null;
   let removedCuratedUpdatedAt = null;
+  const launchHoldWaiters = [];
+  function parkLaunchBody(res, body) {
+    return new Promise((resolvePark) => {
+      let settled = false;
+      const waiter = {
+        finish(send) {
+          if (settled) return;
+          settled = true;
+          const index = launchHoldWaiters.indexOf(waiter);
+          if (index >= 0) launchHoldWaiters.splice(index, 1);
+          if (send && !res.writableEnded) {
+            try { sendJson(res, body); } catch { /* the browser already left */ }
+          }
+          resolvePark();
+        },
+      };
+      launchHoldWaiters.push(waiter);
+      res.on('close', () => waiter.finish(false));
+    });
+  }
+  function releaseLaunchHold() {
+    for (const waiter of [...launchHoldWaiters]) waiter.finish(true);
+  }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
@@ -295,6 +318,20 @@ function startProxy(home) {
       const published = launchRung(fixtureDir, rung);
       if (!published) return sendFile('launch-latest.json');
       sendJson(res, JSON.stringify(published.pointer));
+      return;
+    }
+    if (path === '/api/verify/launch-hold' && req.method === 'GET') {
+      json(res, 200, { pending: launchHoldWaiters.length > 0 });
+      return;
+    }
+    if (path === '/api/verify/launch-release' && req.method === 'POST') {
+      await readBody(req);
+      releaseLaunchHold();
+      json(res, 200, { ok: true, pending: launchHoldWaiters.length });
+      return;
+    }
+    if (path === '/launch/v/verifyrev-hold.json') {
+      await parkLaunchBody(res, launchRung(fixtureDir, 'hold').body);
       return;
     }
     if (path === '/launch/v/verifyrev-gone.json') {
