@@ -3181,6 +3181,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 [data-iss-toolbar] {
+  position: relative;
   width: 100%;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -3348,8 +3349,10 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 [data-iss-edition] {
-  grid-column: 3;
-  justify-self: end;
+  position: absolute;
+  top: 46px;
+  left: 0;
+  z-index: 1;
   color: #f4f7fb;
   pointer-events: none;
   user-select: none;
@@ -3828,10 +3831,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
     grid-column: auto;
   }
 
-  [data-iss-clock],
-  [data-iss-edition] {
+  [data-iss-clock] {
     align-self: flex-end;
     grid-column: auto;
+  }
+
+  [data-iss-edition] {
+    position: static;
+    top: auto;
+    left: auto;
+    align-self: flex-end;
   }
 }
 
