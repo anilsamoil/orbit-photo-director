@@ -1006,6 +1006,50 @@ async function proveMapChromeMemory(send) {
   );
 }
 
+async function proveMapLaunchesLabel(send, evidenceDir) {
+  await revealInView(send, '#filter-launches-map');
+  const fit = await evaluate(send, `(() => {
+    const button = document.getElementById('filter-launches-map');
+    const queue = document.getElementById('filter-launches-queue');
+    if (!button || !queue) return { step: 'missing' };
+    const style = getComputedStyle(button);
+    const queueStyle = getComputedStyle(queue);
+    const box = button.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(button);
+    const text = range.getBoundingClientRect();
+    const pad = 0.5;
+    const inside = text.width > 0 && text.height > 0
+      && text.left >= box.left - pad && text.right <= box.right + pad
+      && text.top >= box.top - pad && text.bottom <= box.bottom + pad;
+    const label = (button.textContent || '').trim();
+    if (label !== 'Launches') return { step: 'label', label };
+    if (style.flexShrink !== '0') return { step: 'shrink', flexShrink: style.flexShrink };
+    if (style.whiteSpace !== 'nowrap') return { step: 'wrap', whiteSpace: style.whiteSpace };
+    if (style.minWidth !== '44px') return { step: 'min', minWidth: style.minWidth };
+    if (!inside) return {
+      step: 'ink',
+      button: { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width },
+      text: { left: text.left, right: text.right, top: text.top, bottom: text.bottom, width: text.width },
+    };
+    if (queueStyle.flexShrink === '0' || queueStyle.whiteSpace === 'nowrap') {
+      return { step: 'queue', flexShrink: queueStyle.flexShrink, whiteSpace: queueStyle.whiteSpace };
+    }
+    for (const id of ['filter-all-map', 'filter-mine-map']) {
+      const sibling = document.getElementById(id);
+      if (!sibling) return { step: 'sibling-missing', id };
+      const siblingStyle = getComputedStyle(sibling);
+      if (siblingStyle.flexShrink !== '0' || siblingStyle.minWidth !== '44px') {
+        return { step: 'sibling', id, flexShrink: siblingStyle.flexShrink, minWidth: siblingStyle.minWidth };
+      }
+    }
+    if (document.querySelector('[data-iss-edition]')) return { step: 'edition' };
+    return { ok: true, width: box.width, textWidth: text.width };
+  })()`);
+  if (!fit?.ok) throw new Error(`map launches label ${JSON.stringify(fit)}`);
+  await shot(send, evidenceDir, 'map-launches-label');
+}
+
 async function ensureMapChromeShown(send) {
   const hidden = await evaluate(send, `document.body.classList.contains('map-chrome-hidden')`);
   if (hidden) await showMapChrome(send);
@@ -1398,10 +1442,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
         track: !!(map && map.getLayer && map.getLayer('iss-track-layer')),
         view: document.getElementById('view')?.className,
         issClock: !!document.querySelector('[data-iss-clock]'),
+        issEdition: !!document.querySelector('[data-iss-edition]'),
         logs: (window.__opdLogs || []).slice(-8),
         mapHtml: (document.getElementById('map')?.innerHTML || '').slice(0, 180),
       };
-      if (status.map && status.marker && status.legend && status.badge && String(status.badge).trim() && status.track && !status.issClock) {
+      if (status.map && status.marker && status.legend && status.badge && String(status.badge).trim() && status.track && !status.issClock && !status.issEdition) {
         return { ok: true, badge: status.badge, legend: legend.innerText };
       }
       return status;
@@ -1414,6 +1459,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   }
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   await proveMapChromeMemory(send);
+  await proveMapLaunchesLabel(send, evidenceDir);
   const anil = await evaluate(send, `(() => {
     const node = document.querySelector('.map-legend-anil');
     const swatch = node ? getComputedStyle(node).backgroundColor : '';
@@ -1598,7 +1644,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
-  return 'map: globe, legend, imagery, hide control 88x44 at 12px, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
+  return 'map: globe, legend, imagery, hide control 88x44 at 12px, launches label inside, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
 }
 
 const UNAVAILABLE_LEGEND = {
@@ -1836,6 +1882,7 @@ async function driveIss(send, evidenceDir, viewport) {
     45000,
   );
   const clock = await proveIssClock(send);
+  await proveIssEdition(send, 'either');
   await shot(send, evidenceDir, 'iss-horizon');
   await sleep(1100);
   await waitFor(
@@ -1952,7 +1999,7 @@ async function driveIss(send, evidenceDir, viewport) {
   await click(send, '#tab-map');
   await waitFor(
     send,
-    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') ? { ok: true } : null`,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') && !document.querySelector('[data-iss-edition]') ? { ok: true } : null`,
     'map after iss',
     20000,
   );
@@ -1972,7 +2019,7 @@ async function driveIss(send, evidenceDir, viewport) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, edition line, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
 }
 
 async function proveIssClock(send) {
@@ -2350,7 +2397,7 @@ async function proveIssPanSession(send, evidenceDir, pan) {
   await click(send, '#tab-map');
   await waitFor(
     send,
-    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') ? { ok: true } : null`,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') && !document.querySelector('[data-iss-edition]') ? { ok: true } : null`,
     'map before pan return',
     20000,
   );
@@ -2437,7 +2484,7 @@ async function proveIssWindowSession(send, evidenceDir) {
   await click(send, '#tab-map');
   await waitFor(
     send,
-    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') ? { ok: true } : null`,
+    `document.getElementById('view')?.className === 'view-map' && !document.querySelector('[data-iss-scene]') && !document.querySelector('[data-iss-clock]') && !document.querySelector('[data-iss-edition]') ? { ok: true } : null`,
     'map before window return',
     20000,
   );
@@ -3161,6 +3208,62 @@ function issKeyHelpHeld(before) {
   })()`;
 }
 
+async function proveIssEdition(send, layout) {
+  const placed = await evaluate(send, `(() => {
+    const edition = document.querySelector('[data-iss-edition]');
+    const toolbar = document.querySelector('[data-iss-toolbar]');
+    const frame = document.querySelector('[data-iss-frame]');
+    const help = document.querySelector('[data-iss-aim-help]');
+    const clock = document.querySelector('[data-iss-clock]');
+    const scene = document.querySelector('[data-iss-scene]');
+    const pane = document.getElementById('iss-pane');
+    if (!edition || !toolbar || !frame || !help || !clock || !scene || !pane) return { step: 'missing' };
+    if (edition.tagName !== 'P') return { step: 'tag', tag: edition.tagName };
+    if ((edition.textContent || '') !== 'Expedition 75 Beta Edition') return { step: 'text', text: edition.textContent };
+    if (edition.closest('[data-iss-toolbar]') !== toolbar) return { step: 'toolbar' };
+    if (frame.contains(edition) || clock.contains(edition)) return { step: 'inside' };
+    const style = getComputedStyle(edition);
+    if (style.pointerEvents !== 'none') return { step: 'pointer', pointer: style.pointerEvents };
+    if (style.minHeight !== '0px') return { step: 'min', minHeight: style.minHeight };
+    const box = edition.getBoundingClientRect();
+    const frameBox = frame.getBoundingClientRect();
+    const helpBox = help.getBoundingClientRect();
+    const overlaps = box.width > 0 && box.height > 0
+      && box.left < frameBox.right - 1 && box.right > frameBox.left + 1
+      && box.top < frameBox.bottom - 1 && box.bottom > frameBox.top + 1;
+    if (overlaps || box.width < 8 || box.height < 4 || box.height >= 44) {
+      return { step: 'box', width: box.width, height: box.height, overlaps };
+    }
+    const wide = window.innerWidth > 720;
+    if (${JSON.stringify(layout)} === 'wide' && !wide) return { step: 'width', innerWidth: window.innerWidth };
+    if (wide) {
+      if (style.position !== 'absolute') return { step: 'position', position: style.position, innerWidth: window.innerWidth };
+      if (box.top < helpBox.bottom - 2) return { step: 'under', editionTop: box.top, helpBottom: helpBox.bottom };
+      if (Math.abs(box.left - helpBox.left) > 8) return { step: 'left', editionLeft: box.left, helpLeft: helpBox.left };
+    } else if (style.position !== 'static') {
+      return { step: 'position', position: style.position, innerWidth: window.innerWidth };
+    }
+    const sceneScroll = scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2;
+    const paneStyle = getComputedStyle(pane);
+    const paneCanScroll = paneStyle.overflowY === 'auto' || paneStyle.overflowY === 'scroll' || paneStyle.overflowX === 'auto' || paneStyle.overflowX === 'scroll';
+    const paneScroll = paneCanScroll && (pane.scrollHeight > pane.clientHeight + 2 || pane.scrollWidth > pane.clientWidth + 2);
+    return {
+      ok: true,
+      wide,
+      position: style.position,
+      sceneScroll,
+      paneScroll,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+    };
+  })()`);
+  if (!placed?.ok) throw new Error(`iss edition ${JSON.stringify(placed)}`);
+  if (layout === 'wide' && (placed.sceneScroll || placed.paneScroll)) {
+    throw new Error(`iss edition scrolled the short landscape ${JSON.stringify(placed)}`);
+  }
+  return placed;
+}
+
 async function proveIssLandscape(send, evidenceDir) {
   await setViewport(send, 874, 402, true);
   const contained = `(() => {
@@ -3190,6 +3293,7 @@ async function proveIssLandscape(send, evidenceDir) {
   const open = await waitFor(send, contained, 'iss landscape telemetry open', 10000);
   await sleep(1200);
   const held = await waitFor(send, contained, 'iss landscape telemetry after ticks', 10000);
+  await proveIssEdition(send, 'wide');
   await shot(send, evidenceDir, 'iss-landscape-telemetry');
   await click(send, '[data-iss-telemetry]');
   await waitFor(
