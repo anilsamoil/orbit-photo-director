@@ -14,7 +14,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 - `map-target-popup` opens the Verify Reef popup.
 - `map-pin-drop` right-clicks the map and opens a pass popup.
 - `map-hide-pin` hides Verify Reef from Queue and the targets source drops `verify-reef`.
-- `map-launch` turns on Launches and opens the Verify Ascent dialog.
+- `map-launch` turns on Launches and opens the Verify Ascent dialog. `#filter-launches-map` keeps the word `Launches` inside the button. `.view-map .map-toolbar .filter-btn` in `frontend/src/style.css` sets `flex-shrink: 0`, `white-space: nowrap`, and `min-width: 44px` on All, Mine, and Launches. `#filter-launches-queue` is a different control and does not use that rule.
 
 ## How to get to it (user POV)
 
@@ -29,7 +29,8 @@ Preconditions:
 - `doctor` prints `ok`.
 - The launch fixture `valid_until` is still in the future.
 
-- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present. On a fresh profile the legend is in the page and `display: none`. The Show toolbar and the Time strip (`.map-command`) are `display: none` with it. `#map-chrome-toggle` reads `Controls`, is 88px wide and 44px tall with `right` `12px`, and `aria-expanded` is `false`. The status footer and the Map tab stay visible. `evidence/map-chrome-hidden.png` is that clear map. The script taps `Controls`. The button reads `Hide`, the Time strip is visible under the map, `opd-map-chrome` is `shown`, and a reload keeps that chrome. The script taps `Hide`, the key is `hidden`, and a reload keeps the clear map. It taps `Controls` again, and the rest of this drive uses that chrome.
+- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present. On a fresh profile the legend is in the page and `display: none`. The Show toolbar and the Time strip (`.map-command`) are `display: none` with it. `#map-chrome-toggle` reads `Controls`, is 88px wide and 44px tall with `right` `12px`, and `aria-expanded` is `false`. The status footer and the Map tab stay visible. There is no `[data-iss-clock]` and no `[data-iss-edition]`. `evidence/map-chrome-hidden.png` is that clear map. The script taps `Controls`. The button reads `Hide`, the Time strip is visible under the map, `opd-map-chrome` is `shown`, and a reload keeps that chrome. The script taps `Hide`, the key is `hidden`, and a reload keeps the clear map. It taps `Controls` again, and the rest of this drive uses that chrome.
+- **Show label.** `#filter-launches-map` reads `Launches`. `flex-shrink` is `0`, `white-space` is `nowrap`, and `min-width` is `44px`. The word's box sits inside the button border. All and Mine on that toolbar also refuse to shrink. `#filter-launches-queue` keeps `white-space` `normal` and `flex-shrink` other than `0`. `evidence/map-launches-label.png` is that Show row.
 - **Controls.** The map ? button and the (i) credit button are not shown. Hiding the chrome and showing it again leaves `#map-chrome-toggle` in the same place, still 88 by 44 and 12px from the right of `#map-pane`. `evidence/map-controls.png` is that rail.
 - **Time.** T+45 changes `#time-slider-readout`. Now sets that readout back to `Now`.
 - **Tool rail.** IR becomes active, night lights become active, labels become inactive, multi-orbit becomes active, ISS up is already the default and stays active, and its title is `ISS up (default). Rotate so the direction of travel points up`. Follow reports `aria-pressed` false.
@@ -39,7 +40,7 @@ Preconditions:
 - **Launch.** Launches reports `aria-pressed` true. Turning it on opens the map brief. The script clicks the launch name in that brief. The dialog text contains Verify Ascent. The script turns Launches off again.
 - **Legend category.** The legend text contains `Anil's targets`. The `.map-legend-anil` swatch is `rgb(139, 147, 255)`. The `targets-layer` circle color expression names `anils-targets` and `#8b93ff`.
 - **Hidden pin.** After the launch dialog closes, the targets source still contains `verify-reef`. Hide on the Verify Reef queue card removes that id from the source. The script waits until `GET /api/browser/profiles/anil/targets` contains `verify-reef`. The new-browser check for a hidden card is `drive upcoming`.
-- **Proof.** `evidence/map-chrome-hidden.png`, `evidence/map-globe.png`, `evidence/map-legend.png`, `evidence/map-imagery-date.png`, `evidence/map-controls.png`, `evidence/map-time.png`, `evidence/map-tool-rail.png`, `evidence/map-satellites.png`, `evidence/map-target-popup.png`, `evidence/map-pin-drop.png`, `evidence/map-launch.png`, and `evidence/map-pin-hidden.png`.
+- **Proof.** `evidence/map-chrome-hidden.png`, `evidence/map-launches-label.png`, `evidence/map-globe.png`, `evidence/map-legend.png`, `evidence/map-imagery-date.png`, `evidence/map-controls.png`, `evidence/map-time.png`, `evidence/map-tool-rail.png`, `evidence/map-satellites.png`, `evidence/map-target-popup.png`, `evidence/map-pin-drop.png`, `evidence/map-launch.png`, and `evidence/map-pin-hidden.png`. Stdout includes `launches label inside`.
 
 Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 
@@ -49,6 +50,7 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 - The map ? button and the (i) credit button are not on this tab. Queue, Upcoming, ISS view, Profile, and Log still have the corner ? button. The ISS view keeps its own credit control.
 - IR replaces the daily clouds layer. Do not expect both buttons to stay active.
 - Launch mode hides target pins. Drive the target popup before Launches.
+- The queue Launches button is `#filter-launches-queue`. It is not in `.map-toolbar`, so the Show-row shrink rule does not apply to it.
 - The launch pointer is valid for about 13 minutes. Each surface slides that clock forward before the page loads. Target coordinates stay the ones from `up`.
 - Adding a satellite from the picker fetches CelesTrak. This drive only opens the list.
 - Repo-root `targets.json` has eight `anils-targets` places, painted the same indigo on the map, on card chips, and in the target popup. The verify fixture categories are `coast` and `terrain`, so this drive checks the legend and the layer paint. It does not look for those eight names.
