@@ -4,6 +4,7 @@ import {
   EARTH_VIEW_ROLL_DEG,
   earthFrameSides,
   groundLightAt,
+  issClockLines,
   sceneCard,
   sceneFit,
   sceneFrame,
@@ -141,11 +142,18 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   windowChip.dataset.issWindow = '';
   windowChip.hidden = true;
   presets.append(horizon, nadir, cupola, windowChip);
+  const clockBlock = document.createElement('div');
+  clockBlock.dataset.issClock = '';
   const utc = document.createElement('p');
   utc.dataset.issUtc = '';
+  const houston = clockLine('issHouston');
+  const gmtDay = clockLine('issGmtDay');
+  const dayMonth = clockLine('issDayMonth');
+  const weekday = clockLine('issWeekday');
+  clockBlock.append(utc, houston, gmtDay, dayMonth, weekday);
   const toolbar = document.createElement('div');
   toolbar.dataset.issToolbar = '';
-  toolbar.append(presets, utc);
+  toolbar.append(presets, clockBlock);
   const frame = document.createElement('div');
   frame.dataset.issFrame = '';
   frame.tabIndex = 0;
@@ -680,8 +688,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     status.textContent = lines.join('\n');
     detail.textContent = card.detail;
     details.hidden = card.detail.length === 0;
-    const clock = /^(\d{4}-\d{2}-\d{2} )(\d{2}:\d{2}:\d{2} UTC)/.exec(card.position);
-    paintEqualDigits(utc, clock?.[2] ?? '');
+    const clock = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC/.exec(card.position);
+    paintEqualDigits(utc, clock ? `${clock[2]} UTC` : '');
+    const when = clock ? Date.parse(`${clock[1]}T${clock[2]}Z`) : Number.NaN;
+    const readout = Number.isFinite(when) ? issClockLines(when) : null;
+    paintEqualDigits(houston, readout?.houston ?? '');
+    paintEqualDigits(gmtDay, readout?.dayOfYear ?? '');
+    paintEqualDigits(dayMonth, readout?.dayMonth ?? '');
+    paintEqualDigits(weekday, readout?.weekday ?? '');
   }
 
   function layout(): { widthPx: number; heightPx: number } {
@@ -877,6 +891,12 @@ function sideLabel(name: 'issPort' | 'issStarboard', text: string): HTMLParagrap
   label.dataset[name] = '';
   label.textContent = text;
   return label;
+}
+
+function clockLine(name: 'issHouston' | 'issGmtDay' | 'issDayMonth' | 'issWeekday'): HTMLParagraphElement {
+  const line = document.createElement('p');
+  line.dataset[name] = '';
+  return line;
 }
 
 function presetButton(mode: CameraMode, label: string): HTMLButtonElement {

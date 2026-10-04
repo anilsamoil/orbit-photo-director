@@ -227,6 +227,58 @@ function formatUtc(whenMs: number): string {
   return `${y}-${m}-${d} ${h}:${min}:${s} UTC`;
 }
 
+const HOUSTON_TIME_ZONE = 'America/Chicago';
+const GMT_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'] as const;
+const GMT_WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+const houstonClock = new Intl.DateTimeFormat('en-US', {
+  timeZone: HOUSTON_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+  timeZoneName: 'short',
+});
+
+export type IssClockLines = {
+  houston: string;
+  dayOfYear: string;
+  dayMonth: string;
+  weekday: string;
+};
+
+/** Houston civil time and the GMT calendar of the instant the UTC readout shows. */
+export function issClockLines(whenMs: number): IssClockLines {
+  const date = new Date(whenMs);
+  const weekday = GMT_WEEKDAYS[date.getUTCDay()] ?? 'Sunday';
+  return {
+    houston: formatHouston(date),
+    dayOfYear: formatGmtDay(date),
+    dayMonth: `${date.getUTCDate()} ${GMT_MONTHS[date.getUTCMonth()]}`,
+    weekday,
+  };
+}
+
+function formatHouston(date: Date): string {
+  const parts = houstonClock.formatToParts(date);
+  const hour = clockPart(parts, 'hour').padStart(2, '0');
+  const minute = clockPart(parts, 'minute').padStart(2, '0');
+  const second = clockPart(parts, 'second').padStart(2, '0');
+  const zone = clockPart(parts, 'timeZoneName');
+  return `${hour === '24' ? '00' : hour}:${minute}:${second} ${zone}`;
+}
+
+function formatGmtDay(date: Date): string {
+  const year = date.getUTCFullYear();
+  const start = Date.UTC(year, 0, 1);
+  const day = Math.floor((Date.UTC(year, date.getUTCMonth(), date.getUTCDate()) - start) / 86_400_000) + 1;
+  return `GMT${String(day).padStart(3, '0')}`;
+}
+
+function clockPart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+  return parts.find((entry) => entry.type === type)?.value ?? '';
+}
+
 function formatLat(latDeg: number): string {
   const hemisphere = latDeg >= 0 ? 'N' : 'S';
   return `${Math.abs(latDeg).toFixed(2)}°${hemisphere}`;
