@@ -189,7 +189,10 @@ def fetch_tle(
             errors.append(f"{label}: {exc}")
             last_exc = exc
             continue
-        cache_path.write_text(f"{new_tle.line1}\n{new_tle.line2}\n")
+        try:
+            cache_path.write_text(f"{new_tle.line1}\n{new_tle.line2}\n")
+        except OSError as exc:
+            log.warning("TLE cache write failed (%s); returning fetched TLE", exc)
         log.info("TLE source %s won: epoch %s", label, new_tle.epoch.isoformat())
         if detect_reboost(prior, new_tle):
             log.warning(
