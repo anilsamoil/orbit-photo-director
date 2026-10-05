@@ -780,6 +780,29 @@ def test_fetch_tle_keeps_cache_when_every_source_fails(
     )
 
 
+def test_fetch_tle_returns_fresh_tle_when_cache_is_not_writable(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    cache.chmod(0o444)
+    line1, line2 = _iss_lines("24291.79041667")
+
+    import logging
+    with (
+        caplog.at_level(logging.WARNING, logger="generator.main"),
+        patch(
+            "generator.main.requests.get",
+            return_value=_FakeResponse(f"{line1}\n{line2}\n"),
+        ),
+    ):
+        tle = fetch_tle(CELESTRAK_URL, cache, ttl_hours=1.0)
+    assert tle.line1 == line1
+    assert tle.line2 == line2
+    assert cache.read_text() == SAMPLE_TLE_TEXT
+    assert any("cache write failed" in record.message.lower() for record in caplog.records)
+
+
 # --------------------------------------------------------------------------
 # select_cloud_sampler — picks the right sampler based on availability
 # --------------------------------------------------------------------------
