@@ -18,6 +18,7 @@ from generator.tracked import (
     TrackedUnavailable,
     canonical_intldes,
     parse_element_sets,
+    query_urls,
     resolve_spec,
 )
 from tests.conftest import SAMPLE_TLE_TEXT
@@ -233,6 +234,41 @@ def test_supgp_wins_a_tie_and_a_newer_gp_wins(tmp_path: Path) -> None:
     assert isinstance(newer, TrackedElements)
     assert newer.elements.source == "gp"
     assert newer.elements.epoch > epoch
+
+
+def test_aged_out_gp_uses_a_fresher_cached_supgp_while_supgp_rests(tmp_path: Path) -> None:
+    later = TLE.from_text(later_epoch()).epoch
+    now = later + timedelta(hours=6)
+    line1, line2 = _lines(later_epoch())
+    cached = json.dumps(
+        {"name": "STARSHIP", "line1": line1, "line2": line2, "source": "supgp"}
+    )
+    (tmp_path / "tracked-starship.json").write_text(cached)
+    seen: list[str] = []
+
+    def get(url: str, timeout: float) -> tuple[int, str]:
+        del timeout
+        seen.append(url)
+        return 200, named("STARSHIP")
+
+    sources, clock = _bind(tmp_path, get)
+    resting = {
+        url: {"attempted_at": clock.now().isoformat(), "failures": 1}
+        for source, url in query_urls(STARSHIP)
+        if source == "supgp"
+    }
+    (tmp_path / "tle-sources.json").write_text(
+        json.dumps({"version": 1, "sources": resting})
+    )
+    record = resolve_spec(STARSHIP, tmp_path, now, sources)
+    assert isinstance(record, TrackedElements)
+    assert record.from_cache is True
+    assert record.elements.source == "supgp"
+    assert record.elements.line1 == line1
+    assert record.age_hours == pytest.approx(6.0)
+    assert (tmp_path / "tracked-starship.json").read_text() == cached
+    assert seen
+    assert all("sup-gp.php" not in url for url in seen)
 
 
 def test_old_elements_age_out_without_a_line(tmp_path: Path) -> None:

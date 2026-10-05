@@ -168,6 +168,7 @@ def resolve_spec(
         log.warning("tracked query failed for %s: %s", url, reply.reason)
         saw_error = True
 
+    chosen: TrackedRecord | None = None
     if candidates:
         chosen = _select(spec, candidates, now)
         if isinstance(chosen, TrackedElements):
@@ -182,7 +183,7 @@ def resolve_spec(
                     from_cache=True,
                 )
             _write_cache(_cache_path(cache_dir, spec.id), chosen.elements)
-        return chosen
+            return chosen
 
     cached = _read_cache(_cache_path(cache_dir, spec.id))
     if cached is not None and _matches(spec, cached):
@@ -196,8 +197,12 @@ def resolve_spec(
                 age_hours=age,
                 from_cache=True,
             )
+        if chosen is not None:
+            return chosen
         return TrackedUnavailable(spec.id, spec.label, spec.color, "aged_out")
 
+    if chosen is not None:
+        return chosen
     if saw_error:
         return TrackedUnavailable(spec.id, spec.label, spec.color, "lookup_failed")
     return TrackedUnavailable(spec.id, spec.label, spec.color, "no_public_orbit")
