@@ -33,6 +33,13 @@ profile. The validation rules mirror profiles.ts:validateTarget — id
 pattern `personal:<name>:<token>`, name length, lat/lon bounds,
 priority 1-10.
 
+Crew roster
+===========
+The names in `data/crew-roster/roster.json` are multiplexed after
+`config.PROFILE_NAMES`. Their sites are `data/crew-roster/<name>.csv`, the
+same files the browser reads in `frontend/src/crew-roster.ts`, and they are
+read on every call with no Worker request.
+
 Failure mode
 ============
 Profile fetch failure (network, Worker 5xx, auth) → log loudly and fall
@@ -51,9 +58,13 @@ Out of scope (slot 6+)
 
 from __future__ import annotations
 
+import csv
+import json
 import logging
 import os
 import re
+import unicodedata
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -74,6 +85,11 @@ _ID_RE = re.compile(r"^personal:[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9_-]{1,128}$")
 # Worker enforces this; daemon double-checks (defense in depth). Matches
 # TARGET_NAME_MAX_LEN in worker/src/profiles.ts.
 _NAME_MAX_LEN = 200
+
+_ROSTER_DIR = Path(__file__).resolve().parent.parent / "data" / "crew-roster"
+# Mirrors isValidProfileName in frontend/src/profile.ts. Used with fullmatch
+# because a roster name becomes an artifact file name (passes_<name>.json).
+_ROSTER_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 
 
 class ProfileFetchError(RuntimeError):
@@ -199,6 +215,67 @@ def validate_personal_target(raw: Any, profile_name: str) -> dict[str, Any] | No
     }
 
 
+def roster_profiles() -> tuple[str, ...]:
+    """Crew roster names in `roster.json` order. Never raises. An unreadable
+    registry or a bad entry is logged and skipped, so the tick keeps
+    scoring every other profile. The browser throws on the same files,
+    which keeps a bad registry out of CI."""
+    try:
+        entries = json.loads((_ROSTER_DIR / "roster.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("crew roster: cannot read roster.json (%s); no roster profiles", exc)
+        return ()
+    if not isinstance(entries, list):
+        log.warning("crew roster: roster.json is not a list; no roster profiles")
+        return ()
+    names: list[str] = []
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not _ROSTER_NAME_RE.fullmatch(name) or name in names:
+            log.warning("crew roster: skipping roster.json entry %r", entry)
+            continue
+        names.append(name)
+    return tuple(names)
+
+
+def _roster_site_token(site_name: str) -> str:
+    """Mirrors `siteToken` in frontend/src/crew-roster.ts. Both test suites
+    pin the same literal ids, so a queue row and a map ring share one id."""
+    ascii_name = unicodedata.normalize("NFKD", site_name).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:128]
+
+
+def _roster_targets(profile_name: str) -> list[dict[str, Any]]:
+    """One roster profile's sites from `<name>.csv` as daemon target dicts.
+    Never raises. A missing file yields no sites, and a bad row is logged
+    and dropped. A BOM is tolerated because the browser's header check
+    trims it."""
+    path = _ROSTER_DIR / f"{profile_name}.csv"
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            rows = list(csv.DictReader(handle))
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        log.warning("crew roster: cannot read %s.csv (%s); no roster sites", profile_name, exc)
+        return []
+    targets: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            raw = {
+                "id": f"personal:{profile_name}:{_roster_site_token(row['name'])}",
+                "name": row["name"],
+                "lat": float(row["lat"]),
+                "lon": float(row["lon"]),
+                "priority": int(row["priority"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            log.warning("crew roster: %s.csv row %r is malformed; skipping", profile_name, row)
+            continue
+        target = validate_personal_target(raw, profile_name)
+        if target is not None:
+            targets.append(target)
+    return targets
+
+
 def fetch_profile_targets(profile_name: str) -> dict[str, Any]:
     """Fetch + validate one profile's personal targets from the Worker.
 
@@ -207,11 +284,16 @@ def fetch_profile_targets(profile_name: str) -> dict[str, Any]:
                    converted to the curated schema, validated)
       - `removed_curated_ids`: curated target ids the profile has hidden.
                                Missing or null on the GET body means none.
-      - `source`: "api" on success, "curated-only" on auth/network failure
+      - `source`: "api" on success, "curated-only" on auth/network failure,
+                  "roster" for a crew roster profile, read from its CSV
+                  with no request and no token
 
     Never raises: a fetch failure logs a warning and returns a curated-only
     result (empty targets, empty removed list) so the tick proceeds.
     """
+    if profile_name in roster_profiles():
+        targets = _roster_targets(profile_name)
+        return {"targets": targets, "removed_curated_ids": [], "source": "roster"}
     empty: dict[str, Any] = {"targets": [], "removed_curated_ids": [], "source": "curated-only"}
     token = _calib_token()
     if not token:
@@ -313,9 +395,10 @@ def build_profile_target_list(
 
 
 def profile_names() -> tuple[str, ...]:
-    """Names this daemon multiplexes. Wrapped in a function so tests can
-    monkeypatch the module-level constant without import-order pain."""
-    return PROFILE_NAMES
+    """Names this daemon multiplexes, the configured profiles then the crew
+    roster. Wrapped in a function so tests can monkeypatch the module-level
+    constant without import-order pain."""
+    return PROFILE_NAMES + roster_profiles()
 
 
 def multiplex_enabled() -> bool:
