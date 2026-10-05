@@ -789,4 +789,19 @@ describe('ISS toolbar text', () => {
       happyDOM.setWindowSize({ width: 1024, height: 768 });
     }
   });
+
+  it('hides the expedition line while the key sheet is open', async () => {
+    const editionVisibility = async (open: boolean): Promise<string> => {
+      const { host, done } = await mountStyled();
+      try {
+        if (open) (host.querySelector('[data-iss-aim-help]') as HTMLElement).click();
+        expect((host.querySelector('[data-iss-aim-sheet]') as HTMLElement).hidden).toBe(!open);
+        return getComputedStyle(host.querySelector('[data-iss-edition]') as HTMLElement).visibility;
+      } finally {
+        done();
+      }
+    };
+    expect(await editionVisibility(true)).toBe('hidden');
+    expect(await editionVisibility(false)).not.toBe('hidden');
+  });
 });

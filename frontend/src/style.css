@@ -3352,10 +3352,13 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   position: absolute;
   top: 46px;
   left: 0;
-  z-index: 1;
   color: #f4f7fb;
   pointer-events: none;
   user-select: none;
+}
+
+[data-iss-scene][data-iss-aim-open] [data-iss-edition] {
+  visibility: hidden;
 }
 
 [data-iss-cupola] {
