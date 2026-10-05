@@ -32,9 +32,23 @@ export function mountProfileMenu(): void {
     if (profile.name === account.name) item.setAttribute('aria-current', 'true');
     return item;
   }));
-  menu.addEventListener('beforetoggle', placeMenu);
+  menu.addEventListener('beforetoggle', onMenuToggle);
   menu.addEventListener('click', chooseProfile);
   restoreSwitchedView();
+}
+
+function onMenuToggle(event: ToggleEvent): void {
+  placeMenu(event);
+  window.removeEventListener('keydown', keepMenuEscape, true);
+  if (event.newState === 'open') window.addEventListener('keydown', keepMenuEscape, true);
+}
+
+function keepMenuEscape(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return;
+  const menu = document.getElementById('profile-menu');
+  if (!(menu instanceof HTMLElement) || !menu.matches(':popover-open')) return;
+  event.stopPropagation();
+  menu.hidePopover();
 }
 
 function placeMenu(event: ToggleEvent): void {
