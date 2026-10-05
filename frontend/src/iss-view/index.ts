@@ -174,7 +174,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const gmtDay = clockLine('issGmtDay');
   const dayMonth = clockLine('issDayMonth');
   const weekday = clockLine('issWeekday');
-  clockBlock.append(utc, houston, gmtDay, dayMonth, weekday);
+  clockBlock.append(utc, gmtDay, houston, dayMonth, weekday);
   const edition = document.createElement('p');
   edition.dataset.issEdition = '';
   edition.textContent = EXPEDITION_EDITION;
