@@ -487,7 +487,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
     else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
-    else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl));
+    else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
     else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home));
@@ -1454,7 +1454,7 @@ async function proveMapLaidOnPane(send) {
   return laid;
 }
 
-async function driveMap(send, evidenceDir, meta, baseUrl) {
+async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
     send,
@@ -1674,7 +1674,128 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted`;
+  await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip`;
+}
+
+function myTargetNamesExpr() {
+  return `(() => {
+    const source = window.__opdMap && window.__opdMap.getSource && window.__opdMap.getSource('my-targets');
+    const serialized = source && source.serialize ? source.serialize().data : null;
+    const features = serialized && serialized.features ? serialized.features : null;
+    if (!features) return null;
+    return features.map((feature) => feature.properties && feature.properties.target_name).filter(Boolean);
+  })()`;
+}
+
+async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix = '') {
+  const name = (base) => (shotSuffix ? `${base}-${shotSuffix}` : base);
+  await click(send, '#tab-queue');
+  await waitFor(
+    send,
+    `document.getElementById('tab-queue')?.classList.contains('active') && document.getElementById('view')?.className === 'view-queue' ? { ok: true } : null`,
+    'queue before profile menu',
+    20000,
+  );
+  await click(send, '#profile-badge');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => ({
+        name: row.dataset.profile,
+        text: row.textContent,
+        home: row.hasAttribute('data-profile-home'),
+        current: row.getAttribute('aria-current'),
+      }));
+      const home = rows[0];
+      if (!home || !home.home || home.text !== 'Anil' || home.current === 'true') return null;
+      if (!rows.some((row) => row.name === 'watkins' && row.text === 'Jessica Watkins (Watty)')) return null;
+      return { ok: true, count: rows.length };
+    })()`,
+    'profile menu lists Anil above the crew',
+    10000,
+  );
+  await shot(send, evidenceDir, name('profile-menu-anil'));
+  await click(send, '#profile-menu [data-profile="watkins"]');
+  await waitForHref(send, /[?&]u=watkins(?:&|#|$)/, 'watkins profile url');
+  await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!banner || text.includes('Loading')) return null;
+      if (!document.getElementById('tab-queue')?.classList.contains('active')) return null;
+      if (document.getElementById('view')?.className !== 'view-queue') return null;
+      const badge = document.querySelector('#profile-badge .profile-badge-name')?.textContent;
+      if (badge !== 'Jessica Watkins (Watty)') return null;
+      if (new URL(location.href).searchParams.get('u') !== 'watkins') return null;
+      return { ok: true };
+    })()`,
+    'queue restored on Watkins',
+    30000,
+  );
+  await click(send, '#tab-map');
+  await waitFor(
+    send,
+    `(() => {
+      if (document.getElementById('view')?.className !== 'view-map') return null;
+      const legend = document.getElementById('personal-targets-legend')?.textContent;
+      if (legend !== "Jessica Watkins (Watty)'s targets") return null;
+      const names = ${myTargetNamesExpr()};
+      if (!names || !names.includes('Lafayette, Colorado hometown') || names.length !== 12) return null;
+      return { ok: true, legend, count: names.length };
+    })()`,
+    'Watkins legend and sites',
+    45000,
+  );
+  await evaluate(send, `(() => { const toggle = document.getElementById('map-chrome-toggle'); if (toggle && (toggle.textContent || '').trim() === 'Controls') toggle.click(); })()`);
+  await shot(send, evidenceDir, name('profile-legend-watkins'));
+  await click(send, '#profile-badge');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      const home = menu.querySelector('[data-profile-home]');
+      const watkins = menu.querySelector('[data-profile="watkins"]');
+      if (!home || home.textContent !== 'Anil' || home.getAttribute('aria-current') === 'true') return null;
+      if (watkins?.getAttribute('aria-current') !== 'true') return null;
+      return { ok: true };
+    })()`,
+    'profile menu marks Watkins',
+    10000,
+  );
+  await shot(send, evidenceDir, name('profile-menu-watkins'));
+  await click(send, '#profile-menu [data-profile-home]');
+  await waitForHref(send, /\?e2e=(?:#|$)/, 'anil profile url');
+  await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!banner || text.includes('Loading')) return null;
+      if (new URL(location.href).searchParams.has('u')) return null;
+      if (!document.getElementById('tab-map')?.classList.contains('active')) return null;
+      if (document.getElementById('view')?.className !== 'view-map') return null;
+      const badge = document.querySelector('#profile-badge .profile-badge-name')?.textContent;
+      if (badge !== 'Anil') return null;
+      const legend = document.getElementById('personal-targets-legend')?.textContent;
+      if (legend !== "Anil's targets") return null;
+      const names = ${myTargetNamesExpr()};
+      if (!names || names.includes('Lafayette, Colorado hometown')) return null;
+      return { ok: true, legend, count: names.length };
+    })()`,
+    'map restored on Anil',
+    45000,
+  );
+  await shot(send, evidenceDir, name('profile-legend-anil'));
+  if (!shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
+    await setViewport(send, 874, 402, true);
+    await proveProfileMenuRoundTrip(send, evidenceDir, { width: 874, height: 402, mobile: true }, 'land');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
 }
 
 const UNAVAILABLE_LEGEND = {
@@ -3357,7 +3478,7 @@ async function proveIssProfileMenuEscape(send, evidenceDir) {
       const menu = document.getElementById('profile-menu');
       if (!menu || !menu.matches(':popover-open')) return null;
       const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => row.textContent);
-      if (rows.length !== 3) return null;
+      if (rows[0] !== 'Anil' || !rows.includes('Jessica Watkins (Watty)') || rows.length !== 4) return null;
       return { ok: true };
     })()`,
     'iss profile menu open',
