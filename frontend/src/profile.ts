@@ -12,12 +12,12 @@
  *  fetch that consumes the profile name.
  */
 
-/** Per-profile schema. Versioned for migration safety (premise 8 of the
- *  design doc). Bump `version` + add a migrator in MIGRATIONS when the
- *  shape changes. */
 import { isRosterProfile, rosterSites } from './crew-roster';
 import { getAccountProfile } from './profile-session';
 
+/** Per-profile schema. Versioned for migration safety (premise 8 of the
+ *  design doc). Bump `version` + add a migrator in MIGRATIONS when the
+ *  shape changes. */
 export interface Profile {
   /** Schema version. Migrations chain runs `version → version+1` until
    *  CURRENT_VERSION on every load. */
@@ -232,10 +232,7 @@ export function migrate(
  *  - Profile is corrupted / future-versioned → throws with context
  *
  *  Callers in v1 (Slot 1: just main.ts boot) treat null as "auto-create
- *  a default." Later slots may prompt instead.
- *
- *  A crew roster name never returns null, and its additions are always
- *  the roster sites, whatever storage holds. */
+ *  a default." Later slots may prompt instead. */
 export function loadProfile(name: string): Profile | null {
   if (!isValidProfileName(name)) return null;
   const stored = readStoredProfile(name);
@@ -272,9 +269,6 @@ function readStoredProfile(name: string): Profile | null {
  *
  *  Quota-exceeded errors are caught and surfaced as a thrown Error so
  *  the calling UI can show a clear "couldn't save" toast (Slot 6).
- *
- *  A crew roster profile is stored with no additions, so storage never
- *  holds a copy of the roster sites.
  */
 export function saveProfile(profile: Profile): void {
   if (!isValidProfileName(profile.name)) {

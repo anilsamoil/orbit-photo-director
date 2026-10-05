@@ -1,13 +1,3 @@
-/** Slot 7 tests for the Profile tab UI.
- *
- *  Slot 7 (threshold slider): slider value persists to profile after the
- *  150ms debounce; reading from the active profile renders the right
- *  starting value; filter integration is covered by map.ts unit tests
- *  but verified at the data layer here too.
- *
- *  Test env is happy-dom (vite.config). localStorage is real.
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { _resetProfileUiForTests, renderProfilePane } from '../src/profile-ui';

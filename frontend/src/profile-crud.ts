@@ -154,9 +154,6 @@ export function buildCrudSection(profileName: string): HTMLElement {
   return section;
 }
 
-/** A crew roster profile's sites ship with the app, so they are listed with
- *  no add, edit, delete, import or server hydration. Hiding curated targets
- *  still works and stays on this device. */
 function buildRosterSection(profileName: RosterName): HTMLElement {
   const section = document.createElement('section');
   section.className = 'profile-section';
@@ -1429,8 +1426,7 @@ function buildRemovedChip(profileName: string, id: string): HTMLElement {
  *  list changes immediately. The same list is PUT to the profile API
  *  so the generator and other devices pick it up. A failed PUT keeps
  *  the local list. The next hydrate retries when this device's stamp
- *  is newer than the server copy. A crew roster profile has no server
- *  copy, so its list stays on this device. */
+ *  is newer than the server copy. */
 async function handleToggleCurated(
   profileName: string,
   curatedId: string,

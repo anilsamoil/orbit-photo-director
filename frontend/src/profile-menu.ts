@@ -6,9 +6,6 @@ const MENU_WIDTH_PX = 224;
 const MENU_GAP_PX = 4;
 const VIEWPORT_MARGIN_PX = 8;
 
-/** Names the active profile in the top bar and lists the crew roster under it,
- *  then reopens the tab a switch left from. A switch reloads the page, so the
- *  account cannot change under a mounted menu. */
 export function mountProfileMenu(): void {
   const account = getAccountProfile();
   const badge = document.getElementById('profile-badge');
@@ -57,7 +54,7 @@ function chooseProfile(event: MouseEvent): void {
   const activeTab = document.querySelector('.tabs .tab.active');
   try {
     if (activeTab?.id) sessionStorage.setItem(SWITCH_VIEW_KEY, activeTab.id);
-  } catch { /* storage disabled: the switch lands on the default tab */ }
+  } catch {}
   const url = new URL(window.location.href);
   url.searchParams.set('u', name);
   window.location.assign(url.href);
@@ -68,7 +65,7 @@ function restoreSwitchedView(): void {
   try {
     tabId = sessionStorage.getItem(SWITCH_VIEW_KEY);
     sessionStorage.removeItem(SWITCH_VIEW_KEY);
-  } catch { /* storage disabled */ }
+  } catch {}
   const tab = tabId ? document.getElementById(tabId) : null;
   if (tab?.matches('.tabs .tab:not(.active)')) tab.click();
 }

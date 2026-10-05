@@ -1,18 +1,3 @@
-/** Profile tab UI — Slot 2 of design rev 2 (locked 2026-05-26).
- *
- *  Owns the entire Profile pane DOM tree: the active profile's identity,
- *  (Slot 7) the distance-threshold slider, and (Slot 6) the CRUD section.
- *
- *  Rendering is one-shot per Map / Log pane convention — `renderProfilePane()`
- *  rebuilds the pane into the `#profile-body` container on every tab
- *  activation.
- *
- *  XSS surface: every operator-provided string (profile names) flows
- *  through `textContent` only — never `innerHTML`. Premise 12 of the
- *  design doc requires no new XSS surfaces; `isValidProfileName` already
- *  caps the character set, but defense-in-depth uses textContent anyway.
- */
-
 import {
   createDefaultProfile,
   isValidProfileName,
@@ -48,9 +33,6 @@ let thresholdTimer: number | null = null;
  *  Read by the timer when it fires. */
 let pendingThresholdKm: number | null = null;
 
-/** Pane render is idempotent. Tab dispatcher calls renderProfilePane()
- *  every time the Profile tab is activated; that's fine — rebuilding the
- *  pane is cheap. */
 export function renderProfilePane(): void {
   const container = document.getElementById('profile-body');
   if (!container) return;
@@ -61,8 +43,6 @@ export function renderProfilePane(): void {
   );
 }
 
-/** Names the active profile. A crew roster profile also says how to get back,
- *  because the top-bar menu lists only the roster. */
 function buildIdentitySection(): HTMLElement {
   const section = document.createElement('section');
   section.className = 'profile-section';
@@ -186,10 +166,6 @@ export function readThresholdKm(): number {
   return profile?.distanceThresholdKm ?? THRESHOLD_DEFAULT_KM;
 }
 
-/** Persist the threshold value to the active profile. If the profile
- *  doesn't exist yet (first-launch + slider moved before any other
- *  save), auto-create + persist. Failures (quota exceeded / private
- *  mode) surface under the slider. */
 function persistThreshold(km: number): void {
   const name = readActiveProfileName();
   let profile = safeLoadProfile(name);
@@ -222,8 +198,6 @@ function readActiveProfileName(): string {
   return getAccountProfile()?.name ?? parseProfileFromURL(window.location.href);
 }
 
-/** Test-only state reset. Clears the threshold debounce timer + pending
- *  value so consecutive tests don't inherit a poisoned state. */
 export function _resetProfileUiForTests(): void {
   if (thresholdTimer !== null) {
     window.clearTimeout(thresholdTimer);

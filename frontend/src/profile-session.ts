@@ -1,10 +1,8 @@
 import { rosterProfiles, type RosterProfile } from './crew-roster';
 
-/** Browser identity comes only from the verified session. A roster name in `?u=` opens that crew roster profile on top of the session, with no grant. */
 export interface AccountProfile {
   name: string;
   displayName: string;
-  /** False when this tab has no server authority for the active profile. */
   isVerified?: boolean;
   /** This origin served the app shell instead of an account API. */
   localOnly?: boolean;
@@ -126,11 +124,10 @@ export async function resolveAccountProfile(urlHref = window.location.href): Pro
 
 function requestedRosterProfile(urlHref: string): RosterProfile | undefined {
   let requested: string | null = null;
-  try { requested = new URL(urlHref).searchParams.get('u'); } catch { /* no roster profile */ }
+  try { requested = new URL(urlHref).searchParams.get('u'); } catch {}
   return rosterProfiles().find((profile) => profile.name === requested);
 }
 
-/** Asks the session for the profile this tab already had, so a roster visit leaves the tab cache unchanged. */
 function sessionHref(urlHref: string): string {
   const url = new URL(urlHref);
   const cached = cachedSessionProfile();

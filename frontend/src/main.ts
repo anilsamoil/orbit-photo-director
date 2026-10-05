@@ -210,15 +210,13 @@ async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean>
   return false;
 }
 
-/** A crew roster profile keeps its ratings and hides on this device. */
 function onRosterProfile(): boolean {
   return isRosterProfile(getAccountProfile()?.name ?? '');
 }
 
 /** Render or hide the topbar "N pending sync" badge based on the calib queue.
  *  The badge sits inside the Log tab button so the user sees the count
- *  regardless of which view they're on. A crew roster profile's queue never
- *  syncs, so a count there would promise a sync. */
+ *  regardless of which view they're on. */
 function updatePendingSyncBadge(): void {
   const el = document.getElementById('pending-sync-badge');
   if (!el) return;
@@ -1670,7 +1668,6 @@ async function init(): Promise<void> {
   bindTopbarPan(document.querySelector('.tabs'));
   bindLiveReadout();
   // Authenticate before loading any personal cache, target or rating queue.
-  // A shared ?u= link selects a crew profile only when the session allows it.
   try {
     const account = await resolveAccountProfile();
     const url = new URL(window.location.href);

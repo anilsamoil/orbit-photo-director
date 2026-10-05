@@ -1,8 +1,3 @@
-"""Crew roster profiles score data/crew-roster with no Worker request.
-
-The rows match frontend/test/crew-roster.test.ts so a queue row and its map
-ring share one id. Edit both tables together."""
-
 from __future__ import annotations
 
 import json

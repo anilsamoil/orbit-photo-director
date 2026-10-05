@@ -4,7 +4,6 @@ const own = { name: 'anil', displayName: 'Anil' };
 const crew = { name: 'jessica', displayName: 'Jessica Meir' };
 const sessionBody = { ok: true, profile: own, profiles: [own, crew] };
 
-// Rendering the identity section does not need a target hydration.
 vi.mock('../src/profile-crud', () => ({ buildCrudSection: () => document.createElement('section') }));
 
 beforeEach(() => {

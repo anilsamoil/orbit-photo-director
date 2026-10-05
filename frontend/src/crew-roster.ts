@@ -84,7 +84,6 @@ function parseSites(profileName: string, csv: string): PersonalTarget[] {
   });
 }
 
-/** Mirrors _roster_site_token in generator/multiplex.py. */
 function siteToken(siteName: string): string {
   return siteName
     .normalize('NFKD')
