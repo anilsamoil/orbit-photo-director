@@ -35,7 +35,6 @@ Preconditions:
 ## Gotchas
 
 - A denied session stops on the sign-in footer and does not open this pane. A failed fetch with no saved session paints a red banner and returns before the tab clicks are wired. The tab buttons are already in the page. A non-JSON 404, or a 200 HTML body that contains `id="status-banner"`, opens Profile as a local account.
-- The New profile field is built only when no account is set. Every path that wires the tabs has already set an account, including that local copy. The pane does not show the field.
 - The page's bundled set is `BUNDLED_ISS_TLE` in `frontend/src/iss-tle.ts`. `scripts/fixtures.mjs` writes the same 2026-09-27 lines as the published track only when CelesTrak does not answer. Photo lookup tries `opd-iss-tle-last-good`, then `opd-tle-25544`, then the published track, then that bundled set. The choice is the candidate that still propagates and whose epoch is closest to the photo time. A failed first pass asks once for the ISS set, from that 6 hour cache or from CelesTrak, and retries only when the set is not stale.
 - `track.tle_epoch` must match the epoch inside the TLE lines within 2 seconds. Photo lookup treats a track whose epoch disagrees as malformed and tries the other candidates. The bundled set always parses, so the malformed chip does not appear while that set is in the page.
 - Add target posts to the fixture `/api/browser/profiles/anil/targets`. The name is painted before the response returns. This drive checks that the name is on screen. It does not wait for the toast.
