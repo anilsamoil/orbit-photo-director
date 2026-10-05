@@ -88,6 +88,18 @@ const ISS_CLOCK_EXPR = `(() => {
   for (const el of [root, ...root.children]) {
     if (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight) return { step: 'clip', line: Object.keys(el.dataset).join(','), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
   }
+  for (const sel of ['[data-iss-utc]', '[data-iss-gmt-day]', '[data-iss-edition]']) {
+    const el = document.querySelector(sel);
+    if (!el) return { step: 'ink', sel };
+    const box = el.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const ink = range.getBoundingClientRect();
+    if (!(ink.height > 8)) return { step: 'ink-height', sel, height: ink.height };
+    if (ink.left < box.left - 0.5 || ink.right > box.right + 0.5 || ink.top < box.top - 0.5 || ink.bottom > box.bottom + 0.5) {
+      return { step: 'ink', sel, inkLeft: ink.left, inkTop: ink.top, inkRight: ink.right, inkBottom: ink.bottom, boxLeft: box.left, boxTop: box.top, boxRight: box.right, boxBottom: box.bottom };
+    }
+  }
   return { ok: true, utc, houston, gmt, dayMonth, weekday, utcPx, smallPx: small[0] };
 })()`;
 
@@ -2125,6 +2137,10 @@ const ISS_EDITION_EXPR = `(() => {
   if (edition.scrollWidth > edition.clientWidth) return { step: 'edition-clip', scrollWidth: edition.scrollWidth, clientWidth: edition.clientWidth };
   const wide = window.innerWidth > 720;
   if (wide) {
+    const clock = document.querySelector('[data-iss-clock]');
+    if (!clock || toolbar.offsetHeight !== clock.offsetHeight) {
+      return { step: 'toolbar-height', toolbar: toolbar.offsetHeight, clock: clock ? clock.offsetHeight : null, width: window.innerWidth };
+    }
     if (style.position !== 'absolute') return { step: 'wide-position', position: style.position, width: window.innerWidth };
     if (editionBox.top < helpBox.bottom - 2) return { step: 'wide-below-help', editionTop: editionBox.top, helpBottom: helpBox.bottom };
     if (Math.abs(editionBox.left - helpBox.left) > 8) return { step: 'wide-left', editionLeft: editionBox.left, helpLeft: helpBox.left };
@@ -3459,6 +3475,17 @@ const ISS_LANDSCAPE_PANES = [
   { width: 844, height: 390, insets: { top: 0, left: 47, bottom: 21, right: 47 }, shot: 'iss-landscape-844x390-telemetry' },
 ];
 
+const ISS_WIDE_TOOLBAR_EXPR = `(() => {
+  if (window.innerWidth <= 720) return { ok: true, width: window.innerWidth };
+  const toolbar = document.querySelector('[data-iss-toolbar]');
+  const clock = document.querySelector('[data-iss-clock]');
+  if (!toolbar || !clock) return null;
+  if (toolbar.offsetHeight !== clock.offsetHeight) {
+    return { step: 'toolbar-height', toolbar: toolbar.offsetHeight, clock: clock.offsetHeight, width: window.innerWidth };
+  }
+  return { ok: true, height: toolbar.offsetHeight, width: window.innerWidth };
+})()`;
+
 async function proveIssLandscape(send, evidenceDir) {
   const contained = `(() => {
     const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
@@ -3495,9 +3522,11 @@ async function proveIssLandscape(send, evidenceDir) {
         await waitFor(send, contained, `iss landscape ${label} collapsed`, 10000);
         await waitFor(send, ISS_CLOCK_EXPR, `iss clock in landscape ${label}`, 10000);
         await waitFor(send, ISS_EDITION_EXPR, `iss edition in landscape ${label}`, 10000);
+        await waitFor(send, ISS_WIDE_TOOLBAR_EXPR, `iss toolbar height in landscape ${label}`, 10000);
         await click(send, '[data-iss-telemetry]');
         const open = await waitFor(send, contained, `iss landscape ${label} telemetry open`, 10000);
         await waitFor(send, ISS_CLOCK_EXPR, `iss clock in landscape ${label} with telemetry open`, 10000);
+        await waitFor(send, ISS_WIDE_TOOLBAR_EXPR, `iss toolbar height in landscape ${label} with telemetry open`, 10000);
         await sleep(1200);
         const after = await waitFor(send, contained, `iss landscape ${label} telemetry after ticks`, 10000);
         if (!inset) await shot(send, evidenceDir, pane.shot);
