@@ -98,6 +98,32 @@ function clockLines(host: HTMLElement): string[] {
   });
 }
 
+function clockOrder(host: HTMLElement): string[] {
+  return [...(host.querySelector('[data-iss-clock]')?.children ?? [])].map((el) => {
+    if (el.hasAttribute('data-iss-utc')) return 'utc';
+    if (el.hasAttribute('data-iss-gmt-day')) return 'gmt-day';
+    if (el.hasAttribute('data-iss-houston')) return 'houston';
+    if (el.hasAttribute('data-iss-day-month')) return 'day-month';
+    if (el.hasAttribute('data-iss-weekday')) return 'weekday';
+    return el.tagName;
+  });
+}
+
+function clockSizes(host: HTMLElement): Record<string, string> {
+  const size = (selector: string): string => {
+    const el = host.querySelector(selector);
+    return el ? getComputedStyle(el).fontSize : 'missing';
+  };
+  return {
+    utc: size('[data-iss-utc]'),
+    gmtDay: size('[data-iss-gmt-day]'),
+    edition: size('[data-iss-edition]'),
+    houston: size('[data-iss-houston]'),
+    dayMonth: size('[data-iss-day-month]'),
+    weekday: size('[data-iss-weekday]'),
+  };
+}
+
 describe('ISS scene lifecycle', () => {
   it('stays loading until a snapshot arrives and then paints one pose', async () => {
     const host = document.createElement('div');
@@ -241,16 +267,7 @@ describe('ISS scene lifecycle', () => {
     await ready(scene);
     scene.update(shot('clock'));
     await ready(scene);
-    const order = [...(host.querySelector('[data-iss-clock]')?.children ?? [])].map((node) => {
-      const el = node as HTMLElement;
-      if (el.hasAttribute('data-iss-utc')) return 'utc';
-      if (el.hasAttribute('data-iss-houston')) return 'houston';
-      if (el.hasAttribute('data-iss-gmt-day')) return 'gmt-day';
-      if (el.hasAttribute('data-iss-day-month')) return 'day-month';
-      if (el.hasAttribute('data-iss-weekday')) return 'weekday';
-      return el.tagName;
-    });
-    expect(order).toEqual(['utc', 'houston', 'gmt-day', 'day-month', 'weekday']);
+    expect(clockOrder(host)).toEqual(['utc', 'gmt-day', 'houston', 'day-month', 'weekday']);
     expect(host.querySelector('[data-iss-utc]')?.textContent).toBe('12:01:00 UTC');
     expect(clockLines(host)).toEqual(['07:01:00 CDT', 'GMT291', '17 oct', 'Thursday']);
 
@@ -720,5 +737,56 @@ describe('ISS chrome starts out of the way', () => {
       window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ''}`);
     }
     vi.resetModules();
+  });
+});
+
+describe('ISS toolbar text', () => {
+  const stacked = ['utc', 'gmt-day', 'houston', 'day-month', 'weekday'];
+  const sizes = { utc: '16px', gmtDay: '16px', edition: '16px', houston: '10.88px', dayMonth: '10.88px', weekday: '10.88px' };
+
+  async function mountStyled(): Promise<{ host: HTMLElement; done: () => void }> {
+    const style = document.createElement('style');
+    style.textContent = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8');
+    document.head.append(style);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const scene = mount(host, fakeRenderer().factory);
+    await ready(scene);
+    scene.update(shot('stack'));
+    await ready(scene);
+    return {
+      host,
+      done: () => {
+        scene.dispose();
+        host.remove();
+        style.remove();
+      },
+    };
+  }
+
+  it('puts GMT directly under UTC at the UTC size and keeps Houston, the date, and the weekday small', async () => {
+    const { host, done } = await mountStyled();
+    try {
+      expect(clockOrder(host)).toEqual(stacked);
+      expect(host.querySelector('[data-iss-gmt-day]')?.textContent).toBe('GMT291');
+      expect(clockSizes(host)).toEqual(sizes);
+      expect(getComputedStyle(host.querySelector('[data-iss-gmt-day]') as HTMLElement).minHeight).toBe('0');
+    } finally {
+      done();
+    }
+  });
+
+  it('keeps those sizes when the toolbar is a column at 720px and below', async () => {
+    const happyDOM = (window as unknown as { happyDOM: { setWindowSize(size: { width: number; height: number }): void } }).happyDOM;
+    happyDOM.setWindowSize({ width: 390, height: 844 });
+    const { host, done } = await mountStyled();
+    try {
+      expect(getComputedStyle(host.querySelector('[data-iss-edition]') as HTMLElement).position).toBe('static');
+      expect(clockOrder(host)).toEqual(stacked);
+      expect(clockSizes(host)).toEqual(sizes);
+    } finally {
+      done();
+      happyDOM.setWindowSize({ width: 1024, height: 768 });
+    }
   });
 });
