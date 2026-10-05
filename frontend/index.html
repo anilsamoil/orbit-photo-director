@@ -23,8 +23,8 @@
           <div id="iss-now" class="iss-now" title="Live ISS sub-point from SGP4, or the polynomial fit when SGP4 has no position"></div>
           <div id="kp-widget" class="kp-badge" hidden></div>
           <div id="sun-widget" class="sun-badge" hidden></div>
-          <span id="profile-badge" class="profile-badge" title="Active astronaut profile" hidden></span>
         </div>
+        <button type="button" id="profile-badge" class="profile-badge" popovertarget="profile-menu" title="Switch profile" hidden></button>
         <button id="live-readout-toggle" class="live-readout-toggle" type="button" aria-expanded="false" aria-controls="live-readout">Status</button>
       </div>
       <nav class="tabs" aria-label="Views">
@@ -36,6 +36,8 @@
         <button id="tab-log" class="tab" type="button">Log<span id="pending-sync-badge" class="pending-badge" hidden></span></button>
       </nav>
     </header>
+    <!-- Outside <header>: topbar-pan would turn a finger that drifts inside the menu into a pan and drop the tap. -->
+    <div id="profile-menu" class="profile-menu" popover></div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
@@ -174,7 +176,7 @@
       <section id="profile-pane" class="pane">
         <div class="pane-header">
           <h2 class="pane-title">Profile &mdash; per-astronaut settings</h2>
-          <p class="pane-sub">Your Google account opens your own profile by default. Choose an available crew profile below, then save places by name or coordinates.</p>
+          <p class="pane-sub">Your Google account opens your own profile by default. Save places by name or coordinates, or use the name in the top bar to open a crew roster profile.</p>
         </div>
         <div id="profile-body" class="profile-body"></div>
         <p class="pane-sub">Your Google sign-in also syncs personal targets and shot ratings. No extra token needed.</p>

@@ -35,9 +35,7 @@ vi.mock('../src/network-status', async () => {
 
 vi.mock('../src/profile-session', () => ({
   getAccountProfile: () => null,
-  getAuthorizedProfiles: () => [],
   getSignedInAccountProfile: () => null,
-  canSelectProfile: () => false,
   resolveAccountProfile: async () => ({ name: 'anil', displayName: 'Anil', isVerified: true }),
 }));
 

@@ -1,4 +1,5 @@
 import { fetchLiveCloud } from '../../../cloud';
+import { isRosterProfile } from '../../../crew-roster';
 import { getMapLaunchMode } from '../../../map-launch-mode';
 import { isLaunchPass } from '../../../launch-selectors';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from '../../../pass-filter';
@@ -254,7 +255,7 @@ export function bindTargetInteractions(host: MapCore): void {
       if (shot > 0) props.shot_count = shot;
     }
     let popup: PopupHandle | null = null;
-    const onEdit = props.is_personal && props.target_id
+    const onEdit = props.is_personal && props.target_id && !isRosterProfile(parseProfileFromURL(window.location.href))
       ? (id: string) => {
           popup?.remove();
           window.dispatchEvent(new CustomEvent(EDIT_TARGET_EVENT, { detail: { targetId: id } }));

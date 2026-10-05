@@ -7,6 +7,8 @@ import { createVendorDouble } from '../../../../test/vendor-map-double';
 import { createClock } from '../../map-core/clock';
 import { createMapCore } from '../../map-core/core';
 
+vi.mock('../../../cloud', () => ({ fetchLiveCloud: async () => null }));
+
 const NOW = Date.parse('2026-05-04T12:10:00Z');
 
 const loaded: { mod: typeof import('./index') | null } = { mod: null };
@@ -117,5 +119,28 @@ describe('targets', () => {
     const encoded = JSON.stringify(layer.paint['circle-color']);
     expect(encoded).toContain(ANILS_TARGETS_CATEGORY);
     expect(encoded).toContain(ANILS_TARGET_PAINT.color);
+  });
+
+  it.each([
+    ['/?u=anil', 'personal:anil:harbor', ['Edit target']],
+    ['/?u=watkins', 'personal:watkins:grand-canyon-arizona', []],
+  ])('a personal pin tapped on %s offers %j', (url, targetId, editButtons) => {
+    history.replaceState(null, '', url);
+    const vendor = createVendorDouble({ layers: [api().myTargetsLayer()] });
+    vendor.queryAt = (_box, layers) => layers.includes('my-targets-layer')
+      ? [{
+          properties: { target_id: targetId, target_name: 'Site', lat: 36.1, lon: -112.1, priority: 2, has_pass: false, is_personal: true },
+          geometry: { type: 'Point', coordinates: [-112.1, 36.1] },
+        }]
+      : [];
+    const clock = createClock(() => NOW);
+    const core = createMapCore(vendor, clock);
+    api().bindTargetsClock(clock);
+    api().noteTargetCore(core);
+    api().bindTargetInteractions(core);
+    vendor.fire('click', { point: { x: -112.1, y: 36.1 }, lngLat: [-112.1, 36.1] });
+    expect(vendor.popups).toHaveLength(1);
+    const buttons = [...vendor.popups[0]!.content.querySelectorAll('button')].map((button) => button.textContent);
+    expect(buttons.filter((text) => text === 'Edit target')).toEqual(editButtons);
   });
 });

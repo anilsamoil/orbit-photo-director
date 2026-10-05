@@ -54,6 +54,7 @@ import type { CuratedTarget, Manifest } from './types';
 import { getCurrentManifest } from './main';
 import { geocode, type GeocodeResult } from './profile-geocode';
 import { getAccountProfile } from './profile-session';
+import { isRosterProfile, rosterSites, type RosterName } from './crew-roster';
 import { markProfileTargetsChanged, profileTargetsChanged, profileTargetRevision, resetProfileTargetSyncForTests } from './profile-target-sync';
 
 /** App version stamped into export envelopes. Injected by Vite's `define`
@@ -107,6 +108,7 @@ function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success')
  *  Returns the rebuilt section so the caller can decide where to mount
  *  it. */
 export function buildCrudSection(profileName: string): HTMLElement {
+  if (isRosterProfile(profileName)) return buildRosterSection(profileName);
   const section = document.createElement('section');
   section.className = 'profile-section';
   section.id = 'profile-crud-section';
@@ -149,6 +151,40 @@ export function buildCrudSection(profileName: string): HTMLElement {
     void hydrateShotCounts(profileName);
   }
 
+  return section;
+}
+
+/** A crew roster profile's sites ship with the app, so they are listed with
+ *  no add, edit, delete, import or server hydration. Hiding curated targets
+ *  still works and stays on this device. */
+function buildRosterSection(profileName: RosterName): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'profile-section';
+  section.id = 'profile-crud-section';
+
+  const heading = document.createElement('h3');
+  heading.textContent = 'Crew roster sites';
+
+  const desc = document.createElement('p');
+  desc.textContent = 'These sites come with the app and cannot be edited here. Tap their pins on the Map to see upcoming ISS passes.';
+
+  const ul = document.createElement('ul');
+  ul.className = 'profile-crud-ul';
+  for (const site of rosterSites(profileName)) {
+    const li = document.createElement('li');
+    li.className = 'profile-crud-row';
+    li.dataset.targetId = site.id;
+    const nameEl = document.createElement('span');
+    nameEl.className = 'profile-crud-name';
+    nameEl.textContent = site.name;
+    const coordEl = document.createElement('span');
+    coordEl.className = 'profile-crud-coord';
+    coordEl.textContent = `${site.lat.toFixed(3)}, ${site.lon.toFixed(3)} · p${site.priority}`;
+    li.append(nameEl, coordEl);
+    ul.appendChild(li);
+  }
+
+  section.append(heading, desc, ul, buildCuratedRemovedSection(profileName));
   return section;
 }
 
@@ -638,6 +674,7 @@ function geocodeErrorMessage(
  *  POST, rollback + error toast on failure (D1=B: a mid-LOS add fails
  *  honestly; the operator retries when the link returns). */
 export async function handleAdd(profileName: string, target: PersonalTarget): Promise<'ok' | string> {
+  if (isRosterProfile(profileName)) return 'Crew roster profiles are read-only. Add targets on your own profile.';
   const before = safeLoadProfile(profileName);
   if (!before) return 'Could not load active profile.';
   let next: Profile;
@@ -1032,7 +1069,9 @@ function buildCuratedRemovedSection(profileName: string): HTMLElement {
 
   const desc = document.createElement('p');
   desc.className = 'profile-crud-empty';
-  desc.textContent = 'Exclude curated targets from your scored view. Type to search by name and pick a match to hide it. The hide is saved to your profile, so every signed-in device drops it, and the generator removes it from the published queue the next time it runs. Restore brings it back everywhere.';
+  desc.textContent = isRosterProfile(profileName)
+    ? 'Exclude curated targets from your scored view. Type to search by name and pick a match to hide it. A crew roster profile keeps the hide on this device only. Restore brings it back.'
+    : 'Exclude curated targets from your scored view. Type to search by name and pick a match to hide it. The hide is saved to your profile, so every signed-in device drops it, and the generator removes it from the published queue the next time it runs. Restore brings it back everywhere.';
   wrap.appendChild(desc);
 
   // v3 — typeahead UI (Anil 2026-05-26). Replaces the paste-exact-id
@@ -1390,7 +1429,8 @@ function buildRemovedChip(profileName: string, id: string): HTMLElement {
  *  list changes immediately. The same list is PUT to the profile API
  *  so the generator and other devices pick it up. A failed PUT keeps
  *  the local list. The next hydrate retries when this device's stamp
- *  is newer than the server copy. */
+ *  is newer than the server copy. A crew roster profile has no server
+ *  copy, so its list stays on this device. */
 async function handleToggleCurated(
   profileName: string,
   curatedId: string,
@@ -1416,12 +1456,13 @@ async function handleToggleCurated(
     return;
   }
   rerenderCrudSection(profileName);
-  const synced = await putRemovedCuratedIds(profileName, next.removedCuratedIds, updatedAt);
+  const settled = isRosterProfile(profileName)
+    || (await putRemovedCuratedIds(profileName, next.removedCuratedIds, updatedAt)).ok;
   showToast(
-    synced.ok
+    settled
       ? (intendedHide ? `Hid curated "${curatedId}"` : `Restored curated "${curatedId}"`)
       : 'Saved on this device. Other devices update once the profile syncs.',
-    synced.ok ? 'success' : 'warn',
+    settled ? 'success' : 'warn',
   );
 }
 

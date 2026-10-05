@@ -2131,11 +2131,56 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   background: rgba(91, 208, 255, 0.12);
   border: 1px solid rgba(91, 208, 255, 0.4);
   color: var(--accent, #5cd0ff);
+  font: inherit;
   font-size: 0.8rem;
   line-height: 1;
   white-space: nowrap;
+  cursor: pointer;
+}
+.profile-badge::after {
+  content: '';
+  border: 4px solid transparent;
+  border-top-color: currentColor;
+  margin-top: 4px;
 }
 .profile-badge[hidden] { display: none; }
+.profile-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  width: 224px;
+  max-height: calc(100dvh - var(--topbar-height) - 8px);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  color: var(--text);
+}
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.profile-menu-item[aria-current='true'] { color: var(--accent); }
+.profile-menu-item:hover { background: var(--selected); }
 
 /* Profile pane scaffolding. Mirrors .lookup-form / .log-* sizing so the
  * pane reads consistently with the other "settings-like" tabs. */
@@ -2176,7 +2221,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   font-size: 0.85rem;
   color: var(--text-dim);
 }
-.profile-select,
 .profile-input {
   background: var(--surface-2);
   color: var(--text);
@@ -4317,7 +4361,13 @@ summary:focus-visible {
 
   .live-readout-toggle {
     display: inline-flex;
+    flex: 0 0 auto;
     margin-left: auto;
+  }
+
+  .profile-badge {
+    flex: 0 1 auto;
+    min-width: 44px;
   }
 
   .tabs {

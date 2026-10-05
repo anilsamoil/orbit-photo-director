@@ -5,7 +5,6 @@ import { NAVIGATION_FALLBACK_DENYLIST } from '../src/sw-navigation';
 const identity = vi.hoisted(() => ({ account: { name: 'jessica', displayName: 'Jessica Meir', isVerified: true } }));
 vi.mock('../src/profile-session', () => ({
   getAccountProfile: () => identity.account,
-  getAuthorizedProfiles: () => [identity.account],
   getSignedInAccountProfile: () => identity.account,
   resolveAccountProfile: async () => identity.account,
 }));
@@ -94,6 +93,17 @@ describe('Log session recovery', () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(document.querySelector('#log-pane a')).toBeNull();
     expect(document.querySelector('#log-notice')?.textContent).toContain('reconnect, then reopen Log');
+  });
+
+  it('tells a crew roster profile it has no log, with no read and no sign-in prompt', async () => {
+    Object.assign(identity.account, { name: 'kutryk', displayName: 'Josh Kutryk', isVerified: false });
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const { loadLogPane } = await import('../src/main');
+    await loadLogPane();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(document.querySelector('#log-pane a')).toBeNull();
+    expect(document.querySelector('#log-notice')?.textContent).toBe('Crew roster profiles keep ratings on this device and have no log.');
   });
 
   it('clears obsolete recovery after a successful refresh and shows the saved log', async () => {
