@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -26,7 +28,9 @@ from generator.main import (
     select_cloud_sampler,
 )
 from generator.orbit import TLE, Pass, Position
+from generator.tle_sources import TleSources
 from tests.conftest import SAMPLE_TLE_TEXT
+from tests.tle_fakes import TextStream
 
 
 @pytest.fixture(autouse=True)
@@ -493,60 +497,71 @@ def test_run_tick_lock_releases_on_normal_completion(
 # --------------------------------------------------------------------------
 
 
-class _FakeResponse:
-    def __init__(self, text: str, status: int = 200) -> None:
-        self.text = text
-        self.status_code = status
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+def _client(cache: Path, transport) -> TleSources:
+    return TleSources(cache.parent, transport=transport)
 
 
-def test_fetch_tle_uses_fresh_cache(tmp_path: Path) -> None:
-    """Cache age below TTL → return cached, no network call."""
+def test_fetch_tle_young_mtime_still_asks_then_rests(tmp_path: Path) -> None:
     cache = tmp_path / "iss.tle"
     cache.write_text(SAMPLE_TLE_TEXT)
-    now = datetime.fromtimestamp(cache.stat().st_mtime + 60, tz=UTC)  # 1 min old
-    with patch("generator.main.requests.get") as mock_get:
-        tle = fetch_tle("http://example.invalid", cache, ttl_hours=1.0, now=now)
-    assert tle is not None
-    mock_get.assert_not_called()
+    epoch = TLE.from_text(SAMPLE_TLE_TEXT).epoch
+    now = epoch + timedelta(hours=1)
+    os.utime(cache, (now.timestamp() - 60, now.timestamp() - 60))
+    calls: list[str] = []
+    line1, line2 = _iss_lines("24290.79041667")
+    body = f"{line1}\n{line2}\n"
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream(body)
+
+    sources = _client(cache, transport)
+    first = fetch_tle(_ORDERED_TLE_URLS, cache, now=now, sources=sources)
+    second = fetch_tle(
+        _ORDERED_TLE_URLS, cache, now=now + timedelta(minutes=30), sources=sources
+    )
+    assert first.line1 == second.line1
+    assert calls == [CELESTRAK_URL]
 
 
-def test_fetch_tle_fetches_when_cache_stale(tmp_path: Path) -> None:
-    """Cache older than TTL → network fetch + write new cache."""
+def test_fetch_tle_fetches_when_the_source_has_a_newer_epoch(tmp_path: Path) -> None:
     cache = tmp_path / "iss.tle"
     cache.write_text(SAMPLE_TLE_TEXT)
-    # Force cache to be stale
-    old_mtime = time.time() - 7200  # 2 hours old
-    import os as _os
-    _os.utime(cache, (old_mtime, old_mtime))
+    line1, line2 = _iss_lines("24291.79041667")
+    new_text = f"{line1}\n{line2}\n"
 
-    new_text = SAMPLE_TLE_TEXT  # same content; just exercises the fetch path
-    with patch("generator.main.requests.get", return_value=_FakeResponse(new_text)):
-        tle = fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
-    assert tle is not None
+    def transport(url: str, budget_s: float) -> TextStream:
+        del url, budget_s
+        return TextStream(new_text)
+
+    tle = fetch_tle("http://example.invalid", cache, sources=_client(cache, transport))
+    assert tle.line1 == line1
+    assert cache.read_text() == new_text
 
 
 def test_fetch_tle_falls_back_to_cache_on_network_error(tmp_path: Path) -> None:
     """Network fails but cache present → return cached TLE (don't crash)."""
     cache = tmp_path / "iss.tle"
     cache.write_text(SAMPLE_TLE_TEXT)
-    old_mtime = time.time() - 7200
-    import os as _os
-    _os.utime(cache, (old_mtime, old_mtime))
 
-    with patch("generator.main.requests.get", side_effect=requests.ConnectionError("offline")):
-        tle = fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
+    def transport(url: str, budget_s: float) -> TextStream:
+        del url, budget_s
+        raise requests.ConnectionError("offline")
+
+    tle = fetch_tle("http://example.invalid", cache, sources=_client(cache, transport))
     assert tle is not None
 
 
 def test_fetch_tle_no_cache_no_network_raises(tmp_path: Path) -> None:
     cache = tmp_path / "iss.tle"
-    with patch("generator.main.requests.get", side_effect=requests.ConnectionError("offline")):
-        with pytest.raises(RuntimeError, match="TLE fetch failed"):
-            fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del url, budget_s
+        raise requests.ConnectionError("offline")
+
+    with pytest.raises(RuntimeError, match="TLE fetch failed"):
+        fetch_tle("http://example.invalid", cache, sources=_client(cache, transport))
 
 
 def test_fetch_tle_logs_reboost_when_mean_motion_jumps(
@@ -569,12 +584,13 @@ def test_fetch_tle_logs_reboost_when_mean_motion_jumps(
         "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.49000000479596"
     )
     bumped_tle = f"ISS (ZARYA)\n{bumped_line1}\n{bumped_line2}\n"
-    import logging
-    with (
-        caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch("generator.main.requests.get", return_value=_FakeResponse(bumped_tle)),
-    ):
-        fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del url, budget_s
+        return TextStream(bumped_tle)
+
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        fetch_tle("http://example.invalid", cache, sources=_client(cache, transport))
     # Reboost detection logs a warning
     assert any("reboost" in r.message.lower() for r in caplog.records)
 
@@ -594,16 +610,14 @@ def test_fetch_tle_logs_when_prior_cache_corrupted(
     import os as _os
     _os.utime(cache, (old_mtime, old_mtime))
 
-    import logging
     line1, line2 = _iss_lines("24291.79041667")
-    with (
-        caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch(
-            "generator.main.requests.get",
-            return_value=_FakeResponse(f"{line1}\n{line2}\n"),
-        ),
-    ):
-        fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del url, budget_s
+        return TextStream(f"{line1}\n{line2}\n")
+
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        fetch_tle("http://example.invalid", cache, sources=_client(cache, transport))
 
     # Warning that ground support can grep on. Specifically should
     # mention "cache parse failed" so it's distinguishable from upstream
@@ -652,22 +666,18 @@ def test_fetch_tle_uses_wheretheiss_when_celestrak_times_out(
     line1, line2 = _iss_lines("24291.79041667")
     payload = json.dumps({"id": "25544", "line1": line1, "line2": line2})
 
-    timeouts: list[float | None] = []
+    timeouts: list[float] = []
 
-    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
-        timeouts.append(timeout)
+    def transport(url: str, budget_s: float) -> TextStream:
+        timeouts.append(budget_s)
         if url == CELESTRAK_URL:
             raise requests.ConnectTimeout("celestrak connect timeout")
         if url == WHERETHEISS_URL:
-            return _FakeResponse(payload)
+            return TextStream(payload)
         raise AssertionError(url)
 
-    import logging
-    with (
-        caplog.at_level(logging.INFO, logger="generator.main"),
-        patch("generator.main.requests.get", side_effect=fake_get),
-    ):
-        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    with caplog.at_level(logging.INFO, logger="generator.main"):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, sources=_client(cache, transport))
     assert timeouts == [5.0, 5.0]
     assert tle.line1 == line1
     assert tle.line2 == line2
@@ -689,19 +699,16 @@ def test_fetch_tle_rejects_alternate_with_bad_checksum(tmp_path: Path, caplog: p
     bad_line1 = f"{line1[:-1]}{'0' if line1[-1] != '0' else '1'}"
     payload = json.dumps({"line1": bad_line1, "line2": line2})
 
-    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
         if url == CELESTRAK_URL:
             raise requests.ConnectTimeout("celestrak connect timeout")
         if url == WHERETHEISS_URL:
-            return _FakeResponse(payload)
+            return TextStream(payload)
         raise AssertionError(url)
 
-    import logging
-    with (
-        caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch("generator.main.requests.get", side_effect=fake_get),
-    ):
-        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, sources=_client(cache, transport))
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert cache.read_text() == SAMPLE_TLE_TEXT
     assert any("checksum" in record.message.lower() for record in caplog.records)
@@ -714,19 +721,16 @@ def test_fetch_tle_rejects_alternate_with_wrong_norad(tmp_path: Path, caplog: py
     line1, line2 = _iss_lines("24291.79041667", norad="99999")
     payload = json.dumps({"line1": line1, "line2": line2})
 
-    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
         if url == CELESTRAK_URL:
             raise requests.ConnectTimeout("celestrak connect timeout")
         if url == WHERETHEISS_URL:
-            return _FakeResponse(payload)
+            return TextStream(payload)
         raise AssertionError(url)
 
-    import logging
-    with (
-        caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch("generator.main.requests.get", side_effect=fake_get),
-    ):
-        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, sources=_client(cache, transport))
     assert tle.line1.startswith("1 25544U")
     assert "99999" not in cache.read_text()
     assert any("norad" in record.message.lower() for record in caplog.records)
@@ -740,19 +744,17 @@ def test_fetch_tle_keeps_newer_cache_when_source_epoch_is_older(
     _stale_cache(cache, SAMPLE_TLE_TEXT)
     line1, line2 = _iss_lines("24289.79041667")
 
-    import logging
-    with (
-        caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch(
-            "generator.main.requests.get",
-            return_value=_FakeResponse(f"{line1}\n{line2}\n"),
-        ),
-    ):
-        tle = fetch_tle(CELESTRAK_URL, cache, ttl_hours=1.0)
+    def transport(url: str, budget_s: float) -> TextStream:
+        del url, budget_s
+        return TextStream(f"{line1}\n{line2}\n")
+
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(CELESTRAK_URL, cache, sources=_client(cache, transport))
     cached_line1 = SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert tle.line1 == cached_line1
     assert cache.read_text() == SAMPLE_TLE_TEXT
     assert any("not newer" in record.message.lower() for record in caplog.records)
+    assert not any("failed from all sources" in record.message for record in caplog.records)
 
 
 def test_fetch_tle_keeps_cache_when_every_source_fails(
@@ -761,15 +763,12 @@ def test_fetch_tle_keeps_cache_when_every_source_fails(
     cache = tmp_path / "iss.tle"
     _stale_cache(cache, SAMPLE_TLE_TEXT)
 
-    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
         raise requests.ConnectTimeout(f"connect timeout {url}")
 
-    import logging
-    with (
-        caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch("generator.main.requests.get", side_effect=fake_get),
-    ):
-        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, sources=_client(cache, transport))
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert cache.read_text() == SAMPLE_TLE_TEXT
     assert any(
@@ -788,19 +787,73 @@ def test_fetch_tle_returns_fresh_tle_when_cache_is_not_writable(
     cache.chmod(0o444)
     line1, line2 = _iss_lines("24291.79041667")
 
-    import logging
-    with (
-        caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch(
-            "generator.main.requests.get",
-            return_value=_FakeResponse(f"{line1}\n{line2}\n"),
-        ),
-    ):
-        tle = fetch_tle(CELESTRAK_URL, cache, ttl_hours=1.0)
+    def transport(url: str, budget_s: float) -> TextStream:
+        del url, budget_s
+        return TextStream(f"{line1}\n{line2}\n")
+
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(CELESTRAK_URL, cache, sources=_client(cache, transport))
     assert tle.line1 == line1
     assert tle.line2 == line2
     assert cache.read_text() == SAMPLE_TLE_TEXT
     assert any("cache write failed" in record.message.lower() for record in caplog.records)
+
+
+def test_equal_epoch_logs_info_once_and_touches_mtime(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    cache.write_text(SAMPLE_TLE_TEXT)
+    original = cache.read_text()
+    epoch = TLE.from_text(original).epoch
+    now = epoch + timedelta(hours=1)
+    os.utime(cache, (now.timestamp() - 10_000, now.timestamp() - 10_000))
+    calls: list[str] = []
+    line1, line2 = _iss_lines("24290.79041667")
+    body = f"{line1}\n{line2}\n"
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream(body)
+
+    with caplog.at_level(logging.INFO, logger="generator.main"):
+        tle = fetch_tle(
+            _ORDERED_TLE_URLS,
+            cache,
+            now=now,
+            sources=_client(cache, transport),
+        )
+    assert tle.line1 == original.strip().splitlines()[1]
+    assert cache.read_text() == original
+    assert calls == [CELESTRAK_URL]
+    infos = [record for record in caplog.records if record.levelno == logging.INFO]
+    assert len(infos) == 1
+    assert "no newer TLE" in infos[0].message
+    assert not any("failed from all sources" in record.message for record in caplog.records)
+    assert cache.stat().st_mtime == pytest.approx(now.timestamp(), abs=1e-3)
+
+
+def test_expiring_cache_walks_past_a_throttle(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "iss.tle"
+    cache.write_text(SAMPLE_TLE_TEXT)
+    epoch = TLE.from_text(SAMPLE_TLE_TEXT).epoch
+    calls: list[str] = []
+    line1, line2 = _iss_lines("24290.79041667")
+    body = f"{line1}\n{line2}\n"
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream(body)
+
+    sources = _client(cache, transport)
+    fetch_tle(_ORDERED_TLE_URLS, cache, now=epoch + timedelta(hours=1), sources=sources)
+    assert calls == [CELESTRAK_URL]
+    fetch_tle(_ORDERED_TLE_URLS, cache, now=epoch + timedelta(hours=23), sources=sources)
+    assert calls == [CELESTRAK_URL, WHERETHEISS_URL]
 
 
 # --------------------------------------------------------------------------

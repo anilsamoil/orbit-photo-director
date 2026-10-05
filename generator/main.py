@@ -13,6 +13,7 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -20,8 +21,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-
-import requests
 
 from . import __version__
 from .ascent import (
@@ -87,6 +86,7 @@ from .orbit import (
     tle_age_hours,
 )
 from .score import compute_score, top_n
+from .tle_sources import Answered, BackedOff, Failed, Throttled, TleSources
 from .tracked import unavailable_artifact_text, write_tracked_artifact
 from .water_mask import load_water_mask
 
@@ -130,86 +130,133 @@ def _tle_text_from_body(body: str) -> str:
     return f"{line1.strip()}\n{line2.strip()}\n"
 
 
-def _require_newer_iss_tle(text: str, prior: TLE | None) -> TLE:
-    tle = TLE.from_text(text)
+def _parse_iss_reply(status: int, text: str) -> TLE:
+    if status != 200:
+        raise ValueError(f"HTTP {status}")
+    tle = TLE.from_text(_tle_text_from_body(text))
     if not (_tle_checksum_ok(tle.line1) and _tle_checksum_ok(tle.line2)):
         raise ValueError("TLE checksum failed")
     norad1 = tle.line1[2:7]
     norad2 = tle.line2[2:7]
     if norad1 != ISS_NORAD_ID or norad2 != ISS_NORAD_ID:
         raise ValueError(f"TLE NORAD id {norad1}/{norad2} is not {ISS_NORAD_ID}")
-    if prior is not None and tle.epoch <= prior.epoch:
-        raise ValueError(
-            f"TLE epoch {tle.epoch.isoformat()} is not newer than cached {prior.epoch.isoformat()}"
+    return tle
+
+
+def _read_prior(cache_path: Path) -> TLE | None:
+    if not cache_path.exists():
+        return None
+    try:
+        return TLE.from_text(cache_path.read_text())
+    except (ValueError, OSError) as exc:
+        log.warning(
+            "TLE cache parse failed (%s); reboost detection skipped for this tick. "
+            "Cache will be overwritten on successful upstream fetch below.",
+            exc,
+        )
+        return None
+
+
+def _adopt(tle: TLE, label: str, prior: TLE | None, cache_path: Path) -> TLE:
+    try:
+        cache_path.write_text(f"{tle.line1}\n{tle.line2}\n")
+    except OSError as exc:
+        log.warning("TLE cache write failed (%s); returning fetched TLE", exc)
+    log.info("TLE source %s won: epoch %s", label, tle.epoch.isoformat())
+    if detect_reboost(prior, tle):
+        log.warning(
+            "ISS reboost detected: TLE epoch advanced from %s to %s "
+            "(mean motion changed > 0.005 rev/day)",
+            prior.epoch.isoformat() if prior else "<none>",
+            tle.epoch.isoformat(),
         )
     return tle
+
+
+def _touch_cache(cache_path: Path, now: datetime) -> None:
+    try:
+        stamp = now.timestamp()
+        os.utime(cache_path, (stamp, stamp))
+    except OSError as exc:
+        log.warning("TLE cache touch failed (%s)", exc)
+
+
+def _iss_expiring(prior: TLE, now: datetime) -> bool:
+    return freshness_factor(tle_age_hours(prior, now) + 2) < 1
 
 
 def fetch_tle(
     url: str,
     cache_path: Path,
-    ttl_hours: float = 1.0,
     now: datetime | None = None,
+    *,
+    sources: TleSources | None = None,
 ) -> TLE:
+    """Newest acceptable ISS TLE, or the cache when no source has a newer epoch."""
     n = now or datetime.now(tz=UTC)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    if cache_path.exists():
-        age_h = (n.timestamp() - cache_path.stat().st_mtime) / 3600.0
-        if age_h < ttl_hours:
-            return TLE.from_text(cache_path.read_text())
-
-    # Snapshot prior TLE for reboost comparison BEFORE overwriting.
-    # If the cache is corrupted (partial write, disk hiccup), `prior` is
-    # None and detect_reboost returns False — any real reboost in this
-    # tick goes silently undetected. Log a warning so ground-side
-    # support sees the corruption signal even if the next reboost is
-    # missed. V2-P3 fix from TODOS.md (anilsamoilenko 2026-05-17).
-    prior: TLE | None = None
-    if cache_path.exists():
-        try:
-            prior = TLE.from_text(cache_path.read_text())
-        except (ValueError, OSError) as exc:
-            log.warning(
-                "TLE cache parse failed (%s); reboost detection skipped for this tick. "
-                "Cache will be overwritten on successful upstream fetch below.",
-                exc,
-            )
-            prior = None
-
+    prior = _read_prior(cache_path)
+    client = sources if sources is not None else TleSources(cache_path.parent)
+    expiring = prior is not None and _iss_expiring(prior, n)
+    configured = _tle_source_urls(url)
+    confirmed: list[str] = []
     errors: list[str] = []
-    last_exc: Exception | None = None
-    for source_url in _tle_source_urls(url):
+    saw_older = False
+    vouched = False
+    for source_url in configured:
         label = urlparse(source_url).netloc or source_url
-        try:
-            resp = requests.get(source_url, timeout=TLE_SOURCE_TIMEOUT_SECONDS)
-            resp.raise_for_status()
-            new_tle = _require_newer_iss_tle(_tle_text_from_body(resp.text), prior)
-        except (requests.RequestException, ValueError) as exc:
-            log.warning("TLE source %s failed: %s", label, exc)
-            errors.append(f"{label}: {exc}")
-            last_exc = exc
-            continue
-        try:
-            cache_path.write_text(f"{new_tle.line1}\n{new_tle.line2}\n")
-        except OSError as exc:
-            log.warning("TLE cache write failed (%s); returning fetched TLE", exc)
-        log.info("TLE source %s won: epoch %s", label, new_tle.epoch.isoformat())
-        if detect_reboost(prior, new_tle):
+        reply = client.ask(
+            source_url,
+            _parse_iss_reply,
+            budget_s=TLE_SOURCE_TIMEOUT_SECONDS,
+            lift_answer_rest=prior is None,
+        )
+        if isinstance(reply, Answered):
+            fetched = reply.value
+            if prior is None or fetched.epoch > prior.epoch:
+                return _adopt(fetched, label, prior, cache_path)
+            if prior is not None and fetched.epoch == prior.epoch:
+                confirmed.append(label)
+                if not expiring:
+                    break
+                continue
+            assert prior is not None
             log.warning(
-                "ISS reboost detected: TLE epoch advanced from %s to %s "
-                "(mean motion changed > 0.005 rev/day)",
-                prior.epoch.isoformat() if prior else "<none>",
-                new_tle.epoch.isoformat(),
+                "TLE source %s epoch %s is not newer than cached %s",
+                label,
+                fetched.epoch.isoformat(),
+                prior.epoch.isoformat(),
             )
-        return new_tle
-
-    log.warning(
-        "TLE fetch failed from all sources (%s); using cached if present",
-        "; ".join(errors) if errors else "no sources configured",
-    )
+            saw_older = True
+            continue
+        if isinstance(reply, Throttled):
+            vouched = True
+            if not expiring:
+                break
+            continue
+        if isinstance(reply, BackedOff):
+            continue
+        if not isinstance(reply, Failed):
+            raise RuntimeError(f"unexpected TLE reply {type(reply).__name__}")
+        log.warning("TLE source %s failed: %s", label, reply.reason)
+        errors.append(f"{label}: {reply.reason}")
+    if confirmed and prior is not None:
+        log.info(
+            "no newer TLE: %s still at epoch %s",
+            ", ".join(confirmed),
+            prior.epoch.isoformat(),
+        )
+        _touch_cache(cache_path, n)
+    elif not vouched and not saw_older and (errors or not configured):
+        log.warning(
+            "TLE fetch failed from all sources (%s); using cached if present",
+            "; ".join(errors) if errors else "no sources configured",
+        )
+    if prior is not None:
+        return prior
     if cache_path.exists():
         return TLE.from_text(cache_path.read_text())
-    raise RuntimeError("TLE fetch failed and no cache available") from last_exc
+    raise RuntimeError("TLE fetch failed and no cache available")
 
 
 class CombinedCloudSampler:
@@ -819,7 +866,8 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
 
     # 1. TLE
     tle_cache = settings.cache_dir / "iss.tle"
-    tle = fetch_tle(settings.tle_url, tle_cache, ttl_hours=1.0, now=n)
+    tle_sources = TleSources(settings.cache_dir)
+    tle = fetch_tle(settings.tle_url, tle_cache, now=n, sources=tle_sources)
     age_h = tle_age_hours(tle, n)
     if age_h > TLE_HARD_FAIL_HOURS:
         # Predictions will be off by hundreds of km. Better to fail loudly than
@@ -1206,7 +1254,7 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
 
     tracked_path = v_dir / "tracked.json"
     try:
-        write_tracked_artifact(settings.cache_dir, n, tracked_path)
+        write_tracked_artifact(settings.cache_dir, n, tracked_path, sources=tle_sources)
     except OSError as exc:
         log.warning("tracked objects failed (%s); publishing the no-data state", exc)
         tracked_path.write_text(unavailable_artifact_text())

@@ -9,23 +9,20 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
-import requests
-
 from .manifest import utcnow_iso
 from .orbit import TLE
+from .tle_sources import Answered, BackedOff, Failed, Throttled, TleSources
 
 log = logging.getLogger(__name__)
 
 GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
 SUPGP_URL = "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php"
-
-GetText = Callable[[str, float], tuple[int, str]]
+TRACKED_QUERY_BUDGET_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -103,11 +100,6 @@ def canonical_intldes(value: str) -> str:
     return text
 
 
-def http_get(url: str, timeout: float = 15.0) -> tuple[int, str]:
-    resp = requests.get(url, timeout=timeout)
-    return resp.status_code, resp.text
-
-
 def parse_element_sets(text: str, source: str) -> list[ElementSet]:
     """Every 2LE or 3LE in a CelesTrak body. The name line is kept."""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -153,32 +145,42 @@ def resolve_spec(
     spec: TrackedSpec,
     cache_dir: Path,
     now: datetime,
-    get: GetText,
+    sources: TleSources,
 ) -> TrackedRecord:
     candidates: list[ElementSet] = []
     saw_error = False
     for source, url in query_urls(spec):
-        try:
-            status, text = get(url, 15.0)
-        except OSError as exc:
-            log.warning("tracked query failed for %s: %s", url, exc)
+        reply = sources.ask(
+            url,
+            _reply_judge(source),
+            budget_s=TRACKED_QUERY_BUDGET_SECONDS,
+        )
+        if isinstance(reply, Answered):
+            candidates.extend(element for element in reply.value if _matches(spec, element))
+            continue
+        if isinstance(reply, Throttled):
+            continue
+        if isinstance(reply, BackedOff):
             saw_error = True
             continue
-        kind = _classify(status, text)
-        if kind == "error":
-            saw_error = True
-            continue
-        if kind == "empty":
-            continue
-        parsed = parse_element_sets(text, source)
-        if not parsed:
-            saw_error = True
-            continue
-        candidates.extend(element for element in parsed if _matches(spec, element))
+        if not isinstance(reply, Failed):
+            raise RuntimeError(f"unexpected TLE reply {type(reply).__name__}")
+        log.warning("tracked query failed for %s: %s", url, reply.reason)
+        saw_error = True
 
     if candidates:
         chosen = _select(spec, candidates, now)
         if isinstance(chosen, TrackedElements):
+            kept = _newer_cached(spec, cache_dir, chosen.elements, now)
+            if kept is not None:
+                return TrackedElements(
+                    id=spec.id,
+                    label=spec.label,
+                    color=spec.color,
+                    elements=kept,
+                    age_hours=_age_hours(kept.epoch, now),
+                    from_cache=True,
+                )
             _write_cache(_cache_path(cache_dir, spec.id), chosen.elements)
         return chosen
 
@@ -205,10 +207,10 @@ def write_tracked_artifact(
     cache_dir: Path,
     now: datetime,
     dest: Path,
-    get: GetText | None = None,
+    sources: TleSources | None = None,
 ) -> None:
-    getter = http_get if get is None else get
-    records = [_resolve_one(spec, cache_dir, now, getter) for spec in TRACKED_SPECS]
+    client = sources if sources is not None else TleSources(cache_dir)
+    records = [_resolve_one(spec, cache_dir, now, client) for spec in TRACKED_SPECS]
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(_dump(records))
 
@@ -225,13 +227,44 @@ def _resolve_one(
     spec: TrackedSpec,
     cache_dir: Path,
     now: datetime,
-    get: GetText,
+    sources: TleSources,
 ) -> TrackedRecord:
     try:
-        return resolve_spec(spec, cache_dir, now, get)
+        return resolve_spec(spec, cache_dir, now, sources)
     except OSError as exc:
         log.warning("tracked resolve failed for %s: %s", spec.id, exc)
         return TrackedUnavailable(spec.id, spec.label, spec.color, "lookup_failed")
+
+
+def _reply_judge(source: str):
+    def judge(status: int, text: str) -> list[ElementSet]:
+        kind = _classify(status, text)
+        if kind == "empty":
+            return []
+        if kind == "error":
+            raise ValueError(f"HTTP {status}")
+        found = parse_element_sets(text, source)
+        if not found:
+            raise ValueError("no readable element sets")
+        return found
+
+    return judge
+
+
+def _newer_cached(
+    spec: TrackedSpec,
+    cache_dir: Path,
+    winner: ElementSet,
+    now: datetime,
+) -> ElementSet | None:
+    cached = _read_cache(_cache_path(cache_dir, spec.id))
+    if cached is None or not _matches(spec, cached):
+        return None
+    if _age_hours(cached.epoch, now) > spec.max_age_hours:
+        return None
+    if cached.epoch <= winner.epoch:
+        return None
+    return cached
 
 
 def _dump(records: list[TrackedRecord]) -> str:
