@@ -112,23 +112,20 @@ function buildAccountSection(account: AccountProfile): HTMLElement {
     return section;
   }
 
+  if (account.localOnly) return buildLocalPickerSection();
+
   const own = getSignedInAccountProfile();
   const managingCrew = own !== null && own.name !== account.name;
-  const onOwn = own !== null && own.name === account.name;
   heading.textContent = `${account.isVerified === false ? 'Active profile' : managingCrew ? 'Crew profile' : 'Your profile'} · ${account.displayName}`;
-  info.textContent = account.localOnly
-    ? 'This copy has no Google sign-in. Your saved targets and ratings stay on this device.'
-    : account.isVerified === false
-      ? 'Offline · using this tab’s last verified profile. Reconnect and reload to sync.'
-      : managingCrew
-        ? `Signed in as ${own.displayName}. You are managing ${account.displayName}’s targets, settings and ratings.`
-        : 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.';
+  info.textContent = account.isVerified === false
+    ? 'Offline · using this tab’s last verified profile. Reconnect and reload to sync.'
+    : managingCrew
+      ? `Signed in as ${own.displayName}. You are managing ${account.displayName}’s targets, settings and ratings.`
+      : 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.';
   section.append(heading, info);
 
   const authorized = getAuthorizedProfiles();
-  const showAuthorizedSelect = authorized.length > 1
-    || (onOwn && account.isVerified !== false && authorized.length >= 1);
-  if (showAuthorizedSelect) {
+  if (authorized.length > 1) {
     const row = document.createElement('div');
     row.className = 'profile-row';
     const label = document.createElement('label');
@@ -142,11 +139,10 @@ function buildAccountSection(account: AccountProfile): HTMLElement {
       if (!suppressPickerChange && select.value !== readActiveProfileName()) switchToProfile(select.value);
     });
     row.append(label, select);
-    section.append(row, authorizedList());
+    section.append(row);
   } else if (account.isVerified !== false) {
     info.textContent = 'Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.';
   }
-  if (onOwn && account.isVerified !== false && authorized.length < 2) appendLocalCreateDelete(section);
   if (account.name === 'jessica') {
     const sources = document.createElement('p');
     const link = document.createElement('a');
@@ -156,19 +152,6 @@ function buildAccountSection(account: AccountProfile): HTMLElement {
     section.appendChild(sources);
   }
   return section;
-}
-
-function authorizedList(): HTMLElement {
-  const list = document.createElement('ul');
-  list.id = 'profile-authorized-list';
-  list.className = 'profile-authorized-list';
-  const own = getSignedInAccountProfile();
-  for (const profile of getAuthorizedProfiles()) {
-    const item = document.createElement('li');
-    item.textContent = profile.name === own?.name ? `${profile.displayName} (Your profile)` : profile.displayName;
-    list.appendChild(item);
-  }
-  return list;
 }
 
 function buildLocalPickerSection(): HTMLElement {
@@ -258,11 +241,6 @@ function appendLocalCreateDelete(section: HTMLElement): void {
     }
     if (listProfiles().includes(name)) {
       errorEl.textContent = `Profile "${name}" already exists.`;
-      return;
-    }
-    const account = getAccountProfile();
-    if (account && !canSelectProfile(name)) {
-      errorEl.textContent = 'That profile is not on this account.';
       return;
     }
     try {
@@ -404,7 +382,8 @@ function readActiveProfileName(): string {
 
 export function switchToProfile(name: string): void {
   if (isRosterProfile(name)) return;
-  if (getAccountProfile() && !canSelectProfile(name)) return;
+  const account = getAccountProfile();
+  if (account && !account.localOnly && !canSelectProfile(name)) return;
   if (!isValidProfileName(name)) return;
   try {
     const url = new URL(window.location.href);

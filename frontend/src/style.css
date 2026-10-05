@@ -2245,11 +2245,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 .profile-btn:hover { filter: brightness(1.15); }
 .profile-btn.danger { color: var(--red, #ff6464); border-color: rgba(255, 100, 100, 0.5); }
-.profile-authorized-list {
-  margin: 0;
-  padding-left: 1.2rem;
-  font-size: 0.85rem;
-}
 .profile-error {
   color: var(--red, #ff6464);
   font-size: 0.85rem;

@@ -90,16 +90,30 @@ const ERROR_MESSAGES: Record<string, string> = {
  *  element from index.html so we don't duplicate the toast plumbing
  *  main.ts already owns. Falls back silently when the element isn't
  *  mounted (test envs without DOM fixtures). */
+const toastTimers = new Set<number>();
+
+/** Drops toast timers before the test window is torn down. */
+export function _clearToastTimersForTests(): void {
+  for (const id of toastTimers) window.clearTimeout(id);
+  toastTimers.clear();
+}
+
 function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success'): void {
   const el = document.getElementById('toast');
   if (!el) return;
   el.className = `toast ${kind} show`;
   el.textContent = text;
   el.hidden = false;
-  window.setTimeout(() => {
+  const fade = window.setTimeout(() => {
+    toastTimers.delete(fade);
     el.classList.remove('show');
-    window.setTimeout(() => { el.hidden = true; }, 250);
+    const hide = window.setTimeout(() => {
+      toastTimers.delete(hide);
+      el.hidden = true;
+    }, 250);
+    toastTimers.add(hide);
   }, 2400);
+  toastTimers.add(fade);
 }
 
 /** Re-render the CRUD section for the given profile. Idempotent —

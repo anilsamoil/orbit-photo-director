@@ -1115,6 +1115,15 @@ async function handleHideAction(p: PassEntry): Promise<void> {
 
 let toastFadeTimer: number | null = null;
 let toastHideTimer: number | null = null;
+
+/** Drops toast timers before the test window is torn down. */
+export function _clearToastTimersForTests(): void {
+  if (toastFadeTimer !== null) window.clearTimeout(toastFadeTimer);
+  if (toastHideTimer !== null) window.clearTimeout(toastHideTimer);
+  toastFadeTimer = null;
+  toastHideTimer = null;
+}
+
 function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success'): void {
   const el = document.getElementById('toast');
   if (!el) return;

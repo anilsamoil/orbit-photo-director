@@ -349,6 +349,12 @@ function startProxy(home) {
         json(res, 401, { error: 'unauthorized' });
         return;
       }
+      const local = (req.headers.cookie ?? '').split(';').some((part) => part.trim() === 'opd-verify-session=local');
+      if (local) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end('missing');
+        return;
+      }
       json(res, 200, { ok: true, profile: { name: 'anil', displayName: 'Anil' } });
       return;
     }

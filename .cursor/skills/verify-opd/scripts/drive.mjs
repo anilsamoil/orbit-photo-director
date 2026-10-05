@@ -3753,7 +3753,7 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
     })()`,
     'profile pane',
   );
-  await proveProfilePicker(send, evidenceDir, viewport);
+  await proveProfilePicker(send, evidenceDir, viewport, baseUrl);
   await evaluate(send, `(() => {
     const slider = document.getElementById('profile-threshold-slider');
     slider.value = '800';
@@ -3871,31 +3871,75 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
   return `profile: picker, threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, 2035 ${far.kind}`;
 }
 
-async function proveProfilePicker(send, evidenceDir, viewport, shotSuffix = '') {
-  const name = (base) => (shotSuffix ? `${base}-${shotSuffix}` : base);
+const SIGNED_IN_PICKER = `(() => {
+  const select = document.getElementById('profile-picker-select');
+  const info = document.querySelector('#profile-picker-section p')?.textContent || '';
+  const count = select ? select.options.length : 0;
+  if (document.getElementById('profile-new-btn') || document.getElementById('profile-delete-btn')) return null;
+  if (!info.includes('Google account')) return null;
+  if (count === 1 || (select && count < 2)) return null;
+  return { ok: true, count, info };
+})()`;
+
+async function proveProfilePicker(send, evidenceDir, viewport, baseUrl) {
+  await waitFor(send, SIGNED_IN_PICKER, 'signed-in profile picker', 20000);
+  await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
+  await shot(send, evidenceDir, 'profile-picker');
+  if (viewport && viewport.width === 402 && viewport.height === 874) {
+    await setViewport(send, 874, 402, true);
+    await waitFor(send, SIGNED_IN_PICKER, 'signed-in profile picker landscape', 20000);
+    await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
+    await shot(send, evidenceDir, 'profile-picker-land');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+  await proveLocalProfilePicker(send, evidenceDir, viewport, baseUrl);
+}
+
+async function proveLocalProfilePicker(send, evidenceDir, viewport, baseUrl) {
+  await setSessionCookie(send, 'local');
+  await send('Page.navigate', { url: `${baseUrl}/?e2e` });
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('status-banner')?.textContent || '';
+      return text.includes('Last updated') ? { ok: true } : null;
+    })()`,
+    'local profile app',
+    30000,
+  );
+  await click(send, '#tab-profile');
   await waitFor(
     send,
     `(() => {
       const select = document.getElementById('profile-picker-select');
-      const options = select ? [...select.options].map((option) => option.textContent || '') : [];
-      const list = [...document.querySelectorAll('#profile-authorized-list li')].map((item) => item.textContent || '');
-      const newer = document.getElementById('profile-new-btn')?.textContent;
-      const deleter = document.getElementById('profile-delete-btn')?.textContent;
-      if (!select || !options.some((item) => item.includes('Anil'))) return null;
-      if (newer !== 'New profile' || deleter !== 'Delete this profile') return null;
-      if (!list.some((item) => item.includes('Anil'))) return null;
-      return { ok: true, options, list };
+      if (!select || select.options.length < 1) return null;
+      if (document.getElementById('profile-new-btn')?.textContent !== 'New profile') return null;
+      if (document.getElementById('profile-delete-btn')?.textContent !== 'Delete this profile') return null;
+      return { ok: true };
     })()`,
-    'profile picker',
+    'local profile picker',
     20000,
   );
   await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
-  await shot(send, evidenceDir, name('profile-picker'));
-  if (!shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
+  await shot(send, evidenceDir, 'profile-picker-local');
+  if (viewport && viewport.width === 402 && viewport.height === 874) {
     await setViewport(send, 874, 402, true);
-    await proveProfilePicker(send, evidenceDir, { width: 874, height: 402, mobile: true }, 'land');
+    await shot(send, evidenceDir, 'profile-picker-local-land');
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
+  await setSessionCookie(send, '');
+  await send('Page.navigate', { url: `${baseUrl}/?e2e` });
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('status-banner')?.textContent || '';
+      return text.includes('Last updated') ? { ok: true } : null;
+    })()`,
+    'signed-in profile app',
+    30000,
+  );
+  await click(send, '#tab-profile');
+  await waitFor(send, SIGNED_IN_PICKER, 'signed-in profile picker restored', 20000);
 }
 
 async function driveLog(send, evidenceDir, baseUrl) {

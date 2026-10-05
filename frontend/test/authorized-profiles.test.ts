@@ -197,10 +197,38 @@ describe('Profile pane identity', () => {
     expect(document.getElementById('profile-picker-select')).toBeNull();
     expect(document.getElementById('profile-new-btn')).toBeNull();
     expect(document.getElementById('profile-delete-btn')).toBeNull();
-    expect(document.getElementById('profile-authorized-list')).toBeNull();
   });
 
-  it('lists the authorized profiles on the signed-in profile', async () => {
+  it('a local copy with no Google account can create, select, and delete a profile', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('missing', { status: 404, headers: { 'content-type': 'text/plain' } })));
+    const session = await import('../src/profile-session');
+    await session.resolveAccountProfile('http://127.0.0.1:5173/?u=chris');
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    expect(document.getElementById('profile-new-btn')?.textContent).toBe('New profile');
+    expect(document.getElementById('profile-delete-btn')?.textContent).toBe('Delete this profile');
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
+    const input = document.getElementById('profile-new-input') as HTMLInputElement;
+    input.value = 'lee';
+    (document.getElementById('profile-new-btn') as HTMLButtonElement).click();
+    const profiles = await import('../src/profile');
+    expect(profiles.listProfiles()).toContain('lee');
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('lee');
+    expect(reload).toHaveBeenCalledTimes(1);
+    ui.renderProfilePane();
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(expect.arrayContaining(['chris', 'lee']));
+    select.value = 'lee';
+    select.dispatchEvent(new Event('change'));
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('lee');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    ui.renderProfilePane();
+    (document.getElementById('profile-delete-btn') as HTMLButtonElement).click();
+    expect(profiles.loadProfile('chris')).toBeNull();
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('anil');
+  });
+
+  it('lists the authorized profiles on the signed-in profile and offers no New or Delete', async () => {
     expect(await identity('/')).toEqual({
       heading: 'Your profile · Anil',
       info: 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.',
@@ -210,28 +238,22 @@ describe('Profile pane identity', () => {
     expect(Array.from(select.options).map((option) => [option.value, option.textContent])).toEqual([
       ['anil', 'Anil (Your profile)'], ['jessica', 'Jessica Meir'],
     ]);
-    expect([...document.querySelectorAll('#profile-authorized-list li')].map((item) => item.textContent)).toEqual([
-      'Anil (Your profile)', 'Jessica Meir',
-    ]);
+    expect(document.getElementById('profile-new-btn')).toBeNull();
+    expect(document.getElementById('profile-delete-btn')).toBeNull();
   });
 
-  it('shows the select, New profile, Delete this profile, and the authorized list on Anil’s own profile', async () => {
+  it('renders no New or Delete, and no select, when the signed-in account has only itself', async () => {
     await signIn('/', { ok: true, profile: own });
     const profiles = await import('../src/profile');
     profiles.saveProfile(profiles.createDefaultProfile('jack'));
     const ui = await import('../src/profile-ui');
     ui.renderProfilePane();
-    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
-    expect(Array.from(select.options).map((option) => [option.value, option.textContent])).toEqual([
-      ['anil', 'Anil (Your profile)'],
-    ]);
-    expect(document.getElementById('profile-new-btn')?.textContent).toBe('New profile');
-    expect(document.getElementById('profile-delete-btn')?.textContent).toBe('Delete this profile');
-    expect([...document.querySelectorAll('#profile-authorized-list li')].map((item) => item.textContent)).toEqual([
-      'Anil (Your profile)',
-    ]);
+    expect(document.getElementById('profile-picker-select')).toBeNull();
+    expect(document.getElementById('profile-new-btn')).toBeNull();
+    expect(document.getElementById('profile-delete-btn')).toBeNull();
+    expect(document.querySelector('#profile-picker-section p')?.textContent)
+      .toBe('Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.');
     expect(document.getElementById('profile-picker-section')?.textContent).not.toContain('jack');
-    expect(document.getElementById('profile-threshold-slider')).toBeTruthy();
   });
 });
 
