@@ -22,7 +22,7 @@ Preconditions:
 - **Sort.** The Score button gains the active class.
 - **Hide.** The Hide control removes Verify Mesa from the list. Time sort paints the list again and the card stays gone. `removedCuratedIds` in localStorage `opd-profile-anil` contains `verify-mesa`.
 - **Reload.** The script reloads the page and opens Upcoming again. Verify Mesa stays gone, and the same id is still in `removedCuratedIds`.
-- **Another browser.** After `GET /api/browser/profiles/anil/targets` contains `verify-mesa`, a new Chrome profile opens the same proxy. Upcoming does not show Verify Mesa, and its localStorage timestamp matches the GET.
+- **Another browser.** After `GET /api/browser/profiles/anil/targets` lists `verify-mesa` in `removedCuratedIds`, a new Chrome profile opens the same proxy. Upcoming does not show Verify Mesa, and its localStorage timestamp matches the GET.
 - **Proof.** `evidence/upcoming.png` shows Verify Ascent above Verify Mesa. `evidence/upcoming-hidden.png` shows Mesa gone and Ascent still listed. `evidence/upcoming-reloaded.png` shows Mesa still gone.
 
 Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.

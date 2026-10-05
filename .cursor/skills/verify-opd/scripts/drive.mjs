@@ -643,8 +643,36 @@ async function setTleCookie(send, stale) {
   await evaluate(send, assignment);
 }
 
+const BANNER_AGE_LABEL = /<1 min|\d+ min|\d+h \d+m/;
+
+export function bannerAgeNormalized(text) {
+  return String(text).replace(/<1 min|\d+ min|\d+h \d+m/g, 'AGE');
+}
+
+function assertBannerAgeSamples() {
+  const suffix = 'TLE 72h old — live track may drift';
+  const fresh = `Last updated <1 min ago · ${suffix}`;
+  const minute = `Last updated 1 min ago · ${suffix}`;
+  if (bannerAgeNormalized(fresh) !== bannerAgeNormalized(minute)) {
+    throw new Error('banner age normalization missed <1 min to 1 min');
+  }
+  if (!bannerAgeNormalized(fresh).includes(suffix) || bannerAgeNormalized(fresh).includes('<1 min')) {
+    throw new Error('banner age normalization changed the TLE suffix');
+  }
+  const held = 'SIGN IN AGAIN — session expired, data frozen 3h 20m ago. Tap here.';
+  const heldNext = 'SIGN IN AGAIN — session expired, data frozen 3h 21m ago. Tap here.';
+  if (bannerAgeNormalized(held) !== bannerAgeNormalized(heldNext) || bannerAgeNormalized(held).includes('3h')) {
+    throw new Error('banner age normalization missed an hour-minute step');
+  }
+}
+
+function bannerAgeToken(text) {
+  return String(text).match(BANNER_AGE_LABEL)?.[0] ?? '';
+}
+
 async function proveStaleTle(send, evidenceDir, baseUrl) {
   const suffix = 'TLE 72h old — live track may drift';
+  assertBannerAgeSamples();
   await setTleCookie(send, true);
   await send('Page.navigate', { url: `${baseUrl}/?e2e&u=anil` });
   const shown = await waitFor(
@@ -660,9 +688,46 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
     30000,
   );
   const before = shown.text;
-  await sleep(1200);
-  const afterTick = await evaluate(send, `document.getElementById('status-banner').textContent`);
-  if (afterTick !== before) throw new Error(`countdown dropped the TLE suffix: ${afterTick}`);
+  const beforeAge = bannerAgeToken(before);
+  if (!beforeAge) throw new Error(`stale TLE banner has no age label: ${before}`);
+  await evaluate(send, `(() => {
+    window.__opdRealNow = Date.now;
+    const base = Date.now();
+    Date.now = () => base + 70000;
+    return true;
+  })()`);
+  let afterTick = before;
+  let afterAge = beforeAge;
+  const started = Date.now();
+  try {
+    while (Date.now() - started < 3000) {
+      afterTick = await evaluate(send, `(() => {
+        const banner = document.getElementById('status-banner');
+        const text = banner ? banner.textContent || '' : '';
+        if (!banner || !banner.classList.contains('banner-orange')) return '';
+        return text;
+      })()`);
+      afterAge = bannerAgeToken(afterTick);
+      if (
+        afterTick.includes(suffix)
+        && afterTick.includes('Last updated')
+        && bannerAgeNormalized(afterTick) === bannerAgeNormalized(before)
+        && afterAge
+        && afterAge !== beforeAge
+      ) {
+        break;
+      }
+      await sleep(100);
+    }
+  } finally {
+    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+  }
+  if (!afterTick.includes(suffix) || bannerAgeNormalized(afterTick) !== bannerAgeNormalized(before)) {
+    throw new Error(`countdown dropped the TLE suffix: ${afterTick}`);
+  }
+  if (!afterAge || afterAge === beforeAge) {
+    throw new Error(`age label did not move across the clock jump: ${beforeAge} -> ${afterAge} (${afterTick})`);
+  }
   await shot(send, evidenceDir, 'banner-tle');
   await setTleCookie(send, false);
   await send('Page.navigate', { url: `${baseUrl}/?e2e&u=anil` });
@@ -676,7 +741,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
     'banner after stale TLE',
     30000,
   );
-  return '72h held';
+  return `72h held, age ${beforeAge} to ${afterAge}`;
 }
 
 async function setSessionCookie(send, value) {
@@ -1737,9 +1802,19 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
         home: row.hasAttribute('data-profile-home'),
         current: row.getAttribute('aria-current'),
       }));
-      const home = rows[0];
-      if (!home || !home.home || home.text !== 'Anil' || home.current !== 'true') return null;
-      if (!rows.some((row) => row.name === 'watkins' && row.text === 'Jessica Watkins (Watty)' && row.current !== 'true')) return null;
+      const expected = [
+        ['anil', 'Anil', true, 'true'],
+        ['watkins', 'Jessica Watkins (Watty)', false, null],
+        ['kutryk', 'Josh Kutryk', false, null],
+        ['delaney', 'Luke Delaney', false, null],
+      ];
+      if (rows.length !== expected.length) return null;
+      for (let i = 0; i < expected.length; i += 1) {
+        const row = rows[i];
+        const want = expected[i];
+        if (!row || row.name !== want[0] || row.text !== want[1] || row.home !== want[2]) return null;
+        if (want[3] === 'true' ? row.current !== 'true' : row.current === 'true') return null;
+      }
       return { ok: true, count: rows.length };
     })()`,
     'profile menu lists Anil above the crew',
@@ -1763,6 +1838,57 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
     })()`,
     'queue restored on Watkins',
     30000,
+  );
+  await click(send, '#tab-profile');
+  await waitFor(
+    send,
+    `(() => {
+      const heading = document.querySelector('#profile-picker-section h3')?.textContent || '';
+      const names = [...document.querySelectorAll('#profile-crud-section .profile-crud-row:not(.profile-crud-chip) .profile-crud-name')].map((el) => el.textContent);
+      const labels = [...document.querySelectorAll('#profile-body button')].map((el) => (el.textContent || '').trim());
+      if (heading !== 'Crew roster · Jessica Watkins (Watty)') return null;
+      if (document.getElementById('profile-picker-select')) return null;
+      if (document.getElementById('profile-new-btn') || document.getElementById('profile-delete-btn')) return null;
+      if (labels.includes('Add target') || labels.includes('Edit') || labels.includes('New profile') || labels.includes('Delete this profile')) return null;
+      if (!names.includes('Lafayette, Colorado hometown') || names.length !== 12) return null;
+      return { ok: true, count: names.length };
+    })()`,
+    'Watkins crew roster is read-only',
+    20000,
+  );
+  await shot(send, evidenceDir, name('profile-crew-watkins'));
+  await click(send, '#profile-badge');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => ({
+        name: row.dataset.profile,
+        text: row.textContent,
+        current: row.getAttribute('aria-current'),
+      }));
+      if (rows.map((row) => row.text).join('|') !== 'Anil|Jessica Watkins (Watty)|Josh Kutryk|Luke Delaney') return null;
+      if (rows[1]?.current !== 'true' || rows[0]?.current === 'true') return null;
+      if (document.getElementById('view')?.className !== 'view-profile') return null;
+      return { ok: true };
+    })()`,
+    'profile menu open on Profile',
+    10000,
+  );
+  await shot(send, evidenceDir, name('profile-menu-on-profile'));
+  await pressKey(send, 'Escape');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || menu.matches(':popover-open')) return null;
+      if (document.getElementById('view')?.className !== 'view-profile') return null;
+      if (new URL(location.href).searchParams.get('u') !== 'watkins') return null;
+      return { ok: true };
+    })()`,
+    'escape closes the profile menu',
+    10000,
   );
   await click(send, '#tab-map');
   await waitFor(
@@ -3541,8 +3667,12 @@ async function proveIssProfileMenuEscape(send, evidenceDir) {
     `(() => {
       const menu = document.getElementById('profile-menu');
       if (!menu || !menu.matches(':popover-open')) return null;
-      const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => row.textContent);
-      if (rows[0] !== 'Anil' || !rows.includes('Jessica Watkins (Watty)') || rows.length !== 4) return null;
+      const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => ({
+        text: row.textContent,
+        current: row.getAttribute('aria-current'),
+      }));
+      if (rows.map((row) => row.text).join('|') !== 'Anil|Jessica Watkins (Watty)|Josh Kutryk|Luke Delaney') return null;
+      if (rows[0]?.current !== 'true') return null;
       return { ok: true };
     })()`,
     'iss profile menu open',
@@ -4007,6 +4137,25 @@ async function proveLocalProfilePicker(send, evidenceDir, viewport, baseUrl) {
     })()`,
     'local profile picker',
     20000,
+  );
+  await evaluate(send, `(() => {
+    const input = document.getElementById('profile-new-input');
+    if (input) input.value = 'watkins';
+    document.getElementById('profile-new-btn')?.click();
+    return true;
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const error = document.getElementById('profile-new-error')?.textContent || '';
+      const names = [...document.querySelectorAll('#profile-picker-select option')].map((opt) => opt.value);
+      if (error !== 'Crew roster profiles come with the app.') return null;
+      if (names.some((name) => name === 'watkins' || name === 'kutryk' || name === 'delaney')) return null;
+      if (new URL(location.href).searchParams.get('u')) return null;
+      return { ok: true };
+    })()`,
+    'local picker refuses roster names',
+    10000,
   );
   await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
   await shot(send, evidenceDir, 'profile-picker-local');
