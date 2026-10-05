@@ -17,6 +17,7 @@ dependencies = [
     "netCDF4>=1.6",
     "Pillow>=10.4",
     "requests>=2.31",
+    "urllib3>=2",
     "structlog>=24.1",
     "platformdirs>=4.0",
 ]

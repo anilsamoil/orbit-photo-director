@@ -9,7 +9,7 @@
 # Scenarios:
 #   network-kill      — drop generator's network for 5 min via pfctl (macOS)
 #   daemon-kill       — kill the running generator daemon process
-#   tle-expire        — manipulate cached TLE mtime to fake 36h+ age
+#   tle-expire        — backdate cached TLE mtime 36h; freshness follows the epoch
 #   earthdata-revoke  — temporarily rename .netrc to simulate auth failure
 #   force-reboot      — request a hard restart (requires sudo, prompts)
 #   stale-cloud       — set cached SatCORPS file mtime to 4h ago
@@ -62,9 +62,9 @@ case "$SCENARIO" in
       echo "[soak] no cached TLE at $TLE"
       exit 1
     fi
-    echo "[soak] backdating TLE mtime to 36h ago..."
+    echo "[soak] backdating TLE mtime to 36h ago. Freshness follows the TLE epoch; mtime does not drive tle_freshness_factor."
     touch -t "$(date -v-36H +%Y%m%d%H%M)" "$TLE"
-    echo "[soak] verify: status.json should show tle_freshness_factor < 1.0 next tick."
+    echo "[soak] verify: tle_freshness_factor follows the TLE epoch and stays put when mtime moves."
     ;;
 
   earthdata-revoke)

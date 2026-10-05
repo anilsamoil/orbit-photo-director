@@ -107,12 +107,30 @@ def repo_with_targets(tmp_path: Path) -> Path:
     return tmp_path
 
 
+class _OfflineTleStream:
+    status = 404
+
+    def __init__(self) -> None:
+        self._done = False
+
+    def read_some(self, timeout_s: float) -> bytes:
+        del timeout_s
+        if self._done:
+            return b""
+        self._done = True
+        return b"No GP data found"
+
+    def close(self) -> None:
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _offline_tracked_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "generator.tracked.http_get",
-        lambda url, timeout=15.0: (404, "No GP data found"),
-    )
+    def transport(url: str, budget_s: float) -> _OfflineTleStream:
+        del url, budget_s
+        return _OfflineTleStream()
+
+    monkeypatch.setattr("generator.tle_sources.open_http", transport)
 
 
 @pytest.fixture
