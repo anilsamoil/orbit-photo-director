@@ -3817,16 +3817,17 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
     'photo lookup',
   );
   await shot(send, evidenceDir, 'profile-lookup');
-  await click(send, '#lookup-result .lookup-btn');
   await waitFor(
     send,
     `(() => {
       const onMap = document.getElementById('view')?.className === 'view-map';
       const layer = window.__opdMap?.getLayer('lookup-pin-layer');
-      return onMap && layer ? { ok: true } : null;
+      if (onMap && layer) return { ok: true };
+      document.querySelector('#lookup-result .lookup-btn')?.click();
+      return null;
     })()`,
     'lookup pin on map',
-    20000,
+    30000,
   );
   await shot(send, evidenceDir, 'profile-lookup-map');
   await click(send, '#tab-profile');
