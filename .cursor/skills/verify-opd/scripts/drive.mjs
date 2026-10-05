@@ -490,7 +490,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
-    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
     else if (feature === 'phone') notes.push(await drivePhone(send, evidenceDir, meta, viewport));
     else if (feature === 'tracked') notes.push(await driveTracked(send, evidenceDir, meta, viewport));
@@ -3742,7 +3742,7 @@ const LAST_GOOD_TLE = {
   at: '2026-09-29T04:10:50.460Z',
 };
 
-async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
+async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
   await click(send, '#tab-profile');
   await waitFor(
     send,
@@ -3753,6 +3753,7 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
     })()`,
     'profile pane',
   );
+  await proveProfilePicker(send, evidenceDir, viewport);
   await evaluate(send, `(() => {
     const slider = document.getElementById('profile-threshold-slider');
     slider.value = '800';
@@ -3867,7 +3868,34 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
   );
   await click(send, '#tab-profile');
   await shot(send, evidenceDir, 'profile-lookup-2035');
-  return `profile: threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, 2035 ${far.kind}`;
+  return `profile: picker, threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, 2035 ${far.kind}`;
+}
+
+async function proveProfilePicker(send, evidenceDir, viewport, shotSuffix = '') {
+  const name = (base) => (shotSuffix ? `${base}-${shotSuffix}` : base);
+  await waitFor(
+    send,
+    `(() => {
+      const select = document.getElementById('profile-picker-select');
+      const options = select ? [...select.options].map((option) => option.textContent || '') : [];
+      const list = [...document.querySelectorAll('#profile-authorized-list li')].map((item) => item.textContent || '');
+      const newer = document.getElementById('profile-new-btn')?.textContent;
+      const deleter = document.getElementById('profile-delete-btn')?.textContent;
+      if (!select || !options.some((item) => item.includes('Anil'))) return null;
+      if (newer !== 'New profile' || deleter !== 'Delete this profile') return null;
+      if (!list.some((item) => item.includes('Anil'))) return null;
+      return { ok: true, options, list };
+    })()`,
+    'profile picker',
+    20000,
+  );
+  await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
+  await shot(send, evidenceDir, name('profile-picker'));
+  if (!shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
+    await setViewport(send, 874, 402, true);
+    await proveProfilePicker(send, evidenceDir, { width: 874, height: 402, mobile: true }, 'land');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
 }
 
 async function driveLog(send, evidenceDir, baseUrl) {

@@ -18,11 +18,19 @@ export class SessionSignInRequired extends Error {
 const CACHE_KEY = 'opd-account-session-v1';
 let account: AccountProfile | null = null;
 let signedInAccount: AccountProfile | null = null;
+let authorizedProfiles: AccountProfile[] = [];
 
 /** Active profile; all personal caches, writes and ratings use this scope. */
 export function getAccountProfile(): AccountProfile | null { return account; }
 /** The Google account's own profile, distinct from a crew profile it manages. */
 export function getSignedInAccountProfile(): AccountProfile | null { return signedInAccount; }
+/** Offline cache never supplies permissions to switch into another profile. */
+export function getAuthorizedProfiles(): AccountProfile[] {
+  return authorizedProfiles.map((profile) => ({ ...profile }));
+}
+export function canSelectProfile(name: string): boolean {
+  return account?.isVerified === true && authorizedProfiles.some((profile) => profile.name === name);
+}
 
 const LOCAL_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -38,6 +46,7 @@ function adoptLocalProfile(name: string): AccountProfile {
   const profile: AccountProfile = { name, displayName: name, isVerified: false, localOnly: true };
   account = profile;
   signedInAccount = profile;
+  authorizedProfiles = [profile];
   try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(profile)); } catch { /* storage disabled */ }
   return profile;
 }
@@ -79,7 +88,10 @@ function resumeOfflineProfile(): AccountProfile | null {
     isVerified: false,
     ...(cached.localOnly ? { localOnly: true } : {}),
   };
-  if (account.localOnly) signedInAccount = account;
+  if (account.localOnly) {
+    signedInAccount = account;
+    authorizedProfiles = [account];
+  }
   return account;
 }
 
@@ -139,6 +151,7 @@ function sessionHref(urlHref: string): string {
 async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
   account = null;
   signedInAccount = null;
+  authorizedProfiles = [];
   // Tab-local storage avoids selecting another account merely because it used
   // this browser previously. Never resume a cache after an HTTP/auth failure.
   if (navigator.onLine === false) {
@@ -175,6 +188,7 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
     try { requested = new URL(urlHref).searchParams.get('u'); } catch { /* use own profile */ }
     account = profiles.find((profile) => profile.name === requested) ?? own;
     signedInAccount = own;
+    authorizedProfiles = profiles;
     try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(account)); } catch { /* storage disabled */ }
     return account;
   } catch (error) {

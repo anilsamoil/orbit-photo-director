@@ -22,14 +22,14 @@ Preconditions:
 - `doctor` prints `ok`.
 - The track fixture includes a TLE. `up` always writes one.
 
-- **Open Profile.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive profile`. The pane text contains Anil and the distance slider exists.
+- **Open Profile.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive profile`. The pane text contains Anil and the distance slider exists. `#profile-picker-select` lists Anil, `#profile-new-btn` reads `New profile`, `#profile-delete-btn` reads `Delete this profile`, and `#profile-authorized-list` names Anil. `evidence/profile-picker.png` is that section. iPhone 17 Pro repeats the check in landscape as `evidence/profile-picker-land.png`.
 - **Threshold.** Set the slider to 800. The display reads `800 km`.
 - **Add a target.** Enter Verify Harbor with the fixture latitude and longitude, then choose Add target. The profile list contains Verify Harbor.
 - **Hidden curated targets.** A `.profile-crud-subhead` in `#profile-body` has text `Hidden curated targets`. The stylesheet uppercases subheads, so `innerText` reads `HIDDEN CURATED TARGETS`. `Your targets` is an earlier subhead of the same class. If `verify-mesa` is not already listed, the script opens Or paste an exact id, enters `verify-mesa`, and chooses Hide. Restore on that chip removes it. The script waits until the GET no longer contains `verify-mesa`, then a new Chrome profile shows Verify Mesa on Upcoming.
 - **Lookup.** Paste the timestamp from `fixtures/meta.json` field `lookupTimestamp` and choose Resolve. The result text contains `ISS at` and the view switches to the map with `lookup-pin-layer`. Pin on map repeats that drop.
 - **Last-good TLE.** The script writes `opd-iss-tle-last-good` with an element set whose epoch is `2026-09-29T04:10:50.460Z`, resolves that timestamp, and requires `TLE age 0.0 h`. That epoch is closer to the photo time than the published track or the bundled set.
 - **2035 lookup.** The script then resolves `2035-06-01T00:00:00.000Z`. The current 2026 element sets still propagate that far, so the chip is `low confidence — TLE age ...` and the line contains `ISS at`. The stale sentence appears when no candidate returns a position and at least one has an SGP4 error. Any other failed lookup says `Calculation failed — TLE may be missing or malformed.` The script accepts either result.
-- **Proof.** `evidence/profile.png`, `evidence/profile-target.png`, `evidence/profile-hidden.png`, `evidence/profile-lookup.png`, `evidence/profile-lookup-map.png`, `evidence/profile-lookup-last-good.png`, and `evidence/profile-lookup-2035.png`.
+- **Proof.** `evidence/profile-picker.png`, `evidence/profile.png`, `evidence/profile-target.png`, `evidence/profile-hidden.png`, `evidence/profile-lookup.png`, `evidence/profile-lookup-map.png`, `evidence/profile-lookup-last-good.png`, and `evidence/profile-lookup-2035.png`.
 - **Devices.** Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 
 ## Gotchas

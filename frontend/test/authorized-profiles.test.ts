@@ -31,11 +31,14 @@ describe('server-authorized profile selection', () => {
     await session.resolveAccountProfile('https://map.astroanil.dev/api/app?u=jessica');
     expect(session.getAccountProfile()).toMatchObject({ ...crew, isVerified: true });
     expect(session.getSignedInAccountProfile()).toMatchObject(own);
+    expect(session.getAuthorizedProfiles().map((profile) => profile.name)).toEqual(['anil', 'jessica']);
+    expect(session.canSelectProfile('jessica')).toBe(true);
   });
 
   it('ignores a copied URL for a profile the signed-in account cannot access', async () => {
     const session = await signIn('/?u=jack');
     expect(session.getAccountProfile()?.name).toBe('anil');
+    expect(session.canSelectProfile('jack')).toBe(false);
     const profiles = await import('../src/profile');
     expect(profiles.loadOrCreateProfileFromURL(window.location.href).name).toBe('anil');
     expect(profiles.loadProfile('jack')).toBeNull();
@@ -44,6 +47,8 @@ describe('server-authorized profile selection', () => {
   it('works with the previous own-profile-only Worker response', async () => {
     const session = await signIn('/?u=jessica', { ok: true, profile: own });
     expect(session.getAccountProfile()?.name).toBe('anil');
+    expect(session.getAuthorizedProfiles()).toHaveLength(1);
+    expect(session.canSelectProfile('jessica')).toBe(false);
   });
 
   it.each([
@@ -55,6 +60,7 @@ describe('server-authorized profile selection', () => {
     await expect(session.resolveAccountProfile()).rejects.toThrow('verify');
     expect(session.getAccountProfile()).toBeNull();
     expect(session.getSignedInAccountProfile()).toBeNull();
+    expect(session.getAuthorizedProfiles()).toEqual([]);
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     await expect(session.resolveAccountProfile()).rejects.toThrow('Connect once');
   });
@@ -65,13 +71,17 @@ describe('server-authorized profile selection', () => {
     await session.resolveAccountProfile('https://map.astroanil.dev/?u=anil');
     expect(session.getAccountProfile()).toMatchObject({ name: 'jessica', isVerified: false });
     expect(session.getSignedInAccountProfile()).toBeNull();
+    expect(session.getAuthorizedProfiles()).toEqual([]);
+    expect(session.canSelectProfile('anil')).toBe(false);
+    expect(session.canSelectProfile('jessica')).toBe(false);
     const { getProfileTargets } = await import('../src/profile-api');
     expect(await getProfileTargets('jessica')).toMatchObject({ ok: false, reason: 'authentication' });
     expect(session.fetch).toHaveBeenCalledTimes(1);
     const ui = await import('../src/profile-ui');
     ui.renderProfilePane();
-    expect(document.querySelector('#profile-identity-section h3')?.textContent).toBe('Active profile · Jessica Meir');
-    expect(document.querySelector('#profile-identity-section p')?.textContent)
+    expect(document.querySelector('#profile-picker-select')).toBeNull();
+    expect(document.querySelector('#profile-picker-section h3')?.textContent).toBe('Active profile · Jessica Meir');
+    expect(document.querySelector('#profile-picker-section p')?.textContent)
       .toBe('Offline · using this tab’s last verified profile. Reconnect and reload to sync.');
   });
 
@@ -80,6 +90,7 @@ describe('server-authorized profile selection', () => {
     session.fetch.mockImplementation(async () => new Response(JSON.stringify({ ok: true, profile: own, profiles: [own] })));
     await session.resolveAccountProfile();
     expect(session.getAccountProfile()?.name).toBe('anil');
+    expect(session.canSelectProfile('jessica')).toBe(false);
   });
 
   it('keeps target API and ratings scoped to the selected crew profile', async () => {
@@ -161,7 +172,7 @@ describe('Profile pane identity', () => {
     await signIn(url);
     const ui = await import('../src/profile-ui');
     ui.renderProfilePane();
-    const section = document.querySelector('#profile-identity-section')!;
+    const section = document.querySelector('#profile-picker-section')!;
     return {
       heading: section.querySelector('h3')?.textContent,
       info: section.querySelector('p')?.textContent,
@@ -177,19 +188,96 @@ describe('Profile pane identity', () => {
     });
   });
 
-  it('names a crew roster profile without a URL hint for leaving it', async () => {
+  it('names a crew roster profile without a picker for creating or deleting it', async () => {
     expect(await identity('/?u=kutryk')).toEqual({
       heading: 'Crew roster · Josh Kutryk',
       info: 'Crew roster profiles come with the app. Settings, ratings and hidden targets stay on this device.',
       link: null,
     });
+    expect(document.getElementById('profile-picker-select')).toBeNull();
+    expect(document.getElementById('profile-new-btn')).toBeNull();
+    expect(document.getElementById('profile-delete-btn')).toBeNull();
+    expect(document.getElementById('profile-authorized-list')).toBeNull();
   });
 
-  it('points the signed-in profile at the name in the top bar', async () => {
+  it('lists the authorized profiles on the signed-in profile', async () => {
     expect(await identity('/')).toEqual({
       heading: 'Your profile · Anil',
-      info: 'Your Google account selects your profile automatically. Use the name in the top bar to open a crew roster profile.',
+      info: 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.',
       link: null,
     });
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    expect(Array.from(select.options).map((option) => [option.value, option.textContent])).toEqual([
+      ['anil', 'Anil (Your profile)'], ['jessica', 'Jessica Meir'],
+    ]);
+    expect([...document.querySelectorAll('#profile-authorized-list li')].map((item) => item.textContent)).toEqual([
+      'Anil (Your profile)', 'Jessica Meir',
+    ]);
+  });
+
+  it('shows the select, New profile, Delete this profile, and the authorized list on Anil’s own profile', async () => {
+    await signIn('/', { ok: true, profile: own });
+    const profiles = await import('../src/profile');
+    profiles.saveProfile(profiles.createDefaultProfile('jack'));
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    expect(Array.from(select.options).map((option) => [option.value, option.textContent])).toEqual([
+      ['anil', 'Anil (Your profile)'],
+    ]);
+    expect(document.getElementById('profile-new-btn')?.textContent).toBe('New profile');
+    expect(document.getElementById('profile-delete-btn')?.textContent).toBe('Delete this profile');
+    expect([...document.querySelectorAll('#profile-authorized-list li')].map((item) => item.textContent)).toEqual([
+      'Anil (Your profile)',
+    ]);
+    expect(document.getElementById('profile-picker-section')?.textContent).not.toContain('jack');
+    expect(document.getElementById('profile-threshold-slider')).toBeTruthy();
+  });
+});
+
+describe('visible crew profile chooser', () => {
+  it('lists Jessica from the server on a fresh device, with clear managing and signed-in labels', async () => {
+    await signIn('/?u=jessica');
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    expect(Array.from(select.options).map((option) => [option.value, option.textContent])).toEqual([
+      ['anil', 'Anil (Your profile)'], ['jessica', 'Jessica Meir'],
+    ]);
+    expect(select.value).toBe('jessica');
+    expect(document.querySelector('#profile-picker-section')?.textContent).toContain('Crew profile · Jessica Meir');
+    expect(document.querySelector('#profile-picker-section')?.textContent).toContain('Signed in as Anil');
+    expect(document.querySelector('#profile-picker-section')?.textContent).toContain('Jessica Meir’s targets, settings and ratings');
+    expect(document.querySelector<HTMLAnchorElement>('#profile-picker-section a')?.getAttribute('href')).toBe('/profile-research/jessica.html');
+    expect(document.querySelector('#profile-new-btn')).toBeNull();
+    expect(document.querySelector('#profile-delete-btn')).toBeNull();
+  });
+
+  it('never adds locally saved unrelated profiles, including during cross-tab refresh', async () => {
+    await signIn();
+    const p = await import('../src/profile');
+    p.saveProfile(p.createDefaultProfile('jack'));
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    p.saveProfile(p.createDefaultProfile('josh'));
+    ui.refreshPickerFromExternalChange();
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['anil', 'jessica']);
+    expect(select.value).toBe('anil');
+  });
+
+  it('switching through the chooser changes the requested profile and reloads exactly once', async () => {
+    await signIn();
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    select.value = 'jessica';
+    select.dispatchEvent(new Event('change'));
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('jessica');
+    expect(reload).toHaveBeenCalledTimes(1);
+    ui.switchToProfile('jack');
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('jessica');
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

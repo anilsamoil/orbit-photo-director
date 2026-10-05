@@ -88,7 +88,7 @@ it('the account pane names only the signed-in account, never other locally saved
   p.loadOrCreateProfileFromURL('https://map.astroanil.dev/?u=anil');
   const ui = await import('../src/profile-ui');
   ui.renderProfilePane();
-  const identity = document.querySelector('#profile-identity-section');
+  const identity = document.querySelector('#profile-picker-section');
   expect(identity?.querySelector('h3')?.textContent).toBe('Your profile · Jessica');
   expect(identity?.textContent).not.toContain('anil');
 });
