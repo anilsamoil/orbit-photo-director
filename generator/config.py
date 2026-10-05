@@ -67,6 +67,9 @@ ENCOUNTER_PREROLL_SECONDS = 600  # 10 min — generous vs the ~2-4 min crossing
 # TLE freshness
 TLE_WARN_AGE_HOURS = 24.0
 TLE_FLOOR_FRESHNESS = 0.5
+CELESTRAK_ISS_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE"
+WHERETHEISS_ISS_TLE_URL = "https://api.wheretheiss.at/v1/satellites/25544/tles"
+DEFAULT_TLE_URL = f"{CELESTRAK_ISS_TLE_URL},{WHERETHEISS_ISS_TLE_URL}"
 
 # Sun-glint
 SUN_GLINT_THRESHOLD_DEG = 25.0
@@ -115,10 +118,7 @@ class Settings:
             cache_dir=Path(os.environ.get("OPD_CACHE", root / "data" / "cache")),
             log_dir=Path(os.environ.get("OPD_LOG", root / "data" / "logs")),
             targets_file=root / "targets.json",
-            tle_url=os.environ.get(
-                "OPD_TLE_URL",
-                "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE",
-            ),
+            tle_url=os.environ.get("OPD_TLE_URL", DEFAULT_TLE_URL),
             satcorps_creds_file=Path(
                 os.environ.get(
                     "OPD_CREDS",

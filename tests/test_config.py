@@ -53,6 +53,18 @@ def test_from_env_honors_environment_variables(
     assert s.pass_window_hours == 12
 
 
+def test_default_tle_url_tries_celestrak_then_wheretheiss(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("OPD_TLE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    urls = [part.strip() for part in Settings.from_env().tle_url.split(",") if part.strip()]
+    assert urls == [
+        "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE",
+        "https://api.wheretheiss.at/v1/satellites/25544/tles",
+    ]
+
+
 # --------------------------------------------------------------------------
 # enable_ascent flag (V3-P2 ASCENT)
 # --------------------------------------------------------------------------

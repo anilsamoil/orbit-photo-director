@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -93,8 +94,55 @@ from .water_mask import load_water_mask
 # the queue would mislead the user. Better to publish a stale-flag manifest
 # than confidently-wrong shot times.
 TLE_HARD_FAIL_HOURS = 96.0
+ISS_NORAD_ID = "25544"
+TLE_SOURCE_TIMEOUT_SECONDS = 5.0
 
 log = logging.getLogger(__name__)
+
+
+def _tle_source_urls(url: str) -> list[str]:
+    return [part.strip() for part in url.split(",") if part.strip()]
+
+
+def _tle_checksum_ok(line: str) -> bool:
+    if len(line) < 69 or not line[68].isdigit():
+        return False
+    total = 0
+    for char in line[:68]:
+        if char.isdigit():
+            total += int(char)
+        elif char == "-":
+            total += 1
+    return total % 10 == int(line[68])
+
+
+def _tle_text_from_body(body: str) -> str:
+    stripped = body.lstrip()
+    if not stripped.startswith("{"):
+        return body
+    payload = json.loads(stripped)
+    if not isinstance(payload, dict):
+        raise ValueError("TLE JSON must be an object")
+    line1 = payload.get("line1")
+    line2 = payload.get("line2")
+    if not isinstance(line1, str) or not isinstance(line2, str):
+        raise ValueError("TLE JSON must include string line1 and line2")
+    return f"{line1.strip()}\n{line2.strip()}\n"
+
+
+def _require_newer_iss_tle(text: str, prior: TLE | None) -> TLE:
+    tle = TLE.from_text(text)
+    if not (_tle_checksum_ok(tle.line1) and _tle_checksum_ok(tle.line2)):
+        raise ValueError("TLE checksum failed")
+    norad1 = tle.line1[2:7]
+    norad2 = tle.line2[2:7]
+    if norad1 != ISS_NORAD_ID or norad2 != ISS_NORAD_ID:
+        raise ValueError(f"TLE NORAD id {norad1}/{norad2} is not {ISS_NORAD_ID}")
+    if prior is not None and tle.epoch <= prior.epoch:
+        raise ValueError(
+            f"TLE epoch {tle.epoch.isoformat()} is not newer than cached {prior.epoch.isoformat()}"
+        )
+    return tle
 
 
 def fetch_tle(
@@ -103,13 +151,6 @@ def fetch_tle(
     ttl_hours: float = 1.0,
     now: datetime | None = None,
 ) -> TLE:
-    """Fetch latest TLE from Celestrak, cache to disk. If cache fresh, use it.
-
-    Side effect: when fetching a NEW TLE, compares it to the previous cached one
-    and logs a warning if a likely reboost is detected (mean motion change >
-    0.005 rev/day). Reboost detection lets ground-side support know when the new
-    TLE arrived and validates that pass times are now trustworthy.
-    """
     n = now or datetime.now(tz=UTC)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     if cache_path.exists():
@@ -135,16 +176,24 @@ def fetch_tle(
             )
             prior = None
 
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        text = resp.text
-        # Parse FIRST. If the upstream returned a CDN error page or HTML
-        # captured as 200, TLE.from_text raises and we fall through to the
-        # cached copy below. Writing the cache BEFORE parsing would replace
-        # our last good TLE with garbage.
-        new_tle = TLE.from_text(text)
-        cache_path.write_text(text)
+    errors: list[str] = []
+    last_exc: Exception | None = None
+    for source_url in _tle_source_urls(url):
+        label = urlparse(source_url).netloc or source_url
+        try:
+            resp = requests.get(source_url, timeout=TLE_SOURCE_TIMEOUT_SECONDS)
+            resp.raise_for_status()
+            new_tle = _require_newer_iss_tle(_tle_text_from_body(resp.text), prior)
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("TLE source %s failed: %s", label, exc)
+            errors.append(f"{label}: {exc}")
+            last_exc = exc
+            continue
+        try:
+            cache_path.write_text(f"{new_tle.line1}\n{new_tle.line2}\n")
+        except OSError as exc:
+            log.warning("TLE cache write failed (%s); returning fetched TLE", exc)
+        log.info("TLE source %s won: epoch %s", label, new_tle.epoch.isoformat())
         if detect_reboost(prior, new_tle):
             log.warning(
                 "ISS reboost detected: TLE epoch advanced from %s to %s "
@@ -153,11 +202,14 @@ def fetch_tle(
                 new_tle.epoch.isoformat(),
             )
         return new_tle
-    except Exception as exc:  # noqa: BLE001
-        log.warning("TLE fetch failed: %s; using cached if present", exc)
-        if cache_path.exists():
-            return TLE.from_text(cache_path.read_text())
-        raise RuntimeError("TLE fetch failed and no cache available") from exc
+
+    log.warning(
+        "TLE fetch failed from all sources (%s); using cached if present",
+        "; ".join(errors) if errors else "no sources configured",
+    )
+    if cache_path.exists():
+        return TLE.from_text(cache_path.read_text())
+    raise RuntimeError("TLE fetch failed and no cache available") from last_exc
 
 
 class CombinedCloudSampler:
