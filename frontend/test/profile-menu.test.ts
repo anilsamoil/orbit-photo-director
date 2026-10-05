@@ -9,7 +9,7 @@ const TOPBAR_HTML = readFileSync(resolve('index.html'), 'utf8').match(/<header c
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear(); sessionStorage.clear();
-  document.body.innerHTML = TOPBAR_HTML;
+  document.body.innerHTML = `${TOPBAR_HTML}<span id="personal-targets-legend">Anil's targets</span>`;
   window.history.replaceState({}, '', '/');
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
 });
@@ -43,30 +43,56 @@ describe('top-bar profile menu', () => {
     expect(menu.closest('header')).toBeNull();
   });
 
-  it('lists exactly the three crew roster profiles and marks the active one', async () => {
+  it('lists the signed-in profile above the three crew and marks Watkins', async () => {
     await mountOn('/?u=watkins');
     expect(document.getElementById('profile-badge')?.hidden).toBe(false);
     expect(badgeName()).toBe('Jessica Watkins (Watty)');
     expect(menuRows()).toEqual([
+      ['BUTTON', 'anil', 'Anil', null],
       ['BUTTON', 'watkins', 'Jessica Watkins (Watty)', 'true'],
       ['BUTTON', 'kutryk', 'Josh Kutryk', null],
       ['BUTTON', 'delaney', 'Luke Delaney', null],
     ]);
+    expect(document.querySelector('#profile-menu [data-profile="anil"]')?.hasAttribute('data-profile-home')).toBe(true);
+    expect(document.getElementById('personal-targets-legend')?.textContent).toBe("Jessica Watkins (Watty)'s targets");
     const closers = [...document.querySelectorAll('#profile-menu button')]
       .map((row) => [row.getAttribute('popovertarget'), row.getAttribute('popovertargetaction')]);
-    expect(closers).toEqual([['profile-menu', 'hide'], ['profile-menu', 'hide'], ['profile-menu', 'hide']]);
+    expect(closers).toEqual([['profile-menu', 'hide'], ['profile-menu', 'hide'], ['profile-menu', 'hide'], ['profile-menu', 'hide']]);
   });
 
-  it('lists only the roster for the signed-in profile, never its grants or local profiles', async () => {
+  it('marks Anil when his profile is active and keeps his legend label', async () => {
     const profiles = await import('../src/profile');
     profiles.saveProfile(profiles.createDefaultProfile('jack'));
     await mountOn('/');
     expect(badgeName()).toBe('Anil');
     expect(menuRows()).toEqual([
+      ['BUTTON', 'anil', 'Anil', 'true'],
       ['BUTTON', 'watkins', 'Jessica Watkins (Watty)', null],
       ['BUTTON', 'kutryk', 'Josh Kutryk', null],
       ['BUTTON', 'delaney', 'Luke Delaney', null],
     ]);
+    expect(document.getElementById('personal-targets-legend')?.textContent).toBe("Anil's targets");
+  });
+
+  it('returns to the signed-in profile by removing ?u= and keeping the tab', async () => {
+    await mountOn('/?e2e&u=watkins#launch');
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    document.getElementById('tab-map')!.classList.remove('active');
+    document.getElementById('tab-queue')!.classList.add('active');
+    chooseRow('anil');
+    expect(assign).toHaveBeenCalledTimes(1);
+    const next = new URL(String(assign.mock.calls[0]?.[0]));
+    expect(next.searchParams.has('u')).toBe(false);
+    expect([next.pathname, next.search, next.hash]).toEqual(['/', '?e2e=', '#launch']);
+    expect(sessionStorage.getItem('opd-profile-switch-view')).toBe('tab-queue');
+  });
+
+  it('choosing the signed-in profile again does not navigate', async () => {
+    await mountOn('/');
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    chooseRow('anil');
+    expect(assign).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('opd-profile-switch-view')).toBeNull();
   });
 
   it('switches from Queue to Josh Kutryk with one navigation that keeps the other params and the hash', async () => {
@@ -98,7 +124,7 @@ describe('top-bar profile menu', () => {
     expect(sessionStorage.getItem('opd-profile-switch-view')).toBeNull();
     mountProfileMenu();
     expect(clicks).toHaveBeenCalledTimes(1);
-    expect(menuRows()).toHaveLength(3);
+    expect(menuRows()).toHaveLength(4);
   });
 
   it('leaves the default tab alone when the switch left from it', async () => {

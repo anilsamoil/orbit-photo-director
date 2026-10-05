@@ -1,5 +1,5 @@
 import { isRosterProfile, rosterProfiles } from './crew-roster';
-import { getAccountProfile } from './profile-session';
+import { getAccountProfile, getSignedInAccountProfile } from './profile-session';
 
 const SWITCH_VIEW_KEY = 'opd-profile-switch-view';
 const MENU_WIDTH_PX = 224;
@@ -21,17 +21,14 @@ export function mountProfileMenu(): void {
     : account.displayName;
   badge.replaceChildren(icon, name);
   badge.hidden = false;
-  menu.replaceChildren(...rosterProfiles().map((profile) => {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'profile-menu-item';
-    item.dataset.profile = profile.name;
-    item.setAttribute('popovertarget', 'profile-menu');
-    item.setAttribute('popovertargetaction', 'hide');
-    item.textContent = profile.displayName;
-    if (profile.name === account.name) item.setAttribute('aria-current', 'true');
-    return item;
-  }));
+  const signedIn = getSignedInAccountProfile();
+  const home = signedIn ?? (isRosterProfile(account.name) ? null : account);
+  menu.replaceChildren(
+    ...(home ? [menuButton(home, !isRosterProfile(account.name) && account.name === home.name, true)] : []),
+    ...rosterProfiles().map((profile) => menuButton(profile, profile.name === account.name, false)),
+  );
+  const legend = document.getElementById('personal-targets-legend');
+  if (legend) legend.textContent = personalTargetsLegend(account.displayName);
   menu.addEventListener('beforetoggle', onMenuToggle);
   menu.addEventListener('click', chooseProfile);
   restoreSwitchedView();
@@ -61,15 +58,46 @@ function placeMenu(event: ToggleEvent): void {
   menu.style.left = `${Math.round(Math.max(VIEWPORT_MARGIN_PX, Math.min(rect.left, maxLeft)))}px`;
 }
 
-function chooseProfile(event: MouseEvent): void {
-  const item = event.target instanceof Element ? event.target.closest<HTMLElement>('.profile-menu-item') : null;
-  const name = item?.dataset.profile;
-  if (!name || name === getAccountProfile()?.name) return;
+export function personalTargetsLegend(displayName: string): string {
+  return `${displayName}'s targets`;
+}
+
+function menuButton(profile: { name: string; displayName: string }, active: boolean, home: boolean): HTMLButtonElement {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = home ? 'profile-menu-item profile-menu-home' : 'profile-menu-item';
+  item.dataset.profile = profile.name;
+  if (home) item.setAttribute('data-profile-home', '');
+  item.setAttribute('popovertarget', 'profile-menu');
+  item.setAttribute('popovertargetaction', 'hide');
+  item.textContent = profile.displayName;
+  if (active) item.setAttribute('aria-current', 'true');
+  return item;
+}
+
+function rememberTab(): void {
   const activeTab = document.querySelector('.tabs .tab.active');
   try {
     if (activeTab?.id) sessionStorage.setItem(SWITCH_VIEW_KEY, activeTab.id);
   } catch {}
+}
+
+function chooseProfile(event: MouseEvent): void {
+  const item = event.target instanceof Element ? event.target.closest<HTMLElement>('.profile-menu-item') : null;
+  if (!item) return;
+  const account = getAccountProfile();
   const url = new URL(window.location.href);
+  if (item.hasAttribute('data-profile-home')) {
+    const onHome = account !== null && !isRosterProfile(account.name) && account.name === item.dataset.profile;
+    if (onHome && !url.searchParams.has('u')) return;
+    rememberTab();
+    url.searchParams.delete('u');
+    window.location.assign(url.href);
+    return;
+  }
+  const name = item.dataset.profile;
+  if (!name || name === account?.name) return;
+  rememberTab();
   url.searchParams.set('u', name);
   window.location.assign(url.href);
 }

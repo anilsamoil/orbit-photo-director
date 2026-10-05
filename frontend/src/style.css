@@ -2179,6 +2179,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   text-align: left;
   cursor: pointer;
 }
+.profile-menu-home { border-bottom: 1px solid var(--border); margin-bottom: 4px; }
 .profile-menu-item[aria-current='true'] { color: var(--accent); }
 .profile-menu-item:hover { background: var(--selected); }
 

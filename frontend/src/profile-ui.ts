@@ -57,7 +57,7 @@ function buildIdentitySection(): HTMLElement {
   const info = document.createElement('p');
   if (isRosterProfile(account.name)) {
     heading.textContent = `Crew roster · ${account.displayName}`;
-    info.textContent = `Crew roster profiles come with the app. Settings, ratings and hidden targets stay on this device. Open the map without ?u=${account.name} to return to your own profile.`;
+    info.textContent = 'Crew roster profiles come with the app. Settings, ratings and hidden targets stay on this device.';
   } else {
     const own = getSignedInAccountProfile();
     const managingCrew = own !== null && own.name !== account.name;

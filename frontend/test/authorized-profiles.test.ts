@@ -177,10 +177,10 @@ describe('Profile pane identity', () => {
     });
   });
 
-  it('names a crew roster profile and says how to return to the signed-in profile', async () => {
+  it('names a crew roster profile without a URL hint for leaving it', async () => {
     expect(await identity('/?u=kutryk')).toEqual({
       heading: 'Crew roster · Josh Kutryk',
-      info: 'Crew roster profiles come with the app. Settings, ratings and hidden targets stay on this device. Open the map without ?u=kutryk to return to your own profile.',
+      info: 'Crew roster profiles come with the app. Settings, ratings and hidden targets stay on this device.',
       link: null,
     });
   });
