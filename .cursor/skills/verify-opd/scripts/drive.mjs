@@ -1710,8 +1710,8 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
         current: row.getAttribute('aria-current'),
       }));
       const home = rows[0];
-      if (!home || !home.home || home.text !== 'Anil' || home.current === 'true') return null;
-      if (!rows.some((row) => row.name === 'watkins' && row.text === 'Jessica Watkins (Watty)')) return null;
+      if (!home || !home.home || home.text !== 'Anil' || home.current !== 'true') return null;
+      if (!rows.some((row) => row.name === 'watkins' && row.text === 'Jessica Watkins (Watty)' && row.current !== 'true')) return null;
       return { ok: true, count: rows.length };
     })()`,
     'profile menu lists Anil above the crew',
@@ -1750,7 +1750,17 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
     'Watkins legend and sites',
     45000,
   );
-  await evaluate(send, `(() => { const toggle = document.getElementById('map-chrome-toggle'); if (toggle && (toggle.textContent || '').trim() === 'Controls') toggle.click(); })()`);
+  await ensureMapChromeShown(send);
+  await waitFor(
+    send,
+    `(() => {
+      const legend = document.querySelector('.map-legend');
+      if (!legend || getComputedStyle(legend).display === 'none') return null;
+      return { ok: true, text: legend.innerText };
+    })()`,
+    'Watkins legend visible',
+    10000,
+  );
   await shot(send, evidenceDir, name('profile-legend-watkins'));
   await click(send, '#profile-badge');
   await waitFor(
@@ -1769,27 +1779,37 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
   );
   await shot(send, evidenceDir, name('profile-menu-watkins'));
   await click(send, '#profile-menu [data-profile-home]');
-  await waitForHref(send, /\?e2e=(?:#|$)/, 'anil profile url');
+  await waitForHref(send, /\?e2e=(?:&u=anil)?(?:#|$)/, 'anil profile url');
   await waitFor(
     send,
     `(() => {
       const banner = document.getElementById('status-banner');
       const text = banner ? banner.textContent || '' : '';
       if (!banner || text.includes('Loading')) return null;
-      if (new URL(location.href).searchParams.has('u')) return null;
-      if (!document.getElementById('tab-map')?.classList.contains('active')) return null;
-      if (document.getElementById('view')?.className !== 'view-map') return null;
-      const badge = document.querySelector('#profile-badge .profile-badge-name')?.textContent;
-      if (badge !== 'Anil') return null;
-      const legend = document.getElementById('personal-targets-legend')?.textContent;
-      if (legend !== "Anil's targets") return null;
+      const u = new URL(location.href).searchParams.get('u');
+      const badge = document.querySelector('#profile-badge .profile-badge-name')?.textContent || null;
+      const legend = document.getElementById('personal-targets-legend')?.textContent || null;
       const names = ${myTargetNamesExpr()};
-      if (!names || names.includes('Lafayette, Colorado hometown')) return null;
-      return { ok: true, legend, count: names.length };
+      const state = {
+        href: location.href,
+        u,
+        tab: document.querySelector('.tabs .tab.active')?.id || null,
+        view: document.getElementById('view')?.className || null,
+        badge,
+        legend,
+        count: names ? names.length : null,
+        lafayette: !!(names && names.includes('Lafayette, Colorado hometown')),
+      };
+      const home = u === null || u === 'anil';
+      if (!home || state.tab !== 'tab-map' || state.view !== 'view-map' || badge !== 'Anil' || legend !== "Anil's targets" || !names || state.lafayette) {
+        return state;
+      }
+      return { ok: true, legend, count: names.length, u };
     })()`,
     'map restored on Anil',
     45000,
   );
+  await ensureMapChromeShown(send);
   await shot(send, evidenceDir, name('profile-legend-anil'));
   if (!shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
     await setViewport(send, 874, 402, true);
