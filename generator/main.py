@@ -157,10 +157,12 @@ def _read_prior(cache_path: Path) -> TLE | None:
         return None
 
 
-def _adopt(tle: TLE, label: str, prior: TLE | None, cache_path: Path) -> TLE:
+def _adopt(tle: TLE, label: str, prior: TLE | None, cache_path: Path) -> tuple[TLE, bool]:
+    wrote = True
     try:
         cache_path.write_text(f"{tle.line1}\n{tle.line2}\n")
     except OSError as exc:
+        wrote = False
         log.warning("TLE cache write failed (%s); returning fetched TLE", exc)
     log.info("TLE source %s won: epoch %s", label, tle.epoch.isoformat())
     if detect_reboost(prior, tle):
@@ -170,7 +172,7 @@ def _adopt(tle: TLE, label: str, prior: TLE | None, cache_path: Path) -> TLE:
             prior.epoch.isoformat() if prior else "<none>",
             tle.epoch.isoformat(),
         )
-    return tle
+    return tle, wrote
 
 
 def _touch_cache(cache_path: Path, now: datetime) -> None:
@@ -214,7 +216,10 @@ def fetch_tle(
         if isinstance(reply, Answered):
             fetched = reply.value
             if prior is None or fetched.epoch > prior.epoch:
-                return _adopt(fetched, label, prior, cache_path)
+                adopted, wrote = _adopt(fetched, label, prior, cache_path)
+                if not wrote:
+                    client.clear_rest(source_url)
+                return adopted
             if prior is not None and fetched.epoch == prior.epoch:
                 confirmed.append(label)
                 if not expiring:

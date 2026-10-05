@@ -799,6 +799,54 @@ def test_fetch_tle_returns_fresh_tle_when_cache_is_not_writable(
     assert any("cache write failed" in record.message.lower() for record in caplog.records)
 
 
+def test_unwritable_iss_cache_does_not_rest_the_source(tmp_path: Path) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    cache.chmod(0o444)
+    line1, line2 = _iss_lines("24291.79041667")
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream(f"{line1}\n{line2}\n")
+
+    sources = _client(cache, transport)
+    first = fetch_tle(CELESTRAK_URL, cache, sources=sources)
+    second = fetch_tle(CELESTRAK_URL, cache, sources=sources)
+    assert first.line1 == line1
+    assert second.line1 == line1
+    assert calls == [CELESTRAK_URL, CELESTRAK_URL]
+    assert cache.read_text() == SAMPLE_TLE_TEXT
+
+
+def test_fetch_tle_serves_cache_when_the_ledger_lock_cannot_be_created(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    cache.write_text(SAMPLE_TLE_TEXT)
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        raise OSError("celestrak down")
+
+    sources = _client(cache, transport)
+    tmp_path.chmod(0o555)
+    try:
+        with caplog.at_level(logging.WARNING, logger="generator.tle_sources"):
+            first = fetch_tle(CELESTRAK_URL, cache, sources=sources)
+            second = fetch_tle(CELESTRAK_URL, cache, sources=sources)
+    finally:
+        tmp_path.chmod(0o755)
+    cached_line1 = SAMPLE_TLE_TEXT.strip().splitlines()[1]
+    assert first.line1 == cached_line1
+    assert second.line1 == cached_line1
+    assert calls == [CELESTRAK_URL, CELESTRAK_URL]
+    assert any("ledger unavailable" in record.message for record in caplog.records)
+
+
 def test_equal_epoch_logs_info_once_and_touches_mtime(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
