@@ -8,18 +8,19 @@ export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map',
 
 const DESKTOP = { width: 1400, height: 900, mobile: false };
 const ISS_LENS_FOV_DEG = 81.2;
+const SCENE_SCROLLS = 'scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth';
 const ISS_CLOCK_EXPR = `(() => {
   const root = document.querySelector('[data-iss-clock]');
   if (!root) return { step: 'missing' };
   const names = [...root.children].map((el) => {
     if (el.hasAttribute('data-iss-utc')) return 'utc';
-    if (el.hasAttribute('data-iss-houston')) return 'houston';
     if (el.hasAttribute('data-iss-gmt-day')) return 'gmt-day';
+    if (el.hasAttribute('data-iss-houston')) return 'houston';
     if (el.hasAttribute('data-iss-day-month')) return 'day-month';
     if (el.hasAttribute('data-iss-weekday')) return 'weekday';
     return el.tagName;
   });
-  if (names.join(',') !== 'utc,houston,gmt-day,day-month,weekday') return { step: 'order', names };
+  if (names.join(',') !== 'utc,gmt-day,houston,day-month,weekday') return { step: 'order', names };
   const text = (sel) => document.querySelector(sel)?.textContent || '';
   const utc = text('[data-iss-utc]');
   const status = document.querySelector('[data-iss-status]')?.textContent || '';
@@ -59,7 +60,7 @@ const ISS_CLOCK_EXPR = `(() => {
   const weekdayText = text('[data-iss-weekday]');
   if (weekdayText !== weekday) return { step: 'weekday', weekdayText, weekday };
   if (getComputedStyle(root).pointerEvents !== 'none') return { step: 'pointer' };
-  const lines = ['[data-iss-houston]', '[data-iss-gmt-day]', '[data-iss-day-month]', '[data-iss-weekday]'];
+  const lines = ['[data-iss-gmt-day]', '[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]'];
   for (const sel of lines) {
     const el = document.querySelector(sel);
     if (!el || el.tagName !== 'P') return { step: 'tag', sel };
@@ -69,10 +70,37 @@ const ISS_CLOCK_EXPR = `(() => {
     if (style.pointerEvents !== 'none') return { step: 'line-pointer', sel, pointer: style.pointerEvents };
     if (style.minHeight !== '0px') return { step: 'min', sel, minHeight: style.minHeight };
   }
-  const utcBox = document.querySelector('[data-iss-utc]').getBoundingClientRect();
-  const under = document.querySelector('[data-iss-houston]').getBoundingClientRect();
-  if (under.top + 1 < utcBox.top) return { step: 'under', utcTop: utcBox.top, lineTop: under.top };
-  return { ok: true, utc, houston, gmt, dayMonth, weekday };
+  const boxes = [...root.children].map((el) => el.getBoundingClientRect());
+  for (let i = 1; i < boxes.length; i += 1) {
+    if (boxes[i].top < boxes[i - 1].bottom - 0.5) return { step: 'stack', line: names[i], top: boxes[i].top, above: boxes[i - 1].bottom };
+  }
+  const [utcBox, gmtBox] = boxes;
+  if (Math.abs(gmtBox.top - utcBox.bottom) > 0.5) return { step: 'gmt-under', utcBottom: utcBox.bottom, gmtTop: gmtBox.top };
+  if (Math.abs(gmtBox.bottom - utcBox.top - 44) > 1) return { step: 'band', pair: gmtBox.bottom - utcBox.top };
+  const horizonBox = document.querySelector('[data-iss-preset="horizon"]')?.getBoundingClientRect();
+  if (window.innerWidth > 720 && (!horizonBox || Math.abs(utcBox.top - horizonBox.top) > 1)) return { step: 'band-row', utcTop: utcBox.top, horizonTop: horizonBox?.top };
+  const px = (el) => Number.parseFloat(getComputedStyle(el).fontSize);
+  const [utcPx, gmtPx, ...small] = [...root.children].map(px);
+  const rootPx = px(document.documentElement);
+  if (Math.abs(gmtPx - utcPx) > 0.01) return { step: 'gmt-size', utcPx, gmtPx };
+  if (small.some((size) => Math.abs(size - 0.68 * rootPx) > 0.01)) return { step: 'small-size', small, rootPx };
+  if (!(utcPx > small[0])) return { step: 'size-rank', utcPx, small: small[0] };
+  for (const el of [root, ...root.children]) {
+    if (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight) return { step: 'clip', line: Object.keys(el.dataset).join(','), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+  }
+  for (const sel of ['[data-iss-utc]', '[data-iss-gmt-day]', '[data-iss-edition]']) {
+    const el = document.querySelector(sel);
+    if (!el) return { step: 'ink', sel };
+    const box = el.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const ink = range.getBoundingClientRect();
+    if (!(ink.height > 8)) return { step: 'ink-height', sel, height: ink.height };
+    if (ink.left < box.left - 0.5 || ink.right > box.right + 0.5 || ink.top < box.top - 0.5 || ink.bottom > box.bottom + 0.5) {
+      return { step: 'ink', sel, inkLeft: ink.left, inkTop: ink.top, inkRight: ink.right, inkBottom: ink.bottom, boxLeft: box.left, boxTop: box.top, boxRight: box.right, boxBottom: box.bottom };
+    }
+  }
+  return { ok: true, utc, houston, gmt, dayMonth, weekday, utcPx, smallPx: small[0] };
 })()`;
 
 function selectedSurfaceNames() {
@@ -1895,7 +1923,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
       const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
       const scene = document.querySelector('[data-iss-scene]');
       if (!hostBox || !scene) return null;
-      if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+      if (${SCENE_SCROLLS}) return null;
       const within = (box) => box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
       if (!within(frame) || !within(card) || !within(portBox) || !within(starboardBox)) return null;
       const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
@@ -1925,7 +1953,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
       const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
       const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
       if (!hostBox || !scene || !frame || !card || !port || !starboard) return null;
-      if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+      if (${SCENE_SCROLLS}) return null;
       const within = (box) => box.width > 1 && box.height > 1 && box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
       if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
       const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
@@ -1957,7 +1985,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
       const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
       const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
       if (!hostBox || !scene || !port || !starboard) return null;
-      if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+      if (${SCENE_SCROLLS}) return null;
       const within = (box) => box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
       if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
       return { ok: true };
@@ -1983,7 +2011,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   );
   const zoomed = await proveIssOpticalFov(send, evidenceDir);
   const pan = await proveIssPan(send, evidenceDir, zoomed);
-  await proveIssLandscape(send, evidenceDir);
+  const landscape = await proveIssLandscape(send, evidenceDir);
   const fovAfterLandscape = await evaluate(send, `window.__opdIss?.getVerticalFieldOfView?.()`);
   if (typeof fovAfterLandscape !== 'number' || Math.abs(fovAfterLandscape - zoomed) > 0.5) {
     throw new Error(`iss fov changed across landscape telemetry ${zoomed} -> ${fovAfterLandscape}`);
@@ -2049,7 +2077,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
 }
 
 async function proveIssClock(send) {
@@ -2092,7 +2120,8 @@ const ISS_EDITION_EXPR = `(() => {
   const horizon = document.querySelector('[data-iss-preset="horizon"]');
   const frame = document.querySelector('[data-iss-frame]');
   const toolbar = document.querySelector('[data-iss-toolbar]');
-  if (!(edition instanceof HTMLParagraphElement) || !help || !horizon || !frame || !toolbar) return null;
+  const utcLine = document.querySelector('[data-iss-utc]');
+  if (!(edition instanceof HTMLParagraphElement) || !help || !horizon || !frame || !toolbar || !utcLine) return null;
   if (edition.textContent !== 'Expedition 75 Beta Edition') return null;
   if (frame.contains(edition)) return null;
   if (help.getAttribute('aria-label') !== 'Keyboard shortcuts') return null;
@@ -2100,13 +2129,27 @@ const ISS_EDITION_EXPR = `(() => {
   const editionBox = edition.getBoundingClientRect();
   const helpBox = help.getBoundingClientRect();
   const aimBox = horizon.getBoundingClientRect();
+  const toolbarBox = toolbar.getBoundingClientRect();
   if (editionBox.width < 8 || editionBox.height < 8) return null;
+  if (style.visibility !== 'visible') return { step: 'edition-visibility', visibility: style.visibility };
+  const utcSize = getComputedStyle(utcLine).fontSize;
+  if (style.fontSize !== utcSize) return { step: 'edition-size', edition: style.fontSize, utc: utcSize };
+  if (edition.scrollWidth > edition.clientWidth) return { step: 'edition-clip', scrollWidth: edition.scrollWidth, clientWidth: edition.clientWidth };
   const wide = window.innerWidth > 720;
   if (wide) {
+    const clock = document.querySelector('[data-iss-clock]');
+    if (!clock || toolbar.offsetHeight !== clock.offsetHeight) {
+      return { step: 'toolbar-height', toolbar: toolbar.offsetHeight, clock: clock ? clock.offsetHeight : null, width: window.innerWidth };
+    }
     if (style.position !== 'absolute') return { step: 'wide-position', position: style.position, width: window.innerWidth };
     if (editionBox.top < helpBox.bottom - 2) return { step: 'wide-below-help', editionTop: editionBox.top, helpBottom: helpBox.bottom };
     if (Math.abs(editionBox.left - helpBox.left) > 8) return { step: 'wide-left', editionLeft: editionBox.left, helpLeft: helpBox.left };
     if (editionBox.left >= aimBox.left - 1) return { step: 'wide-aim', editionLeft: editionBox.left, aimLeft: aimBox.left };
+    if (editionBox.bottom > toolbarBox.bottom + 0.5) return { step: 'wide-band', editionBottom: editionBox.bottom, toolbarBottom: toolbarBox.bottom };
+    const covered = [...document.querySelectorAll('[data-iss-presets] > *, [data-iss-aim-help], [data-iss-clock]')]
+      .map((node) => node.getBoundingClientRect())
+      .find((box) => box.width > 0 && box.height > 0 && editionBox.left < box.right - 0.5 && editionBox.right > box.left + 0.5 && editionBox.top < box.bottom - 0.5 && editionBox.bottom > box.top + 0.5);
+    if (covered) return { step: 'wide-cover', edition: [editionBox.left, editionBox.top, editionBox.right, editionBox.bottom], control: [covered.left, covered.top, covered.right, covered.bottom] };
     return { ok: true, place: 'under-help', width: window.innerWidth };
   }
   if (style.position !== 'static') return { step: 'narrow-position', position: style.position, width: window.innerWidth };
@@ -2114,6 +2157,7 @@ const ISS_EDITION_EXPR = `(() => {
   if (!others.length) return { step: 'narrow-siblings' };
   const lowest = Math.max(...others.map((node) => node.getBoundingClientRect().bottom));
   if (editionBox.top < lowest - 2) return { step: 'narrow-row', editionTop: editionBox.top, lowest, width: window.innerWidth };
+  if (editionBox.right > toolbarBox.right + 0.5) return { step: 'narrow-right', editionRight: editionBox.right, toolbarRight: toolbarBox.right };
   return { ok: true, place: 'last-row', width: window.innerWidth };
 })()`;
 
@@ -3366,6 +3410,10 @@ async function proveIssKeyHelp(send, evidenceDir) {
         ['n', 'Straight down'],
       ];
       if (!want.every(([keys, effect]) => rows.some((row) => row[0] === keys && row[1] === effect))) return null;
+      const edition = document.querySelector('[data-iss-edition]');
+      if (!edition) return null;
+      const editionVisibility = getComputedStyle(edition).visibility;
+      if (editionVisibility !== 'hidden') return { step: 'edition-under-sheet', visibility: editionVisibility };
       return { ok: true, rows: rows.length };
     })()`,
     'iss key help open',
@@ -3409,6 +3457,8 @@ function issKeyHelpHeld(before) {
     if (!map?.getCenter || !map.getVerticalFieldOfView || !sheet || !button) return null;
     if (!sheet.hidden) return null;
     if (button.getAttribute('aria-expanded') !== 'false') return null;
+    const edition = document.querySelector('[data-iss-edition]');
+    if (!edition || getComputedStyle(edition).visibility !== 'visible') return null;
     const center = map.getCenter();
     const shift = Math.abs(center.lat - ${before.lat}) + Math.abs(center.lng - ${before.lng});
     if (shift > 0.35) return null;
@@ -3420,8 +3470,23 @@ function issKeyHelpHeld(before) {
   })()`;
 }
 
+const ISS_LANDSCAPE_PANES = [
+  { width: 874, height: 402, insets: { top: 0, left: 62, bottom: 21, right: 62 }, shot: 'iss-landscape-telemetry' },
+  { width: 844, height: 390, insets: { top: 0, left: 47, bottom: 21, right: 47 }, shot: 'iss-landscape-844x390-telemetry' },
+];
+
+const ISS_WIDE_TOOLBAR_EXPR = `(() => {
+  if (window.innerWidth <= 720) return { ok: true, width: window.innerWidth };
+  const toolbar = document.querySelector('[data-iss-toolbar]');
+  const clock = document.querySelector('[data-iss-clock]');
+  if (!toolbar || !clock) return null;
+  if (toolbar.offsetHeight !== clock.offsetHeight) {
+    return { step: 'toolbar-height', toolbar: toolbar.offsetHeight, clock: clock.offsetHeight, width: window.innerWidth };
+  }
+  return { ok: true, height: toolbar.offsetHeight, width: window.innerWidth };
+})()`;
+
 async function proveIssLandscape(send, evidenceDir) {
-  await setViewport(send, 874, 402, true);
   const contained = `(() => {
     const hostBox = document.getElementById('iss-host')?.getBoundingClientRect();
     const scene = document.querySelector('[data-iss-scene]');
@@ -3431,7 +3496,7 @@ async function proveIssLandscape(send, evidenceDir) {
     const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
     if (!hostBox || !scene || !frame || !card || !port || !starboard) return null;
     if (frame.width < 80 || frame.height < 72) return null;
-    if (scene.scrollHeight > scene.clientHeight + 2 || scene.scrollWidth > scene.clientWidth + 2) return null;
+    if (${SCENE_SCROLLS}) return { step: 'scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth] };
     const within = (box) => box.width > 1 && box.height > 1 && box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
     if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
     const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
@@ -3444,21 +3509,43 @@ async function proveIssLandscape(send, evidenceDir) {
     }
     return { ok: true, width: frame.width, height: frame.height, labels: places.length };
   })()`;
-  await waitFor(send, contained, 'iss landscape collapsed', 10000);
-  await waitFor(send, ISS_EDITION_EXPR, 'iss edition in short landscape', 10000);
-  await click(send, '[data-iss-telemetry]');
-  const open = await waitFor(send, contained, 'iss landscape telemetry open', 10000);
-  await sleep(1200);
-  const held = await waitFor(send, contained, 'iss landscape telemetry after ticks', 10000);
-  await shot(send, evidenceDir, 'iss-landscape-telemetry');
-  await click(send, '[data-iss-telemetry]');
-  await waitFor(
-    send,
-    `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
-    'iss landscape telemetry collapsed',
-    10000,
-  );
-  if (open.height < 72 || held.height < 72) throw new Error(`iss landscape frame ${open.height} then ${held.height}`);
+  const held = [];
+  try {
+    for (const pane of ISS_LANDSCAPE_PANES) {
+      await setViewport(send, pane.width, pane.height, true);
+      for (const inset of [null, pane.insets]) {
+        if (inset && !(await safeAreaOverride(send, inset))) {
+          held.push(`${pane.width}x${pane.height} inset unsupported`);
+          continue;
+        }
+        const label = `${pane.width}x${pane.height}${inset ? ' home inset' : ''}`;
+        await waitFor(send, contained, `iss landscape ${label} collapsed`, 10000);
+        await waitFor(send, ISS_CLOCK_EXPR, `iss clock in landscape ${label}`, 10000);
+        await waitFor(send, ISS_EDITION_EXPR, `iss edition in landscape ${label}`, 10000);
+        await waitFor(send, ISS_WIDE_TOOLBAR_EXPR, `iss toolbar height in landscape ${label}`, 10000);
+        await click(send, '[data-iss-telemetry]');
+        const open = await waitFor(send, contained, `iss landscape ${label} telemetry open`, 10000);
+        await waitFor(send, ISS_CLOCK_EXPR, `iss clock in landscape ${label} with telemetry open`, 10000);
+        await waitFor(send, ISS_WIDE_TOOLBAR_EXPR, `iss toolbar height in landscape ${label} with telemetry open`, 10000);
+        await sleep(1200);
+        const after = await waitFor(send, contained, `iss landscape ${label} telemetry after ticks`, 10000);
+        if (!inset) await shot(send, evidenceDir, pane.shot);
+        await click(send, '[data-iss-telemetry]');
+        await waitFor(
+          send,
+          `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+          `iss landscape ${label} telemetry collapsed`,
+          10000,
+        );
+        if (open.height < 72 || after.height < 72) throw new Error(`iss landscape ${label} frame ${open.height} then ${after.height}`);
+        held.push(label);
+      }
+      await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    }
+  } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  }
+  return held.join(', ');
 }
 
 async function driveHelp(send, evidenceDir) {

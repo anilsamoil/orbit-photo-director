@@ -3316,7 +3316,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 [data-iss-utc] {
   position: static;
   margin: 0;
-  min-height: 44px;
+  min-height: calc(44px - 1.15em);
   display: flex;
   align-items: center;
   font-weight: 600;
@@ -3341,21 +3341,29 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   padding: 0;
   min-height: 0;
   min-width: 0;
-  font-size: 0.68rem;
   font-weight: 600;
   line-height: 1.15;
   text-align: right;
   white-space: nowrap;
 }
 
+[data-iss-houston],
+[data-iss-day-month],
+[data-iss-weekday] {
+  font-size: 0.68rem;
+}
+
 [data-iss-edition] {
   position: absolute;
   top: 46px;
   left: 0;
-  z-index: 1;
   color: #f4f7fb;
   pointer-events: none;
   user-select: none;
+}
+
+[data-iss-scene][data-iss-aim-open] [data-iss-edition] {
+  visibility: hidden;
 }
 
 [data-iss-cupola] {
