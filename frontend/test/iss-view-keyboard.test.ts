@@ -1046,4 +1046,81 @@ describe('ISS keyboard aim persistence', () => {
     scene.dispose();
     host.remove();
   });
+
+  it('Escape while the profile menu is open closes the menu and keeps the saved aim', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      profile: { name: 'anil', displayName: 'Anil' },
+      profiles: [{ name: 'anil', displayName: 'Anil' }],
+    }), { headers: { 'content-type': 'application/json' } })));
+    const view = await import('../src/iss-view');
+    const host = document.createElement('div');
+    document.body.append(host);
+    const aims: IssAim[] = [];
+    const scene = view.mountIssScene(host, {
+      nowMs: () => now,
+      drive: 'manual',
+      createRenderer: renderer(aims),
+    });
+    scene.update(shot());
+    await scene.paint();
+    const frame = host.querySelector('[data-iss-frame]');
+    if (!(frame instanceof HTMLElement)) throw new Error('missing frame');
+    frame.focus();
+    key(frame, 'n');
+    const savedSession = sessionStorage.getItem('opd-iss-aim');
+    const savedLocal = localStorage.getItem('opd-iss-aim');
+    expect(savedSession).toContain('"mode":"nadir"');
+    expect(savedLocal).toBe(savedSession);
+    expect(view.issPresetSession().mode).toBe('nadir');
+    expect(host.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed')).toBe('true');
+    const badge = document.createElement('button');
+    badge.id = 'profile-badge';
+    badge.type = 'button';
+    badge.hidden = true;
+    const menu = document.createElement('div');
+    menu.id = 'profile-menu';
+    menu.setAttribute('popover', '');
+    document.body.append(badge, menu);
+    let open = false;
+    const realMatches = menu.matches.bind(menu);
+    menu.matches = ((selectors: string) => (selectors === ':popover-open' ? open : realMatches(selectors))) as typeof menu.matches;
+    const showPopover = () => {
+      if (open) return;
+      open = true;
+      menu.dispatchEvent(Object.assign(new Event('beforetoggle'), { oldState: 'closed', newState: 'open' }));
+    };
+    const hidePopover = () => {
+      if (!open) throw new DOMException('The popover is already hidden.', 'InvalidStateError');
+      open = false;
+      menu.dispatchEvent(Object.assign(new Event('beforetoggle'), { oldState: 'open', newState: 'closed' }));
+    };
+    menu.showPopover = showPopover;
+    menu.hidePopover = hidePopover;
+    const session = await import('../src/profile-session');
+    await session.resolveAccountProfile();
+    const { mountProfileMenu } = await import('../src/profile-menu');
+    mountProfileMenu();
+    showPopover();
+    expect(open).toBe(true);
+    frame.focus();
+    key(frame, 'Escape');
+    expect(open).toBe(false);
+    expect(menu.matches(':popover-open')).toBe(false);
+    expect(sessionStorage.getItem('opd-iss-aim')).toBe(savedSession);
+    expect(localStorage.getItem('opd-iss-aim')).toBe(savedLocal);
+    expect(view.issPresetSession().mode).toBe('nadir');
+    expect(host.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(host.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('false');
+    key(frame, 'Escape');
+    expect(sessionStorage.getItem('opd-iss-aim')).toBeNull();
+    expect(localStorage.getItem('opd-iss-aim')).toBeNull();
+    expect(view.issPresetSession().mode).toBe('horizon');
+    expect(host.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('true');
+    scene.dispose();
+    host.remove();
+    badge.remove();
+    menu.remove();
+    vi.unstubAllGlobals();
+  });
 });
