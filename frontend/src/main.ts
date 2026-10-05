@@ -40,7 +40,9 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
-import { getAccountProfile, getAuthorizedProfiles, resolveAccountProfile, SessionSignInRequired } from './profile-session';
+import { getAccountProfile, resolveAccountProfile, SessionSignInRequired } from './profile-session';
+import { isRosterProfile } from './crew-roster';
+import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
 import { rememberPublishedIssTle } from './iss-tle';
 import { markProfileTargetsChanged } from './profile-target-sync';
@@ -208,13 +210,17 @@ async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean>
   return false;
 }
 
+function onRosterProfile(): boolean {
+  return isRosterProfile(getAccountProfile()?.name ?? '');
+}
+
 /** Render or hide the topbar "N pending sync" badge based on the calib queue.
  *  The badge sits inside the Log tab button so the user sees the count
  *  regardless of which view they're on. */
 function updatePendingSyncBadge(): void {
   const el = document.getElementById('pending-sync-badge');
   if (!el) return;
-  const n = queuedCalibCount();
+  const n = onRosterProfile() ? 0 : queuedCalibCount();
   if (n === 0) {
     el.hidden = true;
     el.textContent = '';
@@ -908,7 +914,9 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
     const rateResult = await postCalib(ratePayload);
     updatePendingSyncBadge();
     showToast(
-      rateResult.ok ? `Rated ${rating}★` : `Rating queued (${rating}★)`,
+      rateResult.ok ? `Rated ${rating}★`
+        : onRosterProfile() ? `Rated ${rating}★ on this device only. Crew roster profiles do not sync.`
+        : `Rating queued (${rating}★)`,
       rateResult.ok ? 'success' : 'warn',
     );
     return;
@@ -944,10 +952,8 @@ async function onCardAction(action: CardAction, p: PassEntry, value?: number): P
   } else if (result.reason === 'network') {
     showToast(`Offline — ${verb.toLowerCase()} queued for next visit`, 'warn');
   } else if (['server_401', 'server_403', 'sign_in_required'].includes(result.reason)) {
-    showToast(
-      'Saved offline — sign in again to sync',
-      'error',
-    );
+    if (onRosterProfile()) showToast(`${verb} saved on this device only. Crew roster profiles do not sync.`, 'warn');
+    else showToast('Saved offline — sign in again to sync', 'error');
   } else if (result.reason?.startsWith('server_4')) {
     showToast(`Server rejected ${verb.toLowerCase()} (${result.reason})`, 'error');
   } else {
@@ -994,6 +1000,10 @@ async function handleHideAction(p: PassEntry): Promise<void> {
     return;
   }
   const isPersonal = p.target_id.startsWith('personal:');
+  if (isPersonal && isRosterProfile(profile.name)) {
+    showToast('Crew roster sites come with the app and stay on this profile.', 'warn');
+    return;
+  }
   const account = getAccountProfile();
   if (isPersonal && (p.target_id.split(':')[1] !== profile.name
     || account && (account.name !== profile.name || account.isVerified === false))) {
@@ -1089,7 +1099,8 @@ async function handleHideAction(p: PassEntry): Promise<void> {
       `Hidden "${p.target_name}" — restore in Profile tab`,
       'success',
     );
-    if (next.removedCuratedUpdatedAt && next.removedCuratedIds !== profile.removedCuratedIds) {
+    if (next.removedCuratedUpdatedAt && next.removedCuratedIds !== profile.removedCuratedIds
+      && !isRosterProfile(profile.name)) {
       const synced = await putRemovedCuratedIds(
         profile.name,
         next.removedCuratedIds,
@@ -1104,6 +1115,15 @@ async function handleHideAction(p: PassEntry): Promise<void> {
 
 let toastFadeTimer: number | null = null;
 let toastHideTimer: number | null = null;
+
+/** Drops toast timers before the test window is torn down. */
+export function _clearToastTimersForTests(): void {
+  if (toastFadeTimer !== null) window.clearTimeout(toastFadeTimer);
+  if (toastHideTimer !== null) window.clearTimeout(toastHideTimer);
+  toastFadeTimer = null;
+  toastHideTimer = null;
+}
+
 function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success'): void {
   const el = document.getElementById('toast');
   if (!el) return;
@@ -1538,6 +1558,8 @@ async function loadLogPane(): Promise<void> {
         retry.href = getAccessRecoveryPath(profileName);
         retry.textContent = 'Sign in and reload';
         noticeEl.appendChild(retry);
+      } else if (result.reason === 'offline' && onRosterProfile()) {
+        noticeEl.textContent = 'Crew roster profiles keep ratings on this device and have no log.';
       } else {
         noticeEl.textContent = result.reason === 'offline'
           ? 'Could not connect to your log. Your saved ratings are kept; reconnect, then reopen Log.'
@@ -1649,84 +1671,12 @@ export function getCurrentManifest(): Manifest | null {
   return currentManifest;
 }
 
-/** Update the topbar profile badge ("👤 Jack") to reflect the active
- *  profile name. textContent only (no innerHTML) — premise 12 of design
- *  rev 2 forbids new XSS surfaces, and profile names are user-influenced
- *  (URL ?u=<name>) even though isValidProfileName already constrains them.
- *
- *  Subscribers in Slot 11 call this on 'profile-changed' events; init()
- *  calls it once at boot. Stays a thin DOM-only function here so the
- *  profile-ui lazy module isn't forced into the boot bundle.
- */
-export function renderTopbarProfileBadge(name: string | null): void {
-  const el = document.getElementById('profile-badge');
-  if (!el) return;
-  if (!name) {
-    el.hidden = true;
-    el.textContent = '';
-    return;
-  }
-  el.hidden = false;
-  const account = getAccountProfile();
-  const offline = account?.localOnly ? '' : account?.isVerified === false ? ' · Offline' : '';
-  el.textContent = `👤 ${account?.displayName ?? name}${offline}`;
-  el.title = account?.localOnly
-    ? 'This copy has no Google sign-in. Saved targets and ratings stay on this device.'
-    : account
-      ? (getAuthorizedProfiles().length > 1 ? 'Choose your profile or a crew profile' : 'Open your profile')
-      : `Active profile: ${name} — click to switch`;
-  // Bug 1 — make the chip discoverable as a profile switcher. Click
-  // (or Enter / Space when focused) activates the Profile tab and
-  // scrolls the picker section into view. a11y: role=button + tabindex
-  // so screen-readers + keyboard users can reach it.
-  bindProfileBadgeAffordance(el);
-}
-
-/** Track whether the badge has been wired for click/keyboard switching
- *  yet — `renderTopbarProfileBadge` runs on every `profile-changed` event
- *  (which fires per slider tick + per cross-tab storage event) so we must
- *  not stack duplicate listeners. */
-let profileBadgeBound = false;
-
-function bindProfileBadgeAffordance(el: HTMLElement): void {
-  el.setAttribute('role', 'button');
-  el.setAttribute('aria-label', getAccountProfile() && getAuthorizedProfiles().length < 2 ? 'Open your profile' : 'Switch profile');
-  el.setAttribute('tabindex', '0');
-  el.style.cursor = 'pointer';
-  if (profileBadgeBound) return;
-  profileBadgeBound = true;
-  const activate = () => {
-    const tabProfile = document.getElementById('tab-profile') as HTMLElement | null;
-    if (tabProfile) tabProfile.click();
-    // Defer the scroll one frame — the Profile pane is loaded lazily via
-    // `loadProfilePane`, so the picker section may not exist on the same
-    // tick that the tab click fires. Two requestAnimationFrame ticks
-    // is enough to land after the dynamic import + initial render in
-    // every test we tried; setTimeout 0 also works but rAF aligns with
-    // the browser's paint cycle.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const picker = document.getElementById('profile-picker-section');
-        picker?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    });
-  };
-  el.addEventListener('click', activate);
-  el.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      activate();
-    }
-  });
-}
-
 async function init(): Promise<void> {
   bindMapChrome();
   bindTopbarPan(document.querySelector('.topbar'));
   bindTopbarPan(document.querySelector('.tabs'));
   bindLiveReadout();
   // Authenticate before loading any personal cache, target or rating queue.
-  // A shared ?u= link selects a crew profile only when the session allows it.
   try {
     const account = await resolveAccountProfile();
     const url = new URL(window.location.href);
@@ -1744,7 +1694,6 @@ async function init(): Promise<void> {
     else setBanner({ level: 'red', text });
     return;
   }
-  renderTopbarProfileBadge(currentProfile?.name ?? null);
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
   // cross-tab storage event, debounced 150ms). Re-read currentProfile on
   // each fire so the slot 7 distance filter reflects the just-saved
@@ -1755,10 +1704,10 @@ async function init(): Promise<void> {
     } catch {
       /* keep existing currentProfile on load failure */
     }
-    renderTopbarProfileBadge(currentProfile?.name ?? null);
     if (currentManifest) renderQueue();
   });
   bindTabs();
+  mountProfileMenu();
   // Map is the default landing tab (view-map is set in HTML). Trigger the lazy
   // load now so mapPaneWaitingForManifest is set; renderPendingMapPane() in
   // doRefresh() will complete the render once the first manifest arrives.

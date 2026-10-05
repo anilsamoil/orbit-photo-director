@@ -469,6 +469,43 @@ describe('curated toggle flow', () => {
   });
 });
 
+describe('crew roster profile', () => {
+  it('lists the eleven Kutryk sites with no add, edit, delete, CSV or JSON control', () => {
+    const section = mountSection('kutryk');
+    expect(section.querySelector('h3')?.textContent).toBe('Crew roster sites');
+    const names = [...section.querySelectorAll('.profile-crud-name')].map((el) => el.textContent);
+    expect(names).toHaveLength(11);
+    expect(names).toContain('Slovenian Karst and Divača region, CAVES connection');
+    expect(section.querySelector('#profile-add-btn')).toBeNull();
+    expect(section.querySelector('.profile-crud-btn')).toBeNull();
+    expect(section.querySelector('#profile-csv-import')).toBeNull();
+    expect(section.querySelector('#profile-json-io')).toBeNull();
+    expect([...section.querySelectorAll('.profile-crud-subhead')].map((el) => el.textContent)).toEqual(['Hidden curated targets']);
+    expect(section.querySelector('.profile-crud-curated .profile-crud-empty')?.textContent)
+      .toBe('Exclude curated targets from your scored view. Type to search by name and pick a match to hide it. A crew roster profile keeps the hide on this device only. Restore brings it back.');
+  });
+
+  it('refuses an add without saving it or posting it', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await _test.handleAdd('kutryk', makeTarget({ id: makePersonalTargetId('kutryk'), name: 'Not a roster site' }));
+    expect(result).toBe('Crew roster profiles are read-only. Add targets on your own profile.');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(loadProfile('kutryk')!.additions.map((target) => target.name)).not.toContain('Not a roster site');
+    expect(loadProfile('kutryk')!.additions).toHaveLength(11);
+  });
+
+  it('hides a curated target on this device with no PUT', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    mountSection('kutryk');
+    await _test.handleToggleCurated('kutryk', 'aurora-scandinavia', true);
+    expect(loadProfile('kutryk')!.removedCuratedIds).toEqual(['aurora-scandinavia']);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(document.getElementById('toast')?.textContent).toBe('Hid curated "aurora-scandinavia"');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // DOM rendering — mixed curated / personal list
 // ---------------------------------------------------------------------------

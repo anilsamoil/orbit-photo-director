@@ -515,10 +515,10 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
     else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
-    else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl));
+    else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
-    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
     else if (feature === 'phone') notes.push(await drivePhone(send, evidenceDir, meta, viewport));
     else if (feature === 'tracked') notes.push(await driveTracked(send, evidenceDir, meta, viewport));
@@ -1482,7 +1482,7 @@ async function proveMapLaidOnPane(send) {
   return laid;
 }
 
-async function driveMap(send, evidenceDir, meta, baseUrl) {
+async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
     send,
@@ -1702,7 +1702,148 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted`;
+  await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip`;
+}
+
+function myTargetNamesExpr() {
+  return `(() => {
+    const source = window.__opdMap && window.__opdMap.getSource && window.__opdMap.getSource('my-targets');
+    const serialized = source && source.serialize ? source.serialize().data : null;
+    const features = serialized && serialized.features ? serialized.features : null;
+    if (!features) return null;
+    return features.map((feature) => feature.properties && feature.properties.target_name).filter(Boolean);
+  })()`;
+}
+
+async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix = '') {
+  const name = (base) => (shotSuffix ? `${base}-${shotSuffix}` : base);
+  await click(send, '#tab-queue');
+  await waitFor(
+    send,
+    `document.getElementById('tab-queue')?.classList.contains('active') && document.getElementById('view')?.className === 'view-queue' ? { ok: true } : null`,
+    'queue before profile menu',
+    20000,
+  );
+  await click(send, '#profile-badge');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => ({
+        name: row.dataset.profile,
+        text: row.textContent,
+        home: row.hasAttribute('data-profile-home'),
+        current: row.getAttribute('aria-current'),
+      }));
+      const home = rows[0];
+      if (!home || !home.home || home.text !== 'Anil' || home.current !== 'true') return null;
+      if (!rows.some((row) => row.name === 'watkins' && row.text === 'Jessica Watkins (Watty)' && row.current !== 'true')) return null;
+      return { ok: true, count: rows.length };
+    })()`,
+    'profile menu lists Anil above the crew',
+    10000,
+  );
+  await shot(send, evidenceDir, name('profile-menu-anil'));
+  await click(send, '#profile-menu [data-profile="watkins"]');
+  await waitForHref(send, /[?&]u=watkins(?:&|#|$)/, 'watkins profile url');
+  await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!banner || text.includes('Loading')) return null;
+      if (!document.getElementById('tab-queue')?.classList.contains('active')) return null;
+      if (document.getElementById('view')?.className !== 'view-queue') return null;
+      const badge = document.querySelector('#profile-badge .profile-badge-name')?.textContent;
+      if (badge !== 'Jessica Watkins (Watty)') return null;
+      if (new URL(location.href).searchParams.get('u') !== 'watkins') return null;
+      return { ok: true };
+    })()`,
+    'queue restored on Watkins',
+    30000,
+  );
+  await click(send, '#tab-map');
+  await waitFor(
+    send,
+    `(() => {
+      if (document.getElementById('view')?.className !== 'view-map') return null;
+      const legend = document.getElementById('personal-targets-legend')?.textContent;
+      if (legend !== "Jessica Watkins (Watty)'s targets") return null;
+      const names = ${myTargetNamesExpr()};
+      if (!names || !names.includes('Lafayette, Colorado hometown') || names.length !== 12) return null;
+      return { ok: true, legend, count: names.length };
+    })()`,
+    'Watkins legend and sites',
+    45000,
+  );
+  await ensureMapChromeShown(send);
+  await waitFor(
+    send,
+    `(() => {
+      const legend = document.querySelector('.map-legend');
+      if (!legend || getComputedStyle(legend).display === 'none') return null;
+      return { ok: true, text: legend.innerText };
+    })()`,
+    'Watkins legend visible',
+    10000,
+  );
+  await shot(send, evidenceDir, name('profile-legend-watkins'));
+  await click(send, '#profile-badge');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      const home = menu.querySelector('[data-profile-home]');
+      const watkins = menu.querySelector('[data-profile="watkins"]');
+      if (!home || home.textContent !== 'Anil' || home.getAttribute('aria-current') === 'true') return null;
+      if (watkins?.getAttribute('aria-current') !== 'true') return null;
+      return { ok: true };
+    })()`,
+    'profile menu marks Watkins',
+    10000,
+  );
+  await shot(send, evidenceDir, name('profile-menu-watkins'));
+  await click(send, '#profile-menu [data-profile-home]');
+  await waitForHref(send, /\?e2e=(?:&u=anil)?(?:#|$)/, 'anil profile url');
+  await waitFor(
+    send,
+    `(() => {
+      const banner = document.getElementById('status-banner');
+      const text = banner ? banner.textContent || '' : '';
+      if (!banner || text.includes('Loading')) return null;
+      const u = new URL(location.href).searchParams.get('u');
+      const badge = document.querySelector('#profile-badge .profile-badge-name')?.textContent || null;
+      const legend = document.getElementById('personal-targets-legend')?.textContent || null;
+      const names = ${myTargetNamesExpr()};
+      const state = {
+        href: location.href,
+        u,
+        tab: document.querySelector('.tabs .tab.active')?.id || null,
+        view: document.getElementById('view')?.className || null,
+        badge,
+        legend,
+        count: names ? names.length : null,
+        lafayette: !!(names && names.includes('Lafayette, Colorado hometown')),
+      };
+      const home = u === null || u === 'anil';
+      if (!home || state.tab !== 'tab-map' || state.view !== 'view-map' || badge !== 'Anil' || legend !== "Anil's targets" || !names || state.lafayette) {
+        return state;
+      }
+      return { ok: true, legend, count: names.length, u };
+    })()`,
+    'map restored on Anil',
+    45000,
+  );
+  await ensureMapChromeShown(send);
+  await shot(send, evidenceDir, name('profile-legend-anil'));
+  if (!shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
+    await setViewport(send, 874, 402, true);
+    await proveProfileMenuRoundTrip(send, evidenceDir, { width: 874, height: 402, mobile: true }, 'land');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
 }
 
 const UNAVAILABLE_LEGEND = {
@@ -2077,7 +2218,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
 }
 
 async function proveIssClock(send) {
@@ -3139,6 +3280,7 @@ async function proveIssKeyboard(send, evidenceDir) {
     'iss keyboard straight down',
     10000,
   );
+  await proveIssProfileMenuEscape(send, evidenceDir);
   await pressKey(send, 'H');
   await waitFor(
     send,
@@ -3376,6 +3518,70 @@ function issLookNear(origin, tolerance) {
 
 async function releaseKey(send, key) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key });
+}
+
+async function proveIssProfileMenuEscape(send, evidenceDir) {
+  const before = await evaluate(send, `(() => {
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    if (!raw || localStorage.getItem('opd-iss-aim') !== raw) return null;
+    const aim = JSON.parse(raw);
+    if (aim.mode !== 'nadir') return null;
+    const nadir = document.querySelector('[data-iss-preset="nadir"]');
+    const horizon = document.querySelector('[data-iss-preset="horizon"]');
+    if (nadir?.getAttribute('aria-pressed') !== 'true') return null;
+    if (horizon?.getAttribute('aria-pressed') !== 'false') return null;
+    const fov = window.__opdIss?.getVerticalFieldOfView?.();
+    if (typeof fov !== 'number') return null;
+    return { raw, fov };
+  })()`);
+  if (!before) throw new Error('iss profile menu escape baseline missing');
+  await click(send, '#profile-badge');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => row.textContent);
+      if (rows[0] !== 'Anil' || !rows.includes('Jessica Watkins (Watty)') || rows.length !== 4) return null;
+      return { ok: true };
+    })()`,
+    'iss profile menu open',
+    10000,
+  );
+  await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      if (document.activeElement !== frame) return null;
+      return { ok: true };
+    })()`,
+    'iss profile menu stays open with the view focused',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-profile-menu');
+  await pressKey(send, 'Escape');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || menu.matches(':popover-open')) return null;
+      if (sessionStorage.getItem('opd-iss-aim') !== ${JSON.stringify(before.raw)}) return null;
+      if (localStorage.getItem('opd-iss-aim') !== ${JSON.stringify(before.raw)}) return null;
+      const nadir = document.querySelector('[data-iss-preset="nadir"]');
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (nadir?.getAttribute('aria-pressed') !== 'true') return null;
+      if (horizon?.getAttribute('aria-pressed') !== 'false') return null;
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || Math.abs(fov - ${before.fov}) > 0.5) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss profile menu escape keeps aim',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-profile-menu-escape');
 }
 
 async function proveIssKeyHelp(send, evidenceDir) {
@@ -3623,7 +3829,7 @@ const LAST_GOOD_TLE = {
   at: '2026-09-29T04:10:50.460Z',
 };
 
-async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
+async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
   await click(send, '#tab-profile');
   await waitFor(
     send,
@@ -3634,6 +3840,7 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
     })()`,
     'profile pane',
   );
+  await proveProfilePicker(send, evidenceDir, viewport, baseUrl);
   await evaluate(send, `(() => {
     const slider = document.getElementById('profile-threshold-slider');
     slider.value = '800';
@@ -3697,16 +3904,17 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
     'photo lookup',
   );
   await shot(send, evidenceDir, 'profile-lookup');
-  await click(send, '#lookup-result .lookup-btn');
   await waitFor(
     send,
     `(() => {
       const onMap = document.getElementById('view')?.className === 'view-map';
       const layer = window.__opdMap?.getLayer('lookup-pin-layer');
-      return onMap && layer ? { ok: true } : null;
+      if (onMap && layer) return { ok: true };
+      document.querySelector('#lookup-result .lookup-btn')?.click();
+      return null;
     })()`,
     'lookup pin on map',
-    20000,
+    30000,
   );
   await shot(send, evidenceDir, 'profile-lookup-map');
   await click(send, '#tab-profile');
@@ -3748,7 +3956,78 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home) {
   );
   await click(send, '#tab-profile');
   await shot(send, evidenceDir, 'profile-lookup-2035');
-  return `profile: threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, 2035 ${far.kind}`;
+  return `profile: picker, threshold, add target, hidden curated restore, photo lookup, last-good ${lastGood.text.includes('TLE age 0.0 h')}, 2035 ${far.kind}`;
+}
+
+const SIGNED_IN_PICKER = `(() => {
+  const select = document.getElementById('profile-picker-select');
+  const info = document.querySelector('#profile-picker-section p')?.textContent || '';
+  const count = select ? select.options.length : 0;
+  if (document.getElementById('profile-new-btn') || document.getElementById('profile-delete-btn')) return null;
+  if (!info.includes('Google account')) return null;
+  if (count === 1 || (select && count < 2)) return null;
+  return { ok: true, count, info };
+})()`;
+
+async function proveProfilePicker(send, evidenceDir, viewport, baseUrl) {
+  await waitFor(send, SIGNED_IN_PICKER, 'signed-in profile picker', 20000);
+  await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
+  await shot(send, evidenceDir, 'profile-picker');
+  if (viewport && viewport.width === 402 && viewport.height === 874) {
+    await setViewport(send, 874, 402, true);
+    await waitFor(send, SIGNED_IN_PICKER, 'signed-in profile picker landscape', 20000);
+    await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
+    await shot(send, evidenceDir, 'profile-picker-land');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+  await proveLocalProfilePicker(send, evidenceDir, viewport, baseUrl);
+}
+
+async function proveLocalProfilePicker(send, evidenceDir, viewport, baseUrl) {
+  await setSessionCookie(send, 'local');
+  await send('Page.navigate', { url: `${baseUrl}/?e2e` });
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('status-banner')?.textContent || '';
+      return text.includes('Last updated') ? { ok: true } : null;
+    })()`,
+    'local profile app',
+    30000,
+  );
+  await click(send, '#tab-profile');
+  await waitFor(
+    send,
+    `(() => {
+      const select = document.getElementById('profile-picker-select');
+      if (!select || select.options.length < 1) return null;
+      if (document.getElementById('profile-new-btn')?.textContent !== 'New profile') return null;
+      if (document.getElementById('profile-delete-btn')?.textContent !== 'Delete this profile') return null;
+      return { ok: true };
+    })()`,
+    'local profile picker',
+    20000,
+  );
+  await evaluate(send, `document.getElementById('profile-picker-section')?.scrollIntoView({ block: 'start' })`);
+  await shot(send, evidenceDir, 'profile-picker-local');
+  if (viewport && viewport.width === 402 && viewport.height === 874) {
+    await setViewport(send, 874, 402, true);
+    await shot(send, evidenceDir, 'profile-picker-local-land');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+  await setSessionCookie(send, '');
+  await send('Page.navigate', { url: `${baseUrl}/?e2e` });
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.getElementById('status-banner')?.textContent || '';
+      return text.includes('Last updated') ? { ok: true } : null;
+    })()`,
+    'signed-in profile app',
+    30000,
+  );
+  await click(send, '#tab-profile');
+  await waitFor(send, SIGNED_IN_PICKER, 'signed-in profile picker restored', 20000);
 }
 
 async function driveLog(send, evidenceDir, baseUrl) {

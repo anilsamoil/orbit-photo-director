@@ -16,6 +16,7 @@ const CAMERA = 'src/map/map-core/camera.ts';
 const PIN_DROP = 'src/map/features/pin-drop/index.ts';
 const SATELLITES = 'src/map/features/satellites/index.ts';
 const TRACKED = 'src/map/features/tracked/index.ts';
+const TARGETS = 'src/map/features/targets/index.ts';
 const LABELS = 'src/map/features/labels/index.ts';
 const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
 const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
@@ -35,6 +36,7 @@ const PIN_FILES = [
   'test/map-satellites-contract.test.ts',
   'test/map-ground-track-contract.test.ts',
   'src/map/features/tracked/tracked.test.ts',
+  'src/map/features/targets/targets.test.ts',
 ];
 
 const MUTATIONS = [
@@ -145,6 +147,12 @@ const MUTATIONS = [
     file: SATELLITES,
     find: '      tracked.delete(key);\n      publish();\n      persistSelectedKeys(tracked.keys());',
     replace: '      tracked.delete(key);\n      publish();',
+  },
+  {
+    contract: 'a crew roster site popup has no Edit button',
+    file: TARGETS,
+    find: '    const onEdit = props.is_personal && props.target_id && !isRosterProfile(parseProfileFromURL(window.location.href))',
+    replace: '    const onEdit = props.is_personal && props.target_id',
   },
 ];
 

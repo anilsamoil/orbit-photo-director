@@ -80,7 +80,7 @@ it('boot waits for identity and never renders or deletes previous personal data 
   expect(document.body.textContent).toContain('sign in again');
 });
 
-it('the account pane never lists other locally saved profiles or permits URL switching', async () => {
+it('the account pane names only the signed-in account, never other locally saved profiles', async () => {
   await login();
   document.body.innerHTML = '<div id="profile-body"></div>';
   const p = await import('../src/profile');
@@ -88,9 +88,7 @@ it('the account pane never lists other locally saved profiles or permits URL swi
   p.loadOrCreateProfileFromURL('https://map.astroanil.dev/?u=anil');
   const ui = await import('../src/profile-ui');
   ui.renderProfilePane();
-  expect(document.querySelector('#profile-picker-select')).toBeNull();
-  expect(document.querySelector('#profile-picker-section')?.textContent).toContain('Jessica');
-  const urlBefore = window.location.href;
-  ui.switchToProfile('anil');
-  expect(window.location.href).toBe(urlBefore);
+  const identity = document.querySelector('#profile-picker-section');
+  expect(identity?.querySelector('h3')?.textContent).toBe('Your profile · Jessica');
+  expect(identity?.textContent).not.toContain('anil');
 });

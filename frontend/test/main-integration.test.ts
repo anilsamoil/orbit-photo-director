@@ -33,12 +33,11 @@ vi.mock('../src/profile-api', async () => {
 
 // These orchestration fixtures exercise the legacy cache migration boundary.
 // Account selection and fail-closed boot are tested in account-session.test.ts.
+const session = vi.hoisted(() => ({ account: null as { name: string; displayName: string; isVerified: boolean } | null }));
 vi.mock('../src/profile-session', () => ({
-  getAccountProfile: () => null,
-  getAuthorizedProfiles: () => [],
+  getAccountProfile: () => session.account,
   getSignedInAccountProfile: () => null,
-  canSelectProfile: () => false,
-  resolveAccountProfile: async () => ({ name: 'anil', displayName: 'Anil', isVerified: true }),
+  resolveAccountProfile: async () => session.account ?? { name: 'anil', displayName: 'Anil', isVerified: true },
 }));
 
 // Mock the network layer at module boundary so tests control what each
@@ -171,6 +170,7 @@ const liveIntervals = new Set<ReturnType<typeof window.setInterval>>();
 let restoreIntervalSpy: (() => void) | undefined;
 
 beforeEach(async () => {
+  session.account = null;
   document.body.innerHTML = DOM;
   localStorage.clear();
   vi.resetModules();    // clears module-level state in main.ts (refreshInFlight, currentManifest, etc.)
@@ -832,6 +832,48 @@ describe('main.ts: updatePendingSyncBadge', () => {
     el = document.getElementById('pending-sync-badge')!;
     expect(el.textContent).toBe('3');
     expect(el.title).toContain('3 calibration entries queued');
+  });
+});
+
+describe('main.ts: crew roster profile', () => {
+  const kutryk = { name: 'kutryk', displayName: 'Josh Kutryk', isVerified: false };
+  const karst = buildPass({
+    target_id: 'personal:kutryk:slovenian-karst-and-divaca-region-caves-connection',
+    target_name: 'Slovenian Karst and Divača region, CAVES connection',
+  });
+  beforeEach(() => {
+    session.account = kutryk;
+    history.replaceState(null, '', '/?u=kutryk');
+    vi.mocked(manifestModule.fetchManifest).mockRejectedValue(new Error('test'));
+  });
+
+  it('keeps a roster site on its profile when its card is hidden', async () => {
+    const { init, handleHideAction } = await import('../src/main');
+    const { loadProfile } = await import('../src/profile');
+    await init();
+    await handleHideAction(karst);
+    expect(document.getElementById('toast')?.textContent).toBe('Crew roster sites come with the app and stay on this profile.');
+    expect(profileApi.deleteProfileTarget).not.toHaveBeenCalled();
+    expect(loadProfile('kutryk')!.additions.map((site) => site.name)).toContain('Slovenian Karst and Divača region, CAVES connection');
+  });
+
+  it('hides a curated card on this device with no PUT', async () => {
+    const put = vi.spyOn(profileApi, 'putRemovedCuratedIds');
+    const { init, handleHideAction } = await import('../src/main');
+    await init();
+    await handleHideAction(buildPass({ target_id: 'aurora-scandinavia', target_name: 'Aurora — Scandinavia' }));
+    expect(JSON.parse(localStorage.getItem('opd-profile-kutryk')!).removedCuratedIds).toEqual(['aurora-scandinavia']);
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('says a shoot and a rating stay on this device, with no pending-sync count', async () => {
+    const { onCardAction } = await import('../src/main');
+    await onCardAction('shoot', karst);
+    expect(document.getElementById('toast')?.textContent).toBe('Shoot saved on this device only. Crew roster profiles do not sync.');
+    await onCardAction('rate', karst, 4);
+    expect(document.getElementById('toast')?.textContent).toBe('Rated 4★ on this device only. Crew roster profiles do not sync.');
+    expect(JSON.parse(localStorage.getItem('opd-calib-queue:kutryk')!)).toHaveLength(2);
+    expect(document.getElementById('pending-sync-badge')?.hidden).toBe(true);
   });
 });
 

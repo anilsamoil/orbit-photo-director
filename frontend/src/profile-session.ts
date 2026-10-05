@@ -1,8 +1,8 @@
-/** Browser identity and selectable profiles come only from the verified session. */
+import { rosterProfiles, type RosterProfile } from './crew-roster';
+
 export interface AccountProfile {
   name: string;
   displayName: string;
-  /** False only when resuming this tab's last verified profile offline. */
   isVerified?: boolean;
   /** This origin served the app shell instead of an account API. */
   localOnly?: boolean;
@@ -72,24 +72,27 @@ async function decideSessionResponse(response: Response, urlHref: string): Promi
   return { kind: 'json', body: await response.json() };
 }
 
-function resumeOfflineProfile(): AccountProfile | null {
+function cachedSessionProfile(): AccountProfile | null {
   try {
     const cached: unknown = JSON.parse(sessionStorage.getItem(CACHE_KEY) ?? 'null');
-    if (validProfile(cached)) {
-      account = {
-        name: cached.name,
-        displayName: cached.displayName,
-        isVerified: false,
-        ...(cached.localOnly ? { localOnly: true } : {}),
-      };
-      if (account.localOnly) {
-        signedInAccount = account;
-        authorizedProfiles = [account];
-      }
-      return account;
-    }
-  } catch { /* no usable tab-local offline session */ }
-  return null;
+    return validProfile(cached) ? cached : null;
+  } catch { return null; }
+}
+
+function resumeOfflineProfile(): AccountProfile | null {
+  const cached = cachedSessionProfile();
+  if (!cached) return null;
+  account = {
+    name: cached.name,
+    displayName: cached.displayName,
+    isVerified: false,
+    ...(cached.localOnly ? { localOnly: true } : {}),
+  };
+  if (account.localOnly) {
+    signedInAccount = account;
+    authorizedProfiles = [account];
+  }
+  return account;
 }
 
 function sessionJson(value: unknown): { profile: unknown; profiles: unknown } | null {
@@ -124,6 +127,28 @@ function validateAuthorizedProfiles(value: unknown, own: AccountProfile): Accoun
 }
 
 export async function resolveAccountProfile(urlHref = window.location.href): Promise<AccountProfile> {
+  const roster = requestedRosterProfile(urlHref);
+  const session = await resolveSessionProfile(roster ? sessionHref(urlHref) : urlHref);
+  if (!roster) return session;
+  account = { name: roster.name, displayName: roster.displayName, isVerified: false };
+  return account;
+}
+
+function requestedRosterProfile(urlHref: string): RosterProfile | undefined {
+  let requested: string | null = null;
+  try { requested = new URL(urlHref).searchParams.get('u'); } catch {}
+  return rosterProfiles().find((profile) => profile.name === requested);
+}
+
+function sessionHref(urlHref: string): string {
+  const url = new URL(urlHref);
+  const cached = cachedSessionProfile();
+  if (cached) url.searchParams.set('u', cached.name);
+  else url.searchParams.delete('u');
+  return url.href;
+}
+
+async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
   account = null;
   signedInAccount = null;
   authorizedProfiles = [];

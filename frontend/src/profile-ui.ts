@@ -1,27 +1,3 @@
-/** Profile tab UI — Slot 2 of design rev 2 (locked 2026-05-26).
- *
- *  Owns the entire Profile pane DOM tree: picker dropdown, new-profile
- *  CTA, delete CTA, and (Slot 7) the distance-threshold slider.
- *
- *  Rendering is one-shot per Map / Log pane convention — `renderProfilePane()`
- *  rebuilds the pane into the `#profile-body` container on every tab
- *  activation. Picker re-renders also fire from the `'profile-changed'`
- *  event (Slot 11) so other tabs / cross-tab writes keep this pane in sync.
- *
- *  Switching the picker dropdown mutates the URL (`?u=<name>` via
- *  `history.pushState`) AND triggers a full page reload. Reload is
- *  intentional in v1 — Slot 5 refines to an in-place manifest swap once
- *  the per-profile manifest fetch path lands. The reload guarantees all
- *  stale caches (currentManifest, snapshots, MapLibre sources) are
- *  flushed; trying to swap in place before Slot 5 would leave dangling
- *  data with the wrong profile.
- *
- *  XSS surface: every operator-provided string (profile names) flows
- *  through `textContent` only — never `innerHTML`. Premise 12 of the
- *  design doc requires no new XSS surfaces; `isValidProfileName` already
- *  caps the character set, but defense-in-depth uses textContent anyway.
- */
-
 import {
   createDefaultProfile,
   isValidProfileName,
@@ -34,7 +10,14 @@ import {
 } from './profile';
 import { subscribeProfileChanged } from './profile-events';
 import { buildCrudSection } from './profile-crud';
-import { canSelectProfile, getAccountProfile, getAuthorizedProfiles, getSignedInAccountProfile } from './profile-session';
+import { isRosterProfile } from './crew-roster';
+import {
+  canSelectProfile,
+  getAccountProfile,
+  getAuthorizedProfiles,
+  getSignedInAccountProfile,
+  type AccountProfile,
+} from './profile-session';
 
 /** Min/max for the distance threshold slider (km). Range chosen to span
  *  "tight nadir only" (100 km) through "well past ISS horizon" (2000 km).
@@ -59,59 +42,30 @@ let thresholdTimer: number | null = null;
  *  Read by the timer when it fires. */
 let pendingThresholdKm: number | null = null;
 
-/** Suppress the picker dropdown's 'change' event when WE programmatically
- *  set its value (e.g., from a 'profile-changed' subscriber re-render).
- *  Without this guard, our own re-render would loop back through the
- *  switch-profile reload path. */
+/** Suppress the picker dropdown's change event when we set its value. */
 let suppressPickerChange = false;
 
-/** One-time bind for the cross-tab + in-tab profile-changed subscriber.
- *  Bound the first time the Profile pane renders. Slot 11 — debounced
- *  150ms + cross-tab storage event automatically handled by the bus. */
+/** One subscriber for cross-tab profile writes, bound on the first pane render. */
 let profileChangedBound = false;
 function bindProfileChangedSubscriber(): void {
   if (profileChangedBound) return;
   subscribeProfileChanged(() => {
-    // The pane may be torn down or unmounted; refreshPickerFromExternalChange
-    // is a no-op when #profile-picker-select doesn't exist.
     refreshPickerFromExternalChange();
   });
   profileChangedBound = true;
 }
 
-/** Pane render is idempotent. Tab dispatcher calls renderProfilePane()
- *  every time the Profile tab is activated; that's fine — rebuilding the
- *  pane is cheap and ensures picker contents reflect the latest
- *  listProfiles() (e.g., after a new profile was created in another tab). */
 export function renderProfilePane(): void {
   const container = document.getElementById('profile-body');
   if (!container) return;
-  container.replaceChildren();
-  container.appendChild(buildPickerSection());
-  container.appendChild(buildThresholdSection());
-  // Slot 6 — CRUD UI (add target form + personal list + curated hide).
-  // Lives in profile-crud.ts so the file stays scoped per slot; mounted
-  // here so the Profile tab is the single home for per-astronaut config.
-  const activeName = readActiveProfileName();
-  container.appendChild(buildCrudSection(activeName));
-  // Subscribe once so subsequent cross-tab edits or other-pane edits
-  // refresh the picker dropdown without requiring the user to re-open
-  // the Profile tab.
+  container.replaceChildren(
+    buildPickerSection(),
+    buildThresholdSection(),
+    buildCrudSection(readActiveProfileName()),
+  );
   bindProfileChangedSubscriber();
 }
 
-/** Scan localStorage for `opd-profile-<name>` keys and return the validated
- *  profile names. Defense against the names-list cache (`opd-profile-names`)
- *  drifting from reality — e.g., operator wiped the cache via devtools,
- *  fresh device visited only one URL, or partial import left stranded
- *  profile blobs. v2 hotfix (Anil same-day feedback after v1.6.16.0).
- *
- *  Validates each extracted name via isValidProfileName so hand-edited
- *  weirdness (uppercase, trailing junk, empty after the prefix) is filtered
- *  out — they wouldn't load successfully anyway, no point showing them
- *  in the picker.
- *
- *  Returns [] on any localStorage exception (Safari private-mode etc). */
 function discoverProfileKeys(): string[] {
   const out: string[] = [];
   try {
@@ -119,10 +73,7 @@ function discoverProfileKeys(): string[] {
       const key = localStorage.key(i);
       if (!key) continue;
       const m = key.match(/^opd-profile-([a-z0-9][a-z0-9-]{0,31})$/);
-      if (!m || !m[1] || !isValidProfileName(m[1])) continue;
-      // Skip the reserved `opd-profile-names` key (the names-list itself) —
-      // matches the regex but is NOT a profile blob. Validate the value
-      // shape so any future reserved-key collision is caught the same way.
+      if (!m || !m[1] || !isValidProfileName(m[1]) || isRosterProfile(m[1])) continue;
       const raw = localStorage.getItem(key);
       if (!raw) continue;
       try {
@@ -132,122 +83,132 @@ function discoverProfileKeys(): string[] {
         if (typeof blob.name !== 'string' || blob.name !== m[1]) continue;
         out.push(m[1]);
       } catch {
-        // Not a JSON profile blob; skip (handles the names-list array case +
-        // any future non-Profile value at an opd-profile-* key).
+        // The names-list cache lives at an opd-profile-* key and is not a profile.
       }
     }
   } catch {
-    // Safari private mode throws on localStorage access; degrade gracefully.
+    // Safari private mode throws on localStorage access.
   }
   return out;
 }
 
-/** Build the picker section: dropdown of known profiles + add/delete CTAs.
- *  Returns the section element ready to be inserted; caller decides
- *  parent layout. */
 function buildPickerSection(): HTMLElement {
+  const account = getAccountProfile();
+  if (account) return buildAccountSection(account);
+  return buildLocalPickerSection();
+}
+
+function buildAccountSection(account: AccountProfile): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'profile-section';
+  section.id = 'profile-picker-section';
+
+  const heading = document.createElement('h3');
+  const info = document.createElement('p');
+  if (isRosterProfile(account.name)) {
+    heading.textContent = `Crew roster · ${account.displayName}`;
+    info.textContent = 'Crew roster profiles come with the app. Settings, ratings and hidden targets stay on this device.';
+    section.append(heading, info);
+    return section;
+  }
+
+  if (account.localOnly) return buildLocalPickerSection();
+
+  const own = getSignedInAccountProfile();
+  const managingCrew = own !== null && own.name !== account.name;
+  heading.textContent = `${account.isVerified === false ? 'Active profile' : managingCrew ? 'Crew profile' : 'Your profile'} · ${account.displayName}`;
+  info.textContent = account.isVerified === false
+    ? 'Offline · using this tab’s last verified profile. Reconnect and reload to sync.'
+    : managingCrew
+      ? `Signed in as ${own.displayName}. You are managing ${account.displayName}’s targets, settings and ratings.`
+      : 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.';
+  section.append(heading, info);
+
+  const authorized = getAuthorizedProfiles();
+  if (authorized.length > 1) {
+    const row = document.createElement('div');
+    row.className = 'profile-row';
+    const label = document.createElement('label');
+    label.htmlFor = 'profile-picker-select';
+    label.textContent = 'Profile:';
+    const select = document.createElement('select');
+    select.id = 'profile-picker-select';
+    select.className = 'profile-select';
+    populateAuthorizedOptions(select);
+    select.addEventListener('change', () => {
+      if (!suppressPickerChange && select.value !== readActiveProfileName()) switchToProfile(select.value);
+    });
+    row.append(label, select);
+    section.append(row);
+  } else if (account.isVerified !== false) {
+    info.textContent = 'Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.';
+  }
+  if (account.name === 'jessica') {
+    const sources = document.createElement('p');
+    const link = document.createElement('a');
+    link.href = '/profile-research/jessica.html';
+    link.textContent = 'Why these targets? Sources and shooting ideas';
+    sources.appendChild(link);
+    section.appendChild(sources);
+  }
+  return section;
+}
+
+function buildLocalPickerSection(): HTMLElement {
   const section = document.createElement('section');
   section.className = 'profile-section';
   section.id = 'profile-picker-section';
 
   const heading = document.createElement('h3');
   heading.textContent = 'Active profile';
-  section.appendChild(heading);
-
-  const account = getAccountProfile();
-  if (account) {
-    const own = getSignedInAccountProfile();
-    const managingCrew = own !== null && own.name !== account.name;
-    heading.textContent = `${account.isVerified === false ? 'Active profile' : managingCrew ? 'Crew profile' : 'Your profile'} · ${account.displayName}`;
-    const info = document.createElement('p');
-    info.textContent = account.localOnly
-      ? 'This copy has no Google sign-in. Your saved targets and ratings stay on this device.'
-      : account.isVerified === false
-      ? 'Offline · using this tab’s last verified profile. Reconnect and reload to sync.'
-      : managingCrew
-        ? `Signed in as ${own.displayName}. You are managing ${account.displayName}’s targets, settings and ratings.`
-        : 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.';
-    section.appendChild(info);
-    if (getAuthorizedProfiles().length > 1) {
-      const row = document.createElement('div');
-      row.className = 'profile-row';
-      const label = document.createElement('label');
-      label.htmlFor = 'profile-picker-select';
-      label.textContent = 'Profile:';
-      const select = document.createElement('select');
-      select.id = 'profile-picker-select';
-      select.className = 'profile-select';
-      populateAuthorizedOptions(select);
-      select.addEventListener('change', () => {
-        if (!suppressPickerChange && select.value !== readActiveProfileName()) switchToProfile(select.value);
-      });
-      row.append(label, select);
-      section.appendChild(row);
-    } else if (account.isVerified !== false) {
-      info.textContent = 'Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.';
-    }
-    if (account.name === 'jessica') {
-      const sources = document.createElement('p');
-      const link = document.createElement('a');
-      link.href = '/profile-research/jessica.html';
-      link.textContent = 'Why these targets? Sources and shooting ideas';
-      sources.appendChild(link);
-      section.appendChild(sources);
-    }
-    return section;
-  }
-
   const desc = document.createElement('p');
   desc.textContent = 'Each profile keeps its own personal targets and threshold settings. Switching reloads the page so caches stay clean.';
-  section.appendChild(desc);
+  section.append(heading, desc);
 
-  // --- Picker row --------------------------------------------------------
   const pickerRow = document.createElement('div');
   pickerRow.className = 'profile-row';
   const pickerLabel = document.createElement('label');
   pickerLabel.htmlFor = 'profile-picker-select';
   pickerLabel.textContent = 'Profile:';
-  pickerRow.appendChild(pickerLabel);
-
   const select = document.createElement('select');
   select.id = 'profile-picker-select';
   select.className = 'profile-select';
-
-  // Include the active profile name even if it hasn't been saved yet —
-  // listProfiles() reads the persisted name list, but the first-launch
-  // profile is added to that list on save. Belt-and-braces: union of
-  // listProfiles + active name so the dropdown is never empty.
-  //
-  // v2 hotfix (Anil same-day feedback after v1.6.16.0): also scan
-  // localStorage directly for `opd-profile-<name>` keys. The names-list
-  // cache (`opd-profile-names`) can drift from reality — operator
-  // devtools wipe, fresh device that only visited one URL, partial
-  // import — leaving profiles that EXIST hidden from the picker. The
-  // scan self-heals the dropdown.
   const currentName = readActiveProfileName();
-  const names = new Set<string>(listProfiles());
-  for (const n of discoverProfileKeys()) names.add(n);
-  names.add(currentName);
-  // Always include the default so first-launchers see a sensible row.
+  fillLocalOptions(select, currentName);
+  select.addEventListener('change', () => {
+    if (suppressPickerChange) return;
+    const next = select.value;
+    if (!isValidProfileName(next) || isRosterProfile(next) || next === currentName) return;
+    switchToProfile(next);
+  });
+  pickerRow.append(pickerLabel, select);
+  section.appendChild(pickerRow);
+  appendLocalCreateDelete(section);
+  return section;
+}
+
+function localProfileNames(currentName: string): string[] {
+  const names = new Set<string>(listProfiles().filter((name) => !isRosterProfile(name)));
+  for (const name of discoverProfileKeys()) names.add(name);
+  if (!isRosterProfile(currentName)) names.add(currentName);
   names.add(DEFAULT_PROFILE_NAME);
-  for (const name of Array.from(names).sort()) {
+  return Array.from(names).sort();
+}
+
+function fillLocalOptions(select: HTMLSelectElement, currentName: string): void {
+  select.replaceChildren();
+  for (const name of localProfileNames(currentName)) {
     const opt = document.createElement('option');
     opt.value = name;
     opt.textContent = name;
     if (name === currentName) opt.selected = true;
     select.appendChild(opt);
   }
-  select.addEventListener('change', () => {
-    if (suppressPickerChange) return;
-    const next = select.value;
-    if (!isValidProfileName(next)) return;
-    if (next === currentName) return;
-    switchToProfile(next);
-  });
-  pickerRow.appendChild(select);
-  section.appendChild(pickerRow);
+  if (!isRosterProfile(currentName)) select.value = currentName;
+}
 
-  // --- New profile row ---------------------------------------------------
+function appendLocalCreateDelete(section: HTMLElement): void {
+  const currentName = readActiveProfileName();
   const newRow = document.createElement('div');
   newRow.className = 'profile-row';
   const newInput = document.createElement('input');
@@ -257,13 +218,12 @@ function buildPickerSection(): HTMLElement {
   newInput.placeholder = 'new profile name (a-z, 0-9, -)';
   newInput.autocomplete = 'off';
   newInput.spellcheck = false;
-  newRow.appendChild(newInput);
   const newBtn = document.createElement('button');
   newBtn.type = 'button';
   newBtn.className = 'profile-btn';
   newBtn.id = 'profile-new-btn';
   newBtn.textContent = 'New profile';
-  newRow.appendChild(newBtn);
+  newRow.append(newInput, newBtn);
   const errorEl = document.createElement('div');
   errorEl.className = 'profile-error';
   errorEl.id = 'profile-new-error';
@@ -271,6 +231,10 @@ function buildPickerSection(): HTMLElement {
   newBtn.addEventListener('click', () => {
     const name = (newInput.value || '').trim();
     errorEl.textContent = '';
+    if (isRosterProfile(name)) {
+      errorEl.textContent = 'Crew roster profiles come with the app.';
+      return;
+    }
     if (!isValidProfileName(name)) {
       errorEl.textContent = 'Invalid name — use a-z, 0-9, or hyphen (max 32 chars).';
       return;
@@ -286,13 +250,10 @@ function buildPickerSection(): HTMLElement {
       return;
     }
     newInput.value = '';
-    // Switch into the freshly-created profile.
     switchToProfile(name);
   });
-  section.appendChild(newRow);
-  section.appendChild(errorEl);
+  section.append(newRow, errorEl);
 
-  // --- Delete row --------------------------------------------------------
   const delRow = document.createElement('div');
   delRow.className = 'profile-row';
   const delBtn = document.createElement('button');
@@ -301,19 +262,13 @@ function buildPickerSection(): HTMLElement {
   delBtn.id = 'profile-delete-btn';
   delBtn.textContent = 'Delete this profile';
   delBtn.addEventListener('click', () => {
+    if (isRosterProfile(currentName)) return;
     if (!confirmDelete(currentName)) return;
     deleteProfileLocal(currentName);
-    // After deletion the URL should fall back to the default profile.
-    // switchToProfile handles the pushState + reload pair.
-    const fallback = currentName === DEFAULT_PROFILE_NAME
-      ? DEFAULT_PROFILE_NAME
-      : DEFAULT_PROFILE_NAME;
-    switchToProfile(fallback);
+    switchToProfile(DEFAULT_PROFILE_NAME);
   });
   delRow.appendChild(delBtn);
   section.appendChild(delRow);
-
-  return section;
 }
 
 /** Build the distance-threshold section (Slot 7 of design rev 2). Slider
@@ -357,9 +312,6 @@ function buildThresholdSection(): HTMLElement {
   display.textContent = `${initial} km`;
   sliderRow.appendChild(display);
 
-  // On input: update the display instantly + arm the debounce timer.
-  // Debounce coalesces a rapid drag into one saveProfile call + one
-  // 'profile-changed' event so downstream subscribers don't thrash.
   slider.addEventListener('input', () => {
     const v = clampThreshold(Number(slider.value));
     display.textContent = `${v} km`;
@@ -374,7 +326,12 @@ function buildThresholdSection(): HTMLElement {
     }, THRESHOLD_DEBOUNCE_MS);
   });
 
-  section.appendChild(sliderRow);
+  const errorEl = document.createElement('div');
+  errorEl.className = 'profile-error';
+  errorEl.id = 'profile-threshold-error';
+  errorEl.setAttribute('role', 'alert');
+
+  section.append(sliderRow, errorEl);
   return section;
 }
 
@@ -395,10 +352,6 @@ export function readThresholdKm(): number {
   return profile?.distanceThresholdKm ?? THRESHOLD_DEFAULT_KM;
 }
 
-/** Persist the threshold value to the active profile. If the profile
- *  doesn't exist yet (first-launch + slider moved before any other
- *  save), auto-create + persist. Failures (quota exceeded / private
- *  mode) surface in the picker error area when one exists. */
 function persistThreshold(km: number): void {
   const name = readActiveProfileName();
   let profile = safeLoadProfile(name);
@@ -410,7 +363,7 @@ function persistThreshold(km: number): void {
   try {
     saveProfile(profile);
   } catch (e) {
-    const errorEl = document.getElementById('profile-new-error');
+    const errorEl = document.getElementById('profile-threshold-error');
     if (errorEl) errorEl.textContent = `Couldn't save threshold: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
@@ -423,23 +376,14 @@ function safeLoadProfile(name: string): Profile | null {
   }
 }
 
-/** Read the active profile name from the URL (?u=<name>) without
- *  importing main.ts's getCurrentProfile (which would create a
- *  circular dependency at module load time). Same precedence as
- *  parseProfileFromURL. */
 function readActiveProfileName(): string {
   return getAccountProfile()?.name ?? parseProfileFromURL(window.location.href);
 }
 
-/** Switch the active profile: mutate URL via pushState + reload so all
- *  in-memory caches are flushed. v1 design decision — Slot 5 will refine
- *  to an in-place swap once the per-profile manifest fetch path lands.
- *
- *  Split out for unit testing — tests stub `history.pushState` and
- *  `location.reload` to verify the URL mutation contract without
- *  actually navigating. */
 export function switchToProfile(name: string): void {
-  if (getAccountProfile() && !canSelectProfile(name)) return;
+  if (isRosterProfile(name)) return;
+  const account = getAccountProfile();
+  if (account && !account.localOnly && !canSelectProfile(name)) return;
   if (!isValidProfileName(name)) return;
   try {
     const url = new URL(window.location.href);
@@ -448,21 +392,16 @@ export function switchToProfile(name: string): void {
   } catch { /* pushState unavailable in some test envs */ }
   try {
     window.location.reload();
-  } catch { /* reload unavailable in some test envs (happy-dom default ok) */ }
+  } catch { /* reload unavailable in some test envs */ }
 }
 
-/** Confirm-then-delete. Wraps window.confirm so tests can monkey-patch
- *  it. Returns true if the user confirmed. */
 function confirmDelete(name: string): boolean {
-  // In test environments without window.confirm, default to false (safer).
   if (typeof window.confirm !== 'function') return false;
   return window.confirm(`Delete profile "${name}"? Personal targets and threshold will be lost.`);
 }
 
-/** Remove a profile from localStorage + the known-profiles list. Exposed
- *  for tests; production callers go through the delete button. */
 export function deleteProfileLocal(name: string): void {
-  if (!isValidProfileName(name)) return;
+  if (!isValidProfileName(name) || isRosterProfile(name)) return;
   try {
     localStorage.removeItem(`opd-profile-${name}`);
   } catch { /* ignore */ }
@@ -478,43 +417,22 @@ export function deleteProfileLocal(name: string): void {
   } catch { /* ignore */ }
 }
 
-/** Re-render the picker dropdown when a 'profile-changed' event fires
- *  (e.g., from a cross-tab save or another module's saveProfile). Slot 11
- *  wires this into the subscribeProfileChanged event bus. Suppresses its
- *  own 'change' event during the value-set so the listener doesn't recurse
- *  into switchToProfile. */
 export function refreshPickerFromExternalChange(): void {
   const select = document.getElementById('profile-picker-select') as HTMLSelectElement | null;
   if (!select) return;
   const currentName = readActiveProfileName();
-  // Rebuild option list — a 'profile-changed' from another tab may have
-  // added/removed profiles. textContent only.
   suppressPickerChange = true;
   try {
     if (getAccountProfile()) {
       populateAuthorizedOptions(select);
       return;
     }
-    select.replaceChildren();
-    const names = new Set<string>(listProfiles());
-    // v2 hotfix: belt-and-braces self-heal (see discoverProfileKeys).
-    for (const n of discoverProfileKeys()) names.add(n);
-    names.add(currentName);
-    names.add(DEFAULT_PROFILE_NAME);
-    for (const name of Array.from(names).sort()) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = name;
-      if (name === currentName) opt.selected = true;
-      select.appendChild(opt);
-    }
-    select.value = currentName;
+    fillLocalOptions(select, currentName);
   } finally {
     suppressPickerChange = false;
   }
 }
 
-/** Never add locally discovered profiles to a signed-in account's chooser. */
 function populateAuthorizedOptions(select: HTMLSelectElement): void {
   select.replaceChildren();
   const own = getSignedInAccountProfile();
@@ -527,31 +445,6 @@ function populateAuthorizedOptions(select: HTMLSelectElement): void {
   }
 }
 
-/** Update the topbar profile badge. Reads textContent only (no innerHTML),
- *  per premise 12 of the design doc — no new XSS surfaces. */
-export function renderProfileBadge(name: string | null): void {
-  const el = document.getElementById('profile-badge');
-  if (!el) return;
-  if (!name) {
-    el.hidden = true;
-    el.textContent = '';
-    return;
-  }
-  el.hidden = false;
-  // Plain emoji + name. textContent escapes any unusual characters; the
-  // name is also already validated by isValidProfileName before it gets
-  // here (lowercase ASCII + digits + hyphen), so the worst case is a
-  // visual oddity, not a script-injection surface.
-  const displayName = getAccountProfile()?.displayName ?? name;
-  el.textContent = `👤 ${displayName}`;
-  el.title = `Active profile: ${displayName}`;
-}
-
-/** Test-only state reset. Clears the suppress-recursion flag + the
- *  threshold debounce timer + pending value + the one-time subscriber
- *  guard so consecutive tests don't inherit a poisoned state. Tests
- *  that need the subscriber bound must call renderProfilePane() again
- *  after this reset. */
 export function _resetProfileUiForTests(): void {
   suppressPickerChange = false;
   if (thresholdTimer !== null) {

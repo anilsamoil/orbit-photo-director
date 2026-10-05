@@ -4,14 +4,12 @@ const own = { name: 'anil', displayName: 'Anil' };
 const crew = { name: 'jessica', displayName: 'Jessica Meir' };
 const sessionBody = { ok: true, profile: own, profiles: [own, crew] };
 
-// Rendering the picker does not need a target hydration or event-bus timer.
 vi.mock('../src/profile-crud', () => ({ buildCrudSection: () => document.createElement('section') }));
-vi.mock('../src/profile-events', () => ({ subscribeProfileChanged: () => () => {} }));
 
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear(); sessionStorage.clear();
-  document.body.innerHTML = '<span id="profile-badge"></span><div id="profile-body"></div>';
+  document.body.innerHTML = '<div id="profile-body"></div>';
   window.history.replaceState({}, '', '/');
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
 });
@@ -67,7 +65,7 @@ describe('server-authorized profile selection', () => {
     await expect(session.resolveAccountProfile()).rejects.toThrow('Connect once');
   });
 
-  it('resumes only the last selected profile offline, with no selectable permissions or sync', async () => {
+  it('resumes only the last selected profile offline, with no sync', async () => {
     const session = await signIn('/?u=jessica');
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     await session.resolveAccountProfile('https://map.astroanil.dev/?u=anil');
@@ -82,7 +80,9 @@ describe('server-authorized profile selection', () => {
     const ui = await import('../src/profile-ui');
     ui.renderProfilePane();
     expect(document.querySelector('#profile-picker-select')).toBeNull();
-    expect(document.querySelector('#profile-picker-section')?.textContent).toContain('Offline');
+    expect(document.querySelector('#profile-picker-section h3')?.textContent).toBe('Active profile · Jessica Meir');
+    expect(document.querySelector('#profile-picker-section p')?.textContent)
+      .toBe('Offline · using this tab’s last verified profile. Reconnect and reload to sync.');
   });
 
   it('drops a revoked grant on the next successful sign-in and returns to the own profile', async () => {
@@ -111,6 +111,152 @@ describe('server-authorized profile selection', () => {
   });
 });
 
+describe('crew roster profiles from ?u=', () => {
+  const cachedSession = () => JSON.parse(sessionStorage.getItem('opd-account-session-v1') ?? 'null');
+
+  it('opens the roster profile over the signed-in session and caches only the session', async () => {
+    const session = await signIn('/?u=watkins');
+    expect(session.getAccountProfile()).toEqual({ name: 'watkins', displayName: 'Jessica Watkins (Watty)', isVerified: false });
+    expect(session.getSignedInAccountProfile()).toEqual({ ...own, isVerified: true });
+    expect(cachedSession()).toEqual({ ...own, isVerified: true });
+  });
+
+  it('keeps the granted profile the tab had in the cache across a roster visit', async () => {
+    const session = await signIn('/?u=jessica');
+    await session.resolveAccountProfile('https://map.astroanil.dev/?u=kutryk');
+    expect(session.getAccountProfile()).toEqual({ name: 'kutryk', displayName: 'Josh Kutryk', isVerified: false });
+    expect(cachedSession()).toEqual({ ...crew, isVerified: true });
+  });
+
+  it('resolves ?u=anil and a granted name exactly as before', async () => {
+    const session = await signIn('/?u=anil');
+    expect(session.getAccountProfile()).toEqual({ ...own, isVerified: true });
+    await session.resolveAccountProfile('https://map.astroanil.dev/?u=jessica');
+    expect(session.getAccountProfile()).toEqual({ ...crew, isVerified: true });
+  });
+
+  it('still requires sign-in, and offline still requires a cached session', async () => {
+    window.history.replaceState({}, '', '/?u=watkins');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
+    const session = await import('../src/profile-session');
+    await expect(session.resolveAccountProfile()).rejects.toThrow('Please sign in again to open your own profile.');
+    expect(session.getAccountProfile()).toBeNull();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    await expect(session.resolveAccountProfile()).rejects.toThrow('Connect once to verify your Google account.');
+    expect(session.getAccountProfile()).toBeNull();
+  });
+
+  it('opens a roster profile offline over the cached session', async () => {
+    const session = await signIn();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    expect(await session.resolveAccountProfile('https://map.astroanil.dev/?u=delaney')).toEqual({
+      name: 'delaney', displayName: 'Luke Delaney', isVerified: false,
+    });
+    expect(session.fetch).toHaveBeenCalledTimes(1);
+    expect(cachedSession()).toEqual({ ...own, isVerified: true });
+  });
+
+  it('keeps a local copy on its own profile under a roster profile', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('missing', { status: 404, headers: { 'content-type': 'text/plain' } })));
+    const session = await import('../src/profile-session');
+    await session.resolveAccountProfile('http://127.0.0.1:5173/?u=chris');
+    expect(await session.resolveAccountProfile('http://127.0.0.1:5173/?u=watkins')).toEqual({
+      name: 'watkins', displayName: 'Jessica Watkins (Watty)', isVerified: false,
+    });
+    expect(session.getSignedInAccountProfile()).toEqual({ name: 'chris', displayName: 'chris', isVerified: false, localOnly: true });
+  });
+});
+
+describe('Profile pane identity', () => {
+  async function identity(url: string) {
+    await signIn(url);
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    const section = document.querySelector('#profile-picker-section')!;
+    return {
+      heading: section.querySelector('h3')?.textContent,
+      info: section.querySelector('p')?.textContent,
+      link: section.querySelector('a')?.getAttribute('href') ?? null,
+    };
+  }
+
+  it('names a granted crew profile and the signed-in account managing it', async () => {
+    expect(await identity('/?u=jessica')).toEqual({
+      heading: 'Crew profile · Jessica Meir',
+      info: 'Signed in as Anil. You are managing Jessica Meir’s targets, settings and ratings.',
+      link: '/profile-research/jessica.html',
+    });
+  });
+
+  it('names a crew roster profile without a picker for creating or deleting it', async () => {
+    expect(await identity('/?u=kutryk')).toEqual({
+      heading: 'Crew roster · Josh Kutryk',
+      info: 'Crew roster profiles come with the app. Settings, ratings and hidden targets stay on this device.',
+      link: null,
+    });
+    expect(document.getElementById('profile-picker-select')).toBeNull();
+    expect(document.getElementById('profile-new-btn')).toBeNull();
+    expect(document.getElementById('profile-delete-btn')).toBeNull();
+  });
+
+  it('a local copy with no Google account can create, select, and delete a profile', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('missing', { status: 404, headers: { 'content-type': 'text/plain' } })));
+    const session = await import('../src/profile-session');
+    await session.resolveAccountProfile('http://127.0.0.1:5173/?u=chris');
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    expect(document.getElementById('profile-new-btn')?.textContent).toBe('New profile');
+    expect(document.getElementById('profile-delete-btn')?.textContent).toBe('Delete this profile');
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
+    const input = document.getElementById('profile-new-input') as HTMLInputElement;
+    input.value = 'lee';
+    (document.getElementById('profile-new-btn') as HTMLButtonElement).click();
+    const profiles = await import('../src/profile');
+    expect(profiles.listProfiles()).toContain('lee');
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('lee');
+    expect(reload).toHaveBeenCalledTimes(1);
+    ui.renderProfilePane();
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(expect.arrayContaining(['chris', 'lee']));
+    select.value = 'lee';
+    select.dispatchEvent(new Event('change'));
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('lee');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    ui.renderProfilePane();
+    (document.getElementById('profile-delete-btn') as HTMLButtonElement).click();
+    expect(profiles.loadProfile('chris')).toBeNull();
+    expect(new URL(window.location.href).searchParams.get('u')).toBe('anil');
+  });
+
+  it('lists the authorized profiles on the signed-in profile and offers no New or Delete', async () => {
+    expect(await identity('/')).toEqual({
+      heading: 'Your profile · Anil',
+      info: 'Your Google account opens your own profile by default. Choose an available crew profile below to manage its targets, settings and ratings.',
+      link: null,
+    });
+    const select = document.querySelector<HTMLSelectElement>('#profile-picker-select')!;
+    expect(Array.from(select.options).map((option) => [option.value, option.textContent])).toEqual([
+      ['anil', 'Anil (Your profile)'], ['jessica', 'Jessica Meir'],
+    ]);
+    expect(document.getElementById('profile-new-btn')).toBeNull();
+    expect(document.getElementById('profile-delete-btn')).toBeNull();
+  });
+
+  it('renders no New or Delete, and no select, when the signed-in account has only itself', async () => {
+    await signIn('/', { ok: true, profile: own });
+    const profiles = await import('../src/profile');
+    profiles.saveProfile(profiles.createDefaultProfile('jack'));
+    const ui = await import('../src/profile-ui');
+    ui.renderProfilePane();
+    expect(document.getElementById('profile-picker-select')).toBeNull();
+    expect(document.getElementById('profile-new-btn')).toBeNull();
+    expect(document.getElementById('profile-delete-btn')).toBeNull();
+    expect(document.querySelector('#profile-picker-section p')?.textContent)
+      .toBe('Your Google account selects your profile automatically. Personal targets and ratings stay with your account, including when you open a shared map link.');
+    expect(document.getElementById('profile-picker-section')?.textContent).not.toContain('jack');
+  });
+});
+
 describe('visible crew profile chooser', () => {
   it('lists Jessica from the server on a fresh device, with clear managing and signed-in labels', async () => {
     await signIn('/?u=jessica');
@@ -127,10 +273,6 @@ describe('visible crew profile chooser', () => {
     expect(document.querySelector<HTMLAnchorElement>('#profile-picker-section a')?.getAttribute('href')).toBe('/profile-research/jessica.html');
     expect(document.querySelector('#profile-new-btn')).toBeNull();
     expect(document.querySelector('#profile-delete-btn')).toBeNull();
-    const { renderTopbarProfileBadge } = await import('../src/main');
-    renderTopbarProfileBadge('jessica');
-    expect(document.querySelector('#profile-badge')?.textContent).toBe('👤 Jessica Meir');
-    expect(document.querySelector('#profile-badge')?.getAttribute('aria-label')).toBe('Switch profile');
   });
 
   it('never adds locally saved unrelated profiles, including during cross-tab refresh', async () => {

@@ -12,11 +12,12 @@
  *  fetch that consumes the profile name.
  */
 
+import { isRosterProfile, rosterSites } from './crew-roster';
+import { getAccountProfile } from './profile-session';
+
 /** Per-profile schema. Versioned for migration safety (premise 8 of the
  *  design doc). Bump `version` + add a migrator in MIGRATIONS when the
  *  shape changes. */
-import { getAccountProfile } from './profile-session';
-
 export interface Profile {
   /** Schema version. Migrations chain runs `version → version+1` until
    *  CURRENT_VERSION on every load. */
@@ -234,6 +235,12 @@ export function migrate(
  *  a default." Later slots may prompt instead. */
 export function loadProfile(name: string): Profile | null {
   if (!isValidProfileName(name)) return null;
+  const stored = readStoredProfile(name);
+  if (!isRosterProfile(name)) return stored;
+  return { ...(stored ?? createDefaultProfile(name)), additions: [...rosterSites(name)] };
+}
+
+function readStoredProfile(name: string): Profile | null {
   let raw: string | null;
   try {
     raw = localStorage.getItem(profileKey(name));
@@ -273,7 +280,7 @@ export function saveProfile(profile: Profile): void {
       `expected ${CURRENT_PROFILE_VERSION}. Did you forget to migrate?`,
     );
   }
-  const serialized = JSON.stringify(profile);
+  const serialized = JSON.stringify(isRosterProfile(profile.name) ? { ...profile, additions: [] } : profile);
   try {
     localStorage.setItem(profileKey(profile.name), serialized);
   } catch (err) {
