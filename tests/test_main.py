@@ -537,14 +537,14 @@ def test_fetch_tle_falls_back_to_cache_on_network_error(tmp_path: Path) -> None:
     import os as _os
     _os.utime(cache, (old_mtime, old_mtime))
 
-    with patch("generator.main.requests.get", side_effect=RuntimeError("offline")):
+    with patch("generator.main.requests.get", side_effect=requests.ConnectionError("offline")):
         tle = fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
     assert tle is not None
 
 
 def test_fetch_tle_no_cache_no_network_raises(tmp_path: Path) -> None:
     cache = tmp_path / "iss.tle"
-    with patch("generator.main.requests.get", side_effect=RuntimeError("offline")):
+    with patch("generator.main.requests.get", side_effect=requests.ConnectionError("offline")):
         with pytest.raises(RuntimeError, match="TLE fetch failed"):
             fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
 
@@ -562,11 +562,13 @@ def test_fetch_tle_logs_reboost_when_mean_motion_jumps(
 
     # Reboost = altitude raised = period lengthens = mean motion DECREASES.
     # Old TLE has 15.4981; drop it to 15.4900 to trigger detect_reboost.
-    bumped_tle = (
-        "ISS (ZARYA)\n"
-        "1 25544U 98067A   24291.79041667  .00031560  00000-0  56270-3 0  9998\n"
-        "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.49000000479596\n"
+    bumped_line1 = _resign_tle_line(
+        "1 25544U 98067A   24291.79041667  .00031560  00000-0  56270-3 0  9998"
     )
+    bumped_line2 = _resign_tle_line(
+        "2 25544  51.6383 254.0066 0009172  76.0729  21.3008 15.49000000479596"
+    )
+    bumped_tle = f"ISS (ZARYA)\n{bumped_line1}\n{bumped_line2}\n"
     import logging
     with (
         caplog.at_level(logging.WARNING, logger="generator.main"),
@@ -593,9 +595,13 @@ def test_fetch_tle_logs_when_prior_cache_corrupted(
     _os.utime(cache, (old_mtime, old_mtime))
 
     import logging
+    line1, line2 = _iss_lines("24291.79041667")
     with (
         caplog.at_level(logging.WARNING, logger="generator.main"),
-        patch("generator.main.requests.get", return_value=_FakeResponse(SAMPLE_TLE_TEXT)),
+        patch(
+            "generator.main.requests.get",
+            return_value=_FakeResponse(f"{line1}\n{line2}\n"),
+        ),
     ):
         fetch_tle("http://example.invalid", cache, ttl_hours=1.0)
 
@@ -641,13 +647,15 @@ def _stale_cache(cache: Path, text: str) -> None:
 def test_fetch_tle_uses_wheretheiss_when_celestrak_times_out(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """CelesTrak ConnectTimeout, Where the ISS answers: that TLE is cached."""
     cache = tmp_path / "iss.tle"
     _stale_cache(cache, SAMPLE_TLE_TEXT)
     line1, line2 = _iss_lines("24291.79041667")
     payload = json.dumps({"id": "25544", "line1": line1, "line2": line2})
 
+    timeouts: list[float | None] = []
+
     def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+        timeouts.append(timeout)
         if url == CELESTRAK_URL:
             raise requests.ConnectTimeout("celestrak connect timeout")
         if url == WHERETHEISS_URL:
@@ -660,6 +668,7 @@ def test_fetch_tle_uses_wheretheiss_when_celestrak_times_out(
         patch("generator.main.requests.get", side_effect=fake_get),
     ):
         tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    assert timeouts == [5.0, 5.0]
     assert tle.line1 == line1
     assert tle.line2 == line2
     assert cache.read_text() == f"{line1}\n{line2}\n"
