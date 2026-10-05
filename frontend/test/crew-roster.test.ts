@@ -89,6 +89,20 @@ describe('crew roster registry', () => {
   });
 });
 
+describe('crew roster import cycle', () => {
+  it.each([
+    ['profile', () => import('../src/profile')],
+    ['profile-session', () => import('../src/profile-session')],
+    ['crew-roster', () => import('../src/crew-roster')],
+    ['csv-parse', () => import('../src/csv-parse')],
+  ])('loads roster sites when %s is imported first', async (_first, importFirst) => {
+    vi.resetModules();
+    await importFirst();
+    const { loadProfile } = await import('../src/profile');
+    expect(loadProfile('delaney')?.additions[10]?.id).toBe('personal:delaney:okinawa-island-and-adjacent-reefs-japan');
+  });
+});
+
 describe('crew roster registry over broken files', () => {
   const ROSTER = [
     { name: 'watkins', displayName: 'Jessica Watkins (Watty)' },

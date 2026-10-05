@@ -340,6 +340,41 @@ describe("'profile-changed' event", () => {
   });
 });
 
+describe('crew roster profiles', () => {
+  const stale: PersonalTarget = {
+    id: 'personal:watkins:old-upload-row', name: 'Old upload row', lat: 1, lon: 2, priority: 5, createdAt: '2026-09-01T00:00:00.000Z',
+  };
+
+  it('reads the roster sites over stale stored additions and keeps the stored settings', () => {
+    localStorage.setItem('opd-profile-watkins', JSON.stringify({
+      ...createDefaultProfile('watkins'), additions: [stale], removedCuratedIds: ['grand-canyon'], distanceThresholdKm: 800,
+    }));
+    const loaded = loadProfile('watkins');
+    expect(loaded).toMatchObject({ name: 'watkins', removedCuratedIds: ['grand-canyon'], distanceThresholdKm: 800 });
+    expect(loaded?.additions).toHaveLength(12);
+    expect(loaded?.additions[0]?.id).toBe('personal:watkins:lafayette-colorado-hometown');
+    expect(loaded?.additions.some((site) => site.id === stale.id)).toBe(false);
+  });
+
+  it('opens a roster profile that storage has never held, without writing it', () => {
+    const opened = loadOrCreateProfileFromURL('https://map.astroanil.dev/?u=kutryk');
+    expect(opened).toMatchObject({ name: 'kutryk', removedCuratedIds: [], distanceThresholdKm: 1500 });
+    expect(opened.additions).toHaveLength(11);
+    expect(opened.additions.map((site) => site.name)).toContain('Slovenian Karst and Divača region, CAVES connection');
+    expect(localStorage.getItem('opd-profile-kutryk')).toBeNull();
+  });
+
+  it('stores a roster profile without its sites, so repeated saves and loads never duplicate them', () => {
+    saveProfile({ ...loadProfile('delaney')!, distanceThresholdKm: 900 });
+    expect(JSON.parse(localStorage.getItem('opd-profile-delaney') ?? 'null')).toMatchObject({ additions: [], distanceThresholdKm: 900 });
+    saveProfile(loadProfile('delaney')!);
+    saveProfile(loadProfile('delaney')!);
+    expect(loadProfile('delaney')).toMatchObject({ distanceThresholdKm: 900 });
+    expect(loadProfile('delaney')?.additions).toHaveLength(11);
+    expect(loadProfile('delaney')?.additions[10]?.name).toBe('Okinawa island and adjacent reefs, Japan');
+  });
+});
+
 describe('updatePersonalTarget', () => {
   const mk = (over: Partial<PersonalTarget> = {}): PersonalTarget => ({
     id: 'personal:default:gw', name: 'Great Wall', lat: 40.4, lon: 116.6, priority: 5, createdAt: '2026-06-01T00:00:00Z', ...over,

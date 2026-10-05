@@ -111,6 +111,62 @@ describe('server-authorized profile selection', () => {
   });
 });
 
+describe('crew roster profiles from ?u=', () => {
+  const cachedSession = () => JSON.parse(sessionStorage.getItem('opd-account-session-v1') ?? 'null');
+
+  it('opens the roster profile over the signed-in session and caches only the session', async () => {
+    const session = await signIn('/?u=watkins');
+    expect(session.getAccountProfile()).toEqual({ name: 'watkins', displayName: 'Jessica Watkins (Watty)', isVerified: false });
+    expect(session.getSignedInAccountProfile()).toEqual({ ...own, isVerified: true });
+    expect(cachedSession()).toEqual({ ...own, isVerified: true });
+  });
+
+  it('keeps the granted profile the tab had in the cache across a roster visit', async () => {
+    const session = await signIn('/?u=jessica');
+    await session.resolveAccountProfile('https://map.astroanil.dev/?u=kutryk');
+    expect(session.getAccountProfile()).toEqual({ name: 'kutryk', displayName: 'Josh Kutryk', isVerified: false });
+    expect(cachedSession()).toEqual({ ...crew, isVerified: true });
+  });
+
+  it('resolves ?u=anil and a granted name exactly as before', async () => {
+    const session = await signIn('/?u=anil');
+    expect(session.getAccountProfile()).toEqual({ ...own, isVerified: true });
+    await session.resolveAccountProfile('https://map.astroanil.dev/?u=jessica');
+    expect(session.getAccountProfile()).toEqual({ ...crew, isVerified: true });
+  });
+
+  it('still requires sign-in, and offline still requires a cached session', async () => {
+    window.history.replaceState({}, '', '/?u=watkins');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
+    const session = await import('../src/profile-session');
+    await expect(session.resolveAccountProfile()).rejects.toThrow('Please sign in again to open your own profile.');
+    expect(session.getAccountProfile()).toBeNull();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    await expect(session.resolveAccountProfile()).rejects.toThrow('Connect once to verify your Google account.');
+    expect(session.getAccountProfile()).toBeNull();
+  });
+
+  it('opens a roster profile offline over the cached session', async () => {
+    const session = await signIn();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    expect(await session.resolveAccountProfile('https://map.astroanil.dev/?u=delaney')).toEqual({
+      name: 'delaney', displayName: 'Luke Delaney', isVerified: false,
+    });
+    expect(session.fetch).toHaveBeenCalledTimes(1);
+    expect(cachedSession()).toEqual({ ...own, isVerified: true });
+  });
+
+  it('keeps a local copy on its own profile under a roster profile', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('missing', { status: 404, headers: { 'content-type': 'text/plain' } })));
+    const session = await import('../src/profile-session');
+    await session.resolveAccountProfile('http://127.0.0.1:5173/?u=chris');
+    expect(await session.resolveAccountProfile('http://127.0.0.1:5173/?u=watkins')).toEqual({
+      name: 'watkins', displayName: 'Jessica Watkins (Watty)', isVerified: false,
+    });
+    expect(session.getSignedInAccountProfile()).toEqual({ name: 'chris', displayName: 'chris', isVerified: false, localOnly: true });
+  });
+});
+
 describe('visible crew profile chooser', () => {
   it('lists Jessica from the server on a fresh device, with clear managing and signed-in labels', async () => {
     await signIn('/?u=jessica');
