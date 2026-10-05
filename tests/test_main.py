@@ -608,6 +608,169 @@ def test_fetch_tle_logs_when_prior_cache_corrupted(
     ), "expected 'cache parse failed ... reboost detection skipped' warning"
 
 
+CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE"
+WHERETHEISS_URL = "https://api.wheretheiss.at/v1/satellites/25544/tles"
+_ORDERED_TLE_URLS = f"{CELESTRAK_URL},{WHERETHEISS_URL}"
+
+
+def _resign_tle_line(line: str) -> str:
+    body = line[:68]
+    total = 0
+    for char in body:
+        if char.isdigit():
+            total += int(char)
+        elif char == "-":
+            total += 1
+    return f"{body}{total % 10}"
+
+
+def _iss_lines(epoch: str, norad: str = "25544") -> tuple[str, str]:
+    line1, line2 = SAMPLE_TLE_TEXT.strip().splitlines()[1:]
+    line1 = f"{line1[:2]}{norad}{line1[7:18]}{epoch}{line1[32:]}"
+    line2 = f"{line2[:2]}{norad}{line2[7:]}"
+    return _resign_tle_line(line1), _resign_tle_line(line2)
+
+
+def _stale_cache(cache: Path, text: str) -> None:
+    cache.write_text(text)
+    old_mtime = time.time() - 7200
+    import os as _os
+    _os.utime(cache, (old_mtime, old_mtime))
+
+
+def test_fetch_tle_uses_wheretheiss_when_celestrak_times_out(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """CelesTrak ConnectTimeout, Where the ISS answers: that TLE is cached."""
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    line1, line2 = _iss_lines("24291.79041667")
+    payload = json.dumps({"id": "25544", "line1": line1, "line2": line2})
+
+    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == WHERETHEISS_URL:
+            return _FakeResponse(payload)
+        raise AssertionError(url)
+
+    import logging
+    with (
+        caplog.at_level(logging.INFO, logger="generator.main"),
+        patch("generator.main.requests.get", side_effect=fake_get),
+    ):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    assert tle.line1 == line1
+    assert tle.line2 == line2
+    assert cache.read_text() == f"{line1}\n{line2}\n"
+    assert any(
+        "api.wheretheiss.at" in record.message and "won" in record.message
+        for record in caplog.records
+    )
+    assert any(
+        "celestrak.org" in record.message and "celestrak connect timeout" in record.message
+        for record in caplog.records
+    )
+
+
+def test_fetch_tle_rejects_alternate_with_bad_checksum(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    line1, line2 = _iss_lines("24291.79041667")
+    bad_line1 = f"{line1[:-1]}{'0' if line1[-1] != '0' else '1'}"
+    payload = json.dumps({"line1": bad_line1, "line2": line2})
+
+    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == WHERETHEISS_URL:
+            return _FakeResponse(payload)
+        raise AssertionError(url)
+
+    import logging
+    with (
+        caplog.at_level(logging.WARNING, logger="generator.main"),
+        patch("generator.main.requests.get", side_effect=fake_get),
+    ):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
+    assert cache.read_text() == SAMPLE_TLE_TEXT
+    assert any("checksum" in record.message.lower() for record in caplog.records)
+    assert any("all sources" in record.message.lower() for record in caplog.records)
+
+
+def test_fetch_tle_rejects_alternate_with_wrong_norad(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    line1, line2 = _iss_lines("24291.79041667", norad="99999")
+    payload = json.dumps({"line1": line1, "line2": line2})
+
+    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == WHERETHEISS_URL:
+            return _FakeResponse(payload)
+        raise AssertionError(url)
+
+    import logging
+    with (
+        caplog.at_level(logging.WARNING, logger="generator.main"),
+        patch("generator.main.requests.get", side_effect=fake_get),
+    ):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    assert tle.line1.startswith("1 25544U")
+    assert "99999" not in cache.read_text()
+    assert any("norad" in record.message.lower() for record in caplog.records)
+    assert any("all sources" in record.message.lower() for record in caplog.records)
+
+
+def test_fetch_tle_keeps_newer_cache_when_source_epoch_is_older(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    line1, line2 = _iss_lines("24289.79041667")
+
+    import logging
+    with (
+        caplog.at_level(logging.WARNING, logger="generator.main"),
+        patch(
+            "generator.main.requests.get",
+            return_value=_FakeResponse(f"{line1}\n{line2}\n"),
+        ),
+    ):
+        tle = fetch_tle(CELESTRAK_URL, cache, ttl_hours=1.0)
+    cached_line1 = SAMPLE_TLE_TEXT.strip().splitlines()[1]
+    assert tle.line1 == cached_line1
+    assert cache.read_text() == SAMPLE_TLE_TEXT
+    assert any("not newer" in record.message.lower() for record in caplog.records)
+
+
+def test_fetch_tle_keeps_cache_when_every_source_fails(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+
+    def fake_get(url: str, timeout: float | None = None, **_kwargs: object) -> _FakeResponse:
+        raise requests.ConnectTimeout(f"connect timeout {url}")
+
+    import logging
+    with (
+        caplog.at_level(logging.WARNING, logger="generator.main"),
+        patch("generator.main.requests.get", side_effect=fake_get),
+    ):
+        tle = fetch_tle(_ORDERED_TLE_URLS, cache, ttl_hours=1.0)
+    assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
+    assert cache.read_text() == SAMPLE_TLE_TEXT
+    assert any(
+        "all sources" in record.message.lower()
+        and "celestrak.org" in record.message
+        and "api.wheretheiss.at" in record.message
+        for record in caplog.records
+    )
+
+
 # --------------------------------------------------------------------------
 # select_cloud_sampler — picks the right sampler based on availability
 # --------------------------------------------------------------------------
