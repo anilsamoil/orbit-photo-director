@@ -255,10 +255,96 @@ def test_future_stamp_waits_at_most_one_rest(tmp_path: Path) -> None:
         "sources": {URL: {"attempted_at": future.isoformat(), "failures": 0}},
     }
     (tmp_path / "tle-sources.json").write_text(json.dumps(ledger))
-    sources = TleSources(tmp_path, clock=clock, transport=lambda url, budget_s: TextStream("x"))
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream("x")
+
+    sources = TleSources(tmp_path, clock=clock, transport=transport)
     reply = sources.ask(URL, _echo, budget_s=5)
     assert isinstance(reply, Throttled)
     assert reply.until == T0 + timedelta(hours=2)
+    assert calls == []
+    saved = json.loads((tmp_path / "tle-sources.json").read_text())
+    assert datetime.fromisoformat(saved["sources"][URL]["attempted_at"]) == T0
+    clock.advance(3 * 3600)
+    assert sources.ask(URL, _echo, budget_s=5) == Answered("x")
+    assert calls == [URL]
+
+
+def test_future_failure_stamp_does_not_keep_the_clock_jump(tmp_path: Path) -> None:
+    clock = FakeClock(T0)
+    future = T0 + timedelta(hours=24)
+    ledger = {
+        "version": 1,
+        "sources": {URL: {"attempted_at": future.isoformat(), "failures": 2}},
+    }
+    (tmp_path / "tle-sources.json").write_text(json.dumps(ledger))
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream("ok")
+
+    sources = TleSources(tmp_path, clock=clock, transport=transport)
+    reply = sources.ask(URL, _echo, budget_s=5)
+    assert isinstance(reply, BackedOff)
+    assert reply.until == T0 + timedelta(hours=4)
+    assert calls == []
+    saved = json.loads((tmp_path / "tle-sources.json").read_text())
+    assert datetime.fromisoformat(saved["sources"][URL]["attempted_at"]) == T0
+    assert saved["sources"][URL]["failures"] == 2
+    clock.advance(26 * 3600)
+    assert sources.ask(URL, _echo, budget_s=5) == Answered("ok")
+    assert calls == [URL]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"\xff\xfe not utf-8",
+        b"[]",
+        b'{"sources": "nope"}',
+    ],
+)
+def test_bad_ledger_bytes_are_treated_as_empty(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, payload: bytes
+) -> None:
+    clock = FakeClock(T0)
+    (tmp_path / "tle-sources.json").write_bytes(payload)
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream("ok")
+
+    sources = _sources(tmp_path, clock, transport)
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="generator.tle_sources"):
+        assert sources.ask(URL, _echo, budget_s=5) == Answered("ok")
+    assert calls == [URL]
+    assert any("unreadable" in record.message for record in caplog.records)
+
+
+def test_wrong_typed_ledger_row_does_not_block_the_fetch(tmp_path: Path) -> None:
+    clock = FakeClock(T0)
+    payload = {"version": 1, "sources": {URL: {"attempted_at": 12, "failures": "x"}}}
+    (tmp_path / "tle-sources.json").write_text(json.dumps(payload))
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        return TextStream("ok")
+
+    sources = _sources(tmp_path, clock, transport)
+    assert sources.ask(URL, _echo, budget_s=5) == Answered("ok")
+    assert calls == [URL]
 
 
 def test_corrupt_ledger_is_treated_as_empty(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

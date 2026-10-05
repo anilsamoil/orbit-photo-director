@@ -118,6 +118,7 @@ class _RequestsStream:
 
 
 def open_http(url: str, budget_s: float) -> _RequestsStream:
+    """Stop body reads at budget_s. DNS and header bytes can outlast it."""
     response = requests.get(
         url,
         stream=True,
@@ -150,8 +151,12 @@ class TleSources:
         budget_s: float,
         lift_answer_rest: bool = False,
     ) -> Answered[T] | Failed | Throttled | BackedOff:
-        stamp = self._reserve(url, lift_answer_rest=lift_answer_rest)
-        if not isinstance(stamp, datetime):
+        try:
+            stamp = self._reserve(url, lift_answer_rest=lift_answer_rest)
+        except OSError as exc:
+            log.warning("TLE source ledger unavailable (%s); fetching without a rest", exc)
+            stamp = None
+        if stamp is not None and not isinstance(stamp, datetime):
             return stamp
         try:
             status, text = self._read(url, budget_s)
@@ -163,13 +168,31 @@ class TleSources:
             value = judge(status, text)
         except (ValueError, OSError) as exc:
             return Failed(_reason(exc))
-        self._settle(url, stamp)
+        if isinstance(stamp, datetime):
+            self._settle(url, stamp)
         return Answered(value)
+
+    def clear_rest(self, url: str) -> None:
+        try:
+            with self._locked():
+                records = self._load()
+                if url not in records:
+                    return
+                del records[url]
+                self._save(records)
+        except OSError as exc:
+            log.warning(
+                "TLE source ledger %s not updated (%s); the source may keep its rest",
+                self._ledger,
+                exc,
+            )
 
     def _reserve(self, url: str, *, lift_answer_rest: bool) -> datetime | Throttled | BackedOff:
         with self._locked():
             now = _as_utc(self._clock.now())
             records = self._load()
+            if _clamp_future(records, now):
+                self._save(records)
             record = records.get(url)
             resting = _rest(record, now)
             if isinstance(resting, BackedOff):
@@ -182,12 +205,19 @@ class TleSources:
             return now
 
     def _settle(self, url: str, stamp: datetime) -> None:
-        with self._locked():
-            records = self._load()
-            current = records.get(url)
-            if current is not None and current.attempted_at == stamp:
-                records[url] = _Record(attempted_at=stamp, failures=0)
-                self._save(records)
+        try:
+            with self._locked():
+                records = self._load()
+                current = records.get(url)
+                if current is not None and current.attempted_at == stamp:
+                    records[url] = _Record(attempted_at=stamp, failures=0)
+                    self._save(records)
+        except OSError as exc:
+            log.warning(
+                "TLE source ledger %s not updated (%s); the source may keep its rest",
+                self._ledger,
+                exc,
+            )
 
     def _read(self, url: str, budget_s: float) -> tuple[int, str]:
         deadline = self._clock.monotonic() + budget_s
@@ -229,12 +259,12 @@ class TleSources:
             text = self._ledger.read_text()
         except FileNotFoundError:
             return {}
-        except OSError as exc:
+        except (OSError, UnicodeError, ValueError) as exc:
             _warn_unreadable(self._ledger, exc)
             return {}
         try:
             raw = json.loads(text)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeError, ValueError, TypeError) as exc:
             _warn_unreadable(self._ledger, exc)
             return {}
         sources = raw.get("sources") if isinstance(raw, dict) else None
@@ -277,7 +307,7 @@ def _as_utc(moment: datetime) -> datetime:
 def _rest(record: _Record | None, now: datetime) -> Throttled | BackedOff | None:
     if record is None:
         return None
-    since = min(record.attempted_at, now)
+    since = record.attempted_at if record.attempted_at <= now else now
     if record.failures == 0:
         until = since + _ANSWER_REST
         if now < until:
@@ -288,6 +318,16 @@ def _rest(record: _Record | None, now: datetime) -> Throttled | BackedOff | None
     if now < until:
         return BackedOff(until, record.failures)
     return None
+
+
+def _clamp_future(records: dict[str, _Record], now: datetime) -> bool:
+    changed = False
+    for url, record in records.items():
+        if record.attempted_at <= now:
+            continue
+        records[url] = _Record(attempted_at=now, failures=record.failures)
+        changed = True
+    return changed
 
 
 def _parse_row(item: object) -> _Record | None:
