@@ -1974,7 +1974,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held, edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
 }
 
 async function proveIssClock(send) {
@@ -3020,6 +3020,7 @@ async function proveIssKeyboard(send, evidenceDir) {
     'iss keyboard straight down',
     10000,
   );
+  await proveIssProfileMenuEscape(send, evidenceDir);
   await pressKey(send, 'H');
   await waitFor(
     send,
@@ -3257,6 +3258,70 @@ function issLookNear(origin, tolerance) {
 
 async function releaseKey(send, key) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key });
+}
+
+async function proveIssProfileMenuEscape(send, evidenceDir) {
+  const before = await evaluate(send, `(() => {
+    const raw = sessionStorage.getItem('opd-iss-aim');
+    if (!raw || localStorage.getItem('opd-iss-aim') !== raw) return null;
+    const aim = JSON.parse(raw);
+    if (aim.mode !== 'nadir') return null;
+    const nadir = document.querySelector('[data-iss-preset="nadir"]');
+    const horizon = document.querySelector('[data-iss-preset="horizon"]');
+    if (nadir?.getAttribute('aria-pressed') !== 'true') return null;
+    if (horizon?.getAttribute('aria-pressed') !== 'false') return null;
+    const fov = window.__opdIss?.getVerticalFieldOfView?.();
+    if (typeof fov !== 'number') return null;
+    return { raw, fov };
+  })()`);
+  if (!before) throw new Error('iss profile menu escape baseline missing');
+  await click(send, '#profile-badge');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      const rows = [...menu.querySelectorAll('.profile-menu-item')].map((row) => row.textContent);
+      if (rows.length !== 3) return null;
+      return { ok: true };
+    })()`,
+    'iss profile menu open',
+    10000,
+  );
+  await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!menu || !menu.matches(':popover-open')) return null;
+      if (document.activeElement !== frame) return null;
+      return { ok: true };
+    })()`,
+    'iss profile menu stays open with the view focused',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-profile-menu');
+  await pressKey(send, 'Escape');
+  await waitFor(
+    send,
+    `(() => {
+      const menu = document.getElementById('profile-menu');
+      if (!menu || menu.matches(':popover-open')) return null;
+      if (sessionStorage.getItem('opd-iss-aim') !== ${JSON.stringify(before.raw)}) return null;
+      if (localStorage.getItem('opd-iss-aim') !== ${JSON.stringify(before.raw)}) return null;
+      const nadir = document.querySelector('[data-iss-preset="nadir"]');
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (nadir?.getAttribute('aria-pressed') !== 'true') return null;
+      if (horizon?.getAttribute('aria-pressed') !== 'false') return null;
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || Math.abs(fov - ${before.fov}) > 0.5) return null;
+      return { ok: true, fov };
+    })()`,
+    'iss profile menu escape keeps aim',
+    10000,
+  );
+  await shot(send, evidenceDir, 'iss-profile-menu-escape');
 }
 
 async function proveIssKeyHelp(send, evidenceDir) {
