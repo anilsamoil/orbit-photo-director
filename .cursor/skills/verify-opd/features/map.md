@@ -8,7 +8,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 - `map-legend` shows launch, day, twilight, eclipse, Anil's targets, and the Starship status. The Anil swatch is `#8b93ff`. The Starship swatch is `#ff5c5c`.
 - `map-imagery` shows the imagery or clouds date badge.
 - `map-controls` has no map ? button and no (i) credit button. The right tool rail uses that space. `#map-chrome-toggle` stays in the same screen place when it reads `Controls` and when it reads `Hide`. It is 88px wide and 44px tall, and `right` is `12px`.
-- `map-time` is the Time strip under the map (`.map-command`). It is not in the top Show toolbar. T+45 moves the readout off Now, then Now returns it.
+- `map-time` is the Time strip (`.map-command`) laid on the map. The canvas meets `#map-pane` with a 0px gap. The strip's computed background is `rgba(16, 22, 28, 0.55)`, and the ground shows through it. It is not in the top Show toolbar. T+45 moves the readout off Now, then Now returns it.
 - `map-tools` toggles IR, night lights, labels, multi-orbit, and follow, and confirms ISS up is the selected bearing.
 - `map-satellites` opens the picker and lists Tiangong and Hubble.
 - `map-target-popup` opens the Verify Reef popup.
@@ -19,7 +19,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 ## How to get to it (user POV)
 
 - Choose the Map tab. The page also lands here on first load.
-- The map opens clear. One `Controls` button sits at the bottom right. The legend, the Time strip under the map, the Show toolbar, the tool dock, the imagery date, the zoom buttons, the launch panel, and the satellite picker are hidden. The map ? button and the (i) credit button stay off. The top bar and the status footer stay, including Sign in and Reload when the session is dead. Help on the other tabs stays.
+- The map opens clear. One `Controls` button sits at the bottom right. The legend, the Time strip on the map, the Show toolbar, the tool dock, the imagery date, the zoom buttons, the launch panel, and the satellite picker are hidden. The map ? button and the (i) credit button stay off. The top bar and the status footer stay, including Sign in and Reload when the session is dead. Help on the other tabs stays.
 - Tap `Controls`. The chrome comes back and the button reads `Hide`. Tap `Hide` and the map is clear again. The choice is stored on this device as `opd-map-chrome` (`shown` or `hidden`). A missing key stays hidden.
 
 ## Driving it with opd-verify
@@ -29,9 +29,9 @@ Preconditions:
 - `doctor` prints `ok`.
 - The launch fixture `valid_until` is still in the future.
 
-- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present. On a fresh profile the legend is in the page and `display: none`. The Show toolbar and the Time strip (`.map-command`) are `display: none` with it. `#map-chrome-toggle` reads `Controls`, is 88px wide and 44px tall with `right` `12px`, and `aria-expanded` is `false`. The status footer and the Map tab stay visible. `evidence/map-chrome-hidden.png` is that clear map. The script taps `Controls`. The button reads `Hide`, the Time strip is visible under the map, `opd-map-chrome` is `shown`, and a reload keeps that chrome. The script taps `Hide`, the key is `hidden`, and a reload keeps the clear map. It taps `Controls` again, and the rest of this drive uses that chrome.
+- **Open the map.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive map`. The URL includes `?e2e`. The ISS marker, legend, imagery badge, and `iss-track-layer` are present. On a fresh profile the legend is in the page and `display: none`. The Show toolbar and the Time strip (`.map-command`) are `display: none` with it. `#map-chrome-toggle` reads `Controls`, is 88px wide and 44px tall with `right` `12px`, and `aria-expanded` is `false`. The status footer and the Map tab stay visible. `evidence/map-chrome-hidden.png` is that clear map. The script taps `Controls`. The button reads `Hide`, the Time strip is visible on the map, `opd-map-chrome` is `shown`, and a reload keeps that chrome. The script taps `Hide`, the key is `hidden`, and a reload keeps the clear map. It taps `Controls` again, and the rest of this drive uses that chrome.
 - **Controls.** The map ? button and the (i) credit button are not shown. Hiding the chrome and showing it again leaves `#map-chrome-toggle` in the same place, still 88 by 44 and 12px from the right of `#map-pane`. `evidence/map-controls.png` is that rail.
-- **Time.** T+45 changes `#time-slider-readout`. Now sets that readout back to `Now`.
+- **Time.** With the chrome shown, the MapLibre canvas bottom meets `#map-pane` (a 0px gap) and `.map-command` overlaps that canvas. The strip's computed `background-color` is `rgba(16, 22, 28, 0.55)`. The time controls inside it are transparent, so the ground shows through the strip. T+45 changes `#time-slider-readout`. Now sets that readout back to `Now`.
 - **Tool rail.** IR becomes active, night lights become active, labels become inactive, multi-orbit becomes active, ISS up is already the default and stays active, and its title is `ISS up (default). Rotate so the direction of travel points up`. Follow reports `aria-pressed` false.
 - **Satellites.** The picker lists Tiangong and Hubble. The script closes it without adding a NORAD id.
 - **Target popup.** The script frames Verify Reef and clicks that point. A popup contains Verify Reef.

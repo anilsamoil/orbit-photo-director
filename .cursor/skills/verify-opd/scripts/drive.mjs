@@ -1380,6 +1380,80 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   return `upcoming: ${ascent} above ${mesa}, score sort, hide persisted ${mesaId}, fresh profile hid it`;
 }
 
+function rgbaChannels(color) {
+  const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(String(color || ''));
+  if (!match) return null;
+  return {
+    r: Number(match[1]),
+    g: Number(match[2]),
+    b: Number(match[3]),
+    a: match[4] === undefined ? 1 : Number(match[4]),
+  };
+}
+
+function timeStripShowsGround(color) {
+  const parsed = rgbaChannels(color);
+  if (!parsed) return false;
+  return parsed.r === 16 && parsed.g === 22 && parsed.b === 28 && parsed.a < 1 && Math.abs(parsed.a - 0.55) <= 0.02;
+}
+
+function paintIsClear(color) {
+  if (color === 'transparent') return true;
+  const parsed = rgbaChannels(color);
+  return !!parsed && parsed.a === 0;
+}
+
+async function proveMapLaidOnPane(send) {
+  const laid = await evaluate(send, `(() => {
+    const pane = document.getElementById('map-pane');
+    const map = document.getElementById('map');
+    const canvas = map && map.querySelector('canvas.maplibregl-canvas');
+    const strip = document.querySelector('.map-command');
+    const controls = document.querySelector('.map-command .map-controls-time');
+    if (!pane || !map || !canvas || !strip || !controls) return null;
+    const paneStyle = getComputedStyle(pane);
+    const mapStyle = getComputedStyle(map);
+    const stripStyle = getComputedStyle(strip);
+    const controlsStyle = getComputedStyle(controls);
+    if (stripStyle.display === 'none' || controlsStyle.display === 'none') return null;
+    const paneBox = pane.getBoundingClientRect();
+    const canvasBox = canvas.getBoundingClientRect();
+    const stripBox = strip.getBoundingClientRect();
+    const gap = paneBox.bottom - canvasBox.bottom;
+    const covers = canvasBox.top <= stripBox.top + 1
+      && canvasBox.bottom + 1 >= stripBox.bottom
+      && canvasBox.left <= stripBox.left + 1
+      && canvasBox.right + 1 >= stripBox.right;
+    return {
+      gap,
+      bottom: mapStyle.bottom,
+      rowGap: paneStyle.rowGap,
+      columnGap: paneStyle.columnGap,
+      paddingTop: paneStyle.paddingTop,
+      paddingRight: paneStyle.paddingRight,
+      paddingBottom: paneStyle.paddingBottom,
+      paddingLeft: paneStyle.paddingLeft,
+      color: stripStyle.backgroundColor,
+      controls: controlsStyle.backgroundColor,
+      covers,
+      canvasBottom: canvasBox.bottom,
+      paneBottom: paneBox.bottom,
+      stripTop: stripBox.top,
+      stripBottom: stripBox.bottom,
+    };
+  })()`);
+  const paddingClear = laid
+    && laid.paddingTop === '0px'
+    && laid.paddingRight === '0px'
+    && laid.paddingBottom === '0px'
+    && laid.paddingLeft === '0px';
+  const gapClear = laid && laid.rowGap === '0px' && laid.columnGap === '0px';
+  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !timeStripShowsGround(laid.color) || !paintIsClear(laid.controls)) {
+    throw new Error(`time strip not laid on the map ${JSON.stringify(laid)}`);
+  }
+  return laid;
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -1414,6 +1488,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   }
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   await proveMapChromeMemory(send);
+  const laid = await proveMapLaidOnPane(send);
   const anil = await evaluate(send, `(() => {
     const node = document.querySelector('.map-legend-anil');
     const swatch = node ? getComputedStyle(node).backgroundColor : '';
@@ -1599,7 +1674,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl) {
   );
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
-  return 'map: globe, legend, imagery, hide control 88x44 at 12px, time, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted';
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted`;
 }
 
 const UNAVAILABLE_LEGEND = {
