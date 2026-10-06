@@ -4634,7 +4634,6 @@ summary:focus-visible {
 
 @media (max-height: 520px) {
   body:has(> #view.view-map):not(.map-chrome-hidden) {
-    --map-command-height: 52px;
     --map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));
   }
 
@@ -4642,13 +4641,14 @@ summary:focus-visible {
     right: 8px;
     bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));
     align-items: center;
-    height: 52px;
-    max-height: 52px;
+    height: auto;
+    max-height: none;
     padding: 4px 96px 4px 8px;
   }
 
   .view-map .map-command .map-controls-time {
-    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
   }
 
   .view-map .map-control-dock,
@@ -4684,6 +4684,22 @@ summary:focus-visible {
   .live-readout,
   .live-readout-toggle {
     display: none;
+  }
+}
+
+@media (max-height: 520px) and (min-width: 720px) {
+  body:has(> #view.view-map):not(.map-chrome-hidden) {
+    --map-command-height: 52px;
+  }
+
+  .view-map .map-command {
+    height: 52px;
+    max-height: 52px;
+  }
+
+  .view-map .map-command .map-controls-time {
+    flex-wrap: nowrap;
+    overflow-x: visible;
   }
 }
 

@@ -289,6 +289,12 @@ describe('map chrome layout', () => {
     expect(heights).toContain('calc(120px + env(safe-area-inset-bottom, 0px))');
     expect(heights).toContain('52px');
     expect(heights).not.toContain('calc(72px + env(safe-area-inset-bottom, 0px))');
+    const narrowShort = css.slice(css.indexOf('@media (max-height: 520px) {'), css.indexOf('@media (max-height: 520px) and (min-width: 720px)'));
+    const wideShort = css.slice(css.indexOf('@media (max-height: 520px) and (min-width: 720px)'), css.indexOf('@media (max-height: 520px) and (max-width: 899px)'));
+    expect(narrowShort).not.toContain('flex-wrap: nowrap');
+    expect(narrowShort).toContain('overflow-x: auto');
+    expect(wideShort).toContain('flex-wrap: nowrap');
+    expect(wideShort).toContain('height: 52px;');
     expect(css).toContain('--map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);');
     expect(css).toContain('--map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');

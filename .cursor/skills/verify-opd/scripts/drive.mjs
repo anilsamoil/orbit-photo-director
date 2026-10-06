@@ -2413,6 +2413,39 @@ async function proveLegendWarning(send, evidenceDir) {
   );
 }
 
+async function proveShortTimeRow(send, viewport) {
+  const sizes = [
+    { width: 390, height: 520 },
+    { width: 430, height: 400 },
+    { width: 664, height: 390 },
+    { width: 874, height: 402 },
+  ];
+  try {
+    for (const size of sizes) {
+      await setViewport(send, size.width, size.height, true);
+      await sleep(200);
+      const laid = await evaluate(send, `(() => {
+        const button = document.getElementById('time-fwd-90');
+        const chip = document.querySelector('.map-command .map-controls-time');
+        if (!button || !chip) return { ok: false, reason: 'missing' };
+        const box = button.getBoundingClientRect();
+        if (box.width < 8 || box.height < 8) return { ok: false, reason: 'box', w: box.width, h: box.height };
+        if (box.left < -1 || box.right > innerWidth + 1 || box.top < -1 || box.bottom > innerHeight + 1) {
+          return { ok: false, reason: 'offscreen', left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom), innerWidth, innerHeight };
+        }
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        if (!hit || (hit !== button && !button.contains(hit))) {
+          return { ok: false, reason: 'hit', hit: hit ? (hit.id || hit.getAttribute('aria-label') || hit.tagName) : null };
+        }
+        return { ok: true, wrap: getComputedStyle(chip).flexWrap };
+      })()`);
+      if (!laid?.ok) throw new Error(`time skip ${size.width}x${size.height} ${JSON.stringify(laid)}`);
+    }
+  } finally {
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -2462,6 +2495,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
   await proveMapControlHits(send, 'shot list closed');
+  await proveShortTimeRow(send, viewport);
   await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
   try {
     await proveMapControlHits(send, 'shot list open');
@@ -2699,7 +2733,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time chip ${laid.controls} on clear strip gap ${laid.gap}px, control hits, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time chip ${laid.controls} on clear strip gap ${laid.gap}px, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {
