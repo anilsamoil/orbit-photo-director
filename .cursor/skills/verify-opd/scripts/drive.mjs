@@ -2720,7 +2720,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       const group = [...picker.querySelectorAll('optgroup')].find((entry) => entry.label === 'All launches');
       const option = group && [...group.querySelectorAll('option')].find((entry) => entry.textContent?.includes('Verify Horizon'));
       if (!option) return null;
-      return { value: option.value };
+      return { ok: true, value: option.value };
     })()`,
     'iss all launches group',
     15000,
@@ -2748,6 +2748,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     'iss all launches schedule only',
     15000,
   );
+  await shot(send, evidenceDir, 'iss-all-launches');
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
     if (!(picker instanceof HTMLSelectElement)) return false;
