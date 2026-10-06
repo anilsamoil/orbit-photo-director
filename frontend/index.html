@@ -169,11 +169,17 @@
             </div>
           </div>
         <button id="map-chrome-toggle" class="map-chrome-toggle" type="button" aria-expanded="false" title="Show map controls">Controls</button>
+        <button type="button" class="pip-inset pip-horizon" data-pip="horizon" hidden aria-label="Show the ISS view">
+          <span class="pip-inset-frame" data-pip-frame="horizon" aria-hidden="true"></span>
+        </button>
         <aside id="map-inspector" class="map-inspector" hidden></aside>
       </section>
 
       <section id="iss-pane" class="pane">
         <div id="iss-host"></div>
+        <button type="button" class="pip-inset pip-plan" data-pip="plan" hidden aria-label="Show the map">
+          <span class="pip-inset-frame" data-pip-frame="plan" aria-hidden="true"></span>
+        </button>
       </section>
 
       <section id="profile-pane" class="pane">

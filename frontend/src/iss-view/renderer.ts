@@ -17,6 +17,10 @@ export type IssRendererHooks = {
   onLaunchVisibility?: (eventId: string, visibility: LaunchVisibility) => void;
 };
 
+export type IssRendererOptions = {
+  labels?: boolean;
+};
+
 export type IssRenderer = {
   ready(): Promise<void>;
   aim(aim: IssAim): Promise<void>;
@@ -25,4 +29,8 @@ export type IssRenderer = {
   destroy(): void;
 };
 
-export type IssRendererFactory = (frame: HTMLElement, hooks: IssRendererHooks) => IssRenderer;
+export type IssRendererFactory = (
+  frame: HTMLElement,
+  hooks: IssRendererHooks,
+  options?: IssRendererOptions,
+) => IssRenderer;

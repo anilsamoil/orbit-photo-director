@@ -19,7 +19,7 @@ import { readCatalog } from '../../../iss-view/catalog-read';
 import { fetchCatalog } from '../../../iss-view/catalog-load';
 import { TOWN_LABEL_FOV_DEG } from '../../../iss-view/fov';
 import { placesOnDisk, type CatalogPoint, type PlaceLabel } from '../../../iss-view/place-labels';
-import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
+import type { IssAim, IssRenderer, IssRendererHooks, IssRendererOptions } from '../../../iss-view/renderer';
 import { collapseAttribution } from './attribution';
 
 export const ISS_VIEW_MAX_PITCH_DEG = TANGENT_PITCH_DEG;
@@ -42,7 +42,12 @@ export function cappedPixelRatio(deviceRatio: number): number {
   return Math.min(1.5, deviceRatio);
 }
 
-export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): IssRenderer {
+export function createIssRenderer(
+  frame: HTMLElement,
+  hooks: IssRendererHooks,
+  options?: IssRendererOptions,
+): IssRenderer {
+  const labels = options?.labels !== false;
   listeners.current = hooks;
   registerProtocol();
   let map: MapLibreMap;
@@ -81,8 +86,10 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   const armLabels = (): void => {
     frame.dataset.issPlaceLayers = 'country city town region water';
   };
-  if (map.loaded()) armLabels();
-  else map.once('load', armLabels);
+  if (labels) {
+    if (map.loaded()) armLabels();
+    else map.once('load', armLabels);
+  }
   map.on('error', (event) => {
     const note = imageryNote(event.error);
     if (note) hooks.onImagery(note);
@@ -118,7 +125,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
       },
     );
   };
-  requestNear();
+  if (labels) requestNear();
 
   return {
     ready() {
@@ -169,9 +176,11 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg, roll: EARTH_VIEW_ROLL_DEG });
       launchState.aim = aim;
-      requestNear();
-      if (aim.verticalFovDeg <= TOWN_LABEL_FOV_DEG) requestTowns();
-      syncPlaceMarkers(map, placeMarkers, aim, mergedCatalog(), measured);
+      if (labels) {
+        requestNear();
+        if (aim.verticalFovDeg <= TOWN_LABEL_FOV_DEG) requestTowns();
+        syncPlaceMarkers(map, placeMarkers, aim, mergedCatalog(), measured);
+      }
       syncLaunchOverlay(map, frame, launchMarkers, launchEdges, launchState, hooks);
       await idle(map);
     },
