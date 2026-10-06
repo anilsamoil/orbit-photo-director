@@ -184,6 +184,36 @@ async function evaluate(send, expression) {
   return result.result?.value;
 }
 
+function settledLayout(sample) {
+  if (!sample || sample.ok !== true) return null;
+  return [
+    sample.stage,
+    sample.frame,
+    sample.canvas,
+    sample.scrollHeight,
+    sample.clientHeight,
+    sample.controlsBottom,
+    sample.sceneBottom,
+  ].join(',');
+}
+
+async function waitForStable(send, expression, label, timeoutMs = 10000) {
+  const started = Date.now();
+  let last = null;
+  let previous = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await evaluate(send, `(() => { try { return (${expression}); } catch (error) { return { error: String(error) }; } })()`);
+    if (last && typeof last === 'object' && typeof last.error === 'string') {
+      throw new Error(`${label}: ${last.error}`);
+    }
+    const signature = settledLayout(last);
+    if (signature && signature === previous) return last;
+    previous = signature;
+    await sleep(250);
+  }
+  throw new Error(`${label} timed out. Last value: ${JSON.stringify(last)}`);
+}
+
 async function waitFor(send, expression, label, timeoutMs = 20000) {
   const started = Date.now();
   let last = null;
@@ -3244,6 +3274,7 @@ function launchEarthPanes(width, height) {
     return [
       { ...native, place: 'below', minShort: 200 },
       { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
+      { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
   }
   if (width >= 1200) return [{ ...native, place: 'side', minShort: 400 }];
@@ -3397,13 +3428,46 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
     })()`);
     await setLayoutViewport(send, size.width, size.height, mobile);
   }
-  await waitFor(
+  const restored = await waitForStable(
     send,
-    `(() => { ${LAUNCH_EARTH_CHECK} })()`,
+    `(() => {
+      const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
+      if (!earth || earth.ok !== true) return earth;
+      const stage = document.querySelector('[data-iss-stage]');
+      const frame = document.querySelector('[data-iss-frame]');
+      const canvas = frame?.querySelector('canvas');
+      const controls = document.querySelector('[data-iss-controls]');
+      const scene = document.querySelector('[data-iss-scene]');
+      if (!stage || !frame || !canvas || !controls || !scene) return { step: 'stage' };
+      const stageBox = stage.getBoundingClientRect();
+      const frameBox = frame.getBoundingClientRect();
+      const canvasBox = canvas.getBoundingClientRect();
+      const controlsBox = controls.getBoundingClientRect();
+      const sceneBox = scene.getBoundingClientRect();
+      if (Math.abs(stageBox.height - frameBox.height) > 1 || Math.abs(stageBox.height - canvasBox.height) > 1) {
+        return { step: 'stage', stage: Math.round(stageBox.height), frame: Math.round(frameBox.height), canvas: Math.round(canvasBox.height), inline: stage.style.height, min: getComputedStyle(stage).minHeight };
+      }
+      if (scene.scrollHeight > scene.clientHeight + 1) {
+        return { step: 'scroll', height: [scene.scrollHeight, scene.clientHeight] };
+      }
+      if (controlsBox.bottom > sceneBox.bottom + 1) {
+        return { step: 'controls', top: Math.round(controlsBox.top), bottom: Math.round(controlsBox.bottom), sceneBottom: Math.round(sceneBox.bottom), scrollTop: scene.scrollTop, scrollY: window.scrollY };
+      }
+      return {
+        ...earth,
+        stage: Math.round(stageBox.height),
+        frame: Math.round(frameBox.height),
+        canvas: Math.round(canvasBox.height),
+        scrollHeight: scene.scrollHeight,
+        clientHeight: scene.clientHeight,
+        controlsBottom: Math.round(controlsBox.bottom),
+        sceneBottom: Math.round(sceneBox.bottom),
+      };
+    })()`,
     `iss launch earth restored ${size.width}x${size.height}`,
-    10000,
+    12000,
   );
-  return held.join(', ');
+  return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
 function fixtureInstant(evidenceDir) {
