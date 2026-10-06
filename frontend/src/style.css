@@ -4314,7 +4314,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   height: auto;
   max-height: none;
   margin: 0;
-  padding: 0 0 env(safe-area-inset-bottom, 0px);
+  padding: 0 0 calc(28px + env(safe-area-inset-bottom, 0px));
   overflow: visible;
   color: #f4f7fb;
   background: transparent;
