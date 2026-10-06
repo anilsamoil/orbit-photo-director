@@ -4147,12 +4147,13 @@ async function proveLocalProfilePicker(send, evidenceDir, viewport, baseUrl) {
   await waitFor(
     send,
     `(() => {
-      const error = document.getElementById('profile-new-error')?.textContent || '';
+      const errorText = document.getElementById('profile-new-error')?.textContent || '';
       const names = [...document.querySelectorAll('#profile-picker-select option')].map((opt) => opt.value);
-      if (error !== 'Crew roster profiles come with the app.') return null;
-      if (names.some((name) => name === 'watkins' || name === 'kutryk' || name === 'delaney')) return null;
-      if (new URL(location.href).searchParams.get('u')) return null;
-      return { ok: true };
+      const u = new URL(location.href).searchParams.get('u');
+      const rosterUrl = u === 'watkins' || u === 'kutryk' || u === 'delaney';
+      const rosterOption = names.some((name) => name === 'watkins' || name === 'kutryk' || name === 'delaney');
+      if (errorText === 'Crew roster profiles come with the app.' && !rosterOption && !rosterUrl) return { ok: true, u };
+      return { errorText, names, u };
     })()`,
     'local picker refuses roster names',
     10000,
