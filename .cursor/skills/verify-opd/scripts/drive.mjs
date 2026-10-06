@@ -2096,6 +2096,7 @@ async function proveLegendDisclosure(send, evidenceDir, viewport, suffix = '') {
     (viewport.width === 1400 && viewport.height === 900)
     || (viewport.width === 390 && viewport.height === 664)
     || (viewport.width === 402 && viewport.height === 874)
+    || (viewport.width === 834 && viewport.height === 1194)
   )) {
     await proveLegendShotlist(send, evidenceDir);
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
@@ -2160,7 +2161,149 @@ async function proveShortLandscapeLegend(send, evidenceDir, fullLand) {
   }
 }
 
+async function assertControlCenters(send, label, selectors) {
+  const laid = await evaluate(send, `(() => {
+    const selectors = ${JSON.stringify(selectors)};
+    const misses = [];
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      if (!node) {
+        misses.push({ selector, reason: 'missing' });
+        continue;
+      }
+      const rect = node.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) {
+        misses.push({ selector, reason: 'empty', w: rect.width, h: rect.height });
+        continue;
+      }
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(cx, cy);
+      if (!(hit && (hit === node || node.contains(hit)))) {
+        misses.push({
+          selector,
+          reason: 'hit',
+          id: hit && hit.id ? hit.id : '',
+          className: String(hit && hit.className || '').slice(0, 80),
+          cx: Math.round(cx),
+          cy: Math.round(cy),
+        });
+      }
+    }
+    return { ok: misses.length === 0, misses };
+  })()`);
+  if (!laid?.ok) throw new Error(`control centers ${label} ${JSON.stringify(laid)}`);
+}
+
+async function assertDockAndTimeClear(send, label) {
+  const laid = await evaluate(send, `(() => {
+    const dock = document.querySelector('.map-control-dock');
+    if (dock) dock.scrollTop = dock.scrollHeight;
+    const hits = (a, b) => a && b && a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    const picker = document.getElementById('toggle-satellite-picker');
+    const hide = document.getElementById('map-chrome-toggle');
+    const strip = document.querySelector('.map-command');
+    const banner = document.getElementById('status-banner');
+    if (!picker || !hide || !strip || !banner) return { ok: false, reason: 'missing' };
+    const buttons = [...document.querySelectorAll('.map-control-dock .time-btn')];
+    let bottommost = null;
+    let bottom = -1;
+    for (const node of buttons) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) continue;
+      if (rect.bottom > bottom) {
+        bottom = rect.bottom;
+        bottommost = node;
+      }
+    }
+    if (bottommost !== picker) return { ok: false, reason: 'bottom', id: bottommost && bottommost.id, bottom: Math.round(bottom) };
+    const pickerRect = picker.getBoundingClientRect();
+    const hideRect = hide.getBoundingClientRect();
+    const stripRect = strip.getBoundingClientRect();
+    const bannerRect = banner.getBoundingClientRect();
+    const cx = pickerRect.left + pickerRect.width / 2;
+    const cy = pickerRect.top + pickerRect.height / 2;
+    const hit = pickerRect.width > 0 ? document.elementFromPoint(cx, cy) : null;
+    const pickerHit = !!(hit && (hit === picker || picker.contains(hit)));
+    const timeIds = ['time-now', 'time-back-45', 'time-back-90', 'time-fwd-45', 'time-fwd-90'];
+    const timeOverlaps = [];
+    for (const id of timeIds) {
+      const rect = document.getElementById(id)?.getBoundingClientRect();
+      if (!rect || rect.width < 1) {
+        timeOverlaps.push({ id, reason: 'missing' });
+        continue;
+      }
+      if (hits(rect, bannerRect)) {
+        timeOverlaps.push({
+          id,
+          overlap: Math.round(Math.min(rect.bottom, bannerRect.bottom) - Math.max(rect.top, bannerRect.top)),
+          top: Math.round(rect.top),
+          bottom: Math.round(rect.bottom),
+          bannerTop: Math.round(bannerRect.top),
+        });
+      }
+    }
+    const pickerOverlaps = [];
+    if (hits(pickerRect, hideRect)) pickerOverlaps.push('hide');
+    if (hits(pickerRect, stripRect)) pickerOverlaps.push('strip');
+    const inset = document.querySelector('[data-pip="horizon"]');
+    const insetStyle = inset ? getComputedStyle(inset) : null;
+    const insetRect = inset ? inset.getBoundingClientRect() : null;
+    const insetShown = !!(inset && !inset.hidden && insetStyle && insetStyle.display !== 'none' && insetRect && insetRect.width > 1 && insetRect.height > 1);
+    const insetOverlaps = [];
+    if (insetShown) {
+      if (hits(insetRect, stripRect)) insetOverlaps.push('strip');
+      if (hits(insetRect, hideRect)) insetOverlaps.push('hide');
+    }
+    const ok = pickerHit && pickerOverlaps.length === 0 && timeOverlaps.length === 0 && insetOverlaps.length === 0;
+    return {
+      ok,
+      pickerHit,
+      picker: { top: Math.round(pickerRect.top), bottom: Math.round(pickerRect.bottom), hit: hit ? (hit.id || String(hit.className).slice(0, 60)) : '' },
+      hide: { top: Math.round(hideRect.top), bottom: Math.round(hideRect.bottom) },
+      strip: { top: Math.round(stripRect.top), bottom: Math.round(stripRect.bottom) },
+      pickerOverlaps,
+      timeOverlaps,
+      insetShown,
+      insetOverlaps,
+      inset: insetShown ? { top: Math.round(insetRect.top), bottom: Math.round(insetRect.bottom), left: Math.round(insetRect.left), right: Math.round(insetRect.right) } : null,
+    };
+  })()`);
+  if (!laid?.ok) throw new Error(`dock time ${label} ${JSON.stringify(laid)}`);
+  await evaluate(send, `(() => { const dock = document.querySelector('.map-control-dock'); if (dock) dock.scrollTop = 0; return true; })()`);
+}
+
+const SHOWN_CONTROL_CENTERS = [
+  '.maplibregl-ctrl-zoom-in',
+  '.maplibregl-ctrl-zoom-out',
+  '.maplibregl-ctrl-compass',
+  '#map-legend-toggle',
+  '#map-chrome-toggle',
+  '#time-now',
+  '#time-back-45',
+  '#time-back-90',
+  '#time-fwd-45',
+  '#time-fwd-90',
+  '#time-slider',
+];
+
 async function proveLegendShotlist(send, evidenceDir) {
+  await click(send, '#tab-queue');
+  await waitFor(send, `document.querySelector('.btn-remind') ? { ok: true } : null`, 'shot list remind');
+  const armed = await evaluate(send, `document.body.classList.contains('shotlist-bar-visible')`);
+  if (!armed) await click(send, '.btn-remind');
+  await waitFor(
+    send,
+    `document.body.classList.contains('shotlist-bar-visible') && document.querySelector('.shotlist-add') && document.querySelector('.shotlist-clear') ? { ok: true } : null`,
+    'shot list bar',
+  );
+  await click(send, '#tab-map');
+  await waitFor(
+    send,
+    `document.getElementById('view')?.className === 'view-map' && document.querySelector('.maplibregl-ctrl-zoom-out') ? { ok: true } : null`,
+    'map after shot list',
+  );
+  await ensureMapChromeShown(send);
   const sizes = [
     { width: 390, height: 664, suffix: '390x664' },
     { width: 390, height: 844, suffix: '390x844' },
@@ -2168,12 +2311,23 @@ async function proveLegendShotlist(send, evidenceDir) {
     { width: 874, height: 402, suffix: '874x402' },
     { width: 844, height: 390, suffix: '844x390' },
     { width: 932, height: 430, suffix: '932x430' },
+    { width: 1400, height: 900, suffix: '1400x900' },
+    { width: 834, height: 1194, suffix: '834x1194' },
+    { width: 1194, height: 834, suffix: '1194x834' },
   ];
-  await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
+  const openCenters = [...SHOWN_CONTROL_CENTERS, '.shotlist-add', '.shotlist-clear'];
   try {
     for (const size of sizes) {
-      await setViewport(send, size.width, size.height, true);
+      await setViewport(send, size.width, size.height, size.width < 900);
+      const inset = size.height <= 520
+        ? await safeAreaOverride(send, { top: 0, left: 0, bottom: 21, right: 0 })
+        : false;
       await sleep(300);
+      await assertControlCenters(send, `shotlist ${size.suffix} shown`, openCenters);
+      if (size.width >= 800 && size.height >= 600) {
+        await waitFor(send, pipReadyExpression('horizon'), `horizon inset shotlist ${size.suffix}`, 20000);
+      }
+      await assertDockAndTimeClear(send, `shotlist ${size.suffix} shown`);
       await assertLegendClearOfZoom(send, `shotlist ${size.suffix} shown`);
       const clear = await evaluate(send, `(() => {
         const button = document.getElementById('map-legend-toggle')?.getBoundingClientRect();
@@ -2187,11 +2341,30 @@ async function proveLegendShotlist(send, evidenceDir) {
       })()`);
       if (!clear?.ok) throw new Error(`legend shotlist ${size.suffix} ${JSON.stringify(clear)}`);
       if (size.width === 390 && size.height === 664) await shot(send, evidenceDir, 'map-legend-shotlist');
+      if (inset) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
       await hideMapChrome(send);
       await assertLegendClearOfZoom(send, `shotlist ${size.suffix} hidden`);
+      await assertControlCenters(send, `shotlist ${size.suffix} hidden`, ['#map-chrome-toggle', '.shotlist-add', '.shotlist-clear']);
       await showMapChrome(send);
     }
+    await click(send, '.shotlist-clear');
+    await waitFor(
+      send,
+      `!document.body.classList.contains('shotlist-bar-visible') ? { ok: true } : null`,
+      'shot list cleared',
+    );
+    for (const size of sizes.filter((item) => item.height <= 520)) {
+      await setViewport(send, size.width, size.height, true);
+      const inset = await safeAreaOverride(send, { top: 0, left: 0, bottom: 21, right: 0 });
+      await sleep(300);
+      await assertControlCenters(send, `shotlist ${size.suffix} closed`, SHOWN_CONTROL_CENTERS);
+      await assertDockAndTimeClear(send, `shotlist ${size.suffix} closed`);
+      if (inset) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    }
   } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    const open = await evaluate(send, `document.body.classList.contains('shotlist-bar-visible')`);
+    if (open) await click(send, '.shotlist-clear');
     await evaluate(send, `document.body.classList.remove('shotlist-bar-visible')`);
   }
 }
