@@ -824,6 +824,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const heightPx = Math.max(1, Math.floor(fit.heightPx));
     frame.style.width = `${widthPx}px`;
     frame.style.height = `${heightPx}px`;
+    stage.style.height = `${heightPx}px`;
+    const labelHeightPx = Math.ceil(Math.max(port.offsetHeight, starboard.offsetHeight));
+    if (labelHeightPx > heightPx) stage.style.height = `${labelHeightPx}px`;
     framePx = { widthPx, heightPx };
     telemetryBody.style.maxHeight = fit.bodyMaxPx === null ? '' : `${fit.bodyMaxPx}px`;
     return { widthPx, heightPx };
