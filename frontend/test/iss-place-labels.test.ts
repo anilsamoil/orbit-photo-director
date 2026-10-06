@@ -1,11 +1,15 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
+import { readCatalog } from '../src/iss-view/catalog-read';
 import { CUPOLA_WINDOWS, cupolaPreset } from '../src/iss-view/cupola';
 import { TOWN_LABEL_FOV_DEG } from '../src/iss-view/fov';
-import { LABEL_CATALOG } from '../src/iss-view/label-catalog';
-import { LABEL_TOWNS } from '../src/iss-view/label-catalog-towns';
-import { readCatalog } from '../src/iss-view/catalog-read';
 import { namesAt, placesOnDisk } from '../src/iss-view/place-labels';
+
+const LABEL_CATALOG = readCatalog(JSON.parse(readFileSync(resolve(__dirname, '../src/iss-view/label-catalog.json'), 'utf8')));
+const LABEL_TOWNS = readCatalog(JSON.parse(readFileSync(resolve(__dirname, '../src/iss-view/label-catalog-towns.json'), 'utf8')));
 
 const catalog = [...LABEL_CATALOG, ...LABEL_TOWNS];
 
