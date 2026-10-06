@@ -1711,7 +1711,22 @@ function pipClearExpression(name, selectors) {
         const nodeStyle = getComputedStyle(node);
         if (nodeStyle.display === 'none' || nodeStyle.visibility === 'hidden') continue;
         if (node.getClientRects().length === 0) continue;
-        const other = node.getBoundingClientRect();
+        let other = node.getBoundingClientRect();
+        let clip = node.parentElement;
+        while (clip) {
+          const clipStyle = getComputedStyle(clip);
+          const oy = clipStyle.overflowY;
+          const ox = clipStyle.overflowX;
+          if (oy === 'auto' || oy === 'scroll' || oy === 'hidden' || ox === 'auto' || ox === 'scroll' || ox === 'hidden') {
+            const bounds = clip.getBoundingClientRect();
+            const left = Math.max(other.left, bounds.left);
+            const top = Math.max(other.top, bounds.top);
+            const right = Math.min(other.right, bounds.right);
+            const bottom = Math.min(other.bottom, bounds.bottom);
+            other = { left, top, right, bottom, width: right - left, height: bottom - top };
+          }
+          clip = clip.parentElement;
+        }
         if (other.width < 1 || other.height < 1) continue;
         if (box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5) {
           hits.push(sel);
@@ -2240,6 +2255,7 @@ async function assertDockAndTimeClear(send, label) {
     if (insetShown) {
       if (hits(insetRect, stripRect)) insetOverlaps.push('strip');
       if (hits(insetRect, hideRect)) insetOverlaps.push('hide');
+      if (hits(insetRect, pickerRect)) insetOverlaps.push('picker');
       const bar = document.getElementById('shotlist-bar');
       const legend = document.querySelector('.map-legend');
       const zoom = document.querySelector('.maplibregl-ctrl-top-left');
