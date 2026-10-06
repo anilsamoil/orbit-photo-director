@@ -1,17 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mountIssScene, type IssScene, type MountIssSceneOptions } from '../src/iss-view';
 import type { SceneSnapshot } from '../src/iss-view/model';
 import type { IssRendererFactory } from '../src/iss-view/renderer';
+import { launchStore } from '../src/launch-store';
 import type { LaunchSelection } from '../src/launch-selectors';
 import type { Track } from '../src/types';
 
 import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
 import { installFullscreenDouble, type FullscreenApi, type FullscreenDouble } from './fullscreen-double';
-import { assessment, supported } from './launch-fixtures';
+import { NOW, artifact, assessment, envelope, iso, launch, supported } from './launch-fixtures';
 
 const fixture = fixtureRaw as {
   tle: { line1: string; line2: string };
@@ -335,6 +336,32 @@ describe('ISS fullscreen Escape', () => {
     expect(view.scene.mode()).toBe('horizon');
   });
 
+  it('closes an open shortcut sheet on enter, so aim keys work and Escape does not bring it back', async () => {
+    browser('missing');
+    const view = await mounted({ session: { mode: 'horizon' } });
+    const help = query(view.root, '[data-iss-aim-help]');
+    if (!(help instanceof HTMLButtonElement)) throw new Error('shortcut button is not a native button');
+    help.click();
+    expect(view.root.hasAttribute('data-iss-aim-open')).toBe(true);
+    expect(query(view.root, '[data-iss-aim-sheet]').hidden).toBe(false);
+    expect(help.getAttribute('aria-expanded')).toBe('true');
+
+    view.button.click();
+    expect(marked(view.root)).toBe(true);
+    expect(view.root.hasAttribute('data-iss-aim-open')).toBe(false);
+    expect(query(view.root, '[data-iss-aim-sheet]').hidden).toBe(true);
+    expect(help.getAttribute('aria-expanded')).toBe('false');
+
+    key(view.frame, 'n');
+    expect(view.scene.mode()).toBe('nadir');
+
+    key(view.button, 'Escape');
+    expect(marked(view.root)).toBe(false);
+    expect(view.root.hasAttribute('data-iss-aim-open')).toBe(false);
+    expect(query(view.root, '[data-iss-aim-sheet]').hidden).toBe(true);
+    expect(view.scene.mode()).toBe('nadir');
+  });
+
   it('lets an open modal take Escape first', async () => {
     browser('missing');
     const view = await mounted();
@@ -371,6 +398,64 @@ describe('ISS fullscreen frame', () => {
     await settle();
     expect(view.frame.style.width).toBe('800px');
     expect(view.frame.style.height).toBe('533px');
+  });
+
+  it('hides a stale offline launch in fullscreen and restores it with the selection', async () => {
+    browser('missing');
+    const chance = launch({
+      event_id: 'crew',
+      name: 'Crew',
+      assessment: assessment({ checked_at: iso(1) }),
+      site: { name: 'Cape Canaveral', lat: 28.5, lon: -80.6 },
+      launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' },
+      sources: [{ kind: 'schedule', url: 'https://example.org/launch', fetched_at: iso(1) }],
+    });
+    const body = await envelope(artifact([chance], { revision: 'r-stale', generated_at: iso(1) }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      return new Response(path.includes('launch/latest.json') ? JSON.stringify(body.pointer) : body.body);
+    }));
+    const shown: string[][] = [];
+    try {
+      await launchStore.refresh();
+      const view = await mounted({
+        nowMs: () => NOW + 2 * 60_000,
+        session: { mode: 'horizon' },
+        createRenderer: () => ({
+          ready: () => Promise.resolve(),
+          aim: () => Promise.resolve(),
+          showLaunches: (sites) => shown.push(sites.map((site) => site.eventId)),
+          resize: () => {},
+          destroy: () => {},
+        }),
+      });
+      const picker = query(view.host, '[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) throw new Error('launch picker is not a select');
+      picker.value = 'crew';
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await settle();
+      await view.scene.paint();
+      expect(shown.at(-1)).toEqual(['crew']);
+      await launchStore.refresh(false);
+      await settle();
+      await view.scene.paint();
+      expect(launchStore.getState().availability).toBe('offline');
+      expect(picker.value).toBe('crew');
+      expect(shown.at(-1)).toEqual(['crew']);
+
+      view.button.click();
+      expect(marked(view.root)).toBe(true);
+      expect(shown.at(-1)).toEqual([]);
+      expect(picker.value).toBe('crew');
+
+      view.button.click();
+      expect(marked(view.root)).toBe(false);
+      expect(shown.at(-1)).toEqual(['crew']);
+      expect(picker.value).toBe('crew');
+      expect(view.host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('crew');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('takes the launch corridor off the earth while fullscreen', async () => {
