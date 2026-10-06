@@ -1,6 +1,6 @@
 # Upcoming
 
-Upcoming lists launches with a shooting chance, then future passes from the `top_24h` artifact. The generator writes that artifact from 90 minutes out through the 36 hour window. The page drops a pass once its closest approach is in the past. The pane title starts with Next 36 hours. The fixture puts the Verify Ascent launch card above Verify Mesa. Mesa is about eight hours ahead. Ascent stays after Mesa is hidden.
+Upcoming lists launches with a shooting chance, then future passes from the `top_24h` artifact. The generator writes that artifact from 90 minutes out through the 36 hour window. The page drops a pass once its closest approach is in the past. The pane title starts with Next 36 hours. The fixture puts the Verify Ascent launch card above Verify Mesa. Mesa is about eight hours ahead. Ascent stays after Mesa is hidden. Verify Horizon is the fixture's All launches row. It is not a chance, and Upcoming does not list that name.
 
 ## Sub-features
 
@@ -18,7 +18,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 
-- **Open Upcoming.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive upcoming`. The script requires Verify Ascent above Verify Mesa in the list text.
+- **Open Upcoming.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive upcoming`. The script requires Verify Ascent above Verify Mesa in the list text, and the list does not include Verify Horizon.
 - **Sort.** The Score button gains the active class.
 - **Hide.** The Hide control removes Verify Mesa from the list. Time sort paints the list again and the card stays gone. `removedCuratedIds` in localStorage `opd-profile-anil` contains `verify-mesa`.
 - **Reload.** The script reloads the page and opens Upcoming again. Verify Mesa stays gone, and the same id is still in `removedCuratedIds`.
