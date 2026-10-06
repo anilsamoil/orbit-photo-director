@@ -18,7 +18,9 @@ from generator.tle_sources import (
     Throttled,
     TleSources,
     open_http,
+    parse_three_line_iss,
 )
+from tests.conftest import SAMPLE_TLE_TEXT
 from tests.tle_fakes import FakeClock, TextStream, TrickleStream
 
 T0 = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
@@ -484,3 +486,39 @@ def test_open_http_turns_urllib3_errors_into_connection_errors(
     reply = sources.ask("https://example.test/other", _echo, budget_s=5)
     assert isinstance(reply, Failed)
     assert "reset" in reply.reason
+
+
+def _sample_pair() -> tuple[str, str, str]:
+    name, line1, line2 = SAMPLE_TLE_TEXT.strip().splitlines()
+    return name, line1, line2
+
+
+def test_parse_three_line_iss_tolerates_crlf_and_whitespace() -> None:
+    name, line1, line2 = _sample_pair()
+    expected = f"{line1}\n{line2}\n"
+    variants = [
+        f"{name}\n{line1}\n{line2}\n",
+        f"{name}\r\n{line1}\r\n{line2}\r\n",
+        f"  {name}  \r\n  {line1}\r\n{line2}  \n",
+        f"\n\n{name}\r\n{line1}\r\n{line2}\n\n",
+    ]
+    assert [parse_three_line_iss(text) for text in variants] == [expected] * len(variants)
+
+
+def test_parse_three_line_iss_picks_the_25544_pair() -> None:
+    name, line1, line2 = _sample_pair()
+    decoy1 = f"{line1[:2]}99999{line1[7:]}"
+    decoy2 = f"{line2[:2]}99999{line2[7:]}"
+    text = f"OTHER\n{decoy1}\n{decoy2}\n{name}\n{line1}\n{line2}\n"
+    assert parse_three_line_iss(text) == f"{line1}\n{line2}\n"
+
+
+def test_parse_three_line_iss_rejects_anything_but_the_iss_pair() -> None:
+    name, line1, line2 = _sample_pair()
+    foreign = f"{name}\n{line1[:2]}99999{line1[7:]}\n{line2[:2]}99999{line2[7:]}\n"
+    with pytest.raises(ValueError, match="NORAD 25544"):
+        parse_three_line_iss(foreign)
+    with pytest.raises(ValueError, match="NORAD 25544"):
+        parse_three_line_iss(f"{name}\n{line1}\n")
+    with pytest.raises(ValueError, match="NORAD 25544"):
+        parse_three_line_iss("   \r\n")

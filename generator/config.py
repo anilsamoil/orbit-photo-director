@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .tle_sources import ARISS_ISS_TLE_URL
+
 DEFAULT_TICK_MINUTES = 60  # 1h — geostationary IR refreshes every 10-15 min upstream
 # 36h covers "tomorrow night" planning in every check-time scenario:
 #   - Anil checks at 11pm Pacific (06:00 UTC) → tomorrow's passes 1-25h out, fits
@@ -69,7 +71,9 @@ TLE_WARN_AGE_HOURS = 24.0
 TLE_FLOOR_FRESHNESS = 0.5
 CELESTRAK_ISS_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE"
 WHERETHEISS_ISS_TLE_URL = "https://api.wheretheiss.at/v1/satellites/25544/tles"
-DEFAULT_TLE_URL = f"{CELESTRAK_ISS_TLE_URL},{WHERETHEISS_ISS_TLE_URL}"
+DEFAULT_TLE_URL = (
+    f"{CELESTRAK_ISS_TLE_URL},{ARISS_ISS_TLE_URL},{WHERETHEISS_ISS_TLE_URL}"
+)
 
 # Sun-glint
 SUN_GLINT_THRESHOLD_DEG = 25.0

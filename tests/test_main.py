@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from generator.config import Settings
+from generator.config import DEFAULT_TLE_URL, Settings
 from generator.main import (
     TLE_HARD_FAIL_HOURS,
     CombinedCloudSampler,
@@ -30,7 +30,7 @@ from generator.main import (
 from generator.orbit import TLE, Pass, Position
 from generator.tle_sources import TleSources
 from tests.conftest import SAMPLE_TLE_TEXT
-from tests.tle_fakes import TextStream
+from tests.tle_fakes import FakeClock, TextStream
 
 
 @pytest.fixture(autouse=True)
@@ -629,6 +629,7 @@ def test_fetch_tle_logs_when_prior_cache_corrupted(
 
 
 CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE"
+ARISS_URL = "https://live.ariss.org/iss.txt"
 WHERETHEISS_URL = "https://api.wheretheiss.at/v1/satellites/25544/tles"
 _ORDERED_TLE_URLS = f"{CELESTRAK_URL},{WHERETHEISS_URL}"
 
@@ -902,6 +903,232 @@ def test_expiring_cache_walks_past_a_throttle(
     assert calls == [CELESTRAK_URL]
     fetch_tle(_ORDERED_TLE_URLS, cache, now=epoch + timedelta(hours=23), sources=sources)
     assert calls == [CELESTRAK_URL, WHERETHEISS_URL]
+
+
+def _ariss_text(epoch: str, norad: str = "25544", *, bad_checksum: bool = False) -> str:
+    line1, line2 = _iss_lines(epoch, norad)
+    if bad_checksum:
+        line1 = f"{line1[:-1]}{'0' if line1[-1] != '0' else '1'}"
+    return f"  ISS (ZARYA)  \r\n  {line1}  \r\n  {line2}\r\n"
+
+
+def test_ariss_newer_epoch_wins_when_celestrak_times_out(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    line1, line2 = _iss_lines("24291.79041667")
+    budgets: list[float] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        budgets.append(budget_s)
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == ARISS_URL:
+            return TextStream(_ariss_text("24291.79041667"))
+        raise AssertionError(url)
+
+    with caplog.at_level(logging.INFO, logger="generator.main"):
+        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+    assert budgets == [5.0, 5.0]
+    assert tle.line1 == line1
+    assert tle.line2 == line2
+    assert cache.read_text() == f"{line1}\n{line2}\n"
+    assert any(
+        "live.ariss.org" in record.message and "won" in record.message
+        for record in caplog.records
+    )
+
+
+def test_ariss_bad_checksum_is_rejected(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == ARISS_URL:
+            return TextStream(_ariss_text("24291.79041667", bad_checksum=True))
+        if url == WHERETHEISS_URL:
+            raise requests.ConnectTimeout("wheretheiss connect timeout")
+        raise AssertionError(url)
+
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+    assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
+    assert cache.read_text() == SAMPLE_TLE_TEXT
+    assert any("checksum" in record.message.lower() for record in caplog.records)
+
+
+def test_ariss_wrong_norad_is_rejected(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == ARISS_URL:
+            return TextStream(_ariss_text("24291.79041667", norad="99999"))
+        if url == WHERETHEISS_URL:
+            raise requests.ConnectTimeout("wheretheiss connect timeout")
+        raise AssertionError(url)
+
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+    assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
+    assert "99999" not in cache.read_text()
+    assert any("norad" in record.message.lower() for record in caplog.records)
+
+
+def test_ariss_equal_epoch_keeps_the_cache(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    cache.write_text(SAMPLE_TLE_TEXT)
+    original = cache.read_text()
+    epoch = TLE.from_text(original).epoch
+    now = epoch + timedelta(hours=1)
+    os.utime(cache, (now.timestamp() - 10_000, now.timestamp() - 10_000))
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == ARISS_URL:
+            return TextStream(_ariss_text("24290.79041667"))
+        raise AssertionError(url)
+
+    with caplog.at_level(logging.INFO, logger="generator.main"):
+        tle = fetch_tle(DEFAULT_TLE_URL, cache, now=now, sources=_client(cache, transport))
+    assert tle.line1 == original.strip().splitlines()[1]
+    assert cache.read_text() == original
+    assert calls == [CELESTRAK_URL, ARISS_URL]
+    infos = [record for record in caplog.records if record.levelno == logging.INFO]
+    assert len(infos) == 1
+    assert "no newer TLE" in infos[0].message
+    assert "live.ariss.org" in infos[0].message
+    assert cache.stat().st_mtime == pytest.approx(now.timestamp(), abs=1e-3)
+
+
+def test_ariss_older_epoch_falls_through_to_wheretheiss(tmp_path: Path) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    line1, line2 = _iss_lines("24291.79041667")
+    payload = json.dumps({"line1": line1, "line2": line2})
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == ARISS_URL:
+            return TextStream(_ariss_text("24289.79041667"))
+        if url == WHERETHEISS_URL:
+            return TextStream(payload)
+        raise AssertionError(url)
+
+    tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+    assert calls == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
+    assert tle.line1 == line1
+    assert cache.read_text() == f"{line1}\n{line2}\n"
+
+
+def test_ariss_and_wheretheiss_older_epochs_keep_the_cache(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = tmp_path / "iss.tle"
+    _stale_cache(cache, SAMPLE_TLE_TEXT)
+    line1, line2 = _iss_lines("24289.79041667")
+    payload = json.dumps({"line1": line1, "line2": line2})
+    calls: list[str] = []
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == ARISS_URL:
+            return TextStream(_ariss_text("24289.79041667"))
+        if url == WHERETHEISS_URL:
+            return TextStream(payload)
+        raise AssertionError(url)
+
+    with caplog.at_level(logging.WARNING, logger="generator.main"):
+        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+    assert calls == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
+    assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
+    assert cache.read_text() == SAMPLE_TLE_TEXT
+    assert any("not newer" in record.message.lower() for record in caplog.records)
+    assert not any("failed from all sources" in record.message for record in caplog.records)
+
+
+def test_ariss_obeys_answer_rest_and_failure_backoff(tmp_path: Path) -> None:
+    cache = tmp_path / "iss.tle"
+    cache.write_text(SAMPLE_TLE_TEXT)
+    epoch = TLE.from_text(SAMPLE_TLE_TEXT).epoch
+    clock = FakeClock(epoch + timedelta(hours=1))
+    calls: list[str] = []
+    line1, line2 = _iss_lines("24291.79041667")
+    body = f"ISS (ZARYA)\r\n{line1}\r\n{line2}\r\n"
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        calls.append(url)
+        if url == CELESTRAK_URL:
+            raise requests.ConnectTimeout("celestrak connect timeout")
+        if url == ARISS_URL:
+            return TextStream(body)
+        raise AssertionError(url)
+
+    sources = TleSources(cache.parent, clock=clock, transport=transport)
+    adopted = fetch_tle(DEFAULT_TLE_URL, cache, now=clock.now(), sources=sources)
+    assert adopted.line1 == line1
+    assert cache.read_text() == f"{line1}\n{line2}\n"
+    assert calls == [CELESTRAK_URL, ARISS_URL]
+    clock.advance(2 * 3600 - 1)
+    resting = fetch_tle(DEFAULT_TLE_URL, cache, now=clock.now(), sources=sources)
+    assert resting.line1 == line1
+    assert calls == [CELESTRAK_URL, ARISS_URL]
+    clock.advance(1)
+    fetch_tle(DEFAULT_TLE_URL, cache, now=clock.now(), sources=sources)
+    assert calls == [CELESTRAK_URL, ARISS_URL, CELESTRAK_URL, ARISS_URL]
+
+    failed: list[str] = []
+    newer = json.dumps({"line1": line1, "line2": line2})
+
+    def failing_ariss(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        failed.append(url)
+        if url in (CELESTRAK_URL, ARISS_URL):
+            raise requests.ConnectTimeout(url)
+        if url == WHERETHEISS_URL:
+            return TextStream(newer)
+        raise AssertionError(url)
+
+    other = tmp_path / "other"
+    other.mkdir()
+    other_cache = other / "iss.tle"
+    other_cache.write_text(SAMPLE_TLE_TEXT)
+    fail_clock = FakeClock(epoch + timedelta(hours=1))
+    fail_sources = TleSources(other, clock=fail_clock, transport=failing_ariss)
+    fetched = fetch_tle(DEFAULT_TLE_URL, other_cache, now=fail_clock.now(), sources=fail_sources)
+    assert fetched.line1 == line1
+    assert failed == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
+    fail_clock.advance(2 * 3600 - 1)
+    fetch_tle(DEFAULT_TLE_URL, other_cache, now=fail_clock.now(), sources=fail_sources)
+    assert failed == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
+    fail_clock.advance(1)
+    fetch_tle(DEFAULT_TLE_URL, other_cache, now=fail_clock.now(), sources=fail_sources)
+    assert failed == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL, CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
 
 
 # --------------------------------------------------------------------------
