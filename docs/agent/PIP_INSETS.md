@@ -14,7 +14,7 @@ Both insets are 148×96 CSS pixels, at least a 44px hit target, and `position: a
 
 ### Map view, the horizon inset
 
-The resting place is the same on iPad Pro 11 portrait (834×1194), iPad Pro 11 landscape (1194×834), and desktop (1280×800 and larger). It is not a corner. With the controls open, every corner is taken. The top left is the Show toolbar and the zoom control. The top right is the Bearing and Layers dock. The bottom left is the legend, and a later change turns that legend into a tab on the left edge. The bottom edge is the time strip, and the bottom right is the Hide button.
+The resting place is the same on iPad Pro 11 portrait (834×1194), iPad Pro 11 landscape (1194×834), and desktop (1280×800 and larger). It is not a corner. With the controls open, every corner is taken. The top left is the Show toolbar and `.maplibregl-ctrl-top-left` (the MapLibre zoom and compass). A later change moves the legend toggle off that control in short landscape. The inset stays on the right, so it stays clear of that control either way. The top right is the Bearing and Layers dock. The bottom left is the legend, and a later change turns that legend into a tab on the left edge. The bottom edge is the time strip, and the bottom right is the Hide button.
 
 The inset sits just left of the dock and just above the time strip.
 
@@ -35,7 +35,7 @@ Fullscreen removes the extra padding and hides the inset. The earth frame grows 
 
 A visible box counts. A `hidden` control or a `display: none` control does not.
 
-On the map, the inset misses the top bar, the status line, the Show label and All, Mine, and Launches, the zoom control, the Bearing and Layers labels and their buttons, the time strip, the slider, Now and +36h, the readout, T-90, T-45, Now, T+45, and T+90, Hide, the legend and its four items, and the imagery note.
+On the map, the inset misses the top bar, the status line, the Show label and All, Mine, and Launches, `.maplibregl-ctrl-top-left`, the Bearing and Layers labels and their buttons, the time strip, the slider, Now and +36h, the readout, T-90, T-45, Now, T+45, and T+90, Hide, the legend and its four items, and the imagery note. The drive overlap list names `.maplibregl-ctrl-top-left` as its own selector.
 
 On the ISS view, the inset misses the top bar, the status line, the help button, Keyboard shortcuts, Full screen, Horizon, Straight down, the Cupola select, the five clock lines, the edition line, Port, Starboard, the field readout, the hint, the launch card, Telemetry, the Launch menu, the attribution button, and any place name on the earth.
 

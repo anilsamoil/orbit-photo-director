@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { refreshLaunchClock } from './fixtures.mjs';
+import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
@@ -2630,7 +2630,91 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  const towns = await proveIssTownRetry(send, evidenceDir, viewport);
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
+}
+
+async function proveIssTownRetry(send, evidenceDir, viewport) {
+  try {
+    const portrait = await proveIssTownsOnce(send, evidenceDir, '');
+    if (!viewport || viewport.width !== 402 || viewport.height !== 874) return portrait;
+    await setViewport(send, 874, 402, true);
+    const landscape = await proveIssTownsOnce(send, evidenceDir, '-874x402');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return `${portrait}; ${landscape}`;
+  } finally {
+    await evaluate(send, `(() => {
+      if (window.__opdRealNow) Date.now = window.__opdRealNow;
+      document.cookie = 'opd-verify-towns=; path=/; max-age=0';
+      document.cookie = 'opd-verify-nadir=; path=/; max-age=0';
+      return true;
+    })()`);
+  }
+}
+
+async function proveIssTownsOnce(send, evidenceDir, shotSuffix) {
+  const aim = JSON.stringify({
+    mode: 'nadir',
+    azimuthDeg: 0,
+    windowId: null,
+    look: { rightDeg: 0, upDeg: 0 },
+    opticalFovDeg: 8,
+  });
+  await evaluate(send, `(() => {
+    const aim = ${JSON.stringify(aim)};
+    sessionStorage.setItem('opd-iss-aim', aim);
+    localStorage.setItem('opd-iss-aim', aim);
+    document.cookie = 'opd-verify-nadir=boston; path=/';
+    document.cookie = 'opd-verify-towns=block; path=/';
+    return true;
+  })()`);
+  await reloadSettled(send);
+  await evaluate(send, `(() => {
+    window.__opdRealNow = Date.now;
+    Date.now = () => ${BOSTON_NADIR_EPOCH_MS};
+    return true;
+  })()`);
+  await click(send, '#tab-iss');
+  const blocked = await waitFor(
+    send,
+    `(() => {
+      const pressed = document.querySelector('[data-iss-preset="nadir"]');
+      const text = document.querySelector('[data-iss-status]')?.textContent || '';
+      if (!pressed || pressed.getAttribute('aria-pressed') !== 'true') return null;
+      if (!text.includes('Nadir locked')) return null;
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || Math.abs(fov - 8) > 0.5) return null;
+      const shown = (node) => {
+        const box = node.getBoundingClientRect();
+        return box.width > 1 && box.height > 1;
+      };
+      const places = [...document.querySelectorAll('.iss-place')].filter(shown);
+      const towns = places.filter((node) => node.classList.contains('iss-place-town'));
+      const base = places.filter((node) => !node.classList.contains('iss-place-town'));
+      if (base.length < 1 || towns.length > 0) return null;
+      return { ok: true, base: base.map((node) => node.textContent), fov };
+    })()`,
+    `iss towns blocked${shotSuffix}`,
+    45000,
+  );
+  await shot(send, evidenceDir, `iss-towns-blocked${shotSuffix}`);
+  await evaluate(send, `document.cookie = 'opd-verify-towns=; path=/; max-age=0'`);
+  const recovered = await waitFor(
+    send,
+    `(() => {
+      const shown = (node) => {
+        const box = node.getBoundingClientRect();
+        return box.width > 1 && box.height > 1;
+      };
+      const towns = [...document.querySelectorAll('.iss-place-town')].filter(shown);
+      if (towns.length < 1) return null;
+      return { ok: true, towns: towns.map((node) => node.textContent) };
+    })()`,
+    `iss towns recovered${shotSuffix}`,
+    30000,
+  );
+  await shot(send, evidenceDir, `iss-towns-recovered${shotSuffix}`);
+  return `base ${blocked.base.join(', ')}; towns ${recovered.towns.join(', ')}${shotSuffix}`;
 }
 
 async function proveIssClock(send) {

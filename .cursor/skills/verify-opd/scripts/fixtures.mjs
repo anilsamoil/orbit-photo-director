@@ -14,6 +14,30 @@ const FALLBACK_TLE = {
   line2: '2 25544  51.6315 155.3455 0007168 193.0559 167.0244 15.48664528587569',
 };
 
+export const BOSTON_NADIR_EPOCH_MS = 1791309600000;
+
+const BOSTON_NADIR_TLE = {
+  line1: '1 25544U 98067A   26279.75000000  .00000000  00000-0  00000-0 0  9998',
+  line2: '2 25544  51.6400  80.5900 0001000   0.0000 120.6800 15.48880433000002',
+};
+
+export function bostonTrackText(fixtureDir) {
+  const track = JSON.parse(readFileSync(resolve(fixtureDir, 'track.json'), 'utf8'));
+  const epoch = new Date(BOSTON_NADIR_EPOCH_MS).toISOString();
+  track.tle = { line1: BOSTON_NADIR_TLE.line1, line2: BOSTON_NADIR_TLE.line2 };
+  track.tle_epoch = epoch;
+  track.tle_age_hours = 0;
+  track.tle_freshness_factor = 1;
+  track.iss_polynomial = {
+    start: epoch,
+    duration_seconds: 7200,
+    lat_coeffs: [42.3604],
+    lon_coeffs: [-71.0573],
+    polynomial_order: 0,
+  };
+  return JSON.stringify(track);
+}
+
 function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }
