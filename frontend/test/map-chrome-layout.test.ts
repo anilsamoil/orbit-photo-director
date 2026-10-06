@@ -31,8 +31,12 @@ function mount(viewClass: string): void {
         </div>
       </div>
     </div>
-    <div class="map-legend">legend</div>
-    <div class="map-imagery-date">imagery</div>
+    <div id="map-legend" class="map-legend">
+      <button id="map-legend-toggle" class="map-legend-toggle" type="button" aria-expanded="false" aria-controls="map-legend-panel">Legend</button>
+      <div id="map-legend-panel" class="map-legend-panel">
+        <div class="map-imagery-date">imagery</div>
+      </div>
+    </div>
   `);
 }
 
@@ -88,7 +92,9 @@ describe('map chrome layout', () => {
     const buttonTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib-button', 'height');
     expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(buttonTop);
     expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(px('.maplibregl-ctrl-bottom-right', 'bottom'));
-    expect(px('.map-imagery-date', 'bottom')).toBeGreaterThan(px('.map-legend', 'bottom'));
+    expect(getComputedStyle(document.querySelector('.map-imagery-date')!).position).toBe('static');
+    expect(document.querySelector('#map-legend-panel')!.contains(document.querySelector('.map-imagery-date'))).toBe(true);
+    expect(getComputedStyle(document.querySelector('#map-legend-panel')!).display).toBe('none');
   });
 
   it('leaves the queue status banner in normal flow', () => {
@@ -242,7 +248,7 @@ describe('map chrome layout', () => {
     expect(button.height).toBe('44px');
     expect(Number.parseFloat(attrib.width)).toBeLessThanOrEqual(44);
     expect(px('.map-legend', 'bottom')).toBeLessThan(100);
-    expect(px('.map-imagery-date', 'bottom')).toBeLessThan(136);
+    expect(getComputedStyle(document.querySelector('.map-imagery-date')!).position).toBe('static');
     expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeLessThan(100);
   });
 
@@ -265,7 +271,7 @@ describe('map chrome layout', () => {
     document.querySelector('.maplibregl-ctrl-attrib')!.classList.add('maplibregl-compact-show');
     const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
     expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
-    expect(px('.map-imagery-date', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
+    expect(getComputedStyle(document.querySelector('.map-imagery-date')!).position).toBe('static');
     expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).left).toBe('8px');
     const helpBottom = Number.parseFloat(
       ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab').bottom,
