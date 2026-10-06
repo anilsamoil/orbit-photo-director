@@ -37,6 +37,8 @@ describe('inset viewport gate', () => {
     expect(css).toContain(`@media (min-width: ${INSET_MIN_WIDTH_PX}px) and (min-height: ${INSET_MIN_HEIGHT_PX}px)`);
     expect(css).toContain('#map-pane.map-chrome-hidden .pip-horizon');
     expect(css).toContain('right: 112px');
+    expect(css).toContain('bottom: calc(var(--map-command-bottom, 0px) + var(--map-command-height) + 36px)');
+    expect(css).toContain('bottom: calc(var(--map-command-bottom) + var(--map-command-height) + 36px)');
     expect(css).toContain('max-width: calc(100% - 272px)');
     expect(drive).toContain('#map-legend-toggle');
     expect(drive).toContain('#map-legend-panel');

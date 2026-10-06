@@ -286,7 +286,14 @@ describe('map chrome layout', () => {
     const heights = rulesFor('body:has(> #view.view-map):not(.map-chrome-hidden)')
       .map((style) => style.getPropertyValue('--map-command-height'));
     expect(heights).toContain('calc(140px + env(safe-area-inset-bottom, 0px))');
-    expect(heights).toContain('calc(92px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('52px');
+    expect(css).toContain('--map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);');
+    expect(css).toContain('--map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));');
+    expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');
+    expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - var(--map-command-bottom, 0px) - 16px);');
+    expect(css).toContain('--map-command-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));');
+    expect(css).toContain('bottom: calc(var(--map-command-bottom) + var(--map-command-height) + 36px);');
+    expect(css).toContain('body.shotlist-bar-visible:has(> #view.view-map) main {\n    padding-bottom: 0;');
     expect(heights).not.toContain('156px');
     expect(heights).not.toContain('104px');
   });
