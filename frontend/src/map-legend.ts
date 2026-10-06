@@ -20,9 +20,15 @@ export function bindLegendDisclosure(root?: ParentNode | null): void {
     button.focus({ preventScroll: true });
   });
   legend.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape' || readLegendDisclosure(button) !== 'expanded') return;
+    if (event.key === 'Escape') {
+      if (readLegendDisclosure(button) !== 'expanded') return;
+      event.preventDefault();
+      collapse();
+      return;
+    }
+    if (event.target !== button || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
-    collapse();
+    applyLegendDisclosure(button, readLegendDisclosure(button) === 'expanded' ? 'collapsed' : 'expanded');
   });
   window.addEventListener('pageshow', collapse);
 }

@@ -64,6 +64,10 @@ describe('map legend disclosure', () => {
     button.click();
     button.click();
     expect(button.getAttribute('aria-expanded')).toBe('false');
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(localStorage.length).toBe(0);
   });
 
