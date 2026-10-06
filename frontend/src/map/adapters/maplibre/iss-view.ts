@@ -15,6 +15,8 @@ import {
   type LaunchPin,
   type LaunchSite,
 } from '../../../iss-view/launches';
+import { readCatalog } from '../../../iss-view/catalog-read';
+import { fetchCatalog } from '../../../iss-view/catalog-load';
 import { TOWN_LABEL_FOV_DEG } from '../../../iss-view/fov';
 import { placesOnDisk, type CatalogPoint, type PlaceLabel } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
@@ -24,6 +26,8 @@ export const ISS_VIEW_MAX_PITCH_DEG = TANGENT_PITCH_DEG;
 
 const PROTOCOL = 'iss-view';
 const LIT_MAX_ZOOM = 8;
+const nearCatalogUrl = new URL('../../../iss-view/label-catalog.json', import.meta.url).href;
+const townCatalogUrl = new URL('../../../iss-view/label-catalog-towns.json', import.meta.url).href;
 
 const gate = { done: false };
 const listeners: { current: IssRendererHooks | null } = { current: null };
@@ -99,7 +103,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   const requestNear = (): void => {
     pullChunk(
       nearLoad,
-      () => import('../../../iss-view/label-catalog').then((mod) => mod.LABEL_CATALOG),
+      () => fetchCatalog(nearCatalogUrl).then(readCatalog),
       (points) => {
         nearPoints = points;
       },
@@ -108,7 +112,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   const requestTowns = (): void => {
     pullChunk(
       townLoad,
-      () => import('../../../iss-view/label-catalog-towns').then((mod) => mod.LABEL_TOWNS),
+      () => fetchCatalog(townCatalogUrl).then(readCatalog),
       (points) => {
         townPoints = points;
       },
