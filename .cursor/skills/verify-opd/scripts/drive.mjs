@@ -1688,11 +1688,58 @@ function pipReadyExpression(name) {
       const host = document.getElementById('iss-host')?.getBoundingClientRect();
       const telemetry = document.querySelector('[data-iss-telemetry]')?.getBoundingClientRect();
       const picker = document.querySelector('[data-iss-launch-picker]')?.getBoundingClientRect();
-      const tiles = Number(inset.querySelector('[data-pip-frame]')?.getAttribute('data-inset-label-tiles') || '0');
+      const frame = inset.querySelector('[data-pip-frame]');
+      const orbit = frame && frame.__opdTrackInset;
+      const tiles = Number(frame?.getAttribute('data-inset-label-tiles') || '0');
       if (!host || host.width + 1 < box.width) return { step: 'cupola', host: host && Math.round(host.width), map: Math.round(box.width) };
       if (!telemetry || telemetry.top < box.bottom - 1) return { step: 'telemetry', telemetryTop: telemetry && Math.round(telemetry.top), mapBottom: Math.round(box.bottom) };
       if (!picker || picker.top < box.bottom - 1) return { step: 'launch', pickerTop: picker && Math.round(picker.top), mapBottom: Math.round(box.bottom) };
       if (box.width * box.height < 148 * 96 * 3) return { step: 'scale', width: Math.round(box.width), height: Math.round(box.height) };
+      if (!orbit || typeof orbit.project !== 'function' || typeof orbit.getCanvas !== 'function' || typeof orbit.querySourceFeatures !== 'function') {
+        return { step: 'orbit', reason: 'map' };
+      }
+      const marker = inset.querySelector('.iss-marker');
+      if (!marker) return { step: 'marker', reason: 'missing' };
+      const markerBox = marker.getBoundingClientRect();
+      const canvas = orbit.getCanvas();
+      const canvasBox = canvas.getBoundingClientRect();
+      const markerInside = markerBox.width > 8 && markerBox.height > 4
+        && markerBox.left >= canvasBox.left - 1 && markerBox.right <= canvasBox.right + 1
+        && markerBox.top >= canvasBox.top - 1 && markerBox.bottom <= canvasBox.bottom + 1;
+      if (!markerInside) {
+        return {
+          step: 'marker',
+          marker: [Math.round(markerBox.left), Math.round(markerBox.top), Math.round(markerBox.right), Math.round(markerBox.bottom)],
+          canvas: [Math.round(canvasBox.left), Math.round(canvasBox.top), Math.round(canvasBox.right), Math.round(canvasBox.bottom)],
+        };
+      }
+      let trackFeatures = [];
+      try {
+        trackFeatures = orbit.querySourceFeatures('inset-track') || [];
+      } catch (error) {
+        return { step: 'track', reason: 'query' };
+      }
+      let coords = 0;
+      let outside = null;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      for (const feature of trackFeatures) {
+        const geometry = feature && feature.geometry;
+        if (!geometry || geometry.type !== 'LineString' || !geometry.coordinates) continue;
+        for (const pair of geometry.coordinates) {
+          const lon = pair[0];
+          const lat = pair[1];
+          if (!(lon >= -180 && lon <= 180) || !(lat >= -90 && lat <= 90)) continue;
+          const point = orbit.project(pair);
+          coords += 1;
+          if (!(point.x >= -1 && point.y >= -1 && point.x <= width + 1 && point.y <= height + 1)) {
+            outside = { x: Math.round(point.x), y: Math.round(point.y), lon, lat, width, height };
+            break;
+          }
+        }
+        if (outside) break;
+      }
+      if (coords < 8 || outside) return { step: 'track', coords, outside, width, height };
       if (!(tiles > 0)) return { step: 'labels', tiles };
     }
     return { ok: true, width: box.width, height: box.height };

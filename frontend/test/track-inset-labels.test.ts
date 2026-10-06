@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 const created = vi.hoisted(() => ({
   options: null as null | {
+    minZoom?: number;
+    renderWorldCopies?: boolean;
+    transformConstrain?: (center: { lng: number; lat: number }, zoom: number) => { center: { lng: number; lat: number }; zoom: number };
     style: {
       sources: Record<string, { tiles?: string[]; maxzoom?: number }>;
       layers: { id: string; source?: string; paint?: { 'raster-opacity'?: number } }[];
     };
   },
-  fit: null as null | { maxZoom?: number },
+  fit: null as null | { maxZoom?: number; padding?: number },
 }));
 
 vi.mock('maplibre-gl', () => {
@@ -32,13 +35,20 @@ vi.mock('maplibre-gl', () => {
   return { Map, Marker };
 });
 
-import { createTrackInset } from '../src/map/adapters/maplibre/track-inset';
+import { createTrackInset, letterboxCamera } from '../src/map/adapters/maplibre/track-inset';
 
 describe('plan inset labels', () => {
   it('draws the Esri reference raster above the basemap and lets a tighter track zoom past 2', () => {
     const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 274 });
+    Object.defineProperty(frame, 'clientHeight', { value: 900 });
     const marker = document.createElement('div');
     const inset = createTrackInset(frame, marker);
+    const center = { lng: 118.33, lat: 0 };
+    expect(letterboxCamera(center as unknown as Parameters<typeof letterboxCamera>[0], -1.15)).toEqual({ center, zoom: -1.15 });
+    expect(created.options?.minZoom).toBeLessThanOrEqual(-1);
+    expect(created.options?.renderWorldCopies).toBe(false);
+    expect(created.options?.transformConstrain).toBe(letterboxCamera);
     const style = created.options?.style;
     expect(style?.sources['inset-labels']?.tiles?.[0]).toContain('World_Boundaries_and_Places');
     expect(style?.sources['inset-labels']?.maxzoom).toBeGreaterThan(2);

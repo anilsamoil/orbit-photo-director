@@ -1,4 +1,4 @@
-import { Map, Marker, type Map as MapLibreMap } from 'maplibre-gl';
+import { Map, Marker, type LngLat, type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
@@ -18,12 +18,25 @@ const ESRI_LABEL_TILES = [
 /** Caps the fit. A tighter track zooms in and the reference tiles get denser. A full orbit stays near zoom 2, where those tiles still name countries. */
 const INSET_FIT_MAX_ZOOM = 5;
 
+/** A 274px column needs a zoom below 0 to hold one orbit. */
+const INSET_MIN_ZOOM = -2;
+
+/** Half the 40px ISS marker, plus 2px, so the icon stays inside the canvas. */
+const INSET_FIT_PADDING_PX = 22;
+
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
+type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };
 
 export type TrackInset = {
   show(features: readonly GeoJSON.Feature[] | null, position: LonLat | null): void;
   destroy(): void;
 };
+
+/** Returns the requested camera. The default constrain fills a tall frame and pushes a full orbit off the canvas. */
+export function letterboxCamera(center: LngLat, zoom: number): { center: LngLat; zoom: number } {
+  return { center, zoom };
+}
 
 export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement): TrackInset {
   const map: MapLibreMap = new Map({
@@ -31,6 +44,9 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     interactive: false,
     attributionControl: false,
     fadeDuration: 0,
+    minZoom: INSET_MIN_ZOOM,
+    renderWorldCopies: false,
+    transformConstrain: letterboxCamera,
     style: {
       version: 8,
       sources: {
@@ -50,6 +66,8 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       ],
     },
   });
+  const insetFrame = frame as InsetFrame;
+  insetFrame.__opdTrackInset = map;
   frame.dataset.insetLabelTiles = '0';
   map.on('sourcedata', (event) => {
     if (event.sourceId !== 'inset-labels' || event.tile == null) return;
@@ -58,42 +76,54 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   });
   const marker = new Marker({ element: markerElement, anchor: 'center' });
   let removed = false;
-  let fitted = false;
-  let pendingFeatures: readonly GeoJSON.Feature[] | null = null;
-  let pendingPosition: LonLat | null = null;
+  let track: readonly GeoJSON.Feature[] | null = null;
+  let position: LonLat | null = null;
+  let trackDirty = false;
+  let fittedWidth = -1;
+  let fittedHeight = -1;
   const apply = (): void => {
     if (removed || !map.isStyleLoaded()) return;
     map.resize();
-    if (pendingFeatures) {
+    const width = frame.clientWidth;
+    const height = frame.clientHeight;
+    const sizeChanged = width !== fittedWidth || height !== fittedHeight;
+    const shouldFit = track !== null && (trackDirty || sizeChanged) && width >= 2 && height >= 2;
+    if (track && trackDirty) {
       const source = map.getSource('inset-track');
       if (source && 'setData' in source && typeof source.setData === 'function') {
-        source.setData({ type: 'FeatureCollection', features: pendingFeatures.slice() });
+        source.setData({ type: 'FeatureCollection', features: track.slice() });
       }
-      const bounds = insetTrackBounds(pendingFeatures, pendingPosition);
-      if (bounds) {
-        map.fitBounds(bounds, { padding: 12, maxZoom: INSET_FIT_MAX_ZOOM, animate: false });
-        fitted = true;
-      }
-      pendingFeatures = null;
+      trackDirty = false;
     }
-    if (pendingPosition) {
-      marker.setLngLat([pendingPosition.lon, pendingPosition.lat]).addTo(map);
-      if (!fitted) {
-        map.jumpTo({ center: [pendingPosition.lon, pendingPosition.lat], zoom: 1.4 });
-        fitted = true;
+    if (shouldFit && track) {
+      const bounds = insetTrackBounds(track, position);
+      if (bounds) {
+        map.fitBounds(bounds, { padding: INSET_FIT_PADDING_PX, maxZoom: INSET_FIT_MAX_ZOOM, animate: false });
+        fittedWidth = width;
+        fittedHeight = height;
+      }
+    }
+    if (position) {
+      marker.setLngLat([position.lon, position.lat]).addTo(map);
+      if (fittedWidth < 0 && width >= 2 && height >= 2) {
+        map.jumpTo({ center: [position.lon, position.lat], zoom: 1.4 });
+        fittedWidth = width;
+        fittedHeight = height;
       }
     }
   };
   if (map.isStyleLoaded()) apply();
   else map.once('load', apply);
   return {
-    show(features, position) {
+    show(features, nextPosition) {
       if (removed) return;
       if (features) {
-        pendingFeatures = features;
-        fitted = false;
+        track = features;
+        trackDirty = true;
+        fittedWidth = -1;
+        fittedHeight = -1;
       }
-      pendingPosition = position;
+      position = nextPosition;
       apply();
     },
     destroy() {
@@ -101,6 +131,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       removed = true;
       marker.remove();
       map.remove();
+      delete insetFrame.__opdTrackInset;
     },
   };
 }
