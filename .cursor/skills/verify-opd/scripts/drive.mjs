@@ -2640,11 +2640,8 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
           name.style.width = '';
           return true;
         }
-        name.style.maxWidth = 'none';
-        name.style.width = 'max-content';
-        const full = name.getBoundingClientRect().width;
         name.style.width = '';
-        name.style.maxWidth = Math.max(1, Math.floor(full * 0.62)) + 'px';
+        name.style.maxWidth = '9ch';
         return true;
       })()`);
       const earth = await waitFor(
@@ -2676,6 +2673,19 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
         10000,
       );
       const heldCard = await proveLaunchCardHolds(send, pane.label);
+      if (pane.twoLine) {
+        const wrapped = await evaluate(send, `(() => {
+          const name = document.querySelector('[data-iss-launch-name]');
+          const range = document.createRange();
+          if (name) range.selectNodeContents(name);
+          const lines = name ? range.getClientRects().length : 0;
+          const box = name ? name.getBoundingClientRect() : null;
+          return { lines, height: box ? Math.round(box.height) : 0, max: name instanceof HTMLElement ? name.style.maxWidth : '' };
+        })()`);
+        if (!wrapped || wrapped.lines < 2) {
+          throw new Error(`${pane.label} name unwrapped after the hold ${JSON.stringify(wrapped)}`);
+        }
+      }
       if (pane.label !== `${size.width}x${size.height}` || pane.label === '390x664' || pane.twoLine) {
         await shot(send, evidenceDir, `iss-launch-earth-${pane.label}`);
       }
