@@ -4031,6 +4031,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   position: absolute;
   top: 0;
   left: calc(44px + 0.35rem);
+  z-index: 3;
   width: 44px;
   height: 44px;
   display: inline-flex;
