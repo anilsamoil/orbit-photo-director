@@ -680,6 +680,34 @@ def test_pad_coordinates_accept_numbers_and_strings() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("status", "precision", "expected_status", "expected_precision"),
+    [
+        ("Go", "Second", "Go", "Second"),
+        ("Go for Launch", "SEC", "Go", "Second"),
+        ({"abbrev": "Go"}, {"abbrev": "SEC"}, "Go", "Second"),
+        ({"name": "Go for Launch"}, {"name": "Second"}, "Go", "Second"),
+        ("Confirmed", "Minute", "Confirmed", "Minute"),
+        ({"abbrev": "Confirmed"}, {"abbrev": "MIN"}, "Confirmed", "Minute"),
+        ({"name": "Confirmed"}, {"name": "Minute"}, "Confirmed", "Minute"),
+        ("TBC", "Hour", "TBC", "Hour"),
+        ("To Be Confirmed", "HR", "TBC", "Hour"),
+        ({"abbrev": "TBC"}, {"abbrev": "HOUR"}, "TBC", "Hour"),
+        ({"name": "To Be Confirmed"}, {"name": "Hour"}, "TBC", "Hour"),
+    ],
+)
+def test_status_and_precision_forms_normalize_identically(status, precision, expected_status, expected_precision) -> None:
+    payload = json.loads(DETAILED_FIXTURE.read_text())
+    row = payload["results"][0]
+    row["id"] = "synthetic-normalize"
+    row["name"] = "synthetic: normalized schedule"
+    row["status"] = status
+    row["net_precision"] = precision
+    launch = parse_response({"count": 1, "results": [row]}, now=datetime(2026, 10, 5, tzinfo=UTC))[0]
+    assert launch.status_abbrev == expected_status
+    assert launch.time_precision == expected_precision
+
+
 def test_hour_precision_and_string_status_parse() -> None:
     payload = json.loads(DETAILED_FIXTURE.read_text())
     row = payload["results"][0]

@@ -167,34 +167,58 @@ def _text(value: Any) -> str | None:
     return None
 
 
+_STATUS_FROM_TOKEN = {
+    "GO": "Go",
+    "GO FOR LAUNCH": "Go",
+    "CONFIRMED": "Confirmed",
+    "TBC": "TBC",
+    "TO BE CONFIRMED": "TBC",
+}
+
+
+def _schedule_status(token: str) -> str:
+    return _STATUS_FROM_TOKEN.get(token.upper(), token)
+
+
 def _status_abbrev(value: Any) -> str:
     if isinstance(value, str):
         text = value.strip()
         if text:
-            return text
+            return _schedule_status(text)
     if isinstance(value, dict):
         abbrev = _text(value.get("abbrev"))
         if abbrev:
-            return abbrev
+            return _schedule_status(abbrev)
         name = _text(value.get("name"))
         if name:
-            return name
+            return _schedule_status(name)
     raise KeyError("status")
 
 
-_PRECISION_FROM_ABBREV = {"SEC": "Second", "MIN": "Minute", "HR": "Hour", "HOUR": "Hour"}
+_PRECISION_FROM_TOKEN = {
+    "SEC": "Second",
+    "SECOND": "Second",
+    "MIN": "Minute",
+    "MINUTE": "Minute",
+    "HR": "Hour",
+    "HOUR": "Hour",
+}
+
+
+def _schedule_precision(token: str) -> str:
+    return _PRECISION_FROM_TOKEN.get(token.upper(), token)
 
 
 def _precision_name(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
-        return value.strip()
+        return _schedule_precision(value.strip())
     if isinstance(value, dict):
         name = _text(value.get("name"))
         if name:
-            return name
+            return _schedule_precision(name)
         abbrev = _text(value.get("abbrev"))
         if abbrev:
-            return _PRECISION_FROM_ABBREV.get(abbrev.upper(), abbrev)
+            return _schedule_precision(abbrev)
     return None
 
 
