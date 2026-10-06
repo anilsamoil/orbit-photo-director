@@ -3811,7 +3811,7 @@ const LAUNCH_EARTH_CHECK = `
   const frame = document.querySelector('[data-iss-frame]');
   const card = document.querySelector('[data-iss-launch-card]');
   const button = document.querySelector('[data-iss-launch]');
-  const scene = button && button.closest('[data-iss-scene]');
+  const scene = document.querySelector('[data-iss-scene]');
   if (!frame || !card || !button || !scene || card.hidden) return null;
   const frameBox = frame.getBoundingClientRect();
   const cardBox = card.getBoundingClientRect();
@@ -4060,7 +4060,14 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
       if (scene.scrollHeight > scene.clientHeight + 1) {
         return { step: 'scroll', height: [scene.scrollHeight, scene.clientHeight] };
       }
-      if (controlsBox.bottom > sceneBox.bottom + 1) {
+      const splitOn = scene.getAttribute('data-iss-split') === 'on';
+      const paneBox = document.getElementById('iss-pane')?.getBoundingClientRect();
+      const mapBox = document.querySelector('[data-pip="plan"]')?.getBoundingClientRect();
+      const hostLeft = document.getElementById('iss-host')?.getBoundingClientRect().left;
+      const controlsHome = !splitOn
+        ? controlsBox.bottom <= sceneBox.bottom + 1
+        : !!(paneBox && hostLeft != null && controlsBox.top >= paneBox.top - 1 && controlsBox.bottom <= paneBox.bottom + 1 && controlsBox.right <= hostLeft + 2 && (!(mapBox && mapBox.height > 40) || controlsBox.top >= mapBox.bottom - 1));
+      if (!controlsHome) {
         return { step: 'controls', top: Math.round(controlsBox.top), bottom: Math.round(controlsBox.bottom), sceneBottom: Math.round(sceneBox.bottom), scrollTop: scene.scrollTop, scrollY: window.scrollY };
       }
       return {
@@ -4232,7 +4239,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       if (picker.value !== ${JSON.stringify(before.value)}) return null;
       if (button.querySelector('[data-iss-launch-label]')?.textContent !== 'Look toward Verify Pad') return null;
       if (!button.textContent.includes('Verify Pad')) return null;
-      const scene = button.closest('[data-iss-scene]');
+      const scene = document.querySelector('[data-iss-scene]');
       if (scene && scene.scrollWidth > scene.clientWidth + 1) return null;
       if (card.hasAttribute('hidden')) return null;
       const name = card.querySelector('[data-iss-launch-name]')?.textContent || '';
