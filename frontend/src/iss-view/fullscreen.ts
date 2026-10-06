@@ -83,6 +83,7 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
   }
 
   function onPress(): void {
+    if (mode === 'off') closeOpenAimSheet(scene);
     dispatch('press');
   }
 
@@ -153,6 +154,12 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
       button.remove();
     },
   };
+}
+
+function closeOpenAimSheet(scene: HTMLElement): void {
+  if (!scene.hasAttribute('data-iss-aim-open')) return;
+  const scrim = scene.querySelector('[data-iss-aim-scrim]');
+  if (scrim instanceof HTMLElement) scrim.click();
 }
 
 function clientBox(element: HTMLElement): { width: number; height: number } {

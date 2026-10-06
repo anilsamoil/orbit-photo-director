@@ -121,6 +121,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const readAll = options.allLaunches
     ?? (options.launches ? () => [] : () => selectAllLaunches(launchStore.getState(), options.nowMs()));
   let pick: LaunchPick = { kind: 'open' };
+  let shownLaunchSites: readonly LaunchSite[] = [];
+  let launchDrawingHidden = false;
   let launchVisibility: LaunchVisibility = 'View unavailable';
   let pickerSync = false;
   const visible = options.visible ?? (() => document.visibilityState !== 'hidden');
@@ -543,7 +545,19 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const catalog = current.kind === 'held' && current.group === 'all' ? all : selections;
     const present = heldId !== '' && catalog.some((entry) => entry.item.event_id === heldId);
     const schedulePick = current.kind === 'held' && current.group === 'all';
-    if (current.kind === 'held' && !schedulePick && !judged) return;
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    if (current.kind === 'held' && !schedulePick && !judged) {
+      if (fullscreen) {
+        if (!launchDrawingHidden) {
+          renderer?.showLaunches?.([]);
+          launchDrawingHidden = true;
+        }
+      } else if (launchDrawingHidden) {
+        renderer?.showLaunches?.(shownLaunchSites);
+        launchDrawingHidden = false;
+      }
+      return;
+    }
     pick = reduceLaunchPick(current, { type: 'catalog', judged, present });
     const next = pick;
     const choiceId = next.kind === 'held' ? next.eventId : '';
@@ -553,7 +567,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const site = choice ? launchSiteFromSelection(choice) : null;
     syncPad(site);
     paintLaunchCard(choice, state, now, next.kind === 'held' ? next.group : null);
-    renderer?.showLaunches?.(site && !root.hasAttribute('data-iss-fullscreen-active') ? [site] : []);
+    shownLaunchSites = site ? [site] : [];
+    launchDrawingHidden = fullscreen;
+    renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
   }
 
   function syncPicker(
