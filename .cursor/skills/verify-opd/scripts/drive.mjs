@@ -2478,6 +2478,112 @@ async function proveMapShowLaunches(send, evidenceDir) {
   await shot(send, evidenceDir, 'map-show-launches');
 }
 
+const LAUNCH_EARTH_CHECK = `
+  const frame = document.querySelector('[data-iss-frame]');
+  const card = document.querySelector('[data-iss-launch-card]');
+  const button = document.querySelector('[data-iss-launch]');
+  const scene = button && button.closest('[data-iss-scene]');
+  if (!frame || !card || !button || !scene || card.hidden) return null;
+  const frameBox = frame.getBoundingClientRect();
+  const cardBox = card.getBoundingClientRect();
+  const buttonBox = button.getBoundingClientRect();
+  if (buttonBox.width < 44 || buttonBox.height < 44) return null;
+  const place = scene.dataset.issLaunchPlace || '';
+  const visibility = card.querySelector('[data-iss-launch-visibility]')?.textContent || '';
+  const mark = document.querySelector('.iss-launch-pin, [data-iss-launch-edge]');
+  const markBox = mark ? mark.getBoundingClientRect() : null;
+  const markKind = !mark ? 'none' : (mark.classList.contains('iss-launch-pin') ? 'pin' : 'arrow');
+  if (visibility === 'Site below horizon') {
+    if (mark) return { step: 'mark', visibility };
+  } else if (visibility === 'Site in frame' || visibility === 'Site outside frame') {
+    if (!markBox || markBox.width < 8 || markBox.height < 8) return { step: 'mark', visibility, markKind };
+    const covered = markBox.left >= cardBox.left - 1 && markBox.right <= cardBox.right + 1 && markBox.top >= cardBox.top - 1 && markBox.bottom <= cardBox.bottom + 1;
+    if (covered) return { step: 'mark-covered', visibility, markKind, width: Math.round(frameBox.width), height: Math.round(frameBox.height) };
+  } else {
+    return { step: 'visibility', visibility, width: Math.round(frameBox.width), height: Math.round(frameBox.height), place };
+  }
+  if (frameBox.width < 80 || frameBox.height < 80) {
+    return { step: 'earth', width: Math.round(frameBox.width), height: Math.round(frameBox.height), place };
+  }
+  const shortSide = Math.min(frameBox.width, frameBox.height);
+  if ((place === 'over' || place === 'below') && shortSide < 120) {
+    return { step: 'earth', width: Math.round(frameBox.width), height: Math.round(frameBox.height), place, shortSide: Math.round(shortSide) };
+  }
+  if (scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth) {
+    return { step: 'scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth], place };
+  }
+  const covers = (box) => box.left < frameBox.right - 1 && box.right > frameBox.left + 1 && box.top < frameBox.bottom - 1 && box.bottom > frameBox.top + 1;
+  if (covers(buttonBox) || (place !== 'over' && covers(cardBox))) {
+    return { step: 'cover', place, button: covers(buttonBox), card: covers(cardBox) };
+  }
+  const line = card.querySelector('[data-iss-launch-visibility]');
+  const lineBox = line ? line.getBoundingClientRect() : null;
+  if (!lineBox || lineBox.height < 4 || lineBox.bottom <= cardBox.top + 1 || lineBox.top >= cardBox.bottom - 1) {
+    return { step: 'visibility-line', visibility, place };
+  }
+  return {
+    ok: true,
+    width: Math.round(frameBox.width),
+    height: Math.round(frameBox.height),
+    place,
+    visibility,
+    mark: markKind,
+    scrollHeight: scene.scrollHeight,
+    clientHeight: scene.clientHeight,
+    scrollWidth: scene.scrollWidth,
+    clientWidth: scene.clientWidth,
+  };
+`;
+
+function launchEarthPanes(width, height) {
+  const native = { width, height, mobile: width < 1100, label: `${width}x${height}` };
+  if (width === 390 && height === 664) {
+    return [
+      native,
+      { width: 390, height: 844, mobile: true, label: '390x844' },
+      { width: 844, height: 390, mobile: true, label: '844x390' },
+    ];
+  }
+  if (width === 402 && height === 874) {
+    return [
+      native,
+      { width: 874, height: 402, mobile: true, label: '874x402' },
+    ];
+  }
+  return [native];
+}
+
+async function proveLaunchEarthPanes(send, evidenceDir) {
+  const size = await evaluate(send, `({ width: window.innerWidth, height: window.innerHeight })`);
+  const panes = launchEarthPanes(size.width, size.height);
+  const mobile = size.width < 1100;
+  const held = [];
+  try {
+    for (const pane of panes) {
+      await setViewport(send, pane.width, pane.height, pane.mobile);
+      const earth = await waitFor(
+        send,
+        `(() => { ${LAUNCH_EARTH_CHECK} })()`,
+        `iss launch earth ${pane.label}`,
+        10000,
+      );
+      if (pane.label !== `${size.width}x${size.height}`) {
+        await shot(send, evidenceDir, `iss-launch-earth-${pane.label}`);
+      }
+      held.push(`${pane.label} ${earth.width}x${earth.height} ${earth.place} ${earth.mark}`);
+    }
+  } finally {
+    await setViewport(send, size.width, size.height, mobile);
+  }
+  await waitFor(
+    send,
+    `(() => { ${LAUNCH_EARTH_CHECK} })()`,
+    `iss launch earth restored ${size.width}x${size.height}`,
+    10000,
+  );
+  return held.join(', ');
+}
+
 async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   const before = await waitFor(
     send,
@@ -2534,21 +2640,9 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
       if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
       if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
-      const visibility = card.querySelector('[data-iss-launch-visibility]')?.textContent || '';
-      const mark = document.querySelector('.iss-launch-pin, [data-iss-launch-edge]');
-      if (visibility === 'Site below horizon') {
-        if (mark) return null;
-      } else if (visibility === 'Site in frame' || visibility === 'Site outside frame') {
-        if (!mark) return null;
-      } else {
-        return null;
-      }
-      const b = button.getBoundingClientRect();
-      const frameBox = frame.getBoundingClientRect();
-      const cardBox = card.getBoundingClientRect();
-      if (b.width < 44 || b.height < 44) return null;
-      const covers = (box) => box.left < frameBox.right - 1 && box.right > frameBox.left + 1 && box.top < frameBox.bottom - 1 && box.bottom > frameBox.top + 1;
-      if (covers(b) || covers(cardBox)) return null;
+      const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
+      if (!earth || earth.ok !== true) return earth;
+      const visibility = earth.visibility;
       const center = window.__opdIss?.getCenter?.();
       if (!center) return null;
       const moved = Math.hypot(center.lng - ${Number(before.lng)}, center.lat - ${Number(before.lat)});
@@ -2558,6 +2652,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     'iss launch selected',
     15000,
   );
+  const earthPanes = await proveLaunchEarthPanes(send, evidenceDir);
   const siteShot = await revealInView(send, '[data-iss-launch]');
   if (!siteShot.text.includes('Look toward Verify Pad')) {
     throw new Error(`site button shot would miss the label ${JSON.stringify(siteShot)}`);
@@ -2697,8 +2792,9 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       if (!frame || frame.contains(missing) || frame.contains(card)) return null;
       const frameBox = frame.getBoundingClientRect();
       const cardBox = card.getBoundingClientRect();
+      const place = document.querySelector('[data-iss-scene]')?.dataset.issLaunchPlace || '';
       const covers = cardBox.left < frameBox.right - 1 && cardBox.right > frameBox.left + 1 && cardBox.top < frameBox.bottom - 1 && cardBox.bottom > frameBox.top + 1;
-      if (covers) return null;
+      if (place !== 'over' && covers) return null;
       if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
       const center = window.__opdIss?.getCenter?.();
       if (!center) return null;
@@ -2781,7 +2877,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   const chooseLabel = await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.selectedOptions?.[0]?.textContent || ''`);
   if (chooseLabel !== 'Choose launch') throw new Error(`reload shot missed Choose launch ${JSON.stringify({ choose, chooseLabel })}`);
   await shot(send, evidenceDir, 'iss-launch-reloaded');
-  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / launch lost when that body arrived, Choose launch, notice outside the frame / launch returned on verifyrev-back, not restored / None / reload Choose launch`;
+  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / earth ${earthPanes} / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / launch lost when that body arrived, Choose launch, notice kept / launch returned on verifyrev-back, not restored / None / reload Choose launch`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
