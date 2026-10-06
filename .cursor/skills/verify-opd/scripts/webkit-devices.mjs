@@ -67,7 +67,16 @@ export function playwrightSend(page) {
       }
     }
     if (method === 'Page.captureScreenshot') {
-      const buffer = await page.screenshot({ type: 'png' });
+      const options = { type: 'png' };
+      if (params.clip) {
+        options.clip = {
+          x: params.clip.x,
+          y: params.clip.y,
+          width: params.clip.width,
+          height: params.clip.height,
+        };
+      }
+      const buffer = await page.screenshot(options);
       return { data: buffer.toString('base64') };
     }
     if (method === 'Page.navigate') {
@@ -128,6 +137,10 @@ export function playwrightSend(page) {
       return {};
     }
     if (method === 'Input.tap') {
+      await page.touchscreen.tap(params.x, params.y);
+      return {};
+    }
+    if (method === 'Input.touchscreenTap') {
       await page.touchscreen.tap(params.x, params.y);
       return {};
     }
