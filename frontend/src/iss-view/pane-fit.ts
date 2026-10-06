@@ -31,14 +31,41 @@ export type PaneFit = {
 const NARROW_ISS_PANE_PX = 720;
 
 /** A card under the earth that leaves a shorter frame than this collapses the globe. */
-const USABLE_BELOW_EARTH_PX = 120;
+export const USABLE_BELOW_EARTH_PX = 120;
 
-export function fitIssPane(measure: PaneMeasure): PaneFit {
+/**
+ * While the card is over the earth, the below-reserved short side must reach
+ * this before the card returns underneath. 120 through 131 keeps the current
+ * place. Under 120 enters over. 132 or more returns to below.
+ */
+export const BELOW_EARTH_RETURN_PX = 132;
+
+export function storedLaunchPlace(value: string | undefined): LaunchCardPlace {
+  if (value === 'over' || value === 'below' || value === 'side' || value === 'off') return value;
+  return 'off';
+}
+
+export function launchCardCandidate(paneWidthPx: number, cardShown: boolean): LaunchCardPlace {
+  if (!cardShown) return 'off';
+  return paneWidthPx <= NARROW_ISS_PANE_PX ? 'below' : 'side';
+}
+
+export function fitIssPane(measure: PaneMeasure, previous: LaunchCardPlace = 'off'): PaneFit {
   const launchCardPlace = placeLaunchCard(measure);
   const reserved = layoutCard(measure, launchCardPlace, true);
+  if (launchCardPlace === 'off') return reserved;
   const shortSide = Math.min(reserved.widthPx, reserved.heightPx);
-  const floor = launchCardPlace === 'below' ? USABLE_BELOW_EARTH_PX : LAUNCH_MARK_MIN_PX;
-  if (launchCardPlace === 'off' || shortSide >= floor) return reserved;
+  if (launchCardPlace === 'side') {
+    if (shortSide >= LAUNCH_MARK_MIN_PX) return reserved;
+    return overlay(measure, launchCardPlace);
+  }
+  const collapsed = shortSide < USABLE_BELOW_EARTH_PX;
+  const holding = previous === 'over' && shortSide < BELOW_EARTH_RETURN_PX;
+  if (collapsed || holding) return overlay(measure, launchCardPlace);
+  return reserved;
+}
+
+function overlay(measure: PaneMeasure, launchCardPlace: LaunchCardPlace): PaneFit {
   return { ...layoutCard(measure, launchCardPlace, false), launchCardPlace: 'over' };
 }
 

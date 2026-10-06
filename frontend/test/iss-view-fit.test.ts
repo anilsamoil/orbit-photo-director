@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { mountIssScene, type IssScene } from '../src/iss-view';
 import { placeLaunchMarks, type LaunchSite } from '../src/iss-view/launches';
+import { fitIssPane, type PaneMeasure } from '../src/iss-view/pane-fit';
+import { sceneFit } from '../src/iss-view/model';
 import type { LaunchSelection } from '../src/launch-selectors';
 import { sensorField, type SceneSnapshot } from '../src/iss-view/model';
 import type { IssAim, IssRenderer, IssRendererFactory, IssRendererHooks } from '../src/iss-view/renderer';
@@ -374,6 +376,48 @@ describe('ISS frame fit', () => {
     landscape.scene.dispose();
     landscape.host.remove();
   });
+
+  it('holds a below card from 120 through 131 and enters over under 120', () => {
+    for (const short of [119, 120, 121]) {
+      const measure = measureWithShort(short);
+      expect(reservedShort(measure)).toBe(short);
+      const fromBelow = fitIssPane(measure, 'below').launchCardPlace;
+      const fromOver = fitIssPane(measure, 'over').launchCardPlace;
+      expect(fromBelow).toBe(short < 120 ? 'over' : 'below');
+      expect(fromOver).toBe('over');
+    }
+    expect(fitIssPane(measureWithShort(131), 'over').launchCardPlace).toBe('over');
+    expect(fitIssPane(measureWithShort(132), 'over').launchCardPlace).toBe('below');
+    expect(fitIssPane(measureWithShort(132), 'below').launchCardPlace).toBe('below');
+  });
+
+  it('keeps one placement across repeated layouts for a two-line name at 390x565', async () => {
+    const fitted = await mountFitted(390, 565, { width: 352, height: 116 }, {
+      toolbar: 244,
+      select: false,
+      cardBox: (place) => (place === 'over' ? { width: 152, height: 104 } : { width: 352, height: 116 }),
+    });
+    await chooseLaunch(fitted.host);
+    const places: string[] = [];
+    for (let tick = 0; tick < 8; tick += 1) {
+      await paint(fitted.scene);
+      places.push(fitted.root.dataset.issLaunchPlace || '');
+    }
+    expect(fitted.host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Northrop Grumman Cygnus NG-21 visiting the long wall');
+    expect(new Set(places)).toEqual(new Set(['over']));
+    expect(Math.min(framePx(fitted.frame).width, framePx(fitted.frame).height)).toBeGreaterThanOrEqual(80);
+    fitted.scene.dispose();
+    fitted.host.remove();
+  });
+
+  it('overlays a side card when the reserved short side is under 80px', () => {
+    const tight = sideMeasure(800, 760);
+    expect(Math.min(sceneFit(40, 500).widthPx, sceneFit(40, 500).heightPx)).toBeLessThan(80);
+    expect(fitIssPane(tight, 'side').launchCardPlace).toBe('over');
+    const again = fitIssPane(tight, 'over').launchCardPlace;
+    expect(again).toBe('over');
+    expect(fitIssPane(sideMeasure(1400, 400), 'side').launchCardPlace).toBe('side');
+  });
 });
 
 const verifyPad: LaunchSite = {
@@ -384,6 +428,40 @@ const verifyPad: LaunchSite = {
   lon: -80.6,
   corridor: null,
 };
+
+function measureWithShort(short: number): PaneMeasure {
+  return {
+    paneWidthPx: 390,
+    paneHeightPx: 400,
+    padXPx: 0,
+    padYPx: 0,
+    gapPx: 0,
+    toolbarPx: 0,
+    buttonPx: 0,
+    bodyPx: 0,
+    bodyMarginPx: 0,
+    sideWidthPx: 0,
+    labelPx: 1,
+    launchCardWidthPx: 300,
+    launchCardHeightPx: 400 - short,
+    launchCardGapPx: 0,
+  };
+}
+
+function reservedShort(measure: PaneMeasure): number {
+  const fitted = sceneFit(measure.paneWidthPx, measure.paneHeightPx - measure.launchCardHeightPx);
+  return Math.min(fitted.widthPx, fitted.heightPx);
+}
+
+function sideMeasure(paneWidthPx: number, cardWidthPx: number): PaneMeasure {
+  return {
+    ...measureWithShort(120),
+    paneWidthPx,
+    paneHeightPx: 500,
+    launchCardWidthPx: cardWidthPx,
+    launchCardHeightPx: 40,
+  };
+}
 
 function framePx(frame: HTMLElement): { width: number; height: number } {
   return {
@@ -414,7 +492,7 @@ async function mountFitted(
   width: number,
   height: number,
   card: { width: number; height: number },
-  chrome: { toolbar?: number; body?: number; select?: boolean } = {},
+  chrome: { toolbar?: number; body?: number; select?: boolean; cardBox?: (place: string) => { width: number; height: number } } = {},
 ): Promise<{
   host: HTMLElement;
   root: HTMLElement;
@@ -463,8 +541,14 @@ async function mountFitted(
   Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => (body.hidden ? 0 : chrome.body ?? 120) });
   Object.defineProperty(port, 'offsetWidth', { configurable: true, get: () => 11 });
   Object.defineProperty(starboard, 'offsetWidth', { configurable: true, get: () => 11 });
-  Object.defineProperty(launchCard, 'offsetWidth', { configurable: true, get: () => card.width });
-  Object.defineProperty(launchCard, 'offsetHeight', { configurable: true, get: () => card.height });
+  Object.defineProperty(launchCard, 'offsetWidth', {
+    configurable: true,
+    get: () => (chrome.cardBox ? chrome.cardBox(root.dataset.issLaunchPlace || '').width : card.width),
+  });
+  Object.defineProperty(launchCard, 'offsetHeight', {
+    configurable: true,
+    get: () => (chrome.cardBox ? chrome.cardBox(root.dataset.issLaunchPlace || '').height : card.height),
+  });
   scene.update(shot());
   await paint(scene);
   if (chrome.select !== false) {
