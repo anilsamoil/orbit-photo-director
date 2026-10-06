@@ -58,6 +58,27 @@ const EDGE_PAD_PX = 28;
 /** Smallest frame side that can hold a pin or an edge arrow. */
 export const LAUNCH_MARK_MIN_PX = 80;
 
+export const ALL_LAUNCHES_HORIZON_MS = 14 * 24 * 3600_000;
+const SCHEDULE_PRECISION = new Set(['second', 'minute', 'hour']);
+
+export function selectAllLaunches(state: LaunchState, nowMs: number): LaunchSelection[] {
+  const artifact = state.artifact;
+  if (!artifact) return [];
+  const selected: LaunchSelection[] = [];
+  for (const item of artifact.items) {
+    if (item.reason_codes.includes('LAUNCH_UNCONFIRMED')) continue;
+    const precision = item.launch_window.precision?.toLowerCase() ?? '';
+    if (!SCHEDULE_PRECISION.has(precision)) continue;
+    const net = Date.parse(item.launch_window.net);
+    if (!Number.isFinite(net) || net < nowMs || net > nowMs + ALL_LAUNCHES_HORIZON_MS) continue;
+    const end = hasLaunchTimeConflict(item) ? item.launch_window.net : item.launch_window.end ?? item.launch_window.net;
+    if (Date.parse(end) <= nowMs) continue;
+    selected.push({ item, interval: null, expired: false });
+  }
+  return selected.sort((a, b) => Date.parse(a.item.launch_window.net) - Date.parse(b.item.launch_window.net)
+    || (a.item.event_id < b.item.event_id ? -1 : a.item.event_id > b.item.event_id ? 1 : 0));
+}
+
 export function launchSites(state: LaunchState, nowMs: number): LaunchSite[] {
   return selectLaunches(state, nowMs, 'map').map(launchSiteFromSelection);
 }

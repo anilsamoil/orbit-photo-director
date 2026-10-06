@@ -2712,6 +2712,49 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
 }
 
 async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
+  const horizon = await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) return null;
+      const group = [...picker.querySelectorAll('optgroup')].find((entry) => entry.label === 'All launches');
+      const option = group && [...group.querySelectorAll('option')].find((entry) => entry.textContent?.includes('Verify Horizon'));
+      if (!option) return null;
+      return { value: option.value };
+    })()`,
+    'iss all launches group',
+    15000,
+  );
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.value = ${JSON.stringify(horizon.value)};
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const card = document.querySelector('[data-iss-launch-card]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!card || card.hasAttribute('hidden') || !frame) return null;
+      if (card.dataset.issLaunchGroup !== 'all') return null;
+      if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Horizon') return null;
+      const text = card.textContent || '';
+      if (/possible|chance/i.test(text)) return null;
+      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      return { ok: true };
+    })()`,
+    'iss all launches schedule only',
+    15000,
+  );
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.value = 'none';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
   const before = await waitFor(
     send,
     `(() => {

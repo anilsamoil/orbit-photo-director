@@ -180,7 +180,7 @@ export class LaunchStore {
     ]), ...sourceExpiries];
     const key = boundaries.map((time) => {
       const t = Date.parse(time);
-      return `${t > now}:${t >= now}:${t > now - 30 * 60_000}:${t <= now + 90 * 60_000}:${t <= now + 36 * 3600_000}:${t <= now + 7 * 24 * 3600_000}`;
+      return `${t > now}:${t >= now}:${t > now - 30 * 60_000}:${t <= now + 90 * 60_000}:${t <= now + 36 * 3600_000}:${t <= now + 7 * 24 * 3600_000}:${t <= now + 14 * 24 * 3600_000}`;
     }).join('|');
     if (key !== this.clockKey) {
       this.clockKey = key;
