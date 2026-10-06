@@ -1,7 +1,11 @@
+import type { InsetHandle } from '../insets/host';
 import type { Manifest, PassEntry, Track } from '../types';
 import { fetchArtifact } from '../manifest';
 import { loadTrackedRecords } from '../tracked';
 import { createVendorMap } from './adapters/maplibre';
+import { createIssRenderer } from './adapters/maplibre/iss-view';
+import { createTrackInset } from './adapters/maplibre/track-inset';
+import { sceneFrame, sensorField } from '../iss-view/model';
 import { registerViirsAlphaProtocol, viirsAlphaUrl } from './adapters/maplibre/viirs-alpha';
 import { initialCamera } from './map-core/camera';
 import { createClock } from './map-core/clock';
@@ -34,12 +38,15 @@ import {
 } from './features/follow-iss';
 import { bindGroundTrackClock, refreshGroundTrack } from './features/ground-track';
 import {
+  createIssMarkerElement,
   hasIssMarker,
   issMarkerPosition,
+  markerPositionAt,
   moveIssMarkerToView,
   syncIssMarker,
   tickIssMarker,
 } from './features/iss-marker';
+import { groundTrackFeatures } from './features/ground-track/geometry';
 import { refreshLabels, resetLabelsForTest } from './features/labels';
 import { applyTracked } from './features/tracked';
 import {
@@ -484,4 +491,98 @@ export function _setFollowEnvForTest(
 
 export function resizeMap(): void {
   if (core) core.resize();
+}
+
+const HORIZON_INSET_MS = 1000;
+const PLAN_INSET_MS = 1000;
+const PLAN_TRACK_EVERY = 5;
+
+type PublishedIss = { getContainer(): HTMLElement };
+
+function publishedIss(): PublishedIss | null {
+  const candidate = (window as unknown as { __opdIss?: PublishedIss }).__opdIss;
+  if (!candidate || typeof candidate.getContainer !== 'function') return null;
+  return candidate;
+}
+
+/** Earth-from-ISS preview. One `createIssRenderer` hook slot, so this stays unmounted while the ISS scene exists. */
+export function mountHorizonInset(frame: HTMLElement, track: Track, nowMs: () => number): InsetHandle {
+  const held = { track };
+  let stopped = false;
+  let painting = false;
+  const renderer = createIssRenderer(frame, {
+    onImagery() {},
+    onContextLost() {},
+  }, { labels: false });
+  const paint = (): void => {
+    if (stopped || painting) return;
+    if (frame.clientWidth < 2 || frame.clientHeight < 2) return;
+    const posed = sceneFrame(held.track, nowMs(), 'horizon');
+    if (!posed.ok) return;
+    painting = true;
+    const widthPx = Math.round(frame.clientWidth);
+    const heightPx = Math.round(frame.clientHeight);
+    renderer.resize(widthPx, heightPx);
+    void renderer.aim({
+      pose: posed.pose,
+      verticalFovDeg: sensorField().vertical,
+      widthPx,
+      heightPx,
+      lightingUtcMs: nowMs(),
+    }).finally(() => {
+      painting = false;
+    });
+  };
+  void renderer.ready().then(() => {
+    if (!stopped) paint();
+  });
+  const timer = window.setInterval(paint, HORIZON_INSET_MS);
+  return {
+    setTrack(next) {
+      held.track = next;
+    },
+    dispose() {
+      if (stopped) return;
+      stopped = true;
+      window.clearInterval(timer);
+      const owned = publishedIss()?.getContainer() === frame;
+      renderer.destroy();
+      delete frame.dataset.issPlaceLayers;
+      frame.style.width = '';
+      frame.style.height = '';
+      if (owned) delete (window as unknown as { __opdIss?: PublishedIss }).__opdIss;
+    },
+  };
+}
+
+/** Mercator preview of the ISS position and the current ground track. */
+export function mountPlanInset(frame: HTMLElement, track: Track, nowMs: () => number): InsetHandle {
+  const held = { track };
+  const inset = createTrackInset(frame, createIssMarkerElement());
+  let stopped = false;
+  let ticks = 0;
+  const paint = (): void => {
+    if (stopped || frame.clientWidth < 2 || frame.clientHeight < 2) return;
+    ticks += 1;
+    const position = markerPositionAt(held.track, 0, nowMs());
+    const features = ticks === 1 || ticks % PLAN_TRACK_EVERY === 0
+      ? groundTrackFeatures(held.track, false)
+      : null;
+    inset.show(features, position);
+  };
+  paint();
+  const timer = window.setInterval(paint, PLAN_INSET_MS);
+  return {
+    setTrack(next) {
+      held.track = next;
+      ticks = 0;
+      paint();
+    },
+    dispose() {
+      if (stopped) return;
+      stopped = true;
+      window.clearInterval(timer);
+      inset.destroy();
+    },
+  };
 }
