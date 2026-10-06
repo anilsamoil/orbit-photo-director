@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CUPOLA_WINDOWS } from '../src/iss-view/cupola';
+import { MIN_OPTICAL_FOV_DEG } from '../src/iss-view/fov';
 import { sceneFrame, sensorField, type SceneSnapshot } from '../src/iss-view/model';
 import { horizontalFovDeg, lookRoom } from '../src/iss-view/look';
 import { formatOpticalFov, mountIssScene, type IssScene } from '../src/iss-view';
@@ -401,7 +402,7 @@ describe('ISS keyboard aim', () => {
     await finish(view.scene);
   });
 
-  it('narrows on + and =, widens on - and _, and clamps between 12° and the lens', async () => {
+  it('narrows on + and =, widens on - and _, and clamps between the close field and the lens', async () => {
     const host = mountHost();
     const view = await running(host, []);
     const lens = sensorField().vertical;
@@ -419,9 +420,18 @@ describe('ISS keyboard aim', () => {
     expect(view.aim.opticalFovDeg).toBeCloseTo(lens * 0.96, 5);
     key(view.frame, '_');
     expect(view.aim.opticalFovDeg).toBeCloseTo(lens, 5);
-    for (let step = 0; step < 80; step += 1) key(view.frame, '=');
-    expect(view.aim.opticalFovDeg).toBe(12);
-    for (let step = 0; step < 80; step += 1) key(view.frame, '-');
+    let guard = 0;
+    while (view.aim.opticalFovDeg > MIN_OPTICAL_FOV_DEG && guard < 160) {
+      key(view.frame, '=');
+      guard += 1;
+    }
+    expect(view.aim.opticalFovDeg).toBe(MIN_OPTICAL_FOV_DEG);
+    expect(MIN_OPTICAL_FOV_DEG).toBeLessThan(12);
+    guard = 0;
+    while (view.aim.opticalFovDeg < lens - 1e-9 && guard < 160) {
+      key(view.frame, '-');
+      guard += 1;
+    }
     expect(view.aim.opticalFovDeg).toBeCloseTo(lens, 5);
     await finish(view.scene);
   });
