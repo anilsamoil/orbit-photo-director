@@ -127,6 +127,10 @@ export function playwrightSend(page) {
       await page.keyboard.press(key);
       return {};
     }
+    if (method === 'Input.tap') {
+      await page.touchscreen.tap(params.x, params.y);
+      return {};
+    }
     if (method === 'Input.dispatchTouchEvent') {
       const point = (params.touchPoints || [])[0];
       if (!point) return {};

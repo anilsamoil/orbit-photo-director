@@ -98,7 +98,9 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
     resize(widthPx, heightPx) {
       frame.style.width = `${widthPx}px`;
       frame.style.height = `${heightPx}px`;
-      map.resize();
+      const ratio = cappedPixelRatio(globalThis.devicePixelRatio);
+      if (map.getPixelRatio() === ratio) map.resize();
+      else map.setPixelRatio(ratio);
     },
     async aim(aim: IssAim) {
       map.setMaxPitch(ISS_VIEW_MAX_PITCH_DEG);

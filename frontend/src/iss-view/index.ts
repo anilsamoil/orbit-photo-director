@@ -29,6 +29,7 @@ import {
 import { launchVerdictBlock, selectLaunches, type LaunchSelection } from '../launch-selectors';
 import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
+import { bindIssFullscreen } from './fullscreen';
 import { paintEqualDigits } from '../digits';
 import { fitIssPane, launchCardCandidate, storedLaunchPlace, type LaunchCardPlace } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
@@ -120,6 +121,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const readAll = options.allLaunches
     ?? (options.launches ? () => [] : () => selectAllLaunches(launchStore.getState(), options.nowMs()));
   let pick: LaunchPick = { kind: 'open' };
+  let shownLaunchSites: readonly LaunchSite[] = [];
+  let launchDrawingHidden = false;
   let launchVisibility: LaunchVisibility = 'View unavailable';
   let pickerSync = false;
   const visible = options.visible ?? (() => document.visibilityState !== 'hidden');
@@ -360,6 +363,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     armed: () => phase === 'running',
     apply: applyAim,
   });
+  const fullscreen = bindIssFullscreen({
+    scene: root,
+    relayout: () => {
+      if (phase === 'running' && rendererReady) void paint();
+      else layout();
+    },
+  });
 
   const stopLaunches = options.launches
     ? () => {}
@@ -415,6 +425,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       aimKeys.dispose();
+      fullscreen.dispose();
       stopLaunches();
       storedAim.flush();
       renderer?.destroy();
@@ -534,7 +545,19 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const catalog = current.kind === 'held' && current.group === 'all' ? all : selections;
     const present = heldId !== '' && catalog.some((entry) => entry.item.event_id === heldId);
     const schedulePick = current.kind === 'held' && current.group === 'all';
-    if (current.kind === 'held' && !schedulePick && !judged) return;
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    if (current.kind === 'held' && !schedulePick && !judged) {
+      if (fullscreen) {
+        if (!launchDrawingHidden) {
+          renderer?.showLaunches?.([]);
+          launchDrawingHidden = true;
+        }
+      } else if (launchDrawingHidden) {
+        renderer?.showLaunches?.(shownLaunchSites);
+        launchDrawingHidden = false;
+      }
+      return;
+    }
     pick = reduceLaunchPick(current, { type: 'catalog', judged, present });
     const next = pick;
     const choiceId = next.kind === 'held' ? next.eventId : '';
@@ -544,7 +567,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const site = choice ? launchSiteFromSelection(choice) : null;
     syncPad(site);
     paintLaunchCard(choice, state, now, next.kind === 'held' ? next.group : null);
-    renderer?.showLaunches?.(site ? [site] : []);
+    shownLaunchSites = site ? [site] : [];
+    launchDrawingHidden = fullscreen;
+    renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
   }
 
   function syncPicker(
