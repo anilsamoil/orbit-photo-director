@@ -83,6 +83,36 @@ describe('ISS place label collision', () => {
     expect(placed.map((label) => label.name)).toEqual(['Tokyo']);
   });
 
+  it('keeps New York when Bridgeport overlaps it', () => {
+    const placed = placeScreenLabels(
+      [
+        { kind: 'city', name: 'Bridgeport', x: 300, y: 200, width: 80, height: 14, rank: 144000, maxFovDeg: 22 },
+        { kind: 'city', name: 'New York', x: 300, y: 200, width: 84, height: 14 },
+      ],
+      frame,
+    );
+    expect(placed.map((label) => label.name)).toEqual(['New York']);
+    expect(placed[0]?.offsetX).toBe(0);
+    expect(placed[0]?.offsetY).toBe(0);
+  });
+
+  it('moves a town off a city and keeps the city anchor', () => {
+    const placed = placeScreenLabels(
+      [
+        { kind: 'town', name: 'Kissimmee', x: 240, y: 180, width: 78, height: 14 },
+        { kind: 'city', name: 'Orlando', x: 240, y: 180, width: 58, height: 14 },
+      ],
+      frame,
+    );
+    const city = placed.find((label) => label.name === 'Orlando');
+    const town = placed.find((label) => label.name === 'Kissimmee');
+    expect(city?.offsetX).toBe(0);
+    expect(city?.offsetY).toBe(0);
+    expect(town).toBeTruthy();
+    if (!city || !town) return;
+    expect(overlaps(rect(city), rect(town))).toBe(false);
+  });
+
   it('moves a water label off a city and keeps the city anchor', () => {
     const placed = placeScreenLabels(
       [
