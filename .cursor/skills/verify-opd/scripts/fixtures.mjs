@@ -274,6 +274,19 @@ export async function buildFixtures(dir, now = Date.now()) {
           window: { verdict: 'unknown', reason: 'VIEW_UNCONFIRMED' },
         },
       },
+      {
+        event_id: 'verify-horizon',
+        revision: 'eventrev-horizon',
+        name: 'Verify Horizon',
+        rocket: 'Verify Rocket',
+        site: { name: 'Verify Coast', lat: hereNow.lat + 0.3, lon: hereNow.lon },
+        status: 'map_only',
+        reason_codes: ['TIME_PRECISION_COARSE'],
+        launch_window: { net, start: net, end: windowEnd, precision: 'hour' },
+        capture_intervals: [],
+        trajectory: { quality: 'unknown', source: null, points: [] },
+        sources: [{ kind: 'schedule', url: 'https://example.org/verify-horizon', fetched_at: generatedLaunch }],
+      },
     ],
   };
 

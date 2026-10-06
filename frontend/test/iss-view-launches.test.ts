@@ -7,6 +7,7 @@ import {
   launchCorridorLines,
   launchSites,
   launchTimeFact,
+  selectAllLaunches,
   lookArrowDeg,
   lookNudge,
   placeLaunchMarks,
@@ -527,6 +528,224 @@ describe('selected launch in the ISS view', () => {
       expect([...picker.options].some((entry) => entry.value === 'crew' && !entry.selected)).toBe(true);
       expect(host.querySelector('[data-iss-launch-missing]')?.textContent).toBe('Selected launch is no longer available');
       expect(host.querySelector('[data-iss-launch]')).toBeNull();
+      scene.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+      host.remove();
+    }
+  });
+
+  it('shows an All launches row as a pad without claiming a chance or an unsourced corridor', async () => {
+    const shown: LaunchSite[][] = [];
+    const net = new Date(startMs + 2 * 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const end = new Date(startMs + 3 * 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const schedule = launch({
+      event_id: 'horizon',
+      name: 'Horizon',
+      site: { name: 'Coast', lat: 28.5, lon: -80.6 },
+      reason_codes: ['TIME_PRECISION_COARSE'],
+      launch_window: { net, start: net, end, precision: 'Hour' },
+    });
+    const sourced = launch({
+      event_id: 'sourced',
+      name: 'Sourced',
+      site: { name: 'Cape', lat: 28.4, lon: -80.5 },
+      reason_codes: [],
+      launch_window: { net, start: net, end, precision: 'Second' },
+      trajectory: {
+        quality: 'approximate',
+        source: 'Published track',
+        points: [
+          { lat: 28.4, lon: -80.5, alt_km: 0, t_offset_seconds: 0 },
+          { lat: 28.8, lon: -80.1, alt_km: 20, t_offset_seconds: 30 },
+        ],
+      },
+    });
+    const catalog = selectAllLaunches(state([schedule, sourced]), startMs + 60_000);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: () => Promise.resolve(),
+        showLaunches(sites) {
+          shown.push([...sites]);
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      launches: () => [],
+      allLaunches: () => catalog,
+    });
+    scene.update(shot());
+    await settle();
+    await scene.paint();
+    const picker = host.querySelector('[data-iss-launch-picker]');
+    expect(picker).toBeInstanceOf(HTMLSelectElement);
+    if (!(picker instanceof HTMLSelectElement)) return;
+    const group = [...picker.querySelectorAll('optgroup')].find((entry) => entry.label === 'All launches');
+    expect(group?.querySelectorAll('option').length).toBe(2);
+    picker.value = 'all:horizon';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    await scene.paint();
+    const card = host.querySelector('[data-iss-launch-card]');
+    expect(card?.getAttribute('data-iss-launch-group')).toBe('all');
+    expect(card?.textContent ?? '').not.toMatch(/possible|chance/i);
+    expect(shown.at(-1)?.[0]?.corridor).toBeNull();
+    expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Horizon');
+    picker.value = 'all:sourced';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    await scene.paint();
+    expect(shown.at(-1)?.[0]?.corridor?.length).toBe(2);
+    expect(host.querySelector('[data-iss-launch-card]')?.textContent ?? '').not.toMatch(/possible|chance/i);
+    scene.dispose();
+    host.remove();
+  });
+
+  it('aims an All launches pick from the pin and from the edge arrow', async () => {
+    const net = new Date(startMs + 2 * 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const end = new Date(startMs + 3 * 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const schedule = launch({
+      event_id: 'horizon',
+      name: 'Horizon',
+      site: { name: 'Coast', lat: 28.5, lon: -80.6 },
+      reason_codes: ['TIME_PRECISION_COARSE'],
+      launch_window: { net, start: net, end, precision: 'Hour' },
+    });
+    const catalog = selectAllLaunches(state([schedule]), startMs + 60_000);
+    const aims: IssAim[] = [];
+    const host = document.createElement('div');
+    document.body.append(host);
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      createRenderer: (frame, received) => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aims.push(aim);
+          return Promise.resolve();
+        },
+        showLaunches(sites) {
+          frame.querySelectorAll('.iss-launch-pin, [data-iss-launch-edge]').forEach((node) => node.remove());
+          for (const site of sites) {
+            const pin = document.createElement('button');
+            pin.type = 'button';
+            pin.className = 'iss-launch-pin';
+            pin.addEventListener('click', () => received.onLaunchLook?.(site.eventId));
+            const edge = document.createElement('button');
+            edge.type = 'button';
+            edge.dataset.issLaunchEdge = site.eventId;
+            edge.addEventListener('click', () => received.onLaunchLook?.(site.eventId));
+            frame.append(pin, edge);
+          }
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      launches: () => [],
+      allLaunches: () => catalog,
+    });
+    scene.update(shot());
+    await settle();
+    await scene.paint();
+    const picker = host.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) throw new Error('missing picker');
+    picker.value = 'all:horizon';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    await scene.paint();
+    const card = host.querySelector('[data-iss-launch-card]');
+    expect(card?.getAttribute('data-iss-launch-group')).toBe('all');
+    expect(card?.querySelector('[data-iss-launch-name]')?.textContent).toBe('Horizon');
+    const beforePin = aims.at(-1)?.pose.targetLatDeg;
+    host.querySelector<HTMLButtonElement>('.iss-launch-pin')?.click();
+    await settle();
+    await scene.paint();
+    expect(aims.at(-1)?.pose.targetLatDeg).not.toBe(beforePin);
+    expect(card?.querySelector('[data-iss-launch-name]')?.textContent).toBe('Horizon');
+    expect(picker.value).toBe('all:horizon');
+    const beforeEdge = aims.at(-1)?.pose.targetLatDeg;
+    host.querySelector<HTMLButtonElement>('[data-iss-launch-edge]')?.click();
+    await settle();
+    await scene.paint();
+    expect(aims.at(-1)?.pose.targetLatDeg).not.toBe(beforeEdge);
+    expect(card?.querySelector('[data-iss-launch-name]')?.textContent).toBe('Horizon');
+    expect(host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('horizon');
+    scene.dispose();
+    host.remove();
+  });
+
+  it('keeps a stale chance pick unchanged and still draws an All launches pick', async () => {
+    const chance = launch({
+      event_id: 'crew',
+      name: 'Crew',
+      assessment: assessment({ checked_at: iso(1) }),
+      site: { name: 'Cape Canaveral', lat: 28.5, lon: -80.6 },
+      launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' },
+      sources: [{ kind: 'schedule', url: 'https://example.org/launch', fetched_at: iso(1) }],
+    });
+    const schedule = launch({
+      event_id: 'horizon',
+      name: 'Horizon',
+      site: { name: 'Coast', lat: 34.6, lon: -120.6 },
+      reason_codes: ['TIME_PRECISION_COARSE'],
+      launch_window: { net: iso(20), start: iso(20), end: iso(80), precision: 'Hour' },
+    });
+    const body = await envelope(artifact([chance, schedule], { revision: 'r-stale', generated_at: iso(1) }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      return new Response(path.includes('launch/latest.json') ? JSON.stringify(body.pointer) : body.body);
+    }));
+    const host = document.createElement('div');
+    document.body.append(host);
+    try {
+      await launchStore.refresh();
+      const scene = mountIssScene(host, {
+        nowMs: () => NOW + 2 * 60_000,
+        createRenderer: () => ({
+          ready: () => Promise.resolve(),
+          aim: () => Promise.resolve(),
+          showLaunches() {},
+          resize: () => {},
+          destroy: () => {},
+        }),
+        drive: 'manual',
+        session: { mode: 'horizon' },
+      });
+      scene.update(shot());
+      await settle();
+      await scene.paint();
+      const picker = host.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) throw new Error('missing picker');
+      picker.value = 'crew';
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await settle();
+      await scene.paint();
+      expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Crew');
+      expect(host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('crew');
+      await launchStore.refresh(false);
+      await settle();
+      await scene.paint();
+      expect(launchStore.getState().availability).toBe('offline');
+      expect(picker.value).toBe('crew');
+      expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Crew');
+      expect(host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('crew');
+      expect(host.querySelector('[data-iss-launch-card]')?.hasAttribute('hidden')).toBe(false);
+      picker.value = 'all:horizon';
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await settle();
+      await scene.paint();
+      const card = host.querySelector('[data-iss-launch-card]');
+      expect(card?.getAttribute('data-iss-launch-group')).toBe('all');
+      expect(card?.querySelector('[data-iss-launch-name]')?.textContent).toBe('Horizon');
+      expect(card?.hasAttribute('hidden')).toBe(false);
+      expect(host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('horizon');
       scene.dispose();
     } finally {
       vi.unstubAllGlobals();

@@ -58,8 +58,8 @@ soak:
 	@test -n "$(SCENARIO)" || (echo "Usage: make soak SCENARIO=network-kill"; exit 1)
 	bash scripts/soak/inject_failure.sh $(SCENARIO)
 
-LL2_URL ?= https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=1
-LL2_FIXTURE ?= tests/fixtures/ll2-response-2026-05.json
+LL2_URL ?= https://ll.thespacedevs.com/2.3.0/launches/upcoming/?mode=detailed&limit=1
+LL2_FIXTURE ?= tests/fixtures/ll2-2.3.0-detailed.json
 
 # Diff the live LL2 (Launch Library 2) API response shape against the pinned
 # fixture. Fires when status.json's `launches_schema_hash` differs from the

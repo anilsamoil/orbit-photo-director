@@ -22,6 +22,7 @@ from generator.launch_data import (
     NET_WINDOW_MAX_SECONDS,
     Launch,
     compute_schema_hash,
+    dedupe_launches,
     fetch_upcoming_launches,
     filter_ascent_launches,
     filter_launches,
@@ -425,10 +426,14 @@ def test_fetch_requests_a_full_page_not_ll2_default(
         fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
 
     assert mock_get.call_count == 1
+    assert mock_get.call_args.args[0] == "https://ll.thespacedevs.com/2.3.0/launches/upcoming/"
     params = mock_get.call_args.kwargs.get("params") or {}
-    assert params.get("limit") == LL2_PAGE_LIMIT
-    # 100 is the LL2 server-side maximum; larger values clamp silently.
-    assert 50 <= LL2_PAGE_LIMIT <= 100
+    assert params == {
+        "mode": "detailed",
+        "net__lte": "2026-05-25T00:00:00Z",
+        "hide_recent_previous": "true",
+        "limit": LL2_PAGE_LIMIT,
+    }
 
 
 def test_fetch_falls_back_to_cache_on_network_error(
@@ -645,6 +650,117 @@ def test_fetch_from_stale_cache_drops_completed_launches(
         result = fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=n)
     # All 4 fixture launches are pre-2030 → past → filtered out
     assert result.launches == []
+
+
+DETAILED_FIXTURE = Path(__file__).parent / "fixtures" / "ll2-2.3.0-detailed.json"
+PINNED_DETAILED_SCHEMA_HASH = "edd3f0c7e1d4d84b"
+
+
+def test_recorded_detailed_feed_parses_and_pins_its_schema_hash() -> None:
+    payload = json.loads(DETAILED_FIXTURE.read_text())
+    assert compute_schema_hash(payload) == PINNED_DETAILED_SCHEMA_HASH
+    now = datetime(2026, 10, 5, tzinfo=UTC)
+    launches = parse_response(payload, now=now)
+    assert [(launch.name, launch.time_precision, launch.status_abbrev, launch.site_lat, launch.site_lon) for launch in launches] == [
+        ("Falcon 9 Block 5 | SDA Tranche 1 Transport Layer A", "Second", "Go", 34.632, -120.611),
+        ("Nuri | NeonSat-2 to 6", "Minute", "Go", 34.431867, 127.535069),
+    ]
+
+
+def test_pad_coordinates_accept_numbers_and_strings() -> None:
+    payload = json.loads(DETAILED_FIXTURE.read_text())
+    payload["results"][0]["pad"]["latitude"] = "34.632"
+    payload["results"][0]["pad"]["longitude"] = "-120.611"
+    payload["results"][1]["pad"]["latitude"] = 34
+    payload["results"][1]["pad"]["longitude"] = 127
+    launches = parse_response(payload, now=datetime(2026, 10, 5, tzinfo=UTC))
+    assert [(launch.site_lat, launch.site_lon) for launch in launches] == [
+        (34.632, -120.611),
+        (34.0, 127.0),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "precision", "expected_status", "expected_precision"),
+    [
+        ("Go", "Second", "Go", "Second"),
+        ("Go for Launch", "SEC", "Go", "Second"),
+        ({"abbrev": "Go"}, {"abbrev": "SEC"}, "Go", "Second"),
+        ({"name": "Go for Launch"}, {"name": "Second"}, "Go", "Second"),
+        ("Confirmed", "Minute", "Confirmed", "Minute"),
+        ({"abbrev": "Confirmed"}, {"abbrev": "MIN"}, "Confirmed", "Minute"),
+        ({"name": "Confirmed"}, {"name": "Minute"}, "Confirmed", "Minute"),
+        ("TBC", "Hour", "TBC", "Hour"),
+        ("To Be Confirmed", "HR", "TBC", "Hour"),
+        ({"abbrev": "TBC"}, {"abbrev": "HOUR"}, "TBC", "Hour"),
+        ({"name": "To Be Confirmed"}, {"name": "Hour"}, "TBC", "Hour"),
+    ],
+)
+def test_status_and_precision_forms_normalize_identically(status, precision, expected_status, expected_precision) -> None:
+    payload = json.loads(DETAILED_FIXTURE.read_text())
+    row = payload["results"][0]
+    row["id"] = "synthetic-normalize"
+    row["name"] = "synthetic: normalized schedule"
+    row["status"] = status
+    row["net_precision"] = precision
+    launch = parse_response({"count": 1, "results": [row]}, now=datetime(2026, 10, 5, tzinfo=UTC))[0]
+    assert launch.status_abbrev == expected_status
+    assert launch.time_precision == expected_precision
+
+
+def test_hour_precision_and_string_status_parse() -> None:
+    payload = json.loads(DETAILED_FIXTURE.read_text())
+    row = payload["results"][0]
+    row["name"] = "synthetic: hour precision"
+    row["id"] = "synthetic-hour"
+    row["net_precision"] = {"name": "Hour", "abbrev": "HR"}
+    row["status"] = "Go"
+    launch = parse_response({"count": 1, "results": [row]}, now=datetime(2026, 10, 5, tzinfo=UTC))[0]
+    assert launch.time_precision == "Hour"
+    assert launch.status_abbrev == "Go"
+    assert "TIME_PRECISION_COARSE" in launch.timing_reasons
+
+
+def test_duplicate_event_ids_keep_the_newest_last_updated() -> None:
+    payload = json.loads(DETAILED_FIXTURE.read_text())
+    older = json.loads(json.dumps(payload["results"][0]))
+    newer = json.loads(json.dumps(payload["results"][0]))
+    older["name"] = "synthetic: duplicate older"
+    older["last_updated"] = "2026-10-01T00:00:00Z"
+    newer["name"] = "synthetic: duplicate newer"
+    newer["last_updated"] = "2026-10-04T00:00:00Z"
+    launches = parse_response(
+        {"count": 2, "results": [older, newer]},
+        now=datetime(2026, 10, 5, tzinfo=UTC),
+    )
+    kept = dedupe_launches(launches)
+    assert [launch.name for launch in kept] == ["synthetic: duplicate newer"]
+
+
+def test_one_successful_request_per_hour_uses_the_horizon_query(cache_path: Path, fixture_text: str) -> None:
+    start = datetime(2026, 5, 11, tzinfo=UTC)
+
+    class FakeResp:
+        status_code = 200
+        text = fixture_text
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    with patch("generator.launch_data.requests.get", return_value=FakeResp()) as mock_get:
+        with patch("generator.launch_data._utc_now", return_value=start):
+            fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=start)
+        import os
+        os.utime(cache_path, (start.timestamp(), start.timestamp()))
+        with patch("generator.launch_data._utc_now", return_value=start + timedelta(minutes=30)):
+            fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=start + timedelta(minutes=30))
+        assert mock_get.call_count == 1
+        assert mock_get.call_args.kwargs["params"]["net__lte"] == "2026-05-25T00:00:00Z"
+        assert mock_get.call_args.kwargs["params"]["mode"] == "detailed"
+        with patch("generator.launch_data._utc_now", return_value=start + timedelta(hours=1)):
+            fetch_upcoming_launches(cache_path, ttl_hours=1.0, now=start + timedelta(hours=1))
+        assert mock_get.call_count == 2
 
 
 def test_net_window_max_aligns_with_pass_window() -> None:

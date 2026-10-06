@@ -9,6 +9,26 @@ const planned = () => launch({ assessment: assessment(),
 const selection = (item = planned()) => ({ item, interval: null, expired: false });
 
 describe('plain launch shooting brief', () => {
+  it('never calls TBC a chance after VALIDATION_PENDING is removed', () => {
+    const item = supported({
+      reason_codes: [],
+      assessment: assessment({
+        net: {
+          verdict: 'unknown',
+          reason: 'TIMING_UNCONFIRMED',
+          at: iso(10),
+          pad_distance_km: null,
+          t_offset_seconds: null,
+          look: null,
+        },
+        window: { verdict: 'unknown', reason: 'TIMING_UNCONFIRMED' },
+      }),
+    });
+    expect(launchBrief({ item, interval: item.capture_intervals[0] ?? null, expired: false }, state([item]), NOW).verdict).not.toBe('chance');
+    expect(selectLaunches(state([item]), NOW, 'map')).toEqual([]);
+    expect(selectLaunches(state([item]), NOW, 'upcoming')).toEqual([]);
+  });
+
   it('shows a possible shot only for fresh site visibility at the listed liftoff time, without admitting it to Queue', () => {
     const item = planned(); const s = state([item]);
     const brief = launchBrief(selection(item), s, NOW);

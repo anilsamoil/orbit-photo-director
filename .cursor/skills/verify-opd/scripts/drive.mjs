@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
@@ -2711,7 +2711,117 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return held.join(', ');
 }
 
+function fixtureInstant(evidenceDir) {
+  let dir = evidenceDir;
+  for (let step = 0; step < 4; step += 1) {
+    const path = resolve(dir, 'fixtures/meta.json');
+    if (existsSync(path)) {
+      const now = JSON.parse(readFileSync(path, 'utf8')).now;
+      if (typeof now === 'number' && Number.isFinite(now)) return now;
+    }
+    dir = dirname(dir);
+  }
+  throw new Error('verify fixture meta missing');
+}
+
 async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
+  const horizon = await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) return null;
+      const group = [...picker.querySelectorAll('optgroup')].find((entry) => entry.label === 'All launches');
+      const option = group && [...group.querySelectorAll('option')].find((entry) => entry.textContent?.includes('Verify Horizon'));
+      if (!option) return null;
+      return { ok: true, value: option.value };
+    })()`,
+    'iss all launches group',
+    15000,
+  );
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.value = ${JSON.stringify(horizon.value)};
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const card = document.querySelector('[data-iss-launch-card]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!card || card.hasAttribute('hidden') || !frame) return null;
+      if (card.dataset.issLaunchGroup !== 'all') return null;
+      if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Horizon') return null;
+      const text = card.textContent || '';
+      if (/possible|chance/i.test(text)) return null;
+      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      return { ok: true };
+    })()`,
+    'iss all launches schedule only',
+    15000,
+  );
+  await shot(send, evidenceDir, 'iss-all-launches');
+  const frozen = fixtureInstant(evidenceDir);
+  await evaluate(send, `(() => {
+    window.__opdRealNow = Date.now;
+    const frozen = ${frozen};
+    Date.now = () => frozen;
+    return true;
+  })()`);
+  try {
+  await click(send, '[data-iss-preset="nadir"]');
+  await waitFor(
+    send,
+    `(() => {
+      const pressed = document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true';
+      const card = document.querySelector('[data-iss-launch-card]');
+      const name = card?.querySelector('[data-iss-launch-name]')?.textContent ?? null;
+      const visibility = card?.querySelector('[data-iss-launch-visibility]')?.textContent ?? null;
+      const pin = !!document.querySelector('.iss-launch-pin');
+      const edge = !!document.querySelector('[data-iss-launch-edge]');
+      const look = document.querySelector('[data-iss-launch-label]')?.textContent ?? null;
+      const status = document.querySelector('[data-iss-status]')?.textContent ?? null;
+      if (!pressed || name !== 'Verify Horizon' || !pin) {
+        return { pressed, name, visibility, pin, edge, look, status: status && status.slice(0, 180) };
+      }
+      return { ok: true };
+    })()`,
+    'iss all launches pin in frame',
+    15000,
+  );
+  const aimBeforePin = await evaluate(send, `(() => {
+    const center = window.__opdIss?.getCenter?.();
+    return center ? { ok: true, lat: center.lat, lng: center.lng } : null;
+  })()`);
+  if (!aimBeforePin?.lat && aimBeforePin?.lat !== 0) throw new Error('iss all launches pin has no center');
+  await click(send, '.iss-launch-pin');
+  await waitFor(
+    send,
+    `(() => {
+      const card = document.querySelector('[data-iss-launch-card]');
+      const center = window.__opdIss?.getCenter?.();
+      if (!card || card.dataset.issLaunchGroup !== 'all') return null;
+      if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Horizon') return null;
+      if (!center) return null;
+      const moved = Math.abs(center.lat - ${aimBeforePin.lat}) + Math.abs(center.lng - ${aimBeforePin.lng});
+      if (moved < 0.15) return null;
+      return { ok: true };
+    })()`,
+    'iss all launches pin',
+    15000,
+  );
+  await shot(send, evidenceDir, 'iss-all-launches-pin');
+  } finally {
+    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+  }
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.value = 'none';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
   const before = await waitFor(
     send,
     `(() => {

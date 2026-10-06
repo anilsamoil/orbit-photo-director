@@ -92,14 +92,19 @@ def test_timing_unknowns_stay_explicit(evidence, sample_tle, change, reason):
     assert artifact["items"][0]["capture_intervals"] == []
 
 
-def test_duplicate_conflicting_ids_are_not_selected(evidence, sample_tle):
+def test_duplicate_ids_keep_the_newest_update(evidence, sample_tle):
     now, payload = evidence
-    payload["results"].append(copy.deepcopy(payload["results"][0]))
+    older = copy.deepcopy(payload["results"][0])
+    newer = copy.deepcopy(payload["results"][0])
+    older["last_updated"] = "2026-10-01T00:00:00Z"
+    older["name"] = "synthetic: duplicate older"
+    newer["last_updated"] = "2026-10-02T00:00:00Z"
+    newer["name"] = "synthetic: duplicate newer"
+    payload["results"] = [older, newer]
     payload["count"] = 2
     artifact = build_launch_artifact(payload, sample_tle, now, fetched_at=now)
-    assert artifact["items"] == []
-    assert "DUPLICATE_EVENT_IDS" in artifact["coverage"]["reasons"]
-    assert not artifact["coverage"]["complete"]
+    assert [item["name"] for item in artifact["items"]] == ["synthetic: duplicate newer"]
+    assert "DUPLICATE_EVENT_IDS" not in artifact["coverage"]["reasons"]
 
 
 def test_partial_feed_is_not_complete_negative(evidence, sample_tle):
@@ -108,6 +113,13 @@ def test_partial_feed_is_not_complete_negative(evidence, sample_tle):
     artifact = build_launch_artifact(payload, sample_tle, now, fetched_at=now)
     assert "FEED_PAGINATED" in artifact["coverage"]["reasons"]
     assert not artifact["coverage"]["complete"]
+
+
+def test_fitted_horizon_page_is_not_marked_paginated(evidence, sample_tle):
+    now, payload = evidence
+    payload.update(count=1, next="https://example.invalid/unused")
+    artifact = build_launch_artifact(payload, sample_tle, now, fetched_at=now)
+    assert "FEED_PAGINATED" not in artifact["coverage"]["reasons"]
 
 
 def test_missing_tle_and_malformed_rows_are_visible(evidence):

@@ -40,6 +40,46 @@ def assess(planning, *, position=None, **kwargs):
         return build_planning_assessment(launch, tle, now, fetched, budget, **kwargs)
 
 
+def test_tbc_cannot_become_a_chance_even_without_validation_pending(planning):
+    now, launch, tle = planning
+    observer = propagate(tle, launch.t0)
+    tbc = replace(
+        launch,
+        status_abbrev="TBC",
+        site_lat=observer.lat,
+        site_lon=observer.lon,
+        time_precision="Second",
+        timing_reasons=(),
+    )
+    direct = build_planning_assessment(tbc, tle, now, now, EvaluationBudget())
+    assert direct["net"]["verdict"] != "possible"
+    assert direct["net"]["reason"] == "TIMING_UNCONFIRMED"
+    row = {
+        "id": "synthetic-tbc",
+        "name": "synthetic: tbc",
+        "net": utc(tbc.t0),
+        "window_start": utc(tbc.t0),
+        "window_end": utc(tbc.window_end),
+        "net_precision": "SEC",
+        "status": {"name": "To Be Confirmed"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {
+            "latitude": observer.lat,
+            "longitude": observer.lon,
+            "location": {"name": "Under ISS"},
+        },
+    }
+    artifact = build_launch_artifact(
+        {"count": 1, "next": None, "results": [row]}, tle, now, fetched_at=now,
+    )
+    item = artifact["items"][0]
+    assert item["assessment"]["net"]["verdict"] != "possible"
+    assert item["assessment"]["net"]["reason"] == "TIMING_UNCONFIRMED"
+    item["reason_codes"] = [code for code in item["reason_codes"] if code != "VALIDATION_PENDING"]
+    assert "VALIDATION_PENDING" not in item["reason_codes"]
+    assert item["assessment"]["net"]["verdict"] != "possible"
+
+
 def test_visible_site_has_real_look_even_for_unknown_rocket(planning):
     now, launch, tle = planning
     observer = propagate(tle, launch.t0)

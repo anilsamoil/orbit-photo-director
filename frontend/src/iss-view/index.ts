@@ -22,6 +22,7 @@ import {
   launchSiteFromSelection,
   launchTimeFact,
   lookToward,
+  selectAllLaunches,
   type LaunchSite,
   type LaunchVisibility,
 } from './launches';
@@ -78,6 +79,7 @@ export type MountIssSceneOptions = {
   onMap?: () => void;
   drive?: 'manual' | 'live';
   launches?: () => readonly LaunchSelection[];
+  allLaunches?: () => readonly LaunchSelection[];
   session?: {
     mode: CameraMode;
     azimuthDeg?: number;
@@ -89,7 +91,7 @@ export type MountIssSceneOptions = {
 
 type LaunchPick =
   | { kind: 'open' }
-  | { kind: 'held'; eventId: string }
+  | { kind: 'held'; eventId: string; group: 'chance' | 'all' }
   | { kind: 'cleared' };
 
 type LaunchPickEvent =
@@ -97,14 +99,16 @@ type LaunchPickEvent =
   | { type: 'catalog'; judged: boolean; present: boolean };
 
 function pickValue(pick: LaunchPick): string {
-  return pick.kind === 'held' ? pick.eventId : '';
+  if (pick.kind !== 'held') return '';
+  return pick.group === 'all' ? `all:${pick.eventId}` : pick.eventId;
 }
 
 function reduceLaunchPick(pick: LaunchPick, event: LaunchPickEvent): LaunchPick {
   if (event.type === 'menu') {
     if (event.value === '' || event.value === pickValue(pick)) return pick;
     if (event.value === 'none') return { kind: 'open' };
-    return { kind: 'held', eventId: event.value };
+    if (event.value.startsWith('all:')) return { kind: 'held', eventId: event.value.slice(4), group: 'all' };
+    return { kind: 'held', eventId: event.value, group: 'chance' };
   }
   if (pick.kind !== 'held' || !event.judged || event.present) return pick;
   return { kind: 'cleared' };
@@ -113,6 +117,8 @@ function reduceLaunchPick(pick: LaunchPick, event: LaunchPickEvent): LaunchPick 
 export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions): IssScene {
   const session = bindSession(options.session ?? sessionPreset);
   const readSelections = options.launches ?? (() => selectLaunches(launchStore.getState(), options.nowMs(), 'map'));
+  const readAll = options.allLaunches
+    ?? (options.launches ? () => [] : () => selectAllLaunches(launchStore.getState(), options.nowMs()));
   let pick: LaunchPick = { kind: 'open' };
   let launchVisibility: LaunchVisibility = 'View unavailable';
   let pickerSync = false;
@@ -425,10 +431,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     try {
       renderer = factory(frame, {
         onLaunchLook(eventId) {
-          const selection = readSelections().find((entry) => entry.item.event_id === eventId);
-          if (selection && pick.kind === 'held' && selection.item.event_id === pick.eventId) {
-            aimToward(launchSiteFromSelection(selection));
-          }
+          if (pick.kind !== 'held' || eventId !== pick.eventId) return;
+          const catalog = pick.group === 'all' ? readAll() : readSelections();
+          const selection = catalog.find((entry) => entry.item.event_id === eventId);
+          if (selection) aimToward(launchSiteFromSelection(selection));
         },
         onLaunchVisibility(eventId, visibility) {
           if (pick.kind !== 'held' || eventId !== pick.eventId) return;
@@ -519,47 +525,85 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function syncLaunchChrome(): void {
     const selections = readSelections();
+    const all = readAll();
     const state = launchStore.getState();
     const now = options.nowMs();
     const judged = !!options.launches || launchVerdictBlock(state, now) === null;
     const current = pick;
     const heldId = current.kind === 'held' ? current.eventId : '';
-    const present = heldId !== '' && selections.some((entry) => entry.item.event_id === heldId);
-    if (current.kind === 'held' && !judged) return;
+    const catalog = current.kind === 'held' && current.group === 'all' ? all : selections;
+    const present = heldId !== '' && catalog.some((entry) => entry.item.event_id === heldId);
+    const schedulePick = current.kind === 'held' && current.group === 'all';
+    if (current.kind === 'held' && !schedulePick && !judged) return;
     pick = reduceLaunchPick(current, { type: 'catalog', judged, present });
     const next = pick;
     const choiceId = next.kind === 'held' ? next.eventId : '';
-    const choice = choiceId === '' ? null : selections.find((entry) => entry.item.event_id === choiceId) ?? null;
-    syncPicker(selections, state, now);
+    const choiceCatalog = next.kind === 'held' && next.group === 'all' ? all : selections;
+    const choice = choiceId === '' ? null : choiceCatalog.find((entry) => entry.item.event_id === choiceId) ?? null;
+    syncPicker(selections, all, state, now);
     const site = choice ? launchSiteFromSelection(choice) : null;
     syncPad(site);
-    paintLaunchCard(choice, state, now);
+    paintLaunchCard(choice, state, now, next.kind === 'held' ? next.group : null);
     renderer?.showLaunches?.(site ? [site] : []);
   }
 
-  function syncPicker(selections: readonly LaunchSelection[], state: ReturnType<typeof launchStore.getState>, now: number): void {
-    const rows: { value: string; label: string }[] = [
-      { value: '', label: 'Choose launch' },
-      { value: 'none', label: 'None' },
+  function syncPicker(
+    selections: readonly LaunchSelection[],
+    all: readonly LaunchSelection[],
+    state: ReturnType<typeof launchStore.getState>,
+    now: number,
+  ): void {
+    const rows: { value: string; label: string; group: string | null }[] = [
+      { value: '', label: 'Choose launch', group: null },
+      { value: 'none', label: 'None', group: null },
     ];
     for (const selection of selections) {
+      rows.push({ value: selection.item.event_id, label: launchChoiceLabel(selection, state, now), group: null });
+    }
+    for (const selection of all) {
       rows.push({
-        value: selection.item.event_id,
+        value: `all:${selection.item.event_id}`,
         label: launchChoiceLabel(selection, state, now),
+        group: 'All launches',
       });
     }
-    const signature = rows.map((row) => `${row.value}\t${row.label}`).join('\n');
+    const signature = rows.map((row) => `${row.group ?? ''}\t${row.value}\t${row.label}`).join('\n');
     const value = pickValue(pick);
     pickerSync = true;
     try {
       if (picker.dataset.issLaunchOptions !== signature) {
-        picker.dataset.issLaunchOptions = signature;
-        while (picker.options.length > rows.length) picker.remove(picker.options.length - 1);
-        rows.forEach((row, index) => {
-          const option = picker.options[index] ?? picker.appendChild(document.createElement('option'));
-          if (option.textContent !== row.label) option.textContent = row.label;
-          if (option.getAttribute('value') !== row.value) option.setAttribute('value', row.value);
+        const existing = [...picker.options];
+        const sameShape = existing.length === rows.length && existing.every((option, index) => {
+          const parent = option.parentElement;
+          const group = parent instanceof HTMLOptGroupElement ? parent.label : '';
+          return option.value === rows[index]?.value && group === (rows[index]?.group ?? '');
         });
+        if (sameShape) {
+          rows.forEach((row, index) => {
+            const option = existing[index];
+            if (option && option.textContent !== row.label) option.textContent = row.label;
+          });
+        } else {
+          picker.replaceChildren();
+          let group: HTMLOptGroupElement | null = null;
+          for (const row of rows) {
+            const option = document.createElement('option');
+            option.value = row.value;
+            option.textContent = row.label;
+            if (row.group) {
+              if (!group || group.label !== row.group) {
+                group = document.createElement('optgroup');
+                group.label = row.group;
+                picker.append(group);
+              }
+              group.append(option);
+            } else {
+              group = null;
+              picker.append(option);
+            }
+          }
+        }
+        picker.dataset.issLaunchOptions = signature;
       }
       if (picker.value !== value) picker.value = value;
     } finally {
@@ -595,7 +639,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       button.addEventListener('click', () => {
         const current = pick;
         if (current.kind !== 'held') return;
-        const selected = readSelections().find((entry) => entry.item.event_id === current.eventId);
+        const catalog = current.group === 'all' ? readAll() : readSelections();
+        const selected = catalog.find((entry) => entry.item.event_id === current.eventId);
         if (selected) aimToward(launchSiteFromSelection(selected));
       });
       launchesHost.append(button);
@@ -619,9 +664,11 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     choice: LaunchSelection | null,
     state: ReturnType<typeof launchStore.getState>,
     now: number,
+    group: 'chance' | 'all' | null,
   ): void {
     if (pick.kind === 'cleared') {
       launchCard.hidden = false;
+      delete launchCard.dataset.issLaunchGroup;
       if (launchCard.dataset.issLaunchState !== 'missing') {
         launchCard.dataset.issLaunchState = 'missing';
         launchCard.replaceChildren(factMissing);
@@ -631,9 +678,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (pick.kind !== 'held' || !choice) {
       launchCard.hidden = true;
       launchCard.dataset.issLaunchState = '';
+      delete launchCard.dataset.issLaunchGroup;
       return;
     }
     launchCard.hidden = false;
+    if (group === 'all') launchCard.dataset.issLaunchGroup = 'all';
+    else delete launchCard.dataset.issLaunchGroup;
     if (launchCard.dataset.issLaunchState !== 'selected') {
       launchCard.dataset.issLaunchState = 'selected';
       launchCard.replaceChildren(factName, factSite, factTime, factVisibility);

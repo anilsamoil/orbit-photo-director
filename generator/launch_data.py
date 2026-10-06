@@ -44,7 +44,7 @@ from typing import Any
 
 import requests
 
-LL2_DEFAULT_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
+LL2_DEFAULT_URL = "https://ll.thespacedevs.com/2.3.0/launches/upcoming/"
 LL2_FETCH_TIMEOUT_SECONDS = 15
 LL2_MIN_ATTEMPT_SECONDS = 900
 LL2_MAX_BACKOFF_SECONDS = 7200
@@ -61,10 +61,17 @@ LL2_MAX_SERVER_DELAY_SECONDS = 7 * 86400
 # rate limit — just a bigger page on the call we already make.
 LL2_PAGE_LIMIT = 100
 
+# The upcoming query stops at this horizon. One detailed page then covers the
+# launches the ISS view lists. The legacy pass finder keeps its own shorter gate.
+FEED_HORIZON = timedelta(days=14)
+
 # Status abbrevs that count as "actionable, plan around it." Everything else
 # (TBD, Hold, Removed, Failed, etc.) is filtered out before pass-finding.
 # LL2 status abbrev field is stable across the 2.2.0 schema.
 LL2_GO_STATUS_ABBREVS = frozenset({"Go", "Confirmed"})
+
+# Go, Confirmed, and TBC stay on the schedule list. TBC is not a shooting chance.
+SCHEDULE_STATUS_ABBREVS = frozenset({"Go", "Confirmed", "TBC"})
 
 # How wide a window around t0 to ask find_passes about. The launch can slip
 # anywhere within (window_start, window_end); the ISS overhead window is
@@ -139,6 +146,7 @@ class Launch:
     mission_inclination_deg: float | None = None
     launch_azimuth_deg: float | None = None
     trajectory_source: str | None = None
+    last_updated: datetime | None = None
 
 
 def _parse_iso8601_z(text: str) -> datetime:
@@ -151,6 +159,115 @@ def _parse_iso8601_z(text: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include timezone")
     return parsed.astimezone(UTC)
+
+
+def _text(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+_STATUS_FROM_TOKEN = {
+    "GO": "Go",
+    "GO FOR LAUNCH": "Go",
+    "CONFIRMED": "Confirmed",
+    "TBC": "TBC",
+    "TO BE CONFIRMED": "TBC",
+}
+
+
+def _schedule_status(token: str) -> str:
+    return _STATUS_FROM_TOKEN.get(token.upper(), token)
+
+
+def _status_abbrev(value: Any) -> str:
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            return _schedule_status(text)
+    if isinstance(value, dict):
+        abbrev = _text(value.get("abbrev"))
+        if abbrev:
+            return _schedule_status(abbrev)
+        name = _text(value.get("name"))
+        if name:
+            return _schedule_status(name)
+    raise KeyError("status")
+
+
+_PRECISION_FROM_TOKEN = {
+    "SEC": "Second",
+    "SECOND": "Second",
+    "MIN": "Minute",
+    "MINUTE": "Minute",
+    "HR": "Hour",
+    "HOUR": "Hour",
+}
+
+
+def _schedule_precision(token: str) -> str:
+    return _PRECISION_FROM_TOKEN.get(token.upper(), token)
+
+
+def _precision_name(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return _schedule_precision(value.strip())
+    if isinstance(value, dict):
+        name = _text(value.get("name"))
+        if name:
+            return _schedule_precision(name)
+        abbrev = _text(value.get("abbrev"))
+        if abbrev:
+            return _schedule_precision(abbrev)
+    return None
+
+
+def _coordinate(value: Any) -> float:
+    if isinstance(value, bool) or isinstance(value, str) and not value.strip():
+        raise ValueError("coordinate")
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    raise ValueError("coordinate")
+
+
+def _optional_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return _parse_iso8601_z(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_z(when: datetime) -> str:
+    return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def upcoming_query(now: datetime) -> dict[str, str | int]:
+    """One detailed page through the schedule horizon. No further pages."""
+    return {
+        "mode": "detailed",
+        "net__lte": _iso_z(now + FEED_HORIZON),
+        "hide_recent_previous": "true",
+        "limit": LL2_PAGE_LIMIT,
+    }
+
+
+def dedupe_launches(launches: list[Launch]) -> list[Launch]:
+    """Keep the copy of each event id with the newest last_updated."""
+    chosen: dict[str, Launch] = {}
+    order: list[str] = []
+    for launch in launches:
+        previous = chosen.get(launch.id)
+        if previous is None:
+            chosen[launch.id] = launch
+            order.append(launch.id)
+            continue
+        current_at = launch.last_updated
+        previous_at = previous.last_updated
+        if previous_at is None or (current_at is not None and current_at >= previous_at):
+            chosen[launch.id] = launch
+    return [chosen[launch_id] for launch_id in order]
 
 
 def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> Launch | None:
@@ -195,22 +312,21 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
             we = _parse_iso8601_z(we_raw) if we_raw else None
             net_window_seconds = ASCENT_NET_WINDOW_MAX_SECONDS + 1
             reasons.append("WINDOW_UNKNOWN")
-        precision_raw = result.get("net_precision")
-        precision = precision_raw.get("name") if isinstance(precision_raw, dict) else None
+        precision = _precision_name(result.get("net_precision"))
         if not isinstance(precision, str):
             precision = None
             reasons.append("TIME_PRECISION_UNKNOWN")
         elif precision.lower() not in {"second", "minute"}:
             reasons.append("TIME_PRECISION_COARSE")
-        status_abbrev = result["status"]["abbrev"]
+        status_abbrev = _status_abbrev(result.get("status"))
         rocket_type = (
             result["rocket"]["configuration"].get("full_name")
             or result["rocket"]["configuration"].get("name", "Unknown")
         )
         pad = result["pad"]
         site_name = pad["location"]["name"]
-        site_lat = float(pad["latitude"])
-        site_lon = float(pad["longitude"])
+        site_lat = _coordinate(pad.get("latitude"))
+        site_lon = _coordinate(pad.get("longitude"))
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
         log.debug("LL2 result skipped (parse failure): %s", exc)
         return None
@@ -254,6 +370,7 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
         time_precision=precision,
         timing_reasons=tuple(reasons),
         mission_inclination_deg=inclination,
+        last_updated=_optional_timestamp(result.get("last_updated")),
     )
 
 
@@ -597,7 +714,7 @@ def fetch_upcoming_launches(
             try:
                 resp = requests.get(
                     url, timeout=LL2_FETCH_TIMEOUT_SECONDS,
-                    params={"limit": LL2_PAGE_LIMIT}, allow_redirects=False,
+                    params=upcoming_query(n), allow_redirects=False,
                 )
                 state["status"] = getattr(resp, "status_code", None)
                 headers = getattr(resp, "headers", {})
