@@ -4675,6 +4675,13 @@ summary:focus-visible {
   }
 }
 
+@media (max-height: 720px) {
+  body.shotlist-bar-visible .view-map .map-legend {
+    left: calc(8px + env(safe-area-inset-left, 0px) + 52px + 8px);
+    max-width: calc(100% - 92px - 60px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  }
+}
+
 @media (max-height: 520px) {
   :root {
     --topbar-height: calc(env(safe-area-inset-top, 0px) + 48px);

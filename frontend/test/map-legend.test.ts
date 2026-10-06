@@ -108,6 +108,7 @@ describe('map legend disclosure', () => {
     expect(css).toContain('left: calc(8px + env(safe-area-inset-left, 0px) + 52px + 8px)');
     expect(css).toContain('max-width: calc(100% - 92px - 60px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))');
     expect(css).toContain('.view-map #map .maplibregl-ctrl-top-left {\n    left: calc(8px + env(safe-area-inset-left, 0px));');
+    expect(css).toContain('body.shotlist-bar-visible .view-map .map-legend {\n    left: calc(8px + env(safe-area-inset-left, 0px) + 52px + 8px);');
   });
 
   it('collapses again when the page is shown', () => {

@@ -1723,6 +1723,14 @@ async function proveLegendDisclosure(send, evidenceDir, viewport, suffix = '') {
     if (inset) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
+  if (!suffix && viewport && (
+    (viewport.width === 1400 && viewport.height === 900)
+    || (viewport.width === 390 && viewport.height === 664)
+    || (viewport.width === 402 && viewport.height === 874)
+  )) {
+    await proveLegendShotlist(send, evidenceDir);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
 }
 
 async function hideMapChrome(send) {
@@ -1780,6 +1788,42 @@ async function proveShortLandscapeLegend(send, evidenceDir, fullLand) {
     await hideMapChrome(send);
     await assertLegendClearOfZoom(send, `${size.suffix} hidden`);
     await showMapChrome(send);
+  }
+}
+
+async function proveLegendShotlist(send, evidenceDir) {
+  const sizes = [
+    { width: 390, height: 664, suffix: '390x664' },
+    { width: 390, height: 844, suffix: '390x844' },
+    { width: 402, height: 874, suffix: '402x874' },
+    { width: 874, height: 402, suffix: '874x402' },
+    { width: 844, height: 390, suffix: '844x390' },
+    { width: 932, height: 430, suffix: '932x430' },
+  ];
+  await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
+  try {
+    for (const size of sizes) {
+      await setViewport(send, size.width, size.height, true);
+      await sleep(300);
+      await assertLegendClearOfZoom(send, `shotlist ${size.suffix} shown`);
+      const clear = await evaluate(send, `(() => {
+        const button = document.getElementById('map-legend-toggle')?.getBoundingClientRect();
+        const strip = document.querySelector('.map-command')?.getBoundingClientRect();
+        const hide = document.getElementById('map-chrome-toggle')?.getBoundingClientRect();
+        if (!button || !strip || !hide) return { ok: false, reason: 'missing' };
+        const hits = (a, b) => a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        if (hits(button, strip)) return { ok: false, reason: 'strip', button: { top: button.top, bottom: button.bottom }, strip: { top: strip.top, bottom: strip.bottom } };
+        if (hits(button, hide)) return { ok: false, reason: 'hide', button: { left: button.left, right: button.right, top: button.top, bottom: button.bottom }, hide: { left: hide.left, right: hide.right, top: hide.top, bottom: hide.bottom } };
+        return { ok: true };
+      })()`);
+      if (!clear?.ok) throw new Error(`legend shotlist ${size.suffix} ${JSON.stringify(clear)}`);
+      if (size.width === 390 && size.height === 664) await shot(send, evidenceDir, 'map-legend-shotlist');
+      await hideMapChrome(send);
+      await assertLegendClearOfZoom(send, `shotlist ${size.suffix} hidden`);
+      await showMapChrome(send);
+    }
+  } finally {
+    await evaluate(send, `document.body.classList.remove('shotlist-bar-visible')`);
   }
 }
 
