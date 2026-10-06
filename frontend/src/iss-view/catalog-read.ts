@@ -7,7 +7,7 @@ function isKind(value: unknown): value is CatalogPoint['kind'] {
 }
 
 export function readCatalog(value: unknown): readonly CatalogPoint[] {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) throw new Error('catalog response is not an array');
   const points: CatalogPoint[] = [];
   for (const row of value) {
     if (!Array.isArray(row) || row.length < 5) continue;
