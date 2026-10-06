@@ -90,25 +90,29 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   let litTiles = '';
   let nearPoints: readonly CatalogPoint[] = [];
   let townPoints: readonly CatalogPoint[] = [];
-  let townRequested = false;
+  const nearLoad: ChunkSlot = { phase: 'idle', pause: 0, fails: 0 };
+  const townLoad: ChunkSlot = { phase: 'idle', pause: 0, fails: 0 };
+  const measured = new globalThis.Map<string, { width: number; height: number }>();
   const mergedCatalog = (): readonly CatalogPoint[] => (
     townPoints.length === 0 ? nearPoints : nearPoints.concat(townPoints)
   );
   const requestNear = (): void => {
-    void import('../../../iss-view/label-catalog')
-      .then((mod) => {
-        nearPoints = mod.LABEL_CATALOG;
-      })
-      .catch(() => undefined);
+    pullChunk(
+      nearLoad,
+      () => import('../../../iss-view/label-catalog').then((mod) => mod.LABEL_CATALOG),
+      (points) => {
+        nearPoints = points;
+      },
+    );
   };
   const requestTowns = (): void => {
-    if (townRequested) return;
-    townRequested = true;
-    void import('../../../iss-view/label-catalog-towns')
-      .then((mod) => {
-        townPoints = mod.LABEL_TOWNS;
-      })
-      .catch(() => undefined);
+    pullChunk(
+      townLoad,
+      () => import('../../../iss-view/label-catalog-towns').then((mod) => mod.LABEL_TOWNS),
+      (points) => {
+        townPoints = points;
+      },
+    );
   };
   requestNear();
 
@@ -159,8 +163,9 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg, roll: EARTH_VIEW_ROLL_DEG });
       launchState.aim = aim;
+      requestNear();
       if (aim.verticalFovDeg <= TOWN_LABEL_FOV_DEG) requestTowns();
-      syncPlaceMarkers(map, placeMarkers, aim, mergedCatalog());
+      syncPlaceMarkers(map, placeMarkers, aim, mergedCatalog(), measured);
       syncLaunchOverlay(map, frame, launchMarkers, launchEdges, launchState, hooks);
       await idle(map);
     },
@@ -190,6 +195,7 @@ function syncPlaceMarkers(
   markers: { key: string; marker: Marker }[],
   aim: IssAim,
   catalog: readonly CatalogPoint[],
+  measured: globalThis.Map<string, { width: number; height: number }>,
 ): void {
   const width = map.getCanvas().clientWidth;
   const height = map.getCanvas().clientHeight;
@@ -203,53 +209,62 @@ function syncPlaceMarkers(
     aim.verticalFovDeg,
     catalog,
   );
-  const chosen: { key: string; place: PlaceLabel; score: number; x: number; y: number }[] = [];
+  const chosen = new globalThis.Map<string, { key: string; place: PlaceLabel; score: number; x: number; y: number }>();
   for (const place of candidates) {
     const projected = map.project([place.lon, place.lat]);
     if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
     if (projected.x < 18 || projected.y < 18 || projected.x > width - 18 || projected.y > height - 18) continue;
     const score = (projected.x - width / 2) ** 2 + (projected.y - height / 2) ** 2;
-    const key = `${place.kind}:${place.name}`;
-    const current = chosen.find((entry) => entry.key === key);
-    if (!current) chosen.push({ key, place, score, x: projected.x, y: projected.y });
-    else if (score < current.score) {
-      current.place = place;
-      current.score = score;
-      current.x = projected.x;
-      current.y = projected.y;
-    }
+    const key = place.rank === undefined
+      ? `${place.kind}:${place.name}`
+      : `${place.kind}:${place.name}:${place.lon.toFixed(2)}:${place.lat.toFixed(2)}`;
+    const current = chosen.get(key);
+    if (!current || score < current.score) chosen.set(key, { key, place, score, x: projected.x, y: projected.y });
   }
-  const placed = placeScreenLabels(
-    chosen.map((entry) => {
-      const size = measurePlace(map.getContainer(), entry.place);
-      return { kind: entry.place.kind, name: entry.place.name, x: entry.x, y: entry.y, width: size.width, height: size.height };
-    }),
-    { width, height },
-  );
-  const placedKeys = new Set(placed.map((label) => `${label.kind}:${label.name}`));
+  const screened = [...chosen.values()].map((entry) => {
+    const size = measurePlace(map.getContainer(), entry.place, measured);
+    return {
+      key: entry.key,
+      place: entry.place,
+      label: {
+        kind: entry.place.kind,
+        name: entry.place.name,
+        x: entry.x,
+        y: entry.y,
+        width: size.width,
+        height: size.height,
+        maxFovDeg: entry.place.maxFovDeg,
+        rank: entry.place.rank,
+      },
+    };
+  });
+  const laid = placeScreenLabels(screened.map((entry) => entry.label), { width, height });
+  const placed = laid.flatMap((label) => {
+    const source = screened.find((entry) => entry.label.kind === label.kind && entry.label.name === label.name && entry.label.x === label.x && entry.label.y === label.y);
+    return source ? [{ key: source.key, place: source.place, label }] : [];
+  });
+  const placedKeys = new Set(placed.map((entry) => entry.key));
   for (let index = markers.length - 1; index >= 0; index -= 1) {
     const entry = markers[index];
     if (!entry || placedKeys.has(entry.key)) continue;
     entry.marker.remove();
     markers.splice(index, 1);
   }
-  for (const label of placed) {
-    const key = `${label.kind}:${label.name}`;
-    const entry = chosen.find((item) => item.key === key);
-    if (!entry) continue;
-    const existing = markers.find((item) => item.key === key);
+  for (const item of placed) {
+    const { key, place, label } = item;
+    const existing = markers.find((marker) => marker.key === key);
     if (existing) {
-      existing.marker.setLngLat([entry.place.lon, entry.place.lat]);
+      existing.marker.setLngLat([place.lon, place.lat]);
       existing.marker.setOffset([label.offsetX, label.offsetY]);
       continue;
     }
     const node = document.createElement('span');
-    node.className = `iss-place iss-place-${entry.place.kind}`;
-    node.textContent = entry.place.name;
+    node.className = `iss-place iss-place-${place.kind}`;
+    node.textContent = place.name;
     markers.push({
       key,
       marker: new Marker({ element: node, anchor: 'top', offset: [label.offsetX, label.offsetY] })
-        .setLngLat([entry.place.lon, entry.place.lat])
+        .setLngLat([place.lon, place.lat])
         .addTo(map),
     });
   }
@@ -378,17 +393,52 @@ function clearLaunchMarks(markers: { key: string; marker: Marker }[], edges: HTM
   edges.splice(0, edges.length);
 }
 
-function measurePlace(host: HTMLElement, place: PlaceLabel): { width: number; height: number } {
+function measurePlace(
+  host: HTMLElement,
+  place: PlaceLabel,
+  measured: globalThis.Map<string, { width: number; height: number }>,
+): { width: number; height: number } {
+  const key = `${place.kind}:${place.name}`;
+  const cached = measured.get(key);
+  if (cached) return cached;
   const label = document.createElement('span');
   label.className = `iss-place iss-place-${place.kind}`;
   label.textContent = place.name;
   label.style.position = 'absolute';
   label.style.visibility = 'hidden';
   host.append(label);
-  const width = label.offsetWidth;
-  const height = label.offsetHeight;
+  const size = { width: label.offsetWidth, height: label.offsetHeight };
   label.remove();
-  return { width, height };
+  measured.set(key, size);
+  return size;
+}
+
+type ChunkPhase = 'idle' | 'pending' | 'ready' | 'failed';
+
+type ChunkSlot = {
+  phase: ChunkPhase;
+  pause: number;
+  fails: number;
+};
+
+function pullChunk<T>(slot: ChunkSlot, load: () => Promise<T>, accept: (value: T) => void): void {
+  if (slot.phase === 'ready' || slot.phase === 'pending') return;
+  if (slot.phase === 'failed' && slot.pause > 0) {
+    slot.pause -= 1;
+    return;
+  }
+  slot.phase = 'pending';
+  void load().then(
+    (value) => {
+      accept(value);
+      slot.phase = 'ready';
+    },
+    () => {
+      slot.fails += 1;
+      slot.pause = Math.min(16, 2 ** (slot.fails - 1));
+      slot.phase = 'failed';
+    },
+  );
 }
 
 function registerProtocol(): void {

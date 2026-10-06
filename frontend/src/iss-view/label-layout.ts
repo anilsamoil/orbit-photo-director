@@ -7,6 +7,8 @@ export type ScreenLabel = {
   y: number;
   width: number;
   height: number;
+  maxFovDeg?: number;
+  rank?: number;
 };
 
 export type PlacedLabel = ScreenLabel & {
@@ -23,7 +25,7 @@ export function placeScreenLabels(labels: readonly ScreenLabel[], frame: { width
   const areas = labels.filter((label) => label.kind !== 'city');
   const placed: PlacedLabel[] = [];
   const occupied: Rect[] = [];
-  const ranked = [...cities].sort(byName);
+  const ranked = [...cities].sort(byCity);
   for (const city of ranked) {
     const next = { ...city, offsetX: 0, offsetY: 0 };
     const box = rectOf(next);
@@ -41,6 +43,17 @@ export function placeScreenLabels(labels: readonly ScreenLabel[], frame: { width
     occupied.push(rectOf(next));
   }
   return placed;
+}
+
+function byCity(a: ScreenLabel, b: ScreenLabel): number {
+  const aHand = a.rank === undefined;
+  const bHand = b.rank === undefined;
+  if (aHand !== bHand) return aHand ? -1 : 1;
+  const byRank = (b.rank ?? 0) - (a.rank ?? 0);
+  if (byRank !== 0) return byRank;
+  const byField = (b.maxFovDeg ?? 0) - (a.maxFovDeg ?? 0);
+  if (byField !== 0) return byField;
+  return byName(a, b);
 }
 
 function byName(a: ScreenLabel, b: ScreenLabel): number {

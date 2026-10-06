@@ -11,11 +11,12 @@ export function readCatalog(value: unknown): readonly CatalogPoint[] {
   const points: CatalogPoint[] = [];
   for (const row of value) {
     if (!Array.isArray(row) || row.length < 5) continue;
-    const [kind, name, lon, lat, maxFovDeg] = row;
+    const [kind, name, lon, lat, maxFovDeg, rank] = row;
     if (!isKind(kind) || typeof name !== 'string' || name.length === 0) continue;
     if (typeof lon !== 'number' || typeof lat !== 'number' || typeof maxFovDeg !== 'number') continue;
     if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(maxFovDeg)) continue;
-    points.push({ kind, name, lon, lat, maxFovDeg });
+    const placeRank = typeof rank === 'number' && Number.isFinite(rank) ? rank : 0;
+    points.push({ kind, name, lon, lat, maxFovDeg, rank: placeRank });
   }
   return points;
 }

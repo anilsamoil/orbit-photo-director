@@ -9,6 +9,7 @@ export type CatalogPoint = {
   lon: number;
   lat: number;
   maxFovDeg: number;
+  rank: number;
 };
 
 export type PlaceLabel = {
@@ -16,6 +17,8 @@ export type PlaceLabel = {
   name: string;
   lon: number;
   lat: number;
+  maxFovDeg?: number;
+  rank?: number;
 };
 
 export const PLACE_CITIES: readonly PlaceLabel[] = [

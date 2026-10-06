@@ -76,8 +76,30 @@ describe('ISS place labels', () => {
       ['country', 'France', 2, 46, 40],
       ['town', '', -80, 25, 10],
     ])).toEqual([
-      { kind: 'city', name: 'Miami', lon: -80.23, lat: 25.79, maxFovDeg: 57 },
+      { kind: 'city', name: 'Miami', lon: -80.23, lat: 25.79, maxFovDeg: 57, rank: 0 },
     ]);
+  });
+
+  it('keeps the Bering Sea on the Pacific side of the antimeridian', () => {
+    const sea = LABEL_CATALOG.find((point) => point.kind === 'water' && point.name === 'Bering Sea');
+    expect(sea).toBeTruthy();
+    expect(sea !== undefined && (sea.lon >= 160 || sea.lon <= -160)).toBe(true);
+    const chukchi = LABEL_CATALOG.find((point) => point.kind === 'water' && point.name === 'Chukchi Sea');
+    expect(chukchi !== undefined && (chukchi.lon >= 160 || chukchi.lon <= -160)).toBe(true);
+  });
+
+  it('keeps same-name cities that are different places', () => {
+    const places = [...LABEL_CATALOG, ...LABEL_TOWNS];
+    const near = (name: string, lat: number, lon: number) => places.some((point) => {
+      if (point.name !== name) return false;
+      const dLat = point.lat - lat;
+      const dLon = (point.lon - lon) * Math.cos(lat * Math.PI / 180);
+      return Math.hypot(dLat, dLon) < 1;
+    });
+    expect(near('Valencia', 39.49, -0.4)).toBe(true);
+    expect(near('Columbus', 39.98, -82.99)).toBe(true);
+    expect(near('Newcastle', 55, -1.6)).toBe(true);
+    expect(near('Portland', 43.67, -70.25)).toBe(true);
   });
 
   it('keeps every town inside the field that loads the town chunk', () => {
