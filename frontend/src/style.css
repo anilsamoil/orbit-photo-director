@@ -4348,6 +4348,12 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   pointer-events: auto;
 }
 
+@media (min-height: 521px) {
+  .view-map .map-command .map-controls-time {
+    padding-bottom: 8px;
+  }
+}
+
 .view-map .map-command .time-step-btn,
 .view-map .map-command .filter-btn,
 .view-map .map-command .time-btn {

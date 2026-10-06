@@ -316,6 +316,8 @@ describe('map chrome layout', () => {
     expect(command.borderTopWidth).toBe('0px');
     expect(command.bottom).toBe('0px');
     expect(css).toContain('padding: 0 0 calc(28px + env(safe-area-inset-bottom, 0px));');
+    expect(css).toContain('@media (min-height: 521px)');
+    expect(css).toContain('.view-map .map-command .map-controls-time {\n    padding-bottom: 8px;');
     expect(controls.backgroundColor).toBe('rgba(7, 10, 13, 0.86)');
     expect(controls.pointerEvents).toBe('auto');
     expect(ruleStyle('.view-map #map').bottom).toBe('0px');
