@@ -631,9 +631,21 @@ async function driveBanner(send, evidenceDir, baseUrl) {
     'queue banner',
   );
   if (queueBanner.position !== 'static') throw new Error(`queue banner ${queueBanner.position}`);
+  await click(send, '#tab-iss');
+  const issBanner = await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view')?.className;
+      const banner = document.getElementById('status-banner');
+      if (!banner || view !== 'view-iss') return null;
+      return { ok: true, position: getComputedStyle(banner).position };
+    })()`,
+    'iss banner',
+  );
+  if (issBanner.position !== 'static') throw new Error(`iss banner ${issBanner.position}`);
   const tle = await proveStaleTle(send, evidenceDir, baseUrl);
   const held = await proveHeldSignIn(send, evidenceDir, baseUrl);
-  return `banner: ${text.trim()}, queue ${queueBanner.position}, tle ${tle}, held ${held}`;
+  return `banner: ${text.trim()}, queue ${queueBanner.position}, iss ${issBanner.position}, tle ${tle}, held ${held}`;
 }
 
 async function setTleCookie(send, stale) {
@@ -4263,8 +4275,10 @@ async function driveHelp(send, evidenceDir) {
     'Hold Shift',
     '#iss=',
     'The Launch menu sits beside Telemetry',
+    'Chances for the next seven days come first',
     'All launches',
     '14 days',
+    'That list is not limited to chances.',
     'Map and Upcoming list chances only',
     'None clears it.',
     'beside Telemetry',
@@ -4277,6 +4291,16 @@ async function driveHelp(send, evidenceDir) {
   if (missing.length) throw new Error(`help aiming missing ${missing.join(', ')}`);
   if (/Reset/.test(String(helpText)) || String(helpText).toLowerCase().includes('double-tap') || String(helpText).includes('Horizon opens first')) {
     throw new Error('help dialog brought back removed aiming copy');
+  }
+  const legendPhrases = [
+    'launch, day, twilight, and eclipse',
+    "The ISS marker, Anil's targets, Starship, and your white rings are not rows.",
+    'Starship is not a legend row',
+  ];
+  const legendMissing = legendPhrases.filter((phrase) => !String(helpText).includes(phrase));
+  if (legendMissing.length) throw new Error(`help legend missing ${legendMissing.join(', ')}`);
+  for (const gone of ['Starship: no public orbit yet', 'Starship: public orbit expired', 'Starship: orbit lookup failed']) {
+    if (String(helpText).includes(gone)) throw new Error(`help legend brought back ${gone}`);
   }
   await shot(send, evidenceDir, 'help');
   await click(send, '.help-close');
