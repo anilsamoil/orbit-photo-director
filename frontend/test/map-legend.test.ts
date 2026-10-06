@@ -68,7 +68,46 @@ describe('map legend disclosure', () => {
     expect(button.getAttribute('aria-expanded')).toBe('true');
     button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
     expect(button.getAttribute('aria-expanded')).toBe('false');
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, repeat: true }));
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, repeat: true }));
+    expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(localStorage.length).toBe(0);
+  });
+
+  it('marks the Legend button while an IR warning is the imagery line', async () => {
+    const button = mount(false);
+    bindLegendDisclosure();
+    const badge = document.querySelector('.map-imagery-date') as HTMLElement;
+    const dot = () => button.querySelector('.map-legend-warning-dot') as HTMLElement;
+    const note = () => document.getElementById('map-legend-warning');
+    expect(dot().hidden).toBe(true);
+    expect(button.hasAttribute('aria-describedby')).toBe(false);
+
+    badge.textContent = 'IR · GOES-East · feed unavailable';
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(dot().hidden).toBe(false);
+    expect(button.getAttribute('aria-describedby')).toBe('map-legend-warning');
+    expect(note()?.textContent).toBe('IR · GOES-East · feed unavailable');
+    expect(panelDisplay()).toBe('none');
+    expect(getComputedStyle(badge).display === 'none' || badge.getBoundingClientRect().width === 0).toBe(true);
+
+    badge.textContent = 'IR · Meteosat-11 · LIVE now (not the scrubbed time) · misses low cloud';
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(dot().hidden).toBe(false);
+    expect(note()?.textContent).toContain('LIVE now (not the scrubbed time)');
+
+    badge.textContent = 'Imagery: 2026-05-04 · ~1h old';
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(dot().hidden).toBe(true);
+    expect(button.hasAttribute('aria-describedby')).toBe(false);
+    expect(note()?.textContent).toBe('');
+  });
+
+  it('keeps the legend clear of the zoom stack on a short screen', () => {
+    expect(css).toContain('left: calc(8px + env(safe-area-inset-left, 0px) + 52px + 8px)');
+    expect(css).toContain('max-width: calc(100% - 92px - 60px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))');
+    expect(css).toContain('.view-map #map .maplibregl-ctrl-top-left {\n    left: calc(8px + env(safe-area-inset-left, 0px));');
   });
 
   it('collapses again when the page is shown', () => {

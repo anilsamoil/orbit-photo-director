@@ -296,8 +296,10 @@ const HELP_SECTIONS: HelpSection[] = [
           'The legend reads launch, day, twilight, and eclipse. The ISS ' +
           'marker, Anil\'s targets, Starship, and your white rings are not ' +
           'rows. It starts closed. Tap Legend on the left edge to open the ' +
-          'rows and the imagery date. Tap Legend again, or press Escape, to ' +
-          'close it. That choice is not remembered.',
+          'rows and the imagery date. On a short landscape screen, Legend sits ' +
+          'just to the right of the zoom buttons. Tap Legend again, or press Escape, to ' +
+          'close it. That choice is not remembered. A live IR warning adds a mark ' +
+          'on Legend while the list is closed.',
       },
       {
         icon: '🚀',
@@ -354,7 +356,8 @@ const HELP_SECTIONS: HelpSection[] = [
           'The view stays on the time you chose until real time catches up. ' +
           'The imagery date keeps the observed clouds and says they are ' +
           'not forecast. That line sits in the legend and shows only while ' +
-          'the legend is open. A stale TLE tag appears when the orbit solution is ' +
+          'the legend is open. A live IR warning stays marked on Legend while that ' +
+          'list is closed. A stale TLE tag appears when the orbit solution is ' +
           'over 48 hours old.',
       },
     ],
