@@ -431,10 +431,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     try {
       renderer = factory(frame, {
         onLaunchLook(eventId) {
-          const selection = readSelections().find((entry) => entry.item.event_id === eventId);
-          if (selection && pick.kind === 'held' && selection.item.event_id === pick.eventId) {
-            aimToward(launchSiteFromSelection(selection));
-          }
+          if (pick.kind !== 'held' || eventId !== pick.eventId) return;
+          const catalog = pick.group === 'all' ? readAll() : readSelections();
+          const selection = catalog.find((entry) => entry.item.event_id === eventId);
+          if (selection) aimToward(launchSiteFromSelection(selection));
         },
         onLaunchVisibility(eventId, visibility) {
           if (pick.kind !== 'held' || eventId !== pick.eventId) return;
@@ -533,7 +533,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const heldId = current.kind === 'held' ? current.eventId : '';
     const catalog = current.kind === 'held' && current.group === 'all' ? all : selections;
     const present = heldId !== '' && catalog.some((entry) => entry.item.event_id === heldId);
-    if (current.kind === 'held' && !judged) return;
+    const schedulePick = current.kind === 'held' && current.group === 'all';
+    if (current.kind === 'held' && !schedulePick && !judged) return;
     pick = reduceLaunchPick(current, { type: 'catalog', judged, present });
     const next = pick;
     const choiceId = next.kind === 'held' ? next.eventId : '';

@@ -2749,6 +2749,37 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-all-launches');
+  for (let step = 0; step < 20; step += 1) {
+    const pin = await evaluate(send, `(() => {
+      const name = document.querySelector('[data-iss-launch-name]')?.textContent;
+      if (name !== 'Verify Horizon') return null;
+      return document.querySelector('.iss-launch-pin') ? { ok: true } : null;
+    })()`);
+    if (pin?.ok) break;
+    await click(send, '[data-iss-launch]');
+    await sleep(200);
+  }
+  const aimBeforePin = await evaluate(send, `(() => {
+    const center = window.__opdIss?.getCenter?.();
+    return center ? { ok: true, lat: center.lat, lng: center.lng } : null;
+  })()`);
+  await click(send, '.iss-launch-pin');
+  await waitFor(
+    send,
+    `(() => {
+      const card = document.querySelector('[data-iss-launch-card]');
+      const center = window.__opdIss?.getCenter?.();
+      if (!card || card.dataset.issLaunchGroup !== 'all') return null;
+      if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Horizon') return null;
+      if (!center) return null;
+      const moved = Math.abs(center.lat - ${aimBeforePin.lat}) + Math.abs(center.lng - ${aimBeforePin.lng});
+      if (moved < 0.15) return null;
+      return { ok: true };
+    })()`,
+    'iss all launches pin',
+    15000,
+  );
+  await shot(send, evidenceDir, 'iss-all-launches-pin');
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
     if (!(picker instanceof HTMLSelectElement)) return false;
