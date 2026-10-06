@@ -15,7 +15,8 @@ import {
   type LaunchPin,
   type LaunchSite,
 } from '../../../iss-view/launches';
-import { placesOnDisk, type PlaceLabel } from '../../../iss-view/place-labels';
+import { TOWN_LABEL_FOV_DEG } from '../../../iss-view/fov';
+import { placesOnDisk, type CatalogPoint, type PlaceLabel } from '../../../iss-view/place-labels';
 import type { IssAim, IssRenderer, IssRendererHooks } from '../../../iss-view/renderer';
 import { collapseAttribution } from './attribution';
 
@@ -74,7 +75,7 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   const launchEdges: HTMLButtonElement[] = [];
   const launchState: { sites: readonly LaunchSite[]; aim: IssAim | null } = { sites: [], aim: null };
   const armLabels = (): void => {
-    frame.dataset.issPlaceLayers = 'country city water';
+    frame.dataset.issPlaceLayers = 'country city town region water';
   };
   if (map.loaded()) armLabels();
   else map.once('load', armLabels);
@@ -87,6 +88,29 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
   });
   const removed = { done: false };
   let litTiles = '';
+  let nearPoints: readonly CatalogPoint[] = [];
+  let townPoints: readonly CatalogPoint[] = [];
+  let townRequested = false;
+  const mergedCatalog = (): readonly CatalogPoint[] => (
+    townPoints.length === 0 ? nearPoints : nearPoints.concat(townPoints)
+  );
+  const requestNear = (): void => {
+    void import('../../../iss-view/label-catalog')
+      .then((mod) => {
+        nearPoints = mod.LABEL_CATALOG;
+      })
+      .catch(() => undefined);
+  };
+  const requestTowns = (): void => {
+    if (townRequested) return;
+    townRequested = true;
+    void import('../../../iss-view/label-catalog-towns')
+      .then((mod) => {
+        townPoints = mod.LABEL_TOWNS;
+      })
+      .catch(() => undefined);
+  };
+  requestNear();
 
   return {
     ready() {
@@ -135,7 +159,8 @@ export function createIssRenderer(frame: HTMLElement, hooks: IssRendererHooks): 
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg, roll: EARTH_VIEW_ROLL_DEG });
       launchState.aim = aim;
-      syncPlaceMarkers(map, placeMarkers, aim);
+      if (aim.verticalFovDeg <= TOWN_LABEL_FOV_DEG) requestTowns();
+      syncPlaceMarkers(map, placeMarkers, aim, mergedCatalog());
       syncLaunchOverlay(map, frame, launchMarkers, launchEdges, launchState, hooks);
       await idle(map);
     },
@@ -160,7 +185,12 @@ function exposeIssForEndToEnd(map: MapLibreMap): void {
   (window as unknown as { __opdIss?: MapLibreMap }).__opdIss = map;
 }
 
-function syncPlaceMarkers(map: MapLibreMap, markers: { key: string; marker: Marker }[], aim: IssAim): void {
+function syncPlaceMarkers(
+  map: MapLibreMap,
+  markers: { key: string; marker: Marker }[],
+  aim: IssAim,
+  catalog: readonly CatalogPoint[],
+): void {
   const width = map.getCanvas().clientWidth;
   const height = map.getCanvas().clientHeight;
   if (width < 10 || height < 10) return;
@@ -170,6 +200,8 @@ function syncPlaceMarkers(map: MapLibreMap, markers: { key: string; marker: Mark
     aim.pose.altitudeM,
     aim.pose.bearingDeg,
     aim.pose.analyticPitchDeg,
+    aim.verticalFovDeg,
+    catalog,
   );
   const chosen: { key: string; place: PlaceLabel; score: number; x: number; y: number }[] = [];
   for (const place of candidates) {

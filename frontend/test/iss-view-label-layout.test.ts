@@ -83,6 +83,23 @@ describe('ISS place label collision', () => {
     expect(placed.map((label) => label.name)).toEqual(['Tokyo']);
   });
 
+  it('moves a town off a city and keeps the city anchor', () => {
+    const placed = placeScreenLabels(
+      [
+        { kind: 'town', name: 'Kissimmee', x: 240, y: 180, width: 78, height: 14 },
+        { kind: 'city', name: 'Orlando', x: 240, y: 180, width: 58, height: 14 },
+      ],
+      frame,
+    );
+    const city = placed.find((label) => label.name === 'Orlando');
+    const town = placed.find((label) => label.name === 'Kissimmee');
+    expect(city?.offsetX).toBe(0);
+    expect(city?.offsetY).toBe(0);
+    expect(town).toBeTruthy();
+    if (!city || !town) return;
+    expect(overlaps(rect(city), rect(town))).toBe(false);
+  });
+
   it('moves a water label off a city and keeps the city anchor', () => {
     const placed = placeScreenLabels(
       [

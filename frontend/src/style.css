@@ -3620,6 +3620,18 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   font-size: 12px;
 }
 
+.iss-place-town {
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.iss-place-region {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #efe6d4;
+}
+
 .iss-place-water {
   font-size: 12px;
   font-style: italic;
