@@ -150,10 +150,13 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '',
         label: 'Launch',
         text:
-          'The Launch menu sits beside Telemetry. It lists a possible shot ' +
-          'for the next seven days. Choosing one keeps the aim and shows ' +
-          'that pad, its time, and whether the site is in the picture now. ' +
-          'None clears it.',
+          'The Launch menu sits beside Telemetry. Chances for the next ' +
+          'seven days come first. All launches lists every scheduled ' +
+          'launch in the next 14 days that is Go, Confirmed, or TBC, ' +
+          'timed to the second, minute, or hour. That list is not limited ' +
+          'to chances. Map and Upcoming list chances only. Choosing one ' +
+          'keeps the aim and shows that pad, its time, and whether the ' +
+          'site is in the picture now. None clears it.',
       },
       {
         icon: '',
@@ -290,22 +293,18 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '🎨',
         label: 'Rows',
         text:
-          'The legend reads launch, day, twilight, eclipse, and Anil\'s ' +
-          'targets. The ISS marker and your white rings are not rows.',
+          'The legend reads launch, day, twilight, and eclipse. The ISS ' +
+          'marker, Anil\'s targets, Starship, and your white rings are not ' +
+          'rows.',
       },
       {
         icon: '🚀',
         label: 'Starship',
         text:
-          'The last row is the tracked Starship. It says "Starship: no ' +
-          'public orbit yet" when there is no public element set, ' +
-          '"Starship: public orbit expired" when that set is too old, or ' +
-          '"Starship: orbit lookup failed" when the lookup does not return. ' +
-          'A missing list uses the same no-public-orbit sentence. When a ' +
-          'public orbit is available, the row names it, and the map draws a ' +
-          'red diamond labeled Starship plus a dotted track. "(last good)" ' +
-          'means the last set that still worked. The Starship checkbox ' +
-          'under the satellite button is a separate search.',
+          'Starship is not a legend row. When a public orbit is available, ' +
+          'the map draws a red diamond labeled Starship and a dotted track. ' +
+          'The Starship checkbox under the satellite button is a separate ' +
+          'search.',
       },
     ],
   },

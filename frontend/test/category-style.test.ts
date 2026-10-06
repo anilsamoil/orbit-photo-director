@@ -11,11 +11,19 @@ describe('category paint', () => {
     expect(categoryPaint(undefined)).toBeUndefined();
   });
 
-  it('uses that same color on the map legend', () => {
+  it('keeps the Anil color and the Starship swatch off the map legend', () => {
     const css = readFileSync('src/style.css', 'utf8');
     const html = readFileSync('index.html', 'utf8');
-    expect(css).toContain(`.map-legend-anil { background: ${ANILS_TARGET_PAINT.color};`);
-    expect(html).toContain('map-legend-anil');
-    expect(html).toContain(ANILS_TARGET_PAINT.label);
+    const legend = html.slice(html.indexOf('class="map-legend"'), html.indexOf('map-chrome-toggle'));
+    expect(legend).toContain('map-legend-launch');
+    expect(legend).toContain('map-legend-day');
+    expect(legend).toContain('map-legend-twilight');
+    expect(legend).toContain('map-legend-eclipse');
+    expect(legend).not.toContain('map-legend-anil');
+    expect(legend).not.toContain('map-legend-starship');
+    expect(legend).not.toContain(ANILS_TARGET_PAINT.label);
+    expect(legend).not.toContain('Starship');
+    expect(css).not.toContain('.map-legend-anil');
+    expect(css).not.toContain('.map-legend-starship');
   });
 });

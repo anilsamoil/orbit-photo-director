@@ -47,6 +47,11 @@ describe('openHelpModal', () => {
     expect(aiming).toContain('14 mm lens');
     expect(aiming).toContain('#iss=');
     expect(aiming).toContain('beside Telemetry');
+    expect(aiming).toContain('All launches');
+    expect(aiming).toContain('14 days');
+    expect(aiming).toContain('Map and Upcoming list chances only');
+    expect(aiming).toContain('None clears it.');
+    expect(aiming).not.toContain('possible shot');
     expect(aiming).toContain('about 18°');
     expect(aiming).toContain('gold pin');
     expect(aiming).toContain('arrow on the edge');
@@ -63,9 +68,12 @@ describe('openHelpModal', () => {
   it('names the legend states, the footer recovery, and the Safari data clear', () => {
     openHelpModal();
     const text = document.querySelector('.help-body')?.textContent ?? '';
-    expect(text).toContain('Starship: no public orbit yet');
-    expect(text).toContain('Starship: public orbit expired');
-    expect(text).toContain('Starship: orbit lookup failed');
+    expect(text).toContain('launch, day, twilight, and eclipse');
+    expect(text).toContain('Anil\'s targets, Starship, and your white rings are not rows');
+    expect(text).toContain('Starship is not a legend row');
+    expect(text).not.toContain('Starship: no public orbit yet');
+    expect(text).not.toContain('Starship: public orbit expired');
+    expect(text).not.toContain('Starship: orbit lookup failed');
     expect(text).toContain('Sign in and Reload are in that footer');
     expect(text).toContain('Settings > Apps > Safari > Advanced > Website Data');
     expect(text).toContain('remove astroanil');

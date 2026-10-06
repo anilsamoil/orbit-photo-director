@@ -9,7 +9,7 @@ const TOPBAR_HTML = readFileSync(resolve('index.html'), 'utf8').match(/<header c
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear(); sessionStorage.clear();
-  document.body.innerHTML = `${TOPBAR_HTML}<span id="personal-targets-legend">Anil's targets</span>`;
+  document.body.innerHTML = TOPBAR_HTML;
   window.history.replaceState({}, '', '/');
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
 });
@@ -54,13 +54,12 @@ describe('top-bar profile menu', () => {
       ['BUTTON', 'delaney', 'Luke Delaney', null],
     ]);
     expect(document.querySelector('#profile-menu [data-profile="anil"]')?.hasAttribute('data-profile-home')).toBe(true);
-    expect(document.getElementById('personal-targets-legend')?.textContent).toBe("Jessica Watkins (Watty)'s targets");
     const closers = [...document.querySelectorAll('#profile-menu button')]
       .map((row) => [row.getAttribute('popovertarget'), row.getAttribute('popovertargetaction')]);
     expect(closers).toEqual([['profile-menu', 'hide'], ['profile-menu', 'hide'], ['profile-menu', 'hide'], ['profile-menu', 'hide']]);
   });
 
-  it('marks Anil when his profile is active and keeps his legend label', async () => {
+  it('marks Anil when his profile is active', async () => {
     const profiles = await import('../src/profile');
     profiles.saveProfile(profiles.createDefaultProfile('jack'));
     await mountOn('/');
@@ -71,7 +70,6 @@ describe('top-bar profile menu', () => {
       ['BUTTON', 'kutryk', 'Josh Kutryk', null],
       ['BUTTON', 'delaney', 'Luke Delaney', null],
     ]);
-    expect(document.getElementById('personal-targets-legend')?.textContent).toBe("Anil's targets");
   });
 
   it('returns to the signed-in profile by removing ?u= and keeping the tab', async () => {
