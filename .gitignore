@@ -31,6 +31,7 @@ data/logs/
 *.nc
 *.hdf
 *.tle
+!tests/fixtures/iss-2026-10-05.tle
 
 # Credentials (NEVER commit)
 .netrc

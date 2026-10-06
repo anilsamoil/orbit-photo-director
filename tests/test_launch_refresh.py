@@ -142,7 +142,9 @@ def test_slip_then_tbd_removes_old_exact_event(setup):
     write_cache(now + timedelta(hours=2))
     run(now + timedelta(hours=2))
     pointer = json.loads(remote["launch/latest.json"])
-    assert json.loads(remote[pointer["path"]])["items"] == []
+    items = json.loads(remote[pointer["path"]])["items"]
+    assert [item["launch_window"]["net"] for item in items] == [row["net"]]
+    assert "LAUNCH_UNCONFIRMED" in items[0]["reason_codes"]
 
 
 @pytest.mark.parametrize("mode", ["missing", "mismatch", "future", "stale"])

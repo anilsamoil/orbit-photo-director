@@ -26,17 +26,24 @@ from .ascent import (
 )
 from .ascent_profiles import match_rocket
 from .launch_assessment import build_planning_assessment
-from .launch_data import LL2_GO_STATUS_ABBREVS, Launch, parse_response, validate_feed
+from .launch_data import (
+    FEED_HORIZON,
+    SCHEDULE_STATUS_ABBREVS,
+    Launch,
+    dedupe_launches,
+    parse_response,
+    validate_feed,
+)
 from .orbit import TLE, _ensure_utc, propagate
 
-HORIZON_HOURS = 7 * 24
+HORIZON_HOURS = int(FEED_HORIZON.total_seconds() // 3600)
 MAX_EVENTS = 100
 MAX_LIFTOFF_SECONDS = 6 * 3600
 MAX_POINTS_EVENT = 50_000
 MAX_POINTS_RUN = 250_000
 COMPUTE_SECONDS = 15
 VALID_SECONDS = 900
-LL2_SOURCE = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
+LL2_SOURCE = "https://ll.thespacedevs.com/2.3.0/launches/upcoming/"
 
 
 def utc(value: datetime) -> str:
@@ -202,13 +209,11 @@ def build_launch_artifact(
     parsed_launches = parse_response(payload, now=now)
     horizon = now + timedelta(hours=HORIZON_HOURS)
     reasons = list(source_reasons)
-    ids = Counter(la.id for la in parsed_launches)
-    launches = [la for la in parsed_launches if ids[la.id] == 1]
-    if len(launches) != len(parsed_launches):
-        reasons.append("DUPLICATE_EVENT_IDS")
-    if payload.get("next") or payload.get("count", len(payload["results"])) > len(
-        payload["results"]
-    ):
+    launches = dedupe_launches(parsed_launches)
+    reported = payload.get("count", len(payload["results"]))
+    if isinstance(reported, bool) or not isinstance(reported, int):
+        reported = len(payload["results"])
+    if reported > len(payload["results"]):
         reasons.append("FEED_PAGINATED")
     if fetched_at is None:
         reasons.append("SOURCE_AGE_UNKNOWN")
@@ -228,7 +233,7 @@ def build_launch_artifact(
     evaluated = visible = 0
     for la in sorted(near, key=lambda x: (x.t0, x.id))[:MAX_EVENTS]:
         why = list(la.timing_reasons)
-        if la.status_abbrev not in LL2_GO_STATUS_ABBREVS:
+        if la.status_abbrev not in SCHEDULE_STATUS_ABBREVS:
             why.append("LAUNCH_UNCONFIRMED")
         result = {"intervals": [], "points": [], "evaluated": False, "reasons": []}
         if (
