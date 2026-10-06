@@ -2542,6 +2542,7 @@ function launchEarthPanes(width, height) {
       { ...native, place: 'over', minShort: 160 },
       { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
       { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
+      { width: 390, height: 565, mobile: true, label: '390x565', place: '', minShort: 80, twoLine: true },
     ];
   }
   if (width === 402 && height === 874) {
@@ -2563,6 +2564,43 @@ async function setLayoutViewport(send, width, height, mobile) {
   await setViewport(send, width, height, mobile);
 }
 
+async function proveLaunchCardHolds(send, label) {
+  const held = await evaluate(send, `(() => new Promise((resolve) => {
+    const read = () => document.querySelector('[data-iss-scene]')?.dataset.issLaunchPlace || '';
+    const samples = [read()];
+    const timer = setInterval(() => samples.push(read()), 200);
+    setTimeout(() => {
+      clearInterval(timer);
+      samples.push(read());
+      const card = document.querySelector('[data-iss-launch-card]');
+      const name = card?.querySelector('[data-iss-launch-name]');
+      const line = card?.querySelector('[data-iss-launch-visibility]');
+      const time = card?.querySelector('[data-iss-launch-time]');
+      if (time instanceof HTMLElement) time.scrollTop = time.scrollHeight;
+      const cardBox = card?.getBoundingClientRect();
+      const seen = (el) => {
+        if (!(el instanceof HTMLElement) || !cardBox) return false;
+        const box = el.getBoundingClientRect();
+        return box.height >= 4 && box.bottom > cardBox.top + 1 && box.top < cardBox.bottom - 1;
+      };
+      resolve({
+        samples,
+        place: read(),
+        nameSeen: seen(name),
+        lineSeen: seen(line),
+      });
+    }, 3000);
+  }))()`);
+  const places = Array.isArray(held?.samples) ? held.samples : [];
+  if (new Set(places).size !== 1) {
+    throw new Error(`${label} placement flipped ${JSON.stringify(places)}`);
+  }
+  if (!held?.nameSeen || !held?.lineSeen) {
+    throw new Error(`${label} name or visibility left the card after scroll ${JSON.stringify(held)}`);
+  }
+  return held;
+}
+
 async function proveLaunchEarthPanes(send, evidenceDir) {
   const size = await evaluate(send, `({ width: window.innerWidth, height: window.innerHeight })`);
   const panes = launchEarthPanes(size.width, size.height);
@@ -2571,6 +2609,11 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   try {
     for (const pane of panes) {
       await setLayoutViewport(send, pane.width, pane.height, pane.mobile);
+      await evaluate(send, `(() => {
+        const name = document.querySelector('[data-iss-launch-name]');
+        if (name instanceof HTMLElement) name.style.maxWidth = ${pane.twoLine ? `'4.2rem'` : `''`};
+        return true;
+      })()`);
       const earth = await waitFor(
         send,
         `(() => {
@@ -2584,17 +2627,28 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
           if (Math.min(earth.width, earth.height) < ${pane.minShort}) {
             return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: ${pane.minShort} };
           }
+          if (${pane.twoLine ? 'true' : 'false'}) {
+            const name = document.querySelector('[data-iss-launch-name]');
+            const lines = name ? name.getClientRects().length : 0;
+            if (lines < 2) return { step: 'name-lines', lines, place: earth.place };
+          }
           return earth;
         })()`,
         `iss launch earth ${pane.label}`,
         10000,
       );
-      if (pane.label !== `${size.width}x${size.height}`) {
+      const heldCard = await proveLaunchCardHolds(send, pane.label);
+      if (pane.label !== `${size.width}x${size.height}` || pane.label === '390x664' || pane.twoLine) {
         await shot(send, evidenceDir, `iss-launch-earth-${pane.label}`);
       }
-      held.push(`${pane.label} ${earth.width}x${earth.height} ${earth.place} ${earth.mark}`);
+      held.push(`${pane.label} ${earth.width}x${earth.height} ${earth.place} ${earth.mark} held ${heldCard.place}`);
     }
   } finally {
+    await evaluate(send, `(() => {
+      const name = document.querySelector('[data-iss-launch-name]');
+      if (name instanceof HTMLElement) name.style.maxWidth = '';
+      return true;
+    })()`);
     await setLayoutViewport(send, size.width, size.height, mobile);
   }
   await waitFor(
