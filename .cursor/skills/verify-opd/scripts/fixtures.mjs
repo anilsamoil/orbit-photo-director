@@ -279,7 +279,7 @@ export async function buildFixtures(dir, now = Date.now()) {
         revision: 'eventrev-horizon',
         name: 'Verify Horizon',
         rocket: 'Verify Rocket',
-        site: { name: 'Verify Coast', lat: pad.lat + 1, lon: pad.lon },
+        site: { name: 'Verify Coast', lat: hereNow.lat + 0.3, lon: hereNow.lon },
         status: 'map_only',
         reason_codes: ['TIME_PRECISION_COARSE'],
         launch_window: { net, start: net, end: windowEnd, precision: 'hour' },
