@@ -3478,7 +3478,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   user-select: none;
 }
 
-[data-iss-scene][data-iss-aim-open] [data-iss-edition] {
+[data-iss-scene][data-iss-aim-open] [data-iss-edition],
+.view-iss:has([data-iss-scene][data-iss-aim-open]) [data-iss-edition] {
   visibility: hidden;
 }
 

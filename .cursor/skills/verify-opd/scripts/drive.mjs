@@ -3528,7 +3528,7 @@ const ISS_FULLSCREEN_OFF = `(() => {
   const box = button.getBoundingClientRect();
   if (Math.abs(box.width - 44) > 0.5 || Math.abs(box.height - 44) > 0.5) return { step: 'size', width: box.width, height: box.height };
   if (!button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) return { step: 'hit' };
-  const covered = [...button.parentElement.children]
+  const covered = [...button.parentElement.querySelectorAll('button, select, [data-iss-clock]')]
     .filter((node) => node !== button)
     .flatMap((node) => [...node.getClientRects()])
     .find((other) => box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5);
