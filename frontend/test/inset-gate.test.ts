@@ -33,6 +33,7 @@ describe('inset viewport gate', () => {
     const css = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8');
     const host = readFileSync(resolve(__dirname, '../src/insets/host.ts'), 'utf8');
     const drive = readFileSync(resolve(__dirname, '../../.cursor/skills/verify-opd/scripts/drive.mjs'), 'utf8');
+    const trackInset = readFileSync(resolve(__dirname, '../src/map/adapters/maplibre/track-inset.ts'), 'utf8');
     expect(css).toContain(`@media (min-width: ${INSET_MIN_WIDTH_PX}px) and (min-height: ${INSET_MIN_HEIGHT_PX}px)`);
     expect(css).toContain('#map-pane.map-chrome-hidden .pip-horizon');
     expect(css).toContain('right: 112px');
@@ -40,8 +41,9 @@ describe('inset viewport gate', () => {
     expect(drive).toContain('#map-legend-toggle');
     expect(drive).toContain('#map-legend-panel');
     expect(drive).toContain('legendCentersMissInset');
-    expect(css).toContain('padding-bottom: 7.75rem');
-    expect(css).toContain('left: 12px');
+    expect(css).toContain('grid-template-columns: minmax(300px, 36%) minmax(0, 1fr)');
+    expect(trackInset).toContain('inset-labels');
+    expect(trackInset).toContain('World_Boundaries_and_Places');
     expect(host).toContain('INSET_MIN_WIDTH_PX');
     expect(host).toContain('INSET_MIN_HEIGHT_PX');
     expect(host).not.toContain('min-height: 800px');
