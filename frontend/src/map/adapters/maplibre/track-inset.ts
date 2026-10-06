@@ -10,6 +10,14 @@ const CARTO_TILES = [
   'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
 ];
 
+/** Same reference raster the map tab draws. CARTO country text starts at zoom 3, and a full orbit fits near zoom 2. */
+const ESRI_LABEL_TILES = [
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+];
+
+/** Caps the fit. A tighter track zooms in and the reference tiles get denser. A full orbit stays near zoom 2, where those tiles still name countries. */
+const INSET_FIT_MAX_ZOOM = 5;
+
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
 export type TrackInset = {
@@ -27,10 +35,12 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       version: 8,
       sources: {
         'inset-basemap': { type: 'raster', tiles: CARTO_TILES, tileSize: 256 },
+        'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: 19 },
         'inset-track': { type: 'geojson', data: EMPTY },
       },
       layers: [
         { id: 'inset-basemap', type: 'raster', source: 'inset-basemap' },
+        { id: 'inset-labels', type: 'raster', source: 'inset-labels', paint: { 'raster-opacity': 0.85 } },
         {
           id: 'inset-track',
           type: 'line',
@@ -39,6 +49,12 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
         },
       ],
     },
+  });
+  frame.dataset.insetLabelTiles = '0';
+  map.on('sourcedata', (event) => {
+    if (event.sourceId !== 'inset-labels' || event.tile == null) return;
+    const count = Number(frame.dataset.insetLabelTiles ?? '0') + 1;
+    frame.dataset.insetLabelTiles = String(count);
   });
   const marker = new Marker({ element: markerElement, anchor: 'center' });
   let removed = false;
@@ -55,7 +71,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       }
       const bounds = insetTrackBounds(pendingFeatures, pendingPosition);
       if (bounds) {
-        map.fitBounds(bounds, { padding: 12, maxZoom: 2, animate: false });
+        map.fitBounds(bounds, { padding: 12, maxZoom: INSET_FIT_MAX_ZOOM, animate: false });
         fitted = true;
       }
       pendingFeatures = null;
