@@ -1,0 +1,3 @@
+Open Sans Regular glyphs, Unicode 0-255.
+Fetched from https://fonts.openmaptiles.org/Open%20Sans%20Regular/0-255.pbf
+Open Sans is licensed under the Apache License 2.0.

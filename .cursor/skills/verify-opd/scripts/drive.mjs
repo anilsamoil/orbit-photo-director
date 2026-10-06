@@ -1690,7 +1690,7 @@ function pipReadyExpression(name) {
       const picker = document.querySelector('[data-iss-launch-picker]')?.getBoundingClientRect();
       const frame = inset.querySelector('[data-pip-frame]');
       const orbit = frame && frame.__opdTrackInset;
-      const tiles = Number(frame?.getAttribute('data-inset-label-tiles') || '0');
+      const glyphs = Number(frame?.getAttribute('data-inset-glyphs') || '0');
       if (!host || host.width + 1 < box.width) return { step: 'cupola', host: host && Math.round(host.width), map: Math.round(box.width) };
       if (!telemetry || telemetry.top < box.bottom - 1) return { step: 'telemetry', telemetryTop: telemetry && Math.round(telemetry.top), mapBottom: Math.round(box.bottom) };
       if (!picker || picker.top < box.bottom - 1) return { step: 'launch', pickerTop: picker && Math.round(picker.top), mapBottom: Math.round(box.bottom) };
@@ -1740,7 +1740,22 @@ function pipReadyExpression(name) {
         if (outside) break;
       }
       if (coords < 8 || outside) return { step: 'track', coords, outside, width, height };
-      if (!(tiles > 0)) return { step: 'labels', tiles };
+      let labelFeatures = [];
+      try {
+        labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
+      } catch (error) {
+        return { step: 'labels', reason: 'query' };
+      }
+      const names = [];
+      for (const feature of labelFeatures) {
+        const name = feature && feature.properties && feature.properties.name;
+        const geometry = feature && feature.geometry;
+        if (typeof name !== 'string' || name.length === 0 || !geometry || geometry.type !== 'Point') continue;
+        const point = orbit.project(geometry.coordinates);
+        if (!(point.x >= 8 && point.y >= 8 && point.x <= width - 8 && point.y <= height - 8)) continue;
+        if (!names.includes(name)) names.push(name);
+      }
+      if (glyphs < 10000 || names.length < 4) return { step: 'labels', glyphs, names };
     }
     return { ok: true, width: box.width, height: box.height };
   })()`;
