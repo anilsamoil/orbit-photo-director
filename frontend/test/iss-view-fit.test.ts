@@ -349,6 +349,7 @@ describe('ISS frame fit', () => {
     await chooseLaunch(fitted.host);
     await paint(fitted.scene);
     const open = framePx(fitted.frame);
+    expect(fitted.root.dataset.issLaunchPlace).toBe('over');
     expect(open).toEqual(closed);
     expect(Math.min(open.width, open.height)).toBeGreaterThanOrEqual(80);
     expectMarks(open.width, open.height);

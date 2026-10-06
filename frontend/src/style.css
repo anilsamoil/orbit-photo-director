@@ -3459,6 +3459,22 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   align-items: center;
 }
 
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-view] {
+  position: relative;
+}
+
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-card] {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 3.25rem;
+  transform: translateX(-50%);
+  width: min(16rem, 9.5rem);
+  max-height: min(6.5rem, calc(100% - 5.5rem));
+  margin: 0;
+  overflow: auto;
+}
+
 [data-iss-stage] {
   display: flex;
   flex-direction: row;

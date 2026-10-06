@@ -55,6 +55,9 @@ export type LaunchMark = {
 const DEG = Math.PI / 180;
 const EDGE_PAD_PX = 28;
 
+/** Smallest frame side that can hold a pin or an edge arrow. */
+export const LAUNCH_MARK_MIN_PX = 80;
+
 export function launchSites(state: LaunchState, nowMs: number): LaunchSite[] {
   return selectLaunches(state, nowMs, 'map').map(launchSiteFromSelection);
 }
@@ -137,7 +140,7 @@ export function placeLaunchMarks(
 ): { pins: LaunchPin[]; arrows: LaunchArrow[] } {
   const pins: LaunchPin[] = [];
   const arrows: LaunchArrow[] = [];
-  if (width < 80 || height < 80) return { pins, arrows };
+  if (width < LAUNCH_MARK_MIN_PX || height < LAUNCH_MARK_MIN_PX) return { pins, arrows };
   const pad = EDGE_PAD_PX;
   for (const site of sites) {
     const projected = project(site.lon, site.lat);
