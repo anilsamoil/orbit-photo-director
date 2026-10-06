@@ -1,5 +1,5 @@
 import type { Track } from '../types';
-import { insetViewportFits } from './gate';
+import { INSET_MIN_HEIGHT_PX, INSET_MIN_WIDTH_PX, insetViewportFits } from './gate';
 
 export type InsetHandle = {
   setTrack(track: Track): void;
@@ -37,7 +37,16 @@ function horizonBlocked(): boolean {
   const pane = document.getElementById('map-pane');
   const picker = document.getElementById('satellite-picker-panel');
   const pickerOpen = picker !== null && !picker.hidden;
-  return pane?.classList.contains('map-inspector-open') === true || pickerOpen;
+  const chromeHidden = pane?.classList.contains('map-chrome-hidden') === true
+    || document.body.classList.contains('map-chrome-hidden');
+  return pane?.classList.contains('map-inspector-open') === true || pickerOpen || chromeHidden;
+}
+
+function openTab(id: string): void {
+  const tab = document.getElementById(id);
+  if (!(tab instanceof HTMLElement)) return;
+  tab.focus();
+  tab.click();
 }
 
 export function bindInsets(options: {
@@ -53,7 +62,9 @@ export function bindInsets(options: {
   let planSerial = 0;
   let horizonQueued: Track | null = null;
   let planQueued: Track | null = null;
-  const media = window.matchMedia('(min-width: 800px) and (min-height: 800px)');
+  const media = window.matchMedia(
+    `(min-width: ${INSET_MIN_WIDTH_PX}px) and (min-height: ${INSET_MIN_HEIGHT_PX}px)`,
+  );
 
   const fitsNow = (): boolean => insetViewportFits(window.innerWidth, window.innerHeight) && media.matches;
 
@@ -167,10 +178,10 @@ export function bindInsets(options: {
   watch(document.getElementById('satellite-picker-panel'), ['hidden'], false);
   watch(document.getElementById('iss-pane'), ['data-iss-fullscreen-active'], true);
   buttonOf('plan')?.addEventListener('click', () => {
-    document.getElementById('tab-map')?.click();
+    openTab('tab-map');
   });
   buttonOf('horizon')?.addEventListener('click', () => {
-    document.getElementById('tab-iss')?.click();
+    openTab('tab-iss');
   });
   sync();
   return { sync, releaseHorizon, releasePlan };

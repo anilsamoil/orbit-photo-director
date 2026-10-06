@@ -4,31 +4,44 @@ import { describe, expect, it } from 'vitest';
 
 import { insetTrackBounds } from '../src/insets/bounds';
 import { boxesIntersect } from '../src/insets/collide';
-import { INSET_MIN_PX, insetViewportFits } from '../src/insets/gate';
+import { INSET_MIN_HEIGHT_PX, INSET_MIN_WIDTH_PX, insetViewportFits } from '../src/insets/gate';
 
 describe('inset viewport gate', () => {
-  it('uses both axes at 800px', () => {
-    expect(INSET_MIN_PX).toBe(800);
+  it('uses width 800 and height 600', () => {
+    expect(INSET_MIN_WIDTH_PX).toBe(800);
+    expect(INSET_MIN_HEIGHT_PX).toBe(600);
     expect(insetViewportFits(834, 1194)).toBe(true);
     expect(insetViewportFits(1194, 834)).toBe(true);
+    expect(insetViewportFits(1194, 710)).toBe(true);
+    expect(insetViewportFits(1194, 700)).toBe(true);
     expect(insetViewportFits(1280, 800)).toBe(true);
+    expect(insetViewportFits(1280, 700)).toBe(true);
     expect(insetViewportFits(1400, 900)).toBe(true);
-    expect(insetViewportFits(800, 800)).toBe(true);
+    expect(insetViewportFits(800, 600)).toBe(true);
     expect(insetViewportFits(874, 402)).toBe(false);
+    expect(insetViewportFits(844, 390)).toBe(false);
+    expect(insetViewportFits(932, 430)).toBe(false);
     expect(insetViewportFits(402, 874)).toBe(false);
     expect(insetViewportFits(390, 664)).toBe(false);
     expect(insetViewportFits(390, 844)).toBe(false);
-    expect(insetViewportFits(844, 390)).toBe(false);
     expect(insetViewportFits(799, 900)).toBe(false);
-    expect(insetViewportFits(1280, 799)).toBe(false);
+    expect(insetViewportFits(1280, 599)).toBe(false);
+    expect(insetViewportFits(800, 599)).toBe(false);
   });
 
-  it('matches the stylesheet media query', () => {
+  it('matches the stylesheet media query and the host', () => {
     const css = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8');
-    expect(css).toContain('@media (min-width: 800px) and (min-height: 800px)');
+    const host = readFileSync(resolve(__dirname, '../src/insets/host.ts'), 'utf8');
+    const drive = readFileSync(resolve(__dirname, '../../.cursor/skills/verify-opd/scripts/drive.mjs'), 'utf8');
+    expect(css).toContain(`@media (min-width: ${INSET_MIN_WIDTH_PX}px) and (min-height: ${INSET_MIN_HEIGHT_PX}px)`);
+    expect(css).toContain('#map-pane.map-chrome-hidden .pip-horizon');
     expect(css).toContain('right: 112px');
     expect(css).toContain('padding-bottom: 7.75rem');
     expect(css).toContain('left: 12px');
+    expect(host).toContain('INSET_MIN_WIDTH_PX');
+    expect(host).toContain('INSET_MIN_HEIGHT_PX');
+    expect(host).not.toContain('min-height: 800px');
+    expect(drive).toContain(`width >= ${INSET_MIN_WIDTH_PX} && height >= ${INSET_MIN_HEIGHT_PX}`);
   });
 });
 

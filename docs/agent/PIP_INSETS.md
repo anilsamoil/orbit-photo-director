@@ -4,9 +4,9 @@ The map inset and the horizon inset are previews. A tap on one opens the view it
 
 ## Gate
 
-Show an inset only when both viewport axes are at least 800px. The check is `matchMedia('(min-width: 800px) and (min-height: 800px)')` plus the same test on `innerWidth` and `innerHeight` before any inset map is created. It is not a user-agent test.
+Show an inset when the viewport is at least 800px wide and 600px tall. The check is `matchMedia('(min-width: 800px) and (min-height: 600px)')` plus the same test on `innerWidth` and `innerHeight` before any inset map is created. `INSET_MIN_WIDTH_PX` and `INSET_MIN_HEIGHT_PX` in `frontend/src/insets/gate.ts` are that pair, and the host builds its media query from them. It is not a user-agent test.
 
-The shorter side is what separates the devices. iPhone 13 and iPhone 17 Pro stop at 402px on the short side, in portrait and in landscape. iPad Pro 11 is 834px on the short side, in both orientations. A desktop window of 1280×800 is 800px on the short side. Width alone is the wrong test. iPhone 17 Pro landscape is 874px wide, and iPad Pro 11 portrait is 834px wide, so a width gate would show the inset on that phone and hide it on that iPad.
+The height floor is 600 because the check reads the usable viewport. iPad Pro 11 landscape in a Safari tab is about 1194×710. A 1280×800 laptop window is about 1280×700. An 800px height floor hides the insets on both, and Anil uses Safari tabs. iPhone landscape stays under about 440px tall, including 874×402, 844×390, and 932×430, so those stay out. Width stays 800. A portrait phone is narrower than that, and iPad Pro 11 portrait is 834 wide, so it stays in. Width alone is still the wrong test. iPhone 17 Pro landscape is 874px wide, and iPad Pro 11 portrait is 834px wide.
 
 ## Where they sit
 
@@ -14,14 +14,14 @@ Both insets are 148×96 CSS pixels, at least a 44px hit target, and `position: a
 
 ### Map view, the horizon inset
 
-The resting place is the same on iPad Pro 11 portrait (834×1194), iPad Pro 11 landscape (1194×834), and desktop (1280×800 and larger). It is not a corner. With the controls open, every corner is taken. The top left is the Show toolbar and `.maplibregl-ctrl-top-left` (the MapLibre zoom and compass). A later change moves the legend toggle off that control in short landscape. The inset stays on the right, so it stays clear of that control either way. The top right is the Bearing and Layers dock. The bottom left is the legend, and a later change turns that legend into a tab on the left edge. The bottom edge is the time strip, and the bottom right is the Hide button.
+The resting place is the same on iPad Pro 11 portrait (834×1194), iPad Pro 11 landscape (1194×834 and a Safari tab at 1194×710), and desktop (1280×800, and a laptop window at 1280×700). It is not a corner. With the controls open, every corner is taken. The top left is the Show toolbar and `.maplibregl-ctrl-top-left` (the MapLibre zoom and compass). A later change moves the legend toggle off that control in short landscape. The inset stays on the right, so it stays clear of that control either way. The top right is the Bearing and Layers dock. The bottom left is the legend, and a later change turns that legend into a tab on the left edge. The bottom edge is the time strip, and the bottom right is the Hide button.
 
 The inset sits just left of the dock and just above the time strip.
 
 - `right: 112px`. The dock is at most 76px wide and 8px from the right, so its left edge is about 84px from the right. The Hide button is 88px wide and 12px from the right, so it occupies out to 100px from the right. 112px leaves a gap beside both.
 - `bottom: calc(var(--map-command-height) + 36px)`. With the controls open the strip is 140px tall, so the inset is above the slider, the skip buttons, the imagery note, and the Hide button. With the controls closed the command height is 0 and the same `right` still clears the Controls button, which does not move.
 
-The inset hides while the pin inspector is open and while the satellite picker is open, because both can cover that band. It returns when they close.
+The inset hides while the pin inspector is open, while the satellite picker is open, and while map chrome is hidden (`#map-pane.map-chrome-hidden`). With the controls closed the time strip is gone, and the same corner would sit on the Controls button. It returns when they open again. Activating the button focuses `#tab-iss` before the view changes, so Enter and Space do not leave focus on `body`.
 
 ### ISS view, the plan inset
 
@@ -41,6 +41,6 @@ On the ISS view, the inset misses the top bar, the status line, the help button,
 
 ## Rendering
 
-The horizon inset calls `createIssRenderer`. That function keeps one module-level hook slot, so the inset exists only while the full ISS scene is disposed. Opening ISS view destroys the horizon inset first, then mounts the scene. The plan inset is a second mercator map, `createTrackInset`, drawing `groundTrackFeatures` and `markerPositionAt` from the existing track code. It can sit beside the full horizon scene.
+The horizon inset calls `createIssRenderer` with `labels: false`, so it does not fetch the place-name catalog and does not lay out labels. That function keeps one module-level hook slot, so the inset exists only while the full ISS scene is disposed. Opening ISS view destroys the horizon inset first, then mounts the scene. The plan inset is a second mercator map, `createTrackInset`, drawing `groundTrackFeatures` and `markerPositionAt` from the existing track code. It can sit beside the full horizon scene.
 
 Neither inset map is created when the gate fails, when its tab is not showing, when the document is hidden, or when ISS fullscreen is active. Updates are 1s for the ISS dot and the horizon aim, and 5s for the ground-track line. Leaving the tab or hiding the document destroys that inset map.

@@ -4653,11 +4653,12 @@ summary:focus-visible {
 
 #iss-pane:has([data-iss-fullscreen-active]) .pip-plan,
 #map-pane.map-inspector-open .pip-horizon,
-#map-pane:has(#satellite-picker-panel:not([hidden])) .pip-horizon {
+#map-pane:has(#satellite-picker-panel:not([hidden])) .pip-horizon,
+#map-pane.map-chrome-hidden .pip-horizon {
   display: none !important;
 }
 
-@media (min-width: 800px) and (min-height: 800px) {
+@media (min-width: 800px) and (min-height: 600px) {
   .view-iss [data-iss-scene]:not([data-iss-fullscreen-active]) {
     padding-bottom: 7.75rem;
   }

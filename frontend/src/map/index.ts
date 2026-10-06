@@ -512,7 +512,7 @@ export function mountHorizonInset(frame: HTMLElement, track: Track, nowMs: () =>
   const renderer = createIssRenderer(frame, {
     onImagery() {},
     onContextLost() {},
-  });
+  }, { labels: false });
   const paint = (): void => {
     if (stopped || painting) return;
     if (frame.clientWidth < 2 || frame.clientHeight < 2) return;

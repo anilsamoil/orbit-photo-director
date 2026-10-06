@@ -1561,7 +1561,7 @@ async function proveMapLaidOnPane(send) {
 }
 
 function insetViewportFits(width, height) {
-  return width >= 800 && height >= 800;
+  return width >= 800 && height >= 600;
 }
 
 const PIP_MAP_OBSTACLES = [
@@ -1701,6 +1701,7 @@ function phoneInsetPanes(viewport) {
     panes.push(
       { width: 874, height: 402 },
       { width: 844, height: 390 },
+      { width: 932, height: 430 },
       { width: 390, height: 844 },
       { width: 402, height: 874 },
     );
@@ -1713,6 +1714,30 @@ function phoneInsetPanes(viewport) {
     seen.add(key);
     return true;
   });
+}
+
+async function holdFittingInset(send, evidenceDir, name, obstacles, shotBase, pane) {
+  await setViewport(send, pane.width, pane.height, pane.mobile);
+  await waitFor(send, pipReadyExpression(name), `${name} inset ${pane.width}x${pane.height}`, 30000);
+  await waitFor(send, pipClearExpression(name, obstacles), `${name} inset ${pane.width}x${pane.height} clear`, 10000);
+  if (pane.shot) {
+    await sleep(800);
+    await shot(send, evidenceDir, `${shotBase}-${pane.shot}`);
+  }
+}
+
+function toolbarInsetPanes(mobile) {
+  if (mobile) {
+    return [
+      { width: 1194, height: 710, mobile: true, shot: '1194x710' },
+      { width: 1194, height: 700, mobile: true, shot: '1194x700' },
+    ];
+  }
+  return [
+    { width: 1280, height: 700, mobile: false, shot: '1280x700' },
+    { width: 1194, height: 710, mobile: false, shot: '1194x710' },
+    { width: 1194, height: 700, mobile: false, shot: '1194x700' },
+  ];
 }
 
 async function provePipSurface(send, evidenceDir, viewport, which) {
@@ -1744,6 +1769,10 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     await sleep(800);
     await shot(send, evidenceDir, `${shotBase}-land`);
     extra.push(`${viewport.height}x${viewport.width}`);
+    for (const pane of toolbarInsetPanes(true)) {
+      await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, pane);
+      extra.push(`${pane.width}x${pane.height}`);
+    }
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   } else {
     await setViewport(send, 1280, 800, false);
@@ -1752,6 +1781,10 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     await sleep(800);
     await shot(send, evidenceDir, `${shotBase}-1280`);
     extra.push('1280x800');
+    for (const pane of toolbarInsetPanes(false)) {
+      await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, pane);
+      extra.push(`${pane.width}x${pane.height}`);
+    }
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
   await waitFor(send, pipReadyExpression(name), `${name} inset restored`, 30000);
@@ -1815,6 +1848,15 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
   const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
+  let chrome = '';
+  if (insetViewportFits(viewport.width, viewport.height)) {
+    await click(send, '#map-chrome-toggle');
+    await waitFor(send, pipAbsentExpression('horizon'), 'horizon inset hidden with chrome', 10000);
+    await shot(send, evidenceDir, 'pip-map-chrome-hidden');
+    await showMapChrome(send);
+    await waitFor(send, pipReadyExpression('horizon'), 'horizon inset after chrome shown', 30000);
+    chrome = ' chrome hidden then shown';
+  }
   if (insetViewportFits(viewport.width, viewport.height)) {
     await pressInset(send, 'horizon', viewport.mobile);
     await waitFor(
@@ -2036,7 +2078,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {
