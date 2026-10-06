@@ -2616,6 +2616,47 @@ async function pressIssFullscreen(send) {
   await mouseClick(send, center.x, center.y);
 }
 
+async function enterFullscreenThroughOpenSheet(send, mobile) {
+  await click(send, '[data-iss-aim-help]');
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? { ok: true } : null`,
+    'iss shortcut sheet open before fullscreen',
+    10000,
+  );
+  await revealInView(send, '[data-iss-fullscreen]');
+  const aim = await evaluate(send, `(() => {
+    const button = document.querySelector('[data-iss-fullscreen]');
+    const scene = document.querySelector('[data-iss-scene]');
+    const box = button.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const node = document.elementFromPoint(x, y);
+    const onButton = !!node && (node === button || button.contains(node));
+    return {
+      ok: onButton && scene.hasAttribute('data-iss-aim-open'),
+      x,
+      y,
+      hit: node ? (node.closest('[data-iss-fullscreen]') ? 'fullscreen' : (node.id || node.tagName)) : null,
+    };
+  })()`);
+  if (!aim?.ok) throw new Error(`iss fullscreen button missed while the sheet is open ${JSON.stringify(aim)}`);
+  if (mobile) await send('Input.tap', { x: aim.x, y: aim.y });
+  else await mouseClick(send, aim.x, aim.y);
+  await waitFor(
+    send,
+    `(() => {
+      const scene = document.querySelector('[data-iss-scene]');
+      const sheet = scene?.querySelector('[data-iss-aim-sheet]');
+      if (!scene?.hasAttribute('data-iss-fullscreen-active')) return { step: 'fullscreen' };
+      if (scene.hasAttribute('data-iss-aim-open') || !sheet?.hidden) return { step: 'sheet' };
+      return { ok: true };
+    })()`,
+    'iss fullscreen from an open shortcut sheet',
+    10000,
+  );
+}
+
 function sameFrame(before, after) {
   return Math.abs(before.width - after.width) <= 1 && Math.abs(before.height - after.height) <= 1;
 }
@@ -2640,7 +2681,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       return 'requestFullscreen' in scene || 'webkitRequestFullscreen' in scene ? 'element' : 'overlay';
     })()`);
     const idle = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen button idle', 10000);
-    await pressIssFullscreen(send);
+    await enterFullscreenThroughOpenSheet(send, viewport.mobile);
     const held = await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected}`, 10000);
     await shot(send, evidenceDir, 'iss-fullscreen');
     if (!viewport.mobile) {
@@ -2691,7 +2732,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, Escape kept aim`;
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }

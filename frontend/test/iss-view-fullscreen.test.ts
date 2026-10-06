@@ -337,6 +337,7 @@ describe('ISS fullscreen Escape', () => {
   });
 
   it('closes an open shortcut sheet on enter, so aim keys work and Escape does not bring it back', async () => {
+    styled();
     browser('missing');
     const view = await mounted({ session: { mode: 'horizon' } });
     const help = query(view.root, '[data-iss-aim-help]');
@@ -345,6 +346,14 @@ describe('ISS fullscreen Escape', () => {
     expect(view.root.hasAttribute('data-iss-aim-open')).toBe(true);
     expect(query(view.root, '[data-iss-aim-sheet]').hidden).toBe(false);
     expect(help.getAttribute('aria-expanded')).toBe('true');
+
+    view.frame.focus();
+    const toolbar = query(view.root, '[data-iss-toolbar]');
+    const scrim = query(view.root, '[data-iss-aim-scrim]');
+    expect(getComputedStyle(toolbar).pointerEvents).toBe('none');
+    expect(getComputedStyle(view.button).pointerEvents).toBe('auto');
+    expect(getComputedStyle(view.button).zIndex).toBe('1');
+    expect(Number(getComputedStyle(toolbar).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
 
     view.button.click();
     expect(marked(view.root)).toBe(true);

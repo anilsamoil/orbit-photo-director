@@ -3309,8 +3309,13 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 [data-iss-scene][data-iss-aim-open] [data-iss-aim-help],
-[data-iss-scene][data-iss-aim-open] [data-iss-aim-sheet] {
+[data-iss-scene][data-iss-aim-open] [data-iss-aim-sheet],
+[data-iss-scene][data-iss-aim-open] [data-iss-fullscreen] {
   pointer-events: auto;
+}
+
+[data-iss-scene][data-iss-aim-open] [data-iss-fullscreen] {
+  z-index: 1;
 }
 
 [data-iss-presets] {
