@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bindInsets } from '../src/insets/host';
 import type { Track } from '../src/types';
 
-const track = { name: 'iss' } as Track;
+const track = { name: 'iss' } as unknown as Track;
 
 function installViewport(): void {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });

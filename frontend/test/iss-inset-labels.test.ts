@@ -44,7 +44,7 @@ vi.mock('maplibre-gl', () => {
   };
 });
 
-const fetchMock = vi.fn(async () => new Response('[]', {
+const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response('[]', {
   status: 200,
   headers: { 'content-type': 'application/json' },
 }));
