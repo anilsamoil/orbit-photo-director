@@ -43,6 +43,7 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 ## Gotchas
 
 - Shoot on a stale manifest is disabled. `up` stamps `generated_at` 30 seconds before it starts, and a reused `up` does not rebuild that stamp. `doctor` fails about 13 minutes after `up`, while the manifest is still under the 60-minute Shoot gate.
+- Verify Reef's closest approach is 20 minutes after that same stamp, and Verify Delta's is 50 minutes. The queue only lists a pass until that time. A drive started after Reef's approach waits on both card names and times out even when `removedCuratedIds` is empty. `resetFixtureProfile` clears hides and does not rebuild pass times. `down` then `up` stamps a new pair.
 - The mine filter matches personal targets. The fixture cards are shared, and an added personal target has no pass in this fixture, so Mine stays empty. Mine writes the shared `opd_target_filter_v1=mine`, so Upcoming and the map follow Mine on purpose. Launches does not write that key. This drive clicks All after Launches, which sets both keys back to `all` before Hide.
 - Forecast cards in Upcoming do not have Shoot. Shoot lives on Queue.
 - Hide on Queue and Hide on Upcoming write the same `removedCuratedIds` list. The proxy keeps that list until `down`. `drive upcoming` reloads the same Chrome, then opens a new Chrome profile and checks that Verify Mesa is already gone. It does not check Verify Delta.
