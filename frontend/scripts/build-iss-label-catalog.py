@@ -231,22 +231,19 @@ def main() -> None:
     rows.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
     near = [row for row in rows if row[0] != 'town']
     towns = [row for row in rows if row[0] == 'town']
-    write_catalog(out, 'LABEL_CATALOG', near)
-    write_catalog(out.with_name('label-catalog-towns.ts'), 'LABEL_TOWNS', towns)
-    print(f'near {len(near)} ({out.stat().st_size} bytes), towns {len(towns)} ({out.with_name("label-catalog-towns.ts").stat().st_size} bytes)')
+    near_path = out.with_name('label-catalog.json')
+    town_path = out.with_name('label-catalog-towns.json')
+    write_catalog(near_path, near)
+    write_catalog(town_path, towns)
+    print(f'near {len(near)} ({near_path.stat().st_size} bytes), towns {len(towns)} ({town_path.stat().st_size} bytes)')
 
 
-def write_catalog(path: Path, symbol: str, rows: list[tuple[str, str, float, float, int, float]]) -> None:
+def write_catalog(path: Path, rows: list[tuple[str, str, float, float, int, float]]) -> None:
     payload = [
         [kind, name, round(lon, 2), round(lat, 2), fov, int(round(rank))]
         for kind, name, lon, lat, fov, rank in rows
     ]
-    # One string, not an object-literal union. tsc cannot represent the latter.
-    literal = json.dumps(json.dumps(payload, separators=(',', ':')))
-    path.write_text(
-        "import { readCatalog } from './catalog-read';\n\n"
-        f'export const {symbol} = readCatalog(JSON.parse({literal}));\n'
-    )
+    path.write_text(json.dumps(payload, separators=(',', ':')) + '\n')
 
 
 if __name__ == '__main__':

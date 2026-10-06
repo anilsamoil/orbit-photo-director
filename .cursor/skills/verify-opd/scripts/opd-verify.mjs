@@ -7,7 +7,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures } from './drive.mjs';
-import { buildFixtures, refreshLaunchClock } from './fixtures.mjs';
+import { bostonTrackText, buildFixtures, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -251,7 +251,8 @@ function startProxy(home) {
       const expired = cookieValue(req, 'opd-verify-session') === 'expired';
       const staleTle = cookieValue(req, 'opd-verify-tle') === 'stale';
       const missingTle = cookieValue(req, 'opd-verify-tle') === 'missing';
-      if (!expired && !staleTle && !missingTle) return sendFile('manifest.json');
+      const bostonNadir = cookieValue(req, 'opd-verify-nadir') === 'boston';
+      if (!expired && !staleTle && !missingTle && !bostonNadir) return sendFile('manifest.json');
       const manifest = JSON.parse(readFileSync(resolve(fixtureDir, 'manifest.json'), 'utf8'));
       if (expired) {
         manifest.generated_at = new Date(Date.now() - 200 * 60_000).toISOString();
@@ -273,6 +274,14 @@ function startProxy(home) {
           bytes: Buffer.byteLength(trackBody),
         };
       }
+      if (bostonNadir) {
+        const trackBody = bostonTrackText(fixtureDir);
+        manifest.artifacts.track = {
+          path: 'v/verify/track-boston.json',
+          sha256: createHash('sha256').update(trackBody).digest('hex'),
+          bytes: Buffer.byteLength(trackBody),
+        };
+      }
       const body = JSON.stringify(manifest);
       res.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
@@ -284,6 +293,16 @@ function startProxy(home) {
     }
     if (path === '/v/verify/track-stale.json') {
       const body = staleTrackText(fixtureDir);
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
+    }
+    if (path === '/v/verify/track-boston.json') {
+      const body = bostonTrackText(fixtureDir);
       res.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
@@ -444,6 +463,11 @@ function startProxy(home) {
       if (profile) next.searchParams.set('u', profile);
       res.writeHead(302, { location: `${next.pathname}${next.search}`, 'cache-control': 'no-store' });
       res.end();
+      return;
+    }
+    if (path.includes('label-catalog-towns') && cookieValue(req, 'opd-verify-towns') === 'block') {
+      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('towns blocked');
       return;
     }
     await proxyRequest(state, req, res);
