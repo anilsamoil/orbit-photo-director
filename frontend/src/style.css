@@ -3945,6 +3945,126 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   }
 }
 
+[data-iss-fullscreen] {
+  position: absolute;
+  top: 0;
+  left: calc(44px + 0.35rem);
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(20, 24, 33, 0.88);
+  color: var(--text);
+  cursor: pointer;
+}
+
+[data-iss-fullscreen] svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  z-index: 95;
+  gap: 0;
+  background: #02040c;
+  overscroll-behavior: contain;
+}
+
+body:has([data-iss-scene][data-iss-fullscreen-active]),
+body:has([data-iss-scene][data-iss-fullscreen-active]) main {
+  overflow: hidden;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-toolbar] {
+  height: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-toolbar] > :not([data-iss-clock]):not([data-iss-fullscreen]) {
+  display: none;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] :is(
+  [data-iss-aim-scrim],
+  [data-iss-launch-card],
+  [data-iss-fov],
+  [data-iss-hint],
+  [data-iss-launch-edge],
+  .iss-launch-pin,
+  .iss-place,
+  .maplibregl-marker,
+  .maplibregl-control-container
+) {
+  display: none;
+}
+
+[data-iss-scene][data-iss-fullscreen-active]:not([data-iss-phase='error']) [data-iss-card] {
+  display: none;
+}
+
+[data-iss-scene][data-iss-fullscreen-active]:not([data-iss-phase='error']) [data-iss-telemetry-body] {
+  margin: 0;
+  border-width: 0;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-fullscreen] {
+  pointer-events: auto;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-clock] {
+  position: absolute;
+  top: 0;
+  right: 0;
+  text-shadow:
+    0 0 2px #02040c,
+    0 0 6px #02040c,
+    0 1px 2px rgba(2, 4, 12, 0.95);
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-view] {
+  margin-block: auto;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-stage] {
+  gap: 0;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] :is([data-iss-port], [data-iss-starboard]) {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  height: 0;
+  white-space: nowrap;
+  text-shadow:
+    0 0 2px #02040c,
+    0 0 6px #02040c;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-stage] > :first-child {
+  left: 1.1rem;
+}
+
+[data-iss-scene][data-iss-fullscreen-active] [data-iss-stage] > :last-child {
+  right: 1.1rem;
+}
+
 .digit {
   display: inline-block;
   width: 0.56em;
@@ -3981,6 +4101,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 .help-fab,
 [data-iss-preset],
 [data-iss-aim-help],
+[data-iss-fullscreen],
 [data-iss-telemetry],
 [data-iss-launch],
 [data-iss-launch-picker],
@@ -4284,6 +4405,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) .view-map:has(.maplibregl-ctr
 
 [data-iss-preset],
 [data-iss-aim-help],
+[data-iss-fullscreen],
 [data-iss-telemetry],
 [data-iss-launch],
 [data-iss-launch-picker],

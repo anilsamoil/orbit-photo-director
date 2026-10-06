@@ -1,0 +1,529 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { mountIssScene, type IssScene, type MountIssSceneOptions } from '../src/iss-view';
+import type { SceneSnapshot } from '../src/iss-view/model';
+import type { IssRendererFactory } from '../src/iss-view/renderer';
+import type { LaunchSelection } from '../src/launch-selectors';
+import type { Track } from '../src/types';
+
+import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
+import { installFullscreenDouble, type FullscreenApi, type FullscreenDouble } from './fullscreen-double';
+import { assessment, supported } from './launch-fixtures';
+
+const fixture = fixtureRaw as {
+  tle: { line1: string; line2: string };
+  start: string;
+  iss_polynomial: Track['iss_polynomial'];
+};
+
+const startMs = Date.parse(fixture.start);
+const STYLE_CSS = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8');
+const AIM_KEY = 'opd-iss-aim';
+
+const cleanups: (() => void)[] = [];
+
+afterEach(() => {
+  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+});
+
+type Mounted = {
+  host: HTMLElement;
+  scene: IssScene;
+  root: HTMLElement;
+  frame: HTMLElement;
+  button: HTMLButtonElement;
+};
+
+function shot(): SceneSnapshot {
+  return {
+    manifestVersion: 'fullscreen',
+    generatedAtMs: startMs,
+    track: {
+      iss_polynomial: fixture.iss_polynomial,
+      tle: fixture.tle,
+      tle_epoch: '2024-10-16T18:58:11.999Z',
+      tle_age_hours: 17,
+      tle_freshness_factor: 1,
+    },
+  };
+}
+
+function renderer(boot: () => Promise<void> = () => Promise.resolve()): IssRendererFactory {
+  return () => ({
+    ready: boot,
+    aim: () => Promise.resolve(),
+    resize: () => {},
+    destroy: () => {},
+  });
+}
+
+function browser(api: FullscreenApi): FullscreenDouble {
+  const double = installFullscreenDouble(api);
+  cleanups.push(() => double.restore());
+  return double;
+}
+
+async function settle(): Promise<void> {
+  for (let step = 0; step < 6; step += 1) await Promise.resolve();
+}
+
+async function mounted(options: {
+  session?: MountIssSceneOptions['session'];
+  createRenderer?: IssRendererFactory;
+  launches?: () => readonly LaunchSelection[];
+  nowMs?: () => number;
+} = {}): Promise<Mounted> {
+  const host = document.createElement('div');
+  document.body.append(host);
+  const scene = mountIssScene(host, {
+    nowMs: options.nowMs ?? (() => startMs + 60_000),
+    createRenderer: options.createRenderer ?? renderer(),
+    drive: 'manual',
+    session: options.session ?? { mode: 'horizon' },
+    launches: options.launches,
+  });
+  cleanups.push(() => {
+    scene.dispose();
+    host.remove();
+  });
+  await settle();
+  scene.update(shot());
+  await settle();
+  const button = query(host, '[data-iss-fullscreen]');
+  if (!(button instanceof HTMLButtonElement)) throw new Error('fullscreen control is not a native button');
+  return { host, scene, root: query(host, '[data-iss-scene]'), frame: query(host, '[data-iss-frame]'), button };
+}
+
+function query(parent: ParentNode, selector: string): HTMLElement {
+  const found = parent.querySelector(selector);
+  if (!(found instanceof HTMLElement)) throw new Error(`missing ${selector}`);
+  return found;
+}
+
+function marked(root: HTMLElement): boolean {
+  return root.hasAttribute('data-iss-fullscreen-active');
+}
+
+function name(button: HTMLButtonElement): string | null {
+  return button.getAttribute('aria-label');
+}
+
+function key(target: EventTarget, value: string, init: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function box(element: Element, size: () => { width: number; height: number }): void {
+  Object.defineProperty(element, 'clientWidth', { configurable: true, get: () => size().width });
+  Object.defineProperty(element, 'clientHeight', { configurable: true, get: () => size().height });
+}
+
+function observedResizes(): { resize(): void } {
+  const callbacks = new Set<() => void>();
+  const original = globalThis.ResizeObserver;
+  class ResizeObserverDouble implements ResizeObserver {
+    private readonly notify: () => void;
+    constructor(callback: ResizeObserverCallback) {
+      this.notify = () => callback([], this);
+    }
+    observe(): void {
+      callbacks.add(this.notify);
+    }
+    unobserve(): void {
+      callbacks.delete(this.notify);
+    }
+    disconnect(): void {
+      callbacks.delete(this.notify);
+    }
+  }
+  globalThis.ResizeObserver = ResizeObserverDouble;
+  cleanups.push(() => {
+    globalThis.ResizeObserver = original;
+  });
+  return {
+    resize() {
+      for (const notify of [...callbacks]) notify();
+    },
+  };
+}
+
+function styled(): void {
+  const style = document.createElement('style');
+  style.textContent = STYLE_CSS;
+  document.head.append(style);
+  cleanups.push(() => style.remove());
+}
+
+describe('ISS fullscreen toggle', () => {
+  it.each(['standard', 'webkit', 'both'] as const)('enters and leaves element fullscreen through the %s API', async (api) => {
+    const fullscreen = browser(api);
+    const view = await mounted();
+    expect(view.button.previousElementSibling?.hasAttribute('data-iss-aim-anchor')).toBe(true);
+    expect(view.button.parentElement?.hasAttribute('data-iss-toolbar')).toBe(true);
+    expect(name(view.button)).toBe('Full screen');
+    expect(view.button.title).toBe('Full screen');
+    expect(view.button.hasAttribute('aria-pressed')).toBe(false);
+
+    view.button.click();
+    expect(marked(view.root)).toBe(true);
+    expect(name(view.button)).toBe('Exit full screen');
+    fullscreen.grant();
+    expect(fullscreen.current()).toBe(view.root);
+    expect(marked(view.root)).toBe(true);
+    expect(view.button.title).toBe('Exit full screen');
+
+    view.button.click();
+    await settle();
+    expect(fullscreen.current()).toBeNull();
+    expect(marked(view.root)).toBe(false);
+    expect(name(view.button)).toBe('Full screen');
+  });
+
+  it('shows the overlay alone when the browser has no Fullscreen API', async () => {
+    browser('missing');
+    const view = await mounted();
+    view.button.click();
+    expect(marked(view.root)).toBe(true);
+    expect(name(view.button)).toBe('Exit full screen');
+    view.button.click();
+    expect(marked(view.root)).toBe(false);
+    expect(name(view.button)).toBe('Full screen');
+  });
+
+  it.each(['standard', 'webkit'] as const)('keeps the overlay when the %s API refuses, and the next press clears it', async (api) => {
+    const fullscreen = browser(api);
+    const view = await mounted();
+    view.button.click();
+    fullscreen.refuse();
+    await settle();
+    expect(fullscreen.current()).toBeNull();
+    expect(marked(view.root)).toBe(true);
+    expect(name(view.button)).toBe('Exit full screen');
+    view.button.click();
+    expect(marked(view.root)).toBe(false);
+    expect(name(view.button)).toBe('Full screen');
+  });
+
+  it('gives back a grant that lands after the press was cancelled', async () => {
+    const fullscreen = browser('standard');
+    const view = await mounted();
+    view.button.click();
+    view.button.click();
+    expect(marked(view.root)).toBe(false);
+    fullscreen.grant();
+    await settle();
+    expect(fullscreen.current()).toBeNull();
+    expect(marked(view.root)).toBe(false);
+    expect(name(view.button)).toBe('Full screen');
+  });
+
+  it('ends when the browser leaves fullscreen by itself', async () => {
+    const fullscreen = browser('webkit');
+    const view = await mounted();
+    view.button.click();
+    fullscreen.grant();
+    fullscreen.leave();
+    expect(marked(view.root)).toBe(false);
+    expect(name(view.button)).toBe('Full screen');
+  });
+
+  it('ends when focus lands outside the scene, not when it moves inside', async () => {
+    browser('missing');
+    const view = await mounted();
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    cleanups.push(() => outside.remove());
+    view.button.focus();
+    view.button.click();
+    view.frame.focus();
+    expect(marked(view.root)).toBe(true);
+    outside.focus();
+    expect(marked(view.root)).toBe(false);
+  });
+
+  it('keeps the overlay through suspend and resume', async () => {
+    browser('missing');
+    const view = await mounted();
+    view.button.click();
+    view.scene.suspend();
+    expect(view.scene.phase()).toBe('suspended');
+    expect(marked(view.root)).toBe(true);
+    view.scene.resume();
+    expect(marked(view.root)).toBe(true);
+  });
+
+  it('leaves the browser fullscreen and clears the marker on dispose', async () => {
+    const fullscreen = browser('standard');
+    const view = await mounted();
+    view.button.click();
+    fullscreen.grant();
+    view.scene.dispose();
+    await settle();
+    expect(fullscreen.current()).toBeNull();
+    expect(marked(view.root)).toBe(false);
+    expect(view.root.querySelector('[data-iss-fullscreen]')).toBeNull();
+  });
+
+  it('ignores a grant that lands after dispose', async () => {
+    const fullscreen = browser('standard');
+    const view = await mounted();
+    view.button.click();
+    view.scene.dispose();
+    expect(marked(view.root)).toBe(false);
+    fullscreen.grant();
+    await settle();
+    expect(marked(view.root)).toBe(false);
+  });
+});
+
+describe('ISS fullscreen Escape', () => {
+  const seeded = JSON.stringify({
+    mode: 'nadir',
+    azimuthDeg: 0,
+    windowId: null,
+    look: { rightDeg: 0, upDeg: 0 },
+    opticalFovDeg: 40,
+  });
+
+  function seedAim(): void {
+    sessionStorage.setItem(AIM_KEY, seeded);
+    localStorage.setItem(AIM_KEY, seeded);
+    cleanups.push(() => {
+      sessionStorage.removeItem(AIM_KEY);
+      localStorage.removeItem(AIM_KEY);
+    });
+  }
+
+  it('leaves the overlay on Escape without resetting the aim, holds the repeat, and resets on a fresh press', async () => {
+    seedAim();
+    browser('missing');
+    const view = await mounted({ session: { mode: 'nadir' } });
+    view.button.focus();
+    view.button.click();
+    expect(marked(view.root)).toBe(true);
+
+    expect(key(view.button, 'Escape').defaultPrevented).toBe(true);
+    expect(marked(view.root)).toBe(false);
+    expect(key(view.button, 'Escape', { repeat: true }).defaultPrevented).toBe(true);
+    key(view.button, 'Escape', { repeat: true });
+    expect(view.scene.mode()).toBe('nadir');
+    expect(sessionStorage.getItem(AIM_KEY)).toBe(seeded);
+    expect(localStorage.getItem(AIM_KEY)).toBe(seeded);
+
+    view.button.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+    key(view.button, 'Escape');
+    expect(view.scene.mode()).toBe('horizon');
+    expect(sessionStorage.getItem(AIM_KEY)).toBeNull();
+  });
+
+  it('holds the repeat after the browser ends fullscreen on its own Escape', async () => {
+    seedAim();
+    const fullscreen = browser('standard');
+    const view = await mounted({ session: { mode: 'nadir' } });
+    view.button.click();
+    fullscreen.grant();
+    fullscreen.leave();
+    key(document.body, 'Escape', { repeat: true });
+    expect(view.scene.mode()).toBe('nadir');
+    expect(sessionStorage.getItem(AIM_KEY)).toBe(seeded);
+    window.dispatchEvent(new Event('blur'));
+    key(document.body, 'Escape', { repeat: true });
+    expect(view.scene.mode()).toBe('horizon');
+  });
+
+  it('lets an open modal take Escape first', async () => {
+    browser('missing');
+    const view = await mounted();
+    view.button.click();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    document.body.append(backdrop);
+    cleanups.push(() => backdrop.remove());
+    expect(key(document.body, 'Escape').defaultPrevented).toBe(false);
+    expect(marked(view.root)).toBe(true);
+    backdrop.remove();
+    key(document.body, 'Escape');
+    expect(marked(view.root)).toBe(false);
+  });
+});
+
+describe('ISS fullscreen frame', () => {
+  it('fits the frame to the fullscreen box after a grant, and back after the exit', async () => {
+    const fullscreen = browser('standard');
+    const view = await mounted();
+    box(view.host, () => ({ width: 800, height: 600 }));
+    box(view.root, () => (fullscreen.current() === view.root ? { width: 1920, height: 1080 } : { width: 800, height: 600 }));
+    await view.scene.paint();
+    expect(view.frame.style.width).toBe('800px');
+    expect(view.frame.style.height).toBe('533px');
+
+    view.button.click();
+    expect(view.frame.style.width).toBe('800px');
+    fullscreen.grant();
+    expect(view.frame.style.width).toBe('1620px');
+    expect(view.frame.style.height).toBe('1080px');
+
+    view.button.click();
+    await settle();
+    expect(view.frame.style.width).toBe('800px');
+    expect(view.frame.style.height).toBe('533px');
+  });
+
+  it('takes the launch corridor off the earth while fullscreen', async () => {
+    browser('missing');
+    const shown: string[][] = [];
+    const cape = supported({
+      event_id: 'cape',
+      name: 'Crew',
+      assessment: assessment(),
+      site: { name: 'Cape Canaveral', lat: 28.5, lon: -80.6 },
+    });
+    const view = await mounted({
+      launches: () => [{ item: cape, interval: cape.capture_intervals[0] ?? null, expired: false }],
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: () => Promise.resolve(),
+        showLaunches: (sites) => shown.push(sites.map((site) => site.eventId)),
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    const picker = query(view.host, '[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) throw new Error('launch picker is not a select');
+    picker.value = 'cape';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    expect(shown.at(-1)).toEqual(['cape']);
+    view.button.click();
+    expect(shown.at(-1)).toEqual([]);
+    view.button.click();
+    expect(shown.at(-1)).toEqual(['cape']);
+  });
+
+  it('repaints when the scene box changes, and not for a repeated or empty box', async () => {
+    const observers = observedResizes();
+    const clock = { now: startMs + 60_000 };
+    const aimedAt: number[] = [];
+    const view = await mounted({
+      nowMs: () => clock.now,
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aimedAt.push(aim.lightingUtcMs);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    expect(aimedAt.at(-1)).toBe(startMs + 60_000);
+    const size = { width: 800, height: 600 };
+    box(view.host, () => size);
+    box(view.root, () => size);
+    clock.now = startMs + 70_000;
+    observers.resize();
+    expect(view.frame.style.width).toBe('800px');
+    expect(aimedAt.at(-1)).toBe(startMs + 70_000);
+
+    clock.now = startMs + 80_000;
+    observers.resize();
+    expect(aimedAt.at(-1)).toBe(startMs + 70_000);
+
+    size.width = 1200;
+    observers.resize();
+    expect(view.frame.style.width).toBe('900px');
+    expect(view.frame.style.height).toBe('600px');
+    expect(aimedAt.at(-1)).toBe(startMs + 80_000);
+
+    size.width = 0;
+    size.height = 0;
+    clock.now = startMs + 90_000;
+    observers.resize();
+    expect(view.frame.style.width).toBe('900px');
+    expect(aimedAt.at(-1)).toBe(startMs + 80_000);
+
+    size.width = 1200;
+    size.height = 600;
+    observers.resize();
+    expect(view.frame.style.width).toBe('900px');
+    expect(aimedAt.at(-1)).toBe(startMs + 90_000);
+  });
+});
+
+describe('ISS fullscreen styles', () => {
+  it('zeroes the chrome around the frame and keeps the clock, the labels, and the exit button', async () => {
+    styled();
+    browser('missing');
+    const view = await mounted();
+    const css = (selector: string): CSSStyleDeclaration => getComputedStyle(query(view.root, selector));
+    expect(getComputedStyle(view.root).position).toBe('absolute');
+    view.button.click();
+    // happy-dom keeps a descendant's cached selector matches until focus moves.
+    view.frame.focus();
+
+    expect(getComputedStyle(view.root).position).toBe('fixed');
+    expect(getComputedStyle(view.root).zIndex).toBe('95');
+    expect(getComputedStyle(view.root).gap).toBe('0');
+    expect(css('[data-iss-stage]').gap).toBe('0');
+    expect(css('[data-iss-toolbar]').height).toBe('0px');
+    expect(getComputedStyle(document.body).overflow).toBe('hidden');
+
+    expect(css('[data-iss-port]').width).toBe('0px');
+    expect(css('[data-iss-starboard]').width).toBe('0px');
+    expect(css('[data-iss-port]').height).toBe('0px');
+    expect(css('[data-iss-port]').color).toBe('rgba(244, 247, 251, 0.62)');
+    expect(css('[data-iss-stage] > :first-child').left).toBe('17.6px');
+    expect(css('[data-iss-stage] > :last-child').right).toBe('17.6px');
+
+    expect(css('[data-iss-card]').display).toBe('none');
+    expect(css('[data-iss-telemetry-body]').marginTop).toBe('0px');
+    expect(css('[data-iss-telemetry-body]').borderTopWidth).toBe('0px');
+    expect(css('[data-iss-presets]').display).toBe('none');
+    expect(css('[data-iss-edition]').display).toBe('none');
+    expect(css('[data-iss-aim-anchor]').display).toBe('none');
+    expect(css('[data-iss-fov]').display).toBe('none');
+    expect(css('[data-iss-hint]').display).toBe('none');
+    expect(css('[data-iss-clock]').display).toBe('flex');
+    expect(css('[data-iss-fullscreen]').display).toBe('inline-flex');
+    expect(css('[data-iss-utc]').fontSize).toBe('16px');
+    expect(css('[data-iss-gmt-day]').fontSize).toBe('16px');
+
+    view.button.click();
+    view.button.focus();
+    expect(marked(view.root)).toBe(false);
+    expect(getComputedStyle(view.root).position).toBe('absolute');
+    expect(css('[data-iss-stage]').gap).toBe('0.4rem');
+    expect(css('[data-iss-card]').display).toBe('block');
+    expect(getComputedStyle(document.body).overflow).not.toBe('hidden');
+  });
+
+  it('dresses the button like the keyboard help button beside it', async () => {
+    styled();
+    browser('missing');
+    const view = await mounted();
+    const button = getComputedStyle(view.button);
+    expect(button.borderTopLeftRadius).toBe('3px');
+    expect(button.backgroundColor).toBe('#10161c');
+    expect(button.borderTopColor).toBe('#617585');
+  });
+
+  it('keeps the error card in fullscreen', async () => {
+    styled();
+    browser('missing');
+    const view = await mounted({ createRenderer: renderer(() => Promise.reject(new Error('WebGL2 unavailable'))) });
+    expect(view.scene.phase()).toBe('error');
+    view.button.click();
+    expect(marked(view.root)).toBe(true);
+    expect(getComputedStyle(query(view.root, '[data-iss-card]')).display).toBe('block');
+  });
+
+  it('styles fullscreen through the valueless marker only', () => {
+    expect(STYLE_CSS).toContain('[data-iss-scene][data-iss-fullscreen-active]');
+    expect(STYLE_CSS).not.toContain(':fullscreen');
+    expect(STYLE_CSS).not.toContain('[data-iss-fullscreen-active=');
+  });
+});

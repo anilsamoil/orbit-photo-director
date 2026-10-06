@@ -29,6 +29,7 @@ import {
 import { launchVerdictBlock, selectLaunches, type LaunchSelection } from '../launch-selectors';
 import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
+import { bindIssFullscreen } from './fullscreen';
 import { paintEqualDigits } from '../digits';
 import { fitIssPane, launchCardCandidate, storedLaunchPlace, type LaunchCardPlace } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
@@ -360,6 +361,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     armed: () => phase === 'running',
     apply: applyAim,
   });
+  const fullscreen = bindIssFullscreen({
+    scene: root,
+    relayout: () => {
+      if (phase === 'running' && rendererReady) void paint();
+      else layout();
+    },
+  });
 
   const stopLaunches = options.launches
     ? () => {}
@@ -415,6 +423,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       aimKeys.dispose();
+      fullscreen.dispose();
       stopLaunches();
       storedAim.flush();
       renderer?.destroy();
@@ -544,7 +553,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const site = choice ? launchSiteFromSelection(choice) : null;
     syncPad(site);
     paintLaunchCard(choice, state, now, next.kind === 'held' ? next.group : null);
-    renderer?.showLaunches?.(site ? [site] : []);
+    renderer?.showLaunches?.(site && !root.hasAttribute('data-iss-fullscreen-active') ? [site] : []);
   }
 
   function syncPicker(
