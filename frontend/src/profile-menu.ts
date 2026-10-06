@@ -27,8 +27,6 @@ export function mountProfileMenu(): void {
     ...(home ? [menuButton(home, !isRosterProfile(account.name) && account.name === home.name, true)] : []),
     ...rosterProfiles().map((profile) => menuButton(profile, profile.name === account.name, false)),
   );
-  const legend = document.getElementById('personal-targets-legend');
-  if (legend) legend.textContent = personalTargetsLegend(account.displayName);
   menu.addEventListener('beforetoggle', onMenuToggle);
   menu.addEventListener('click', chooseProfile);
   restoreSwitchedView();
@@ -56,10 +54,6 @@ function placeMenu(event: ToggleEvent): void {
   const maxLeft = window.innerWidth - MENU_WIDTH_PX - VIEWPORT_MARGIN_PX;
   menu.style.top = `${Math.round(rect.bottom + MENU_GAP_PX)}px`;
   menu.style.left = `${Math.round(Math.max(VIEWPORT_MARGIN_PX, Math.min(rect.left, maxLeft)))}px`;
-}
-
-export function personalTargetsLegend(displayName: string): string {
-  return `${displayName}'s targets`;
 }
 
 function menuButton(profile: { name: string; displayName: string }, active: boolean, home: boolean): HTMLButtonElement {

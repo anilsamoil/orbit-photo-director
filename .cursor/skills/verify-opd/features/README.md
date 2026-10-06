@@ -36,5 +36,5 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 - [Profile](./profile.md) covers the signed-in profile, the profile select, New profile, Delete this profile, the no-account picker refusing roster names, the read-only crew roster, the authorized list, distance threshold, add target, hidden curated targets, and photo lookup.
 - [Log](./log.md) covers the calibration row written by Shoot.
 - [Phone](./phone.md) covers a 390x844 portrait and an 844x390 landscape, 44px targets, a longer dock with the map ? button and the (i) credit button hidden, and a long-press pin popup.
-- [Tracked vehicles](./tracked.md) covers the Starship legend, the no-orbit row, the missing-artifact fallback, the age-out sentence, and the marker plus ground track when an element set is published.
+- [Tracked vehicles](./tracked.md) covers the missing Starship legend row, the no-orbit case, the missing-artifact fallback, the age-out case, and the marker plus ground track when an element set is published.
 - [Service worker](./service-worker.md) covers `sw.js` on a preview build. The shell reload, `updateViaCache: none`, and the no-cache headers on HTML and the shell filenames are named from source. `sw` does not assert them.

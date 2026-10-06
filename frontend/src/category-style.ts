@@ -1,5 +1,5 @@
-/** Paint for a curated category. Markers, cards, popups, and the legend
- *  read this table so a category cannot pick up a second color. */
+/** Paint for a curated category. Markers, cards, and popups read this
+ *  table so a category cannot pick up a second color. */
 export interface CategoryPaint {
   label: string;
   color: string;
