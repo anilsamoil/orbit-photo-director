@@ -1636,6 +1636,7 @@ const PIP_MAP_OBSTACLES = [
   '#map-launch-coverage',
   '#satellite-picker-panel',
   '#help-fab',
+  '#shotlist-bar',
 ];
 
 const PIP_ISS_OBSTACLES = [
@@ -1674,7 +1675,15 @@ function pipReadyExpression(name) {
     const style = getComputedStyle(inset);
     if (style.display === 'none' || style.visibility === 'hidden') return null;
     const box = inset.getBoundingClientRect();
-    if (box.width < 44 || box.height < 44) return { step: 'size', width: box.width, height: box.height };
+    if (${name === 'horizon' ? 'true' : 'false'}) {
+      const pane = document.getElementById('map-pane');
+      const paneBox = pane ? pane.getBoundingClientRect() : null;
+      const rightGap = paneBox ? paneBox.right - box.right : null;
+      if (Math.abs(box.width - 222) > 1 || Math.abs(box.height - 144) > 1) return { step: 'size', width: box.width, height: box.height };
+      if (rightGap == null || Math.abs(rightGap - 12) > 2) return { step: 'place', rightGap, width: box.width, height: box.height };
+    } else if (box.width < 44 || box.height < 44) {
+      return { step: 'size', width: box.width, height: box.height };
+    }
     const canvas = inset.querySelector('canvas');
     if (!canvas || canvas.clientWidth < 2 || canvas.clientHeight < 2) return { step: 'canvas' };
     if (inset.getAttribute('aria-label') !== ${JSON.stringify(label)}) return { step: 'label', aria: inset.getAttribute('aria-label') };
@@ -1756,10 +1765,20 @@ function legendCentersMissInset() {
     const inset = document.querySelector('[data-pip="horizon"]');
     if (!inset) return { step: 'inset' };
     const insetBox = inset.getBoundingClientRect();
-    const controls = ['map-legend-toggle', 'map-legend-panel'];
-    for (const id of controls) {
-      const node = document.getElementById(id);
-      if (!node) return { step: 'missing', id };
+    const nodes = [
+      ['map-legend-toggle', document.getElementById('map-legend-toggle')],
+      ['map-legend-panel', document.getElementById('map-legend-panel')],
+      ['map-chrome-toggle', document.getElementById('map-chrome-toggle')],
+      ['.maplibregl-ctrl-zoom-in', document.querySelector('.maplibregl-ctrl-zoom-in')],
+      ['.maplibregl-ctrl-zoom-out', document.querySelector('.maplibregl-ctrl-zoom-out')],
+      ['.maplibregl-ctrl-compass', document.querySelector('.maplibregl-ctrl-compass')],
+      ['#shotlist-bar', document.getElementById('shotlist-bar')],
+    ];
+    for (const [id, node] of nodes) {
+      if (!node) {
+        if (id === '#shotlist-bar') continue;
+        return { step: 'missing', id };
+      }
       const style = getComputedStyle(node);
       if (style.display === 'none' || style.visibility === 'hidden') continue;
       const box = node.getBoundingClientRect();
@@ -2221,6 +2240,20 @@ async function assertDockAndTimeClear(send, label) {
     if (insetShown) {
       if (hits(insetRect, stripRect)) insetOverlaps.push('strip');
       if (hits(insetRect, hideRect)) insetOverlaps.push('hide');
+      const bar = document.getElementById('shotlist-bar');
+      const legend = document.querySelector('.map-legend');
+      const zoom = document.querySelector('.maplibregl-ctrl-top-left');
+      if (bar && !bar.hidden && hits(insetRect, bar.getBoundingClientRect())) insetOverlaps.push('shotlist');
+      if (legend && hits(insetRect, legend.getBoundingClientRect())) insetOverlaps.push('legend');
+      if (zoom && hits(insetRect, zoom.getBoundingClientRect())) insetOverlaps.push('zoom');
+      const centers = [hide, legend, zoom, bar];
+      for (const node of centers) {
+        if (!node || node.hidden) continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) continue;
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        if (hit && inset.contains(hit)) insetOverlaps.push('point');
+      }
     }
     const ok = pickerHit && pickerOverlaps.length === 0 && timeOverlaps.length === 0 && insetOverlaps.length === 0;
     return {
@@ -2293,6 +2326,8 @@ async function proveLegendShotlist(send, evidenceDir) {
       await assertControlCenters(send, `shotlist ${size.suffix} shown`, openCenters);
       if (size.width >= 800 && size.height >= 600) {
         await waitFor(send, pipReadyExpression('horizon'), `horizon inset shotlist ${size.suffix}`, 20000);
+        await waitFor(send, pipClearExpression('horizon', PIP_MAP_OBSTACLES), `horizon inset shotlist clear ${size.suffix}`, 10000);
+        await waitFor(send, legendCentersMissInset(), `horizon legend centers shotlist ${size.suffix}`, 10000);
       }
       await assertDockAndTimeClear(send, `shotlist ${size.suffix} shown`);
       await assertLegendClearOfZoom(send, `shotlist ${size.suffix} shown`);
