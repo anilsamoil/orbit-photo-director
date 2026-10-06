@@ -23,7 +23,7 @@ Preconditions:
 - `bun` can build `frontend/`.
 - Port `41733` is free, or set `OPD_VERIFY_PREVIEW_PORT`.
 
-- **Build and check.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs sw`. The command builds into `$OPD_VERIFY_HOME/preview-dist`, serves it with the worker's JavaScript content type, and runs `scripts/verify-sw-upgrade.sh` against that origin.
+- **Build and check.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs sw`. The command builds into `$OPD_VERIFY_HOME/preview-dist`, serves `.js` as `application/javascript` from this process (the same type `worker/src/index.ts` uses), and runs `scripts/verify-sw-upgrade.sh` against that origin.
 - **Proof.** Exit code 0, and `evidence/service-worker.txt` names that origin on the first line and the time on the second. The command deletes an older proof file before the build. The static server is inside this process and closes before the command returns.
 
 This command does not open a browser. It does not cover iPhone or iPad. `drive` and `drive all` use the Vite dev server, which does not emit `sw.js`, so those WebKit passes do not exercise this worker either.

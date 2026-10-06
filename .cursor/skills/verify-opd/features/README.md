@@ -26,7 +26,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 
 ## Features
 
-- [Status banner](./banner.md) covers the footer after the manifest loads, the orange `TLE Nh old` suffix held across a countdown tick while the age label may step, and the held `SIGN IN AGAIN` footer.
+- [Status banner](./banner.md) covers the footer after the manifest loads, the orange `TLE Nh old` suffix held across a countdown tick while the age label may step, and the held `SIGN IN AGAIN` footer. The suffix reads track `tle_age_hours`. The footer does not print `tle_epoch`. That field on `track.json` is the element-set epoch.
 - [Top bar](./topbar.md) covers the fixed header, the live ISS readout, the Kp badge, the profile name that opens the crew menu, and the row that scrolls when the tabs and a long name do not fit. A drag that starts on the ISS readout or the Kp chip scrolls that row.
 - [Queue](./queue.md) covers the next passes, score, sort, remind, shoot, the All, Mine, and Launches filters, keepsake windows, Hide, and the empty sentence on the last Hide. Mine writes shared `opd_target_filter_v1`. Launches does not.
 - [Upcoming](./upcoming.md) covers launch cards, the later passes, score sort, and hide.
