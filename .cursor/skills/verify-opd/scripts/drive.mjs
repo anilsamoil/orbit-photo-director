@@ -2536,21 +2536,31 @@ const LAUNCH_EARTH_CHECK = `
 `;
 
 function launchEarthPanes(width, height) {
-  const native = { width, height, mobile: width < 1100, label: `${width}x${height}` };
+  const native = { width, height, mobile: width < 1100, label: `${width}x${height}`, place: '', minShort: 80 };
   if (width === 390 && height === 664) {
     return [
-      native,
-      { width: 390, height: 844, mobile: true, label: '390x844' },
-      { width: 844, height: 390, mobile: true, label: '844x390' },
+      { ...native, place: 'over', minShort: 160 },
+      { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
+      { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
     ];
   }
   if (width === 402 && height === 874) {
     return [
-      native,
-      { width: 874, height: 402, mobile: true, label: '874x402' },
+      { ...native, place: 'below', minShort: 200 },
+      { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
     ];
   }
+  if (width >= 1200) return [{ ...native, place: 'side', minShort: 400 }];
+  if (width >= 800) return [{ ...native, place: 'side', minShort: 200 }];
   return [native];
+}
+
+async function setLayoutViewport(send, width, height, mobile) {
+  const current = await evaluate(send, `({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight })`);
+  if (current?.w === width && current?.h !== height) {
+    await setViewport(send, width + 40, height, mobile);
+  }
+  await setViewport(send, width, height, mobile);
 }
 
 async function proveLaunchEarthPanes(send, evidenceDir) {
@@ -2560,10 +2570,22 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   const held = [];
   try {
     for (const pane of panes) {
-      await setViewport(send, pane.width, pane.height, pane.mobile);
+      await setLayoutViewport(send, pane.width, pane.height, pane.mobile);
       const earth = await waitFor(
         send,
-        `(() => { ${LAUNCH_EARTH_CHECK} })()`,
+        `(() => {
+          const laid = document.documentElement.clientWidth === ${pane.width} && document.documentElement.clientHeight === ${pane.height};
+          if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight };
+          const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
+          if (!earth || earth.ok !== true) return earth;
+          if (${JSON.stringify(pane.place)} && earth.place !== ${JSON.stringify(pane.place)}) {
+            return { step: 'place', place: earth.place, width: earth.width, height: earth.height };
+          }
+          if (Math.min(earth.width, earth.height) < ${pane.minShort}) {
+            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: ${pane.minShort} };
+          }
+          return earth;
+        })()`,
         `iss launch earth ${pane.label}`,
         10000,
       );
@@ -2573,7 +2595,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
       held.push(`${pane.label} ${earth.width}x${earth.height} ${earth.place} ${earth.mark}`);
     }
   } finally {
-    await setViewport(send, size.width, size.height, mobile);
+    await setLayoutViewport(send, size.width, size.height, mobile);
   }
   await waitFor(
     send,
