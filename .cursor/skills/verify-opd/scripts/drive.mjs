@@ -2579,6 +2579,8 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
       'plan inset opens map',
       20000,
     );
+    const chromeHidden = await evaluate(send, `document.body.classList.contains('map-chrome-hidden') || document.getElementById('map-pane')?.classList.contains('map-chrome-hidden')`);
+    if (chromeHidden) await showMapChrome(send);
     await waitFor(send, pipReadyExpression('horizon'), 'horizon inset after plan tap', 30000);
     await shot(send, evidenceDir, 'pip-to-map');
     await click(send, '#tab-iss');
