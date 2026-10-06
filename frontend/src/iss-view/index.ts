@@ -16,6 +16,7 @@ import {
   type SceneSnapshot,
 } from './model';
 import type { LookOffset } from '../iss-g1/model';
+import { clampOpticalFov } from './fov';
 import { horizontalFovDeg, lookRoom, nudgeLook, settleLook } from './look';
 import {
   launchChoiceLabel,
@@ -900,8 +901,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function clampFov(value: number): number {
-    if (!Number.isFinite(value)) return opticalFovDeg;
-    return Math.min(lensFovDeg, Math.max(12, value));
+    return clampOpticalFov(value, lensFovDeg, opticalFovDeg);
   }
 
   function pointerDistance(): number {
@@ -1204,7 +1204,7 @@ function parseStoredAim(value: unknown): IssSession | null {
     azimuthDeg: aim.azimuthDeg,
     windowId,
     look: { rightDeg: look.rightDeg, upDeg: look.upDeg },
-    opticalFovDeg: Math.min(lens, Math.max(12, aim.opticalFovDeg)),
+    opticalFovDeg: clampOpticalFov(aim.opticalFovDeg, lens, aim.opticalFovDeg),
   };
 }
 

@@ -1,13 +1,24 @@
 import { RENDER_RADIUS_M } from '../iss-g1/model';
 import { GROUND_SHAPES, type GroundShape } from './place-shapes';
 
-export type PlaceKind = 'country' | 'city' | 'water';
+export type PlaceKind = 'country' | 'city' | 'town' | 'region' | 'water';
+
+export type CatalogPoint = {
+  kind: 'city' | 'town' | 'region' | 'water';
+  name: string;
+  lon: number;
+  lat: number;
+  maxFovDeg: number;
+  rank: number;
+};
 
 export type PlaceLabel = {
   kind: PlaceKind;
   name: string;
   lon: number;
   lat: number;
+  maxFovDeg?: number;
+  rank?: number;
 };
 
 export const PLACE_CITIES: readonly PlaceLabel[] = [
@@ -47,14 +58,15 @@ export function namesAt(latDeg: number, lonDeg: number): { country: string; wate
   return { country, water: country ? '' : firstHit('water', latDeg, lonDeg) };
 }
 
-/** Labels on the Earth disk in front of this camera.
- *  Straight down sees only a few degrees, so the subsatellite point is always included. */
+/** Straight down sees only a few degrees, so the subsatellite point is always included. */
 export function placesOnDisk(
   latDeg: number,
   lonDeg: number,
   altitudeM: number,
   bearingDeg: number,
   pitchDeg: number,
+  fovDeg = 90,
+  catalog: readonly CatalogPoint[] = [],
 ): PlaceLabel[] {
   const reach = limbDeg(altitudeM) - 2;
   if (!(reach > 1)) return [];
@@ -71,13 +83,27 @@ export function placesOnDisk(
       pushGround(labels, lat, lon);
     }
   }
-  for (const city of PLACE_CITIES) {
-    const sep = separationDeg(latDeg, lonDeg, city.lat, city.lon);
-    if (sep > reach) continue;
-    if (pitchDeg > 45 && sep > 0.8 && bearingDelta(bearingDeg, bearingTo(latDeg, lonDeg, city.lat, city.lon)) > 100) continue;
-    labels.push(city);
-  }
+  pushOnDisk(labels, PLACE_CITIES, latDeg, lonDeg, reach, bearingDeg, pitchDeg);
+  const tiered = catalog.filter((point) => fovDeg <= point.maxFovDeg);
+  pushOnDisk(labels, tiered, latDeg, lonDeg, reach, bearingDeg, pitchDeg);
   return labels;
+}
+
+function pushOnDisk(
+  labels: PlaceLabel[],
+  places: readonly PlaceLabel[],
+  latDeg: number,
+  lonDeg: number,
+  reach: number,
+  bearingDeg: number,
+  pitchDeg: number,
+): void {
+  for (const place of places) {
+    const sep = separationDeg(latDeg, lonDeg, place.lat, place.lon);
+    if (sep > reach) continue;
+    if (pitchDeg > 45 && sep > 0.8 && bearingDelta(bearingDeg, bearingTo(latDeg, lonDeg, place.lat, place.lon)) > 100) continue;
+    labels.push(place);
+  }
 }
 
 function pushGround(labels: PlaceLabel[], lat: number, lon: number): void {
