@@ -1560,6 +1560,221 @@ async function proveMapLaidOnPane(send) {
   return laid;
 }
 
+function insetViewportFits(width, height) {
+  return width >= 800 && height >= 800;
+}
+
+const PIP_MAP_OBSTACLES = [
+  '.topbar',
+  '#status-banner',
+  '.map-toolbar',
+  '.map-group-label',
+  '#filter-all-map',
+  '#filter-mine-map',
+  '#filter-launches-map',
+  '.maplibregl-ctrl-top-left',
+  '.maplibregl-ctrl-bottom-right',
+  '.map-control-dock',
+  '#bearing-north',
+  '#bearing-iss',
+  '#toggle-follow-iss',
+  '#toggle-clouds',
+  '#toggle-ir',
+  '#toggle-terminator',
+  '#toggle-night-lights',
+  '#toggle-labels',
+  '#toggle-multi-orbit',
+  '#toggle-satellite-picker',
+  '.map-command',
+  '#time-slider',
+  '.time-slider-end',
+  '#time-slider-readout',
+  '#time-back-90',
+  '#time-back-45',
+  '#time-now',
+  '#time-fwd-45',
+  '#time-fwd-90',
+  '#map-chrome-toggle',
+  '.map-legend',
+  '.map-legend-item',
+  '.map-imagery-date',
+  '#map-launch-coverage',
+  '#satellite-picker-panel',
+  '#help-fab',
+];
+
+const PIP_ISS_OBSTACLES = [
+  '.topbar',
+  '#status-banner',
+  '#help-fab',
+  '[data-iss-aim-help]',
+  '[data-iss-fullscreen]',
+  '[data-iss-preset]',
+  '[data-iss-cupola]',
+  '[data-iss-window]',
+  '[data-iss-clock]',
+  '[data-iss-utc]',
+  '[data-iss-gmt-day]',
+  '[data-iss-houston]',
+  '[data-iss-day-month]',
+  '[data-iss-weekday]',
+  '[data-iss-edition]',
+  '[data-iss-port]',
+  '[data-iss-starboard]',
+  '[data-iss-fov]',
+  '[data-iss-hint]',
+  '[data-iss-launch-card]',
+  '[data-iss-telemetry]',
+  '[data-iss-launch-picker]',
+  '[data-iss-launch]',
+  '.maplibregl-ctrl-attrib',
+  '.iss-place',
+];
+
+function pipReadyExpression(name) {
+  const label = name === 'horizon' ? 'Show the ISS view' : 'Show the map';
+  return `(() => {
+    const inset = document.querySelector('[data-pip="${name}"]');
+    if (!inset || inset.hidden) return null;
+    const style = getComputedStyle(inset);
+    if (style.display === 'none' || style.visibility === 'hidden') return null;
+    const box = inset.getBoundingClientRect();
+    if (box.width < 44 || box.height < 44) return { step: 'size', width: box.width, height: box.height };
+    const canvas = inset.querySelector('canvas');
+    if (!canvas || canvas.clientWidth < 2 || canvas.clientHeight < 2) return { step: 'canvas' };
+    if (inset.getAttribute('aria-label') !== ${JSON.stringify(label)}) return { step: 'label', aria: inset.getAttribute('aria-label') };
+    if (${name === 'plan' ? 'true' : 'false'}) {
+      const scene = document.querySelector('[data-iss-scene]');
+      const pad = scene ? parseFloat(getComputedStyle(scene).paddingBottom) : 0;
+      if (!scene || !(pad >= 100)) return { step: 'pad', pad };
+    }
+    return { ok: true, width: box.width, height: box.height };
+  })()`;
+}
+
+function pipClearExpression(name, selectors) {
+  return `(() => {
+    const inset = document.querySelector('[data-pip="${name}"]');
+    if (!inset || inset.hidden) return { step: 'hidden' };
+    const style = getComputedStyle(inset);
+    if (style.display === 'none' || style.visibility === 'hidden') return { step: 'display' };
+    const box = inset.getBoundingClientRect();
+    const hits = [];
+    for (const sel of ${JSON.stringify(selectors)}) {
+      for (const node of document.querySelectorAll(sel)) {
+        if (!(node instanceof Element) || inset.contains(node) || node.contains(inset)) continue;
+        if (node.hidden) continue;
+        const nodeStyle = getComputedStyle(node);
+        if (nodeStyle.display === 'none' || nodeStyle.visibility === 'hidden') continue;
+        if (node.getClientRects().length === 0) continue;
+        const other = node.getBoundingClientRect();
+        if (other.width < 1 || other.height < 1) continue;
+        if (box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5) {
+          hits.push(sel);
+          break;
+        }
+      }
+    }
+    if (hits.length) return { step: 'overlap', hits, box: [Math.round(box.left), Math.round(box.top), Math.round(box.right), Math.round(box.bottom)] };
+    return { ok: true, width: Math.round(box.width), height: Math.round(box.height) };
+  })()`;
+}
+
+function pipAbsentExpression(name) {
+  return `(() => {
+    const inset = document.querySelector('[data-pip="${name}"]');
+    const scene = document.querySelector('[data-iss-scene]');
+    const pad = scene ? parseFloat(getComputedStyle(scene).paddingBottom) : 0;
+    if (${name === 'plan' ? 'true' : 'false'} && scene && pad > 40) return { step: 'pad', pad };
+    if (!inset) return { ok: true };
+    const style = getComputedStyle(inset);
+    const box = inset.getBoundingClientRect();
+    const gone = inset.hidden || style.display === 'none' || style.visibility === 'hidden' || inset.getClientRects().length === 0;
+    if (!gone) return { step: 'shown', width: box.width, height: box.height };
+    return { ok: true };
+  })()`;
+}
+
+function phoneInsetPanes(viewport) {
+  const panes = [{ width: viewport.height, height: viewport.width }];
+  if (Math.min(viewport.width, viewport.height) <= 402) {
+    panes.push(
+      { width: 874, height: 402 },
+      { width: 844, height: 390 },
+      { width: 390, height: 844 },
+      { width: 402, height: 874 },
+    );
+  }
+  const seen = new Set();
+  return panes.filter((pane) => {
+    const key = `${pane.width}x${pane.height}`;
+    if (seen.has(key)) return false;
+    if (pane.width === viewport.width && pane.height === viewport.height) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function provePipSurface(send, evidenceDir, viewport, which) {
+  const name = which === 'map' ? 'horizon' : 'plan';
+  const obstacles = which === 'map' ? PIP_MAP_OBSTACLES : PIP_ISS_OBSTACLES;
+  const shotBase = which === 'map' ? 'pip-map' : 'pip-iss';
+  if (!insetViewportFits(viewport.width, viewport.height)) {
+    await waitFor(send, pipAbsentExpression(name), `${name} inset absent`, 10000);
+    await shot(send, evidenceDir, `${shotBase}-absent`);
+    const held = [`${viewport.width}x${viewport.height}`];
+    for (const pane of phoneInsetPanes(viewport)) {
+      await setViewport(send, pane.width, pane.height, true);
+      await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${pane.width}x${pane.height}`, 10000);
+      await shot(send, evidenceDir, `${shotBase}-absent-${pane.width}x${pane.height}`);
+      held.push(`${pane.width}x${pane.height}`);
+    }
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return `absent ${held.join(' ')}`;
+  }
+  const ready = await waitFor(send, pipReadyExpression(name), `${name} inset`, 30000);
+  const clear = await waitFor(send, pipClearExpression(name, obstacles), `${name} inset clear`, 10000);
+  await sleep(1200);
+  await shot(send, evidenceDir, shotBase);
+  const extra = [`${viewport.width}x${viewport.height}`];
+  if (viewport.mobile) {
+    await setViewport(send, viewport.height, viewport.width, true);
+    await waitFor(send, pipReadyExpression(name), `${name} inset landscape`, 30000);
+    await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
+    await sleep(800);
+    await shot(send, evidenceDir, `${shotBase}-land`);
+    extra.push(`${viewport.height}x${viewport.width}`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  } else {
+    await setViewport(send, 1280, 800, false);
+    await waitFor(send, pipReadyExpression(name), `${name} inset 1280x800`, 30000);
+    await waitFor(send, pipClearExpression(name, obstacles), `${name} inset 1280 clear`, 10000);
+    await sleep(800);
+    await shot(send, evidenceDir, `${shotBase}-1280`);
+    extra.push('1280x800');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+  await waitFor(send, pipReadyExpression(name), `${name} inset restored`, 30000);
+  return `present ${ready.width}x${ready.height} clear ${clear.width}x${clear.height} ${extra.join(' ')}`;
+}
+
+async function pressInset(send, name, mobile) {
+  const aim = await evaluate(send, `(() => {
+    const button = document.querySelector('[data-pip="${name}"]');
+    if (!button) return { ok: false, reason: 'missing' };
+    const box = button.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const node = document.elementFromPoint(x, y);
+    const hit = node ? (node.getAttribute('aria-label') || node.id || node.className || node.tagName) : null;
+    return { ok: !!node && button.contains(node), x, y, hit };
+  })()`);
+  if (!aim?.ok) throw new Error(`inset ${name} hit ${JSON.stringify(aim)}`);
+  if (mobile) await send('Input.tap', { x: aim.x, y: aim.y });
+  else await mouseClick(send, aim.x, aim.y);
+  return aim;
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -1599,6 +1814,30 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
+  const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
+  if (insetViewportFits(viewport.width, viewport.height)) {
+    await pressInset(send, 'horizon', viewport.mobile);
+    await waitFor(
+      send,
+      `document.getElementById('view')?.className === 'view-iss' ? { ok: true } : null`,
+      'horizon inset opens ISS view',
+      20000,
+    );
+    await shot(send, evidenceDir, 'pip-to-iss');
+    await click(send, '#tab-map');
+    await waitFor(
+      send,
+      `(() => {
+        const map = window.__opdMap;
+        if (document.getElementById('view')?.className !== 'view-map') return null;
+        if (!map || !map.getLayer || !map.getLayer('iss-track-layer')) return null;
+        if (!document.querySelector('#map .iss-marker')) return null;
+        return { ok: true };
+      })()`,
+      'map after horizon inset',
+      45000,
+    );
+  }
   const anil = await evaluate(send, `(() => {
     const paint = window.__opdMap.getPaintProperty('targets-layer', 'circle-color');
     return {
@@ -1797,7 +2036,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}`;
 }
 
 function myTargetNamesExpr() {
@@ -2259,6 +2498,31 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
     10000,
   );
   const fullscreen = await proveIssFullscreen(send, evidenceDir, viewport);
+  const pip = await provePipSurface(send, evidenceDir, viewport, 'iss');
+  if (insetViewportFits(viewport.width, viewport.height)) {
+    await pressInset(send, 'plan', viewport.mobile);
+    await waitFor(
+      send,
+      `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
+      'plan inset opens map',
+      20000,
+    );
+    await waitFor(send, pipReadyExpression('horizon'), 'horizon inset after plan tap', 30000);
+    await shot(send, evidenceDir, 'pip-to-map');
+    await click(send, '#tab-iss');
+    await waitFor(
+      send,
+      `(() => {
+        const view = document.getElementById('view');
+        const pressed = document.querySelector('[data-iss-preset="horizon"]');
+        if (!view || view.className !== 'view-iss') return null;
+        if (!pressed || pressed.getAttribute('aria-pressed') !== 'true') return null;
+        return { ok: true };
+      })()`,
+      'iss after plan inset',
+      45000,
+    );
+  }
   await click(send, '[data-iss-telemetry]');
   await waitFor(
     send,
@@ -2366,7 +2630,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
 }
 
 async function proveIssClock(send) {
@@ -2521,6 +2785,8 @@ function issFullscreenHeldExpression(expected) {
     const map = window.__opdIss;
     if (!scene || !frame || !button || !clock || !map) return { step: 'missing' };
     if (!scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
+    const planInset = document.querySelector('[data-pip="plan"]');
+    if (planInset && getComputedStyle(planInset).display !== 'none' && planInset.getClientRects().length > 0) return { step: 'inset' };
     const held = document.fullscreenElement ?? document.webkitFullscreenElement ?? null;
     if (${expected === 'element' ? 'held !== scene' : 'held !== null'}) return { step: 'mode', held: held ? held.tagName : null };
     if (button.getAttribute('aria-label') !== 'Exit full screen' || button.title !== 'Exit full screen') return { step: 'label' };
@@ -2693,6 +2959,9 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     }
     await pressIssFullscreen(send);
     const back = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen exit by button', 10000);
+    if (insetViewportFits(viewport.width, viewport.height)) {
+      await waitFor(send, pipReadyExpression('plan'), 'plan inset back after fullscreen', 20000);
+    }
     if (!sameFrame(idle, back)) throw new Error(`iss frame after fullscreen ${JSON.stringify(back)} is not ${JSON.stringify(idle)}`);
     await click(send, '[data-iss-preset="nadir"]');
     const stored = await waitFor(
@@ -4489,6 +4758,7 @@ async function proveIssLandscape(send, evidenceDir) {
           continue;
         }
         const label = `${pane.width}x${pane.height}${inset ? ' home inset' : ''}`;
+        await waitFor(send, pipAbsentExpression('plan'), `plan inset absent in landscape ${label}`, 10000);
         await waitFor(send, contained, `iss landscape ${label} collapsed`, 10000);
         await waitFor(send, ISS_CLOCK_EXPR, `iss clock in landscape ${label}`, 10000);
         await waitFor(send, ISS_EDITION_EXPR, `iss edition in landscape ${label}`, 10000);

@@ -200,4 +200,5 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | The vendor boundary | `src/map/adapters/maplibre/` | `test/maplibre-adapter.test.ts` |
 | Initial camera | `src/map/map-core/camera.ts` | `test/map-camera-contract.test.ts`, `test/map-zoom.test.ts` |
 | Import and state rules | `test/architecture-boundaries.test.ts` | itself, with a self-test per rule |
+| Picture-in-picture insets | `src/insets/host.ts` mounts `mountHorizonInset` and `mountPlanInset` from `src/map/index.ts`. The plan picture is `src/map/adapters/maplibre/track-inset.ts`. The gate is both viewport axes at least 800px. Placement is `docs/agent/PIP_INSETS.md`. | `test/inset-gate.test.ts`. `drive map` and `drive iss` in `.cursor/skills/verify-opd`. |
 | Behavior pins under mutation | `scripts/verify-map-pins.mjs` | `node scripts/verify-map-pins.mjs` |

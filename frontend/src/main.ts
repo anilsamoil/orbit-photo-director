@@ -10,6 +10,7 @@ import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { bindHelp, syncHelpButton } from './help';
 import { bindMapChrome } from './map-chrome';
+import { bindInsets, type InsetHost } from './insets/host';
 import { bindLiveReadout } from './live-readout';
 import { bindTopbarPan } from './topbar-pan';
 import { paintEqualDigits } from './digits';
@@ -299,6 +300,7 @@ async function doRefresh(): Promise<void> {
     currentTrack = track;
     rememberPublishedIssTle(track);
     publishIssSnapshot();
+    insetHost?.sync();
     currentStatus = status ?? null;
     renderPendingMapPane();
 
@@ -1290,6 +1292,7 @@ type IssPaneScene = {
 
 let issTicket = 0;
 let issScene: IssPaneScene | null = null;
+let insetHost: InsetHost | null = null;
 
 function releaseIssPane(): void {
   issTicket += 1;
@@ -1390,14 +1393,19 @@ function bindTabs(): void {
   };
 
   tabQueue.addEventListener('click', () => {
+    insetHost?.releaseHorizon();
+    insetHost?.releasePlan();
     releaseIssPane();
     setActive('view-queue', tabQueue);
   });
   tabUpcoming.addEventListener('click', () => {
+    insetHost?.releaseHorizon();
+    insetHost?.releasePlan();
     releaseIssPane();
     setActive('view-upcoming', tabUpcoming);
   });
   tabMap.addEventListener('click', () => {
+    insetHost?.releasePlan();
     releaseIssPane();
     loadMapPane().catch((err) => {
       // A failed lazy import (LOS mid-chunk-download) must not be a silent
@@ -1420,12 +1428,15 @@ function bindTabs(): void {
   });
   if (tabIss) {
     tabIss.addEventListener('click', () => {
+      insetHost?.releaseHorizon();
       setActive('view-iss', tabIss);
       openIssPane();
     });
   }
   if (tabProfile) {
     tabProfile.addEventListener('click', () => {
+      insetHost?.releaseHorizon();
+      insetHost?.releasePlan();
       releaseIssPane();
       setActive('view-profile', tabProfile);
       void loadProfilePane();
@@ -1436,6 +1447,8 @@ function bindTabs(): void {
     });
   }
   tabLog.addEventListener('click', () => {
+    insetHost?.releaseHorizon();
+    insetHost?.releasePlan();
     releaseIssPane();
     setActive('view-log', tabLog);
     void loadLogPane();
@@ -1705,6 +1718,11 @@ async function init(): Promise<void> {
       /* keep existing currentProfile on load failure */
     }
     if (currentManifest) renderQueue();
+  });
+  insetHost = bindInsets({
+    mounts: async () => mapModule ?? import('./map'),
+    track: () => currentTrack,
+    nowMs: () => Date.now(),
   });
   bindTabs();
   mountProfileMenu();
