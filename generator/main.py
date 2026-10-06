@@ -86,7 +86,15 @@ from .orbit import (
     tle_age_hours,
 )
 from .score import compute_score, top_n
-from .tle_sources import Answered, BackedOff, Failed, Throttled, TleSources
+from .tle_sources import (
+    ISS_NORAD_ID,
+    Answered,
+    BackedOff,
+    Failed,
+    Throttled,
+    TleSources,
+    parse_three_line_iss,
+)
 from .tracked import unavailable_artifact_text, write_tracked_artifact
 from .water_mask import load_water_mask
 
@@ -94,7 +102,6 @@ from .water_mask import load_water_mask
 # the queue would mislead the user. Better to publish a stale-flag manifest
 # than confidently-wrong shot times.
 TLE_HARD_FAIL_HOURS = 96.0
-ISS_NORAD_ID = "25544"
 TLE_SOURCE_TIMEOUT_SECONDS = 5.0
 
 log = logging.getLogger(__name__)
@@ -119,7 +126,7 @@ def _tle_checksum_ok(line: str) -> bool:
 def _tle_text_from_body(body: str) -> str:
     stripped = body.lstrip()
     if not stripped.startswith("{"):
-        return body
+        return parse_three_line_iss(body)
     payload = json.loads(stripped)
     if not isinstance(payload, dict):
         raise ValueError("TLE JSON must be an object")

@@ -26,6 +26,23 @@ _READ_CHUNK_BYTES = 8192
 
 Judge = Callable[[int, str], T]
 
+ISS_NORAD_ID = "25544"
+ARISS_ISS_TLE_URL = "https://live.ariss.org/iss.txt"
+
+
+def parse_three_line_iss(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for index in range(len(lines) - 1):
+        line1 = lines[index]
+        line2 = lines[index + 1]
+        if _iss_tle_line(line1, "1") and _iss_tle_line(line2, "2"):
+            return f"{line1}\n{line2}\n"
+    raise ValueError(f"no NORAD {ISS_NORAD_ID} TLE pair")
+
+
+def _iss_tle_line(line: str, kind: str) -> bool:
+    return len(line) >= 7 and line.startswith(f"{kind} ") and line[2:7] == ISS_NORAD_ID
+
 
 @dataclass(frozen=True)
 class Answered(Generic[T]):
