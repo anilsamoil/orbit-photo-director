@@ -121,6 +121,7 @@ describe('ISS frame fit', () => {
     expect(fake.aims.at(-1)?.heightPx).toBe(641);
     expect(frame.style.width).toBe('961px');
     expect(frame.style.height).toBe('641px');
+    expect(stage.style.height).toBe('641px');
     const toggle = host.querySelector('[data-iss-telemetry]');
     expect(toggle).toBeInstanceOf(HTMLButtonElement);
     if (toggle instanceof HTMLButtonElement) toggle.click();
@@ -130,8 +131,18 @@ describe('ISS frame fit', () => {
     expect(fake.aims.at(-1)?.heightPx).toBe(505);
     expect(frame.style.width).toBe('757px');
     expect(frame.style.height).toBe('505px');
+    expect(stage.style.height).toBe('505px');
     scene.dispose();
     host.remove();
+  });
+
+  it('keeps the stage as tall as a side label that outgrows the frame', async () => {
+    const fitted = await mountFitted(220, 420, { width: 0, height: 0 }, { toolbar: 44, select: false, labelHeight: 250 });
+    const stage = fitted.host.querySelector('[data-iss-stage]') as HTMLElement;
+    expect(Number.parseFloat(fitted.frame.style.height)).toBeLessThan(250);
+    expect(stage.style.height).toBe('250px');
+    fitted.scene.dispose();
+    fitted.host.remove();
   });
 
   it('keeps port and starboard inside a 402px pane', async () => {
@@ -492,7 +503,7 @@ async function mountFitted(
   width: number,
   height: number,
   card: { width: number; height: number },
-  chrome: { toolbar?: number; body?: number; select?: boolean; cardBox?: (place: string) => { width: number; height: number } } = {},
+  chrome: { toolbar?: number; body?: number; select?: boolean; labelHeight?: number; cardBox?: (place: string) => { width: number; height: number } } = {},
 ): Promise<{
   host: HTMLElement;
   root: HTMLElement;
@@ -541,6 +552,11 @@ async function mountFitted(
   Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => (body.hidden ? 0 : chrome.body ?? 120) });
   Object.defineProperty(port, 'offsetWidth', { configurable: true, get: () => 11 });
   Object.defineProperty(starboard, 'offsetWidth', { configurable: true, get: () => 11 });
+  if (chrome.labelHeight !== undefined) {
+    const labelHeight = chrome.labelHeight;
+    Object.defineProperty(port, 'offsetHeight', { configurable: true, get: () => labelHeight });
+    Object.defineProperty(starboard, 'offsetHeight', { configurable: true, get: () => labelHeight });
+  }
   Object.defineProperty(launchCard, 'offsetWidth', {
     configurable: true,
     get: () => (chrome.cardBox ? chrome.cardBox(root.dataset.issLaunchPlace || '').width : card.width),
