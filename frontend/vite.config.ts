@@ -67,7 +67,7 @@ export default defineConfig({
         // the offline copy and reloads open tabs when the new worker activates.
         // v1.4.3.0: geojson stays precached so the coastline overlay
         // (ne_110m_coastline.geojson, ~80KB) survives loss of signal.
-        globPatterns: ['**/*.{js,css,svg,ico,woff2,geojson}'],
+        globPatterns: ['**/*.{js,css,svg,ico,woff2,geojson}', '**/label-catalog*.json'],
         importScripts: ['sw-shell.js'],
 
         // skipWaiting: new SW activates as soon as installed (doesn't sit in
