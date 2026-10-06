@@ -88,6 +88,9 @@ export function launchBrief(selection: LaunchSelection, state: LaunchState, now:
     || ['day', 'month', 'year'].includes(item.launch_window.precision?.toLowerCase() ?? '')) {
     return brief('unknown', 'Chance unknown', 'The liftoff time is not confirmed.');
   }
+  if (item.assessment?.net.reason === 'TIMING_UNCONFIRMED') {
+    return brief('unknown', 'Chance unknown', 'The liftoff time is not confirmed.');
+  }
   if (launchCameraEvidenceFresh(selection, state, now)) {
     return brief('chance', 'Possible during capture window', 'Current geometry supports a possible shot; visibility through your window still needs checking.',
       launchLookDirection(interval!.look));
