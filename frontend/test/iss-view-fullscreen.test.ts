@@ -351,10 +351,13 @@ describe('ISS fullscreen Escape', () => {
     view.frame.focus();
     const toolbar = query(view.root, '[data-iss-toolbar]');
     const scrim = query(view.root, '[data-iss-aim-scrim]');
+    const card = query(view.root, '[data-iss-card]');
     expect(getComputedStyle(toolbar).pointerEvents).toBe('none');
+    expect(getComputedStyle(card).pointerEvents).toBe('none');
     expect(getComputedStyle(view.button).pointerEvents).toBe('auto');
     expect(getComputedStyle(view.button).zIndex).toBe('1');
     expect(Number(getComputedStyle(toolbar).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
+    expect(Number(getComputedStyle(card).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
 
     view.button.click();
     expect(marked(view.root)).toBe(true);
