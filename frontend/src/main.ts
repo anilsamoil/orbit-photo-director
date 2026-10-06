@@ -10,6 +10,7 @@ import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { bindHelp, syncHelpButton } from './help';
 import { bindMapChrome } from './map-chrome';
+import { bindLegendDisclosure } from './map-legend';
 import { bindLiveReadout } from './live-readout';
 import { bindTopbarPan } from './topbar-pan';
 import { paintEqualDigits } from './digits';
@@ -1673,6 +1674,7 @@ export function getCurrentManifest(): Manifest | null {
 
 async function init(): Promise<void> {
   bindMapChrome();
+  bindLegendDisclosure();
   bindTopbarPan(document.querySelector('.topbar'));
   bindTopbarPan(document.querySelector('.tabs'));
   bindLiveReadout();

@@ -209,8 +209,10 @@ async function click(send, selector) {
   if (!clicked) throw new Error(`missing ${selector}`);
 }
 
-async function shot(send, evidenceDir, name) {
-  const image = await send('Page.captureScreenshot', { format: 'png' });
+async function shot(send, evidenceDir, name, clip) {
+  const params = { format: 'png' };
+  if (clip) params.clip = clip;
+  const image = await send('Page.captureScreenshot', params);
   const file = resolve(evidenceDir, `${name}.png`);
   writeFileSync(file, Buffer.from(image.data, 'base64'));
   return file;
@@ -574,6 +576,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const page = await context.newPage();
       try {
         const send = playwrightSend(page);
+        send.pointer = 'touch';
         await openApp(send, baseUrl);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
         notes.push(...featureNotes.map((note) => `${spec.slug}: ${note}`));
@@ -1560,6 +1563,152 @@ async function proveMapLaidOnPane(send) {
   return laid;
 }
 
+async function legendTabPoint(send) {
+  return evaluate(send, `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const panel = document.getElementById('map-legend-panel');
+    if (!(button instanceof HTMLButtonElement) || !panel) return { ok: false, reason: 'missing' };
+    const rect = button.getBoundingClientRect();
+    if (rect.width < 44 || rect.height < 44) return { ok: false, reason: 'hit', w: rect.width, h: rect.height };
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || (hit !== button && !button.contains(hit))) {
+      return { ok: false, reason: 'elementFromPoint', tag: hit && hit.tagName, id: hit && hit.id, className: hit && String(hit.className) };
+    }
+    return { ok: true, x, y, expanded: button.getAttribute('aria-expanded') };
+  })()`);
+}
+
+async function activateLegendTab(send) {
+  const point = await legendTabPoint(send);
+  if (!point?.ok) throw new Error(`legend tab ${JSON.stringify(point)}`);
+  if (send.pointer === 'touch') await send('Input.touchscreenTap', { x: point.x, y: point.y });
+  else await mouseClick(send, point.x, point.y);
+}
+
+async function proveLegendDisclosure(send, evidenceDir, viewport, suffix = '') {
+  const name = (base) => (suffix ? `${base}-${suffix}` : base);
+  const closed = await evaluate(send, `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const panel = document.getElementById('map-legend-panel');
+    const badge = document.querySelector('.map-imagery-date');
+    const slider = document.getElementById('time-slider');
+    if (!(button instanceof HTMLButtonElement) || !panel || !badge || !slider) return { ok: false, reason: 'missing' };
+    if (button.getAttribute('aria-expanded') !== 'false' || button.getAttribute('aria-controls') !== 'map-legend-panel') {
+      return { ok: false, expanded: button.getAttribute('aria-expanded'), controls: button.getAttribute('aria-controls') };
+    }
+    const panelStyle = getComputedStyle(panel);
+    const badgeRect = badge.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    if (panelStyle.display !== 'none' || badgeRect.width > 0 || badgeRect.height > 0) {
+      return { ok: false, reason: 'visible', display: panelStyle.display, badge: { w: badgeRect.width, h: badgeRect.height } };
+    }
+    const blockers = ['.map-command', '.map-toolbar', '.map-control-dock', '#map-chrome-toggle', '#time-slider'];
+    for (const sel of blockers) {
+      const node = document.querySelector(sel);
+      if (!node) continue;
+      const rect = node.getBoundingClientRect();
+      const overlaps = buttonRect.width > 0 && rect.width > 0 && buttonRect.left < rect.right && buttonRect.right > rect.left && buttonRect.top < rect.bottom && buttonRect.bottom > rect.top;
+      if (overlaps) return { ok: false, reason: 'overlap', sel };
+    }
+    return { ok: true };
+  })()`);
+  if (!closed?.ok) throw new Error(`legend collapsed ${suffix || 'shown'} ${JSON.stringify(closed)}`);
+  await shot(send, evidenceDir, name('map-legend-collapsed'));
+  if (!suffix) await shot(send, evidenceDir, 'map-legend');
+  await activateLegendTab(send);
+  const opened = await waitFor(
+    send,
+    `(() => {
+      const button = document.getElementById('map-legend-toggle');
+      const badge = document.querySelector('.map-imagery-date');
+      const slider = document.getElementById('time-slider');
+      if (!button || !badge || !slider) return null;
+      if (button.getAttribute('aria-expanded') !== 'true') return null;
+      const badgeRect = badge.getBoundingClientRect();
+      const sliderRect = slider.getBoundingClientRect();
+      if (!(badgeRect.width > 0 && badgeRect.height > 0)) return null;
+      const hits = badgeRect.left < sliderRect.right && badgeRect.right > sliderRect.left && badgeRect.top < sliderRect.bottom && badgeRect.bottom > sliderRect.top;
+      if (hits) return { error: 'imagery intersects slider ' + JSON.stringify({ badgeTop: badgeRect.top, badgeBottom: badgeRect.bottom, sliderTop: sliderRect.top, sliderBottom: sliderRect.bottom }) };
+      const text = (badge.textContent || '').trim();
+      if (!text) return null;
+      return { ok: true, text };
+    })()`,
+    'legend expanded',
+  );
+  if (opened?.error) throw new Error(opened.error);
+  await shot(send, evidenceDir, name('map-legend-expanded'));
+  if (!suffix) await shot(send, evidenceDir, 'map-imagery-date');
+  await activateLegendTab(send);
+  await waitFor(
+    send,
+    `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+    'legend collapsed again',
+  );
+  const hiddenNote = await evaluate(send, `(() => {
+    const badge = document.querySelector('.map-imagery-date');
+    const rect = badge?.getBoundingClientRect();
+    return rect && rect.width === 0 && rect.height === 0 ? { ok: true } : { w: rect?.width, h: rect?.height };
+  })()`);
+  if (!hiddenNote?.ok) throw new Error(`imagery still visible ${JSON.stringify(hiddenNote)}`);
+  await evaluate(send, `document.getElementById('map-legend-toggle')?.focus()`);
+  await pressKey(send, 'Enter');
+  await waitFor(
+    send,
+    `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true' ? { ok: true } : null`,
+    'legend keyboard open',
+  );
+  await pressKey(send, 'Escape');
+  await waitFor(
+    send,
+    `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+    'legend escape',
+  );
+  const row = await evaluate(send, `(() => {
+    const hide = document.getElementById('map-chrome-toggle')?.getBoundingClientRect();
+    const steps = ['time-fwd-45', 'time-fwd-90'].map((id) => {
+      const rect = document.getElementById(id)?.getBoundingClientRect();
+      return rect ? { id, top: rect.top, height: rect.height, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width } : null;
+    });
+    if (!hide || steps.some((step) => !step)) return { ok: false, reason: 'missing' };
+    const hideCy = hide.top + hide.height / 2;
+    const compared = steps.map((step) => {
+      const dy = Math.abs(hideCy - (step.top + step.height / 2));
+      const heightRatio = Math.abs(hide.height - step.height) / step.height;
+      return { id: step.id, dy, heightRatio, hideH: hide.height, stepH: step.height };
+    });
+    const clipLeft = Math.max(0, Math.min(hide.left, ...steps.map((step) => step.left)) - 8);
+    const clipTop = Math.max(0, Math.min(hide.top, ...steps.map((step) => step.top)) - 8);
+    const right = Math.max(hide.right, ...steps.map((step) => step.right)) + 8;
+    const bottom = Math.max(hide.bottom, ...steps.map((step) => step.bottom)) + 8;
+    const clip = {
+      x: Math.round(clipLeft),
+      y: Math.round(clipTop),
+      width: Math.max(1, Math.round(right - clipLeft)),
+      height: Math.max(1, Math.round(bottom - clipTop)),
+      scale: 1,
+    };
+    return { ok: true, compared, clip, hide: { top: hide.top, height: hide.height, width: hide.width } };
+  })()`);
+  if (!row?.ok) throw new Error(`hide row ${JSON.stringify(row)}`);
+  const ipad = viewport && viewport.width === 834 && viewport.height === 1194;
+  if (ipad) {
+    for (const step of row.compared) {
+      if (step.dy > 2 || step.heightRatio > 0.15) {
+        throw new Error(`iPad hide alignment ${JSON.stringify(step)}`);
+      }
+    }
+  }
+  await shot(send, evidenceDir, name('map-hide-skip-row'), row.clip);
+  if (viewport && viewport.width === 402 && viewport.height === 874 && !suffix) {
+    await setViewport(send, 874, 402, true);
+    await sleep(400);
+    await proveLegendDisclosure(send, evidenceDir, { width: 874, height: 402, mobile: true }, 'land');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -1596,6 +1745,15 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   if (legendText.includes("Anil's targets") || legendText.includes('Starship')) {
     throw new Error(`legend still names a removed row: ${legendText}`);
   }
+  const collapsedOnLoad = await evaluate(send, `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    if (!(button instanceof HTMLButtonElement)) return { ok: false, reason: 'missing' };
+    const expanded = button.getAttribute('aria-expanded');
+    const controls = button.getAttribute('aria-controls');
+    if (expanded !== 'false' || controls !== 'map-legend-panel') return { ok: false, expanded, controls };
+    return { ok: true };
+  })()`);
+  if (!collapsedOnLoad?.ok) throw new Error(`legend collapsed on load ${JSON.stringify(collapsedOnLoad)}`);
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
@@ -1613,8 +1771,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   }
   await sleep(1200);
   await shot(send, evidenceDir, 'map-globe');
-  await shot(send, evidenceDir, 'map-legend');
-  await shot(send, evidenceDir, 'map-imagery-date');
+  await proveLegendDisclosure(send, evidenceDir, viewport);
   await dismissShotlist(send);
   await assertMapInfoControlsGone(send);
   await assertChromeToggleStationary(send);

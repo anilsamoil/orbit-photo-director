@@ -406,6 +406,9 @@ export function buildMapDock(): HTMLElement {
   const container = document.createElement('div');
   container.id = 'map';
   document.body.append(container);
+  const legendPanel = document.createElement('div');
+  legendPanel.id = 'map-legend-panel';
+  document.body.append(legendPanel);
   for (const id of DOCK_BUTTON_IDS) {
     const button = document.createElement('button');
     button.id = id;

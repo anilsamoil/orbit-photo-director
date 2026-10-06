@@ -390,7 +390,8 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   setTargetPasses(passes);
   setLaunchPasses(passes);
 
-  ensureImageryDateBadge(container, manifest);
+  const legendPanel = document.getElementById('map-legend-panel');
+  if (legendPanel) ensureImageryDateBadge(legendPanel, manifest);
   refreshGroundTrack(core);
 
   refreshMyTargetsSource();

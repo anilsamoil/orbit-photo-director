@@ -42,7 +42,7 @@ function pressed(id: string): string | null {
 }
 
 function badge(): string {
-  return document.querySelector('#map .map-imagery-date')?.textContent ?? '';
+  return document.querySelector('.map-imagery-date')?.textContent ?? '';
 }
 
 function irTiles(): string[][] {

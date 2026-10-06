@@ -156,12 +156,18 @@
             <div id="satellite-picker-status" class="satellite-picker-status"></div>
           </div>
         </div>
-          <div class="map-legend" aria-label="Map legend">
-          <span class="map-legend-item"><span class="map-legend-dot map-legend-launch"></span>launch</span>
-          <span class="map-legend-item"><span class="map-legend-dot map-legend-day"></span>day</span>
-          <span class="map-legend-item"><span class="map-legend-dot map-legend-twilight"></span>twilight</span>
-          <span class="map-legend-item"><span class="map-legend-dot map-legend-eclipse"></span>eclipse</span>
-        </div>
+          <div id="map-legend" class="map-legend" aria-label="Map legend">
+            <button id="map-legend-toggle" class="map-legend-toggle" type="button" aria-expanded="false" aria-controls="map-legend-panel">Legend</button>
+            <div id="map-legend-panel" class="map-legend-panel">
+              <div class="map-legend-rows">
+                <span class="map-legend-item"><span class="map-legend-dot map-legend-launch"></span>launch</span>
+                <span class="map-legend-item"><span class="map-legend-dot map-legend-day"></span>day</span>
+                <span class="map-legend-item"><span class="map-legend-dot map-legend-twilight"></span>twilight</span>
+                <span class="map-legend-item"><span class="map-legend-dot map-legend-eclipse"></span>eclipse</span>
+              </div>
+              <div class="map-imagery-date"></div>
+            </div>
+          </div>
         <button id="map-chrome-toggle" class="map-chrome-toggle" type="button" aria-expanded="false" title="Show map controls">Controls</button>
         <aside id="map-inspector" class="map-inspector" hidden></aside>
       </section>

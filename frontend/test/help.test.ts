@@ -71,6 +71,8 @@ describe('openHelpModal', () => {
     expect(text).toContain('launch, day, twilight, and eclipse');
     expect(text).toContain('Anil\'s targets, Starship, and your white rings are not rows');
     expect(text).toContain('Starship is not a legend row');
+    expect(text).toContain('Tap Legend on the left edge');
+    expect(text).toContain('shows only while the legend is open');
     expect(text).not.toContain('Starship: no public orbit yet');
     expect(text).not.toContain('Starship: public orbit expired');
     expect(text).not.toContain('Starship: orbit lookup failed');
