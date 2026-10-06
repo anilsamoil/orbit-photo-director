@@ -29,7 +29,7 @@ import { launchVerdictBlock, selectLaunches, type LaunchSelection } from '../lau
 import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { paintEqualDigits } from '../digits';
-import { fitIssPane, type LaunchCardPlace } from './pane-fit';
+import { fitIssPane, launchCardCandidate, storedLaunchPlace, type LaunchCardPlace } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
 type IssSession = {
@@ -773,6 +773,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const viewStyle = getComputedStyle(view);
     const cardGap = px(viewStyle.gap || viewStyle.columnGap || viewStyle.rowGap);
     const cardShown = !launchCard.hidden;
+    const previous = storedLaunchPlace(root.dataset.issLaunchPlace);
+    const candidate = launchCardCandidate(width, cardShown);
+    const cardBox = measureLaunchCard(candidate);
     return fitIssPane({
       paneWidthPx: width,
       paneHeightPx: height,
@@ -785,10 +788,21 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       bodyMarginPx: open ? bodyMargin : 0,
       sideWidthPx: port.offsetWidth + starboard.offsetWidth + stageGap * 2,
       labelPx: Math.max(port.offsetHeight, starboard.offsetHeight),
-      launchCardWidthPx: cardShown ? launchCard.offsetWidth : 0,
-      launchCardHeightPx: cardShown ? launchCard.offsetHeight : 0,
+      launchCardWidthPx: cardBox.width,
+      launchCardHeightPx: cardBox.height,
       launchCardGapPx: cardShown ? cardGap : 0,
-    });
+    }, previous);
+  }
+
+  function measureLaunchCard(candidate: LaunchCardPlace): { width: number; height: number } {
+    if (launchCard.hidden || candidate === 'off' || candidate === 'over') return { width: 0, height: 0 };
+    const previous = root.dataset.issLaunchPlace;
+    root.dataset.issLaunchPlace = candidate;
+    const width = launchCard.offsetWidth;
+    const height = launchCard.offsetHeight;
+    if (previous) root.dataset.issLaunchPlace = previous;
+    else delete root.dataset.issLaunchPlace;
+    return { width, height };
   }
 
   function setOpticalFov(value: number): void {

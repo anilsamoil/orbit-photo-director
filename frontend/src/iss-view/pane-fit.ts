@@ -1,3 +1,4 @@
+import { LAUNCH_MARK_MIN_PX } from './launches';
 import { sceneFit } from './model';
 
 export type PaneMeasure = {
@@ -17,7 +18,7 @@ export type PaneMeasure = {
   launchCardGapPx: number;
 };
 
-export type LaunchCardPlace = 'side' | 'below' | 'off';
+export type LaunchCardPlace = 'side' | 'below' | 'over' | 'off';
 
 export type PaneFit = {
   widthPx: number;
@@ -29,13 +30,51 @@ export type PaneFit = {
 
 const NARROW_ISS_PANE_PX = 720;
 
-export function fitIssPane(measure: PaneMeasure): PaneFit {
+/** A card under the earth that leaves a shorter frame than this collapses the globe. */
+export const USABLE_BELOW_EARTH_PX = 120;
+
+/**
+ * While the card is over the earth, the below-reserved short side must reach
+ * this before the card returns underneath. 120 through 131 keeps the current
+ * place. Under 120 enters over. 132 or more returns to below.
+ */
+export const BELOW_EARTH_RETURN_PX = 132;
+
+export function storedLaunchPlace(value: string | undefined): LaunchCardPlace {
+  if (value === 'over' || value === 'below' || value === 'side' || value === 'off') return value;
+  return 'off';
+}
+
+export function launchCardCandidate(paneWidthPx: number, cardShown: boolean): LaunchCardPlace {
+  if (!cardShown) return 'off';
+  return paneWidthPx <= NARROW_ISS_PANE_PX ? 'below' : 'side';
+}
+
+export function fitIssPane(measure: PaneMeasure, previous: LaunchCardPlace = 'off'): PaneFit {
   const launchCardPlace = placeLaunchCard(measure);
+  const reserved = layoutCard(measure, launchCardPlace, true);
+  if (launchCardPlace === 'off') return reserved;
+  const shortSide = Math.min(reserved.widthPx, reserved.heightPx);
+  if (launchCardPlace === 'side') {
+    if (shortSide >= LAUNCH_MARK_MIN_PX) return reserved;
+    return overlay(measure, launchCardPlace);
+  }
+  const collapsed = shortSide < USABLE_BELOW_EARTH_PX;
+  const holding = previous === 'over' && shortSide < BELOW_EARTH_RETURN_PX;
+  if (collapsed || holding) return overlay(measure, launchCardPlace);
+  return reserved;
+}
+
+function overlay(measure: PaneMeasure, launchCardPlace: LaunchCardPlace): PaneFit {
+  return { ...layoutCard(measure, launchCardPlace, false), launchCardPlace: 'over' };
+}
+
+function layoutCard(measure: PaneMeasure, launchCardPlace: LaunchCardPlace, reserveCard: boolean): PaneFit {
   const cardWidth = Math.max(0, measure.launchCardWidthPx);
   const cardHeight = Math.max(0, measure.launchCardHeightPx);
   const cardGap = Math.max(0, measure.launchCardGapPx);
-  const sideReserve = launchCardPlace === 'side' ? cardWidth + cardGap : 0;
-  const belowReserve = launchCardPlace === 'below' ? cardHeight + cardGap : 0;
+  const sideReserve = reserveCard && launchCardPlace === 'side' ? cardWidth + cardGap : 0;
+  const belowReserve = reserveCard && launchCardPlace === 'below' ? cardHeight + cardGap : 0;
   const contentW = Math.max(1, measure.paneWidthPx - measure.padXPx - measure.sideWidthPx - sideReserve);
   const room = measure.paneHeightPx - measure.padYPx - measure.toolbarPx - measure.buttonPx - measure.gapPx * 2 - belowReserve;
   const sideCardPx = launchCardPlace === 'side' ? cardHeight : 0;

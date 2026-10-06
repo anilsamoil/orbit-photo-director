@@ -3459,6 +3459,52 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   align-items: center;
 }
 
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-view] {
+  position: relative;
+}
+
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-card] {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 0.25rem;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  width: min(16rem, 9.5rem);
+  max-height: min(4.75rem, calc(100% - 0.5rem));
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-card] > * {
+  pointer-events: auto;
+}
+
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-name] {
+  order: 1;
+  flex: none;
+}
+
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-visibility] {
+  order: 2;
+  flex: none;
+}
+
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-site] {
+  order: 3;
+  flex: none;
+}
+
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-time] {
+  order: 4;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
 [data-iss-stage] {
   display: flex;
   flex-direction: row;
