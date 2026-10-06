@@ -4575,7 +4575,28 @@ summary:focus-visible {
 
 @media (max-height: 520px) {
   body:has(> #view.view-map):not(.map-chrome-hidden) {
-    --map-command-height: calc(92px + env(safe-area-inset-bottom, 0px));
+    --map-command-height: 52px;
+  }
+
+  .view-map .map-command {
+    bottom: env(safe-area-inset-bottom, 0px);
+    padding: 4px 96px 4px 8px;
+  }
+
+  body.shotlist-bar-visible:has(> #view.view-map) main {
+    padding-bottom: 0;
+  }
+
+  body.shotlist-bar-visible .view-map .map-command {
+    bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.shotlist-bar-visible .view-map .map-chrome-toggle {
+    bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.shotlist-bar-visible:has(> #view.view-map):not(.map-chrome-hidden) .view-map .map-legend {
+    bottom: calc(36px + 4rem + var(--map-command-height) + env(safe-area-inset-bottom, 0px));
   }
 
   .brand-expansion,
@@ -4666,6 +4687,7 @@ summary:focus-visible {
 
 @media (max-height: 520px) {
   .view-map #map .maplibregl-ctrl-top-left {
+    top: 62px;
     left: calc(8px + env(safe-area-inset-left, 0px));
   }
 

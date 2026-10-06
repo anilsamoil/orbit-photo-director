@@ -286,7 +286,9 @@ describe('map chrome layout', () => {
     const heights = rulesFor('body:has(> #view.view-map):not(.map-chrome-hidden)')
       .map((style) => style.getPropertyValue('--map-command-height'));
     expect(heights).toContain('calc(140px + env(safe-area-inset-bottom, 0px))');
-    expect(heights).toContain('calc(92px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('52px');
+    expect(css).toContain('.view-map .map-command {\n    bottom: env(safe-area-inset-bottom, 0px);');
+    expect(css).toContain('body.shotlist-bar-visible:has(> #view.view-map) main {\n    padding-bottom: 0;');
     expect(heights).not.toContain('156px');
     expect(heights).not.toContain('104px');
   });
