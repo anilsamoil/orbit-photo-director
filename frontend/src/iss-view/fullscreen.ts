@@ -43,8 +43,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () => void }): { dispose(): void } {
   const { scene, relayout } = options;
-  const toolbar = scene.querySelector('[data-iss-toolbar]');
-  if (!(toolbar instanceof HTMLElement)) throw new Error('iss toolbar missing');
+  const controls = scene.querySelector('[data-iss-controls]');
+  const telemetry = controls?.querySelector('[data-iss-telemetry]');
+  if (!(controls instanceof HTMLElement) || !(telemetry instanceof HTMLElement)) throw new Error('iss controls missing');
   const button = document.createElement('button');
   button.type = 'button';
   button.dataset.issFullscreen = '';
@@ -55,9 +56,7 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
   const path = document.createElementNS(SVG_NS, 'path');
   icon.append(path);
   button.append(icon);
-  const anchor = toolbar.querySelector('[data-iss-aim-anchor]');
-  if (anchor) anchor.after(button);
-  else toolbar.prepend(button);
+  telemetry.after(button);
 
   let mode: IssFullscreenMode = 'off';
   let escapeExitHeld = false;
@@ -66,12 +65,14 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
 
   function dispatch(signal: FullscreenSignal): void {
     const step = STEPS[mode][signal];
-    if (mode !== 'off' && step.mode === 'off') escapeExitHeld = true;
+    const leaving = mode !== 'off' && step.mode === 'off';
+    if (leaving) escapeExitHeld = true;
     mode = step.mode;
     paintMode();
     if (step.effect === 'request') requestFullscreen(scene);
     if (step.effect === 'exit') exitFullscreen();
     relayout();
+    if (leaving && document.contains(button)) button.focus({ preventScroll: true });
   }
 
   function paintMode(): void {

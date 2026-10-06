@@ -815,6 +815,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function layout(): { widthPx: number; heightPx: number } {
     syncLaunchChrome();
+    root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= 564);
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
     const fit = width < 10 || height < 10

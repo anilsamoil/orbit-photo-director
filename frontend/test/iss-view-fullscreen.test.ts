@@ -163,8 +163,8 @@ describe('ISS fullscreen toggle', () => {
   it.each(['standard', 'webkit', 'both'] as const)('enters and leaves element fullscreen through the %s API', async (api) => {
     const fullscreen = browser(api);
     const view = await mounted();
-    expect(view.button.previousElementSibling?.hasAttribute('data-iss-aim-anchor')).toBe(true);
-    expect(view.button.parentElement?.hasAttribute('data-iss-toolbar')).toBe(true);
+    expect(view.button.previousElementSibling?.hasAttribute('data-iss-telemetry')).toBe(true);
+    expect(view.button.parentElement?.hasAttribute('data-iss-controls')).toBe(true);
     expect(name(view.button)).toBe('Full screen');
     expect(view.button.title).toBe('Full screen');
     expect(view.button.hasAttribute('aria-pressed')).toBe(false);
@@ -309,6 +309,7 @@ describe('ISS fullscreen Escape', () => {
 
     expect(key(view.button, 'Escape').defaultPrevented).toBe(true);
     expect(marked(view.root)).toBe(false);
+    expect(document.activeElement).toBe(view.button);
     expect(key(view.button, 'Escape', { repeat: true }).defaultPrevented).toBe(true);
     key(view.button, 'Escape', { repeat: true });
     expect(view.scene.mode()).toBe('nadir');
@@ -573,9 +574,16 @@ describe('ISS fullscreen styles', () => {
     expect(css('[data-iss-stage] > :first-child').left).toBe('17.6px');
     expect(css('[data-iss-stage] > :last-child').right).toBe('17.6px');
 
-    expect(css('[data-iss-card]').display).toBe('none');
-    expect(css('[data-iss-telemetry-body]').marginTop).toBe('0px');
-    expect(css('[data-iss-telemetry-body]').borderTopWidth).toBe('0px');
+    expect(css('[data-iss-card]').display).toBe('block');
+    query(view.root, '[data-iss-telemetry-body]').hidden = false;
+    expect(css('[data-iss-telemetry-body]').display).toBe('none');
+    expect(css('[data-iss-telemetry]').height).toBe('44px');
+    expect(css('[data-iss-fullscreen]').height).toBe('44px');
+    const place = document.createElement('div');
+    place.className = 'iss-place iss-place-country maplibregl-marker';
+    place.textContent = 'Pacific Ocean';
+    view.frame.append(place);
+    expect(getComputedStyle(place).display).not.toBe('none');
     expect(css('[data-iss-presets]').display).toBe('none');
     expect(css('[data-iss-edition]').display).toBe('none');
     expect(css('[data-iss-aim-anchor]').display).toBe('none');
@@ -613,6 +621,17 @@ describe('ISS fullscreen styles', () => {
     view.button.click();
     expect(marked(view.root)).toBe(true);
     expect(getComputedStyle(query(view.root, '[data-iss-card]')).display).toBe('block');
+  });
+
+  it('marks a window at 564px or shorter so layout can use the pane', async () => {
+    const previous = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 564 });
+    const short = await mounted();
+    expect(short.root.hasAttribute('data-iss-short')).toBe(true);
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 665 });
+    const tall = await mounted();
+    expect(tall.root.hasAttribute('data-iss-short')).toBe(false);
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: previous });
   });
 
   it('styles fullscreen through the valueless marker only', () => {

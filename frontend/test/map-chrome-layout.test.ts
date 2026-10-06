@@ -285,8 +285,9 @@ describe('map chrome layout', () => {
     expect(command).toContain('id="time-slider"');
     const heights = rulesFor('body:has(> #view.view-map):not(.map-chrome-hidden)')
       .map((style) => style.getPropertyValue('--map-command-height'));
-    expect(heights).toContain('calc(140px + env(safe-area-inset-bottom, 0px))');
-    expect(heights).toContain('calc(92px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('calc(64px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('calc(120px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('calc(72px + env(safe-area-inset-bottom, 0px))');
     expect(heights).not.toContain('156px');
     expect(heights).not.toContain('104px');
   });
@@ -303,9 +304,10 @@ describe('map chrome layout', () => {
     );
     const command = getComputedStyle(document.querySelector('.map-command')!);
     const controls = getComputedStyle(document.querySelector('.map-controls-time')!);
-    expect(command.backgroundColor).toBe('rgba(16, 22, 28, 0.55)');
-    expect(command.borderTopColor).toBe('transparent');
-    expect(controls.backgroundColor).toBe('transparent');
+    expect(command.backgroundColor).toBe('transparent');
+    expect(command.borderTopWidth).toBe('0px');
+    expect(controls.backgroundColor).toBe('rgba(7, 10, 13, 0.86)');
+    expect(controls.pointerEvents).toBe('auto');
     expect(ruleStyle('.view-map #map').bottom).toBe('0px');
   });
 
