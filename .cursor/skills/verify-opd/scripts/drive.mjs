@@ -2258,6 +2258,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
     'iss contained after render ticks',
     10000,
   );
+  const fullscreen = await proveIssFullscreen(send, evidenceDir, viewport);
   await click(send, '[data-iss-telemetry]');
   await waitFor(
     send,
@@ -2365,7 +2366,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await shot(send, evidenceDir, 'iss-return');
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared`;
 }
 
 async function proveIssClock(send) {
@@ -2457,6 +2458,284 @@ async function proveIssEdition(send, evidenceDir) {
   }
   await shot(send, evidenceDir, 'iss-edition');
   return placed.place;
+}
+
+const ISS_FULLSCREEN_HIDDEN = [
+  '[data-iss-presets]',
+  '[data-iss-edition]',
+  '[data-iss-fov]',
+  '[data-iss-hint]',
+  '.maplibregl-ctrl-attrib',
+  '[data-iss-aim-help]',
+  '[data-iss-launch-picker]',
+];
+
+const ISS_FULLSCREEN_STRIP = `(() => {
+  const scene = document.querySelector('[data-iss-scene]');
+  const stripped = [];
+  for (let proto = Object.getPrototypeOf(scene); proto; proto = Object.getPrototypeOf(proto)) {
+    for (const name of ['requestFullscreen', 'webkitRequestFullscreen']) {
+      const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+      if (descriptor && delete proto[name]) stripped.push({ proto, name, descriptor });
+    }
+  }
+  window.__opdFullscreenStripped = stripped;
+  return !('requestFullscreen' in scene) && !('webkitRequestFullscreen' in scene);
+})()`;
+
+const ISS_FULLSCREEN_RESTORE = `(() => {
+  for (const { proto, name, descriptor } of window.__opdFullscreenStripped || []) Object.defineProperty(proto, name, descriptor);
+  delete window.__opdFullscreenStripped;
+  return true;
+})()`;
+
+const ISS_FULLSCREEN_OFF = `(() => {
+  const scene = document.querySelector('[data-iss-scene]');
+  const button = document.querySelector('[data-iss-fullscreen]');
+  const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+  if (!scene || !button || !frame) return { step: 'missing' };
+  if (scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
+  if ((document.fullscreenElement ?? document.webkitFullscreenElement ?? null) !== null) return { step: 'browser-held' };
+  if (button.getAttribute('aria-label') !== 'Full screen' || button.title !== 'Full screen') return { step: 'label' };
+  if (button.previousElementSibling !== document.querySelector('[data-iss-aim-anchor]')) return { step: 'order' };
+  if (getComputedStyle(scene).position !== 'absolute') return { step: 'position' };
+  if (scene.querySelector('[data-iss-presets]')?.getClientRects().length !== 1) return { step: 'presets' };
+  if (${SCENE_SCROLLS}) return { step: 'scroll' };
+  const box = button.getBoundingClientRect();
+  if (Math.abs(box.width - 44) > 0.5 || Math.abs(box.height - 44) > 0.5) return { step: 'size', width: box.width, height: box.height };
+  if (!button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) return { step: 'hit' };
+  const covered = [...button.parentElement.children]
+    .filter((node) => node !== button)
+    .flatMap((node) => [...node.getClientRects()])
+    .find((other) => box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5);
+  if (covered) return { step: 'overlap', button: [box.left, box.top, box.right, box.bottom], other: [covered.left, covered.top, covered.right, covered.bottom] };
+  return { ok: true, width: frame.width, height: frame.height };
+})()`;
+
+function issFullscreenHeldExpression(expected) {
+  return `(() => {
+    const scene = document.querySelector('[data-iss-scene]');
+    const frame = document.querySelector('[data-iss-frame]');
+    const button = document.querySelector('[data-iss-fullscreen]');
+    const clock = document.querySelector('[data-iss-clock]');
+    const map = window.__opdIss;
+    if (!scene || !frame || !button || !clock || !map) return { step: 'missing' };
+    if (!scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
+    const held = document.fullscreenElement ?? document.webkitFullscreenElement ?? null;
+    if (${expected === 'element' ? 'held !== scene' : 'held !== null'}) return { step: 'mode', held: held ? held.tagName : null };
+    if (button.getAttribute('aria-label') !== 'Exit full screen' || button.title !== 'Exit full screen') return { step: 'label' };
+    const sceneBox = scene.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const view = viewport
+      ? { left: viewport.offsetLeft, top: viewport.offsetTop, right: viewport.offsetLeft + viewport.width, bottom: viewport.offsetTop + viewport.height }
+      : { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    if (getComputedStyle(scene).position !== 'fixed') return { step: 'position', position: getComputedStyle(scene).position };
+    if (sceneBox.left > view.left + 0.5 || sceneBox.top > view.top + 0.5 || sceneBox.right < view.right - 0.5 || sceneBox.bottom < view.bottom - 0.5) {
+      return { step: 'cover', scene: [sceneBox.left, sceneBox.top, sceneBox.right, sceneBox.bottom], view };
+    }
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position: fixed; top: 0; left: 0; width: 0; height: 100dvh; visibility: hidden';
+    document.body.append(probe);
+    const dvh = probe.getBoundingClientRect().height;
+    probe.remove();
+    if (Math.abs(sceneBox.height - dvh) > 1) return { step: 'dvh', height: sceneBox.height, dvh };
+    if (${SCENE_SCROLLS}) return { step: 'scroll' };
+    if (getComputedStyle(document.body).overflow !== 'hidden' || getComputedStyle(document.getElementById('view')).overflow !== 'hidden') return { step: 'scroll-lock' };
+    const points = [[view.left + 2, view.top + 2], [view.right - 2, view.top + 2], [view.left + 2, view.bottom - 2], [view.right - 2, view.bottom - 2]];
+    const fab = document.getElementById('help-fab');
+    if (fab && !fab.hidden) {
+      const fabBox = fab.getBoundingClientRect();
+      points.push([fabBox.left + fabBox.width / 2, fabBox.top + fabBox.height / 2]);
+    }
+    const uncovered = points.find(([x, y]) => !scene.contains(document.elementFromPoint(x, y)));
+    if (uncovered) return { step: 'app-shows', point: uncovered, hit: document.elementFromPoint(uncovered[0], uncovered[1])?.outerHTML.slice(0, 80) };
+    const buttonBox = button.getBoundingClientRect();
+    if (!button.contains(document.elementFromPoint(buttonBox.left + buttonBox.width / 2, buttonBox.top + buttonBox.height / 2))) return { step: 'button-hit' };
+    const hiddenSet = ${JSON.stringify(ISS_FULLSCREEN_HIDDEN)}.concat(scene.getAttribute('data-iss-phase') === 'error' ? [] : ['[data-iss-card]']);
+    const shown = hiddenSet.flatMap((sel) => {
+      const nodes = [...scene.querySelectorAll(sel)];
+      if (!nodes.length) return [sel + ' missing'];
+      return nodes.some((node) => node.getClientRects().length > 0) ? [sel] : [];
+    });
+    if (shown.length) return { step: 'hidden', shown };
+    const topmost = (el, box) => {
+      el.style.pointerEvents = 'auto';
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      el.style.pointerEvents = '';
+      return el.contains(hit);
+    };
+    const frameBox = frame.getBoundingClientRect();
+    const glyphs = {};
+    for (const [side, sel] of [['starboard', '[data-iss-starboard]'], ['port', '[data-iss-port]']]) {
+      const label = scene.querySelector(sel);
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      const ink = range.getBoundingClientRect();
+      if (!(ink.width > 2 && ink.height > 8)) return { step: 'glyph-size', side, width: ink.width, height: ink.height };
+      if (ink.left < frameBox.left - 0.5 || ink.right > frameBox.right + 0.5 || ink.top < frameBox.top - 0.5 || ink.bottom > frameBox.bottom + 0.5) {
+        return { step: 'glyph-frame', side, ink: [ink.left, ink.top, ink.right, ink.bottom], frame: [frameBox.left, frameBox.top, frameBox.right, frameBox.bottom] };
+      }
+      if (!topmost(label, ink)) return { step: 'glyph-covered', side };
+      glyphs[side] = ink;
+    }
+    const middle = frameBox.left + frameBox.width / 2;
+    if (!(glyphs.starboard.right < middle && glyphs.port.left > middle)) return { step: 'glyph-sides' };
+    if (clock.children.length !== 5) return { step: 'clock-lines', count: clock.children.length };
+    for (const line of clock.children) {
+      const box = line.getBoundingClientRect();
+      const name = Object.keys(line.dataset).join(',');
+      if (!(box.width > 8 && box.height > 4)) return { step: 'clock-box', name, width: box.width, height: box.height };
+      if (box.left < view.left - 0.5 || box.right > view.right + 0.5 || box.top < view.top - 0.5 || box.bottom > view.bottom + 0.5) return { step: 'clock-view', name };
+      if (!(line.textContent || '').trim()) return { step: 'clock-text', name };
+      if (getComputedStyle(line).visibility !== 'visible') return { step: 'clock-visibility', name };
+      if (!topmost(line, box)) return { step: 'clock-covered', name };
+      if (box.left < buttonBox.right && box.right > buttonBox.left && box.top < buttonBox.bottom && box.bottom > buttonBox.top) return { step: 'clock-on-button', name };
+    }
+    const pad = getComputedStyle(scene);
+    const roomWidth = sceneBox.width - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight);
+    const roomHeight = sceneBox.height - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
+    if (Math.abs(frameBox.width - roomWidth) > 1 && Math.abs(frameBox.height - roomHeight) > 1) {
+      return { step: 'frame-fit', frame: [frameBox.width, frameBox.height], room: [roomWidth, roomHeight] };
+    }
+    const ratio = map.getPixelRatio();
+    const canvas = map.getCanvas();
+    if (Math.abs(ratio - Math.min(1.5, devicePixelRatio)) > 0.001) return { step: 'ratio', ratio, device: devicePixelRatio };
+    if (Math.abs(canvas.clientWidth - frameBox.width) > 1 || Math.abs(canvas.width - canvas.clientWidth * ratio) > 1.5) {
+      return { step: 'backing', client: [canvas.clientWidth, canvas.clientHeight], backing: [canvas.width, canvas.height], frame: [frameBox.width, frameBox.height], ratio };
+    }
+    return { ok: true, width: Math.round(frameBox.width), height: Math.round(frameBox.height), ratio };
+  })()`;
+}
+
+async function pressIssFullscreen(send) {
+  await revealInView(send, '[data-iss-fullscreen]');
+  const center = await evaluate(send, `(() => {
+    const box = document.querySelector('[data-iss-fullscreen]').getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  })()`);
+  await mouseClick(send, center.x, center.y);
+}
+
+async function enterFullscreenThroughOpenSheet(send, mobile) {
+  await click(send, '[data-iss-aim-help]');
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? { ok: true } : null`,
+    'iss shortcut sheet open before fullscreen',
+    10000,
+  );
+  await revealInView(send, '[data-iss-fullscreen]');
+  const aim = await evaluate(send, `(() => {
+    const button = document.querySelector('[data-iss-fullscreen]');
+    const scene = document.querySelector('[data-iss-scene]');
+    const box = button.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const node = document.elementFromPoint(x, y);
+    const onButton = !!node && (node === button || button.contains(node));
+    return {
+      ok: onButton && scene.hasAttribute('data-iss-aim-open'),
+      x,
+      y,
+      hit: node ? (node.closest('[data-iss-fullscreen]') ? 'fullscreen' : (node.id || node.tagName)) : null,
+    };
+  })()`);
+  if (!aim?.ok) throw new Error(`iss fullscreen button missed while the sheet is open ${JSON.stringify(aim)}`);
+  if (mobile) await send('Input.tap', { x: aim.x, y: aim.y });
+  else await mouseClick(send, aim.x, aim.y);
+  await waitFor(
+    send,
+    `(() => {
+      const scene = document.querySelector('[data-iss-scene]');
+      const sheet = scene?.querySelector('[data-iss-aim-sheet]');
+      if (!scene?.hasAttribute('data-iss-fullscreen-active')) return { step: 'fullscreen' };
+      if (scene.hasAttribute('data-iss-aim-open') || !sheet?.hidden) return { step: 'sheet' };
+      return { ok: true };
+    })()`,
+    'iss fullscreen from an open shortcut sheet',
+    10000,
+  );
+}
+
+function sameFrame(before, after) {
+  return Math.abs(before.width - after.width) <= 1 && Math.abs(before.height - after.height) <= 1;
+}
+
+function issBackingExpression(ratio) {
+  return `(() => {
+    const map = window.__opdIss;
+    const canvas = map?.getCanvas();
+    if (!canvas) return { step: 'missing' };
+    if (map.getPixelRatio() !== ${ratio}) return { step: 'ratio', ratio: map.getPixelRatio(), device: devicePixelRatio };
+    if (Math.abs(canvas.width - canvas.clientWidth * ${ratio}) > 1.5) return { step: 'backing', backing: canvas.width, client: canvas.clientWidth };
+    return { ok: true };
+  })()`;
+}
+
+async function proveIssFullscreen(send, evidenceDir, viewport) {
+  const phone = viewport.mobile && viewport.width < 600;
+  if (phone && !await evaluate(send, ISS_FULLSCREEN_STRIP)) throw new Error('iss fullscreen request methods still present');
+  try {
+    const expected = await evaluate(send, `(() => {
+      const scene = document.querySelector('[data-iss-scene]');
+      return 'requestFullscreen' in scene || 'webkitRequestFullscreen' in scene ? 'element' : 'overlay';
+    })()`);
+    const idle = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen button idle', 10000);
+    await enterFullscreenThroughOpenSheet(send, viewport.mobile);
+    const held = await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected}`, 10000);
+    await shot(send, evidenceDir, 'iss-fullscreen');
+    if (!viewport.mobile) {
+      await send('Emulation.setDeviceMetricsOverride', { width: viewport.width, height: viewport.height, deviceScaleFactor: 2, mobile: false });
+      await waitFor(send, issBackingExpression(1.5), 'iss canvas follows a 2x device at the 1.5 cap', 10000);
+      await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+      await waitFor(send, issBackingExpression(1), 'iss canvas back at 1x', 10000);
+      await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected} after the device ratio`, 10000);
+    }
+    await pressIssFullscreen(send);
+    const back = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen exit by button', 10000);
+    if (!sameFrame(idle, back)) throw new Error(`iss frame after fullscreen ${JSON.stringify(back)} is not ${JSON.stringify(idle)}`);
+    await click(send, '[data-iss-preset="nadir"]');
+    const stored = await waitFor(
+      send,
+      `(() => {
+        if (document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') !== 'true') return null;
+        const raw = sessionStorage.getItem('opd-iss-aim');
+        const link = new URLSearchParams((location.hash || '').replace(/^#/, '')).get('iss');
+        if (!raw || !raw.includes('"nadir"') || link !== raw || localStorage.getItem('opd-iss-aim') !== raw) return null;
+        return { ok: true, raw, hash: location.hash };
+      })()`,
+      'iss straight down stored before fullscreen Escape',
+      10000,
+    );
+    await pressIssFullscreen(send);
+    await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected} on straight down`, 10000);
+    await pressKey(send, 'Escape');
+    await waitFor(
+      send,
+      `(() => {
+        const off = ${ISS_FULLSCREEN_OFF};
+        if (!off.ok) return off;
+        if (document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') !== 'true') return { step: 'aim-reset' };
+        if (location.hash !== ${JSON.stringify(stored.hash)}) return { step: 'hash', hash: location.hash };
+        if (sessionStorage.getItem('opd-iss-aim') !== ${JSON.stringify(stored.raw)}) return { step: 'session' };
+        if (localStorage.getItem('opd-iss-aim') !== ${JSON.stringify(stored.raw)}) return { step: 'local' };
+        return off;
+      })()`,
+      'iss Escape left fullscreen and kept the aim',
+      10000,
+    );
+    await click(send, '[data-iss-preset="horizon"]');
+    await waitFor(
+      send,
+      `document.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed') === 'true' && (document.querySelector('[data-iss-status]')?.textContent || '').includes('Horizon locked') ? { ok: true } : null`,
+      'iss horizon after fullscreen',
+      10000,
+    );
+    const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, Escape kept aim`;
+  } finally {
+    if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
+  }
 }
 
 async function proveMapShowLaunches(send, evidenceDir) {
