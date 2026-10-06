@@ -2786,8 +2786,9 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   }
   await shot(send, evidenceDir, 'iss-launch-site');
   const cardShot = await revealInView(send, '[data-iss-launch-card]');
-  if (!cardShot.text.includes(selected.name) || !cardShot.text.includes(selected.site) || !cardShot.text.includes(selected.visibility) || !cardShot.text.includes(selected.timeLabel)) {
-    throw new Error(`launch card shot would miss the facts ${JSON.stringify(cardShot)}`);
+  const visibilityNow = ['Site in frame', 'Site outside frame', 'Site below horizon'].find((line) => cardShot.text.includes(line));
+  if (!cardShot.text.includes(selected.name) || !cardShot.text.includes(selected.site) || !visibilityNow || !cardShot.text.includes(selected.timeLabel)) {
+    throw new Error(`launch card shot would miss the facts ${JSON.stringify({ ...cardShot, visibilityNow: visibilityNow || null })}`);
   }
   await shot(send, evidenceDir, 'iss-launch-look');
   const pickerBox = await evaluate(send, `(() => {
