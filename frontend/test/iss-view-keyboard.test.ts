@@ -1133,4 +1133,62 @@ describe('ISS keyboard aim persistence', () => {
     menu.remove();
     vi.unstubAllGlobals();
   });
+
+  it('aims from the split dock and still ignores a select there', async () => {
+    const previous = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({
+        matches: true,
+        addEventListener() {},
+        removeEventListener() {},
+      }),
+    });
+    const pane = document.createElement('section');
+    pane.id = 'iss-pane';
+    pane.innerHTML = '<div data-iss-split-chrome></div><div data-iss-split-dock></div><div id="iss-host"></div>';
+    document.body.append(pane);
+    const host = pane.querySelector('#iss-host');
+    if (!(host instanceof HTMLElement)) throw new Error('host missing');
+    const aims: IssAim[] = [];
+    const view = await running(host, aims);
+    try {
+      const dock = pane.querySelector('[data-iss-split-dock]');
+      const telemetry = pane.querySelector('[data-iss-telemetry]');
+      const picker = pane.querySelector('[data-iss-launch-picker]');
+      if (!(dock instanceof HTMLElement) || !(telemetry instanceof HTMLButtonElement) || !(picker instanceof HTMLSelectElement)) {
+        throw new Error('split dock missing');
+      }
+      expect(dock.contains(telemetry)).toBe(true);
+      expect(dock.contains(picker)).toBe(true);
+      telemetry.focus();
+      expect(document.activeElement).toBe(telemetry);
+      const straight = key(telemetry, 'n');
+      expect(straight.defaultPrevented).toBe(true);
+      expect(view.aim.mode).toBe('nadir');
+      const panned = key(telemetry, 'ArrowRight');
+      expect(panned.defaultPrevented).toBe(true);
+      expect(view.aim.look.rightDeg).toBeGreaterThan(0);
+      const zoomed = key(telemetry, '=');
+      expect(zoomed.defaultPrevented).toBe(true);
+      expect(view.aim.opticalFovDeg).toBeLessThan(sensorField().vertical);
+      picker.focus();
+      const blocked = key(picker, 'h');
+      expect(blocked.defaultPrevented).toBe(false);
+      expect(view.aim.mode).toBe('nadir');
+      const outside = document.createElement('button');
+      outside.type = 'button';
+      document.body.append(outside);
+      outside.focus();
+      const missed = key(outside, 'r');
+      expect(missed.defaultPrevented).toBe(false);
+      expect(view.aim.mode).toBe('nadir');
+      outside.remove();
+    } finally {
+      view.scene.dispose();
+      pane.remove();
+      if (previous) Object.defineProperty(window, 'matchMedia', previous);
+      else Reflect.deleteProperty(window, 'matchMedia');
+    }
+  });
 });
