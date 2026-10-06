@@ -30,12 +30,6 @@ function isElements(record: TrackedRecord): record is TrackedElements {
   return record.state === 'elements';
 }
 
-function writeLegend(records: readonly TrackedRecord[]): void {
-  const node = document.getElementById('tracked-legend-text');
-  if (!node) return;
-  node.textContent = records.map(statusText).join(' / ');
-}
-
 function liveRecords(): TrackedElements[] {
   return runtime.records.filter(isElements);
 }
@@ -83,7 +77,6 @@ function paint(core: MapCore): void {
   dropStale(core, live);
   paintTracks(core, live);
   placeMarkers(core, live);
-  writeLegend(runtime.records);
 }
 
 /** Replace the tracked vehicles and redraw. Safe before `mount`. */
@@ -94,7 +87,7 @@ export function applyTracked(core: MapCore, records: readonly TrackedRecord[]): 
 
 /** Starship and any later extra vehicle from `tracked.json`. A row with
  *  elements gets a marker and one ground-track orbit. A row without
- *  elements is legend text only. */
+ *  elements draws nothing. */
 export const tracked: MapFeature = {
   id: 'tracked',
   mount(core) {

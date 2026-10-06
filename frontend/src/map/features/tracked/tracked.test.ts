@@ -87,7 +87,7 @@ function trackStart(vendor: VendorDouble): LngLat | undefined {
 beforeEach(async () => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
-  document.body.innerHTML = '<span id="tracked-legend-text"></span>';
+  document.body.innerHTML = '';
   vi.resetModules();
   loaded.mod = await import('./index');
 });
@@ -110,17 +110,15 @@ describe('tracked vehicles', () => {
     expect(markerFor(vendor)?.element.title).toBe('Starship: STARSHIP S41');
     expect(markerFor(vendor)?.element.querySelector('.tracked-marker-label')?.textContent).toBe('Starship');
     expect(trackStart(vendor)).toEqual(propagated(NOW));
-    expect(document.getElementById('tracked-legend-text')?.textContent).toBe('Starship: STARSHIP S41');
     expect(core.view().satellites).toEqual([]);
     expect(vendor.sources.has('iss-track')).toBe(false);
   });
 
-  it('says there is no public orbit and draws nothing', () => {
+  it('draws nothing when there is no public orbit', () => {
     const { vendor } = mount();
 
     expect(markerFor(vendor)).toBeUndefined();
     expect(vendor.sources.has('sat-track-starship')).toBe(false);
-    expect(document.getElementById('tracked-legend-text')?.textContent).toBe('Starship: no public orbit yet');
   });
 
   it('removes the marker and the track when the elements age out', () => {
@@ -131,7 +129,6 @@ describe('tracked vehicles', () => {
     expect(markerFor(vendor)?.removed).toBe(true);
     expect(vendor.sources.has('sat-track-starship')).toBe(false);
     expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer']);
-    expect(document.getElementById('tracked-legend-text')?.textContent).toBe('Starship: public orbit expired');
   });
 
   it('a scrub moves the track and the marker to the view instant', () => {

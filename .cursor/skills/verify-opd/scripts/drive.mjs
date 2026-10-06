@@ -1570,26 +1570,32 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
         mapHtml: (document.getElementById('map')?.innerHTML || '').slice(0, 180),
       };
       if (status.map && status.marker && status.legend && status.badge && String(status.badge).trim() && status.track && !status.issClock) {
-        return { ok: true, badge: status.badge, legend: legend.innerText };
+        return { ok: true, badge: status.badge, legend: legend.textContent };
       }
       return status;
     })()`,
     'map ready',
     45000,
   );
-  if (!String(ready.legend || '').includes("Anil's targets")) {
-    throw new Error(`legend missing Anil's targets: ${ready.legend}`);
+  const legendText = String(ready.legend || '');
+  for (const word of ['launch', 'day', 'twilight', 'eclipse']) {
+    if (!legendText.includes(word)) throw new Error(`legend missing ${word}: ${legendText}`);
+  }
+  if (legendText.includes("Anil's targets") || legendText.includes('Starship')) {
+    throw new Error(`legend still names a removed row: ${legendText}`);
   }
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
   const anil = await evaluate(send, `(() => {
-    const node = document.querySelector('.map-legend-anil');
-    const swatch = node ? getComputedStyle(node).backgroundColor : '';
     const paint = window.__opdMap.getPaintProperty('targets-layer', 'circle-color');
-    return { swatch, paint: JSON.stringify(paint) };
+    return {
+      anilSwatch: !!document.querySelector('.map-legend-anil'),
+      starshipSwatch: !!document.querySelector('.map-legend-starship'),
+      paint: JSON.stringify(paint),
+    };
   })()`);
-  if (anil.swatch !== 'rgb(139, 147, 255)') throw new Error(`anil swatch ${anil.swatch}`);
+  if (anil.anilSwatch || anil.starshipSwatch) throw new Error(`legend swatch still present ${JSON.stringify(anil)}`);
   if (!String(anil.paint).includes('anils-targets') || !String(anil.paint).includes('#8b93ff')) {
     throw new Error(`anil paint ${anil.paint}`);
   }
@@ -1906,11 +1912,10 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
     send,
     `(() => {
       if (document.getElementById('view')?.className !== 'view-map') return null;
-      const legend = document.getElementById('personal-targets-legend')?.textContent;
-      if (legend !== "Jessica Watkins (Watty)'s targets") return null;
+      if (document.getElementById('personal-targets-legend')) return null;
       const names = ${myTargetNamesExpr()};
       if (!names || !names.includes('Lafayette, Colorado hometown') || names.length !== 12) return null;
-      return { ok: true, legend, count: names.length };
+      return { ok: true, count: names.length };
     })()`,
     'Watkins legend and sites',
     45000,
@@ -1953,7 +1958,7 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
       if (!banner || text.includes('Loading')) return null;
       const u = new URL(location.href).searchParams.get('u');
       const badge = document.querySelector('#profile-badge .profile-badge-name')?.textContent || null;
-      const legend = document.getElementById('personal-targets-legend')?.textContent || null;
+      const legend = document.getElementById('personal-targets-legend');
       const names = ${myTargetNamesExpr()};
       const state = {
         href: location.href,
@@ -1961,15 +1966,15 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
         tab: document.querySelector('.tabs .tab.active')?.id || null,
         view: document.getElementById('view')?.className || null,
         badge,
-        legend,
+        legend: legend ? legend.textContent : null,
         count: names ? names.length : null,
         lafayette: !!(names && names.includes('Lafayette, Colorado hometown')),
       };
       const home = u === null || u === 'anil';
-      if (!home || state.tab !== 'tab-map' || state.view !== 'view-map' || badge !== 'Anil' || legend !== "Anil's targets" || !names || state.lafayette) {
+      if (!home || state.tab !== 'tab-map' || state.view !== 'view-map' || badge !== 'Anil' || legend || !names || state.lafayette) {
         return state;
       }
-      return { ok: true, legend, count: names.length, u };
+      return { ok: true, count: names.length, u };
     })()`,
     'map restored on Anil',
     45000,
@@ -1983,13 +1988,6 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
   }
 }
 
-const UNAVAILABLE_LEGEND = {
-  aged_out: 'Starship: public orbit expired',
-  lookup_failed: 'Starship: orbit lookup failed',
-  missing: 'Starship: no public orbit yet',
-  unavailable: 'Starship: no public orbit yet',
-};
-
 async function driveTracked(send, evidenceDir, meta, home) {
   await setViewport(send, home.width, home.height, home.mobile);
   await click(send, '#tab-map');
@@ -1998,9 +1996,10 @@ async function driveTracked(send, evidenceDir, meta, home) {
     `(() => {
       const map = window.__opdMap;
       const iss = document.querySelector('.iss-marker');
-      const legend = document.getElementById('tracked-legend-text')?.textContent || '';
+      const legendNode = document.querySelector('.map-legend');
+      const legend = legendNode?.textContent || '';
       const track = !!(map && map.getLayer && map.getLayer('iss-track-layer'));
-      if (!map || !iss || !track || !legend.includes('Starship')) return null;
+      if (!map || !iss || !track || !legendNode || legend.includes('Starship')) return null;
       return { ok: true, legend };
     })()`,
     'tracked legend',
@@ -2008,9 +2007,6 @@ async function driveTracked(send, evidenceDir, meta, home) {
   );
   await ensureMapChromeShown(send);
   if (meta.trackedMode === 'elements') {
-    if (!meta.standIn || !ready.legend.includes(meta.standIn)) {
-      throw new Error(`stand-in legend ${ready.legend} expected ${meta.standIn}`);
-    }
     const placed = await waitFor(
       send,
       `(() => {
@@ -2030,6 +2026,9 @@ async function driveTracked(send, evidenceDir, meta, home) {
       'starship marker and track',
       20000,
     );
+    if (!meta.standIn || !String(placed.title).includes(meta.standIn)) {
+      throw new Error(`stand-in marker ${placed.title} expected ${meta.standIn}`);
+    }
     const follow = await evaluate(send, `document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')`);
     if (follow !== 'false') {
       await click(send, '#toggle-follow-iss');
@@ -2077,13 +2076,12 @@ async function driveTracked(send, evidenceDir, meta, home) {
     await setViewport(send, home.width, home.height, home.mobile);
     return `tracked: marker and ground track for ${meta.standIn} on desktop, iPad, and iPhone`;
   }
-  const sentence = UNAVAILABLE_LEGEND[meta.trackedMode] || UNAVAILABLE_LEGEND.unavailable;
   if (meta.trackedMode === 'missing') {
     const published = await evaluate(send, `fetch('/manifest.json').then((response) => response.json()).then((body) => Boolean(body.artifacts && body.artifacts.tracked))`);
     if (published) throw new Error('missing tracked mode still published a tracked artifact');
   }
-  if (!ready.legend.includes(sentence)) {
-    throw new Error(`${meta.trackedMode || 'unavailable'} legend ${ready.legend}`);
+  if (String(ready.legend).includes('Starship')) {
+    throw new Error(`${meta.trackedMode || 'unavailable'} legend still names Starship: ${ready.legend}`);
   }
   const marker = await evaluate(send, `document.querySelector('.tracked-marker') ? 'present' : 'absent'`);
   if (marker !== 'absent') throw new Error(`${meta.trackedMode || 'unavailable'} state still drew a marker`);
@@ -4503,6 +4501,9 @@ async function driveHelp(send, evidenceDir) {
     'Hold Shift',
     '#iss=',
     'The Launch menu sits beside Telemetry',
+    'All launches',
+    '14 days',
+    'Map and Upcoming list chances only',
     'None clears it.',
     'beside Telemetry',
     'about 18°',
