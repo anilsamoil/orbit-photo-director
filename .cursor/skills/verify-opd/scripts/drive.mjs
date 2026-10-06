@@ -4361,23 +4361,42 @@ async function drivePhone(send, evidenceDir, meta, home) {
   } catch {
   }
   const finger = touchPoint(point.x, point.y);
-  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [finger] });
-  await waitFor(
-    send,
-    `(() => {
-      const popup = document.querySelector('.maplibregl-popup');
-      const text = popup?.innerText || '';
-      if (text.includes('Closest')) return { ok: true };
-      const hit = document.elementFromPoint(${finger.x}, ${finger.y});
-      return {
-        popup: text.slice(0, 120),
-        hit: hit ? (hit.id || String(hit.className) || hit.tagName) : null,
-        popups: document.querySelectorAll('.maplibregl-popup').length,
-      };
-    })()`,
-    'long press popup',
-    5000,
-  );
+  await evaluate(send, `(() => {
+    const box = window.__opdMap.getCanvas().parentElement;
+    if (!box || box.dataset.opdLongPress) return true;
+    box.dataset.opdLongPress = '1';
+    box.addEventListener('touchstart', (event) => event.preventDefault(), { capture: true });
+    return true;
+  })()`);
+  const longPressSeen = `(() => {
+    const popup = document.querySelector('.maplibregl-popup');
+    const text = popup?.innerText || '';
+    if (text.includes('Closest')) return { ok: true };
+    const hit = document.elementFromPoint(${finger.x}, ${finger.y});
+    return {
+      popup: text.slice(0, 120),
+      hit: hit ? (hit.id || String(hit.className) || hit.tagName) : null,
+      popups: document.querySelectorAll('.maplibregl-popup').length,
+    };
+  })()`;
+  let held = false;
+  let lastPressError = null;
+  for (let attempt = 0; attempt < 2 && !held; attempt += 1) {
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [finger] });
+    try {
+      await waitFor(send, longPressSeen, 'long press popup', 5000);
+      held = true;
+    } catch (error) {
+      lastPressError = error;
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [finger] });
+      try {
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: finger.x, y: finger.y, button: 'left', buttons: 0, clickCount: 1 });
+      } catch {
+      }
+      await sleep(250);
+    }
+  }
+  if (!held) throw lastPressError;
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [finger] });
   await sleep(80);
   await mouseClick(send, finger.x, finger.y);
