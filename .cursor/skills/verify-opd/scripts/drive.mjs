@@ -1433,6 +1433,7 @@ function upcomingListExpression(mesa, ascent, { hidden }) {
     const text = document.getElementById('upcoming-cards')?.innerText || '';
     const ascentAt = text.indexOf(${JSON.stringify(ascent)});
     const mesaAt = text.indexOf(${JSON.stringify(mesa)});
+    if (text.includes('Verify Horizon')) return null;
     if (ascentAt < 0) return null;
     if (${hidden ? 'true' : 'false'}) {
       if (mesaAt >= 0) return null;
@@ -1470,7 +1471,7 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
     updatedAt: server.removedCuratedUpdatedAt,
     visible: false,
   });
-  return `upcoming: ${ascent} above ${mesa}, score sort, hide persisted ${mesaId}, fresh profile hid it`;
+  return `upcoming: ${ascent} above ${mesa}, Verify Horizon omitted, score sort, hide persisted ${mesaId}, fresh profile hid it`;
 }
 
 function rgbaChannels(color) {
@@ -1716,6 +1717,16 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await proveMapShowLaunches(send, evidenceDir);
   await click(send, '#filter-launches-map');
   await waitFor(send, `document.getElementById('filter-launches-map').getAttribute('aria-pressed') === 'true' ? { ok: true } : null`, 'launch mode');
+  await waitFor(
+    send,
+    `(() => {
+      const text = document.querySelector('.map-launch-brief')?.innerText || '';
+      if (!text.includes(${JSON.stringify(meta.names.launch)}) || text.includes('Verify Horizon')) return null;
+      return { ok: true };
+    })()`,
+    'map chance launch only',
+    10000,
+  );
   const briefName = await evaluate(send, `!!document.querySelector('.map-launch-brief .launch-name')`);
   if (briefName) await click(send, '.map-launch-brief .launch-name');
   else {
