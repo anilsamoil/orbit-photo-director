@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { mountIssScene, type IssScene } from '../src/iss-view';
+import { placeLaunchMarks, type LaunchSite } from '../src/iss-view/launches';
 import type { LaunchSelection } from '../src/launch-selectors';
 import { sensorField, type SceneSnapshot } from '../src/iss-view/model';
 import type { IssAim, IssRenderer, IssRendererFactory, IssRendererHooks } from '../src/iss-view/renderer';
@@ -341,13 +342,78 @@ describe('ISS frame fit', () => {
     fitted.scene.dispose();
     fitted.host.remove();
   });
+
+  it('keeps the card-closed earth when a below card would shrink a 390x664 iPhone 13 under a mark', async () => {
+    const fitted = await mountFitted(390, 503, { width: 352, height: 96 }, { toolbar: 252, select: false });
+    const closed = framePx(fitted.frame);
+    await chooseLaunch(fitted.host);
+    await paint(fitted.scene);
+    const open = framePx(fitted.frame);
+    expect(open).toEqual(closed);
+    expect(Math.min(open.width, open.height)).toBeGreaterThanOrEqual(80);
+    expectMarks(open.width, open.height);
+    fitted.scene.dispose();
+    fitted.host.remove();
+  });
+
+  it('keeps a markable earth with the launch card open at 390x844 and 844x390', async () => {
+    const portrait = await mountFitted(390, 683, { width: 352, height: 96 }, { toolbar: 252 });
+    const portraitPx = framePx(portrait.frame);
+    expect(portrait.root.dataset.issLaunchPlace).toBe('below');
+    expect(Math.min(portraitPx.width, portraitPx.height)).toBeGreaterThanOrEqual(160);
+    expectMarks(portraitPx.width, portraitPx.height);
+    portrait.scene.dispose();
+    portrait.host.remove();
+
+    const landscape = await mountFitted(844, 270, { width: 338, height: 96 }, { toolbar: 80 });
+    const landscapePx = framePx(landscape.frame);
+    expect(landscape.root.dataset.issLaunchPlace).toBe('side');
+    expect(Math.min(landscapePx.width, landscapePx.height)).toBeGreaterThanOrEqual(80);
+    expectMarks(landscapePx.width, landscapePx.height);
+    landscape.scene.dispose();
+    landscape.host.remove();
+  });
 });
+
+const verifyPad: LaunchSite = {
+  eventId: 'verify-ascent',
+  name: 'Verify Ascent',
+  siteName: 'Verify Pad',
+  lat: 28.5,
+  lon: -80.6,
+  corridor: null,
+};
+
+function framePx(frame: HTMLElement): { width: number; height: number } {
+  return {
+    width: Number.parseFloat(frame.style.width),
+    height: Number.parseFloat(frame.style.height),
+  };
+}
+
+function expectMarks(width: number, height: number): void {
+  const pin = placeLaunchMarks([verifyPad], () => ({ x: width / 2, y: height / 2 }), width, height);
+  const arrow = placeLaunchMarks([verifyPad], () => ({ x: -1000, y: height / 2 }), width, height);
+  expect(pin.pins.map((mark) => mark.eventId)).toEqual(['verify-ascent']);
+  expect(pin.arrows).toEqual([]);
+  expect(arrow.pins).toEqual([]);
+  expect(arrow.arrows.map((mark) => mark.eventId)).toEqual(['verify-ascent']);
+}
+
+async function chooseLaunch(host: HTMLElement): Promise<void> {
+  const picker = host.querySelector('[data-iss-launch-picker]');
+  if (!(picker instanceof HTMLSelectElement)) throw new Error('missing launch picker');
+  const option = [...picker.options].find((entry) => entry.value && entry.value !== 'none');
+  if (!option) throw new Error('missing launch option');
+  picker.value = option.value;
+  picker.dispatchEvent(new Event('change', { bubbles: true }));
+}
 
 async function mountFitted(
   width: number,
   height: number,
   card: { width: number; height: number },
-  chrome: { toolbar?: number; body?: number } = {},
+  chrome: { toolbar?: number; body?: number; select?: boolean } = {},
 ): Promise<{
   host: HTMLElement;
   root: HTMLElement;
@@ -400,10 +466,12 @@ async function mountFitted(
   Object.defineProperty(launchCard, 'offsetHeight', { configurable: true, get: () => card.height });
   scene.update(shot());
   await paint(scene);
-  const picker = host.querySelector('[data-iss-launch-picker]');
-  if (!(picker instanceof HTMLSelectElement)) throw new Error('missing launch picker');
-  picker.value = item.event_id;
-  picker.dispatchEvent(new Event('change', { bubbles: true }));
-  await paint(scene);
+  if (chrome.select !== false) {
+    const picker = host.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) throw new Error('missing launch picker');
+    picker.value = item.event_id;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await paint(scene);
+  }
   return { host, root, frame, body, button, scene };
 }
