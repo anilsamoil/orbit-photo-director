@@ -311,7 +311,8 @@ describe('ISS scene lifecycle', () => {
     expect(host2.querySelector('[data-iss-gmt-day]')?.textContent).toBe('');
     expect(host2.querySelector('[data-iss-day-month]')?.textContent).toBe('');
     expect(host2.querySelector('[data-iss-weekday]')?.textContent).toBe('');
-    expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe(`${sensorField().vertical.toFixed(1)}°`);
+    expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe('');
+    expect(host2.querySelector('[data-iss-fov]')?.getAttribute('data-iss-fov-state')).toBe('pending');
     const generation = again.generation();
     again.retry();
     await again.paint();
@@ -640,8 +641,7 @@ describe('ISS chrome starts out of the way', () => {
     scene.dispose();
   });
 
-  it('shows the optical field on the frame and updates it while wheeling or pinching', () => {
-    vi.useFakeTimers();
+  it('shows the optical field on the frame and updates it while wheeling or pinching', async () => {
     const host = document.createElement('div');
     const scene = mountIssScene(host, {
       nowMs: () => startMs,
@@ -654,10 +654,16 @@ describe('ISS chrome starts out of the way', () => {
         destroy: () => {},
       }),
     });
+    scene.update(shot('fov-label'));
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+    for (let i = 0; i < 20 && readout.dataset.issFovState !== 'live'; i += 1) {
+      await scene.paint();
+      await Promise.resolve();
+    }
+    vi.useFakeTimers();
     try {
       const lens = `${sensorField().vertical.toFixed(1)}°`;
-      const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
-      const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
       expect(readout.textContent).toBe(lens);
       expect(readout.dataset.issFovState).toBe('live');
       frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));

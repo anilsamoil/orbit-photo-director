@@ -142,6 +142,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let paintSerial = 0;
   const lensFovDeg = sensorField().vertical;
   let opticalFovDeg = session.opticalFovDeg;
+  let appliedFovDeg: number | null = null;
   let framePx = { widthPx: 640, heightPx: 400 };
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
@@ -531,10 +532,11 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     }
     const fit = layout();
     renderer.resize(fit.widthPx, fit.heightPx);
+    const verticalFovDeg = opticalFovDeg;
     try {
       await renderer.aim({
         pose: posed.pose,
-        verticalFovDeg: opticalFovDeg,
+        verticalFovDeg,
         widthPx: fit.widthPx,
         heightPx: fit.heightPx,
         lightingUtcMs: when,
@@ -545,6 +547,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       return;
     }
     if (token !== generation || epoch !== snapshotEpoch) return;
+    appliedFovDeg = verticalFovDeg;
+    paintFov(verticalFovDeg);
   }
 
   function syncLaunchChrome(): void {
@@ -945,6 +949,11 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function paintFov(degrees: number): void {
+    if (appliedFovDeg === null) {
+      fovReadout.textContent = '';
+      fovReadout.dataset.issFovState = 'pending';
+      return;
+    }
     fovReadout.textContent = formatOpticalFov(degrees);
     fovReadout.dataset.issFovState = 'live';
   }
