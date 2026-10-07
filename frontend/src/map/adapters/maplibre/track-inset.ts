@@ -35,6 +35,9 @@ const PLAN_OPEN_DELAY_MS = 280;
 /** A move past this, or a second touch, is a gesture. Releasing it does not open Map. */
 const PLAN_NAV_SLOP_PX = 1;
 
+/** A wheel can leave scroll-zoom active for as long as it keeps ticking. A deferred resize paints after this delay. A pointer that is still down waits until it ends. */
+export const PLAN_WHEEL_RESIZE_CAP_MS = 1000;
+
 const NIGHT_MINUTE_MS = 60_000;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
@@ -184,10 +187,28 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let navMulti = false;
   let navOrigin: { x: number; y: number } | null = null;
   let resizeWaiting = false;
-  const gestureLive = (): boolean => activePointers.size > 0 || Boolean(map.scrollZoom?.isZooming());
+  let wheelCapTimer = 0;
   const resizeNow = map.resize.bind(map);
+  const clearWheelCap = (): void => {
+    window.clearTimeout(wheelCapTimer);
+    wheelCapTimer = 0;
+  };
+  const armWheelCap = (): void => {
+    if (wheelCapTimer !== 0 || removed) return;
+    wheelCapTimer = window.setTimeout(() => {
+      wheelCapTimer = 0;
+      if (removed || !resizeWaiting || activePointers.size > 0) return;
+      resizeWaiting = false;
+      resizeNow();
+    }, PLAN_WHEEL_RESIZE_CAP_MS);
+  };
   const flushResize = (): void => {
-    if (!resizeWaiting || gestureLive()) return;
+    if (!resizeWaiting || activePointers.size > 0) return;
+    if (map.scrollZoom?.isZooming()) {
+      armWheelCap();
+      return;
+    }
+    clearWheelCap();
     map.resize();
   };
   const settleResize = (): void => {
@@ -199,10 +220,17 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   Object.defineProperty(map, 'resize', {
     configurable: true,
     value(eventData?: object, constrainTransform?: boolean) {
-      if (gestureLive()) {
+      if (activePointers.size > 0) {
         resizeWaiting = true;
+        clearWheelCap();
         return map;
       }
+      if (map.scrollZoom?.isZooming()) {
+        resizeWaiting = true;
+        armWheelCap();
+        return map;
+      }
+      clearWheelCap();
       resizeWaiting = false;
       return resizeNow(eventData, constrainTransform);
     },
@@ -225,6 +253,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       navMulti = true;
     }
     activePointers.add(event.pointerId);
+    clearWheelCap();
   };
   const onPointerMove = (event: PointerEvent): void => {
     if (!navOrigin || !activePointers.has(event.pointerId)) return;
@@ -355,6 +384,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       if (removed) return;
       removed = true;
       window.clearTimeout(openTimer);
+      clearWheelCap();
       frame.removeEventListener('click', stopClick);
       frame.removeEventListener('wheel', onWheel, true);
       frame.removeEventListener('pointerdown', onPointerDown, true);

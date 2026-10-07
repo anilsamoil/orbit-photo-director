@@ -39,6 +39,8 @@ const created = vi.hoisted(() => ({
   gesturing: false,
   rotationLocks: 0,
   domClicks: 0,
+  zooming: false,
+  staleDrag: false,
   sources: new Map<string, { features?: unknown[] }>(),
   handlers: {} as Record<string, ((event: { originalEvent?: Event; preventDefault?: () => void }) => void)[]>,
 }));
@@ -54,6 +56,16 @@ vi.mock('maplibre-gl', () => {
       created.options = options;
       const canvas = document.createElement('canvas');
       options?.container?.append(canvas);
+      const frame = options?.container;
+      frame?.addEventListener('pointerdown', (event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        created.staleDrag = true;
+      }, true);
+      const endOnFrame = (): void => {
+        created.staleDrag = false;
+      };
+      frame?.addEventListener('pointerup', endOnFrame, true);
+      frame?.addEventListener('pointercancel', endOnFrame, true);
       canvas.addEventListener('click', () => {
         created.domClicks += 1;
         for (const fn of created.handlers.click ?? []) fn({});
@@ -61,8 +73,8 @@ vi.mock('maplibre-gl', () => {
     }
     dragRotate = { disable: () => { created.rotationLocks += 1; } };
     touchZoomRotate = { disableRotation: () => { created.rotationLocks += 1; }, isActive: () => false };
-    scrollZoom = { isZooming: () => false };
-    dragPan = { isActive: () => false };
+    scrollZoom = { isZooming: () => created.zooming };
+    dragPan = { isActive: () => created.staleDrag };
     isStyleLoaded(): boolean { return true; }
     once(): void {}
     on(type: string, fn: (event: { originalEvent?: Event; preventDefault?: () => void }) => void): void {
@@ -97,7 +109,7 @@ vi.mock('maplibre-gl', () => {
   return { Map, Marker };
 });
 
-import { createTrackInset, letterboxCamera } from '../src/map/adapters/maplibre/track-inset';
+import { createTrackInset, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS } from '../src/map/adapters/maplibre/track-inset';
 
 describe('plan inset labels', () => {
   it('draws the Esri reference raster above the basemap and lets a tighter track zoom past 2', () => {
@@ -314,6 +326,110 @@ describe('plan inset labels', () => {
     vi.useRealTimers();
   });
 
+  it('paints a wheel-only resize within 1000ms across a size and pixel-ratio change, and holds a drag or a pinch', async () => {
+    expect(PLAN_WHEEL_RESIZE_CAP_MS).toBe(1000);
+    created.resizeCalls = 0;
+    created.zooming = false;
+    created.staleDrag = false;
+    created.handlers = {};
+    vi.useFakeTimers();
+    const frame = document.createElement('div');
+    let width = 478;
+    let height = 690;
+    Object.defineProperty(frame, 'clientWidth', { configurable: true, get: () => width });
+    Object.defineProperty(frame, 'clientHeight', { configurable: true, get: () => height });
+    document.body.append(frame);
+    const ratio = window.devicePixelRatio;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const canvas = frame.querySelector('canvas');
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error('plan canvas missing');
+    expect(canvas.style.width).toBe('478px');
+    expect(canvas.style.height).toBe('690px');
+    expect(canvas.width).toBe(478);
+    expect(canvas.height).toBe(690);
+    const paintBefore = created.resizeCalls;
+    created.zooming = true;
+    width = 449;
+    height = 620;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    const when = new Date('2024-06-21T18:00:00Z');
+    const wheelFor = async (ms: number): Promise<void> => {
+      let left = ms;
+      while (left > 0) {
+        canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -80, bubbles: true, cancelable: true, clientX: 30, clientY: 40 }));
+        const step = Math.min(50, left);
+        await vi.advanceTimersByTimeAsync(step);
+        left -= step;
+      }
+    };
+    inset.show(null, { lon: 1, lat: 1 }, when);
+    inset.show(null, { lon: 2, lat: 2 }, when);
+    inset.show(null, { lon: 3, lat: 3 }, when);
+    expect(created.resizeCalls).toBe(paintBefore);
+    await wheelFor(PLAN_WHEEL_RESIZE_CAP_MS - 1);
+    inset.show(null, { lon: 4, lat: 4 }, when);
+    expect(canvas.style.width).toBe('478px');
+    expect(canvas.style.height).toBe('690px');
+    expect(canvas.width).toBe(478);
+    expect(canvas.height).toBe(690);
+    expect(created.zooming).toBe(true);
+    await wheelFor(1);
+    expect(canvas.style.width).toBe('449px');
+    expect(canvas.style.height).toBe('620px');
+    expect(canvas.width).toBe(898);
+    expect(canvas.height).toBe(1240);
+    await wheelFor(4000);
+    expect(canvas.style.width).toBe('449px');
+    expect(canvas.style.height).toBe('620px');
+    expect(canvas.width).toBe(898);
+    expect(canvas.height).toBe(1240);
+    expect(created.zooming).toBe(true);
+    created.zooming = false;
+    inset.destroy();
+    const held = document.createElement('div');
+    let heldWidth = 478;
+    let heldHeight = 690;
+    Object.defineProperty(held, 'clientWidth', { configurable: true, get: () => heldWidth });
+    Object.defineProperty(held, 'clientHeight', { configurable: true, get: () => heldHeight });
+    document.body.append(held);
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
+    const heldInset = createTrackInset(held, document.createElement('div'));
+    const heldCanvas = held.querySelector('canvas');
+    if (!(heldCanvas instanceof HTMLCanvasElement)) throw new Error('plan canvas missing');
+    expect(heldCanvas.width).toBe(478);
+    expect(heldCanvas.height).toBe(690);
+    heldCanvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 30, clientY: 40, pointerId: 21, pointerType: 'touch' }));
+    heldWidth = 449;
+    heldHeight = 620;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    heldInset.show(null, { lon: 1, lat: 1 }, when);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(heldCanvas.style.width).toBe('478px');
+    expect(heldCanvas.style.height).toBe('690px');
+    expect(heldCanvas.width).toBe(478);
+    expect(heldCanvas.height).toBe(690);
+    heldCanvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 80, clientY: 40, pointerId: 22, pointerType: 'touch' }));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(heldCanvas.width).toBe(478);
+    expect(heldCanvas.height).toBe(690);
+    heldCanvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 80, clientY: 40, pointerId: 22, pointerType: 'touch' }));
+    expect(heldCanvas.width).toBe(478);
+    expect(heldCanvas.height).toBe(690);
+    heldCanvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 30, clientY: 40, pointerId: 21, pointerType: 'touch' }));
+    expect(heldCanvas.style.width).toBe('449px');
+    expect(heldCanvas.style.height).toBe('620px');
+    expect(heldCanvas.width).toBe(898);
+    expect(heldCanvas.height).toBe(1240);
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: ratio });
+    created.zooming = false;
+    created.staleDrag = false;
+    heldInset.destroy();
+    frame.remove();
+    held.remove();
+    vi.useRealTimers();
+  });
+
   it.each([
     ['pointerup', 449, 620, 898, 1240],
     ['pointercancel', 303, 914, 606, 1828],
@@ -322,6 +438,8 @@ describe('plan inset labels', () => {
   ])('resizes after a %s that ends outside the frame, then a plain click opens the map', async (ending, nextWidth, nextHeight, backingWidth, backingHeight) => {
     created.resizeCalls = 0;
     created.gesturing = false;
+    created.zooming = false;
+    created.staleDrag = false;
     created.handlers = {};
     vi.useFakeTimers();
     const button = document.createElement('button');
@@ -345,6 +463,10 @@ describe('plan inset labels', () => {
     document.body.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 420, clientY: 40, pointerId: 9 }));
     if (ending === 'blur') window.dispatchEvent(new Event('blur'));
     else document.body.dispatchEvent(new PointerEvent(ending, { bubbles: ending !== 'lostpointercapture', clientX: 420, clientY: 40, pointerId: 9 }));
+    if (ending === 'pointerup' || ending === 'pointercancel') {
+      const orbit = (frame as HTMLElement & { __opdTrackInset?: { dragPan: { isActive(): boolean } } }).__opdTrackInset;
+      expect(orbit?.dragPan.isActive()).toBe(true);
+    }
     width = nextWidth;
     height = nextHeight;
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
