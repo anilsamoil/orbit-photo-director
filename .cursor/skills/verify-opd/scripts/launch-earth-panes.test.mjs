@@ -18,6 +18,16 @@ test('an 874 by 402 start uses that same phone side pane', () => {
   );
 });
 
+test('a 565 earth scene allows the card below or over', () => {
+  for (const [width, height, label] of [[390, 664, '390x565'], [402, 874, '402x565']]) {
+    const scene = launchEarthPanes(width, height).find((pane) => pane.label === label);
+    assert.deepEqual(scene.places, ['below', 'over']);
+    assert.equal(scene.belowMinShort, 120);
+    assert.equal(scene.minShort, 200);
+    assert.equal(scene.sceneBox, true);
+  }
+});
+
 test('a wide pane at least 800 by 600 still requires a 200px earth', () => {
   const [pane] = launchEarthPanes(874, 700);
   assert.equal(pane.minShort, 200);

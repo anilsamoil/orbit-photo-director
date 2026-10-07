@@ -4721,14 +4721,14 @@ export function launchEarthPanes(width, height) {
       { ...native, place: 'over', minShort: 160 },
       { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
       { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
-      { width: 390, height: 565, mobile: true, label: '390x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
+      { width: 390, height: 565, mobile: true, label: '390x565', place: 'over', places: ['below', 'over'], minShort: 200, belowMinShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 402 && height === 874) {
     return [
       { ...native, place: 'below', minShort: 200 },
       { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
-      { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
+      { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', places: ['below', 'over'], minShort: 200, belowMinShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 874 && height === 402) {
@@ -4840,11 +4840,13 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
           if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scene: scene ? [scene.clientWidth, scene.clientHeight] : null };
           const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
           if (!earth || earth.ok !== true) return earth;
-          if (${JSON.stringify(pane.place)} && earth.place !== ${JSON.stringify(pane.place)}) {
+          const allowed = ${JSON.stringify(pane.places || (pane.place ? [pane.place] : []))};
+          if (allowed.length && !allowed.includes(earth.place)) {
             return { step: 'place', place: earth.place, width: earth.width, height: earth.height };
           }
-          if (Math.min(earth.width, earth.height) < ${pane.minShort}) {
-            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: ${pane.minShort} };
+          const shortFloor = earth.place === 'below' ? ${pane.belowMinShort ?? pane.minShort} : ${pane.minShort};
+          if (Math.min(earth.width, earth.height) < shortFloor) {
+            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: shortFloor };
           }
           if (${pane.twoLine ? 'true' : 'false'}) {
             const name = document.querySelector('[data-iss-launch-name]');
