@@ -1,4 +1,3 @@
-/** One sessionStorage flag. A stale map chunk may reload the document once. */
 export const MAP_IMPORT_RETRY_KEY = 'opd-map-import-retry';
 
 export interface MapImportFlagStore {
@@ -73,7 +72,9 @@ export async function nextMapImportStep(
 ): Promise<MapImportAction> {
   const kind = await classifyMapImportFailure(error, probe);
   const action = planMapImportRecovery(kind, store.getItem(MAP_IMPORT_RETRY_KEY) === '1', href);
-  if (action.action === 'reload-once') store.setItem(MAP_IMPORT_RETRY_KEY, '1');
+  if (action.action !== 'reload-once') return action;
+  store.setItem(MAP_IMPORT_RETRY_KEY, '1');
+  if (store.getItem(MAP_IMPORT_RETRY_KEY) !== '1') return { action: 'show-error' };
   return action;
 }
 

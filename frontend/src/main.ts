@@ -66,7 +66,7 @@ import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './ma
 import {
   nextMapImportStep,
   noteMapImportSuccess,
-  type MapImportFlagStore,
+  type MapImportAction,
 } from './map-import';
 
 const REFRESH_MS = 60_000;
@@ -102,7 +102,6 @@ let refreshInFlight: Promise<void> | null = null;
 let lastSavedManifestVersion: string | null = null;
 /** Footer is showing sign-in recovery. Status ticks must not clear it. */
 let sessionBannerHeld = false;
-/** Footer is showing the map load failure. Status ticks must not clear it. */
 let mapLoadErrorHeld = false;
 /** Last access probe threw, so a held sign-in banner is still the honest one. */
 let accessProbeUnknown = false;
@@ -1625,18 +1624,13 @@ function showLaunchOnMap(eventId: string): void {
   document.getElementById('tab-map')?.click();
 }
 
-function mapImportFlags(): MapImportFlagStore {
-  return {
-    getItem(key) {
-      try { return sessionStorage.getItem(key); } catch { return null; }
-    },
-    setItem(key, value) {
-      try { sessionStorage.setItem(key, value); } catch { /* private mode */ }
-    },
-    removeItem(key) {
-      try { sessionStorage.removeItem(key); } catch { /* private mode */ }
-    },
-  };
+async function mapImportAction(error: unknown): Promise<MapImportAction> {
+  try {
+    return await nextMapImportStep(error, sessionStorage, window.location.href, probeMapChunk);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+    return { action: 'show-error' };
+  }
 }
 
 async function probeMapChunk(url: string): Promise<number | null> {
@@ -1693,7 +1687,7 @@ function dismissMapLoadError(): void {
 }
 
 async function presentMapImportFailure(error: unknown): Promise<void> {
-  const action = await nextMapImportStep(error, mapImportFlags(), window.location.href, probeMapChunk);
+  const action = await mapImportAction(error);
   if (action.action === 'reload-once') {
     window.location.replace(action.href);
     return;
@@ -1706,7 +1700,11 @@ async function ensureMapModule(): Promise<typeof import('./map') | null> {
   if (mapModule) return mapModule;
   try {
     mapModule = await import('./map');
-    noteMapImportSuccess(mapImportFlags());
+    try {
+      noteMapImportSuccess(sessionStorage);
+    } catch (storageError) {
+      console.error('[map] map pane failed to load:', storageError);
+    }
     return mapModule;
   } catch (error) {
     mapModule = null;

@@ -164,6 +164,16 @@ describe('map import recovery', () => {
     expect(again.action).toBe('reload-once');
   });
 
+  it('shows the error when the retry flag does not stick', async () => {
+    const store: MapImportFlagStore = {
+      getItem: () => null,
+      setItem() {},
+      removeItem() {},
+    };
+    const action = await nextMapImportStep(staleError, store, 'http://localhost/?u=anil', async () => 404);
+    expect(action).toEqual({ action: 'show-error' });
+  });
+
   it('shows the error for an aborted load and for a chunk request that does not complete', async () => {
     const store = memoryStore();
     const aborted = new Error('The operation was aborted.');
