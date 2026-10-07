@@ -3717,8 +3717,12 @@ async function provePlanWheelSurvivesRebuild(send) {
 
 async function provePlanRasterNames(send) {
   const laid = await evaluate(send, `(async () => {
-    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
-    if (!orbit?.jumpTo || !orbit.queryRenderedFeatures || !orbit.getStyle) return { ok: false, reason: 'map' };
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame?.querySelector('canvas');
+    const orbit = frame?.__opdTrackInset;
+    if (!canvas || !orbit?.jumpTo || !orbit.queryRenderedFeatures || !orbit.getStyle) return { ok: false, reason: 'map' };
+    canvas.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -1 }));
+    if (orbit.stop) orbit.stop();
     const raster = orbit.getLayer('inset-labels');
     const opacity = orbit.getPaintProperty('inset-labels', 'raster-opacity');
     if (!raster || !(opacity > 0)) return { ok: false, reason: 'raster', opacity: opacity == null ? null : opacity };
@@ -3726,6 +3730,7 @@ async function provePlanRasterNames(send) {
     const symbolIds = symbolLayers.map((layer) => layer.id);
     const samples = [];
     for (const zoom of [3.1, 8]) {
+      if (orbit.stop) orbit.stop();
       orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
       await new Promise((resolve) => {
         const timer = setTimeout(resolve, 1200);
@@ -4031,8 +4036,15 @@ async function dispatchPlanTouches(send, name, active, changed) {
 }
 
 async function provePlanRotatingPinch(send) {
+  const armed = await evaluate(send, `(() => {
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    if (!orbit?.jumpTo || !orbit.getZoom) return null;
+    orbit.jumpTo({ zoom: 1, bearing: 0, pitch: 0 });
+    return { zoom: orbit.getZoom(), bearing: orbit.getBearing() };
+  })()`);
   const start = await planCamera(send);
-  if (!start) throw new Error('plan camera missing before a rotating pinch');
+  if (!armed || !start) throw new Error('plan camera missing before a rotating pinch');
+  start.zoom = armed.zoom;
   const cx = start.x;
   const cy = start.y;
   const finger = (t) => ([
@@ -4140,6 +4152,7 @@ async function returnToPlan(send) {
     'iss after an outside plan gesture',
     45000,
   );
+  await waitForPip(send, 'plan', 'plan framed after an outside gesture', 20000);
 }
 
 async function provePlanOutsideEnding(send, viewport, kind, from, to) {
@@ -4227,11 +4240,18 @@ async function provePlanOutsideRelease(send, viewport) {
 async function provePlanMapLive(send, viewport) {
   try {
     const zoom = await provePlanWheelSurvivesRebuild(send);
+    await provePlanSmallMotion(send);
+    await evaluate(send, `(() => {
+      const canvas = document.querySelector('[data-pip="plan"] canvas');
+      if (!canvas) return false;
+      canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      return true;
+    })()`);
+    await waitForPip(send, 'plan', 'plan framed before an outside release', 20000);
+    const outside = await provePlanOutsideRelease(send, viewport);
     await provePlanRasterNames(send);
     await provePlanGestureHolds(send, viewport);
-    await provePlanSmallMotion(send);
     await provePlanRotatingPinch(send);
-    const outside = await provePlanOutsideRelease(send, viewport);
     return `wheel ${zoom.toFixed(2)}; ${outside}`;
   } finally {
     await evaluate(send, `(() => { delete window.devicePixelRatio; document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
