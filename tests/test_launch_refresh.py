@@ -310,12 +310,16 @@ def test_policy_upgrade_republishes_same_receipt_once_without_releasing_owner(se
         {key: value for key, value in state["input"].items() if key != "input_id"}
     )).hexdigest()
     state_path.write_bytes(canonical_bytes(state))
+    catalog_state_path = output / ".refresh-catalog-state.json"
+    catalog_state = json.loads(catalog_state_path.read_bytes())
+    catalog_state["input_id"] = state["input"]["input_id"]
+    catalog_state_path.write_bytes(canonical_bytes(catalog_state))
     upgraded = run(now + timedelta(seconds=1))
     assert upgraded["published"] and upgraded["revision"] != first["revision"]
     state = json.loads(state_path.read_bytes())
     assert state["remote"] == old_owner
     assert state["input"]["fetched_at"] == old_receipt
-    assert state["input"]["policy"] == 4
+    assert state["input"]["policy"] == 5
     assert len(calls) == 8
     assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
     assert len(calls) == 8
@@ -378,16 +382,18 @@ def test_receipt_just_inside_75_minutes_publishes_a_real_lease(setup):
 
 
 def test_truncated_receipt_lease_does_not_stick_refresh(setup):
-    now, cache, output, payload, _, calls, _, run, _ = setup
+    now, cache, output, payload, remote, calls, _, run, _ = setup
     fetched = now - timedelta(hours=3) + timedelta(milliseconds=200)
     _receipt(cache, payload, fetched.isoformat(timespec="milliseconds").replace("+00:00", "Z"))
-    with pytest.raises(ValueError, match="INVALID_LAUNCH_VALIDITY"):
-        run()
-    assert calls == []
+    result = run()
+    assert result["published"]
+    assert result["catalog_skipped"] == "INVALID_LAUNCH_VALIDITY"
+    assert len(calls) == 2
+    assert "launch/latest.json" in remote
+    assert not any(key.startswith("launch/catalog/") for key in calls)
     assert not (output / ".refresh-intent.json").exists()
-    with pytest.raises(ValueError, match="INVALID_LAUNCH_VALIDITY"):
-        run()
-    assert calls == []
+    assert run()["reason"] == "UNCHANGED_INPUT"
+    assert len(calls) == 2
     assert not (output / ".refresh-intent.json").exists()
 
 
@@ -415,3 +421,127 @@ def test_invalid_catalog_after_v2_commit_recovers(setup):
     assert not (output / ".refresh-intent.json").exists()
     assert not any(key.startswith("launch/catalog/") for key in calls[sent:])
     assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
+
+
+def test_lagging_local_pointer_adopts_the_remote_v2_commit(setup):
+    now, _, output, _, remote, calls, _, run, _ = setup
+    before = (output / "launch/latest.json").read_bytes()
+    run()
+    accepted = remote["launch/latest.json"]
+    assert (output / "launch/latest.json").read_bytes() == accepted
+    (output / "launch/latest.json").write_bytes(before)
+    sent = len(calls)
+    adopted = run(now + timedelta(seconds=1))
+    assert adopted["reason"] == "UNCHANGED_INPUT"
+    assert (output / "launch/latest.json").read_bytes() == accepted
+    assert len(calls) == sent
+    assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
+    assert len(calls) == sent
+
+
+def test_catalog_outage_then_fresh_input_updates_v2_immediately(setup):
+    now, _, _, _, remote, calls, write_cache, run, upload = setup
+
+    def catalog_down(path, key, immutable):
+        if key.startswith("launch/catalog/"):
+            raise RuntimeError("catalog offline")
+        upload(path, key, immutable)
+
+    first = run(upload=catalog_down)
+    assert first["published"]
+    assert first["catalog_skipped"] == "catalog offline"
+    assert "launch/latest.json" in remote
+    assert not any(key.startswith("launch/catalog/") for key in remote)
+    write_cache(now + timedelta(hours=1))
+    second = run(now + timedelta(hours=1))
+    assert second["published"]
+    assert second["revision"] != first["revision"]
+    assert json.loads(remote["launch/latest.json"])["revision"] == second["revision"]
+    assert any(key.startswith("launch/catalog/") for key in calls)
+
+
+def test_publish_path_prevalidates_both_artifacts(tmp_path, monkeypatch, capsys):
+    from generator.launch_publish import _validate_artifact, _validate_catalog
+    from scripts.launch_refresh import main
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    cache, output = tmp_path / "cache", tmp_path / "publication"
+    cache.mkdir()
+    row = {
+        "id": "same-event",
+        "name": "Test launch",
+        "net": utc(now + timedelta(hours=8)),
+        "window_start": utc(now + timedelta(hours=8)),
+        "window_end": utc(now + timedelta(hours=8)),
+        "net_precision": {"name": "Second"},
+        "status": {"abbrev": "Go"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {"latitude": 28.6, "longitude": -80.6, "location": {"name": "Test pad"}},
+    }
+    payload = {"results": [row], "count": 1, "next": None}
+    _receipt(cache, payload, utc(now))
+    uploads = []
+    seen = []
+
+    def validate_artifact(artifact):
+        seen.append(("v2", len(uploads)))
+        _validate_artifact(artifact)
+
+    def validate_catalog(artifact):
+        seen.append(("catalog", len(uploads)))
+        _validate_catalog(artifact)
+
+    def upload(path, key, immutable):
+        uploads.append(key)
+
+    monkeypatch.setattr("scripts.launch_refresh._validate_artifact", validate_artifact)
+    monkeypatch.setattr("scripts.launch_refresh._validate_catalog", validate_catalog)
+    monkeypatch.setattr("scripts.launch_refresh.rclone_uploader", lambda _remote: upload)
+    code = main(
+        ["--cache-dir", str(cache), "--output", str(output), "--publish", "--remote", "test:bucket"]
+    )
+    assert code == 0
+    assert seen[:2] == [("catalog", 0), ("v2", 0)]
+    assert any(key.startswith("launch/v/") for key in uploads)
+    assert any(key.startswith("launch/catalog/") for key in uploads)
+    logged = json.loads(capsys.readouterr().out)
+    assert logged["ok"] is True
+    assert "catalog_skipped" not in logged
+
+
+def test_publish_path_skips_an_invalid_catalog_and_ships_v2(tmp_path, monkeypatch, capsys):
+    from scripts.launch_refresh import main
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    cache, output = tmp_path / "cache", tmp_path / "publication"
+    cache.mkdir()
+    row = {
+        "id": "same-event",
+        "name": "Test launch",
+        "net": utc(now + timedelta(hours=8)),
+        "window_start": utc(now + timedelta(hours=8)),
+        "window_end": utc(now + timedelta(hours=8)),
+        "net_precision": {"name": "Second"},
+        "status": {"abbrev": "Go"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {"latitude": 28.6, "longitude": -80.6, "location": {"name": "Test pad"}},
+    }
+    _receipt(cache, {"results": [row], "count": 1, "next": None}, utc(now))
+    uploads = []
+
+    def reject(_artifact):
+        raise ValueError("INVALID_LAUNCH_VALIDITY")
+
+    monkeypatch.setattr("scripts.launch_refresh._validate_catalog", reject)
+    monkeypatch.setattr(
+        "scripts.launch_refresh.rclone_uploader",
+        lambda _remote: lambda path, key, immutable: uploads.append(key),
+    )
+    code = main(
+        ["--cache-dir", str(cache), "--output", str(output), "--publish", "--remote", "test:bucket"]
+    )
+    assert code == 0
+    assert any(key.startswith("launch/v/") for key in uploads)
+    assert not any(key.startswith("launch/catalog/") for key in uploads)
+    logged = json.loads(capsys.readouterr().out)
+    assert logged["catalog_skipped"] == "INVALID_LAUNCH_VALIDITY"

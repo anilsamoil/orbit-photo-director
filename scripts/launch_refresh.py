@@ -18,6 +18,7 @@ from generator.launch_catalog import build_launch_catalog
 from generator.launch_data import _parse_iso8601_z, validate_feed
 from generator.launch_evidence import build_launch_artifact, canonical_bytes, load_launch_cache
 from generator.launch_publish import (
+    _same_pointer,
     _validate_artifact,
     _validate_catalog,
     publish_launch_artifact,
@@ -82,13 +83,30 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     identity = {
         # A model-policy change requires one fresh publication even when the
         # source receipt is unchanged. Retain ownership and prior receipts.
-        "policy": 4,
+        "policy": 5,
         "schedule_sha256": receipt["sha256"],
         "fetched_at": receipt["fetched_at"],
         "tle_sha256": hashlib.sha256(tle_raw).hexdigest(),
     }
     identity["input_id"] = hashlib.sha256(canonical_bytes(identity)).hexdigest()
     return identity, payload, tle
+
+
+def _prepare_catalog(
+    payload: dict,
+    tle: TLE | None,
+    now: datetime,
+    fetched_at: datetime,
+    source_reasons: tuple[str, ...] = (),
+) -> tuple[dict | None, str | None]:
+    try:
+        catalog = build_launch_catalog(
+            payload, tle, now, fetched_at=fetched_at, source_reasons=source_reasons,
+        )
+        _validate_catalog(catalog)
+    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    return catalog, None
 
 
 def refresh_cached(
@@ -100,7 +118,7 @@ def refresh_cached(
     upload: Callable,
     read_remote: Callable,
 ) -> dict:
-    """One persistent owner; durable intent before upload, receipt after readback."""
+    """v2 commits on its own. A catalog failure is logged and never blocks v2."""
     if "out" in output.resolve().parts:
         raise ValueError("launch output must be separate from Earth out/")
     output.mkdir(parents=True, exist_ok=True)
@@ -111,37 +129,21 @@ def refresh_cached(
             raise RuntimeError("LAUNCH_REFRESH_BUSY") from exc
         state_path = output / ".refresh-state.json"
         intent_path = output / ".refresh-intent.json"
+        catalog_state_path = output / ".refresh-catalog-state.json"
         state = json.loads(state_path.read_bytes()) if state_path.exists() else {}
         intent = json.loads(intent_path.read_bytes()) if intent_path.exists() else None
-        if any(value and value["remote"] != remote for value in (state, intent)):
+        catalog_state = (
+            json.loads(catalog_state_path.read_bytes()) if catalog_state_path.exists() else {}
+        )
+        if any(value and value["remote"] != remote for value in (state, intent, catalog_state)):
             raise ValueError("REMOTE_OWNER_MISMATCH")
 
-        def committed_v2(artifact: dict) -> bool:
-            pointer_path = output / "launch/latest.json"
-            if not pointer_path.exists():
-                return False
-            try:
-                local = json.loads(pointer_path.read_bytes())
-                observed = read_remote()
-            except (OSError, ValueError, TypeError, KeyError):
-                return False
-            return (
-                observed == local
-                and local.get("schema_version") == 2
-                and local.get("revision") == artifact.get("revision")
-                and local.get("generated_at") == artifact.get("generated_at")
-                and local.get("valid_until") == artifact.get("valid_until")
-            )
-
-        def finish(value: dict) -> dict:
+        def finish_v2(value: dict) -> dict:
             artifact = value["artifact"]
             if artifact.get("schema_version") != 2:
                 raise ValueError("LIVE_PUBLICATION_REQUIRES_SCHEMA_2")
-            catalog = value.get("catalog")
             _validate_artifact(artifact)
-            if catalog is not None:
-                _validate_catalog(catalog)
-            age = (now - _parse_iso8601_z(_schedule_fetched(artifact))).total_seconds()
+            age = (now - _parse_iso8601_z(value["input"]["fetched_at"])).total_seconds()
             pointer = publish_launch_artifact(
                 artifact,
                 output,
@@ -149,12 +151,40 @@ def refresh_cached(
                 read_remote=read_remote,
                 permit_upload=0 <= age < MAX_SCHEDULE_AGE_SECONDS,
             )
-            if "catalog" in value:
-                publish_launch_catalog(value["catalog"], output, upload=upload)
             committed = {"remote": remote, "input": value["input"], "pointer": pointer}
             _atomic_json(state_path, committed)
             intent_path.unlink(missing_ok=True)
             return committed
+
+        def ship_catalog(
+            identity: dict,
+            payload: dict,
+            tle: TLE | None,
+            fetched_at: datetime,
+            prepared: dict | None = None,
+            prepared_error: str | None = None,
+        ) -> str | None:
+            if catalog_state.get("input_id") == identity["input_id"]:
+                return None
+            if prepared_error:
+                return prepared_error
+            try:
+                catalog = prepared
+                if catalog is None:
+                    catalog = build_launch_catalog(payload, tle, now, fetched_at=fetched_at)
+                    _validate_catalog(catalog)
+                publish_launch_catalog(catalog, output, upload=upload)
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                return str(exc)
+            _atomic_json(
+                catalog_state_path,
+                {
+                    "remote": remote,
+                    "input_id": identity["input_id"],
+                    "revision": catalog["revision"],
+                },
+            )
+            return None
 
         if (
             intent
@@ -165,52 +195,52 @@ def refresh_cached(
         ):
             local = json.loads((output / "launch/latest.json").read_bytes())
             observed = read_remote()
-            # If the old pointer is still committed, an expired, unaccepted intent
-            # is safe to retire. Otherwise only finish() can adopt its exact commit.
-            if observed == local and observed["revision"] != intent["artifact"]["revision"]:
+            accepted = observed["revision"] != intent["artifact"]["revision"]
+            if _same_pointer(observed, local) and accepted:
                 intent_path.unlink()
                 intent = None
         if intent and intent.get("artifact", {}).get("schema_version") != 2:
             intent_path.unlink()
             intent = None
         if intent and "catalog" in intent:
-            try:
-                _validate_catalog(intent["catalog"])
-            except ValueError:
-                if committed_v2(intent["artifact"]):
-                    intent = {key: value for key, value in intent.items() if key != "catalog"}
-                    _atomic_json(intent_path, intent)
-                else:
-                    intent_path.unlink(missing_ok=True)
-                    intent = None
+            intent = {key: value for key, value in intent.items() if key != "catalog"}
+            _atomic_json(intent_path, intent)
         if intent:
-            state = finish(intent)
+            state = finish_v2(intent)
         identity, payload, tle = _cached_inputs(cache, now)
+        fetched_at = _parse_iso8601_z(identity["fetched_at"])
         if state:
-            if _parse_iso8601_z(identity["fetched_at"]) < _parse_iso8601_z(
-                state["input"]["fetched_at"]
-            ):
+            if fetched_at < _parse_iso8601_z(state["input"]["fetched_at"]):
                 raise ValueError("OBSOLETE_SOURCE_RECEIPT")
             if identity["input_id"] == state["input"]["input_id"]:
-                local = json.loads((output / "launch/latest.json").read_bytes())
-                if read_remote() != state["pointer"] or local != state["pointer"]:
+                pointer_path = output / "launch/latest.json"
+                local = json.loads(pointer_path.read_bytes())
+                observed = read_remote()
+                if observed != state["pointer"] and not _same_pointer(observed, state["pointer"]):
                     raise ValueError("REMOTE_LAUNCH_CONFLICT")
-                return {
+                if local != observed:
+                    _atomic_json(pointer_path, observed)
+                skipped = ship_catalog(identity, payload, tle, fetched_at)
+                result = {
                     "ok": True,
                     "published": False,
                     "notified": False,
                     "reason": "UNCHANGED_INPUT",
-                    "revision": local["revision"],
+                    "revision": observed["revision"],
                 }
-        fetched_at = _parse_iso8601_z(identity["fetched_at"])
+                if skipped:
+                    result["catalog_skipped"] = skipped
+                return result
         artifact = build_launch_artifact(payload, tle, now, fetched_at=fetched_at)
-        catalog = build_launch_catalog(payload, tle, now, fetched_at=fetched_at)
+        prepared_catalog, prepared_error = _prepare_catalog(payload, tle, now, fetched_at)
         _validate_artifact(artifact)
-        _validate_catalog(catalog)
-        intent = {"remote": remote, "input": identity, "artifact": artifact, "catalog": catalog}
+        intent = {"remote": remote, "input": identity, "artifact": artifact}
         _atomic_json(intent_path, intent)
-        state = finish(intent)
-        return {
+        state = finish_v2(intent)
+        skipped = ship_catalog(
+            identity, payload, tle, fetched_at, prepared_catalog, prepared_error,
+        )
+        result = {
             "ok": True,
             "published": True,
             "notified": False,
@@ -219,8 +249,13 @@ def refresh_cached(
             "items": len(artifact["items"]),
             "fetched_at": _schedule_fetched(artifact),
             "coverage_complete": artifact["coverage"]["complete"],
-            "catalog_revision": catalog["revision"],
         }
+        if skipped:
+            result["catalog_skipped"] = skipped
+        elif catalog_state.get("input_id") != identity["input_id"]:
+            published_catalog = json.loads(catalog_state_path.read_bytes())
+            result["catalog_revision"] = published_catalog["revision"]
+        return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -268,27 +303,31 @@ def main(argv: list[str] | None = None) -> int:
         artifact = build_launch_artifact(
             payload, tle, now, fetched_at=fetched, source_reasons=source_reasons,
         )
-        catalog = build_launch_catalog(
-            payload, tle, now, fetched_at=fetched, source_reasons=source_reasons,
+        catalog, catalog_error = _prepare_catalog(
+            payload, tle, now, fetched, source_reasons,
         )
+        _validate_artifact(artifact)
         upload = rclone_uploader(args.remote) if args.publish else None
         pointer = publish_launch_artifact(artifact, args.output, upload=upload)
-        publish_launch_catalog(catalog, args.output, upload=upload)
+        if catalog is not None:
+            try:
+                publish_launch_catalog(catalog, args.output, upload=upload)
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                catalog_error = str(exc)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
         report({"ok": False, "reason": str(exc), "notified": False})
         return 2
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "published": args.publish,
-                "notified": False,
-                "revision": pointer["revision"],
-                "items": len(artifact["items"]),
-                "coverage_complete": artifact["coverage"]["complete"],
-            }
-        )
-    )
+    printed = {
+        "ok": True,
+        "published": args.publish,
+        "notified": False,
+        "revision": pointer["revision"],
+        "items": len(artifact["items"]),
+        "coverage_complete": artifact["coverage"]["complete"],
+    }
+    if catalog_error:
+        printed["catalog_skipped"] = catalog_error
+    print(json.dumps(printed))
     return 0
 
 

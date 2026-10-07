@@ -399,6 +399,19 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
             raise ValueError("INVALID_LAUNCH_ASSESSMENT")
 
 
+def _same_pointer(observed: dict, expected: dict) -> bool:
+    """True when two pointers name the same artifact bytes."""
+    digest = observed.get("sha256")
+    return (
+        observed.get("schema_version") == 2
+        and observed.get("revision") == expected.get("revision")
+        and observed.get("path") == expected.get("path")
+        and digest == expected.get("sha256")
+        and isinstance(digest, str)
+        and len(digest) == 64
+    )
+
+
 def publish_launch_artifact(
     artifact: dict,
     output: Path,
@@ -464,6 +477,10 @@ def publish_launch_artifact(
         # Hold ownership through upload; failure cannot advance the local receipt.
         if upload:
             remote = read_remote() if read_remote else None
+            if isinstance(remote, dict) and _same_pointer(remote, pointer):
+                pending.write_bytes(canonical_bytes(remote))
+                os.replace(pending, pointer_path)
+                return remote
             if read_remote and (previous is None or remote not in (previous, pointer)):
                 raise ValueError("REMOTE_LAUNCH_CONFLICT")
             # A confirmed pointer+hash readback resolves an interrupted acknowledgment.
