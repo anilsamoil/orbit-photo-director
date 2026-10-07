@@ -295,10 +295,13 @@ const HELP_SECTIONS: HelpSection[] = [
         text:
           'The legend reads launch, day, twilight, and eclipse. The ISS ' +
           'marker, Anil\'s targets, Starship, and your white rings are not ' +
-          'rows. It starts closed. Tap Legend beside Hide in the bottom-right ' +
-          'corner to open the rows and the imagery date. On a narrow screen ' +
-          'the time rows sit above Legend and Hide. When that band cannot hold a row, ' +
-          'the time row sits under Show and the legend list scrolls beside it. Tap Legend again, or press Escape, to ' +
+          'rows. It starts closed. On a wide screen, Legend sits immediately ' +
+          'left of Hide in the bottom-right corner. Tap it to open the rows ' +
+          'and the imagery date. On a narrow screen, Legend stays immediately ' +
+          'left of Hide, and the open list sits above the time row when that ' +
+          'band can hold it. When the band cannot, the list scrolls in the ' +
+          'free space above the footer, clear of the zoom column and the time ' +
+          'row. Tap Legend again, or press Escape, to ' +
           'close it. That choice is not remembered. A live IR warning adds a mark ' +
           'on Legend while the list is closed.',
       },
