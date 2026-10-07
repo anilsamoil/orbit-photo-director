@@ -5796,19 +5796,24 @@ async function pressShifted(send, key) {
 }
 
 async function proveIssKeyboard(send, evidenceDir) {
-  const before = await evaluate(send, `(() => {
-    const map = window.__opdIss;
-    if (!map?.getCenter || !map.getVerticalFieldOfView) return null;
-    const center = map.getCenter();
-    const fov = map.getVerticalFieldOfView();
-    if (typeof fov !== 'number') return null;
-    return { lat: center.lat, lng: center.lng, fov };
-  })()`);
-  if (!before) throw new Error('iss keyboard baseline missing');
-  const labelBefore = await readFovLabel(send);
-  if (!labelBefore || Math.abs(labelBefore.shown - before.fov) > 0.2) {
-    throw new Error(`iss fov label missing before key ${JSON.stringify({ before, labelBefore })}`);
-  }
+  const before = await waitFor(
+    send,
+    `(() => {
+      const map = window.__opdIss;
+      const label = document.querySelector('[data-iss-fov]');
+      if (!map?.getCenter || !map.getVerticalFieldOfView || !label) return null;
+      if (label.getAttribute('data-iss-fov-state') !== 'live') return null;
+      const center = map.getCenter();
+      const fov = map.getVerticalFieldOfView();
+      const shown = Number.parseFloat((label.textContent || '').trim());
+      if (!Number.isFinite(fov) || !Number.isFinite(shown)) return null;
+      if (Math.abs(shown - fov) > 0.2) return null;
+      return { ok: true, lat: center.lat, lng: center.lng, fov, shown };
+    })()`,
+    'iss fov label before key',
+    15000,
+  );
+  const labelBefore = { shown: before.shown };
   await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
   await pressKey(send, '=');
   const narrowed = await waitFor(
