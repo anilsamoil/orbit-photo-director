@@ -10,7 +10,7 @@ The height floor is 600 because the check reads the usable viewport. iPad Pro 11
 
 ## Where they sit
 
-Both insets are at least a 44px hit target, and `position: absolute` so they do not reflow the phone layout. On a phone the buttons stay `hidden` and the ISS scene keeps today's padding. The plan inset stays 148×96. The horizon inset is 222×144 on a viewport the gate accepts.
+Both insets are at least a 44px hit target, and `position: absolute` so they do not reflow the phone layout. On a phone the buttons stay `hidden`, `data-iss-split` stays off, and the ISS scene keeps today's padding. The horizon inset is 222×144 on a viewport the gate accepts. The plan map fills the left column of the ISS pane. That column is `minmax(300px, 36%)`, so the cupola column stays wider. The plan map's area is at least three times 148×96, and `letterboxCamera` keeps the fitted zoom so a tall column does not clip the track. The plan map sits above Telemetry and the Launch menu.
 
 ### Map view, the horizon inset
 
@@ -24,11 +24,9 @@ The inset hides while the pin inspector is open, while the satellite picker is o
 
 ### ISS view, the plan inset
 
-The resting place is the bottom left of the ISS pane, 12px from the left and 12px from the bottom. iPad portrait has a tall empty band under the Telemetry row. iPad landscape and desktop do not, so when the gate matches, the scene gains `padding-bottom: 7.75rem` and the earth frame shrinks into the space above that band. The inset sits in the band.
+The plan map is the left column of `#iss-pane`. The cupola scene is the right column, and that column is the wider one. Telemetry and the Launch menu sit in `[data-iss-split-dock]`, under the map. The clock and `Expedition 75 Beta Edition` sit in `[data-iss-split-chrome]`, over the map. Port, Starboard, the field readout, and the hint stay on the cupola. The launch card stays with the earth. The help button is the bottom right of the viewport.
 
-That band is below the Telemetry button, the Launch menu, and the launch card. The card sits beside the earth on these widths. Port and Starboard stay beside the frame. The clock, the edition line, the field readout, and the hint stay on the toolbar or on the frame. The help button is the bottom right of the viewport. The inset is the bottom left of the pane.
-
-Fullscreen removes the extra padding and hides the inset. The earth frame grows back to the fullscreen fit. Leaving fullscreen restores the band and the inset.
+Fullscreen hides the split and moves the clock and the telemetry card back into the scene. The earth frame grows back to the fullscreen fit. Leaving fullscreen restores the two columns.
 
 ## What each inset must miss
 
@@ -36,10 +34,10 @@ A visible box counts. A `hidden` control or a `display: none` control does not.
 
 On the map, the inset misses the top bar, the status line, the Show label and All, Mine, and Launches, `.maplibregl-ctrl-top-left`, the Bearing and Layers labels and their buttons, the time strip, the slider, Now and +36h, the readout, T-90, T-45, Now, T+45, and T+90, Hide, `#map-legend-toggle`, `#map-legend-panel`, the legend items, and the imagery note. The drive overlap list names `.maplibregl-ctrl-top-left`, `#map-legend-toggle`, and `#map-legend-panel` as their own selectors. `elementFromPoint` at each of those legend centers is not the inset.
 
-On the ISS view, the inset misses the top bar, the status line, the help button, Keyboard shortcuts, Full screen, Horizon, Straight down, the Cupola select, the five clock lines, the edition line, Port, Starboard, the field readout, the hint, the launch card, Telemetry, the Launch menu, the attribution button, and any place name on the earth.
+On the ISS view, the plan map misses the top bar, the status line, the help button, Keyboard shortcuts, Full screen, Horizon, Straight down, the Cupola select, Port, Starboard, the field readout, the hint, the launch card, Telemetry, the Launch menu, the attribution button, and any place name on the earth. The clock and the edition line sit on the map. `elementFromPoint` on the UTC line and on the edition line hits `[data-iss-split-chrome]`.
 
 ## Rendering
 
-The horizon inset calls `createIssRenderer` with `labels: false`, so it does not fetch the place-name catalog and does not lay out labels. That function keeps one module-level hook slot, so the inset exists only while the full ISS scene is disposed. Opening ISS view destroys the horizon inset first, then mounts the scene. The plan inset is a second mercator map, `createTrackInset`, drawing `groundTrackFeatures` and `markerPositionAt` from the existing track code. It can sit beside the full horizon scene.
+The horizon inset calls `createIssRenderer` with `labels: false`, so it does not fetch the place-name catalog and does not lay out labels. That function keeps one module-level hook slot, so the inset exists only while the full ISS scene is disposed. Opening ISS view destroys the horizon inset first, then mounts the scene. The plan inset is a second mercator map, `createTrackInset`, drawing `groundTrackFeatures` and `markerPositionAt` from the existing track code. It can sit beside the full horizon scene. Country names are the `inset-countries` symbol layer, twelve centroids drawn with the bundled Open Sans Regular glyphs at `/glyphs/Open%20Sans%20Regular/0-255.pbf`. The Esri `World_Boundaries_and_Places` raster stays underneath. It has no country names at zoom 0–2, which is where a full orbit fits. A fetch of that glyph file sets `data-inset-glyphs` to its byte length. `fitBounds` allows zoom 5, so a tighter track requests denser reference tiles. `letterboxCamera` keeps the fitted zoom, so a tall column does not raise it and clip the marker or the track.
 
 Neither inset map is created when the gate fails, when its tab is not showing, when the document is hidden, or when ISS fullscreen is active. Updates are 1s for the ISS dot and the horizon aim, and 5s for the ground-track line. Leaving the tab or hiding the document destroys that inset map.

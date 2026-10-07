@@ -176,10 +176,16 @@
       </section>
 
       <section id="iss-pane" class="pane">
+        <div id="iss-split" class="iss-split" data-iss-split-stack>
+          <div class="iss-split-map">
+            <button type="button" class="pip-inset pip-plan" data-pip="plan" hidden aria-label="Show the map">
+              <span class="pip-inset-frame" data-pip-frame="plan" aria-hidden="true"></span>
+            </button>
+            <div class="iss-split-chrome" data-iss-split-chrome></div>
+          </div>
+          <div class="iss-split-dock" data-iss-split-dock></div>
+        </div>
         <div id="iss-host"></div>
-        <button type="button" class="pip-inset pip-plan" data-pip="plan" hidden aria-label="Show the map">
-          <span class="pip-inset-frame" data-pip-frame="plan" aria-hidden="true"></span>
-        </button>
       </section>
 
       <section id="profile-pane" class="pane">
