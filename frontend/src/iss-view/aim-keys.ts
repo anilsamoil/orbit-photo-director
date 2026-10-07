@@ -269,6 +269,8 @@ function sceneFocused(scene: HTMLElement): boolean {
   const active = document.activeElement;
   if (active === null || active === document.body || active === document.documentElement) return true;
   if (scene.contains(active)) return true;
+  const dock = scene.closest('#iss-pane')?.querySelector('[data-iss-split-dock]');
+  if (dock instanceof HTMLElement && dock.contains(active)) return true;
   return active.id === 'tab-iss';
 }
 
