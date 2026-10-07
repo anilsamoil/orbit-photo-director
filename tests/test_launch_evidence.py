@@ -338,7 +338,8 @@ def test_uploader_uses_resolved_executable_and_explicit_argv(
                 "--header-upload",
                 f"Cache-Control: public, max-age={max_age}",
             ],
-            check=True,
+            check=False,
+            capture_output=True,
             timeout=90,
         )
 

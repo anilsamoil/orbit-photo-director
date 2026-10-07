@@ -405,6 +405,45 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
             raise ValueError("INVALID_LAUNCH_ASSESSMENT")
 
 
+def _write_bytes_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        with tmp.open("wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _rclone_stderr(raw: bytes | str | None) -> str:
+    if isinstance(raw, str):
+        return raw.strip()
+    return (raw or b"").decode("utf-8", "replace").strip()
+
+
+def _rclone(command: list[str], timeout: int) -> subprocess.CompletedProcess[bytes]:
+    try:
+        result = subprocess.run(  # noqa: S603
+            command,
+            check=False,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"RCLONE_TIMEOUT: {_rclone_stderr(exc.stderr)}") from exc
+    code = getattr(result, "returncode", 0)
+    if not isinstance(code, int):
+        code = 0
+    if code:
+        detail = _rclone_stderr(getattr(result, "stderr", None))
+        raise ValueError(f"RCLONE_EXIT_{code}: {detail}")
+    return result
+
+
 def _same_pointer(observed: dict, expected: dict) -> bool:
     """True when two pointers name the same artifact bytes."""
     digest = observed.get("sha256")
@@ -463,7 +502,7 @@ def publish_launch_artifact(
         if artifact_path.exists() and artifact_path.read_bytes() != body:
             raise ValueError("IMMUTABLE_LAUNCH_CONFLICT")
         pending_artifact = artifact_path.with_suffix(".pending")
-        pending_artifact.write_bytes(body)
+        _write_bytes_atomic(pending_artifact, body)
         os.replace(pending_artifact, artifact_path)
         lease_until = (
             artifact["geometry_valid_until"]
@@ -479,12 +518,12 @@ def publish_launch_artifact(
             "sha256": hashlib.sha256(body).hexdigest(),
         }
         pending = output / "launch/.latest.pending.json"
-        pending.write_bytes(canonical_bytes(pointer))
+        _write_bytes_atomic(pending, canonical_bytes(pointer))
         # Hold ownership through upload; failure cannot advance the local receipt.
         if upload:
             remote = read_remote() if read_remote else None
             if isinstance(remote, dict) and _same_pointer(remote, pointer):
-                pending.write_bytes(canonical_bytes(remote))
+                _write_bytes_atomic(pending, canonical_bytes(remote))
                 os.replace(pending, pointer_path)
                 return remote
             if read_remote and (previous is None or remote not in (previous, pointer)):
@@ -527,7 +566,7 @@ def publish_launch_catalog(
         if artifact_path.exists() and artifact_path.read_bytes() != body:
             raise ValueError("IMMUTABLE_LAUNCH_CONFLICT")
         pending_artifact = artifact_path.with_suffix(".pending")
-        pending_artifact.write_bytes(body)
+        _write_bytes_atomic(pending_artifact, body)
         os.replace(pending_artifact, artifact_path)
         pointer = {
             "schema_version": 2,
@@ -540,7 +579,7 @@ def publish_launch_catalog(
         pointer_path = output / "launch/catalog/latest.json"
         pointer_path.parent.mkdir(parents=True, exist_ok=True)
         pending = output / "launch/catalog/.latest.pending.json"
-        pending.write_bytes(canonical_bytes(pointer))
+        _write_bytes_atomic(pending, canonical_bytes(pointer))
         if upload:
             upload(artifact_path, relative, True)
             upload(pending, "launch/catalog/latest.json", False)
@@ -566,7 +605,7 @@ def rclone_uploader(remote: str) -> Callable[[Path, str, bool], None]:
             "Cache-Control: public, max-age=" + ("3600, immutable" if immutable else "10"),
         ]
         # Resolved rclone, publisher paths and operator remote use separate argv; no shell.
-        subprocess.run(command, check=True, timeout=90)  # noqa: S603
+        _rclone(command, 90)
 
     return upload
 
@@ -584,13 +623,12 @@ def rclone_reader(
     if executable is None:
         raise FileNotFoundError("rclone executable not found")
     executable = str(Path(executable).resolve())
+    healed: list[str] = []
 
     def cat(relative: str, limit: int) -> bytes:
-        result = subprocess.run(  # noqa: S603
+        result = _rclone(
             [executable, "cat", f"{remote.rstrip('/')}/{relative}", "--count", str(limit + 1)],
-            check=True,
-            capture_output=True,
-            timeout=45,
+            45,
         )
         if not result.stdout or not result.stdout.strip():
             raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
@@ -614,8 +652,17 @@ def rclone_reader(
         body = artifact_path.read_bytes()
         if hashlib.sha256(body).hexdigest() != pointer["sha256"]:
             raise ValueError("LOCAL_LAUNCH_HASH_MISMATCH")
-        upload(artifact_path, pointer["path"], True)
-        return cat(pointer["path"], 2_000_000)
+        snapshot = local / "launch" / f".heal-{pointer['revision']}.tmp"
+        _write_bytes_atomic(snapshot, body)
+        try:
+            upload(snapshot, pointer["path"], True)
+            restored = cat(pointer["path"], 2_000_000)
+        finally:
+            snapshot.unlink(missing_ok=True)
+        if hashlib.sha256(restored).hexdigest() != pointer["sha256"]:
+            raise ValueError("REMOTE_LAUNCH_READBACK_FAILED")
+        healed.append(pointer["path"])
+        return restored
 
     def read() -> dict:
         raw = cat("launch/latest.json", 4096)
@@ -652,4 +699,5 @@ def rclone_reader(
             raise ValueError("REMOTE_LAUNCH_READBACK_FAILED")
         return pointer
 
+    read.healed_keys = healed
     return read

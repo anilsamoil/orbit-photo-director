@@ -1,13 +1,20 @@
 import hashlib
 import json
+import os
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from generator.launch_evidence import canonical_bytes, utc
-from generator.launch_publish import _validate_artifact
+from generator.launch_evidence import build_launch_artifact, canonical_bytes, utc
+from generator.launch_publish import (
+    _validate_artifact,
+    publish_launch_artifact,
+    rclone_reader,
+    rclone_uploader,
+)
 from scripts.launch_refresh import main
 
 FIXTURE = Path(__file__).parent / "fixtures" / "launch_outage"
@@ -202,7 +209,7 @@ def test_self_heal_copies_the_matching_local_object_and_publishes(tmp_path, monk
     assert store[restored] == _artifact_bytes()
     heal = [argv for argv in commands if argv[1] == "copyto" and argv[3] == f"{PREFIX}{restored}"]
     assert len(heal) == 1
-    assert heal[0][2].endswith(restored)
+    assert heal[0][2].endswith(f".heal-{OLD_REVISION}.tmp")
     assert "sync" not in {part for argv in commands for part in argv}
     pointer = json.loads(store["launch/latest.json"])
     assert pointer["sha256"] == hashlib.sha256(store[pointer["path"]]).hexdigest()
@@ -217,3 +224,177 @@ def test_hash_mismatch_fails_closed(tmp_path, monkeypatch, capsys):
     assert _log(capsys)["reason"] == "LOCAL_LAUNCH_HASH_MISMATCH"
     assert f"launch/v/{OLD_REVISION}.json" not in store
     assert all(argv[1] != "copyto" for argv in commands)
+
+
+def test_orphan_expired_pending_dropped_on_unchanged_input(tmp_path, monkeypatch, capsys):
+    cache, output, store = _layout(tmp_path)
+    commands = _install(monkeypatch, store)
+    assert _run(cache, output) == 0
+    assert _log(capsys)["reason"] == "PUBLISHED"
+    pending = output / "launch" / ".latest.pending.json"
+    pending.write_bytes(_pending_bytes())
+    commands.clear()
+    assert _run(cache, output) == 0
+    assert _log(capsys)["reason"] == "UNCHANGED_INPUT"
+    assert all(argv[1] != "copyto" for argv in commands)
+    assert not pending.exists()
+
+
+def test_truncated_pending_recovers_from_intent_and_latest(tmp_path, monkeypatch, capsys):
+    cache, output, store = _layout(tmp_path)
+    pending = output / "launch" / ".latest.pending.json"
+    pending.write_bytes(b"{")
+    _install(monkeypatch, store)
+    assert _run(cache, output) == 0
+    assert _log(capsys)["reason"] == "PUBLISHED"
+    assert (output / "launch" / ".latest.pending.bad.json").read_bytes() == b"{"
+    assert not pending.exists()
+    assert _run(cache, output) == 0
+    assert _log(capsys)["reason"] == "UNCHANGED_INPUT"
+
+
+def test_interrupted_pending_write_keeps_the_previous_bytes(tmp_path, monkeypatch):
+    _, output, _store = _layout(tmp_path, remote_artifact=False)
+    artifact = json.loads(_artifact_bytes())
+    real_replace = os.replace
+
+    def boom(src, dst):
+        if Path(dst).name == ".latest.pending.json":
+            raise OSError("disk")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("generator.launch_publish.os.replace", boom)
+    with pytest.raises(OSError, match="disk"):
+        publish_launch_artifact(artifact, output, upload=None)
+    assert (output / "launch" / ".latest.pending.json").read_bytes() == _pending_bytes()
+    assert not list((output / "launch").glob(".latest.pending.json.*.tmp"))
+
+
+def test_scheduled_refresh_leaves_a_paused_manual_commit_intact(tmp_path, monkeypatch, capsys):
+    cache, output, store = _layout(tmp_path)
+    _install(monkeypatch, store)
+    payload = json.loads((cache / "launches.json").read_bytes())
+    built_at = NOW - timedelta(minutes=20)
+    artifact = build_launch_artifact(payload, None, built_at, fetched_at=built_at)
+    paused = threading.Event()
+    release = threading.Event()
+    saved: dict[str, bytes] = {}
+    done: dict = {}
+
+    def upload(path: Path, relative: str, immutable: bool) -> None:
+        if relative == "launch/latest.json":
+            paused.set()
+            assert release.wait(10)
+        saved[relative] = path.read_bytes()
+
+    def manual() -> None:
+        try:
+            done["pointer"] = publish_launch_artifact(artifact, output, upload=upload)
+        except Exception as exc:
+            done["error"] = exc
+            paused.set()
+
+    thread = threading.Thread(target=manual)
+    thread.start()
+    assert paused.wait(10)
+    pending_during = (output / "launch" / ".latest.pending.json").read_bytes()
+    try:
+        assert _run(cache, output) == 2
+        assert _log(capsys)["reason"] == "LAUNCH_PUBLISHER_BUSY"
+        assert (output / "launch" / ".latest.pending.json").read_bytes() == pending_during
+    finally:
+        release.set()
+    thread.join(10)
+    assert not thread.is_alive()
+    assert "error" not in done
+    pointer = done["pointer"]
+    assert json.loads(saved["launch/latest.json"])["revision"] == pointer["revision"]
+    assert hashlib.sha256(saved[pointer["path"]]).hexdigest() == pointer["sha256"]
+
+
+def test_heal_uploads_verified_bytes_when_the_source_changes(tmp_path, monkeypatch):
+    _, output, store = _layout(tmp_path, remote_artifact=False)
+    expected = _artifact_bytes()
+    live = output / "launch" / "v" / f"{OLD_REVISION}.json"
+
+    def run(command, check=False, capture_output=False, timeout=None):
+        argv = [str(part) for part in command]
+        if "sync" in argv:
+            raise AssertionError("rclone sync is forbidden")
+        op = argv[1]
+        if op == "copyto":
+            live.write_bytes(expected + b"\n")
+            data = Path(argv[2]).read_bytes()
+            dest = argv[3]
+            assert dest.startswith(PREFIX)
+            store[dest[len(PREFIX) :]] = data
+            return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
+        if op == "cat":
+            target = argv[2]
+            body = store.get(target[len(PREFIX) :], b"")
+            return SimpleNamespace(stdout=body, stderr=b"", returncode=0)
+        raise AssertionError(argv)
+
+    monkeypatch.setattr("generator.launch_publish.shutil.which", lambda name: "/usr/bin/rclone")
+    monkeypatch.setattr("generator.launch_publish.subprocess.run", run)
+    reader = rclone_reader(REMOTE, local=output, upload=rclone_uploader(REMOTE))
+    pointer = reader()
+    restored = store[f"launch/v/{OLD_REVISION}.json"]
+    assert pointer["sha256"] == OLD_SHA
+    assert restored == expected
+    assert hashlib.sha256(restored).hexdigest() == OLD_SHA
+    assert live.read_bytes() == expected + b"\n"
+
+
+def test_whitespace_object_is_overwritten_when_the_digest_matches(tmp_path, monkeypatch, capsys):
+    cache, output, store = _layout(tmp_path, remote_artifact=False)
+    key = f"launch/v/{OLD_REVISION}.json"
+    store[key] = b" \n"
+    _install(monkeypatch, store)
+    assert _run(cache, output) == 0
+    assert _log(capsys)["reason"] == "PUBLISHED"
+    assert store[key] == _artifact_bytes()
+
+
+def test_repeated_heal_warns_and_keeps_the_count(tmp_path, monkeypatch, capsys):
+    cache, output, store = _layout(tmp_path)
+    _install(monkeypatch, store)
+    assert _run(cache, output) == 0
+    first = _log(capsys)
+    assert first["reason"] == "PUBLISHED"
+    assert "heal" not in first
+    key = json.loads(store["launch/latest.json"])["path"]
+    digest = store[key]
+    del store[key]
+    assert _run(cache, output) == 0
+    second = _log(capsys)
+    assert second["ok"] is True
+    assert second["reason"] == "UNCHANGED_INPUT"
+    assert second["heal"] == {"key": key, "count": 1}
+    assert store[key] == digest
+    del store[key]
+    assert _run(cache, output) == 0
+    third = _log(capsys)
+    assert third["ok"] is True
+    assert third["reason"] == "WARN"
+    assert third["heal"] == {"key": key, "count": 2}
+    assert store[key] == digest
+    assert json.loads((output / ".launch-heal.json").read_bytes())["counts"][key] == 2
+    assert _run(cache, output) == 0
+    fourth = _log(capsys)
+    assert fourth["reason"] == "UNCHANGED_INPUT"
+    assert "heal" not in fourth
+    assert json.loads((output / ".launch-heal.json").read_bytes())["counts"][key] == 2
+
+
+def test_rclone_nonzero_exit_puts_stderr_in_the_reason(tmp_path, monkeypatch, capsys):
+    cache, output, _store = _layout(tmp_path)
+
+    def run(command, check=False, capture_output=False, timeout=None):
+        return SimpleNamespace(stdout=b"", stderr=b"auth failed\n", returncode=7)
+
+    monkeypatch.setattr("generator.launch_publish.shutil.which", lambda name: "/usr/bin/rclone")
+    monkeypatch.setattr("generator.launch_publish.subprocess.run", run)
+    monkeypatch.setattr("scripts.launch_refresh.datetime", _Clock)
+    assert _run(cache, output) == 2
+    assert _log(capsys)["reason"] == "RCLONE_EXIT_7: auth failed"
