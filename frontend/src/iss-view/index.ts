@@ -637,8 +637,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const tiers = readTiers();
     const nextKind: FrameKind = tiers ? 'tiers' : 'chances';
     if (nextKind !== frameKind) {
-      if (nextKind === 'tiers') tierPick = { kind: 'open' };
-      else chancePick = { kind: 'open' };
+      if (nextKind === 'chances') chancePick = { kind: 'open' };
       frameKind = nextKind;
     }
     if (tiers) syncTierChrome(tiers);
@@ -700,6 +699,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function syncTierChrome(tiers: TierCatalog): void {
     if (tierPick.kind === 'held' && !tierListed(tiers, tierPick)) tierPick = { kind: 'cleared' };
+    else if (tierPick.kind === 'held' && tierPick.group !== 'all') {
+      const launch = tiers.find(tierPick.eventId);
+      if (launch && (launch.tier === 'shot' || launch.tier === 'likely') && launch.tier !== tierPick.group) {
+        tierPick = { kind: 'held', eventId: launch.eventId, group: launch.tier };
+      }
+    }
     const next = tierPick;
     const launch = next.kind === 'held' ? tiers.find(next.eventId) : null;
     const rows: PickerRow[] = [
