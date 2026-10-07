@@ -1541,10 +1541,10 @@ function rgbaChannels(color) {
   };
 }
 
-function timeStripShowsGround(color) {
+function chipBacking(color) {
   const parsed = rgbaChannels(color);
   if (!parsed) return false;
-  return parsed.r === 16 && parsed.g === 22 && parsed.b === 28 && parsed.a < 1 && Math.abs(parsed.a - 0.55) <= 0.02;
+  return parsed.a >= 0.7 && parsed.r <= 20 && parsed.g <= 24 && parsed.b <= 30;
 }
 
 function paintIsClear(color) {
@@ -1574,6 +1574,17 @@ async function proveMapLaidOnPane(send) {
       && canvasBox.bottom + 1 >= stripBox.bottom
       && canvasBox.left <= stripBox.left + 1
       && canvasBox.right + 1 >= stripBox.right;
+    const hide = document.getElementById('map-chrome-toggle')?.getBoundingClientRect();
+    const legend = document.getElementById('map-legend-toggle')?.getBoundingClientRect();
+    const zoom = document.querySelector('.maplibregl-ctrl-top-left')?.getBoundingClientRect();
+    const hits = (a, b) => a && b && a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    const slider = document.getElementById('time-slider');
+    const sliderBox = slider ? slider.getBoundingClientRect() : null;
+    const fitting = innerWidth >= 800 && innerHeight >= 600;
+    const pip = fitting
+      ? { left: paneBox.right - 12 - 222, right: paneBox.right - 12, top: paneBox.bottom - 96 - 36 - 144, bottom: paneBox.bottom - 96 - 36, width: 222, height: 144 }
+      : null;
+    const pipHits = pip ? hits(stripBox, pip) : false;
     return {
       gap,
       bottom: mapStyle.bottom,
@@ -1590,6 +1601,18 @@ async function proveMapLaidOnPane(send) {
       paneBottom: paneBox.bottom,
       stripTop: stripBox.top,
       stripBottom: stripBox.bottom,
+      stripWidth: stripBox.width,
+      stripHeight: stripBox.height,
+      rightGap: paneBox.right - stripBox.right,
+      slider: sliderBox ? sliderBox.height : null,
+      fitting,
+      paneWidth: paneBox.width,
+      fullBleed: stripBox.width > paneBox.width - 80,
+      hide: hits(stripBox, hide),
+      legend: hits(stripBox, legend),
+      zoom: hits(stripBox, zoom),
+      pip: pipHits,
+      events: stripStyle.pointerEvents,
     };
   })()`);
   const paddingClear = laid
@@ -1598,10 +1621,32 @@ async function proveMapLaidOnPane(send) {
     && laid.paddingBottom === '0px'
     && laid.paddingLeft === '0px';
   const gapClear = laid && laid.rowGap === '0px' && laid.columnGap === '0px';
-  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !timeStripShowsGround(laid.color) || !paintIsClear(laid.controls)) {
+  const geometry = laid && (!laid.fitting || (
+    Math.abs(laid.stripHeight - 96) <= 2
+    && Math.abs(laid.rightGap - 246) <= 2
+    && Math.abs(laid.slider - 32) <= 1
+  ));
+  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !paintIsClear(laid.color) || !chipBacking(laid.controls) || laid.fullBleed || laid.hide || laid.legend || laid.zoom || laid.pip || laid.events !== 'none' || !geometry) {
     throw new Error(`time strip not laid on the map ${JSON.stringify(laid)}`);
   }
   return laid;
+}
+
+async function proveMapControlHits(send, label) {
+  const hit = await evaluate(send, `(() => {
+    const sels = ['.maplibregl-ctrl-zoom-in', '.maplibregl-ctrl-zoom-out', '.maplibregl-ctrl-compass', '#map-legend-toggle', '#map-chrome-toggle', '#time-slider', '#time-back-90', '#time-back-45', '#time-now', '#time-fwd-45', '#time-fwd-90'];
+    const misses = [];
+    for (const sel of sels) {
+      const el = document.querySelector(sel);
+      if (!el) return { ok: false, reason: 'missing', sel };
+      const box = el.getBoundingClientRect();
+      if (box.width < 8 || box.height < 8) return { ok: false, reason: 'box', sel, w: box.width, h: box.height };
+      const node = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      if (!node || (node !== el && !el.contains(node))) misses.push({ sel, hit: node ? (node.id || node.getAttribute('aria-label') || node.tagName) : null });
+    }
+    return misses.length ? { ok: false, reason: 'elementFromPoint', misses } : { ok: true };
+  })()`);
+  if (!hit?.ok) throw new Error(`map control hit ${label} ${JSON.stringify(hit)}`);
 }
 
 function insetViewportFits(width, height) {
@@ -2587,6 +2632,39 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   );
 }
 
+async function proveShortTimeRow(send, viewport) {
+  const sizes = [
+    { width: 390, height: 520 },
+    { width: 430, height: 400 },
+    { width: 664, height: 390 },
+    { width: 874, height: 402 },
+  ];
+  try {
+    for (const size of sizes) {
+      await setViewport(send, size.width, size.height, true);
+      await sleep(200);
+      const laid = await evaluate(send, `(() => {
+        const button = document.getElementById('time-fwd-90');
+        const chip = document.querySelector('.map-command .map-controls-time');
+        if (!button || !chip) return { ok: false, reason: 'missing' };
+        const box = button.getBoundingClientRect();
+        if (box.width < 8 || box.height < 8) return { ok: false, reason: 'box', w: box.width, h: box.height };
+        if (box.left < -1 || box.right > innerWidth + 1 || box.top < -1 || box.bottom > innerHeight + 1) {
+          return { ok: false, reason: 'offscreen', left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom), innerWidth, innerHeight };
+        }
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        if (!hit || (hit !== button && !button.contains(hit))) {
+          return { ok: false, reason: 'hit', hit: hit ? (hit.id || hit.getAttribute('aria-label') || hit.tagName) : null };
+        }
+        return { ok: true, wrap: getComputedStyle(chip).flexWrap };
+      })()`);
+      if (!laid?.ok) throw new Error(`time skip ${size.width}x${size.height} ${JSON.stringify(laid)}`);
+    }
+  } finally {
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -2635,6 +2713,14 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
+  await proveMapControlHits(send, 'shot list closed');
+  await proveShortTimeRow(send, viewport);
+  await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
+  try {
+    await proveMapControlHits(send, 'shot list open');
+  } finally {
+    await evaluate(send, `document.body.classList.remove('shotlist-bar-visible')`);
+  }
   const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
   let chrome = '';
   if (insetViewportFits(viewport.width, viewport.height)) {
@@ -2867,7 +2953,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, stale readout clear 834x1194 800x600, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {
@@ -3340,6 +3426,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
     'iss contained after render ticks',
     10000,
   );
+  const shortStage = viewport.width === 390 && viewport.height === 664 ? await proveIssShortStages(send) : '';
   const fullscreen = await proveIssFullscreen(send, evidenceDir, viewport);
   const pip = await provePipSurface(send, evidenceDir, viewport, 'iss');
   if (insetViewportFits(viewport.width, viewport.height)) {
@@ -3482,7 +3569,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
   const towns = await proveIssTownRetry(send, evidenceDir, viewport);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
 }
 
 async function proveIssTownRetry(send, evidenceDir, viewport) {
@@ -3709,14 +3796,20 @@ const ISS_FULLSCREEN_OFF = `(() => {
   if (scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
   if ((document.fullscreenElement ?? document.webkitFullscreenElement ?? null) !== null) return { step: 'browser-held' };
   if (button.getAttribute('aria-label') !== 'Full screen' || button.title !== 'Full screen') return { step: 'label' };
-  if (button.previousElementSibling !== document.querySelector('[data-iss-aim-anchor]')) return { step: 'order' };
+  if (document.querySelectorAll('[data-iss-fullscreen]').length !== 1) return { step: 'exit-count' };
+  if (button.previousElementSibling !== document.querySelector('[data-iss-telemetry]')) return { step: 'order' };
+  if (!button.parentElement?.hasAttribute('data-iss-controls')) return { step: 'parent' };
   if (getComputedStyle(scene).position !== 'absolute') return { step: 'position' };
   if (scene.querySelector('[data-iss-presets]')?.getClientRects().length !== 1) return { step: 'presets' };
   if (${SCENE_SCROLLS}) return { step: 'scroll' };
   const box = button.getBoundingClientRect();
   if (Math.abs(box.width - 44) > 0.5 || Math.abs(box.height - 44) > 0.5) return { step: 'size', width: box.width, height: box.height };
   if (!button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) return { step: 'hit' };
-  const covered = [...button.parentElement.querySelectorAll('button, select, [data-iss-clock]')]
+  const telemetry = document.querySelector('[data-iss-telemetry]')?.getBoundingClientRect();
+  if (!telemetry || telemetry.height < 40 || Math.abs(telemetry.height - box.height) > 1) return { step: 'height', telemetry: telemetry ? telemetry.height : null, control: box.height };
+  const shownPlaces = [...document.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length;
+  if (shownPlaces < 1) return { step: 'places', shown: shownPlaces };
+  const covered = [...button.parentElement.children]
     .filter((node) => node !== button)
     .flatMap((node) => [...node.getClientRects()])
     .find((other) => box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5);
@@ -3764,8 +3857,21 @@ function issFullscreenHeldExpression(expected) {
     const uncovered = points.find(([x, y]) => !scene.contains(document.elementFromPoint(x, y)));
     if (uncovered) return { step: 'app-shows', point: uncovered, hit: document.elementFromPoint(uncovered[0], uncovered[1])?.outerHTML.slice(0, 80) };
     const buttonBox = button.getBoundingClientRect();
+    if (document.querySelectorAll('[data-iss-fullscreen]').length !== 1) return { step: 'exit-count' };
     if (!button.contains(document.elementFromPoint(buttonBox.left + buttonBox.width / 2, buttonBox.top + buttonBox.height / 2))) return { step: 'button-hit' };
-    const hiddenSet = ${JSON.stringify(ISS_FULLSCREEN_HIDDEN)}.concat(scene.getAttribute('data-iss-phase') === 'error' ? [] : ['[data-iss-card]']);
+    const telemetryBox = document.querySelector('[data-iss-telemetry]')?.getBoundingClientRect();
+    if (!telemetryBox || telemetryBox.height < 40 || Math.abs(telemetryBox.height - buttonBox.height) > 1) return { step: 'height', telemetry: telemetryBox ? telemetryBox.height : null, control: buttonBox.height };
+    const outsiders = [...document.querySelectorAll('.profile-badge, .tab, .topbar button, .topbar a')].filter((node) => {
+      const other = node.getBoundingClientRect();
+      return other.width > 0 && other.height > 0 && buttonBox.left < other.right - 0.5 && buttonBox.right > other.left + 0.5 && buttonBox.top < other.bottom - 0.5 && buttonBox.bottom > other.top + 0.5;
+    }).map((node) => (node.getAttribute('aria-label') || node.textContent || '').trim().slice(0, 24));
+    if (outsiders.length) return { step: 'exit-overlap', outsiders };
+    const shownPlaces = [...scene.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length;
+    const beforePlaces = window.__opdIssPlaceCount || 0;
+    if (shownPlaces < 1 || (beforePlaces > 0 && (shownPlaces < Math.max(1, Math.floor(beforePlaces * 0.5)) || shownPlaces > beforePlaces + 30))) {
+      return { step: 'places', shown: shownPlaces, before: beforePlaces };
+    }
+    const hiddenSet = ${JSON.stringify(ISS_FULLSCREEN_HIDDEN)}.concat(['[data-iss-launches]']).concat(scene.getAttribute('data-iss-phase') === 'error' ? [] : ['[data-iss-telemetry-body]']);
     const shown = hiddenSet.flatMap((sel) => {
       const nodes = [...scene.querySelectorAll(sel)];
       if (!nodes.length) return [sel + ' missing'];
@@ -3806,8 +3912,9 @@ function issFullscreenHeldExpression(expected) {
       if (box.left < buttonBox.right && box.right > buttonBox.left && box.top < buttonBox.bottom && box.bottom > buttonBox.top) return { step: 'clock-on-button', name };
     }
     const pad = getComputedStyle(scene);
+    const controlsBox = document.querySelector('[data-iss-controls]')?.getBoundingClientRect();
     const roomWidth = sceneBox.width - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight);
-    const roomHeight = sceneBox.height - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
+    const roomHeight = sceneBox.height - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom) - (controlsBox ? controlsBox.height : 0);
     if (Math.abs(frameBox.width - roomWidth) > 1 && Math.abs(frameBox.height - roomHeight) > 1) {
       return { step: 'frame-fit', frame: [frameBox.width, frameBox.height], room: [roomWidth, roomHeight] };
     }
@@ -3817,7 +3924,7 @@ function issFullscreenHeldExpression(expected) {
     if (Math.abs(canvas.clientWidth - frameBox.width) > 1 || Math.abs(canvas.width - canvas.clientWidth * ratio) > 1.5) {
       return { step: 'backing', client: [canvas.clientWidth, canvas.clientHeight], backing: [canvas.width, canvas.height], frame: [frameBox.width, frameBox.height], ratio };
     }
-    return { ok: true, width: Math.round(frameBox.width), height: Math.round(frameBox.height), ratio };
+    return { ok: true, width: Math.round(frameBox.width), height: Math.round(frameBox.height), ratio, places: shownPlaces, beforePlaces, telemetry: Math.round(telemetryBox.height), control: Math.round(buttonBox.height) };
   })()`;
 }
 
@@ -3886,6 +3993,201 @@ function issBackingExpression(ratio) {
   })()`;
 }
 
+const ISS_SHORT_STAGE = `(() => {
+  const frame = document.querySelector('[data-iss-frame]');
+  const stage = document.querySelector('[data-iss-stage]');
+  const telemetry = document.querySelector('[data-iss-telemetry]');
+  const controls = document.querySelector('[data-iss-controls]');
+  const scene = document.querySelector('[data-iss-scene]');
+  if (!frame || !stage || !telemetry || !controls || !scene) return { step: 'missing' };
+  if (window.innerHeight > 564) return { step: 'viewport', inner: window.innerHeight };
+  const frameBox = frame.getBoundingClientRect();
+  const stageBox = stage.getBoundingClientRect();
+  const telemetryBox = telemetry.getBoundingClientRect();
+  const controlsBox = controls.getBoundingClientRect();
+  if (frameBox.width < 200 || frameBox.height < 120) {
+    return { step: 'size', width: Math.round(frameBox.width), height: Math.round(frameBox.height) };
+  }
+  const hits = (a, b) => a.width > 0 && b.width > 0 && a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5;
+  if (hits(stageBox, telemetryBox) || hits(stageBox, controlsBox) || hits(frameBox, telemetryBox) || hits(frameBox, controlsBox)) {
+    return { step: 'overlap', frame: [Math.round(frameBox.top), Math.round(frameBox.bottom)], controls: [Math.round(controlsBox.top), Math.round(controlsBox.bottom)] };
+  }
+  if (!scene.hasAttribute('data-iss-short')) return { step: 'short' };
+  const sels = ['[data-iss-telemetry]', '[data-iss-fullscreen]', '[data-iss-launch-picker]', '[data-iss-aim-help]', '[data-iss-preset="horizon"]', '[data-iss-preset="nadir"]', '[data-iss-cupola]'];
+  for (const sel of sels) {
+    const el = document.querySelector(sel);
+    if (!el) return { step: 'control-missing', sel };
+    const box = el.getBoundingClientRect();
+    if (box.width < 8 || box.height < 8) return { step: 'control-box', sel, w: Math.round(box.width), h: Math.round(box.height) };
+    const node = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    if (!node || (node !== el && !el.contains(node))) return { step: 'hit', sel, hit: node ? (node.id || node.getAttribute('aria-label') || node.tagName) : null };
+  }
+  return { ok: true, width: Math.round(frameBox.width), height: Math.round(frameBox.height) };
+})()`;
+
+async function proveIssShortStages(send) {
+  const rows = [];
+  for (const size of [{ width: 390, height: 564 }, { width: 390, height: 520 }]) {
+    await setViewport(send, size.width, size.height, true);
+    const laid = await waitFor(send, ISS_SHORT_STAGE, `iss short stage ${size.width}x${size.height}`, 10000);
+    rows.push(`${size.width}x${size.height} ${laid.width}x${laid.height}`);
+  }
+  await setViewport(send, 390, 664, true);
+  await waitFor(
+    send,
+    `(() => {
+      if (window.innerHeight !== 664) return null;
+      const scene = document.querySelector('[data-iss-scene]');
+      const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+      if (!scene || scene.hasAttribute('data-iss-short') || !frame || frame.width < 160) return null;
+      if (${SCENE_SCROLLS}) return null;
+      return { ok: true };
+    })()`,
+    'iss short stage restored 390x664',
+    10000,
+  );
+  return rows.join(', ');
+}
+
+function issSplitFullscreenExpression() {
+  return `(() => {
+    const scene = document.querySelector('[data-iss-scene]');
+    const card = document.querySelector('[data-iss-card]');
+    const telemetry = document.querySelector('[data-iss-telemetry]');
+    const button = document.querySelector('[data-iss-fullscreen]');
+    if (!scene || !card || !telemetry || !button) return { step: 'missing' };
+    if (!scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
+    if (card.parentElement !== scene) return { step: 'park' };
+    const cardBox = card.getBoundingClientRect();
+    if (getComputedStyle(card).display === 'none' || card.getClientRects().length === 0) {
+      return { step: 'card', display: getComputedStyle(card).display, w: Math.round(cardBox.width), h: Math.round(cardBox.height) };
+    }
+    const t = telemetry.getBoundingClientRect();
+    const b = button.getBoundingClientRect();
+    if (t.width < 80 || t.height < 40 || t.height > 52) return { step: 'telemetry', w: Math.round(t.width), h: Math.round(t.height) };
+    const tHit = document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2);
+    if (!tHit || !telemetry.contains(tHit)) return { step: 'telemetry-hit', hit: tHit ? (tHit.getAttribute('aria-label') || tHit.tagName) : null };
+    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (Math.abs(b.width - 44) > 1 || Math.abs(b.height - 44) > 1) return { step: 'exit', w: Math.round(b.width), h: Math.round(b.height) };
+    if (b.left + 1 < t.right || b.left > t.right + 24) return { step: 'beside', telemetryRight: Math.round(t.right), exitLeft: Math.round(b.left) };
+    const bHit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    if (!bHit || !button.contains(bHit)) return { step: 'exit-hit', hit: bHit ? (bHit.getAttribute('aria-label') || bHit.id || bHit.tagName) : null };
+    if (button.getAttribute('aria-label') !== 'Exit full screen') return { step: 'label', label: button.getAttribute('aria-label') };
+    const shownPlaces = [...scene.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length;
+    const beforePlaces = window.__opdIssPlaceCount || 0;
+    if (shownPlaces < 1 || (beforePlaces > 0 && (shownPlaces < Math.max(1, Math.floor(beforePlaces * 0.5)) || shownPlaces > beforePlaces + 30))) {
+      return { step: 'places', shown: shownPlaces, before: beforePlaces };
+    }
+    return {
+      ok: true,
+      telemetry: [Math.round(t.width), Math.round(t.height)],
+      exit: [Math.round(b.width), Math.round(b.height)],
+      places: shownPlaces,
+      beforePlaces,
+    };
+  })()`;
+}
+
+function issSplitDockedExpression() {
+  return `(() => {
+    const scene = document.querySelector('[data-iss-scene]');
+    const card = document.querySelector('[data-iss-card]');
+    const dock = document.querySelector('[data-iss-split-dock]');
+    const telemetry = document.querySelector('[data-iss-telemetry]');
+    const button = document.querySelector('[data-iss-fullscreen]');
+    if (!scene || !card || !dock || !telemetry || !button) return { step: 'missing' };
+    if (scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
+    if (scene.getAttribute('data-iss-split') !== 'on') return { step: 'split' };
+    if (!dock.contains(card)) return { step: 'dock' };
+    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.getAttribute('aria-label') !== 'Full screen') return { step: 'label', label: button.getAttribute('aria-label') };
+    const t = telemetry.getBoundingClientRect();
+    const b = button.getBoundingClientRect();
+    if (t.width < 80 || t.height < 40) return { step: 'telemetry', w: Math.round(t.width), h: Math.round(t.height) };
+    if (Math.abs(b.width - 44) > 1 || Math.abs(b.height - 44) > 1) return { step: 'exit', w: Math.round(b.width), h: Math.round(b.height) };
+    if (!telemetry.contains(document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2))) return { step: 'telemetry-hit' };
+    if (!button.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2))) return { step: 'exit-hit' };
+    return { ok: true, telemetry: [Math.round(t.width), Math.round(t.height)], exit: [Math.round(b.width), Math.round(b.height)] };
+  })()`;
+}
+
+async function proveIssSplitFullscreen(send, viewport) {
+  if (!insetViewportFits(viewport.width, viewport.height)) return 'phone column';
+  const sizes = [
+    { width: 1400, height: 900 },
+    { width: 1280, height: 700 },
+    { width: 1194, height: 834 },
+  ];
+  const rows = [];
+  const seen = new Set();
+  const measure = async (width, height) => {
+    const key = `${width}x${height}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const held = await waitFor(send, issSplitFullscreenExpression(), `iss split fullscreen ${key}`, 10000);
+    const open = await proveFullscreenTelemetry(send);
+    rows.push(`${key} telemetry ${held.telemetry[0]}x${held.telemetry[1]} exit ${held.exit[0]}x${held.exit[1]} body ${open} labels ${held.beforePlaces}->${held.places}`);
+  };
+  let current = { width: viewport.width, height: viewport.height };
+  await measure(current.width, current.height);
+  let holding = true;
+  for (const size of sizes) {
+    const key = `${size.width}x${size.height}`;
+    if (seen.has(key)) continue;
+    if (holding) {
+      await pressIssFullscreen(send);
+      await waitFor(send, ISS_FULLSCREEN_OFF, `iss split fullscreen leave ${current.width}x${current.height}`, 10000);
+      const docked = await waitFor(send, issSplitDockedExpression(), `iss split dock after ${current.width}x${current.height}`, 10000);
+      rows.push(`after ${current.width}x${current.height} dock telemetry ${docked.telemetry[0]}x${docked.telemetry[1]} exit ${docked.exit[0]}x${docked.exit[1]}`);
+      holding = false;
+    }
+    await setViewport(send, size.width, size.height, viewport.mobile);
+    current = size;
+    await pressIssFullscreen(send);
+    holding = true;
+    await measure(size.width, size.height);
+  }
+  if (holding) {
+    await pressIssFullscreen(send);
+    await waitFor(send, ISS_FULLSCREEN_OFF, `iss split fullscreen leave ${current.width}x${current.height}`, 10000);
+    const docked = await waitFor(send, issSplitDockedExpression(), `iss split dock after ${current.width}x${current.height}`, 10000);
+    rows.push(`after ${current.width}x${current.height} dock telemetry ${docked.telemetry[0]}x${docked.telemetry[1]} exit ${docked.exit[0]}x${docked.exit[1]}`);
+  }
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  const restored = await waitFor(send, issSplitDockedExpression(), `iss split dock restored ${viewport.width}x${viewport.height}`, 10000);
+  rows.push(`restored ${viewport.width}x${viewport.height} telemetry ${restored.telemetry[0]}x${restored.telemetry[1]} exit ${restored.exit[0]}x${restored.exit[1]}`);
+  await pressIssFullscreen(send);
+  return rows.join('; ');
+}
+
+async function proveFullscreenTelemetry(send) {
+  await click(send, '[data-iss-telemetry]');
+  const open = await waitFor(send, `(() => {
+    const toggle = document.querySelector('[data-iss-telemetry]');
+    const body = document.querySelector('[data-iss-telemetry-body]');
+    if (!toggle || !body) return null;
+    const box = body.getBoundingClientRect();
+    const display = getComputedStyle(body).display;
+    if (toggle.getAttribute('aria-expanded') !== 'true') return { step: 'expanded', value: toggle.getAttribute('aria-expanded') };
+    if (display === 'none' || box.width < 8 || box.height < 8) return { step: 'box', display, w: box.width, h: box.height };
+    return { ok: true, w: Math.round(box.width), h: Math.round(box.height) };
+  })()`, 'iss fullscreen telemetry open', 10000);
+  await click(send, '[data-iss-telemetry]');
+  await waitFor(
+    send,
+    `(() => {
+      const toggle = document.querySelector('[data-iss-telemetry]');
+      const body = document.querySelector('[data-iss-telemetry-body]');
+      if (toggle?.getAttribute('aria-expanded') !== 'false') return null;
+      if (body && body.getClientRects().length > 0) return null;
+      return { ok: true };
+    })()`,
+    'iss fullscreen telemetry closed',
+    10000,
+  );
+  return `${open.w}x${open.h}`;
+}
+
 async function proveIssFullscreen(send, evidenceDir, viewport) {
   const phone = viewport.mobile && viewport.width < 600;
   if (phone && !await evaluate(send, ISS_FULLSCREEN_STRIP)) throw new Error('iss fullscreen request methods still present');
@@ -3894,10 +4196,14 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       const scene = document.querySelector('[data-iss-scene]');
       return 'requestFullscreen' in scene || 'webkitRequestFullscreen' in scene ? 'element' : 'overlay';
     })()`);
+    const rememberPlaces = `window.__opdIssPlaceCount = [...document.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length`;
+    const beforePlaces = await evaluate(send, rememberPlaces);
     const idle = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen button idle', 10000);
     await enterFullscreenThroughOpenSheet(send, viewport.mobile);
+    const split = await proveIssSplitFullscreen(send, viewport);
     const held = await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected}`, 10000);
     await shot(send, evidenceDir, 'iss-fullscreen');
+    const telemetryOpen = await proveFullscreenTelemetry(send);
     if (!viewport.mobile) {
       await send('Emulation.setDeviceMetricsOverride', { width: viewport.width, height: viewport.height, deviceScaleFactor: 2, mobile: false });
       await waitFor(send, issBackingExpression(1.5), 'iss canvas follows a 2x device at the 1.5 cap', 10000);
@@ -3924,6 +4230,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       'iss straight down stored before fullscreen Escape',
       10000,
     );
+    await evaluate(send, rememberPlaces);
     await pressIssFullscreen(send);
     await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected} on straight down`, 10000);
     await pressKey(send, 'Escape');
@@ -3949,7 +4256,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, Escape kept aim`;
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }

@@ -41,10 +41,13 @@ const FACES = {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () => void }): { dispose(): void } {
-  const { scene, relayout } = options;
-  const toolbar = scene.querySelector('[data-iss-toolbar]');
-  if (!(toolbar instanceof HTMLElement)) throw new Error('iss toolbar missing');
+export function bindIssFullscreen(options: {
+  scene: HTMLElement;
+  controls: HTMLElement;
+  telemetry: HTMLElement;
+  relayout: () => void;
+}): { dispose(): void } {
+  const { scene, controls, telemetry, relayout } = options;
   const button = document.createElement('button');
   button.type = 'button';
   button.dataset.issFullscreen = '';
@@ -55,9 +58,7 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
   const path = document.createElementNS(SVG_NS, 'path');
   icon.append(path);
   button.append(icon);
-  const anchor = toolbar.querySelector('[data-iss-aim-anchor]');
-  if (anchor) anchor.after(button);
-  else toolbar.prepend(button);
+  telemetry.after(button);
 
   let mode: IssFullscreenMode = 'off';
   let escapeExitHeld = false;
@@ -66,12 +67,14 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
 
   function dispatch(signal: FullscreenSignal): void {
     const step = STEPS[mode][signal];
-    if (mode !== 'off' && step.mode === 'off') escapeExitHeld = true;
+    const leaving = mode !== 'off' && step.mode === 'off';
+    if (leaving) escapeExitHeld = true;
     mode = step.mode;
     paintMode();
     if (step.effect === 'request') requestFullscreen(scene);
     if (step.effect === 'exit') exitFullscreen();
     relayout();
+    if (leaving && document.contains(button)) button.focus({ preventScroll: true });
   }
 
   function paintMode(): void {
@@ -119,7 +122,8 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
   }
 
   function onFocusIn(event: FocusEvent): void {
-    if (mode === 'off' || !(event.target instanceof Element) || scene.contains(event.target)) return;
+    if (mode === 'off' || !(event.target instanceof Element)) return;
+    if (scene.contains(event.target) || controls.contains(event.target)) return;
     dispatch('dismiss');
   }
 
