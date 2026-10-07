@@ -106,6 +106,12 @@ describe('buildStyle', () => {
     expect(coastline).toMatchObject({ type: 'geojson', data: '/ne_110m_coastline.geojson' });
   });
 
+  it('paints the dark basemap from Esri World Dark Gray', () => {
+    expect(firstTileUrl('carto-dark')).toBe(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    );
+  });
+
   it('routes night lights through the viirs-alpha protocol that keys out the dark background', () => {
     expect(firstTileUrl('viirs-night-lights')).toMatch(/^viirs-alpha:\/\//);
   });

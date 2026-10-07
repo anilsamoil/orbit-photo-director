@@ -3,11 +3,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
 
-const CARTO_TILES = [
-  'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-  'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-  'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-  'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+const ESRI_DARK_TILES = [
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
 ];
 
 /** Reference raster. It draws boundaries at zoom 0–2 and country names only once the fit zooms in. */
@@ -72,7 +69,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       version: 8,
       glyphs: INSET_GLYPHS,
       sources: {
-        'inset-basemap': { type: 'raster', tiles: CARTO_TILES, tileSize: 256 },
+        'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: 20 },
         'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: 19 },
         'inset-countries': { type: 'geojson', data: COUNTRY_CENTROIDS },
         'inset-track': { type: 'geojson', data: EMPTY },
