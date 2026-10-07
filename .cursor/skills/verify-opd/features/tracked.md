@@ -21,7 +21,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 - The default fixture publishes the no-orbit row.
-- `OPD_VERIFY_TRACKED=elements` on `up` publishes the first live Starlink from the CelesTrak SupGP starlink file as the Starship row. The lines are that Starlink. The label is Starship.
+- `OPD_VERIFY_TRACKED=elements` on `up` publishes the first TLE block from the CelesTrak SupGP starlink file as the Starship row. The lines are that block's name, line 1, and line 2. The label is Starship.
 - `OPD_VERIFY_TRACKED=aged_out` on `up` publishes `reason: aged_out` and no element lines.
 - `OPD_VERIFY_TRACKED=lookup_failed` on `up` publishes `reason: lookup_failed` and no element lines.
 - `OPD_VERIFY_TRACKED=missing` on `up` omits `tracked` from the manifest.

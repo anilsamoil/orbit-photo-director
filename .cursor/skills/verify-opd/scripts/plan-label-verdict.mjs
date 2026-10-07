@@ -48,6 +48,12 @@ export function planLabelVerdict(sample) {
   if (!(alpha > 0)) {
     return { ok: false, step: 'labels', reason: 'color', color: sample.textColor == null ? null : sample.textColor, glyphs };
   }
+  if (sample.textAllowOverlap === true) {
+    return { ok: false, step: 'labels', reason: 'allow-overlap', glyphs };
+  }
+  if (sample.textIgnorePlacement === true) {
+    return { ok: false, step: 'labels', reason: 'ignore-placement', glyphs };
+  }
   const catalog = Array.isArray(sample.catalog) ? sample.catalog : [];
   const names = [];
   const rendered = Array.isArray(sample.rendered) ? sample.rendered : [];
@@ -72,6 +78,8 @@ function readPlanLabels(orbit, glyphs, width, height) {
   const textOpacity = orbit.getPaintProperty('inset-countries', 'text-opacity');
   const textColor = orbit.getPaintProperty('inset-countries', 'text-color');
   const textField = orbit.getLayoutProperty('inset-countries', 'text-field');
+  const textAllowOverlap = orbit.getLayoutProperty('inset-countries', 'text-allow-overlap');
+  const textIgnorePlacement = orbit.getLayoutProperty('inset-countries', 'text-ignore-placement');
   let labelFeatures = [];
   try {
     labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
@@ -102,6 +110,8 @@ function readPlanLabels(orbit, glyphs, width, height) {
     textOpacity: textOpacity,
     textColor: textColor,
     textField: textField,
+    textAllowOverlap: textAllowOverlap,
+    textIgnorePlacement: textIgnorePlacement,
     catalog: catalog,
     rendered: rendered,
     width: width,
@@ -173,13 +183,19 @@ export function biteReport() {
   const textField = readPlanLabels(orbit, glyphs, width, height);
   orbit.setLayoutProperty('inset-countries', 'text-field', fieldPrevious);
   const restored = readPlanLabels(orbit, glyphs, width, height);
+  orbit.setLayoutProperty('inset-countries', 'text-allow-overlap', true);
+  const allowOverlap = readPlanLabels(orbit, glyphs, width, height);
+  orbit.setLayoutProperty('inset-countries', 'text-allow-overlap', undefined);
+  orbit.setLayoutProperty('inset-countries', 'text-ignore-placement', true);
+  const ignorePlacement = readPlanLabels(orbit, glyphs, width, height);
+  orbit.setLayoutProperty('inset-countries', 'text-ignore-placement', undefined);
   const shortGlyphs = readPlanLabels(orbit, 9999, width, height);
   orbit.setLayoutProperty('inset-countries', 'visibility', 'none');
   const hidden = readPlanLabels(orbit, glyphs, width, height);
   orbit.setLayoutProperty('inset-countries', 'visibility', 'visible');
   orbit.setPaintProperty('inset-countries', 'text-color', 'transparent');
   const clear = readPlanLabels(orbit, glyphs, width, height);
-  return { unmutated, textOpacity, textField, restored, shortGlyphs, hidden, clear };
+  return { unmutated, textOpacity, textField, restored, allowOverlap, ignorePlacement, shortGlyphs, hidden, clear };
 }
 
 function runBite() {
@@ -188,12 +204,18 @@ function runBite() {
   console.log(line('unmutated', report.unmutated));
   console.log(line('text-opacity', report.textOpacity));
   console.log(line('text-field', report.textField));
+  console.log(line('text-allow-overlap', report.allowOverlap));
+  console.log(line('text-ignore-placement', report.ignorePlacement));
   const bite = report.unmutated.ok === true
     && report.textOpacity.ok === false
     && report.textOpacity.reason === 'opacity'
     && report.textField.ok === false
     && report.textField.reason === 'names'
     && report.restored.ok === true
+    && report.allowOverlap.ok === false
+    && report.allowOverlap.reason === 'allow-overlap'
+    && report.ignorePlacement.ok === false
+    && report.ignorePlacement.reason === 'ignore-placement'
     && report.shortGlyphs.ok === false
     && report.shortGlyphs.reason === 'glyphs'
     && report.hidden.ok === false
