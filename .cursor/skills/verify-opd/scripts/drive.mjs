@@ -1606,6 +1606,26 @@ async function proveMapLaidOnPane(send) {
     const slider = document.getElementById('time-slider');
     const sliderBox = slider ? slider.getBoundingClientRect() : null;
     const fitting = innerWidth >= 800 && innerHeight >= 600;
+    const shortRow = innerHeight <= 520 && innerWidth >= 720;
+    const narrow = innerWidth <= 800 && !shortRow && !fitting;
+    let reserved = null;
+    if (narrow) {
+      const probe = document.createElement('div');
+      probe.style.position = 'absolute';
+      probe.style.visibility = 'hidden';
+      probe.style.height = 'var(--map-command-height)';
+      document.body.appendChild(probe);
+      const height = probe.getBoundingClientRect().height;
+      probe.remove();
+      const insetProbe = document.createElement('div');
+      insetProbe.style.position = 'absolute';
+      insetProbe.style.visibility = 'hidden';
+      insetProbe.style.paddingBottom = 'env(safe-area-inset-bottom, 0px)';
+      document.body.appendChild(insetProbe);
+      const inset = Number.parseFloat(getComputedStyle(insetProbe).paddingBottom) || 0;
+      insetProbe.remove();
+      reserved = { height, inset, expect: 140 + inset };
+    }
     const pip = fitting
       ? { left: paneBox.right - 12 - 222, right: paneBox.right - 12, top: paneBox.bottom - 96 - 36 - 144, bottom: paneBox.bottom - 96 - 36, width: 222, height: 144 }
       : null;
@@ -1631,6 +1651,8 @@ async function proveMapLaidOnPane(send) {
       rightGap: paneBox.right - stripBox.right,
       slider: sliderBox ? sliderBox.height : null,
       fitting,
+      narrow,
+      reserved,
       paneWidth: paneBox.width,
       fullBleed: stripBox.width > paneBox.width - 80,
       hide: hits(stripBox, hide),
@@ -1651,7 +1673,11 @@ async function proveMapLaidOnPane(send) {
     && Math.abs(laid.rightGap - 246) <= 2
     && Math.abs(laid.slider - 32) <= 1
   ));
-  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !paintIsClear(laid.color) || !chipBacking(laid.controls) || laid.fullBleed || laid.hide || laid.legend || laid.zoom || laid.pip || laid.events !== 'none' || !geometry) {
+  const narrowOk = laid && (!laid.narrow || (
+    laid.reserved
+    && Math.abs(laid.reserved.height - laid.reserved.expect) <= 2
+  ));
+  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !paintIsClear(laid.color) || !chipBacking(laid.controls) || laid.fullBleed || laid.hide || laid.legend || laid.zoom || laid.pip || laid.events !== 'none' || !geometry || !narrowOk) {
     throw new Error(`time strip not laid on the map ${JSON.stringify(laid)}`);
   }
   return laid;
@@ -2735,13 +2761,14 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
         legend: !!legend,
         badge: badge ? badge.textContent : null,
         track: !!(map && map.getLayer && map.getLayer('iss-track-layer')),
+        darkZoom: map && map.getSource ? (map.getSource('carto-dark') ? map.getSource('carto-dark').maxzoom : null) : null,
         view: document.getElementById('view')?.className,
         issClock: !!document.querySelector('[data-iss-clock]'),
         logs: (window.__opdLogs || []).slice(-8),
         mapHtml: (document.getElementById('map')?.innerHTML || '').slice(0, 180),
       };
-      if (status.map && status.marker && status.legend && status.badge && String(status.badge).trim() && status.track && !status.issClock) {
-        return { ok: true, badge: status.badge, legend: legend.textContent };
+      if (status.map && status.marker && status.legend && status.badge && String(status.badge).trim() && status.track && !status.issClock && status.darkZoom === 16) {
+        return { ok: true, badge: status.badge, legend: legend.textContent, maxzoom: status.darkZoom };
       }
       return status;
     })()`,
@@ -2767,6 +2794,17 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await revealMapChrome(send, evidenceDir, 'map-chrome-hidden');
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
+  let narrowLaid = laid.narrow ? laid : null;
+  if (!laid.narrow) {
+    await setViewport(send, 390, 664, true);
+    await sleep(200);
+    try {
+      narrowLaid = await proveMapLaidOnPane(send);
+    } finally {
+      await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+      await sleep(200);
+    }
+  }
   await proveMapControlHits(send, 'shot list closed');
   await proveShortTimeRow(send, viewport);
   await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
@@ -3007,7 +3045,8 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  const narrowNote = narrowLaid && narrowLaid.reserved ? ` narrow command ${Math.round(narrowLaid.reserved.height)}px` : '';
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, Esri dark maxzoom ${ready.maxzoom}, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px${narrowNote}, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {
