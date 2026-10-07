@@ -3575,6 +3575,12 @@ async function proveTightChromeReflow(send, viewport) {
     }
     await setViewport(send, 390, 521, true);
     await safeAreaOverride(send, { top: 24, left: 0, bottom: 34, right: 0 });
+    await waitFor(
+      send,
+      `document.getElementById('live-readout')?.hidden === true ? { ok: true } : null`,
+      'narrow status collapsed before activation',
+      3000,
+    );
     const activated = await evaluate(send, `(() => {
       document.body.classList.add('shotlist-bar-visible');
       const legend = document.getElementById('map-legend-toggle');
