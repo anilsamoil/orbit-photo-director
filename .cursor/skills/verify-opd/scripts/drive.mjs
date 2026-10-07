@@ -3742,7 +3742,7 @@ async function provePlanRasterNames(send) {
 async function dispatchPlanTouch(send, type, x, y) {
   const sent = await evaluate(send, `(() => {
     const canvas = document.querySelector('[data-pip="plan"] canvas');
-    if (!canvas || !document.createTouch || !document.createTouchList) return false;
+    if (!canvas) return { ok: false, reason: 'canvas' };
     const kind = ${JSON.stringify(type)};
     const x = ${x};
     const y = ${y};
@@ -3756,20 +3756,31 @@ async function dispatchPlanTouch(send, type, x, y) {
       pointerType: 'touch',
       isPrimary: true,
     }));
-    const touch = document.createTouch(window, canvas, 7, x, y, x, y, x, y);
-    const list = document.createTouchList(touch);
-    const empty = document.createTouchList();
+    let touch = null;
+    if (typeof Touch === 'function') {
+      touch = new Touch({ identifier: 7, target: canvas, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y });
+    } else if (document.createTouch) {
+      touch = document.createTouch(window, canvas, 7, x, y, x, y, x, y);
+    }
+    if (!touch) return { ok: false, reason: 'touch-ctor' };
+    const list = document.createTouchList ? document.createTouchList(touch) : [touch];
+    const empty = document.createTouchList ? document.createTouchList() : [];
     const active = kind === 'touchEnd' ? empty : list;
-    canvas.dispatchEvent(new TouchEvent(kind === 'touchStart' ? 'touchstart' : kind === 'touchEnd' ? 'touchend' : 'touchmove', {
-      bubbles: true,
-      cancelable: true,
-      touches: active,
-      targetTouches: active,
-      changedTouches: list,
-    }));
-    return true;
+    const eventName = kind === 'touchStart' ? 'touchstart' : kind === 'touchEnd' ? 'touchend' : 'touchmove';
+    try {
+      canvas.dispatchEvent(new TouchEvent(eventName, {
+        bubbles: true,
+        cancelable: true,
+        touches: active,
+        targetTouches: active,
+        changedTouches: list,
+      }));
+    } catch (error) {
+      return { ok: false, reason: 'event', error: String(error) };
+    }
+    return { ok: true };
   })()`);
-  if (!sent) throw new Error(`plan touch ${type} did not reach the canvas`);
+  if (!sent?.ok) throw new Error(`plan touch ${type} ${JSON.stringify(sent)}`);
 }
 
 async function provePlanGestureHolds(send, viewport) {
