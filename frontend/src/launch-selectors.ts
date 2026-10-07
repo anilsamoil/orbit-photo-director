@@ -198,7 +198,9 @@ export function launchCoverageLabel(state: LaunchState, now: number, view: 'upco
     const until = Math.min(Date.parse(artifact.coverage.until), now + horizon);
     const incomplete = !artifact.coverage.complete || artifact.coverage.reasons.length > 0 || Date.parse(artifact.coverage.until) < now + horizon;
     const checked = artifact.coverage.schedule_fetched_at;
+    const scheduleCurrent = Date.parse(artifact.generated_at) <= now && now < Date.parse(artifact.schedule_valid_until);
     const flags = [
+      scheduleCurrent ? '' : 'STALE / EXPIRED',
       state.superseded ? 'SUPERSEDED; newer update pending' : '',
       state.availability === 'offline' ? 'OFFLINE' : state.availability === 'last-good' ? 'LAST GOOD; refresh unavailable' : '',
     ].filter(Boolean).join('; ');

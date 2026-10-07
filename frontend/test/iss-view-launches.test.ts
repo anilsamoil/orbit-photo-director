@@ -22,7 +22,7 @@ import type { Track } from '../src/types';
 
 import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
 import { launchStore } from '../src/launch-store';
-import { NOW, artifact, assessment, envelope, iso, launch, state, supported } from './launch-fixtures';
+import { NOW, artifact, assessment, catalog, envelope, iso, launch, state, supported } from './launch-fixtures';
 
 const fixture = fixtureRaw as {
   tle: { line1: string; line2: string };
@@ -746,6 +746,138 @@ describe('selected launch in the ISS view', () => {
       expect(card?.querySelector('[data-iss-launch-name]')?.textContent).toBe('Horizon');
       expect(card?.hasAttribute('hidden')).toBe(false);
       expect(host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('horizon');
+      scene.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+      host.remove();
+    }
+  });
+
+  it('clears a schema 2 chance when an empty schema 3 catalog is accepted', async () => {
+    const shown: LaunchSite[][] = [];
+    const chance = launch({
+      event_id: 'crew',
+      name: 'Crew',
+      assessment: assessment({ checked_at: iso(2) }),
+      site: { name: 'Cape Canaveral', lat: 28.5, lon: -80.6 },
+      launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' },
+      sources: [{ kind: 'schedule', url: 'https://example.org/launch', fetched_at: iso(2) }],
+    });
+    const current = await envelope(artifact([chance], { revision: 'r-v2-chance', generated_at: iso(2) }));
+    const empty = await envelope(catalog([], { revision: 'r-v3-empty', generated_at: iso(3) }));
+    let phase: 'v2' | 'v3' = 'v2';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      const body = phase === 'v2' ? current : empty;
+      return new Response(path.includes('launch/latest.json') ? JSON.stringify(body.pointer) : body.body);
+    }));
+    const host = document.createElement('div');
+    document.body.append(host);
+    try {
+      await launchStore.refresh();
+      const scene = mountIssScene(host, {
+        nowMs: () => NOW + 2 * 60_000,
+        createRenderer: () => ({
+          ready: () => Promise.resolve(),
+          aim: () => Promise.resolve(),
+          showLaunches(sites) {
+            shown.push([...sites]);
+          },
+          resize: () => {},
+          destroy: () => {},
+        }),
+        drive: 'manual',
+        session: { mode: 'horizon' },
+      });
+      scene.update(shot());
+      await settle();
+      await scene.paint();
+      const picker = host.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) throw new Error('missing picker');
+      picker.value = 'crew';
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await settle();
+      await scene.paint();
+      expect(picker.value).toBe('crew');
+      expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Crew');
+      expect(host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('crew');
+      expect(shown.at(-1)?.map((site) => site.eventId)).toEqual(['crew']);
+      phase = 'v3';
+      await launchStore.refresh();
+      await settle();
+      await scene.paint();
+      expect(launchStore.getState().artifact?.schema_version).toBe(3);
+      expect(launchStore.getState().availability).toBe('ready');
+      expect(picker.value).toBe('');
+      expect(host.querySelector('[data-iss-launch-name]')).toBeNull();
+      expect(host.querySelector('[data-iss-launch-missing]')?.textContent).toBe('Selected launch is no longer available');
+      expect(host.querySelector('[data-iss-launch]')).toBeNull();
+      expect(host.querySelector('[data-iss-launches]')?.hasAttribute('hidden')).toBe(true);
+      expect(shown.at(-1)).toEqual([]);
+      scene.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+      host.remove();
+    }
+  });
+
+  it('keeps a schema 2 chance when a schema 3 body fails and the last good copy remains', async () => {
+    const shown: LaunchSite[][] = [];
+    const chance = launch({
+      event_id: 'crew',
+      name: 'Crew',
+      assessment: assessment({ checked_at: iso(4) }),
+      site: { name: 'Cape Canaveral', lat: 28.5, lon: -80.6 },
+      launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' },
+      sources: [{ kind: 'schedule', url: 'https://example.org/launch', fetched_at: iso(4) }],
+    });
+    const current = await envelope(artifact([chance], { revision: 'r-v2-kept', generated_at: iso(4) }));
+    const broken = await envelope(catalog([], { revision: 'r-v3-bad', generated_at: iso(5) }));
+    broken.body += ' ';
+    let phase: 'v2' | 'bad' = 'v2';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      const body = phase === 'v2' ? current : broken;
+      return new Response(path.includes('launch/latest.json') ? JSON.stringify(body.pointer) : body.body);
+    }));
+    const host = document.createElement('div');
+    document.body.append(host);
+    try {
+      await launchStore.refresh();
+      const scene = mountIssScene(host, {
+        nowMs: () => NOW + 4 * 60_000,
+        createRenderer: () => ({
+          ready: () => Promise.resolve(),
+          aim: () => Promise.resolve(),
+          showLaunches(sites) {
+            shown.push([...sites]);
+          },
+          resize: () => {},
+          destroy: () => {},
+        }),
+        drive: 'manual',
+        session: { mode: 'horizon' },
+      });
+      scene.update(shot());
+      await settle();
+      await scene.paint();
+      const picker = host.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) throw new Error('missing picker');
+      picker.value = 'crew';
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await settle();
+      await scene.paint();
+      expect(shown.at(-1)?.map((site) => site.eventId)).toEqual(['crew']);
+      phase = 'bad';
+      await launchStore.refresh();
+      await settle();
+      await scene.paint();
+      expect(launchStore.getState().availability).toBe('last-good');
+      expect(launchStore.getState().artifact?.schema_version).toBe(2);
+      expect(picker.value).toBe('crew');
+      expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe('Crew');
+      expect(host.querySelector('[data-iss-launch]')?.getAttribute('data-iss-launch')).toBe('crew');
+      expect(shown.at(-1)?.map((site) => site.eventId)).toEqual(['crew']);
       scene.dispose();
     } finally {
       vi.unstubAllGlobals();

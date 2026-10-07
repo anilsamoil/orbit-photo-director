@@ -552,7 +552,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const all = readAll();
     const state = launchStore.getState();
     const now = options.nowMs();
-    const judged = !!options.launches || launchVerdictBlock(state, now) === null;
+    const acceptedCatalog = state.artifact?.schema_version === 3 && state.availability === 'ready' && !state.superseded;
+    const judged = !!options.launches || acceptedCatalog || launchVerdictBlock(state, now) === null;
     const current = pick;
     const heldId = current.kind === 'held' ? current.eventId : '';
     const catalog = current.kind === 'held' && current.group === 'all' ? all : selections;

@@ -167,8 +167,14 @@ describe('shared launch selection', () => {
     expect(selectLaunches(loaded, NOW, 'map')).toEqual([]);
     expect(launchScheduleFresh(loaded, NOW)).toBe(false);
     expect(launchCoverageLabel(loaded, NOW)).toBe('LAUNCH: Schedule checked 2026-09-07 11:55:00 UTC | Coverage complete: 2026-09-07 11:00:00 UTC to 2026-09-09 00:00:00 UTC');
+    const scheduleLease = Date.parse(parsed.schedule_valid_until);
+    expect(launchCoverageLabel(loaded, scheduleLease - 1)).not.toContain('STALE / EXPIRED');
+    expect(launchCoverageLabel(loaded, scheduleLease)).toContain('STALE / EXPIRED');
+    expect(launchCoverageLabel(loaded, scheduleLease)).toContain('Coverage complete');
+    expect(launchCoverageLabel(loaded, Date.parse(parsed.generated_at) - 1)).toContain('STALE / EXPIRED');
     loaded.availability = 'last-good';
-    expect(launchCoverageLabel(loaded, NOW)).toContain('LAST GOOD; refresh unavailable');
+    expect(launchCoverageLabel(loaded, NOW)).toBe('LAUNCH: LAST GOOD; refresh unavailable | Schedule checked 2026-09-07 11:55:00 UTC | Coverage complete: 2026-09-07 11:00:00 UTC to 2026-09-09 00:00:00 UTC');
+    expect(launchCoverageLabel(loaded, scheduleLease)).toContain('STALE / EXPIRED; LAST GOOD; refresh unavailable');
     const v2 = state();
     expect(v2.artifact?.schema_version).toBe(2);
     expect(launchCoverageLabel(v2, NOW)).toContain('SCHEDULE CURRENT (MAP ONLY)');
