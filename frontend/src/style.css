@@ -1357,8 +1357,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   overscroll-behavior: contain;
   color: #f4f7fb;
 }
-/* Zoom stays under the toolbar. Credits own the strip above the status
- * line. Legend, imagery date, and help sit above that strip. */
 .view-map #map .maplibregl-ctrl-top-left {
   top: calc(var(--topbar-height) + 71px);
   left: calc(8px + env(safe-area-inset-left, 0px));
