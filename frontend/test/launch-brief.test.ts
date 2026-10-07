@@ -131,12 +131,17 @@ describe('additive launch planning schema', () => {
   it('accepts a launch window that opens before the NET', () => {
     const item = planned();
     item.launch_window.start = iso(5);
-    expect(parseLaunchArtifact(artifact([item])).items[0]?.assessment?.net.verdict).toBe('possible');
+    const parsed = parseLaunchArtifact(artifact([item]));
+    if (parsed.schema_version !== 2) throw new Error('expected schema 2');
+    expect(parsed.items[0]?.assessment?.net.verdict).toBe('possible');
   });
 
   it('accepts both older artifacts and the new complete planning assessment', () => {
-    expect(parseLaunchArtifact(artifact()).items[0]?.assessment).toBeUndefined();
-    expect(parseLaunchArtifact(artifact([planned()])).items[0]?.assessment?.net.verdict).toBe('possible');
+    const older = parseLaunchArtifact(artifact());
+    const plannedArtifact = parseLaunchArtifact(artifact([planned()]));
+    if (older.schema_version !== 2 || plannedArtifact.schema_version !== 2) throw new Error('expected schema 2');
+    expect(older.items[0]?.assessment).toBeUndefined();
+    expect(plannedArtifact.items[0]?.assessment?.net.verdict).toBe('possible');
   });
 
   it.each(['missing-look', 'wrong-net', 'missing-tle', 'overlong-validity', 'unknown-field', 'negative-without-model', 'unknown-with-look'])('rejects misleading %s assessment', (cause) => {

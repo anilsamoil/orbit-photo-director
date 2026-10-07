@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LaunchStore, LAUNCH_STORAGE_KEY, LAUNCH_OBSERVED_POINTER_KEY } from '../src/launch-store';
 import { parseLaunchArtifact, parseLaunchPointer } from '../src/launch-schema';
 import { launchBrief, launchCoverageLabel, launchFresh, launchScheduleFresh, selectLaunches } from '../src/launch-selectors';
-import { artifact, assessment, envelope, iso, launch, NOW, supported } from './launch-fixtures';
+import { artifact, assessment, catalog, envelope, iso, launch, NOW, supported } from './launch-fixtures';
 
 beforeEach(() => localStorage.clear());
 
@@ -10,7 +10,9 @@ describe('superseded launch evidence', () => {
   const planned = () => launch({ assessment: assessment(),
     launch_window: { net: iso(10), start: iso(10), end: iso(97), precision: 'Minute' } });
   const displayed = (store: LaunchStore) => {
-    const item = store.getState().artifact!.items[0]!;
+    const loaded = store.getState().artifact;
+    if (loaded?.schema_version !== 2) throw new Error('expected schema 2');
+    const item = loaded.items[0]!;
     return launchBrief({ item, interval: item.capture_intervals[0] ?? null, expired: false }, store.getState(), NOW);
   };
   const withdrawn = (store: LaunchStore) => {
@@ -119,7 +121,9 @@ describe('launch runtime schema', () => {
   it('preserves inverted map-only bounds with TIME_CONFLICT but rejects unmarked or supported conflicts', () => {
     const item = launch({ reason_codes: ['TIME_CONFLICT'], launch_window: { net: iso(10), start: iso(20), end: iso(-10), precision: 'minute' } });
     const a = artifact([item]);
-    expect(parseLaunchArtifact(a).items[0]!.launch_window).toEqual(item.launch_window);
+    const parsed = parseLaunchArtifact(a);
+    if (parsed.schema_version !== 2) throw new Error('expected schema 2');
+    expect(parsed.items[0]!.launch_window).toEqual(item.launch_window);
     item.reason_codes = [];
     expect(() => parseLaunchArtifact(a)).toThrow();
     const supportedConflict = supported({ reason_codes: ['TIME_CONFLICT'], launch_window: item.launch_window });
@@ -402,5 +406,59 @@ describe('common launch store', () => {
     store.tick(net + 1);
     expect(listener).toHaveBeenCalledOnce();
     expect(launchBrief({ item, interval: null, expired: false }, store.getState(), net + 1)).toMatchObject({ verdict: 'unknown', direction: null });
+  });
+  it('parses schema 3 with a lens and still parses schema 2', () => {
+    const v2 = parseLaunchArtifact(artifact());
+    expect(v2.schema_version).toBe(2);
+    if (v2.schema_version !== 2) throw new Error('expected schema 2');
+    expect(v2.items[0]?.status).toBe('map_only');
+    const v3 = parseLaunchArtifact(catalog());
+    expect(v3.schema_version).toBe(3);
+    if (v3.schema_version !== 3) throw new Error('expected schema 3');
+    expect(v3.items[0]?.shots[0]?.lens).toBe('telephoto');
+    expect(v3.items[0]?.shots[0]?.lens_reason).toBe('Distant plume');
+    expect(v3.items[0]?.shots[1]?.subject).toBe('ascent');
+    expect(v3.items[0]?.shots[1]?.track).toEqual([
+      { t_offset_s: 0, lat: 28.5, lon: -80.6, alt_km: 0 },
+      { t_offset_s: 15, lat: 28.6, lon: -80.5, alt_km: 10 },
+    ]);
+    expect(v3.items[0]?.direction).toEqual({ kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss plane', off_plane_deg: 0.35 });
+    expect(v3.tle.sha256).toBe('a'.repeat(64));
+  });
+  it.each([
+    (value: ReturnType<typeof catalog>) => { Object.assign(value, { valid_until: iso(10) }); },
+    (value: ReturnType<typeof catalog>) => { value.items[0]!.direction = { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null }; },
+    (value: ReturnType<typeof catalog>) => { value.items[0]!.shots[0]!.track = [{ t_offset_s: 0, lat: 1, lon: 2, alt_km: 0 }]; },
+    (value: ReturnType<typeof catalog>) => { delete (value.items[0]!.shots[0] as { lens?: string }).lens; },
+    (value: ReturnType<typeof catalog>) => { value.geometry_valid_until = iso(11); },
+    (value: ReturnType<typeof catalog>) => { value.items[0]!.shots[0]!.lens_reason = ''; },
+  ])('rejects a schema 3 catalog case %#', (mutate) => {
+    const value = catalog();
+    mutate(value);
+    expect(() => parseLaunchArtifact(value)).toThrow('Invalid launch schema');
+  });
+  it('loads a schema 3 catalog and keeps the last good copy when the hash does not match', async () => {
+    const previous = await envelope();
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(previous));
+    const next = await envelope(catalog([], { revision: 'r2', generated_at: iso(-1) }));
+    const fetcher = vi.fn(async (path) => new Response(path === '/launch/latest.json' ? JSON.stringify(next.pointer) : next.body));
+    const store = new LaunchStore(fetcher);
+    await store.refresh();
+    const loaded = store.getState().artifact;
+    expect(loaded?.schema_version).toBe(3);
+    expect(loaded?.revision).toBe('r2');
+    expect(store.getState().availability).toBe('ready');
+    if (loaded?.schema_version === 3) expect(loaded.geometry_valid_until).toBe(next.pointer.valid_until);
+    expect(selectLaunches(store.getState(), NOW, 'map')).toEqual([]);
+    expect(selectLaunches(store.getState(), NOW, 'queue')).toEqual([]);
+    expect(selectLaunches(store.getState(), NOW, 'upcoming')).toEqual([]);
+    next.body += ' ';
+    const mismatched = new LaunchStore(vi.fn(async (path) => new Response(path === '/launch/latest.json' ? JSON.stringify(next.pointer) : next.body)));
+    localStorage.setItem(LAUNCH_STORAGE_KEY, JSON.stringify(previous));
+    await mismatched.refresh();
+    expect(mismatched.getState().artifact?.schema_version).toBe(2);
+    expect(mismatched.getState().artifact?.revision).toBe('r1');
+    expect(mismatched.getState().availability).toBe('last-good');
+    expect(JSON.parse(localStorage.getItem(LAUNCH_STORAGE_KEY)!).pointer.revision).toBe('r1');
   });
 });

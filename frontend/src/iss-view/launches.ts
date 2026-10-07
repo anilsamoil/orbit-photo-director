@@ -63,7 +63,7 @@ const SCHEDULE_PRECISION = new Set(['second', 'minute', 'hour']);
 
 export function selectAllLaunches(state: LaunchState, nowMs: number): LaunchSelection[] {
   const artifact = state.artifact;
-  if (!artifact) return [];
+  if (!artifact || artifact.schema_version !== 2) return [];
   const selected: LaunchSelection[] = [];
   for (const item of artifact.items) {
     if (item.reason_codes.includes('LAUNCH_UNCONFIRMED')) continue;

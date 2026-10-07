@@ -1,10 +1,10 @@
-import { parseLaunchArtifact, parseLaunchPointer, type LaunchArtifact, type LaunchPointer } from './launch-schema';
+import { parseLaunchArtifact, parseLaunchPointer, type LaunchArtifact, type LaunchCatalog, type LaunchPointer } from './launch-schema';
 
 export const LAUNCH_STORAGE_KEY = 'opd-launch-v2';
 export const LAUNCH_OBSERVED_POINTER_KEY = 'opd-launch-v2-observed-pointer';
 const MAX_BYTES = 2_000_000;
 export interface LaunchState {
-  artifact: LaunchArtifact | null;
+  artifact: LaunchArtifact | LaunchCatalog | null;
   pointer: LaunchPointer | null;
   availability: 'loading' | 'ready' | 'unavailable' | 'last-good' | 'offline';
   /** Cached schedule remains readable, but a known newer publication invalidates its evidence. */
@@ -12,12 +12,13 @@ export interface LaunchState {
 }
 type Envelope = { pointer: LaunchPointer; body: string };
 
-export async function validateLaunchBytes(pointer: LaunchPointer, bytes: ArrayBuffer): Promise<LaunchArtifact> {
+export async function validateLaunchBytes(pointer: LaunchPointer, bytes: ArrayBuffer): Promise<LaunchArtifact | LaunchCatalog> {
   if (bytes.byteLength > MAX_BYTES) throw new Error('Launch artifact too large');
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (n) => n.toString(16).padStart(2, '0')).join('');
   if (hash !== pointer.sha256) throw new Error('Launch hash mismatch');
   const artifact = parseLaunchArtifact(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
-  if (artifact.revision !== pointer.revision || artifact.generated_at !== pointer.generated_at || artifact.valid_until !== pointer.valid_until) {
+  const leaseUntil = artifact.schema_version === 2 ? artifact.valid_until : artifact.geometry_valid_until;
+  if (artifact.revision !== pointer.revision || artifact.generated_at !== pointer.generated_at || leaseUntil !== pointer.valid_until) {
     throw new Error('Launch revision mismatch');
   }
   return artifact;
@@ -31,6 +32,22 @@ function freeze<T>(value: T): T {
 }
 function samePointer(a: LaunchPointer, b: LaunchPointer): boolean {
   return a.revision === b.revision && a.sha256 === b.sha256 && a.generated_at === b.generated_at && a.valid_until === b.valid_until;
+}
+function clockBoundaries(artifact: LaunchArtifact | LaunchCatalog): string[] {
+  if (artifact.schema_version === 3) {
+    return [artifact.geometry_valid_until, artifact.schedule_valid_until, artifact.generated_at, artifact.coverage.from, artifact.coverage.until,
+      ...artifact.items.flatMap((item) => [item.schedule.net, item.schedule.window_end ?? item.schedule.net,
+        ...item.shots.flatMap((shot) => [shot.liftoff, shot.start, shot.best, shot.end])])];
+  }
+  const lifetime = Date.parse(artifact.valid_until) - Date.parse(artifact.generated_at);
+  const sourceExpiries = [artifact.coverage.fetched_at, ...artifact.items.flatMap((item) => item.sources.map((source) => source.fetched_at))]
+    .filter((timestamp): timestamp is string => timestamp !== null)
+    .flatMap((timestamp) => [lifetime, 3 * 3600_000].map((age) => new Date(Date.parse(timestamp) + age).toISOString()));
+  return [artifact.valid_until, artifact.generated_at, artifact.coverage.until, ...artifact.items.flatMap((item) => [
+    item.launch_window.net, item.launch_window.end ?? item.launch_window.net,
+    ...(item.assessment ? [item.assessment.checked_at, item.assessment.valid_until, item.assessment.net.at] : []),
+    ...item.capture_intervals.flatMap((interval) => [interval.start, interval.peak, interval.end]),
+  ]), ...sourceExpiries];
 }
 function regressesOrCollides(pointer: LaunchPointer, known: LaunchPointer): boolean {
   return Date.parse(pointer.generated_at) < Date.parse(known.generated_at)
@@ -169,15 +186,7 @@ export class LaunchStore {
   tick(now: number): void {
     const artifact = this.state.artifact;
     if (!artifact) return;
-    const lifetime = Date.parse(artifact.valid_until) - Date.parse(artifact.generated_at);
-    const sourceExpiries = [artifact.coverage.fetched_at, ...artifact.items.flatMap((item) => item.sources.map((source) => source.fetched_at))]
-      .filter((timestamp): timestamp is string => timestamp !== null)
-      .flatMap((timestamp) => [lifetime, 3 * 3600_000].map((age) => new Date(Date.parse(timestamp) + age).toISOString()));
-    const boundaries = [artifact.valid_until, artifact.generated_at, artifact.coverage.until, ...artifact.items.flatMap((item) => [
-      item.launch_window.net, item.launch_window.end ?? item.launch_window.net,
-      ...(item.assessment ? [item.assessment.checked_at, item.assessment.valid_until, item.assessment.net.at] : []),
-      ...item.capture_intervals.flatMap((interval) => [interval.start, interval.peak, interval.end]),
-    ]), ...sourceExpiries];
+    const boundaries = clockBoundaries(artifact);
     const key = boundaries.map((time) => {
       const t = Date.parse(time);
       return `${t > now}:${t >= now}:${t > now - 30 * 60_000}:${t <= now + 90 * 60_000}:${t <= now + 36 * 3600_000}:${t <= now + 7 * 24 * 3600_000}:${t <= now + 14 * 24 * 3600_000}`;

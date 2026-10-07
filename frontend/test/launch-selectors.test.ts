@@ -3,7 +3,9 @@ import { launchCoverageLabel, launchScheduleFresh, queueSlots, selectLaunches } 
 import { applyTargetFilter } from '../src/target-filter-pref';
 import { filterPassesByDistance } from '../src/pass-filter';
 import type { PassEntry } from '../src/types';
-import { artifact, assessment, interval, iso, launch, NOW, state, supported } from './launch-fixtures';
+import { artifact, assessment, catalog, interval, iso, launch, NOW, state, supported } from './launch-fixtures';
+import { parseLaunchArtifact } from '../src/launch-schema';
+import type { LaunchState } from '../src/launch-store';
 
 describe('shared launch selection', () => {
   it('separates recent tentative schedules from expired camera evidence without extending Queue', () => {
@@ -150,5 +152,26 @@ describe('shared launch selection', () => {
     expect(selectLaunches(s, NOW, 'upcoming').map((row) => row.item.event_id)).toEqual(['go']);
     expect(selectLaunches(s, NOW, 'queue')).toEqual([]);
     expect(selectLaunches(state(noise), NOW, 'map')).toEqual([]);
+  });
+  it('accepts a schema 3 catalog and does not select it as a v2 chance', () => {
+    const parsed = parseLaunchArtifact(catalog());
+    expect(parsed.schema_version).toBe(3);
+    if (parsed.schema_version !== 3) throw new Error('expected schema 3');
+    expect(parsed.items[0]?.tier).toBe('watch');
+    expect(parsed.items[0]?.shots[0]?.lens).toBe('telephoto');
+    expect(parsed.items[0]?.shots[0]?.lens_reason).toBe('Distant plume');
+    expect(parsed.items[0]?.shots[0]?.window).toBe('W6');
+    const loaded: LaunchState = { artifact: parsed, pointer: null, availability: 'ready' };
+    expect(selectLaunches(loaded, NOW, 'queue')).toEqual([]);
+    expect(selectLaunches(loaded, NOW, 'upcoming')).toEqual([]);
+    expect(selectLaunches(loaded, NOW, 'map')).toEqual([]);
+    expect(launchScheduleFresh(loaded, NOW)).toBe(false);
+    expect(launchCoverageLabel(loaded, NOW)).toBe('LAUNCH: Schedule checked 2026-09-07 11:55:00 UTC | Coverage complete: 2026-09-07 11:00:00 UTC to 2026-09-09 00:00:00 UTC');
+    loaded.availability = 'last-good';
+    expect(launchCoverageLabel(loaded, NOW)).toContain('LAST GOOD; refresh unavailable');
+    const v2 = state();
+    expect(v2.artifact?.schema_version).toBe(2);
+    expect(launchCoverageLabel(v2, NOW)).toContain('SCHEDULE CURRENT (MAP ONLY)');
+    expect(selectLaunches(v2, NOW, 'map')).toEqual([]);
   });
 });
