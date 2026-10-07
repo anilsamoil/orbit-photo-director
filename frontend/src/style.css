@@ -4881,7 +4881,9 @@ summary:focus-visible {
 
   .view-map .map-command {
     right: var(--horizon-span);
+    flex-wrap: nowrap;
     align-items: center;
+    align-content: center;
     height: var(--map-command-height);
     max-height: var(--map-command-height);
     padding: 8px 8px calc(32px + env(safe-area-inset-bottom, 0px)) 8px;
