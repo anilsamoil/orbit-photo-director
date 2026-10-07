@@ -46,6 +46,26 @@ function launchIso(ms) {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+export const SESSION_MARGIN_MS = 6 * 60 * 60 * 1000;
+
+function eventInstants(start) {
+  const launchBase = start + SESSION_MARGIN_MS + 30 * 60_000;
+  return {
+    reef: launchIso(start + SESSION_MARGIN_MS + 20 * 60_000),
+    delta: launchIso(start + SESSION_MARGIN_MS + 50 * 60_000),
+    mesa: launchIso(start + 8 * 60 * 60_000),
+    keepsake: launchIso(start + SESSION_MARGIN_MS + 35 * 60_000),
+    windowStart: launchIso(start + SESSION_MARGIN_MS + 30 * 60_000),
+    windowEnd: launchIso(start + SESSION_MARGIN_MS + 40 * 60_000),
+    net: launchIso(launchBase),
+    launchWindowEnd: launchIso(launchBase + 9 * 60_000),
+    captureStart: launchIso(launchBase + 60_000),
+    capturePeak: launchIso(launchBase + 4 * 60_000),
+    captureEnd: launchIso(launchBase + 8 * 60_000),
+    liftoffEnd: launchIso(launchBase + 60_000),
+  };
+}
+
 function wrapLon(lon) {
   let value = lon;
   while (value > 180) value -= 360;
@@ -158,16 +178,17 @@ function artifact(body) {
   return { text, sha256: sha256(text), bytes: Buffer.byteLength(text) };
 }
 
-export async function buildFixtures(dir, now = Date.now()) {
+export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
   mkdirSync(dir, { recursive: true });
   const tle = await loadTle();
   const satrec = satellite.twoline2satrec(tle.line1, tle.line2);
   const hereNow = positionAt(satrec, now) ?? { lat: 0, lon: 0, altKm: 420 };
   const generated = launchIso(now - 30_000);
-  const queueAt = launchIso(now + 20 * 60_000);
-  const queueAt2 = launchIso(now + 50 * 60_000);
-  const upcomingAt = launchIso(now + 8 * 60 * 60_000);
-  const keepsakeAt = launchIso(now + 35 * 60_000);
+  const events = eventInstants(eventStart);
+  const queueAt = events.reef;
+  const queueAt2 = events.delta;
+  const upcomingAt = events.mesa;
+  const keepsakeAt = events.keepsake;
   const reef = { lat: hereNow.lat, lon: wrapLon(hereNow.lon + 8) };
   const delta = { lat: hereNow.lat, lon: wrapLon(hereNow.lon + 12) };
   const mesa = { lat: hereNow.lat, lon: wrapLon(hereNow.lon - 12) };
@@ -185,8 +206,8 @@ export async function buildFixtures(dir, now = Date.now()) {
     ...pass({ id: 'cupola:verify-window', name: 'Verify Keepsake', ...keepsake, at: keepsakeAt, score: 77, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
     golden_hour: true,
     water_pct: 0.45,
-    window_start: launchIso(now + 30 * 60_000),
-    window_end: launchIso(now + 40 * 60_000),
+    window_start: events.windowStart,
+    window_end: events.windowEnd,
   };
   const points = [];
   for (let t = 0; t <= 200 * 60; t += 30) {
@@ -231,8 +252,8 @@ export async function buildFixtures(dir, now = Date.now()) {
     { id: 'verify-mesa', name: 'Verify Mesa', geom: { type: 'point', lat: mesa.lat, lon: mesa.lon }, priority: 3, regime: 'day', category: 'terrain' },
   ];
 
-  const net = launchIso(now + 2 * 60 * 60_000);
-  const windowEnd = launchIso(now + 2 * 60 * 60_000 + 9 * 60_000);
+  const net = events.net;
+  const windowEnd = events.launchWindowEnd;
   const generatedLaunch = launchIso(now - 60_000);
   const pointerUntil = launchIso(now - 60_000 + 14 * 60_000);
   const assessmentUntil = launchIso(now - 60_000 + 2 * 60 * 60_000);
@@ -265,11 +286,11 @@ export async function buildFixtures(dir, now = Date.now()) {
         launch_window: { net, start: net, end: windowEnd, precision: 'second' },
         capture_intervals: [
           {
-            start: launchIso(now + 2 * 60 * 60_000 + 60_000),
-            peak: launchIso(now + 2 * 60 * 60_000 + 4 * 60_000),
-            end: launchIso(now + 2 * 60 * 60_000 + 8 * 60_000),
+            start: events.captureStart,
+            peak: events.capturePeak,
+            end: events.captureEnd,
             liftoff_start: net,
-            liftoff_end: launchIso(now + 2 * 60 * 60_000 + 60_000),
+            liftoff_end: events.liftoffEnd,
             look: { frame: 'orbital-lvlh', azimuth_deg: 45, off_nadir_deg: 55 },
           },
         ],
@@ -450,6 +471,80 @@ export function refreshLaunchClock(dir, wallMs = Date.now()) {
   pointer.sha256 = sha256(text);
   writeFileSync(pointerPath, JSON.stringify(pointer));
   return until;
+}
+
+const PASS_EVENT = {
+  'verify-reef': 'reef',
+  'verify-delta': 'delta',
+  'verify-mesa': 'mesa',
+  'cupola:verify-window': 'keepsake',
+};
+
+function stampPassList(passes, times) {
+  for (const pass of passes) {
+    const key = PASS_EVENT[pass.target_id];
+    if (!key) continue;
+    pass.closest_approach = times[key];
+    if (pass.target_id === 'cupola:verify-window') {
+      pass.window_start = times.windowStart;
+      pass.window_end = times.windowEnd;
+    }
+  }
+}
+
+function stampLaunchBody(launch, times) {
+  for (const item of launch.items || []) {
+    if (item.launch_window) {
+      item.launch_window.net = times.net;
+      item.launch_window.start = times.net;
+      item.launch_window.end = times.launchWindowEnd;
+    }
+    for (const interval of item.capture_intervals || []) {
+      interval.start = times.captureStart;
+      interval.peak = times.capturePeak;
+      interval.end = times.captureEnd;
+      interval.liftoff_start = times.net;
+      interval.liftoff_end = times.liftoffEnd;
+    }
+    if (item.assessment?.net) item.assessment.net.at = times.net;
+  }
+}
+
+function writeJson(dir, name, body) {
+  const entry = artifact(body);
+  writeFileSync(resolve(dir, name), entry.text);
+  return entry;
+}
+
+export function stampEventTimes(dir, eventStart) {
+  const times = eventInstants(eventStart);
+  const passes = JSON.parse(readFileSync(resolve(dir, 'passes.json'), 'utf8'));
+  const top5 = JSON.parse(readFileSync(resolve(dir, 'top5.json'), 'utf8'));
+  const top24 = JSON.parse(readFileSync(resolve(dir, 'top_24h.json'), 'utf8'));
+  const cupola = JSON.parse(readFileSync(resolve(dir, 'cupola_windows.json'), 'utf8'));
+  const launch = JSON.parse(readFileSync(resolve(dir, 'launch.json'), 'utf8'));
+  stampPassList(passes, times);
+  stampPassList(top5, times);
+  stampPassList(top24, times);
+  stampPassList(cupola.windows, times);
+  stampLaunchBody(launch, times);
+  const written = {
+    passes: writeJson(dir, 'passes.json', passes),
+    top5: writeJson(dir, 'top5.json', top5),
+    top_24h: writeJson(dir, 'top_24h.json', top24),
+    cupola_windows: writeJson(dir, 'cupola_windows.json', cupola),
+    launch: writeJson(dir, 'launch.json', launch),
+  };
+  const manifest = JSON.parse(readFileSync(resolve(dir, 'manifest.json'), 'utf8'));
+  for (const key of ['passes', 'top5', 'top_24h', 'cupola_windows']) {
+    manifest.artifacts[key].sha256 = written[key].sha256;
+    manifest.artifacts[key].bytes = written[key].bytes;
+  }
+  writeFileSync(resolve(dir, 'manifest.json'), JSON.stringify(manifest));
+  const pointer = JSON.parse(readFileSync(resolve(dir, 'launch-latest.json'), 'utf8'));
+  pointer.sha256 = written.launch.sha256;
+  writeFileSync(resolve(dir, 'launch-latest.json'), JSON.stringify(pointer));
+  return times;
 }
 
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);

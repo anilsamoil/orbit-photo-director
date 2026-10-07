@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { buildFixtures } from './fixtures.mjs';
+import { buildFixtures, stampEventTimes } from './fixtures.mjs';
 
 const SESSION_MARGIN_MS = 6 * 60 * 60 * 1000;
 
@@ -41,18 +41,21 @@ function eventTimes(dir) {
   return times;
 }
 
+function assertAhead(dir, start, message) {
+  const floor = start + SESSION_MARGIN_MS;
+  const late = eventTimes(dir).filter((row) => !(row.ms > floor));
+  assert.deepEqual(late.map((row) => `${row.label} ${row.iso}`), [], message);
+}
+
 test('fixture event times stay ahead of a six-hour session', async () => {
   const start = Date.parse('2026-10-07T11:26:45.000Z');
+  const later = Date.parse('2026-10-07T12:00:00.000Z');
   const dir = mkdtempSync(join(tmpdir(), 'opd-fixture-times-'));
   try {
     await buildFixtures(dir, start);
-    const floor = start + SESSION_MARGIN_MS;
-    const late = eventTimes(dir).filter((row) => !(row.ms > floor));
-    assert.deepEqual(
-      late.map((row) => `${row.label} ${row.iso}`),
-      [],
-      'a closest_approach of 11:46:45Z is already past once the clock moves',
-    );
+    assertAhead(dir, start, 'a closest_approach of 11:46:45Z is already past once the clock moves');
+    stampEventTimes(dir, later);
+    assertAhead(dir, later, 'stamped event times must stay ahead of 12:00Z plus the session margin');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
