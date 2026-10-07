@@ -55,6 +55,21 @@ export async function launchWebkit() {
   }
 }
 
+async function syncLayoutViewport(page, width, height) {
+  const laid = await page.evaluate(({ width, height }) => {
+    const root = document.documentElement;
+    if (!root) return null;
+    if (root.clientWidth !== width || root.clientHeight !== height) {
+      const meta = document.querySelector('meta[name="viewport"]');
+      if (meta) meta.setAttribute('content', `width=${width}, height=${height}, initial-scale=1, viewport-fit=cover`);
+    }
+    return { width: root.clientWidth, height: root.clientHeight };
+  }, { width, height });
+  if (laid && (laid.width !== width || laid.height !== height)) {
+    throw new Error(`layout viewport ${laid.width}x${laid.height} after set ${width}x${height}`);
+  }
+}
+
 export function playwrightSend(page) {
   return async function send(method, params = {}) {
     if (method === 'Runtime.evaluate') {
@@ -94,6 +109,7 @@ export function playwrightSend(page) {
     }
     if (method === 'Emulation.setDeviceMetricsOverride') {
       await page.setViewportSize({ width: params.width, height: params.height });
+      await syncLayoutViewport(page, params.width, params.height);
       return {};
     }
     if (method === 'Emulation.setSafeAreaInsetsOverride') {
