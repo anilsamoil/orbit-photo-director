@@ -4769,11 +4769,18 @@ body.map-slot-time .view-map .map-command .map-controls-time {
   overflow: visible;
 }
 
-body.map-slot-time-line .view-map .map-command .map-controls-time {
-  flex-wrap: nowrap;
-  height: 100%;
+body.map-slot-time-line .view-map .map-command,
+body.map-slot-time-line.shotlist-bar-visible .view-map .map-command {
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+body.map-slot-time-line .view-map .map-command .map-controls-time {
+  flex-wrap: nowrap;
+  width: max-content;
+  max-width: none;
+  height: 100%;
+  overflow: visible;
 }
 
 body.map-slot-time .view-map .map-command .time-slider-row {
