@@ -77,8 +77,19 @@ const ISS_CLOCK_EXPR = `(() => {
   const [utcBox, gmtBox] = boxes;
   if (Math.abs(gmtBox.top - utcBox.bottom) > 0.5) return { step: 'gmt-under', utcBottom: utcBox.bottom, gmtTop: gmtBox.top };
   if (Math.abs(gmtBox.bottom - utcBox.top - 44) > 1) return { step: 'band', pair: gmtBox.bottom - utcBox.top };
-  const horizonBox = document.querySelector('[data-iss-preset="horizon"]')?.getBoundingClientRect();
-  if (window.innerWidth > 720 && (!horizonBox || Math.abs(utcBox.top - horizonBox.top) > 1)) return { step: 'band-row', utcTop: utcBox.top, horizonTop: horizonBox?.top };
+  const splitChrome = root.closest('[data-iss-split-chrome]');
+  if (splitChrome) {
+    const map = document.querySelector('[data-pip="plan"]')?.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    if (!map || map.width < 40 || box.top < map.top - 1 || box.bottom > map.bottom + 1 || box.left < map.left - 1 || box.right > map.right + 1) {
+      return { step: 'split-clock', mapWidth: map && map.width, top: box.top, bottom: box.bottom };
+    }
+    const hit = document.elementFromPoint(box.left + Math.min(16, box.width / 2), box.top + Math.min(10, box.height / 2));
+    if (!hit || !splitChrome.contains(hit)) return { step: 'split-hit', tag: hit && hit.tagName, className: hit && String(hit.className) };
+  } else if (window.innerWidth > 720) {
+    const horizonBox = document.querySelector('[data-iss-preset="horizon"]')?.getBoundingClientRect();
+    if (!horizonBox || Math.abs(utcBox.top - horizonBox.top) > 1) return { step: 'band-row', utcTop: utcBox.top, horizonTop: horizonBox?.top };
+  }
   const px = (el) => Number.parseFloat(getComputedStyle(el).fontSize);
   const [utcPx, gmtPx, ...small] = [...root.children].map(px);
   const rootPx = px(document.documentElement);
@@ -1680,13 +1691,6 @@ const PIP_ISS_OBSTACLES = [
   '[data-iss-preset]',
   '[data-iss-cupola]',
   '[data-iss-window]',
-  '[data-iss-clock]',
-  '[data-iss-utc]',
-  '[data-iss-gmt-day]',
-  '[data-iss-houston]',
-  '[data-iss-day-month]',
-  '[data-iss-weekday]',
-  '[data-iss-edition]',
   '[data-iss-port]',
   '[data-iss-starboard]',
   '[data-iss-fov]',
@@ -1713,8 +1717,78 @@ function pipReadyExpression(name) {
     if (inset.getAttribute('aria-label') !== ${JSON.stringify(label)}) return { step: 'label', aria: inset.getAttribute('aria-label') };
     if (${name === 'plan' ? 'true' : 'false'}) {
       const scene = document.querySelector('[data-iss-scene]');
-      const pad = scene ? parseFloat(getComputedStyle(scene).paddingBottom) : 0;
-      if (!scene || !(pad >= 100)) return { step: 'pad', pad };
+      if (scene?.getAttribute('data-iss-split') !== 'on') return { step: 'split', attr: scene?.getAttribute('data-iss-split') || null };
+      const host = document.getElementById('iss-host')?.getBoundingClientRect();
+      const telemetry = document.querySelector('[data-iss-telemetry]')?.getBoundingClientRect();
+      const picker = document.querySelector('[data-iss-launch-picker]')?.getBoundingClientRect();
+      const frame = inset.querySelector('[data-pip-frame]');
+      const orbit = frame && frame.__opdTrackInset;
+      const glyphs = Number(frame?.getAttribute('data-inset-glyphs') || '0');
+      if (!host || host.width + 1 < box.width) return { step: 'cupola', host: host && Math.round(host.width), map: Math.round(box.width) };
+      if (!telemetry || telemetry.top < box.bottom - 1) return { step: 'telemetry', telemetryTop: telemetry && Math.round(telemetry.top), mapBottom: Math.round(box.bottom) };
+      if (!picker || picker.top < box.bottom - 1) return { step: 'launch', pickerTop: picker && Math.round(picker.top), mapBottom: Math.round(box.bottom) };
+      if (box.width * box.height < 148 * 96 * 3) return { step: 'scale', width: Math.round(box.width), height: Math.round(box.height) };
+      if (!orbit || typeof orbit.project !== 'function' || typeof orbit.getCanvas !== 'function' || typeof orbit.querySourceFeatures !== 'function') {
+        return { step: 'orbit', reason: 'map' };
+      }
+      const marker = inset.querySelector('.iss-marker');
+      if (!marker) return { step: 'marker', reason: 'missing' };
+      const markerBox = marker.getBoundingClientRect();
+      const canvas = orbit.getCanvas();
+      const canvasBox = canvas.getBoundingClientRect();
+      const markerInside = markerBox.width > 8 && markerBox.height > 4
+        && markerBox.left >= canvasBox.left - 1 && markerBox.right <= canvasBox.right + 1
+        && markerBox.top >= canvasBox.top - 1 && markerBox.bottom <= canvasBox.bottom + 1;
+      if (!markerInside) {
+        return {
+          step: 'marker',
+          marker: [Math.round(markerBox.left), Math.round(markerBox.top), Math.round(markerBox.right), Math.round(markerBox.bottom)],
+          canvas: [Math.round(canvasBox.left), Math.round(canvasBox.top), Math.round(canvasBox.right), Math.round(canvasBox.bottom)],
+        };
+      }
+      let trackFeatures = [];
+      try {
+        trackFeatures = orbit.querySourceFeatures('inset-track') || [];
+      } catch (error) {
+        return { step: 'track', reason: 'query' };
+      }
+      let coords = 0;
+      let outside = null;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      for (const feature of trackFeatures) {
+        const geometry = feature && feature.geometry;
+        if (!geometry || geometry.type !== 'LineString' || !geometry.coordinates) continue;
+        for (const pair of geometry.coordinates) {
+          const lon = pair[0];
+          const lat = pair[1];
+          if (!(lon >= -180 && lon <= 180) || !(lat >= -90 && lat <= 90)) continue;
+          const point = orbit.project(pair);
+          coords += 1;
+          if (!(point.x >= -1 && point.y >= -1 && point.x <= width + 1 && point.y <= height + 1)) {
+            outside = { x: Math.round(point.x), y: Math.round(point.y), lon, lat, width, height };
+            break;
+          }
+        }
+        if (outside) break;
+      }
+      if (coords < 8 || outside) return { step: 'track', coords, outside, width, height };
+      let labelFeatures = [];
+      try {
+        labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
+      } catch (error) {
+        return { step: 'labels', reason: 'query' };
+      }
+      const names = [];
+      for (const feature of labelFeatures) {
+        const name = feature && feature.properties && feature.properties.name;
+        const geometry = feature && feature.geometry;
+        if (typeof name !== 'string' || name.length === 0 || !geometry || geometry.type !== 'Point') continue;
+        const point = orbit.project(geometry.coordinates);
+        if (!(point.x >= 8 && point.y >= 8 && point.x <= width - 8 && point.y <= height - 8)) continue;
+        if (!names.includes(name)) names.push(name);
+      }
+      if (glyphs < 10000 || names.length < 4) return { step: 'labels', glyphs, names };
     }
     return { ok: true, width: box.width, height: box.height };
   })()`;
@@ -1753,7 +1827,15 @@ function pipAbsentExpression(name) {
     const inset = document.querySelector('[data-pip="${name}"]');
     const scene = document.querySelector('[data-iss-scene]');
     const pad = scene ? parseFloat(getComputedStyle(scene).paddingBottom) : 0;
-    if (${name === 'plan' ? 'true' : 'false'} && scene && pad > 40) return { step: 'pad', pad };
+    if (${name === 'plan' ? 'true' : 'false'} && scene) {
+      if (pad > 40) return { step: 'pad', pad };
+      if (scene.getAttribute('data-iss-split') === 'on') return { step: 'split' };
+      const clock = document.querySelector('[data-iss-clock]');
+      const toolbar = document.querySelector('[data-iss-toolbar]');
+      if (clock && toolbar && !toolbar.contains(clock)) return { step: 'clock-home' };
+      const card = document.querySelector('[data-iss-card]');
+      if (card && !scene.contains(card)) return { step: 'card-home' };
+    }
     if (!inset) return { ok: true };
     const style = getComputedStyle(inset);
     const box = inset.getBoundingClientRect();
@@ -3149,7 +3231,13 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
       if (!hostBox || !scene) return null;
       if (${SCENE_SCROLLS}) return null;
       const within = (box) => box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
-      if (!within(frame) || !within(card) || !within(portBox) || !within(starboardBox)) return null;
+      const splitOn = scene.getAttribute('data-iss-split') === 'on';
+      const paneBox = document.getElementById('iss-pane')?.getBoundingClientRect();
+      const mapBox = document.querySelector('[data-pip="plan"]')?.getBoundingClientRect();
+      const cardOk = splitOn
+        ? !!(paneBox && card.top >= paneBox.top - 1 && card.bottom <= paneBox.bottom + 1 && card.left >= paneBox.left - 1 && card.right <= hostBox.left + 2 && (!(mapBox && mapBox.height > 40) || card.top >= mapBox.bottom - 1))
+        : within(card);
+      if (!within(frame) || !cardOk || !within(portBox) || !within(starboardBox)) return null;
       const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
       for (let i = 0; i < places.length; i += 1) {
         for (let j = i + 1; j < places.length; j += 1) {
@@ -3179,7 +3267,13 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
       if (!hostBox || !scene || !frame || !card || !port || !starboard) return null;
       if (${SCENE_SCROLLS}) return null;
       const within = (box) => box.width > 1 && box.height > 1 && box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
-      if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
+      const splitOn = scene.getAttribute('data-iss-split') === 'on';
+      const paneBox = document.getElementById('iss-pane')?.getBoundingClientRect();
+      const mapBox = document.querySelector('[data-pip="plan"]')?.getBoundingClientRect();
+      const cardOk = splitOn
+        ? !!(paneBox && card.top >= paneBox.top - 1 && card.bottom <= paneBox.bottom + 1 && card.left >= paneBox.left - 1 && card.right <= hostBox.left + 2 && (!(mapBox && mapBox.height > 40) || card.top >= mapBox.bottom - 1))
+        : within(card);
+      if (!within(frame) || !cardOk || !within(port) || !within(starboard)) return null;
       const places = [...document.querySelectorAll('.iss-place')].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 1 && box.height > 1);
       if (places.length < 1) return null;
       for (let i = 0; i < places.length; i += 1) {
@@ -3240,7 +3334,13 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
       if (!hostBox || !scene || !port || !starboard) return null;
       if (${SCENE_SCROLLS}) return null;
       const within = (box) => box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
-      if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
+      const splitOn = scene.getAttribute('data-iss-split') === 'on';
+      const paneBox = document.getElementById('iss-pane')?.getBoundingClientRect();
+      const mapBox = document.querySelector('[data-pip="plan"]')?.getBoundingClientRect();
+      const cardOk = splitOn
+        ? !!(paneBox && card.top >= paneBox.top - 1 && card.bottom <= paneBox.bottom + 1 && card.left >= paneBox.left - 1 && card.right <= hostBox.left + 2 && (!(mapBox && mapBox.height > 40) || card.top >= mapBox.bottom - 1))
+        : within(card);
+      if (!within(frame) || !cardOk || !within(port) || !within(starboard)) return null;
       return { ok: true };
     })()`,
     'iss telemetry open stays off the earth',
@@ -3473,6 +3573,19 @@ const ISS_EDITION_EXPR = `(() => {
   if (style.fontSize !== utcSize) return { step: 'edition-size', edition: style.fontSize, utc: utcSize };
   if (edition.scrollWidth > edition.clientWidth) return { step: 'edition-clip', scrollWidth: edition.scrollWidth, clientWidth: edition.clientWidth };
   const wide = window.innerWidth > 720;
+  const splitChrome = edition.closest('[data-iss-split-chrome]');
+  if (splitChrome) {
+    const map = document.querySelector('[data-pip="plan"]')?.getBoundingClientRect();
+    const clock = document.querySelector('[data-iss-clock]');
+    const clockBox = clock?.getBoundingClientRect();
+    if (!map || map.width < 40 || editionBox.top < map.top - 1 || editionBox.bottom > map.bottom + 1 || editionBox.left < map.left - 1) {
+      return { step: 'split-edition' };
+    }
+    if (!clockBox || editionBox.top < clockBox.bottom - 1) return { step: 'split-under-clock', editionTop: editionBox.top, clockBottom: clockBox && clockBox.bottom };
+    const hit = document.elementFromPoint(editionBox.left + Math.min(16, editionBox.width / 2), editionBox.top + Math.min(8, editionBox.height / 2));
+    if (!hit || !splitChrome.contains(hit)) return { step: 'split-hit', tag: hit && hit.tagName };
+    return { ok: true, place: 'map-chrome', width: window.innerWidth };
+  }
   if (wide) {
     const clock = document.querySelector('[data-iss-clock]');
     if (!clock || toolbar.offsetHeight !== clock.offsetHeight) {
@@ -3943,7 +4056,7 @@ const LAUNCH_EARTH_CHECK = `
   const frame = document.querySelector('[data-iss-frame]');
   const card = document.querySelector('[data-iss-launch-card]');
   const button = document.querySelector('[data-iss-launch]');
-  const scene = button && button.closest('[data-iss-scene]');
+  const scene = document.querySelector('[data-iss-scene]');
   if (!frame || !card || !button || !scene || card.hidden) return null;
   const frameBox = frame.getBoundingClientRect();
   const cardBox = card.getBoundingClientRect();
@@ -3996,6 +4109,12 @@ const LAUNCH_EARTH_CHECK = `
   };
 `;
 
+function splitLaunchPlace(width, height) {
+  if (width < 800 || height < 600) return null;
+  const mapColumn = Math.max(300, width * 0.36);
+  return width - mapColumn <= 720 ? 'below' : 'side';
+}
+
 function launchEarthPanes(width, height) {
   const native = { width, height, mobile: width < 1100, label: `${width}x${height}`, place: '', minShort: 80 };
   if (width === 390 && height === 664) {
@@ -4013,8 +4132,11 @@ function launchEarthPanes(width, height) {
       { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
   }
-  if (width >= 1200) return [{ ...native, place: 'side', minShort: 400 }];
-  if (width >= 800) return [{ ...native, place: 'side', minShort: 200 }];
+  if (width >= 1200) {
+    const splitPlace = splitLaunchPlace(width, height);
+    return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
+  }
+  if (width >= 800) return [{ ...native, place: splitLaunchPlace(width, height) || 'side', minShort: 200 }];
   return [native];
 }
 
@@ -4186,7 +4308,14 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
       if (scene.scrollHeight > scene.clientHeight + 1) {
         return { step: 'scroll', height: [scene.scrollHeight, scene.clientHeight] };
       }
-      if (controlsBox.bottom > sceneBox.bottom + 1) {
+      const splitOn = scene.getAttribute('data-iss-split') === 'on';
+      const paneBox = document.getElementById('iss-pane')?.getBoundingClientRect();
+      const mapBox = document.querySelector('[data-pip="plan"]')?.getBoundingClientRect();
+      const hostLeft = document.getElementById('iss-host')?.getBoundingClientRect().left;
+      const controlsHome = !splitOn
+        ? controlsBox.bottom <= sceneBox.bottom + 1
+        : !!(paneBox && hostLeft != null && controlsBox.top >= paneBox.top - 1 && controlsBox.bottom <= paneBox.bottom + 1 && controlsBox.right <= hostLeft + 2 && (!(mapBox && mapBox.height > 40) || controlsBox.top >= mapBox.bottom - 1));
+      if (!controlsHome) {
         return { step: 'controls', top: Math.round(controlsBox.top), bottom: Math.round(controlsBox.bottom), sceneBottom: Math.round(sceneBox.bottom), scrollTop: scene.scrollTop, scrollY: window.scrollY };
       }
       return {
@@ -4358,7 +4487,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       if (picker.value !== ${JSON.stringify(before.value)}) return null;
       if (button.querySelector('[data-iss-launch-label]')?.textContent !== 'Look toward Verify Pad') return null;
       if (!button.textContent.includes('Verify Pad')) return null;
-      const scene = button.closest('[data-iss-scene]');
+      const scene = document.querySelector('[data-iss-scene]');
       if (scene && scene.scrollWidth > scene.clientWidth + 1) return null;
       if (card.hasAttribute('hidden')) return null;
       const name = card.querySelector('[data-iss-launch-name]')?.textContent || '';

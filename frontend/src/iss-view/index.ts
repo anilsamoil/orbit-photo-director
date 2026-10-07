@@ -1,3 +1,4 @@
+import { INSET_MIN_HEIGHT_PX, INSET_MIN_WIDTH_PX } from '../insets/gate';
 import { createIssRenderer } from '../map/adapters/maplibre/iss-view';
 import { CUPOLA_WINDOWS, cupolaPreset } from './cupola';
 import {
@@ -298,6 +299,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (phase === 'running' && rendererReady) void paint();
     else layout();
   });
+  const splitMedia = typeof window.matchMedia === 'function'
+    ? window.matchMedia(`(min-width: ${INSET_MIN_WIDTH_PX}px) and (min-height: ${INSET_MIN_HEIGHT_PX}px)`)
+    : null;
+  const onSplitChange = (): void => {
+    layout();
+  };
+  splitMedia?.addEventListener('change', onSplitChange);
   layout();
   writeLook(settleLook(session.look, session.mode, currentRoom()));
 
@@ -427,6 +435,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       setPhase('dormant');
       stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
+      splitMedia?.removeEventListener('change', onSplitChange);
       aimKeys.dispose();
       fullscreen.dispose();
       stopLaunches();
@@ -434,6 +443,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       renderer?.destroy();
       renderer = null;
       rendererReady = false;
+      parkSplit();
       root.remove();
     },
     element: () => root,
@@ -815,7 +825,41 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     paintEqualDigits(weekday, readout?.weekday ?? '');
   }
 
+  function splitStack(): { chrome: HTMLElement; dock: HTMLElement } | null {
+    const pane = host.parentElement;
+    if (!pane) return null;
+    const chrome = pane.querySelector('[data-iss-split-chrome]');
+    const dock = pane.querySelector('[data-iss-split-dock]');
+    if (!(chrome instanceof HTMLElement) || !(dock instanceof HTMLElement)) return null;
+    return { chrome, dock };
+  }
+
+  function parkSplit(): void {
+    const presetsNode = toolbar.querySelector('[data-iss-presets]');
+    if (clockBlock.parentElement !== toolbar) {
+      if (presetsNode) presetsNode.after(clockBlock);
+      else toolbar.append(clockBlock);
+    }
+    if (edition.parentElement !== toolbar) toolbar.append(edition);
+    if (card.parentElement !== root) root.append(card);
+    delete root.dataset.issSplit;
+  }
+
+  function syncSplit(): void {
+    const stack = splitStack();
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    if (!stack || fullscreen || !splitMedia?.matches) {
+      parkSplit();
+      return;
+    }
+    if (clockBlock.parentElement !== stack.chrome) stack.chrome.append(clockBlock);
+    if (edition.parentElement !== stack.chrome) stack.chrome.append(edition);
+    if (card.parentElement !== stack.dock) stack.dock.append(card);
+    root.dataset.issSplit = 'on';
+  }
+
   function layout(): { widthPx: number; heightPx: number } {
+    syncSplit();
     syncLaunchChrome();
     root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= 564);
     const width = root.clientWidth || host.clientWidth || 640;
@@ -852,6 +896,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const bodyMargin = px(bodyStyle.marginTop) + px(bodyStyle.marginBottom);
     const bodyBorder = px(bodyStyle.borderTopWidth) + px(bodyStyle.borderBottomWidth);
     const open = !telemetryBody.hidden;
+    const docked = root.dataset.issSplit === 'on';
     const viewStyle = getComputedStyle(view);
     const cardGap = px(viewStyle.gap || viewStyle.columnGap || viewStyle.rowGap);
     const cardShown = !launchCard.hidden;
@@ -865,9 +910,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       padYPx: padY,
       gapPx: gap,
       toolbarPx: toolbar.offsetHeight,
-      buttonPx: Math.max(controls.offsetHeight, telemetry.offsetHeight),
-      bodyPx: open ? telemetryBody.scrollHeight + bodyBorder + bodyMargin : 0,
-      bodyMarginPx: open ? bodyMargin : 0,
+      buttonPx: docked ? 0 : Math.max(controls.offsetHeight, telemetry.offsetHeight),
+      bodyPx: docked || !open ? 0 : telemetryBody.scrollHeight + bodyBorder + bodyMargin,
+      bodyMarginPx: docked || !open ? 0 : bodyMargin,
       sideWidthPx: port.offsetWidth + starboard.offsetWidth + stageGap * 2,
       labelPx: Math.max(port.offsetHeight, starboard.offsetHeight),
       launchCardWidthPx: cardBox.width,

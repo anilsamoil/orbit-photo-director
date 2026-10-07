@@ -3483,7 +3483,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   user-select: none;
 }
 
-[data-iss-scene][data-iss-aim-open] [data-iss-edition] {
+[data-iss-scene][data-iss-aim-open] [data-iss-edition],
+.view-iss:has([data-iss-scene][data-iss-aim-open]) [data-iss-edition] {
   visibility: hidden;
 }
 
@@ -4127,6 +4128,10 @@ body:has([data-iss-scene][data-iss-fullscreen-active]) main {
 }
 
 [data-iss-scene][data-iss-fullscreen-active] :is([data-iss-launch-picker-wrap], [data-iss-launches]) {
+  display: none;
+}
+
+[data-iss-scene][data-iss-fullscreen-active]:not([data-iss-phase='error']) [data-iss-card] {
   display: none;
 }
 
@@ -4828,6 +4833,10 @@ summary:focus-visible {
   }
 }
 
+.iss-split {
+  display: none;
+}
+
 .pip-inset {
   display: none;
 }
@@ -4864,8 +4873,78 @@ summary:focus-visible {
     max-width: calc(100% - 272px);
   }
 
-  .view-iss [data-iss-scene]:not([data-iss-fullscreen-active]) {
-    padding-bottom: 7.75rem;
+  .view-iss #iss-pane:not(:has([data-iss-fullscreen-active])) {
+    display: grid;
+    grid-template-columns: minmax(300px, 36%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    height: calc(100dvh - var(--topbar-height) - 4.5rem);
+  }
+
+  .view-iss #iss-pane:not(:has([data-iss-fullscreen-active])) #iss-host {
+    position: relative;
+    inset: auto;
+    grid-column: 2;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .view-iss #iss-pane:not(:has([data-iss-fullscreen-active])) .iss-split {
+    display: flex;
+    flex-direction: column;
+    grid-column: 1;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    box-sizing: border-box;
+    gap: 8px;
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .iss-split-map {
+    position: relative;
+    flex: 1 1 288px;
+    min-height: 192px;
+    min-width: 0;
+  }
+
+  .iss-split-chrome {
+    position: absolute;
+    z-index: 2;
+    top: 10px;
+    left: 10px;
+    max-width: calc(100% - 20px);
+    box-sizing: border-box;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: rgba(8, 12, 18, 0.72);
+    pointer-events: auto;
+  }
+
+  .iss-split-chrome [data-iss-clock] {
+    align-items: flex-start;
+  }
+
+  .iss-split-chrome :is([data-iss-houston], [data-iss-gmt-day], [data-iss-day-month], [data-iss-weekday], [data-iss-edition]) {
+    text-align: left;
+  }
+
+  .iss-split-chrome [data-iss-edition] {
+    position: static;
+    top: auto;
+    left: auto;
+  }
+
+  .iss-split-dock {
+    flex: 0 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .iss-split-dock [data-iss-controls] {
+    flex-wrap: wrap;
   }
 
   .pip-inset:not([hidden]) {
@@ -4891,9 +4970,10 @@ summary:focus-visible {
     bottom: calc(var(--map-command-bottom, 0px) + var(--map-command-height) + 36px);
   }
 
-  .view-iss .pip-plan:not([hidden]) {
-    left: 12px;
-    bottom: 12px;
-    z-index: 4;
+  .view-iss #iss-pane:not(:has([data-iss-fullscreen-active])) .pip-plan:not([hidden]) {
+    inset: 0;
+    z-index: 1;
+    width: auto;
+    height: auto;
   }
 }
