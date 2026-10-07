@@ -309,6 +309,11 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     layout();
   };
   splitMedia?.addEventListener('change', onSplitChange);
+  const onResize = (): void => {
+    if (phase === 'running' && rendererReady) void paint();
+    else layout();
+  };
+  window.addEventListener('resize', onResize);
   layout();
   writeLook(settleLook(session.look, session.mode, currentRoom()));
 
@@ -439,6 +444,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       splitMedia?.removeEventListener('change', onSplitChange);
+      window.removeEventListener('resize', onResize);
       aimKeys.dispose();
       fullscreen.dispose();
       stopLaunches();
