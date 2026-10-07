@@ -219,7 +219,7 @@ describe('bindHelp', () => {
     expect(() => bindHelp()).not.toThrow();
   });
 
-  it('hides the corner button on the map and shows it on the other views', () => {
+  it('hides the corner button on the map and the ISS view, and shows it on the other views', () => {
     document.body.innerHTML = `
       <main id="view" class="view-map"></main>
       <button id="help-fab" type="button">?</button>
@@ -230,7 +230,10 @@ describe('bindHelp', () => {
     document.getElementById('view')!.className = 'view-queue';
     syncHelpButton();
     expect(fab.hidden).toBe(false);
-    for (const view of ['view-upcoming', 'view-iss', 'view-profile', 'view-log']) {
+    document.getElementById('view')!.className = 'view-iss';
+    syncHelpButton();
+    expect(fab.hidden).toBe(true);
+    for (const view of ['view-upcoming', 'view-profile', 'view-log']) {
       document.getElementById('view')!.className = view;
       syncHelpButton();
       expect(fab.hidden).toBe(false);

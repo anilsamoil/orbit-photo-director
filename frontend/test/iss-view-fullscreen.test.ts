@@ -222,8 +222,8 @@ describe('ISS fullscreen toggle', () => {
   it.each(['standard', 'webkit', 'both'] as const)('enters and leaves element fullscreen through the %s API', async (api) => {
     const fullscreen = browser(api);
     const view = await mounted();
-    expect(view.button.previousElementSibling?.hasAttribute('data-iss-telemetry')).toBe(true);
-    expect(view.button.parentElement?.hasAttribute('data-iss-controls')).toBe(true);
+    expect(view.button.parentElement).toBe(view.root);
+    expect(view.root.contains(view.button)).toBe(true);
     expect(name(view.button)).toBe('Full screen');
     expect(view.button.title).toBe('Full screen');
     expect(view.button.hasAttribute('aria-pressed')).toBe(false);
@@ -611,6 +611,31 @@ describe('ISS fullscreen frame', () => {
   });
 });
 
+describe('ISS control placement', () => {
+  it('puts SNAP help between the launch menu and the site name, and parks fullscreen on the scene corner', async () => {
+    styled();
+    browser('missing');
+    const view = await mounted();
+    const help = query(view.root, '[data-iss-snap-help]');
+    const picker = query(view.root, '[data-iss-launch-picker-wrap]');
+    const launches = query(view.root, '[data-iss-launches]');
+    expect(help.textContent).toBe('?');
+    expect(help.getAttribute('aria-label')).toBe('Help — how to use SNAP');
+    expect(help.getAttribute('title')).toBe('Help');
+    expect(picker.nextElementSibling).toBe(help);
+    expect(help.nextElementSibling).toBe(launches);
+    expect(view.button.parentElement).toBe(view.root);
+    expect(getComputedStyle(view.button).position).toBe('absolute');
+    expect(STYLE_CSS).toContain('right: max(0.75rem, env(safe-area-inset-right))');
+    expect(STYLE_CSS).toContain('bottom: max(0.75rem, env(safe-area-inset-bottom))');
+    if (!(help instanceof HTMLButtonElement)) throw new Error('help control is not a native button');
+    help.click();
+    const dialog = document.querySelector('.help-modal');
+    expect(dialog?.getAttribute('aria-label')).toBe('Help — how to use SNAP');
+    cleanups.push(() => document.querySelector('.modal-backdrop')?.remove());
+  });
+});
+
 describe('ISS fullscreen binding', () => {
   it('mounts when the controls sit outside the scene', () => {
     const scene = document.createElement('section');
@@ -629,11 +654,12 @@ describe('ISS fullscreen binding', () => {
       controls.remove();
       outside.remove();
     });
-    const binding = bindIssFullscreen({ scene, controls, telemetry, relayout() {} });
+    const binding = bindIssFullscreen({ scene, controls, relayout() {} });
     cleanups.push(() => binding.dispose());
-    const button = controls.querySelector('[data-iss-fullscreen]');
+    const button = scene.querySelector('[data-iss-fullscreen]');
     if (!(button instanceof HTMLButtonElement)) throw new Error('fullscreen button missing');
-    expect(button.previousElementSibling).toBe(telemetry);
+    expect(button.parentElement).toBe(scene);
+    expect(controls.contains(button)).toBe(false);
     expect(scene.contains(controls)).toBe(false);
     button.click();
     expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(true);
@@ -737,11 +763,11 @@ describe('ISS fullscreen styles', () => {
     const exitBox = view.button.getBoundingClientRect();
     const parked = `card ${getComputedStyle(card).display} telemetry ${telemetryBox.width}x${telemetryBox.height} exit ${exitBox.width}x${exitBox.height}`;
     expect(getComputedStyle(card).display, parked).toBe('block');
-    expect(view.button.previousElementSibling).toBe(telemetry);
+    expect(view.button.parentElement).toBe(view.root);
     expect(getComputedStyle(telemetry).height).toBe('44px');
     expect(getComputedStyle(view.button).width).toBe('44px');
     expect(getComputedStyle(view.button).height).toBe('44px');
-    expect(getComputedStyle(view.button).position).toBe('relative');
+    expect(getComputedStyle(view.button).position).toBe('absolute');
 
     telemetry.click();
     const body = query(pane, '[data-iss-telemetry-body]');

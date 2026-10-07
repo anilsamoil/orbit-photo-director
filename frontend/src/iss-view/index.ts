@@ -30,6 +30,7 @@ import {
 } from './launches';
 import { launchVerdictBlock, selectLaunches, type LaunchSelection } from '../launch-selectors';
 import { launchStore } from '../launch-store';
+import { openHelpModal } from '../help';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { bindIssFullscreen } from './fullscreen';
 import { paintEqualDigits } from '../digits';
@@ -281,7 +282,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const pickerWrap = document.createElement('div');
   pickerWrap.dataset.issLaunchPickerWrap = '';
   pickerWrap.append(picker);
-  controls.append(telemetry, pickerWrap, launchesHost);
+  const snapHelp = document.createElement('button');
+  snapHelp.type = 'button';
+  snapHelp.dataset.issSnapHelp = '';
+  snapHelp.textContent = '?';
+  snapHelp.setAttribute('aria-label', 'Help — how to use SNAP');
+  snapHelp.title = 'Help';
+  snapHelp.addEventListener('click', () => openHelpModal());
+  controls.append(telemetry, pickerWrap, snapHelp, launchesHost);
   card.append(controls, telemetryBody);
   root.append(toolbar, view, card);
   host.append(root);
@@ -375,7 +383,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const fullscreen = bindIssFullscreen({
     scene: root,
     controls,
-    telemetry,
     relayout: () => {
       if (phase === 'running' && rendererReady) void paint();
       else layout();

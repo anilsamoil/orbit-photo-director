@@ -109,6 +109,49 @@ describe('terminatorLonAtLat', () => {
   });
 });
 
+function ringHolds(ring: readonly (readonly number[])[], lon: number, lat: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const xi = ring[i]?.[0] ?? 0;
+    const yi = ring[i]?.[1] ?? 0;
+    const xj = ring[j]?.[0] ?? 0;
+    const yj = ring[j]?.[1] ?? 0;
+    const crosses = (yi > lat) !== (yj > lat);
+    const x = ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (crosses && lon < x) inside = !inside;
+  }
+  return inside;
+}
+
+function nightHolds(features: readonly GeoJSON.Feature[], lon: number, lat: number): boolean {
+  return features.some((feature) => {
+    if (feature.geometry.type !== 'Polygon') return false;
+    const ring = feature.geometry.coordinates[0];
+    return ring ? ringHolds(ring, lon, lat) : false;
+  });
+}
+
+describe('known subsolar point and terminator', () => {
+  const when = new Date('2024-06-21T18:00:00.000Z');
+
+  it('places the sun and the equator crossing for 2024-06-21 18:00 UTC', () => {
+    const sun = subsolarPoint(when);
+    expect(sun.lat).toBeCloseTo(23.432, 3);
+    expect(sun.lon).toBeCloseTo(-89.546, 3);
+    const lons = terminatorLonAtLat(0, sun.lat, sun.lon);
+    expect(lons).toEqual([expect.closeTo(-179.546, 3), expect.closeTo(0.454, 3)]);
+  });
+
+  it('shades the night side of that instant and leaves the subsolar point in day', () => {
+    const night = terminatorNightPolygonFeatures(when);
+    expect(night.length).toBeGreaterThan(0);
+    expect(nightHolds(night, 90.454, 0)).toBe(true);
+    expect(nightHolds(night, -89.546, 23.432)).toBe(false);
+    expect(nightHolds(night, 0, -80)).toBe(true);
+    expect(nightHolds(night, 0, 80)).toBe(false);
+  });
+});
+
 describe('terminatorFeatures', () => {
   it('produces non-empty LineString features for a typical date', () => {
     const features = terminatorFeatures(new Date('2024-10-17T12:00:00Z'));

@@ -565,7 +565,7 @@ export function mountPlanInset(frame: HTMLElement, track: Track, nowMs: () => nu
     const features = ticks === 1 || ticks % PLAN_TRACK_EVERY === 0
       ? groundTrackFeatures(held.track, false)
       : null;
-    inset.show(features, position);
+    inset.show(features, position, new Date(nowMs()));
   };
   paint();
   const timer = window.setInterval(paint, PLAN_INSET_MS);

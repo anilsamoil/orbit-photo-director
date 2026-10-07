@@ -44,10 +44,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 export function bindIssFullscreen(options: {
   scene: HTMLElement;
   controls: HTMLElement;
-  telemetry: HTMLElement;
   relayout: () => void;
 }): { dispose(): void } {
-  const { scene, controls, telemetry, relayout } = options;
+  const { scene, controls, relayout } = options;
   const button = document.createElement('button');
   button.type = 'button';
   button.dataset.issFullscreen = '';
@@ -58,7 +57,7 @@ export function bindIssFullscreen(options: {
   const path = document.createElementNS(SVG_NS, 'path');
   icon.append(path);
   button.append(icon);
-  telemetry.after(button);
+  scene.append(button);
 
   let mode: IssFullscreenMode = 'off';
   let escapeExitHeld = false;

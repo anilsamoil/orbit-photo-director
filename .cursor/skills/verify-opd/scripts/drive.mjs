@@ -3863,6 +3863,7 @@ const ISS_FULLSCREEN_HIDDEN = [
   '[data-iss-hint]',
   '.maplibregl-ctrl-attrib',
   '[data-iss-aim-help]',
+  '[data-iss-snap-help]',
   '[data-iss-launch-picker]',
 ];
 
@@ -3894,8 +3895,14 @@ const ISS_FULLSCREEN_OFF = `(() => {
   if ((document.fullscreenElement ?? document.webkitFullscreenElement ?? null) !== null) return { step: 'browser-held' };
   if (button.getAttribute('aria-label') !== 'Full screen' || button.title !== 'Full screen') return { step: 'label' };
   if (document.querySelectorAll('[data-iss-fullscreen]').length !== 1) return { step: 'exit-count' };
-  if (button.previousElementSibling !== document.querySelector('[data-iss-telemetry]')) return { step: 'order' };
-  if (!button.parentElement?.hasAttribute('data-iss-controls')) return { step: 'parent' };
+  if (button.parentElement !== scene) return { step: 'parent' };
+  const help = document.querySelector('[data-iss-snap-help]');
+  const picker = document.querySelector('[data-iss-launch-picker-wrap]');
+  const launches = document.querySelector('[data-iss-launches]');
+  if (!(help instanceof HTMLElement) || !(picker instanceof HTMLElement) || !(launches instanceof HTMLElement)) return { step: 'help-missing' };
+  if (picker.nextElementSibling !== help || help.nextElementSibling !== launches) return { step: 'help-order' };
+  if (help.getAttribute('aria-label') !== 'Help — how to use SNAP' || help.textContent !== '?') return { step: 'help-label', label: help.getAttribute('aria-label') };
+  if (getComputedStyle(button).position !== 'absolute') return { step: 'corner-position' };
   if (getComputedStyle(scene).position !== 'absolute') return { step: 'position' };
   if (scene.querySelector('[data-iss-presets]')?.getClientRects().length !== 1) return { step: 'presets' };
   if (${SCENE_SCROLLS}) return { step: 'scroll' };
@@ -3904,13 +3911,19 @@ const ISS_FULLSCREEN_OFF = `(() => {
   if (!button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) return { step: 'hit' };
   const telemetry = document.querySelector('[data-iss-telemetry]')?.getBoundingClientRect();
   if (!telemetry || telemetry.height < 40 || Math.abs(telemetry.height - box.height) > 1) return { step: 'height', telemetry: telemetry ? telemetry.height : null, control: box.height };
+  const sceneBox = scene.getBoundingClientRect();
+  if (sceneBox.right - box.right > 96 || sceneBox.bottom - box.bottom > 96 || box.right > sceneBox.right + 1 || box.bottom > sceneBox.bottom + 1) {
+    return { step: 'corner', scene: [sceneBox.right, sceneBox.bottom], button: [box.right, box.bottom] };
+  }
   const shownPlaces = [...document.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length;
   if (shownPlaces < 1) return { step: 'places', shown: shownPlaces };
-  const covered = [...button.parentElement.children]
-    .filter((node) => node !== button)
-    .flatMap((node) => [...node.getClientRects()])
-    .find((other) => box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5);
-  if (covered) return { step: 'overlap', button: [box.left, box.top, box.right, box.bottom], other: [covered.left, covered.top, covered.right, covered.bottom] };
+  const covered = ['[data-iss-telemetry]', '[data-iss-launch-picker]', '[data-iss-snap-help]', '[data-iss-launch]'].find((sel) => {
+    const node = document.querySelector(sel);
+    if (!node) return false;
+    const other = node.getBoundingClientRect();
+    return other.width > 1 && box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5;
+  });
+  if (covered) return { step: 'overlap', covered, button: [box.left, box.top, box.right, box.bottom] };
   return { ok: true, width: frame.width, height: frame.height };
 })()`;
 
@@ -4110,7 +4123,7 @@ const ISS_SHORT_STAGE = `(() => {
     return { step: 'overlap', frame: [Math.round(frameBox.top), Math.round(frameBox.bottom)], controls: [Math.round(controlsBox.top), Math.round(controlsBox.bottom)] };
   }
   if (!scene.hasAttribute('data-iss-short')) return { step: 'short' };
-  const sels = ['[data-iss-telemetry]', '[data-iss-fullscreen]', '[data-iss-launch-picker]', '[data-iss-aim-help]', '[data-iss-preset="horizon"]', '[data-iss-preset="nadir"]', '[data-iss-cupola]'];
+  const sels = ['[data-iss-telemetry]', '[data-iss-fullscreen]', '[data-iss-launch-picker]', '[data-iss-snap-help]', '[data-iss-aim-help]', '[data-iss-preset="horizon"]', '[data-iss-preset="nadir"]', '[data-iss-cupola]'];
   for (const sel of sels) {
     const el = document.querySelector(sel);
     if (!el) return { step: 'control-missing', sel };
@@ -4164,9 +4177,10 @@ function issSplitFullscreenExpression() {
     if (t.width < 80 || t.height < 40 || t.height > 52) return { step: 'telemetry', w: Math.round(t.width), h: Math.round(t.height) };
     const tHit = document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2);
     if (!tHit || !telemetry.contains(tHit)) return { step: 'telemetry-hit', hit: tHit ? (tHit.getAttribute('aria-label') || tHit.tagName) : null };
-    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.parentElement !== scene) return { step: 'parent' };
     if (Math.abs(b.width - 44) > 1 || Math.abs(b.height - 44) > 1) return { step: 'exit', w: Math.round(b.width), h: Math.round(b.height) };
-    if (b.left + 1 < t.right || b.left > t.right + 24) return { step: 'beside', telemetryRight: Math.round(t.right), exitLeft: Math.round(b.left) };
+    const sceneBox = scene.getBoundingClientRect();
+    if (sceneBox.right - b.right > 96 || sceneBox.bottom - b.bottom > 96) return { step: 'corner', right: Math.round(sceneBox.right - b.right), bottom: Math.round(sceneBox.bottom - b.bottom) };
     const bHit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
     if (!bHit || !button.contains(bHit)) return { step: 'exit-hit', hit: bHit ? (bHit.getAttribute('aria-label') || bHit.id || bHit.tagName) : null };
     if (button.getAttribute('aria-label') !== 'Exit full screen') return { step: 'label', label: button.getAttribute('aria-label') };
@@ -4196,7 +4210,10 @@ function issSplitDockedExpression() {
     if (scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
     if (scene.getAttribute('data-iss-split') !== 'on') return { step: 'split' };
     if (!dock.contains(card)) return { step: 'dock' };
-    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.parentElement !== scene) return { step: 'parent' };
+    const help = document.querySelector('[data-iss-snap-help]');
+    const picker = document.querySelector('[data-iss-launch-picker-wrap]');
+    if (picker?.nextElementSibling !== help) return { step: 'help-order' };
     if (button.getAttribute('aria-label') !== 'Full screen') return { step: 'label', label: button.getAttribute('aria-label') };
     const t = telemetry.getBoundingClientRect();
     const b = button.getBoundingClientRect();
