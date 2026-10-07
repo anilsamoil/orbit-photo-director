@@ -15,7 +15,12 @@ const created = vi.hoisted(() => ({
         type?: string;
         source?: string;
         paint?: { 'raster-opacity'?: number; 'text-color'?: string };
-        layout?: { 'text-field'?: unknown; 'text-font'?: string[] };
+        layout?: {
+          'text-field'?: unknown;
+          'text-font'?: string[];
+          'text-allow-overlap'?: boolean;
+          'text-ignore-placement'?: boolean;
+        };
       }[];
     };
   },
@@ -72,6 +77,8 @@ describe('plan inset labels', () => {
     expect(countries?.type).toBe('symbol');
     expect(countries?.layout?.['text-field']).toEqual(['get', 'name']);
     expect(countries?.layout?.['text-font']).toEqual(['Open Sans Regular']);
+    expect(countries?.layout?.['text-allow-overlap']).not.toBe(true);
+    expect(countries?.layout?.['text-ignore-placement']).not.toBe(true);
     expect(style?.sources['inset-countries']?.data?.features?.some((feature) => feature.properties?.name === 'Brazil')).toBe(true);
     const glyphs = readFileSync(resolve(__dirname, '../public/glyphs/Open Sans Regular/0-255.pbf'));
     expect(glyphs.byteLength).toBeGreaterThan(10000);

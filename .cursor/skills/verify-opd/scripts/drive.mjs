@@ -1603,8 +1603,11 @@ async function proveMapLaidOnPane(send) {
     const legend = document.getElementById('map-legend-toggle')?.getBoundingClientRect();
     const zoom = document.querySelector('.maplibregl-ctrl-top-left')?.getBoundingClientRect();
     const hits = (a, b) => a && b && a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-    const pip = innerWidth >= 800 && innerHeight >= 600
-      ? { left: paneBox.right - 112 - 148, right: paneBox.right - 112, top: stripBox.top - 96, bottom: stripBox.top }
+    const slider = document.getElementById('time-slider');
+    const sliderBox = slider ? slider.getBoundingClientRect() : null;
+    const fitting = innerWidth >= 800 && innerHeight >= 600;
+    const pip = fitting
+      ? { left: paneBox.right - 12 - 222, right: paneBox.right - 12, top: paneBox.bottom - 96 - 36 - 144, bottom: paneBox.bottom - 96 - 36, width: 222, height: 144 }
       : null;
     const pipHits = pip ? hits(stripBox, pip) : false;
     return {
@@ -1624,6 +1627,10 @@ async function proveMapLaidOnPane(send) {
       stripTop: stripBox.top,
       stripBottom: stripBox.bottom,
       stripWidth: stripBox.width,
+      stripHeight: stripBox.height,
+      rightGap: paneBox.right - stripBox.right,
+      slider: sliderBox ? sliderBox.height : null,
+      fitting,
       paneWidth: paneBox.width,
       fullBleed: stripBox.width > paneBox.width - 80,
       hide: hits(stripBox, hide),
@@ -1639,7 +1646,12 @@ async function proveMapLaidOnPane(send) {
     && laid.paddingBottom === '0px'
     && laid.paddingLeft === '0px';
   const gapClear = laid && laid.rowGap === '0px' && laid.columnGap === '0px';
-  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !paintIsClear(laid.color) || !chipBacking(laid.controls) || laid.fullBleed || laid.hide || laid.legend || laid.zoom || laid.pip || laid.events !== 'none') {
+  const geometry = laid && (!laid.fitting || (
+    Math.abs(laid.stripHeight - 96) <= 2
+    && Math.abs(laid.rightGap - 246) <= 2
+    && Math.abs(laid.slider - 32) <= 1
+  ));
+  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !paintIsClear(laid.color) || !chipBacking(laid.controls) || laid.fullBleed || laid.hide || laid.legend || laid.zoom || laid.pip || laid.events !== 'none' || !geometry) {
     throw new Error(`time strip not laid on the map ${JSON.stringify(laid)}`);
   }
   return laid;
@@ -1705,6 +1717,7 @@ const PIP_MAP_OBSTACLES = [
   '#map-launch-coverage',
   '#satellite-picker-panel',
   '#help-fab',
+  '#shotlist-bar',
 ];
 
 const PIP_ISS_OBSTACLES = [
@@ -1736,7 +1749,15 @@ function pipReadyExpression(name) {
     const style = getComputedStyle(inset);
     if (style.display === 'none' || style.visibility === 'hidden') return null;
     const box = inset.getBoundingClientRect();
-    if (box.width < 44 || box.height < 44) return { step: 'size', width: box.width, height: box.height };
+    if (${name === 'horizon' ? 'true' : 'false'}) {
+      const pane = document.getElementById('map-pane');
+      const paneBox = pane ? pane.getBoundingClientRect() : null;
+      const rightGap = paneBox ? paneBox.right - box.right : null;
+      if (Math.abs(box.width - 222) > 1 || Math.abs(box.height - 144) > 1) return { step: 'size', width: box.width, height: box.height };
+      if (rightGap == null || Math.abs(rightGap - 12) > 2) return { step: 'place', rightGap, width: box.width, height: box.height };
+    } else if (box.width < 44 || box.height < 44) {
+      return { step: 'size', width: box.width, height: box.height };
+    }
     const canvas = inset.querySelector('canvas');
     if (!canvas || canvas.clientWidth < 2 || canvas.clientHeight < 2) return { step: 'canvas' };
     if (inset.getAttribute('aria-label') !== ${JSON.stringify(label)}) return { step: 'label', aria: inset.getAttribute('aria-label') };
@@ -1850,7 +1871,22 @@ function pipClearExpression(name, selectors) {
         const nodeStyle = getComputedStyle(node);
         if (nodeStyle.display === 'none' || nodeStyle.visibility === 'hidden') continue;
         if (node.getClientRects().length === 0) continue;
-        const other = node.getBoundingClientRect();
+        let other = node.getBoundingClientRect();
+        let clip = node.parentElement;
+        while (clip) {
+          const clipStyle = getComputedStyle(clip);
+          const oy = clipStyle.overflowY;
+          const ox = clipStyle.overflowX;
+          if (oy === 'auto' || oy === 'scroll' || oy === 'hidden' || ox === 'auto' || ox === 'scroll' || ox === 'hidden') {
+            const bounds = clip.getBoundingClientRect();
+            const left = Math.max(other.left, bounds.left);
+            const top = Math.max(other.top, bounds.top);
+            const right = Math.min(other.right, bounds.right);
+            const bottom = Math.min(other.bottom, bounds.bottom);
+            other = { left, top, right, bottom, width: right - left, height: bottom - top };
+          }
+          clip = clip.parentElement;
+        }
         if (other.width < 1 || other.height < 1) continue;
         if (box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5) {
           hits.push(sel);
@@ -1912,10 +1948,20 @@ function legendCentersMissInset() {
     const inset = document.querySelector('[data-pip="horizon"]');
     if (!inset) return { step: 'inset' };
     const insetBox = inset.getBoundingClientRect();
-    const controls = ['map-legend-toggle', 'map-legend-panel'];
-    for (const id of controls) {
-      const node = document.getElementById(id);
-      if (!node) return { step: 'missing', id };
+    const nodes = [
+      ['map-legend-toggle', document.getElementById('map-legend-toggle')],
+      ['map-legend-panel', document.getElementById('map-legend-panel')],
+      ['map-chrome-toggle', document.getElementById('map-chrome-toggle')],
+      ['.maplibregl-ctrl-zoom-in', document.querySelector('.maplibregl-ctrl-zoom-in')],
+      ['.maplibregl-ctrl-zoom-out', document.querySelector('.maplibregl-ctrl-zoom-out')],
+      ['.maplibregl-ctrl-compass', document.querySelector('.maplibregl-ctrl-compass')],
+      ['#shotlist-bar', document.getElementById('shotlist-bar')],
+    ];
+    for (const [id, node] of nodes) {
+      if (!node) {
+        if (id === '#shotlist-bar') continue;
+        return { step: 'missing', id };
+      }
       const style = getComputedStyle(node);
       if (style.display === 'none' || style.visibility === 'hidden') continue;
       const box = node.getBoundingClientRect();
@@ -2390,6 +2436,21 @@ async function assertDockAndTimeClear(send, label) {
     if (insetShown) {
       if (hits(insetRect, stripRect)) insetOverlaps.push('strip');
       if (hits(insetRect, hideRect)) insetOverlaps.push('hide');
+      if (hits(insetRect, pickerRect)) insetOverlaps.push('picker');
+      const bar = document.getElementById('shotlist-bar');
+      const legend = document.querySelector('.map-legend');
+      const zoom = document.querySelector('.maplibregl-ctrl-top-left');
+      if (bar && !bar.hidden && hits(insetRect, bar.getBoundingClientRect())) insetOverlaps.push('shotlist');
+      if (legend && hits(insetRect, legend.getBoundingClientRect())) insetOverlaps.push('legend');
+      if (zoom && hits(insetRect, zoom.getBoundingClientRect())) insetOverlaps.push('zoom');
+      const centers = [hide, legend, zoom, bar];
+      for (const node of centers) {
+        if (!node || node.hidden) continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) continue;
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        if (hit && inset.contains(hit)) insetOverlaps.push('point');
+      }
     }
     const ok = pickerHit && pickerOverlaps.length === 0 && timeOverlaps.length === 0 && insetOverlaps.length === 0;
     return {
@@ -2462,6 +2523,8 @@ async function proveLegendShotlist(send, evidenceDir) {
       await assertControlCenters(send, `shotlist ${size.suffix} shown`, openCenters);
       if (size.width >= 800 && size.height >= 600) {
         await waitFor(send, pipReadyExpression('horizon'), `horizon inset shotlist ${size.suffix}`, 20000);
+        await waitFor(send, pipClearExpression('horizon', PIP_MAP_OBSTACLES), `horizon inset shotlist clear ${size.suffix}`, 10000);
+        await waitFor(send, legendCentersMissInset(), `horizon legend centers shotlist ${size.suffix}`, 10000);
       }
       await assertDockAndTimeClear(send, `shotlist ${size.suffix} shown`);
       await assertLegendClearOfZoom(send, `shotlist ${size.suffix} shown`);
@@ -2546,6 +2609,80 @@ async function proveLegendWarning(send, evidenceDir) {
       return dot.hasAttribute('hidden') ? { ok: true } : { pending: text };
     })()`,
     'legend warning cleared',
+  );
+}
+
+async function proveStaleReadoutClearsSkip(send, viewport) {
+  const sizes = [
+    [834, 1194],
+    [800, 600],
+  ];
+  const expression = `(() => {
+    const el = document.getElementById('time-slider-readout');
+    const step = document.getElementById('time-back-90');
+    if (!el || !step) return null;
+    const text = '+1d 23:59Z · stale TLE';
+    const fragment = document.createDocumentFragment();
+    for (const char of text) {
+      if (char >= '0' && char <= '9') {
+        const cell = document.createElement('span');
+        cell.className = 'digit';
+        cell.textContent = char;
+        fragment.append(cell);
+      } else if (char === ':' || char === '.' || char === ',') {
+        const cell = document.createElement('span');
+        cell.className = 'digit-sep';
+        cell.textContent = char;
+        fragment.append(cell);
+      } else {
+        fragment.append(document.createTextNode(char));
+      }
+    }
+    el.replaceChildren(fragment);
+    el.classList.add('time-slider-scrubbed', 'time-slider-stale');
+    const readout = el.getBoundingClientRect();
+    const skip = step.getBoundingClientRect();
+    const buttons = [...document.querySelectorAll('.map-command .time-step-btn')].map((button) => {
+      const box = button.getBoundingClientRect();
+      return { id: button.id, width: box.width, height: box.height };
+    });
+    const short = buttons.filter((button) => button.width < 44 || button.height < 44);
+    const overflow = el.scrollWidth - el.clientWidth;
+    const inkRight = readout.left + el.scrollWidth;
+    if (el.textContent !== text || overflow > 1 || inkRight > skip.left + 1 || short.length) {
+      return {
+        pending: true,
+        text: el.textContent,
+        overflow,
+        client: el.clientWidth,
+        scroll: el.scrollWidth,
+        inkRight,
+        skipLeft: skip.left,
+        short,
+      };
+    }
+    return { ok: true, client: el.clientWidth, scroll: el.scrollWidth };
+  })()`;
+  try {
+    for (const [width, height] of sizes) {
+      await setViewport(send, width, height, width < 900);
+      await waitFor(send, expression, `stale readout clear of T-90 at ${width}x${height}`, 8000);
+    }
+  } finally {
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+  await evaluate(send, `(() => {
+    const el = document.getElementById('time-slider-readout');
+    if (!el) return { ok: false };
+    el.textContent = 'Now';
+    el.classList.remove('time-slider-scrubbed', 'time-slider-stale');
+    el.removeAttribute('title');
+    return { ok: true };
+  })()`);
+  await waitFor(
+    send,
+    `document.getElementById('time-slider-readout')?.textContent.trim() === 'Now' ? { ok: true } : null`,
+    'readout restored after stale check',
   );
 }
 
@@ -2689,6 +2826,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await dismissShotlist(send);
   await assertMapInfoControlsGone(send);
   await assertChromeToggleStationary(send);
+  await proveStaleReadoutClearsSkip(send, viewport);
   await shot(send, evidenceDir, 'map-controls');
   const before = await evaluate(send, `document.getElementById('time-slider-readout').textContent`);
   await click(send, '#time-fwd-45');
@@ -2869,7 +3007,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time chip ${laid.controls} on clear strip gap ${laid.gap}px, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {

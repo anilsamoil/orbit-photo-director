@@ -286,7 +286,7 @@ describe('map chrome layout', () => {
     const heights = rulesFor('body:has(> #view.view-map):not(.map-chrome-hidden)')
       .map((style) => style.getPropertyValue('--map-command-height'));
     expect(heights).toContain('calc(64px + env(safe-area-inset-bottom, 0px))');
-    expect(heights).toContain('calc(120px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('calc(140px + env(safe-area-inset-bottom, 0px))');
     expect(heights).toContain('52px');
     expect(heights).not.toContain('calc(72px + env(safe-area-inset-bottom, 0px))');
     const narrowShort = css.slice(css.indexOf('@media (max-height: 520px) {'), css.indexOf('@media (max-height: 520px) and (min-width: 720px)'));

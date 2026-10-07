@@ -203,7 +203,7 @@ export function buildStyle(): StyleSpec {
         
         
         
-        maxzoom: 20,
+        maxzoom: 16,
         attribution:
           'Tiles © <a href="https://www.esri.com">Esri</a> &mdash; Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS user community',
       },

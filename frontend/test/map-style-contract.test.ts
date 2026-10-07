@@ -91,7 +91,7 @@ describe('buildStyle', () => {
       ]),
     );
     expect(maxzoom).toEqual({
-      'carto-dark': 20,
+      'carto-dark': 16,
       'gibs-clouds': 9,
       'esri-imagery': 19,
       'ne-coastline': null,

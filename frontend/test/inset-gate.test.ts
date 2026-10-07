@@ -36,11 +36,19 @@ describe('inset viewport gate', () => {
     const trackInset = readFileSync(resolve(__dirname, '../src/map/adapters/maplibre/track-inset.ts'), 'utf8');
     expect(css).toContain(`@media (min-width: ${INSET_MIN_WIDTH_PX}px) and (min-height: ${INSET_MIN_HEIGHT_PX}px)`);
     expect(css).toContain('#map-pane.map-chrome-hidden .pip-horizon');
-    expect(css).toContain('right: 112px');
+    expect(css).toContain('--horizon-width: 222px');
+    expect(css).toContain('--horizon-height: 144px');
+    expect(css).toContain('--horizon-right: 12px');
+    expect(css).toContain('--horizon-span: calc(var(--horizon-right) + var(--horizon-width) + var(--horizon-gap))');
     expect(css).toContain('bottom: calc(var(--map-command-bottom, 0px) + var(--map-command-height) + 36px)');
     expect(css).toContain('bottom: calc(var(--map-command-bottom) + var(--map-command-height) + 36px)');
-    expect(css).toContain('max-width: calc(100% - 272px)');
-    expect(drive).toContain('#map-legend-toggle');
+    expect(css).toContain('max-width: calc(100% - var(--horizon-span))');
+    expect(css).toContain('--map-command-height: calc(96px + env(safe-area-inset-bottom, 0px))');
+    expect(css).not.toContain('right: 112px');
+    expect(css).not.toContain('272px');
+    expect(drive).toContain('#shotlist-bar');
+    expect(drive).toContain('Math.abs(box.width - 222)');
+    expect(drive).toContain('Math.abs(rightGap - 12)');
     expect(drive).toContain('#map-legend-panel');
     expect(drive).toContain('legendCentersMissInset');
     expect(css).toContain('grid-template-columns: minmax(300px, 36%) minmax(0, 1fr)');
@@ -55,13 +63,13 @@ describe('inset viewport gate', () => {
 
 describe('inset collision', () => {
   it('treats separated boxes as clear and overlapping boxes as a hit', () => {
-    const inset = { left: 900, top: 500, right: 1048, bottom: 596 };
+    const inset = { left: 1046, top: 524, right: 1268, bottom: 668 };
     const hide = { left: 1180, top: 720, right: 1268, bottom: 764 };
-    const slider = { left: 8, top: 660, right: 1272, bottom: 800 };
+    const slider = { left: 8, top: 704, right: 1034, bottom: 800 };
     expect(boxesIntersect(inset, hide)).toBe(false);
     expect(boxesIntersect(inset, slider)).toBe(false);
-    expect(boxesIntersect(inset, { left: 1000, top: 520, right: 1100, bottom: 560 })).toBe(true);
-    expect(boxesIntersect(inset, { left: 1048, top: 500, right: 1100, bottom: 596 })).toBe(false);
+    expect(boxesIntersect(inset, { left: 1100, top: 540, right: 1200, bottom: 600 })).toBe(true);
+    expect(boxesIntersect(inset, { left: 1268, top: 524, right: 1300, bottom: 668 })).toBe(false);
   });
 });
 
