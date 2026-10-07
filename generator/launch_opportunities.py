@@ -19,6 +19,7 @@ from .ascent import (
     tangent_clearance,
 )
 from .ascent_profiles import AscentProfile
+from .launch_direction import Direction, IssPlaneDirection, NoDirection
 from .orbit import EARTH_RADIUS_KM, Position, _ensure_utc
 
 SLANT_CAP_KM = 3500.0
@@ -175,6 +176,22 @@ def sample_liftoffs(
     return tuple(
         sample_liftoff(liftoff, observer_at, pad, ascent) for liftoff in liftoffs
     )
+
+
+def sample_directed(
+    liftoff: datetime,
+    observer_at: Callable[[datetime], Position],
+    pad: Pad,
+    profile: AscentProfile,
+    direction: Direction,
+) -> LiftoffScenario:
+    if isinstance(direction, IssPlaneDirection):
+        ascent = Ascent(profile, direction.azimuth_deg)
+    elif isinstance(direction, NoDirection):
+        ascent = None
+    else:
+        raise TypeError(f"unknown direction {type(direction).__name__}")
+    return sample_liftoff(liftoff, observer_at, pad, ascent)
 
 
 def _light(
