@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
+import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
@@ -1797,22 +1798,9 @@ function pipReadyExpression(name) {
         if (outside) break;
       }
       if (coords < 8 || outside) return { step: 'track', coords, outside, width, height };
-      let labelFeatures = [];
-      try {
-        labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
-      } catch (error) {
-        return { step: 'labels', reason: 'query' };
-      }
-      const names = [];
-      for (const feature of labelFeatures) {
-        const name = feature && feature.properties && feature.properties.name;
-        const geometry = feature && feature.geometry;
-        if (typeof name !== 'string' || name.length === 0 || !geometry || geometry.type !== 'Point') continue;
-        const point = orbit.project(geometry.coordinates);
-        if (!(point.x >= 8 && point.y >= 8 && point.x <= width - 8 && point.y <= height - 8)) continue;
-        if (!names.includes(name)) names.push(name);
-      }
-      if (glyphs < 10000 || names.length < 4) return { step: 'labels', glyphs, names };
+      ${planLabelReaders()}
+      const labels = readPlanLabels(orbit, glyphs, width, height);
+      if (!labels.ok) return { step: 'labels', glyphs, names: labels.names || [], reason: labels.reason };
       const pageText = document.body ? document.body.innerText || '' : '';
       if (pageText.includes('API KEY REQUIRED')) return { error: 'API KEY REQUIRED on the page' };
       const basemap = orbit.getStyle && orbit.getStyle().sources && orbit.getStyle().sources['inset-basemap'];
