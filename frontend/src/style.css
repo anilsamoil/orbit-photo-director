@@ -848,6 +848,9 @@ body.shotlist-bar-visible .help-fab { display: none; }
 body.shotlist-bar-visible main {
   padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
 }
+body.shotlist-bar-visible .view-map {
+  --map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px));
+}
 .shotlist-add { background: var(--accent); color: var(--bg); border: 0; }
 .shotlist-clear {
   background: transparent;
@@ -1159,6 +1162,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   --map-zoom-clear: calc(8px + 44px + 16px);
   --map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap)));
   --map-legend-panel-bottom: max(calc(44px + 4px), calc(var(--map-command-height) - var(--map-corner-bottom) + 12px));
+  --map-shotlist-block: 0px;
+  --map-pane-budget: calc(100dvh - var(--map-shotlist-block));
+  --map-toolbar-block: 65px;
+  --map-toolbar-clear: calc(var(--topbar-height) + var(--map-toolbar-block));
+  --map-strip-anchor: calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap));
 }
 .view-map #map-pane {
   position: relative;
@@ -4691,6 +4699,7 @@ summary:focus-visible {
 
   body.shotlist-bar-visible .view-map {
     --map-corner-bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));
+    --map-shotlist-block: 0px;
   }
 
   .brand-expansion,
@@ -4729,7 +4738,29 @@ summary:focus-visible {
   }
 
   .view-map {
-    --map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap) + var(--map-time-block)));
+    --map-stack-room: calc(var(--map-pane-budget) - var(--map-toolbar-clear) - var(--map-strip-anchor));
+    --map-time-block: min(120px, max(44px, calc(var(--map-stack-room) - 60px)));
+    --map-dock-clear: calc(var(--map-strip-anchor) + var(--map-time-block));
+    --map-legend-panel-bottom: calc(44px + var(--map-corner-gap) + var(--map-time-block) + 12px);
+  }
+
+  .view-map .map-legend-panel {
+    max-height: max(0px, calc(var(--map-stack-room) - var(--map-time-block) - 12px));
+  }
+
+  .view-map .map-control-dock,
+  .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
+    width: 76px;
+    height: max(28px, calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px));
+    max-height: max(28px, calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px));
+    pointer-events: none;
+    container-type: size;
+    container-name: map-dock;
+  }
+
+  .view-map .map-control-dock > .map-controls,
+  .view-map .map-control-dock .time-btn {
+    pointer-events: auto;
   }
 
   .view-map .map-command,
@@ -4740,6 +4771,8 @@ summary:focus-visible {
     height: var(--map-time-block);
     max-height: var(--map-time-block);
     padding: 0;
+    container-type: size;
+    container-name: map-command;
   }
 
   .view-map .map-command .map-controls-time {
@@ -4751,6 +4784,52 @@ summary:focus-visible {
   .view-map .map-command .time-slider-row {
     flex: 1 1 100%;
     min-width: 0;
+  }
+}
+
+@container map-dock (max-height: 43px) {
+  .view-map .map-control-dock .time-btn {
+    min-height: 0;
+    height: 100%;
+    max-height: 100%;
+  }
+}
+
+@container map-command (max-height: 100px) {
+  .view-map .map-command .map-controls-time {
+    flex-wrap: nowrap;
+    gap: 2px;
+    padding: 0 2px;
+    overflow: hidden;
+  }
+
+  .view-map .map-command .time-slider-row {
+    flex: 1 1 0;
+    min-width: 44px;
+    padding: 0;
+    gap: 0;
+  }
+
+  .view-map .map-command .time-slider {
+    margin: 0;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .view-map .map-command .time-slider-end,
+  .view-map .map-command .time-slider-readout {
+    display: none;
+  }
+
+  .view-map .map-command .time-step-btn {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    overflow: hidden;
   }
 }
 
@@ -4949,7 +5028,7 @@ summary:focus-visible {
   }
 
   .view-map .map-legend-panel {
-    max-height: calc(100dvh - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px);
+    max-height: calc(var(--map-pane-budget) - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px);
   }
 
   #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
