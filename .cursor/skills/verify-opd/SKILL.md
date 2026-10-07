@@ -21,6 +21,10 @@ The command writes fixtures, checks the launch artifact against `frontend/src/la
 
 One instance per `OPD_VERIFY_HOME`. The default home is `/tmp/opd-verify/default`. A second run sets a different home and `OPD_VERIFY_PORT`. The default ports are `41731` for the proxy and `41732` for Vite. The browser talks only to the proxy.
 
+`OPD_VERIFY_DRIVE_START` overrides the captured drive start. A value older than six hours before now is an error before any browser launches. The message names `OPD_VERIFY_DRIVE_START`, prints the value, and states the six-hour limit. A start inside those six hours, or a future start, is kept.
+
+Each drive copies the home fixtures into its own temp directory, stamps that copy, and registers the directory with the proxy. The browser sends the cookie `opd-verify-fixtures`. Parallel drives on one home do not rewrite one `passes.json`. The home fixture directory stays as `up` wrote it. Proxy profile memory, the log, and launch holds stay one per home.
+
 `up` is safe to repeat. A healthy instance is reused, and reuse does not rebuild fixtures. A dead pid is replaced. If the launch fixture's `valid_until` has passed, `doctor` fails. Run `down`, then `up`.
 
 The command needs `bun`, installed `frontend/node_modules`, `lsof`, Chrome, and Playwright WebKit. Set `OPD_VERIFY_CHROME` when `google-chrome` is not on `PATH`. Install WebKit from `frontend` with `npx playwright install --with-deps webkit`. A drive fails when WebKit is missing. It does not skip the device pass. The drive uses the Node `WebSocket` global. Node 22 has it.

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer, request as httpRequest } from 'node:http';
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
-import { bostonTrackText, buildFixtures, driveStartMs, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
+import { bostonTrackText, buildFixtures, driveStartMs, FIXTURE_COOKIE, publishDriveFixtures } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -31,7 +32,10 @@ function readState(home = homeDir()) {
 
 function writeState(state) {
   mkdirSync(state.home, { recursive: true });
-  writeFileSync(statePath(state.home), JSON.stringify(state, null, 2));
+  const file = statePath(state.home);
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  renameSync(tmp, file);
 }
 
 function alive(pid) {
@@ -204,8 +208,9 @@ function sendJson(res, text) {
 
 function startProxy(home) {
   const state = readState(home);
-  const fixtureDir = resolve(home, 'fixtures');
-  const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
+  const homeFixtures = resolve(home, 'fixtures');
+  const meta = JSON.parse(readFileSync(resolve(homeFixtures, 'meta.json'), 'utf8'));
+  const driveFixtures = new Map();
   const logEntries = [];
   const personalTargets = [];
   let removedCuratedIds = null;
@@ -236,6 +241,28 @@ function startProxy(home) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
+    if (path === '/api/verify/fixtures' && req.method === 'POST') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const token = typeof body.token === 'string' ? body.token : '';
+      const dir = typeof body.dir === 'string' ? resolve(body.dir) : '';
+      const tempRoot = resolve(tmpdir());
+      const allowed = /^[a-f0-9]{16}$/.test(token)
+        && dir.startsWith(`${tempRoot}${sep}`)
+        && existsSync(resolve(dir, 'manifest.json'));
+      if (!allowed) {
+        json(res, 400, { ok: false });
+        return;
+      }
+      driveFixtures.set(token, dir);
+      json(res, 200, { ok: true });
+      return;
+    }
+    const token = cookieValue(req, FIXTURE_COOKIE);
+    if (token && !driveFixtures.has(token)) {
+      json(res, 404, { error: `unknown ${FIXTURE_COOKIE}` });
+      return;
+    }
+    const fixtureDir = token ? driveFixtures.get(token) : homeFixtures;
     const sendFile = (name) => {
       const file = resolve(fixtureDir, name);
       if (!existsSync(file)) {
@@ -614,44 +641,62 @@ async function drive(feature) {
   const wall = Date.now();
   const eventStart = driveStartMs(process.env.OPD_VERIFY_DRIVE_START, wall);
   const home = homeDir();
-  stampEventTimes(resolve(home, 'fixtures'), eventStart);
-  const until = refreshLaunchClock(resolve(home, 'fixtures'), wall);
-  const early = readState(home);
-  if (early) {
-    early.launchValidUntil = until;
-    writeState(early);
-  }
-  await doctor(home);
-  const state = readState(home);
-  if (feature === 'map-corner') {
-    try {
-      const note = await driveMapCorner({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-        home,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+  const published = publishDriveFixtures(resolve(home, 'fixtures'), eventStart, wall);
+  const token = randomBytes(8).toString('hex');
+  let exitCode = 0;
+  try {
+    const early = readState(home);
+    if (early) {
+      early.launchValidUntil = published.launchValidUntil;
+      writeState(early);
     }
+    await doctor(home);
+    const state = readState(home);
+    const registered = await fetch(`${state.url}/api/verify/fixtures`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, dir: published.dir }),
+    });
+    if (!registered.ok) throw new Error(`fixture register ${registered.status}`);
+    if (feature === 'map-corner') {
+      try {
+        const note = await driveMapCorner({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          home,
+          fixtureDir: published.dir,
+          fixtureToken: token,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        exitCode = 1;
+        return;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
+    }
+    const meta = JSON.parse(readFileSync(resolve(published.dir, 'meta.json'), 'utf8'));
+    const features = feature === 'all' ? ['all'] : [feature];
+    if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
+      console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, or map-corner.`);
+      exitCode = 2;
+      return;
+    }
+    const notes = await driveFeatures({
+      baseUrl: state.url,
+      evidenceDir: state.evidence,
+      meta,
+      features,
+      fixtureDir: published.dir,
+      fixtureToken: token,
+    });
+    for (const note of notes) console.log(note);
     console.log(`evidence ${state.evidence}`);
-    return;
+  } finally {
+    rmSync(published.dir, { recursive: true, force: true });
   }
-  const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
-  const features = feature === 'all' ? ['all'] : [feature];
-  if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, or map-corner.`);
-    process.exit(2);
-  }
-  const notes = await driveFeatures({
-    baseUrl: state.url,
-    evidenceDir: state.evidence,
-    meta,
-    features,
-  });
-  for (const note of notes) console.log(note);
-  console.log(`evidence ${state.evidence}`);
+  if (exitCode) process.exit(exitCode);
 }
 
 function staticType(file) {

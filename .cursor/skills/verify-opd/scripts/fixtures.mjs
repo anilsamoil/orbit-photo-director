@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -47,6 +48,21 @@ function launchIso(ms) {
 }
 
 export const SESSION_MARGIN_MS = 6 * 60 * 60 * 1000;
+
+export const FIXTURE_COOKIE = 'opd-verify-fixtures';
+
+export function publishDriveFixtures(sourceDir, eventStart, wallMs) {
+  const dir = mkdtempSync(join(tmpdir(), 'opd-drive-fixtures-'));
+  try {
+    cpSync(sourceDir, dir, { recursive: true });
+    stampEventTimes(dir, eventStart);
+    const launchValidUntil = refreshLaunchClock(dir, wallMs);
+    return { dir, launchValidUntil };
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
 
 export function driveStartMs(raw, wallMs) {
   const text = String(raw ?? '').trim();
