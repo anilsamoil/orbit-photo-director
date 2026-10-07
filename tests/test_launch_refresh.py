@@ -4,7 +4,10 @@ import copy
 import fcntl
 import hashlib
 import json
+import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -319,13 +322,14 @@ def test_policy_upgrade_republishes_same_receipt_once_without_releasing_owner(se
 
 
 def test_live_path_stays_visible_to_current_selectors(setup):
-    import subprocess
-
     now, _, output, _, _, _, _, run, _ = setup
     run()
     pointer = json.loads((output / "launch/latest.json").read_bytes())
     artifact_path = output / pointer["path"]
     catalog_path = output / json.loads((output / "launch/catalog/latest.json").read_bytes())["path"]
+    frontend = Path(__file__).resolve().parents[1] / "frontend"
+    bun = shutil.which("bun")
+    assert bun, "bun must be on PATH so selectAllLaunches can read the published paths"
     script = """
 import { readFileSync } from 'node:fs';
 import { selectAllLaunches } from './src/iss-view/launches.ts';
@@ -340,13 +344,8 @@ const ids = (path) => selectAllLaunches(state(path), now).map((selection) => sel
 console.log(JSON.stringify({ live: ids(process.argv[2]), catalog: ids(process.argv[3]) }));
 """
     result = subprocess.run(  # noqa: S603
-        [
-            "/home/ubuntu/.bun/bin/bun", "-e", script,
-            str(int(now.timestamp() * 1000)),
-            str(artifact_path),
-            str(catalog_path),
-        ],
-        cwd="/workspace/frontend",
+        [bun, "-e", script, str(int(now.timestamp() * 1000)), str(artifact_path), str(catalog_path)],
+        cwd=frontend,
         check=True,
         capture_output=True,
         text=True,
