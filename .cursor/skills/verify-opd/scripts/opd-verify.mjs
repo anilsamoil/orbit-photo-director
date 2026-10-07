@@ -7,7 +7,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
-import { bostonTrackText, buildFixtures, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
+import { bostonTrackText, buildFixtures, driveStartMs, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -610,18 +610,11 @@ function down() {
   console.log(`stopped. evidence remains at ${evidence}`);
 }
 
-function capturedDriveStart(wall) {
-  const raw = (process.env.OPD_VERIFY_DRIVE_START || '').trim();
-  if (!raw) return wall;
-  const parsed = Date.parse(raw);
-  if (!Number.isFinite(parsed)) throw new Error(`OPD_VERIFY_DRIVE_START is not a time: ${raw}`);
-  return parsed;
-}
-
 async function drive(feature) {
-  const home = homeDir();
   const wall = Date.now();
-  stampEventTimes(resolve(home, 'fixtures'), capturedDriveStart(wall));
+  const eventStart = driveStartMs(process.env.OPD_VERIFY_DRIVE_START, wall);
+  const home = homeDir();
+  stampEventTimes(resolve(home, 'fixtures'), eventStart);
   const until = refreshLaunchClock(resolve(home, 'fixtures'), wall);
   const early = readState(home);
   if (early) {

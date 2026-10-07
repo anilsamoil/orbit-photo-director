@@ -48,6 +48,14 @@ function launchIso(ms) {
 
 export const SESSION_MARGIN_MS = 6 * 60 * 60 * 1000;
 
+export function driveStartMs(raw, wallMs) {
+  const text = String(raw ?? '').trim();
+  if (!text) return wallMs;
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) throw new Error(`OPD_VERIFY_DRIVE_START is not a time: ${text}`);
+  return parsed;
+}
+
 function eventInstants(start) {
   const launchBase = start + SESSION_MARGIN_MS + 30 * 60_000;
   return {
