@@ -622,8 +622,8 @@ async function drive(feature) {
   const state = readState(home);
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
-  if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, or all.`);
+  if (feature !== 'all' && feature !== 'iss-labels' && !BROWSER_FEATURES.includes(feature)) {
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, iss-labels, or all.`);
     process.exit(2);
   }
   const notes = await driveFeatures({

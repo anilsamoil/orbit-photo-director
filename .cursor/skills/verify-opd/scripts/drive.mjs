@@ -560,6 +560,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
+    else if (feature === 'iss-labels') notes.push(await driveIssLabels(send, evidenceDir, viewport));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
     else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
@@ -1670,11 +1671,6 @@ const PIP_ISS_OBSTACLES = [
   '.iss-place',
 ];
 
-const PLAN_COUNTRY_NAMES = [
-  'Canada', 'Mexico', 'Brazil', 'Argentina', 'France', 'Egypt',
-  'Nigeria', 'Kenya', 'China', 'India', 'Japan', 'Australia',
-];
-
 const PLAN_BOX = {
   '1400x900': { width: 480, height: 692 },
   '834x1194': { width: 276, height: 986 },
@@ -1684,142 +1680,9 @@ function expectedPlanBox(width, height) {
   return PLAN_BOX[`${width}x${height}`] || null;
 }
 
-function planCountryHelpers() {
-  return `
-    function effectiveTextOpacity(value, zoom) {
-      if (value == null) return 1;
-      if (typeof value === 'number') return value;
-      if (!Array.isArray(value)) return 0;
-      if (value[0] === 'literal' && typeof value[1] === 'number') return value[1];
-      if (value[0] === 'interpolate' && Array.isArray(value[2]) && value[2][0] === 'zoom') {
-        const stops = value.slice(3);
-        if (stops.length < 2 || typeof stops[0] !== 'number') return 0;
-        if (zoom <= stops[0]) return Number(stops[1]);
-        for (let i = 2; i + 1 < stops.length; i += 2) {
-          const z0 = stops[i - 2];
-          const v0 = stops[i - 1];
-          const z1 = stops[i];
-          const v1 = stops[i + 1];
-          if (typeof z0 !== 'number' || typeof z1 !== 'number' || typeof v0 !== 'number' || typeof v1 !== 'number') return 0;
-          if (zoom <= z1) {
-            const span = z1 - z0;
-            if (span === 0) return v1;
-            return v0 + ((zoom - z0) / span) * (v1 - v0);
-          }
-        }
-        const last = stops[stops.length - 1];
-        return typeof last === 'number' ? last : 0;
-      }
-      if (value[0] === 'step' && Array.isArray(value[1]) && value[1][0] === 'zoom') {
-        let current = value[2];
-        for (let i = 3; i + 1 < value.length; i += 2) {
-          if (typeof value[i] === 'number' && zoom >= value[i]) current = value[i + 1];
-        }
-        return typeof current === 'number' ? current : 0;
-      }
-      return 0;
-    }
-    function textFieldReadsName(field) {
-      return Array.isArray(field) && field.length === 2 && field[0] === 'get' && field[1] === 'name';
-    }
-    function planCountryLabels(orbit) {
-      const layer = typeof orbit.getLayer === 'function' ? orbit.getLayer('inset-countries') : null;
-      if (!layer) return { ok: false, step: 'layer' };
-      const visibility = orbit.getLayoutProperty('inset-countries', 'visibility');
-      if (visibility === 'none') return { ok: false, step: 'visibility', visibility };
-      const zoom = orbit.getZoom();
-      if (layer.minzoom && zoom < layer.minzoom) return { ok: false, step: 'zoom', zoom, minzoom: layer.minzoom };
-      if (layer.maxzoom && zoom >= layer.maxzoom) return { ok: false, step: 'zoom', zoom, maxzoom: layer.maxzoom };
-      const opacity = effectiveTextOpacity(orbit.getPaintProperty('inset-countries', 'text-opacity'), zoom);
-      if (!(opacity > 0)) return { ok: false, step: 'opacity', opacity, zoom };
-      const field = orbit.getLayoutProperty('inset-countries', 'text-field');
-      if (!textFieldReadsName(field)) return { ok: false, step: 'field', field };
-      const container = typeof orbit.getContainer === 'function' ? orbit.getContainer() : null;
-      const glyphs = Number((container && container.getAttribute('data-inset-glyphs')) || '0');
-      const canvas = orbit.getCanvas();
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      let labelFeatures = [];
-      try {
-        labelFeatures = orbit.queryRenderedFeatures([[0, 0], [width, height]], { layers: ['inset-countries'] }) || [];
-      } catch (error) {
-        return { ok: false, step: 'labels', reason: 'query', glyphs };
-      }
-      const known = ${JSON.stringify(PLAN_COUNTRY_NAMES)};
-      const names = [];
-      for (const feature of labelFeatures) {
-        const name = feature && feature.properties && feature.properties.name;
-        if (typeof name !== 'string' || !known.includes(name) || names.includes(name)) continue;
-        const geometry = feature.geometry;
-        if (!geometry || geometry.type !== 'Point' || !geometry.coordinates) continue;
-        const point = orbit.project(geometry.coordinates);
-        if (!(point.x >= 0 && point.y >= 0 && point.x <= width && point.y <= height)) continue;
-        names.push(name);
-      }
-      if (names.length < 4) return { ok: false, step: 'labels', names, glyphs, width, height };
-      if (!(glyphs >= 10000)) return { ok: false, step: 'glyphs', glyphs, names };
-      return { ok: true, names, glyphs, opacity, width, height };
-    }
-  `;
-}
-
-function planCountryPassExpression() {
-  return `(() => {
-    ${planCountryHelpers()}
-    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
-    const orbit = frame && frame.__opdTrackInset;
-    if (!orbit) return null;
-    return planCountryLabels(orbit);
-  })()`;
-}
-
-function planCountryFailProbeExpression() {
-  return `(() => {
-    ${planCountryHelpers()}
-    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
-    const orbit = frame && frame.__opdTrackInset;
-    if (!orbit || typeof orbit.setPaintProperty !== 'function' || typeof orbit.setLayoutProperty !== 'function') {
-      return { ok: false, step: 'orbit' };
-    }
-    const paint = orbit.getPaintProperty('inset-countries', 'text-opacity');
-    const field = orbit.getLayoutProperty('inset-countries', 'text-field');
-    const restore = () => {
-      orbit.setPaintProperty('inset-countries', 'text-opacity', paint == null ? 1 : paint);
-      orbit.setLayoutProperty('inset-countries', 'text-field', field);
-    };
-    const baseline = planCountryLabels(orbit);
-    if (!baseline.ok) return { ok: false, step: 'baseline', baseline };
-    let faded = null;
-    let literal = null;
-    try {
-      orbit.setPaintProperty('inset-countries', 'text-opacity', 0);
-      faded = planCountryLabels(orbit);
-      restore();
-      try {
-        orbit.setLayoutProperty('inset-countries', 'text-field', 'X');
-      } catch (error) {
-        orbit.setLayoutProperty('inset-countries', 'text-field', ['literal', 'X']);
-      }
-      literal = planCountryLabels(orbit);
-    } finally {
-      restore();
-    }
-    return {
-      ok: true,
-      opacityFailed: !!(faded && faded.ok !== true && faded.step === 'opacity'),
-      literalFailed: !!(literal && literal.ok !== true && literal.step === 'field'),
-      opacity: faded && faded.step,
-      literal: literal && literal.step,
-      faded,
-      literalResult: literal,
-    };
-  })()`;
-}
-
 function pipReadyExpression(name) {
   const label = name === 'horizon' ? 'Show the ISS view' : 'Show the map';
   return `(() => {
-    ${planCountryHelpers()}
     const inset = document.querySelector('[data-pip="${name}"]');
     if (!inset || inset.hidden) return null;
     const style = getComputedStyle(inset);
@@ -1842,6 +1705,7 @@ function pipReadyExpression(name) {
       const picker = document.querySelector('[data-iss-launch-picker]')?.getBoundingClientRect();
       const frame = inset.querySelector('[data-pip-frame]');
       const orbit = frame && frame.__opdTrackInset;
+      const glyphs = Number(frame?.getAttribute('data-inset-glyphs') || '0');
       if (!host || host.width + 1 < box.width) return { step: 'cupola', host: host && Math.round(host.width), map: Math.round(box.width) };
       if (!telemetry || telemetry.top < box.bottom - 1) return { step: 'telemetry', telemetryTop: telemetry && Math.round(telemetry.top), mapBottom: Math.round(box.bottom) };
       if (!picker || picker.top < box.bottom - 1) return { step: 'launch', pickerTop: picker && Math.round(picker.top), mapBottom: Math.round(box.bottom) };
@@ -1891,8 +1755,71 @@ function pipReadyExpression(name) {
         if (outside) break;
       }
       if (coords < 8 || outside) return { step: 'track', coords, outside, width, height };
-      const labels = planCountryLabels(orbit);
-      if (!labels.ok) return labels;
+      const layer = orbit.getLayer('inset-countries');
+      if (!layer) return { ok: false, step: 'labels', reason: 'layer', glyphs };
+      const visibility = orbit.getLayoutProperty('inset-countries', 'visibility');
+      if (visibility === 'none') return { ok: false, step: 'labels', reason: 'visibility', glyphs };
+      const opacityValue = orbit.getPaintProperty('inset-countries', 'text-opacity');
+      const opacity = opacityValue == null ? 1 : opacityValue;
+      if (typeof opacity !== 'number' || !(opacity > 0)) {
+        return { ok: false, step: 'labels', reason: 'opacity', opacity: opacityValue == null ? null : opacityValue, glyphs };
+      }
+      const colorValue = orbit.getPaintProperty('inset-countries', 'text-color');
+      let colorAlpha = 0;
+      if (colorValue == null) colorAlpha = 1;
+      else if (typeof colorValue === 'string') {
+        const text = colorValue.trim().toLowerCase();
+        const hex = /^#([0-9a-f]+)$/.exec(text);
+        const rgba = /^rgba?\(([^)]*)\)$/.exec(text);
+        if (text === 'transparent') colorAlpha = 0;
+        else if (hex && (hex[1].length === 3 || hex[1].length === 6)) colorAlpha = 1;
+        else if (hex && hex[1].length === 4) colorAlpha = parseInt(hex[1][3] + hex[1][3], 16) / 255;
+        else if (hex && hex[1].length === 8) colorAlpha = parseInt(hex[1].slice(6, 8), 16) / 255;
+        else if (rgba) {
+          const parts = rgba[1].split(',').map((part) => part.trim());
+          colorAlpha = parts.length < 4 ? 1 : Number(parts[3]);
+        }
+      }
+      if (!(colorAlpha > 0)) return { ok: false, step: 'labels', reason: 'color', color: colorValue == null ? null : colorValue, glyphs };
+      let labelFeatures = [];
+      try {
+        labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
+      } catch (error) {
+        return { ok: false, step: 'labels', reason: 'query', glyphs };
+      }
+      const field = orbit.getLayoutProperty('inset-countries', 'text-field');
+      const catalog = [];
+      const remember = (feature) => {
+        const name = feature && feature.properties && feature.properties.name;
+        if (typeof name === 'string' && name.length > 1 && !catalog.includes(name)) catalog.push(name);
+      };
+      try {
+        const stored = orbit.querySourceFeatures('inset-countries') || [];
+        for (const feature of stored) remember(feature);
+      } catch (error) {
+        catalog.length = 0;
+      }
+      const shownText = (feature) => {
+        if (typeof field === 'string') return field;
+        if (Array.isArray(field) && field[0] === 'get' && typeof field[1] === 'string') {
+          const value = feature && feature.properties ? feature.properties[field[1]] : undefined;
+          return typeof value === 'string' ? value : '';
+        }
+        if (Array.isArray(field) && field[0] === 'literal' && typeof field[1] === 'string') return field[1];
+        return '';
+      };
+      const names = [];
+      for (const feature of labelFeatures) {
+        const text = shownText(feature);
+        const geometry = feature && feature.geometry;
+        if (!catalog.includes(text) || !geometry || geometry.type !== 'Point') continue;
+        const point = orbit.project(geometry.coordinates);
+        if (!(point.x >= 8 && point.y >= 8 && point.x <= width - 8 && point.y <= height - 8)) continue;
+        if (!names.includes(text)) names.push(text);
+      }
+      if (glyphs < 10000 || names.length < 4) {
+        return { ok: false, step: 'labels', reason: 'names', glyphs, names, opacity, colorAlpha };
+      }
     }
     return { ok: true, width: box.width, height: box.height };
   })()`;
@@ -2060,15 +1987,7 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     return `absent ${held.join(' ')}`;
   }
   const ready = await waitFor(send, pipReadyExpression(name), `${name} inset`, 30000);
-  let countryNote = '';
   if (name === 'plan') {
-    const failed = await evaluate(send, planCountryFailProbeExpression());
-    if (!failed?.ok || !failed.opacityFailed || !failed.literalFailed) {
-      throw new Error(`plan country names negative control ${JSON.stringify(failed)}`);
-    }
-    const passed = await waitFor(send, planCountryPassExpression(), 'plan country names restored', 10000);
-    const names = Array.isArray(passed.names) ? passed.names.join(',') : '';
-    countryNote = ` country opacity-fail literal-fail pass ${names}`;
     const expect = expectedPlanBox(viewport.width, viewport.height);
     if (expect) {
       const dw = Math.abs(ready.width - expect.width);
@@ -2116,7 +2035,7 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     await closeMapLegend(send);
   }
   await waitFor(send, pipReadyExpression(name), `${name} inset restored`, 30000);
-  return `present ${Math.round(ready.width)}x${Math.round(ready.height)} clear ${clear.width}x${clear.height} ${extra.join(' ')}${countryNote}`;
+  return `present ${Math.round(ready.width)}x${Math.round(ready.height)} clear ${clear.width}x${clear.height} ${extra.join(' ')}`;
 }
 
 async function pressInset(send, name, mobile) {
@@ -3252,6 +3171,86 @@ async function driveTracked(send, evidenceDir, meta, home) {
     return 'tracked: missing artifact falls back to no public orbit yet, ISS marker and track still up';
   }
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
+}
+
+function labelVerdict(result) {
+  return result?.ok === true;
+}
+
+async function mutatePlanLabels(send, kind) {
+  const applied = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const orbit = frame && frame.__opdTrackInset;
+    if (!orbit || typeof orbit.getLayer !== 'function' || !orbit.getLayer('inset-countries')) return { ok: false, reason: 'map' };
+    if (${JSON.stringify(kind)} === 'opacity') {
+      const previous = orbit.getPaintProperty('inset-countries', 'text-opacity');
+      orbit.setPaintProperty('inset-countries', 'text-opacity', 0);
+      const now = orbit.getPaintProperty('inset-countries', 'text-opacity');
+      return { ok: now === 0, previous: previous == null ? null : previous, now };
+    }
+    const previous = orbit.getLayoutProperty('inset-countries', 'text-field');
+    orbit.setLayoutProperty('inset-countries', 'text-field', 'X');
+    const now = orbit.getLayoutProperty('inset-countries', 'text-field');
+    return { ok: now === 'X', previous: previous == null ? null : previous, now };
+  })()`);
+  if (!applied?.ok) throw new Error(`label mutation ${kind} ${JSON.stringify(applied)}`);
+  return applied.previous;
+}
+
+async function restorePlanLabels(send, kind, previous) {
+  await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const orbit = frame && frame.__opdTrackInset;
+    if (!orbit) return false;
+    const previous = ${JSON.stringify(previous)};
+    if (${JSON.stringify(kind)} === 'opacity') {
+      orbit.setPaintProperty('inset-countries', 'text-opacity', previous == null ? 1 : previous);
+    } else {
+      orbit.setLayoutProperty('inset-countries', 'text-field', previous);
+    }
+    return true;
+  })()`);
+}
+
+async function driveIssLabels(send, evidenceDir, viewport) {
+  if (!insetViewportFits(viewport.width, viewport.height)) {
+    throw new Error(`iss-labels needs a viewport at least 800 by 600, got ${viewport.width}x${viewport.height}`);
+  }
+  await dismissShotlist(send);
+  await click(send, '#tab-iss');
+  const unmutated = await waitFor(send, pipReadyExpression('plan'), `plan labels ${viewport.width}x${viewport.height}`, 60000);
+  let textOpacity = null;
+  let textField = null;
+  const opacityPrevious = await mutatePlanLabels(send, 'opacity');
+  try {
+    textOpacity = await evaluate(send, pipReadyExpression('plan'));
+  } finally {
+    await restorePlanLabels(send, 'opacity', opacityPrevious);
+  }
+  const fieldPrevious = await mutatePlanLabels(send, 'field');
+  try {
+    textField = await evaluate(send, pipReadyExpression('plan'));
+  } finally {
+    await restorePlanLabels(send, 'field', fieldPrevious);
+  }
+  const restored = await evaluate(send, pipReadyExpression('plan'));
+  const report = {
+    width: viewport.width,
+    height: viewport.height,
+    unmutated: { ok: labelVerdict(unmutated), result: unmutated },
+    textOpacity: { ok: labelVerdict(textOpacity), result: textOpacity },
+    textField: { ok: labelVerdict(textField), result: textField },
+    restored: { ok: labelVerdict(restored), result: restored },
+  };
+  writeFileSync(resolve(evidenceDir, 'iss-labels.json'), `${JSON.stringify(report, null, 2)}\n`);
+  const line = (name, verdict) => `iss-labels ${viewport.width}x${viewport.height} ${name} ok:${verdict.ok}`;
+  console.log(line('unmutated', report.unmutated));
+  console.log(line('text-opacity', report.textOpacity));
+  console.log(line('text-field', report.textField));
+  if (!report.unmutated.ok || report.textOpacity.ok || report.textField.ok || !report.restored.ok) {
+    throw new Error(`iss-labels ${viewport.width}x${viewport.height} ${JSON.stringify(report)}`);
+  }
+  return `iss-labels ${viewport.width}x${viewport.height} unmutated ok:true text-opacity ok:false text-field ok:false`;
 }
 
 async function driveIss(send, evidenceDir, viewport, baseUrl) {
