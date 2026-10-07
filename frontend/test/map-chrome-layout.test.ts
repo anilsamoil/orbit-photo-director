@@ -266,13 +266,31 @@ describe('map chrome layout', () => {
     expect(css).not.toContain('- 189px');
   });
 
-  it('lifts the legend, imagery date, and help above expanded credits', () => {
+  it('keeps the legend to the left of hide, including when credits expand', () => {
     mount('view-map');
+    document.querySelector('#map-pane')!.insertAdjacentHTML(
+      'beforeend',
+      '<button id="map-chrome-toggle" class="map-chrome-toggle" type="button">Hide</button>',
+    );
     document.querySelector('.maplibregl-ctrl-attrib')!.classList.add('maplibregl-compact-show');
-    const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
-    expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(creditsTop);
+    const legend = getComputedStyle(document.querySelector('.map-legend')!);
+    const hide = getComputedStyle(document.querySelector('#map-chrome-toggle')!);
+    expect(legend.position).toBe('absolute');
+    expect(legend.bottom).toBe(hide.bottom);
+    const sumPx = (value: string) => {
+      const parts = value.match(/[\d.]+px/g);
+      if (!parts) throw new Error(value);
+      return parts.reduce((sum, part) => sum + Number.parseFloat(part), 0);
+    };
+    expect(sumPx(legend.right)).toBe(108);
+    expect(sumPx(hide.right)).toBe(12);
+    expect(sumPx(legend.right)).toBeGreaterThan(sumPx(hide.right) + Number.parseFloat(hide.width));
+    expect(legend.flexDirection).toBe('column-reverse');
+    expect(legend.width).toBe('88px');
+    expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).display).toBe('none');
     expect(getComputedStyle(document.querySelector('.map-imagery-date')!).position).toBe('static');
     expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).left).toBe('8px');
+    const creditsTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib', 'max-height');
     const helpBottom = Number.parseFloat(
       ruleStyle('.view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) ~ .help-fab').bottom,
     );
@@ -300,7 +318,7 @@ describe('map chrome layout', () => {
     expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - var(--map-command-bottom, 0px) - 16px);');
     expect(css).toContain('--map-command-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));');
-    expect(css).toContain('bottom: calc(var(--map-command-bottom) + var(--map-command-height) + 36px);');
+    expect(css).toContain('--map-corner-bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('body.shotlist-bar-visible:has(> #view.view-map) main {\n    padding-bottom: 0;');
     expect(heights).not.toContain('156px');
     expect(heights).not.toContain('104px');
