@@ -1670,9 +1670,156 @@ const PIP_ISS_OBSTACLES = [
   '.iss-place',
 ];
 
+const PLAN_COUNTRY_NAMES = [
+  'Canada', 'Mexico', 'Brazil', 'Argentina', 'France', 'Egypt',
+  'Nigeria', 'Kenya', 'China', 'India', 'Japan', 'Australia',
+];
+
+const PLAN_BOX = {
+  '1400x900': { width: 480, height: 692 },
+  '834x1194': { width: 276, height: 986 },
+};
+
+function expectedPlanBox(width, height) {
+  return PLAN_BOX[`${width}x${height}`] || null;
+}
+
+function planCountryHelpers() {
+  return `
+    function effectiveTextOpacity(value, zoom) {
+      if (value == null) return 1;
+      if (typeof value === 'number') return value;
+      if (!Array.isArray(value)) return 0;
+      if (value[0] === 'literal' && typeof value[1] === 'number') return value[1];
+      if (value[0] === 'interpolate' && Array.isArray(value[2]) && value[2][0] === 'zoom') {
+        const stops = value.slice(3);
+        if (stops.length < 2 || typeof stops[0] !== 'number') return 0;
+        if (zoom <= stops[0]) return Number(stops[1]);
+        for (let i = 2; i + 1 < stops.length; i += 2) {
+          const z0 = stops[i - 2];
+          const v0 = stops[i - 1];
+          const z1 = stops[i];
+          const v1 = stops[i + 1];
+          if (typeof z0 !== 'number' || typeof z1 !== 'number' || typeof v0 !== 'number' || typeof v1 !== 'number') return 0;
+          if (zoom <= z1) {
+            const span = z1 - z0;
+            if (span === 0) return v1;
+            return v0 + ((zoom - z0) / span) * (v1 - v0);
+          }
+        }
+        const last = stops[stops.length - 1];
+        return typeof last === 'number' ? last : 0;
+      }
+      if (value[0] === 'step' && Array.isArray(value[1]) && value[1][0] === 'zoom') {
+        let current = value[2];
+        for (let i = 3; i + 1 < value.length; i += 2) {
+          if (typeof value[i] === 'number' && zoom >= value[i]) current = value[i + 1];
+        }
+        return typeof current === 'number' ? current : 0;
+      }
+      return 0;
+    }
+    function textFieldReadsName(field) {
+      return Array.isArray(field) && field.length === 2 && field[0] === 'get' && field[1] === 'name';
+    }
+    function planCountryLabels(orbit) {
+      const layer = typeof orbit.getLayer === 'function' ? orbit.getLayer('inset-countries') : null;
+      if (!layer) return { ok: false, step: 'layer' };
+      const visibility = orbit.getLayoutProperty('inset-countries', 'visibility');
+      if (visibility === 'none') return { ok: false, step: 'visibility', visibility };
+      const zoom = orbit.getZoom();
+      if (layer.minzoom && zoom < layer.minzoom) return { ok: false, step: 'zoom', zoom, minzoom: layer.minzoom };
+      if (layer.maxzoom && zoom >= layer.maxzoom) return { ok: false, step: 'zoom', zoom, maxzoom: layer.maxzoom };
+      const opacity = effectiveTextOpacity(orbit.getPaintProperty('inset-countries', 'text-opacity'), zoom);
+      if (!(opacity > 0)) return { ok: false, step: 'opacity', opacity, zoom };
+      const field = orbit.getLayoutProperty('inset-countries', 'text-field');
+      if (!textFieldReadsName(field)) return { ok: false, step: 'field', field };
+      const container = typeof orbit.getContainer === 'function' ? orbit.getContainer() : null;
+      const glyphs = Number((container && container.getAttribute('data-inset-glyphs')) || '0');
+      const canvas = orbit.getCanvas();
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      let labelFeatures = [];
+      try {
+        labelFeatures = orbit.queryRenderedFeatures([[0, 0], [width, height]], { layers: ['inset-countries'] }) || [];
+      } catch (error) {
+        return { ok: false, step: 'labels', reason: 'query', glyphs };
+      }
+      const known = ${JSON.stringify(PLAN_COUNTRY_NAMES)};
+      const names = [];
+      for (const feature of labelFeatures) {
+        const name = feature && feature.properties && feature.properties.name;
+        if (typeof name !== 'string' || !known.includes(name) || names.includes(name)) continue;
+        const geometry = feature.geometry;
+        if (!geometry || geometry.type !== 'Point' || !geometry.coordinates) continue;
+        const point = orbit.project(geometry.coordinates);
+        if (!(point.x >= 0 && point.y >= 0 && point.x <= width && point.y <= height)) continue;
+        names.push(name);
+      }
+      if (names.length < 4) return { ok: false, step: 'labels', names, glyphs, width, height };
+      if (!(glyphs >= 10000)) return { ok: false, step: 'glyphs', glyphs, names };
+      return { ok: true, names, glyphs, opacity, width, height };
+    }
+  `;
+}
+
+function planCountryPassExpression() {
+  return `(() => {
+    ${planCountryHelpers()}
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const orbit = frame && frame.__opdTrackInset;
+    if (!orbit) return null;
+    return planCountryLabels(orbit);
+  })()`;
+}
+
+function planCountryFailProbeExpression() {
+  return `(() => {
+    ${planCountryHelpers()}
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const orbit = frame && frame.__opdTrackInset;
+    if (!orbit || typeof orbit.setPaintProperty !== 'function' || typeof orbit.setLayoutProperty !== 'function') {
+      return { ok: false, step: 'orbit' };
+    }
+    const paint = orbit.getPaintProperty('inset-countries', 'text-opacity');
+    const field = orbit.getLayoutProperty('inset-countries', 'text-field');
+    const restore = () => {
+      orbit.setPaintProperty('inset-countries', 'text-opacity', paint == null ? 1 : paint);
+      orbit.setLayoutProperty('inset-countries', 'text-field', field);
+    };
+    const baseline = planCountryLabels(orbit);
+    if (!baseline.ok) return { ok: false, step: 'baseline', baseline };
+    let faded = null;
+    let literal = null;
+    try {
+      orbit.setPaintProperty('inset-countries', 'text-opacity', 0);
+      faded = planCountryLabels(orbit);
+      restore();
+      try {
+        orbit.setLayoutProperty('inset-countries', 'text-field', 'X');
+      } catch (error) {
+        orbit.setLayoutProperty('inset-countries', 'text-field', ['literal', 'X']);
+      }
+      literal = planCountryLabels(orbit);
+    } finally {
+      restore();
+    }
+    return {
+      ok: true,
+      opacityFailed: !!(faded && faded.ok !== true && faded.step === 'opacity'),
+      literalFailed: !!(literal && literal.ok !== true && literal.step === 'field'),
+      opacity: faded && faded.step,
+      literal: literal && literal.step,
+      faded,
+      literalResult: literal,
+    };
+  })()`;
+}
+
 function pipReadyExpression(name) {
   const label = name === 'horizon' ? 'Show the ISS view' : 'Show the map';
   return `(() => {
+    ${planCountryHelpers()}
     const inset = document.querySelector('[data-pip="${name}"]');
     if (!inset || inset.hidden) return null;
     const style = getComputedStyle(inset);
@@ -1682,6 +1829,11 @@ function pipReadyExpression(name) {
     const canvas = inset.querySelector('canvas');
     if (!canvas || canvas.clientWidth < 2 || canvas.clientHeight < 2) return { step: 'canvas' };
     if (inset.getAttribute('aria-label') !== ${JSON.stringify(label)}) return { step: 'label', aria: inset.getAttribute('aria-label') };
+    if (${name === 'horizon' ? 'true' : 'false'}) {
+      if (Math.abs(box.width - 148) > 1 || Math.abs(box.height - 96) > 1) {
+        return { step: 'horizon-size', width: Math.round(box.width), height: Math.round(box.height) };
+      }
+    }
     if (${name === 'plan' ? 'true' : 'false'}) {
       const scene = document.querySelector('[data-iss-scene]');
       if (scene?.getAttribute('data-iss-split') !== 'on') return { step: 'split', attr: scene?.getAttribute('data-iss-split') || null };
@@ -1690,7 +1842,6 @@ function pipReadyExpression(name) {
       const picker = document.querySelector('[data-iss-launch-picker]')?.getBoundingClientRect();
       const frame = inset.querySelector('[data-pip-frame]');
       const orbit = frame && frame.__opdTrackInset;
-      const glyphs = Number(frame?.getAttribute('data-inset-glyphs') || '0');
       if (!host || host.width + 1 < box.width) return { step: 'cupola', host: host && Math.round(host.width), map: Math.round(box.width) };
       if (!telemetry || telemetry.top < box.bottom - 1) return { step: 'telemetry', telemetryTop: telemetry && Math.round(telemetry.top), mapBottom: Math.round(box.bottom) };
       if (!picker || picker.top < box.bottom - 1) return { step: 'launch', pickerTop: picker && Math.round(picker.top), mapBottom: Math.round(box.bottom) };
@@ -1740,22 +1891,8 @@ function pipReadyExpression(name) {
         if (outside) break;
       }
       if (coords < 8 || outside) return { step: 'track', coords, outside, width, height };
-      let labelFeatures = [];
-      try {
-        labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
-      } catch (error) {
-        return { step: 'labels', reason: 'query' };
-      }
-      const names = [];
-      for (const feature of labelFeatures) {
-        const name = feature && feature.properties && feature.properties.name;
-        const geometry = feature && feature.geometry;
-        if (typeof name !== 'string' || name.length === 0 || !geometry || geometry.type !== 'Point') continue;
-        const point = orbit.project(geometry.coordinates);
-        if (!(point.x >= 8 && point.y >= 8 && point.x <= width - 8 && point.y <= height - 8)) continue;
-        if (!names.includes(name)) names.push(name);
-      }
-      if (glyphs < 10000 || names.length < 4) return { step: 'labels', glyphs, names };
+      const labels = planCountryLabels(orbit);
+      if (!labels.ok) return labels;
     }
     return { ok: true, width: box.width, height: box.height };
   })()`;
@@ -1923,6 +2060,24 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     return `absent ${held.join(' ')}`;
   }
   const ready = await waitFor(send, pipReadyExpression(name), `${name} inset`, 30000);
+  let countryNote = '';
+  if (name === 'plan') {
+    const failed = await evaluate(send, planCountryFailProbeExpression());
+    if (!failed?.ok || !failed.opacityFailed || !failed.literalFailed) {
+      throw new Error(`plan country names negative control ${JSON.stringify(failed)}`);
+    }
+    const passed = await waitFor(send, planCountryPassExpression(), 'plan country names restored', 10000);
+    const names = Array.isArray(passed.names) ? passed.names.join(',') : '';
+    countryNote = ` country opacity-fail literal-fail pass ${names}`;
+    const expect = expectedPlanBox(viewport.width, viewport.height);
+    if (expect) {
+      const dw = Math.abs(ready.width - expect.width);
+      const dh = Math.abs(ready.height - expect.height);
+      if (dw > 2 || dh > 2) {
+        throw new Error(`plan inset size ${Math.round(ready.width)}x${Math.round(ready.height)} expected ${expect.width}x${expect.height}`);
+      }
+    }
+  }
   if (name === 'horizon') await openMapLegend(send);
   const clear = await waitFor(send, pipClearExpression(name, obstacles), `${name} inset clear`, 10000);
   if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers`, 10000);
@@ -1961,7 +2116,7 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     await closeMapLegend(send);
   }
   await waitFor(send, pipReadyExpression(name), `${name} inset restored`, 30000);
-  return `present ${ready.width}x${ready.height} clear ${clear.width}x${clear.height} ${extra.join(' ')}`;
+  return `present ${Math.round(ready.width)}x${Math.round(ready.height)} clear ${clear.width}x${clear.height} ${extra.join(' ')}${countryNote}`;
 }
 
 async function pressInset(send, name, mobile) {
@@ -3356,7 +3511,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
   const towns = await proveIssTownRetry(send, evidenceDir, viewport);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, telemetry key, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
 }
 
 async function proveIssTownRetry(send, evidenceDir, viewport) {
@@ -4979,7 +5134,67 @@ async function proveIssAimReload(send, evidenceDir) {
     45000,
   );
   await shot(send, evidenceDir, 'iss-aim-horizon');
+  await proveAimAfterTelemetry(send);
   await proveIssKeyboard(send, evidenceDir);
+}
+
+async function proveAimAfterTelemetry(send) {
+  const before = await evaluate(send, `(() => {
+    const map = window.__opdIss;
+    if (!map?.getCenter) return null;
+    const center = map.getCenter();
+    return { lat: center.lat, lng: center.lng };
+  })()`);
+  if (!before) throw new Error('iss telemetry aim baseline missing');
+  await click(send, '[data-iss-telemetry]');
+  await evaluate(send, `document.querySelector('[data-iss-telemetry]')?.focus()`);
+  const focused = await evaluate(send, `(() => {
+    const button = document.querySelector('[data-iss-telemetry]');
+    const active = document.activeElement;
+    if (!button || active !== button) return { ok: false, active: active && (active.id || active.getAttribute('data-iss-telemetry') || active.tagName) };
+    const scene = document.querySelector('[data-iss-scene]');
+    const split = scene?.getAttribute('data-iss-split') === 'on';
+    const dock = document.querySelector('[data-iss-split-dock]');
+    if (split && (!dock || !dock.contains(button))) return { ok: false, reason: 'dock' };
+    return { ok: true, split };
+  })()`);
+  if (!focused?.ok) throw new Error(`iss telemetry focus ${JSON.stringify(focused)}`);
+  for (let step = 0; step < 6; step += 1) await pressKey(send, 'ArrowRight');
+  await waitFor(
+    send,
+    `(() => {
+      const center = window.__opdIss?.getCenter?.();
+      if (!center) return null;
+      const shift = Math.abs(center.lat - ${before.lat}) + Math.abs(center.lng - ${before.lng});
+      if (shift < 0.2) return null;
+      return { ok: true, shift };
+    })()`,
+    'iss aim after telemetry click',
+    10000,
+  );
+  await click(send, '[data-iss-telemetry]');
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+    'iss telemetry collapsed after aim',
+    10000,
+  );
+  await evaluate(send, `document.querySelector('[data-iss-frame]')?.focus()`);
+  await pressKey(send, 'r');
+  await waitFor(
+    send,
+    `(() => {
+      const horizon = document.querySelector('[data-iss-preset="horizon"]');
+      if (horizon?.getAttribute('aria-pressed') !== 'true') return null;
+      if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
+      if (localStorage.getItem('opd-iss-aim') !== null) return null;
+      const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov !== 'number' || Math.abs(fov - ${ISS_LENS_FOV_DEG}) > 0.5) return null;
+      return { ok: true };
+    })()`,
+    'iss horizon after telemetry aim',
+    10000,
+  );
 }
 
 async function pressKey(send, key) {
@@ -5717,6 +5932,9 @@ async function driveHelp(send, evidenceDir) {
     'launch, day, twilight, and eclipse',
     "The ISS marker, Anil's targets, Starship, and your white rings are not rows.",
     'Starship is not a legend row',
+    'It starts closed. Tap Legend on the left edge',
+    'shows only while the legend is open',
+    'A live IR warning adds a mark on Legend while the list is closed.',
   ];
   const legendMissing = legendPhrases.filter((phrase) => !String(helpText).includes(phrase));
   if (legendMissing.length) throw new Error(`help legend missing ${legendMissing.join(', ')}`);

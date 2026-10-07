@@ -13,7 +13,7 @@ Profile holds the signed-in astronaut, the distance threshold, personal targets,
 ## How to get to it (user POV)
 
 - Choose the Profile tab.
-- Photo lookup is the last section of the Profile pane, below the sign-in note. The target form, Your targets, hidden curated targets, CSV import, and JSON backup sit above it. It is not its own tab.
+- Photo lookup is the last section of the Profile pane, below the sign-in note. The target form, Your targets, hidden curated targets, Bulk import from CSV, and Backup / Restore (JSON) sit above it. It is not its own tab.
 - A crew profile from the top-bar menu has no profile select, no New profile, and no Delete this profile. The site list is `Crew roster sites` and those rows have no Edit and no Add target. `drive map` opens that pane for Jessica Watkins (Watty): 12 sites, including Lafayette. Kutryk and Delaney each have 11 sites in `data/crew-roster/`. This drive checks Watkins.
 
 ## Driving it with opd-verify
