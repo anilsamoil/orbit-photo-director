@@ -4731,6 +4731,9 @@ export function launchEarthPanes(width, height) {
       { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
   }
+  if (width === 874 && height === 402) {
+    return [{ ...native, place: 'side', minShort: 80 }];
+  }
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
     return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
