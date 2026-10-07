@@ -1406,21 +1406,25 @@ async function waitChromeChoice(send, shown) {
   );
 }
 
+function mapLayerReadyExpression() {
+  return `window.__opdMap && window.__opdMap.getLayer && window.__opdMap.getLayer('iss-track-layer') ? { ok: true } : null`;
+}
+
+async function waitMapLayer(send) {
+  await waitFor(send, mapLayerReadyExpression(), 'map after chrome reload', 45000);
+}
+
 async function proveMapChromeMemory(send) {
   await waitChromeChoice(send, true);
   await reloadSettled(send);
   await waitChromeChoice(send, true);
+  await waitMapLayer(send);
   await click(send, '#map-chrome-toggle');
   await waitChromeChoice(send, false);
   await reloadSettled(send);
   await waitChromeChoice(send, false);
   await showMapChrome(send);
-  await waitFor(
-    send,
-    `window.__opdMap && window.__opdMap.getLayer && window.__opdMap.getLayer('iss-track-layer') ? { ok: true } : null`,
-    'map after chrome reload',
-    45000,
-  );
+  await waitMapLayer(send);
 }
 
 async function ensureMapChromeShown(send) {
