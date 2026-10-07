@@ -124,6 +124,23 @@ function selectedSurfaceNames() {
   return [raw];
 }
 
+function viewportOverride() {
+  const raw = (process.env.OPD_VERIFY_VIEWPORT || '').trim();
+  if (!raw) return null;
+  if ((process.env.OPD_VERIFY_SURFACE || '').trim() !== 'iphone-17-pro') {
+    throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro. There is no 874x402 surface value.');
+  }
+  const match = /^(\d+)x(\d+)$/.exec(raw);
+  if (!match) throw new Error(`OPD_VERIFY_VIEWPORT must be WIDTHxHEIGHT, got ${raw}`);
+  return { width: Number(match[1]), height: Number(match[2]), raw };
+}
+
+function specForSurface(spec) {
+  const override = viewportOverride();
+  if (!override || spec.slug !== 'iphone-17-pro') return spec;
+  return { ...spec, viewport: { width: override.width, height: override.height } };
+}
+
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
@@ -624,11 +641,15 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
   for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
     try {
-      const viewport = deviceViewport(spec);
-      const surfaceDir = resolve(evidenceDir, spec.slug);
+      const override = viewportOverride();
+      const active = specForSurface(spec);
+      const viewport = deviceViewport(active);
+      const folder = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}-${override.raw}` : spec.slug;
+      const label = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}@${override.raw}` : spec.slug;
+      const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(spec) });
+      const context = await browser.newContext({ ...deviceDescriptor(active) });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -645,11 +666,11 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
         send.cartoDark = cartoDark;
         await openApp(send, baseUrl);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
-        notes.push(...featureNotes.map((note) => `${spec.slug}: ${note}`));
+        notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
         await context.close();
       }
-      notes.push(`${spec.slug}: ${await proveDeniedFooter(browser, spec, baseUrl, surfaceDir)}`);
+      notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir)}`);
     } finally {
       await browser.close();
     }
@@ -658,6 +679,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
 }
 
 export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
+  viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
