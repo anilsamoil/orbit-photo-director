@@ -3757,10 +3757,19 @@ async function dispatchPlanTouch(send, type, x, y) {
       isPrimary: true,
     }));
     let touch = null;
-    if (typeof Touch === 'function') {
-      touch = new Touch({ identifier: 7, target: canvas, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y });
-    } else if (document.createTouch) {
-      touch = document.createTouch(window, canvas, 7, x, y, x, y, x, y);
+    if (document.createTouch) {
+      try {
+        touch = document.createTouch(window, canvas, 7, x, y, x, y, x, y);
+      } catch (error) {
+        touch = null;
+      }
+    }
+    if (!touch && typeof Touch === 'function') {
+      try {
+        touch = new Touch({ identifier: 7, target: canvas, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y });
+      } catch (error) {
+        touch = null;
+      }
     }
     if (!touch) return { ok: false, reason: 'touch-ctor' };
     const list = document.createTouchList ? document.createTouchList(touch) : [touch];
