@@ -3407,10 +3407,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   pointer-events: auto;
 }
 
-[data-iss-scene][data-iss-aim-open] [data-iss-fullscreen] {
-  z-index: 1;
-}
-
 [data-iss-presets] {
   position: static;
   grid-column: 2;
@@ -3810,6 +3806,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 [data-iss-launch-picker-wrap] {
@@ -5010,7 +5007,20 @@ summary:focus-visible {
   }
 
   .iss-split-dock [data-iss-controls] {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+  }
+
+  .iss-split-dock [data-iss-launches] {
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+
+  .iss-split-dock [data-iss-launch] {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
   }
 
   .pip-inset:not([hidden]) {

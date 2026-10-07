@@ -142,6 +142,39 @@ describe('known subsolar point and terminator', () => {
     expect(lons).toEqual([expect.closeTo(-179.546, 3), expect.closeTo(0.454, 3)]);
   });
 
+  it('leaves the sunlit antimeridian seam in day at 2024-12-21 06:00 UTC', () => {
+    const when = new Date('2024-12-21T06:00:00.000Z');
+    const night = terminatorNightPolygonFeatures(when);
+    const sun = subsolarPoint(when);
+    expect(nightHolds(night, 92.5, -0.5)).toBe(false);
+    expect(nightHolds(night, sun.lon, sun.lat)).toBe(false);
+    const wrap = (lon: number): number => {
+      let next = lon;
+      while (next > 180) next -= 360;
+      while (next < -180) next += 360;
+      return next;
+    };
+    const toward = (from: number, to: number, degrees: number): number => {
+      let delta = to - from;
+      while (delta > 180) delta -= 360;
+      while (delta < -180) delta += 360;
+      return wrap(from + Math.sign(delta || 1) * degrees);
+    };
+    const antisolar = wrap(sun.lon + 180);
+    let seams = 0;
+    for (let lat = -60; lat <= 60; lat += 2) {
+      const edges = terminatorLonAtLat(lat, sun.lat, sun.lon);
+      if (!edges) continue;
+      for (const edge of edges) {
+        if (Math.abs(edge) < 150) continue;
+        seams += 1;
+        expect(nightHolds(night, toward(edge, antisolar, 3), lat)).toBe(true);
+        expect(nightHolds(night, toward(edge, sun.lon, 3), lat)).toBe(false);
+      }
+    }
+    expect(seams).toBeGreaterThan(0);
+  });
+
   it('shades the night side of that instant and leaves the subsolar point in day', () => {
     const night = terminatorNightPolygonFeatures(when);
     expect(night.length).toBeGreaterThan(0);

@@ -43,9 +43,10 @@ export type TrackInset = {
   destroy(): void;
 };
 
-/** Returns the requested camera. The default constrain fills a tall frame and pushes a full orbit off the canvas. */
+/** Returns the requested center. Zoom stays inside the inset minimum and maximum. The default constrain fills a tall frame and pushes a full orbit off the canvas. */
 export function letterboxCamera(center: LngLat, zoom: number): { center: LngLat; zoom: number } {
-  return { center, zoom };
+  const clamped = Math.min(INSET_MAX_ZOOM, Math.max(INSET_MIN_ZOOM, zoom));
+  return { center, zoom: clamped };
 }
 
 /** A freed camera keeps the operator's zoom. A fresh track or a resize frames the orbit again. */
@@ -174,10 +175,13 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let trackDirty = false;
   let fittedWidth = -1;
   let fittedHeight = -1;
+  let paintedWidth = -1;
+  let paintedHeight = -1;
+  let paintedRatio = -1;
   const stopClick = (event: Event): void => {
     event.stopPropagation();
   };
-  frame.addEventListener('click', stopClick, true);
+  frame.addEventListener('click', stopClick);
   const openPlan = (): void => {
     const button = frame.closest('button');
     if (button instanceof HTMLButtonElement) button.click();
@@ -203,9 +207,15 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   });
   const apply = (): void => {
     if (removed || !map.isStyleLoaded()) return;
-    map.resize();
     const width = frame.clientWidth;
     const height = frame.clientHeight;
+    const ratio = window.devicePixelRatio;
+    if (width !== paintedWidth || height !== paintedHeight || ratio !== paintedRatio) {
+      paintedWidth = width;
+      paintedHeight = height;
+      paintedRatio = ratio;
+      map.resize();
+    }
     const sizeChanged = width !== fittedWidth || height !== fittedHeight;
     if (track && trackDirty) {
       const source = map.getSource('inset-track');
@@ -265,7 +275,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       if (removed) return;
       removed = true;
       window.clearTimeout(openTimer);
-      frame.removeEventListener('click', stopClick, true);
+      frame.removeEventListener('click', stopClick);
       marker.remove();
       map.remove();
       delete insetFrame.__opdTrackInset;

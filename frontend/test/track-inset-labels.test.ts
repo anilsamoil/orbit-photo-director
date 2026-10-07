@@ -29,9 +29,14 @@ const created = vi.hoisted(() => ({
     dragPan?: boolean;
     doubleClickZoom?: boolean;
     maxZoom?: number;
+    container?: HTMLElement;
   },
   fit: null as null | { maxZoom?: number; padding?: number },
   fitCount: 0,
+  resizeCalls: 0,
+  gestureStops: 0,
+  gesturing: false,
+  domClicks: 0,
   sources: new Map<string, { features?: unknown[] }>(),
   handlers: {} as Record<string, ((event: { originalEvent?: Event; preventDefault?: () => void }) => void)[]>,
 }));
@@ -45,13 +50,22 @@ vi.mock('maplibre-gl', () => {
   class Map {
     constructor(public options: typeof created.options) {
       created.options = options;
+      const canvas = document.createElement('canvas');
+      options?.container?.append(canvas);
+      canvas.addEventListener('click', () => {
+        created.domClicks += 1;
+        for (const fn of created.handlers.click ?? []) fn({});
+      });
     }
     isStyleLoaded(): boolean { return true; }
     once(): void {}
     on(type: string, fn: (event: { originalEvent?: Event; preventDefault?: () => void }) => void): void {
       (created.handlers[type] ??= []).push(fn);
     }
-    resize(): void {}
+    resize(): void {
+      created.resizeCalls += 1;
+      if (created.gesturing) created.gestureStops += 1;
+    }
     getSource(id: string): { setData(data: { features?: unknown[] }): void } {
       return {
         setData(data) {
@@ -80,6 +94,8 @@ describe('plan inset labels', () => {
     const inset = createTrackInset(frame, marker);
     const center = { lng: 118.33, lat: 0 };
     expect(letterboxCamera(center as unknown as Parameters<typeof letterboxCamera>[0], -1.15)).toEqual({ center, zoom: -1.15 });
+    expect(letterboxCamera(center as unknown as Parameters<typeof letterboxCamera>[0], 9).zoom).toBe(8);
+    expect(letterboxCamera(center as unknown as Parameters<typeof letterboxCamera>[0], -3).zoom).toBe(-2);
     expect(created.options?.minZoom).toBeLessThanOrEqual(-1);
     expect(created.options?.renderWorldCopies).toBe(false);
     expect(created.options?.transformConstrain).toBe(letterboxCamera);
@@ -155,5 +171,66 @@ describe('plan inset labels', () => {
     inset.show(null, { lon: 6, lat: 6 }, december);
     expect(created.sources.get('inset-night')).not.toEqual(night);
     inset.destroy();
+  });
+
+  it('holds a gesture across ticks without resizing, and still resizes when the frame changes', () => {
+    created.resizeCalls = 0;
+    created.gestureStops = 0;
+    created.gesturing = false;
+    created.handlers = {};
+    const frame = document.createElement('div');
+    let width = 320;
+    let height = 640;
+    Object.defineProperty(frame, 'clientWidth', { configurable: true, get: () => width });
+    Object.defineProperty(frame, 'clientHeight', { configurable: true, get: () => height });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const armed = created.resizeCalls;
+    expect(armed).toBeGreaterThan(0);
+    created.gesturing = true;
+    created.handlers.movestart?.[0]?.({ originalEvent: new Event('pointerdown') });
+    const when = new Date('2024-06-21T18:00:00Z');
+    const track = [{
+      type: 'Feature' as const,
+      properties: {},
+      geometry: { type: 'LineString' as const, coordinates: [[0, 0], [10, 10]] },
+    }];
+    inset.show(track, { lon: 1, lat: 1 }, when);
+    inset.show(null, { lon: 2, lat: 2 }, when);
+    inset.show(null, { lon: 3, lat: 3 }, when);
+    expect(created.gestureStops).toBe(0);
+    expect(created.resizeCalls).toBe(armed);
+    width = 400;
+    inset.show(null, { lon: 3, lat: 3 }, when);
+    expect(created.resizeCalls).toBe(armed + 1);
+    const ratio = window.devicePixelRatio;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: ratio === 2 ? 3 : 2 });
+    inset.show(null, { lon: 3, lat: 3 }, when);
+    expect(created.resizeCalls).toBe(armed + 2);
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: ratio });
+    created.gesturing = false;
+    inset.destroy();
+  });
+
+  it('lets MapLibre see a canvas click, then opens the map once', async () => {
+    created.domClicks = 0;
+    created.handlers = {};
+    vi.useFakeTimers();
+    const button = document.createElement('button');
+    const frame = document.createElement('div');
+    button.append(frame);
+    document.body.append(button);
+    let opens = 0;
+    button.addEventListener('click', () => { opens += 1; });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const canvas = frame.querySelector('canvas');
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error('plan canvas missing');
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(created.domClicks).toBe(1);
+    expect(opens).toBe(0);
+    await vi.advanceTimersByTimeAsync(280);
+    expect(opens).toBe(1);
+    inset.destroy();
+    button.remove();
+    vi.useRealTimers();
   });
 });

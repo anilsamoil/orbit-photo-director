@@ -4874,6 +4874,15 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
       if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
       if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
+      if (scene?.getAttribute('data-iss-split') === 'on' && window.innerWidth === 834 && window.innerHeight === 1194) {
+        const pickerBox = picker.getBoundingClientRect();
+        const helpBox = document.querySelector('[data-iss-snap-help]')?.getBoundingClientRect();
+        const siteBox = button.getBoundingClientRect();
+        const mid = (box) => (box.top + box.bottom) / 2;
+        if (!helpBox || Math.abs(mid(pickerBox) - mid(helpBox)) > 4 || Math.abs(mid(pickerBox) - mid(siteBox)) > 4) {
+          return { step: 'launch-row', width: window.innerWidth, height: window.innerHeight, picker: pickerBox.top, help: helpBox ? helpBox.top : null, site: siteBox.top };
+        }
+      }
       const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
       if (!earth || earth.ok !== true) return earth;
       const visibility = earth.visibility;

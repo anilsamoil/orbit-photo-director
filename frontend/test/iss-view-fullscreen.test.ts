@@ -153,6 +153,39 @@ function observedResizes(): { resize(): void } {
   };
 }
 
+function place(element: Element, x: number, y: number, width: number, height: number): void {
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => new DOMRect(x, y, width, height),
+  });
+}
+
+function installHitTest(): void {
+  const original = document.elementFromPoint.bind(document);
+  document.elementFromPoint = (x: number, y: number): Element | null => {
+    const hits: { el: Element; z: number; order: number }[] = [];
+    let order = 0;
+    const walk = (el: Element): void => {
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      const box = el.getBoundingClientRect();
+      const covers = box.width > 0 && box.height > 0 && x >= box.left && x < box.right && y >= box.top && y < box.bottom;
+      if (covers && style.pointerEvents !== 'none') {
+        const z = Number(style.zIndex);
+        hits.push({ el, z: Number.isFinite(z) ? z : 0, order });
+      }
+      order += 1;
+      for (const child of el.children) walk(child);
+    };
+    walk(document.body);
+    hits.sort((a, b) => a.z - b.z || a.order - b.order);
+    return hits.at(-1)?.el ?? original(x, y);
+  };
+  cleanups.push(() => {
+    document.elementFromPoint = original;
+  });
+}
+
 function styled(): void {
   const style = document.createElement('style');
   style.textContent = STYLE_CSS;
@@ -398,6 +431,7 @@ describe('ISS fullscreen Escape', () => {
 
   it('closes an open shortcut sheet on enter, so aim keys work and Escape does not bring it back', async () => {
     styled();
+    installHitTest();
     browser('missing');
     const view = await mounted({ session: { mode: 'horizon' } });
     const help = query(view.root, '[data-iss-aim-help]');
@@ -414,11 +448,17 @@ describe('ISS fullscreen Escape', () => {
     expect(getComputedStyle(toolbar).pointerEvents).toBe('none');
     expect(getComputedStyle(card).pointerEvents).toBe('none');
     expect(getComputedStyle(view.button).pointerEvents).toBe('auto');
-    expect(getComputedStyle(view.button).zIndex).toBe('1');
+    expect(Number(getComputedStyle(view.button).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
     expect(Number(getComputedStyle(toolbar).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
     expect(Number(getComputedStyle(card).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
-
-    view.button.click();
+    place(view.root, 0, 0, 800, 600);
+    place(scrim, 0, 0, 800, 600);
+    place(view.button, 744, 544, 44, 44);
+    const box = view.button.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    expect(hit === view.button || view.button.contains(hit)).toBe(true);
+    if (!(hit instanceof HTMLElement)) throw new Error('fullscreen hit is not an element');
+    hit.click();
     expect(marked(view.root)).toBe(true);
     expect(view.root.hasAttribute('data-iss-aim-open')).toBe(false);
     expect(query(view.root, '[data-iss-aim-sheet]').hidden).toBe(true);
