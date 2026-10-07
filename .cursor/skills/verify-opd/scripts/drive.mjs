@@ -4829,19 +4829,29 @@ async function setLayoutViewport(send, width, height, mobile) {
   await setViewport(send, width, height, mobile);
 }
 
+async function readIssSceneBox(send) {
+  return evaluate(send, `(() => {
+    window.dispatchEvent(new Event('resize'));
+    const scene = document.querySelector('[data-iss-scene]');
+    if (!scene) return null;
+    return { sceneW: scene.clientWidth, sceneH: scene.clientHeight, docW: document.documentElement.clientWidth, docH: document.documentElement.clientHeight };
+  })()`);
+}
+
 async function setIssSceneBox(send, width, height, mobile) {
   let viewW = width;
   let viewH = height;
   let laid = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await setLayoutViewport(send, viewW, viewH, mobile);
-    laid = await evaluate(send, `(() => {
-      const scene = document.querySelector('[data-iss-scene]');
-      if (!scene) return null;
-      return { sceneW: scene.clientWidth, sceneH: scene.clientHeight, docW: document.documentElement.clientWidth, docH: document.documentElement.clientHeight };
-    })()`);
+    laid = await readIssSceneBox(send);
     if (!laid) throw new Error('missing iss scene');
-    if (laid.sceneW === width && laid.sceneH === height) return { width: viewW, height: viewH, scene: laid };
+    if (laid.sceneW === width && laid.sceneH === height) {
+      const again = await readIssSceneBox(send);
+      if (again?.sceneW === width && again?.sceneH === height) return { width: viewW, height: viewH, scene: again };
+      if (!again) throw new Error('missing iss scene');
+      laid = again;
+    }
     const nextW = viewW + (width - laid.sceneW);
     const nextH = viewH + (height - laid.sceneH);
     if (nextW === viewW && nextH === viewH) break;
