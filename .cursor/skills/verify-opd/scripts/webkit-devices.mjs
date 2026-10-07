@@ -55,16 +55,29 @@ export async function launchWebkit() {
   }
 }
 
+const productViewportMeta = new WeakMap();
+
 async function syncLayoutViewport(page, width, height) {
-  const laid = await page.evaluate(({ width, height }) => {
+  const laid = await page.evaluate(({ width, height, product }) => {
     const root = document.documentElement;
+    const meta = document.querySelector('meta[name="viewport"]');
     if (!root) return null;
-    if (root.clientWidth !== width || root.clientHeight !== height) {
-      const meta = document.querySelector('meta[name="viewport"]');
-      if (meta) meta.setAttribute('content', `width=${width}, height=${height}, initial-scale=1, viewport-fit=cover`);
+    const current = meta ? meta.getAttribute('content') || '' : '';
+    const remembered = product || (current.includes('width=device-width') ? current : '');
+    const explicit = `width=${width}, height=${height}, initial-scale=1, viewport-fit=cover`;
+    const matches = () => root.clientWidth === width && root.clientHeight === height;
+    if (!matches() && meta) meta.setAttribute('content', explicit);
+    if (matches() && meta && remembered && meta.getAttribute('content') !== remembered) {
+      meta.setAttribute('content', remembered);
+      if (!matches()) meta.setAttribute('content', explicit);
     }
-    return { width: root.clientWidth, height: root.clientHeight };
-  }, { width, height });
+    return {
+      width: root.clientWidth,
+      height: root.clientHeight,
+      product: remembered,
+    };
+  }, { width, height, product: productViewportMeta.get(page) || '' });
+  if (laid?.product) productViewportMeta.set(page, laid.product);
   if (laid && (laid.width !== width || laid.height !== height)) {
     throw new Error(`layout viewport ${laid.width}x${laid.height} after set ${width}x${height}`);
   }
