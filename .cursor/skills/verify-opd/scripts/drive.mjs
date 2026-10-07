@@ -1756,6 +1756,35 @@ function pipReadyExpression(name) {
         if (!names.includes(name)) names.push(name);
       }
       if (glyphs < 10000 || names.length < 4) return { step: 'labels', glyphs, names };
+      const pageText = document.body ? document.body.innerText || '' : '';
+      if (pageText.includes('API KEY REQUIRED')) return { error: 'API KEY REQUIRED on the page' };
+      const basemap = orbit.getStyle && orbit.getStyle().sources && orbit.getStyle().sources['inset-basemap'];
+      const template = basemap && basemap.tiles && basemap.tiles[0] ? basemap.tiles[0] : '';
+      if (!template) return { error: 'API KEY REQUIRED missing inset basemap' };
+      if (/cartocdn\\.com|\\/dark_all\\//.test(template)) return { error: 'API KEY REQUIRED carto basemap ' + template };
+      const cartoHits = performance.getEntriesByType('resource').filter((entry) => /basemaps\\.cartocdn\\.com\\/dark_all/.test(entry.name));
+      if (cartoHits.length) return { error: 'API KEY REQUIRED fetched carto ' + cartoHits.length };
+      if (frame.dataset.insetBasemapProbe === 'error') return { error: 'API KEY REQUIRED basemap probe failed' };
+      if (frame.dataset.insetBasemapProbe !== 'done') {
+        if (frame.dataset.insetBasemapProbe !== 'pending') {
+          frame.dataset.insetBasemapProbe = 'pending';
+          const url = template.split('{z}').join('2').split('{x}').join('1').split('{y}').join('1');
+          fetch(url).then(async (response) => {
+            const bytes = (await response.arrayBuffer()).byteLength;
+            frame.dataset.insetBasemapBytes = String(bytes);
+            frame.dataset.insetBasemapEtag = response.headers.get('etag') || '';
+            frame.dataset.insetBasemapType = response.headers.get('content-type') || '';
+            frame.dataset.insetBasemapProbe = 'done';
+          }).catch(() => { frame.dataset.insetBasemapProbe = 'error'; });
+        }
+        return { step: 'watermark', reason: 'probe' };
+      }
+      const tileBytes = Number(frame.dataset.insetBasemapBytes || '0');
+      const tileEtag = frame.dataset.insetBasemapEtag || '';
+      const tileType = frame.dataset.insetBasemapType || '';
+      if (tileEtag.includes('wm-') || tileBytes === 2513 || (tileType.includes('png') && tileBytes > 0 && tileBytes < 4000)) {
+        return { error: 'API KEY REQUIRED watermark tile ' + tileBytes + ' ' + tileEtag + ' ' + tileType };
+      }
     }
     return { ok: true, width: box.width, height: box.height };
   })()`;

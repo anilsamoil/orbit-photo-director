@@ -4,20 +4,19 @@
  *
  *  Strategy: when online, after each successful refresh, fire-and-forget
  *  fetch the basemap + cloud tiles for the top-N Queue targets at a few
- *  fixed zoom levels. The SW's existing CacheFirst rules for cartocdn +
+ *  fixed zoom levels. The SW's existing CacheFirst rules for arcgisonline +
  *  gibs.earthdata write the responses to its tile caches automatically.
  *  Next time the operator opens the Map tab during LOS over one of those
  *  targets, the wider-context tiles (z6/z8/z10) are already there.
  *
  *  Budget reasoning:
- *    - Lane F caps tile caches at 100 carto / 200 gibs entries (LRU).
+ *    - Lane F caps tile caches at 100 esri / 200 gibs entries (LRU).
  *    - Pre-caching too aggressively evicts tiles the user actually panned
  *      to. We deliberately fetch ONE tile per (zoom, target, source) — not
  *      a 3×3 grid — to leave room for natural-pan tiles in the LRU.
  *    - Top-3 targets × 3 zoom levels × 2 sources = 18 tile fetches per
  *      refresh. With manifest published hourly, that's 18 fetches/h ÷ ISS
- *      mission ~5800h = ~100K total fetches. Comfortably below the carto
- *      free-tier rate limit.
+ *      mission ~5800h = ~100K total fetches.
  *    - z6 = continent / country scale (~150 km/tile mid-lat)
  *    - z8 = regional scale (~40 km/tile)
  *    - z10 = metro scale (~10 km/tile)
@@ -170,22 +169,15 @@ export function geoIRTileUrl(sat: GeoIRSat, timeIso: string): string {
 export const PRECACHE_TARGET_COUNT = 3;
 
 /** Zoom levels to pre-cache. Picked to cover continent → region → metro
- *  in a single shot. Carto serves up to z20 so all three are real tiles;
+ *  in a single shot. The dark basemap serves these zooms as real tiles;
  *  GIBS caps at z9 so z10 GIBS will overzoom from z9 (still cached). */
 export const PRECACHE_ZOOM_LEVELS = [6, 8, 10];
 
-/** Carto subdomain rotation must MATCH MapLibre's deterministic subdomain
- *  pick or the precache is wasted: the SW Cache API keys by full URL
- *  including hostname, so a tile pre-cached as `a.basemaps...` is a cache
- *  MISS when MapLibre asks for `b.basemaps...` for the same (x, y).
- *  MapLibre's source impl picks subdomain via `(x + y) % subdomains.length`
- *  — we compute the same subdomain when building precache URLs.
- *  Reviewed 2026-05-11; CARTO_SUBDOMAINS must stay in sync with the
- *  tiles[] array in map.ts buildStyle(). */
-const CARTO_SUBDOMAINS = ['a', 'b', 'c', 'd'] as const;
-function cartoTileUrl(z: number, x: number, y: number): string {
-  const sub = CARTO_SUBDOMAINS[(x + y) % CARTO_SUBDOMAINS.length];
-  return `https://${sub}.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}@2x.png`;
+const ESRI_DARK_GRAY_TILE =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+
+function darkBasemapTileUrl(z: number, x: number, y: number): string {
+  return fillTileUrl(ESRI_DARK_GRAY_TILE, z, x, y);
 }
 
 /** GIBS maxzoom matches the source's `maxzoom` in map.ts buildStyle().
@@ -236,7 +228,7 @@ export function buildPrecacheUrls(passes: PassEntry[], gibsTileUrlPattern: strin
     if (!Number.isFinite(p.target_lat) || !Number.isFinite(p.target_lon)) continue;
     for (const z of PRECACHE_ZOOM_LEVELS) {
       const { x, y } = lonLatToTile(p.target_lon, p.target_lat, z);
-      urls.push(cartoTileUrl(z, x, y));
+      urls.push(darkBasemapTileUrl(z, x, y));
       // GIBS tiles at z>maxzoom overzoom from the maxzoom tile (we set
       // the same maxzoom in map.ts). Pre-caching the source-zoom tile
       // means the overzoom path during LOS finds it cached.
@@ -249,7 +241,7 @@ export function buildPrecacheUrls(passes: PassEntry[], gibsTileUrlPattern: strin
 }
 
 /** Fire-and-forget pre-cache. Returns immediately; the fetches resolve in
- *  the background. The SW's CacheFirst rules for cartocdn + gibs write
+ *  the background. The SW's CacheFirst rules for arcgisonline + gibs write
  *  the responses to the tile caches automatically.
  *
  *  Skipped entirely when offline (no point hitting the network when it's
@@ -260,11 +252,11 @@ export function buildPrecacheUrls(passes: PassEntry[], gibsTileUrlPattern: strin
  *  poll interval can stack) would otherwise issue duplicate fetches for
  *  the same URL. PRECACHE_INFLIGHT tracks active URLs and skips repeats.
  *
- *  Default mode (`cors`, not `no-cors`): both cartocdn and gibs.earthdata
+ *  Default mode (`cors`, not `no-cors`): both arcgisonline and gibs.earthdata
  *  serve `Access-Control-Allow-Origin: *`. With CORS the SW sees real
  *  status codes (not opaque 0), so cacheableResponse:[200] correctly
  *  filters out 404/429/5xx — opaque responses would have status 0 for
- *  ALL outcomes and a 429 from carto would get cached as a "valid" tile
+ *  ALL outcomes and an error tile would get cached as a "valid" tile
  *  for 7 days, bricking the map.
  *
  *  Body cancellation: opaque/cors response bodies aren't read here, so
@@ -300,14 +292,14 @@ export function precacheTilesForTargets(
 
 /** Zoom levels for the world-view base map. The map opens at z2 (center
  *  [0,0]); z0-3 cover the default world view plus the first zoom-in steps.
- *  Tile counts: z0=1, z1=4, z2=16, z3=64 = 85 carto tiles total. These are
- *  precached once per session into the dedicated `opd-tiles-carto-base` SW
- *  cache (30d TTL, never evicted by natural-pan LRU) so the default map ALWAYS
+ *  Tile counts: z0=1, z1=4, z2=16, z3=64 = 85 dark basemap tiles total. These are
+ *  precached once per session into `opd-tiles-dark-base` (30d TTL, never
+ *  evicted by natural-pan LRU) so the default map ALWAYS
  *  renders offline — the per-target precache only covers z6/8/10 around the
  *  top-3 targets, never the world view the map actually opens at. */
 export const WORLD_BASE_ZOOM_LEVELS = [0, 1, 2, 3] as const;
 
-/** Build every carto basemap tile URL for the world-view zoom levels (z0-3).
+/** Build every dark basemap tile URL for the world-view zoom levels (z0-3).
  *  Exposed for testing; production uses `precacheWorldBaseTiles`. */
 export function buildWorldBaseUrls(): string[] {
   const urls: string[] = [];
@@ -315,7 +307,7 @@ export function buildWorldBaseUrls(): string[] {
     const n = 2 ** z;
     for (let x = 0; x < n; x++) {
       for (let y = 0; y < n; y++) {
-        urls.push(cartoTileUrl(z, x, y));
+        urls.push(darkBasemapTileUrl(z, x, y));
       }
     }
   }
@@ -328,7 +320,7 @@ const ESRI_IMAGERY_TILE =
 
 /** Build z0-3 world tiles for the SWITCHABLE layers: Esri imagery (the
  *  clouds-OFF basemap), the GIBS true-color cloud overlay, and VIIRS
- *  night-lights. buildWorldBaseUrls only covers the default carto basemap, so
+ *  night-lights. buildWorldBaseUrls only covers the dark basemap, so
  *  without these the world view goes black offline the moment the operator
  *  turns clouds off, or toggles clouds/night-lights on over an area they hadn't
  *  loaded online (a hidden layer never fetches tiles). 3 layers × 85 = 255.
@@ -359,8 +351,6 @@ export function precacheWorldBaseTiles(
   isOnlineFn: () => boolean = () => navigator.onLine,
 ): void {
   if (!isOnlineFn()) return;
-  // Default carto basemap + the switchable Esri/clouds/night-lights layers, so
-  // the world view renders offline whichever layers the operator turns on.
   fireAndForgetPrecache([...buildWorldBaseUrls(), ...buildWorldOverlayUrls()]);
 }
 
