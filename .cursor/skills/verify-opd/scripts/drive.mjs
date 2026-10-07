@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
-import { planLabelReaders } from './plan-label-verdict.mjs';
+import { fractionalCountrySymbols, keptCountrySymbol, planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
@@ -4537,6 +4537,57 @@ async function proveFullscreenTelemetry(send) {
   return `${open.w}x${open.h}`;
 }
 
+async function proveFractionalPlanLabels(send) {
+  const sample = await evaluate(send, `(async () => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
+      return { ok: false, reason: 'map' };
+    }
+    const fit = map.fitBounds.bind(map);
+    const resize = map.resize.bind(map);
+    map.fitBounds = () => map;
+    map.resize = () => map;
+    const saved = { center: map.getCenter(), zoom: map.getZoom() };
+    const settle = () => new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve(true);
+      };
+      map.once('idle', finish);
+      setTimeout(finish, 1200);
+    });
+    const namesAt = async (zoom, lng, lat) => {
+      map.jumpTo({ center: [lng, lat], zoom });
+      await settle();
+      const features = map.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
+      return {
+        zoom: map.getZoom(),
+        names: features.map((feature) => (feature.properties && feature.properties.name) || ''),
+      };
+    };
+    const rows = [];
+    for (const zoom of [2.5, 2.9, 3, 3.1]) rows.push(await namesAt(zoom, 2, 46));
+    const france = await namesAt(1.2, 2, 46);
+    const japan = await namesAt(1.2, 138, 36);
+    map.jumpTo({ center: saved.center, zoom: saved.zoom });
+    await settle();
+    map.fitBounds = fit;
+    map.resize = resize;
+    return { ok: true, rows, france: france.names, japan: japan.names, restored: map.getZoom() };
+  })()`);
+  if (!sample || sample.ok !== true) throw new Error(`plan label zooms ${JSON.stringify(sample)}`);
+  const fractional = fractionalCountrySymbols(sample.rows);
+  if (!fractional.ok) throw new Error(`plan label zooms ${JSON.stringify(fractional)}`);
+  const france = keptCountrySymbol(sample.france, 'France');
+  if (!france.ok) throw new Error(`plan label France ${JSON.stringify(france)}`);
+  const japan = keptCountrySymbol(sample.japan, 'Japan');
+  if (!japan.ok) throw new Error(`plan label Japan ${JSON.stringify(japan)}`);
+  return fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ');
+}
+
 async function proveIssFullscreen(send, evidenceDir, viewport) {
   const phone = viewport.mobile && viewport.width < 600;
   if (phone && !await evaluate(send, ISS_FULLSCREEN_STRIP)) throw new Error('iss fullscreen request methods still present');
@@ -4562,8 +4613,10 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     }
     await pressIssFullscreen(send);
     const back = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen exit by button', 10000);
+    let planSymbols = '';
     if (insetViewportFits(viewport.width, viewport.height)) {
       await waitForPip(send, 'plan', 'plan inset back after fullscreen', 20000);
+      planSymbols = await proveFractionalPlanLabels(send);
     }
     if (!sameFrame(idle, back)) throw new Error(`iss frame after fullscreen ${JSON.stringify(back)} is not ${JSON.stringify(idle)}`);
     await click(send, '[data-iss-preset="nadir"]');
@@ -4605,7 +4658,8 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}, Escape kept aim`;
+    const symbolNote = planSymbols ? `, plan symbols ${planSymbols}` : '';
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}${symbolNote}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }

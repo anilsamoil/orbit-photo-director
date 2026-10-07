@@ -7,10 +7,16 @@ const ESRI_DARK_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
 ];
 
-/** Reference raster. It draws boundaries at zoom 0–2 and country names only once the fit zooms in. */
+/** Reference raster. Boundaries below view zoom 1.5. Country names from there up. */
 const ESRI_LABEL_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
 ];
+
+/** View zoom where those tiles start naming countries.
+ *  MapLibre's world tile is 512px and these tiles are 256px, so the requested
+ *  tile zoom is round(viewZoom + 1). Tile zoom 3 is the first with country names,
+ *  and that round trips to view zoom 1.5. */
+const COUNTRY_SYMBOL_MAX_ZOOM = 1.5;
 
 /** Caps the fit. A tighter track zooms in. A full orbit stays below zoom 2. */
 const INSET_FIT_MAX_ZOOM = 5;
@@ -87,6 +93,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
           id: 'inset-countries',
           type: 'symbol',
           source: 'inset-countries',
+          maxzoom: COUNTRY_SYMBOL_MAX_ZOOM,
           layout: {
             'text-field': ['get', 'name'],
             'text-font': ['Open Sans Regular'],

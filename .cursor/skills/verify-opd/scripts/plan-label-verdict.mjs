@@ -3,6 +3,45 @@ import { pathToFileURL } from 'node:url';
 
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
 
+export const FRACTIONAL_LABEL_ZOOMS = [2.5, 2.9, 3, 3.1];
+
+function nameList(names) {
+  return Array.isArray(names) ? names.filter((name) => typeof name === 'string') : [];
+}
+
+/** Symbol texts at the zooms where the reference raster already draws country names. */
+export function fractionalCountrySymbols(rows) {
+  if (!Array.isArray(rows) || rows.length !== FRACTIONAL_LABEL_ZOOMS.length) {
+    return { ok: false, reason: 'zooms', rows: Array.isArray(rows) ? rows.length : 0 };
+  }
+  const counts = [];
+  for (let index = 0; index < FRACTIONAL_LABEL_ZOOMS.length; index += 1) {
+    const expected = FRACTIONAL_LABEL_ZOOMS[index];
+    const row = rows[index];
+    const zoom = row && Number(row.zoom);
+    if (!row || !Number.isFinite(zoom) || Math.abs(zoom - expected) > 0.001) {
+      return { ok: false, reason: 'zoom', zoom: row && row.zoom, expected };
+    }
+    const names = nameList(row.names);
+    const seen = new Map();
+    for (const name of names) seen.set(name, (seen.get(name) || 0) + 1);
+    const duplicated = [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+    if (names.length > 0 || duplicated.length > 0) {
+      return { ok: false, reason: 'symbols', zoom, count: names.length, names, duplicated };
+    }
+    counts.push({ zoom, count: 0 });
+  }
+  return { ok: true, counts };
+}
+
+/** France or Japan still has one symbol text at the zoom below the raster names. */
+export function keptCountrySymbol(names, country) {
+  const list = nameList(names);
+  const count = list.filter((name) => name === country).length;
+  if (count !== 1) return { ok: false, reason: 'kept', country, count, names: list };
+  return { ok: true, country, count };
+}
+
 export function planLabelVerdict(sample) {
   function resolvedOpacity(value) {
     if (value == null) return 1;
@@ -200,6 +239,32 @@ export function biteReport() {
 
 function runBite() {
   const report = biteReport();
+  const fractionalMain = fractionalCountrySymbols([2.5, 2.9, 3, 3.1].map((zoom) => ({
+    zoom,
+    names: ['Canada', 'France', 'Japan', 'France'],
+  })));
+  const fractionalFixed = fractionalCountrySymbols([2.5, 2.9, 3, 3.1].map((zoom) => ({
+    zoom,
+    names: [],
+  })));
+  const keptFrance = keptCountrySymbol(['Egypt', 'France', 'Nigeria'], 'France');
+  const keptJapan = keptCountrySymbol(['China', 'Japan'], 'Japan');
+  const keptMissing = keptCountrySymbol(['China'], 'Japan');
+  console.log(`fractional-main ok:${fractionalMain.ok === true}`);
+  console.log(`fractional-fixed ok:${fractionalFixed.ok === true}`);
+  console.log(`kept-france ok:${keptFrance.ok === true}`);
+  console.log(`kept-japan ok:${keptJapan.ok === true}`);
+  console.log(`kept-missing ok:${keptMissing.ok === true}`);
+  const fractionalBite = fractionalMain.ok === false
+    && fractionalMain.reason === 'symbols'
+    && fractionalMain.zoom === 2.5
+    && fractionalMain.duplicated.includes('France')
+    && fractionalFixed.ok === true
+    && keptFrance.ok === true
+    && keptJapan.ok === true
+    && keptMissing.ok === false
+    && keptMissing.reason === 'kept';
+  if (!fractionalBite) process.exit(1);
   const line = (name, verdict) => `${name} ok:${verdict.ok === true}`;
   console.log(line('unmutated', report.unmutated));
   console.log(line('text-opacity', report.textOpacity));
