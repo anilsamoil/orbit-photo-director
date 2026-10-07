@@ -15,6 +15,7 @@ const created = vi.hoisted(() => ({
         type?: string;
         source?: string;
         paint?: { 'raster-opacity'?: number; 'text-color'?: string };
+        maxzoom?: number;
         layout?: {
           'text-field'?: unknown;
           'text-font'?: string[];
@@ -88,6 +89,34 @@ describe('plan inset labels', () => {
       geometry: { type: 'LineString', coordinates: [[0, 0], [10, 10]] },
     }], { lon: 5, lat: 5 });
     expect(created.fit?.maxZoom).toBe(5);
+    inset.destroy();
+  });
+
+  it('counts country symbol texts once below the raster names and none at 2.5, 2.9, 3, and 3.1', () => {
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 274 });
+    Object.defineProperty(frame, 'clientHeight', { value: 900 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const style = created.options?.style;
+    const layer = style?.layers.find((entry) => entry.id === 'inset-countries');
+    const names = (style?.sources['inset-countries']?.data?.features ?? [])
+      .map((feature) => feature.properties?.name)
+      .filter((name): name is string => typeof name === 'string');
+    const textsAt = (zoom: number): string[] => {
+      const maxZoom = layer?.maxzoom;
+      if (typeof maxZoom === 'number' && zoom >= maxZoom) return [];
+      return names;
+    };
+    const low = textsAt(1.2);
+    expect(low.filter((name) => name === 'France')).toEqual(['France']);
+    expect(low.filter((name) => name === 'Japan')).toEqual(['Japan']);
+    expect(new Set(low).size).toBe(low.length);
+    expect([2.5, 2.9, 3, 3.1].map((zoom) => [zoom, textsAt(zoom)])).toEqual([
+      [2.5, []],
+      [2.9, []],
+      [3, []],
+      [3.1, []],
+    ]);
     inset.destroy();
   });
 });
