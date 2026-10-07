@@ -179,7 +179,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let paintedWidth = -1;
   let paintedHeight = -1;
   let paintedRatio = -1;
-  let pointers = 0;
+  const activePointers = new Set<number>();
   let navMoved = false;
   let navMulti = false;
   let navOrigin: { x: number; y: number } | null = null;
@@ -190,11 +190,17 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     if (map.touchZoomRotate?.isActive()) return true;
     return false;
   };
-  const gestureLive = (): boolean => pointers > 0 || handlerBusy();
+  const gestureLive = (): boolean => activePointers.size > 0 || handlerBusy();
   const resizeNow = map.resize.bind(map);
   const flushResize = (): void => {
     if (!resizeWaiting || gestureLive()) return;
     map.resize();
+  };
+  const settleResize = (): void => {
+    flushResize();
+    queueMicrotask(() => {
+      if (activePointers.size === 0) flushResize();
+    });
   };
   Object.defineProperty(map, 'resize', {
     configurable: true,
@@ -215,24 +221,39 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     freed = true;
   };
   const onPointerDown = (event: PointerEvent): void => {
-    if (pointers === 0) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (activePointers.has(event.pointerId)) return;
+    if (activePointers.size === 0) {
       navMoved = false;
       navMulti = false;
       navOrigin = { x: event.clientX, y: event.clientY };
     } else {
       navMulti = true;
     }
-    pointers += 1;
+    activePointers.add(event.pointerId);
+    const cap = event.currentTarget;
+    if (cap instanceof Element) {
+      try {
+        cap.setPointerCapture(event.pointerId);
+      } catch {
+        return;
+      }
+    }
   };
   const onPointerMove = (event: PointerEvent): void => {
-    if (!navOrigin || pointers === 0) return;
+    if (!navOrigin || !activePointers.has(event.pointerId)) return;
     const dx = event.clientX - navOrigin.x;
     const dy = event.clientY - navOrigin.y;
     if (dx * dx + dy * dy > PLAN_NAV_SLOP_PX * PLAN_NAV_SLOP_PX) navMoved = true;
   };
-  const onPointerEnd = (): void => {
-    pointers = Math.max(0, pointers - 1);
-    if (pointers === 0) flushResize();
+  const onPointerEnd = (event: PointerEvent): void => {
+    if (!activePointers.delete(event.pointerId)) return;
+    if (activePointers.size === 0) settleResize();
+  };
+  const onWindowBlur = (): void => {
+    if (activePointers.size === 0) return;
+    activePointers.clear();
+    settleResize();
   };
   frame.addEventListener('click', stopClick);
   frame.addEventListener('wheel', onWheel, { capture: true, passive: true });
@@ -240,6 +261,12 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   frame.addEventListener('pointermove', onPointerMove, true);
   frame.addEventListener('pointerup', onPointerEnd, true);
   frame.addEventListener('pointercancel', onPointerEnd, true);
+  frame.addEventListener('lostpointercapture', onPointerEnd, true);
+  window.addEventListener('pointermove', onPointerMove, true);
+  window.addEventListener('pointerup', onPointerEnd, true);
+  window.addEventListener('pointercancel', onPointerEnd, true);
+  window.addEventListener('lostpointercapture', onPointerEnd, true);
+  window.addEventListener('blur', onWindowBlur);
   const openPlan = (): void => {
     const button = frame.closest('button');
     if (button instanceof HTMLButtonElement) button.click();
@@ -348,6 +375,12 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       frame.removeEventListener('pointermove', onPointerMove, true);
       frame.removeEventListener('pointerup', onPointerEnd, true);
       frame.removeEventListener('pointercancel', onPointerEnd, true);
+      frame.removeEventListener('lostpointercapture', onPointerEnd, true);
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', onPointerEnd, true);
+      window.removeEventListener('pointercancel', onPointerEnd, true);
+      window.removeEventListener('lostpointercapture', onPointerEnd, true);
+      window.removeEventListener('blur', onWindowBlur);
       marker.remove();
       map.remove();
       delete insetFrame.__opdTrackInset;

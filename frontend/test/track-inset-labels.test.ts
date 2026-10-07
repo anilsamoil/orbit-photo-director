@@ -71,6 +71,14 @@ vi.mock('maplibre-gl', () => {
     resize(): void {
       created.resizeCalls += 1;
       if (created.gesturing) created.gestureStops += 1;
+      const frame = this.options?.container;
+      const canvas = frame?.querySelector('canvas');
+      if (!frame || !canvas) return;
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.round(frame.clientWidth * ratio);
+      canvas.height = Math.round(frame.clientHeight * ratio);
+      canvas.style.width = `${frame.clientWidth}px`;
+      canvas.style.height = `${frame.clientHeight}px`;
     }
     getSource(id: string): { setData(data: { features?: unknown[] }): void } {
       return {
@@ -301,6 +309,59 @@ describe('plan inset labels', () => {
     canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await vi.advanceTimersByTimeAsync(280);
     expect(opens).toBe(1);
+    inset.destroy();
+    button.remove();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['pointerup', 449, 620, 898, 1240],
+    ['pointercancel', 303, 914, 606, 1828],
+    ['lostpointercapture', 375, 554, 750, 1108],
+    ['blur', 464, 650, 928, 1300],
+  ])('resizes after a %s that ends outside the frame, then a plain click opens the map', async (ending, nextWidth, nextHeight, backingWidth, backingHeight) => {
+    created.resizeCalls = 0;
+    created.gesturing = false;
+    created.handlers = {};
+    vi.useFakeTimers();
+    const button = document.createElement('button');
+    const frame = document.createElement('div');
+    let width = 478;
+    let height = 690;
+    Object.defineProperty(frame, 'clientWidth', { configurable: true, get: () => width });
+    Object.defineProperty(frame, 'clientHeight', { configurable: true, get: () => height });
+    button.append(frame);
+    document.body.append(button);
+    let opens = 0;
+    button.addEventListener('click', () => { opens += 1; });
+    const ratio = window.devicePixelRatio;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const canvas = frame.querySelector('canvas');
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error('plan canvas missing');
+    expect(canvas.width).toBe(478);
+    expect(canvas.height).toBe(690);
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 30, clientY: 40, pointerId: 9 }));
+    document.body.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 420, clientY: 40, pointerId: 9 }));
+    if (ending === 'blur') window.dispatchEvent(new Event('blur'));
+    else document.body.dispatchEvent(new PointerEvent(ending, { bubbles: ending !== 'lostpointercapture', clientX: 420, clientY: 40, pointerId: 9 }));
+    width = nextWidth;
+    height = nextHeight;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    const when = new Date('2024-06-21T18:00:00Z');
+    inset.show(null, { lon: 1, lat: 1 }, when);
+    inset.show(null, { lon: 2, lat: 2 }, when);
+    inset.show(null, { lon: 3, lat: 3 }, when);
+    expect(canvas.style.width).toBe(`${nextWidth}px`);
+    expect(canvas.style.height).toBe(`${nextHeight}px`);
+    expect(canvas.width).toBe(backingWidth);
+    expect(canvas.height).toBe(backingHeight);
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 24, clientY: 24, pointerId: 11 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 24, clientY: 24, pointerId: 11 }));
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await vi.advanceTimersByTimeAsync(280);
+    expect(opens).toBe(1);
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: ratio });
     inset.destroy();
     button.remove();
     vi.useRealTimers();
