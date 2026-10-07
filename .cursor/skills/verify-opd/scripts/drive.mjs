@@ -4729,14 +4729,14 @@ export function launchEarthPanes(width, height) {
       { ...native, place: 'over', minShort: 160 },
       { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
       { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
-      { width: 390, height: 565, mobile: true, label: '390x565', place: '', minShort: 120, twoLine: true, sceneBox: true },
+      { width: 390, height: 565, mobile: true, label: '390x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 402 && height === 874) {
     return [
       { ...native, place: 'below', minShort: 200 },
       { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
-      { width: 402, height: 565, mobile: true, label: '402x565', place: '', minShort: 120, twoLine: true, sceneBox: true },
+      { width: 402, height: 565, mobile: true, label: '402x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 874 && height === 402) {

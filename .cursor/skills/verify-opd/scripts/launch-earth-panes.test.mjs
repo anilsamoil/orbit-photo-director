@@ -26,7 +26,7 @@ test('a 565 earth scene does not choose an overlay floor from the place it sees'
   for (const [width, height, label] of [[390, 664, '390x565'], [402, 874, '402x565']]) {
     const scene = launchEarthPanes(width, height).find((pane) => pane.label === label);
     assert.equal(scene.place, '');
-    assert.equal(scene.places, undefined);
+    assert.deepEqual(scene.places, ['below', 'over']);
     assert.equal(scene.belowMinShort, undefined);
     assert.equal(scene.minShort, 120);
     assert.equal(scene.sceneBox, true);
