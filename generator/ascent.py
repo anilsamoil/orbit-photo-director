@@ -256,10 +256,9 @@ def slant_range_km(
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(iss_xyz, rocket_xyz, strict=True)))
 
 
-# A surface point's spherical ECEF radius can land about 1e-12 km inside
-# EARTH_RADIUS_KM. One millimeter covers that error. A chord Earth actually
-# blocks misses by meters or more, so this does not open those sightlines.
-SURFACE_CLEARANCE_TOLERANCE_KM = 1e-6
+# A few units in the last place of an ECEF magnitude. A millimeter of Earth
+# radius is not numerical error: 100 m past the horizon is only 0.78 mm inside.
+_CLEARANCE_ULP = 1e-12
 
 
 def tangent_clearance(
@@ -270,24 +269,25 @@ def tangent_clearance(
 ) -> bool:
     """True if the ISS→rocket chord clears Earth's surface.
 
-    Replaces the |lat|>52° hack — Earth occultation is line-of-sight,
-    not a latitude rule. Computes the closest approach of the chord
-    to Earth's center and rejects if it's inside R_earth.
+    The sightline's own endpoint is exempt when that endpoint was placed on or
+    above the surface. A closest approach strictly between the endpoints is
+    compared with Earth's radius at computation scale, not a smaller Earth.
     """
     p1 = _geodetic_to_ecef(iss.lat, iss.lon, iss.alt_km)
     p2 = _geodetic_to_ecef(rocket_lat_deg, rocket_lon_deg, rocket_alt_km)
-    # Parametrize: P(s) = p1 + s × (p2 - p1), s ∈ [0, 1].
-    # Closest point to origin: s* = -p1·(p2-p1) / |p2-p1|².
     d = tuple(b - a for a, b in zip(p1, p2, strict=True))
     d2 = sum(c * c for c in d)
     if d2 == 0:
-        # Coincident points — caller should have rejected earlier.
-        return True
-    s = -sum(a * c for a, c in zip(p1, d, strict=True)) / d2
-    s = max(0.0, min(1.0, s))  # closest point on the SEGMENT, not infinite line
-    closest = tuple(a + s * c for a, c in zip(p1, d, strict=True))
+        return rocket_alt_km >= 0.0
+    s_line = -sum(a * c for a, c in zip(p1, d, strict=True)) / d2
+    if s_line >= 1.0:
+        return rocket_alt_km >= 0.0
+    if s_line <= 0.0:
+        return iss.alt_km >= 0.0
+    closest = tuple(a + s_line * c for a, c in zip(p1, d, strict=True))
     min_dist_to_center = math.sqrt(sum(c * c for c in closest))
-    return min_dist_to_center >= EARTH_RADIUS_KM - SURFACE_CLEARANCE_TOLERANCE_KM
+    scale = max(math.sqrt(sum(c * c for c in p1)), math.sqrt(sum(c * c for c in p2)), 1.0)
+    return min_dist_to_center >= EARTH_RADIUS_KM - scale * _CLEARANCE_ULP
 
 
 def apparent_plume_angle_mrad(slant_range_km_: float, rocket_alt_km: float) -> float:
