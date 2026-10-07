@@ -101,7 +101,7 @@ export function renderLaunchFacts(item: LaunchOpportunity, state: LaunchState, n
   }
   if (item.reason_codes.length) row(body, 'Reasons', item.reason_codes.join(', '));
   row(body, 'Event revision', item.revision);
-  if (state.artifact) {
+  if (state.artifact?.schema_version === 2) {
     row(body, 'Artifact revision', state.artifact.revision);
     row(body, 'Generated', utc(state.artifact.generated_at));
     row(body, 'Camera evidence valid until', utc(state.artifact.valid_until));
@@ -136,7 +136,8 @@ export function openLaunchDetails(eventId: string): void {
   const content = element('div', '');
   const update = () => {
     const state = launchStore.getState();
-    const item = state.artifact?.items.find((candidate) => candidate.event_id === eventId);
+    const artifact = state.artifact;
+    const item = artifact?.schema_version === 2 ? artifact.items.find((candidate) => candidate.event_id === eventId) : undefined;
     heading.textContent = item ? `LAUNCH / ASCENT: ${item.name}` : 'LAUNCH / ASCENT';
     content.replaceChildren(item ? renderLaunchFacts(item, state, Date.now()) : element('p', 'launch-status', 'Event unavailable in current revision'));
   };
@@ -255,7 +256,9 @@ export function renderLaunchCoverage(container: HTMLElement, state: LaunchState,
   container.classList.add('launch-coverage');
   container.setAttribute('role', 'status');
   const details = element('details', 'launch-data-details');
-  const checked = state.artifact?.coverage.fetched_at;
+  const artifact = state.artifact;
+  const checked = artifact?.schema_version === 2 ? artifact.coverage.fetched_at
+    : artifact?.schema_version === 3 ? artifact.coverage.schedule_fetched_at : null;
   const label = !state.artifact && state.availability === 'loading' ? 'Launch data details · checking schedule'
     : checked ? `Launch data details · schedule checked ${utc(checked)}` : 'Launch data details · schedule unavailable';
   details.append(element('summary', '', label), element('p', '', launchCoverageLabel(state, now, view)));

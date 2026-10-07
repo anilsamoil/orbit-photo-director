@@ -86,6 +86,16 @@ are screened independently. Neither excludes later burns or visibility outside
 the model. Unknown timing, orbit, model, incomplete evaluation or intersection
 remains unknown. No ascent corridor is fabricated from this envelope.
 
+The frontend parser accepts schema 3 catalogs and schema 2 artifacts.
+The publisher still emits schema 2. A schema 3 body carries `schedule_valid_until`
+and `geometry_valid_until`. The pointer stays schema 2, and its `valid_until`
+equals `geometry_valid_until`. That geometry lease is at most 15 minutes.
+The schedule lease may run up to three hours. Each shot envelope includes
+`lens` (`telephoto` or `wide`) and `lens_reason`. An ascent envelope requires
+`direction.kind` of `published`, `iss_plane`, or `hazard_area`. A pad envelope
+has an empty track. Unknown keys are rejected on both versions. A hash
+mismatch keeps the last good artifact.
+
 The accepting parser supports old artifacts without assessment. Older deployed
 strict parsers reject the new field, so publish the new frontend first, then
 update the separate publisher checkout. Existing tabs may need a reload to pick

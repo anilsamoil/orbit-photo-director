@@ -1,4 +1,4 @@
-import type { CaptureInterval, LaunchArtifact, LaunchAssessment, LaunchOpportunity, LaunchPointer } from '../src/launch-schema';
+import type { CaptureInterval, LaunchArtifact, LaunchAssessment, LaunchCatalog, LaunchCatalogItem, LaunchOpportunity, LaunchPointer, ShotEnvelope } from '../src/launch-schema';
 import type { LaunchState } from '../src/launch-store';
 
 export const NOW = Date.parse('2026-09-07T12:00:00Z');
@@ -40,11 +40,49 @@ export function artifact(items: LaunchOpportunity[] = [launch()], over: Partial<
       received: items.length, parsed: items.length, evaluated: items.length, visible: items.length, unevaluated: 0, reasons: [] },
     items, ...over };
 }
-export function state(items: LaunchOpportunity[] = [launch()], over: Partial<LaunchState> = {}): LaunchState {
+type Schema2State = Omit<LaunchState, 'artifact'> & { artifact: LaunchArtifact | null };
+export function state(items: LaunchOpportunity[] = [launch()], over: Partial<Schema2State> = {}): Schema2State {
   return { artifact: artifact(items), pointer: null, availability: 'ready', ...over };
 }
-export async function envelope(a = artifact()): Promise<{ pointer: LaunchPointer; body: string }> {
+export function shot(over: Partial<ShotEnvelope> = {}): ShotEnvelope {
+  return {
+    subject: 'pad', liftoff: iso(10), start: iso(10), best: iso(11), end: iso(12), best_offset_s: 60,
+    look: { frame: 'orbital-lvlh', azimuth_deg: 45, off_nadir_deg: 70 }, window: 'W6',
+    slant_km: 490, limb_margin_deg: 8, plume_mrad: 1.6, light: 'twilight_plume',
+    lens: 'telephoto', lens_reason: 'Distant plume', track: [],
+    score: { low: 30, high: 40, terms: { A: [0.2, 0.4], C: [0.5, 0.5], D: [0.1, 0.2], M: [0.8, 1], R: [0.4, 0.6] } },
+    confidence: { tle_age_h: 30, along_track_sigma_km: 12, timing_sigma_s: 4, robust: false }, ...over,
+  };
+}
+export function catalogItem(over: Partial<LaunchCatalogItem> = {}): LaunchCatalogItem {
+  return {
+    event_id: 'event-1', revision: 'event-r1', name: 'Dragon CRS-35', rocket: 'Falcon 9',
+    site: { name: 'Kennedy', lat: 28.5, lon: -80.6 },
+    schedule: { net: iso(10), window_start: iso(10), window_end: iso(20), precision: 'Second', status: 'Go', destination: 'ISS' },
+    direction: { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss plane', off_plane_deg: 0.35 },
+    tier: 'watch', why: 'Twilight plume 490 km aft, W6, 3 min after liftoff.', reasons: [],
+    shots: [shot(), shot({ subject: 'ascent', track: [
+      { t_offset_s: 0, lat: 28.5, lon: -80.6, alt_km: 0 },
+      { t_offset_s: 15, lat: 28.6, lon: -80.5, alt_km: 10 },
+    ] })], ...over,
+  };
+}
+export function catalog(items: LaunchCatalogItem[] = [catalogItem()], over: Partial<LaunchCatalog> = {}): LaunchCatalog {
+  return {
+    schema_version: 3, revision: 'r1', generated_at: iso(-5), schedule_valid_until: iso(70), geometry_valid_until: iso(10),
+    tle: { epoch: iso(-60), sha256: 'a'.repeat(64), source: 'celestrak' },
+    coverage: {
+      from: iso(-60), until: iso(14 * 24 * 60), schedule_fetched_at: iso(-5), pages: 1,
+      received: items.length, listed: items.length, evaluated: items.length,
+      tier_counts: { shot: 0, likely: 0, watch: items.length, unassessed: 0, none: 0 },
+      complete: true, reasons: [],
+    },
+    items, ...over,
+  };
+}
+export async function envelope(a: LaunchArtifact | LaunchCatalog = artifact()): Promise<{ pointer: LaunchPointer; body: string }> {
   const body = JSON.stringify(a);
   const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))), (n) => n.toString(16).padStart(2, '0')).join('');
-  return { pointer: { schema_version: 2, revision: a.revision, generated_at: a.generated_at, valid_until: a.valid_until, path: `launch/v/${a.revision}.json`, sha256 }, body };
+  const valid_until = a.schema_version === 2 ? a.valid_until : a.geometry_valid_until;
+  return { pointer: { schema_version: 2, revision: a.revision, generated_at: a.generated_at, valid_until, path: `launch/v/${a.revision}.json`, sha256 }, body };
 }

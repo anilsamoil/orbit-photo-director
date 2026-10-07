@@ -9,13 +9,17 @@ export interface LaunchSelection { item: LaunchOpportunity; interval: CaptureInt
 export function hasLaunchTimeConflict(item: LaunchOpportunity): boolean {
   return item.reason_codes.includes('TIME_CONFLICT');
 }
+function v2Artifact(state: LaunchState): LaunchArtifact | null {
+  const artifact = state.artifact;
+  return artifact?.schema_version === 2 ? artifact : null;
+}
 export function launchFresh(state: LaunchState, now: number): boolean {
-  const a = state.artifact;
+  const a = v2Artifact(state);
   return !!a && !state.superseded && Date.parse(a.generated_at) <= now && now < Date.parse(a.valid_until);
 }
 /** Schedule-only display tolerance; never used to admit capture instructions. */
 export function launchScheduleFresh(state: LaunchState, now: number): boolean {
-  const a = state.artifact;
+  const a = v2Artifact(state);
   if (!a || state.superseded || a.coverage.reasons.some((reason) => ['SOURCE_AGE_UNKNOWN', 'SOURCE_AGE_MTIME_ONLY', 'REPLAY_SOURCE_MISMATCH'].includes(reason))) return false;
   const generated = Date.parse(a.generated_at);
   const recent = (value: string | null) => {
@@ -40,7 +44,7 @@ function sourceFresh(a: LaunchArtifact, fetched: string | null, now: number): bo
 /** Permission to show a current camera estimate, independent of schedule health. */
 export function launchCameraEvidenceFresh(selection: LaunchSelection, state: LaunchState, now: number): boolean {
   const { item, interval, expired } = selection;
-  const a = state.artifact;
+  const a = v2Artifact(state);
   return !!a && !expired && state.availability !== 'offline' && launchFresh(state, now)
     && a.coverage.complete && a.coverage.reasons.length === 0 && sourceFresh(a, a.coverage.fetched_at, now)
     && item.status === 'geometry_supported' && item.reason_codes.length === 0
@@ -136,7 +140,7 @@ function compare(a: LaunchSelection, b: LaunchSelection): number {
     || (a.item.event_id < b.item.event_id ? -1 : a.item.event_id > b.item.event_id ? 1 : 0);
 }
 export function selectLaunches(state: LaunchState, now: number, view: 'queue' | 'upcoming' | 'map'): LaunchSelection[] {
-  const a = state.artifact;
+  const a = v2Artifact(state);
   if (!a || (view === 'queue' && (!launchFresh(state, now) || !a.coverage.complete
     || a.coverage.reasons.length > 0 || !sourceFresh(a, a.coverage.fetched_at, now) || state.availability === 'offline'))) return [];
   const horizon = view === 'map' ? LAUNCH_MAP_HORIZON_MS : LAUNCH_HORIZON_MS;
@@ -187,8 +191,22 @@ export function queueSlots(ground: PassEntry[], launches: LaunchSelection[]): { 
   return { ground: ground.slice(0, 5 - selected.length), launches: selected };
 }
 export function launchCoverageLabel(state: LaunchState, now: number, view: 'upcoming' | 'map' = 'upcoming'): string {
-  const a = state.artifact;
-  if (!a) return state.availability === 'loading' ? 'LAUNCH: loading' : 'LAUNCH: unavailable; coverage unknown';
+  const artifact = state.artifact;
+  if (!artifact) return state.availability === 'loading' ? 'LAUNCH: loading' : 'LAUNCH: unavailable; coverage unknown';
+  if (artifact.schema_version === 3) {
+    const horizon = view === 'map' ? LAUNCH_MAP_HORIZON_MS : LAUNCH_HORIZON_MS;
+    const until = Math.min(Date.parse(artifact.coverage.until), now + horizon);
+    const incomplete = !artifact.coverage.complete || artifact.coverage.reasons.length > 0 || Date.parse(artifact.coverage.until) < now + horizon;
+    const checked = artifact.coverage.schedule_fetched_at;
+    const scheduleCurrent = Date.parse(artifact.generated_at) <= now && now < Date.parse(artifact.schedule_valid_until);
+    const flags = [
+      scheduleCurrent ? '' : 'STALE / EXPIRED',
+      state.superseded ? 'SUPERSEDED; newer update pending' : '',
+      state.availability === 'offline' ? 'OFFLINE' : state.availability === 'last-good' ? 'LAST GOOD; refresh unavailable' : '',
+    ].filter(Boolean).join('; ');
+    return `LAUNCH: ${flags ? `${flags} | ` : ''}Schedule checked ${checked ? utc(checked) : 'Unknown'} | Coverage ${incomplete ? 'incomplete' : 'complete'}: ${utc(artifact.coverage.from)} to ${utc(until)}${artifact.coverage.reasons.length ? ` | ${artifact.coverage.reasons.join(', ')}` : ''}`;
+  }
+  const a = artifact;
   const scheduleOnly = a.items.every((item) => item.status === 'map_only');
   const fresh = scheduleOnly ? launchScheduleFresh(state, now) : launchFresh(state, now);
   const freshness = [!fresh ? 'STALE / EXPIRED' : scheduleOnly ? 'SCHEDULE CURRENT (MAP ONLY)' : 'CURRENT',
