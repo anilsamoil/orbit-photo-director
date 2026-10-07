@@ -3891,14 +3891,350 @@ async function provePlanGestureHolds(send, viewport) {
   }
 }
 
+async function planFrameMetrics(send) {
+  return evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame && frame.querySelector('canvas');
+    const orbit = frame && frame.__opdTrackInset;
+    if (!frame || !canvas || !orbit || !orbit.getZoom) return null;
+    const box = frame.getBoundingClientRect();
+    const canvasBox = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    let outsideX = box.right + 28;
+    let outsideY = box.top + Math.min(48, Math.max(8, box.height / 3));
+    if (outsideX > window.innerWidth - 6) outsideX = Math.max(6, box.left - 28);
+    if (outsideY < 6) outsideY = 6;
+    if (outsideY > window.innerHeight - 6) outsideY = window.innerHeight - 6;
+    const host = document.elementFromPoint(outsideX, outsideY);
+    const outsideFrame = !(host && (frame.contains(host) || host.closest('[data-pip="plan"]')));
+    return {
+      x: canvasBox.left + canvasBox.width / 2,
+      y: canvasBox.top + canvasBox.height / 2,
+      outsideX,
+      outsideY,
+      outsideFrame,
+      cssWidth: canvas.clientWidth,
+      cssHeight: canvas.clientHeight,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height,
+      frameWidth: frame.clientWidth,
+      frameHeight: frame.clientHeight,
+      dpr,
+      view: (document.getElementById('view') && document.getElementById('view').className) || '',
+      zoom: orbit.getZoom(),
+      bearing: orbit.getBearing(),
+    };
+  })()`);
+}
+
+function planCanvasReady(metrics) {
+  if (!metrics || metrics.frameWidth < 2 || metrics.frameHeight < 2 || !(metrics.dpr > 0)) return null;
+  return {
+    cssWidth: metrics.frameWidth,
+    cssHeight: metrics.frameHeight,
+    backingWidth: Math.round(metrics.frameWidth * metrics.dpr),
+    backingHeight: Math.round(metrics.frameHeight * metrics.dpr),
+  };
+}
+
+async function provePlanSmallMotion(send) {
+  const start = await planCamera(send);
+  if (!start) throw new Error('plan camera missing before a small move');
+  for (const dx of [2, 5, 10]) {
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + dx, y: start.y, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: start.x + dx, y: start.y, button: 'left', buttons: 0, clickCount: 1 });
+    await sleep(450);
+    const now = await planCamera(send);
+    if (!now || now.view !== 'view-iss') throw new Error(`plan ${dx}px move opened Map ${JSON.stringify(now)}`);
+  }
+  const second = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const box = canvas.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const point = (type, id, clientX) => canvas.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY: y,
+      pointerId: id,
+      pointerType: 'touch',
+      isPrimary: id === 1,
+    }));
+    point('pointerdown', 1, x);
+    point('pointerdown', 2, x + 36);
+    point('pointerup', 1, x);
+    point('pointerup', 2, x + 36);
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    return { ok: true };
+  })()`);
+  if (!second?.ok) throw new Error(`plan second touch ${JSON.stringify(second)}`);
+  await sleep(450);
+  const after = await planCamera(send);
+  if (!after || after.view !== 'view-iss') throw new Error(`plan second touch opened Map ${JSON.stringify(after)}`);
+}
+
+async function dispatchPlanTouches(send, name, active, changed) {
+  const sent = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const name = ${JSON.stringify(name)};
+    const activePoints = ${JSON.stringify(active)};
+    const changedPoints = ${JSON.stringify(changed)};
+    const make = (point) => {
+      let touch = null;
+      if (document.createTouch) {
+        try {
+          touch = document.createTouch(window, canvas, point.id, point.x, point.y, point.x, point.y, point.x, point.y);
+        } catch (error) {
+          touch = null;
+        }
+      }
+      if (!touch && typeof Touch === 'function') {
+        try {
+          touch = new Touch({ identifier: point.id, target: canvas, clientX: point.x, clientY: point.y, pageX: point.x, pageY: point.y, screenX: point.x, screenY: point.y });
+        } catch (error) {
+          touch = null;
+        }
+      }
+      return touch;
+    };
+    const changedTouches = [];
+    for (const point of changedPoints) {
+      const touch = make(point);
+      if (!touch) return { ok: false, reason: 'touch-ctor' };
+      changedTouches.push(touch);
+    }
+    const activeTouches = [];
+    for (const point of activePoints) {
+      const touch = make(point);
+      if (!touch) return { ok: false, reason: 'touch-ctor' };
+      activeTouches.push(touch);
+    }
+    const list = (points) => document.createTouchList ? document.createTouchList(...points) : points;
+    try {
+      canvas.dispatchEvent(new TouchEvent(name, {
+        bubbles: true,
+        cancelable: true,
+        touches: list(activeTouches),
+        targetTouches: list(activeTouches),
+        changedTouches: list(changedTouches),
+      }));
+    } catch (error) {
+      return { ok: false, reason: 'event', error: String(error) };
+    }
+    return { ok: true };
+  })()`);
+  if (!sent?.ok) throw new Error(`plan pinch ${name} ${JSON.stringify(sent)}`);
+}
+
+async function provePlanRotatingPinch(send) {
+  const start = await planCamera(send);
+  if (!start) throw new Error('plan camera missing before a rotating pinch');
+  const cx = start.x;
+  const cy = start.y;
+  const finger = (t) => ([
+    { id: 1, x: cx - 36 * (1 - t), y: cy - 90 * t },
+    { id: 2, x: cx + 36 * (1 - t), y: cy + 90 * t },
+  ]);
+  const first = finger(0);
+  await dispatchPlanTouches(send, 'touchstart', [first[0]], [first[0]]);
+  await dispatchPlanTouches(send, 'touchstart', first, [first[1]]);
+  for (let step = 1; step <= 6; step += 1) {
+    const next = finger(step / 6);
+    await dispatchPlanTouches(send, 'touchmove', next, next);
+  }
+  const last = finger(1);
+  await dispatchPlanTouches(send, 'touchend', [], last);
+  await sleep(250);
+  const after = await planFrameMetrics(send);
+  if (!after || Math.abs(after.bearing) > 0.5 || !(after.zoom - start.zoom > 0.2)) {
+    throw new Error(`plan rotating pinch ${JSON.stringify({ startZoom: start.zoom, after })}`);
+  }
+  if (after.view !== 'view-iss') throw new Error(`plan rotating pinch opened Map ${JSON.stringify(after)}`);
+}
+
+async function armPlanPointer(send) {
+  const armed = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    if (!frame) return { ok: false };
+    window.__opdPlanPointer = null;
+    frame.addEventListener('pointerdown', (event) => { window.__opdPlanPointer = event.pointerId; }, { capture: true, once: true });
+    return { ok: true };
+  })()`);
+  if (!armed?.ok) throw new Error('plan pointer arm failed');
+}
+
+async function endPlanGesture(send, kind, outside) {
+  if (kind === 'up') {
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: outside.outsideX,
+      y: outside.outsideY,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+  } else {
+    const ended = await evaluate(send, `(() => {
+      const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+      const id = window.__opdPlanPointer;
+      const kind = ${JSON.stringify(kind)};
+      if (!frame || id == null) return { ok: false, reason: 'pointer', id };
+      if (kind === 'cancel') {
+        window.dispatchEvent(new PointerEvent('pointercancel', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: id,
+          pointerType: 'mouse',
+          clientX: ${outside.outsideX},
+          clientY: ${outside.outsideY},
+        }));
+      } else if (kind === 'lost') {
+        if (frame.hasPointerCapture && frame.hasPointerCapture(id)) frame.releasePointerCapture(id);
+        else {
+          window.dispatchEvent(new PointerEvent('lostpointercapture', {
+            bubbles: false,
+            pointerId: id,
+            pointerType: 'mouse',
+            clientX: ${outside.outsideX},
+            clientY: ${outside.outsideY},
+          }));
+        }
+      } else {
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('data-opd-blur', '');
+        iframe.src = 'about:blank';
+        document.body.append(iframe);
+        if (iframe.contentWindow) iframe.contentWindow.focus();
+      }
+      return { ok: true, id };
+    })()`);
+    if (!ended?.ok) throw new Error(`plan ${kind} ${JSON.stringify(ended)}`);
+  }
+  await evaluate(send, `(() => {
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    const dragging = !!(orbit?.dragPan?.isActive?.() || orbit?.touchZoomRotate?.isActive?.() || orbit?.scrollZoom?.isZooming?.());
+    if (dragging && orbit.stop) orbit.stop();
+    return true;
+  })()`);
+}
+
+async function returnToPlan(send) {
+  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  if (await evaluate(send, `document.getElementById('view')?.className === 'view-iss'`)) {
+    await waitForPip(send, 'plan', 'plan inset still open', 20000);
+    return;
+  }
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view');
+      const canvas = document.querySelector('[data-pip="plan"] canvas');
+      if (!view || view.className !== 'view-iss' || !canvas) return null;
+      return { ok: true };
+    })()`,
+    'iss after an outside plan gesture',
+    45000,
+  );
+}
+
+async function provePlanOutsideEnding(send, viewport, kind, from, to) {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: from.width,
+    height: from.height,
+    deviceScaleFactor: from.dpr,
+    mobile: viewport.mobile,
+  });
+  await sleep(400);
+  await waitForPip(send, 'plan', `plan before ${kind}`, 20000);
+  const before = await planFrameMetrics(send);
+  if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
+  await armPlanPointer(send);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: before.outsideX,
+    y: before.outsideY,
+    button: 'left',
+    buttons: 1,
+  });
+  await endPlanGesture(send, kind, before);
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: to.width,
+    height: to.height,
+    deviceScaleFactor: to.dpr,
+    mobile: viewport.mobile,
+  });
+  for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
+  const after = await planFrameMetrics(send);
+  const expected = planCanvasReady(after);
+  const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
+  if (!after || !expected || !changed || after.view !== 'view-iss'
+    || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
+    || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
+    throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
+  }
+  if (kind !== 'up') {
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: before.outsideX,
+      y: before.outsideY,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+  }
+  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  const clickAt = await planFrameMetrics(send);
+  await mouseClick(send, clickAt.x, clickAt.y);
+  await waitFor(
+    send,
+    `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
+    `plan ${kind} click opens map`,
+    8000,
+  );
+  await returnToPlan(send);
+  return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
+}
+
+async function provePlanOutsideRelease(send, viewport) {
+  const panes = viewport.mobile
+    ? [
+      { from: { width: 834, height: 1194, dpr: 2 }, to: { width: 860, height: 1080, dpr: 2 } },
+      { from: { width: 1194, height: 834, dpr: 2 }, to: { width: 1100, height: 760, dpr: 2 } },
+    ]
+    : [
+      { from: { width: 1400, height: 900, dpr: 1 }, to: { width: 1320, height: 830, dpr: 2 } },
+    ];
+  const notes = [];
+  try {
+    for (const pane of panes) {
+      for (const kind of ['up', 'cancel', 'lost', 'blur']) {
+        const sized = await provePlanOutsideEnding(send, viewport, kind, pane.from, pane.to);
+        notes.push(`${pane.from.width}x${pane.from.height} ${kind} ${sized.css} -> ${sized.backing}@${sized.dpr}`);
+      }
+    }
+  } finally {
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  }
+  return notes.join('; ');
+}
+
 async function provePlanMapLive(send, viewport) {
   try {
     const zoom = await provePlanWheelSurvivesRebuild(send);
     await provePlanRasterNames(send);
     await provePlanGestureHolds(send, viewport);
-    return `wheel ${zoom.toFixed(2)}`;
+    await provePlanSmallMotion(send);
+    await provePlanRotatingPinch(send);
+    const outside = await provePlanOutsideRelease(send, viewport);
+    return `wheel ${zoom.toFixed(2)}; ${outside}`;
   } finally {
-    await evaluate(send, `(() => { delete window.devicePixelRatio; return true; })()`);
+    await evaluate(send, `(() => { delete window.devicePixelRatio; document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
 }
