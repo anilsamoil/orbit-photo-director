@@ -316,12 +316,29 @@ describe('map chrome layout', () => {
     expect(css).toContain('--map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);');
     expect(css).toContain('--map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');
-    expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - var(--map-command-bottom, 0px) - 16px);');
+    expect(css).toContain('--map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap)))');
+    expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);');
     expect(css).toContain('--map-command-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('--map-corner-bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('body.shotlist-bar-visible:has(> #view.view-map) main {\n    padding-bottom: 0;');
     expect(heights).not.toContain('156px');
     expect(heights).not.toContain('104px');
+  });
+
+  it('stacks the narrow time strip above the corner and keeps the legend panel in the free band', () => {
+    const narrow = css.slice(css.indexOf('@media (max-width: 719px)'), css.indexOf('@media (min-width: 701px)'));
+    expect(narrow).toContain('--map-time-block: 120px');
+    expect(narrow).toContain('--map-command-height: calc(36px + 44px + 8px + var(--map-time-block) + env(safe-area-inset-bottom, 0px))');
+    expect(narrow).toContain('left: calc(var(--map-zoom-clear) + env(safe-area-inset-left, 0px))');
+    expect(narrow).toContain('bottom: calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap))');
+    expect(narrow).not.toContain('var(--map-corner-clear)');
+    const panel = css.slice(css.indexOf('.view-map .map-legend-panel {'), css.indexOf('.view-map .map-legend-rows'));
+    expect(panel).toContain('width: max-content');
+    expect(panel).toContain('overflow: auto');
+    expect(panel).toContain('pointer-events: auto');
+    expect(panel).not.toContain('width: 100%');
+    expect(css).toContain('max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-dock-clear) - 16px)');
+    expect(css).toContain('max-height: calc(100dvh - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - max(calc(44px + 4px), var(--map-command-height) - var(--map-corner-bottom)) - 8px)');
   });
 
   it('lays the time strip on the map', () => {
