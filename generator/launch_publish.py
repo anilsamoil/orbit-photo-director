@@ -307,7 +307,6 @@ _POLICY2_NET_WITHOUT_OFFSET = frozenset({"at", "look", "pad_distance_km", "reaso
 
 
 def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable) -> None:
-    """Public planning facts cannot accidentally become camera instructions."""
     def number(raw: object, lower: float, upper: float) -> bool:
         return (isinstance(raw, (int, float)) and not isinstance(raw, bool)
                 and math.isfinite(raw) and lower <= raw <= upper)

@@ -1,5 +1,3 @@
-"""The 2026-10-02 policy-2 publication must publish again, and a missing object must not decode as JSON."""
-
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
