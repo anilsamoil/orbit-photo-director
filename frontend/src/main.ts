@@ -63,6 +63,11 @@ import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from 
 import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
+import {
+  nextMapImportStep,
+  noteMapImportSuccess,
+  type MapImportFlagStore,
+} from './map-import';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -97,6 +102,8 @@ let refreshInFlight: Promise<void> | null = null;
 let lastSavedManifestVersion: string | null = null;
 /** Footer is showing sign-in recovery. Status ticks must not clear it. */
 let sessionBannerHeld = false;
+/** Footer is showing the map load failure. Status ticks must not clear it. */
+let mapLoadErrorHeld = false;
 /** Last access probe threw, so a held sign-in banner is still the honest one. */
 let accessProbeUnknown = false;
 
@@ -111,6 +118,7 @@ function recoveryHref(): string {
 function showSessionRecovery(text: string): void {
   const el = document.getElementById('status-banner');
   if (!el) return;
+  mapLoadErrorHeld = false;
   sessionBannerHeld = true;
   el.className = 'banner banner-red';
   el.onclick = null;
@@ -136,7 +144,7 @@ function showSessionRecovery(text: string): void {
 }
 
 function setBanner(state: BannerState): void {
-  if (sessionBannerHeld) return;
+  if (sessionBannerHeld || mapLoadErrorHeld) return;
   const el = document.getElementById('status-banner');
   if (!el) return;
   el.className = `banner banner-${state.level}`;
@@ -148,6 +156,7 @@ function setBanner(state: BannerState): void {
 /** Make the banner a one-tap escape to the Cloudflare Access login. */
 function setAuthBanner(state: BannerState): void {
   sessionBannerHeld = false;
+  mapLoadErrorHeld = false;
   setBanner(state);
   const el = document.getElementById('status-banner');
   if (!el) return;
@@ -1512,11 +1521,9 @@ function loadLookupPane(): void {
       // pattern as loadMapPane) so the MapLibre bundle stays gated.
       const tabMap = document.getElementById('tab-map') as HTMLElement | null;
       if (tabMap) tabMap.click();
-      if (!mapModule) {
-        mapModule = await import('./map');
-      }
-      // dropLookupPin re-uses MapLibre primitives; defined in map.ts.
-      mapModule.dropLookupPin?.(result);
+      const loaded = await ensureMapModule();
+      if (!loaded) return;
+      loaded.dropLookupPin?.(result);
     });
     lookupPaneBound = true;
   });
@@ -1618,16 +1625,113 @@ function showLaunchOnMap(eventId: string): void {
   document.getElementById('tab-map')?.click();
 }
 
+function mapImportFlags(): MapImportFlagStore {
+  return {
+    getItem(key) {
+      try { return sessionStorage.getItem(key); } catch { return null; }
+    },
+    setItem(key, value) {
+      try { sessionStorage.setItem(key, value); } catch { /* private mode */ }
+    },
+    removeItem(key) {
+      try { sessionStorage.removeItem(key); } catch { /* private mode */ }
+    },
+  };
+}
+
+async function probeMapChunk(url: string): Promise<number | null> {
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    return response.status;
+  } catch {
+    return null;
+  }
+}
+
+function restoreStatusBanner(): void {
+  if (currentlyOffline) {
+    renderOfflineBanner();
+    return;
+  }
+  if (!currentManifest) return;
+  setBanner(bannerWithLaunchesOverlay(
+    bannerWithTleOverlay(
+      bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, Date.now()),
+      currentTrack?.tle_age_hours,
+    ),
+    launchesStaleHours(currentStatus, Date.now()),
+  ));
+}
+
+function showMapLoadError(): void {
+  const el = document.getElementById('status-banner');
+  if (!el) return;
+  mapLoadErrorHeld = true;
+  el.className = 'banner banner-red';
+  el.onclick = null;
+  el.style.cursor = '';
+  const copy = document.createElement('p');
+  copy.className = 'banner-copy';
+  copy.textContent = "Map couldn't load";
+  const actions = document.createElement('div');
+  actions.className = 'banner-actions';
+  const retry = document.createElement('button');
+  retry.className = 'banner-action';
+  retry.type = 'button';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', () => {
+    void loadMapPane();
+  });
+  actions.append(retry);
+  el.replaceChildren(copy, actions);
+}
+
+function dismissMapLoadError(): void {
+  if (!mapLoadErrorHeld) return;
+  mapLoadErrorHeld = false;
+  restoreStatusBanner();
+}
+
+async function presentMapImportFailure(error: unknown): Promise<void> {
+  const action = await nextMapImportStep(error, mapImportFlags(), window.location.href, probeMapChunk);
+  if (action.action === 'reload-once') {
+    window.location.replace(action.href);
+    return;
+  }
+  showMapLoadError();
+  console.error('[map] map pane failed to load:', error);
+}
+
+async function ensureMapModule(): Promise<typeof import('./map') | null> {
+  if (mapModule) return mapModule;
+  try {
+    mapModule = await import('./map');
+    noteMapImportSuccess(mapImportFlags());
+    return mapModule;
+  } catch (error) {
+    mapModule = null;
+    await presentMapImportFailure(error);
+    return null;
+  }
+}
+
 async function loadMapPane(): Promise<void> {
   if (!currentManifest) {
     mapPaneWaitingForManifest = true;
     return;
   }
   mapPaneWaitingForManifest = false;
-  if (!mapModule) {
-    mapModule = await import('./map');
+  const loaded = await ensureMapModule();
+  if (!loaded || !currentManifest) return;
+  try {
+    await loaded.renderMap(currentManifest);
+  } catch (error) {
+    mapModule = null;
+    showMapLoadError();
+    console.error('[map] map pane failed to load:', error);
+    return;
   }
-  await mapModule.renderMap(currentManifest);
+  dismissMapLoadError();
   // MapLibre needs explicit resize() after its container becomes visible.
   // The container starts hidden (display: none) so the canvas was 0×0 at init.
   // Defer one frame so the browser reflows the now-visible container first.

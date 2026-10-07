@@ -1093,6 +1093,11 @@ body:has(> #view.view-map) {
   --map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);
 }
 body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
+body:has(> #view.view-map) > #status-banner:has(.banner-actions) {
+  padding: 0.55rem 0.75rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
 
 .pending-badge {
   display: inline-block;

@@ -7,7 +7,7 @@
  * load is the one allowed cache-bust. A third load fails the check.
  *
  *   node frontend/scripts/verify-map-import-failure.mjs
- *   node frontend/scripts/verify-map-import-failure.mjs --out /opt/cursor/artifacts
+ *   node frontend/scripts/verify-map-import-failure.mjs --sizes --out /opt/cursor/artifacts
  */
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../package.json'));
 const { chromium } = require('playwright');
+const { deviceDescriptor, launchWebkit } = await import('../../.cursor/skills/verify-opd/scripts/webkit-devices.mjs');
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
@@ -42,11 +43,14 @@ function mapChunkPath() {
   if (!entry) throw new Error('dist/index.html has no entry module');
   const source = readFileSync(join(dist, entry[1].slice(1)), 'utf8');
   const deps = source.match(/m\.f\|\|\(m\.f=\[([^\]]+)\]\)/);
-  const call = source.match(/__vite__mapDeps\(\[(\d+)[^\]]*\]\)\)\),await \w+\.renderMap/);
-  if (!deps || !call) throw new Error('could not find the map chunk in the entry module');
+  const calls = [...source.matchAll(/__vite__mapDeps\(\[([0-9,]+)\]\)/g)]
+    .map((match) => match[1].split(',').map(Number))
+    .filter((nums) => nums.length > 4);
+  const mapCall = calls.sort((a, b) => b[0] - a[0])[0];
+  if (!deps || !mapCall) throw new Error('could not find the map chunk in the entry module');
   const files = [...deps[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-  const file = files[Number(call[1])];
-  if (!file) throw new Error(`map chunk index ${call[1]} is missing`);
+  const file = files[mapCall[0]];
+  if (!file) throw new Error(`map chunk index ${mapCall[0]} is missing`);
   return `/${file}`;
 }
 
@@ -150,9 +154,9 @@ async function readState(page) {
   });
 }
 
-async function runMode(browser, mapChunk, mode) {
+async function runMode(browser, mapChunk, mode, options = {}) {
   const { server, port, hits } = await startServer(mapChunk, mode);
-  const context = await browser.newContext({
+  const context = options.context ?? await browser.newContext({
     viewport: { width: 1400, height: 900 },
     serviceWorkers: 'block',
   });
@@ -176,21 +180,27 @@ async function runMode(browser, mapChunk, mode) {
     await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForFunction(() => {
       const text = document.getElementById('status-banner')?.textContent ?? '';
-      return text.includes("Map couldn't load") || text.includes('LOS') || text.includes('Last updated') || text.includes('Sign in');
+      return text.includes("Map couldn't load")
+        || text.includes('LOS')
+        || text.includes('Last updated')
+        || text.includes('Sign in');
     }, null, { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(1500);
-    if (page.url().includes('map-chunk') || hits.documents > 1) {
+    await page.waitForFunction(() => {
+      const text = document.getElementById('status-banner')?.textContent ?? '';
+      return text.includes("Map couldn't load") || location.search.includes('map-chunk=');
+    }, null, { timeout: 8000 }).catch(() => {});
+    const midway = await readState(page);
+    if (!midway.bannerText.includes("Map couldn't load")) {
       await page.waitForFunction(() => {
-        const text = document.getElementById('status-banner')?.textContent ?? '';
-        return text.includes("Map couldn't load");
+        return (document.getElementById('status-banner')?.textContent ?? '').includes("Map couldn't load");
       }, null, { timeout: 8000 }).catch(() => {});
     }
     const state = await readState(page);
-    const shot = join(outDir, `map-import-red-${mode}.png`);
+    const shot = join(outDir, options.shot ?? `map-import-red-${mode}.png`);
     await page.screenshot({ path: shot, fullPage: true });
     return { mode, port, hits, state, consoleErrors, shot };
   } finally {
-    await context.close();
+    if (!options.context) await context.close();
     await new Promise((done) => server.close(done));
   }
 }
@@ -218,6 +228,13 @@ function judge(result) {
     stuckOnSnapshot,
     bannerText: text,
     bannerClass: result.state.bannerClass,
+    retryBox: {
+      width: result.state.retryWidth,
+      height: result.state.retryHeight,
+      top: result.state.retryTop,
+      bottom: result.state.retryBottom,
+    },
+    viewport: result.state.viewport,
     mapChildren: result.state.mapChildren,
     canvas: result.state.canvas,
     view: result.state.view,
@@ -227,19 +244,60 @@ function judge(result) {
   };
 }
 
+const SIZES = [
+  { slug: 'desktop-chrome', kind: 'chrome', viewport: { width: 1400, height: 900 } },
+  { slug: 'iphone-13', kind: 'webkit', spec: { name: 'iPhone 13', slug: 'iphone-13', standalone: true } },
+  {
+    slug: 'iphone-17-pro',
+    kind: 'webkit',
+    spec: { name: 'iPhone 17 Pro', slug: 'iphone-17-pro', viewport: { width: 402, height: 874 }, deviceScaleFactor: 3 },
+  },
+  {
+    slug: 'iphone-17-pro-874x402',
+    kind: 'webkit',
+    spec: { name: 'iPhone 17 Pro', slug: 'iphone-17-pro-874x402', viewport: { width: 874, height: 402 }, deviceScaleFactor: 3 },
+  },
+  { slug: 'ipad-pro-11', kind: 'webkit', spec: { name: 'iPad Pro 11', slug: 'ipad-pro-11', standalone: false } },
+];
+
+async function contextFor(size, chrome, webkit) {
+  if (size.kind === 'chrome') {
+    return chrome.newContext({ viewport: size.viewport, serviceWorkers: 'block' });
+  }
+  return webkit.newContext({ ...deviceDescriptor(size.spec), serviceWorkers: 'block' });
+}
+
 const mapChunk = mapChunkPath();
 mkdirSync(outDir, { recursive: true });
-const browser = await chromium.launch({
+const wantSizes = process.argv.includes('--sizes');
+const chrome = await chromium.launch({
   executablePath: process.env.OPD_VERIFY_CHROME || '/opt/google/chrome/chrome',
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
+const webkit = wantSizes ? await launchWebkit() : null;
 try {
   const results = [];
-  for (const mode of ['404', 'abort']) {
-    results.push(judge(await runMode(browser, mapChunk, mode)));
+  if (!wantSizes) {
+    for (const mode of ['404', 'abort']) {
+      results.push(judge(await runMode(chrome, mapChunk, mode)));
+    }
+  } else {
+    for (const size of SIZES) {
+      const context = await contextFor(size, chrome, webkit);
+      try {
+        const judged = judge(await runMode(chrome, mapChunk, '404', {
+          context,
+          shot: `map-import-${size.slug}.png`,
+        }));
+        results.push({ ...judged, size: size.slug });
+      } finally {
+        await context.close();
+      }
+    }
   }
   const report = { mapChunk, results };
-  writeFileSync(join(outDir, 'map-import-red-report.json'), JSON.stringify(report, null, 2));
+  const reportName = wantSizes ? 'map-import-sizes-report.json' : 'map-import-red-report.json';
+  writeFileSync(join(outDir, reportName), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
   if (results.some((result) => !result.pass)) {
     console.error('map import failure check failed');
@@ -247,5 +305,6 @@ try {
   }
   console.log('map import failure check passed');
 } finally {
-  await browser.close();
+  await chrome.close();
+  await webkit?.close();
 }
