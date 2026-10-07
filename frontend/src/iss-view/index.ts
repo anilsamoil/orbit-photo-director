@@ -33,7 +33,7 @@ import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { bindIssFullscreen } from './fullscreen';
 import { paintEqualDigits } from '../digits';
-import { fitIssPane, launchCardCandidate, storedLaunchPlace, type LaunchCardPlace } from './pane-fit';
+import { fitIssPane, launchCardCandidate, SHORT_ISS_WINDOW_PX, sideDockActive, storedLaunchPlace, type LaunchCardPlace } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
 type IssSession = {
@@ -213,6 +213,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   stage.append(left, frame, right);
   const view = document.createElement('div');
   view.dataset.issView = '';
+  const side = document.createElement('div');
+  side.dataset.issSide = '';
+  side.style.display = 'none';
   const launchCard = document.createElement('article');
   launchCard.dataset.issLaunchCard = '';
   launchCard.hidden = true;
@@ -232,7 +235,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const factMissing = document.createElement('p');
   factMissing.dataset.issLaunchMissing = '';
   factMissing.textContent = 'Selected launch is no longer available';
-  view.append(stage, launchCard);
+  view.append(stage, side, launchCard);
   const card = document.createElement('article');
   card.dataset.issCard = '';
   const telemetry = document.createElement('button');
@@ -841,7 +844,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       if (presetsNode) presetsNode.after(clockBlock);
       else toolbar.append(clockBlock);
     }
-    if (edition.parentElement !== toolbar) toolbar.append(edition);
+    if (edition.parentElement !== toolbar && edition.parentElement !== side) toolbar.append(edition);
     if (card.parentElement !== root) root.append(card);
     delete root.dataset.issSplit;
   }
@@ -859,10 +862,52 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     root.dataset.issSplit = 'on';
   }
 
+  function restoreSideDock(): void {
+    const parked = launchCard.parentElement === side
+      || houston.parentElement === side
+      || dayMonth.parentElement === side
+      || weekday.parentElement === side
+      || edition.parentElement === side
+      || telemetryBody.parentElement === side;
+    if (!parked) {
+      side.style.display = 'none';
+      delete root.dataset.issSideDock;
+      return;
+    }
+    if (launchCard.parentElement === side) {
+      if (side.parentElement === view) view.insertBefore(launchCard, side);
+      else view.append(launchCard);
+    }
+    if (houston.parentElement === side || dayMonth.parentElement === side || weekday.parentElement === side) {
+      clockBlock.append(utc, gmtDay, houston, dayMonth, weekday);
+    }
+    if (edition.parentElement === side && root.dataset.issSplit !== 'on') toolbar.append(edition);
+    if (telemetryBody.parentElement === side) card.append(telemetryBody);
+    side.style.display = 'none';
+    delete root.dataset.issSideDock;
+  }
+
+  function syncSideDock(): void {
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    const split = root.dataset.issSplit === 'on';
+    const width = root.clientWidth || host.clientWidth || 0;
+    if (!sideDockActive(width, window.innerHeight, fullscreen, split)) {
+      restoreSideDock();
+      return;
+    }
+    if (side.parentElement !== view) stage.after(side);
+    side.style.removeProperty('display');
+    const order = [launchCard, houston, dayMonth, weekday, edition, telemetryBody];
+    const placed = order.length === side.childElementCount && order.every((node, index) => side.children[index] === node);
+    if (!placed) side.append(launchCard, houston, dayMonth, weekday, edition, telemetryBody);
+    root.dataset.issSideDock = 'on';
+  }
+
   function layout(): { widthPx: number; heightPx: number } {
     syncSplit();
     syncLaunchChrome();
-    root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= 564);
+    syncSideDock();
+    root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= SHORT_ISS_WINDOW_PX);
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
     const fit = width < 10 || height < 10
@@ -898,12 +943,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const bodyBorder = px(bodyStyle.borderTopWidth) + px(bodyStyle.borderBottomWidth);
     const open = !telemetryBody.hidden;
     const docked = root.dataset.issSplit === 'on';
+    const sideDock = root.dataset.issSideDock === 'on';
     const viewStyle = getComputedStyle(view);
     const cardGap = px(viewStyle.gap || viewStyle.columnGap || viewStyle.rowGap);
     const cardShown = !launchCard.hidden;
     const previous = storedLaunchPlace(root.dataset.issLaunchPlace);
     const candidate = launchCardCandidate(width, cardShown);
-    const cardBox = measureLaunchCard(candidate);
+    const cardBox = measureLaunchCard(sideDock ? 'side' : candidate);
+    const columnWidth = sideDock ? Math.max(side.offsetWidth, cardShown ? cardBox.width : 0) : cardBox.width;
     return fitIssPane({
       paneWidthPx: width,
       paneHeightPx: height,
@@ -912,13 +959,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       gapPx: gap,
       toolbarPx: toolbar.offsetHeight,
       buttonPx: docked ? 0 : Math.max(controls.offsetHeight, telemetry.offsetHeight),
-      bodyPx: docked || !open ? 0 : telemetryBody.scrollHeight + bodyBorder + bodyMargin,
-      bodyMarginPx: docked || !open ? 0 : bodyMargin,
+      bodyPx: docked || sideDock || !open ? 0 : telemetryBody.scrollHeight + bodyBorder + bodyMargin,
+      bodyMarginPx: docked || sideDock || !open ? 0 : bodyMargin,
       sideWidthPx: port.offsetWidth + starboard.offsetWidth + stageGap * 2,
       labelPx: Math.max(port.offsetHeight, starboard.offsetHeight),
-      launchCardWidthPx: cardBox.width,
+      launchCardWidthPx: columnWidth,
       launchCardHeightPx: cardBox.height,
-      launchCardGapPx: cardShown ? cardGap : 0,
+      launchCardGapPx: sideDock || cardShown ? cardGap : 0,
     }, previous);
   }
 

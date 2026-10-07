@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { mountIssScene, type IssScene } from '../src/iss-view';
 import { placeLaunchMarks, type LaunchSite } from '../src/iss-view/launches';
-import { fitIssPane, type PaneMeasure } from '../src/iss-view/pane-fit';
+import { fitIssPane, SHORT_ISS_WINDOW_PX, sideDockActive, type PaneMeasure } from '../src/iss-view/pane-fit';
 import { sceneFit } from '../src/iss-view/model';
 import type { LaunchSelection } from '../src/launch-selectors';
 import { sensorField, type SceneSnapshot } from '../src/iss-view/model';
@@ -419,6 +419,128 @@ describe('ISS frame fit', () => {
     expect(Math.min(framePx(fitted.frame).width, framePx(fitted.frame).height)).toBeGreaterThanOrEqual(80);
     fitted.scene.dispose();
     fitted.host.remove();
+  });
+
+  it('parks a reclaimed 844x390 side dock beside an earth at least 240 by 160', async () => {
+    const reclaimed: PaneMeasure = {
+      paneWidthPx: 844,
+      paneHeightPx: 309,
+      padXPx: 24,
+      padYPx: 21,
+      gapPx: 7,
+      toolbarPx: 44,
+      buttonPx: 44,
+      bodyPx: 0,
+      bodyMarginPx: 0,
+      sideWidthPx: 36,
+      labelPx: 40,
+      launchCardWidthPx: 338,
+      launchCardHeightPx: 96,
+      launchCardGapPx: 7,
+    };
+    const closed = fitIssPane(reclaimed, 'side');
+    const open = fitIssPane(reclaimed, 'side');
+    const stacked = fitIssPane({ ...reclaimed, bodyPx: 180, bodyMarginPx: 6 }, 'side');
+    const inset = fitIssPane({ ...reclaimed, padYPx: 30 }, 'side');
+    expect(closed.launchCardPlace).toBe('side');
+    expect(closed.bodyMaxPx).toBeNull();
+    expect(closed.widthPx).toBeGreaterThanOrEqual(240);
+    expect(closed.heightPx).toBeGreaterThanOrEqual(160);
+    expect(open.widthPx).toBe(closed.widthPx);
+    expect(open.heightPx).toBe(closed.heightPx);
+    expect(inset.widthPx).toBeGreaterThanOrEqual(240);
+    expect(inset.heightPx).toBeGreaterThanOrEqual(160);
+    expect(stacked.heightPx).toBeLessThan(160);
+
+    const previous = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 390 });
+    try {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const scene = mountIssScene(host, {
+        nowMs: () => startMs + 60_000,
+        createRenderer: renderer(host).factory,
+        drive: 'manual',
+        session: { mode: 'horizon' },
+      });
+      const root = host.querySelector('[data-iss-scene]') as HTMLElement;
+      const stage = host.querySelector('[data-iss-stage]') as HTMLElement;
+      const view = host.querySelector('[data-iss-view]') as HTMLElement;
+      const toolbar = host.querySelector('[data-iss-toolbar]') as HTMLElement;
+      const clock = host.querySelector('[data-iss-clock]') as HTMLElement;
+      const side = host.querySelector('[data-iss-side]') as HTMLElement;
+      const port = host.querySelector('[data-iss-port]') as HTMLElement;
+      const starboard = host.querySelector('[data-iss-starboard]') as HTMLElement;
+      const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+      const body = host.querySelector('[data-iss-telemetry-body]') as HTMLElement;
+      const button = host.querySelector('[data-iss-telemetry]') as HTMLButtonElement;
+      const controls = host.querySelector('[data-iss-controls]') as HTMLElement;
+      root.style.padding = '12px';
+      root.style.gap = '8px';
+      stage.style.gap = '8px';
+      view.style.gap = '8px';
+      body.style.margin = '0';
+      box(host, 844, 309);
+      box(root, 844, 309);
+      Object.defineProperty(toolbar, 'offsetHeight', { configurable: true, get: () => 44 });
+      Object.defineProperty(button, 'offsetHeight', { configurable: true, get: () => 44 });
+      Object.defineProperty(controls, 'offsetHeight', { configurable: true, get: () => 44 });
+      Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => (body.hidden ? 0 : 183) });
+      Object.defineProperty(side, 'offsetWidth', { configurable: true, get: () => 338 });
+      Object.defineProperty(port, 'offsetWidth', { configurable: true, get: () => 11 });
+      Object.defineProperty(starboard, 'offsetWidth', { configurable: true, get: () => 11 });
+      Object.defineProperty(port, 'offsetHeight', { configurable: true, get: () => 40 });
+      Object.defineProperty(starboard, 'offsetHeight', { configurable: true, get: () => 40 });
+      scene.update(shot());
+      await paint(scene);
+      expect(root.dataset.issSideDock).toBe('on');
+      expect(side.contains(host.querySelector('[data-iss-houston]'))).toBe(true);
+      expect(side.contains(host.querySelector('[data-iss-day-month]'))).toBe(true);
+      expect(side.contains(host.querySelector('[data-iss-weekday]'))).toBe(true);
+      expect(side.contains(host.querySelector('[data-iss-edition]'))).toBe(true);
+      expect(side.contains(body)).toBe(true);
+      expect(clock.contains(host.querySelector('[data-iss-utc]'))).toBe(true);
+      expect(clock.contains(host.querySelector('[data-iss-gmt-day]'))).toBe(true);
+      expect(clock.contains(host.querySelector('[data-iss-houston]'))).toBe(false);
+      const parked = framePx(frame);
+      expect(parked.width).toBeGreaterThanOrEqual(240);
+      expect(parked.height).toBeGreaterThanOrEqual(160);
+      button.click();
+      await paint(scene);
+      expect(framePx(frame)).toEqual(parked);
+      expect(body.style.maxHeight).toBe('');
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: SHORT_ISS_WINDOW_PX + 1 });
+      await paint(scene);
+      expect(root.dataset.issSideDock).toBeUndefined();
+      expect(clock.contains(host.querySelector('[data-iss-houston]'))).toBe(true);
+      expect(clock.contains(host.querySelector('[data-iss-day-month]'))).toBe(true);
+      expect(clock.contains(host.querySelector('[data-iss-weekday]'))).toBe(true);
+      expect(toolbar.contains(host.querySelector('[data-iss-edition]'))).toBe(true);
+      expect(host.querySelector('[data-iss-card]')?.contains(body)).toBe(true);
+      expect(view.contains(host.querySelector('[data-iss-launch-card]'))).toBe(true);
+      expect(side.contains(host.querySelector('[data-iss-launch-card]'))).toBe(false);
+      root.setAttribute('data-iss-fullscreen-active', '');
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 390 });
+      await paint(scene);
+      expect(root.dataset.issSideDock).toBeUndefined();
+      expect(clock.contains(host.querySelector('[data-iss-gmt-day]'))).toBe(true);
+      scene.dispose();
+      host.remove();
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: previous });
+    }
+  });
+
+  it('turns the side dock on only for a short wide window', () => {
+    expect(sideDockActive(844, 390, false, false)).toBe(true);
+    expect(sideDockActive(874, 402, false, false)).toBe(true);
+    expect(sideDockActive(844, SHORT_ISS_WINDOW_PX, false, false)).toBe(true);
+    expect(sideDockActive(721, 390, false, false)).toBe(true);
+    expect(sideDockActive(720, 390, false, false)).toBe(false);
+    expect(sideDockActive(844, SHORT_ISS_WINDOW_PX + 1, false, false)).toBe(false);
+    expect(sideDockActive(844, 0, false, false)).toBe(false);
+    expect(sideDockActive(844, 390, true, false)).toBe(false);
+    expect(sideDockActive(844, 390, false, true)).toBe(false);
   });
 
   it('overlays a side card when the reserved short side is under 80px', () => {

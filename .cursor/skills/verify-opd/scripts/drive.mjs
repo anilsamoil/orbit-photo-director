@@ -22,7 +22,17 @@ const ISS_CLOCK_EXPR = `(() => {
     if (el.hasAttribute('data-iss-weekday')) return 'weekday';
     return el.tagName;
   });
-  if (names.join(',') !== 'utc,gmt-day,houston,day-month,weekday') return { step: 'order', names };
+  const docked = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-side-dock') === 'on';
+  const side = document.querySelector('[data-iss-side]');
+  if (docked) {
+    if (names.join(',') !== 'utc,gmt-day') return { step: 'order', names };
+    for (const sel of ['[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]', '[data-iss-edition]']) {
+      const el = document.querySelector(sel);
+      if (!side || !el || !side.contains(el)) return { step: 'side', sel };
+    }
+  } else if (names.join(',') !== 'utc,gmt-day,houston,day-month,weekday') {
+    return { step: 'order', names };
+  }
   const text = (sel) => document.querySelector(sel)?.textContent || '';
   const utc = text('[data-iss-utc]');
   const status = document.querySelector('[data-iss-status]')?.textContent || '';
@@ -73,8 +83,10 @@ const ISS_CLOCK_EXPR = `(() => {
     if (style.minHeight !== '0px') return { step: 'min', sel, minHeight: style.minHeight };
   }
   const boxes = [...root.children].map((el) => el.getBoundingClientRect());
-  for (let i = 1; i < boxes.length; i += 1) {
-    if (boxes[i].top < boxes[i - 1].bottom - 0.5) return { step: 'stack', line: names[i], top: boxes[i].top, above: boxes[i - 1].bottom };
+  if (!docked) {
+    for (let i = 1; i < boxes.length; i += 1) {
+      if (boxes[i].top < boxes[i - 1].bottom - 0.5) return { step: 'stack', line: names[i], top: boxes[i].top, above: boxes[i - 1].bottom };
+    }
   }
   const [utcBox, gmtBox] = boxes;
   if (Math.abs(gmtBox.top - utcBox.bottom) > 0.5) return { step: 'gmt-under', utcBottom: utcBox.bottom, gmtTop: gmtBox.top };
@@ -93,12 +105,22 @@ const ISS_CLOCK_EXPR = `(() => {
     if (!horizonBox || Math.abs(utcBox.top - horizonBox.top) > 1) return { step: 'band-row', utcTop: utcBox.top, horizonTop: horizonBox?.top };
   }
   const px = (el) => Number.parseFloat(getComputedStyle(el).fontSize);
-  const [utcPx, gmtPx, ...small] = [...root.children].map(px);
+  const dockSmall = docked
+    ? ['[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]'].map((sel) => document.querySelector(sel))
+    : null;
+  if (dockSmall && dockSmall.some((el) => !el || getComputedStyle(el).visibility === 'hidden' || getComputedStyle(el).display === 'none')) {
+    return { step: 'visible' };
+  }
+  const [utcPx, gmtPx, ...small] = docked
+    ? [root.querySelector('[data-iss-utc]'), root.querySelector('[data-iss-gmt-day]'), ...dockSmall].map(px)
+    : [...root.children].map(px);
   const rootPx = px(document.documentElement);
   if (Math.abs(gmtPx - utcPx) > 0.01) return { step: 'gmt-size', utcPx, gmtPx };
   if (small.some((size) => Math.abs(size - 0.68 * rootPx) > 0.01)) return { step: 'small-size', small, rootPx };
   if (!(utcPx > small[0])) return { step: 'size-rank', utcPx, small: small[0] };
-  for (const el of [root, ...root.children]) {
+  const clipNodes = docked ? [root, ...root.children, ...dockSmall, document.querySelector('[data-iss-edition]')] : [root, ...root.children];
+  for (const el of clipNodes) {
+    if (!el) return { step: 'clip-missing' };
     if (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight) return { step: 'clip', line: Object.keys(el.dataset).join(','), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
   }
   for (const sel of ['[data-iss-utc]', '[data-iss-gmt-day]', '[data-iss-edition]']) {
@@ -127,17 +149,20 @@ function selectedSurfaceNames() {
 function viewportOverride() {
   const raw = (process.env.OPD_VERIFY_VIEWPORT || '').trim();
   if (!raw) return null;
-  if ((process.env.OPD_VERIFY_SURFACE || '').trim() !== 'iphone-17-pro') {
-    throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro. There is no 874x402 surface value.');
-  }
+  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim();
   const match = /^(\d+)x(\d+)$/.exec(raw);
   if (!match) throw new Error(`OPD_VERIFY_VIEWPORT must be WIDTHxHEIGHT, got ${raw}`);
-  return { width: Number(match[1]), height: Number(match[2]), raw };
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (surface === 'iphone-17-pro') return { width, height, raw };
+  if (surface === 'iphone-13' && width === 844 && height === 390) return { width, height, raw };
+  throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro, or iphone-13 with 844x390.');
 }
 
 function specForSurface(spec) {
   const override = viewportOverride();
-  if (!override || spec.slug !== 'iphone-17-pro') return spec;
+  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim();
+  if (!override || spec.slug !== surface) return spec;
   return { ...spec, viewport: { width: override.width, height: override.height } };
 }
 
@@ -644,8 +669,9 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const override = viewportOverride();
       const active = specForSurface(spec);
       const viewport = deviceViewport(active);
-      const folder = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}-${override.raw}` : spec.slug;
-      const label = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}@${override.raw}` : spec.slug;
+      const overridden = override && spec.slug === (process.env.OPD_VERIFY_SURFACE || '').trim();
+      const folder = overridden ? `${spec.slug}-${override.raw}` : spec.slug;
+      const label = overridden ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
@@ -4063,6 +4089,18 @@ const ISS_EDITION_EXPR = `(() => {
   const utcSize = getComputedStyle(utcLine).fontSize;
   if (style.fontSize !== utcSize) return { step: 'edition-size', edition: style.fontSize, utc: utcSize };
   if (edition.scrollWidth > edition.clientWidth) return { step: 'edition-clip', scrollWidth: edition.scrollWidth, clientWidth: edition.clientWidth };
+  const side = edition.closest('[data-iss-side]');
+  if (side && document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-side-dock') === 'on') {
+    const sideBox = side.getBoundingClientRect();
+    if (editionBox.left < sideBox.left - 1 || editionBox.right > sideBox.right + 1 || editionBox.top < sideBox.top - 1 || editionBox.bottom > sideBox.bottom + 1) {
+      return { step: 'side-edition' };
+    }
+    const covered = [...document.querySelectorAll('[data-iss-presets] > *, [data-iss-aim-help], [data-iss-telemetry], [data-iss-fullscreen]')]
+      .map((node) => node.getBoundingClientRect())
+      .find((box) => box.width > 0 && box.height > 0 && editionBox.left < box.right - 0.5 && editionBox.right > box.left + 0.5 && editionBox.top < box.bottom - 0.5 && editionBox.bottom > box.top + 0.5);
+    if (covered) return { step: 'side-cover' };
+    return { ok: true, place: 'side-dock', width: window.innerWidth };
+  }
   const wide = window.innerWidth > 720;
   const splitChrome = edition.closest('[data-iss-split-chrome]');
   if (splitChrome) {
@@ -4718,26 +4756,43 @@ function splitLaunchPlace(width, height) {
   return width - mapColumn <= 720 ? 'below' : 'side';
 }
 
+const PHONE_LANDSCAPE_FLOOR = { minShort: 160, minWidth: 240, minHeight: 160 };
+
+function phoneLandscapeFloor(width, height) {
+  if ((width === 844 && height === 390) || (width === 874 && height === 402)) return PHONE_LANDSCAPE_FLOOR;
+  return null;
+}
+
+function phoneLandscapePane(width, height) {
+  return {
+    width,
+    height,
+    mobile: true,
+    label: `${width}x${height}`,
+    place: 'side',
+    ...PHONE_LANDSCAPE_FLOOR,
+  };
+}
+
 export function launchEarthPanes(width, height) {
   const native = { width, height, mobile: width < 1100, label: `${width}x${height}`, place: '', minShort: 80 };
   if (width === 390 && height === 664) {
     return [
       { ...native, place: 'over', minShort: 160 },
       { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
-      { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
+      phoneLandscapePane(844, 390),
       { width: 390, height: 565, mobile: true, label: '390x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 402 && height === 874) {
     return [
       { ...native, place: 'below', minShort: 200 },
-      { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
+      phoneLandscapePane(874, 402),
       { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
   }
-  if (width === 874 && height === 402) {
-    return [{ ...native, place: 'side', minShort: 80 }];
-  }
+  const freshLandscape = phoneLandscapeFloor(width, height);
+  if (freshLandscape) return [{ ...native, place: 'side', ...freshLandscape }];
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
     return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
@@ -4748,6 +4803,7 @@ export function launchEarthPanes(width, height) {
 
 async function setLayoutViewport(send, width, height, mobile) {
   const current = await evaluate(send, `({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight })`);
+  if (current?.w === width && current?.h === height) return;
   if (current?.w === width && current?.h !== height) {
     await setViewport(send, width + 40, height, mobile);
   }
@@ -4813,6 +4869,37 @@ async function proveLaunchCardHolds(send, label) {
   return held;
 }
 
+async function provePhoneLandscapeTelemetry(send, pane) {
+  const floor = `(() => {
+    const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
+    if (!earth || earth.ok !== true) return earth;
+    if (earth.width < 240 || earth.height < 160) {
+      return { step: 'earth', width: earth.width, height: earth.height, place: earth.place };
+    }
+    const name = document.querySelector('[data-iss-launch-name]');
+    const line = document.querySelector('[data-iss-launch-visibility]');
+    const nameBox = name instanceof HTMLElement ? name.getBoundingClientRect() : null;
+    const lineBox = line instanceof HTMLElement ? line.getBoundingClientRect() : null;
+    if (!name || !name.textContent.trim() || !nameBox || nameBox.height < 4 || nameBox.width < 8) return { step: 'name' };
+    if (!line || !line.textContent.trim() || !lineBox || lineBox.height < 4 || lineBox.width < 8) return { step: 'visibility-line' };
+    return earth;
+  })()`;
+  await click(send, '[data-iss-telemetry]');
+  try {
+    await waitFor(send, floor, `iss launch earth ${pane.label} telemetry open`, 10000);
+  } finally {
+    const expanded = await evaluate(send, `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded')`);
+    if (expanded === 'true') await click(send, '[data-iss-telemetry]');
+  }
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+    `iss launch earth ${pane.label} telemetry collapsed`,
+    10000,
+  );
+  await waitFor(send, floor, `iss launch earth ${pane.label} telemetry closed`, 10000);
+}
+
 async function proveLaunchEarthPanes(send, evidenceDir) {
   const size = await evaluate(send, `({ width: window.innerWidth, height: window.innerHeight })`);
   const panes = launchEarthPanes(size.width, size.height);
@@ -4850,6 +4937,9 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
           if (Math.min(earth.width, earth.height) < ${pane.minShort}) {
             return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: ${pane.minShort} };
           }
+          if (${pane.minWidth || 0} > 0 && (earth.width < ${pane.minWidth || 0} || earth.height < ${pane.minHeight || 0})) {
+            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minWidth: ${pane.minWidth || 0}, minHeight: ${pane.minHeight || 0} };
+          }
           if (${pane.twoLine ? 'true' : 'false'}) {
             const name = document.querySelector('[data-iss-launch-name]');
             const range = document.createRange();
@@ -4863,6 +4953,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
         10000,
       );
       const heldCard = await proveLaunchCardHolds(send, pane.label);
+      if (pane.label === '844x390' || pane.label === '874x402') await provePhoneLandscapeTelemetry(send, pane);
       if (pane.twoLine) {
         const wrapped = await evaluate(send, `(() => {
           const name = document.querySelector('[data-iss-launch-name]');
@@ -4897,6 +4988,9 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
     `(() => {
       const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
       if (!earth || earth.ok !== true) return earth;
+      if (${startFloor ? startFloor.minWidth : 0} > 0 && (earth.width < ${startFloor ? startFloor.minWidth : 0} || earth.height < ${startFloor ? startFloor.minHeight : 0})) {
+        return { step: 'earth', width: earth.width, height: earth.height, minWidth: ${startFloor ? startFloor.minWidth : 0}, minHeight: ${startFloor ? startFloor.minHeight : 0} };
+      }
       const stage = document.querySelector('[data-iss-stage]');
       const frame = document.querySelector('[data-iss-frame]');
       const canvas = frame?.querySelector('canvas');
@@ -6395,7 +6489,7 @@ async function proveIssLandscape(send, evidenceDir) {
     const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
     const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
     if (!hostBox || !scene || !frame || !card || !port || !starboard) return null;
-    if (frame.width < 80 || frame.height < 72) return null;
+    if (frame.width < 240 || frame.height < 160) return { step: 'earth', width: frame.width, height: frame.height };
     if (${SCENE_SCROLLS}) return { step: 'scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth] };
     const within = (box) => box.width > 1 && box.height > 1 && box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
     if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
@@ -6438,7 +6532,9 @@ async function proveIssLandscape(send, evidenceDir) {
           `iss landscape ${label} telemetry collapsed`,
           10000,
         );
-        if (open.height < 72 || after.height < 72) throw new Error(`iss landscape ${label} frame ${open.height} then ${after.height}`);
+        if (open.width < 240 || open.height < 160 || after.width < 240 || after.height < 160) {
+          throw new Error(`iss landscape ${label} frame ${open.width}x${open.height} then ${after.width}x${after.height}`);
+        }
         held.push(label);
       }
       await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
