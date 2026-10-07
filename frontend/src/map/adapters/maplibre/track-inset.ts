@@ -81,8 +81,8 @@ function countrySymbolLayers() {
   }
   return Object.entries(groups)
     .sort((left, right) => Number(left[0]) - Number(right[0]))
-    .map(([key, names]) => ({
-      id: Number(key) === 1.5 ? 'inset-countries' : `inset-countries-${key.replace('.', '-')}`,
+    .map(([key, names], index) => ({
+      id: index === 0 ? 'inset-countries' : `inset-countries-${key.replace('.', '-')}`,
       type: 'symbol' as const,
       source: 'inset-countries',
       maxzoom: Number(key),
