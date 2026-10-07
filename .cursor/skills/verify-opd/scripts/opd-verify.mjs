@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } 
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BROWSER_FEATURES, driveFeatures } from './drive.mjs';
+import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
 import { bostonTrackText, buildFixtures, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -620,10 +620,25 @@ async function drive(feature) {
   }
   await doctor(home);
   const state = readState(home);
+  if (feature === 'map-corner') {
+    try {
+      const note = await driveMapCorner({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+        home,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
   if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, or all.`);
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, or map-corner.`);
     process.exit(2);
   }
   const notes = await driveFeatures({
@@ -754,6 +769,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-corner>|sw|down|check|serve');
   process.exit(2);
 }
