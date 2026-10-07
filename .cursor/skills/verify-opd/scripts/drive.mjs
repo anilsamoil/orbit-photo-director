@@ -2883,7 +2883,7 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
       const date = document.querySelector('.map-imagery-date');
       button.setAttribute('aria-expanded', 'true');
       const line = 'LIVE now (not the scrubbed time)';
-      date.textContent = Array.from({ length: 12 }, () => line).join(' ');
+      date.textContent = Array.from({ length: 40 }, () => line).join(' ');
       return true;
     })()`);
     await withBannerActions(send, async () => {
