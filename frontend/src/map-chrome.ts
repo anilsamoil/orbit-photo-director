@@ -69,13 +69,14 @@ function insetPx(side: 'top' | 'right' | 'bottom' | 'left'): number {
 
 function gutterPx(dock: HTMLElement | null): number {
   const probe = document.createElement('div');
-  probe.style.position = 'absolute';
-  probe.style.left = '-9999px';
+  probe.style.position = 'fixed';
+  probe.style.left = '0';
   probe.style.top = '0';
   probe.style.width = '80px';
   probe.style.height = '40px';
   probe.style.overflow = 'scroll';
   probe.style.visibility = 'hidden';
+  probe.style.pointerEvents = 'none';
   const inner = document.createElement('div');
   inner.style.width = '200px';
   inner.style.height = '80px';
@@ -151,6 +152,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
 
 let lastSlots = '';
 let mute = false;
+let syncQueued = false;
 
 function writeSlot(name: string, value: number): void {
   document.body.style.setProperty(name, `${value}px`);
@@ -187,6 +189,15 @@ function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
   }
   queueMicrotask(() => {
     mute = false;
+  });
+}
+
+function scheduleSync(): void {
+  if (syncQueued) return;
+  syncQueued = true;
+  requestAnimationFrame(() => {
+    syncQueued = false;
+    syncMapChrome();
   });
 }
 
@@ -230,19 +241,35 @@ export function bindMapChrome(): void {
     applyMapChrome(shown);
     syncMapChrome();
   });
-  const observer = new ResizeObserver(() => syncMapChrome());
+  const observer = new ResizeObserver(() => scheduleSync());
   observer.observe(document.documentElement);
   observer.observe(ensureInsetProbe());
-  const mutations = new MutationObserver(() => syncMapChrome());
+  const mutations = new MutationObserver(() => scheduleSync());
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   const banner = document.getElementById('status-banner');
   if (banner) mutations.observe(banner, { childList: true, subtree: true });
   const legend = document.getElementById('map-legend-toggle');
   if (legend) mutations.observe(legend, { attributes: true, attributeFilter: ['aria-expanded'] });
   const map = document.getElementById('map');
-  if (map) mutations.observe(map, { childList: true, subtree: true });
-  window.addEventListener('resize', syncMapChrome);
-  window.visualViewport?.addEventListener('resize', syncMapChrome);
+  if (map) {
+    let controlsWatched = false;
+    const watchMap = new MutationObserver(() => {
+      scheduleSync();
+      if (controlsWatched) return;
+      const controls = map.querySelector('.maplibregl-control-container');
+      if (!controls) return;
+      controlsWatched = true;
+      watchMap.observe(controls, { childList: true, subtree: true });
+    });
+    watchMap.observe(map, { childList: true });
+    const controls = map.querySelector('.maplibregl-control-container');
+    if (controls) {
+      controlsWatched = true;
+      watchMap.observe(controls, { childList: true, subtree: true });
+    }
+  }
+  window.addEventListener('resize', scheduleSync);
+  window.visualViewport?.addEventListener('resize', scheduleSync);
   (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChrome;
   syncMapChrome();
 }
