@@ -4060,7 +4060,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   flex: 0 0 auto;
   width: min(22rem, 40vw);
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: 0.35rem;
 }
 
@@ -4087,11 +4089,12 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 [data-iss-side-dock='on'] [data-iss-side] [data-iss-telemetry-body] {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   width: 100%;
   margin-top: 0;
+  max-height: none;
 }
 
 [data-iss-side-dock='on'] [data-iss-presets] {

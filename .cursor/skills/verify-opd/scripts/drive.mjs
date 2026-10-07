@@ -4778,7 +4778,7 @@ function splitLaunchPlace(width, height) {
 const PHONE_LANDSCAPE_FLOOR = { minShort: 160, minWidth: 240, minHeight: 160 };
 
 function phoneLandscapeFloor(width, height) {
-  if ((width === 844 && height === 390) || (width === 874 && height === 402)) return PHONE_LANDSCAPE_FLOOR;
+  if ((width === 844 && height === 390) || (width === 874 && height === 402) || (width === 721 && height === 390)) return PHONE_LANDSCAPE_FLOOR;
   return null;
 }
 
@@ -4898,6 +4898,156 @@ async function proveLaunchCardHolds(send, label) {
   return held;
 }
 
+export const SIDE_COLUMN_REACH = `(() => {
+  const column = document.querySelector('[data-iss-side]');
+  const scene = document.querySelector('[data-iss-scene]');
+  const frame = document.querySelector('[data-iss-frame]');
+  const details = document.querySelector('[data-iss-details]');
+  const summary = details?.querySelector('summary');
+  if (!column || !scene || !frame || scene.getAttribute('data-iss-side-dock') !== 'on') return { step: 'dock' };
+  if (document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') !== 'true') return null;
+  if (!details || details.hidden || !summary || summary.textContent !== 'Details') return null;
+  const earthNow = () => frame.getBoundingClientRect();
+  const frameBox = earthNow();
+  if (frameBox.width < 240 || frameBox.height < 160) {
+    return { step: 'earth', width: Math.round(frameBox.width), height: Math.round(frameBox.height) };
+  }
+  if (scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth) {
+    return { step: 'scene-scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth] };
+  }
+  const overflowY = getComputedStyle(column).overflowY;
+  const sels = ['[data-iss-launch-name]', '[data-iss-launch-visibility]', '[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]', '[data-iss-edition]', '[data-iss-status]', '[data-iss-details] summary'];
+  const sample = (el) => {
+    const box = el.getBoundingClientRect();
+    const port = column.getBoundingClientRect();
+    const visible = Math.max(0, Math.min(box.bottom, port.bottom) - Math.max(box.top, port.top));
+    return { visible, height: box.height, top: box.top, portTop: port.top, portHeight: port.height };
+  };
+  const fits = (el) => {
+    const reading = sample(el);
+    return reading.height > 1 && reading.visible >= reading.height - 1;
+  };
+  const reveal = (el) => {
+    if (fits(el)) return { ok: true, ...sample(el) };
+    if (overflowY !== 'auto' && overflowY !== 'scroll') return { ok: false, ...sample(el), overflowY };
+    const before = sample(el);
+    const max = Math.max(0, column.scrollHeight - column.clientHeight);
+    const alignTop = Math.max(0, Math.min(max, column.scrollTop + (before.top - before.portTop)));
+    column.scrollTop = alignTop;
+    if (fits(el)) return { ok: true, ...sample(el) };
+    if (before.height <= before.portHeight + 1) return { ok: false, ...sample(el), overflowY };
+    const mid = sample(el);
+    const alignBottom = Math.max(0, Math.min(max, column.scrollTop + (mid.top + mid.height - (mid.portTop + mid.portHeight))));
+    column.scrollTop = alignBottom;
+    const end = sample(el);
+    const bottomIn = end.visible > 1 && end.top + end.height <= end.portTop + end.portHeight + 1;
+    column.scrollTop = alignTop;
+    const start = sample(el);
+    const topIn = start.visible > 1 && start.top >= start.portTop - 1;
+    return { ok: topIn && bottomIn, ...start, overflowY };
+  };
+  for (const sel of sels) {
+    const el = document.querySelector(sel);
+    if (!el || !column.contains(el)) return { step: 'missing', sel };
+    const reached = reveal(el);
+    if (!reached.ok) {
+      return {
+        step: 'clipped',
+        sel,
+        visible: Math.round(reached.visible * 100) / 100,
+        height: Math.round(reached.height * 100) / 100,
+        overflowY,
+      };
+    }
+  }
+  if (!reveal(summary).ok) return { step: 'details-reach' };
+  const box = summary.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.left + Math.min(28, box.width / 2), box.top + box.height / 2);
+  if (!hit || (hit !== summary && !summary.contains(hit))) {
+    return { step: 'details-hit', tag: hit ? hit.tagName : null, text: hit ? (hit.textContent || '').slice(0, 40) : null };
+  }
+  const after = earthNow();
+  if (after.width < 240 || after.height < 160) {
+    return { step: 'earth', width: Math.round(after.width), height: Math.round(after.height) };
+  }
+  if (scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth) {
+    return { step: 'scene-scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth] };
+  }
+  column.scrollTop = 0;
+  return { ok: true, earth: [Math.round(after.width), Math.round(after.height)], overflowY };
+})()`;
+
+async function setSimulatedInsets(send, insets) {
+  await evaluate(send, `(() => {
+    document.getElementById('opd-side-inset')?.remove();
+    const insets = ${insets ? JSON.stringify(insets) : 'null'};
+    if (insets) {
+      const swap = (text) => text
+        .replaceAll('env(safe-area-inset-top, 0px)', insets.top + 'px')
+        .replaceAll('env(safe-area-inset-right, 0px)', insets.right + 'px')
+        .replaceAll('env(safe-area-inset-bottom, 0px)', insets.bottom + 'px')
+        .replaceAll('env(safe-area-inset-left, 0px)', insets.left + 'px')
+        .replaceAll('env(safe-area-inset-top)', insets.top + 'px')
+        .replaceAll('env(safe-area-inset-right)', insets.right + 'px')
+        .replaceAll('env(safe-area-inset-bottom)', insets.bottom + 'px')
+        .replaceAll('env(safe-area-inset-left)', insets.left + 'px');
+      const chunks = [];
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try { rules = [...sheet.cssRules]; } catch { continue; }
+        for (const rule of rules) {
+          if (rule.cssText && rule.cssText.includes('safe-area-inset')) chunks.push(swap(rule.cssText));
+        }
+      }
+      const style = document.createElement('style');
+      style.id = 'opd-side-inset';
+      style.textContent = chunks.join('\\n');
+      document.head.append(style);
+    }
+    window.dispatchEvent(new Event('resize'));
+    return true;
+  })()`);
+}
+
+async function setLaunchNameLines(send, lines) {
+  await evaluate(send, `(() => {
+    const name = document.querySelector('[data-iss-launch-name]');
+    if (!(name instanceof HTMLElement)) return false;
+    name.style.width = '';
+    name.style.maxWidth = ${lines > 1 ? "'9ch'" : "''"};
+    return true;
+  })()`);
+  if (lines < 2) return;
+  await waitFor(
+    send,
+    `(() => {
+      const name = document.querySelector('[data-iss-launch-name]');
+      if (!(name instanceof HTMLElement)) return null;
+      const range = document.createRange();
+      range.selectNodeContents(name);
+      const count = range.getClientRects().length;
+      if (count < 2) return { step: 'name-lines', count };
+      return { ok: true, count };
+    })()`,
+    'iss side column two-line name',
+    10000,
+  );
+}
+
+async function proveSideColumnMatrix(send, pane) {
+  const cases = [
+    { lines: 1, insets: null, label: 'one line' },
+    { lines: 1, insets: { top: 0, left: 59, right: 59, bottom: 21 }, label: 'one line inset 59' },
+    { lines: 2, insets: null, label: 'two lines' },
+    { lines: 2, insets: { top: 0, left: 59, right: 59, bottom: 21 }, label: 'two lines inset 59' },
+  ];
+  for (const item of cases) {
+    await setSimulatedInsets(send, item.insets);
+    await setLaunchNameLines(send, item.lines);
+    await waitFor(send, SIDE_COLUMN_REACH, `iss side column ${pane.label} ${item.label}`, 10000);
+  }
+}
+
 async function provePhoneLandscapeTelemetry(send, pane) {
   const floor = `(() => {
     const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
@@ -4916,7 +5066,11 @@ async function provePhoneLandscapeTelemetry(send, pane) {
   await click(send, '[data-iss-telemetry]');
   try {
     await waitFor(send, floor, `iss launch earth ${pane.label} telemetry open`, 10000);
+    await proveSideColumnMatrix(send, pane);
   } finally {
+    await setSimulatedInsets(send, null);
+    await setLaunchNameLines(send, 1);
+    await evaluate(send, `(() => { const column = document.querySelector('[data-iss-side]'); if (column) column.scrollTop = 0; return true; })()`);
     const expanded = await evaluate(send, `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded')`);
     if (expanded === 'true') await click(send, '[data-iss-telemetry]');
   }
@@ -4983,7 +5137,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
         10000,
       );
       const heldCard = await proveLaunchCardHolds(send, pane.label);
-      if (pane.label === '844x390' || pane.label === '874x402') await provePhoneLandscapeTelemetry(send, pane);
+      if (pane.label === '844x390' || pane.label === '874x402' || pane.label === '721x390') await provePhoneLandscapeTelemetry(send, pane);
       if (pane.twoLine) {
         const wrapped = await evaluate(send, `(() => {
           const name = document.querySelector('[data-iss-launch-name]');

@@ -44,6 +44,11 @@ test('an 874 by 402 start uses that same phone side pane', () => {
   );
 });
 
+test('a fresh 721 by 390 start uses the phone landscape floor', () => {
+  const [pane] = launchEarthPanes(721, 390);
+  assert.deepEqual(floorOf(pane), { ...phoneLandscapeFloor, width: 721, height: 390 });
+});
+
 test('a wide pane at least 800 by 600 still requires a 200px earth', () => {
   const [pane] = launchEarthPanes(874, 700);
   assert.equal(pane.minShort, 200);
