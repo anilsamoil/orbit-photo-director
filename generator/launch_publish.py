@@ -303,19 +303,25 @@ def _commit_matches(pointer: dict, artifact: dict) -> bool:
     )
 
 
+_POLICY2_NET_WITHOUT_OFFSET = frozenset({"at", "look", "pad_distance_km", "reason", "verdict"})
+
+
 def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable) -> None:
-    """Public planning facts cannot accidentally become camera instructions."""
     def number(raw: object, lower: float, upper: float) -> bool:
         return (isinstance(raw, (int, float)) and not isinstance(raw, bool)
                 and math.isfinite(raw) and lower <= raw <= upper)
 
     keys(value, "checked_at valid_until tle_epoch model net window")
-    keys(value["net"], "verdict reason at pad_distance_km t_offset_seconds look")
+    raw_net = value["net"]
+    if isinstance(raw_net, dict) and set(raw_net) == _POLICY2_NET_WITHOUT_OFFSET:
+        raw_net = {**raw_net, "t_offset_seconds": None}
+    else:
+        keys(raw_net, "verdict reason at pad_distance_km t_offset_seconds look")
     keys(value["window"], "verdict reason")
     checked = _parse_iso8601_z(value["checked_at"])
     expires = _parse_iso8601_z(value["valid_until"])
-    net_time = _parse_iso8601_z(value["net"]["at"])
-    net, window, model = value["net"], value["window"], value["model"]
+    net_time = _parse_iso8601_z(raw_net["at"])
+    net, window, model = raw_net, value["window"], value["model"]
     if (value["checked_at"] != artifact["generated_at"]
             or value["net"]["at"] != item["launch_window"]["net"]
             or not 0 < (expires - checked).total_seconds() <= PLANNING_VALID_SECONDS
@@ -399,6 +405,45 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
             raise ValueError("INVALID_LAUNCH_ASSESSMENT")
 
 
+def _write_bytes_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        with tmp.open("wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _rclone_stderr(raw: bytes | str | None) -> str:
+    if isinstance(raw, str):
+        return raw.strip()
+    return (raw or b"").decode("utf-8", "replace").strip()
+
+
+def _rclone(command: list[str], timeout: int) -> subprocess.CompletedProcess[bytes]:
+    try:
+        result = subprocess.run(  # noqa: S603
+            command,
+            check=False,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"RCLONE_TIMEOUT: {_rclone_stderr(exc.stderr)}") from exc
+    code = getattr(result, "returncode", 0)
+    if not isinstance(code, int):
+        code = 0
+    if code:
+        detail = _rclone_stderr(getattr(result, "stderr", None))
+        raise ValueError(f"RCLONE_EXIT_{code}: {detail}")
+    return result
+
+
 def _same_pointer(observed: dict, expected: dict) -> bool:
     """True when two pointers name the same artifact bytes."""
     digest = observed.get("sha256")
@@ -457,7 +502,7 @@ def publish_launch_artifact(
         if artifact_path.exists() and artifact_path.read_bytes() != body:
             raise ValueError("IMMUTABLE_LAUNCH_CONFLICT")
         pending_artifact = artifact_path.with_suffix(".pending")
-        pending_artifact.write_bytes(body)
+        _write_bytes_atomic(pending_artifact, body)
         os.replace(pending_artifact, artifact_path)
         lease_until = (
             artifact["geometry_valid_until"]
@@ -473,12 +518,12 @@ def publish_launch_artifact(
             "sha256": hashlib.sha256(body).hexdigest(),
         }
         pending = output / "launch/.latest.pending.json"
-        pending.write_bytes(canonical_bytes(pointer))
+        _write_bytes_atomic(pending, canonical_bytes(pointer))
         # Hold ownership through upload; failure cannot advance the local receipt.
         if upload:
             remote = read_remote() if read_remote else None
             if isinstance(remote, dict) and _same_pointer(remote, pointer):
-                pending.write_bytes(canonical_bytes(remote))
+                _write_bytes_atomic(pending, canonical_bytes(remote))
                 os.replace(pending, pointer_path)
                 return remote
             if read_remote and (previous is None or remote not in (previous, pointer)):
@@ -521,7 +566,7 @@ def publish_launch_catalog(
         if artifact_path.exists() and artifact_path.read_bytes() != body:
             raise ValueError("IMMUTABLE_LAUNCH_CONFLICT")
         pending_artifact = artifact_path.with_suffix(".pending")
-        pending_artifact.write_bytes(body)
+        _write_bytes_atomic(pending_artifact, body)
         os.replace(pending_artifact, artifact_path)
         pointer = {
             "schema_version": 2,
@@ -534,7 +579,7 @@ def publish_launch_catalog(
         pointer_path = output / "launch/catalog/latest.json"
         pointer_path.parent.mkdir(parents=True, exist_ok=True)
         pending = output / "launch/catalog/.latest.pending.json"
-        pending.write_bytes(canonical_bytes(pointer))
+        _write_bytes_atomic(pending, canonical_bytes(pointer))
         if upload:
             upload(artifact_path, relative, True)
             upload(pending, "launch/catalog/latest.json", False)
@@ -560,12 +605,17 @@ def rclone_uploader(remote: str) -> Callable[[Path, str, bool], None]:
             "Cache-Control: public, max-age=" + ("3600, immutable" if immutable else "10"),
         ]
         # Resolved rclone, publisher paths and operator remote use separate argv; no shell.
-        subprocess.run(command, check=True, timeout=90)  # noqa: S603
+        _rclone(command, 90)
 
     return upload
 
 
-def rclone_reader(remote: str) -> Callable[[], dict]:
+def rclone_reader(
+    remote: str,
+    *,
+    local: Path | None = None,
+    upload: Callable[[Path, str, bool], None] | None = None,
+) -> Callable[[], dict]:
     """Read and hash-validate the actual remote commit, bounded and fail-closed."""
     if not remote or remote.startswith("-") or "\n" in remote:
         raise ValueError("invalid remote")
@@ -573,17 +623,46 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
     if executable is None:
         raise FileNotFoundError("rclone executable not found")
     executable = str(Path(executable).resolve())
+    healed: list[str] = []
 
     def cat(relative: str, limit: int) -> bytes:
-        result = subprocess.run(  # noqa: S603
+        result = _rclone(
             [executable, "cat", f"{remote.rstrip('/')}/{relative}", "--count", str(limit + 1)],
-            check=True,
-            capture_output=True,
-            timeout=45,
+            45,
         )
+        if not result.stdout or not result.stdout.strip():
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
         if len(result.stdout) > limit:
             raise ValueError("REMOTE_LAUNCH_TOO_LARGE")
         return result.stdout
+
+    def restore(pointer: dict) -> bytes:
+        if local is None or upload is None:
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
+        latest_path = local / "launch" / "latest.json"
+        if not latest_path.is_file():
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
+        committed = json.loads(latest_path.read_bytes())
+        if not _same_pointer(pointer, committed):
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
+        artifact_path = (local / pointer["path"]).resolve()
+        version_dir = (local / "launch" / "v").resolve()
+        if not artifact_path.is_relative_to(version_dir) or not artifact_path.is_file():
+            raise ValueError("LOCAL_LAUNCH_HASH_MISMATCH")
+        body = artifact_path.read_bytes()
+        if hashlib.sha256(body).hexdigest() != pointer["sha256"]:
+            raise ValueError("LOCAL_LAUNCH_HASH_MISMATCH")
+        snapshot = local / "launch" / f".heal-{pointer['revision']}.tmp"
+        _write_bytes_atomic(snapshot, body)
+        try:
+            upload(snapshot, pointer["path"], True)
+            restored = cat(pointer["path"], 2_000_000)
+        finally:
+            snapshot.unlink(missing_ok=True)
+        if hashlib.sha256(restored).hexdigest() != pointer["sha256"]:
+            raise ValueError("REMOTE_LAUNCH_READBACK_FAILED")
+        healed.append(pointer["path"])
+        return restored
 
     def read() -> dict:
         raw = cat("launch/latest.json", 4096)
@@ -604,7 +683,12 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
             or pointer["path"] != f"launch/v/{revision}.json"
         ):
             raise ValueError("INVALID_REMOTE_LAUNCH_PATH")
-        body = cat(pointer["path"], 2_000_000)
+        try:
+            body = cat(pointer["path"], 2_000_000)
+        except ValueError as exc:
+            if exc.args != ("REMOTE_LAUNCH_ARTIFACT_MISSING",):
+                raise
+            body = restore(pointer)
         artifact = json.loads(body)
         _validate_artifact(artifact)
         if (
@@ -615,4 +699,5 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
             raise ValueError("REMOTE_LAUNCH_READBACK_FAILED")
         return pointer
 
+    read.healed_keys = healed
     return read
