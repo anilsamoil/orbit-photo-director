@@ -4131,10 +4131,6 @@ body:has([data-iss-scene][data-iss-fullscreen-active]) main {
   display: none;
 }
 
-[data-iss-scene][data-iss-fullscreen-active]:not([data-iss-phase='error']) [data-iss-card] {
-  display: none;
-}
-
 [data-iss-scene][data-iss-fullscreen-active] [data-iss-fullscreen] {
   pointer-events: auto;
 }

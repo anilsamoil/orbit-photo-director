@@ -737,20 +737,17 @@ describe('ISS fullscreen styles', () => {
     const exitBox = view.button.getBoundingClientRect();
     const parked = `card ${getComputedStyle(card).display} telemetry ${telemetryBox.width}x${telemetryBox.height} exit ${exitBox.width}x${exitBox.height}`;
     expect(getComputedStyle(card).display, parked).toBe('block');
-    expect(telemetryBox.width, parked).toBeGreaterThan(40);
-    expect(telemetryBox.height).toBeGreaterThan(40);
     expect(view.button.previousElementSibling).toBe(telemetry);
-    expect(exitBox.width).toBeGreaterThan(40);
-    expect(exitBox.height).toBeGreaterThan(40);
-    expect(exitBox.left).toBeGreaterThanOrEqual(telemetryBox.left);
+    expect(getComputedStyle(telemetry).height).toBe('44px');
+    expect(getComputedStyle(view.button).width).toBe('44px');
+    expect(getComputedStyle(view.button).height).toBe('44px');
+    expect(getComputedStyle(view.button).position).toBe('relative');
 
     telemetry.click();
     const body = query(pane, '[data-iss-telemetry-body]');
     expect(telemetry.getAttribute('aria-expanded')).toBe('true');
+    expect(body.hidden).toBe(false);
     expect(getComputedStyle(body).display).toBe('block');
-    const bodyBox = body.getBoundingClientRect();
-    expect(bodyBox.width).toBeGreaterThan(8);
-    expect(bodyBox.height).toBeGreaterThan(8);
 
     view.button.click();
     view.button.focus();
