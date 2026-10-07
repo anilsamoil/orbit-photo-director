@@ -285,7 +285,7 @@ function houstonStamp(ms: number): { dayKey: string; date: string; clock: string
 function houstonRange(startMs: number, endMs: number): string {
   const start = houstonStamp(startMs);
   const end = houstonStamp(endMs);
-  if (start.dayKey !== end.dayKey) return `${start.full} – ${end.full}`;
+  if (start.dayKey !== end.dayKey || start.zone !== end.zone) return `${start.full} – ${end.full}`;
   return `${start.date}, ${start.clock}–${end.clock} ${start.zone}`;
 }
 

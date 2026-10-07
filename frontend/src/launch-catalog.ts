@@ -63,14 +63,19 @@ export class LaunchCatalogStore {
   }
 
   tick(now: number): void {
-    const key = signature(this.read(now));
-    if (key === this.readKey) return;
-    this.readKey = key;
-    this.emit();
+    this.publish(this.read(now));
   }
 
   private emit(): void {
     for (const listener of this.listeners) listener();
+  }
+
+  /** Record the projection listeners can see, and notify only when it changes. */
+  private publish(tiers: TierCatalog | null): void {
+    const key = signature(tiers);
+    if (key === this.readKey) return;
+    this.readKey = key;
+    this.emit();
   }
 
   private async load(): Promise<void> {
@@ -84,6 +89,7 @@ export class LaunchCatalogStore {
       if (this.held && Date.parse(pointer.generated_at) < Date.parse(this.held.catalog.generated_at)) return;
       this.seen = pointer;
       if (this.held && samePointer(pointer, this.held.pointer)) return;
+      if (this.held) this.publish(this.read(Date.now()));
       const bytes = await this.bytes(`/${pointer.path}`, 'force-cache', controller.signal);
       if (controller.signal.aborted) throw new Error('catalog aborted');
       const artifact = await validateLaunchBytes(pointer, bytes);
@@ -102,7 +108,7 @@ export class LaunchCatalogStore {
       const seenChanged = this.seen === null
         ? beforeSeen !== null
         : beforeSeen === null || !samePointer(this.seen, beforeSeen);
-      if (this.held !== beforeHeld || seenChanged) this.emit();
+      if (this.held !== beforeHeld || seenChanged) this.publish(this.read(Date.now()));
     }
   }
 

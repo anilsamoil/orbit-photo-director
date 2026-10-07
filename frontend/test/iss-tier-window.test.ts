@@ -104,6 +104,62 @@ async function selectedWindow(item: LaunchCatalogItem): Promise<string> {
   }
 }
 
+async function restingLabel(item: LaunchCatalogItem): Promise<string> {
+  const body = catalog([item], {
+    generated_at: at(-5),
+    geometry_valid_until: at(10),
+    schedule_valid_until: at(70),
+    revision: item.event_id,
+  });
+  const text = JSON.stringify(body);
+  const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const pointer = {
+    schema_version: 2,
+    revision: body.revision,
+    generated_at: body.generated_at,
+    valid_until: body.geometry_valid_until,
+    path: `launch/catalog/v/${body.revision}.json`,
+    sha256,
+  };
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : new URL(input.url).pathname;
+    if (path === '/launch/catalog/latest.json') {
+      return new Response(JSON.stringify(pointer), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (path === `/${pointer.path}`) {
+      return new Response(text, { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response('missing', { status: 404 });
+  }));
+  await launchCatalog.refresh(true);
+  const host = document.createElement('div');
+  hosts.push(host);
+  document.body.append(host);
+  const renderer: IssRenderer = {
+    ready: () => Promise.resolve(),
+    aim: () => Promise.resolve(),
+    showLaunches() {},
+    resize() {},
+    destroy() {},
+  };
+  const scene = mountIssScene(host, {
+    nowMs: () => viewMs,
+    createRenderer: () => renderer,
+    drive: 'manual',
+    session: { mode: 'horizon' },
+  });
+  try {
+    scene.update(shot());
+    await settle();
+    await scene.paint();
+    const picker = host.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) throw new Error('missing picker');
+    return picker.selectedOptions[0]?.textContent ?? '';
+  } finally {
+    scene.dispose();
+  }
+}
+
 describe('ISS tier window', () => {
   it('shows both endpoints of a nonzero launch window', async () => {
     const text = await selectedWindow(catalogItem({
@@ -137,5 +193,40 @@ describe('ISS tier window', () => {
       },
     }));
     expect(text).toBe('17 Oct 2024, 23:30:00 UTC – 18 Oct 2024, 00:30:00 UTC');
+  });
+
+  it('rests a shot catalog on the tier label', async () => {
+    const label = await restingLabel(catalogItem({
+      event_id: 'rest-shot',
+      name: 'Same day',
+      tier: 'shot',
+      schedule: {
+        net: at(10),
+        window_start: at(10),
+        window_end: at(20),
+        precision: 'Second',
+        status: 'Go',
+        destination: 'ISS',
+      },
+    }));
+    expect(label).toBe('Same day · Shot · Oct 17');
+    expect(label).not.toBe('Choose launch');
+  });
+
+  it('rests a watch-only catalog on Choose launch', async () => {
+    const label = await restingLabel(catalogItem({
+      event_id: 'rest-watch',
+      name: 'Verify Horizon',
+      tier: 'watch',
+      schedule: {
+        net: at(30),
+        window_start: at(30),
+        window_end: at(40),
+        precision: 'Second',
+        status: 'Go',
+        destination: 'ISS',
+      },
+    }));
+    expect(label).toBe('Choose launch');
   });
 });

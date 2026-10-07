@@ -173,6 +173,30 @@ describe('launch catalog store', () => {
     expect(store.read(NOW)).toBeNull();
   });
 
+  it('treats a pointer 404 as a miss', async () => {
+    const store = new LaunchCatalogStore(vi.fn(async () => new Response('', { status: 404 })));
+    await store.refresh(true);
+    expect(store.read(NOW)).toBeNull();
+  });
+
+  it('reads null when one lease is spent and when both are spent', async () => {
+    const geometry = await catalogEnvelope(catalog([], { geometry_valid_until: iso(-1) }));
+    const geometryStore = new LaunchCatalogStore(catalogFetcher(geometry));
+    await geometryStore.refresh(true);
+    expect(geometryStore.read(NOW)).toBeNull();
+    expect(geometryStore.read(Date.parse(iso(-2)))?.revision).toBe('r1');
+    const schedule = await catalogEnvelope(catalog([], { schedule_valid_until: iso(-1) }));
+    const scheduleStore = new LaunchCatalogStore(catalogFetcher(schedule));
+    await scheduleStore.refresh(true);
+    expect(scheduleStore.read(NOW)).toBeNull();
+    expect(scheduleStore.read(Date.parse(iso(-2)))?.revision).toBe('r1');
+    const both = await catalogEnvelope(catalog([], { geometry_valid_until: iso(-1), schedule_valid_until: iso(-1) }));
+    const bothStore = new LaunchCatalogStore(catalogFetcher(both));
+    await bothStore.refresh(true);
+    expect(bothStore.read(NOW)).toBeNull();
+    expect(bothStore.read(Date.parse(iso(-2)))?.revision).toBe('r1');
+  });
+
   it('ticks only when the read signature changes', async () => {
     const packed = await catalogEnvelope();
     const store = new LaunchCatalogStore(catalogFetcher(packed));
