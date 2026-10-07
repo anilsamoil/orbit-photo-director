@@ -4902,6 +4902,7 @@ async function provePhoneLandscapeTelemetry(send, pane) {
 
 async function proveLaunchEarthPanes(send, evidenceDir) {
   const size = await evaluate(send, `({ width: window.innerWidth, height: window.innerHeight })`);
+  const startFloor = phoneLandscapeFloor(size.width, size.height);
   const panes = launchEarthPanes(size.width, size.height);
   const mobile = size.width < 1100;
   const held = [];
