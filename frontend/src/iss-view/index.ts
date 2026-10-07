@@ -31,7 +31,7 @@ import {
 } from './launches';
 import { launchCatalog, subscribeLaunchSlots } from '../launch-catalog';
 import { launchVerdictBlock, selectLaunches, utc, type LaunchSelection } from '../launch-selectors';
-import { scheduleLabel, tierLabel, type TierCatalog, type TierLaunch } from '../launch-tiers';
+import { scheduleLabel, tierLabel, tierWindowUtc, type TierCatalog, type TierLaunch } from '../launch-tiers';
 import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { bindIssFullscreen } from './fullscreen';
@@ -166,7 +166,7 @@ function tierSite(launch: TierLaunch): LaunchSite {
 
 function tierTimeFact(launch: TierLaunch): LaunchTimeFact {
   const { windowStartMs, windowEndMs, netMs } = launch.schedule;
-  if (windowStartMs !== null && windowEndMs !== null) return { label: 'Launch window', text: utc(windowStartMs) };
+  if (windowStartMs !== null && windowEndMs !== null) return { label: 'Launch window', text: tierWindowUtc(windowStartMs, windowEndMs) };
   return { label: 'NET, tentative', text: utc(netMs) };
 }
 

@@ -243,6 +243,82 @@ function passesAll(launch: TierLaunch, now: number): boolean {
   return end > now;
 }
 
+const houstonClock = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Chicago',
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+  timeZoneName: 'short',
+});
+
+function utcDate(ms: number): string {
+  const date = new Date(ms);
+  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+
+function utcClock(ms: number): string {
+  return new Date(ms).toISOString().slice(11, 19);
+}
+
+function utcInstant(ms: number): string {
+  return `${utcDate(ms)}, ${utcClock(ms)} UTC`;
+}
+
+function houstonPart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+  return parts.find((part) => part.type === type)?.value ?? '';
+}
+
+function houstonStamp(ms: number): { dayKey: string; date: string; clock: string; zone: string; full: string } {
+  const parts = houstonClock.formatToParts(new Date(ms));
+  const hourRaw = houstonPart(parts, 'hour');
+  const hour = (hourRaw === '24' ? '00' : hourRaw).padStart(2, '0');
+  const clock = `${hour}:${houstonPart(parts, 'minute').padStart(2, '0')}:${houstonPart(parts, 'second').padStart(2, '0')}`;
+  const date = `${houstonPart(parts, 'day')} ${houstonPart(parts, 'month')} ${houstonPart(parts, 'year')}`;
+  const zone = houstonPart(parts, 'timeZoneName');
+  return { dayKey: `${houstonPart(parts, 'year')}-${houstonPart(parts, 'month')}-${houstonPart(parts, 'day')}`, date, clock, zone, full: `${date}, ${clock} ${zone}` };
+}
+
+function houstonRange(startMs: number, endMs: number): string {
+  const start = houstonStamp(startMs);
+  const end = houstonStamp(endMs);
+  if (start.dayKey !== end.dayKey) return `${start.full} – ${end.full}`;
+  return `${start.date}, ${start.clock}–${end.clock} ${start.zone}`;
+}
+
+/** UTC launch window with both endpoints, matching the v2 card range. */
+export function tierWindowUtc(startMs: number, endMs: number): string {
+  if (new Date(startMs).toISOString().slice(0, 10) !== new Date(endMs).toISOString().slice(0, 10)) {
+    return `${utcInstant(startMs)} – ${utcInstant(endMs)}`;
+  }
+  return `${utcDate(startMs)}, ${utcClock(startMs)}–${utcClock(endMs)} UTC`;
+}
+
+/** One catalog instant in UTC and Houston civil time. */
+export function tierInstantText(ms: number): string {
+  return `${utcInstant(ms)} · ${houstonStamp(ms).full}`;
+}
+
+/** Launch window in UTC and Houston, with both endpoints on each clock. */
+export function tierWindowText(startMs: number, endMs: number): string {
+  return `${tierWindowUtc(startMs, endMs)} · ${houstonRange(startMs, endMs)}`;
+}
+
+/** NET, launch window, and best time. A missing window or shot omits that row. */
+export function tierScheduleFacts(launch: TierLaunch): { label: string; text: string }[] {
+  const facts: { label: string; text: string }[] = [
+    { label: 'NET', text: tierInstantText(launch.schedule.netMs) },
+  ];
+  const start = launch.schedule.windowStartMs;
+  const end = launch.schedule.windowEndMs;
+  if (start !== null && end !== null) facts.push({ label: 'Launch window', text: tierWindowText(start, end) });
+  if (launch.top) facts.push({ label: 'Best time', text: tierInstantText(launch.top.bestMs) });
+  return facts;
+}
+
 /** The only projection. Null unless both leases hold and generated_at is not still ahead of now. */
 export function tiersAt(catalog: LaunchCatalog, now: number): TierCatalog | null {
   const generated = Date.parse(catalog.generated_at);
