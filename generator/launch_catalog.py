@@ -42,9 +42,6 @@ from .launch_evidence import (
 )
 from .launch_geometry import look_direction_at
 from .launch_opportunities import (
-    CLIMB_AFTER_S,
-    PREP_BEFORE_S,
-    SLANT_CAP_KM,
     Pad,
     Subject,
     sample_directed,
@@ -54,7 +51,6 @@ from .orbit import EARTH_RADIUS_KM, TLE, Position, _ensure_utc, great_circle_km,
 
 SCHEDULE_LEASE_SECONDS = 75 * 60
 GEOMETRY_LEASE_SECONDS = VALID_SECONDS
-LIFTOFF_STEP_S = 5
 SHOT_TLE_AGE_H = 24.0
 LIKELY_TLE_AGE_H = 48.0
 SHOT_SCORE_LOW = 50.0
@@ -176,7 +172,7 @@ def _item(
         reasons.append("LAUNCH_UNCONFIRMED")
     destination_iss = destination_from_ll2(raw) is Destination.ISS
     g1 = _g1(launch)
-    liftoffs = _liftoff_grid(launch)
+    liftoffs = _diagnostic_liftoffs(launch)
     shots: list[dict] = []
     direction: Direction = NoDirection()
     finished = True
@@ -228,6 +224,8 @@ def _item(
         launch, g1, shots, tle.epoch if tle is not None else None,
         fresh_negative, finished, usable, liftoffs,
     )
+    for shot in shots:
+        shot.pop("_age_h", None)
     item = {
         "event_id": launch.id,
         "name": launch.name,
@@ -290,6 +288,9 @@ def _tier(
     precision = (launch.time_precision or "").lower()
     if launch.status_abbrev == "TBC" or precision == "hour" or not finished or not usable:
         return "watch"
+    start, end = launch.window_start, launch.window_end
+    if start is None or end is None or end > start:
+        return "watch"
     if not shots:
         return "none" if fresh_negative else "watch"
     concrete = launch.status_abbrev in {"Go", "Confirmed"} and precision in {"second", "minute"}
@@ -347,7 +348,7 @@ def _shots(
 
     shots: list[dict] = []
     ascent_directions: list[tuple[dict, Direction]] = []
-    for liftoff in _liftoffs_to_sample(launch, tle, liftoffs):
+    for liftoff in liftoffs:
         direction: Direction = NoDirection()
         if destination_iss and profile is not None:
             try:
@@ -379,7 +380,8 @@ def _shots(
     return shots, chosen
 
 
-def _liftoff_grid(launch: Launch) -> tuple[datetime, ...]:
+def _diagnostic_liftoffs(launch: Launch) -> tuple[datetime, ...]:
+    """Window start, NET, and window end. The best envelope is one of these."""
     start, end = launch.window_start, launch.window_end
     if (
         start is None or end is None or end < start
@@ -389,47 +391,10 @@ def _liftoff_grid(launch: Launch) -> tuple[datetime, ...]:
         return ()
     earliest = max(start, launch.t0)
     found: list[datetime] = []
-    cursor = earliest
-    step = timedelta(seconds=LIFTOFF_STEP_S)
-    while cursor < end:
-        found.append(cursor)
-        cursor += step
-    if not found or found[-1] != end:
-        found.append(end)
+    for when in (earliest, launch.t0, end):
+        if earliest <= when <= end and when not in found:
+            found.append(when)
     return tuple(found)
-
-
-def _liftoffs_to_sample(
-    launch: Launch, tle: TLE, liftoffs: tuple[datetime, ...],
-) -> tuple[datetime, ...]:
-    """Full geometry only near the pad. Far liftoffs stay in the coverage grid."""
-    if len(liftoffs) <= 1:
-        return liftoffs
-    first = liftoffs[0] - timedelta(seconds=PREP_BEFORE_S)
-    last = liftoffs[-1] + timedelta(seconds=CLIMB_AFTER_S)
-    close: list[datetime] = []
-    when = first
-    probe = timedelta(seconds=30)
-    reach = SLANT_CAP_KM + 2000.0
-    while when <= last:
-        iss = propagate(tle, when)
-        if great_circle_km(iss.lat, iss.lon, launch.site_lat, launch.site_lon) <= reach:
-            close.append(when)
-        when += probe
-    if not close:
-        return ()
-    prep = timedelta(seconds=PREP_BEFORE_S)
-    climb = timedelta(seconds=CLIMB_AFTER_S)
-    kept: list[datetime] = []
-    index = 0
-    for liftoff in liftoffs:
-        begin = liftoff - prep
-        finish = liftoff + climb
-        while index < len(close) and close[index] < begin:
-            index += 1
-        if index < len(close) and close[index] <= finish:
-            kept.append(liftoff)
-    return tuple(kept)
 
 
 def _envelope(
@@ -451,7 +416,7 @@ def _envelope(
     if end < best:
         end = best
     lens, lens_reason = _lens(sight)
-    return {
+    envelope = {
         "subject": sight.subject.value,
         "liftoff": utc(span.liftoff),
         "evaluated_at": utc(evaluated_at),
@@ -481,6 +446,8 @@ def _envelope(
             "robust": duration >= 4.0 * timing,
         },
     }
+    envelope["_age_h"] = age_h
+    return envelope
 
 
 def _score(sight, iss: Position, duration_s: float) -> dict:
@@ -780,6 +747,9 @@ def _receipt_usable(
 
 
 def _capture_age_h(shot: dict, epoch: datetime) -> float:
+    precise = shot.get("_age_h")
+    if isinstance(precise, (int, float)) and not isinstance(precise, bool):
+        return float(precise)
     return _age_hours(_parse_iso8601_z(shot["start"]), _parse_iso8601_z(shot["end"]), epoch)
 
 

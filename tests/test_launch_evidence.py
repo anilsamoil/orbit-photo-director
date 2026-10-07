@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from generator.launch_catalog import _lens, _score, build_launch_catalog
-from generator.launch_data import parse_response, validate_feed
+from generator.launch_data import _parse_iso8601_z, parse_response, validate_feed
 from generator.launch_direction import Destination, DirectionKind, _iss_plane, direction_for
 from generator.launch_evidence import (
     VALID_SECONDS,
@@ -23,7 +23,14 @@ from generator.launch_evidence import (
     read_cached_artifact,
     utc,
 )
-from generator.launch_opportunities import LightMode, Sight, Subject, sight_at
+from generator.launch_opportunities import (
+    LiftoffScenario,
+    LightMode,
+    Sight,
+    Subject,
+    VisibleSpan,
+    sight_at,
+)
 from generator.launch_publish import (
     publish_launch_artifact,
     publish_launch_catalog,
@@ -688,6 +695,42 @@ def test_wide_window_is_watch_unless_every_liftoff_is_covered(sample_tle):
     assert item["tier"] == "watch"
 
 
+def test_fractional_second_past_the_tle_age_gates_is_not_a_shot(sample_tle, monkeypatch):
+    epoch = sample_tle.epoch
+    now = epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(minutes=10)
+    iss = propagate(sample_tle, net)
+
+    def fake(liftoff, observer, pad, _ascent, *, end):
+        sight = sight_at(observer(liftoff), liftoff, liftoff, Subject.PAD, pad.lat, pad.lon, 0.0)
+        span = VisibleSpan(Subject.PAD, liftoff, liftoff, end, sight)
+        return LiftoffScenario(liftoff, (sight,), (span,))
+
+    def gate(hours):
+        end = epoch + timedelta(hours=hours, microseconds=500_000)
+        monkeypatch.setattr(
+            "generator.launch_catalog.sample_liftoff",
+            lambda liftoff, observer, pad, ascent: fake(liftoff, observer, pad, ascent, end=end),
+        )
+        payload = _catalog_row(net)
+        payload["results"][0]["pad"]["latitude"] = iss.lat
+        payload["results"][0]["pad"]["longitude"] = iss.lon
+        item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+        shot = item["shots"][0]
+        truncated = _parse_iso8601_z(shot["end"])
+        assert (end - epoch).total_seconds() == hours * 3600 + 0.5
+        assert (truncated - epoch).total_seconds() <= hours * 3600
+        assert shot["score"]["low"] >= 50
+        return item
+
+    day = gate(24)
+    assert day["tier"] == "likely"
+    assert day["tier"] != "shot"
+    two_days = gate(48)
+    assert two_days["tier"] == "watch"
+    assert two_days["tier"] != "likely"
+
+
 def test_tle_freshness_uses_the_capture_interval(sample_tle):
     epoch = sample_tle.epoch.replace(microsecond=0)
     now = epoch + timedelta(hours=1)
@@ -816,20 +859,19 @@ def test_missing_or_stale_ephemeris_is_not_a_negative(sample_tle):
     assert stale["why"] == "The ISS orbit is too old to confirm or rule out a view."
 
 
-def test_continuous_liftoffs_can_be_a_shot(sample_tle):
+def test_nonzero_window_stays_watch_with_bounded_envelopes(sample_tle):
     now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
-    start = now + timedelta(minutes=15)
-    end = now + timedelta(minutes=27)
-    iss = propagate(sample_tle, now + timedelta(minutes=20))
-    payload = _catalog_row(start)
+    net = now + timedelta(hours=1)
+    end = net + timedelta(hours=6)
+    payload = _catalog_row(net)
     payload["results"][0]["window_end"] = utc(end)
-    payload["results"][0]["pad"]["latitude"] = iss.lat
-    payload["results"][0]["pad"]["longitude"] = iss.lon
+    payload["results"][0]["pad"]["latitude"] = 45.0
+    payload["results"][0]["pad"]["longitude"] = -20.0
     item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
     liftoffs = {shot["liftoff"] for shot in item["shots"]}
-    assert utc(start) in liftoffs and utc(end) in liftoffs
-    assert any(utc(start) < liftoff < utc(end) for liftoff in liftoffs)
-    assert item["tier"] == "shot"
+    assert item["tier"] == "watch"
+    assert liftoffs <= {utc(net), utc(end)}
+    assert len(item["shots"]) <= 16
 
 
 def test_window_without_interior_support_stays_watch(sample_tle):
