@@ -14,6 +14,11 @@ from generator.launch_publish import publish_launch_artifact, rclone_reader
 from scripts.launch_refresh import refresh_cached
 
 
+def _published_catalog(remote: dict) -> dict:
+    pointer = json.loads(remote["launch/catalog/latest.json"])
+    return json.loads(remote[pointer["path"]])
+
+
 @pytest.fixture
 def setup(tmp_path):
     now = datetime(2026, 9, 9, 8, tzinfo=UTC)
@@ -74,20 +79,23 @@ def test_refresh_and_restart_noop_preserve_source_age(setup):
     now, _, output, _, remote, calls, _, run, _ = setup
     result = run()
     assert result["published"] and not result["notified"]
-    assert len(calls) == 2
+    assert len(calls) == 4
     pointer = json.loads(remote["launch/latest.json"])
     artifact = json.loads(remote[pointer["path"]])
-    assert artifact["schema_version"] == 3
-    assert artifact["coverage"]["schedule_fetched_at"] == utc(now)
-    assert artifact["schedule_valid_until"] == utc(now + timedelta(minutes=75))
-    assert artifact["geometry_valid_until"] == utc(now + timedelta(minutes=15))
+    catalog = _published_catalog(remote)
+    assert artifact["schema_version"] == 2
+    assert artifact["coverage"]["fetched_at"] == utc(now)
     assert pointer["schema_version"] == 2
-    assert pointer["valid_until"] == artifact["geometry_valid_until"]
-    assert "FEED_PAGINATED" in artifact["coverage"]["reasons"]
-    assert not artifact["coverage"]["complete"]
-    assert artifact["items"][0]["tier"] == "watch"
+    assert pointer["valid_until"] == artifact["valid_until"]
+    assert catalog["schema_version"] == 3
+    assert catalog["coverage"]["schedule_fetched_at"] == utc(now)
+    assert catalog["schedule_valid_until"] == utc(now + timedelta(minutes=75))
+    assert catalog["geometry_valid_until"] == utc(now + timedelta(minutes=15))
+    assert "FEED_PAGINATED" in catalog["coverage"]["reasons"]
+    assert not catalog["coverage"]["complete"]
+    assert catalog["items"][0]["tier"] == "watch"
     assert run(now + timedelta(hours=2))["reason"] == "UNCHANGED_INPUT"
-    assert len(calls) == 2
+    assert len(calls) == 4
     assert json.loads((output / "launch/latest.json").read_bytes()) == pointer
 
 
@@ -99,11 +107,11 @@ def test_ten_minute_checks_do_not_fetch_renew_or_republish(setup):
         result = run(now + timedelta(minutes=minutes))
         assert result["reason"] == "UNCHANGED_INPUT"
         assert not result["notified"] and not result["published"]
-    assert len(calls) == 2
+    assert len(calls) == 4
     assert remote["launch/latest.json"] == original_pointer
     with pytest.raises(ValueError, match="CACHE_RECEIPT_EXPIRED_OR_FUTURE"):
         run(now + timedelta(hours=3))
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_ten_minute_check_consumes_new_receipt_once(setup):
@@ -115,12 +123,11 @@ def test_ten_minute_check_consumes_new_receipt_once(setup):
     write_cache(received)
     result = run(now + timedelta(hours=2, minutes=50))
     assert result["published"] and not result["notified"]
-    pointer = json.loads(remote["launch/latest.json"])
-    artifact = json.loads(remote[pointer["path"]])
-    assert artifact["coverage"]["schedule_fetched_at"] == utc(received)
-    assert len(calls) == 4
+    catalog = _published_catalog(remote)
+    assert catalog["coverage"]["schedule_fetched_at"] == utc(received)
+    assert len(calls) == 8
     assert run(now + timedelta(hours=3))["reason"] == "UNCHANGED_INPUT"
-    assert len(calls) == 4
+    assert len(calls) == 8
 
 
 def test_slip_then_tbd_removes_old_exact_event(setup):
@@ -134,8 +141,7 @@ def test_slip_then_tbd_removes_old_exact_event(setup):
     )
     write_cache(now + timedelta(hours=1))
     run(now + timedelta(hours=1))
-    pointer = json.loads(remote["launch/latest.json"])
-    item = json.loads(remote[pointer["path"]])["items"][0]
+    item = _published_catalog(remote)["items"][0]
     assert item["schedule"]["net"] == row["net"]
     row.update(
         net=utc(now + timedelta(days=8)),
@@ -146,8 +152,7 @@ def test_slip_then_tbd_removes_old_exact_event(setup):
     )
     write_cache(now + timedelta(hours=2))
     run(now + timedelta(hours=2))
-    pointer = json.loads(remote["launch/latest.json"])
-    items = json.loads(remote[pointer["path"]])["items"]
+    items = _published_catalog(remote)["items"]
     assert [item["schedule"]["net"] for item in items] == [row["net"]]
     assert items[0]["tier"] == "unassessed"
     assert "LAUNCH_UNCONFIRMED" in items[0]["reasons"]
@@ -198,7 +203,9 @@ def test_interruption_retains_last_good_and_recovers_same_intent(setup, fail_key
     assert result["reason"] in {"PUBLISHED", "UNCHANGED_INPUT"}
     assert (output / "launch/latest.json").read_bytes() == remote["launch/latest.json"]
     if fail_key == "pointer":
-        assert len(calls) == sent_before  # adopt confirmed remote commit, no replay
+        assert calls.count("launch/latest.json") == 1
+        assert sum(key.startswith("launch/v/") for key in calls) == 1
+        assert sent_before == 2
 
 
 def test_rollback_and_cross_destination_are_rejected(setup):
@@ -211,7 +218,7 @@ def test_rollback_and_cross_destination_are_rejected(setup):
         refresh_cached(
             cache, output, now, remote="other:bucket", upload=upload, read_remote=lambda: {}
         )
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_remote_changes_during_immutable_upload_do_not_flip_pointer(setup):
@@ -254,7 +261,7 @@ def test_unchanged_data_with_new_source_receipt_updates_checked_time(setup):
     second = run(now + timedelta(hours=2))
     assert first["revision"] != second["revision"]
     assert second["fetched_at"] == utc(now + timedelta(hours=2))
-    assert len(calls) == 4
+    assert len(calls) == 8
 
 
 @pytest.mark.parametrize("failure", [None, "hash", "path", "changed"])
@@ -305,7 +312,45 @@ def test_policy_upgrade_republishes_same_receipt_once_without_releasing_owner(se
     state = json.loads(state_path.read_bytes())
     assert state["remote"] == old_owner
     assert state["input"]["fetched_at"] == old_receipt
-    assert state["input"]["policy"] == 3
-    assert len(calls) == 4
+    assert state["input"]["policy"] == 4
+    assert len(calls) == 8
     assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
-    assert len(calls) == 4
+    assert len(calls) == 8
+
+
+def test_live_path_stays_visible_to_current_selectors(setup):
+    import subprocess
+
+    now, _, output, _, _, _, _, run, _ = setup
+    run()
+    pointer = json.loads((output / "launch/latest.json").read_bytes())
+    artifact_path = output / pointer["path"]
+    catalog_path = output / json.loads((output / "launch/catalog/latest.json").read_bytes())["path"]
+    script = """
+import { readFileSync } from 'node:fs';
+import { selectAllLaunches } from './src/iss-view/launches.ts';
+const now = Number(process.argv[1]);
+const state = (path) => ({
+  artifact: JSON.parse(readFileSync(path, 'utf8')),
+  pointer: null,
+  availability: 'ready',
+  superseded: false,
+});
+const ids = (path) => selectAllLaunches(state(path), now).map((selection) => selection.item.event_id);
+console.log(JSON.stringify({ live: ids(process.argv[2]), catalog: ids(process.argv[3]) }));
+"""
+    result = subprocess.run(  # noqa: S603
+        [
+            "/home/ubuntu/.bun/bin/bun", "-e", script,
+            str(int(now.timestamp() * 1000)),
+            str(artifact_path),
+            str(catalog_path),
+        ],
+        cwd="/workspace/frontend",
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    selected = json.loads(result.stdout)
+    assert selected["live"] == ["same-event"]
+    assert selected["catalog"] == []

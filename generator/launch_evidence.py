@@ -318,8 +318,10 @@ def build_launch_artifact(
     return artifact
 
 
-def read_cached_artifact(cache_dir: Path, now: datetime, *, replay: bool = False) -> dict:
-    """Never fetches, fixes caches, writes output, publishes or sends."""
+def load_launch_cache(
+    cache_dir: Path, now: datetime, *, replay: bool = False,
+) -> tuple[dict, TLE | None, datetime, tuple[str, ...]]:
+    """Read one cache. Never fetches, repairs, publishes, or sends."""
     cache = cache_dir / "launches.json"
     try:
         if cache.stat().st_size > 8_000_000:
@@ -347,6 +349,12 @@ def read_cached_artifact(cache_dir: Path, now: datetime, *, replay: bool = False
         tle = TLE.from_text((cache_dir / "iss.tle").read_text())
     except (OSError, ValueError):
         tle = None
+    return payload, tle, fetched, source_reasons
+
+
+def read_cached_artifact(cache_dir: Path, now: datetime, *, replay: bool = False) -> dict:
+    """Never fetches, fixes caches, writes output, publishes or sends."""
+    payload, tle, fetched, source_reasons = load_launch_cache(cache_dir, now, replay=replay)
     from .launch_catalog import build_launch_catalog
 
     return build_launch_catalog(

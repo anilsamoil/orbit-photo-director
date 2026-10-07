@@ -16,8 +16,13 @@ from pathlib import Path
 
 from generator.launch_catalog import build_launch_catalog
 from generator.launch_data import _parse_iso8601_z, validate_feed
-from generator.launch_evidence import canonical_bytes, read_cached_artifact
-from generator.launch_publish import publish_launch_artifact, rclone_reader, rclone_uploader
+from generator.launch_evidence import build_launch_artifact, canonical_bytes, load_launch_cache
+from generator.launch_publish import (
+    publish_launch_artifact,
+    publish_launch_catalog,
+    rclone_reader,
+    rclone_uploader,
+)
 from generator.orbit import TLE
 
 # Schedule refresh tolerance, NOT the 15-minute capture-evidence lifetime.
@@ -75,7 +80,7 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     identity = {
         # A model-policy change requires one fresh publication even when the
         # source receipt is unchanged. Retain ownership and prior receipts.
-        "policy": 3,
+        "policy": 4,
         "schedule_sha256": receipt["sha256"],
         "fetched_at": receipt["fetched_at"],
         "tle_sha256": hashlib.sha256(tle_raw).hexdigest(),
@@ -111,6 +116,8 @@ def refresh_cached(
 
         def finish(value: dict) -> dict:
             artifact = value["artifact"]
+            if artifact.get("schema_version") != 2:
+                raise ValueError("LIVE_PUBLICATION_REQUIRES_SCHEMA_2")
             age = (now - _parse_iso8601_z(_schedule_fetched(artifact))).total_seconds()
             pointer = publish_launch_artifact(
                 artifact,
@@ -119,6 +126,8 @@ def refresh_cached(
                 read_remote=read_remote,
                 permit_upload=0 <= age < MAX_SCHEDULE_AGE_SECONDS,
             )
+            if "catalog" in value:
+                publish_launch_catalog(value["catalog"], output, upload=upload)
             committed = {"remote": remote, "input": value["input"], "pointer": pointer}
             _atomic_json(state_path, committed)
             intent_path.unlink(missing_ok=True)
@@ -138,6 +147,9 @@ def refresh_cached(
             if observed == local and observed["revision"] != intent["artifact"]["revision"]:
                 intent_path.unlink()
                 intent = None
+        if intent and intent.get("artifact", {}).get("schema_version") != 2:
+            intent_path.unlink()
+            intent = None
         if intent:
             state = finish(intent)
         identity, payload, tle = _cached_inputs(cache, now)
@@ -157,10 +169,10 @@ def refresh_cached(
                     "reason": "UNCHANGED_INPUT",
                     "revision": local["revision"],
                 }
-        artifact = build_launch_catalog(
-            payload, tle, now, fetched_at=_parse_iso8601_z(identity["fetched_at"])
-        )
-        intent = {"remote": remote, "input": identity, "artifact": artifact}
+        fetched_at = _parse_iso8601_z(identity["fetched_at"])
+        artifact = build_launch_artifact(payload, tle, now, fetched_at=fetched_at)
+        catalog = build_launch_catalog(payload, tle, now, fetched_at=fetched_at)
+        intent = {"remote": remote, "input": identity, "artifact": artifact, "catalog": catalog}
         _atomic_json(intent_path, intent)
         state = finish(intent)
         return {
@@ -172,6 +184,7 @@ def refresh_cached(
             "items": len(artifact["items"]),
             "fetched_at": _schedule_fetched(artifact),
             "coverage_complete": artifact["coverage"]["complete"],
+            "catalog_revision": catalog["revision"],
         }
 
 
@@ -216,10 +229,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        artifact = read_cached_artifact(args.cache_dir, datetime.now(UTC))
-        pointer = publish_launch_artifact(
-            artifact, args.output, upload=rclone_uploader(args.remote) if args.publish else None
+        payload, tle, fetched, source_reasons = load_launch_cache(args.cache_dir, now)
+        artifact = build_launch_artifact(
+            payload, tle, now, fetched_at=fetched, source_reasons=source_reasons,
         )
+        catalog = build_launch_catalog(
+            payload, tle, now, fetched_at=fetched, source_reasons=source_reasons,
+        )
+        upload = rclone_uploader(args.remote) if args.publish else None
+        pointer = publish_launch_artifact(artifact, args.output, upload=upload)
+        publish_launch_catalog(catalog, args.output, upload=upload)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
         report({"ok": False, "reason": str(exc), "notified": False})
         return 2

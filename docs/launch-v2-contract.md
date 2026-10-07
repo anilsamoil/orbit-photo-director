@@ -87,9 +87,12 @@ the model. Unknown timing, orbit, model, incomplete evaluation or intersection
 remains unknown. No ascent corridor is fabricated from this envelope.
 
 The frontend parser accepts schema 3 catalogs and schema 2 artifacts.
-The publisher emits schema 3 and still accepts a schema 2 body. A schema 3 body
-carries `schedule_valid_until` (75 minutes) and `geometry_valid_until` (15 minutes).
-The pointer stays schema 2, and its `valid_until` equals `geometry_valid_until`.
+Current selectors still read only schema 2, so `launch/latest.json` stays a schema 2
+body. The schema 3 catalog is published beside it at `launch/catalog/latest.json`.
+A schema 3 body carries `schedule_valid_until` (at most 75 minutes, and not past
+the schedule receipt) and `geometry_valid_until` (at most 15 minutes, and not past
+the schedule lease). Its pointer stays schema 2, and that pointer's `valid_until`
+equals `geometry_valid_until`.
 The parser allows a schedule lease up to three hours. Each shot envelope includes
 `lens` (`telephoto` or `wide`) and `lens_reason`. A `night_engine` shot stays scored;
 its item carries `NIGHT_ENGINE_UNVALIDATED` until that mode is calibrated. An ascent
@@ -100,5 +103,5 @@ mismatch keeps the last good artifact.
 The accepting parser supports old artifacts without assessment. Older deployed
 strict parsers reject the new field, so publish the new frontend first, then
 update the separate publisher checkout. Existing tabs may need a reload to pick
-up the new app; do not clear personal site data. Publisher policy 3 changes the
+up the new app; do not clear personal site data. Publisher policy 4 changes the
 input identity once while preserving the persistent owner and receipts.

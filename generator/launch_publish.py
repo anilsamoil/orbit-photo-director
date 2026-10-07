@@ -396,6 +396,8 @@ def publish_launch_artifact(
     read_remote: Callable[[], dict] | None = None,
     permit_upload: bool = True,
 ) -> dict:
+    if artifact.get("schema_version") != 2:
+        raise ValueError("LIVE_PUBLICATION_REQUIRES_SCHEMA_2")
     _validate_artifact(artifact)
     if "out" in output.resolve().parts:
         raise ValueError("launch output must be separate from Earth out/")
@@ -463,6 +465,51 @@ def publish_launch_artifact(
                 upload(pending, "launch/latest.json", False)
                 if read_remote and read_remote() != pointer:
                     raise ValueError("REMOTE_LAUNCH_READBACK_FAILED")
+        os.replace(pending, pointer_path)
+        return pointer
+
+
+def publish_launch_catalog(
+    artifact: dict,
+    output: Path,
+    *,
+    upload: Callable[[Path, str, bool], None] | None = None,
+) -> dict:
+    """Schema 3 catalog beside the live schema 2 publication."""
+    _validate_catalog(artifact)
+    if "out" in output.resolve().parts:
+        raise ValueError("launch output must be separate from Earth out/")
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / ".launch-publisher.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("LAUNCH_PUBLISHER_BUSY") from exc
+        revision = artifact["revision"]
+        relative = f"launch/catalog/v/{revision}.json"
+        artifact_path = output / relative
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        body = canonical_bytes(artifact)
+        if artifact_path.exists() and artifact_path.read_bytes() != body:
+            raise ValueError("IMMUTABLE_LAUNCH_CONFLICT")
+        pending_artifact = artifact_path.with_suffix(".pending")
+        pending_artifact.write_bytes(body)
+        os.replace(pending_artifact, artifact_path)
+        pointer = {
+            "schema_version": 2,
+            "revision": revision,
+            "generated_at": artifact["generated_at"],
+            "valid_until": artifact["geometry_valid_until"],
+            "path": relative,
+            "sha256": hashlib.sha256(body).hexdigest(),
+        }
+        pointer_path = output / "launch/catalog/latest.json"
+        pointer_path.parent.mkdir(parents=True, exist_ok=True)
+        pending = output / "launch/catalog/.latest.pending.json"
+        pending.write_bytes(canonical_bytes(pointer))
+        if upload:
+            upload(artifact_path, relative, True)
+            upload(pending, "launch/catalog/latest.json", False)
         os.replace(pending, pointer_path)
         return pointer
 
