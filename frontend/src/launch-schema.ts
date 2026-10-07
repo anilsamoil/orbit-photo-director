@@ -171,6 +171,21 @@ export function parseLaunchPointer(value: unknown): LaunchPointer {
   requireValue(obj.path === `launch/v/${obj.revision}.json`);
   return value as LaunchPointer;
 }
+
+export interface LaunchCatalogPointer extends Omit<LaunchPointer, 'path'> {
+  path: `launch/catalog/v/${string}.json`;
+}
+
+/** Catalog publication pointer. Same schema 2 validity and sha256 rules, catalog path only. */
+export function parseLaunchCatalogPointer(value: unknown): LaunchCatalogPointer {
+  const obj = record(value, 'schema_version revision generated_at valid_until path sha256');
+  requireValue(obj.schema_version === 2 && revision(obj.revision));
+  validity(obj.generated_at, obj.valid_until);
+  requireValue(typeof obj.sha256 === 'string' && /^[a-f0-9]{64}$/.test(obj.sha256));
+  requireValue(obj.path === `launch/catalog/v/${obj.revision}.json`);
+  return value as LaunchCatalogPointer;
+}
+
 export function parseLaunchArtifact(value: unknown): LaunchArtifact | LaunchCatalog {
   requireValue(value !== null && typeof value === 'object' && !Array.isArray(value));
   const version = (value as Record<string, unknown>).schema_version;
