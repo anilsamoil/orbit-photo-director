@@ -7,7 +7,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
-import { bostonTrackText, buildFixtures, refreshLaunchClock } from './fixtures.mjs';
+import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -211,6 +211,15 @@ function startProxy(home) {
   let removedCuratedIds = null;
   let removedCuratedUpdatedAt = null;
   const launchHoldWaiters = [];
+  const catalogBodies = new Map();
+  let catalogLive = null;
+  function currentCatalog() {
+    const now = Date.now();
+    if (catalogLive && now < catalogLive.anchor + 8 * 60_000 && catalogBodies.has(catalogLive.pointer.path)) return catalogLive;
+    catalogLive = publishVerifyCatalog(fixtureDir, now);
+    catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
+    return catalogLive;
+  }
   function parkLaunchBody(res, body) {
     return new Promise((resolvePark) => {
       let settled = false;
@@ -362,6 +371,20 @@ function startProxy(home) {
       return;
     }
     if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
+    if (path === '/launch/catalog/latest.json') {
+      sendJson(res, JSON.stringify(currentCatalog().pointer));
+      return;
+    }
+    if (path.startsWith('/launch/catalog/v/') && path.endsWith('.json')) {
+      const body = catalogBodies.get(path.slice(1));
+      if (!body) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end('missing');
+        return;
+      }
+      sendJson(res, body);
+      return;
+    }
     if (path === '/api/browser/session') {
       const denied = (req.headers.cookie ?? '').split(';').some((part) => part.trim() === 'opd-verify-session=deny');
       if (denied) {

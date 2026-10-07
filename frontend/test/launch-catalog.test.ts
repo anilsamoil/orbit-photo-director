@@ -191,9 +191,11 @@ describe('launch catalog store', () => {
   it('keeps launch/catalog out of the v2 store and storage out of the catalog module', () => {
     const storeText = readFileSync(resolve('src/launch-store.ts'), 'utf8');
     const catalogText = readFileSync(resolve('src/launch-catalog.ts'), 'utf8');
+    const cardText = readFileSync(resolve('src/launch-tier-card.ts'), 'utf8');
     expect(storeText).not.toContain('launch/catalog');
     expect(catalogText).not.toContain('localStorage');
     expect(catalogText).not.toContain('opd-');
+    expect(cardText).not.toContain('selectLaunches');
     expect(parseLaunchArtifact(catalog()).schema_version).toBe(3);
   });
 });

@@ -1735,7 +1735,7 @@ function upcomingListExpression(mesa, ascent, { hidden }) {
     const text = document.getElementById('upcoming-cards')?.innerText || '';
     const ascentAt = text.indexOf(${JSON.stringify(ascent)});
     const mesaAt = text.indexOf(${JSON.stringify(mesa)});
-    if (text.includes('Verify Horizon')) return null;
+    if (text.includes('Verify Horizon') || !text.includes('Verify Likely')) return null;
     if (ascentAt < 0) return null;
     if (${hidden ? 'true' : 'false'}) {
       if (mesaAt >= 0) return null;
@@ -1773,7 +1773,7 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
     updatedAt: server.removedCuratedUpdatedAt,
     visible: false,
   });
-  return `upcoming: ${ascent} above ${mesa}, Verify Horizon omitted, score sort, hide persisted ${mesaId}, fresh profile hid it`;
+  return `upcoming: ${ascent} and Verify Likely above ${mesa}, Verify Horizon omitted, score sort, hide persisted ${mesaId}, fresh profile hid it`;
 }
 
 function rgbaChannels(color) {
@@ -3221,11 +3221,29 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     send,
     `(() => {
       const text = document.querySelector('.map-launch-brief')?.innerText || '';
-      if (!text.includes(${JSON.stringify(meta.names.launch)}) || text.includes('Verify Horizon')) return null;
+      if (!text.includes(${JSON.stringify(meta.names.launch)}) || !text.includes('Verify Likely') || text.includes('Verify Horizon')) return null;
       return { ok: true };
     })()`,
-    'map chance launch only',
+    'map tier launch brief',
     10000,
+  );
+  await waitFor(
+    send,
+    `(async () => {
+      const map = window.__opdMap;
+      const pads = map?.getSource?.('ascent-pad');
+      const lines = map?.getSource?.('ascent-trajectory');
+      if (!pads?.getData || !lines?.getData) return null;
+      const padData = await pads.getData();
+      const lineData = await lines.getData();
+      const padIds = (padData.features || []).map((feature) => feature.properties && feature.properties.event_id);
+      const lineIds = (lineData.features || []).map((feature) => feature.properties && feature.properties.event_id);
+      if (!padIds.includes('verify-ascent') || !padIds.includes('verify-likely') || padIds.includes('verify-horizon')) return null;
+      if (!lineIds.includes('verify-ascent') || lineIds.includes('verify-likely') || lineIds.includes('verify-horizon')) return null;
+      return { ok: true, pads: padIds, lines: lineIds.length };
+    })()`,
+    'tier launch pads and corridor',
+    15000,
   );
   const briefName = await evaluate(send, `!!document.querySelector('.map-launch-brief .launch-name')`);
   if (briefName) await click(send, '.map-launch-brief .launch-name');
@@ -4916,6 +4934,11 @@ function fixtureInstant(evidenceDir) {
   let dir = evidenceDir;
   for (let step = 0; step < 4; step += 1) {
     const path = resolve(dir, 'fixtures/meta.json');
+    const clockPath = resolve(dir, 'fixtures/catalog-clock.json');
+    if (existsSync(clockPath)) {
+      const anchor = JSON.parse(readFileSync(clockPath, 'utf8')).anchor;
+      if (typeof anchor === 'number' && Number.isFinite(anchor)) return anchor;
+    }
     if (existsSync(path)) {
       const now = JSON.parse(readFileSync(path, 'utf8')).now;
       if (typeof now === 'number' && Number.isFinite(now)) return now;
@@ -4926,6 +4949,22 @@ function fixtureInstant(evidenceDir) {
 }
 
 async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement) || picker.value !== '') return null;
+      const groups = [...picker.querySelectorAll('optgroup')].map((entry) => entry.label);
+      for (const name of ['Shot', 'Likely', 'Watch', 'All launches']) {
+        if (!groups.includes(name)) return null;
+      }
+      const closed = picker.selectedOptions[0]?.textContent || '';
+      if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \\d{1,2}$/.test(closed)) return null;
+      return { ok: true, closed };
+    })()`,
+    'iss tier groups',
+    20000,
+  );
   const horizon = await waitFor(
     send,
     `(() => {
@@ -5030,7 +5069,8 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       const telemetry = document.querySelector('[data-iss-telemetry]');
       const frame = document.querySelector('[data-iss-frame]');
       if (!(picker instanceof HTMLSelectElement) || !telemetry || !frame) return null;
-      const option = [...picker.options].find((entry) => entry.textContent?.includes('Verify Pad'));
+      const shotGroup = [...picker.querySelectorAll('optgroup')].find((entry) => entry.label === 'Shot');
+      const option = shotGroup && [...shotGroup.querySelectorAll('option')].find((entry) => entry.textContent?.includes('Verify Ascent'));
       if (!option || picker.value) return null;
       if (document.querySelector('[data-iss-launch], .iss-launch-pin, [data-iss-launch-edge]')) return null;
       if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
@@ -5221,32 +5261,26 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     `(() => {
       const picker = document.querySelector('[data-iss-launch-picker]');
       const card = document.querySelector('[data-iss-launch-card]');
-      const missing = document.querySelector('[data-iss-launch-missing]');
-      if (!(picker instanceof HTMLSelectElement) || !card || card.hidden) return null;
-      if (picker.value !== '' || (picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
-      if (missing?.textContent !== 'Selected launch is no longer available') return null;
-      if ([...picker.options].some((entry) => entry.textContent === 'Selected launch is no longer available')) return null;
-      if (document.querySelector('[data-iss-launch], .iss-launch-pin, [data-iss-launch-edge]')) return null;
+      const button = document.querySelector('[data-iss-launch]');
+      if (!(picker instanceof HTMLSelectElement) || !card || card.hidden || !button) return null;
+      if (picker.value !== ${JSON.stringify(before.value)}) return null;
+      if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Ascent') return null;
+      if ((card.textContent || '').includes('Selected launch is no longer available')) return null;
+      if (button.querySelector('[data-iss-launch-label]')?.textContent !== 'Look toward Verify Pad') return null;
       const frame = document.querySelector('[data-iss-frame]');
-      if (!frame || frame.contains(missing) || frame.contains(card)) return null;
-      const frameBox = frame.getBoundingClientRect();
-      const cardBox = card.getBoundingClientRect();
-      const place = document.querySelector('[data-iss-scene]')?.dataset.issLaunchPlace || '';
-      const covers = cardBox.left < frameBox.right - 1 && cardBox.right > frameBox.left + 1 && cardBox.top < frameBox.bottom - 1 && cardBox.bottom > frameBox.top + 1;
-      if (place !== 'over' && covers) return null;
-      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      if (frame?.getAttribute('data-iss-launch-corridor') !== 'on') return null;
       const center = window.__opdIss?.getCenter?.();
       if (!center) return null;
       const drifted = Math.hypot(center.lng - ${Number(aimed.lng)}, center.lat - ${Number(aimed.lat)});
       if (!(drifted < 0.15)) return null;
       return { ok: true };
     })()`,
-    'iss launch lost',
+    'iss tier pick kept through empty v2 body',
     20000,
   );
-  const lostShot = await revealInView(send, '[data-iss-launch-missing]');
-  if (!lostShot.text.includes('Selected launch is no longer available')) {
-    throw new Error(`launch loss shot would miss the sentence ${JSON.stringify(lostShot)}`);
+  const keptShot = await revealInView(send, '[data-iss-launch-card]');
+  if (!keptShot.text.includes('Verify Ascent') || keptShot.text.includes('Selected launch is no longer available')) {
+    throw new Error(`tier pick should stay after the empty v2 body ${JSON.stringify(keptShot)}`);
   }
   await shot(send, evidenceDir, 'iss-launch-lost');
   await evaluate(send, `document.cookie = 'opd-verify-launch=back; path=/'`);
@@ -5255,15 +5289,15 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     `(() => {
       document.dispatchEvent(new Event('visibilitychange'));
       const picker = document.querySelector('[data-iss-launch-picker]');
-      const missing = document.querySelector('[data-iss-launch-missing]');
-      if (!(picker instanceof HTMLSelectElement)) return null;
-      const ascent = [...picker.options].find((entry) => (entry.textContent || '').includes('Verify Ascent'));
-      if (!ascent || ascent.selected) return null;
-      if (picker.value !== '' || (picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
-      if (missing?.textContent !== 'Selected launch is no longer available') return null;
-      if (document.querySelector('[data-iss-launch]')) return null;
+      const card = document.querySelector('[data-iss-launch-card]');
+      if (!(picker instanceof HTMLSelectElement) || !card || card.hidden) return null;
+      const ascent = [...picker.querySelectorAll('optgroup')].find((entry) => entry.label === 'Shot');
+      const option = ascent && [...ascent.querySelectorAll('option')].find((entry) => entry.textContent?.includes('Verify Ascent'));
+      if (!option || !option.selected) return null;
+      if (picker.value !== ${JSON.stringify(before.value)}) return null;
+      if ((card.textContent || '').includes('Selected launch is no longer available')) return null;
       const frame = document.querySelector('[data-iss-frame]');
-      if (frame?.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      if (frame?.getAttribute('data-iss-launch-corridor') !== 'on') return null;
       return { ok: true };
     })()`,
     'iss launch returned',
@@ -5281,7 +5315,8 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     `(() => {
       const picker = document.querySelector('[data-iss-launch-picker]');
       if (!(picker instanceof HTMLSelectElement) || picker.value !== '') return null;
-      if ((picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
+      const closed = picker.selectedOptions[0]?.textContent || '';
+      if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \\d{1,2}$/.test(closed)) return null;
       if (document.querySelector('[data-iss-launch]')) return null;
       const card = document.querySelector('[data-iss-launch-card]');
       if (card && !card.hidden) return null;
@@ -5303,7 +5338,8 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       const picker = document.querySelector('[data-iss-launch-picker]');
       const scene = document.querySelector('[data-iss-scene]');
       if (!(picker instanceof HTMLSelectElement) || !scene) return null;
-      if (picker.value !== '' || (picker.selectedOptions[0]?.textContent || '') !== 'Choose launch') return null;
+      const closed = picker.selectedOptions[0]?.textContent || '';
+      if (picker.value !== '' || !/^Verify Ascent · Shot · [A-Z][a-z]{2} \\d{1,2}$/.test(closed)) return null;
       if (document.querySelector('[data-iss-launch]')) return null;
       const card = document.querySelector('[data-iss-launch-card]');
       if (card && !card.hidden) return null;
@@ -5314,9 +5350,9 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   );
   const choose = await revealInView(send, '[data-iss-launch-picker]');
   const chooseLabel = await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.selectedOptions?.[0]?.textContent || ''`);
-  if (chooseLabel !== 'Choose launch') throw new Error(`reload shot missed Choose launch ${JSON.stringify({ choose, chooseLabel })}`);
+  if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \d{1,2}$/.test(chooseLabel)) throw new Error(`reload shot missed the tier label ${JSON.stringify({ choose, chooseLabel })}`);
   await shot(send, evidenceDir, 'iss-launch-reloaded');
-  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / earth ${earthPanes} / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / launch lost when that body arrived, Choose launch, notice kept / launch returned on verifyrev-back, not restored / None / reload Choose launch`;
+  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / earth ${earthPanes} / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / tier pick kept through the empty v2 body / v2 republish left the Shot selected / None / reload ${chooseLabel}`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
