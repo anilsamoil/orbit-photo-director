@@ -1084,7 +1084,7 @@ body:has(> #view.view-map) .tab { color: var(--text); }
 body:has(> #view.view-map) .tab.active { color: var(--accent); }
 body:has(> #view.view-map) > .banner {
   position: fixed;
-  bottom: 0;
+  bottom: env(safe-area-inset-bottom, 0px);
   left: 0;
   right: 0;
   z-index: 30;
@@ -1361,7 +1361,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
  * line. Legend, imagery date, and help sit above that strip. */
 .view-map #map .maplibregl-ctrl-top-left {
   top: calc(var(--topbar-height) + 71px);
-  left: 8px;
+  left: calc(8px + env(safe-area-inset-left, 0px));
   right: auto;
   bottom: auto;
 }
@@ -3265,9 +3265,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
     padding-left: calc(16px + env(safe-area-inset-left));
     padding-right: calc(16px + env(safe-area-inset-right));
   }
-  body:has(> #view.view-map) > .banner {
-    padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
-  }
   .view-map .map-control-dock {
     max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   }
@@ -4341,7 +4338,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 
 .view-map .map-command {
   position: absolute;
-  left: 8px;
+  left: calc(8px + env(safe-area-inset-left, 0px));
   right: var(--map-corner-clear);
   bottom: 0;
   z-index: 16;
