@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
@@ -160,6 +161,7 @@ export async function connectCdp(port) {
   });
   let nextId = 0;
   const pending = new Map();
+  const listeners = new Map();
   ws.addEventListener('message', (event) => {
     const message = JSON.parse(event.data);
     if (message.id && pending.has(message.id)) {
@@ -167,7 +169,12 @@ export async function connectCdp(port) {
       pending.delete(message.id);
       if (message.error) rejectMessage(new Error(JSON.stringify(message.error)));
       else resolveMessage(message.result);
+      return;
     }
+    if (!message.method) return;
+    const handlers = listeners.get(message.method);
+    if (!handlers) return;
+    for (const handler of handlers) handler(message.params || {});
   });
   function send(method, params = {}) {
     const id = ++nextId;
@@ -176,8 +183,14 @@ export async function connectCdp(port) {
       ws.send(JSON.stringify({ id, method, params }));
     });
   }
+  function on(method, handler) {
+    const handlers = listeners.get(method) || [];
+    handlers.push(handler);
+    listeners.set(method, handlers);
+  }
   return {
     send,
+    on,
     close: () => ws.close(),
   };
 }
@@ -584,6 +597,12 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
         deviceScaleFactor: 1,
         mobile: DESKTOP.mobile,
       });
+      const cartoDark = [];
+      cdp.on('Network.requestWillBeSent', (params) => {
+        noteRequest(cartoDark, params.request && params.request.url);
+      });
+      await cdp.send('Network.enable');
+      cdp.send.cartoDark = cartoDark;
       await openApp(cdp.send, baseUrl);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
       return notes.map((note) => `desktop: ${note}`);
@@ -616,8 +635,13 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       }
       const page = await context.newPage();
       try {
+        const cartoDark = [];
+        page.on('request', (request) => {
+          noteRequest(cartoDark, request.url());
+        });
         const send = playwrightSend(page);
         send.pointer = 'touch';
+        send.cartoDark = cartoDark;
         await openApp(send, baseUrl);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
         notes.push(...featureNotes.map((note) => `${spec.slug}: ${note}`));
@@ -1942,9 +1966,22 @@ async function closeMapLegend(send) {
   );
 }
 
+function assertPlanBasemap(send, label, page) {
+  const verdict = planBasemapVerdict(send.cartoDark, page);
+  if (!verdict.ok) {
+    throw new Error(`${label}: API KEY REQUIRED carto dark_all ${verdict.url || verdict.reason}`);
+  }
+}
+
+async function waitForPip(send, name, label, timeoutMs = 30000) {
+  const ready = await waitFor(send, pipReadyExpression(name), label, timeoutMs);
+  if (name === 'plan') assertPlanBasemap(send, label, ready);
+  return ready;
+}
+
 async function holdFittingInset(send, evidenceDir, name, obstacles, shotBase, pane) {
   await setViewport(send, pane.width, pane.height, pane.mobile);
-  await waitFor(send, pipReadyExpression(name), `${name} inset ${pane.width}x${pane.height}`, 30000);
+  await waitForPip(send, name, `${name} inset ${pane.width}x${pane.height}`);
   await waitFor(send, pipClearExpression(name, obstacles), `${name} inset ${pane.width}x${pane.height} clear`, 10000);
   if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers ${pane.width}x${pane.height}`, 10000);
   if (pane.shot) {
@@ -1984,7 +2021,7 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
     return `absent ${held.join(' ')}`;
   }
-  const ready = await waitFor(send, pipReadyExpression(name), `${name} inset`, 30000);
+  const ready = await waitForPip(send, name, `${name} inset`);
   if (name === 'horizon') await openMapLegend(send);
   const clear = await waitFor(send, pipClearExpression(name, obstacles), `${name} inset clear`, 10000);
   if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers`, 10000);
@@ -1993,7 +2030,7 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
   const extra = [`${viewport.width}x${viewport.height}`];
   if (viewport.mobile) {
     await setViewport(send, viewport.height, viewport.width, true);
-    await waitFor(send, pipReadyExpression(name), `${name} inset landscape`, 30000);
+    await waitForPip(send, name, `${name} inset landscape`);
     await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
     if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers landscape`, 10000);
     await sleep(800);
@@ -2006,7 +2043,7 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   } else {
     await setViewport(send, 1280, 800, false);
-    await waitFor(send, pipReadyExpression(name), `${name} inset 1280x800`, 30000);
+    await waitForPip(send, name, `${name} inset 1280x800`);
     await waitFor(send, pipClearExpression(name, obstacles), `${name} inset 1280 clear`, 10000);
     if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers 1280`, 10000);
     await sleep(800);
@@ -2022,7 +2059,7 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
     await waitFor(send, legendCentersMissInset(), `${name} legend centers restored`, 10000);
     await closeMapLegend(send);
   }
-  await waitFor(send, pipReadyExpression(name), `${name} inset restored`, 30000);
+  await waitForPip(send, name, `${name} inset restored`);
   return `present ${ready.width}x${ready.height} clear ${clear.width}x${clear.height} ${extra.join(' ')}`;
 }
 
@@ -4105,7 +4142,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     await pressIssFullscreen(send);
     const back = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen exit by button', 10000);
     if (insetViewportFits(viewport.width, viewport.height)) {
-      await waitFor(send, pipReadyExpression('plan'), 'plan inset back after fullscreen', 20000);
+      await waitForPip(send, 'plan', 'plan inset back after fullscreen', 20000);
     }
     if (!sameFrame(idle, back)) throw new Error(`iss frame after fullscreen ${JSON.stringify(back)} is not ${JSON.stringify(idle)}`);
     await click(send, '[data-iss-preset="nadir"]');
