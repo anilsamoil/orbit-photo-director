@@ -285,8 +285,16 @@ describe('map chrome layout', () => {
     expect(command).toContain('id="time-slider"');
     const heights = rulesFor('body:has(> #view.view-map):not(.map-chrome-hidden)')
       .map((style) => style.getPropertyValue('--map-command-height'));
-    expect(heights).toContain('calc(140px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('calc(64px + env(safe-area-inset-bottom, 0px))');
+    expect(heights).toContain('calc(120px + env(safe-area-inset-bottom, 0px))');
     expect(heights).toContain('52px');
+    expect(heights).not.toContain('calc(72px + env(safe-area-inset-bottom, 0px))');
+    const narrowShort = css.slice(css.indexOf('@media (max-height: 520px) {'), css.indexOf('@media (max-height: 520px) and (min-width: 720px)'));
+    const wideShort = css.slice(css.indexOf('@media (max-height: 520px) and (min-width: 720px)'), css.indexOf('@media (max-height: 520px) and (max-width: 899px)'));
+    expect(narrowShort).not.toContain('flex-wrap: nowrap');
+    expect(narrowShort).toContain('overflow-x: auto');
+    expect(wideShort).toContain('flex-wrap: nowrap');
+    expect(wideShort).toContain('height: 52px;');
     expect(css).toContain('--map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);');
     expect(css).toContain('--map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');
@@ -310,9 +318,14 @@ describe('map chrome layout', () => {
     );
     const command = getComputedStyle(document.querySelector('.map-command')!);
     const controls = getComputedStyle(document.querySelector('.map-controls-time')!);
-    expect(command.backgroundColor).toBe('rgba(16, 22, 28, 0.55)');
-    expect(command.borderTopColor).toBe('transparent');
-    expect(controls.backgroundColor).toBe('transparent');
+    expect(command.backgroundColor).toBe('transparent');
+    expect(command.borderTopWidth).toBe('0px');
+    expect(command.bottom).toBe('0px');
+    expect(css).toContain('padding: 0 0 calc(28px + env(safe-area-inset-bottom, 0px));');
+    expect(css).toContain('@media (min-height: 521px)');
+    expect(css).toContain('.view-map .map-command .map-controls-time {\n    padding-bottom: 8px;');
+    expect(controls.backgroundColor).toBe('rgba(7, 10, 13, 0.86)');
+    expect(controls.pointerEvents).toBe('auto');
     expect(ruleStyle('.view-map #map').bottom).toBe('0px');
   });
 
