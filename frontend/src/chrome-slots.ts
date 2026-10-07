@@ -126,7 +126,7 @@ function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot {
   const chosen = stackedOk ? tall : fits(line) ? line : { x, y: raisedY, w: width, h: TARGET };
   const side = [measure.hide, measure.legendButton, measure.footer, measure.shotList].filter(present);
   const cleared = shrinkClear(chosen, side);
-  return slot(cleared.x, cleared.y, Math.max(TARGET, cleared.w), TARGET);
+  return slot(cleared.x, cleared.y, Math.max(TARGET, cleared.w), chosen.h);
 }
 
 function placeNarrowDock(measure: ChromeMeasure, lane: Box | null, time: Slot): DockSlot {
@@ -147,38 +147,49 @@ function placeNarrowDock(measure: ChromeMeasure, lane: Box | null, time: Slot): 
   return { ...slot(minX, y, Math.max(TARGET, draft.w), gutter), axis: 'row' };
 }
 
-function placeNarrowLegend(measure: ChromeMeasure, lane: Box | null, time: Slot, dock: DockSlot): Slot | null {
-  if (!measure.legendOpen) return null;
+function legendSlot(measure: ChromeMeasure, lane: Box | null, y: number, h: number, panelRight: number): Slot | null {
   const minX = (lane ? rightOf(lane) : measure.insets.left) + GAP;
-  const bandTop = showBottom(measure) + SEPARATION;
-  const bandH = time.y - GAP - bandTop;
-  const stackedTop = Math.max(bottomOf(time), bottomOf(dock)) + GAP;
-  const stackedH = floorY(measure) - GAP - stackedTop;
-  const useBand = bandH >= MIN_LEGEND;
-  const y = useBand ? bandTop : stackedTop;
-  const h = useBand ? bandH : stackedH;
-  if (h < 1) return null;
-  const buttonRight = present(measure.legendButton)
-    ? rightOf(measure.legendButton)
-    : measure.viewport.w - measure.insets.right - EDGE;
-  let panelRight = buttonRight;
-  if (!useBand && y < bottomOf(dock) - 0.5 && y + h > dock.y + 0.5) {
-    panelRight = Math.min(panelRight, dock.x - GAP);
-  }
   const cap = Math.min(panelRight, measure.viewport.w - measure.insets.right - EDGE);
   const width = Math.min(LEGEND_W, Math.max(0, cap - minX));
+  if (width < 1 || h < 1) return null;
   const x = Math.max(minX, cap - width);
   const top = snap(y);
   const low = Math.floor(Math.min(y + h, floorY(measure) - GAP) * 100) / 100;
-  return { x: snap(Math.max(minX, x)), y: top, w: snap(width), h: Math.max(0, Math.floor((low - top) * 100) / 100) };
+  const height = Math.max(0, Math.floor((low - top) * 100) / 100);
+  if (height < 1) return null;
+  return { x: snap(x), y: top, w: snap(width), h: height };
+}
+
+function placeNarrowLegend(measure: ChromeMeasure, lane: Box | null, time: Slot, dock: DockSlot): Slot | null {
+  if (!measure.legendOpen) return null;
+  const bandTop = showBottom(measure) + SEPARATION;
+  const bandH = time.y - GAP - bandTop;
+  const buttonRight = present(measure.legendButton)
+    ? rightOf(measure.legendButton)
+    : measure.viewport.w - measure.insets.right - EDGE;
+  const clearOfDock = (y: number, h: number, panelRight: number) => (
+    y < bottomOf(dock) - 0.5 && y + h > dock.y + 0.5 ? Math.min(panelRight, dock.x - GAP) : panelRight
+  );
+  if (bandH >= MIN_LEGEND) {
+    return legendSlot(measure, lane, bandTop, bandH, clearOfDock(bandTop, bandH, buttonRight));
+  }
+  const controlTop = nearestTop([measure.legendButton, measure.hide], floorY(measure));
+  const belowTop = Math.max(bottomOf(time), bottomOf(dock)) + GAP;
+  const aboveH = controlTop - GAP - belowTop;
+  if (aboveH >= MIN_LEGEND) {
+    return legendSlot(measure, lane, belowTop, aboveH, clearOfDock(belowTop, aboveH, buttonRight));
+  }
+  let panelRight = present(measure.legendButton) ? measure.legendButton.x - GAP : buttonRight;
+  if (present(measure.hide)) panelRight = Math.min(panelRight, measure.hide.x - GAP);
+  const room = Math.max(0, floorY(measure) - GAP - belowTop);
+  return legendSlot(measure, lane, belowTop, room, clearOfDock(belowTop, room, panelRight));
 }
 
 function placeWideDock(measure: ChromeMeasure, lane: Box | null): DockSlot | null {
   if (!(measure.dockCorridor > 0 && measure.dockCorridor < TARGET)) return null;
   const gutter = cross(measure.scrollbar);
   const x = (lane ? rightOf(lane) : measure.insets.left) + GAP;
-  const anchors = [measure.show, measure.zoom, measure.compass].filter(present).map(bottomOf);
-  let y = (anchors.length ? Math.max(...anchors) : measure.insets.top) + GAP;
+  const span = measure.viewport.w - measure.insets.right - RIGHT_MARGIN - x;
   const obstacles = [
     measure.pip,
     measure.hide,
@@ -187,20 +198,31 @@ function placeWideDock(measure: ChromeMeasure, lane: Box | null): DockSlot | nul
     measure.shotList,
     measure.zoom,
     measure.compass,
+    measure.show,
+    measure.slider,
+    measure.sliderChip,
+    ...measure.showButtons,
     ...measure.timeButtons,
   ].filter(present);
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const span = measure.viewport.w - measure.insets.right - RIGHT_MARGIN - x;
+  const clusterTop = nearestTop(
+    [measure.hide, measure.legendButton, measure.footer, measure.shotList, measure.slider, measure.sliderChip, ...measure.timeButtons],
+    measure.viewport.h - measure.insets.bottom,
+  );
+  const candidates = [clusterTop - GAP - gutter, ...obstacles.map((box) => bottomOf(box) + GAP)];
+  const seen = new Set<number>();
+  for (const raw of candidates) {
+    const y = snap(raw);
+    if (seen.has(y)) continue;
+    seen.add(y);
+    if (y < measure.insets.top - 0.5) continue;
+    if (y + gutter > measure.viewport.h - measure.insets.bottom + 0.5) continue;
     const cleared = shrinkClear({ x, y, w: span, h: gutter }, obstacles);
-    if (cleared.w >= TARGET && !obstacles.some((box) => meets(cleared, box))) {
-      return { ...slot(x, y, cleared.w, gutter), axis: 'row' };
+    const row = { x, y, w: cleared.w, h: gutter };
+    if (row.w >= TARGET && !obstacles.some((box) => meets(row, box))) {
+      return { ...slot(x, y, row.w, gutter), axis: 'row' };
     }
-    const hits = obstacles.filter((box) => meets({ x, y, w: Math.max(span, TARGET), h: gutter }, box));
-    if (!hits.length) break;
-    y = Math.max(...hits.map(bottomOf)) + GAP;
   }
-  const span = measure.viewport.w - measure.insets.right - RIGHT_MARGIN - x;
-  return { ...slot(x, y, Math.max(TARGET, span), gutter), axis: 'row' };
+  return null;
 }
 
 function placeWideLegend(measure: ChromeMeasure): Slot | null {

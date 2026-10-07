@@ -137,19 +137,24 @@ describe('chrome slots', () => {
     expect(hide).toEqual({ x: 620, y: 388, w: 88, h: 44 });
   });
 
-  it('gives an 800x600 dock a 44px cross axis clear of the preview', () => {
+  it('gives an 800x600 dock a 44px cross axis clear of the preview and the time strip', () => {
     const pip: Box = { x: 566, y: 89, w: 222, h: 144 };
-    const hide: Box = { x: 700, y: 480, w: 88, h: 44 };
-    const zoom: Box = { x: 55, y: 89, w: 44, h: 88 };
+    const hide: Box = { x: 700, y: 312, w: 88, h: 44 };
+    const zoom: Box = { x: 8, y: 239, w: 44, h: 88 };
+    const slider: Box = { x: 46.66, y: 403.2, w: 175.92, h: 32 };
+    const t90: Box = { x: 537.02, y: 398, w: 50.98, h: 44 };
     const slots = solveChromeSlots(measure({
       viewport: { w: 800, h: 600 },
       insets: { top: 24, right: 0, bottom: 20, left: 47 },
       zoom,
-      compass: { x: 55, y: 177, w: 44, h: 44 },
-      show: { x: 55, y: 89, w: 200, h: 52 },
+      compass: { x: 8, y: 327, w: 44, h: 44 },
+      show: { x: 8, y: 89, w: 203.38, h: 52 },
       pip,
       hide,
-      legendButton: { x: 604, y: 480, w: 88, h: 44 },
+      legendButton: { x: 604, y: 312, w: 88, h: 44 },
+      slider,
+      sliderChip: { x: 8, y: 384, w: 588, h: 116 },
+      timeButtons: [t90],
       dockCorridor: 43,
       scrollbar: 6,
     }));
@@ -159,9 +164,12 @@ describe('chrome slots', () => {
     expect(slots.dock.axis).toBe('row');
     expect(slots.dock.h).toBeGreaterThanOrEqual(44 + 6);
     expect(slots.dock.x).toBeGreaterThanOrEqual(rightOf(zoom) + 8);
+    expect(bottomOf(slots.dock)).toBeLessThanOrEqual(hide.y - 8);
     expect(meets(slots.dock, pip)).toBe(false);
     expect(meets(slots.dock, hide)).toBe(false);
     expect(meets(slots.dock, zoom)).toBe(false);
+    expect(meets(slots.dock, slider)).toBe(false);
+    expect(meets(slots.dock, t90)).toBe(false);
   });
 
   it('keeps a short wide dock at 874x402 clear of zoom and the footer', () => {
@@ -204,11 +212,37 @@ describe('chrome slots', () => {
     }));
     expect(slots.legend).not.toBeNull();
     if (!slots.legend || !slots.time) return;
+    const legendButton: Box = { x: 234, y: 198, w: 88, h: 44 };
+    const hide: Box = { x: 330, y: 198, w: 88, h: 44 };
     expect(bottomOf(slots.legend)).toBeLessThanOrEqual(footer.y - 8);
     expect(meets(slots.legend, footer)).toBe(false);
     expect(meets(slots.legend, zoom)).toBe(false);
+    expect(meets(slots.legend, legendButton)).toBe(false);
+    expect(meets(slots.legend, hide)).toBe(false);
     expect(slots.legend.x).toBeGreaterThanOrEqual(rightOf(zoom) + 8);
+    expect(slots.legend.w).toBeGreaterThan(88);
     expect(meets(slots.legend, slots.time)).toBe(false);
+  });
+
+  it('keeps a 390x520 time stack tall enough for a full-width slider', () => {
+    const hide: Box = { x: 290, y: 440, w: 88, h: 44 };
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 390, h: 520 },
+      zoom: { x: 8, y: 110, w: 44, h: 88 },
+      compass: { x: 8, y: 198, w: 44, h: 44 },
+      show: { x: 8, y: 53, w: 203, h: 52 },
+      hide,
+      legendButton: { x: 194, y: 440, w: 88, h: 44 },
+      footer: { x: 0, y: 497, w: 390, h: 23 },
+      legendOpen: false,
+      scrollbar: 6,
+    }));
+    expect(slots.time).not.toBeNull();
+    if (!slots.time) return;
+    expect(slots.time.h).toBe(96);
+    expect(bottomOf(slots.time)).toBeLessThanOrEqual(hide.y);
+    expect(slots.time.w).toBeGreaterThanOrEqual(100);
+    expect(meets(slots.time, hide)).toBe(false);
   });
 
   it('hides every slot when the chrome is hidden', () => {

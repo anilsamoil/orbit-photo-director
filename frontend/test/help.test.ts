@@ -74,7 +74,7 @@ describe('openHelpModal', () => {
     expect(text).toContain('On a wide screen, Legend sits immediately left of Hide in the bottom-right corner');
     expect(text).toContain('On a narrow screen, Legend stays immediately left of Hide');
     expect(text).toContain('the open list sits above the time row when that band can hold it');
-    expect(text).toContain('the list scrolls in the free space above the footer, clear of the zoom column and the time row');
+    expect(text).toContain('the list scrolls in the free space above the footer, clear of the zoom column, the time row, and the Legend button');
     expect(text).not.toContain('Tap Legend on the left edge');
     expect(text).not.toContain('right of the zoom buttons');
     expect(text).not.toContain('of the zoom buttons');

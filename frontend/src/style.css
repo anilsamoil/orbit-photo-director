@@ -4783,6 +4783,11 @@ body.map-slot-time .view-map .map-command .time-slider-row {
   gap: 0;
 }
 
+body.map-slot-time:not(.map-slot-time-line) .view-map .map-command .time-slider-row {
+  flex: 1 0 100%;
+  width: 100%;
+}
+
 body.map-slot-time .view-map .map-command .time-slider {
   margin: 0;
   min-width: 44px;
