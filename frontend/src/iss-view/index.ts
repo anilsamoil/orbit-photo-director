@@ -366,6 +366,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   });
   const fullscreen = bindIssFullscreen({
     scene: root,
+    controls,
+    telemetry,
     relayout: () => {
       if (phase === 'running' && rendererReady) void paint();
       else layout();

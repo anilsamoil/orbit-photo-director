@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mountIssScene, type IssScene, type MountIssSceneOptions } from '../src/iss-view';
+import { bindIssFullscreen } from '../src/iss-view/fullscreen';
 import type { SceneSnapshot } from '../src/iss-view/model';
 import type { IssRendererFactory } from '../src/iss-view/renderer';
 import { launchStore } from '../src/launch-store';
@@ -549,6 +550,41 @@ describe('ISS fullscreen frame', () => {
     observers.resize();
     expect(view.frame.style.width).toBe('900px');
     expect(aimedAt.at(-1)).toBe(startMs + 90_000);
+  });
+});
+
+describe('ISS fullscreen binding', () => {
+  it('mounts when the controls sit outside the scene', () => {
+    const scene = document.createElement('section');
+    const controls = document.createElement('div');
+    controls.dataset.issControls = '';
+    const telemetry = document.createElement('button');
+    telemetry.type = 'button';
+    telemetry.dataset.issTelemetry = '';
+    telemetry.textContent = 'Telemetry';
+    controls.append(telemetry);
+    const outside = document.createElement('button');
+    outside.type = 'button';
+    document.body.append(scene, controls, outside);
+    cleanups.push(() => {
+      scene.remove();
+      controls.remove();
+      outside.remove();
+    });
+    const binding = bindIssFullscreen({ scene, controls, telemetry, relayout() {} });
+    cleanups.push(() => binding.dispose());
+    const button = controls.querySelector('[data-iss-fullscreen]');
+    if (!(button instanceof HTMLButtonElement)) throw new Error('fullscreen button missing');
+    expect(button.previousElementSibling).toBe(telemetry);
+    expect(scene.contains(controls)).toBe(false);
+    button.click();
+    expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(true);
+    expect(button.getAttribute('aria-label')).toBe('Exit full screen');
+    button.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    telemetry.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(true);
+    outside.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(false);
   });
 });
 

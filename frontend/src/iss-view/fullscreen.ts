@@ -41,11 +41,13 @@ const FACES = {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () => void }): { dispose(): void } {
-  const { scene, relayout } = options;
-  const controls = scene.querySelector('[data-iss-controls]');
-  const telemetry = controls?.querySelector('[data-iss-telemetry]');
-  if (!(controls instanceof HTMLElement) || !(telemetry instanceof HTMLElement)) throw new Error('iss controls missing');
+export function bindIssFullscreen(options: {
+  scene: HTMLElement;
+  controls: HTMLElement;
+  telemetry: HTMLElement;
+  relayout: () => void;
+}): { dispose(): void } {
+  const { scene, controls, telemetry, relayout } = options;
   const button = document.createElement('button');
   button.type = 'button';
   button.dataset.issFullscreen = '';
@@ -120,7 +122,8 @@ export function bindIssFullscreen(options: { scene: HTMLElement; relayout: () =>
   }
 
   function onFocusIn(event: FocusEvent): void {
-    if (mode === 'off' || !(event.target instanceof Element) || scene.contains(event.target)) return;
+    if (mode === 'off' || !(event.target instanceof Element)) return;
+    if (scene.contains(event.target) || controls.contains(event.target)) return;
     dispatch('dismiss');
   }
 
