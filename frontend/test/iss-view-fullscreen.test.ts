@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mountIssScene, type IssScene, type MountIssSceneOptions } from '../src/iss-view';
+import { bindIssFullscreen } from '../src/iss-view/fullscreen';
 import type { SceneSnapshot } from '../src/iss-view/model';
 import type { IssRendererFactory } from '../src/iss-view/renderer';
 import { launchStore } from '../src/launch-store';
@@ -159,12 +160,70 @@ function styled(): void {
   cleanups.push(() => style.remove());
 }
 
+function installSplitMedia(matches: boolean): void {
+  const previous = window.matchMedia.bind(window);
+  const media = {
+    matches,
+    media: '',
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() {
+      return false;
+    },
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+  };
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: () => media,
+  });
+  cleanups.push(() => {
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: previous });
+  });
+}
+
+async function mountedSplit(): Promise<Mounted & { pane: HTMLElement }> {
+  installSplitMedia(true);
+  const pane = document.createElement('section');
+  pane.id = 'iss-pane';
+  pane.innerHTML = `
+    <div data-iss-split-stack>
+      <div class="iss-split-map">
+        <button type="button" data-pip="plan"><span data-pip-frame="plan"></span></button>
+        <div data-iss-split-chrome></div>
+      </div>
+      <div data-iss-split-dock></div>
+    </div>
+    <div id="iss-host"></div>
+  `;
+  document.body.append(pane);
+  const host = pane.querySelector('#iss-host');
+  if (!(host instanceof HTMLElement)) throw new Error('host missing');
+  const scene = mountIssScene(host, {
+    nowMs: () => startMs + 60_000,
+    createRenderer: renderer(),
+    drive: 'manual',
+    session: { mode: 'horizon' },
+  });
+  cleanups.push(() => {
+    scene.dispose();
+    pane.remove();
+  });
+  await settle();
+  scene.update(shot());
+  await settle();
+  const button = query(pane, '[data-iss-fullscreen]');
+  if (!(button instanceof HTMLButtonElement)) throw new Error('fullscreen control is not a native button');
+  return { host, scene, root: query(pane, '[data-iss-scene]'), frame: query(pane, '[data-iss-frame]'), button, pane };
+}
+
 describe('ISS fullscreen toggle', () => {
   it.each(['standard', 'webkit', 'both'] as const)('enters and leaves element fullscreen through the %s API', async (api) => {
     const fullscreen = browser(api);
     const view = await mounted();
-    expect(view.button.previousElementSibling?.hasAttribute('data-iss-aim-anchor')).toBe(true);
-    expect(view.button.parentElement?.hasAttribute('data-iss-toolbar')).toBe(true);
+    expect(view.button.previousElementSibling?.hasAttribute('data-iss-telemetry')).toBe(true);
+    expect(view.button.parentElement?.hasAttribute('data-iss-controls')).toBe(true);
     expect(name(view.button)).toBe('Full screen');
     expect(view.button.title).toBe('Full screen');
     expect(view.button.hasAttribute('aria-pressed')).toBe(false);
@@ -309,6 +368,7 @@ describe('ISS fullscreen Escape', () => {
 
     expect(key(view.button, 'Escape').defaultPrevented).toBe(true);
     expect(marked(view.root)).toBe(false);
+    expect(document.activeElement).toBe(view.button);
     expect(key(view.button, 'Escape', { repeat: true }).defaultPrevented).toBe(true);
     key(view.button, 'Escape', { repeat: true });
     expect(view.scene.mode()).toBe('nadir');
@@ -350,10 +410,13 @@ describe('ISS fullscreen Escape', () => {
     view.frame.focus();
     const toolbar = query(view.root, '[data-iss-toolbar]');
     const scrim = query(view.root, '[data-iss-aim-scrim]');
+    const card = query(view.root, '[data-iss-card]');
     expect(getComputedStyle(toolbar).pointerEvents).toBe('none');
+    expect(getComputedStyle(card).pointerEvents).toBe('none');
     expect(getComputedStyle(view.button).pointerEvents).toBe('auto');
     expect(getComputedStyle(view.button).zIndex).toBe('1');
     expect(Number(getComputedStyle(toolbar).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
+    expect(Number(getComputedStyle(card).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
 
     view.button.click();
     expect(marked(view.root)).toBe(true);
@@ -548,6 +611,41 @@ describe('ISS fullscreen frame', () => {
   });
 });
 
+describe('ISS fullscreen binding', () => {
+  it('mounts when the controls sit outside the scene', () => {
+    const scene = document.createElement('section');
+    const controls = document.createElement('div');
+    controls.dataset.issControls = '';
+    const telemetry = document.createElement('button');
+    telemetry.type = 'button';
+    telemetry.dataset.issTelemetry = '';
+    telemetry.textContent = 'Telemetry';
+    controls.append(telemetry);
+    const outside = document.createElement('button');
+    outside.type = 'button';
+    document.body.append(scene, controls, outside);
+    cleanups.push(() => {
+      scene.remove();
+      controls.remove();
+      outside.remove();
+    });
+    const binding = bindIssFullscreen({ scene, controls, telemetry, relayout() {} });
+    cleanups.push(() => binding.dispose());
+    const button = controls.querySelector('[data-iss-fullscreen]');
+    if (!(button instanceof HTMLButtonElement)) throw new Error('fullscreen button missing');
+    expect(button.previousElementSibling).toBe(telemetry);
+    expect(scene.contains(controls)).toBe(false);
+    button.click();
+    expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(true);
+    expect(button.getAttribute('aria-label')).toBe('Exit full screen');
+    button.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    telemetry.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(true);
+    outside.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(false);
+  });
+});
+
 describe('ISS fullscreen styles', () => {
   it('zeroes the chrome around the frame and keeps the clock, the labels, and the exit button', async () => {
     styled();
@@ -573,9 +671,23 @@ describe('ISS fullscreen styles', () => {
     expect(css('[data-iss-stage] > :first-child').left).toBe('17.6px');
     expect(css('[data-iss-stage] > :last-child').right).toBe('17.6px');
 
-    expect(css('[data-iss-card]').display).toBe('none');
-    expect(css('[data-iss-telemetry-body]').marginTop).toBe('0px');
-    expect(css('[data-iss-telemetry-body]').borderTopWidth).toBe('0px');
+    expect(css('[data-iss-card]').display).toBe('block');
+    const telemetry = query(view.root, '[data-iss-telemetry]');
+    const body = query(view.root, '[data-iss-telemetry-body]');
+    expect(telemetry.getAttribute('aria-expanded')).toBe('false');
+    expect(body.hidden).toBe(true);
+    expect(css('[data-iss-telemetry-body]').display).toBe('none');
+    telemetry.click();
+    expect(telemetry.getAttribute('aria-expanded')).toBe('true');
+    expect(body.hidden).toBe(false);
+    expect(css('[data-iss-telemetry-body]').display).toBe('block');
+    expect(css('[data-iss-telemetry]').height).toBe('44px');
+    expect(css('[data-iss-fullscreen]').height).toBe('44px');
+    const place = document.createElement('div');
+    place.className = 'iss-place iss-place-country maplibregl-marker';
+    place.textContent = 'Pacific Ocean';
+    view.frame.append(place);
+    expect(getComputedStyle(place).display).not.toBe('none');
     expect(css('[data-iss-presets]').display).toBe('none');
     expect(css('[data-iss-edition]').display).toBe('none');
     expect(css('[data-iss-aim-anchor]').display).toBe('none');
@@ -605,6 +717,45 @@ describe('ISS fullscreen styles', () => {
     expect(button.borderTopColor).toBe('#617585');
   });
 
+  it('keeps Telemetry and Exit on the card when split fullscreen parks it', async () => {
+    styled();
+    browser('missing');
+    const view = await mountedSplit();
+    const pane = view.pane;
+    const card = query(pane, '[data-iss-card]');
+    const telemetry = query(pane, '[data-iss-telemetry]');
+    const dock = query(pane, '[data-iss-split-dock]');
+    expect(dock.contains(card)).toBe(true);
+    expect(view.root.getAttribute('data-iss-split')).toBe('on');
+
+    view.button.click();
+    view.frame.focus();
+
+    expect(view.root.hasAttribute('data-iss-fullscreen-active')).toBe(true);
+    expect(card.parentElement).toBe(view.root);
+    const telemetryBox = telemetry.getBoundingClientRect();
+    const exitBox = view.button.getBoundingClientRect();
+    const parked = `card ${getComputedStyle(card).display} telemetry ${telemetryBox.width}x${telemetryBox.height} exit ${exitBox.width}x${exitBox.height}`;
+    expect(getComputedStyle(card).display, parked).toBe('block');
+    expect(view.button.previousElementSibling).toBe(telemetry);
+    expect(getComputedStyle(telemetry).height).toBe('44px');
+    expect(getComputedStyle(view.button).width).toBe('44px');
+    expect(getComputedStyle(view.button).height).toBe('44px');
+    expect(getComputedStyle(view.button).position).toBe('relative');
+
+    telemetry.click();
+    const body = query(pane, '[data-iss-telemetry-body]');
+    expect(telemetry.getAttribute('aria-expanded')).toBe('true');
+    expect(body.hidden).toBe(false);
+    expect(getComputedStyle(body).display).toBe('block');
+
+    view.button.click();
+    view.button.focus();
+    expect(view.root.hasAttribute('data-iss-fullscreen-active')).toBe(false);
+    expect(view.root.getAttribute('data-iss-split')).toBe('on');
+    expect(dock.contains(card)).toBe(true);
+  });
+
   it('keeps the error card in fullscreen', async () => {
     styled();
     browser('missing');
@@ -613,6 +764,17 @@ describe('ISS fullscreen styles', () => {
     view.button.click();
     expect(marked(view.root)).toBe(true);
     expect(getComputedStyle(query(view.root, '[data-iss-card]')).display).toBe('block');
+  });
+
+  it('marks a window at 564px or shorter so layout can use the pane', async () => {
+    const previous = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 564 });
+    const short = await mounted();
+    expect(short.root.hasAttribute('data-iss-short')).toBe(true);
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 665 });
+    const tall = await mounted();
+    expect(tall.root.hasAttribute('data-iss-short')).toBe(false);
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: previous });
   });
 
   it('styles fullscreen through the valueless marker only', () => {

@@ -374,6 +374,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   });
   const fullscreen = bindIssFullscreen({
     scene: root,
+    controls,
+    telemetry,
     relayout: () => {
       if (phase === 'running' && rendererReady) void paint();
       else layout();
@@ -859,6 +861,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function layout(): { widthPx: number; heightPx: number } {
     syncSplit();
     syncLaunchChrome();
+    root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= 564);
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
     const fit = width < 10 || height < 10
