@@ -77,10 +77,15 @@ def test_refresh_and_restart_noop_preserve_source_age(setup):
     assert len(calls) == 2
     pointer = json.loads(remote["launch/latest.json"])
     artifact = json.loads(remote[pointer["path"]])
-    assert artifact["coverage"]["fetched_at"] == utc(now)
+    assert artifact["schema_version"] == 3
+    assert artifact["coverage"]["schedule_fetched_at"] == utc(now)
+    assert artifact["schedule_valid_until"] == utc(now + timedelta(minutes=75))
+    assert artifact["geometry_valid_until"] == utc(now + timedelta(minutes=15))
+    assert pointer["schema_version"] == 2
+    assert pointer["valid_until"] == artifact["geometry_valid_until"]
     assert "FEED_PAGINATED" in artifact["coverage"]["reasons"]
     assert not artifact["coverage"]["complete"]
-    assert all(item["status"] == "map_only" for item in artifact["items"])
+    assert artifact["items"][0]["tier"] == "watch"
     assert run(now + timedelta(hours=2))["reason"] == "UNCHANGED_INPUT"
     assert len(calls) == 2
     assert json.loads((output / "launch/latest.json").read_bytes()) == pointer
@@ -112,7 +117,7 @@ def test_ten_minute_check_consumes_new_receipt_once(setup):
     assert result["published"] and not result["notified"]
     pointer = json.loads(remote["launch/latest.json"])
     artifact = json.loads(remote[pointer["path"]])
-    assert artifact["coverage"]["fetched_at"] == utc(received)
+    assert artifact["coverage"]["schedule_fetched_at"] == utc(received)
     assert len(calls) == 4
     assert run(now + timedelta(hours=3))["reason"] == "UNCHANGED_INPUT"
     assert len(calls) == 4
@@ -131,7 +136,7 @@ def test_slip_then_tbd_removes_old_exact_event(setup):
     run(now + timedelta(hours=1))
     pointer = json.loads(remote["launch/latest.json"])
     item = json.loads(remote[pointer["path"]])["items"][0]
-    assert item["launch_window"]["net"] == row["net"]
+    assert item["schedule"]["net"] == row["net"]
     row.update(
         net=utc(now + timedelta(days=8)),
         status={"abbrev": "TBD"},
@@ -143,8 +148,9 @@ def test_slip_then_tbd_removes_old_exact_event(setup):
     run(now + timedelta(hours=2))
     pointer = json.loads(remote["launch/latest.json"])
     items = json.loads(remote[pointer["path"]])["items"]
-    assert [item["launch_window"]["net"] for item in items] == [row["net"]]
-    assert "LAUNCH_UNCONFIRMED" in items[0]["reason_codes"]
+    assert [item["schedule"]["net"] for item in items] == [row["net"]]
+    assert items[0]["tier"] == "unassessed"
+    assert "LAUNCH_UNCONFIRMED" in items[0]["reasons"]
 
 
 @pytest.mark.parametrize("mode", ["missing", "mismatch", "future", "stale"])
@@ -299,7 +305,7 @@ def test_policy_upgrade_republishes_same_receipt_once_without_releasing_owner(se
     state = json.loads(state_path.read_bytes())
     assert state["remote"] == old_owner
     assert state["input"]["fetched_at"] == old_receipt
-    assert state["input"]["policy"] == 2
+    assert state["input"]["policy"] == 3
     assert len(calls) == 4
     assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
     assert len(calls) == 4

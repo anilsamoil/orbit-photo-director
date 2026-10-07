@@ -14,13 +14,25 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from generator.launch_catalog import build_launch_catalog
 from generator.launch_data import _parse_iso8601_z, validate_feed
-from generator.launch_evidence import build_launch_artifact, canonical_bytes, read_cached_artifact
+from generator.launch_evidence import canonical_bytes, read_cached_artifact
 from generator.launch_publish import publish_launch_artifact, rclone_reader, rclone_uploader
 from generator.orbit import TLE
 
 # Schedule refresh tolerance, NOT the 15-minute capture-evidence lifetime.
 MAX_SCHEDULE_AGE_SECONDS = 3 * 3600
+
+
+def _schedule_fetched(artifact: dict) -> str:
+    coverage = artifact["coverage"]
+    if artifact.get("schema_version") == 3:
+        stamp = coverage["schedule_fetched_at"]
+    else:
+        stamp = coverage["fetched_at"]
+    if not isinstance(stamp, str):
+        raise ValueError("SOURCE_AGE_UNKNOWN")
+    return stamp
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -63,7 +75,7 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     identity = {
         # A model-policy change requires one fresh publication even when the
         # source receipt is unchanged. Retain ownership and prior receipts.
-        "policy": 2,
+        "policy": 3,
         "schedule_sha256": receipt["sha256"],
         "fetched_at": receipt["fetched_at"],
         "tle_sha256": hashlib.sha256(tle_raw).hexdigest(),
@@ -99,7 +111,7 @@ def refresh_cached(
 
         def finish(value: dict) -> dict:
             artifact = value["artifact"]
-            age = (now - _parse_iso8601_z(artifact["coverage"]["fetched_at"])).total_seconds()
+            age = (now - _parse_iso8601_z(_schedule_fetched(artifact))).total_seconds()
             pointer = publish_launch_artifact(
                 artifact,
                 output,
@@ -115,7 +127,7 @@ def refresh_cached(
         if (
             intent
             and (
-                now - _parse_iso8601_z(intent["artifact"]["coverage"]["fetched_at"])
+                now - _parse_iso8601_z(_schedule_fetched(intent["artifact"]))
             ).total_seconds()
             >= MAX_SCHEDULE_AGE_SECONDS
         ):
@@ -145,7 +157,7 @@ def refresh_cached(
                     "reason": "UNCHANGED_INPUT",
                     "revision": local["revision"],
                 }
-        artifact = build_launch_artifact(
+        artifact = build_launch_catalog(
             payload, tle, now, fetched_at=_parse_iso8601_z(identity["fetched_at"])
         )
         intent = {"remote": remote, "input": identity, "artifact": artifact}
@@ -158,7 +170,7 @@ def refresh_cached(
             "reason": "PUBLISHED",
             "revision": state["pointer"]["revision"],
             "items": len(artifact["items"]),
-            "fetched_at": artifact["coverage"]["fetched_at"],
+            "fetched_at": _schedule_fetched(artifact),
             "coverage_complete": artifact["coverage"]["complete"],
         }
 

@@ -6,11 +6,12 @@ import copy
 import hashlib
 import json
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
+from generator.launch_catalog import _score, build_launch_catalog
 from generator.launch_data import parse_response, validate_feed
 from generator.launch_evidence import (
     VALID_SECONDS,
@@ -21,8 +22,11 @@ from generator.launch_evidence import (
     read_cached_artifact,
     utc,
 )
-from generator.launch_publish import publish_launch_artifact, rclone_uploader
+from generator.launch_opportunities import LightMode, Sight, Subject
+from generator.launch_publish import publish_launch_artifact, rclone_reader, rclone_uploader
+from generator.orbit import Position, propagate
 from scripts.ascent_smoke import main as diagnose
+from scripts.launch_census import FIXTURE_DIR, load_replay
 
 
 @pytest.fixture
@@ -222,8 +226,10 @@ def test_cache_receipt_and_readonly_diagnostic(tmp_path, evidence, capsys):
     )
     before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.iterdir()}
     with patch("requests.get", side_effect=AssertionError("network forbidden")):
-        assert diagnose(["--cache-dir", str(tmp_path), "--now", utc(now), "--json"]) == 2
+        assert diagnose(["--cache-dir", str(tmp_path), "--now", utc(now), "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
+    assert report["coverage"]["listed"] == 1
+    assert "schedule_fetched_at" in report["coverage"]
     assert not report["notified"] and not report["published"]
     assert "EPHEMERIS_MISSING" in report["coverage"]["reasons"]
     assert "SOURCE_AGE_MTIME_ONLY" not in report["coverage"]["reasons"]
@@ -387,3 +393,214 @@ def test_historical_fixture_requires_archived_evidence(tmp_path, capsys):
     registry.write_text(json.dumps({"validation_status": "historical_ephemeris_missing"}))
     assert diagnose(["--fixture", str(registry), "--json"]) == 2
     assert "HISTORICAL_EPHEMERIS_MISSING" in json.loads(capsys.readouterr().out)["reasons"]
+
+
+def _catalog_row(net: datetime, **over) -> dict:
+    row = {
+        "id": "synthetic-f9",
+        "name": "Synthetic Falcon 9",
+        "net": utc(net),
+        "window_start": utc(net),
+        "window_end": utc(net),
+        "net_precision": {"name": "Second"},
+        "status": {"abbrev": "Go"},
+        "rocket": {"configuration": {"full_name": "Falcon 9 Block 5"}},
+        "pad": {"latitude": 0.0, "longitude": 0.0, "location": {"name": "Synthetic pad"}},
+    }
+    row.update(over)
+    return {"count": 1, "next": None, "results": [row]}
+
+
+def _overhead(sample_tle, net: datetime) -> dict:
+    iss = propagate(sample_tle, net)
+    payload = _catalog_row(net)
+    payload["results"][0]["pad"]["latitude"] = iss.lat
+    payload["results"][0]["pad"]["longitude"] = iss.lon
+    return payload
+
+
+def test_night_engine_score_is_a_range():
+    when = datetime(2026, 10, 6, tzinfo=UTC)
+    sight = Sight(
+        Subject.ASCENT, when, when, 60, 28.0, -80.0, 80.0,
+        True, 500.0, 10.0, LightMode.NIGHT_ENGINE, 1.0, True,
+    )
+    score = _score(sight, Position(28.0, -80.0, 420.0, when), 30.0)
+    assert score["terms"]["C"] == [0.3, 0.8]
+    assert score["low"] < score["high"]
+    assert score["low"] != (score["low"] + score["high"]) / 2
+
+
+def test_overhead_pad_is_a_shot_with_one_sentence(sample_tle, tmp_path):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(minutes=10)
+    catalog = build_launch_catalog(_overhead(sample_tle, net), sample_tle, now, fetched_at=now)
+    item = catalog["items"][0]
+    assert catalog["schema_version"] == 3
+    assert catalog["schedule_valid_until"] == utc(now + timedelta(minutes=75))
+    assert catalog["geometry_valid_until"] == utc(now + timedelta(minutes=15))
+    assert item["tier"] == "shot"
+    assert item["direction"]["kind"] == "none"
+    assert item["why"].endswith(".")
+    assert "km" in item["why"]
+    assert all(shot["subject"] == "pad" and shot["track"] == [] for shot in item["shots"])
+    shot = item["shots"][0]
+    assert set(shot["score"]["terms"]) == {"A", "C", "D", "M", "R"}
+    assert shot["score"]["low"] <= shot["score"]["high"]
+    assert shot["score"]["low"] >= 50
+    pointer = publish_launch_artifact(catalog, tmp_path / "launch-output")
+    assert pointer["schema_version"] == 2
+    assert pointer["valid_until"] == catalog["geometry_valid_until"]
+
+
+def test_tle_age_splits_likely_and_watch(sample_tle):
+    epoch = sample_tle.epoch.replace(microsecond=0)
+    now = epoch + timedelta(hours=1)
+    likely = build_launch_catalog(
+        _overhead(sample_tle, epoch + timedelta(hours=30)), sample_tle, now, fetched_at=now,
+    )
+    watch = build_launch_catalog(
+        _overhead(sample_tle, epoch + timedelta(hours=49)), sample_tle, now, fetched_at=now,
+    )
+    assert likely["items"][0]["tier"] == "likely"
+    assert watch["items"][0]["tier"] == "watch"
+
+
+def test_hour_and_loose_schedule_cap_the_tier(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(minutes=10)
+    hour = _overhead(sample_tle, net)
+    hour["results"][0]["net_precision"] = {"name": "Hour"}
+    tbc = _overhead(sample_tle, net)
+    tbc["results"][0]["status"] = {"abbrev": "TBC"}
+    day = _catalog_row(net, net_precision={"name": "Day"})
+    assert build_launch_catalog(hour, sample_tle, now, fetched_at=now)["items"][0]["tier"] == "watch"
+    assert build_launch_catalog(tbc, sample_tle, now, fetched_at=now)["items"][0]["tier"] == "watch"
+    loose = build_launch_catalog(day, sample_tle, now, fetched_at=now)["items"][0]
+    assert loose["tier"] == "unassessed"
+    assert loose["why"] == "Schedule is too loose to plan a window."
+    assert loose["shots"] == []
+
+
+def test_fresh_disk_negative_is_none_and_stale_miss_is_not(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    fresh_net = now + timedelta(minutes=20)
+    iss = propagate(sample_tle, fresh_net)
+    lon = iss.lon + 180.0
+    if lon > 180.0:
+        lon -= 360.0
+    fresh = _catalog_row(fresh_net)
+    fresh["results"][0]["pad"]["latitude"] = -iss.lat
+    fresh["results"][0]["pad"]["longitude"] = lon
+    fresh_item = build_launch_catalog(fresh, sample_tle, now, fetched_at=now)["items"][0]
+    assert fresh_item["tier"] == "none"
+    assert "NOMINAL_ASCENT_TOO_FAR" in fresh_item["reasons"]
+    stale_net = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=49)
+    stale = _catalog_row(stale_net)
+    stale["results"][0]["pad"]["latitude"] = -iss.lat
+    stale["results"][0]["pad"]["longitude"] = lon
+    stale_item = build_launch_catalog(stale, sample_tle, now, fetched_at=now)["items"][0]
+    assert stale_item["tier"] == "watch"
+
+
+def test_ascent_track_needs_a_direction_and_keeps_altitude(sample_tle, tmp_path):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(minutes=10)
+    payload = _overhead(sample_tle, net)
+    payload["results"][0]["rocket"]["spacecraft_stage"] = [{"destination": "ISS"}]
+    catalog = build_launch_catalog(payload, sample_tle, now, fetched_at=now)
+    item = catalog["items"][0]
+    assert item["direction"]["kind"] == "iss_plane"
+    assert item["schedule"]["destination"] == "ISS"
+    ascent = [shot for shot in item["shots"] if shot["subject"] == "ascent"]
+    assert ascent
+    assert ascent[0]["track"]
+    assert any(point["alt_km"] > 0 for point in ascent[0]["track"])
+    assert all(point["alt_km"] >= 0 for point in ascent[0]["track"])
+    offsets = [point["t_offset_s"] for point in ascent[0]["track"]]
+    assert offsets == sorted(set(offsets))
+    publish_launch_artifact(catalog, tmp_path / "launch-output")
+
+
+def test_liftoff_scenarios_stay_separate(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(minutes=10)
+    payload = _overhead(sample_tle, net)
+    end = net + timedelta(seconds=120)
+    payload["results"][0]["window_end"] = utc(end)
+    item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+    liftoffs = {shot["liftoff"] for shot in item["shots"]}
+    assert liftoffs == {utc(net), utc(end)}
+    for shot in item["shots"]:
+        liftoff = datetime.fromisoformat(shot["liftoff"].replace("Z", "+00:00"))
+        best = datetime.fromisoformat(shot["best"].replace("Z", "+00:00"))
+        assert -300 <= (best - liftoff).total_seconds() <= 600
+
+
+def test_complete_follows_the_horizon_not_the_server_count(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    payload = _catalog_row(now + timedelta(hours=2))
+    payload.update(count=400, next="https://example.invalid/page2")
+    partial = build_launch_catalog(payload, sample_tle, now, fetched_at=now)
+    assert partial["coverage"]["complete"] is False
+    assert "FEED_PAGINATED" in partial["coverage"]["reasons"]
+    far = copy.deepcopy(payload["results"][0])
+    far.update(
+        id="beyond-horizon",
+        name="Beyond horizon",
+        net=utc(now + timedelta(days=15)),
+        window_start=utc(now + timedelta(days=15)),
+        window_end=utc(now + timedelta(days=15)),
+    )
+    payload["results"].append(far)
+    paged = build_launch_catalog(payload, sample_tle, now, fetched_at=now)
+    assert paged["coverage"]["complete"] is True
+    assert "FEED_PAGINATED" not in paged["coverage"]["reasons"]
+    assert paged["coverage"]["listed"] == 1
+    assert paged["coverage"]["received"] == 2
+
+
+def test_saved_feed_lists_seven_and_crs35_is_watch():
+    payload, tle, now = load_replay(FIXTURE_DIR)
+    catalog = build_launch_catalog(payload, tle, now, fetched_at=now)
+    assert catalog["schema_version"] == 3
+    assert catalog["coverage"]["listed"] == 7
+    assert catalog["coverage"]["tier_counts"]["shot"] == 0
+    assert catalog["coverage"]["tier_counts"]["likely"] == 0
+    crs = next(item for item in catalog["items"] if "SpX-35" in item["name"])
+    assert crs["tier"] == "watch"
+    epoch = datetime.fromisoformat(catalog["tle"]["epoch"].replace("Z", "+00:00"))
+    for item in catalog["items"]:
+        assert all(shot["subject"] != "ascent" or item["direction"]["kind"] != "none" for shot in item["shots"])
+        if item["tier"] != "none":
+            continue
+        net = datetime.fromisoformat(item["schedule"]["net"].replace("Z", "+00:00"))
+        assert abs((net - epoch).total_seconds()) <= 24 * 3600
+
+
+def test_catalog_pointer_stays_schema2(tmp_path, sample_tle):
+    from types import SimpleNamespace
+
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    catalog = build_launch_catalog(
+        _catalog_row(now + timedelta(minutes=10)), sample_tle, now, fetched_at=now,
+    )
+    stored = {}
+
+    def upload(path, key, immutable):
+        stored[key] = path.read_bytes()
+
+    output = tmp_path / "launch-output"
+    pointer = publish_launch_artifact(catalog, output, upload=upload)
+    assert pointer["schema_version"] == 2
+    assert pointer["valid_until"] == catalog["geometry_valid_until"]
+    body = stored[pointer["path"]]
+    raw = canonical_bytes(pointer)
+    with (
+        patch("generator.launch_publish.shutil.which", return_value="/usr/bin/rclone"),
+        patch(
+            "generator.launch_publish.subprocess.run",
+            side_effect=[SimpleNamespace(stdout=value) for value in (raw, body, raw)],
+        ),
+    ):
+        assert rclone_reader("test:bucket")() == pointer

@@ -24,6 +24,10 @@ from .launch_evidence import VALID_SECONDS, canonical_bytes
 
 
 def _validate_artifact(artifact: dict) -> None:
+    if isinstance(artifact, dict) and artifact.get("schema_version") == 3:
+        _validate_catalog(artifact)
+        return
+
     def keys(value: dict, expected: str) -> None:
         if not isinstance(value, dict) or set(value) != set(expected.split()):
             raise ValueError("UNEXPECTED_PUBLIC_LAUNCH_FIELDS")
@@ -69,6 +73,223 @@ def _validate_artifact(artifact: dict) -> None:
     ).total_seconds()
     if not 0 < validity <= VALID_SECONDS:
         raise ValueError("INVALID_LAUNCH_VALIDITY")
+
+
+def _validate_catalog(artifact: dict) -> None:
+    def keys(value: object, expected: str) -> None:
+        if not isinstance(value, dict) or set(value) != set(expected.split()):
+            raise ValueError("UNEXPECTED_PUBLIC_LAUNCH_FIELDS")
+
+    def number(raw: object, lower: float, upper: float) -> bool:
+        return (
+            isinstance(raw, (int, float)) and not isinstance(raw, bool)
+            and math.isfinite(raw) and lower <= raw <= upper
+        )
+
+    def whole(raw: object) -> bool:
+        return type(raw) is int and raw >= 0
+
+    keys(
+        artifact,
+        "schema_version revision generated_at schedule_valid_until "
+        "geometry_valid_until tle coverage items",
+    )
+    if artifact["schema_version"] != 3 or len(artifact["items"]) > 100:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    generated = _parse_iso8601_z(artifact["generated_at"])
+    schedule_for = (
+        _parse_iso8601_z(artifact["schedule_valid_until"]) - generated
+    ).total_seconds()
+    geometry_for = (
+        _parse_iso8601_z(artifact["geometry_valid_until"]) - generated
+    ).total_seconds()
+    if not 0 < schedule_for <= PLANNING_VALID_SECONDS or not 0 < geometry_for <= VALID_SECONDS:
+        raise ValueError("INVALID_LAUNCH_VALIDITY")
+    tle = artifact["tle"]
+    keys(tle, "epoch sha256 source")
+    _parse_iso8601_z(tle["epoch"])
+    if (
+        not isinstance(tle["sha256"], str) or re.fullmatch(r"[a-f0-9]{64}", tle["sha256"]) is None
+        or not isinstance(tle["source"], str) or not tle["source"]
+    ):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    coverage = artifact["coverage"]
+    keys(
+        coverage,
+        "from until schedule_fetched_at pages received listed evaluated "
+        "tier_counts complete reasons",
+    )
+    _parse_iso8601_z(coverage["from"])
+    _parse_iso8601_z(coverage["until"])
+    if coverage["schedule_fetched_at"] is not None:
+        _parse_iso8601_z(coverage["schedule_fetched_at"])
+    if not isinstance(coverage["complete"], bool) or not isinstance(coverage["reasons"], list):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if any(not whole(coverage[field]) for field in ("pages", "received", "listed", "evaluated")):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    counts = coverage["tier_counts"]
+    keys(counts, "shot likely watch unassessed none")
+    names = ("shot", "likely", "watch", "unassessed", "none")
+    counted = sum(counts[name] for name in names)
+    if any(not whole(counts[name]) for name in names) or counted != len(artifact["items"]):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if coverage["listed"] != len(artifact["items"]) or coverage["evaluated"] > coverage["listed"]:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    seen: set[str] = set()
+    for item in artifact["items"]:
+        _validate_catalog_item(item, seen, keys, number)
+    expected = hashlib.sha256(
+        canonical_bytes({k: v for k, v in artifact.items() if k != "revision"})
+    ).hexdigest()[:24]
+    if artifact["revision"] != expected:
+        raise ValueError("LAUNCH_REVISION_MISMATCH")
+    if len(canonical_bytes(artifact)) > 2_000_000:
+        raise ValueError("LAUNCH_ARTIFACT_TOO_LARGE")
+
+
+def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: Callable) -> None:
+    keys(item, "event_id revision name rocket site schedule direction tier why reasons shots")
+    if (
+        not isinstance(item["event_id"], str) or item["event_id"] in seen
+        or not isinstance(item["name"], str) or not item["name"]
+        or not isinstance(item["rocket"], str) or not item["rocket"]
+        or not isinstance(item["why"], str) or not item["why"]
+        or item["tier"] not in {"shot", "likely", "watch", "unassessed", "none"}
+        or not isinstance(item["reasons"], list)
+    ):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    seen.add(item["event_id"])
+    keys(item["site"], "name lat lon")
+    if not isinstance(item["site"]["name"], str) or not number(item["site"]["lat"], -90, 90):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if not number(item["site"]["lon"], -180, 180):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    schedule = item["schedule"]
+    keys(schedule, "net window_start window_end precision status destination")
+    _parse_iso8601_z(schedule["net"])
+    if schedule["window_start"] is not None:
+        _parse_iso8601_z(schedule["window_start"])
+    if schedule["window_end"] is not None:
+        _parse_iso8601_z(schedule["window_end"])
+    if schedule["window_start"] is not None and schedule["window_end"] is not None:
+        if _parse_iso8601_z(schedule["window_start"]) > _parse_iso8601_z(schedule["window_end"]):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if schedule["precision"] is not None and not isinstance(schedule["precision"], str):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if not isinstance(schedule["status"], str) or not schedule["status"]:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if schedule["destination"] is not None and not isinstance(schedule["destination"], str):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    direction = item["direction"]
+    keys(direction, "kind azimuth_deg source off_plane_deg")
+    kind = direction["kind"]
+    if kind == "none":
+        empty = ("azimuth_deg", "source", "off_plane_deg")
+        if any(direction[field] is not None for field in empty):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    elif kind in {"published", "iss_plane", "hazard_area"}:
+        if not number(direction["azimuth_deg"], 0, 360) or not isinstance(direction["source"], str):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+        if kind == "iss_plane":
+            if not number(direction["off_plane_deg"], -180, 180):
+                raise ValueError("INVALID_LAUNCH_SCHEMA")
+        elif direction["off_plane_deg"] is not None:
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    else:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if not isinstance(item["shots"], list) or len(item["shots"]) > 1000:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    for shot in item["shots"]:
+        _validate_shot(shot, kind, keys, number)
+
+
+def _validate_shot(shot: dict, kind: str, keys: Callable, number: Callable) -> None:
+    keys(
+        shot,
+        "subject liftoff start best end best_offset_s look window slant_km limb_margin_deg "
+        "plume_mrad light lens lens_reason track score confidence",
+    )
+    if shot["subject"] not in {"pad", "ascent"}:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if shot["subject"] == "ascent" and kind == "none":
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    for field in ("liftoff", "start", "best", "end"):
+        _parse_iso8601_z(shot[field])
+    if (
+        _parse_iso8601_z(shot["start"]) > _parse_iso8601_z(shot["best"])
+        or _parse_iso8601_z(shot["best"]) > _parse_iso8601_z(shot["end"])
+    ):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if not number(shot["best_offset_s"], -86400, 86400):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    keys(shot["look"], "frame azimuth_deg off_nadir_deg")
+    look = shot["look"]
+    if (
+        look["frame"] != "orbital-lvlh"
+        or not number(look["azimuth_deg"], 0, 360)
+        or not number(look["off_nadir_deg"], 0, 180)
+    ):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if not isinstance(shot["window"], str) or re.fullmatch(r"W[1-7]", shot["window"]) is None:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if not number(shot["slant_km"], 0, 21000) or not number(shot["limb_margin_deg"], -180, 180):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if shot["plume_mrad"] is not None and not number(shot["plume_mrad"], 0, 1000):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if shot["light"] not in {"twilight_plume", "day_plume", "night_engine", "pad_day", "pad_night"}:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if shot["lens"] not in {"telephoto", "wide"} or not isinstance(shot["lens_reason"], str):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if not isinstance(shot["track"], list) or (shot["subject"] == "pad" and shot["track"]):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    previous = -math.inf
+    for point in shot["track"]:
+        keys(point, "t_offset_s lat lon alt_km")
+        if (
+            not number(point["t_offset_s"], -86400, 1e7) or point["t_offset_s"] <= previous
+            or not number(point["lat"], -90, 90) or not number(point["lon"], -180, 180)
+            or not number(point["alt_km"], 0, 100000)
+        ):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+        previous = point["t_offset_s"]
+    keys(shot["score"], "low high terms")
+    if (
+        not number(shot["score"]["low"], 0, 100) or not number(shot["score"]["high"], 0, 100)
+        or shot["score"]["low"] > shot["score"]["high"]
+    ):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    keys(shot["score"]["terms"], "A C D M R")
+    for term in shot["score"]["terms"].values():
+        if (
+            not isinstance(term, list) or len(term) != 2
+            or not number(term[0], 0, 1) or not number(term[1], 0, 1) or term[0] > term[1]
+        ):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    keys(shot["confidence"], "tle_age_h along_track_sigma_km timing_sigma_s robust")
+    confidence = shot["confidence"]
+    if (
+        not number(confidence["tle_age_h"], 0, 100000)
+        or not number(confidence["along_track_sigma_km"], 0, 100000)
+        or not number(confidence["timing_sigma_s"], 0, 1e7)
+        or not isinstance(confidence["robust"], bool)
+    ):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+
+
+def _commit_matches(pointer: dict, artifact: dict) -> bool:
+    if pointer.get("revision") != artifact.get("revision"):
+        return False
+    if pointer.get("generated_at") != artifact.get("generated_at"):
+        return False
+    if artifact.get("schema_version") == 3:
+        return (
+            pointer.get("schema_version") == 2
+            and pointer.get("valid_until") == artifact.get("geometry_valid_until")
+        )
+    return (
+        pointer.get("schema_version") == artifact.get("schema_version")
+        and pointer.get("valid_until") == artifact.get("valid_until")
+    )
 
 
 def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable) -> None:
@@ -212,11 +433,16 @@ def publish_launch_artifact(
         pending_artifact = artifact_path.with_suffix(".pending")
         pending_artifact.write_bytes(body)
         os.replace(pending_artifact, artifact_path)
+        lease_until = (
+            artifact["geometry_valid_until"]
+            if artifact.get("schema_version") == 3
+            else artifact["valid_until"]
+        )
         pointer = {
             "schema_version": 2,
             "revision": revision,
             "generated_at": artifact["generated_at"],
-            "valid_until": artifact["valid_until"],
+            "valid_until": lease_until,
             "path": relative,
             "sha256": hashlib.sha256(body).hexdigest(),
         }
@@ -308,10 +534,7 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
         _validate_artifact(artifact)
         if (
             hashlib.sha256(body).hexdigest() != pointer["sha256"]
-            or any(
-                pointer[k] != artifact[k]
-                for k in ("schema_version", "revision", "generated_at", "valid_until")
-            )
+            or not _commit_matches(pointer, artifact)
             or cat("launch/latest.json", 4096) != raw
         ):
             raise ValueError("REMOTE_LAUNCH_READBACK_FAILED")

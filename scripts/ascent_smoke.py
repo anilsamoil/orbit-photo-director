@@ -62,11 +62,17 @@ def main(argv: list[str] | None = None) -> int:
         print("Launch diagnosis incomplete: " + ", ".join(report["reasons"]))
     else:
         c = report["coverage"]
-        print(
-            f"Launches: {c['received']} received, {c['parsed']} parsed, "
-            f"{c['evaluated']} evaluated, {c['visible']} sampled-visible, "
-            f"{c['unevaluated']} unevaluated. No send or publication."
-        )
+        if "listed" in c:
+            print(
+                f"Launches: {c['received']} received, {c['listed']} listed, "
+                f"{c['evaluated']} evaluated. No send or publication."
+            )
+        else:
+            print(
+                f"Launches: {c['received']} received, {c['parsed']} parsed, "
+                f"{c['evaluated']} evaluated, {c['visible']} sampled-visible, "
+                f"{c['unevaluated']} unevaluated. No send or publication."
+            )
         print(
             "Coverage: "
             + ("complete" if c["complete"] else "incomplete")
@@ -74,10 +80,16 @@ def main(argv: list[str] | None = None) -> int:
             + ", ".join(c["reasons"])
         )
         for item in report["items"]:
-            print(
-                f"{item['launch_window']['net']} | {item['name']} | MAP ONLY | "
-                + ", ".join(item["reason_codes"])
-            )
+            if "schedule" in item:
+                print(
+                    f"{item['schedule']['net']} | {item['name']} | {item['tier']} | "
+                    + ", ".join(item["reasons"])
+                )
+            else:
+                print(
+                    f"{item['launch_window']['net']} | {item['name']} | MAP ONLY | "
+                    + ", ".join(item["reason_codes"])
+                )
     return 0 if report["ok"] and report["coverage_complete"] else 2
 
 
