@@ -4714,7 +4714,7 @@ function splitLaunchPlace(width, height) {
   return width - mapColumn <= 720 ? 'below' : 'side';
 }
 
-function launchEarthPanes(width, height) {
+export function launchEarthPanes(width, height) {
   const native = { width, height, mobile: width < 1100, label: `${width}x${height}`, place: '', minShort: 80 };
   if (width === 390 && height === 664) {
     return [
