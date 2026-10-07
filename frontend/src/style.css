@@ -4745,17 +4745,13 @@ summary:focus-visible {
   }
 
   .view-map .map-legend-panel {
-    max-height: max(0px, calc(var(--map-stack-room) - var(--map-time-block) - 12px));
+    max-height: calc(var(--map-stack-room) - var(--map-time-block) - 12px);
   }
 
   .view-map .map-control-dock,
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    width: 76px;
-    height: max(28px, calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px));
-    max-height: max(28px, calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px));
+    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
     pointer-events: none;
-    container-type: size;
-    container-name: map-dock;
   }
 
   .view-map .map-control-dock > .map-controls,
@@ -4771,8 +4767,6 @@ summary:focus-visible {
     height: var(--map-time-block);
     max-height: var(--map-time-block);
     padding: 0;
-    container-type: size;
-    container-name: map-command;
   }
 
   .view-map .map-command .map-controls-time {
@@ -4785,43 +4779,63 @@ summary:focus-visible {
     flex: 1 1 100%;
     min-width: 0;
   }
-}
 
-@container map-dock (max-height: 43px) {
-  .view-map .map-control-dock .time-btn {
-    min-height: 0;
-    height: 100%;
-    max-height: 100%;
+  body.map-chrome-reflow .view-map {
+    --map-reflow-top: calc(var(--map-toolbar-clear) + 4px + 44px + 8px);
   }
-}
 
-@container map-command (max-height: 100px) {
-  .view-map .map-command .map-controls-time {
+  body.map-chrome-reflow:has(#status-banner .banner-actions) .view-map {
+    --map-reflow-corner: max(36px, calc(7.75rem + env(safe-area-inset-bottom, 0px) - var(--map-shotlist-block) + 4px));
+  }
+
+  body.map-chrome-reflow .view-map .map-chrome-toggle,
+  body.map-chrome-reflow .view-map .map-legend {
+    bottom: var(--map-reflow-corner, var(--map-corner-bottom));
+  }
+
+  body.map-chrome-reflow .view-map .map-command,
+  body.map-chrome-reflow.shotlist-bar-visible .view-map .map-command {
+    top: calc(var(--map-toolbar-clear) + 4px);
+    bottom: auto;
+    height: 44px;
+    max-height: 44px;
+    min-height: 44px;
+    padding: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    pointer-events: auto;
+  }
+
+  body.map-chrome-reflow .view-map .map-command .map-controls-time {
     flex-wrap: nowrap;
     gap: 2px;
+    width: max-content;
+    min-width: 100%;
+    max-width: none;
+    height: 44px;
     padding: 0 2px;
-    overflow: hidden;
+    overflow: visible;
   }
 
-  .view-map .map-command .time-slider-row {
+  body.map-chrome-reflow .view-map .map-command .time-slider-row {
     flex: 1 1 0;
     min-width: 44px;
     padding: 0;
     gap: 0;
   }
 
-  .view-map .map-command .time-slider {
+  body.map-chrome-reflow .view-map .map-command .time-slider {
     margin: 0;
     min-width: 44px;
     height: 44px;
   }
 
-  .view-map .map-command .time-slider-end,
-  .view-map .map-command .time-slider-readout {
+  body.map-chrome-reflow .view-map .map-command .time-slider-end,
+  body.map-chrome-reflow .view-map .map-command .time-slider-readout {
     display: none;
   }
 
-  .view-map .map-command .time-step-btn {
+  body.map-chrome-reflow .view-map .map-command .time-step-btn {
     flex: 0 0 44px;
     width: 44px;
     min-width: 44px;
@@ -4830,6 +4844,62 @@ summary:focus-visible {
     min-height: 44px;
     padding: 0;
     overflow: hidden;
+  }
+
+  body.map-chrome-reflow .view-map .map-control-dock,
+  body.map-chrome-reflow .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
+    top: var(--map-reflow-top);
+    width: max-content;
+    max-width: 76px;
+    height: auto;
+    max-height: calc(100% - var(--map-reflow-top) - var(--map-reflow-corner, var(--map-corner-bottom)) - 44px - 8px);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  body.map-chrome-reflow.map-dock-row .view-map {
+    --map-reflow-top: calc(var(--map-toolbar-clear) + 4px + 44px + 8px + 52px + 8px);
+  }
+
+  body.map-chrome-reflow.map-dock-row .view-map .map-control-dock,
+  body.map-chrome-reflow.map-dock-row .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
+    top: calc(var(--map-toolbar-clear) + 4px + 44px + 8px);
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    right: var(--map-corner-clear);
+    width: auto;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-direction: row;
+  }
+
+  body.map-chrome-reflow.map-dock-row .view-map .map-control-dock > .map-controls {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    width: max-content;
+  }
+
+  body.map-chrome-reflow.map-dock-row .view-map .map-control-dock .map-group-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  body.map-chrome-reflow .view-map .map-legend-panel {
+    position: fixed;
+    top: var(--map-reflow-top);
+    bottom: auto;
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    right: auto;
+    width: min(11rem, calc(100vw - var(--map-corner-clear) - 8px - env(safe-area-inset-left, 0px)));
+    min-width: 0;
+    max-width: min(11rem, calc(100vw - var(--map-corner-clear) - 8px - env(safe-area-inset-left, 0px)));
+    max-height: max(44px, calc(var(--map-pane-budget) - var(--map-reflow-top) - 8px));
+    overflow: auto;
   }
 }
 

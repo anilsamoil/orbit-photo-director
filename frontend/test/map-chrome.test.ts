@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyMapChrome, bindMapChrome, readMapChromeShown } from '../src/map-chrome';
+import { applyMapChrome, bindMapChrome, mapChromeReflowChoice, readMapChromeShown } from '../src/map-chrome';
 
 function mount(): HTMLButtonElement {
   document.body.className = 'map-chrome-hidden';
@@ -43,5 +43,78 @@ describe('map chrome', () => {
     applyMapChrome(readMapChromeShown());
     expect(button.textContent).toBe('Hide');
     expect(document.getElementById('map-pane')!.classList.contains('map-chrome-hidden')).toBe(false);
+  });
+
+  it('moves the strip when a 44px row does not clear Show', () => {
+    const stacked = {
+      narrow: true,
+      chromeHidden: false,
+      pane: 407,
+      toolbarClear: 178,
+      stripAnchor: 210,
+      topbar: 113,
+      legendOpen: false,
+      reflowCorner: 48,
+      centersStolen: false,
+    };
+    expect(mapChromeReflowChoice(stacked)).toEqual({ reflow: true, dockRow: false });
+    expect(mapChromeReflowChoice({ ...stacked, pane: 416 })).toEqual({ reflow: true, dockRow: false });
+    expect(mapChromeReflowChoice({
+      narrow: true,
+      chromeHidden: false,
+      pane: 400,
+      toolbarClear: 137,
+      stripAnchor: 210,
+      topbar: 72,
+      legendOpen: false,
+      reflowCorner: 162,
+      centersStolen: false,
+    })).toEqual({ reflow: false, dockRow: false });
+    expect(mapChromeReflowChoice({
+      narrow: true,
+      chromeHidden: false,
+      pane: 400,
+      toolbarClear: 137,
+      stripAnchor: 210,
+      topbar: 72,
+      legendOpen: true,
+      reflowCorner: 162,
+      centersStolen: false,
+    })).toEqual({ reflow: true, dockRow: true });
+    expect(mapChromeReflowChoice({
+      narrow: true,
+      chromeHidden: false,
+      pane: 400,
+      toolbarClear: 137,
+      stripAnchor: 154,
+      topbar: 72,
+      legendOpen: true,
+      reflowCorner: 102,
+      centersStolen: false,
+    })).toEqual({ reflow: false, dockRow: false });
+    expect(mapChromeReflowChoice({
+      narrow: true,
+      chromeHidden: false,
+      pane: 520,
+      toolbarClear: 113,
+      stripAnchor: 120,
+      topbar: 48,
+      legendOpen: true,
+      reflowCorner: 68,
+      centersStolen: false,
+    })).toEqual({ reflow: false, dockRow: false });
+    expect(mapChromeReflowChoice({
+      narrow: true,
+      chromeHidden: false,
+      pane: 520,
+      toolbarClear: 113,
+      stripAnchor: 120,
+      topbar: 48,
+      legendOpen: true,
+      reflowCorner: 68,
+      centersStolen: true,
+    }).reflow).toBe(true);
+    expect(mapChromeReflowChoice({ ...stacked, narrow: false }).reflow).toBe(false);
+    expect(mapChromeReflowChoice({ ...stacked, chromeHidden: true }).reflow).toBe(false);
   });
 });
