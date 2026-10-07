@@ -3219,6 +3219,7 @@ async function proveNarrowDockScrollport(send, viewport) {
         document.body.classList.toggle('shotlist-bar-visible', ${shotlist});
         const toggle = document.getElementById('map-legend-toggle');
         if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        window.__opdSyncMapChrome?.();
         const dock = document.querySelector('.map-control-dock');
         const first = document.getElementById('bearing-north');
         const last = document.getElementById('toggle-satellite-picker');
@@ -3277,6 +3278,7 @@ async function proveLegendClearsNarrowControls(send, viewport) {
           document.body.classList.toggle('shotlist-bar-visible', ${toggle.shotlist});
           const legend = document.getElementById('map-legend-toggle');
           if (legend) legend.setAttribute('aria-expanded', 'true');
+          window.__opdSyncMapChrome?.();
           const panel = document.getElementById('map-legend-panel');
           const strip = document.querySelector('.map-command');
           const toolbar = document.querySelector('.map-toolbar');
@@ -3337,6 +3339,7 @@ async function proveRaisedStripClearsToolbar(send, viewport) {
       document.body.classList.remove('shotlist-bar-visible');
       const legend = document.getElementById('map-legend-toggle');
       if (legend) legend.setAttribute('aria-expanded', 'false');
+      window.__opdSyncMapChrome?.();
       const mine = document.getElementById('filter-mine-map');
       const launches = document.getElementById('filter-launches-map');
       const toolbar = document.querySelector('.map-toolbar');
@@ -3404,6 +3407,7 @@ async function proveLegendMissesRaisedPip(send, viewport) {
       document.body.classList.add('shotlist-bar-visible');
       const legend = document.getElementById('map-legend-toggle');
       if (legend) legend.setAttribute('aria-expanded', 'true');
+      window.__opdSyncMapChrome?.();
       const panel = document.getElementById('map-legend-panel');
       const date = document.querySelector('.map-imagery-date');
       const pip = document.querySelector('[data-pip="horizon"]');
