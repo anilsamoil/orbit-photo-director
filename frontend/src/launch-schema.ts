@@ -51,7 +51,10 @@ export interface LaunchArtifact {
 
 export interface ShotEnvelope {
   subject: 'pad' | 'ascent';
-  liftoff: string; start: string; best: string; end: string; best_offset_s: number;
+  liftoff: string;
+  evaluated_at?: string;
+  direction?: LaunchCatalogItem['direction'];
+  start: string; best: string; end: string; best_offset_s: number;
   look: { frame: 'orbital-lvlh'; azimuth_deg: number; off_nadir_deg: number };
   window: 'W1' | 'W2' | 'W3' | 'W4' | 'W5' | 'W6' | 'W7';
   slant_km: number; limb_margin_deg: number; plume_mrad: number | null;
@@ -366,10 +369,26 @@ function parseSchema3(value: unknown): LaunchCatalog {
     strings(item.reasons);
     requireValue(Array.isArray(item.shots) && item.shots.length <= 1000);
     for (const shotValue of item.shots) {
-      const shot = record(shotValue, 'subject liftoff start best end best_offset_s look window slant_km limb_margin_deg plume_mrad light lens lens_reason track score confidence');
+      const shot = record(shotValue, 'subject liftoff start best end best_offset_s look window slant_km limb_margin_deg plume_mrad light lens lens_reason track score confidence', 'evaluated_at direction');
       requireValue(shot.subject === 'pad' || shot.subject === 'ascent');
       if (shot.subject === 'ascent') requireValue(direction.kind !== 'none');
       timestamp(shot.liftoff);
+      const hasEvaluated = Object.hasOwn(shot, 'evaluated_at');
+      const hasDirection = Object.hasOwn(shot, 'direction');
+      requireValue(hasEvaluated === hasDirection);
+      if (hasEvaluated) {
+        timestamp(shot.evaluated_at);
+        const shotDirection = record(shot.direction, 'kind azimuth_deg source off_plane_deg');
+        requireValue(typeof shotDirection.kind === 'string' && DIRECTION_KINDS.has(shotDirection.kind));
+        if (shotDirection.kind === 'none') {
+          requireValue(shotDirection.azimuth_deg === null && shotDirection.source === null && shotDirection.off_plane_deg === null);
+          requireValue(shot.subject !== 'ascent');
+        } else {
+          requireValue(number(shotDirection.azimuth_deg, 0, 360) && string(shotDirection.source));
+          if (shotDirection.kind === 'iss_plane') requireValue(number(shotDirection.off_plane_deg, -180, 180));
+          else requireValue(shotDirection.off_plane_deg === null);
+        }
+      }
       ordered(shot.start, shot.best);
       ordered(shot.best, shot.end);
       requireValue(number(shot.best_offset_s, -86400, 86400));

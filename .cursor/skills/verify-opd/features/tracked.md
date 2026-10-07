@@ -12,7 +12,7 @@ The map legend does not name Starship. A published element set draws a red diamo
 ## How to get to it (user POV)
 
 - Choose the Map tab. The legend is hidden until `Controls`.
-- Tap `Controls`. Tap `Legend` on the left edge. The legend reads launch, day, twilight, and eclipse, and the imagery date is in that open panel. It has no Starship row and no red swatch. The diamond is the map marker, and it appears only while the vehicle has elements. The diamond and the dotted track are on the map before that tap when an element set is published.
+- Tap `Controls`. Tap `Legend`, immediately left of Hide. The legend reads launch, day, twilight, and eclipse, and the imagery date is in that open panel. It has no Starship row and no red swatch. The diamond is the map marker, and it appears only while the vehicle has elements. The diamond and the dotted track are on the map before that tap when an element set is published.
 - When elements exist, the diamond sits on the sub-point and the dotted line is one orbit. The marker title is the status.
 
 ## Driving it with opd-verify
