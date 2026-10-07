@@ -7,16 +7,37 @@ const ESRI_DARK_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
 ];
 
-/** Reference raster. Boundaries below view zoom 1.5. Country names from there up. */
+/** Reference raster. Each centroid's first painted tile zoom is COUNTRY_RASTER_TILE_ZOOM. */
 const ESRI_LABEL_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
 ];
 
-/** View zoom where those tiles start naming countries.
- *  MapLibre's world tile is 512px and these tiles are 256px, so the requested
- *  tile zoom is round(viewZoom + 1). Tile zoom 3 is the first with country names,
- *  and that round trips to view zoom 1.5. */
-const COUNTRY_SYMBOL_MAX_ZOOM = 1.5;
+/** First World_Boundaries_and_Places tile zoom that paints the centroid name.
+ *  Full-world audit at tile z1 through z4. Australia is the continent label
+ *  on tile z1. Kenya is absent through tile z3 and first painted at tile z4.
+ *  The other ten centroids start at tile z3. */
+const COUNTRY_RASTER_TILE_ZOOM: Record<string, number> = {
+  Canada: 3,
+  Mexico: 3,
+  Brazil: 3,
+  Argentina: 3,
+  France: 3,
+  Egypt: 3,
+  Nigeria: 3,
+  Kenya: 4,
+  China: 3,
+  India: 3,
+  Japan: 3,
+  Australia: 1,
+};
+
+/** View zoom where that centroid symbol stops.
+ *  Requested tile zoom is round(viewZoom + 1), so tile zoom T starts at view
+ *  zoom T - 1.5. A fitted orbit stays below 1.5, so no symbol stops earlier
+ *  than that. Kenya therefore stops at 2.5 and the other eleven stop at 1.5. */
+const COUNTRY_SYMBOL_MAX_ZOOM: Record<string, number> = Object.fromEntries(
+  Object.entries(COUNTRY_RASTER_TILE_ZOOM).map(([name, tileZoom]) => [name, Math.max(1.5, tileZoom - 1.5)]),
+);
 
 /** Caps the fit. A tighter track zooms in. A full orbit stays below zoom 2. */
 const INSET_FIT_MAX_ZOOM = 5;
@@ -49,6 +70,37 @@ const INSET_MIN_ZOOM = -2;
 const INSET_FIT_PADDING_PX = 22;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
+function countrySymbolLayers() {
+  const groups: Record<string, string[]> = {};
+  for (const [name, maxzoom] of Object.entries(COUNTRY_SYMBOL_MAX_ZOOM)) {
+    const key = String(maxzoom);
+    const names = groups[key] ?? [];
+    names.push(name);
+    groups[key] = names;
+  }
+  return Object.entries(groups)
+    .sort((left, right) => Number(left[0]) - Number(right[0]))
+    .map(([key, names]) => ({
+      id: Number(key) === 1.5 ? 'inset-countries' : `inset-countries-${key.replace('.', '-')}`,
+      type: 'symbol' as const,
+      source: 'inset-countries',
+      maxzoom: Number(key),
+      filter: ['in', ['get', 'name'], ['literal', names]] as ['in', ['get', 'name'], ['literal', string[]]],
+      layout: {
+        'text-field': ['get', 'name'] as ['get', 'name'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': 12,
+      },
+      paint: {
+        'text-color': '#f7f4ea',
+        'text-halo-color': '#02040c',
+        'text-halo-width': 1.4,
+      },
+    }));
+}
+
+const COUNTRY_SYMBOL_LAYERS = countrySymbolLayers();
 
 type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };
 
@@ -89,22 +141,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
           source: 'inset-track',
           paint: { 'line-color': '#5cd0ff', 'line-width': 2 },
         },
-        {
-          id: 'inset-countries',
-          type: 'symbol',
-          source: 'inset-countries',
-          maxzoom: COUNTRY_SYMBOL_MAX_ZOOM,
-          layout: {
-            'text-field': ['get', 'name'],
-            'text-font': ['Open Sans Regular'],
-            'text-size': 12,
-          },
-          paint: {
-            'text-color': '#f7f4ea',
-            'text-halo-color': '#02040c',
-            'text-halo-width': 1.4,
-          },
-        },
+        ...COUNTRY_SYMBOL_LAYERS,
       ],
     },
   });

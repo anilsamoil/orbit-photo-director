@@ -42,6 +42,44 @@ export function keptCountrySymbol(names, country) {
   return { ok: true, country, count };
 }
 
+function rasterPainted(words, country) {
+  const token = String(country || '').toUpperCase();
+  const letters = String(words || '').toUpperCase().replace(/[^A-Z]+/g, '');
+  if (token.length < 4 || letters.length === 0) return false;
+  if (letters.includes(token)) return true;
+  for (let index = 0; index < token.length; index += 1) {
+    const stem = token.slice(0, index) + token.slice(index + 1);
+    if (stem.length >= 4 && letters.includes(stem)) return true;
+  }
+  return false;
+}
+
+/** One handoff sample. tilesOk false is a failure, including a wait that timed out.
+ *  After the cutoff the symbol is gone and the raster lettering is in the OCR words.
+ *  Before the cutoff the symbol is still there. */
+export function handoffSample(row, expect) {
+  if (!row || row.tilesOk !== true) {
+    return { ok: false, reason: 'tiles', country: expect && expect.country, zoom: expect && expect.zoom, detail: row && row.detail };
+  }
+  const zoom = Number(row.zoom);
+  if (!expect || !Number.isFinite(zoom) || Math.abs(zoom - expect.zoom) > 0.001) {
+    return { ok: false, reason: 'zoom', zoom: row.zoom, expected: expect && expect.zoom };
+  }
+  if (row.tileZ !== expect.tileZ) {
+    return { ok: false, reason: 'tile', tileZ: row.tileZ, expected: expect.tileZ, country: expect.country };
+  }
+  const names = nameList(row.names);
+  const count = names.filter((name) => name === expect.country).length;
+  if (count !== expect.symbols) {
+    return { ok: false, reason: 'symbol', country: expect.country, zoom, count, names };
+  }
+  const painted = rasterPainted(row.words, expect.country);
+  if (expect.raster && !painted) {
+    return { ok: false, reason: 'raster', country: expect.country, zoom, words: row.words };
+  }
+  return { ok: true, country: expect.country, zoom, count, raster: painted };
+}
+
 export function planLabelVerdict(sample) {
   function resolvedOpacity(value) {
     if (value == null) return 1;
@@ -255,6 +293,34 @@ function runBite() {
   console.log(`kept-france ok:${keptFrance.ok === true}`);
   console.log(`kept-japan ok:${keptJapan.ok === true}`);
   console.log(`kept-missing ok:${keptMissing.ok === true}`);
+  const handoffTiles = handoffSample({ tilesOk: false, detail: 'timeout' }, {
+    zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3,
+  });
+  const handoffGap = handoffSample({
+    tilesOk: true, zoom: 1.49, tileZ: 2, names: [], words: 'EUROPE',
+  }, { zoom: 1.49, country: 'France', symbols: 1, raster: false, tileZ: 2 });
+  const handoffDuplicate = handoffSample({
+    tilesOk: true, zoom: 1.5, tileZ: 3, names: ['France'], words: 'FRANCE',
+  }, { zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3 });
+  const handoffFrance = handoffSample({
+    tilesOk: true, zoom: 1.5, tileZ: 3, names: ['Spain'], words: 'FARIS RANCEMMAI',
+  }, { zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3 });
+  const handoffKenya = handoffSample({
+    tilesOk: true, zoom: 2.5, tileZ: 4, names: [], words: 'KENYA',
+  }, { zoom: 2.5, country: 'Kenya', symbols: 0, raster: true, tileZ: 4 });
+  const handoffKenyaEarly = handoffSample({
+    tilesOk: true, zoom: 2.49, tileZ: 3, names: [], words: 'AFRICA',
+  }, { zoom: 2.49, country: 'Kenya', symbols: 1, raster: false, tileZ: 3 });
+  const handoffMiss = handoffSample({
+    tilesOk: true, zoom: 1.5, tileZ: 3, names: [], words: 'EUROPE SPAIN',
+  }, { zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3 });
+  console.log(`handoff-tiles ok:${handoffTiles.ok === true}`);
+  console.log(`handoff-gap ok:${handoffGap.ok === true}`);
+  console.log(`handoff-duplicate ok:${handoffDuplicate.ok === true}`);
+  console.log(`handoff-france ok:${handoffFrance.ok === true}`);
+  console.log(`handoff-kenya ok:${handoffKenya.ok === true}`);
+  console.log(`handoff-kenya-early ok:${handoffKenyaEarly.ok === true}`);
+  console.log(`handoff-miss ok:${handoffMiss.ok === true}`);
   const fractionalBite = fractionalMain.ok === false
     && fractionalMain.reason === 'symbols'
     && fractionalMain.zoom === 2.5
@@ -263,7 +329,19 @@ function runBite() {
     && keptFrance.ok === true
     && keptJapan.ok === true
     && keptMissing.ok === false
-    && keptMissing.reason === 'kept';
+    && keptMissing.reason === 'kept'
+    && handoffTiles.ok === false
+    && handoffTiles.reason === 'tiles'
+    && handoffGap.ok === false
+    && handoffGap.reason === 'symbol'
+    && handoffDuplicate.ok === false
+    && handoffDuplicate.reason === 'symbol'
+    && handoffFrance.ok === true
+    && handoffKenya.ok === true
+    && handoffKenyaEarly.ok === false
+    && handoffKenyaEarly.reason === 'symbol'
+    && handoffMiss.ok === false
+    && handoffMiss.reason === 'raster';
   if (!fractionalBite) process.exit(1);
   const line = (name, verdict) => `${name} ok:${verdict.ok === true}`;
   console.log(line('unmutated', report.unmutated));

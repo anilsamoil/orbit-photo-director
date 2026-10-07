@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
-import { fractionalCountrySymbols, keptCountrySymbol, planLabelReaders } from './plan-label-verdict.mjs';
+import { fractionalCountrySymbols, handoffSample, keptCountrySymbol, planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
@@ -4537,55 +4537,178 @@ async function proveFullscreenTelemetry(send) {
   return `${open.w}x${open.h}`;
 }
 
-async function proveFractionalPlanLabels(send) {
-  const sample = await evaluate(send, `(async () => {
-    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
-    const map = frame && frame.__opdTrackInset;
-    if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
-      return { ok: false, reason: 'map' };
-    }
-    const fit = map.fitBounds.bind(map);
-    const resize = map.resize.bind(map);
+function ocrRasterTile(png) {
+  const script = `
+from PIL import Image, ImageOps
+import io, subprocess, sys
+im = Image.open(io.BytesIO(sys.stdin.buffer.read())).convert("RGBA")
+def paint(bg, scale, nearest, contrast):
+    base = Image.new("RGBA", im.size, bg)
+    comp = Image.alpha_composite(base, im).convert("L")
+    resample = Image.Resampling.NEAREST if nearest else Image.Resampling.LANCZOS
+    big = comp.resize((comp.width * scale, comp.height * scale), resample)
+    if contrast:
+        big = ImageOps.autocontrast(big)
+    buf = io.BytesIO()
+    big.save(buf, format="PNG")
+    result = subprocess.run(["tesseract", "stdin", "stdout", "-l", "eng", "--psm", "11"], input=buf.getvalue(), capture_output=True)
+    return result.stdout.decode("utf8", "replace")
+text = paint((32, 35, 38, 255), 4, True, True)
+text += "\\n" + paint((255, 255, 255, 255), 8, False, False)
+sys.stdout.write(text)
+`;
+  const result = spawnSync('python3', ['-c', script], { input: png, maxBuffer: 8 * 1024 * 1024 });
+  if (result.status !== 0) {
+    const err = result.stderr ? result.stderr.toString('utf8') : '';
+    throw new Error(`raster tile ocr failed ${err.slice(0, 200)}`);
+  }
+  return result.stdout ? result.stdout.toString('utf8').toUpperCase() : '';
+}
+
+async function fetchRasterTile(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`raster tile ${response.status} ${url}`);
+  return Buffer.from(await response.arrayBuffer());
+}
+
+const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
+  const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+  const map = frame && frame.__opdTrackInset;
+  if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
+    return { ok: false, reason: 'map' };
+  }
+  if (!map.__opdLabelHold) {
+    map.__opdLabelHold = {
+      fit: map.fitBounds.bind(map),
+      resize: map.resize.bind(map),
+      center: map.getCenter(),
+      zoom: map.getZoom(),
+    };
     map.fitBounds = () => map;
     map.resize = () => map;
-    const saved = { center: map.getCenter(), zoom: map.getZoom() };
-    const settle = () => new Promise((resolve) => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        resolve(true);
-      };
-      map.once('idle', finish);
-      setTimeout(finish, 1200);
-    });
-    const namesAt = async (zoom, lng, lat) => {
-      map.jumpTo({ center: [lng, lat], zoom });
-      await settle();
-      const features = map.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
-      return {
-        zoom: map.getZoom(),
-        names: features.map((feature) => (feature.properties && feature.properties.name) || ''),
-      };
+  }
+  const centerTile = (sourceId) => {
+    const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
+    const center = map.getCenter();
+    const z = Math.max(0, Math.round(map.getZoom() + 1));
+    const n = 2 ** z;
+    const x = Math.max(0, Math.min(n - 1, Math.floor(((center.lng + 180) / 360) * n)));
+    const rad = center.lat * Math.PI / 180;
+    const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+    const y = Math.max(0, Math.min(n - 1, yRaw));
+    if (!manager || typeof manager.getVisibleCoordinates !== 'function') {
+      return { z, x, y, state: 'manager' };
+    }
+    const coords = manager.getVisibleCoordinates() || [];
+    const match = coords.find((coord) => coord.canonical && coord.canonical.z === z && coord.canonical.x === x && coord.canonical.y === y);
+    const tile = match && typeof manager.getTile === 'function' ? manager.getTile(match) : null;
+    return {
+      z, x, y,
+      state: tile ? tile.state : 'missing',
+      visible: coords.slice(0, 8).map((coord) => coord.canonical ? coord.canonical.z + '/' + coord.canonical.y + '/' + coord.canonical.x : ''),
     };
-    const rows = [];
-    for (const zoom of [2.5, 2.9, 3, 3.1]) rows.push(await namesAt(zoom, 2, 46));
-    const france = await namesAt(1.2, 2, 46);
-    const japan = await namesAt(1.2, 138, 36);
-    map.jumpTo({ center: saved.center, zoom: saved.zoom });
-    await settle();
-    map.fitBounds = fit;
-    map.resize = resize;
-    return { ok: true, rows, france: france.names, japan: japan.names, restored: map.getZoom() };
-  })()`);
+  };
+  map.jumpTo({ center: [lng, lat], zoom });
+  const deadline = performance.now() + 8000;
+  let detail = null;
+  while (performance.now() < deadline) {
+    const labels = centerTile('inset-labels');
+    const base = centerTile('inset-basemap');
+    detail = { labels, base };
+    if (labels.state === 'loaded' && base.state === 'loaded' && map.areTilesLoaded()) break;
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 100);
+      map.once('idle', () => { clearTimeout(timer); resolve(); });
+    });
+  }
+  const labels = detail && detail.labels;
+  const base = detail && detail.base;
+  const tilesOk = !!(labels && base && labels.state === 'loaded' && base.state === 'loaded' && map.areTilesLoaded());
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources['inset-labels'];
+  const template = spec && spec.tiles && spec.tiles[0];
+  const tileUrl = tilesOk && template && labels
+    ? template.replace('{z}', String(labels.z)).replace('{y}', String(labels.y)).replace('{x}', String(labels.x))
+    : null;
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol')
+    .map((layer) => layer.id);
+  const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
+  const canvas = map.getCanvas();
+  const box = canvas.getBoundingClientRect();
+  return {
+    ok: true,
+    tilesOk,
+    detail,
+    tileUrl,
+    zoom: map.getZoom(),
+    tileZ: labels ? labels.z : null,
+    names: features.map((feature) => (feature.properties && feature.properties.name) || ''),
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+  };
+})`;
+
+async function readPlanLabelZoom(send, zoom, lng, lat, wantRaster = false) {
+  const sample = await evaluate(send, `(${PLAN_LABEL_READ})(${zoom}, ${lng}, ${lat})`);
   if (!sample || sample.ok !== true) throw new Error(`plan label zooms ${JSON.stringify(sample)}`);
-  const fractional = fractionalCountrySymbols(sample.rows);
-  if (!fractional.ok) throw new Error(`plan label zooms ${JSON.stringify(fractional)}`);
-  const france = keptCountrySymbol(sample.france, 'France');
-  if (!france.ok) throw new Error(`plan label France ${JSON.stringify(france)}`);
-  const japan = keptCountrySymbol(sample.japan, 'Japan');
-  if (!japan.ok) throw new Error(`plan label Japan ${JSON.stringify(japan)}`);
-  return fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ');
+  let words = '';
+  if (wantRaster) {
+    if (!sample.tilesOk || !sample.tileUrl) throw new Error(`plan label tiles ${JSON.stringify({ zoom, detail: sample.detail, tileUrl: sample.tileUrl })}`);
+    words = ocrRasterTile(await fetchRasterTile(sample.tileUrl));
+  }
+  return { ...sample, words };
+}
+
+async function restorePlanLabelCamera(send) {
+  await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    const hold = map && map.__opdLabelHold;
+    if (!map || !hold) return { ok: false };
+    map.jumpTo({ center: hold.center, zoom: hold.zoom });
+    map.fitBounds = hold.fit;
+    map.resize = hold.resize;
+    delete map.__opdLabelHold;
+    return { ok: true, zoom: map.getZoom() };
+  })()`);
+}
+
+async function proveFractionalPlanLabels(send) {
+  const handoffPlan = [
+    { zoom: 1.49, lng: 2, lat: 46, country: 'France', symbols: 1, raster: false, tileZ: 2 },
+    { zoom: 1.5, lng: 2, lat: 46, country: 'France', symbols: 0, raster: true, tileZ: 3 },
+    { zoom: 1.51, lng: 2, lat: 46, country: 'France', symbols: 0, raster: true, tileZ: 3 },
+    { zoom: 1.49, lng: 138, lat: 36, country: 'Japan', symbols: 1, raster: false, tileZ: 2 },
+    { zoom: 1.5, lng: 138, lat: 36, country: 'Japan', symbols: 0, raster: true, tileZ: 3 },
+    { zoom: 1.51, lng: 138, lat: 36, country: 'Japan', symbols: 0, raster: true, tileZ: 3 },
+    { zoom: 2.49, lng: 38, lat: 1, country: 'Kenya', symbols: 1, raster: false, tileZ: 3 },
+    { zoom: 2.5, lng: 38, lat: 1, country: 'Kenya', symbols: 0, raster: true, tileZ: 4 },
+  ];
+  try {
+    const rows = [];
+    for (const zoom of [2.5, 2.9, 3, 3.1]) {
+      const row = await readPlanLabelZoom(send, zoom, 2, 46);
+      if (!row.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom, detail: row.detail })}`);
+      rows.push(row);
+    }
+    const fractional = fractionalCountrySymbols(rows);
+    if (!fractional.ok) throw new Error(`plan label zooms ${JSON.stringify(fractional)}`);
+    for (const step of handoffPlan) {
+      const row = await readPlanLabelZoom(send, step.zoom, step.lng, step.lat, step.raster);
+      const verdict = handoffSample(row, step);
+      if (!verdict.ok) throw new Error(`plan label handoff ${JSON.stringify(verdict)}`);
+    }
+    const france = await readPlanLabelZoom(send, 1.2, 2, 46);
+    if (!france.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: france.detail })}`);
+    const franceKept = keptCountrySymbol(france.names, 'France');
+    if (!franceKept.ok) throw new Error(`plan label France ${JSON.stringify(franceKept)}`);
+    const japan = await readPlanLabelZoom(send, 1.2, 138, 36);
+    if (!japan.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: japan.detail })}`);
+    const japanKept = keptCountrySymbol(japan.names, 'Japan');
+    if (!japanKept.ok) throw new Error(`plan label Japan ${JSON.stringify(japanKept)}`);
+    return fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ');
+  } finally {
+    await restorePlanLabelCamera(send);
+  }
 }
 
 async function proveIssFullscreen(send, evidenceDir, viewport) {

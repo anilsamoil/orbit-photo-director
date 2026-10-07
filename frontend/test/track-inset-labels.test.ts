@@ -16,6 +16,7 @@ const created = vi.hoisted(() => ({
         source?: string;
         paint?: { 'raster-opacity'?: number; 'text-color'?: string };
         maxzoom?: number;
+        filter?: unknown;
         layout?: {
           'text-field'?: unknown;
           'text-font'?: string[];
@@ -71,7 +72,7 @@ describe('plan inset labels', () => {
     expect(style?.sources['inset-labels']?.tiles?.[0]).toContain('World_Boundaries_and_Places');
     expect(style?.sources['inset-labels']?.maxzoom).toBeGreaterThan(2);
     const ids = style?.layers.map((layer) => layer.id);
-    expect(ids).toEqual(['inset-basemap', 'inset-labels', 'inset-track', 'inset-countries']);
+    expect(ids).toEqual(['inset-basemap', 'inset-labels', 'inset-track', 'inset-countries', 'inset-countries-2-5']);
     expect(style?.layers[1]?.paint?.['raster-opacity']).toBe(0.85);
     expect(style?.glyphs).toBe('/glyphs/{fontstack}/{range}.pbf');
     const countries = style?.layers.find((layer) => layer.id === 'inset-countries');
@@ -92,31 +93,46 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
-  it('counts country symbol texts once below the raster names and none at 2.5, 2.9, 3, and 3.1', () => {
+  it('reads each centroid handoff from the symbol layer that filters that name', () => {
     const frame = document.createElement('div');
     Object.defineProperty(frame, 'clientWidth', { value: 274 });
     Object.defineProperty(frame, 'clientHeight', { value: 900 });
     const inset = createTrackInset(frame, document.createElement('div'));
     const style = created.options?.style;
-    const layer = style?.layers.find((entry) => entry.id === 'inset-countries');
-    const names = (style?.sources['inset-countries']?.data?.features ?? [])
+    const sourceNames = (style?.sources['inset-countries']?.data?.features ?? [])
       .map((feature) => feature.properties?.name)
       .filter((name): name is string => typeof name === 'string');
-    const textsAt = (zoom: number): string[] => {
-      const maxZoom = layer?.maxzoom;
-      if (typeof maxZoom === 'number' && zoom >= maxZoom) return [];
-      return names;
-    };
-    const low = textsAt(1.2);
-    expect(low.filter((name) => name === 'France')).toEqual(['France']);
-    expect(low.filter((name) => name === 'Japan')).toEqual(['Japan']);
-    expect(new Set(low).size).toBe(low.length);
-    expect([2.5, 2.9, 3, 3.1].map((zoom) => [zoom, textsAt(zoom)])).toEqual([
-      [2.5, []],
-      [2.9, []],
-      [3, []],
-      [3.1, []],
-    ]);
+    const cutoffs: Record<string, number> = {};
+    for (const layer of style?.layers ?? []) {
+      if (layer.type !== 'symbol' || layer.source !== 'inset-countries') continue;
+      if (typeof layer.maxzoom !== 'number') throw new Error(`${layer.id} has no maxzoom`);
+      const filter = layer.filter;
+      const listed = Array.isArray(filter)
+        && filter[0] === 'in'
+        && Array.isArray(filter[2])
+        && filter[2][0] === 'literal'
+        && Array.isArray(filter[2][1])
+        ? filter[2][1].filter((name): name is string => typeof name === 'string')
+        : sourceNames;
+      for (const name of listed) {
+        if (name in cutoffs) throw new Error(`${name} is on two symbol layers`);
+        cutoffs[name] = layer.maxzoom;
+      }
+    }
+    expect(cutoffs).toEqual({
+      Canada: 1.5,
+      Mexico: 1.5,
+      Brazil: 1.5,
+      Argentina: 1.5,
+      France: 1.5,
+      Egypt: 1.5,
+      Nigeria: 1.5,
+      Kenya: 2.5,
+      China: 1.5,
+      India: 1.5,
+      Japan: 1.5,
+      Australia: 1.5,
+    });
     inset.destroy();
   });
 });
