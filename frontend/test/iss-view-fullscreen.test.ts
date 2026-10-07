@@ -578,8 +578,15 @@ describe('ISS fullscreen styles', () => {
     expect(css('[data-iss-stage] > :last-child').right).toBe('17.6px');
 
     expect(css('[data-iss-card]').display).toBe('block');
-    query(view.root, '[data-iss-telemetry-body]').hidden = false;
+    const telemetry = query(view.root, '[data-iss-telemetry]');
+    const body = query(view.root, '[data-iss-telemetry-body]');
+    expect(telemetry.getAttribute('aria-expanded')).toBe('false');
+    expect(body.hidden).toBe(true);
     expect(css('[data-iss-telemetry-body]').display).toBe('none');
+    telemetry.click();
+    expect(telemetry.getAttribute('aria-expanded')).toBe('true');
+    expect(body.hidden).toBe(false);
+    expect(css('[data-iss-telemetry-body]').display).toBe('block');
     expect(css('[data-iss-telemetry]').height).toBe('44px');
     expect(css('[data-iss-fullscreen]').height).toBe('44px');
     const place = document.createElement('div');

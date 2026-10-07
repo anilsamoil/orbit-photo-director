@@ -3798,6 +3798,34 @@ async function proveIssShortStages(send) {
   return rows.join(', ');
 }
 
+async function proveFullscreenTelemetry(send) {
+  await click(send, '[data-iss-telemetry]');
+  const open = await waitFor(send, `(() => {
+    const toggle = document.querySelector('[data-iss-telemetry]');
+    const body = document.querySelector('[data-iss-telemetry-body]');
+    if (!toggle || !body) return null;
+    const box = body.getBoundingClientRect();
+    const display = getComputedStyle(body).display;
+    if (toggle.getAttribute('aria-expanded') !== 'true') return { step: 'expanded', value: toggle.getAttribute('aria-expanded') };
+    if (display === 'none' || box.width < 8 || box.height < 8) return { step: 'box', display, w: box.width, h: box.height };
+    return { ok: true, w: Math.round(box.width), h: Math.round(box.height) };
+  })()`, 'iss fullscreen telemetry open', 10000);
+  await click(send, '[data-iss-telemetry]');
+  await waitFor(
+    send,
+    `(() => {
+      const toggle = document.querySelector('[data-iss-telemetry]');
+      const body = document.querySelector('[data-iss-telemetry-body]');
+      if (toggle?.getAttribute('aria-expanded') !== 'false') return null;
+      if (body && body.getClientRects().length > 0) return null;
+      return { ok: true };
+    })()`,
+    'iss fullscreen telemetry closed',
+    10000,
+  );
+  return `${open.w}x${open.h}`;
+}
+
 async function proveIssFullscreen(send, evidenceDir, viewport) {
   const phone = viewport.mobile && viewport.width < 600;
   if (phone && !await evaluate(send, ISS_FULLSCREEN_STRIP)) throw new Error('iss fullscreen request methods still present');
@@ -3812,6 +3840,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     await enterFullscreenThroughOpenSheet(send, viewport.mobile);
     const held = await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected}`, 10000);
     await shot(send, evidenceDir, 'iss-fullscreen');
+    const telemetryOpen = await proveFullscreenTelemetry(send);
     if (!viewport.mobile) {
       await send('Emulation.setDeviceMetricsOverride', { width: viewport.width, height: viewport.height, deviceScaleFactor: 2, mobile: false });
       await waitFor(send, issBackingExpression(1.5), 'iss canvas follows a 2x device at the 1.5 cap', 10000);
@@ -3864,7 +3893,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, Escape kept aim`;
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }
