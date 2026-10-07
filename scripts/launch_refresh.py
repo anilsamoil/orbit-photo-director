@@ -32,6 +32,21 @@ from generator.orbit import TLE
 MAX_SCHEDULE_AGE_SECONDS = 3 * 3600
 
 
+def _drop_expired_pending(output: Path, now: datetime) -> None:
+    pending_path = output / "launch" / ".latest.pending.json"
+    latest_path = output / "launch" / "latest.json"
+    if not pending_path.is_file() or not latest_path.is_file():
+        return
+    pending = json.loads(pending_path.read_bytes())
+    latest = json.loads(latest_path.read_bytes())
+    if not isinstance(pending, dict) or _same_pointer(pending, latest):
+        return
+    valid_until = pending.get("valid_until")
+    if not isinstance(valid_until, str) or _parse_iso8601_z(valid_until) > now:
+        return
+    pending_path.unlink()
+
+
 def _schedule_fetched(artifact: dict) -> str:
     coverage = artifact["coverage"]
     if artifact.get("schema_version") == 3:
@@ -137,6 +152,7 @@ def refresh_cached(
         )
         if any(value and value["remote"] != remote for value in (state, intent, catalog_state)):
             raise ValueError("REMOTE_OWNER_MISMATCH")
+        _drop_expired_pending(output, now)
 
         def finish_v2(value: dict) -> dict:
             artifact = value["artifact"]
@@ -288,14 +304,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.scheduled:
             if not args.publish:
                 raise ValueError("SCHEDULED_REQUIRES_PUBLISH")
+            uploader = rclone_uploader(args.remote)
             report(
                 refresh_cached(
                     args.cache_dir,
                     args.output,
                     now,
                     remote=args.remote,
-                    upload=rclone_uploader(args.remote),
-                    read_remote=rclone_reader(args.remote),
+                    upload=uploader,
+                    read_remote=rclone_reader(args.remote, local=args.output, upload=uploader),
                 )
             )
             return 0

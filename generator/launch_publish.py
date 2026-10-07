@@ -303,6 +303,9 @@ def _commit_matches(pointer: dict, artifact: dict) -> bool:
     )
 
 
+_POLICY2_NET_WITHOUT_OFFSET = frozenset({"at", "look", "pad_distance_km", "reason", "verdict"})
+
+
 def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable) -> None:
     """Public planning facts cannot accidentally become camera instructions."""
     def number(raw: object, lower: float, upper: float) -> bool:
@@ -310,12 +313,16 @@ def _validate_assessment(value: dict, item: dict, artifact: dict, keys: Callable
                 and math.isfinite(raw) and lower <= raw <= upper)
 
     keys(value, "checked_at valid_until tle_epoch model net window")
-    keys(value["net"], "verdict reason at pad_distance_km t_offset_seconds look")
+    raw_net = value["net"]
+    if isinstance(raw_net, dict) and set(raw_net) == _POLICY2_NET_WITHOUT_OFFSET:
+        raw_net = {**raw_net, "t_offset_seconds": None}
+    else:
+        keys(raw_net, "verdict reason at pad_distance_km t_offset_seconds look")
     keys(value["window"], "verdict reason")
     checked = _parse_iso8601_z(value["checked_at"])
     expires = _parse_iso8601_z(value["valid_until"])
-    net_time = _parse_iso8601_z(value["net"]["at"])
-    net, window, model = value["net"], value["window"], value["model"]
+    net_time = _parse_iso8601_z(raw_net["at"])
+    net, window, model = raw_net, value["window"], value["model"]
     if (value["checked_at"] != artifact["generated_at"]
             or value["net"]["at"] != item["launch_window"]["net"]
             or not 0 < (expires - checked).total_seconds() <= PLANNING_VALID_SECONDS
@@ -565,7 +572,12 @@ def rclone_uploader(remote: str) -> Callable[[Path, str, bool], None]:
     return upload
 
 
-def rclone_reader(remote: str) -> Callable[[], dict]:
+def rclone_reader(
+    remote: str,
+    *,
+    local: Path | None = None,
+    upload: Callable[[Path, str, bool], None] | None = None,
+) -> Callable[[], dict]:
     """Read and hash-validate the actual remote commit, bounded and fail-closed."""
     if not remote or remote.startswith("-") or "\n" in remote:
         raise ValueError("invalid remote")
@@ -581,9 +593,30 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
             capture_output=True,
             timeout=45,
         )
+        if not result.stdout or not result.stdout.strip():
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
         if len(result.stdout) > limit:
             raise ValueError("REMOTE_LAUNCH_TOO_LARGE")
         return result.stdout
+
+    def restore(pointer: dict) -> bytes:
+        if local is None or upload is None:
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
+        latest_path = local / "launch" / "latest.json"
+        if not latest_path.is_file():
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
+        committed = json.loads(latest_path.read_bytes())
+        if not _same_pointer(pointer, committed):
+            raise ValueError("REMOTE_LAUNCH_ARTIFACT_MISSING")
+        artifact_path = (local / pointer["path"]).resolve()
+        version_dir = (local / "launch" / "v").resolve()
+        if not artifact_path.is_relative_to(version_dir) or not artifact_path.is_file():
+            raise ValueError("LOCAL_LAUNCH_HASH_MISMATCH")
+        body = artifact_path.read_bytes()
+        if hashlib.sha256(body).hexdigest() != pointer["sha256"]:
+            raise ValueError("LOCAL_LAUNCH_HASH_MISMATCH")
+        upload(artifact_path, pointer["path"], True)
+        return cat(pointer["path"], 2_000_000)
 
     def read() -> dict:
         raw = cat("launch/latest.json", 4096)
@@ -604,7 +637,12 @@ def rclone_reader(remote: str) -> Callable[[], dict]:
             or pointer["path"] != f"launch/v/{revision}.json"
         ):
             raise ValueError("INVALID_REMOTE_LAUNCH_PATH")
-        body = cat(pointer["path"], 2_000_000)
+        try:
+            body = cat(pointer["path"], 2_000_000)
+        except ValueError as exc:
+            if exc.args != ("REMOTE_LAUNCH_ARTIFACT_MISSING",):
+                raise
+            body = restore(pointer)
         artifact = json.loads(body)
         _validate_artifact(artifact)
         if (

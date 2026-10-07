@@ -74,7 +74,9 @@ sight from 300 seconds before NET until 120 seconds after it. `t_offset_seconds`
 is that instant minus NET. The orbital LVLH angle describes the pad at that
 instant, not a physical spacecraft window or rocket tracking instruction. A pad
 that is only inside the limb at NET is not a shot. `SITE_IN_VIEW_AT_NET` remains
-accepted so an artifact from the previous publisher still parses. Clouds, optical
+accepted so an artifact from the previous publisher still parses. A policy-2 net may omit
+`t_offset_seconds`. The publisher reads that omission as null. Any other missing or extra
+public field is still rejected. Clouds, optical
 detectability and window access can still prevent a shot. The display never converts a nominal ascent-disk
 intersection into a positive result.
 
