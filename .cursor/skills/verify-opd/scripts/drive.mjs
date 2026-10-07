@@ -5349,23 +5349,36 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
-  const before = await evaluate(send, `(() => {
-    const map = window.__opdIss;
-    const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
-    if (!map?.getVerticalFieldOfView || !map.getZoom || !map.getRoll || !frame) return null;
-    return {
-      x: frame.left + frame.width / 2,
-      y: frame.top + frame.height / 2,
-      fov: map.getVerticalFieldOfView(),
-      zoom: map.getZoom(),
-      roll: ((map.getRoll() % 360) + 360) % 360,
-    };
-  })()`);
-  if (!before) throw new Error('iss fov baseline missing');
-  const openLabel = await readFovLabel(send);
-  if (!openLabel || Math.abs(openLabel.shown - before.fov) > 0.15) {
-    throw new Error(`iss fov readout missing on open ${JSON.stringify({ before, openLabel })}`);
-  }
+  const before = await waitFor(
+    send,
+    `(() => {
+      const scene = document.querySelector('[data-iss-scene]');
+      const label = document.querySelector('[data-iss-fov]');
+      const map = window.__opdIss;
+      const frame = document.querySelector('[data-iss-frame]')?.getBoundingClientRect();
+      if (!scene || !label || !map?.getVerticalFieldOfView || !map.getZoom || !map.getRoll || !frame || frame.width < 40) return null;
+      const fov = map.getVerticalFieldOfView();
+      const zoom = map.getZoom();
+      const roll = ((map.getRoll() % 360) + 360) % 360;
+      const shown = Number.parseFloat((label.textContent || '').trim());
+      if (scene.getAttribute('data-iss-phase') !== 'running') return null;
+      if (label.getAttribute('data-iss-fov-state') !== 'live') return null;
+      if (!Number.isFinite(fov) || !Number.isFinite(shown)) return null;
+      if (Math.abs(shown - fov) > 0.15) return null;
+      if (Math.abs(roll - 180) > 0.5) return null;
+      return {
+        ok: true,
+        x: frame.left + frame.width / 2,
+        y: frame.top + frame.height / 2,
+        fov,
+        zoom,
+        roll,
+        shown,
+      };
+    })()`,
+    'iss fov ready',
+    15000,
+  );
   await shot(send, evidenceDir, 'iss-fov-before');
   await send('Input.dispatchMouseEvent', {
     type: 'mouseWheel',
