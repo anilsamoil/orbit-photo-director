@@ -4060,12 +4060,14 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   flex: 0 0 auto;
   width: min(22rem, 40vw);
   min-height: 0;
+  overflow: hidden;
   gap: 0.35rem;
 }
 
 [data-iss-side-dock='on'] [data-iss-side] [data-iss-launch-card] {
   width: 100%;
   align-self: stretch;
+  flex: 0 0 auto;
 }
 
 [data-iss-side-dock='on'] [data-iss-side] [data-iss-edition] {
@@ -4074,8 +4076,13 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   left: auto;
 }
 
+[data-iss-side-dock='on'] [data-iss-side] > :not([data-iss-telemetry-body]) {
+  flex: 0 0 auto;
+}
+
 [data-iss-side-dock='on'] [data-iss-side] :is([data-iss-houston], [data-iss-day-month], [data-iss-weekday], [data-iss-edition]) {
   pointer-events: none;
+  flex: 0 0 auto;
   min-height: 0;
 }
 
@@ -4085,6 +4092,17 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   overflow: auto;
   width: 100%;
   margin-top: 0;
+}
+
+[data-iss-side-dock='on'] [data-iss-presets] {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+[data-iss-side-dock='on'] [data-iss-cupola] {
+  min-width: 44px;
+  max-width: 100%;
+  flex: 1 1 auto;
 }
 
 @media (max-width: 720px) {
