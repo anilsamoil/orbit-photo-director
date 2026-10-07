@@ -4744,7 +4744,7 @@ function splitLaunchPlace(width, height) {
   return width - mapColumn <= 720 ? 'below' : 'side';
 }
 
-function launchEarthPanes(width, height) {
+export function launchEarthPanes(width, height) {
   const native = { width, height, mobile: width < 1100, label: `${width}x${height}`, place: '', minShort: 80 };
   if (width === 390 && height === 664) {
     return [
@@ -4760,6 +4760,9 @@ function launchEarthPanes(width, height) {
       { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
       { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
+  }
+  if (width === 874 && height === 402) {
+    return [{ ...native, place: 'side', minShort: 80 }];
   }
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
