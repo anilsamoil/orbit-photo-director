@@ -4126,12 +4126,6 @@ async function endPlanGesture(send, kind, outside) {
     })()`);
     if (!ended?.ok) throw new Error(`plan ${kind} ${JSON.stringify(ended)}`);
   }
-  await evaluate(send, `(() => {
-    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
-    const dragging = !!(orbit?.dragPan?.isActive?.() || orbit?.touchZoomRotate?.isActive?.() || orbit?.scrollZoom?.isZooming?.());
-    if (dragging && orbit.stop) orbit.stop();
-    return true;
-  })()`);
 }
 
 async function returnToPlan(send) {
@@ -4191,6 +4185,11 @@ async function provePlanOutsideEnding(send, viewport, kind, from, to) {
     || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
     throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
   }
+  await evaluate(send, `(() => {
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    if (orbit?.stop) orbit.stop();
+    return true;
+  })()`);
   if (kind !== 'up') {
     await send('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
@@ -5414,6 +5413,7 @@ function launchEarthPanes(width, height) {
       { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
   }
+  if (width >= 800 && height < 600) return [{ ...native, place: 'side', minShort: 80 }];
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
     return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
