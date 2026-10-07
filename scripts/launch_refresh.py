@@ -10,7 +10,8 @@ import json
 import os
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,6 +31,118 @@ from generator.orbit import TLE
 
 # Schedule refresh tolerance, NOT the 15-minute capture-evidence lifetime.
 MAX_SCHEDULE_AGE_SECONDS = 3 * 3600
+
+
+@contextmanager
+def _publisher_guard(output: Path) -> Iterator[None]:
+    handle = (output / ".launch-publisher.lock").open("a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError("LAUNCH_PUBLISHER_BUSY") from exc
+    try:
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
+
+
+def _committed_pointer(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        latest = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return False
+    if not isinstance(latest, dict):
+        return False
+    revision = latest.get("revision")
+    digest = latest.get("sha256")
+    return (
+        latest.get("schema_version") == 2
+        and isinstance(revision, str)
+        and len(revision) == 24
+        and latest.get("path") == f"launch/v/{revision}.json"
+        and isinstance(digest, str)
+        and len(digest) == 64
+        and all(character in "0123456789abcdef" for character in revision + digest)
+    )
+
+
+def _intent_rebuilds(intent: dict | None) -> bool:
+    artifact = intent.get("artifact") if isinstance(intent, dict) else None
+    return isinstance(artifact, dict) and artifact.get("schema_version") == 2
+
+
+def _drop_expired_pending(output: Path, now: datetime, intent: dict | None = None) -> None:
+    with _publisher_guard(output):
+        pending_path = output / "launch" / ".latest.pending.json"
+        latest_path = output / "launch" / "latest.json"
+        if not pending_path.is_file():
+            return
+        try:
+            pending = json.loads(pending_path.read_bytes())
+        except json.JSONDecodeError:
+            if _committed_pointer(latest_path) or _intent_rebuilds(intent):
+                os.replace(pending_path, pending_path.with_name(".latest.pending.bad.json"))
+                return
+            raise ValueError("MALFORMED_LAUNCH_PENDING") from None
+        if not latest_path.is_file():
+            return
+        try:
+            latest = json.loads(latest_path.read_bytes())
+        except json.JSONDecodeError:
+            return
+        if not isinstance(pending, dict) or not isinstance(latest, dict):
+            return
+        if _same_pointer(pending, latest):
+            return
+        valid_until = pending.get("valid_until")
+        if not isinstance(valid_until, str) or _parse_iso8601_z(valid_until) > now:
+            return
+        pending_path.unlink()
+
+
+def _heal_counts(output: Path) -> dict[str, int]:
+    path = output / ".launch-heal.json"
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    counts = raw.get("counts") if isinstance(raw, dict) else None
+    if not isinstance(counts, dict):
+        return {}
+    clean: dict[str, int] = {}
+    for key, value in counts.items():
+        if (
+            isinstance(key, str)
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+        ):
+            clean[key] = value
+    return clean
+
+
+def _note_heals(output: Path, read_remote: Callable, result: dict) -> dict:
+    keys = list(dict.fromkeys(getattr(read_remote, "healed_keys", ())))
+    if not keys:
+        return result
+    counts = _heal_counts(output)
+    noted: dict | None = None
+    for key in keys:
+        count = counts.get(key, 0) + 1
+        counts[key] = count
+        if noted is None or count > noted["count"]:
+            noted = {"key": key, "count": count}
+    _atomic_json(output / ".launch-heal.json", {"counts": counts})
+    result["heal"] = noted
+    if noted is not None and noted["count"] >= 2:
+        result["reason"] = "WARN"
+    return result
 
 
 def _schedule_fetched(artifact: dict) -> str:
@@ -137,6 +250,7 @@ def refresh_cached(
         )
         if any(value and value["remote"] != remote for value in (state, intent, catalog_state)):
             raise ValueError("REMOTE_OWNER_MISMATCH")
+        _drop_expired_pending(output, now, intent)
 
         def finish_v2(value: dict) -> dict:
             artifact = value["artifact"]
@@ -230,7 +344,7 @@ def refresh_cached(
                 }
                 if skipped:
                     result["catalog_skipped"] = skipped
-                return result
+                return _note_heals(output, read_remote, result)
         artifact = build_launch_artifact(payload, tle, now, fetched_at=fetched_at)
         prepared_catalog, prepared_error = _prepare_catalog(payload, tle, now, fetched_at)
         _validate_artifact(artifact)
@@ -255,7 +369,7 @@ def refresh_cached(
         elif catalog_state.get("input_id") != identity["input_id"]:
             published_catalog = json.loads(catalog_state_path.read_bytes())
             result["catalog_revision"] = published_catalog["revision"]
-        return result
+        return _note_heals(output, read_remote, result)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -288,14 +402,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.scheduled:
             if not args.publish:
                 raise ValueError("SCHEDULED_REQUIRES_PUBLISH")
+            uploader = rclone_uploader(args.remote)
             report(
                 refresh_cached(
                     args.cache_dir,
                     args.output,
                     now,
                     remote=args.remote,
-                    upload=rclone_uploader(args.remote),
-                    read_remote=rclone_reader(args.remote),
+                    upload=uploader,
+                    read_remote=rclone_reader(args.remote, local=args.output, upload=uploader),
                 )
             )
             return 0

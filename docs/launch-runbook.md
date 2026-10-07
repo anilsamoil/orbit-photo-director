@@ -86,8 +86,13 @@ for cache-only publication; paginated source coverage remains explicitly incompl
 
 Inspect timestamped JSON stdout/stderr and `.refresh-state.json` in the private
 output directory. A healthy run reports `PUBLISHED` or `UNCHANGED_INPUT` and
-`notified: false`; source/publication failures return exit 2. A stopped source or
-publisher ages out visibly, rather than being made fresh by a timer.
+`notified: false`; source/publication failures return exit 2. A repaired missing
+artifact adds `heal.key` (the relative object key) and `heal.count` (how many
+runs have repaired that key). The first repair keeps the normal reason. When
+`heal.count` is 2 or more, `reason` is `WARN` and `ok` stays true. The count
+lives in `.launch-heal.json` and is not cleared by a later healthy run. A
+stopped source or publisher ages out visibly, rather than being made fresh by
+a timer.
 
 The publisher accepts only `map_only`; an instruction-ready item is rejected.
 Frontend support for future geometry-supported fixtures is not activation.
