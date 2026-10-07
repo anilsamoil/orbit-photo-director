@@ -668,6 +668,7 @@ describe('ISS control placement', () => {
     expect(getComputedStyle(view.button).position).toBe('absolute');
     expect(STYLE_CSS).toContain('right: max(0.75rem, env(safe-area-inset-right))');
     expect(STYLE_CSS).toContain('bottom: max(0.75rem, env(safe-area-inset-bottom))');
+    expect(STYLE_CSS).toContain('[data-iss-scene][data-iss-aim-open] [data-iss-snap-help]');
     if (!(help instanceof HTMLButtonElement)) throw new Error('help control is not a native button');
     help.click();
     const dialog = document.querySelector('.help-modal');

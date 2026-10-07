@@ -3403,7 +3403,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 
 [data-iss-scene][data-iss-aim-open] [data-iss-aim-help],
 [data-iss-scene][data-iss-aim-open] [data-iss-aim-sheet],
-[data-iss-scene][data-iss-aim-open] [data-iss-fullscreen] {
+[data-iss-scene][data-iss-aim-open] [data-iss-fullscreen],
+[data-iss-scene][data-iss-aim-open] [data-iss-snap-help] {
   pointer-events: auto;
 }
 

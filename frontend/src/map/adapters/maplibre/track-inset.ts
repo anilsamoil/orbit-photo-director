@@ -2,7 +2,7 @@ import { Map, Marker, type LngLat, type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
-import { PLAN_CITY_ZOOM, PLAN_TOWN_ZOOM, planTier, type PlanPlace } from '../../../insets/plan-labels';
+import { PLAN_RASTER_NAME_ZOOM, planTier, type PlanPlace } from '../../../insets/plan-labels';
 import { terminatorNightPolygonFeatures } from '../../../terminator';
 
 const ESRI_DARK_TILES = [
@@ -31,6 +31,9 @@ const INSET_FIT_PADDING_PX = 22;
 
 /** One click opens the Map tab. A second click inside this window recenters instead. */
 const PLAN_OPEN_DELAY_MS = 280;
+
+/** A move past this, or a second touch, is a gesture. Releasing it does not open Map. */
+const PLAN_NAV_SLOP_PX = 1;
 
 const NIGHT_MINUTE_MS = 60_000;
 
@@ -66,11 +69,12 @@ function collection(places: readonly PlanPlace[]): GeoJSON.FeatureCollection {
   };
 }
 
-function nameLayer(id: string, source: string, minzoom?: number): {
+function nameLayer(id: string, source: string, minzoom?: number, maxzoom?: number): {
   id: string;
   type: 'symbol';
   source: string;
   minzoom?: number;
+  maxzoom?: number;
   layout: {
     'text-field': ['get', 'name'];
     'text-font': ['Open Sans Regular'];
@@ -87,6 +91,7 @@ function nameLayer(id: string, source: string, minzoom?: number): {
     type: 'symbol',
     source,
     ...(minzoom === undefined ? {} : { minzoom }),
+    ...(maxzoom === undefined ? {} : { maxzoom }),
     layout: {
       'text-field': ['get', 'name'],
       'text-font': ['Open Sans Regular'],
@@ -127,8 +132,6 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
         'inset-night': { type: 'geojson', data: EMPTY },
         'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: 19 },
         'inset-countries': { type: 'geojson', data: collection(planTier(0)) },
-        'inset-cities': { type: 'geojson', data: collection(planTier(PLAN_CITY_ZOOM)) },
-        'inset-towns': { type: 'geojson', data: collection(planTier(PLAN_TOWN_ZOOM)) },
         'inset-track': { type: 'geojson', data: EMPTY },
       },
       layers: [
@@ -146,9 +149,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
           source: 'inset-track',
           paint: { 'line-color': '#5cd0ff', 'line-width': 2 },
         },
-        nameLayer('inset-countries', 'inset-countries'),
-        nameLayer('inset-cities', 'inset-cities', PLAN_CITY_ZOOM),
-        nameLayer('inset-towns', 'inset-towns', PLAN_TOWN_ZOOM),
+        nameLayer('inset-countries', 'inset-countries', undefined, PLAN_RASTER_NAME_ZOOM),
       ],
     },
   });
@@ -178,10 +179,67 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let paintedWidth = -1;
   let paintedHeight = -1;
   let paintedRatio = -1;
+  let pointers = 0;
+  let navMoved = false;
+  let navMulti = false;
+  let navOrigin: { x: number; y: number } | null = null;
+  let resizeWaiting = false;
+  const handlerBusy = (): boolean => {
+    if (map.scrollZoom?.isZooming()) return true;
+    if (map.dragPan?.isActive()) return true;
+    if (map.touchZoomRotate?.isActive()) return true;
+    return false;
+  };
+  const gestureLive = (): boolean => pointers > 0 || handlerBusy();
+  const resizeNow = map.resize.bind(map);
+  const flushResize = (): void => {
+    if (!resizeWaiting || gestureLive()) return;
+    map.resize();
+  };
+  Object.defineProperty(map, 'resize', {
+    configurable: true,
+    value(eventData?: object, constrainTransform?: boolean) {
+      if (gestureLive()) {
+        resizeWaiting = true;
+        return map;
+      }
+      resizeWaiting = false;
+      return resizeNow(eventData, constrainTransform);
+    },
+  });
   const stopClick = (event: Event): void => {
     event.stopPropagation();
   };
+  const onWheel = (event: WheelEvent): void => {
+    if (event.deltaX === 0 && event.deltaY === 0) return;
+    freed = true;
+  };
+  const onPointerDown = (event: PointerEvent): void => {
+    if (pointers === 0) {
+      navMoved = false;
+      navMulti = false;
+      navOrigin = { x: event.clientX, y: event.clientY };
+    } else {
+      navMulti = true;
+    }
+    pointers += 1;
+  };
+  const onPointerMove = (event: PointerEvent): void => {
+    if (!navOrigin || pointers === 0) return;
+    const dx = event.clientX - navOrigin.x;
+    const dy = event.clientY - navOrigin.y;
+    if (dx * dx + dy * dy > PLAN_NAV_SLOP_PX * PLAN_NAV_SLOP_PX) navMoved = true;
+  };
+  const onPointerEnd = (): void => {
+    pointers = Math.max(0, pointers - 1);
+    if (pointers === 0) flushResize();
+  };
   frame.addEventListener('click', stopClick);
+  frame.addEventListener('wheel', onWheel, { capture: true, passive: true });
+  frame.addEventListener('pointerdown', onPointerDown, true);
+  frame.addEventListener('pointermove', onPointerMove, true);
+  frame.addEventListener('pointerup', onPointerEnd, true);
+  frame.addEventListener('pointercancel', onPointerEnd, true);
   const openPlan = (): void => {
     const button = frame.closest('button');
     if (button instanceof HTMLButtonElement) button.click();
@@ -195,7 +253,16 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   map.on('movestart', (event) => {
     if (event.originalEvent) freed = true;
   });
+  map.on('moveend', () => {
+    flushResize();
+  });
   map.on('click', () => {
+    if (navMoved || navMulti) {
+      navMoved = false;
+      navMulti = false;
+      navOrigin = null;
+      return;
+    }
     window.clearTimeout(openTimer);
     openTimer = window.setTimeout(openPlan, PLAN_OPEN_DELAY_MS);
   });
@@ -276,6 +343,11 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       removed = true;
       window.clearTimeout(openTimer);
       frame.removeEventListener('click', stopClick);
+      frame.removeEventListener('wheel', onWheel, true);
+      frame.removeEventListener('pointerdown', onPointerDown, true);
+      frame.removeEventListener('pointermove', onPointerMove, true);
+      frame.removeEventListener('pointerup', onPointerEnd, true);
+      frame.removeEventListener('pointercancel', onPointerEnd, true);
       marker.remove();
       map.remove();
       delete insetFrame.__opdTrackInset;

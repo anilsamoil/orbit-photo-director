@@ -1,5 +1,3 @@
-import { PLACE_CITIES } from '../iss-view/place-labels';
-
 export type PlanPlace = {
   name: string;
   lon: number;
@@ -7,11 +5,8 @@ export type PlanPlace = {
   minZoom: number;
 };
 
-/** Country names. The Esri reference raster has none until the fit zooms in. */
-export const PLAN_CITY_ZOOM = 3;
-
-/** Towns. The city tier is already on screen. */
-export const PLAN_TOWN_ZOOM = 5;
+/** Vector country names stop here. The reference raster draws place names from this zoom, and those tiles cannot join symbol collision. */
+export const PLAN_RASTER_NAME_ZOOM = 3;
 
 const COUNTRIES: readonly PlanPlace[] = [
   { name: 'Canada', lon: -100, lat: 50, minZoom: 0 },
@@ -28,31 +23,17 @@ const COUNTRIES: readonly PlanPlace[] = [
   { name: 'Australia', lon: 134, lat: -25, minZoom: 0 },
 ];
 
-const TOWNS: readonly PlanPlace[] = [
-  { name: 'Salem', lon: -70.9, lat: 42.52, minZoom: PLAN_TOWN_ZOOM },
-  { name: 'Houston', lon: -95.37, lat: 29.76, minZoom: PLAN_TOWN_ZOOM },
-  { name: 'Dubai', lon: 55.27, lat: 25.2, minZoom: PLAN_TOWN_ZOOM },
-  { name: 'Lisbon', lon: -9.14, lat: 38.72, minZoom: PLAN_TOWN_ZOOM },
-  { name: 'Oslo', lon: 10.75, lat: 59.91, minZoom: PLAN_TOWN_ZOOM },
-  { name: 'Honolulu', lon: -157.86, lat: 21.31, minZoom: PLAN_TOWN_ZOOM },
-];
+/** One label system for this zoom. Raster place names own the zoom once they appear. */
+export function planNameSystem(zoom: number): 'vector' | 'raster' {
+  return zoom < PLAN_RASTER_NAME_ZOOM ? 'vector' : 'raster';
+}
 
-const PLACES: readonly PlanPlace[] = [
-  ...COUNTRIES,
-  ...PLACE_CITIES.map((city) => ({
-    name: city.name,
-    lon: city.lon,
-    lat: city.lat,
-    minZoom: PLAN_CITY_ZOOM,
-  })),
-  ...TOWNS,
-];
-
-/** Names for one plan-map zoom. Higher zooms keep every lower tier. */
+/** Names for one plan-map zoom. The raster range has no vector names. */
 export function planPlaces(zoom: number): readonly PlanPlace[] {
-  return PLACES.filter((place) => place.minZoom <= zoom);
+  if (planNameSystem(zoom) !== 'vector') return [];
+  return COUNTRIES;
 }
 
 export function planTier(minZoom: number): readonly PlanPlace[] {
-  return PLACES.filter((place) => place.minZoom === minZoom);
+  return COUNTRIES.filter((place) => place.minZoom === minZoom);
 }
