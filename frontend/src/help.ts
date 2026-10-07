@@ -300,8 +300,8 @@ const HELP_SECTIONS: HelpSection[] = [
           'and the imagery date. On a narrow screen, Legend stays immediately ' +
           'left of Hide, and the open list sits above the time row when that ' +
           'band can hold it. When the band cannot, the list scrolls in the ' +
-          'free space above the footer, clear of the zoom column and the time ' +
-          'row. Tap Legend again, or press Escape, to ' +
+          'free space above the footer, clear of the zoom column, the time ' +
+          'row, and the Legend button. Tap Legend again, or press Escape, to ' +
           'close it. That choice is not remembered. A live IR warning adds a mark ' +
           'on Legend while the list is closed.',
       },
