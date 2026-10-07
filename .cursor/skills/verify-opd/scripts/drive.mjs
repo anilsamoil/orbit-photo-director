@@ -3911,6 +3911,117 @@ async function proveIssShortStages(send) {
   return rows.join(', ');
 }
 
+function issSplitFullscreenExpression() {
+  return `(() => {
+    const scene = document.querySelector('[data-iss-scene]');
+    const card = document.querySelector('[data-iss-card]');
+    const telemetry = document.querySelector('[data-iss-telemetry]');
+    const button = document.querySelector('[data-iss-fullscreen]');
+    if (!scene || !card || !telemetry || !button) return { step: 'missing' };
+    if (!scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
+    if (card.parentElement !== scene) return { step: 'park' };
+    const cardBox = card.getBoundingClientRect();
+    if (getComputedStyle(card).display === 'none' || card.getClientRects().length === 0) {
+      return { step: 'card', display: getComputedStyle(card).display, w: Math.round(cardBox.width), h: Math.round(cardBox.height) };
+    }
+    const t = telemetry.getBoundingClientRect();
+    const b = button.getBoundingClientRect();
+    if (t.width < 80 || t.height < 40 || t.height > 52) return { step: 'telemetry', w: Math.round(t.width), h: Math.round(t.height) };
+    const tHit = document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2);
+    if (!tHit || !telemetry.contains(tHit)) return { step: 'telemetry-hit', hit: tHit ? (tHit.getAttribute('aria-label') || tHit.tagName) : null };
+    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (Math.abs(b.width - 44) > 1 || Math.abs(b.height - 44) > 1) return { step: 'exit', w: Math.round(b.width), h: Math.round(b.height) };
+    if (b.left + 1 < t.right || b.left > t.right + 24) return { step: 'beside', telemetryRight: Math.round(t.right), exitLeft: Math.round(b.left) };
+    const bHit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    if (!bHit || !button.contains(bHit)) return { step: 'exit-hit', hit: bHit ? (bHit.getAttribute('aria-label') || bHit.id || bHit.tagName) : null };
+    if (button.getAttribute('aria-label') !== 'Exit full screen') return { step: 'label', label: button.getAttribute('aria-label') };
+    const shownPlaces = [...scene.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length;
+    const beforePlaces = window.__opdIssPlaceCount || 0;
+    if (shownPlaces < 1 || (beforePlaces > 0 && (shownPlaces < Math.max(1, Math.floor(beforePlaces * 0.5)) || shownPlaces > beforePlaces + 30))) {
+      return { step: 'places', shown: shownPlaces, before: beforePlaces };
+    }
+    return {
+      ok: true,
+      telemetry: [Math.round(t.width), Math.round(t.height)],
+      exit: [Math.round(b.width), Math.round(b.height)],
+      places: shownPlaces,
+      beforePlaces,
+    };
+  })()`;
+}
+
+function issSplitDockedExpression() {
+  return `(() => {
+    const scene = document.querySelector('[data-iss-scene]');
+    const card = document.querySelector('[data-iss-card]');
+    const dock = document.querySelector('[data-iss-split-dock]');
+    const telemetry = document.querySelector('[data-iss-telemetry]');
+    const button = document.querySelector('[data-iss-fullscreen]');
+    if (!scene || !card || !dock || !telemetry || !button) return { step: 'missing' };
+    if (scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
+    if (scene.getAttribute('data-iss-split') !== 'on') return { step: 'split' };
+    if (!dock.contains(card)) return { step: 'dock' };
+    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.getAttribute('aria-label') !== 'Full screen') return { step: 'label', label: button.getAttribute('aria-label') };
+    const t = telemetry.getBoundingClientRect();
+    const b = button.getBoundingClientRect();
+    if (t.width < 80 || t.height < 40) return { step: 'telemetry', w: Math.round(t.width), h: Math.round(t.height) };
+    if (Math.abs(b.width - 44) > 1 || Math.abs(b.height - 44) > 1) return { step: 'exit', w: Math.round(b.width), h: Math.round(b.height) };
+    if (!telemetry.contains(document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2))) return { step: 'telemetry-hit' };
+    if (!button.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2))) return { step: 'exit-hit' };
+    return { ok: true, telemetry: [Math.round(t.width), Math.round(t.height)], exit: [Math.round(b.width), Math.round(b.height)] };
+  })()`;
+}
+
+async function proveIssSplitFullscreen(send, viewport) {
+  if (!insetViewportFits(viewport.width, viewport.height)) return 'phone column';
+  const sizes = [
+    { width: 1400, height: 900 },
+    { width: 1280, height: 700 },
+    { width: 1194, height: 834 },
+  ];
+  const rows = [];
+  const seen = new Set();
+  const measure = async (width, height) => {
+    const key = `${width}x${height}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const held = await waitFor(send, issSplitFullscreenExpression(), `iss split fullscreen ${key}`, 10000);
+    const open = await proveFullscreenTelemetry(send);
+    rows.push(`${key} telemetry ${held.telemetry[0]}x${held.telemetry[1]} exit ${held.exit[0]}x${held.exit[1]} body ${open} labels ${held.beforePlaces}->${held.places}`);
+  };
+  let current = { width: viewport.width, height: viewport.height };
+  await measure(current.width, current.height);
+  let holding = true;
+  for (const size of sizes) {
+    const key = `${size.width}x${size.height}`;
+    if (seen.has(key)) continue;
+    if (holding) {
+      await pressIssFullscreen(send);
+      await waitFor(send, ISS_FULLSCREEN_OFF, `iss split fullscreen leave ${current.width}x${current.height}`, 10000);
+      const docked = await waitFor(send, issSplitDockedExpression(), `iss split dock after ${current.width}x${current.height}`, 10000);
+      rows.push(`after ${current.width}x${current.height} dock telemetry ${docked.telemetry[0]}x${docked.telemetry[1]} exit ${docked.exit[0]}x${docked.exit[1]}`);
+      holding = false;
+    }
+    await setViewport(send, size.width, size.height, viewport.mobile);
+    current = size;
+    await pressIssFullscreen(send);
+    holding = true;
+    await measure(size.width, size.height);
+  }
+  if (holding) {
+    await pressIssFullscreen(send);
+    await waitFor(send, ISS_FULLSCREEN_OFF, `iss split fullscreen leave ${current.width}x${current.height}`, 10000);
+    const docked = await waitFor(send, issSplitDockedExpression(), `iss split dock after ${current.width}x${current.height}`, 10000);
+    rows.push(`after ${current.width}x${current.height} dock telemetry ${docked.telemetry[0]}x${docked.telemetry[1]} exit ${docked.exit[0]}x${docked.exit[1]}`);
+  }
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  const restored = await waitFor(send, issSplitDockedExpression(), `iss split dock restored ${viewport.width}x${viewport.height}`, 10000);
+  rows.push(`restored ${viewport.width}x${viewport.height} telemetry ${restored.telemetry[0]}x${restored.telemetry[1]} exit ${restored.exit[0]}x${restored.exit[1]}`);
+  await pressIssFullscreen(send);
+  return rows.join('; ');
+}
+
 async function proveFullscreenTelemetry(send) {
   await click(send, '[data-iss-telemetry]');
   const open = await waitFor(send, `(() => {
@@ -3951,6 +4062,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     const beforePlaces = await evaluate(send, rememberPlaces);
     const idle = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen button idle', 10000);
     await enterFullscreenThroughOpenSheet(send, viewport.mobile);
+    const split = await proveIssSplitFullscreen(send, viewport);
     const held = await waitFor(send, issFullscreenHeldExpression(expected), `iss fullscreen ${expected}`, 10000);
     await shot(send, evidenceDir, 'iss-fullscreen');
     const telemetryOpen = await proveFullscreenTelemetry(send);
@@ -4006,7 +4118,7 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, Escape kept aim`;
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }

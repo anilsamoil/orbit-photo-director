@@ -160,6 +160,64 @@ function styled(): void {
   cleanups.push(() => style.remove());
 }
 
+function installSplitMedia(matches: boolean): void {
+  const previous = window.matchMedia.bind(window);
+  const media = {
+    matches,
+    media: '',
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() {
+      return false;
+    },
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+  };
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: () => media,
+  });
+  cleanups.push(() => {
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: previous });
+  });
+}
+
+async function mountedSplit(): Promise<Mounted & { pane: HTMLElement }> {
+  installSplitMedia(true);
+  const pane = document.createElement('section');
+  pane.id = 'iss-pane';
+  pane.innerHTML = `
+    <div data-iss-split-stack>
+      <div class="iss-split-map">
+        <button type="button" data-pip="plan"><span data-pip-frame="plan"></span></button>
+        <div data-iss-split-chrome></div>
+      </div>
+      <div data-iss-split-dock></div>
+    </div>
+    <div id="iss-host"></div>
+  `;
+  document.body.append(pane);
+  const host = pane.querySelector('#iss-host');
+  if (!(host instanceof HTMLElement)) throw new Error('host missing');
+  const scene = mountIssScene(host, {
+    nowMs: () => startMs + 60_000,
+    createRenderer: renderer(),
+    drive: 'manual',
+    session: { mode: 'horizon' },
+  });
+  cleanups.push(() => {
+    scene.dispose();
+    pane.remove();
+  });
+  await settle();
+  scene.update(shot());
+  await settle();
+  const button = query(pane, '[data-iss-fullscreen]');
+  if (!(button instanceof HTMLButtonElement)) throw new Error('fullscreen control is not a native button');
+  return { host, scene, root: query(pane, '[data-iss-scene]'), frame: query(pane, '[data-iss-frame]'), button, pane };
+}
+
 describe('ISS fullscreen toggle', () => {
   it.each(['standard', 'webkit', 'both'] as const)('enters and leaves element fullscreen through the %s API', async (api) => {
     const fullscreen = browser(api);
@@ -657,6 +715,48 @@ describe('ISS fullscreen styles', () => {
     expect(button.borderTopLeftRadius).toBe('3px');
     expect(button.backgroundColor).toBe('#10161c');
     expect(button.borderTopColor).toBe('#617585');
+  });
+
+  it('keeps Telemetry and Exit on the card when split fullscreen parks it', async () => {
+    styled();
+    browser('missing');
+    const view = await mountedSplit();
+    const pane = view.pane;
+    const card = query(pane, '[data-iss-card]');
+    const telemetry = query(pane, '[data-iss-telemetry]');
+    const dock = query(pane, '[data-iss-split-dock]');
+    expect(dock.contains(card)).toBe(true);
+    expect(view.root.getAttribute('data-iss-split')).toBe('on');
+
+    view.button.click();
+    view.frame.focus();
+
+    expect(view.root.hasAttribute('data-iss-fullscreen-active')).toBe(true);
+    expect(card.parentElement).toBe(view.root);
+    const telemetryBox = telemetry.getBoundingClientRect();
+    const exitBox = view.button.getBoundingClientRect();
+    const parked = `card ${getComputedStyle(card).display} telemetry ${telemetryBox.width}x${telemetryBox.height} exit ${exitBox.width}x${exitBox.height}`;
+    expect(getComputedStyle(card).display, parked).toBe('block');
+    expect(telemetryBox.width, parked).toBeGreaterThan(40);
+    expect(telemetryBox.height).toBeGreaterThan(40);
+    expect(view.button.previousElementSibling).toBe(telemetry);
+    expect(exitBox.width).toBeGreaterThan(40);
+    expect(exitBox.height).toBeGreaterThan(40);
+    expect(exitBox.left).toBeGreaterThanOrEqual(telemetryBox.left);
+
+    telemetry.click();
+    const body = query(pane, '[data-iss-telemetry-body]');
+    expect(telemetry.getAttribute('aria-expanded')).toBe('true');
+    expect(getComputedStyle(body).display).toBe('block');
+    const bodyBox = body.getBoundingClientRect();
+    expect(bodyBox.width).toBeGreaterThan(8);
+    expect(bodyBox.height).toBeGreaterThan(8);
+
+    view.button.click();
+    view.button.focus();
+    expect(view.root.hasAttribute('data-iss-fullscreen-active')).toBe(false);
+    expect(view.root.getAttribute('data-iss-split')).toBe('on');
+    expect(dock.contains(card)).toBe(true);
   });
 
   it('keeps the error card in fullscreen', async () => {
