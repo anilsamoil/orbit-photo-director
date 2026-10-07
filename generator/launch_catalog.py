@@ -534,7 +534,7 @@ def _lens(sight) -> tuple[str, str]:
 def _track(scenario, span) -> list[dict]:
     if span.subject is not Subject.ASCENT:
         return []
-    points: list[dict] = []
+    by_time: dict[int, dict] = {}
     last = None
     for sight in scenario.sights:
         if sight.subject is not Subject.ASCENT or not sight.in_plan:
@@ -543,11 +543,12 @@ def _track(scenario, span) -> list[dict]:
             continue
         if last is not None and sight.t_offset_s - last < 15:
             continue
-        points.append(_point(sight))
+        by_time[int(sight.t_offset_s)] = _point(sight)
         last = sight.t_offset_s
-    if not points:
-        points.append(_point(span.closest))
-    return points
+    for sight in (span.start_sight, span.closest, span.end_sight):
+        if sight is not None:
+            by_time[int(sight.t_offset_s)] = _point(sight)
+    return [by_time[offset] for offset in sorted(by_time)]
 
 
 def _point(sight) -> dict:

@@ -595,6 +595,37 @@ def test_ascent_track_needs_a_direction_and_keeps_altitude(sample_tle, tmp_path)
     publish_launch_catalog(catalog, tmp_path / "launch-output")
 
 
+def test_thinned_track_keeps_the_best_instant_and_both_ends(sample_tle):
+    epoch = sample_tle.epoch.replace(microsecond=0)
+    liftoff = epoch + timedelta(hours=4, minutes=20)
+    future = propagate(sample_tle, liftoff + timedelta(seconds=540))
+    direction = direction_for(sample_tle, liftoff, future.lat, future.lon, Destination.ISS)
+    lat, lon = _destination_along_bearing(
+        future.lat, future.lon, (direction.azimuth_deg + 180.0) % 360.0, 1400.0,
+    )
+    payload = _catalog_row(liftoff)
+    payload["results"][0]["pad"]["latitude"] = lat
+    payload["results"][0]["pad"]["longitude"] = lon
+    payload["results"][0]["rocket"]["spacecraft_stage"] = [{"destination": "ISS"}]
+    item = build_launch_catalog(
+        payload, sample_tle, epoch + timedelta(hours=1), fetched_at=epoch + timedelta(hours=1),
+    )["items"][0]
+    shot = next(row for row in item["shots"] if row["subject"] == "ascent")
+    lift = _parse_iso8601_z(shot["liftoff"])
+    start = int((_parse_iso8601_z(shot["start"]) - lift).total_seconds())
+    end = int((_parse_iso8601_z(shot["end"]) - lift).total_seconds())
+    offsets = [point["t_offset_s"] for point in shot["track"]]
+    assert item["tier"] == "shot"
+    assert shot["best_offset_s"] == 540
+    assert start == 6
+    assert end == 540
+    assert shot["best_offset_s"] in offsets
+    assert start in offsets
+    assert end in offsets
+    assert offsets == sorted(offsets)
+    assert len(offsets) == len(set(offsets))
+
+
 def test_liftoff_scenarios_stay_separate(sample_tle):
     now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
     net = now + timedelta(minutes=10)
