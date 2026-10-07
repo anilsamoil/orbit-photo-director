@@ -25,7 +25,7 @@ Preconditions:
 - **Another browser.** After `GET /api/browser/profiles/anil/targets` lists `verify-mesa` in `removedCuratedIds`, a new Chrome profile opens the same proxy. Upcoming does not show Verify Mesa, and its localStorage timestamp matches the GET.
 - **Proof.** `evidence/upcoming.png` shows Verify Ascent and Verify Likely above Verify Mesa. `evidence/upcoming-hidden.png` shows Mesa gone and both launch cards still listed. `evidence/upcoming-reloaded.png` shows Mesa still gone.
 
-Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
+On iPhone 17 Pro the drive also opens 874 by 402 before the hide, checks that Verify Ascent and Verify Likely stay above Verify Mesa, and that Verify Horizon stays absent. `evidence/iphone-17-pro/upcoming-874x402.png` is that pane. Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run the same steps. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
 
 ## Gotchas
 

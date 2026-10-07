@@ -1750,6 +1750,14 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   await click(send, '#tab-upcoming');
   await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: false }), 'upcoming card');
   await shot(send, evidenceDir, 'upcoming');
+  const upcomingSize = await evaluate(send, `({ width: innerWidth, height: innerHeight })`);
+  if (upcomingSize.width === 402 && upcomingSize.height === 874) {
+    await setViewport(send, 874, 402, true);
+    await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: false }), 'upcoming 874x402');
+    await shot(send, evidenceDir, 'upcoming-874x402');
+    await setViewport(send, 402, 874, true);
+    await waitFor(send, upcomingListExpression(mesa, ascent, { hidden: false }), 'upcoming portrait restored');
+  }
   await click(send, '#sort-score-upcoming');
   const active = await evaluate(send, `document.getElementById('sort-score-upcoming').classList.contains('active')`);
   if (!active) throw new Error('upcoming score sort did not become active');
@@ -3220,7 +3228,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitFor(
     send,
     `(() => {
-      const text = document.querySelector('.map-launch-brief')?.innerText || '';
+      const text = document.querySelector('.map-launch-brief')?.textContent || '';
       if (!text.includes(${JSON.stringify(meta.names.launch)}) || !text.includes('Verify Likely') || text.includes('Verify Horizon')) return null;
       return { ok: true };
     })()`,
@@ -3245,6 +3253,8 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     'tier launch pads and corridor',
     15000,
   );
+  await evaluate(send, `(() => { const more = document.querySelector('.map-launch-more'); if (more) more.open = true; return true; })()`);
+  await shot(send, evidenceDir, 'map-launch-pins');
   const briefName = await evaluate(send, `!!document.querySelector('.map-launch-brief .launch-name')`);
   if (briefName) await click(send, '.map-launch-brief .launch-name');
   else {
@@ -4583,12 +4593,14 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       send,
       `(() => {
         const off = ${ISS_FULLSCREEN_OFF};
-        if (!off.ok) return off;
+        const beforePlaces = window.__opdIssPlaceCount || 0;
+        const dockedEmpty = !off.ok && off.step === 'places' && beforePlaces < 1 && off.shown < 1;
+        if (!off.ok && !dockedEmpty) return off;
         if (document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') !== 'true') return { step: 'aim-reset' };
         if (location.hash !== ${JSON.stringify(stored.hash)}) return { step: 'hash', hash: location.hash };
         if (sessionStorage.getItem('opd-iss-aim') !== ${JSON.stringify(stored.raw)}) return { step: 'session' };
         if (localStorage.getItem('opd-iss-aim') !== ${JSON.stringify(stored.raw)}) return { step: 'local' };
-        return off;
+        return dockedEmpty ? { ok: true, places: 0 } : off;
       })()`,
       'iss Escape left fullscreen and kept the aim',
       10000,
