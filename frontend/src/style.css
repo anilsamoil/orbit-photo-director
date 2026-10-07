@@ -4736,177 +4736,116 @@ summary:focus-visible {
     --map-time-block: 120px;
     --map-command-height: calc(36px + 44px + 8px + var(--map-time-block) + env(safe-area-inset-bottom, 0px));
   }
-
-  .view-map {
-    --map-stack-room: calc(var(--map-pane-budget) - var(--map-toolbar-clear) - var(--map-strip-anchor));
-    --map-time-block: min(120px, max(44px, calc(var(--map-stack-room) - 60px)));
-    --map-dock-clear: calc(var(--map-strip-anchor) + var(--map-time-block));
-    --map-legend-panel-bottom: calc(44px + var(--map-corner-gap) + var(--map-time-block) + 12px);
-  }
-
-  .view-map .map-legend-panel {
-    max-height: calc(var(--map-stack-room) - var(--map-time-block) - 12px);
-  }
-
-  .view-map .map-control-dock,
-  .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
-    pointer-events: none;
-  }
-
-  .view-map .map-control-dock > .map-controls,
-  .view-map .map-control-dock .time-btn {
-    pointer-events: auto;
-  }
-
-  .view-map .map-command,
-  body.shotlist-bar-visible .view-map .map-command {
-    left: calc(var(--map-zoom-clear) + env(safe-area-inset-left, 0px));
-    right: calc(16px + env(safe-area-inset-right, 0px));
-    bottom: calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap));
-    height: var(--map-time-block);
-    max-height: var(--map-time-block);
-    padding: 0;
-  }
-
-  .view-map .map-command .map-controls-time {
-    width: 100%;
-    max-width: 100%;
-    overflow-x: visible;
-  }
-
-  .view-map .map-command .time-slider-row {
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-
-  body.map-chrome-reflow .view-map {
-    --map-reflow-top: calc(var(--map-toolbar-clear) + 4px + 44px + 8px);
-  }
-
-  body.map-chrome-reflow:has(#status-banner .banner-actions) .view-map {
-    --map-reflow-corner: max(36px, calc(7.75rem + env(safe-area-inset-bottom, 0px) - var(--map-shotlist-block) + 4px));
-  }
-
-  body.map-chrome-reflow .view-map .map-chrome-toggle,
-  body.map-chrome-reflow .view-map .map-legend {
-    bottom: var(--map-reflow-corner, var(--map-corner-bottom));
-  }
-
-  body.map-chrome-reflow .view-map .map-command,
-  body.map-chrome-reflow.shotlist-bar-visible .view-map .map-command {
-    top: calc(var(--map-toolbar-clear) + 4px);
-    bottom: auto;
-    height: 44px;
-    max-height: 44px;
-    min-height: 44px;
-    padding: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    pointer-events: auto;
-  }
-
-  body.map-chrome-reflow .view-map .map-command .map-controls-time {
-    flex-wrap: nowrap;
-    gap: 2px;
-    width: max-content;
-    min-width: 100%;
-    max-width: none;
-    height: 44px;
-    padding: 0 2px;
-    overflow: visible;
-  }
-
-  body.map-chrome-reflow .view-map .map-command .time-slider-row {
-    flex: 1 1 0;
-    min-width: 44px;
-    padding: 0;
-    gap: 0;
-  }
-
-  body.map-chrome-reflow .view-map .map-command .time-slider {
-    margin: 0;
-    min-width: 44px;
-    height: 44px;
-  }
-
-  body.map-chrome-reflow .view-map .map-command .time-slider-end,
-  body.map-chrome-reflow .view-map .map-command .time-slider-readout {
-    display: none;
-  }
-
-  body.map-chrome-reflow .view-map .map-command .time-step-btn {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    max-width: 44px;
-    height: 44px;
-    min-height: 44px;
-    padding: 0;
-    overflow: hidden;
-  }
-
-  body.map-chrome-reflow .view-map .map-control-dock,
-  body.map-chrome-reflow .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    top: var(--map-reflow-top);
-    width: max-content;
-    max-width: 76px;
-    height: auto;
-    max-height: calc(100% - var(--map-reflow-top) - var(--map-reflow-corner, var(--map-corner-bottom)) - 44px - 8px);
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
-  body.map-chrome-reflow.map-dock-row .view-map {
-    --map-reflow-top: calc(var(--map-toolbar-clear) + 4px + 44px + 8px + 52px + 8px);
-  }
-
-  body.map-chrome-reflow.map-dock-row .view-map .map-control-dock,
-  body.map-chrome-reflow.map-dock-row .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    top: calc(var(--map-toolbar-clear) + 4px + 44px + 8px);
-    left: calc(8px + env(safe-area-inset-left, 0px));
-    right: var(--map-corner-clear);
-    width: auto;
-    max-width: none;
-    height: auto;
-    max-height: none;
-    overflow-x: auto;
-    overflow-y: hidden;
-    flex-direction: row;
-  }
-
-  body.map-chrome-reflow.map-dock-row .view-map .map-control-dock > .map-controls {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    width: max-content;
-  }
-
-  body.map-chrome-reflow.map-dock-row .view-map .map-control-dock .map-group-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-  }
-
-  body.map-chrome-reflow .view-map .map-legend-panel {
-    position: fixed;
-    top: var(--map-reflow-top);
-    bottom: auto;
-    left: calc(8px + env(safe-area-inset-left, 0px));
-    right: auto;
-    width: min(11rem, calc(100vw - var(--map-corner-clear) - 8px - env(safe-area-inset-left, 0px)));
-    min-width: 0;
-    max-width: min(11rem, calc(100vw - var(--map-corner-clear) - 8px - env(safe-area-inset-left, 0px)));
-    max-height: max(44px, calc(var(--map-pane-budget) - var(--map-reflow-top) - 8px));
-    overflow: auto;
-  }
 }
 
 @media (min-width: 701px) {
   .view-map .map-command {
     align-content: flex-end;
   }
+}
+
+body.map-slot-time .view-map .map-command,
+body.map-slot-time.shotlist-bar-visible .view-map .map-command {
+  top: var(--slot-time-y);
+  left: var(--slot-time-x);
+  width: var(--slot-time-w);
+  height: var(--slot-time-h);
+  right: auto;
+  bottom: auto;
+  max-height: none;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+body.map-slot-time .view-map .map-command .map-controls-time {
+  flex-wrap: wrap;
+  align-content: center;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: 0 2px;
+  overflow: visible;
+}
+
+body.map-slot-time-line .view-map .map-command .map-controls-time {
+  flex-wrap: nowrap;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+body.map-slot-time .view-map .map-command .time-slider-row {
+  flex: 1 1 0;
+  min-width: 44px;
+  padding: 0;
+  gap: 0;
+}
+
+body.map-slot-time .view-map .map-command .time-slider {
+  margin: 0;
+  min-width: 44px;
+  height: 44px;
+}
+
+body.map-slot-time .view-map .map-command .time-step-btn {
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+}
+
+body.map-slot-dock .view-map .map-control-dock,
+body.map-slot-dock #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  top: var(--slot-dock-y);
+  left: var(--slot-dock-x);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-dock-w);
+  height: var(--slot-dock-h);
+  max-width: none;
+  max-height: var(--slot-dock-h);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body.map-slot-dock.map-slot-dock-row .view-map .map-control-dock,
+body.map-slot-dock.map-slot-dock-row #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-direction: row;
+}
+
+body.map-slot-dock-row .view-map .map-control-dock > .map-controls {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  width: max-content;
+}
+
+body.map-slot-dock-row .view-map .map-control-dock .map-group-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+body.map-slot-legend .view-map .map-legend-panel {
+  position: fixed;
+  top: var(--slot-legend-y);
+  left: var(--slot-legend-x);
+  bottom: auto;
+  right: auto;
+  width: var(--slot-legend-w);
+  height: var(--slot-legend-h);
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  overflow: auto;
+  pointer-events: auto;
 }
 
 @media (max-width: 700px) {
