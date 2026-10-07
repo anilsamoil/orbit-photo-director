@@ -209,7 +209,7 @@ async function hit(page, locator) {
 export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
   mkdirSync(evidenceDir, { recursive: true });
   const device = deviceDescriptor(spec);
-  const context = await browser.newContext({ ...device });
+  const context = await browser.newContext({ ...device, serviceWorkers: 'block' });
   await context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
   if (spec.standalone) {
     await context.addInitScript(() => {

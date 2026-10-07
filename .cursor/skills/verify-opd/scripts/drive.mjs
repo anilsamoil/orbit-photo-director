@@ -650,7 +650,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active) });
+      const context = await browser.newContext({ ...deviceDescriptor(active), serviceWorkers: 'block' });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -3848,7 +3848,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   );
   const launchLook = await proveIssLaunchLook(send, evidenceDir, baseUrl);
   const placement = viewport.width === 390 || viewport.width === 402
-    ? await proveLaunchPlacement(baseUrl, evidenceDir)
+    ? await proveLaunchPlacement(baseUrl, evidenceDir, viewport.width)
     : '';
   await click(send, '[data-iss-preset="horizon"]');
   await waitFor(

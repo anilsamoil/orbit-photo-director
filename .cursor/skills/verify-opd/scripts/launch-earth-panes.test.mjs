@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchEarthPanes } from './drive.mjs';
-import { PLACEMENT_CASES } from './placement-proof.mjs';
+import { acceptsNatural, NATURAL_CARD_PX, placementScenes, PLACEMENT_CASES } from './placement-proof.mjs';
 
 test('a 402 by 874 start checks 874 by 402 as a phone side pane', () => {
   const landscape = launchEarthPanes(402, 874).find((pane) => pane.label === '874x402');
@@ -65,4 +65,27 @@ test('a wide pane at least 800 by 600 still requires a 200px earth', () => {
   assert.equal(pane.minShort, 200);
   assert.equal(pane.width, 874);
   assert.equal(pane.height, 700);
+  const drive = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'drive.mjs'), 'utf8');
+  assert.equal(drive.includes("minShort: 180"), false);
+  assert.match(drive, /width >= 800\) return \[\{ \.\.\.native, place: splitLaunchPlace\(width, height\) \|\| 'side', minShort: 200 \}\]/);
+});
+
+test('each phone proof reads that phone and the unwrapped card', () => {
+  const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'placement-proof.mjs'), 'utf8');
+  const drive = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'drive.mjs'), 'utf8');
+  assert.equal(source.includes("place !== ''"), false);
+  assert.equal(source.includes('launchPersistentContext'), true);
+  assert.equal(source.includes("serviceWorkers: 'block'"), true);
+  assert.equal(NATURAL_CARD_PX, 96);
+  assert.deepEqual(placementScenes(390).map((scene) => [scene.name, scene.sceneWidth]), [['iphone-13', 390]]);
+  assert.deepEqual(placementScenes(402).map((scene) => [scene.name, scene.sceneWidth]), [['iphone-17-pro', 402]]);
+  assert.equal(drive.includes('proveLaunchPlacement(baseUrl, evidenceDir, viewport.width)'), true);
+  const iphone13 = placementScenes(390)[0];
+  const iphone17 = placementScenes(402)[0];
+  const meta = 'width=device-width, initial-scale=1, viewport-fit=cover';
+  assert.equal(acceptsNatural(iphone13, { sceneWidth: 390, sceneHeight: 565, innerWidth: 390, innerHeight: 726, meta, place: 'below', card: 96, width: 195, height: 130 }), true);
+  assert.equal(acceptsNatural(iphone17, { sceneWidth: 402, sceneHeight: 565, innerWidth: 402, innerHeight: 726, meta, place: 'below', card: 96, width: 228, height: 152 }), true);
+  assert.equal(acceptsNatural(iphone13, { sceneWidth: 390, sceneHeight: 565, innerWidth: 390, innerHeight: 726, meta, place: 'below', card: 138, width: 315, height: 210 }), false);
+  assert.equal(acceptsNatural(iphone13, { sceneWidth: 390, sceneHeight: 565, innerWidth: 390, innerHeight: 726, meta, place: '', card: 96, width: 195, height: 130 }), false);
+  assert.equal(acceptsNatural(iphone17, { sceneWidth: 390, sceneHeight: 565, innerWidth: 390, innerHeight: 726, meta, place: 'below', card: 96, width: 195, height: 130 }), false);
 });
