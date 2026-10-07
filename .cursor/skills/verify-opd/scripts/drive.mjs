@@ -1626,9 +1626,9 @@ async function proveMapLaidOnPane(send) {
       insetProbe.remove();
       reserved = { height, inset, expect: 140 + inset };
     }
-    const pip = fitting
-      ? { left: paneBox.right - 12 - 222, right: paneBox.right - 12, top: paneBox.bottom - 96 - 36 - 144, bottom: paneBox.bottom - 96 - 36, width: 222, height: 144 }
-      : null;
+    const pipNode = document.querySelector('[data-pip="horizon"]');
+    const pipShown = pipNode && !pipNode.hidden && getComputedStyle(pipNode).display !== 'none';
+    const pip = pipShown ? pipNode.getBoundingClientRect() : null;
     const pipHits = pip ? hits(stripBox, pip) : false;
     return {
       gap,
@@ -1670,7 +1670,7 @@ async function proveMapLaidOnPane(send) {
   const gapClear = laid && laid.rowGap === '0px' && laid.columnGap === '0px';
   const geometry = laid && (!laid.fitting || (
     Math.abs(laid.stripHeight - 96) <= 2
-    && Math.abs(laid.rightGap - 246) <= 2
+    && Math.abs(laid.rightGap - 204) <= 2
     && Math.abs(laid.slider - 32) <= 1
   ));
   const narrowOk = laid && (!laid.narrow || (
@@ -1781,6 +1781,15 @@ function pipReadyExpression(name) {
       const rightGap = paneBox ? paneBox.right - box.right : null;
       if (Math.abs(box.width - 222) > 1 || Math.abs(box.height - 144) > 1) return { step: 'size', width: box.width, height: box.height };
       if (rightGap == null || Math.abs(rightGap - 12) > 2) return { step: 'place', rightGap, width: box.width, height: box.height };
+      const bar = document.querySelector('.topbar')?.getBoundingClientRect();
+      if (bar && box.top < bar.bottom - 1) return { step: 'topbar', pipTop: box.top, barBottom: bar.bottom };
+      const dock = document.querySelector('.map-control-dock')?.getBoundingClientRect();
+      if (dock && dock.height > 8 && box.bottom > dock.top + 1) return { step: 'stack', pipBottom: box.bottom, dockTop: dock.top };
+      const legend = document.getElementById('map-legend-toggle')?.getBoundingClientRect();
+      const hide = document.getElementById('map-chrome-toggle')?.getBoundingClientRect();
+      if (legend && hide && legend.width > 8 && hide.width > 8 && legend.right > hide.left - 1) {
+        return { step: 'legend', legendRight: legend.right, hideLeft: hide.left };
+      }
     } else if (box.width < 44 || box.height < 44) {
       return { step: 'size', width: box.width, height: box.height };
     }
