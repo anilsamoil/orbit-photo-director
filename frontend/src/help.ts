@@ -297,7 +297,8 @@ const HELP_SECTIONS: HelpSection[] = [
           'marker, Anil\'s targets, Starship, and your white rings are not ' +
           'rows. It starts closed. Tap Legend beside Hide in the bottom-right ' +
           'corner to open the rows and the imagery date. On a narrow screen ' +
-          'the time rows sit above Legend and Hide. Tap Legend again, or press Escape, to ' +
+          'the time rows sit above Legend and Hide. When that band cannot hold a row, ' +
+          'the time row sits under Show and the legend list scrolls beside it. Tap Legend again, or press Escape, to ' +
           'close it. That choice is not remembered. A live IR warning adds a mark ' +
           'on Legend while the list is closed.',
       },
