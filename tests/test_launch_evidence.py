@@ -5,12 +5,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
+from generator.ascent import _destination_along_bearing
 from generator.launch_catalog import _lens, _score, build_launch_catalog
 from generator.launch_data import _parse_iso8601_z, parse_response, validate_feed
 from generator.launch_direction import Destination, DirectionKind, _iss_plane, direction_for
@@ -37,7 +39,7 @@ from generator.launch_publish import (
     rclone_reader,
     rclone_uploader,
 )
-from generator.orbit import Position, propagate
+from generator.orbit import EARTH_RADIUS_KM, Position, propagate
 from scripts.ascent_smoke import main as diagnose
 from scripts.launch_census import FIXTURE_DIR, load_replay
 
@@ -729,6 +731,45 @@ def test_fractional_second_past_the_tle_age_gates_is_not_a_shot(sample_tle, monk
     two_days = gate(48)
     assert two_days["tier"] == "watch"
     assert two_days["tier"] != "likely"
+
+
+def _pad_that_sets_before_net(sample_tle, hours: float) -> dict:
+    net = sample_tle.epoch + timedelta(hours=hours, seconds=30)
+    iss = propagate(sample_tle, net - timedelta(minutes=2))
+    horizon_km = EARTH_RADIUS_KM * math.acos(
+        EARTH_RADIUS_KM / (EARTH_RADIUS_KM + iss.alt_km)
+    )
+    lat, lon = _destination_along_bearing(iss.lat, iss.lon, 256.0, horizon_km * 0.8)
+    payload = _catalog_row(net)
+    payload["results"][0]["pad"]["latitude"] = lat
+    payload["results"][0]["pad"]["longitude"] = lon
+    return payload
+
+
+def test_pad_capture_ending_before_net_still_hits_the_tle_age_ceilings(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+
+    def item_at(hours: float) -> dict:
+        payload = _pad_that_sets_before_net(sample_tle, hours)
+        return build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+
+    day = item_at(24)
+    pad = next(shot for shot in day["shots"] if shot["subject"] == "pad")
+    end = _parse_iso8601_z(pad["end"])
+    assert pad["end"] < pad["liftoff"]
+    assert (end - sample_tle.epoch).total_seconds() <= 24 * 3600
+    assert pad["score"]["low"] == 51.8
+    assert day["tier"] != "shot"
+    assert "TLE_AGE_OVER_24H" in day["reasons"]
+
+    two_days = item_at(48)
+    later = next(shot for shot in two_days["shots"] if shot["subject"] == "pad")
+    later_end = _parse_iso8601_z(later["end"])
+    assert later["end"] < later["liftoff"]
+    assert (later_end - sample_tle.epoch).total_seconds() <= 48 * 3600
+    assert later["score"]["low"] >= 25
+    assert two_days["tier"] != "likely"
+    assert "TLE_AGE_OVER_48H" in two_days["reasons"]
 
 
 def test_tle_freshness_uses_the_capture_interval(sample_tle):

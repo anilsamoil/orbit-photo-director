@@ -196,10 +196,13 @@ def _item(
     capture_ages = [
         _capture_age_h(shot, tle.epoch) for shot in shots if tle is not None
     ]
-    if (capture_ages and max(capture_ages) > SHOT_TLE_AGE_H) or (
-        not capture_ages and age_h is not None and age_h > SHOT_TLE_AGE_H
-    ):
+    checked_ages = list(capture_ages)
+    if age_h is not None:
+        checked_ages.append(age_h)
+    if any(age > SHOT_TLE_AGE_H for age in checked_ages):
         reasons.append("TLE_AGE_OVER_24H")
+    if any(age > LIKELY_TLE_AGE_H for age in checked_ages):
+        reasons.append("TLE_AGE_OVER_48H")
     g2 = bool(shots)
     fresh_negative = False
     blocked = {"GEOMETRY_INVALID", "EVALUATION_INCOMPLETE", "EPHEMERIS_MISSING"}
@@ -367,7 +370,7 @@ def _shots(
             reasons.append("GEOMETRY_INVALID")
             continue
         for span in scenario.spans:
-            shot = _envelope(span, scenario, tle, direction, liftoff)
+            shot = _envelope(span, scenario, tle, direction, liftoff, launch.t0)
             if shot is None:
                 continue
             shots.append(shot)
@@ -398,7 +401,7 @@ def _diagnostic_liftoffs(launch: Launch) -> tuple[datetime, ...]:
 
 
 def _envelope(
-    span, scenario, tle: TLE, direction: Direction, evaluated_at: datetime,
+    span, scenario, tle: TLE, direction: Direction, evaluated_at: datetime, net: datetime,
 ) -> dict | None:
     sight = span.closest
     try:
@@ -407,7 +410,7 @@ def _envelope(
     except (ValueError, RuntimeError, ArithmeticError):
         return None
     duration = max(0.0, (span.end - span.start).total_seconds())
-    age_h = _age_hours(span.start, span.end, tle.epoch)
+    age_h = _age_hours(span.liftoff, net, span.start, span.end, tle.epoch)
     sigma = _sigma_km(age_h)
     timing = sigma / ORBITAL_SPEED_KM_S
     start, best, end = utc(span.start), utc(sight.when), utc(span.end)
@@ -567,7 +570,11 @@ def _why(tier: str, shots: list[dict], reasons: list[str]) -> str:
             return "The view assessment did not finish."
         if "GEOMETRY_INVALID" in reasons:
             return "The viewing geometry could not be evaluated."
-        if "TLE_AGE_OVER_24H" in reasons or "EPHEMERIS_STALE" in reasons:
+        if (
+            "TLE_AGE_OVER_24H" in reasons
+            or "TLE_AGE_OVER_48H" in reasons
+            or "EPHEMERIS_STALE" in reasons
+        ):
             return "The ISS orbit is too old to confirm or rule out a view."
         if tier == "none":
             return "The ascent stays behind Earth on a fresh orbit."
@@ -753,9 +760,9 @@ def _capture_age_h(shot: dict, epoch: datetime) -> float:
     return _age_hours(_parse_iso8601_z(shot["start"]), _parse_iso8601_z(shot["end"]), epoch)
 
 
-def _age_hours(start: datetime, end: datetime, epoch: datetime) -> float:
-    span = max(abs((start - epoch).total_seconds()), abs((end - epoch).total_seconds()))
-    return span / 3600.0
+def _age_hours(*moments: datetime) -> float:
+    epoch = moments[-1]
+    return max(abs((when - epoch).total_seconds()) for when in moments[:-1]) / 3600.0
 
 
 def _sigma_km(age_h: float) -> float:
