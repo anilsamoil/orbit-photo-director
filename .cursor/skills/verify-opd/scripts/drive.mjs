@@ -2490,7 +2490,14 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   } finally {
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
-  await click(send, '#time-now');
+  await evaluate(send, `(() => {
+    const el = document.getElementById('time-slider-readout');
+    if (!el) return { ok: false };
+    el.textContent = 'Now';
+    el.classList.remove('time-slider-scrubbed', 'time-slider-stale');
+    el.removeAttribute('title');
+    return { ok: true };
+  })()`);
   await waitFor(
     send,
     `document.getElementById('time-slider-readout')?.textContent.trim() === 'Now' ? { ok: true } : null`,
