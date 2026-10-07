@@ -2811,7 +2811,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   try {
     await proveMapControlHits(send, 'shot list open');
   } finally {
-    await evaluate(send, `document.body.classList.remove('shotlist-bar-visible')`);
+    await evaluate(send, `(() => {
+      const bar = document.getElementById('shotlist-bar');
+      if (!bar || bar.hidden) document.body.classList.remove('shotlist-bar-visible');
+      return true;
+    })()`);
   }
   const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
   let chrome = '';
