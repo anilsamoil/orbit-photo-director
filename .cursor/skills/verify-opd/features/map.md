@@ -21,7 +21,7 @@ The Map tab is the globe, the ISS track and marker, target pins, a dropped pin, 
 
 - Choose the Map tab. The page also lands here on first load.
 - The map opens clear. One `Controls` button sits at the bottom right. The legend tab, the Time strip on the map, the Show toolbar, the tool dock, the imagery date, the zoom buttons, the launch panel, and the satellite picker are hidden. The map ? button and the (i) credit button stay off. The top bar and the status footer stay, including Sign in and Reload when the session is dead. Help on the other tabs stays.
-- Tap `Controls`. The chrome comes back and the button reads `Hide`. The legend is still a closed tab on the left. Tap `Legend` to open the rows and the imagery date. Tap `Hide` and the map is clear again. The chrome choice is stored on this device as `opd-map-chrome` (`shown` or `hidden`). A missing key stays hidden. The legend open or closed choice is not stored.
+- Tap `Controls`. The chrome comes back and the button reads `Hide`. The legend is still a closed tab immediately left of Hide. Tap `Legend` to open the rows and the imagery date. Tap `Hide` and the map is clear again. The chrome choice is stored on this device as `opd-map-chrome` (`shown` or `hidden`). A missing key stays hidden. The legend open or closed choice is not stored.
 
 ## Driving it with opd-verify
 
