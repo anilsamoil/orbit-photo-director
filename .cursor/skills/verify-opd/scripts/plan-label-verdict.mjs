@@ -4,21 +4,62 @@ import { pathToFileURL } from 'node:url';
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
 
 export function planLabelVerdict(sample) {
-  const names = [];
-  const rendered = Array.isArray(sample.rendered) ? sample.rendered : [];
-  const width = Number(sample.width);
-  const height = Number(sample.height);
-  for (const feature of rendered) {
-    const name = feature && feature.properties && feature.properties.name;
-    if (typeof name !== 'string' || name.length === 0) continue;
-    if (!(feature.x >= 8 && feature.y >= 8 && feature.x <= width - 8 && feature.y <= height - 8)) continue;
-    if (!names.includes(name)) names.push(name);
+  function resolvedOpacity(value) {
+    if (value == null) return 1;
+    if (typeof value === 'number') return value;
+    if (Array.isArray(value) && value[0] === 'literal' && typeof value[1] === 'number') return value[1];
+    return 0;
+  }
+  function colorAlpha(colorValue) {
+    if (colorValue == null) return 1;
+    if (typeof colorValue !== 'string') return 0;
+    const text = colorValue.trim().toLowerCase();
+    if (text === 'transparent') return 0;
+    const hex = /^#([0-9a-f]+)$/.exec(text);
+    if (hex && (hex[1].length === 3 || hex[1].length === 6)) return 1;
+    if (hex && hex[1].length === 4) return parseInt(hex[1][3] + hex[1][3], 16) / 255;
+    if (hex && hex[1].length === 8) return parseInt(hex[1].slice(6, 8), 16) / 255;
+    const rgba = /^rgba?\(([^)]*)\)$/.exec(text);
+    if (!rgba) return 0;
+    const parts = rgba[1].split(',').map((part) => part.trim());
+    if (parts.length < 4) return 1;
+    const alpha = Number(parts[3]);
+    return Number.isFinite(alpha) ? alpha : 0;
+  }
+  function shownText(field, properties) {
+    if (typeof field === 'string') return field;
+    if (Array.isArray(field) && field[0] === 'get' && typeof field[1] === 'string') {
+      const value = properties ? properties[field[1]] : undefined;
+      return typeof value === 'string' ? value : '';
+    }
+    if (Array.isArray(field) && field[0] === 'literal' && typeof field[1] === 'string') return field[1];
+    return '';
   }
   const glyphs = Number(sample.glyphs);
-  if (glyphs < 10000 || names.length < 4) {
-    return { ok: false, step: 'labels', reason: 'names', glyphs, names };
+  const width = Number(sample.width);
+  const height = Number(sample.height);
+  if (!sample.layerPresent) return { ok: false, step: 'labels', reason: 'layer', glyphs };
+  if (sample.visibility != null && sample.visibility !== 'visible') {
+    return { ok: false, step: 'labels', reason: 'visibility', glyphs };
   }
-  return { ok: true, names, glyphs };
+  const opacity = resolvedOpacity(sample.textOpacity);
+  if (!(opacity > 0)) return { ok: false, step: 'labels', reason: 'opacity', opacity, glyphs };
+  const alpha = colorAlpha(sample.textColor);
+  if (!(alpha > 0)) {
+    return { ok: false, step: 'labels', reason: 'color', color: sample.textColor == null ? null : sample.textColor, glyphs };
+  }
+  const catalog = Array.isArray(sample.catalog) ? sample.catalog : [];
+  const names = [];
+  const rendered = Array.isArray(sample.rendered) ? sample.rendered : [];
+  for (const feature of rendered) {
+    const text = shownText(sample.textField, feature && feature.properties);
+    if (text.length < 2 || !catalog.includes(text)) continue;
+    if (!(feature.x >= 8 && feature.y >= 8 && feature.x <= width - 8 && feature.y <= height - 8)) continue;
+    if (!names.includes(text)) names.push(text);
+  }
+  if (glyphs < 10000) return { ok: false, step: 'labels', reason: 'glyphs', glyphs, names, opacity };
+  if (names.length < 4) return { ok: false, step: 'labels', reason: 'names', glyphs, names, opacity };
+  return { ok: true, names, glyphs, opacity };
 }
 
 export function planLabelReaders() {
@@ -132,7 +173,13 @@ export function biteReport() {
   const textField = readPlanLabels(orbit, glyphs, width, height);
   orbit.setLayoutProperty('inset-countries', 'text-field', fieldPrevious);
   const restored = readPlanLabels(orbit, glyphs, width, height);
-  return { unmutated, textOpacity, textField, restored };
+  const shortGlyphs = readPlanLabels(orbit, 9999, width, height);
+  orbit.setLayoutProperty('inset-countries', 'visibility', 'none');
+  const hidden = readPlanLabels(orbit, glyphs, width, height);
+  orbit.setLayoutProperty('inset-countries', 'visibility', 'visible');
+  orbit.setPaintProperty('inset-countries', 'text-color', 'transparent');
+  const clear = readPlanLabels(orbit, glyphs, width, height);
+  return { unmutated, textOpacity, textField, restored, shortGlyphs, hidden, clear };
 }
 
 function runBite() {
@@ -143,8 +190,16 @@ function runBite() {
   console.log(line('text-field', report.textField));
   const bite = report.unmutated.ok === true
     && report.textOpacity.ok === false
+    && report.textOpacity.reason === 'opacity'
     && report.textField.ok === false
-    && report.restored.ok === true;
+    && report.textField.reason === 'names'
+    && report.restored.ok === true
+    && report.shortGlyphs.ok === false
+    && report.shortGlyphs.reason === 'glyphs'
+    && report.hidden.ok === false
+    && report.hidden.reason === 'visibility'
+    && report.clear.ok === false
+    && report.clear.reason === 'color';
   if (!bite) process.exit(1);
 }
 

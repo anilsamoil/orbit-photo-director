@@ -1800,7 +1800,7 @@ function pipReadyExpression(name) {
       if (coords < 8 || outside) return { step: 'track', coords, outside, width, height };
       ${planLabelReaders()}
       const labels = readPlanLabels(orbit, glyphs, width, height);
-      if (!labels.ok) return { step: 'labels', glyphs, names: labels.names || [], reason: labels.reason };
+      if (!labels.ok) return labels;
       const pageText = document.body ? document.body.innerText || '' : '';
       if (pageText.includes('API KEY REQUIRED')) return { error: 'API KEY REQUIRED on the page' };
       const basemap = orbit.getStyle && orbit.getStyle().sources && orbit.getStyle().sources['inset-basemap'];
