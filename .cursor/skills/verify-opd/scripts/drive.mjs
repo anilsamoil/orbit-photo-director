@@ -4049,7 +4049,26 @@ async function proveIssClockCleared(send, evidenceDir) {
         const status = document.querySelector('[data-iss-status]')?.textContent || '';
         if (!status.includes('Orbit unavailable')) return null;
         const root = document.querySelector('[data-iss-clock]');
-        if (!root || root.children.length !== 5) return { step: 'block' };
+        const side = document.querySelector('[data-iss-side]');
+        const docked = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-side-dock') === 'on';
+        if (!root) return { step: 'block' };
+        const names = [...root.children].map((el) => {
+          if (el.hasAttribute('data-iss-utc')) return 'utc';
+          if (el.hasAttribute('data-iss-gmt-day')) return 'gmt-day';
+          if (el.hasAttribute('data-iss-houston')) return 'houston';
+          if (el.hasAttribute('data-iss-day-month')) return 'day-month';
+          if (el.hasAttribute('data-iss-weekday')) return 'weekday';
+          return el.tagName;
+        });
+        if (docked) {
+          if (names.join(',') !== 'utc,gmt-day') return { step: 'block', names };
+          for (const sel of ['[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]']) {
+            const el = document.querySelector(sel);
+            if (!side || !el || !side.contains(el)) return { step: 'side', sel };
+          }
+        } else if (names.join(',') !== 'utc,gmt-day,houston,day-month,weekday') {
+          return { step: 'block', names };
+        }
         const sels = ['[data-iss-utc]', '[data-iss-houston]', '[data-iss-gmt-day]', '[data-iss-day-month]', '[data-iss-weekday]'];
         for (const sel of sels) {
           const el = document.querySelector(sel);
