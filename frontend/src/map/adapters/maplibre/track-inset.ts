@@ -184,13 +184,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let navMulti = false;
   let navOrigin: { x: number; y: number } | null = null;
   let resizeWaiting = false;
-  const handlerBusy = (): boolean => {
-    if (map.scrollZoom?.isZooming()) return true;
-    if (map.dragPan?.isActive()) return true;
-    if (map.touchZoomRotate?.isActive()) return true;
-    return false;
-  };
-  const gestureLive = (): boolean => activePointers.size > 0 || handlerBusy();
+  const gestureLive = (): boolean => activePointers.size > 0 || Boolean(map.scrollZoom?.isZooming());
   const resizeNow = map.resize.bind(map);
   const flushResize = (): void => {
     if (!resizeWaiting || gestureLive()) return;
@@ -231,14 +225,6 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       navMulti = true;
     }
     activePointers.add(event.pointerId);
-    const cap = event.currentTarget;
-    if (cap instanceof Element) {
-      try {
-        cap.setPointerCapture(event.pointerId);
-      } catch {
-        return;
-      }
-    }
   };
   const onPointerMove = (event: PointerEvent): void => {
     if (!navOrigin || !activePointers.has(event.pointerId)) return;
