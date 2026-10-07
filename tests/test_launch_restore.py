@@ -405,6 +405,7 @@ def test_uploader_nonzero_exit_puts_stderr_in_the_reason(tmp_path, monkeypatch, 
     cache, output, store = _layout(tmp_path)
 
     def run(command, check=False, capture_output=False, timeout=None):
+        assert capture_output is True
         argv = [str(part) for part in command]
         if "sync" in argv:
             raise AssertionError("rclone sync is forbidden")
@@ -429,6 +430,7 @@ def test_rclone_timeout_puts_stderr_in_the_reason(tmp_path, monkeypatch, capsys)
     cache, output, _store = _layout(tmp_path)
 
     def run(command, check=False, capture_output=False, timeout=None):
+        assert capture_output is True
         expired = subprocess.TimeoutExpired(list(command), timeout or 45)
         expired.stderr = b"i/o timeout\n"
         raise expired
@@ -438,3 +440,42 @@ def test_rclone_timeout_puts_stderr_in_the_reason(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr("scripts.launch_refresh.datetime", _Clock)
     assert _run(cache, output) == 2
     assert _log(capsys)["reason"] == "RCLONE_TIMEOUT: i/o timeout"
+
+
+@pytest.mark.parametrize("operation", ["cat", "copyto"])
+@pytest.mark.parametrize(
+    "stderr",
+    [b"i/o timeout\n", "i/o timeout\n", None],
+    ids=["bytes", "str", "none"],
+)
+def test_timeout_reason_matrix(tmp_path, monkeypatch, capsys, operation, stderr):
+    cache, output, store = _layout(tmp_path)
+    calls = []
+    limits = {"cat": 45, "copyto": 90}
+
+    def run(command, check=False, capture_output=False, timeout=None):
+        argv = [str(part) for part in command]
+        if "sync" in argv:
+            raise AssertionError("rclone sync is forbidden")
+        op = argv[1]
+        calls.append((op, timeout))
+        assert check is False
+        assert capture_output is True
+        assert timeout == limits[op]
+        if op == operation:
+            raise subprocess.TimeoutExpired(
+                command, timeout, output=b"wrong stdout\n", stderr=stderr,
+            )
+        assert op == "cat"
+        target = argv[2]
+        assert target.startswith(PREFIX)
+        body = store.get(target[len(PREFIX) :], b"")
+        return SimpleNamespace(stdout=body, stderr=b"", returncode=0)
+
+    monkeypatch.setattr("generator.launch_publish.shutil.which", lambda name: "/usr/bin/rclone")
+    monkeypatch.setattr("generator.launch_publish.subprocess.run", run)
+    monkeypatch.setattr("scripts.launch_refresh.datetime", _Clock)
+    assert _run(cache, output) == 2
+    detail = "" if stderr is None else "i/o timeout"
+    assert _log(capsys)["reason"] == "RCLONE_TIMEOUT: " + detail
+    assert calls[-1] == (operation, limits[operation])
