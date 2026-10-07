@@ -4274,7 +4274,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 
 @media (max-width: 800px) {
   body:has(> #view.view-map):not(.map-chrome-hidden) {
-    --map-command-height: calc(120px + env(safe-area-inset-bottom, 0px));
+    --map-command-height: calc(140px + env(safe-area-inset-bottom, 0px));
   }
 }
 
