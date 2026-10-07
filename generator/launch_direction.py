@@ -1,5 +1,3 @@
-"""Whether a launch has a sourced ascent direction."""
-
 from __future__ import annotations
 
 import math
@@ -48,6 +46,12 @@ class NoDirection:
 Direction = IssPlaneDirection | NoDirection
 
 
+@dataclass(frozen=True)
+class IssPlaneAtPad:
+    prograde_azimuth_deg: float
+    off_plane_toward_normal_deg: float
+
+
 def destination_from_ll2(result: Mapping[str, Any]) -> Destination:
     """Read spacecraft destination. Launch titles and program names are not one."""
     labels = _destination_labels(result)
@@ -67,10 +71,13 @@ def direction_for(
 ) -> Direction:
     if destination is not Destination.ISS:
         return NoDirection()
-    azimuth, off_plane = _iss_plane(tle, when, lat, lon)
-    if abs(off_plane) >= OFF_PLANE_MAX_DEG:
+    plane = _iss_plane(tle, when, lat, lon)
+    if abs(plane.off_plane_toward_normal_deg) >= OFF_PLANE_MAX_DEG:
         return NoDirection()
-    return IssPlaneDirection(azimuth_deg=azimuth, off_plane_deg=off_plane)
+    return IssPlaneDirection(
+        azimuth_deg=plane.prograde_azimuth_deg,
+        off_plane_deg=plane.off_plane_toward_normal_deg,
+    )
 
 
 def _destination_labels(result: Mapping[str, Any]) -> tuple[str, ...]:
@@ -103,8 +110,7 @@ def _label(value: Any) -> str | None:
     return None
 
 
-def _iss_plane(tle: TLE, when: datetime, lat: float, lon: float) -> tuple[float, float]:
-    """Prograde azimuth of the TLE plane at the pad, and the signed off-plane angle."""
+def _iss_plane(tle: TLE, when: datetime, lat: float, lon: float) -> IssPlaneAtPad:
     _ensure_utc(when, "when")
     sat = Satrec.twoline2rv(tle.line1, tle.line2)
     jd, fr = jday(
@@ -121,7 +127,7 @@ def _iss_plane(tle: TLE, when: datetime, lat: float, lon: float) -> tuple[float,
     prograde = _cross(angular, pad)
     east, north = _east_north(lat, lon, gmst)
     azimuth = math.degrees(math.atan2(_dot(prograde, east), _dot(prograde, north))) % 360.0
-    return azimuth, off_plane
+    return IssPlaneAtPad(prograde_azimuth_deg=azimuth, off_plane_toward_normal_deg=off_plane)
 
 
 def _pad_eci(lat: float, lon: float, gmst: float) -> tuple[float, float, float]:

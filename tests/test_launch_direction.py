@@ -1,5 +1,3 @@
-"""Direction provenance for an ascent corridor."""
-
 from __future__ import annotations
 
 import json
