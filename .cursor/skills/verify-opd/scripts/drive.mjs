@@ -2431,6 +2431,73 @@ async function proveLegendWarning(send, evidenceDir) {
   );
 }
 
+async function proveStaleReadoutClearsSkip(send, viewport) {
+  const sizes = [
+    [834, 1194],
+    [800, 600],
+  ];
+  const expression = `(() => {
+    const el = document.getElementById('time-slider-readout');
+    const step = document.getElementById('time-back-90');
+    if (!el || !step) return null;
+    const text = '+1d 23:59Z · stale TLE';
+    const fragment = document.createDocumentFragment();
+    for (const char of text) {
+      if (char >= '0' && char <= '9') {
+        const cell = document.createElement('span');
+        cell.className = 'digit';
+        cell.textContent = char;
+        fragment.append(cell);
+      } else if (char === ':' || char === '.' || char === ',') {
+        const cell = document.createElement('span');
+        cell.className = 'digit-sep';
+        cell.textContent = char;
+        fragment.append(cell);
+      } else {
+        fragment.append(document.createTextNode(char));
+      }
+    }
+    el.replaceChildren(fragment);
+    el.classList.add('time-slider-scrubbed', 'time-slider-stale');
+    const readout = el.getBoundingClientRect();
+    const skip = step.getBoundingClientRect();
+    const buttons = [...document.querySelectorAll('.map-command .time-step-btn')].map((button) => {
+      const box = button.getBoundingClientRect();
+      return { id: button.id, width: box.width, height: box.height };
+    });
+    const short = buttons.filter((button) => button.width < 44 || button.height < 44);
+    const overflow = el.scrollWidth - el.clientWidth;
+    const inkRight = readout.left + el.scrollWidth;
+    if (el.textContent !== text || overflow > 1 || inkRight > skip.left + 1 || short.length) {
+      return {
+        pending: true,
+        text: el.textContent,
+        overflow,
+        client: el.clientWidth,
+        scroll: el.scrollWidth,
+        inkRight,
+        skipLeft: skip.left,
+        short,
+      };
+    }
+    return { ok: true, client: el.clientWidth, scroll: el.scrollWidth };
+  })()`;
+  try {
+    for (const [width, height] of sizes) {
+      await setViewport(send, width, height, width < 900);
+      await waitFor(send, expression, `stale readout clear of T-90 at ${width}x${height}`, 8000);
+    }
+  } finally {
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+  await click(send, '#time-now');
+  await waitFor(
+    send,
+    `document.getElementById('time-slider-readout')?.textContent.trim() === 'Now' ? { ok: true } : null`,
+    'readout restored after stale check',
+  );
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -2530,6 +2597,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await dismissShotlist(send);
   await assertMapInfoControlsGone(send);
   await assertChromeToggleStationary(send);
+  await proveStaleReadoutClearsSkip(send, viewport);
   await shot(send, evidenceDir, 'map-controls');
   const before = await evaluate(send, `document.getElementById('time-slider-readout').textContent`);
   await click(send, '#time-fwd-45');
@@ -2710,7 +2778,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await waitServerRemoved(baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, time strip ${laid.color} gap ${laid.gap}px, stale readout clear 834x1194 800x600, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {

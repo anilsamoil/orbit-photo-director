@@ -4816,6 +4816,15 @@ summary:focus-visible {
     height: 32px;
   }
 
+  .view-map .map-command .time-step-btn {
+    padding-left: 0.3rem;
+    padding-right: 0.3rem;
+  }
+
+  .view-map .map-command .time-slider-readout {
+    flex-shrink: 0;
+  }
+
   .view-map .map-control-dock,
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
     max-height: calc(100% - var(--topbar-height) - var(--horizon-bottom) - var(--horizon-height) - var(--horizon-gap) - 5px);
