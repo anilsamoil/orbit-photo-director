@@ -669,6 +669,227 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
   return notes;
 }
 
+function cornerRound(value) {
+  return Number.isFinite(value) ? value.toFixed(2) : 'missing';
+}
+
+const CORNER_BOX = `
+  const cornerBox = (el) => {
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+  };
+  const cornerMeets = (a, b) => !!(a && b && a.width > 0 && b.width > 0 && a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5);
+  const cornerOwns = (x, y, selector) => {
+    const el = document.elementFromPoint(x, y);
+    return !!(el && el.closest(selector));
+  };
+  const cornerHit = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return '';
+    return el.id || String(el.className || el.tagName);
+  };
+  const cornerBanner = (enabled) => {
+    const banner = document.getElementById('status-banner');
+    if (banner) banner.querySelectorAll('.banner-actions').forEach((node) => node.remove());
+    if (!enabled || !banner) return;
+    const actions = document.createElement('div');
+    actions.className = 'banner-actions';
+    const signIn = document.createElement('a');
+    signIn.className = 'banner-action';
+    signIn.textContent = 'Sign in';
+    const reload = document.createElement('button');
+    reload.className = 'banner-action';
+    reload.type = 'button';
+    reload.textContent = 'Reload';
+    actions.append(signIn, reload);
+    banner.append(actions);
+  };
+`;
+
+export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
+  mkdirSync(evidenceDir, { recursive: true });
+  slideLaunch(home);
+  const debugPort = 9300 + Math.floor(Math.random() * 500);
+  const chromePid = startChrome(home, debugPort);
+  writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
+  const lines = [];
+  const failures = [];
+  try {
+    const cdp = await connectCdp(debugPort);
+    const send = cdp.send;
+    try {
+      await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
+      await openApp(send, baseUrl);
+      const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
+      if (!shown) {
+        await click(send, '#map-chrome-toggle');
+        await waitFor(
+          send,
+          `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '') ? { ok: true } : null`,
+          'map chrome shown',
+        );
+      }
+      await setViewport(send, 390, 520, true);
+      await evaluate(send, `document.body.classList.remove('shotlist-bar-visible'); true`);
+      await sleep(300);
+      const narrow = await evaluate(send, `(() => {
+        ${CORNER_BOX}
+        const slider = cornerBox(document.getElementById('time-slider'));
+        const compass = cornerBox(document.querySelector('.maplibregl-ctrl-compass'));
+        const hit = compass ? cornerHit(compass.left + compass.width / 2, compass.top + compass.height / 2) : '';
+        const owns = compass ? cornerOwns(compass.left + compass.width / 2, compass.top + compass.height / 2, '.maplibregl-ctrl-compass') : false;
+        return { slider, compass, hit, owns };
+      })()`);
+      lines.push(`390x520 slider ${cornerRound(narrow?.slider?.width)}x${cornerRound(narrow?.slider?.height)} at ${cornerRound(narrow?.slider?.left)},${cornerRound(narrow?.slider?.top)} compass-hit ${narrow?.hit || 'missing'}`);
+      if (!narrow?.slider || narrow.slider.width < 44) {
+        failures.push(`390x520 #time-slider width ${cornerRound(narrow?.slider?.width)} is under 44`);
+      }
+      await shot(send, evidenceDir, 'map-corner-390x520');
+
+      await setViewport(send, 430, 400, true);
+      await evaluate(send, `document.body.classList.add('shotlist-bar-visible'); true`);
+      await sleep(300);
+      const compass = await evaluate(send, `(() => {
+        ${CORNER_BOX}
+        const slider = cornerBox(document.getElementById('time-slider'));
+        const compass = cornerBox(document.querySelector('.maplibregl-ctrl-compass'));
+        const ends = [...document.querySelectorAll('.time-slider-end')].map((el) => ({ ...cornerBox(el), text: (el.textContent || '').trim() }));
+        const cx = compass ? compass.left + compass.width / 2 : 0;
+        const cy = compass ? compass.top + compass.height / 2 : 0;
+        return {
+          slider,
+          compass,
+          ends,
+          hit: compass ? cornerHit(cx, cy) : '',
+          owns: compass ? cornerOwns(cx, cy, '.maplibregl-ctrl-compass') : false,
+          overlap: ends.some((end) => cornerMeets(compass, end)),
+        };
+      })()`);
+      const nowEnd = (compass?.ends || []).find((end) => end.text === 'Now');
+      lines.push(`430x400 shotlist slider ${cornerRound(compass?.slider?.width)} compass ${cornerRound(compass?.compass?.left)},${cornerRound(compass?.compass?.top)} ${cornerRound(compass?.compass?.width)}x${cornerRound(compass?.compass?.height)} hit ${compass?.hit || 'missing'} now ${cornerRound(nowEnd?.left)}-${cornerRound(nowEnd?.right)},${cornerRound(nowEnd?.top)} overlap ${compass?.overlap === true}`);
+      if (!compass?.owns || compass.overlap) {
+        failures.push(`430x400 compass center hits ${compass?.hit || 'missing'} overlap ${compass?.overlap === true}`);
+      }
+      await shot(send, evidenceDir, 'map-corner-430x400');
+
+      await evaluate(send, `document.body.classList.remove('shotlist-bar-visible'); true`);
+      await setViewport(send, 1280, 700, false);
+      const insetCleared = await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+      if (!insetCleared) throw new Error('map-corner needs Chrome safe-area override');
+      await sleep(300);
+      const dock = await evaluate(send, `(() => {
+        ${CORNER_BOX}
+        cornerBanner(true);
+        const dock = document.querySelector('.map-control-dock');
+        dock.scrollTop = dock.scrollHeight;
+        const sat = cornerBox(document.getElementById('toggle-satellite-picker'));
+        const hide = cornerBox(document.getElementById('map-chrome-toggle'));
+        const cx = sat ? sat.left + sat.width / 2 : 0;
+        const cy = sat ? sat.top + sat.height / 2 : 0;
+        return {
+          sat, hide,
+          scrollTop: dock.scrollTop,
+          overlap: cornerMeets(sat, hide),
+          owns: sat ? cornerOwns(cx, cy, '#toggle-satellite-picker') : false,
+          hit: sat ? cornerHit(cx, cy) : '',
+          actions: !!document.querySelector('#status-banner .banner-actions'),
+        };
+      })()`);
+      lines.push(`1280x700 banner dock scroll ${dock?.scrollTop} sat ${cornerRound(dock?.sat?.left)},${cornerRound(dock?.sat?.top)} ${cornerRound(dock?.sat?.width)}x${cornerRound(dock?.sat?.height)} hide ${cornerRound(dock?.hide?.left)},${cornerRound(dock?.hide?.top)} ${cornerRound(dock?.hide?.width)}x${cornerRound(dock?.hide?.height)} overlap ${dock?.overlap === true} hit ${dock?.hit || 'missing'}`);
+      if (!dock?.actions || dock.overlap || !dock.owns) {
+        failures.push(`1280x700 satellite meets Hide overlap ${dock?.overlap === true} hit ${dock?.hit || 'missing'}`);
+      }
+      await shot(send, evidenceDir, 'map-corner-1280x700');
+
+      await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
+      await evaluate(send, `(() => {
+        const ir = document.getElementById('toggle-ir');
+        if (ir && ir.getAttribute('aria-pressed') !== 'true') ir.click();
+        document.getElementById('time-fwd-45').click();
+        const toggle = document.getElementById('map-legend-toggle');
+        if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+        return true;
+      })()`);
+      await waitFor(
+        send,
+        `(() => {
+          const panel = document.getElementById('map-legend-panel');
+          const text = panel?.innerText || '';
+          const box = panel?.getBoundingClientRect();
+          if (!box || box.height < 80) return null;
+          if (!text.includes('LIVE now') && !text.includes('feed unavailable')) return null;
+          return { ok: true, height: box.height };
+        })()`,
+        'scrubbed IR legend',
+        20000,
+      );
+      const opened = await evaluate(send, `(() => {
+        const box = document.getElementById('map-legend-panel').getBoundingClientRect();
+        return { width: box.width, height: box.height, text: (document.getElementById('map-legend-panel').innerText || '').replace(/\\s+/g, ' ').trim() };
+      })()`);
+      lines.push(`legend panel ${cornerRound(opened?.width)}x${cornerRound(opened?.height)} ${opened?.text || ''}`);
+
+      const legendFrames = [
+        { name: '844x390 banner bottom21', width: 844, height: 390, mobile: true, insets: { top: 0, left: 0, bottom: 21, right: 0 }, banner: true, pip: false, shot: 'map-corner-844x390' },
+        { name: '800x600 top24 bottom20', width: 800, height: 600, mobile: false, insets: { top: 24, left: 0, bottom: 20, right: 0 }, banner: false, pip: true, shot: 'map-corner-800x600' },
+        { name: '800x600 banner', width: 800, height: 600, mobile: false, insets: { top: 0, left: 0, bottom: 0, right: 0 }, banner: true, pip: true, shot: 'map-corner-800x600-banner-only' },
+        { name: '800x600 top24 bottom20 banner', width: 800, height: 600, mobile: false, insets: { top: 24, left: 0, bottom: 20, right: 0 }, banner: true, pip: true, shot: 'map-corner-800x600-banner' },
+      ];
+      for (const frame of legendFrames) {
+        await setViewport(send, frame.width, frame.height, frame.mobile);
+        const applied = await safeAreaOverride(send, frame.insets);
+        if (!applied) throw new Error('map-corner needs Chrome safe-area override');
+        await sleep(300);
+        const sample = await evaluate(send, `(() => {
+          ${CORNER_BOX}
+          cornerBanner(${frame.banner ? 'true' : 'false'});
+          const panel = cornerBox(document.getElementById('map-legend-panel'));
+          const pane = cornerBox(document.getElementById('map-pane'));
+          const pipEl = document.querySelector('[data-pip="horizon"]');
+          const pipStyle = pipEl ? getComputedStyle(pipEl) : null;
+          const pip = cornerBox(pipEl);
+          const pipShown = !!(pipEl && pipStyle && pipStyle.display !== 'none' && pip && pip.width > 0 && pip.height > 0);
+          const text = (document.getElementById('map-legend-panel')?.innerText || '').replace(/\\s+/g, ' ').trim();
+          return {
+            panel, pane, pip, pipShown, text,
+            clipAbovePane: panel && pane ? Math.max(0, pane.top - panel.top) : null,
+            clipBelowPane: panel && pane ? Math.max(0, panel.bottom - pane.bottom) : null,
+            clipAboveViewport: panel ? Math.max(0, -panel.top) : null,
+            clipBelowViewport: panel ? Math.max(0, panel.bottom - innerHeight) : null,
+            overlapPip: cornerMeets(panel, pipShown ? pip : null),
+            insideX: !!(panel && pane && panel.left >= pane.left - 0.5 && panel.right <= pane.right + 0.5),
+            actions: !!document.querySelector('#status-banner .banner-actions'),
+          };
+        })()`);
+        lines.push(`${frame.name} panel ${cornerRound(sample?.panel?.left)},${cornerRound(sample?.panel?.top)} ${cornerRound(sample?.panel?.width)}x${cornerRound(sample?.panel?.height)} clip-above ${cornerRound(sample?.clipAbovePane)} pip ${cornerRound(sample?.pip?.top)}-${cornerRound(sample?.pip?.bottom)} overlap ${sample?.overlapPip === true}`);
+        const clips = [sample?.clipAbovePane, sample?.clipBelowPane, sample?.clipAboveViewport, sample?.clipBelowViewport];
+        const warning = /LIVE now|feed unavailable/.test(sample?.text || '');
+        if (!warning || clips.some((value) => value == null || value > 0.5) || !sample?.insideX) {
+          failures.push(`${frame.name} panel clipped above-pane ${cornerRound(sample?.clipAbovePane)} below-pane ${cornerRound(sample?.clipBelowPane)} above-view ${cornerRound(sample?.clipAboveViewport)} below-view ${cornerRound(sample?.clipBelowViewport)}`);
+        }
+        if (frame.banner && !sample?.actions) failures.push(`${frame.name} banner actions missing during the rect read`);
+        if (frame.pip && !sample?.pipShown) failures.push(`${frame.name} horizon inset missing`);
+        if (frame.pip && sample?.overlapPip) {
+          failures.push(`${frame.name} panel meets horizon pip panel-top ${cornerRound(sample?.panel?.top)} pip-bottom ${cornerRound(sample?.pip?.bottom)}`);
+        }
+        await shot(send, evidenceDir, frame.shot);
+      }
+    } finally {
+      cdp.close();
+    }
+  } finally {
+    try {
+      process.kill(chromePid, 'SIGTERM');
+    } catch {
+    }
+  }
+  writeFileSync(resolve(evidenceDir, 'map-corner.txt'), `${lines.join('\n')}\n`);
+  for (const line of lines) console.log(line);
+  if (failures.length) throw new Error(['map-corner fail', ...failures].join('\n'));
+  return 'map-corner pass';
+}
+
 async function dismissShotlist(send) {
   const covering = await evaluate(send, `document.body.classList.contains('shotlist-bar-visible')`);
   if (!covering) return;
