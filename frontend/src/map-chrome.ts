@@ -1,39 +1,7 @@
-const STORAGE_KEY = 'opd-map-chrome';
-const toolbarPaintSlackPx = 8;
-const rowSeparationPx = 4;
-const minTargetPx = 44;
-const minLegendBandPx = 32;
+import { solveChromeSlots, type Box, type ChromeMeasure, type ChromeSlots } from './chrome-slots';
 
-export function mapChromeReflowChoice(input: {
-  narrow: boolean;
-  chromeHidden: boolean;
-  pane: number;
-  toolbarClear: number;
-  stripAnchor: number;
-  topbar: number;
-  legendOpen: boolean;
-  reflowCorner: number;
-  centersStolen: boolean;
-}): { reflow: boolean; dockRow: boolean } {
-  if (!input.narrow || input.chromeHidden || !(input.pane > 0) || !(input.toolbarClear > 0)) {
-    return { reflow: false, dockRow: false };
-  }
-  const stackRoom = input.pane - input.toolbarClear - input.stripAnchor;
-  const timeBlock = Math.min(120, Math.max(minTargetPx, stackRoom - 60));
-  const legendBand = stackRoom - timeBlock - 12;
-  const dockWindow = input.pane - input.topbar - input.stripAnchor - timeBlock - 16;
-  const stripTop = input.pane - input.stripAnchor - timeBlock;
-  const toolbarBottom = input.toolbarClear - toolbarPaintSlackPx;
-  const reflow = input.centersStolen
-    || stripTop < toolbarBottom + rowSeparationPx
-    || dockWindow < minTargetPx
-    || (input.legendOpen && legendBand < minLegendBandPx);
-  if (!reflow) return { reflow: false, dockRow: false };
-  const dockTop = input.toolbarClear + rowSeparationPx + minTargetPx + 8;
-  const hideTop = input.pane - input.reflowCorner - minTargetPx;
-  const dockMax = hideTop - 8 - dockTop;
-  return { reflow: true, dockRow: dockMax < minTargetPx };
-}
+const STORAGE_KEY = 'opd-map-chrome';
+const timeLinePx = 44;
 
 export function readMapChromeShown(): boolean {
   try {
@@ -53,6 +21,26 @@ export function applyMapChrome(shown: boolean): void {
   button.title = shown ? 'Hide map controls' : 'Show map controls';
 }
 
+function emptyBox(): Box {
+  return { x: 0, y: 0, w: 0, h: 0 };
+}
+
+function boxOf(node: Element | null): Box {
+  if (!(node instanceof HTMLElement)) return emptyBox();
+  const rect = node.getBoundingClientRect();
+  return { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+}
+
+function unionBox(nodes: Element[]): Box {
+  const boxes = nodes.map(boxOf).filter((box) => box.w >= 1 && box.h >= 1);
+  if (!boxes.length) return emptyBox();
+  const x = Math.min(...boxes.map((box) => box.x));
+  const y = Math.min(...boxes.map((box) => box.y));
+  const far = Math.max(...boxes.map((box) => box.x + box.w));
+  const low = Math.max(...boxes.map((box) => box.y + box.h));
+  return { x, y, w: far - x, h: low - y };
+}
+
 function lengthPx(host: HTMLElement, value: string): number {
   const probe = document.createElement('div');
   probe.style.position = 'absolute';
@@ -66,61 +54,169 @@ function lengthPx(host: HTMLElement, value: string): number {
   return width;
 }
 
-function timeCentersStolen(): boolean {
-  for (const node of document.querySelectorAll('.map-command .time-step-btn')) {
-    if (!(node instanceof HTMLElement)) continue;
-    const box = node.getBoundingClientRect();
-    if (box.width < 1 || box.height < 1) continue;
-    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-    if (!hit || (hit !== node && !node.contains(hit))) return true;
-  }
-  return false;
+function insetPx(side: 'top' | 'right' | 'bottom' | 'left'): number {
+  const probe = document.createElement('div');
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.pointerEvents = 'none';
+  const prop = side === 'top' ? 'paddingTop' : side === 'right' ? 'paddingRight' : side === 'bottom' ? 'paddingBottom' : 'paddingLeft';
+  probe.style[prop] = `env(safe-area-inset-${side}, 0px)`;
+  document.body.appendChild(probe);
+  const value = Number.parseFloat(getComputedStyle(probe)[prop]) || 0;
+  probe.remove();
+  return value;
 }
 
-let ignoreChromeMutation = false;
-
-function syncMapChromeReflow(): void {
-  if (ignoreChromeMutation) return;
-  ignoreChromeMutation = true;
-  try {
-    syncMapChromeReflowNow();
-  } finally {
-    queueMicrotask(() => {
-      ignoreChromeMutation = false;
-    });
-  }
+function gutterPx(dock: HTMLElement | null): number {
+  const probe = document.createElement('div');
+  probe.style.position = 'absolute';
+  probe.style.left = '-9999px';
+  probe.style.top = '0';
+  probe.style.width = '80px';
+  probe.style.height = '40px';
+  probe.style.overflow = 'scroll';
+  probe.style.visibility = 'hidden';
+  const inner = document.createElement('div');
+  inner.style.width = '200px';
+  inner.style.height = '80px';
+  probe.appendChild(inner);
+  document.body.appendChild(probe);
+  const bar = probe.offsetHeight - probe.clientHeight;
+  probe.remove();
+  const controls = dock?.querySelector(':scope > .map-controls');
+  if (!(controls instanceof HTMLElement)) return Math.max(0, bar);
+  const style = getComputedStyle(controls);
+  const pad = (Number.parseFloat(style.paddingTop) || 0)
+    + (Number.parseFloat(style.paddingBottom) || 0)
+    + (Number.parseFloat(style.borderTopWidth) || 0)
+    + (Number.parseFloat(style.borderBottomWidth) || 0);
+  return Math.max(0, bar) + pad;
 }
 
-function syncMapChromeReflowNow(): void {
-  const view = document.querySelector('.view-map');
-  if (!(view instanceof HTMLElement)) {
-    document.body.classList.remove('map-chrome-reflow', 'map-dock-row');
-    return;
-  }
+function visiblePip(): Box | null {
+  const pip = document.querySelector('[data-pip="horizon"]');
+  if (!(pip instanceof HTMLElement) || pip.hidden) return null;
+  if (getComputedStyle(pip).display === 'none') return null;
+  const box = boxOf(pip);
+  return box.h >= 1 ? box : null;
+}
+
+function naturalDockCorridor(view: HTMLElement, pane: HTMLElement): number {
   const style = getComputedStyle(view);
   const read = (name: string) => lengthPx(view, style.getPropertyValue(name).trim() || '0px');
-  const banner = document.querySelector('#status-banner .banner-actions');
-  const reflowCorner = banner
-    ? lengthPx(view, 'max(36px, calc(7.75rem + env(safe-area-inset-bottom, 0px) - var(--map-shotlist-block) + 4px))')
-    : read('--map-corner-bottom');
-  const narrow = window.matchMedia('(max-width: 719px)').matches;
-  const chromeHidden = document.body.classList.contains('map-chrome-hidden');
-  const legendOpen = document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true';
-  document.body.classList.remove('map-chrome-reflow', 'map-dock-row');
-  const centersStolen = narrow && !chromeHidden && timeCentersStolen();
-  const choice = mapChromeReflowChoice({
-    narrow,
-    chromeHidden,
-    pane: read('--map-pane-budget'),
-    toolbarClear: read('--map-toolbar-clear'),
-    stripAnchor: read('--map-strip-anchor'),
-    topbar: read('--topbar-height'),
-    legendOpen,
-    reflowCorner,
-    centersStolen,
+  const paneH = pane.getBoundingClientRect().height;
+  const clear = read('--map-dock-clear');
+  if (visiblePip()) {
+    return paneH - read('--horizon-top') - read('--horizon-height') - read('--horizon-gap') - clear - 16;
+  }
+  return paneH - read('--topbar-height') - clear - 16;
+}
+
+function naturalLegendBottom(view: HTMLElement): number {
+  const legend = document.querySelector('.map-legend');
+  if (!(legend instanceof HTMLElement)) return 0;
+  const style = getComputedStyle(view);
+  const offset = lengthPx(view, style.getPropertyValue('--map-legend-panel-bottom').trim() || '0px');
+  return legend.getBoundingClientRect().bottom - offset;
+}
+
+function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
+  const shotList = document.body.classList.contains('shotlist-bar-visible')
+    ? boxOf(document.getElementById('shotlist-bar'))
+    : emptyBox();
+  const dock = document.querySelector('.map-control-dock');
+  return {
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    insets: { top: insetPx('top'), right: insetPx('right'), bottom: insetPx('bottom'), left: insetPx('left') },
+    zoom: unionBox([...document.querySelectorAll('.maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out')]),
+    compass: boxOf(document.querySelector('.maplibregl-ctrl-compass')),
+    show: boxOf(document.querySelector('.map-toolbar')),
+    showButtons: [...document.querySelectorAll('#filter-all-map, #filter-mine-map, #filter-launches-map')].map(boxOf),
+    sliderChip: boxOf(document.querySelector('.map-command .map-controls-time')),
+    slider: boxOf(document.getElementById('time-slider')),
+    timeButtons: [...document.querySelectorAll('.map-command .time-step-btn')].map(boxOf),
+    footer: boxOf(document.getElementById('status-banner')),
+    shotList,
+    scrollbar: gutterPx(dock instanceof HTMLElement ? dock : null),
+    pip: visiblePip(),
+    hide: boxOf(document.getElementById('map-chrome-toggle')),
+    legendButton: boxOf(document.getElementById('map-legend-toggle')),
+    legendPanel: boxOf(document.getElementById('map-legend-panel')),
+    legendOpen: document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true',
+    legendNaturalBottom: naturalLegendBottom(view),
+    dockCorridor: naturalDockCorridor(view, pane),
+    chromeHidden: document.body.classList.contains('map-chrome-hidden'),
+  };
+}
+
+let lastSlots = '';
+let mute = false;
+
+function writeSlot(name: string, value: number): void {
+  document.body.style.setProperty(name, `${value}px`);
+}
+
+function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
+  const key = JSON.stringify(slots);
+  if (key === lastSlots) return;
+  lastSlots = key;
+  const origin = pane.getBoundingClientRect();
+  mute = true;
+  document.body.classList.toggle('map-slot-time', slots.time !== null);
+  document.body.classList.toggle('map-slot-time-line', slots.time !== null && slots.time.h <= timeLinePx);
+  document.body.classList.toggle('map-slot-dock', slots.dock !== null);
+  document.body.classList.toggle('map-slot-dock-row', slots.dock?.axis === 'row');
+  document.body.classList.toggle('map-slot-legend', slots.legend !== null);
+  if (slots.time) {
+    writeSlot('--slot-time-x', slots.time.x - origin.left);
+    writeSlot('--slot-time-y', slots.time.y - origin.top);
+    writeSlot('--slot-time-w', slots.time.w);
+    writeSlot('--slot-time-h', slots.time.h);
+  }
+  if (slots.dock) {
+    writeSlot('--slot-dock-x', slots.dock.x - origin.left);
+    writeSlot('--slot-dock-y', slots.dock.y - origin.top);
+    writeSlot('--slot-dock-w', slots.dock.w);
+    writeSlot('--slot-dock-h', slots.dock.h);
+  }
+  if (slots.legend) {
+    writeSlot('--slot-legend-x', slots.legend.x);
+    writeSlot('--slot-legend-y', slots.legend.y);
+    writeSlot('--slot-legend-w', slots.legend.w);
+    writeSlot('--slot-legend-h', slots.legend.h);
+  }
+  queueMicrotask(() => {
+    mute = false;
   });
-  document.body.classList.toggle('map-chrome-reflow', choice.reflow);
-  document.body.classList.toggle('map-dock-row', choice.dockRow);
+}
+
+function syncMapChrome(): void {
+  if (mute) return;
+  const view = document.querySelector('.view-map');
+  const pane = document.getElementById('map-pane');
+  if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
+    lastSlots = '';
+    document.body.classList.remove('map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend');
+    return;
+  }
+  applySlots(solveChromeSlots(measureChrome(view, pane)), pane);
+}
+
+function ensureInsetProbe(): HTMLElement {
+  const existing = document.querySelector('[data-map-chrome-insets]');
+  if (existing instanceof HTMLElement) return existing;
+  const probe = document.createElement('div');
+  probe.setAttribute('data-map-chrome-insets', '');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.position = 'fixed';
+  probe.style.left = '0';
+  probe.style.top = '0';
+  probe.style.width = 'calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px))';
+  probe.style.height = 'calc(env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px))';
+  probe.style.pointerEvents = 'none';
+  probe.style.visibility = 'hidden';
+  document.body.appendChild(probe);
+  return probe;
 }
 
 export function bindMapChrome(): void {
@@ -132,20 +228,21 @@ export function bindMapChrome(): void {
     } catch {
     }
     applyMapChrome(shown);
-    syncMapChromeReflow();
+    syncMapChrome();
   });
-  document.getElementById('map-legend-toggle')?.addEventListener('click', () => {
-    queueMicrotask(syncMapChromeReflow);
-  });
-  const observer = new ResizeObserver(() => syncMapChromeReflow());
+  const observer = new ResizeObserver(() => syncMapChrome());
   observer.observe(document.documentElement);
-  const mutations = new MutationObserver(() => syncMapChromeReflow());
+  observer.observe(ensureInsetProbe());
+  const mutations = new MutationObserver(() => syncMapChrome());
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   const banner = document.getElementById('status-banner');
   if (banner) mutations.observe(banner, { childList: true, subtree: true });
   const legend = document.getElementById('map-legend-toggle');
   if (legend) mutations.observe(legend, { attributes: true, attributeFilter: ['aria-expanded'] });
-  window.addEventListener('resize', syncMapChromeReflow);
-  (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChromeReflow;
-  syncMapChromeReflow();
+  const map = document.getElementById('map');
+  if (map) mutations.observe(map, { childList: true, subtree: true });
+  window.addEventListener('resize', syncMapChrome);
+  window.visualViewport?.addEventListener('resize', syncMapChrome);
+  (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChrome;
+  syncMapChrome();
 }

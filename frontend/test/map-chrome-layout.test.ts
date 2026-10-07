@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -325,31 +326,27 @@ describe('map chrome layout', () => {
     expect(heights).not.toContain('104px');
   });
 
-  it('stacks the narrow time strip above the corner and keeps the legend panel in the free band', () => {
+  it('keeps the narrow command token and leaves placement to the slot owner', () => {
     const narrow = css.slice(css.indexOf('@media (max-width: 719px)'), css.indexOf('@media (min-width: 701px)'));
     expect(narrow).toContain('--map-time-block: 120px');
     expect(narrow).toContain('--map-command-height: calc(36px + 44px + 8px + var(--map-time-block) + env(safe-area-inset-bottom, 0px))');
-    expect(narrow).toContain('--map-time-block: min(120px, max(44px, calc(var(--map-stack-room) - 60px)))');
-    expect(narrow).toContain('--map-dock-clear: calc(var(--map-strip-anchor) + var(--map-time-block))');
-    expect(narrow).toContain('--map-legend-panel-bottom: calc(44px + var(--map-corner-gap) + var(--map-time-block) + 12px)');
-    expect(narrow).toContain('max-height: calc(var(--map-stack-room) - var(--map-time-block) - 12px)');
-    expect(narrow).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px)');
     expect(narrow).not.toContain('max(0px');
     expect(narrow).not.toContain('max(28px');
     expect(narrow).not.toContain('container-type');
     expect(narrow).not.toContain('@container');
+    expect(narrow).not.toContain('map-chrome-reflow');
+    expect(narrow).not.toContain('map-dock-row');
+    expect(narrow).not.toContain('position:');
+    expect(narrow).not.toContain('top:');
+    expect(narrow).not.toContain('left:');
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('@container');
-    expect(narrow).toContain('body.map-chrome-reflow .view-map');
-    expect(narrow).toContain('top: calc(var(--map-toolbar-clear) + 4px)');
-    expect(narrow).toContain('--map-reflow-corner: max(36px, calc(7.75rem + env(safe-area-inset-bottom, 0px) - var(--map-shotlist-block) + 4px))');
-    expect(narrow).toContain('position: fixed');
-    expect(narrow).not.toContain('var(--map-command-height) + var(--map-command-bottom');
-    expect(narrow).toContain('left: calc(var(--map-zoom-clear) + env(safe-area-inset-left, 0px))');
-    expect(narrow).toContain('bottom: calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap))');
-    expect(narrow).toContain('right: var(--map-corner-clear)');
-    const command = narrow.slice(narrow.indexOf('.view-map .map-command,'), narrow.indexOf('body.map-chrome-reflow .view-map'));
-    expect(command).not.toContain('var(--map-corner-clear)');
+    expect(css).not.toContain('map-chrome-reflow');
+    expect(css).not.toContain('map-dock-row');
+    expect(css).toContain('body.map-slot-time .view-map .map-command');
+    expect(css).toContain('body.map-slot-dock .view-map .map-control-dock');
+    expect(css).toContain('body.map-slot-legend .view-map .map-legend-panel');
+    expect(css).toContain('margin: 0;');
     const panel = css.slice(css.indexOf('.view-map .map-legend-panel {'), css.indexOf('.view-map .map-legend-rows'));
     expect(panel).toContain('width: max-content');
     expect(panel).toContain('max-width: min(11rem,');
@@ -358,10 +355,13 @@ describe('map chrome layout', () => {
     expect(panel).not.toContain('width: 100%');
     expect(css).toContain('--map-legend-panel-bottom: max(calc(44px + 4px), calc(var(--map-command-height) - var(--map-corner-bottom) + 12px))');
     expect(css).toContain('max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-dock-clear) - 16px)');
+    expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);');
     expect(css).toContain('--map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px))');
     expect(css).toContain('--map-shotlist-block: 0px');
     expect(css).toContain('--map-pane-budget: calc(100dvh - var(--map-shotlist-block))');
     expect(css).toContain('max-height: calc(var(--map-pane-budget) - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px)');
+    execFileSync('node', ['scripts/census-narrow-chrome.mjs'], { cwd: resolve('.') });
+    execFileSync('node', ['scripts/census-narrow-chrome.mjs', '--fixture'], { cwd: resolve('.') });
   });
 
   it('lays the time strip on the map', () => {
