@@ -179,6 +179,16 @@ def test_tangent_clearance_tolerance_still_blocks_earth() -> None:
     assert tangent_clearance(iss, -25.0, -90.0, 0.0) is False
 
 
+def test_target_9m_past_the_horizon_is_blocked() -> None:
+    iss = _iss_position(lat=0.0, lon=0.0, alt_km=408.0)
+    assert tangent_clearance(iss, 0.0, 0.0, 0.0) is True
+    horizon_km = EARTH_RADIUS_KM * math.acos(
+        EARTH_RADIUS_KM / (EARTH_RADIUS_KM + iss.alt_km)
+    )
+    lat, lon = _destination_along_bearing(iss.lat, iss.lon, 0.0, horizon_km + 0.009)
+    assert tangent_clearance(iss, lat, lon, 0.0) is False
+
+
 def test_nadir_is_visible_and_a_target_100m_past_the_horizon_is_blocked() -> None:
     iss = _iss_position(lat=-25.0, lon=-120.0, alt_km=420.0)
     assert tangent_clearance(iss, iss.lat, iss.lon, 0.0) is True
