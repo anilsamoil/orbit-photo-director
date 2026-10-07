@@ -3025,6 +3025,26 @@ async function proveNarrowTimeSlider(send, evidenceDir, viewport) {
   }
 }
 
+const BANNER_ACTIONS_MARKUP = '<p class="banner-copy">SIGN IN AGAIN</p><div class="banner-actions"><a class="banner-action" href="/api/app">Sign in</a><button class="banner-action" type="button">Reload</button></div>';
+
+function bannerInjectExpression() {
+  return `(() => {
+    const banner = document.getElementById('status-banner');
+    if (!banner) return false;
+    banner.className = 'banner banner-red';
+    banner.innerHTML = ${JSON.stringify(BANNER_ACTIONS_MARKUP)};
+    return !!banner.querySelector('.banner-actions');
+  })()`;
+}
+
+function bannerClearExpression() {
+  return `(() => {
+    const banner = document.getElementById('status-banner');
+    if (banner) banner.querySelectorAll('.banner-actions').forEach((node) => node.remove());
+    return !document.querySelector('#status-banner .banner-actions');
+  })()`;
+}
+
 async function withBannerActions(send, run) {
   const saved = await evaluate(send, `(() => {
     const banner = document.getElementById('status-banner');
@@ -3032,12 +3052,7 @@ async function withBannerActions(send, run) {
     return { className: banner.className, html: banner.innerHTML };
   })()`);
   if (!saved) throw new Error('status banner missing');
-  await evaluate(send, `(() => {
-    const banner = document.getElementById('status-banner');
-    banner.className = 'banner banner-red';
-    banner.innerHTML = '<p class="banner-copy">SIGN IN AGAIN</p><div class="banner-actions"><a class="banner-action" href="/api/app">Sign in</a><button class="banner-action" type="button">Reload</button></div>';
-    return true;
-  })()`);
+  await evaluate(send, bannerInjectExpression());
   try {
     return await run();
   } finally {
@@ -3058,10 +3073,11 @@ async function proveRaisedHideDock(send, evidenceDir, viewport) {
     await withBannerActions(send, async () => {
       await sleep(250);
       const laid = await evaluate(send, `(() => {
+        const actions = ${bannerInjectExpression()};
         const dock = document.querySelector('.map-control-dock');
         const picker = document.getElementById('toggle-satellite-picker');
         const hide = document.getElementById('map-chrome-toggle');
-        if (!dock || !picker || !hide) return { ok: false, reason: 'missing' };
+        if (!dock || !picker || !hide) return { ok: false, reason: 'missing', actions };
         dock.scrollTop = dock.scrollHeight;
         const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
         const dockBox = dock.getBoundingClientRect();
@@ -3069,7 +3085,8 @@ async function proveRaisedHideDock(send, evidenceDir, viewport) {
         const hideBox = hide.getBoundingClientRect();
         const overlap = hits(pickerBox, hideBox) || hits(dockBox, hideBox);
         return {
-          ok: !overlap && dockBox.bottom <= hideBox.top + 1,
+          ok: actions && !overlap && dockBox.bottom <= hideBox.top + 1,
+          actions,
           dockBottom: Math.round(dockBox.bottom),
           hideTop: Math.round(hideBox.top),
           hideBottom: Math.round(hideBox.bottom),
@@ -3115,10 +3132,11 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
         if (!applied) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
         await sleep(250);
         const laid = await evaluate(send, `(() => {
+          const actions = ${bannerInjectExpression()};
           const panel = document.getElementById('map-legend-panel');
           const header = document.querySelector('.topbar');
           const strip = document.querySelector('.map-command');
-          if (!panel || !header || !strip) return { ok: false, reason: 'missing' };
+          if (!actions || !panel || !header || !strip) return { ok: false, reason: actions ? 'missing' : 'banner', actions };
           const box = panel.getBoundingClientRect();
           const head = header.getBoundingClientRect();
           const stripBox = strip.getBoundingClientRect();
@@ -3133,7 +3151,8 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
           const stripClear = !hits(box, stripBox);
           const scrollable = (style.overflowY === 'auto' || style.overflowY === 'scroll') && panel.scrollHeight > panel.clientHeight + 1;
           return {
-            ok: onScreen && belowHeader && pipClear && stripClear && scrollable && style.pointerEvents === 'auto' && box.width > 88,
+            ok: actions && onScreen && belowHeader && pipClear && stripClear && scrollable && style.pointerEvents === 'auto' && box.width > 88,
+            actions,
             onScreen,
             belowHeader,
             pipClear,
@@ -3163,6 +3182,235 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
       return true;
     })()`);
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function restoreNarrowChrome(send, viewport, legendExpanded) {
+  await evaluate(send, `(() => {
+    document.body.classList.remove('shotlist-bar-visible');
+    const toggle = document.getElementById('map-legend-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', ${JSON.stringify(legendExpanded || 'false')});
+    ${bannerClearExpression()};
+    return true;
+  })()`);
+  await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+}
+
+async function proveNarrowDockScrollport(send, viewport) {
+  await setViewport(send, 430, 400, true);
+  const applied = await safeAreaOverride(send, { top: 24, left: 47, bottom: 34, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the narrow dock');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    for (const shotlist of [true, false]) {
+      const laid = await evaluate(send, `(() => {
+        ${bannerClearExpression()};
+        document.body.classList.toggle('shotlist-bar-visible', ${shotlist});
+        const toggle = document.getElementById('map-legend-toggle');
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        const dock = document.querySelector('.map-control-dock');
+        const first = document.getElementById('bearing-north');
+        const last = document.getElementById('toggle-satellite-picker');
+        if (!dock || !first || !last) return { ok: false, reason: 'missing' };
+        const owns = (el) => {
+          const box = el.getBoundingClientRect();
+          const dockBox = dock.getBoundingClientRect();
+          const x = box.left + box.width / 2;
+          const y = box.top + box.height / 2;
+          const hit = document.elementFromPoint(x, y);
+          return {
+            inside: x >= dockBox.left - 0.5 && x <= dockBox.right + 0.5 && y >= dockBox.top - 0.5 && y <= dockBox.bottom + 0.5,
+            own: !!(hit && (hit === el || el.contains(hit))),
+            hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+          };
+        };
+        dock.scrollTop = 0;
+        const start = owns(first);
+        dock.scrollTop = dock.scrollHeight;
+        const end = owns(last);
+        const box = dock.getBoundingClientRect();
+        return {
+          ok: box.height >= 44 && start.inside && start.own && end.inside && end.own,
+          height: Math.round(box.height),
+          client: dock.clientHeight,
+          start,
+          end,
+        };
+      })()`);
+      if (!laid?.ok) throw new Error(`narrow dock shotlist ${shotlist} ${JSON.stringify(laid)}`);
+    }
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveLegendClearsNarrowControls(send, viewport) {
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  const sizes = [
+    { width: 390, height: 520 },
+    { width: 430, height: 400 },
+  ];
+  const toggles = [
+    { shotlist: false, banner: false },
+    { shotlist: true, banner: false },
+    { shotlist: false, banner: true },
+    { shotlist: true, banner: true },
+  ];
+  try {
+    for (const size of sizes) {
+      await setViewport(send, size.width, size.height, true);
+      await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+      for (const toggle of toggles) {
+        const laid = await evaluate(send, `(() => {
+          const actions = ${toggle.banner ? bannerInjectExpression() : bannerClearExpression()};
+          document.body.classList.toggle('shotlist-bar-visible', ${toggle.shotlist});
+          const legend = document.getElementById('map-legend-toggle');
+          if (legend) legend.setAttribute('aria-expanded', 'true');
+          const panel = document.getElementById('map-legend-panel');
+          const strip = document.querySelector('.map-command');
+          const toolbar = document.querySelector('.map-toolbar');
+          if (!actions || !panel || !strip || !toolbar) return { ok: false, reason: 'missing', actions };
+          const meets = (a, b) => !!(a && b && a.width > 0 && b.width > 0 && a.height > 0 && b.height > 0 && a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5);
+          const panelBox = panel.getBoundingClientRect();
+          const stripBox = strip.getBoundingClientRect();
+          const toolBox = toolbar.getBoundingClientRect();
+          const selectors = ['#time-slider', '#time-back-90', '#time-back-45', '#time-now', '#time-fwd-45', '#time-fwd-90', '#filter-all-map', '#filter-mine-map', '#filter-launches-map'];
+          const misses = [];
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (!el) {
+              misses.push({ selector, reason: 'missing' });
+              continue;
+            }
+            const box = el.getBoundingClientRect();
+            if (meets(panelBox, box)) misses.push({ selector, reason: 'covered' });
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+            if (!hit || (hit !== el && !el.contains(hit))) misses.push({ selector, reason: 'hit', hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null });
+            if (box.width < 44 || box.height < 44) misses.push({ selector, reason: 'size', w: Math.round(box.width), h: Math.round(box.height) });
+          }
+          const aboveStrip = panelBox.bottom <= stripBox.top - 8;
+          const belowToolbar = panelBox.top >= toolBox.bottom - 1;
+          return {
+            ok: misses.length === 0 && aboveStrip && belowToolbar && panelBox.height >= 24 && panelBox.width > 88,
+            misses,
+            aboveStrip,
+            belowToolbar,
+            panel: { top: Math.round(panelBox.top), bottom: Math.round(panelBox.bottom), height: Math.round(panelBox.height), width: Math.round(panelBox.width) },
+            stripTop: Math.round(stripBox.top),
+            toolbarBottom: Math.round(toolBox.bottom),
+            actions: !!document.querySelector('#status-banner .banner-actions'),
+          };
+        })()`);
+        if (!laid?.ok || (toggle.banner && !laid.actions)) {
+          throw new Error(`legend clearance ${size.width}x${size.height} shotlist ${toggle.shotlist} banner ${toggle.banner} ${JSON.stringify(laid)}`);
+        }
+      }
+    }
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveRaisedStripClearsToolbar(send, viewport) {
+  await setViewport(send, 430, 400, true);
+  const applied = await safeAreaOverride(send, { top: 24, left: 47, bottom: 34, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the raised strip');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    const laid = await evaluate(send, `(() => {
+      const actions = ${bannerInjectExpression()};
+      document.body.classList.remove('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'false');
+      const mine = document.getElementById('filter-mine-map');
+      const launches = document.getElementById('filter-launches-map');
+      const toolbar = document.querySelector('.map-toolbar');
+      const strip = document.querySelector('.map-command');
+      if (!actions || !mine || !launches || !toolbar || !strip) return { ok: false, reason: actions ? 'missing' : 'banner', actions };
+      const owns = (el) => {
+        const box = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          own: !!(hit && (hit === el || el.contains(hit))),
+          hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+          h: Math.round(box.height),
+          w: Math.round(box.width),
+        };
+      };
+      const stripBox = strip.getBoundingClientRect();
+      const toolBox = toolbar.getBoundingClientRect();
+      const steps = [...document.querySelectorAll('.map-command .time-step-btn')].map((el) => {
+        const box = el.getBoundingClientRect();
+        return { id: el.id, w: Math.round(box.width), h: Math.round(box.height) };
+      });
+      const mineHit = owns(mine);
+      const launchHit = owns(launches);
+      const targets = steps.every((step) => step.w >= 44 && step.h >= 44);
+      const gap = stripBox.top - toolBox.bottom;
+      return {
+        ok: mineHit.own && launchHit.own && mineHit.h >= 44 && launchHit.h >= 44 && targets && gap >= 4,
+        actions,
+        gap: Math.round(gap),
+        stripTop: Math.round(stripBox.top),
+        toolbarBottom: Math.round(toolBox.bottom),
+        mineHit,
+        launchHit,
+        steps,
+      };
+    })()`);
+    if (!laid?.ok) throw new Error(`raised strip upper bound ${JSON.stringify(laid)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveLegendMissesRaisedPip(send, viewport) {
+  const applied = await safeAreaOverride(send, { top: 24, left: 0, bottom: 20, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the legend and horizon inset');
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    await setViewport(send, 800, 600, false);
+    await waitFor(send, pipReadyExpression('horizon'), 'horizon inset under the legend', 15000);
+    const laid = await evaluate(send, `(() => {
+      const actions = ${bannerInjectExpression()};
+      document.body.classList.add('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'true');
+      const panel = document.getElementById('map-legend-panel');
+      const pip = document.querySelector('[data-pip="horizon"]');
+      if (!actions || !panel || !pip) return { ok: false, reason: 'missing', actions };
+      const panelBox = panel.getBoundingClientRect();
+      const pipBox = pip.getBoundingClientRect();
+      const meets = panelBox.width > 0 && pipBox.width > 0 && panelBox.left < pipBox.right - 0.5 && panelBox.right > pipBox.left + 0.5 && panelBox.top < pipBox.bottom - 0.5 && panelBox.bottom > pipBox.top + 0.5;
+      const hit = document.elementFromPoint(600, 216);
+      const legendHit = !!(hit && hit.closest('#map-legend-panel, .map-legend-item'));
+      const pipHit = !!(hit && hit.closest('[data-pip="horizon"]'));
+      return {
+        ok: !meets && pipHit && !legendHit && pipBox.height >= 44,
+        meets,
+        pipHit,
+        legendHit,
+        hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+        panel: { left: Math.round(panelBox.left), top: Math.round(panelBox.top), width: Math.round(panelBox.width), height: Math.round(panelBox.height), bottom: Math.round(panelBox.bottom) },
+        pip: { left: Math.round(pipBox.left), top: Math.round(pipBox.top), width: Math.round(pipBox.width), height: Math.round(pipBox.height), bottom: Math.round(pipBox.bottom) },
+        actions,
+      };
+    })()`);
+    if (!laid?.ok) throw new Error(`legend meets horizon inset ${JSON.stringify(laid)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
   }
 }
 
@@ -3241,7 +3489,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await proveNarrowTimeSlider(send, evidenceDir, viewport);
   await proveRaisedHideDock(send, evidenceDir, viewport);
   await proveLegendPanelBounds(send, evidenceDir, viewport);
+  await proveNarrowDockScrollport(send, viewport);
+  await proveLegendClearsNarrowControls(send, viewport);
+  await proveRaisedStripClearsToolbar(send, viewport);
   const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
+  await proveLegendMissesRaisedPip(send, viewport);
   let chrome = '';
   if (insetViewportFits(viewport.width, viewport.height)) {
     await click(send, '#map-chrome-toggle');
