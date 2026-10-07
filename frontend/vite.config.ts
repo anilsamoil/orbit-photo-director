@@ -266,9 +266,23 @@ export default defineConfig({
             },
           },
           {
+            // World-view Esri Dark Gray (z0-3): the clouds-ON basemap. Its own
+            // cache so these 85 tiles do not evict World Imagery from
+            // opd-tiles-esri-base. MUST precede that /tile/[0-3]/ route.
+            urlPattern: /^https:\/\/server\.arcgisonline\.com\/ArcGIS\/rest\/services\/Canvas\/World_Dark_Gray_Base\/MapServer\/tile\/[0-3]\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opd-tiles-dark-base',
+              expiration: {
+                maxEntries: 90,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             // World-view Esri imagery (z0-3): dedicated cache so the clouds-OFF
-            // basemap renders offline at world view, like opd-tiles-carto-base
-            // does for the clouds-ON basemap. /tile/[0-3]/ pins it to z0-3;
+            // basemap renders offline at world view. /tile/[0-3]/ pins it to z0-3;
             // deeper zooms fall through to the general esri rule. MUST precede it.
             urlPattern: /^https:\/\/server\.arcgisonline\.com\/.*\/MapServer\/tile\/[0-3]\//,
             handler: 'CacheFirst',

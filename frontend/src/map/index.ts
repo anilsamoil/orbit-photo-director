@@ -193,10 +193,7 @@ export function buildStyle(): StyleSpec {
       'carto-dark': {
         type: 'raster',
         tiles: [
-          'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
         
@@ -208,7 +205,7 @@ export function buildStyle(): StyleSpec {
         
         maxzoom: 20,
         attribution:
-          '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+          'Tiles © <a href="https://www.esri.com">Esri</a> &mdash; Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS user community',
       },
       'gibs-clouds': {
         type: 'raster',

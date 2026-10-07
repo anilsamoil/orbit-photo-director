@@ -59,6 +59,9 @@ describe('plan inset labels', () => {
     expect(created.options?.renderWorldCopies).toBe(false);
     expect(created.options?.transformConstrain).toBe(letterboxCamera);
     const style = created.options?.style;
+    expect(style?.sources['inset-basemap']?.tiles).toEqual([
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    ]);
     expect(style?.sources['inset-labels']?.tiles?.[0]).toContain('World_Boundaries_and_Places');
     expect(style?.sources['inset-labels']?.maxzoom).toBeGreaterThan(2);
     const ids = style?.layers.map((layer) => layer.id);

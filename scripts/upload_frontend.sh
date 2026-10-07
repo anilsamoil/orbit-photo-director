@@ -24,6 +24,7 @@ content_type_for() {
     *.svg)         echo "image/svg+xml" ;;
     *.png)         echo "image/png" ;;
     *.woff|*.woff2) echo "font/woff2" ;;
+    *.pbf)         echo "application/x-protobuf" ;;
     *)             echo "application/octet-stream" ;;
   esac
 }
@@ -46,7 +47,14 @@ is_shell_entry() {
   return 1
 }
 
+GLYPH_REL="glyphs/Open Sans Regular/0-255.pbf"
+if [ ! -f "$DIST_DIR/$GLYPH_REL" ]; then
+  echo "ERROR: $DIST_DIR/$GLYPH_REL missing. The plan inset reads this Open Sans PBF." >&2
+  exit 2
+fi
+
 COUNT=0
+GLYPHS_UPLOADED=0
 FAILED_FILES=()
 upload_one() {
   local FILE="$1"
@@ -69,6 +77,9 @@ upload_one() {
     return
   }
   COUNT=$((COUNT + 1))
+  if [ "$REL_PATH" = "$GLYPH_REL" ]; then
+    GLYPHS_UPLOADED=1
+  fi
   echo "  ✓ $REL_PATH"
 }
 
@@ -101,6 +112,11 @@ if [ "${#FAILED_FILES[@]}" -gt 0 ]; then
   echo "==> NOT updating index.html assumption — the site may reference" >&2
   echo "    assets that didn't upload. Re-run upload_frontend.sh, or" >&2
   echo "    inspect the errors above." >&2
+  exit 3
+fi
+
+if [ "$GLYPHS_UPLOADED" -ne 1 ]; then
+  echo "ERROR: $GLYPH_REL was not uploaded." >&2
   exit 3
 fi
 

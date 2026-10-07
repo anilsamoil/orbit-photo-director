@@ -126,16 +126,15 @@ describe('buildPrecacheUrls', () => {
     const passes = Array.from({ length: 10 }, (_, i) =>
       samplePass({ target_id: `p${i}`, target_lat: i, target_lon: i }));
     const urls = buildPrecacheUrls(passes, gibsPattern);
-    // Each target produces 2 URLs (carto + gibs) per zoom level.
     const expectedPerTarget = PRECACHE_ZOOM_LEVELS.length * 2;
     expect(urls.length).toBe(PRECACHE_TARGET_COUNT * expectedPerTarget);
   });
 
-  it('produces both carto and gibs URLs for each (target, zoom)', () => {
+  it('produces both dark basemap and gibs URLs for each (target, zoom)', () => {
     const urls = buildPrecacheUrls([samplePass({ target_lat: 28.6, target_lon: -80.6 })], gibsPattern);
-    const cartoCount = urls.filter((u) => u.includes('cartocdn')).length;
+    const darkCount = urls.filter((u) => u.includes('World_Dark_Gray_Base')).length;
     const gibsCount = urls.filter((u) => u.includes('gibs.earthdata')).length;
-    expect(cartoCount).toBe(PRECACHE_ZOOM_LEVELS.length);
+    expect(darkCount).toBe(PRECACHE_ZOOM_LEVELS.length);
     expect(gibsCount).toBe(PRECACHE_ZOOM_LEVELS.length);
   });
 
@@ -158,24 +157,26 @@ describe('buildPrecacheUrls', () => {
       [samplePass({ target_lat: 28.6082, target_lon: -80.6041 })],
       gibsPattern,
     );
-    // KSC at z=8 → tile (70, 106); carto pattern is /{z}/{x}/{y}@2x.png
-    // Subdomain is (x+y)%4 = (70+106)%4 = 176%4 = 0 → 'a'
-    const cartoZ8 = urls.find((u) => u.includes('cartocdn') && u.includes('/8/'));
-    expect(cartoZ8).toContain('/8/70/106@2x.png');
-    expect(cartoZ8).toContain('https://a.basemaps.cartocdn.com/');
+    // KSC at z=8 → tile x=70 y=106. Esri order is /tile/{z}/{y}/{x}.
+    const darkZ8 = urls.find((u) => u.includes('World_Dark_Gray_Base') && u.includes('/tile/8/'));
+    expect(darkZ8).toBe(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/8/106/70',
+    );
   });
 
-  it('rotates carto subdomain via (x+y)%4 to match MapLibre', () => {
-    // Tokyo at z=10 → tile (909, 403); (909+403)%4 = 1312%4 = 0 → 'a'
+  it('uses Esri {z}/{y}/{x} for Tokyo', () => {
     const tokyo = buildPrecacheUrls(
       [samplePass({ target_lat: 35.68, target_lon: 139.69 })],
       gibsPattern,
     );
-    const tokyoZ10 = tokyo.find((u) => u.includes('cartocdn') && u.includes('/10/'));
-    expect(tokyoZ10).toContain('https://a.basemaps.cartocdn.com/');
-    // Z=8 for Tokyo: tile (227, 100); (227+100)%4 = 327%4 = 3 → 'd'
-    const tokyoZ8 = tokyo.find((u) => u.includes('cartocdn') && u.includes('/8/'));
-    expect(tokyoZ8).toContain('https://d.basemaps.cartocdn.com/');
+    const tokyoZ10 = tokyo.find((u) => u.includes('World_Dark_Gray_Base') && u.includes('/tile/10/'));
+    expect(tokyoZ10).toBe(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/10/403/909',
+    );
+    const tokyoZ8 = tokyo.find((u) => u.includes('World_Dark_Gray_Base') && u.includes('/tile/8/'));
+    expect(tokyoZ8).toBe(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/8/100/227',
+    );
   });
 
   it('skips targets with non-finite lat/lon', () => {
@@ -200,28 +201,31 @@ describe('buildWorldBaseUrls (z0-3 world-view basemap)', () => {
 
   it('covers every tile at each zoom (z2 → all 16)', () => {
     const urls = buildWorldBaseUrls();
-    const z2 = urls.filter((u) => /\/dark_all\/2\//.test(u));
+    const z2 = urls.filter((u) => /\/MapServer\/tile\/2\//.test(u));
     expect(z2.length).toBe(16);
-    // Every (x,y) in the 4×4 z2 grid is present.
     for (let x = 0; x < 4; x++) {
       for (let y = 0; y < 4; y++) {
-        expect(z2.some((u) => u.includes(`/2/${x}/${y}@2x.png`))).toBe(true);
+        expect(z2).toContain(
+          `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/2/${y}/${x}`,
+        );
       }
     }
   });
 
-  it('only emits carto dark_all base tiles (matches the SW base-cache route)', () => {
+  it('only emits Esri World Dark Gray tiles at z0-3', () => {
     for (const u of buildWorldBaseUrls()) {
-      expect(u).toMatch(/^https:\/\/[a-d]\.basemaps\.cartocdn\.com\/dark_all\/[0-3]\/\d+\/\d+@2x\.png$/);
+      expect(u).toMatch(/^https:\/\/server\.arcgisonline\.com\/ArcGIS\/rest\/services\/Canvas\/World_Dark_Gray_Base\/MapServer\/tile\/[0-3]\/\d+\/\d+$/);
     }
   });
 
-  it('rotates subdomain via (x+y)%4 (same as the per-target precache)', () => {
+  it('uses Esri {z}/{y}/{x} so z3 tile x=2 y=1 is /tile/3/1/2', () => {
     const urls = buildWorldBaseUrls();
-    // z3 tile (2,1): (2+1)%4 = 3 → 'd'
-    expect(urls).toContain('https://d.basemaps.cartocdn.com/dark_all/3/2/1@2x.png');
-    // z3 tile (0,0): (0+0)%4 = 0 → 'a'
-    expect(urls).toContain('https://a.basemaps.cartocdn.com/dark_all/3/0/0@2x.png');
+    expect(urls).toContain(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/3/1/2',
+    );
+    expect(urls).toContain(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/3/0/0',
+    );
   });
 });
 
@@ -268,9 +272,12 @@ describe('precacheWorldBaseTiles', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('fires carto base (85) + Esri/clouds/VIIRS overlays (255) = 340 when online', () => {
+  it('fires the dark basemap (85) plus imagery, clouds, and VIIRS (255) when online', () => {
     precacheWorldBaseTiles(() => true);
     expect(fetchSpy).toHaveBeenCalledTimes(85 + 255);
+    const urls = fetchSpy.mock.calls.map((call) => String(call[0]));
+    expect(urls.filter((url) => url.includes('World_Dark_Gray_Base'))).toHaveLength(85);
+    expect(urls.some((url) => url.includes('cartocdn'))).toBe(false);
   });
 
   it('dedupes against in-flight URLs from a prior call', async () => {
