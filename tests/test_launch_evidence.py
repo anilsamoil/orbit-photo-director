@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from generator.launch_catalog import _score, build_launch_catalog
+from generator.launch_catalog import _lens, _score, build_launch_catalog
 from generator.launch_data import parse_response, validate_feed
 from generator.launch_evidence import (
     VALID_SECONDS,
@@ -431,6 +431,59 @@ def test_night_engine_score_is_a_range():
     assert score["low"] != (score["low"] + score["high"]) / 2
 
 
+def test_lens_follows_angular_size():
+    when = datetime(2026, 10, 6, tzinfo=UTC)
+
+    def sight(**over) -> Sight:
+        fields = {
+            "subject": Subject.PAD,
+            "liftoff": when,
+            "when": when,
+            "t_offset_s": 0,
+            "lat": 0.0,
+            "lon": 0.0,
+            "alt_km": 0.0,
+            "line_of_sight": True,
+            "slant_km": 400.0,
+            "limb_margin_deg": 10.0,
+            "light": LightMode.PAD_DAY,
+            "plume_mrad": None,
+            "in_plan": True,
+        }
+        fields.update(over)
+        return Sight(**fields)
+
+    assert _lens(sight()) == ("wide", "Close pad.")
+    assert _lens(sight(slant_km=1200.0)) == ("telephoto", "Pad is a small target.")
+    assert _lens(sight(
+        subject=Subject.ASCENT, alt_km=80.0, light=LightMode.NIGHT_ENGINE, plume_mrad=4.0,
+    )) == ("telephoto", "Night engine is a point.")
+    assert _lens(sight(
+        subject=Subject.ASCENT, alt_km=80.0, light=LightMode.TWILIGHT_PLUME, plume_mrad=3.0,
+    )) == ("wide", "Plume fills the frame.")
+    assert _lens(sight(
+        subject=Subject.ASCENT, alt_km=80.0, light=LightMode.DAY_PLUME, plume_mrad=1.0,
+    )) == ("telephoto", "Distant plume.")
+
+
+def test_night_engine_shot_is_scored_and_unvalidated(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0)
+    ahead = propagate(sample_tle, now + timedelta(minutes=8))
+    payload = _catalog_row(now)
+    payload["results"][0]["pad"]["latitude"] = ahead.lat
+    payload["results"][0]["pad"]["longitude"] = ahead.lon
+    payload["results"][0]["rocket"]["spacecraft_stage"] = [{"destination": "ISS"}]
+    item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+    engine = next(shot for shot in item["shots"] if shot["light"] == "night_engine")
+    assert engine["lens"] == "telephoto"
+    assert engine["lens_reason"] == "Night engine is a point."
+    assert engine["score"]["terms"]["C"] == [0.3, 0.8]
+    assert engine["score"]["low"] < engine["score"]["high"]
+    assert "NIGHT_ENGINE_UNVALIDATED" in item["reasons"]
+    assert item["why"].startswith("Night engine ")
+    assert item["why"].endswith(", scored but unvalidated until calibrated.")
+
+
 def test_overhead_pad_is_a_shot_with_one_sentence(sample_tle, tmp_path):
     now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
     net = now + timedelta(minutes=10)
@@ -445,6 +498,8 @@ def test_overhead_pad_is_a_shot_with_one_sentence(sample_tle, tmp_path):
     assert "km" in item["why"]
     assert all(shot["subject"] == "pad" and shot["track"] == [] for shot in item["shots"])
     shot = item["shots"][0]
+    assert shot["lens"] == "wide"
+    assert shot["lens_reason"] == "Close pad."
     assert set(shot["score"]["terms"]) == {"A", "C", "D", "M", "R"}
     assert shot["score"]["low"] <= shot["score"]["high"]
     assert shot["score"]["low"] >= 50

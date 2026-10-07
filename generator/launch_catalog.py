@@ -191,6 +191,8 @@ def _item(
         reasons.append("NOMINAL_ASCENT_TOO_FAR" if fresh_negative else "NO_LINE_OF_SIGHT")
     elif g1 and not g2 and finished and "GEOMETRY_INVALID" not in reasons:
         reasons.append("NO_LINE_OF_SIGHT")
+    if any(shot["light"] == "night_engine" for shot in shots):
+        reasons.append("NIGHT_ENGINE_UNVALIDATED")
 
     tier = _tier(launch, g1, g2, shots, age_h, fresh_negative, finished)
     item = {
@@ -478,7 +480,10 @@ def _why(tier: str, shots: list[dict]) -> str:
         when = f"{-minutes} min before liftoff"
     slant = round(best["slant_km"])
     bearing = _bearing(best["look"]["azimuth_deg"])
-    return f"{_LIGHT[best['light']]} {slant} km {bearing}, {best['window']}, {when}."
+    sentence = f"{_LIGHT[best['light']]} {slant} km {bearing}, {best['window']}, {when}"
+    if best["light"] == "night_engine":
+        sentence += ", scored but unvalidated until calibrated"
+    return sentence + "."
 
 
 def _best(shots: list[dict]) -> dict | None:

@@ -91,9 +91,10 @@ The publisher emits schema 3 and still accepts a schema 2 body. A schema 3 body
 carries `schedule_valid_until` (75 minutes) and `geometry_valid_until` (15 minutes).
 The pointer stays schema 2, and its `valid_until` equals `geometry_valid_until`.
 The parser allows a schedule lease up to three hours. Each shot envelope includes
-`lens` (`telephoto` or `wide`) and `lens_reason`. An ascent envelope requires
-`direction.kind` of `published`, `iss_plane`, or `hazard_area`. A pad envelope
-has an empty track. Unknown keys are rejected on both versions. A hash
+`lens` (`telephoto` or `wide`) and `lens_reason`. A `night_engine` shot stays scored;
+its item carries `NIGHT_ENGINE_UNVALIDATED` until that mode is calibrated. An ascent
+envelope requires `direction.kind` of `published`, `iss_plane`, or `hazard_area`.
+A pad envelope has an empty track. Unknown keys are rejected on both versions. A hash
 mismatch keeps the last good artifact.
 
 The accepting parser supports old artifacts without assessment. Older deployed
