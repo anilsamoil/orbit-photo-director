@@ -445,7 +445,7 @@ def test_rclone_timeout_puts_stderr_in_the_reason(tmp_path, monkeypatch, capsys)
 @pytest.mark.parametrize("operation", ["cat", "copyto"])
 @pytest.mark.parametrize(
     "stderr",
-    [b"i/o timeout\n", "i/o timeout\n", None],
+    [b" \t i/o timeout \n", " \t i/o timeout \n", None],
     ids=["bytes", "str", "none"],
 )
 def test_timeout_reason_matrix(tmp_path, monkeypatch, capsys, operation, stderr):
