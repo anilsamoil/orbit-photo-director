@@ -1608,6 +1608,7 @@ async function proveMapLaidOnPane(send) {
     const fitting = innerWidth >= 800 && innerHeight >= 600;
     const shortRow = innerHeight <= 520 && innerWidth >= 720;
     const narrow = innerWidth <= 800 && !shortRow && !fitting;
+    const stacked = innerWidth <= 719;
     let reserved = null;
     if (narrow) {
       const probe = document.createElement('div');
@@ -1624,7 +1625,7 @@ async function proveMapLaidOnPane(send) {
       document.body.appendChild(insetProbe);
       const inset = Number.parseFloat(getComputedStyle(insetProbe).paddingBottom) || 0;
       insetProbe.remove();
-      reserved = { height, inset, expect: 140 + inset };
+      reserved = { height, inset, expect: (stacked ? 208 : 140) + inset };
     }
     const pipNode = document.querySelector('[data-pip="horizon"]');
     const pipShown = pipNode && !pipNode.hidden && getComputedStyle(pipNode).display !== 'none';
@@ -2754,6 +2755,195 @@ async function proveShortTimeRow(send, viewport) {
   }
 }
 
+async function proveNarrowTimeSlider(send, evidenceDir, viewport) {
+  try {
+    await setViewport(send, 390, 520, true);
+    await sleep(250);
+    const slider = await evaluate(send, `(() => {
+      const input = document.getElementById('time-slider');
+      const strip = document.querySelector('.map-command');
+      const pane = document.getElementById('map-pane');
+      if (!input || !strip || !pane) return { ok: false, reason: 'missing' };
+      const box = input.getBoundingClientRect();
+      const stripBox = strip.getBoundingClientRect();
+      const paneBox = pane.getBoundingClientRect();
+      return {
+        ok: box.width >= 100,
+        width: Math.round(box.width),
+        rightGap: Math.round(paneBox.right - stripBox.right),
+        above: stripBox.bottom <= (document.getElementById('map-chrome-toggle')?.getBoundingClientRect().top || 0) + 1,
+      };
+    })()`);
+    if (!slider?.ok || !slider.above || slider.rightGap > 24) {
+      throw new Error(`narrow time slider ${JSON.stringify(slider)}`);
+    }
+    await shot(send, evidenceDir, 'map-time-390x520');
+    await setViewport(send, 430, 400, true);
+    await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
+    await sleep(250);
+    const compass = await evaluate(send, `(() => {
+      const el = document.querySelector('.maplibregl-ctrl-compass');
+      if (!el) return { ok: false, reason: 'missing' };
+      const box = el.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const own = !!(hit && (hit === el || el.contains(hit)));
+      return {
+        ok: own,
+        hit: hit ? (hit.id || hit.getAttribute('aria-label') || hit.className || hit.tagName) : null,
+        top: Math.round(box.top),
+        bottom: Math.round(box.bottom),
+      };
+    })()`);
+    if (!compass?.ok) throw new Error(`compass under the time strip ${JSON.stringify(compass)}`);
+    await shot(send, evidenceDir, 'map-compass-430x400');
+  } finally {
+    await evaluate(send, `document.body.classList.remove('shotlist-bar-visible')`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function withBannerActions(send, run) {
+  const saved = await evaluate(send, `(() => {
+    const banner = document.getElementById('status-banner');
+    if (!banner) return null;
+    return { className: banner.className, html: banner.innerHTML };
+  })()`);
+  if (!saved) throw new Error('status banner missing');
+  await evaluate(send, `(() => {
+    const banner = document.getElementById('status-banner');
+    banner.className = 'banner banner-red';
+    banner.innerHTML = '<p class="banner-copy">SIGN IN AGAIN</p><div class="banner-actions"><a class="banner-action" href="/api/app">Sign in</a><button class="banner-action" type="button">Reload</button></div>';
+    return true;
+  })()`);
+  try {
+    return await run();
+  } finally {
+    await evaluate(send, `(() => {
+      const banner = document.getElementById('status-banner');
+      if (!banner) return false;
+      banner.className = ${JSON.stringify(saved.className)};
+      banner.innerHTML = ${JSON.stringify(saved.html)};
+      return true;
+    })()`);
+  }
+}
+
+async function proveRaisedHideDock(send, evidenceDir, viewport) {
+  await setViewport(send, 1280, 700, false);
+  await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  try {
+    await withBannerActions(send, async () => {
+      await sleep(250);
+      const laid = await evaluate(send, `(() => {
+        const dock = document.querySelector('.map-control-dock');
+        const picker = document.getElementById('toggle-satellite-picker');
+        const hide = document.getElementById('map-chrome-toggle');
+        if (!dock || !picker || !hide) return { ok: false, reason: 'missing' };
+        dock.scrollTop = dock.scrollHeight;
+        const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        const dockBox = dock.getBoundingClientRect();
+        const pickerBox = picker.getBoundingClientRect();
+        const hideBox = hide.getBoundingClientRect();
+        const overlap = hits(pickerBox, hideBox) || hits(dockBox, hideBox);
+        return {
+          ok: !overlap && dockBox.bottom <= hideBox.top + 1,
+          dockBottom: Math.round(dockBox.bottom),
+          hideTop: Math.round(hideBox.top),
+          hideBottom: Math.round(hideBox.bottom),
+          pickerTop: Math.round(pickerBox.top),
+          pickerBottom: Math.round(pickerBox.bottom),
+        };
+      })()`);
+      if (!laid?.ok) throw new Error(`raised hide covers the dock ${JSON.stringify(laid)}`);
+      await shot(send, evidenceDir, 'map-dock-1280x700');
+    });
+  } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function proveLegendPanelBounds(send, evidenceDir, viewport) {
+  const saved = await evaluate(send, `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const date = document.querySelector('.map-imagery-date');
+    if (!button || !date) return null;
+    return { expanded: button.getAttribute('aria-expanded'), text: date.textContent };
+  })()`);
+  if (!saved) throw new Error('legend panel missing');
+  const cases = [
+    { width: 844, height: 390, insets: { top: 0, left: 0, bottom: 21, right: 0 }, name: '844x390' },
+    { width: 800, height: 600, insets: { top: 24, left: 0, bottom: 20, right: 0 }, name: '800x600' },
+  ];
+  try {
+    await evaluate(send, `(() => {
+      const button = document.getElementById('map-legend-toggle');
+      const date = document.querySelector('.map-imagery-date');
+      button.setAttribute('aria-expanded', 'true');
+      const line = 'LIVE now (not the scrubbed time)';
+      date.textContent = Array.from({ length: 12 }, () => line).join(' ');
+      return true;
+    })()`);
+    await withBannerActions(send, async () => {
+      for (const pane of cases) {
+        await setViewport(send, pane.width, pane.height, true);
+        const applied = await safeAreaOverride(send, pane.insets);
+        if (!applied) throw new Error(`safe area override failed at ${pane.name}`);
+        await sleep(250);
+        const laid = await evaluate(send, `(() => {
+          const panel = document.getElementById('map-legend-panel');
+          const header = document.querySelector('.topbar');
+          const strip = document.querySelector('.map-command');
+          if (!panel || !header || !strip) return { ok: false, reason: 'missing' };
+          const box = panel.getBoundingClientRect();
+          const head = header.getBoundingClientRect();
+          const stripBox = strip.getBoundingClientRect();
+          const style = getComputedStyle(panel);
+          const hits = (a, b) => a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+          const pipNode = document.querySelector('[data-pip="horizon"]');
+          const pipShown = pipNode && !pipNode.hidden && getComputedStyle(pipNode).display !== 'none';
+          const pip = pipShown ? pipNode.getBoundingClientRect() : null;
+          const onScreen = box.top >= -1 && box.left >= -1 && box.right <= innerWidth + 1 && box.bottom <= innerHeight + 1;
+          const belowHeader = box.top >= head.bottom - 1;
+          const pipClear = !pip || !hits(box, pip);
+          const stripClear = !hits(box, stripBox);
+          const scrollable = (style.overflowY === 'auto' || style.overflowY === 'scroll') && panel.scrollHeight > panel.clientHeight + 1;
+          return {
+            ok: onScreen && belowHeader && pipClear && stripClear && scrollable && style.pointerEvents === 'auto' && box.width > 88,
+            onScreen,
+            belowHeader,
+            pipClear,
+            stripClear,
+            scrollable,
+            events: style.pointerEvents,
+            overflow: style.overflowY,
+            width: Math.round(box.width),
+            top: Math.round(box.top),
+            bottom: Math.round(box.bottom),
+            header: Math.round(head.bottom),
+            scrollHeight: panel.scrollHeight,
+            clientHeight: panel.clientHeight,
+          };
+        })()`);
+        if (!laid?.ok) throw new Error(`legend panel ${pane.name} ${JSON.stringify(laid)}`);
+        await shot(send, evidenceDir, `map-legend-panel-${pane.name}`);
+      }
+    });
+  } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    await evaluate(send, `(() => {
+      const button = document.getElementById('map-legend-toggle');
+      const date = document.querySelector('.map-imagery-date');
+      if (button) button.setAttribute('aria-expanded', ${JSON.stringify(saved.expanded)});
+      if (date) date.textContent = ${JSON.stringify(saved.text)};
+      return true;
+    })()`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -2826,6 +3016,9 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       return true;
     })()`);
   }
+  await proveNarrowTimeSlider(send, evidenceDir, viewport);
+  await proveRaisedHideDock(send, evidenceDir, viewport);
+  await proveLegendPanelBounds(send, evidenceDir, viewport);
   const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
   let chrome = '';
   if (insetViewportFits(viewport.width, viewport.height)) {
