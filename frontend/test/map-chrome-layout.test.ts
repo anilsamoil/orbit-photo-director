@@ -337,8 +337,9 @@ describe('map chrome layout', () => {
     expect(panel).toContain('overflow: auto');
     expect(panel).toContain('pointer-events: auto');
     expect(panel).not.toContain('width: 100%');
+    expect(css).toContain('--map-legend-panel-bottom: max(calc(44px + 4px), calc(var(--map-command-height) - var(--map-corner-bottom) + 12px))');
     expect(css).toContain('max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-dock-clear) - 16px)');
-    expect(css).toContain('max-height: calc(100dvh - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - max(calc(44px + 4px), var(--map-command-height) - var(--map-corner-bottom)) - 8px)');
+    expect(css).toContain('max-height: calc(100dvh - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px)');
   });
 
   it('lays the time strip on the map', () => {
