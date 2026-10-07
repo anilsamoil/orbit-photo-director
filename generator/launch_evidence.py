@@ -1,7 +1,7 @@
-"""Bounded, no-network launch evidence shared by diagnostics and map publication.
+"""Bounded, no-network launch evidence shared by diagnostics and publication.
 
-The first release is map-only. A profile and an orbit inclination are NOT
-independent evidence of a launch azimuth, optical detectability or window access.
+Schema 2 from build_launch_artifact stays map-only. Schema 3 is launch_catalog.
+A profile and an orbit inclination are not a launch azimuth.
 """
 
 from __future__ import annotations
@@ -318,8 +318,10 @@ def build_launch_artifact(
     return artifact
 
 
-def read_cached_artifact(cache_dir: Path, now: datetime, *, replay: bool = False) -> dict:
-    """Never fetches, fixes caches, writes output, publishes or sends."""
+def load_launch_cache(
+    cache_dir: Path, now: datetime, *, replay: bool = False,
+) -> tuple[dict, TLE | None, datetime, tuple[str, ...]]:
+    """Read one cache. Never fetches, repairs, publishes, or sends."""
     cache = cache_dir / "launches.json"
     try:
         if cache.stat().st_size > 8_000_000:
@@ -347,6 +349,14 @@ def read_cached_artifact(cache_dir: Path, now: datetime, *, replay: bool = False
         tle = TLE.from_text((cache_dir / "iss.tle").read_text())
     except (OSError, ValueError):
         tle = None
-    return build_launch_artifact(
+    return payload, tle, fetched, source_reasons
+
+
+def read_cached_artifact(cache_dir: Path, now: datetime, *, replay: bool = False) -> dict:
+    """Never fetches, fixes caches, writes output, publishes or sends."""
+    payload, tle, fetched, source_reasons = load_launch_cache(cache_dir, now, replay=replay)
+    from .launch_catalog import build_launch_catalog
+
+    return build_launch_catalog(
         payload, tle, now, fetched_at=fetched, source_reasons=source_reasons
     )

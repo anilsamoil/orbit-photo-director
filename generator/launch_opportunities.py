@@ -81,6 +81,8 @@ class VisibleSpan:
     start: datetime
     end: datetime
     closest: Sight
+    start_sight: Sight | None = None
+    end_sight: Sight | None = None
 
 
 @dataclass(frozen=True)
@@ -301,6 +303,8 @@ def _runs(
             start=start.when,
             end=end.when,
             closest=closest,
+            start_sight=start,
+            end_sight=end,
         ))
     return spans
 
