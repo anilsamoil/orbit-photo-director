@@ -94,8 +94,6 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
             'text-field': ['get', 'name'],
             'text-font': ['Open Sans Regular'],
             'text-size': 12,
-            'text-allow-overlap': true,
-            'text-ignore-placement': true,
           },
           paint: {
             'text-color': '#f7f4ea',
