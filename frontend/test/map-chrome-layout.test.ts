@@ -334,6 +334,7 @@ describe('map chrome layout', () => {
     expect(narrow).not.toContain('var(--map-corner-clear)');
     const panel = css.slice(css.indexOf('.view-map .map-legend-panel {'), css.indexOf('.view-map .map-legend-rows'));
     expect(panel).toContain('width: max-content');
+    expect(panel).toContain('max-width: min(11rem,');
     expect(panel).toContain('overflow: auto');
     expect(panel).toContain('pointer-events: auto');
     expect(panel).not.toContain('width: 100%');
