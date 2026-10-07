@@ -353,3 +353,65 @@ console.log(JSON.stringify({ live: ids(process.argv[2]), catalog: ids(process.ar
     selected = json.loads(result.stdout)
     assert selected["live"] == ["same-event"]
     assert selected["catalog"] == []
+
+
+def _receipt(cache, payload, fetched_at: str) -> None:
+    raw = canonical_bytes(payload)
+    (cache / "launches.json").write_bytes(raw)
+    (cache / "launches.json.receipt.json").write_bytes(
+        canonical_bytes({"sha256": hashlib.sha256(raw).hexdigest(), "fetched_at": fetched_at})
+    )
+
+
+def test_receipt_just_inside_75_minutes_publishes_a_real_lease(setup):
+    now, cache, output, payload, remote, _, _, run, _ = setup
+    fetched = now - timedelta(minutes=75) + timedelta(milliseconds=200)
+    _receipt(cache, payload, fetched.isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+    result = run()
+    assert result["published"]
+    catalog = _published_catalog(remote)
+    assert catalog["generated_at"] < catalog["geometry_valid_until"] <= catalog["schedule_valid_until"]
+    assert catalog["schedule_valid_until"] == utc(now + timedelta(minutes=75))
+    assert catalog["geometry_valid_until"] == utc(now + timedelta(minutes=15))
+    assert not (output / ".refresh-intent.json").exists()
+    assert run(now + timedelta(seconds=1))["reason"] == "UNCHANGED_INPUT"
+
+
+def test_truncated_receipt_lease_does_not_stick_refresh(setup):
+    now, cache, output, payload, _, calls, _, run, _ = setup
+    fetched = now - timedelta(hours=3) + timedelta(milliseconds=200)
+    _receipt(cache, payload, fetched.isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+    with pytest.raises(ValueError, match="INVALID_LAUNCH_VALIDITY"):
+        run()
+    assert calls == []
+    assert not (output / ".refresh-intent.json").exists()
+    with pytest.raises(ValueError, match="INVALID_LAUNCH_VALIDITY"):
+        run()
+    assert calls == []
+    assert not (output / ".refresh-intent.json").exists()
+
+
+def test_invalid_catalog_after_v2_commit_recovers(setup):
+    now, _, output, _, _, calls, _, run, _ = setup
+    run()
+    state = json.loads((output / ".refresh-state.json").read_bytes())
+    pointer = json.loads((output / "launch/latest.json").read_bytes())
+    artifact = json.loads((output / pointer["path"]).read_bytes())
+    catalog_pointer = json.loads((output / "launch/catalog/latest.json").read_bytes())
+    catalog = json.loads((output / catalog_pointer["path"]).read_bytes())
+    catalog["schedule_valid_until"] = catalog["generated_at"]
+    catalog["geometry_valid_until"] = catalog["generated_at"]
+    catalog["revision"] = "0" * 24
+    intent = {
+        "remote": "test:bucket",
+        "input": state["input"],
+        "artifact": artifact,
+        "catalog": catalog,
+    }
+    (output / ".refresh-intent.json").write_bytes(canonical_bytes(intent))
+    sent = len(calls)
+    result = run(now + timedelta(seconds=1))
+    assert result["reason"] == "UNCHANGED_INPUT"
+    assert not (output / ".refresh-intent.json").exists()
+    assert not any(key.startswith("launch/catalog/") for key in calls[sent:])
+    assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"

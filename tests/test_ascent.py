@@ -166,6 +166,18 @@ def test_tangent_clearance_directly_above_passes() -> None:
     assert tangent_clearance(iss, 0.0, 0.0, 0.0) is True
 
 
+def test_tangent_clearance_float_nadir_is_visible() -> None:
+    """These latitudes make the surface radius a fraction under R_earth."""
+    iss = _iss_position(lat=-25.0, lon=-120.0, alt_km=420.0)
+    assert tangent_clearance(iss, -25.0, -120.0, 0.0) is True
+
+
+def test_tangent_clearance_tolerance_still_blocks_earth() -> None:
+    """Thirty degrees off nadir is past the horizon. The millimeter slack must not clear it."""
+    iss = _iss_position(lat=-25.0, lon=-120.0, alt_km=420.0)
+    assert tangent_clearance(iss, -25.0, -90.0, 0.0) is False
+
+
 def test_tangent_clearance_antipodal_rejected() -> None:
     """Antipodal pair has Earth squarely in the line — chord passes through center."""
     iss = _iss_position(lat=0.0, lon=0.0, alt_km=408.0)

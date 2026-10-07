@@ -94,7 +94,8 @@ the schedule receipt) and `geometry_valid_until` (at most 15 minutes, and not pa
 the schedule lease). Its pointer stays schema 2, and that pointer's `valid_until`
 equals `geometry_valid_until`.
 The parser allows a schedule lease up to three hours. Each shot envelope includes
-`lens` (`telephoto` or `wide`) and `lens_reason`. A `night_engine` shot stays scored;
+`lens` (`telephoto` or `wide`), `lens_reason`, and that envelope's own `direction`
+plus `evaluated_at`. A `night_engine` shot stays scored;
 its item carries `NIGHT_ENGINE_UNVALIDATED` until that mode is calibrated. An ascent
 envelope requires `direction.kind` of `published`, `iss_plane`, or `hazard_area`.
 A pad envelope has an empty track. Unknown keys are rejected on both versions. A hash

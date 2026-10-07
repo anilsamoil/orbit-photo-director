@@ -594,7 +594,8 @@ def test_liftoff_scenarios_stay_separate(sample_tle):
     payload["results"][0]["window_end"] = utc(end)
     item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
     liftoffs = {shot["liftoff"] for shot in item["shots"]}
-    assert liftoffs == {utc(net), utc(end)}
+    assert utc(net) in liftoffs and utc(end) in liftoffs
+    assert all(utc(net) <= liftoff <= utc(end) for liftoff in liftoffs)
     for shot in item["shots"]:
         liftoff = datetime.fromisoformat(shot["liftoff"].replace("Z", "+00:00"))
         best = datetime.fromisoformat(shot["best"].replace("Z", "+00:00"))
@@ -813,3 +814,127 @@ def test_missing_or_stale_ephemeris_is_not_a_negative(sample_tle):
     assert "NO_LINE_OF_SIGHT" not in stale["reasons"]
     assert "NOMINAL_ASCENT_TOO_FAR" not in stale["reasons"]
     assert stale["why"] == "The ISS orbit is too old to confirm or rule out a view."
+
+
+def test_continuous_liftoffs_can_be_a_shot(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    start = now + timedelta(minutes=15)
+    end = now + timedelta(minutes=27)
+    iss = propagate(sample_tle, now + timedelta(minutes=20))
+    payload = _catalog_row(start)
+    payload["results"][0]["window_end"] = utc(end)
+    payload["results"][0]["pad"]["latitude"] = iss.lat
+    payload["results"][0]["pad"]["longitude"] = iss.lon
+    item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+    liftoffs = {shot["liftoff"] for shot in item["shots"]}
+    assert utc(start) in liftoffs and utc(end) in liftoffs
+    assert any(utc(start) < liftoff < utc(end) for liftoff in liftoffs)
+    assert item["tier"] == "shot"
+
+
+def test_window_without_interior_support_stays_watch(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    start = now + timedelta(minutes=15)
+    end = now + timedelta(minutes=50)
+    mid = now + timedelta(minutes=40)
+    iss = propagate(sample_tle, now + timedelta(minutes=20))
+    payload = _catalog_row(start)
+    payload["results"][0]["window_end"] = utc(end)
+    payload["results"][0]["pad"]["latitude"] = iss.lat
+    payload["results"][0]["pad"]["longitude"] = iss.lon
+    item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+    alone = _catalog_row(mid)
+    alone["results"][0]["pad"]["latitude"] = iss.lat
+    alone["results"][0]["pad"]["longitude"] = iss.lon
+    midpoint = build_launch_catalog(alone, sample_tle, now, fetched_at=now)["items"][0]
+    assert midpoint["tier"] != "shot"
+    assert item["tier"] == "watch"
+
+
+def test_each_liftoff_keeps_its_own_direction(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    start = now + timedelta(minutes=20)
+    end = start + timedelta(minutes=2)
+    iss = propagate(sample_tle, start)
+    payload = _catalog_row(start)
+    payload["results"][0]["window_end"] = utc(end)
+    payload["results"][0]["pad"]["latitude"] = iss.lat
+    payload["results"][0]["pad"]["longitude"] = iss.lon
+    payload["results"][0]["rocket"]["spacecraft_stage"] = [{"destination": "ISS"}]
+    item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+    ascent = [shot for shot in item["shots"] if shot["subject"] == "ascent"]
+    by_liftoff = {}
+    for shot in ascent:
+        by_liftoff.setdefault(shot["liftoff"], shot)
+    assert len(by_liftoff) >= 2
+    azimuths = set()
+    for shot in by_liftoff.values():
+        when = datetime.fromisoformat(shot["evaluated_at"].replace("Z", "+00:00"))
+        direction = direction_for(sample_tle, when, iss.lat, iss.lon, Destination.ISS)
+        assert direction.kind is DirectionKind.ISS_PLANE
+        azimuth = round(direction.azimuth_deg % 360.0, 4)
+        assert shot["evaluated_at"] == shot["liftoff"]
+        assert shot["direction"]["azimuth_deg"] == azimuth
+        assert shot["direction"]["kind"] == "iss_plane"
+        azimuths.add(shot["direction"]["azimuth_deg"])
+    assert len(azimuths) >= 2
+
+
+def test_schedule_lease_stays_inside_generation_and_receipt(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(minutes=10)
+    aged = now - timedelta(minutes=75)
+    catalog = build_launch_catalog(_catalog_row(net), sample_tle, now, fetched_at=aged)
+    assert catalog["schedule_valid_until"] == utc(now + timedelta(minutes=75))
+    assert catalog["geometry_valid_until"] == utc(now + timedelta(minutes=15))
+    assert catalog["geometry_valid_until"] <= catalog["schedule_valid_until"]
+    expired = now - timedelta(minutes=180)
+    spent = build_launch_catalog(_catalog_row(net), sample_tle, now, fetched_at=expired)
+    assert spent["schedule_valid_until"] == spent["generated_at"]
+    assert spent["geometry_valid_until"] == spent["generated_at"]
+    assert spent["schedule_valid_until"] != utc(now + timedelta(minutes=75))
+    assert spent["items"][0]["tier"] not in {"shot", "likely", "none"}
+
+
+def test_unknown_exclusion_is_not_a_negative(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    overhead = now + timedelta(minutes=20)
+    iss = propagate(sample_tle, overhead)
+    payload = _catalog_row(overhead + timedelta(minutes=12))
+    payload["results"][0]["pad"]["latitude"] = iss.lat
+    payload["results"][0]["pad"]["longitude"] = iss.lon
+    item = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+    assert item["shots"] == []
+    assert item["tier"] == "watch"
+    assert "VIEW_UNCONFIRMED" in item["reasons"]
+    assert "NO_LINE_OF_SIGHT" not in item["reasons"]
+    assert "line of sight" not in item["why"].lower()
+
+
+def test_invalid_geometry_is_not_a_negative(sample_tle, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise ValueError("bad geometry")
+
+    monkeypatch.setattr("generator.launch_catalog.sample_liftoff", boom)
+    monkeypatch.setattr("generator.launch_catalog.sample_directed", boom)
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    item = build_launch_catalog(
+        _overhead(sample_tle, now + timedelta(minutes=10)), sample_tle, now, fetched_at=now,
+    )["items"][0]
+    assert "GEOMETRY_INVALID" in item["reasons"]
+    assert "NO_LINE_OF_SIGHT" not in item["reasons"]
+    assert "NOMINAL_ASCENT_TOO_FAR" not in item["reasons"]
+    assert item["why"] == "The viewing geometry could not be evaluated."
+
+
+def test_mtime_provenance_cannot_be_actionable(sample_tle):
+    now = sample_tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    payload = _overhead(sample_tle, now + timedelta(minutes=10))
+    plain = build_launch_catalog(payload, sample_tle, now, fetched_at=now)["items"][0]
+    assert plain["tier"] == "shot"
+    for reason in ("SOURCE_AGE_MTIME_ONLY", "SOURCE_AGE_UNKNOWN", "REPLAY_SOURCE_MISMATCH"):
+        catalog = build_launch_catalog(
+            payload, sample_tle, now, fetched_at=now, source_reasons=(reason,),
+        )
+        assert catalog["items"][0]["tier"] not in {"shot", "likely", "none"}
+        assert reason in catalog["coverage"]["reasons"]

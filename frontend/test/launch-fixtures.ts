@@ -46,7 +46,9 @@ export function state(items: LaunchOpportunity[] = [launch()], over: Partial<Sch
 }
 export function shot(over: Partial<ShotEnvelope> = {}): ShotEnvelope {
   return {
-    subject: 'pad', liftoff: iso(10), start: iso(10), best: iso(11), end: iso(12), best_offset_s: 60,
+    subject: 'pad', liftoff: iso(10), evaluated_at: iso(10),
+    direction: { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null },
+    start: iso(10), best: iso(11), end: iso(12), best_offset_s: 60,
     look: { frame: 'orbital-lvlh', azimuth_deg: 45, off_nadir_deg: 70 }, window: 'W6',
     slant_km: 490, limb_margin_deg: 8, plume_mrad: 1.6, light: 'twilight_plume',
     lens: 'telephoto', lens_reason: 'Distant plume', track: [],
@@ -61,7 +63,7 @@ export function catalogItem(over: Partial<LaunchCatalogItem> = {}): LaunchCatalo
     schedule: { net: iso(10), window_start: iso(10), window_end: iso(20), precision: 'Second', status: 'Go', destination: 'ISS' },
     direction: { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss plane', off_plane_deg: 0.35 },
     tier: 'watch', why: 'Twilight plume 490 km aft, W6, 3 min after liftoff.', reasons: [],
-    shots: [shot(), shot({ subject: 'ascent', track: [
+    shots: [shot(), shot({ subject: 'ascent', direction: { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss plane', off_plane_deg: 0.35 }, track: [
       { t_offset_s: 0, lat: 28.5, lon: -80.6, alt_km: 0 },
       { t_offset_s: 15, lat: 28.6, lon: -80.5, alt_km: 10 },
     ] })], ...over,

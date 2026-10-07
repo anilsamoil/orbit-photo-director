@@ -18,6 +18,8 @@ from generator.launch_catalog import build_launch_catalog
 from generator.launch_data import _parse_iso8601_z, validate_feed
 from generator.launch_evidence import build_launch_artifact, canonical_bytes, load_launch_cache
 from generator.launch_publish import (
+    _validate_artifact,
+    _validate_catalog,
     publish_launch_artifact,
     publish_launch_catalog,
     rclone_reader,
@@ -114,10 +116,31 @@ def refresh_cached(
         if any(value and value["remote"] != remote for value in (state, intent)):
             raise ValueError("REMOTE_OWNER_MISMATCH")
 
+        def committed_v2(artifact: dict) -> bool:
+            pointer_path = output / "launch/latest.json"
+            if not pointer_path.exists():
+                return False
+            try:
+                local = json.loads(pointer_path.read_bytes())
+                observed = read_remote()
+            except (OSError, ValueError, TypeError, KeyError):
+                return False
+            return (
+                observed == local
+                and local.get("schema_version") == 2
+                and local.get("revision") == artifact.get("revision")
+                and local.get("generated_at") == artifact.get("generated_at")
+                and local.get("valid_until") == artifact.get("valid_until")
+            )
+
         def finish(value: dict) -> dict:
             artifact = value["artifact"]
             if artifact.get("schema_version") != 2:
                 raise ValueError("LIVE_PUBLICATION_REQUIRES_SCHEMA_2")
+            catalog = value.get("catalog")
+            _validate_artifact(artifact)
+            if catalog is not None:
+                _validate_catalog(catalog)
             age = (now - _parse_iso8601_z(_schedule_fetched(artifact))).total_seconds()
             pointer = publish_launch_artifact(
                 artifact,
@@ -150,6 +173,16 @@ def refresh_cached(
         if intent and intent.get("artifact", {}).get("schema_version") != 2:
             intent_path.unlink()
             intent = None
+        if intent and "catalog" in intent:
+            try:
+                _validate_catalog(intent["catalog"])
+            except ValueError:
+                if committed_v2(intent["artifact"]):
+                    intent = {key: value for key, value in intent.items() if key != "catalog"}
+                    _atomic_json(intent_path, intent)
+                else:
+                    intent_path.unlink(missing_ok=True)
+                    intent = None
         if intent:
             state = finish(intent)
         identity, payload, tle = _cached_inputs(cache, now)
@@ -172,6 +205,8 @@ def refresh_cached(
         fetched_at = _parse_iso8601_z(identity["fetched_at"])
         artifact = build_launch_artifact(payload, tle, now, fetched_at=fetched_at)
         catalog = build_launch_catalog(payload, tle, now, fetched_at=fetched_at)
+        _validate_artifact(artifact)
+        _validate_catalog(catalog)
         intent = {"remote": remote, "input": identity, "artifact": artifact, "catalog": catalog}
         _atomic_json(intent_path, intent)
         state = finish(intent)

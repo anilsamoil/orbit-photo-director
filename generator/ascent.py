@@ -256,6 +256,12 @@ def slant_range_km(
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(iss_xyz, rocket_xyz, strict=True)))
 
 
+# A surface point's spherical ECEF radius can land about 1e-12 km inside
+# EARTH_RADIUS_KM. One millimeter covers that error. A chord Earth actually
+# blocks misses by meters or more, so this does not open those sightlines.
+SURFACE_CLEARANCE_TOLERANCE_KM = 1e-6
+
+
 def tangent_clearance(
     iss: Position,
     rocket_lat_deg: float,
@@ -281,7 +287,7 @@ def tangent_clearance(
     s = max(0.0, min(1.0, s))  # closest point on the SEGMENT, not infinite line
     closest = tuple(a + s * c for a, c in zip(p1, d, strict=True))
     min_dist_to_center = math.sqrt(sum(c * c for c in closest))
-    return min_dist_to_center >= EARTH_RADIUS_KM
+    return min_dist_to_center >= EARTH_RADIUS_KM - SURFACE_CLEARANCE_TOLERANCE_KM
 
 
 def apparent_plume_angle_mrad(slant_range_km_: float, rocket_alt_km: float) -> float:

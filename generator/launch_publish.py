@@ -181,7 +181,17 @@ def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: C
     if schedule["destination"] is not None and not isinstance(schedule["destination"], str):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     direction = item["direction"]
+    kind = _validate_direction(direction, keys, number)
+    if not isinstance(item["shots"], list) or len(item["shots"]) > 1000:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    for shot in item["shots"]:
+        _validate_shot(shot, kind, keys, number)
+
+
+def _validate_direction(direction: object, keys: Callable, number: Callable) -> str:
     keys(direction, "kind azimuth_deg source off_plane_deg")
+    if not isinstance(direction, dict):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
     kind = direction["kind"]
     if kind == "none":
         empty = ("azimuth_deg", "source", "off_plane_deg")
@@ -197,21 +207,22 @@ def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: C
             raise ValueError("INVALID_LAUNCH_SCHEMA")
     else:
         raise ValueError("INVALID_LAUNCH_SCHEMA")
-    if not isinstance(item["shots"], list) or len(item["shots"]) > 1000:
-        raise ValueError("INVALID_LAUNCH_SCHEMA")
-    for shot in item["shots"]:
-        _validate_shot(shot, kind, keys, number)
+    return kind
 
 
 def _validate_shot(shot: dict, kind: str, keys: Callable, number: Callable) -> None:
     keys(
         shot,
-        "subject liftoff start best end best_offset_s look window slant_km limb_margin_deg "
-        "plume_mrad light lens lens_reason track score confidence",
+        "subject liftoff evaluated_at direction start best end best_offset_s look window "
+        "slant_km limb_margin_deg plume_mrad light lens lens_reason track score confidence",
     )
     if shot["subject"] not in {"pad", "ascent"}:
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     if shot["subject"] == "ascent" and kind == "none":
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    _parse_iso8601_z(shot["evaluated_at"])
+    _validate_direction(shot["direction"], keys, number)
+    if shot["subject"] == "ascent" and shot["direction"]["kind"] == "none":
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     for field in ("liftoff", "start", "best", "end"):
         _parse_iso8601_z(shot[field])

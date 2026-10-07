@@ -42,6 +42,9 @@ from .launch_evidence import (
 )
 from .launch_geometry import look_direction_at
 from .launch_opportunities import (
+    CLIMB_AFTER_S,
+    PREP_BEFORE_S,
+    SLANT_CAP_KM,
     Pad,
     Subject,
     sample_directed,
@@ -51,6 +54,7 @@ from .orbit import EARTH_RADIUS_KM, TLE, Position, _ensure_utc, great_circle_km,
 
 SCHEDULE_LEASE_SECONDS = 75 * 60
 GEOMETRY_LEASE_SECONDS = VALID_SECONDS
+LIFTOFF_STEP_S = 5
 SHOT_TLE_AGE_H = 24.0
 LIKELY_TLE_AGE_H = 48.0
 SHOT_SCORE_LOW = 50.0
@@ -66,6 +70,22 @@ _LIGHT = {
     "pad_night": "Night pad",
 }
 _TIERS = ("shot", "likely", "watch", "unassessed", "none")
+_UNACTIONABLE_PROVENANCE = frozenset({
+    "SOURCE_AGE_MTIME_ONLY",
+    "SOURCE_AGE_UNKNOWN",
+    "REPLAY_SOURCE_MISMATCH",
+})
+_UNCERTAIN_REASONS = frozenset({
+    "VIEW_UNCONFIRMED",
+    "TIMING_UNCONFIRMED",
+    "GEOMETRY_INVALID",
+    "EVALUATION_INCOMPLETE",
+    "PROFILE_UNKNOWN",
+    "SOURCE_UNAVAILABLE",
+    "EPHEMERIS_UNAVAILABLE",
+    "EPHEMERIS_OUTSIDE_HORIZON",
+    "WINDOW_UNKNOWN",
+})
 
 
 def build_launch_catalog(
@@ -156,6 +176,7 @@ def _item(
         reasons.append("LAUNCH_UNCONFIRMED")
     destination_iss = destination_from_ll2(raw) is Destination.ISS
     g1 = _g1(launch)
+    liftoffs = _liftoff_grid(launch)
     shots: list[dict] = []
     direction: Direction = NoDirection()
     finished = True
@@ -165,7 +186,7 @@ def _item(
             finished = False
         else:
             try:
-                shots, direction = _shots(launch, tle, destination_iss, reasons)
+                shots, direction = _shots(launch, tle, destination_iss, reasons, liftoffs)
             except (ValueError, RuntimeError, ArithmeticError):
                 reasons.append("GEOMETRY_INVALID")
                 shots = []
@@ -191,15 +212,21 @@ def _item(
         g1 and not g2 and finished and not stale and not blocked.intersection(reasons)
         and _can_exclude(launch, g1, g2, finished, age_h, reasons)
     ):
-        fresh_negative = _disk_negative(launch, tle, now, fetched_at, budget, source_reasons)
-        reasons.append("NOMINAL_ASCENT_TOO_FAR" if fresh_negative else "NO_LINE_OF_SIGHT")
+        outcome = _window_outcome(launch, tle, now, fetched_at, budget, source_reasons)
+        if outcome["verdict"] == "too_far" and outcome["reason"] == "NOMINAL_ASCENT_TOO_FAR":
+            fresh_negative = True
+            reasons.append("NOMINAL_ASCENT_TOO_FAR")
+        elif outcome["verdict"] == "unknown" or outcome["reason"] in _UNCERTAIN_REASONS:
+            reasons.append(outcome["reason"])
+        else:
+            reasons.append("NO_LINE_OF_SIGHT")
     if any(shot["light"] == "night_engine" for shot in shots):
         reasons.append("NIGHT_ENGINE_UNVALIDATED")
 
-    usable = _receipt_usable(now, fetched_at)
+    usable = _receipt_usable(now, fetched_at, source_reasons)
     tier = _tier(
         launch, g1, shots, tle.epoch if tle is not None else None,
-        fresh_negative, finished, usable,
+        fresh_negative, finished, usable, liftoffs,
     )
     item = {
         "event_id": launch.id,
@@ -256,6 +283,7 @@ def _tier(
     fresh_negative: bool,
     finished: bool,
     usable: bool,
+    liftoffs: tuple[datetime, ...],
 ) -> str:
     if not g1:
         return "unassessed"
@@ -265,7 +293,6 @@ def _tier(
     if not shots:
         return "none" if fresh_negative else "watch"
     concrete = launch.status_abbrev in {"Go", "Confirmed"} and precision in {"second", "minute"}
-    liftoffs = _liftoffs(launch)
     if (
         concrete and epoch is not None
         and _covers(shots, liftoffs, epoch, SHOT_SCORE_LOW, SHOT_TLE_AGE_H, True)
@@ -289,37 +316,26 @@ def _covers(
 ) -> bool:
     if not liftoffs:
         return False
+    by_liftoff: dict[str, list[dict]] = {}
+    for shot in shots:
+        by_liftoff.setdefault(shot["liftoff"], []).append(shot)
     for liftoff in liftoffs:
-        stamp = utc(liftoff)
-        best = _best([shot for shot in shots if shot["liftoff"] == stamp])
+        best = _best(by_liftoff.get(utc(liftoff), []))
         if best is None or best["score"]["low"] < score_low:
             return False
         if need_robust and not best["confidence"]["robust"]:
             return False
         if _capture_age_h(best, epoch) > max_age_h:
             return False
-    ordered = sorted(liftoffs)
-    for left, right in zip(ordered, ordered[1:], strict=False):
-        gap = (right - left).total_seconds()
-        if gap <= 0:
-            continue
-        left_shot = _best([shot for shot in shots if shot["liftoff"] == utc(left)])
-        right_shot = _best([shot for shot in shots if shot["liftoff"] == utc(right)])
-        if left_shot is None or right_shot is None:
-            return False
-        if gap > _span_seconds(left_shot) and gap > _span_seconds(right_shot):
-            return False
     return True
 
 
-def _span_seconds(shot: dict) -> float:
-    start = _parse_iso8601_z(shot["start"])
-    end = _parse_iso8601_z(shot["end"])
-    return max(0.0, (end - start).total_seconds())
-
-
 def _shots(
-    launch: Launch, tle: TLE, destination_iss: bool, reasons: list[str],
+    launch: Launch,
+    tle: TLE,
+    destination_iss: bool,
+    reasons: list[str],
+    liftoffs: tuple[datetime, ...],
 ) -> tuple[list[dict], Direction]:
     profile = match_rocket({"full_name": launch.rocket_type})
     if destination_iss and profile is None:
@@ -331,7 +347,7 @@ def _shots(
 
     shots: list[dict] = []
     ascent_directions: list[tuple[dict, Direction]] = []
-    for liftoff in _liftoffs(launch):
+    for liftoff in _liftoffs_to_sample(launch, tle, liftoffs):
         direction: Direction = NoDirection()
         if destination_iss and profile is not None:
             try:
@@ -350,7 +366,7 @@ def _shots(
             reasons.append("GEOMETRY_INVALID")
             continue
         for span in scenario.spans:
-            shot = _envelope(span, scenario, tle)
+            shot = _envelope(span, scenario, tle, direction, liftoff)
             if shot is None:
                 continue
             shots.append(shot)
@@ -363,7 +379,7 @@ def _shots(
     return shots, chosen
 
 
-def _liftoffs(launch: Launch) -> tuple[datetime, ...]:
+def _liftoff_grid(launch: Launch) -> tuple[datetime, ...]:
     start, end = launch.window_start, launch.window_end
     if (
         start is None or end is None or end < start
@@ -373,13 +389,52 @@ def _liftoffs(launch: Launch) -> tuple[datetime, ...]:
         return ()
     earliest = max(start, launch.t0)
     found: list[datetime] = []
-    for when in (earliest, launch.t0, end):
-        if earliest <= when <= end and when not in found:
-            found.append(when)
+    cursor = earliest
+    step = timedelta(seconds=LIFTOFF_STEP_S)
+    while cursor < end:
+        found.append(cursor)
+        cursor += step
+    if not found or found[-1] != end:
+        found.append(end)
     return tuple(found)
 
 
-def _envelope(span, scenario, tle: TLE) -> dict | None:
+def _liftoffs_to_sample(
+    launch: Launch, tle: TLE, liftoffs: tuple[datetime, ...],
+) -> tuple[datetime, ...]:
+    """Full geometry only near the pad. Far liftoffs stay in the coverage grid."""
+    if len(liftoffs) <= 1:
+        return liftoffs
+    first = liftoffs[0] - timedelta(seconds=PREP_BEFORE_S)
+    last = liftoffs[-1] + timedelta(seconds=CLIMB_AFTER_S)
+    close: list[datetime] = []
+    when = first
+    probe = timedelta(seconds=30)
+    reach = SLANT_CAP_KM + 2000.0
+    while when <= last:
+        iss = propagate(tle, when)
+        if great_circle_km(iss.lat, iss.lon, launch.site_lat, launch.site_lon) <= reach:
+            close.append(when)
+        when += probe
+    if not close:
+        return ()
+    prep = timedelta(seconds=PREP_BEFORE_S)
+    climb = timedelta(seconds=CLIMB_AFTER_S)
+    kept: list[datetime] = []
+    index = 0
+    for liftoff in liftoffs:
+        begin = liftoff - prep
+        finish = liftoff + climb
+        while index < len(close) and close[index] < begin:
+            index += 1
+        if index < len(close) and close[index] <= finish:
+            kept.append(liftoff)
+    return tuple(kept)
+
+
+def _envelope(
+    span, scenario, tle: TLE, direction: Direction, evaluated_at: datetime,
+) -> dict | None:
     sight = span.closest
     try:
         look = look_direction_at(tle, sight.when, sight.lat, sight.lon, sight.alt_km)
@@ -399,6 +454,8 @@ def _envelope(span, scenario, tle: TLE) -> dict | None:
     return {
         "subject": sight.subject.value,
         "liftoff": utc(span.liftoff),
+        "evaluated_at": utc(evaluated_at),
+        "direction": _direction_block(direction),
         "start": start,
         "best": best,
         "end": end,
@@ -541,13 +598,15 @@ def _why(tier: str, shots: list[dict], reasons: list[str]) -> str:
             return "No ISS orbit is available, so the view was not assessed."
         if "EVALUATION_INCOMPLETE" in reasons:
             return "The view assessment did not finish."
+        if "GEOMETRY_INVALID" in reasons:
+            return "The viewing geometry could not be evaluated."
         if "TLE_AGE_OVER_24H" in reasons or "EPHEMERIS_STALE" in reasons:
             return "The ISS orbit is too old to confirm or rule out a view."
         if tier == "none":
             return "The ascent stays behind Earth on a fresh orbit."
         if "NO_LINE_OF_SIGHT" in reasons:
             return "No clear line of sight inside 3500 km."
-        return "No clear line of sight inside 3500 km."
+        return "The view is not confirmed."
     minutes = int(round(best["best_offset_s"] / 60.0))
     if minutes == 0:
         when = "at liftoff"
@@ -628,22 +687,28 @@ def _direction_block(direction: Direction) -> dict:
     }
 
 
-def _disk_negative(
+def _window_outcome(
     launch: Launch,
     tle: TLE | None,
     now: datetime,
     fetched_at: datetime | None,
     budget: EvaluationBudget,
     source_reasons: tuple[str, ...],
-) -> bool:
+) -> dict:
     try:
         assessment = build_planning_assessment(
             launch, tle, now, fetched_at, budget, source_reasons=source_reasons,
         )
     except (ValueError, RuntimeError, ArithmeticError):
-        return False
-    window = assessment["window"]
-    return window["verdict"] == "too_far" and window["reason"] == "NOMINAL_ASCENT_TOO_FAR"
+        return {"verdict": "unknown", "reason": "GEOMETRY_INVALID"}
+    window = assessment.get("window") if isinstance(assessment, dict) else None
+    if not isinstance(window, dict):
+        return {"verdict": "unknown", "reason": "GEOMETRY_INVALID"}
+    verdict = window.get("verdict")
+    reason = window.get("reason")
+    if verdict not in {"too_far", "unknown"} or not isinstance(reason, str) or not reason:
+        return {"verdict": "unknown", "reason": "GEOMETRY_INVALID"}
+    return {"verdict": verdict, "reason": reason}
 
 
 def _tle_block(tle: TLE | None) -> dict:
@@ -685,24 +750,28 @@ def _leases(now: datetime, fetched_at: datetime | None) -> tuple[datetime, datet
     geometry_until = now + timedelta(seconds=GEOMETRY_LEASE_SECONDS)
     if fetched_at is not None and fetched_at <= now:
         receipt_deadline = fetched_at + timedelta(seconds=PLANNING_VALID_SECONDS)
-        evidence_deadline = fetched_at + timedelta(seconds=SCHEDULE_LEASE_SECONDS)
-        if evidence_deadline <= now or receipt_deadline <= now:
-            remaining = receipt_deadline - now
-            if remaining > timedelta(0):
-                schedule_until = now + remaining
-        else:
-            schedule_until = min(schedule_until, evidence_deadline, receipt_deadline)
-    if schedule_until <= now:
-        schedule_until = now + timedelta(seconds=1)
-    geometry_until = min(geometry_until, schedule_until)
-    if geometry_until <= now:
-        geometry_until = now + timedelta(seconds=1)
-    if geometry_until > schedule_until:
+        schedule_until = min(schedule_until, receipt_deadline)
+    schedule_until = _lease_end(now, schedule_until)
+    geometry_until = _lease_end(now, min(geometry_until, schedule_until))
+    if utc(geometry_until) > utc(schedule_until):
         geometry_until = schedule_until
     return schedule_until, geometry_until
 
 
-def _receipt_usable(now: datetime, fetched_at: datetime | None) -> bool:
+def _lease_end(now: datetime, until: datetime) -> datetime:
+    """A lease that dies when seconds are dropped is not a lease. Do not renew it."""
+    if utc(until) <= utc(now):
+        return now
+    return until
+
+
+def _receipt_usable(
+    now: datetime,
+    fetched_at: datetime | None,
+    source_reasons: tuple[str, ...] = (),
+) -> bool:
+    if _UNACTIONABLE_PROVENANCE.intersection(source_reasons):
+        return False
     if fetched_at is None or fetched_at > now:
         return False
     evidence_deadline = fetched_at + timedelta(seconds=SCHEDULE_LEASE_SECONDS)
