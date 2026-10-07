@@ -23,6 +23,11 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend
+        run: cd frontend && bun install
+
       - name: Lint
         run: ruff check generator/ tests/
 

@@ -262,26 +262,73 @@ def tangent_clearance(
     rocket_lon_deg: float,
     rocket_alt_km: float,
 ) -> bool:
-    """True if the ISS→rocket chord clears Earth's surface.
+    """True if the ISS-to-rocket chord clears Earth's surface.
 
-    Replaces the |lat|>52° hack — Earth occultation is line-of-sight,
-    not a latitude rule. Computes the closest approach of the chord
-    to Earth's center and rejects if it's inside R_earth.
+    A surface target is visible when ``dot(p2, p1 - p2)`` is at least zero
+    after the rounding of that dot. An elevated chord uses its closest-point
+    distance, lowered by the rounding of that same distance.
     """
     p1 = _geodetic_to_ecef(iss.lat, iss.lon, iss.alt_km)
     p2 = _geodetic_to_ecef(rocket_lat_deg, rocket_lon_deg, rocket_alt_km)
-    # Parametrize: P(s) = p1 + s × (p2 - p1), s ∈ [0, 1].
-    # Closest point to origin: s* = -p1·(p2-p1) / |p2-p1|².
-    d = tuple(b - a for a, b in zip(p1, p2, strict=True))
-    d2 = sum(c * c for c in d)
-    if d2 == 0:
-        # Coincident points — caller should have rejected earlier.
+    if rocket_alt_km < 0.0:
+        return False
+    if rocket_alt_km == 0.0:
+        return _surface_visible(p1, p2)
+    return _elevated_visible(p1, p2)
+
+
+def _dot_ulp(
+    left: tuple[float, float, float], right: tuple[float, float, float],
+) -> tuple[float, float]:
+    """Dot product and its absolute error.
+
+    One ulp for each of the three products and one ulp for their sum: four
+    ulps of this dot, which is the rounding the arithmetic actually commits.
+    """
+    terms = (left[0] * right[0], left[1] * right[1], left[2] * right[2])
+    total = terms[0] + terms[1] + terms[2]
+    error = math.ulp(terms[0]) + math.ulp(terms[1]) + math.ulp(terms[2]) + math.ulp(total)
+    return total, error
+
+
+def _surface_visible(
+    observer: tuple[float, float, float], target: tuple[float, float, float],
+) -> bool:
+    outward, outward_err = _dot_ulp(target, observer)
+    radial, radial_err = _dot_ulp(target, target)
+    gap = outward - radial
+    bound = outward_err + radial_err + math.ulp(outward) + math.ulp(radial)
+    return gap >= -bound
+
+
+def _elevated_visible(
+    observer: tuple[float, float, float], target: tuple[float, float, float],
+) -> bool:
+    step = tuple(b - a for a, b in zip(observer, target, strict=True))
+    length2, length_err = _dot_ulp(step, step)
+    for component in step:
+        length_err += 2.0 * abs(component) * math.ulp(component)
+    if length2 <= length_err:
         return True
-    s = -sum(a * c for a, c in zip(p1, d, strict=True)) / d2
-    s = max(0.0, min(1.0, s))  # closest point on the SEGMENT, not infinite line
-    closest = tuple(a + s * c for a, c in zip(p1, d, strict=True))
-    min_dist_to_center = math.sqrt(sum(c * c for c in closest))
-    return min_dist_to_center >= EARTH_RADIUS_KM
+    numer, numer_err = _dot_ulp(observer, step)
+    for origin, component in zip(observer, step, strict=True):
+        numer_err += abs(origin) * math.ulp(component)
+    along = -numer / length2
+    along_err = numer_err / length2 + abs(along) * length_err / length2 + math.ulp(along)
+    if along <= along_err or along >= 1.0 - along_err:
+        return True
+    closest = tuple(
+        origin + along * component for origin, component in zip(observer, step, strict=True)
+    )
+    dist2, dist_err = _dot_ulp(closest, closest)
+    for origin, component, point in zip(observer, step, closest, strict=True):
+        coord_err = math.ulp(origin) + math.ulp(along * component) + abs(component) * along_err
+        dist_err += 2.0 * abs(point) * coord_err
+    if dist2 <= 0.0:
+        return False
+    dist = math.sqrt(dist2)
+    dist_err = dist_err / (2.0 * dist) + math.ulp(dist)
+    return dist >= EARTH_RADIUS_KM - dist_err
 
 
 def apparent_plume_angle_mrad(slant_range_km_: float, rocket_alt_km: float) -> float:

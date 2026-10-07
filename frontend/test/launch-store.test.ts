@@ -3,6 +3,7 @@ import { LaunchStore, LAUNCH_STORAGE_KEY, LAUNCH_OBSERVED_POINTER_KEY } from '..
 import { parseLaunchArtifact, parseLaunchPointer } from '../src/launch-schema';
 import { launchBrief, launchCoverageLabel, launchFresh, launchScheduleFresh, selectLaunches } from '../src/launch-selectors';
 import { artifact, assessment, catalog, envelope, iso, launch, NOW, supported } from './launch-fixtures';
+import legacyCatalog from './fixtures/launch-catalog-v3-251.json' with { type: 'json' };
 
 beforeEach(() => localStorage.clear());
 
@@ -424,6 +425,29 @@ describe('common launch store', () => {
     ]);
     expect(v3.items[0]?.direction).toEqual({ kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss plane', off_plane_deg: 0.35 });
     expect(v3.tle.sha256).toBe('a'.repeat(64));
+  });
+  it('parses the #251 catalog without envelope evaluated_at or direction', () => {
+    const legacy = structuredClone(legacyCatalog);
+    expect(legacy.items[0]?.shots[0]).not.toHaveProperty('evaluated_at');
+    expect(legacy.items[0]?.shots[0]).not.toHaveProperty('direction');
+    expect(legacy.items[0]?.shots[1]).not.toHaveProperty('evaluated_at');
+    expect(legacy.items[0]?.shots[1]).not.toHaveProperty('direction');
+    const parsed = parseLaunchArtifact(legacy);
+    expect(parsed.schema_version).toBe(3);
+    if (parsed.schema_version !== 3) throw new Error('expected schema 3');
+    expect(parsed.items[0]?.name).toBe('Dragon CRS-35');
+    expect(parsed.items[0]?.shots).toHaveLength(2);
+  });
+  it('requires envelope evaluated_at and direction to appear together', () => {
+    const onlyWhen = catalog();
+    delete onlyWhen.items[0]!.shots[0]!.direction;
+    expect(() => parseLaunchArtifact(onlyWhen)).toThrow('Invalid launch schema');
+    const onlyDirection = catalog();
+    delete onlyDirection.items[0]!.shots[0]!.evaluated_at;
+    expect(() => parseLaunchArtifact(onlyDirection)).toThrow('Invalid launch schema');
+    const broken = catalog();
+    broken.items[0]!.shots[0]!.direction = { kind: 'published', azimuth_deg: null, source: null, off_plane_deg: null };
+    expect(() => parseLaunchArtifact(broken)).toThrow('Invalid launch schema');
   });
   it.each([
     (value: ReturnType<typeof catalog>) => { Object.assign(value, { valid_until: iso(10) }); },

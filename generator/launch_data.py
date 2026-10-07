@@ -253,6 +253,12 @@ def upcoming_query(now: datetime) -> dict[str, str | int]:
     }
 
 
+def _replaces(current: Launch, previous: Launch) -> bool:
+    current_at = current.last_updated
+    previous_at = previous.last_updated
+    return previous_at is None or (current_at is not None and current_at >= previous_at)
+
+
 def dedupe_launches(launches: list[Launch]) -> list[Launch]:
     """Keep the copy of each event id with the newest last_updated."""
     chosen: dict[str, Launch] = {}
@@ -263,10 +269,30 @@ def dedupe_launches(launches: list[Launch]) -> list[Launch]:
             chosen[launch.id] = launch
             order.append(launch.id)
             continue
-        current_at = launch.last_updated
-        previous_at = previous.last_updated
-        if previous_at is None or (current_at is not None and current_at >= previous_at):
+        if _replaces(launch, previous):
             chosen[launch.id] = launch
+    return [chosen[launch_id] for launch_id in order]
+
+
+def retained_launch_rows(
+    payload: dict[str, Any], now: datetime | None = None,
+) -> list[tuple[Launch, dict[str, Any]]]:
+    """Pair each kept launch with the row that parsed into it."""
+    chosen: dict[str, tuple[Launch, dict[str, Any]]] = {}
+    order: list[str] = []
+    for row in payload.get("results", []):
+        if not isinstance(row, dict):
+            continue
+        launch = _parse_one_result(row, now)
+        if launch is None:
+            continue
+        previous = chosen.get(launch.id)
+        if previous is None:
+            chosen[launch.id] = (launch, row)
+            order.append(launch.id)
+            continue
+        if _replaces(launch, previous[0]):
+            chosen[launch.id] = (launch, row)
     return [chosen[launch_id] for launch_id in order]
 
 
