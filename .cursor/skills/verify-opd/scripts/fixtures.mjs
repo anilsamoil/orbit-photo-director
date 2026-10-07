@@ -53,6 +53,9 @@ export function driveStartMs(raw, wallMs) {
   if (!text) return wallMs;
   const parsed = Date.parse(text);
   if (!Number.isFinite(parsed)) throw new Error(`OPD_VERIFY_DRIVE_START is not a time: ${text}`);
+  if (parsed < wallMs - SESSION_MARGIN_MS) {
+    throw new Error(`OPD_VERIFY_DRIVE_START ${text} is older than 6h before now ${new Date(wallMs).toISOString()}. The drive start has to be within the last 6 hours, or in the future.`);
+  }
   return parsed;
 }
 
