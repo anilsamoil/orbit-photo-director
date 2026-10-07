@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -398,3 +399,42 @@ def test_rclone_nonzero_exit_puts_stderr_in_the_reason(tmp_path, monkeypatch, ca
     monkeypatch.setattr("scripts.launch_refresh.datetime", _Clock)
     assert _run(cache, output) == 2
     assert _log(capsys)["reason"] == "RCLONE_EXIT_7: auth failed"
+
+
+def test_uploader_nonzero_exit_puts_stderr_in_the_reason(tmp_path, monkeypatch, capsys):
+    cache, output, store = _layout(tmp_path)
+
+    def run(command, check=False, capture_output=False, timeout=None):
+        argv = [str(part) for part in command]
+        if "sync" in argv:
+            raise AssertionError("rclone sync is forbidden")
+        op = argv[1]
+        if op == "copyto":
+            return SimpleNamespace(stdout=b"", stderr=b"disk full\n", returncode=3)
+        if op == "cat":
+            target = argv[2]
+            assert target.startswith(PREFIX)
+            body = store.get(target[len(PREFIX) :], b"")
+            return SimpleNamespace(stdout=body, stderr=b"", returncode=0)
+        raise AssertionError(argv)
+
+    monkeypatch.setattr("generator.launch_publish.shutil.which", lambda name: "/usr/bin/rclone")
+    monkeypatch.setattr("generator.launch_publish.subprocess.run", run)
+    monkeypatch.setattr("scripts.launch_refresh.datetime", _Clock)
+    assert _run(cache, output) == 2
+    assert _log(capsys)["reason"] == "RCLONE_EXIT_3: disk full"
+
+
+def test_rclone_timeout_puts_stderr_in_the_reason(tmp_path, monkeypatch, capsys):
+    cache, output, _store = _layout(tmp_path)
+
+    def run(command, check=False, capture_output=False, timeout=None):
+        expired = subprocess.TimeoutExpired(list(command), timeout or 45)
+        expired.stderr = b"i/o timeout\n"
+        raise expired
+
+    monkeypatch.setattr("generator.launch_publish.shutil.which", lambda name: "/usr/bin/rclone")
+    monkeypatch.setattr("generator.launch_publish.subprocess.run", run)
+    monkeypatch.setattr("scripts.launch_refresh.datetime", _Clock)
+    assert _run(cache, output) == 2
+    assert _log(capsys)["reason"] == "RCLONE_TIMEOUT: i/o timeout"
