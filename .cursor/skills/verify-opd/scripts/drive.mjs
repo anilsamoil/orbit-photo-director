@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
-import { fractionalCountrySymbols, handoffSample, keptCountrySymbol, planLabelReaders } from './plan-label-verdict.mjs';
+import { countrySweepZooms, fractionalCountrySymbols, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
@@ -656,6 +656,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
         });
       }
       const page = await context.newPage();
+      page.setDefaultTimeout(600000);
       try {
         const cartoDark = [];
         page.on('request', (request) => {
@@ -4555,7 +4556,7 @@ def paint(bg, scale, nearest, contrast):
         big = ImageOps.autocontrast(big)
     buf = io.BytesIO()
     big.save(buf, format="PNG")
-    result = subprocess.run(["tesseract", "stdin", "stdout", "-l", "eng", "--psm", "11"], input=buf.getvalue(), capture_output=True)
+    result = subprocess.run(["tesseract", "stdin", "stdout", "-l", "eng", "--psm", "11"], input=buf.getvalue(), capture_output=True, timeout=12)
     return result.stdout.decode("utf8", "replace")
 text = paint((32, 35, 38, 255), 4, True, True)
 text += "\\n" + paint((255, 255, 255, 255), 8, False, False)
@@ -4570,96 +4571,212 @@ sys.stdout.write(text)
 }
 
 async function fetchRasterTile(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`raster tile ${response.status} ${url}`);
-  return Buffer.from(await response.arrayBuffer());
+  const fresh = url.includes('nocache=') ? url : `${url}${url.includes('?') ? '&' : '?'}nocache=fu121`;
+  let last = 'raster tile failed';
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetch(fresh, { headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
+    if (response.ok) return Buffer.from(await response.arrayBuffer());
+    last = `raster tile ${response.status} ${fresh}`;
+    await sleep(300 * (attempt + 1));
+  }
+  throw new Error(last);
 }
 
-const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
-  const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
-  const map = frame && frame.__opdTrackInset;
-  if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
-    return { ok: false, reason: 'map' };
+const rasterWordCache = new Map();
+const rasterWordFile = '/tmp/opd-fu121-ocr.json';
+
+function rememberRasterWords() {
+  const saved = {};
+  for (const [url, words] of rasterWordCache) saved[url] = words;
+  writeFileSync(rasterWordFile, JSON.stringify(saved));
+}
+
+function recallRasterWords() {
+  if (!existsSync(rasterWordFile)) return;
+  const saved = JSON.parse(readFileSync(rasterWordFile, 'utf8'));
+  for (const [url, words] of Object.entries(saved)) {
+    if (typeof words === 'string' && words.length > 0) rasterWordCache.set(url, words);
   }
-  if (!map.__opdLabelHold) {
-    map.__opdLabelHold = {
-      fit: map.fitBounds.bind(map),
-      resize: map.resize.bind(map),
-      center: map.getCenter(),
-      zoom: map.getZoom(),
-    };
-    map.fitBounds = () => map;
-    map.resize = () => map;
-  }
-  const centerTile = (sourceId) => {
-    const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
-    const center = map.getCenter();
-    const z = Math.max(0, Math.round(map.getZoom() + 1));
-    const n = 2 ** z;
-    const x = Math.max(0, Math.min(n - 1, Math.floor(((center.lng + 180) / 360) * n)));
-    const rad = center.lat * Math.PI / 180;
-    const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
-    const y = Math.max(0, Math.min(n - 1, yRaw));
-    if (!manager || typeof manager.getVisibleCoordinates !== 'function') {
-      return { z, x, y, state: 'manager' };
+}
+
+async function rasterWords(urls) {
+  recallRasterWords();
+  const parts = [];
+  let wrote = false;
+  for (const url of urls) {
+    if (!rasterWordCache.has(url)) {
+      rasterWordCache.set(url, ocrRasterTile(await fetchRasterTile(url)));
+      wrote = true;
     }
-    const coords = manager.getVisibleCoordinates() || [];
-    const match = coords.find((coord) => coord.canonical && coord.canonical.z === z && coord.canonical.x === x && coord.canonical.y === y);
-    const tile = match && typeof manager.getTile === 'function' ? manager.getTile(match) : null;
-    return {
-      z, x, y,
-      state: tile ? tile.state : 'missing',
-      visible: coords.slice(0, 8).map((coord) => coord.canonical ? coord.canonical.z + '/' + coord.canonical.y + '/' + coord.canonical.x : ''),
-    };
+    parts.push(rasterWordCache.get(url));
+  }
+  if (wrote) rememberRasterWords();
+  return parts.join('\n');
+}
+
+const PLAN_TILE_HELPERS = `
+function planHold(map) {
+  if (map.__opdLabelHold) return;
+  map.__opdLabelHold = {
+    fit: map.fitBounds.bind(map),
+    resize: map.resize.bind(map),
+    center: map.getCenter(),
+    zoom: map.getZoom(),
   };
-  map.jumpTo({ center: [lng, lat], zoom });
+  map.fitBounds = () => map;
+  map.resize = () => map;
+}
+function planIdealZoom(map) {
+  return Math.max(0, Math.round(map.getZoom() + 1));
+}
+function planCenterTile(map, z) {
+  const center = map.getCenter();
+  const n = 2 ** z;
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((center.lng + 180) / 360) * n)));
+  const rad = center.lat * Math.PI / 180;
+  const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+  const y = Math.max(0, Math.min(n - 1, yRaw));
+  return { x, y };
+}
+function planVisibleTiles(map, sourceId) {
+  const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
+  const z = planIdealZoom(map);
+  const center = planCenterTile(map, z);
+  if (!manager || typeof manager.getVisibleCoordinates !== 'function') {
+    return { z, tiles: [], center, state: 'manager' };
+  }
+  const tiles = [];
+  for (const coord of manager.getVisibleCoordinates() || []) {
+    if (!coord.canonical || coord.canonical.z !== z) continue;
+    const tile = typeof manager.getTile === 'function' ? manager.getTile(coord) : null;
+    tiles.push({
+      z,
+      x: coord.canonical.x,
+      y: coord.canonical.y,
+      state: tile ? tile.state : 'missing',
+    });
+  }
+  return { z, tiles, center };
+}
+function planTileUrls(map, sourceId, tiles) {
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
+  const template = spec && spec.tiles && spec.tiles[0];
+  if (!template) return [];
+  return tiles.map((tile) => template.replace('{z}', String(tile.z)).replace('{y}', String(tile.y)).replace('{x}', String(tile.x)));
+}
+function planSymbolNames(map) {
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol')
+    .map((layer) => layer.id);
+  const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
+  return features.map((feature) => (feature.properties && feature.properties.name) || '');
+}
+async function planWaitTiles(map) {
   const deadline = performance.now() + 8000;
-  let detail = null;
+  let labels = null;
+  let base = null;
   while (performance.now() < deadline) {
-    const labels = centerTile('inset-labels');
-    const base = centerTile('inset-basemap');
-    detail = { labels, base };
-    if (labels.state === 'loaded' && base.state === 'loaded' && map.areTilesLoaded()) break;
+    labels = planVisibleTiles(map, 'inset-labels');
+    base = planVisibleTiles(map, 'inset-basemap');
+    const ready = (pack) => pack.tiles.length > 0
+      && pack.tiles.every((tile) => tile.state === 'loaded')
+      && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y);
+    if (ready(labels) && ready(base) && map.areTilesLoaded()) break;
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, 100);
       map.once('idle', () => { clearTimeout(timer); resolve(); });
     });
   }
-  const labels = detail && detail.labels;
-  const base = detail && detail.base;
-  const tilesOk = !!(labels && base && labels.state === 'loaded' && base.state === 'loaded' && map.areTilesLoaded());
-  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources['inset-labels'];
-  const template = spec && spec.tiles && spec.tiles[0];
-  const tileUrl = tilesOk && template && labels
-    ? template.replace('{z}', String(labels.z)).replace('{y}', String(labels.y)).replace('{x}', String(labels.x))
-    : null;
-  const layers = ((map.getStyle() && map.getStyle().layers) || [])
-    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol')
-    .map((layer) => layer.id);
-  const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
+  const ready = (pack) => !!(pack && pack.tiles.length > 0
+    && pack.tiles.every((tile) => tile.state === 'loaded')
+    && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y));
+  const tilesOk = ready(labels) && ready(base) && map.areTilesLoaded();
+  const urls = tilesOk
+    ? planTileUrls(map, 'inset-labels', labels.tiles).concat(planTileUrls(map, 'inset-basemap', base.tiles))
+    : [];
+  return {
+    tilesOk,
+    tileZ: labels ? labels.z : null,
+    urls,
+    detail: tilesOk ? null : { labels, base },
+  };
+}
+`;
+
+const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
+  ${PLAN_TILE_HELPERS}
+  const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+  const map = frame && frame.__opdTrackInset;
+  if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
+    return { ok: false, reason: 'map' };
+  }
+  planHold(map);
+  map.jumpTo({ center: [lng, lat], zoom });
+  const waited = await planWaitTiles(map);
   const canvas = map.getCanvas();
   const box = canvas.getBoundingClientRect();
   return {
     ok: true,
-    tilesOk,
-    detail,
-    tileUrl,
+    tilesOk: waited.tilesOk,
+    detail: waited.detail,
+    urls: waited.urls,
     zoom: map.getZoom(),
-    tileZ: labels ? labels.z : null,
-    names: features.map((feature) => (feature.properties && feature.properties.name) || ''),
+    tileZ: waited.tileZ,
+    names: planSymbolNames(map),
     clip: { x: box.x, y: box.y, width: box.width, height: box.height },
   };
 })`;
 
-async function readPlanLabelZoom(send, zoom, lng, lat, wantRaster = false) {
+async function readPlanLabelZoom(send, zoom, lng, lat) {
   const sample = await evaluate(send, `(${PLAN_LABEL_READ})(${zoom}, ${lng}, ${lat})`);
   if (!sample || sample.ok !== true) throw new Error(`plan label zooms ${JSON.stringify(sample)}`);
-  let words = '';
-  if (wantRaster) {
-    if (!sample.tilesOk || !sample.tileUrl) throw new Error(`plan label tiles ${JSON.stringify({ zoom, detail: sample.detail, tileUrl: sample.tileUrl })}`);
-    words = ocrRasterTile(await fetchRasterTile(sample.tileUrl));
+  return sample;
+}
+
+async function coldPlanTileCaches(send) {
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
+  const countries = JSON.stringify(PLAN_COUNTRIES);
+  const cleared = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const names = (typeof caches !== 'undefined' && caches.keys) ? await caches.keys() : [];
+    await Promise.all(names.map((name) => caches.delete(name)));
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map || !map.style || !map.style.tileManagers || typeof map.jumpTo !== 'function') {
+      return { ok: false, reason: 'map', caches: names };
+    }
+    planHold(map);
+    for (const id of ['inset-labels', 'inset-basemap']) {
+      const manager = map.style.tileManagers[id];
+      if (manager && typeof manager.clearTiles === 'function') manager.clearTiles();
+    }
+    const center = map.getCenter();
+    map.jumpTo({ center, zoom: map.getZoom() });
+    const waited = await planWaitTiles(map);
+    const canvas = map.getCanvas();
+    const box = canvas.getBoundingClientRect();
+    const inside = [];
+    for (const country of ${countries}) {
+      const point = map.project([country.lng, country.lat]);
+      if (point.x >= 8 && point.y >= 8 && point.x <= box.width - 8 && point.y <= box.height - 8) inside.push(country.name);
+    }
+    return {
+      ok: waited.tilesOk === true,
+      cold: true,
+      caches: names,
+      tilesOk: waited.tilesOk,
+      detail: waited.detail,
+      urls: waited.urls,
+      zoom: map.getZoom(),
+      tileZ: waited.tileZ,
+      names: planSymbolNames(map),
+      inside,
+    };
+  })()`);
+  if (!cleared || cleared.cold !== true || cleared.tilesOk !== true) {
+    throw new Error(`plan label caches ${JSON.stringify(cleared)}`);
   }
-  return { ...sample, words };
+  return cleared;
 }
 
 async function restorePlanLabelCamera(send) {
@@ -4676,18 +4793,33 @@ async function restorePlanLabelCamera(send) {
   })()`);
 }
 
+async function assertOneNameSource(row) {
+  if (!row.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: row.zoom, country: row.country, detail: row.detail })}`);
+  const words = await rasterWords(row.urls || []);
+  const verdict = oneNameSource({ ...row, words });
+  if (!verdict.ok) throw new Error(`plan label source ${JSON.stringify(verdict)}`);
+  return verdict;
+}
+
 async function proveFractionalPlanLabels(send) {
-  const handoffPlan = [
-    { zoom: 1.49, lng: 2, lat: 46, country: 'France', symbols: 1, raster: false, tileZ: 2 },
-    { zoom: 1.5, lng: 2, lat: 46, country: 'France', symbols: 0, raster: true, tileZ: 3 },
-    { zoom: 1.51, lng: 2, lat: 46, country: 'France', symbols: 0, raster: true, tileZ: 3 },
-    { zoom: 1.49, lng: 138, lat: 36, country: 'Japan', symbols: 1, raster: false, tileZ: 2 },
-    { zoom: 1.5, lng: 138, lat: 36, country: 'Japan', symbols: 0, raster: true, tileZ: 3 },
-    { zoom: 1.51, lng: 138, lat: 36, country: 'Japan', symbols: 0, raster: true, tileZ: 3 },
-    { zoom: 2.49, lng: 38, lat: 1, country: 'Kenya', symbols: 1, raster: false, tileZ: 3 },
-    { zoom: 2.5, lng: 38, lat: 1, country: 'Kenya', symbols: 0, raster: true, tileZ: 4 },
-  ];
+  const zooms = countrySweepZooms();
   try {
+    const fitted = await coldPlanTileCaches(send);
+    if (!fitted.inside || !fitted.inside.includes('Australia')) {
+      throw new Error(`plan label fitted ${JSON.stringify({ zoom: fitted.zoom, tileZ: fitted.tileZ, inside: fitted.inside, names: fitted.names })}`);
+    }
+    const fittedWords = await rasterWords(fitted.urls || []);
+    for (const country of fitted.inside) {
+      const verdict = oneNameSource({
+        tilesOk: true,
+        zoom: fitted.zoom,
+        tileZ: fitted.tileZ,
+        country,
+        names: fitted.names,
+        words: fittedWords,
+      });
+      if (!verdict.ok) throw new Error(`plan label fitted ${JSON.stringify(verdict)}`);
+    }
     const rows = [];
     for (const zoom of [2.5, 2.9, 3, 3.1]) {
       const row = await readPlanLabelZoom(send, zoom, 2, 46);
@@ -4696,10 +4828,34 @@ async function proveFractionalPlanLabels(send) {
     }
     const fractional = fractionalCountrySymbols(rows);
     if (!fractional.ok) throw new Error(`plan label zooms ${JSON.stringify(fractional)}`);
-    for (const step of handoffPlan) {
-      const row = await readPlanLabelZoom(send, step.zoom, step.lng, step.lat, step.raster);
-      const verdict = handoffSample(row, step);
-      if (!verdict.ok) throw new Error(`plan label handoff ${JSON.stringify(verdict)}`);
+    const sweepNotes = [];
+    for (const country of PLAN_COUNTRIES) {
+      const swept = await evaluate(send, `(async () => {
+        ${PLAN_TILE_HELPERS}
+        const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+        const map = frame && frame.__opdTrackInset;
+        if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+        planHold(map);
+        const rows = [];
+        for (const zoom of ${JSON.stringify(zooms)}) {
+          map.jumpTo({ center: [${country.lng}, ${country.lat}], zoom });
+          const waited = await planWaitTiles(map);
+          rows.push({
+            tilesOk: waited.tilesOk,
+            detail: waited.detail,
+            urls: waited.urls,
+            zoom: map.getZoom(),
+            tileZ: waited.tileZ,
+            names: planSymbolNames(map),
+            country: ${JSON.stringify(country.name)},
+          });
+          if (!waited.tilesOk) break;
+        }
+        return { ok: true, rows };
+      })()`);
+      if (!swept || swept.ok !== true) throw new Error(`plan label sweep ${country.name} ${JSON.stringify(swept)}`);
+      for (const row of swept.rows) await assertOneNameSource(row);
+      sweepNotes.push(`${country.name}:${swept.rows.length}`);
     }
     const france = await readPlanLabelZoom(send, 1.2, 2, 46);
     if (!france.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: france.detail })}`);
@@ -4709,7 +4865,7 @@ async function proveFractionalPlanLabels(send) {
     if (!japan.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: japan.detail })}`);
     const japanKept = keptCountrySymbol(japan.names, 'Japan');
     if (!japanKept.ok) throw new Error(`plan label Japan ${JSON.stringify(japanKept)}`);
-    return fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ');
+    return `caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
   } finally {
     await restorePlanLabelCamera(send);
   }

@@ -2,42 +2,19 @@ import { Map, Marker, type LngLat, type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
+import countryRasterLevels from './country-raster-levels.json' with { type: 'json' };
 
 const ESRI_DARK_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
 ];
 
-/** Reference raster. Each centroid's first painted tile zoom is COUNTRY_RASTER_TILE_ZOOM. */
+/** Reference raster. Painted tile zooms live in country-raster-levels.json. */
 const ESRI_LABEL_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
 ];
 
-/** First World_Boundaries_and_Places tile zoom that paints the centroid name.
- *  Full-world audit at tile z1 through z4. Australia is the continent label
- *  on tile z1. Kenya is absent through tile z3 and first painted at tile z4.
- *  The other ten centroids start at tile z3. */
-const COUNTRY_RASTER_TILE_ZOOM: Record<string, number> = {
-  Canada: 3,
-  Mexico: 3,
-  Brazil: 3,
-  Argentina: 3,
-  France: 3,
-  Egypt: 3,
-  Nigeria: 3,
-  Kenya: 4,
-  China: 3,
-  India: 3,
-  Japan: 3,
-  Australia: 1,
-};
-
-/** View zoom where that centroid symbol stops.
- *  Requested tile zoom is round(viewZoom + 1), so tile zoom T starts at view
- *  zoom T - 1.5. A fitted orbit stays below 1.5, so no symbol stops earlier
- *  than that. Kenya therefore stops at 2.5 and the other eleven stop at 1.5. */
-const COUNTRY_SYMBOL_MAX_ZOOM: Record<string, number> = Object.fromEntries(
-  Object.entries(COUNTRY_RASTER_TILE_ZOOM).map(([name, tileZoom]) => [name, Math.max(1.5, tileZoom - 1.5)]),
-);
+/** Tile zooms whose Esri raster paints the centroid. `through` was audited; a higher tile stays painted when `through` is. */
+const COUNTRY_RASTER_LEVELS: { through: number; countries: Record<string, readonly number[]> } = countryRasterLevels;
 
 /** Caps the fit. A tighter track zooms in. A full orbit stays below zoom 2. */
 const INSET_FIT_MAX_ZOOM = 5;
@@ -71,22 +48,69 @@ const INSET_FIT_PADDING_PX = 22;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
-function countrySymbolLayers() {
-  const groups: Record<string, string[]> = {};
-  for (const [name, maxzoom] of Object.entries(COUNTRY_SYMBOL_MAX_ZOOM)) {
-    const key = String(maxzoom);
-    const names = groups[key] ?? [];
-    names.push(name);
-    groups[key] = names;
+type SymbolBand = { minzoom?: number; maxzoom?: number };
+
+function holeBands(painted: readonly number[], through: number): SymbolBand[] {
+  const has = new Set(painted);
+  const holes: number[] = [];
+  for (let tile = 0; tile <= through; tile += 1) {
+    if (!has.has(tile)) holes.push(tile);
   }
-  return Object.entries(groups)
-    .sort((left, right) => Number(left[0]) - Number(right[0]))
-    .map(([key, names], index) => ({
-      id: index === 0 ? 'inset-countries' : `inset-countries-${key.replace('.', '-')}`,
+  const bands: SymbolBand[] = [];
+  let index = 0;
+  while (index < holes.length) {
+    let end = index;
+    while (end + 1 < holes.length && holes[end + 1] === holes[end]! + 1) end += 1;
+    const first = holes[index]!;
+    const last = holes[end]!;
+    const band: SymbolBand = {};
+    if (first > 0) band.minzoom = first - 1.5;
+    if (!(last === through && !has.has(through))) band.maxzoom = last - 0.5;
+    bands.push(band);
+    index = end + 1;
+  }
+  return bands;
+}
+
+function bandKey(band: SymbolBand): string {
+  const min = band.minzoom == null ? 'floor' : String(band.minzoom).replace('-', 'n').replace('.', '-');
+  const max = band.maxzoom == null ? 'ceil' : String(band.maxzoom).replace('-', 'n').replace('.', '-');
+  return `${min}-${max}`;
+}
+
+function coversView(band: SymbolBand, zoom: number): boolean {
+  const min = band.minzoom ?? Number.NEGATIVE_INFINITY;
+  const max = band.maxzoom ?? Number.POSITIVE_INFINITY;
+  return zoom >= min && zoom < max;
+}
+
+/** Symbol layers for the centroid names. A layer is on only where round(viewZoom + 1) is missing from that country's painted tiles. */
+function countrySymbolLayers() {
+  const grouped: Record<string, { band: SymbolBand; names: string[] }> = {};
+  for (const [name, painted] of Object.entries(COUNTRY_RASTER_LEVELS.countries)) {
+    for (const band of holeBands(painted, COUNTRY_RASTER_LEVELS.through)) {
+      const key = bandKey(band);
+      const group = grouped[key] ?? { band, names: [] };
+      group.names.push(name);
+      grouped[key] = group;
+    }
+  }
+  const groups = Object.values(grouped);
+  const primary = groups.reduce((best, group) => {
+    if (!coversView(group.band, 0)) return best;
+    if (!best || group.names.length > best.names.length) return group;
+    return best;
+  }, null as { band: SymbolBand; names: string[] } | null);
+  return groups
+    .sort((left, right) => (left.band.minzoom ?? -Infinity) - (right.band.minzoom ?? -Infinity)
+      || (left.band.maxzoom ?? Infinity) - (right.band.maxzoom ?? Infinity))
+    .map((group) => ({
+      id: group === primary ? 'inset-countries' : `inset-countries-${bandKey(group.band)}`,
       type: 'symbol' as const,
       source: 'inset-countries',
-      maxzoom: Number(key),
-      filter: ['in', ['get', 'name'], ['literal', names]] as ['in', ['get', 'name'], ['literal', string[]]],
+      ...(group.band.minzoom == null ? {} : { minzoom: group.band.minzoom }),
+      ...(group.band.maxzoom == null ? {} : { maxzoom: group.band.maxzoom }),
+      filter: ['in', ['get', 'name'], ['literal', group.names]] as ['in', ['get', 'name'], ['literal', string[]]],
       layout: {
         'text-field': ['get', 'name'] as ['get', 'name'],
         'text-font': ['Open Sans Regular'],
@@ -121,6 +145,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     attributionControl: false,
     fadeDuration: 0,
     minZoom: INSET_MIN_ZOOM,
+    validateStyle: false,
     renderWorldCopies: false,
     transformConstrain: letterboxCamera,
     style: {

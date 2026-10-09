@@ -1,0 +1,17 @@
+{
+  "through": 6,
+  "countries": {
+    "Canada": [3, 4, 5, 6],
+    "Mexico": [3, 4, 5, 6],
+    "Brazil": [3, 4],
+    "Argentina": [3, 4, 5, 6],
+    "France": [3, 4, 5, 6],
+    "Egypt": [3, 4, 5, 6],
+    "Nigeria": [3, 4, 5, 6],
+    "Kenya": [4, 5, 6],
+    "China": [3, 4, 5, 6],
+    "India": [3, 4],
+    "Japan": [3, 4, 5, 6],
+    "Australia": [1, 2, 4, 5]
+  }
+}

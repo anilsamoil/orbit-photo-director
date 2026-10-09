@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { pathToFileURL } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
 
@@ -43,15 +45,108 @@ export function keptCountrySymbol(names, country) {
 }
 
 function rasterPainted(words, country) {
-  const token = String(country || '').toUpperCase();
-  const letters = String(words || '').toUpperCase().replace(/[^A-Z]+/g, '');
-  if (token.length < 4 || letters.length === 0) return false;
-  if (letters.includes(token)) return true;
-  for (let index = 0; index < token.length; index += 1) {
-    const stem = token.slice(0, index) + token.slice(index + 1);
-    if (stem.length >= 4 && letters.includes(stem)) return true;
+  const name = String(country || '').toUpperCase();
+  if (name.length < 4) return false;
+  const stems = [name];
+  for (let index = 0; index < name.length; index += 1) {
+    const stem = name.slice(0, index) + name.slice(index + 1);
+    if (stem.length >= 4) stems.push(stem);
   }
-  return false;
+  const tokens = String(words || '').toUpperCase().split(/[^A-Z]+/).filter((word) => word.length >= 4);
+  const extended = tokens.some((word) => word.startsWith(name) && word.length > name.length);
+  return tokens.some((word) => {
+    if (extended && word === name) return false;
+    if (word.startsWith(name) && word.length > name.length) return false;
+    if (stems.includes(word)) return true;
+    return stems.some((stem) => stem !== name && word.includes(stem) && word.length > stem.length && word.length <= stem.length + 4);
+  });
+}
+
+export function countrySweepZooms() {
+  const zooms = [];
+  for (let step = -50; step <= 310; step += 5) zooms.push(step / 100);
+  for (const extra of [1.49, 1.51, 2.49, 2.51]) zooms.push(extra);
+  zooms.sort((left, right) => left - right);
+  return zooms;
+}
+
+export const PLAN_COUNTRIES = [
+  { name: 'Canada', lng: -100, lat: 50 },
+  { name: 'Mexico', lng: -102, lat: 23 },
+  { name: 'Brazil', lng: -55, lat: -10 },
+  { name: 'Argentina', lng: -64, lat: -34 },
+  { name: 'France', lng: 2, lat: 46 },
+  { name: 'Egypt', lng: 30, lat: 26 },
+  { name: 'Nigeria', lng: 8, lat: 10 },
+  { name: 'Kenya', lng: 38, lat: 1 },
+  { name: 'China', lng: 104, lat: 35 },
+  { name: 'India', lng: 79, lat: 22 },
+  { name: 'Japan', lng: 138, lat: 36 },
+  { name: 'Australia', lng: 134, lat: -25 },
+];
+
+export function loadCountryRasterLevels() {
+  const file = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/src/map/adapters/maplibre/country-raster-levels.json');
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+function idealTile(zoom) {
+  return Math.max(0, Math.round(Number(zoom) + 1));
+}
+
+function levelPaints(levels, country, tileZoom) {
+  const painted = levels.countries[country] || [];
+  if (tileZoom <= levels.through) return painted.includes(tileZoom);
+  return painted.includes(levels.through);
+}
+
+/** Exactly one name source: the centroid symbol, or the raster lettering, never both and never neither. */
+export function oneNameSource(row) {
+  if (!row || row.tilesOk !== true) {
+    return { ok: false, reason: 'tiles', country: row && row.country, zoom: row && row.zoom, detail: row && row.detail };
+  }
+  const zoom = Number(row.zoom);
+  if (!Number.isFinite(zoom)) return { ok: false, reason: 'zoom', zoom: row && row.zoom };
+  const ideal = idealTile(zoom);
+  if (row.tileZ !== ideal) {
+    return { ok: false, reason: 'tile', tileZ: row.tileZ, expected: ideal, country: row.country, zoom };
+  }
+  const names = nameList(row.names);
+  const count = names.filter((name) => name === row.country).length;
+  if (count > 1) return { ok: false, reason: 'symbol', country: row.country, zoom, count, names };
+  const painted = rasterPainted(row.words, row.country);
+  const sources = (count === 1 ? 1 : 0) + (painted ? 1 : 0);
+  if (sources !== 1) {
+    return {
+      ok: false,
+      reason: sources === 0 ? 'gap' : 'duplicate',
+      country: row.country,
+      zoom,
+      count,
+      raster: painted,
+    };
+  }
+  return { ok: true, country: row.country, zoom, count, raster: painted };
+}
+
+function sweepRows(levels, symbolCount) {
+  const rows = [];
+  for (const country of PLAN_COUNTRIES) {
+    for (const zoom of countrySweepZooms()) {
+      const tileZ = idealTile(zoom);
+      const raster = levelPaints(levels, country.name, tileZ);
+      const count = symbolCount(country.name, zoom, raster, tileZ);
+      rows.push({
+        tilesOk: true,
+        zoom,
+        tileZ,
+        country: country.name,
+        names: count === 1 ? [country.name] : [],
+        words: raster ? country.name.toUpperCase() : 'OCEAN',
+      });
+    }
+  }
+  return rows;
 }
 
 /** One handoff sample. tilesOk false is a failure, including a wait that timed out.
@@ -157,9 +252,17 @@ function readPlanLabels(orbit, glyphs, width, height) {
   const textField = orbit.getLayoutProperty('inset-countries', 'text-field');
   const textAllowOverlap = orbit.getLayoutProperty('inset-countries', 'text-allow-overlap');
   const textIgnorePlacement = orbit.getLayoutProperty('inset-countries', 'text-ignore-placement');
+  let labelLayers = ['inset-countries'];
+  if (typeof orbit.getStyle === 'function') {
+    const style = orbit.getStyle();
+    const listed = style && style.layers
+      ? style.layers.filter((layer) => layer && layer.source === 'inset-countries' && layer.type === 'symbol').map((layer) => layer.id)
+      : [];
+    if (listed.length) labelLayers = listed;
+  }
   let labelFeatures = [];
   try {
-    labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
+    labelFeatures = orbit.queryRenderedFeatures({ layers: labelLayers }) || [];
   } catch (error) {
     return { ok: false, step: 'labels', reason: 'query', glyphs: glyphs };
   }
@@ -321,6 +424,38 @@ function runBite() {
   console.log(`handoff-kenya ok:${handoffKenya.ok === true}`);
   console.log(`handoff-kenya-early ok:${handoffKenyaEarly.ok === true}`);
   console.log(`handoff-miss ok:${handoffMiss.ok === true}`);
+  const levels = loadCountryRasterLevels();
+  const australiaLevels = levels.countries.Australia;
+  const levelShape = Array.isArray(australiaLevels)
+    && australiaLevels.includes(1)
+    && australiaLevels.includes(2)
+    && !australiaLevels.includes(3)
+    && australiaLevels.includes(4);
+  const complement = sweepRows(levels, (_name, _zoom, raster) => (raster ? 0 : 1))
+    .map((row) => oneNameSource(row))
+    .find((verdict) => verdict.ok !== true);
+  const restoredFloor = sweepRows(levels, (name, zoom) => {
+    const painted = levels.countries[name] || [];
+    const first = painted.length ? Math.min(...painted) : 3;
+    return zoom < Math.max(1.5, first - 1.5) ? 1 : 0;
+  }).map((row) => oneNameSource(row)).find((verdict) => verdict.ok !== true);
+  const droppedHole = sweepRows(levels, (name, zoom, _raster, tileZ) => {
+    const painted = new Set(levels.countries[name] || []);
+    if (name === 'Australia') painted.add(3);
+    const raster = tileZ <= levels.through ? painted.has(tileZ) : painted.has(levels.through);
+    return raster ? 0 : 1;
+  }).map((row) => {
+    if (row.country === 'Australia' && row.tileZ === 3) return oneNameSource({ ...row, words: 'INDONESIA' });
+    return oneNameSource(row);
+  }).find((verdict) => verdict.ok !== true);
+  const ocean = oneNameSource({
+    tilesOk: true, zoom: 0, tileZ: 1, country: 'India', names: ['India'], words: 'INDIAN OCEAN india',
+  });
+  console.log(`sweep-complement ok:${complement == null}`);
+  console.log(`sweep-floor ok:${restoredFloor != null && restoredFloor.ok === false}`);
+  console.log(`sweep-hole ok:${droppedHole != null && droppedHole.ok === false && droppedHole.reason === 'gap'}`);
+  console.log(`sweep-ocean ok:${ocean.ok === true}`);
+  console.log(`sweep-australia ok:${levelShape === true}`);
   const fractionalBite = fractionalMain.ok === false
     && fractionalMain.reason === 'symbols'
     && fractionalMain.zoom === 2.5
@@ -341,7 +476,14 @@ function runBite() {
     && handoffKenyaEarly.ok === false
     && handoffKenyaEarly.reason === 'symbol'
     && handoffMiss.ok === false
-    && handoffMiss.reason === 'raster';
+    && handoffMiss.reason === 'raster'
+    && complement == null
+    && restoredFloor != null
+    && restoredFloor.ok === false
+    && droppedHole != null
+    && droppedHole.reason === 'gap'
+    && ocean.ok === true
+    && levelShape === true;
   if (!fractionalBite) process.exit(1);
   const line = (name, verdict) => `${name} ok:${verdict.ok === true}`;
   console.log(line('unmutated', report.unmutated));
