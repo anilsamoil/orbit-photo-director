@@ -1,7 +1,6 @@
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
@@ -40,7 +39,22 @@ function readLayout() {
   const scene = document.querySelector('[data-iss-scene]');
   const frame = document.querySelector('[data-iss-frame]');
   const card = document.querySelector('[data-iss-launch-card]');
-  if (!scene || !frame || !card) return null;
+  const toolbar = document.querySelector('[data-iss-toolbar]');
+  const controls = document.querySelector('[data-iss-controls]');
+  const telemetry = document.querySelector('[data-iss-telemetry]');
+  const stage = document.querySelector('[data-iss-stage]');
+  const port = document.querySelector('[data-iss-port]');
+  const starboard = document.querySelector('[data-iss-starboard]');
+  const view = document.querySelector('[data-iss-view]');
+  if (!scene || !frame || !card || !toolbar || !controls || !telemetry || !stage || !port || !starboard || !view) return null;
+  const px = (value) => {
+    const n = Number.parseFloat(value || '');
+    return Number.isFinite(n) ? n : 0;
+  };
+  const style = getComputedStyle(scene);
+  const stageStyle = getComputedStyle(stage);
+  const viewStyle = getComputedStyle(view);
+  const stageGap = px(stageStyle.columnGap || stageStyle.gap);
   const box = frame.getBoundingClientRect();
   return {
     place: scene.dataset.issLaunchPlace || '',
@@ -52,6 +66,23 @@ function readLayout() {
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
     meta: document.querySelector('meta[name="viewport"]')?.getAttribute('content') || '',
+    devicePixelRatio: window.devicePixelRatio,
+    userAgent: navigator.userAgent,
+    coarse: window.matchMedia('(pointer: coarse)').matches,
+    chrome: {
+      paneWidth: scene.clientWidth,
+      paneHeight: scene.clientHeight,
+      padX: px(style.paddingLeft) + px(style.paddingRight),
+      padY: px(style.paddingTop) + px(style.paddingBottom),
+      gap: px(style.rowGap || style.gap),
+      toolbar: toolbar.offsetHeight,
+      button: Math.max(controls.offsetHeight, telemetry.offsetHeight),
+      sideWidth: port.offsetWidth + starboard.offsetWidth + stageGap * 2,
+      label: Math.max(port.offsetHeight, starboard.offsetHeight),
+      cardHeight: card.offsetHeight,
+      cardGap: px(viewStyle.gap || viewStyle.columnGap || viewStyle.rowGap),
+      body: 0,
+    },
   };
 }
 
@@ -114,8 +145,36 @@ export function placementScenes(sceneWidth) {
   return scenes;
 }
 
-export function acceptsNatural(scene, row) {
+export function naturalFrame(chrome) {
+  if (!chrome) return null;
+  const belowReserve = Math.max(0, chrome.cardHeight) + Math.max(0, chrome.cardGap);
+  const contentW = Math.max(1, chrome.paneWidth - chrome.padX - chrome.sideWidth);
+  const room = chrome.paneHeight - chrome.padY - chrome.toolbar - chrome.button - chrome.gap * 2 - belowReserve;
+  const naturalStage = room - (chrome.body || 0);
+  const reserve = Math.max(chrome.label, 1);
+  const stageBudget = naturalStage >= reserve ? naturalStage : reserve;
+  const heightLimited = contentW / 1.5 > stageBudget;
+  const widthPx = heightLimited ? stageBudget * 1.5 : contentW;
+  const heightPx = heightLimited ? stageBudget : contentW / 1.5;
+  return { width: Math.max(1, Math.floor(widthPx)), height: Math.max(1, Math.floor(heightPx)) };
+}
+
+export function acceptsPhone(scene, row) {
   if (!row) return false;
+  const context = scene.context;
+  const mobile = typeof context.userAgent === 'string' && /iPhone/.test(context.userAgent) && /Mobile/.test(context.userAgent);
+  return mobile
+    && context.isMobile === true
+    && context.hasTouch === true
+    && row.devicePixelRatio === context.deviceScaleFactor
+    && row.userAgent === context.userAgent
+    && row.coarse === true;
+}
+
+export function acceptsNatural(scene, row) {
+  if (!acceptsPhone(scene, row)) return false;
+  const expected = naturalFrame(row.chrome);
+  if (!expected) return false;
   const fitted = Math.abs(row.width - Math.round(row.height * 3 / 2)) <= 1;
   return row.sceneWidth === scene.sceneWidth
     && row.sceneHeight === 565
@@ -124,16 +183,17 @@ export function acceptsNatural(scene, row) {
     && row.meta === PRODUCT_META
     && row.place === 'below'
     && row.card === NATURAL_CARD_PX
-    && row.height >= 120
-    && row.height < 200
+    && row.card === row.chrome.cardHeight
+    && row.width === expected.width
+    && row.height === expected.height
     && row.width > row.height
     && fitted;
 }
 
 async function openScene(scene) {
-  const profile = mkdtempSync(join(tmpdir(), 'opd-placement-'));
+  const browser = await webkit.launch();
   try {
-    const context = await webkit.launchPersistentContext(profile, {
+    const context = await browser.newContext({
       ...scene.context,
       serviceWorkers: 'block',
     });
@@ -148,19 +208,16 @@ async function openScene(scene) {
       headers.pragma = 'no-cache';
       return route.continue({ headers });
     });
-    const page = context.pages()[0] || await context.newPage();
+    const page = await context.newPage();
     return {
       page,
       async close() {
-        try {
-          await context.close();
-        } finally {
-          rmSync(profile, { recursive: true, force: true });
-        }
+        await context.close();
+        await browser.close();
       },
     };
   } catch (error) {
-    rmSync(profile, { recursive: true, force: true });
+    await browser.close();
     throw error;
   }
 }
@@ -181,6 +238,7 @@ export async function proveLaunchPlacement(baseUrl, evidenceDir, sceneWidth) {
       if (controlled.controller || controlled.registrations) {
         throw new Error(`${scene.name} placement page is controlled by a service worker ${JSON.stringify(controlled)}`);
       }
+      await until(page, (row) => acceptsPhone(scene, row), `${scene.name} phone`, 8000);
       const natural = await until(page, (row) => acceptsNatural(scene, row), `${scene.name} natural scene`, 8000);
       await page.waitForTimeout(600);
       const settled = await page.evaluate(readLayout);
@@ -191,7 +249,7 @@ export async function proveLaunchPlacement(baseUrl, evidenceDir, sceneWidth) {
       await setCardBox(page, 64);
       const ruler = await until(
         page,
-        (row) => row.place === 'below' && row.card === 64 && row.height > 1 && row.height !== settled.height && row.sceneWidth === scene.sceneWidth && row.sceneHeight === 565 && row.innerHeight === 726 && row.meta === PRODUCT_META,
+        (row) => acceptsPhone(scene, row) && row.place === 'below' && row.card === 64 && row.height > 1 && row.height !== settled.height && row.sceneWidth === scene.sceneWidth && row.sceneHeight === 565 && row.innerHeight === 726 && row.meta === PRODUCT_META,
         `${scene.name} ruler below`,
       );
       const cases = PLACEMENT_CASES.filter((item) => item.sceneWidth === scene.sceneWidth);
@@ -200,7 +258,7 @@ export async function proveLaunchPlacement(baseUrl, evidenceDir, sceneWidth) {
         await setCardBox(page, card);
         const laid = await until(
           page,
-          (row) => row.place === item.place && row.width === item.width && row.height === item.height && row.height > 1 && row.sceneHeight === 565 && row.innerWidth === scene.context.viewport.width && row.innerHeight === 726 && row.meta === PRODUCT_META,
+          (row) => acceptsPhone(scene, row) && row.place === item.place && row.width === item.width && row.height === item.height && row.height > 1 && row.sceneHeight === 565 && row.innerWidth === scene.context.viewport.width && row.innerHeight === 726 && row.meta === PRODUCT_META,
           `${scene.name} reserved ${item.reservedShort} from card ${card} expected ${item.place} ${item.width}x${item.height}`,
         );
         if (evidenceDir && ((item.reservedShort === 134 && item.place === 'below') || (item.reservedShort === 119 && item.place === 'over'))) {
