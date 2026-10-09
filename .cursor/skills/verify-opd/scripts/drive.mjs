@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
-import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { BOSTON_NADIR_EPOCH_MS, fixtureClockMs, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
@@ -543,7 +543,8 @@ const LOG_HOOK = `window.__opdLogs = [];
   console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
 
 function slideLaunch(home) {
-  const until = refreshLaunchClock(resolve(home, 'fixtures'));
+  const dir = resolve(home, 'fixtures');
+  const until = refreshLaunchClock(dir, fixtureClockMs(dir));
   const stateFile = resolve(home, 'state.json');
   if (!existsSync(stateFile)) return until;
   const state = JSON.parse(readFileSync(stateFile, 'utf8'));

@@ -7,7 +7,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
-import { bostonTrackText, buildFixtures, driveStartMs, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
+import { bostonTrackText, buildFixtures, driveStartMs, fixtureClockMs, liveFixtureRoot, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -234,6 +234,7 @@ function startProxy(home) {
     for (const waiter of [...launchHoldWaiters]) waiter.finish(true);
   }
   const server = createServer(async (req, res) => {
+    const fixtureDir = liveFixtureRoot(resolve(home, 'fixtures'));
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
     const sendFile = (name) => {
@@ -512,7 +513,8 @@ async function doctor(home = homeDir()) {
         const manifestResponse = await fetch(`http://127.0.0.1:${state.port}/manifest.json`);
         const manifest = await manifestResponse.json();
         if (!manifest.version || !manifest.generated_at) problems.push('manifest missing version');
-        if (Date.parse(state.launchValidUntil) <= Date.now()) problems.push('launch fixture expired. Run down, then up.');
+        const fixtureNow = fixtureClockMs(resolve(home, 'fixtures'));
+        if (Date.parse(state.launchValidUntil) <= fixtureNow) problems.push('launch fixture expired. Run down, then up.');
       } catch (error) {
         problems.push(error instanceof Error ? error.message : String(error));
       }
@@ -615,7 +617,7 @@ async function drive(feature) {
   const eventStart = driveStartMs(process.env.OPD_VERIFY_DRIVE_START, wall);
   const home = homeDir();
   stampEventTimes(resolve(home, 'fixtures'), eventStart);
-  const until = refreshLaunchClock(resolve(home, 'fixtures'), wall);
+  const until = refreshLaunchClock(resolve(home, 'fixtures'), eventStart);
   const early = readState(home);
   if (early) {
     early.launchValidUntil = until;

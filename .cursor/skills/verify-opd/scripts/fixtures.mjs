@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -51,7 +51,35 @@ export const QUEUE_REEF_OFFSET_MS = 20 * 60_000;
 export const QUEUE_DELTA_OFFSET_MS = 50 * 60_000;
 export const CATALOG_NET_OFFSET_MS = 2 * 60 * 60_000;
 
-const ZONED_STAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})$/;
+const ZONED_STAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function zonedEpoch(text) {
+  const match = ZONED_STAMP.exec(text);
+  if (!match) return Number.NaN;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const fraction = match[7] ? Number(match[7]) : 0;
+  const ms = Math.round(fraction * 1000);
+  const zone = match[8];
+  if (ms < 0 || ms > 999) return Number.NaN;
+  const utc = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const check = new Date(utc);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day
+    || check.getUTCHours() !== hour || check.getUTCMinutes() !== minute || check.getUTCSeconds() !== second
+    || check.getUTCMilliseconds() !== ms) {
+    return Number.NaN;
+  }
+  if (zone === 'Z') return utc;
+  const sign = zone.startsWith('-') ? -1 : 1;
+  const zoneHour = Number(zone.slice(1, 3));
+  const zoneMinute = Number(zone.slice(4, 6));
+  if (zoneHour > 23 || zoneMinute > 59) return Number.NaN;
+  return utc - sign * (zoneHour * 60 + zoneMinute) * 60_000;
+}
 
 export function driveStartMs(raw, wallMs) {
   const text = String(raw ?? '').trim();
@@ -59,9 +87,9 @@ export function driveStartMs(raw, wallMs) {
   if (!ZONED_STAMP.test(text)) {
     throw new Error(`OPD_VERIFY_DRIVE_START must be a zoned timestamp: ${text}`);
   }
-  const parsed = Date.parse(text);
+  const parsed = zonedEpoch(text);
   if (!Number.isFinite(parsed)) {
-    throw new Error(`OPD_VERIFY_DRIVE_START is not a time: ${text}`);
+    throw new Error(`OPD_VERIFY_DRIVE_START is not a valid date: ${text}`);
   }
   if (parsed + QUEUE_REEF_OFFSET_MS <= wallMs) {
     throw new Error(`OPD_VERIFY_DRIVE_START ${text} is expired at ${new Date(wallMs).toISOString()}`);
@@ -91,17 +119,182 @@ function eventInstants(start) {
   };
 }
 
-function writeTextAtomic(path, text) {
+export function writeTextAtomic(path, text, write = writeFileSync) {
   const tmp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
-  writeFileSync(tmp, text);
   try {
+    write(tmp, text);
     renameSync(tmp, path);
   } catch (error) {
     try {
       unlinkSync(tmp);
     } catch {
-      // The rename already failed. Leave that error in charge.
+      // No temp file was left to remove.
     }
+    throw error;
+  }
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function acquireFixtureLock(dir) {
+  const lockPath = `${dir}.writer.lock`;
+  const deadline = Date.now() + 10_000;
+  const payload = String(process.pid);
+  for (;;) {
+    const tmp = `${lockPath}.${process.pid}.${randomBytes(4).toString('hex')}`;
+    writeFileSync(tmp, payload);
+    try {
+      linkSync(tmp, lockPath);
+      unlinkSync(tmp);
+      return lockPath;
+    } catch (error) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // The temp lock file is already gone.
+      }
+      if (error.code !== 'EEXIST') throw error;
+      let owner = Number.NaN;
+      try {
+        owner = Number(readFileSync(lockPath, 'utf8'));
+      } catch {
+        owner = Number.NaN;
+      }
+      if (!pidAlive(owner)) {
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // Another writer removed the stale lock.
+        }
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error(`fixture writer lock held by ${owner}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+}
+
+function withFixtureLock(dir, fn) {
+  const lockPath = acquireFixtureLock(dir);
+  try {
+    return fn();
+  } finally {
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // The lock file is already gone.
+    }
+  }
+}
+
+export function liveFixtureRoot(dir) {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
+export function fixtureClockMs(dir, wallMs = Date.now()) {
+  const file = join(liveFixtureRoot(dir), 'drive-clock.json');
+  if (!existsSync(file)) return wallMs;
+  try {
+    const start = JSON.parse(readFileSync(file, 'utf8')).start;
+    return Number.isFinite(start) ? start : wallMs;
+  } catch {
+    return wallMs;
+  }
+}
+
+function listFiles(root) {
+  const names = [];
+  for (const name of readdirSync(root)) {
+    if (name.startsWith('.')) continue;
+    const full = join(root, name);
+    if (lstatSync(full).isFile()) names.push(name);
+  }
+  return names;
+}
+
+function stageGeneration(logicalDir, sourceRoot, replacements) {
+  const next = `${logicalDir}.gen-${randomBytes(6).toString('hex')}`;
+  mkdirSync(next);
+  const names = new Set(listFiles(sourceRoot));
+  for (const name of replacements.keys()) names.add(name);
+  for (const name of names) {
+    const text = replacements.has(name) ? replacements.get(name) : readFileSync(join(sourceRoot, name));
+    writeFileSync(join(next, name), text);
+  }
+  return next;
+}
+
+function pruneGenerations(logicalDir, keep) {
+  const parent = dirname(logicalDir);
+  const prefix = `${basename(logicalDir)}.gen-`;
+  for (const name of readdirSync(parent)) {
+    if (!name.startsWith(prefix)) continue;
+    const full = join(parent, name);
+    if (keep.has(full)) continue;
+    rmSync(full, { recursive: true, force: true });
+  }
+}
+
+function sealFixtureRoot(dir) {
+  if (lstatSync(dir).isSymbolicLink()) return;
+  const next = `${dir}.gen-${randomBytes(6).toString('hex')}`;
+  renameSync(dir, next);
+  try {
+    symlinkSync(next, dir);
+  } catch (error) {
+    try {
+      renameSync(next, dir);
+    } catch {
+      // The original directory could not be restored.
+    }
+    throw error;
+  }
+}
+
+function switchToGeneration(logicalDir, next, previousRoot) {
+  if (lstatSync(logicalDir).isSymbolicLink()) {
+    const link = `${logicalDir}.next-${randomBytes(4).toString('hex')}`;
+    symlinkSync(next, link);
+    renameSync(link, logicalDir);
+  } else {
+    const displaced = `${logicalDir}.displaced-${randomBytes(4).toString('hex')}`;
+    renameSync(logicalDir, displaced);
+    try {
+      symlinkSync(next, logicalDir);
+    } catch (error) {
+      try {
+        renameSync(displaced, logicalDir);
+      } catch {
+        // The original directory could not be restored.
+      }
+      throw error;
+    }
+    rmSync(displaced, { recursive: true, force: true });
+  }
+  const keep = new Set([next]);
+  if (previousRoot && previousRoot !== logicalDir && previousRoot !== next) keep.add(previousRoot);
+  pruneGenerations(logicalDir, keep);
+}
+
+function publishLocked(logicalDir, replacements) {
+  const sourceRoot = liveFixtureRoot(logicalDir);
+  const next = stageGeneration(logicalDir, sourceRoot, replacements);
+  try {
+    switchToGeneration(logicalDir, next, sourceRoot);
+  } catch (error) {
+    if (liveFixtureRoot(logicalDir) !== next) rmSync(next, { recursive: true, force: true });
     throw error;
   }
 }
@@ -504,35 +697,39 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
     standIn: standIn ? standIn.name : null,
   };
   writeFileSync(resolve(dir, 'meta.json'), JSON.stringify(meta, null, 2));
+  sealFixtureRoot(dir);
   return { manifest, meta, pointer, launchBody };
 }
 
-export function refreshLaunchClock(dir, wallMs = Date.now()) {
-  const launchPath = resolve(dir, 'launch.json');
-  const pointerPath = resolve(dir, 'launch-latest.json');
-  const launch = JSON.parse(readFileSync(launchPath, 'utf8'));
-  const generated = new Date(wallMs - 60_000).toISOString();
-  const until = new Date(wallMs - 60_000 + 14 * 60_000).toISOString();
-  const assessmentUntil = new Date(wallMs - 60_000 + 2 * 60 * 60_000).toISOString();
-  launch.generated_at = generated;
-  launch.valid_until = until;
-  if (launch.coverage) launch.coverage.fetched_at = generated;
-  for (const item of launch.items || []) {
-    for (const source of item.sources || []) source.fetched_at = generated;
-    if (item.assessment) {
-      item.assessment.checked_at = generated;
-      item.assessment.valid_until = assessmentUntil;
-      item.assessment.tle_epoch = generated;
+export function refreshLaunchClock(dir, nowMs = Date.now()) {
+  return withFixtureLock(dir, () => {
+    const root = liveFixtureRoot(dir);
+    const launch = JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8'));
+    const generated = new Date(nowMs - 60_000).toISOString();
+    const until = new Date(nowMs - 60_000 + 14 * 60_000).toISOString();
+    const assessmentUntil = new Date(nowMs - 60_000 + 2 * 60 * 60_000).toISOString();
+    launch.generated_at = generated;
+    launch.valid_until = until;
+    if (launch.coverage) launch.coverage.fetched_at = generated;
+    for (const item of launch.items || []) {
+      for (const source of item.sources || []) source.fetched_at = generated;
+      if (item.assessment) {
+        item.assessment.checked_at = generated;
+        item.assessment.valid_until = assessmentUntil;
+        item.assessment.tle_epoch = generated;
+      }
     }
-  }
-  const text = JSON.stringify(launch);
-  writeTextAtomic(launchPath, text);
-  const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
-  pointer.generated_at = generated;
-  pointer.valid_until = until;
-  pointer.sha256 = sha256(text);
-  writeTextAtomic(pointerPath, JSON.stringify(pointer));
-  return until;
+    const text = JSON.stringify(launch);
+    const pointer = JSON.parse(readFileSync(join(root, 'launch-latest.json'), 'utf8'));
+    pointer.generated_at = generated;
+    pointer.valid_until = until;
+    pointer.sha256 = sha256(text);
+    publishLocked(dir, new Map([
+      ['launch.json', text],
+      ['launch-latest.json', JSON.stringify(pointer)],
+    ]));
+    return until;
+  });
 }
 
 const PASS_EVENT = {
@@ -573,16 +770,7 @@ function stampLaunchBody(launch, times) {
   }
 }
 
-function writeJson(dir, name, body) {
-  const entry = artifact(body);
-  writeTextAtomic(resolve(dir, name), entry.text);
-  return entry;
-}
-
-function stampCatalog(dir, times, eventStart) {
-  const catalogPath = resolve(dir, 'catalog.json');
-  if (!existsSync(catalogPath)) return;
-  const catalog = JSON.parse(readFileSync(catalogPath, 'utf8'));
+function stampCatalogBody(catalog, times) {
   for (const item of catalog.items || []) {
     if (item.schedule) {
       item.schedule.net = times.net;
@@ -596,41 +784,55 @@ function stampCatalog(dir, times, eventStart) {
       shot.end = times.captureEnd;
     }
   }
-  writeTextAtomic(catalogPath, JSON.stringify(catalog));
-  writeTextAtomic(resolve(dir, 'catalog-clock.json'), JSON.stringify({ anchor: eventStart }));
 }
 
 export function stampEventTimes(dir, eventStart) {
-  const times = eventInstants(eventStart);
-  const passes = JSON.parse(readFileSync(resolve(dir, 'passes.json'), 'utf8'));
-  const top5 = JSON.parse(readFileSync(resolve(dir, 'top5.json'), 'utf8'));
-  const top24 = JSON.parse(readFileSync(resolve(dir, 'top_24h.json'), 'utf8'));
-  const cupola = JSON.parse(readFileSync(resolve(dir, 'cupola_windows.json'), 'utf8'));
-  const launch = JSON.parse(readFileSync(resolve(dir, 'launch.json'), 'utf8'));
-  stampPassList(passes, times);
-  stampPassList(top5, times);
-  stampPassList(top24, times);
-  stampPassList(cupola.windows, times);
-  stampLaunchBody(launch, times);
-  stampCatalog(dir, times, eventStart);
-  const written = {
-    passes: writeJson(dir, 'passes.json', passes),
-    top5: writeJson(dir, 'top5.json', top5),
-    top_24h: writeJson(dir, 'top_24h.json', top24),
-    cupola_windows: writeJson(dir, 'cupola_windows.json', cupola),
-    launch: writeJson(dir, 'launch.json', launch),
-  };
-  const manifest = JSON.parse(readFileSync(resolve(dir, 'manifest.json'), 'utf8'));
-  for (const key of ['passes', 'top5', 'top_24h', 'cupola_windows']) {
-    manifest.artifacts[key].sha256 = written[key].sha256;
-    manifest.artifacts[key].bytes = written[key].bytes;
-  }
-  writeTextAtomic(resolve(dir, 'manifest.json'), JSON.stringify(manifest));
-  const pointer = JSON.parse(readFileSync(resolve(dir, 'launch-latest.json'), 'utf8'));
-  pointer.sha256 = written.launch.sha256;
-  writeTextAtomic(resolve(dir, 'launch-latest.json'), JSON.stringify(pointer));
-  writeTextAtomic(resolve(dir, 'drive-clock.json'), JSON.stringify({ start: eventStart }));
-  return times;
+  return withFixtureLock(dir, () => {
+    const times = eventInstants(eventStart);
+    const root = liveFixtureRoot(dir);
+    const read = (name) => JSON.parse(readFileSync(join(root, name), 'utf8'));
+    const passes = read('passes.json');
+    const top5 = read('top5.json');
+    const top24 = read('top_24h.json');
+    const cupola = read('cupola_windows.json');
+    const launch = read('launch.json');
+    stampPassList(passes, times);
+    stampPassList(top5, times);
+    stampPassList(top24, times);
+    stampPassList(cupola.windows, times);
+    stampLaunchBody(launch, times);
+    const files = new Map();
+    const put = (name, body) => {
+      const entry = artifact(body);
+      files.set(name, entry.text);
+      return entry;
+    };
+    const written = {
+      passes: put('passes.json', passes),
+      top5: put('top5.json', top5),
+      top_24h: put('top_24h.json', top24),
+      cupola_windows: put('cupola_windows.json', cupola),
+      launch: put('launch.json', launch),
+    };
+    if (existsSync(join(root, 'catalog.json'))) {
+      const catalog = read('catalog.json');
+      stampCatalogBody(catalog, times);
+      files.set('catalog.json', JSON.stringify(catalog));
+      files.set('catalog-clock.json', JSON.stringify({ anchor: eventStart }));
+    }
+    const manifest = read('manifest.json');
+    for (const key of ['passes', 'top5', 'top_24h', 'cupola_windows']) {
+      manifest.artifacts[key].sha256 = written[key].sha256;
+      manifest.artifacts[key].bytes = written[key].bytes;
+    }
+    files.set('manifest.json', JSON.stringify(manifest));
+    const pointer = read('launch-latest.json');
+    pointer.sha256 = written.launch.sha256;
+    files.set('launch-latest.json', JSON.stringify(pointer));
+    files.set('drive-clock.json', JSON.stringify({ start: eventStart }));
+    publishLocked(dir, files);
+    return times;
+  });
 }
 
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
