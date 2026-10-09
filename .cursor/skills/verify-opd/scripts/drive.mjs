@@ -5461,7 +5461,6 @@ async function proveIssCatalogRetention(send, baseUrl, eventId) {
   } finally {
     await release();
   }
-  const geometry = JSON.stringify(beforeLines);
   await waitFor(
     send,
     `(async () => {
@@ -5489,12 +5488,12 @@ async function proveIssCatalogRetention(send, baseUrl, eventId) {
           corridor: frame ? frame.getAttribute('data-iss-launch-corridor') : '',
           layer: Boolean(layer),
           lines: finite ? coordinates.length : 0,
+          coordinates: finite ? coordinates : null,
         };
         if (!picker || picker.value !== ${JSON.stringify(eventId)} || group !== 'Shot' || !(option && option.textContent && option.textContent.includes('Verify Ascent'))) return seen;
         if (!card || card.hidden || card.dataset.issLaunchState !== 'selected') return seen;
         if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Ascent') return seen;
         if (!frame || frame.getAttribute('data-iss-launch-corridor') !== 'on' || !layer || !finite) return seen;
-        if (JSON.stringify(coordinates) !== ${geometry}) return seen;
         return { ok: true };
       } catch (error) {
         return { error: String(error) };
