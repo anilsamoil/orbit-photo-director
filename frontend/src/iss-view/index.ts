@@ -198,6 +198,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let frameKind: FrameKind = 'chances';
   let chancePick: LaunchPick = { kind: 'open' };
   let tierPick: TierPick = { kind: 'open' };
+  let tierChoices = false;
   const readTiers = (): TierCatalog | null => (options.launches ? null : launchCatalog.read(options.nowMs()));
   const activePick = (): LaunchPick | TierPick => (frameKind === 'tiers' ? tierPick : chancePick);
   let shownLaunchSites: readonly LaunchSite[] = [];
@@ -367,7 +368,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   picker.addEventListener('change', () => {
     if (pickerSync) return;
     const tiers = readTiers();
-    if (tiers || tierPick.kind === 'held') {
+    if (tiers || tierChoices) {
       const selected = picker.selectedOptions[0];
       const parent = selected?.parentElement;
       const groupLabel = parent instanceof HTMLOptGroupElement ? parent.label : '';
@@ -657,14 +658,21 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function syncLaunchChrome(): void {
     const tiers = readTiers();
-    const nextKind: FrameKind = tiers ? 'tiers' : 'chances';
-    if (nextKind !== frameKind) {
-      if (nextKind === 'chances' && tierPick.kind !== 'held') chancePick = { kind: 'open' };
-      frameKind = nextKind;
+    if (tiers) {
+      frameKind = 'tiers';
+      syncTierChrome(tiers);
+      return;
     }
-    if (tiers) syncTierChrome(tiers);
-    else if (tierPick.kind === 'held') suspendTierFacts();
-    else syncChanceChrome();
+    if (tierChoices) {
+      frameKind = 'tiers';
+      suspendTierFacts();
+      return;
+    }
+    if (frameKind !== 'chances') {
+      chancePick = { kind: 'open' };
+      frameKind = 'chances';
+    }
+    syncChanceChrome();
   }
 
   function suspendTierFacts(): void {
@@ -678,7 +686,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     launchDrawingHidden = fullscreen;
     renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
     const value = tierPickValue(tierPick);
-    if (value && picker.value !== value) {
+    if (picker.value !== value) {
       pickerSync = true;
       try {
         picker.value = value;
@@ -743,6 +751,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function syncTierChrome(tiers: TierCatalog): void {
+    tierChoices = true;
     if (tierPick.kind === 'held' && !tierListed(tiers, tierPick)) tierPick = { kind: 'cleared' };
     else if (tierPick.kind === 'held' && tierPick.group !== 'all') {
       const launch = tiers.find(tierPick.eventId);

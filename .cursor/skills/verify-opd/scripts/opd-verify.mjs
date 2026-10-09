@@ -265,14 +265,23 @@ function startProxy(home) {
   }
   function bumpHeldCatalog() {
     const live = currentCatalog();
-    const bodyObj = JSON.parse(live.body);
-    const generatedMs = Date.parse(bodyObj.generated_at) + 1000;
-    const geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
-    const scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
+    const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
+    const bodyObj = JSON.parse(base);
+    let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
+    let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
+    let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
+    let revision = `c${generatedMs}`;
+    const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
+      || (catalogGate && catalogGate.pointer.revision === candidate);
+    for (let step = 0; taken(revision) && step < 8; step += 1) {
+      generatedMs += 1000;
+      geometryMs += 1000;
+      scheduleMs += 1000;
+      revision = `c${generatedMs}`;
+    }
     const generated = new Date(generatedMs).toISOString();
     const geometry = new Date(geometryMs).toISOString();
     const schedule = new Date(scheduleMs).toISOString();
-    const revision = `c${generatedMs}`;
     bodyObj.generated_at = generated;
     bodyObj.geometry_valid_until = geometry;
     bodyObj.schedule_valid_until = schedule;

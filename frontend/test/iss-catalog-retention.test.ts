@@ -404,4 +404,62 @@ describe('ISS catalog selection retention', () => {
       await pending;
     }
   });
+
+  it.each([
+    ['cold', 'shot'],
+    ['warm', 'shot'],
+    ['cold', 'likely'],
+    ['warm', 'likely'],
+  ] as const)('%s %s none then another launch during a held body keeps the later choice', async (temperature, tier) => {
+    vi.spyOn(Date, 'now').mockReturnValue(viewMs);
+    const primary = liveItem({
+      tier,
+      name: tier === 'shot' ? 'Retained shot' : 'Retained likely',
+    });
+    const alternate = moved(liveItem({ event_id: 'other', tier: 'shot', name: 'Other event' }));
+    await publish([primary, alternate], `${temperature}-${tier}-none-then`);
+    const { scene, picker, card, drawn } = await openScene();
+    await choose(scene, picker, 'retained');
+    if (temperature === 'warm') launchCatalog.tick(viewMs);
+    picker.focus();
+
+    const next = await pack([primary, alternate], `${temperature}-${tier}-none-then-next`);
+    let release!: (response: Response) => void;
+    let bodySeen = false;
+    const gate = new Promise<Response>((resolve) => { release = resolve; });
+    install(next.pointer, () => {
+      bodySeen = true;
+      return gate;
+    });
+    const pending = launchCatalog.refresh(true);
+    try {
+      await vi.waitFor(() => { expect(bodySeen).toBe(true); });
+      expect(picker.value).toBe('retained');
+      await choose(scene, picker, 'none');
+      expect(picker.value).toBe('');
+      expect(card.hidden).toBe(true);
+      expect(drawn.at(-1)).toEqual([]);
+      expect([...picker.querySelectorAll('optgroup')].some((group) => group.label === 'Shot')).toBe(true);
+      expect(document.activeElement).toBe(picker);
+      await choose(scene, picker, 'other');
+      expect(picker.value).toBe('other');
+      expect(card.hidden).toBe(true);
+      expect(drawn.at(-1)).toEqual([]);
+      expect(document.activeElement).toBe(picker);
+      release(new Response(next.text, { status: 200, headers: { 'content-type': 'application/json' } }));
+      await pending;
+      await settle();
+      await scene.paint();
+      expect(document.activeElement).toBe(picker);
+      expect(picker.value).toBe('other');
+      expect(picker.selectedOptions[0]?.textContent).not.toMatch(/Retained/);
+      expect(card.hidden).toBe(false);
+      expect(card.dataset.issLaunchState).toBe('selected');
+      expect(card.querySelector('[data-iss-launch-name]')?.textContent).toBe('Other event');
+      expect(drawn.at(-1)).toEqual([{ eventId: 'other', corridor: MOVED }]);
+    } finally {
+      release(new Response('missing', { status: 404 }));
+      await pending;
+    }
+  });
 });
