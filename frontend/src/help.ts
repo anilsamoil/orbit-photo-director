@@ -336,14 +336,16 @@ const HELP_SECTIONS: HelpSection[] = [
       },
       {
         icon: '☀️',
-        label: 'Right edge',
+        label: 'Layers dock',
         text:
-          'Also on the right edge: the day-night line, night lights (off ' +
-          'until you turn them on), place labels, extra ISS orbits, and ' +
-          'other satellites (Tiangong, Hubble, X-37B, or a name you add). ' +
-          'ISS up is the default and points the direction of travel up. ' +
-          'North up keeps north at the top. The target button recenters on ' +
-          'the station. Pan away to release it.',
+          'The layers dock is a column on the right when that column can ' +
+          'hold a 44px target, and a horizontal row when the corner cannot. ' +
+          'It holds the day-night line, night lights (off until you turn ' +
+          'them on), place labels, extra ISS orbits, and other satellites ' +
+          '(Tiangong, Hubble, X-37B, or a name you add). ISS up is the ' +
+          'default and points the direction of travel up. North up keeps ' +
+          'north at the top. The target button recenters on the station. ' +
+          'Pan away to release it.',
       },
     ],
   },

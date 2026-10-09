@@ -78,6 +78,9 @@ describe('openHelpModal', () => {
     expect(text).not.toContain('Tap Legend on the left edge');
     expect(text).not.toContain('right of the zoom buttons');
     expect(text).not.toContain('of the zoom buttons');
+    expect(text).toContain('The layers dock is a column on the right when that column can hold a 44px target, and a horizontal row when the corner cannot.');
+    expect(text).not.toContain('Also on the right edge');
+    expect(text).not.toContain('Right edge');
     expect(text).toContain('shows only while the legend is open');
     expect(text).toContain('A live IR warning adds a mark on Legend');
     expect(text).not.toContain('Starship: no public orbit yet');
