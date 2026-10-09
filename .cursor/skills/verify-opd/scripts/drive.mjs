@@ -1406,21 +1406,25 @@ async function waitChromeChoice(send, shown) {
   );
 }
 
+function mapLayerReadyExpression() {
+  return `window.__opdMap && window.__opdMap.getLayer && window.__opdMap.getLayer('iss-track-layer') ? { ok: true } : null`;
+}
+
+async function waitMapLayer(send) {
+  await waitFor(send, mapLayerReadyExpression(), 'map after chrome reload', 45000);
+}
+
 async function proveMapChromeMemory(send) {
   await waitChromeChoice(send, true);
   await reloadSettled(send);
   await waitChromeChoice(send, true);
+  await waitMapLayer(send);
   await click(send, '#map-chrome-toggle');
   await waitChromeChoice(send, false);
   await reloadSettled(send);
   await waitChromeChoice(send, false);
   await showMapChrome(send);
-  await waitFor(
-    send,
-    `window.__opdMap && window.__opdMap.getLayer && window.__opdMap.getLayer('iss-track-layer') ? { ok: true } : null`,
-    'map after chrome reload',
-    45000,
-  );
+  await waitMapLayer(send);
 }
 
 async function ensureMapChromeShown(send) {
@@ -5396,7 +5400,7 @@ function splitLaunchPlace(width, height) {
   return width - mapColumn <= 720 ? 'below' : 'side';
 }
 
-function launchEarthPanes(width, height) {
+export function launchEarthPanes(width, height) {
   const native = { width, height, mobile: width < 1100, label: `${width}x${height}`, place: '', minShort: 80 };
   if (width === 390 && height === 664) {
     return [
@@ -5413,7 +5417,9 @@ function launchEarthPanes(width, height) {
       { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
     ];
   }
-  if (width >= 800 && height < 600) return [{ ...native, place: 'side', minShort: 80 }];
+  if (width === 874 && height === 402) {
+    return [{ ...native, place: 'side', minShort: 80 }];
+  }
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
     return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
