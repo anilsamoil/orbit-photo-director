@@ -1,13 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAP_IMPORT_RETRY_KEY,
+  MAP_IMPORT_URL_KEY,
   nextMapImportStep,
   noteMapImportSuccess,
+  retryMapHref,
+  retryMapModuleUrl,
   type MapImportFlagStore,
 } from '../src/map-import';
 
 const mapGate = vi.hoisted(() => ({
-  mode: 'stale' as 'stale' | 'abort' | 'ok',
+  mode: 'stale' as 'stale' | 'abort' | 'ok' | 'webkit',
+}));
+
+const net = vi.hoisted(() => ({
+  chunkStatus: 404,
 }));
 
 vi.mock('../src/network-status', async () => {
@@ -47,6 +54,9 @@ vi.mock('../src/aurora', async () => {
 vi.mock('../src/map', () => {
   if (mapGate.mode === 'stale') {
     throw new TypeError('Failed to fetch dynamically imported module: http://localhost/assets/map-stale.js');
+  }
+  if (mapGate.mode === 'webkit') {
+    throw new TypeError('Importing a module script failed.');
   }
   if (mapGate.mode === 'abort') {
     const error = new Error('The operation was aborted.');
@@ -88,6 +98,10 @@ const DOM = `
   <footer id="status-banner" class="banner banner-loading">Loading…</footer>
 `;
 
+type IntervalId = ReturnType<typeof window.setInterval>;
+
+const intervals: IntervalId[] = [];
+
 function memoryStore(): MapImportFlagStore {
   const bag = new Map<string, string>();
   return {
@@ -128,9 +142,29 @@ function seedSnapshot(): void {
   }));
 }
 
+function emptyScript(name: string, responseStatus?: number) {
+  return {
+    name,
+    entryType: 'resource',
+    initiatorType: 'script',
+    responseStatus,
+    transferSize: 0,
+    encodedBodySize: 0,
+    decodedBodySize: 0,
+  };
+}
+
+function stubResources(entries: ReturnType<typeof emptyScript>[]): void {
+  vi.spyOn(performance, 'getEntriesByType').mockImplementation((type: string) => {
+    if (type !== 'resource') return [];
+    return entries as unknown as PerformanceEntryList;
+  });
+}
+
 const staleError = new TypeError(
   'Failed to fetch dynamically imported module: http://localhost/assets/map-stale.js',
 );
+const webkitError = new TypeError('Importing a module script failed.');
 
 describe('map import recovery', () => {
   it('reloads once on the first stale chunk, shows the error if that retry fails, and does not reload again', async () => {
@@ -153,8 +187,10 @@ describe('map import recovery', () => {
   it('clears the retry flag after the map module loads, so a later stale chunk may reload once', async () => {
     const store = memoryStore();
     store.setItem(MAP_IMPORT_RETRY_KEY, '1');
+    store.setItem(MAP_IMPORT_URL_KEY, 'http://localhost/assets/map-stale.js');
     noteMapImportSuccess(store);
     expect(store.getItem(MAP_IMPORT_RETRY_KEY)).toBeNull();
+    expect(store.getItem(MAP_IMPORT_URL_KEY)).toBeNull();
     const again = await nextMapImportStep(
       staleError,
       store,
@@ -174,6 +210,15 @@ describe('map import recovery', () => {
     expect(action).toEqual({ action: 'show-error' });
   });
 
+  it('rejects when storing the retry flag throws', async () => {
+    const store: MapImportFlagStore = {
+      getItem: () => null,
+      setItem() { throw new Error('quota'); },
+      removeItem() {},
+    };
+    await expect(nextMapImportStep(staleError, store, 'http://localhost/?u=anil', async () => 404)).rejects.toThrow('quota');
+  });
+
   it('shows the error for an aborted load and for a chunk request that does not complete', async () => {
     const store = memoryStore();
     const aborted = new Error('The operation was aborted.');
@@ -186,23 +231,64 @@ describe('map import recovery', () => {
     expect(dropped).toEqual({ action: 'show-error' });
     expect(store.getItem(MAP_IMPORT_RETRY_KEY)).toBeNull();
   });
+
+  it('reloads a WebKit failure with no URL only when the probe says the chunk is missing', async () => {
+    const store = memoryStore();
+    const probe = vi.fn(async () => 404);
+    const action = await nextMapImportStep(webkitError, store, 'http://localhost/?u=anil', probe);
+    expect(probe).toHaveBeenCalledWith(null);
+    expect(action).toEqual({
+      action: 'reload-once',
+      href: 'http://localhost/?u=anil&map-chunk=1',
+    });
+  });
+
+  it('shows the error for a WebKit failure when the probe is null, 500, or 200', async () => {
+    for (const status of [null, 500, 200]) {
+      const store = memoryStore();
+      const probe = vi.fn(async () => status);
+      const action = await nextMapImportStep(webkitError, store, 'http://localhost/?u=anil', probe);
+      expect(probe).toHaveBeenCalledWith(null);
+      expect(action).toEqual({ action: 'show-error' });
+      expect(store.getItem(MAP_IMPORT_RETRY_KEY)).toBeNull();
+    }
+  });
+
+  it('adds a document cache-bust nonce and the same nonce on the stored chunk URL', () => {
+    expect(retryMapHref('http://localhost/?e2e', '17')).toBe('http://localhost/?e2e=&map-retry=17');
+    expect(retryMapHref('http://localhost/?u=anil&map-chunk=1', '42')).toBe(
+      'http://localhost/?u=anil&map-chunk=1&map-retry=42',
+    );
+    expect(retryMapModuleUrl('http://127.0.0.1:45175/assets/index-D1lI8Fx4.js', '9')).toBe(
+      'http://127.0.0.1:45175/assets/index-D1lI8Fx4.js?map-retry=9',
+    );
+  });
 });
 
 beforeEach(() => {
   mapGate.mode = 'stale';
+  net.chunkStatus = 404;
   document.body.innerHTML = DOM;
   localStorage.clear();
   sessionStorage.clear();
   vi.resetModules();
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes('map-stale.js')) return new Response('missing', { status: 404 });
+    if (url.includes('map-stale.js')) return new Response('missing', { status: net.chunkStatus });
     return new Response('{"targets":[],"entries":[]}', { status: 200 });
   }));
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
+  const realSetInterval = window.setInterval.bind(window);
+  vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    const id = realSetInterval(handler, timeout, ...args);
+    intervals.push(id as unknown as IntervalId);
+    return id;
+  }) as typeof window.setInterval);
 });
 
 afterEach(() => {
+  for (const id of intervals) window.clearInterval(id);
+  intervals.length = 0;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   document.body.innerHTML = '';
@@ -225,7 +311,7 @@ describe('map pane when the chunk fails', () => {
     expect(document.getElementById('status-banner')?.textContent ?? '').not.toContain("Map couldn't load");
   });
 
-  it('shows Map couldn\'t load and Retry when the stale chunk fails again', async () => {
+  it('reloads the document when Retry is pressed after the stale chunk fails again', async () => {
     seedSnapshot();
     sessionStorage.setItem(MAP_IMPORT_RETRY_KEY, '1');
     const replace = vi.fn();
@@ -237,16 +323,49 @@ describe('map pane when the chunk fails', () => {
     });
     const retry = document.querySelector('#status-banner button');
     expect(retry?.textContent).toBe('Retry');
+    expect(retry?.getAttribute('tabindex')).toBeNull();
     expect(replace).not.toHaveBeenCalled();
-    const errors = vi.spyOn(console, 'error');
-    const logged = errors.mock.calls.length;
     retry?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await vi.waitFor(() => {
-      expect(errors.mock.calls.length).toBeGreaterThan(logged);
+      expect(replace).toHaveBeenCalledTimes(1);
     });
-    expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
-    expect(replace).not.toHaveBeenCalled();
+    const href = String(replace.mock.calls[0]?.[0]);
+    expect(href).toMatch(/map-retry=\d+/);
+    expect(href).not.toContain('map-chunk=');
     expect(sessionStorage.getItem(MAP_IMPORT_RETRY_KEY)).toBe('1');
+    expect(retry?.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('keeps Map couldn\'t load after the countdown tick', async () => {
+    seedSnapshot();
+    sessionStorage.setItem(MAP_IMPORT_RETRY_KEY, '1');
+    vi.spyOn(window.location, 'replace').mockImplementation(() => {});
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const text = document.getElementById('status-banner')?.textContent ?? '';
+    expect(text).toContain("Map couldn't load");
+    expect(text).not.toContain('Last updated');
+  });
+
+  it('shows the error when sessionStorage throws on the retry flag', async () => {
+    seedSnapshot();
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const original = sessionStorage.setItem.bind(sessionStorage);
+    vi.spyOn(sessionStorage, 'setItem').mockImplementation((key: string, value: string) => {
+      if (key === MAP_IMPORT_RETRY_KEY) throw new Error('quota');
+      original(key, value);
+    });
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    });
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it('shows the error for an aborted load without reloading', async () => {
@@ -264,15 +383,67 @@ describe('map pane when the chunk fails', () => {
     expect(sessionStorage.getItem(MAP_IMPORT_RETRY_KEY)).toBeNull();
   });
 
+  it('reloads a WebKit failure when the resource timing entry is a 404', async () => {
+    mapGate.mode = 'webkit';
+    seedSnapshot();
+    stubResources([emptyScript('http://localhost/assets/map-stale.js', 404)]);
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledTimes(1);
+    });
+    expect(String(replace.mock.calls[0]?.[0])).toContain('map-chunk=1');
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).toContain('map-stale.js');
+  });
+
+  it('reloads a WebKit failure when an earlier empty script is the missing chunk', async () => {
+    mapGate.mode = 'webkit';
+    seedSnapshot();
+    stubResources([
+      emptyScript('http://localhost/assets/map-stale.js'),
+      emptyScript('http://localhost/assets/satellites.js'),
+    ]);
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledTimes(1);
+    });
+    expect(String(replace.mock.calls[0]?.[0])).toContain('map-chunk=1');
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).toContain('map-stale.js');
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).not.toContain('satellites.js');
+  });
+
+  it('shows the error for a WebKit 500 without reloading', async () => {
+    mapGate.mode = 'webkit';
+    net.chunkStatus = 500;
+    seedSnapshot();
+    stubResources([emptyScript('http://localhost/assets/map-stale.js', 500)]);
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    });
+    expect(replace).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(MAP_IMPORT_RETRY_KEY)).toBeNull();
+  });
+
   it('clears the retry flag when the map module loads', async () => {
     mapGate.mode = 'ok';
     seedSnapshot();
     sessionStorage.setItem(MAP_IMPORT_RETRY_KEY, '1');
+    sessionStorage.setItem(MAP_IMPORT_URL_KEY, 'http://localhost/assets/map-stale.js');
     const { init } = await import('../src/main');
     await init();
     await vi.waitFor(() => {
       expect(sessionStorage.getItem(MAP_IMPORT_RETRY_KEY)).toBeNull();
     });
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).toBeNull();
     expect(document.getElementById('status-banner')?.textContent ?? '').not.toContain("Map couldn't load");
     const map = await import('../src/map');
     expect(map.renderMap).toHaveBeenCalled();

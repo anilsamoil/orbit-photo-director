@@ -64,8 +64,11 @@ import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 import {
+  MAP_IMPORT_URL_KEY,
   nextMapImportStep,
   noteMapImportSuccess,
+  retryMapHref,
+  retryMapModuleUrl,
   type MapImportAction,
 } from './map-import';
 
@@ -1633,9 +1636,60 @@ async function mapImportAction(error: unknown): Promise<MapImportAction> {
   }
 }
 
-async function probeMapChunk(url: string): Promise<number | null> {
+function assetScriptEntries(): PerformanceResourceTiming[] {
+  const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+  return entries.filter((entry) => /\/assets\/[^?#]+\.js(?:[?#]|$)/.test(entry.name));
+}
+
+async function failedAssetScriptUrl(): Promise<string | null> {
+  const scripts = assetScriptEntries();
+  const missing = [...scripts].reverse().find((entry) => entry.responseStatus === 404);
+  if (missing) return missing.name;
+  const httpError = [...scripts].reverse().find((entry) => {
+    const status = entry.responseStatus;
+    return typeof status === 'number' && status !== 0 && status !== 200;
+  });
+  if (httpError) return httpError.name;
+  for (const entry of [...scripts].reverse()) {
+    if (entry.responseStatus === 200) continue;
+    if (entry.transferSize !== 0 || entry.encodedBodySize !== 0 || entry.decodedBodySize !== 0) continue;
+    try {
+      const response = await fetch(entry.name, { cache: 'no-store' });
+      if (response.status !== 200) return entry.name;
+    } catch {
+      return entry.name;
+    }
+  }
+  return null;
+}
+
+async function rememberFailedMapChunk(): Promise<void> {
+  const found = await failedAssetScriptUrl();
+  if (!found) return;
   try {
-    const response = await fetch(url, { cache: 'no-store' });
+    sessionStorage.setItem(MAP_IMPORT_URL_KEY, found);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
+}
+
+function loadMapModule(): Promise<typeof import('./map')> {
+  const nonce = new URL(window.location.href).searchParams.get('map-retry');
+  let stored: string | null = null;
+  try {
+    stored = sessionStorage.getItem(MAP_IMPORT_URL_KEY);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
+  if (!nonce || !stored) return import('./map');
+  return import(/* @vite-ignore */ retryMapModuleUrl(stored, nonce)) as Promise<typeof import('./map')>;
+}
+
+async function probeMapChunk(url: string | null): Promise<number | null> {
+  const target = url ?? await failedAssetScriptUrl();
+  if (!target) return null;
+  try {
+    const response = await fetch(target, { cache: 'no-store' });
     return response.status;
   } catch {
     return null;
@@ -1674,7 +1728,9 @@ function showMapLoadError(): void {
   retry.type = 'button';
   retry.textContent = 'Retry';
   retry.addEventListener('click', () => {
-    void loadMapPane();
+    void rememberFailedMapChunk().then(() => {
+      window.location.replace(retryMapHref(window.location.href, String(Date.now())));
+    });
   });
   actions.append(retry);
   el.replaceChildren(copy, actions);
@@ -1687,6 +1743,7 @@ function dismissMapLoadError(): void {
 }
 
 async function presentMapImportFailure(error: unknown): Promise<void> {
+  await rememberFailedMapChunk();
   const action = await mapImportAction(error);
   if (action.action === 'reload-once') {
     window.location.replace(action.href);
@@ -1699,7 +1756,7 @@ async function presentMapImportFailure(error: unknown): Promise<void> {
 async function ensureMapModule(): Promise<typeof import('./map') | null> {
   if (mapModule) return mapModule;
   try {
-    mapModule = await import('./map');
+    mapModule = await loadMapModule();
     try {
       noteMapImportSuccess(sessionStorage);
     } catch (storageError) {
@@ -1824,7 +1881,7 @@ async function init(): Promise<void> {
     if (currentManifest) renderQueue();
   });
   insetHost = bindInsets({
-    mounts: async () => mapModule ?? import('./map'),
+    mounts: async () => mapModule ?? loadMapModule(),
     track: () => currentTrack,
     nowMs: () => Date.now(),
   });

@@ -1,14 +1,14 @@
 /**
  * Prove a failed dynamic import of the map chunk on a production build.
  *
- * Serves frontend/dist, signs the page in, restores a snapshot, then either
- * 404s the hashed map chunk or aborts that request. The check expects the
- * footer to say "Map couldn't load" and to offer Retry. A second document
- * load is the one allowed cache-bust. A third load fails the check.
+ * Serves frontend/dist. A 404 may reload the document once. An abort or a
+ * 500 must not. Retry reloads the document, and with the chunk served the
+ * map paints.
  *
  *   node frontend/scripts/verify-map-import-failure.mjs
  *   node frontend/scripts/verify-map-import-failure.mjs --sizes --out /opt/cursor/artifacts
  */
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -54,9 +54,24 @@ function mapChunkPath() {
   return `/${file}`;
 }
 
-function snapshotBody() {
+function snapshotFixture() {
   const now = new Date().toISOString();
-  return JSON.stringify({
+  const passesBody = '[]';
+  const track = {
+    iss_polynomial: {
+      start: now,
+      duration_seconds: 7200,
+      lat_coeffs: [0, 0, 0, 0, 0.01, 0],
+      lon_coeffs: [0, 0, 0, 0, 0.04, 0],
+      polynomial_order: 5,
+    },
+    tle_epoch: '2026-10-07T00:00:00Z',
+    tle_age_hours: 1,
+    tle_freshness_factor: 1,
+  };
+  const trackBody = JSON.stringify(track);
+  const sha = (body) => createHash('sha256').update(body).digest('hex');
+  const saved = JSON.stringify({
     manifest: {
       version: '20261007T120000Z',
       generated_at: now,
@@ -66,32 +81,29 @@ function snapshotBody() {
       build_version: '2.0.0.0',
       freshness: { tle_hours: 1, cloud_hours: 0, ok: true },
       artifacts: {
-        top5: { path: 'v/X/top5.json', sha256: 'a'.repeat(64), bytes: 2 },
-        top_24h: { path: 'v/X/top_24h.json', sha256: 'b'.repeat(64), bytes: 2 },
-        track: { path: 'v/X/track.json', sha256: 'c'.repeat(64), bytes: 2 },
+        passes: { path: 'v/X/passes.json', sha256: sha(passesBody), bytes: Buffer.byteLength(passesBody) },
+        track: { path: 'v/X/track.json', sha256: sha(trackBody), bytes: Buffer.byteLength(trackBody) },
       },
     },
     top5: [],
     top_24h: [],
-    track: {
-      iss_polynomial: {
-        start: now,
-        duration_seconds: 7200,
-        lat_coeffs: [0, 0, 0, 0, 0.01, 0],
-        lon_coeffs: [0, 0, 0, 0, 0.04, 0],
-        polynomial_order: 5,
-      },
-      tle_epoch: '2026-10-07T00:00:00Z',
-      tle_age_hours: 1,
-      tle_freshness_factor: 1,
-    },
+    track,
     status: null,
     savedAt: Date.now() - 30 * 60_000,
   });
+  return {
+    saved,
+    files: {
+      '/v/X/passes.json': passesBody,
+      '/v/X/track.json': trackBody,
+    },
+  };
 }
 
-function startServer(mapChunk, mode) {
-  const hits = { map: 0, documents: 0 };
+function startServer(mapChunk) {
+  const fixture = snapshotFixture();
+  const control = { chunk: '404' };
+  const hits = { map: 0, documents: 0, script: 0, fetch: 0 };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const path = url.pathname;
@@ -100,9 +112,15 @@ function startServer(mapChunk, mode) {
       res.end(JSON.stringify({ ok: true, profile: { name: 'anil', displayName: 'Anil' } }));
       return;
     }
-    if (path === mapChunk && mode === '404') {
-      hits.map += 1;
-      res.writeHead(404, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+    const artifact = fixture.files[path];
+    if (artifact) {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(artifact);
+      return;
+    }
+    if (path === mapChunk && control.chunk !== 'ok') {
+      const status = control.chunk === '500' ? 500 : 404;
+      res.writeHead(status, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
       res.end('missing');
       return;
     }
@@ -123,12 +141,24 @@ function startServer(mapChunk, mode) {
       res.end('missing');
     }
   });
-  return new Promise((done) => {
+  const ready = new Promise((done) => {
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
       const port = typeof address === 'object' && address ? address.port : 0;
-      done({ server, port, hits });
+      done(port);
     });
+  });
+  return { server, ready, hits, control, snapshot: fixture.saved };
+}
+
+function watchChunk(page, mapChunk, hits) {
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path !== mapChunk) return;
+    hits.map += 1;
+    const kind = request.resourceType();
+    if (kind === 'script') hits.script += 1;
+    else hits.fetch += 1;
   });
 }
 
@@ -137,6 +167,7 @@ async function readState(page) {
     const banner = document.getElementById('status-banner');
     const retry = document.querySelector('#status-banner button');
     const box = retry?.getBoundingClientRect();
+    const map = window.__opdMap;
     return {
       href: location.href,
       bannerText: banner?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
@@ -146,16 +177,39 @@ async function readState(page) {
       retryHeight: box ? Math.round(box.height) : 0,
       retryTop: box ? Math.round(box.top) : 0,
       retryBottom: box ? Math.round(box.bottom) : 0,
+      retryTabIndex: retry ? retry.tabIndex : -1,
       view: document.getElementById('view')?.className ?? '',
       mapChildren: document.getElementById('map')?.childElementCount ?? -1,
       canvas: document.querySelectorAll('#map canvas').length,
+      track: Boolean(map && typeof map.getLayer === 'function' && map.getLayer('iss-track-layer')),
       viewport: { width: window.innerWidth, height: window.innerHeight },
     };
   });
 }
 
-async function runMode(browser, mapChunk, mode, options = {}) {
-  const { server, port, hits } = await startServer(mapChunk, mode);
+async function tabReachesRetry(page) {
+  await page.evaluate(() => {
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
+  for (let step = 0; step < 40; step += 1) {
+    const text = await page.evaluate(() => (document.activeElement?.textContent ?? '').trim());
+    if (text === 'Retry') return true;
+    await page.keyboard.press('Tab');
+  }
+  return false;
+}
+
+async function waitForMapError(page) {
+  await page.waitForFunction(() => {
+    return (document.getElementById('status-banner')?.textContent ?? '').includes("Map couldn't load");
+  }, null, { timeout: 20000 });
+}
+
+async function openFailurePage(browser, mapChunk, options) {
+  const started = startServer(mapChunk);
+  if (options.chunk) started.control.chunk = options.chunk;
+  const port = await started.ready;
   const context = options.context ?? await browser.newContext({
     viewport: { width: 1400, height: 900 },
     serviceWorkers: 'block',
@@ -166,66 +220,65 @@ async function runMode(browser, mapChunk, mode, options = {}) {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('pageerror', (error) => consoleErrors.push(String(error)));
-  page.on('request', (request) => {
-    if (new URL(request.url()).pathname === mapChunk) hits.map += mode === '404' ? 0 : 1;
-  });
-  if (mode === 'abort') {
+  watchChunk(page, mapChunk, started.hits);
+  if (options.abort) {
     await page.route(`**${mapChunk}`, (route) => route.abort('aborted'));
   }
   await page.addInitScript((saved) => {
     localStorage.setItem('opd-snapshot', saved);
-  }, snapshotBody());
-  const origin = `http://127.0.0.1:${port}/`;
+  }, started.snapshot);
+  await page.goto(`http://127.0.0.1:${port}/?e2e`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  return { ...started, port, context, page, consoleErrors, ownsContext: !options.context };
+}
+
+async function runFailure(browser, mapChunk, options = {}) {
+  const opened = await openFailurePage(browser, mapChunk, options);
   try {
-    await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    await page.waitForFunction(() => {
-      const text = document.getElementById('status-banner')?.textContent ?? '';
-      return text.includes("Map couldn't load")
-        || text.includes('LOS')
-        || text.includes('Last updated')
-        || text.includes('Sign in');
-    }, null, { timeout: 15000 }).catch(() => {});
-    await page.waitForFunction(() => {
-      const text = document.getElementById('status-banner')?.textContent ?? '';
-      return text.includes("Map couldn't load") || location.search.includes('map-chunk=');
-    }, null, { timeout: 8000 }).catch(() => {});
-    const midway = await readState(page);
-    if (!midway.bannerText.includes("Map couldn't load")) {
-      await page.waitForFunction(() => {
-        return (document.getElementById('status-banner')?.textContent ?? '').includes("Map couldn't load");
-      }, null, { timeout: 8000 }).catch(() => {});
-    }
-    const state = await readState(page);
-    const shot = join(outDir, options.shot ?? `map-import-red-${mode}.png`);
-    await page.screenshot({ path: shot, fullPage: true });
-    return { mode, port, hits, state, consoleErrors, shot };
+    await waitForMapError(opened.page);
+    const tabbable = await tabReachesRetry(opened.page);
+    const heldDocuments = opened.hits.documents;
+    const heldHref = opened.page.url();
+    await opened.page.waitForTimeout(10000);
+    const held = opened.hits.documents === heldDocuments && opened.page.url() === heldHref;
+    const state = await readState(opened.page);
+    const shot = join(outDir, options.shot ?? 'map-import-red.png');
+    await opened.page.screenshot({ path: shot, fullPage: true });
+    return { hits: opened.hits, state, consoleErrors: opened.consoleErrors, shot, tabbable, held };
   } finally {
-    if (!options.context) await context.close();
-    await new Promise((done) => server.close(done));
+    if (opened.ownsContext) await opened.context.close();
+    await new Promise((done) => opened.server.close(done));
   }
 }
 
-function judge(result) {
+function judgeFailure(result, expected) {
   const text = result.state.bannerText;
-  const showed = text.includes("Map couldn't load");
+  const showed = text.includes("Map couldn't load") && !text.includes('Last updated');
   const retry = result.state.retryText === 'Retry';
   const tap = result.state.retryHeight >= 44 && result.state.retryWidth >= 44;
   const onScreen = result.state.retryTop >= 0
     && result.state.retryBottom <= result.state.viewport.height + 1;
-  const documents = result.hits.documents;
-  const loop = documents > 2;
-  const stuckOnSnapshot = /LOS|Last updated/.test(text) && !showed;
+  const reloaded = result.state.href.includes('map-chunk=1');
+  const pass = showed && result.held && retry && tap && onScreen && result.tabbable
+    && result.state.retryTabIndex >= 0
+    && result.hits.documents === expected.documents
+    && reloaded === expected.reload
+    && !result.state.href.includes('map-retry=')
+    && result.hits.map >= 1;
   return {
-    mode: result.mode,
-    pass: showed && retry && tap && onScreen && !loop && result.hits.map >= 1,
+    label: expected.label,
+    pass,
     showed,
+    held: result.held,
     retry,
     tap,
     onScreen,
-    loop,
-    documents,
+    tabbable: result.tabbable,
+    retryTabIndex: result.state.retryTabIndex,
+    documents: result.hits.documents,
+    reload: reloaded,
     mapRequests: result.hits.map,
-    stuckOnSnapshot,
+    scriptRequests: result.hits.script,
+    fetchRequests: result.hits.fetch,
     bannerText: text,
     bannerClass: result.state.bannerClass,
     retryBox: {
@@ -235,13 +288,76 @@ function judge(result) {
       bottom: result.state.retryBottom,
     },
     viewport: result.state.viewport,
-    mapChildren: result.state.mapChildren,
     canvas: result.state.canvas,
-    view: result.state.view,
+    track: result.state.track,
     href: result.state.href,
     consoleErrors: result.consoleErrors.slice(0, 8),
     shot: result.shot,
   };
+}
+
+async function runRetry(browser, mapChunk, label) {
+  const opened = await openFailurePage(browser, mapChunk, {});
+  try {
+    await waitForMapError(opened.page);
+    const tabbable = await tabReachesRetry(opened.page);
+    const heldDocuments = opened.hits.documents;
+    const heldHref = opened.page.url();
+    await opened.page.waitForTimeout(10000);
+    const stateDuringHold = await readState(opened.page);
+    const held = opened.hits.documents === heldDocuments
+      && opened.page.url() === heldHref
+      && heldHref.includes('map-chunk=1')
+      && stateDuringHold.bannerText.includes("Map couldn't load")
+      && !stateDuringHold.bannerText.includes('Last updated');
+    const documentsBefore = opened.hits.documents;
+    const scriptsBefore = opened.hits.script;
+    opened.control.chunk = 'ok';
+    const stillFocused = await tabReachesRetry(opened.page);
+    await opened.page.keyboard.press('Enter');
+    try {
+      await opened.page.waitForFunction(() => {
+        const map = window.__opdMap;
+        return location.href.includes('map-retry=')
+          && document.querySelectorAll('#map canvas').length > 0
+          && Boolean(map && typeof map.getLayer === 'function' && map.getLayer('iss-track-layer'));
+      }, null, { timeout: 30000 });
+    } catch {
+      /* screenshot the page that did not paint */
+    }
+    const state = await readState(opened.page);
+    const shot = join(outDir, `map-import-retry-${label}.png`);
+    await opened.page.screenshot({ path: shot, fullPage: true });
+    const pass = held && tabbable && stillFocused
+      && state.canvas > 0
+      && state.track
+      && state.href.includes('map-retry=')
+      && opened.hits.documents === documentsBefore + 1
+      && opened.hits.script > scriptsBefore
+      && !state.bannerText.includes("Map couldn't load");
+    return {
+      label: `retry-${label}`,
+      pass,
+      held,
+      tabbable,
+      stillFocused,
+      documents: opened.hits.documents,
+      documentsBefore,
+      scriptRequests: opened.hits.script,
+      scriptsBefore,
+      fetchRequests: opened.hits.fetch,
+      mapRequests: opened.hits.map,
+      canvas: state.canvas,
+      track: state.track,
+      bannerText: state.bannerText,
+      href: state.href,
+      viewport: state.viewport,
+      shot,
+    };
+  } finally {
+    await opened.context.close();
+    await new Promise((done) => opened.server.close(done));
+  }
 }
 
 const SIZES = [
@@ -274,22 +390,36 @@ const chrome = await chromium.launch({
   executablePath: process.env.OPD_VERIFY_CHROME || '/opt/google/chrome/chrome',
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
-const webkit = wantSizes ? await launchWebkit() : null;
+const webkit = await launchWebkit();
 try {
   const results = [];
   if (!wantSizes) {
-    for (const mode of ['404', 'abort']) {
-      results.push(judge(await runMode(chrome, mapChunk, mode)));
+    const cases = [
+      { label: 'chrome-404', browser: chrome, documents: 2, reload: true, shot: 'map-import-chrome-404.png' },
+      { label: 'chrome-abort', browser: chrome, documents: 1, reload: false, abort: true, shot: 'map-import-chrome-abort.png' },
+      { label: 'webkit-abort', browser: webkit, documents: 1, reload: false, abort: true, shot: 'map-import-webkit-abort.png' },
+      { label: 'webkit-500', browser: webkit, documents: 1, reload: false, chunk: '500', shot: 'map-import-webkit-500.png' },
+    ];
+    for (const item of cases) {
+      const result = await runFailure(item.browser, mapChunk, item);
+      results.push(judgeFailure(result, item));
     }
+    results.push(await runRetry(chrome, mapChunk, 'chrome'));
+    results.push(await runRetry(webkit, mapChunk, 'webkit'));
   } else {
     for (const size of SIZES) {
+      const browser = size.kind === 'webkit' ? webkit : chrome;
       const context = await contextFor(size, chrome, webkit);
       try {
-        const judged = judge(await runMode(chrome, mapChunk, '404', {
+        const result = await runFailure(browser, mapChunk, {
           context,
           shot: `map-import-${size.slug}.png`,
-        }));
-        results.push({ ...judged, size: size.slug });
+        });
+        results.push({ ...judgeFailure(result, {
+          label: size.slug,
+          documents: 2,
+          reload: true,
+        }), size: size.slug });
       } finally {
         await context.close();
       }
@@ -306,5 +436,5 @@ try {
   console.log('map import failure check passed');
 } finally {
   await chrome.close();
-  await webkit?.close();
+  await webkit.close();
 }
