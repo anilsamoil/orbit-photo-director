@@ -38,6 +38,16 @@ export function safeAreaChromeFailures({ controls, banner, viewportHeight, inset
   return failures;
 }
 
+export function hitOwnershipFailures(hits, insets) {
+  const failures = [];
+  const span = (insets?.top || 0) + (insets?.right || 0) + (insets?.bottom || 0) + (insets?.left || 0);
+  if (!(span > 0)) failures.push('hit ownership requires a nonzero inset');
+  for (const hit of hits || []) {
+    if (!hit.owned) failures.push(`${hit.name} hit ${hit.hit || 'nothing'}`);
+  }
+  return failures;
+}
+
 function round(value) {
   return Number.isFinite(value) ? Math.round(value) : null;
 }
@@ -64,6 +74,15 @@ async function readSample(page, insets) {
     const env = { top: side('paddingTop'), right: side('paddingRight'), bottom: side('paddingBottom'), left: side('paddingLeft') };
     probe.remove();
     window.__opdSyncMapChrome?.();
+    const owns = (selector) => {
+      const el = document.querySelector(selector);
+      if (!el) return { name: selector, owned: false, hit: 'missing' };
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 8 || rect.height < 8) return { name: selector, owned: false, hit: 'box' };
+      const node = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const owned = !!node && (node === el || el.contains(node));
+      return { name: selector, owned, hit: node ? (node.id || node.getAttribute('aria-label') || node.className || node.tagName) : 'nothing' };
+    };
     return {
       env,
       viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -73,6 +92,18 @@ async function readSample(page, insets) {
         { name: 'time strip', ...box(document.querySelector('.map-command')) },
       ],
       banner: box(document.getElementById('status-banner')),
+      hits: [
+        '.maplibregl-ctrl-zoom-in',
+        '.maplibregl-ctrl-zoom-out',
+        '.maplibregl-ctrl-compass',
+        '#map-legend-toggle',
+        '#map-chrome-toggle',
+        '#time-slider',
+        '#time-back-90',
+        '#time-fwd-90',
+        '#filter-launches-map',
+        '#bearing-north',
+      ].map(owns),
       slotted: document.body.classList.contains('map-slot-time'),
       expected,
     };
@@ -139,9 +170,7 @@ export async function driveMapSafeArea({ baseUrl, evidenceDir }) {
           }
           await page.goto(`${baseUrl}/?e2e`, { waitUntil: 'domcontentloaded', timeout: 30000 });
           await showChrome(page);
-          if (size.width <= 719) {
-            await page.waitForFunction(() => document.body.classList.contains('map-slot-time'), null, { timeout: 5000 });
-          }
+          await page.waitForFunction(() => document.body.classList.contains('map-slot-owned'), null, { timeout: 5000 });
           await page.evaluate(() => window.__opdSyncMapChrome());
           await page.waitForTimeout(300);
           const sample = await readSample(page, insets);
@@ -157,12 +186,15 @@ export async function driveMapSafeArea({ baseUrl, evidenceDir }) {
             if (!control || !(control.width > 0)) throw new Error(`${label} missing ${control?.name || 'control'}`);
           }
           if (!sample.banner || !(sample.banner.height > 0)) throw new Error(`${label} missing status banner`);
-          const named = safeAreaChromeFailures({
-            controls,
-            banner: sample.banner,
-            viewportHeight: sample.viewport.height,
-            insets,
-          });
+          const named = [
+            ...safeAreaChromeFailures({
+              controls,
+              banner: sample.banner,
+              viewportHeight: sample.viewport.height,
+              insets,
+            }),
+            ...hitOwnershipFailures(sample.hits, insets),
+          ];
           const zoom = controls[0];
           const compass = controls[1];
           const strip = controls[2];

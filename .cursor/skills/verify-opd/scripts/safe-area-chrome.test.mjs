@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { safeAreaChromeFailures } from './safe-area-chrome.mjs';
+import { hitOwnershipFailures, safeAreaChromeFailures } from './safe-area-chrome.mjs';
 
 const clear = {
   controls: [
@@ -50,6 +50,29 @@ test('names the status banner when its bottom covers the home indicator', () => 
 
 test('accepts chrome that clears the left inset and the bottom inset', () => {
   assert.deepEqual(safeAreaChromeFailures(clear), []);
+});
+
+test('names a control whose center belongs to something else', () => {
+  const failures = hitOwnershipFailures(
+    [{ name: 'zoom in', owned: false, hit: 'time-slider' }],
+    { top: 24, right: 0, bottom: 20, left: 47 },
+  );
+  assert.deepEqual(failures, ['zoom in hit time-slider']);
+});
+
+test('refuses a zero-inset ownership pass', () => {
+  const failures = hitOwnershipFailures(
+    [{ name: 'zoom in', owned: true, hit: 'zoom in' }],
+    { top: 0, right: 0, bottom: 0, left: 0 },
+  );
+  assert.deepEqual(failures, ['hit ownership requires a nonzero inset']);
+});
+
+test('accepts owned hits at a nonzero inset', () => {
+  assert.deepEqual(hitOwnershipFailures(
+    [{ name: 'Hide', owned: true, hit: 'Hide' }],
+    { top: 24, right: 34, bottom: 0, left: 0 },
+  ), []);
 });
 
 test('ignores a control with no box', () => {
