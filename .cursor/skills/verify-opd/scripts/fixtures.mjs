@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,17 +46,42 @@ function launchIso(ms) {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-export const SESSION_MARGIN_MS = 6 * 60 * 60 * 1000;
+export const QUEUE_HORIZON_MS = 90 * 60_000;
+export const QUEUE_REEF_OFFSET_MS = 20 * 60_000;
+export const QUEUE_DELTA_OFFSET_MS = 50 * 60_000;
+export const CATALOG_NET_OFFSET_MS = 2 * 60 * 60_000;
+
+const ZONED_STAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})$/;
+
+export function driveStartMs(raw, wallMs) {
+  const text = String(raw ?? '').trim();
+  if (!text) return wallMs;
+  if (!ZONED_STAMP.test(text)) {
+    throw new Error(`OPD_VERIFY_DRIVE_START must be a zoned timestamp: ${text}`);
+  }
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`OPD_VERIFY_DRIVE_START is not a time: ${text}`);
+  }
+  if (parsed + QUEUE_REEF_OFFSET_MS <= wallMs) {
+    throw new Error(`OPD_VERIFY_DRIVE_START ${text} is expired at ${new Date(wallMs).toISOString()}`);
+  }
+  if (parsed + QUEUE_DELTA_OFFSET_MS >= wallMs + QUEUE_HORIZON_MS) {
+    throw new Error(`OPD_VERIFY_DRIVE_START ${text} is outside the 90-minute horizon at ${new Date(wallMs).toISOString()}`);
+  }
+  return parsed;
+}
 
 function eventInstants(start) {
-  const launchBase = start + SESSION_MARGIN_MS + 30 * 60_000;
+  const launchBase = start + CATALOG_NET_OFFSET_MS;
   return {
-    reef: launchIso(start + SESSION_MARGIN_MS + 20 * 60_000),
-    delta: launchIso(start + SESSION_MARGIN_MS + 50 * 60_000),
+    reef: launchIso(start + QUEUE_REEF_OFFSET_MS),
+    delta: launchIso(start + QUEUE_DELTA_OFFSET_MS),
     mesa: launchIso(start + 8 * 60 * 60_000),
-    keepsake: launchIso(start + SESSION_MARGIN_MS + 35 * 60_000),
-    windowStart: launchIso(start + SESSION_MARGIN_MS + 30 * 60_000),
-    windowEnd: launchIso(start + SESSION_MARGIN_MS + 40 * 60_000),
+    keepsake: launchIso(start + 35 * 60_000),
+    windowStart: launchIso(start + 30 * 60_000),
+    windowEnd: launchIso(start + 40 * 60_000),
+    sample: launchIso(start - 30_000),
     net: launchIso(launchBase),
     launchWindowEnd: launchIso(launchBase + 9 * 60_000),
     captureStart: launchIso(launchBase + 60_000),
@@ -64,6 +89,21 @@ function eventInstants(start) {
     captureEnd: launchIso(launchBase + 8 * 60_000),
     liftoffEnd: launchIso(launchBase + 60_000),
   };
+}
+
+function writeTextAtomic(path, text) {
+  const tmp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
+  writeFileSync(tmp, text);
+  try {
+    renameSync(tmp, path);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // The rename already failed. Leave that error in charge.
+    }
+    throw error;
+  }
 }
 
 function wrapLon(lon) {
@@ -185,6 +225,7 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
   const hereNow = positionAt(satrec, now) ?? { lat: 0, lon: 0, altKm: 420 };
   const generated = launchIso(now - 30_000);
   const events = eventInstants(eventStart);
+  const sample = events.sample;
   const queueAt = events.reef;
   const queueAt2 = events.delta;
   const upcomingAt = events.mesa;
@@ -196,14 +237,14 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
   const keepsake = { lat: hereNow.lat, lon: wrapLon(hereNow.lon + 4) };
 
   const top5 = [
-    pass({ id: 'verify-reef', name: 'Verify Reef', ...reef, at: queueAt, score: 86, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
-    pass({ id: 'verify-delta', name: 'Verify Delta', ...delta, at: queueAt2, score: 64, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
+    pass({ id: 'verify-reef', name: 'Verify Reef', ...reef, at: queueAt, score: 86, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
+    pass({ id: 'verify-delta', name: 'Verify Delta', ...delta, at: queueAt2, score: 64, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
   ];
   const top24h = [
-    pass({ id: 'verify-mesa', name: 'Verify Mesa', ...mesa, at: upcomingAt, score: 71, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
+    pass({ id: 'verify-mesa', name: 'Verify Mesa', ...mesa, at: upcomingAt, score: 71, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
   ];
   const cupolaPass = {
-    ...pass({ id: 'cupola:verify-window', name: 'Verify Keepsake', ...keepsake, at: keepsakeAt, score: 77, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
+    ...pass({ id: 'cupola:verify-window', name: 'Verify Keepsake', ...keepsake, at: keepsakeAt, score: 77, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
     golden_hour: true,
     water_pct: 0.45,
     window_start: events.windowStart,
@@ -421,6 +462,27 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
     sha256: sha256(launchText),
   };
   writeFileSync(resolve(dir, 'launch-latest.json'), JSON.stringify(pointer));
+  const catalog = {
+    schema_version: 3,
+    revision: 'verify-catalog',
+    generated_at: generatedLaunch,
+    schedule_valid_until: assessmentUntil,
+    geometry_valid_until: pointerUntil,
+    coverage: {
+      from: launchIso(now - 60 * 60_000),
+      until: launchIso(now + 14 * 24 * 60 * 60_000),
+    },
+    items: [
+      {
+        event_id: 'verify-ascent',
+        name: 'Verify Ascent',
+        schedule: { net, window_start: net, window_end: windowEnd },
+        shots: [{ liftoff: net, start: net, best: events.captureStart, end: events.captureEnd }],
+      },
+    ],
+  };
+  writeFileSync(resolve(dir, 'catalog.json'), JSON.stringify(catalog));
+  writeFileSync(resolve(dir, 'catalog-clock.json'), JSON.stringify({ anchor: eventStart }));
   const meta = {
     now,
     tleSource: tle.source,
@@ -464,12 +526,12 @@ export function refreshLaunchClock(dir, wallMs = Date.now()) {
     }
   }
   const text = JSON.stringify(launch);
-  writeFileSync(launchPath, text);
+  writeTextAtomic(launchPath, text);
   const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
   pointer.generated_at = generated;
   pointer.valid_until = until;
   pointer.sha256 = sha256(text);
-  writeFileSync(pointerPath, JSON.stringify(pointer));
+  writeTextAtomic(pointerPath, JSON.stringify(pointer));
   return until;
 }
 
@@ -485,6 +547,7 @@ function stampPassList(passes, times) {
     const key = PASS_EVENT[pass.target_id];
     if (!key) continue;
     pass.closest_approach = times[key];
+    pass.sample_time = times.sample;
     if (pass.target_id === 'cupola:verify-window') {
       pass.window_start = times.windowStart;
       pass.window_end = times.windowEnd;
@@ -512,8 +575,29 @@ function stampLaunchBody(launch, times) {
 
 function writeJson(dir, name, body) {
   const entry = artifact(body);
-  writeFileSync(resolve(dir, name), entry.text);
+  writeTextAtomic(resolve(dir, name), entry.text);
   return entry;
+}
+
+function stampCatalog(dir, times, eventStart) {
+  const catalogPath = resolve(dir, 'catalog.json');
+  if (!existsSync(catalogPath)) return;
+  const catalog = JSON.parse(readFileSync(catalogPath, 'utf8'));
+  for (const item of catalog.items || []) {
+    if (item.schedule) {
+      item.schedule.net = times.net;
+      item.schedule.window_start = times.net;
+      item.schedule.window_end = times.launchWindowEnd;
+    }
+    for (const shot of item.shots || []) {
+      shot.liftoff = times.net;
+      shot.start = times.net;
+      shot.best = times.captureStart;
+      shot.end = times.captureEnd;
+    }
+  }
+  writeTextAtomic(catalogPath, JSON.stringify(catalog));
+  writeTextAtomic(resolve(dir, 'catalog-clock.json'), JSON.stringify({ anchor: eventStart }));
 }
 
 export function stampEventTimes(dir, eventStart) {
@@ -528,6 +612,7 @@ export function stampEventTimes(dir, eventStart) {
   stampPassList(top24, times);
   stampPassList(cupola.windows, times);
   stampLaunchBody(launch, times);
+  stampCatalog(dir, times, eventStart);
   const written = {
     passes: writeJson(dir, 'passes.json', passes),
     top5: writeJson(dir, 'top5.json', top5),
@@ -540,10 +625,11 @@ export function stampEventTimes(dir, eventStart) {
     manifest.artifacts[key].sha256 = written[key].sha256;
     manifest.artifacts[key].bytes = written[key].bytes;
   }
-  writeFileSync(resolve(dir, 'manifest.json'), JSON.stringify(manifest));
+  writeTextAtomic(resolve(dir, 'manifest.json'), JSON.stringify(manifest));
   const pointer = JSON.parse(readFileSync(resolve(dir, 'launch-latest.json'), 'utf8'));
   pointer.sha256 = written.launch.sha256;
-  writeFileSync(resolve(dir, 'launch-latest.json'), JSON.stringify(pointer));
+  writeTextAtomic(resolve(dir, 'launch-latest.json'), JSON.stringify(pointer));
+  writeTextAtomic(resolve(dir, 'drive-clock.json'), JSON.stringify({ start: eventStart }));
   return times;
 }
 

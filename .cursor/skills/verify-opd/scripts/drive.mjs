@@ -561,8 +561,20 @@ async function resetFixtureProfile(baseUrl) {
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
 }
 
-async function openApp(send, baseUrl) {
+function pageClockSource(startMs) {
+  return `(() => {
+    const start = ${Number(startMs)};
+    const real = Date.now.bind(Date);
+    const skew = start - real();
+    Date.now = () => real() + skew;
+  })();`;
+}
+
+async function openApp(send, baseUrl, pageNowMs) {
   await send('Page.enable');
+  if (Number.isFinite(pageNowMs)) {
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: pageClockSource(pageNowMs) });
+  }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: LOG_HOOK });
   await send('Page.navigate', { url: `${baseUrl}/?e2e` });
   await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'page load', 30000);
@@ -601,7 +613,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   return notes;
 }
 
-async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home, pageNowMs }) {
   slideLaunch(home);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
@@ -621,7 +633,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
       });
       await cdp.send('Network.enable');
       cdp.send.cartoDark = cartoDark;
-      await openApp(cdp.send, baseUrl);
+      await openApp(cdp.send, baseUrl, pageNowMs);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
@@ -635,7 +647,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
   }
 }
 
-async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, pageNowMs }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
@@ -650,6 +662,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
       const context = await browser.newContext({ ...deviceDescriptor(active) });
+      if (Number.isFinite(pageNowMs)) await context.addInitScript({ content: pageClockSource(pageNowMs) });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -678,15 +691,15 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
   return notes;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features, pageNowMs }) {
   viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home }));
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, pageNowMs }));
   if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
-    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }));
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, pageNowMs }));
   }
   return notes;
 }
@@ -729,7 +742,7 @@ const CORNER_BOX = `
   };
 `;
 
-export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
+export async function driveMapCorner({ baseUrl, evidenceDir, home, pageNowMs }) {
   mkdirSync(evidenceDir, { recursive: true });
   slideLaunch(home);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
@@ -742,7 +755,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
     const send = cdp.send;
     try {
       await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
-      await openApp(send, baseUrl);
+      await openApp(send, baseUrl, pageNowMs);
       const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
       if (!shown) {
         await click(send, '#map-chrome-toggle');
