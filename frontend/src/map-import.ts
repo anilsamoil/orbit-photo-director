@@ -1,5 +1,9 @@
 export const MAP_IMPORT_RETRY_KEY = 'opd-map-import-retry';
 export const MAP_IMPORT_URL_KEY = 'opd-map-import-url';
+export const MAP_IMPORT_VIEW_KEY = 'opd-map-import-view';
+export const MAP_CHUNK_PROBE_TIMEOUT_MS = 2000;
+
+const MAP_IMPORT_VIEW_IDS = ['tab-queue', 'tab-upcoming', 'tab-iss', 'tab-profile', 'tab-log'] as const;
 
 export interface MapImportFlagStore {
   getItem(key: string): string | null;
@@ -36,6 +40,77 @@ export function retryMapModuleUrl(chunkUrl: string, nonce: string): string {
   const url = new URL(chunkUrl);
   url.searchParams.set('map-retry', nonce);
   return url.toString();
+}
+
+export function stripMapImportParams(href: string): string {
+  const url = new URL(href);
+  url.searchParams.delete('map-chunk');
+  url.searchParams.delete('map-retry');
+  return url.toString();
+}
+
+/** A query the precache route does not ignore, so the probe is not answered from the service worker. */
+export function chunkProbeUrl(chunkUrl: string, nonce: string): string {
+  const url = new URL(chunkUrl);
+  url.searchParams.set('map-probe', nonce);
+  return url.toString();
+}
+
+export function isMapLibreVendorUrl(url: string): boolean {
+  let path = url;
+  try {
+    path = new URL(url, 'http://localhost').pathname;
+  } catch {
+    return false;
+  }
+  return /\/maplibre-vendor-[^/]+\.js$/.test(path) || /\/maplibre-gl-worker-[^/]+\.js$/.test(path);
+}
+
+export function rememberedViewId(activeTabId: string | null): string | null {
+  if (!activeTabId) return null;
+  return (MAP_IMPORT_VIEW_IDS as readonly string[]).includes(activeTabId) ? activeTabId : null;
+}
+
+export function mapModuleFromViteDeps(source: string): { script: string; stylesheets: string[] } | null {
+  const body = source.match(/m\.f\|\|\(m\.f=\[([^\]]+)\]\)/)?.[1];
+  if (!body) return null;
+  const files = [...body.matchAll(/"([^"]+)"/g)].flatMap((match) => (match[1] ? [match[1]] : []));
+  const calls = [...source.matchAll(/__vite__mapDeps\(\[([0-9,]+)\]\)/g)].flatMap((match) => {
+    const raw = match[1];
+    if (!raw) return [];
+    const nums = raw.split(',').map(Number);
+    if (nums.length <= 4 || nums.some((num) => !Number.isInteger(num))) return [];
+    return [nums];
+  });
+  const mapCall = [...calls].sort((a, b) => (b[0] ?? 0) - (a[0] ?? 0))[0];
+  const scriptIndex = mapCall?.[0];
+  if (!mapCall || scriptIndex === undefined) return null;
+  const script = files[scriptIndex];
+  if (!script || !script.endsWith('.js') || isMapLibreVendorUrl(script)) return null;
+  const stylesheets = mapCall
+    .map((index) => files[index])
+    .filter((file): file is string => typeof file === 'string' && file.endsWith('.css'));
+  return { script, stylesheets };
+}
+
+export async function readChunkStatus(
+  chunkUrl: string,
+  timeoutMs = MAP_CHUNK_PROBE_TIMEOUT_MS,
+  nonce = String(Date.now()),
+): Promise<number | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(chunkProbeUrl(chunkUrl, nonce), {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    return response.status;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function reportedImportError(error: unknown): unknown {

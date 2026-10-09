@@ -103,7 +103,7 @@ function snapshotFixture() {
 function startServer(mapChunk) {
   const fixture = snapshotFixture();
   const control = { chunk: '404' };
-  const hits = { map: 0, documents: 0, script: 0, fetch: 0 };
+  const hits = { map: 0, documents: 0, script: 0, fetch: 0, docUrls: [], scriptUrls: [] };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const path = url.pathname;
@@ -129,7 +129,10 @@ function startServer(mapChunk) {
       res.end('/* service worker withheld so the hashed chunk stays a network 404 */');
       return;
     }
-    if (path === '/' || path === '/index.html') hits.documents += 1;
+    if (path === '/' || path === '/index.html') {
+      hits.documents += 1;
+      hits.docUrls.push(url.pathname + url.search);
+    }
     const file = path === '/' ? '/index.html' : path;
     try {
       const body = readFileSync(join(dist, file));
@@ -157,8 +160,10 @@ function watchChunk(page, mapChunk, hits) {
     if (path !== mapChunk) return;
     hits.map += 1;
     const kind = request.resourceType();
-    if (kind === 'script') hits.script += 1;
-    else hits.fetch += 1;
+    if (kind === 'script') {
+      hits.script += 1;
+      hits.scriptUrls.push(request.url());
+    } else hits.fetch += 1;
   });
 }
 
@@ -182,8 +187,30 @@ async function readState(page) {
       mapChildren: document.getElementById('map')?.childElementCount ?? -1,
       canvas: document.querySelectorAll('#map canvas').length,
       track: Boolean(map && typeof map.getLayer === 'function' && map.getLayer('iss-track-layer')),
+      css: Boolean(document.querySelector('link[rel="stylesheet"][href*="maplibre-vendor"]')),
+      markerInside: markerInsideMap(),
+      storedUrl: sessionStorage.getItem('opd-map-import-url') ?? '',
+      hit: retryHit(),
       viewport: { width: window.innerWidth, height: window.innerHeight },
     };
+    function markerInsideMap() {
+      const mapEl = document.getElementById('map');
+      const marker = document.querySelector('#map .iss-marker');
+      if (!mapEl || !marker) return false;
+      const mapBox = mapEl.getBoundingClientRect();
+      const box = marker.getBoundingClientRect();
+      if (mapBox.width < 20 || mapBox.height < 20 || box.width < 1 || box.height < 1) return false;
+      const cx = box.left + box.width / 2;
+      const cy = box.top + box.height / 2;
+      return cx >= mapBox.left && cx <= mapBox.right && cy >= mapBox.top && cy <= mapBox.bottom;
+    }
+    function retryHit() {
+      const retry = document.querySelector('#status-banner button');
+      if (!retry) return '';
+      const box = retry.getBoundingClientRect();
+      const node = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return node instanceof HTMLElement ? (node.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
+    }
   });
 }
 
@@ -222,13 +249,25 @@ async function openFailurePage(browser, mapChunk, options) {
   page.on('pageerror', (error) => consoleErrors.push(String(error)));
   watchChunk(page, mapChunk, started.hits);
   if (options.abort) {
-    await page.route(`**${mapChunk}`, (route) => route.abort('aborted'));
+    await page.route(`**${mapChunk}*`, (route) => route.abort('aborted'));
   }
+  if (options.prepare) await options.prepare(page);
   await page.addInitScript((saved) => {
     localStorage.setItem('opd-snapshot', saved);
   }, started.snapshot);
   await page.goto(`http://127.0.0.1:${port}/?e2e`, { waitUntil: 'domcontentloaded', timeout: 20000 });
   return { ...started, port, context, page, consoleErrors, ownsContext: !options.context };
+}
+
+async function raiseShotList(page) {
+  await page.evaluate(() => {
+    document.body.classList.add('shotlist-bar-visible');
+    if (document.getElementById('shotlist-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'shotlist-bar';
+    bar.textContent = '2 selected';
+    document.body.append(bar);
+  });
 }
 
 async function runFailure(browser, mapChunk, options = {}) {
@@ -240,6 +279,7 @@ async function runFailure(browser, mapChunk, options = {}) {
     const heldHref = opened.page.url();
     await opened.page.waitForTimeout(10000);
     const held = opened.hits.documents === heldDocuments && opened.page.url() === heldHref;
+    await raiseShotList(opened.page);
     const state = await readState(opened.page);
     const shot = join(outDir, options.shot ?? 'map-import-red.png');
     await opened.page.screenshot({ path: shot, fullPage: true });
@@ -258,12 +298,14 @@ function judgeFailure(result, expected) {
   const onScreen = result.state.retryTop >= 0
     && result.state.retryBottom <= result.state.viewport.height + 1;
   const reloaded = result.state.href.includes('map-chunk=1');
+  const hit = result.state.hit === 'Retry';
   const pass = showed && result.held && retry && tap && onScreen && result.tabbable
     && result.state.retryTabIndex >= 0
     && result.hits.documents === expected.documents
     && reloaded === expected.reload
     && !result.state.href.includes('map-retry=')
-    && result.hits.map >= 1;
+    && result.hits.map >= 1
+    && hit;
   return {
     label: expected.label,
     pass,
@@ -273,6 +315,7 @@ function judgeFailure(result, expected) {
     tap,
     onScreen,
     tabbable: result.tabbable,
+    hit,
     retryTabIndex: result.state.retryTabIndex,
     documents: result.hits.documents,
     reload: reloaded,
@@ -316,22 +359,43 @@ async function runRetry(browser, mapChunk, label) {
     const stillFocused = await tabReachesRetry(opened.page);
     await opened.page.keyboard.press('Enter');
     try {
-      await opened.page.waitForFunction(() => {
+      await opened.page.waitForFunction((chunk) => {
         const map = window.__opdMap;
-        return location.href.includes('map-retry=')
+        const mapEl = document.getElementById('map');
+        const marker = document.querySelector('#map .iss-marker');
+        const css = Boolean(document.querySelector('link[rel="stylesheet"][href*="maplibre-vendor"]'));
+        const flagsGone = !location.href.includes('map-chunk') && !location.href.includes('map-retry');
+        if (!mapEl || !marker || !css || !flagsGone) return false;
+        const mapBox = mapEl.getBoundingClientRect();
+        const box = marker.getBoundingClientRect();
+        const cx = box.left + box.width / 2;
+        const cy = box.top + box.height / 2;
+        const inside = mapBox.width > 20 && cx >= mapBox.left && cx <= mapBox.right && cy >= mapBox.top && cy <= mapBox.bottom;
+        return inside
           && document.querySelectorAll('#map canvas').length > 0
-          && Boolean(map && typeof map.getLayer === 'function' && map.getLayer('iss-track-layer'));
-      }, null, { timeout: 30000 });
+          && Boolean(map && typeof map.getLayer === 'function' && map.getLayer('iss-track-layer'))
+          && chunk.length > 0;
+      }, mapChunk, { timeout: 30000 });
     } catch {
       /* screenshot the page that did not paint */
     }
     const state = await readState(opened.page);
     const shot = join(outDir, `map-import-retry-${label}.png`);
     await opened.page.screenshot({ path: shot, fullPage: true });
+    const retriedDoc = opened.hits.docUrls.some((href) => href.includes('map-retry='));
+    const retryScripts = opened.hits.scriptUrls.filter((href) => href.includes('map-retry='));
+    const retriedMap = retryScripts.some((href) => href.includes(mapChunk));
+    const retriedVendor = retryScripts.some((href) => href.includes('maplibre-vendor') || href.includes('maplibre-gl-worker'));
+    const flagsGone = !state.href.includes('map-chunk') && !state.href.includes('map-retry');
     const pass = held && tabbable && stillFocused
       && state.canvas > 0
       && state.track
-      && state.href.includes('map-retry=')
+      && state.css
+      && state.markerInside
+      && flagsGone
+      && retriedDoc
+      && retriedMap
+      && !retriedVendor
       && opened.hits.documents === documentsBefore + 1
       && opened.hits.script > scriptsBefore
       && !state.bannerText.includes("Map couldn't load");
@@ -349,9 +413,152 @@ async function runRetry(browser, mapChunk, label) {
       mapRequests: opened.hits.map,
       canvas: state.canvas,
       track: state.track,
+      css: state.css,
+      markerInside: state.markerInside,
+      flagsGone,
+      retriedDoc,
+      retriedMap,
+      retriedVendor,
       bannerText: state.bannerText,
       href: state.href,
       viewport: state.viewport,
+      shot,
+    };
+  } finally {
+    await opened.context.close();
+    await new Promise((done) => opened.server.close(done));
+  }
+}
+
+async function runProbeHang(browser, mapChunk) {
+  const opened = await openFailurePage(browser, mapChunk, {
+    prepare: (page) => page.route(`**${mapChunk}*`, async (route) => {
+      if (route.request().url().includes('map-probe=')) return;
+      await route.abort('failed');
+    }),
+  });
+  try {
+    await waitForMapError(opened.page);
+    await opened.page.waitForTimeout(3000);
+    const state = await readState(opened.page);
+    const shot = join(outDir, 'map-import-probe-hang.png');
+    await opened.page.screenshot({ path: shot, fullPage: true });
+    const pass = state.bannerText.includes("Map couldn't load")
+      && !state.bannerText.includes('Last updated')
+      && !state.href.includes('map-chunk')
+      && opened.hits.documents === 1;
+    return {
+      label: 'probe-hang',
+      pass,
+      documents: opened.hits.documents,
+      bannerText: state.bannerText,
+      href: state.href,
+      shot,
+    };
+  } finally {
+    await opened.context.close();
+    await new Promise((done) => opened.server.close(done));
+  }
+}
+
+async function runViewPreserve(browser, mapChunk) {
+  let release = () => {};
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  const opened = await openFailurePage(browser, mapChunk, {
+    prepare: (page) => page.route(`**${mapChunk}*`, async (route) => {
+      const requestUrl = route.request().url();
+      if (requestUrl.includes('map-probe=')) {
+        await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
+        return;
+      }
+      await hold;
+      await route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' });
+    }),
+  });
+  try {
+    await opened.page.waitForRequest((request) => {
+      return request.url().includes(mapChunk) && request.resourceType() === 'script';
+    }, { timeout: 20000 });
+    await opened.page.click('#tab-queue');
+    release();
+    await opened.page.waitForFunction(() => {
+      return location.href.includes('map-chunk=1') && document.getElementById('view')?.className === 'view-queue';
+    }, null, { timeout: 20000 });
+    const state = await readState(opened.page);
+    const shot = join(outDir, 'map-import-view-queue.png');
+    await opened.page.screenshot({ path: shot, fullPage: true });
+    const pass = state.view === 'view-queue'
+      && state.href.includes('map-chunk=1')
+      && opened.hits.documents === 2
+      && !state.href.includes('map-retry');
+    return { label: 'view-queue', pass, view: state.view, documents: opened.hits.documents, href: state.href, shot };
+  } finally {
+    release();
+    await opened.context.close();
+    await new Promise((done) => opened.server.close(done));
+  }
+}
+
+async function runAbortRetry(browser, mapChunk, label) {
+  const opened = await openFailurePage(browser, mapChunk, { abort: true });
+  try {
+    await waitForMapError(opened.page);
+    const failed = await readState(opened.page);
+    const storedMap = failed.storedUrl.includes(mapChunk) && !failed.storedUrl.includes('maplibre-vendor');
+    await opened.page.unroute(`**${mapChunk}*`);
+    opened.control.chunk = 'ok';
+    const scriptsBefore = opened.hits.script;
+    await opened.page.click('#status-banner button');
+    try {
+      await opened.page.waitForFunction(() => {
+        const map = window.__opdMap;
+        const mapEl = document.getElementById('map');
+        const marker = document.querySelector('#map .iss-marker');
+        const css = Boolean(document.querySelector('link[rel="stylesheet"][href*="maplibre-vendor"]'));
+        if (!mapEl || !marker || !css) return false;
+        if (location.href.includes('map-chunk') || location.href.includes('map-retry')) return false;
+        const mapBox = mapEl.getBoundingClientRect();
+        const box = marker.getBoundingClientRect();
+        const cx = box.left + box.width / 2;
+        const cy = box.top + box.height / 2;
+        return mapBox.width > 20
+          && cx >= mapBox.left && cx <= mapBox.right
+          && cy >= mapBox.top && cy <= mapBox.bottom
+          && document.querySelectorAll('#map canvas').length > 0
+          && Boolean(map && typeof map.getLayer === 'function' && map.getLayer('iss-track-layer'));
+      }, null, { timeout: 30000 });
+    } catch {
+      /* screenshot the page that did not paint */
+    }
+    const state = await readState(opened.page);
+    const shot = join(outDir, `map-import-abort-retry-${label}.png`);
+    await opened.page.screenshot({ path: shot, fullPage: true });
+    const retryScripts = opened.hits.scriptUrls.filter((href) => href.includes('map-retry='));
+    const pass = storedMap
+      && failed.href.includes("e2e")
+      && !failed.href.includes('map-chunk')
+      && state.canvas > 0
+      && state.track
+      && state.css
+      && state.markerInside
+      && !state.href.includes('map-chunk')
+      && !state.href.includes('map-retry')
+      && retryScripts.some((href) => href.includes(mapChunk))
+      && !retryScripts.some((href) => href.includes('maplibre-vendor') || href.includes('maplibre-gl-worker'))
+      && opened.hits.script > scriptsBefore;
+    return {
+      label: `abort-retry-${label}`,
+      pass,
+      storedMap,
+      storedUrl: failed.storedUrl,
+      css: state.css,
+      markerInside: state.markerInside,
+      canvas: state.canvas,
+      track: state.track,
+      href: state.href,
+      scriptUrls: retryScripts,
       shot,
     };
   } finally {
@@ -406,6 +613,9 @@ try {
     }
     results.push(await runRetry(chrome, mapChunk, 'chrome'));
     results.push(await runRetry(webkit, mapChunk, 'webkit'));
+    results.push(await runAbortRetry(webkit, mapChunk, 'webkit'));
+    results.push(await runProbeHang(chrome, mapChunk));
+    results.push(await runViewPreserve(chrome, mapChunk));
   } else {
     for (const size of SIZES) {
       const browser = size.kind === 'webkit' ? webkit : chrome;

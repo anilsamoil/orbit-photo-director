@@ -1094,6 +1094,7 @@ body:has(> #view.view-map) {
 }
 body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 body:has(> #view.view-map) > #status-banner:has(.banner-actions) {
+  z-index: 70;
   padding: 0.55rem 0.75rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
   font-size: 0.85rem;
   line-height: 1.3;

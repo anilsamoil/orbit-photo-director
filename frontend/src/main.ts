@@ -64,11 +64,18 @@ import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 import {
+  MAP_CHUNK_PROBE_TIMEOUT_MS,
   MAP_IMPORT_URL_KEY,
+  MAP_IMPORT_VIEW_KEY,
+  isMapLibreVendorUrl,
+  mapModuleFromViteDeps,
   nextMapImportStep,
   noteMapImportSuccess,
+  readChunkStatus,
+  rememberedViewId,
   retryMapHref,
   retryMapModuleUrl,
+  stripMapImportParams,
   type MapImportAction,
 } from './map-import';
 
@@ -1641,31 +1648,64 @@ function assetScriptEntries(): PerformanceResourceTiming[] {
   return entries.filter((entry) => /\/assets\/[^?#]+\.js(?:[?#]|$)/.test(entry.name));
 }
 
+function mapChunkCandidate(url: string): string | null {
+  if (!url || isMapLibreVendorUrl(url)) return null;
+  return url;
+}
+
 async function failedAssetScriptUrl(): Promise<string | null> {
-  const scripts = assetScriptEntries();
+  const scripts = assetScriptEntries().filter((entry) => !isMapLibreVendorUrl(entry.name));
   const missing = [...scripts].reverse().find((entry) => entry.responseStatus === 404);
-  if (missing) return missing.name;
+  const missingUrl = mapChunkCandidate(missing?.name ?? '');
+  if (missingUrl) return missingUrl;
   const httpError = [...scripts].reverse().find((entry) => {
     const status = entry.responseStatus;
     return typeof status === 'number' && status !== 0 && status !== 200;
   });
-  if (httpError) return httpError.name;
+  const httpErrorUrl = mapChunkCandidate(httpError?.name ?? '');
+  if (httpErrorUrl) return httpErrorUrl;
   for (const entry of [...scripts].reverse()) {
     if (entry.responseStatus === 200) continue;
     if (entry.transferSize !== 0 || entry.encodedBodySize !== 0 || entry.decodedBodySize !== 0) continue;
-    try {
-      const response = await fetch(entry.name, { cache: 'no-store' });
-      if (response.status !== 200) return entry.name;
-    } catch {
-      return entry.name;
-    }
+    const status = await readChunkStatus(entry.name);
+    if (status !== null && status !== 200) return entry.name;
+    if (status === null && /\/assets\/index-[^/]+\.js(?:[?#]|$)/.test(entry.name)) return entry.name;
   }
   return null;
 }
 
+async function readMapModuleGraph(): Promise<{ script: string; stylesheets: string[] } | null> {
+  const entry = document.querySelector('script[type="module"][src*="/assets/"]');
+  const src = entry?.getAttribute('src');
+  if (!src) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MAP_CHUNK_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(new URL(src, window.location.href), {
+      cache: 'force-cache',
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    return mapModuleFromViteDeps(await response.text());
+  } catch (error) {
+    console.error('[map] map pane failed to load:', error);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function absoluteAssetUrl(file: string): string {
+  return new URL(file, window.location.origin).href;
+}
+
 async function rememberFailedMapChunk(): Promise<void> {
-  const found = await failedAssetScriptUrl();
-  if (!found) return;
+  let found = mapChunkCandidate(await failedAssetScriptUrl() ?? '');
+  if (!found) {
+    const graph = await readMapModuleGraph();
+    if (graph) found = absoluteAssetUrl(graph.script);
+  }
+  if (!found || isMapLibreVendorUrl(found)) return;
   try {
     sessionStorage.setItem(MAP_IMPORT_URL_KEY, found);
   } catch (storageError) {
@@ -1673,27 +1713,80 @@ async function rememberFailedMapChunk(): Promise<void> {
   }
 }
 
-function loadMapModule(): Promise<typeof import('./map')> {
-  const nonce = new URL(window.location.href).searchParams.get('map-retry');
-  let stored: string | null = null;
+async function ensureMapLibreStyles(): Promise<void> {
+  const graph = await readMapModuleGraph();
+  if (!graph) return;
+  const present = new Set(
+    [...document.querySelectorAll('link[rel="stylesheet"]')].map((link) => (link as HTMLLinkElement).href),
+  );
+  for (const file of graph.stylesheets) {
+    const href = absoluteAssetUrl(file);
+    if (present.has(href)) continue;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+  }
+}
+
+function readStoredMapChunk(): string | null {
   try {
-    stored = sessionStorage.getItem(MAP_IMPORT_URL_KEY);
+    const stored = sessionStorage.getItem(MAP_IMPORT_URL_KEY);
+    if (!stored || isMapLibreVendorUrl(stored)) return null;
+    return stored;
   } catch (storageError) {
     console.error('[map] map pane failed to load:', storageError);
+    return null;
   }
-  if (!nonce || !stored) return import('./map');
+}
+
+async function loadMapModule(): Promise<typeof import('./map')> {
+  const nonce = new URL(window.location.href).searchParams.get('map-retry');
+  if (!nonce) return import('./map');
+  let stored = readStoredMapChunk();
+  if (!stored) {
+    const graph = await readMapModuleGraph();
+    if (graph) stored = absoluteAssetUrl(graph.script);
+  }
+  if (!stored || isMapLibreVendorUrl(stored)) return import('./map');
+  await ensureMapLibreStyles();
   return import(/* @vite-ignore */ retryMapModuleUrl(stored, nonce)) as Promise<typeof import('./map')>;
 }
 
 async function probeMapChunk(url: string | null): Promise<number | null> {
-  const target = url ?? await failedAssetScriptUrl();
-  if (!target) return null;
+  const target = mapChunkCandidate(url ?? '') ?? await failedAssetScriptUrl();
+  if (!target || isMapLibreVendorUrl(target)) return null;
+  return readChunkStatus(target);
+}
+
+function rememberMapImportView(): void {
+  const active = document.querySelector('.tabs .tab.active');
+  const viewId = rememberedViewId(active?.id ?? null);
+  if (!viewId) return;
   try {
-    const response = await fetch(target, { cache: 'no-store' });
-    return response.status;
-  } catch {
-    return null;
+    sessionStorage.setItem(MAP_IMPORT_VIEW_KEY, viewId);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
   }
+}
+
+function restoreMapImportView(): void {
+  let viewId: string | null = null;
+  try {
+    viewId = sessionStorage.getItem(MAP_IMPORT_VIEW_KEY);
+    sessionStorage.removeItem(MAP_IMPORT_VIEW_KEY);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+    return;
+  }
+  if (!rememberedViewId(viewId)) return;
+  document.getElementById(viewId ?? '')?.click();
+}
+
+function clearMapImportUrlFlags(): void {
+  const clean = stripMapImportParams(window.location.href);
+  if (clean === window.location.href) return;
+  window.history.replaceState({}, '', clean);
 }
 
 function restoreStatusBanner(): void {
@@ -1712,6 +1805,7 @@ function restoreStatusBanner(): void {
 }
 
 function showMapLoadError(): void {
+  if (sessionBannerHeld) return;
   const el = document.getElementById('status-banner');
   if (!el) return;
   mapLoadErrorHeld = true;
@@ -1728,9 +1822,14 @@ function showMapLoadError(): void {
   retry.type = 'button';
   retry.textContent = 'Retry';
   retry.addEventListener('click', () => {
-    void rememberFailedMapChunk().then(() => {
-      window.location.replace(retryMapHref(window.location.href, String(Date.now())));
-    });
+    rememberMapImportView();
+    void rememberFailedMapChunk()
+      .catch((error: unknown) => {
+        console.error('[map] map pane failed to load:', error);
+      })
+      .then(() => {
+        window.location.replace(retryMapHref(window.location.href, String(Date.now())));
+      });
   });
   actions.append(retry);
   el.replaceChildren(copy, actions);
@@ -1743,9 +1842,15 @@ function dismissMapLoadError(): void {
 }
 
 async function presentMapImportFailure(error: unknown): Promise<void> {
-  await rememberFailedMapChunk();
+  if (sessionBannerHeld) return;
+  try {
+    await rememberFailedMapChunk();
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
   const action = await mapImportAction(error);
   if (action.action === 'reload-once') {
+    rememberMapImportView();
     window.location.replace(action.href);
     return;
   }
@@ -1762,6 +1867,7 @@ async function ensureMapModule(): Promise<typeof import('./map') | null> {
     } catch (storageError) {
       console.error('[map] map pane failed to load:', storageError);
     }
+    clearMapImportUrlFlags();
     return mapModule;
   } catch (error) {
     mapModule = null;
@@ -1880,12 +1986,13 @@ async function init(): Promise<void> {
     }
     if (currentManifest) renderQueue();
   });
+  bindTabs();
+  restoreMapImportView();
   insetHost = bindInsets({
     mounts: async () => mapModule ?? loadMapModule(),
     track: () => currentTrack,
     nowMs: () => Date.now(),
   });
-  bindTabs();
   mountProfileMenu();
   // Map is the default landing tab (view-map is set in HTML). Trigger the lazy
   // load now so mapPaneWaitingForManifest is set; renderPendingMapPane() in
