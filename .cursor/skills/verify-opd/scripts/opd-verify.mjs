@@ -213,12 +213,49 @@ function startProxy(home) {
   const launchHoldWaiters = [];
   const catalogBodies = new Map();
   let catalogLive = null;
+  let catalogPark = null;
   function currentCatalog() {
+    if (catalogPark && catalogLive && catalogLive.pointer.path === catalogPark.path) return catalogLive;
     const now = Date.now();
     if (catalogLive && now < catalogLive.anchor + 8 * 60_000 && catalogBodies.has(catalogLive.pointer.path)) return catalogLive;
     catalogLive = publishVerifyCatalog(fixtureDir, now);
     catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
     return catalogLive;
+  }
+  function armCatalogHold() {
+    if (catalogPark && catalogLive && catalogLive.pointer.path === catalogPark.path) {
+      return { revision: catalogLive.pointer.revision, path: catalogPark.path };
+    }
+    const published = publishVerifyCatalog(fixtureDir, Date.now());
+    catalogLive = published;
+    catalogBodies.set(published.pointer.path, published.body);
+    catalogPark = { path: published.pointer.path, body: published.body, waiters: [] };
+    return { revision: published.pointer.revision, path: catalogPark.path };
+  }
+  function parkCatalogBody(res, park) {
+    return new Promise((resolvePark) => {
+      let settled = false;
+      const waiter = {
+        finish(send) {
+          if (settled) return;
+          settled = true;
+          const index = park.waiters.indexOf(waiter);
+          if (index >= 0) park.waiters.splice(index, 1);
+          if (send && !res.writableEnded) {
+            try { sendJson(res, park.body); } catch { /* the browser already left */ }
+          }
+          resolvePark();
+        },
+      };
+      park.waiters.push(waiter);
+      res.on('close', () => waiter.finish(false));
+    });
+  }
+  function releaseCatalogHold() {
+    const park = catalogPark;
+    catalogPark = null;
+    if (!park) return;
+    for (const waiter of [...park.waiters]) waiter.finish(true);
   }
   function parkLaunchBody(res, body) {
     return new Promise((resolvePark) => {
@@ -371,12 +408,34 @@ function startProxy(home) {
       return;
     }
     if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
+    if (path === '/api/verify/catalog-hold' && req.method === 'GET') {
+      json(res, 200, { pending: Boolean(catalogPark && catalogPark.waiters.length > 0), parked: catalogPark !== null });
+      return;
+    }
+    if (path === '/api/verify/catalog-hold' && req.method === 'POST') {
+      await readBody(req);
+      const armed = armCatalogHold();
+      json(res, 200, { ok: true, revision: armed.revision, path: armed.path });
+      return;
+    }
+    if (path === '/api/verify/catalog-release' && req.method === 'POST') {
+      await readBody(req);
+      releaseCatalogHold();
+      json(res, 200, { ok: true, pending: Boolean(catalogPark && catalogPark.waiters.length > 0) });
+      return;
+    }
     if (path === '/launch/catalog/latest.json') {
       sendJson(res, JSON.stringify(currentCatalog().pointer));
       return;
     }
     if (path.startsWith('/launch/catalog/v/') && path.endsWith('.json')) {
-      const body = catalogBodies.get(path.slice(1));
+      const key = path.slice(1);
+      const park = catalogPark;
+      if (park && key === park.path) {
+        await parkCatalogBody(res, park);
+        return;
+      }
+      const body = catalogBodies.get(key);
       if (!body) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
         res.end('missing');

@@ -5344,6 +5344,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     'iss launch returned',
     20000,
   );
+  const retained = await proveIssCatalogRetention(send, baseUrl, before.value);
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
     if (!(picker instanceof HTMLSelectElement)) return false;
@@ -5393,7 +5394,116 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   const chooseLabel = await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.selectedOptions?.[0]?.textContent || ''`);
   if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \d{1,2}$/.test(chooseLabel)) throw new Error(`reload shot missed the tier label ${JSON.stringify({ choose, chooseLabel })}`);
   await shot(send, evidenceDir, 'iss-launch-reloaded');
-  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / earth ${earthPanes} / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / tier pick kept through the empty v2 body / v2 republish left the Shot selected / None / reload ${chooseLabel}`;
+  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / earth ${earthPanes} / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / tier pick kept through the empty v2 body / v2 republish left the Shot selected / catalog retention kept ${retained} / None / reload ${chooseLabel}`;
+}
+
+async function proveIssCatalogRetention(send, baseUrl, eventId) {
+  const beforeLines = await evaluate(send, `(async () => {
+    try {
+      const map = window.__opdIss;
+      const source = map && map.getSource && map.getSource('iss-launch-corridor');
+      if (!source || !source.getData || !map.getLayer || !map.getLayer('iss-launch-corridor')) return null;
+      const data = await source.getData();
+      const line = (data.features || []).find((feature) => feature.geometry && feature.geometry.type === 'LineString' && feature.geometry.coordinates && feature.geometry.coordinates.length >= 2);
+      return line ? line.geometry.coordinates : null;
+    } catch (error) {
+      return { error: String(error) };
+    }
+  })()`);
+  if (!Array.isArray(beforeLines) || beforeLines.length < 2) {
+    throw new Error(`iss catalog retention: corridor geometry missing before the null read ${JSON.stringify(beforeLines)}`);
+  }
+  await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST' });
+  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST' });
+  if (!armed.ok) throw new Error(`iss catalog retention: catalog hold ${armed.status}`);
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    const response = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST' });
+    if (!response.ok) throw new Error(`iss catalog retention: catalog release ${response.status}`);
+  };
+  try {
+    await waitFor(
+      send,
+      `(async () => {
+        try {
+          document.dispatchEvent(new Event('visibilitychange'));
+          const status = await fetch('/api/verify/catalog-hold', { cache: 'no-store' }).then((response) => response.json());
+          const picker = document.querySelector('[data-iss-launch-picker]');
+          const card = document.querySelector('[data-iss-launch-card]');
+          const frame = document.querySelector('[data-iss-frame]');
+          const map = window.__opdIss;
+          const source = map && map.getSource && map.getSource('iss-launch-corridor');
+          const data = source && source.getData ? await source.getData() : null;
+          const lines = ((data && data.features) || []).filter((feature) => feature.geometry && feature.geometry.type === 'LineString' && feature.geometry.coordinates && feature.geometry.coordinates.length >= 2);
+          const groups = picker ? [...picker.querySelectorAll('optgroup')].map((entry) => entry.label) : [];
+          const seen = {
+            pending: status.pending,
+            parked: status.parked,
+            value: picker && picker.value,
+            groups,
+            label: picker && picker.selectedOptions && picker.selectedOptions[0] ? picker.selectedOptions[0].textContent : '',
+            hidden: card ? card.hidden : null,
+            corridor: frame ? frame.getAttribute('data-iss-launch-corridor') : '',
+            lines: lines.length,
+          };
+          if (!status.pending || groups.includes('Shot') || seen.label !== 'Choose launch' || !card || !card.hidden) return seen;
+          if (!frame || frame.getAttribute('data-iss-launch-corridor') !== 'off' || lines.length) return seen;
+          return { ok: true };
+        } catch (error) {
+          return { error: String(error) };
+        }
+      })()`,
+      'iss catalog retention: card or corridor still visible while the catalog read is null',
+      8000,
+    );
+  } finally {
+    await release();
+  }
+  const geometry = JSON.stringify(beforeLines);
+  await waitFor(
+    send,
+    `(async () => {
+      try {
+        const picker = document.querySelector('[data-iss-launch-picker]');
+        const card = document.querySelector('[data-iss-launch-card]');
+        const frame = document.querySelector('[data-iss-frame]');
+        const map = window.__opdIss;
+        const option = picker && picker.selectedOptions ? picker.selectedOptions[0] : null;
+        const parent = option ? option.parentElement : null;
+        const group = parent && parent.tagName === 'OPTGROUP' ? parent.label : '';
+        const source = map && map.getSource && map.getSource('iss-launch-corridor');
+        const layer = map && map.getLayer && map.getLayer('iss-launch-corridor');
+        const data = source && source.getData ? await source.getData() : null;
+        const line = ((data && data.features) || []).find((feature) => feature.geometry && feature.geometry.type === 'LineString');
+        const coordinates = line && line.geometry ? line.geometry.coordinates : null;
+        const finite = Array.isArray(coordinates) && coordinates.length >= 2 && coordinates.every((pair) => Array.isArray(pair) && Number.isFinite(pair[0]) && Number.isFinite(pair[1]));
+        const seen = {
+          value: picker && picker.value,
+          label: option ? option.textContent : '',
+          group,
+          hidden: card ? card.hidden : null,
+          state: card ? card.dataset.issLaunchState : '',
+          name: card ? card.querySelector('[data-iss-launch-name]')?.textContent : '',
+          corridor: frame ? frame.getAttribute('data-iss-launch-corridor') : '',
+          layer: Boolean(layer),
+          lines: finite ? coordinates.length : 0,
+        };
+        if (!picker || picker.value !== ${JSON.stringify(eventId)} || group !== 'Shot' || !(option && option.textContent && option.textContent.includes('Verify Ascent'))) return seen;
+        if (!card || card.hidden || card.dataset.issLaunchState !== 'selected') return seen;
+        if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Ascent') return seen;
+        if (!frame || frame.getAttribute('data-iss-launch-corridor') !== 'on' || !layer || !finite) return seen;
+        if (JSON.stringify(coordinates) !== ${geometry}) return seen;
+        return { ok: true };
+      } catch (error) {
+        return { error: String(error) };
+      }
+    })()`,
+    'iss catalog retention: tierPick not restored after accepted body',
+    10000,
+  );
+  return eventId;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {

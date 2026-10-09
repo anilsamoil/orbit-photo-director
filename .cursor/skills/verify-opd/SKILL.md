@@ -88,6 +88,8 @@ Every `drive` command, including `drive all` and a single feature, runs the sele
 
 `frontend/scripts/verify-map-pins.mjs` rewrites product source and runs unit tests. Do not run it from this skill. `frontend/scripts/verify-popup-scroll.mjs` drives a synthetic popup page, not SNAP. The live popup proof is `drive map`.
 
+`drive iss` keeps the selected Shot across a newer catalog pointer. After `iss launch returned` and before `None`, it posts `/api/verify/catalog-hold`. The proxy mints a newer catalog pointer and parks that body's `GET` until `/api/verify/catalog-release`. While the body is pending the card is hidden and `iss-launch-corridor` has no line. The accepted body restores the same Shot. The picker label still names `Verify Ascent`, the card is selected, and the corridor source has the same geometry. Failures name `iss catalog retention: card or corridor still visible while the catalog read is null` and `iss catalog retention: tierPick not restored after accepted body`. `launch look` includes `catalog retention kept verify-ascent`. A proxy started before these routes existed needs `down`, then `up`.
+
 ## Evidence
 
 Screenshots and the service-worker pass stamp go to `$OPD_VERIFY_HOME/evidence`, which defaults to `/tmp/opd-verify/default/evidence`. Capture the action and the next screen. A screenshot of the final tab alone does not prove the click.
