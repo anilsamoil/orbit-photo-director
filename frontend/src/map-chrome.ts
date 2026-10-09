@@ -94,6 +94,14 @@ function gutterPx(dock: HTMLElement | null): number {
   return Math.max(0, bar) + pad;
 }
 
+function launchBox(): Box | null {
+  const node = document.getElementById('map-launch-coverage');
+  if (!(node instanceof HTMLElement) || node.hidden) return null;
+  if (getComputedStyle(node).display === 'none') return null;
+  const box = boxOf(node);
+  return box.h >= 1 ? box : null;
+}
+
 function visiblePip(): Box | null {
   const pip = document.querySelector('[data-pip="horizon"]');
   if (!(pip instanceof HTMLElement) || pip.hidden) return null;
@@ -136,8 +144,10 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     sliderChip: boxOf(document.querySelector('.map-command .map-controls-time')),
     slider: boxOf(document.getElementById('time-slider')),
     timeButtons: [...document.querySelectorAll('.map-command .time-step-btn')].map(boxOf),
+    topbar: lengthPx(view, getComputedStyle(document.documentElement).getPropertyValue('--topbar-height').trim() || '48px'),
     footer: boxOf(document.getElementById('status-banner')),
     shotList,
+    launch: launchBox(),
     scrollbar: gutterPx(dock instanceof HTMLElement ? dock : null),
     pip: visiblePip(),
     hide: boxOf(document.getElementById('map-chrome-toggle')),
@@ -158,35 +168,44 @@ function writeSlot(name: string, value: number): void {
   document.body.style.setProperty(name, `${value}px`);
 }
 
+function placeInPane(name: string, box: { x: number; y: number; w: number; h: number }, origin: { left: number; top: number }): void {
+  writeSlot(`--slot-${name}-x`, box.x - origin.left);
+  writeSlot(`--slot-${name}-y`, box.y - origin.top);
+  writeSlot(`--slot-${name}-w`, box.w);
+  writeSlot(`--slot-${name}-h`, box.h);
+}
+
+function placeInView(name: string, box: { x: number; y: number; w: number; h: number }): void {
+  writeSlot(`--slot-${name}-x`, box.x);
+  writeSlot(`--slot-${name}-y`, box.y);
+  writeSlot(`--slot-${name}-w`, box.w);
+  writeSlot(`--slot-${name}-h`, box.h);
+}
+
 function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
   const key = JSON.stringify(slots);
   if (key === lastSlots) return;
   lastSlots = key;
   const origin = pane.getBoundingClientRect();
   mute = true;
+  const owned = slots.zoom !== null || slots.time !== null || slots.hide !== null;
+  document.body.classList.toggle('map-slot-owned', owned);
   document.body.classList.toggle('map-slot-time', slots.time !== null);
   document.body.classList.toggle('map-slot-time-line', slots.time !== null && slots.time.h <= timeLinePx);
   document.body.classList.toggle('map-slot-dock', slots.dock !== null);
   document.body.classList.toggle('map-slot-dock-row', slots.dock?.axis === 'row');
   document.body.classList.toggle('map-slot-legend', slots.legend !== null);
-  if (slots.time) {
-    writeSlot('--slot-time-x', slots.time.x - origin.left);
-    writeSlot('--slot-time-y', slots.time.y - origin.top);
-    writeSlot('--slot-time-w', slots.time.w);
-    writeSlot('--slot-time-h', slots.time.h);
-  }
-  if (slots.dock) {
-    writeSlot('--slot-dock-x', slots.dock.x - origin.left);
-    writeSlot('--slot-dock-y', slots.dock.y - origin.top);
-    writeSlot('--slot-dock-w', slots.dock.w);
-    writeSlot('--slot-dock-h', slots.dock.h);
-  }
-  if (slots.legend) {
-    writeSlot('--slot-legend-x', slots.legend.x);
-    writeSlot('--slot-legend-y', slots.legend.y);
-    writeSlot('--slot-legend-w', slots.legend.w);
-    writeSlot('--slot-legend-h', slots.legend.h);
-  }
+  document.body.classList.toggle('map-slot-launch', slots.launch !== null);
+  if (slots.zoom) placeInPane('zoom', slots.zoom, origin);
+  if (slots.compass) placeInPane('compass', slots.compass, origin);
+  if (slots.show) placeInPane('show', slots.show, origin);
+  if (slots.time) placeInPane('time', slots.time, origin);
+  if (slots.dock) placeInPane('dock', slots.dock, origin);
+  if (slots.legendButton) placeInPane('legend-button', slots.legendButton, origin);
+  if (slots.hide) placeInPane('hide', slots.hide, origin);
+  if (slots.launch) placeInPane('launch', slots.launch, origin);
+  if (slots.legend) placeInView('legend', slots.legend);
+  if (slots.footer) placeInView('footer', slots.footer);
   queueMicrotask(() => {
     mute = false;
   });
@@ -207,27 +226,35 @@ function syncMapChrome(): void {
   const pane = document.getElementById('map-pane');
   if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
     lastSlots = '';
-    document.body.classList.remove('map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend');
+    document.body.classList.remove('map-slot-owned', 'map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch');
     return;
   }
   applySlots(solveChromeSlots(measureChrome(view, pane)), pane);
 }
 
-function ensureInsetProbe(): HTMLElement {
-  const existing = document.querySelector('[data-map-chrome-insets]');
-  if (existing instanceof HTMLElement) return existing;
-  const probe = document.createElement('div');
-  probe.setAttribute('data-map-chrome-insets', '');
-  probe.setAttribute('aria-hidden', 'true');
-  probe.style.position = 'fixed';
-  probe.style.left = '0';
-  probe.style.top = '0';
-  probe.style.width = 'calc(env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px))';
-  probe.style.height = 'calc(env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px))';
-  probe.style.pointerEvents = 'none';
-  probe.style.visibility = 'hidden';
-  document.body.appendChild(probe);
-  return probe;
+function ensureInsetProbes(): HTMLElement[] {
+  return (['top', 'right', 'bottom', 'left'] as const).map((side) => {
+    const existing = document.querySelector(`[data-map-chrome-inset="${side}"]`);
+    if (existing instanceof HTMLElement) return existing;
+    const probe = document.createElement('div');
+    probe.setAttribute('data-map-chrome-inset', side);
+    probe.setAttribute('data-inset-env', `env(safe-area-inset-${side}, 0px)`);
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.position = 'fixed';
+    probe.style.left = '0';
+    probe.style.top = '0';
+    probe.style.pointerEvents = 'none';
+    probe.style.visibility = 'hidden';
+    if (side === 'left' || side === 'right') {
+      probe.style.width = `env(safe-area-inset-${side}, 0px)`;
+      probe.style.height = '1px';
+    } else {
+      probe.style.height = `env(safe-area-inset-${side}, 0px)`;
+      probe.style.width = '1px';
+    }
+    document.body.appendChild(probe);
+    return probe;
+  });
 }
 
 export function bindMapChrome(): void {
@@ -243,7 +270,7 @@ export function bindMapChrome(): void {
   });
   const observer = new ResizeObserver(() => scheduleSync());
   observer.observe(document.documentElement);
-  observer.observe(ensureInsetProbe());
+  for (const probe of ensureInsetProbes()) observer.observe(probe);
   const mutations = new MutationObserver(() => scheduleSync());
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   const banner = document.getElementById('status-banner');

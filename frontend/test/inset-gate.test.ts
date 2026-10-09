@@ -41,7 +41,8 @@ describe('inset viewport gate', () => {
     expect(css).toContain('--horizon-right: 12px');
     expect(css).toContain('--horizon-top: calc(var(--topbar-height) + 5px)');
     expect(css).toContain('top: var(--horizon-top)');
-    expect(css).toContain('top: calc(var(--horizon-top) + var(--horizon-height) + var(--horizon-gap))');
+    expect(css).toContain('top: var(--slot-dock-y)');
+    expect(css).not.toContain('top: calc(var(--horizon-top) + var(--horizon-height) + var(--horizon-gap))');
     expect(css).not.toContain('--horizon-bottom');
     expect(css).not.toContain('--horizon-span');
     expect(css).toContain('--map-command-height: calc(96px + env(safe-area-inset-bottom, 0px))');

@@ -78,7 +78,16 @@ describe('map chrome layout', () => {
   it('floats the top bar and status banner over the map and stacks the dock as a rail', () => {
     mount('view-map');
     expect(ruleStyle('.topbar').position).toBe('fixed');
-    expect(ruleStyle('body:has(> #view.view-map) > .banner').position).toBe('fixed');
+    expect(ruleStyle('body.map-slot-owned:has(> #view.view-map) > .banner').position).toBe('fixed');
+    document.body.classList.add('map-slot-owned', 'map-slot-dock');
+    document.body.style.setProperty('--slot-dock-x', '700px');
+    document.body.style.setProperty('--slot-dock-y', '53px');
+    document.body.style.setProperty('--slot-dock-w', '60px');
+    document.body.style.setProperty('--slot-dock-h', '200px');
+    document.body.style.setProperty('--slot-show-x', '8px');
+    document.body.style.setProperty('--slot-show-y', '53px');
+    document.body.style.setProperty('--slot-show-w', '180px');
+    document.body.style.setProperty('--slot-show-h', '52px');
     const dock = getComputedStyle(document.querySelector('.map-control-dock')!);
     const toolbar = getComputedStyle(document.querySelector('.map-toolbar')!);
     expect(dock.position).toBe('absolute');
@@ -92,7 +101,12 @@ describe('map chrome layout', () => {
     mount('view-map');
     const buttonTop = px('.maplibregl-ctrl-bottom-right', 'bottom') + px('.maplibregl-ctrl-attrib-button', 'height');
     expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeGreaterThanOrEqual(buttonTop);
-    expect(px('.map-legend', 'bottom')).toBeGreaterThanOrEqual(px('.maplibregl-ctrl-bottom-right', 'bottom'));
+    document.body.classList.add('map-slot-owned');
+    document.body.style.setProperty('--slot-legend-button-x', '704px');
+    document.body.style.setProperty('--slot-legend-button-y', '400px');
+    document.body.style.setProperty('--slot-legend-button-w', '88px');
+    document.body.style.setProperty('--slot-legend-button-h', '44px');
+    expect(px('.map-legend', 'top')).toBe(400);
     expect(getComputedStyle(document.querySelector('.map-imagery-date')!).position).toBe('static');
     expect(document.querySelector('#map-legend-panel')!.contains(document.querySelector('.map-imagery-date'))).toBe(true);
     expect(getComputedStyle(document.querySelector('#map-legend-panel')!).display).toBe('none');
@@ -211,6 +225,10 @@ describe('map chrome layout', () => {
       '<button id="map-chrome-toggle" class="map-chrome-toggle" type="button">Controls</button>',
     );
     const button = document.querySelector('#map-chrome-toggle')!;
+    document.body.classList.add('map-slot-owned');
+    document.body.style.setProperty('--slot-hide-y', '500px');
+    document.body.style.setProperty('--slot-hide-w', '88px');
+    document.body.style.setProperty('--slot-hide-h', '44px');
     const place = () => {
       const style = getComputedStyle(button);
       return [style.position, style.left, style.right, style.top, style.bottom, style.transform].join('|');
@@ -221,7 +239,9 @@ describe('map chrome layout', () => {
     button.textContent = 'Hide';
     expect(place()).toBe(hiddenPlace);
     const style = getComputedStyle(button);
-    expect(style.right).toBe('12px');
+    expect(css).toContain('right: calc(12px + env(safe-area-inset-right, 0px))');
+    expect(style.top).toBe('500px');
+    expect(style.width).toBe('88px');
     expect(style.minWidth).toBe('88px');
     expect(hiddenPlace).not.toContain('50%');
   });
@@ -248,7 +268,12 @@ describe('map chrome layout', () => {
     expect(button.width).toBe('44px');
     expect(button.height).toBe('44px');
     expect(Number.parseFloat(attrib.width)).toBeLessThanOrEqual(44);
-    expect(px('.map-legend', 'bottom')).toBeLessThan(100);
+    document.body.classList.add('map-slot-owned');
+    document.body.style.setProperty('--slot-legend-button-y', '40px');
+    document.body.style.setProperty('--slot-legend-button-x', '8px');
+    document.body.style.setProperty('--slot-legend-button-w', '88px');
+    document.body.style.setProperty('--slot-legend-button-h', '44px');
+    expect(px('.map-legend', 'top')).toBeLessThan(100);
     expect(getComputedStyle(document.querySelector('.map-imagery-date')!).position).toBe('static');
     expect(Number.parseFloat(ruleStyle('.view-map ~ .help-fab').bottom)).toBeLessThan(100);
   });
@@ -274,18 +299,20 @@ describe('map chrome layout', () => {
       '<button id="map-chrome-toggle" class="map-chrome-toggle" type="button">Hide</button>',
     );
     document.querySelector('.maplibregl-ctrl-attrib')!.classList.add('maplibregl-compact-show');
+    document.body.classList.add('map-slot-owned');
+    document.body.style.setProperty('--slot-legend-button-x', '704px');
+    document.body.style.setProperty('--slot-legend-button-y', '500px');
+    document.body.style.setProperty('--slot-legend-button-w', '88px');
+    document.body.style.setProperty('--slot-legend-button-h', '44px');
+    document.body.style.setProperty('--slot-hide-y', '500px');
+    document.body.style.setProperty('--slot-hide-w', '88px');
+    document.body.style.setProperty('--slot-hide-h', '44px');
     const legend = getComputedStyle(document.querySelector('.map-legend')!);
     const hide = getComputedStyle(document.querySelector('#map-chrome-toggle')!);
     expect(legend.position).toBe('absolute');
-    expect(legend.bottom).toBe(hide.bottom);
-    const sumPx = (value: string) => {
-      const parts = value.match(/[\d.]+px/g);
-      if (!parts) throw new Error(value);
-      return parts.reduce((sum, part) => sum + Number.parseFloat(part), 0);
-    };
-    expect(sumPx(legend.right)).toBe(108);
-    expect(sumPx(hide.right)).toBe(12);
-    expect(sumPx(legend.right)).toBeGreaterThan(sumPx(hide.right) + Number.parseFloat(hide.width));
+    expect(legend.top).toBe(hide.top);
+    expect(Number.parseFloat(legend.left)).toBe(704);
+    expect(css).toContain('right: calc(12px + env(safe-area-inset-right, 0px))');
     expect(legend.flexDirection).toBe('column-reverse');
     expect(legend.width).toBe('88px');
     expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).display).toBe('none');
@@ -316,7 +343,7 @@ describe('map chrome layout', () => {
     expect(wideShort).toContain('height: 52px;');
     expect(css).toContain('--map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);');
     expect(css).toContain('--map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));');
-    expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');
+    expect(css).toContain('top: var(--slot-time-y)');
     expect(css).toContain('--map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap)))');
     expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);');
     expect(css).toContain('--map-command-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));');
@@ -362,6 +389,15 @@ describe('map chrome layout', () => {
     expect(css).toContain('max-height: calc(var(--map-pane-budget) - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px)');
     execFileSync('node', ['scripts/census-narrow-chrome.mjs'], { cwd: resolve('.') });
     execFileSync('node', ['scripts/census-narrow-chrome.mjs', '--fixture'], { cwd: resolve('.') });
+    execFileSync('node', ['scripts/census-narrow-chrome.mjs', '--patterns'], { cwd: resolve('.') });
+    const mutants = execFileSync('node', ['scripts/prove-slot-mutants.mjs'], { cwd: resolve('.'), encoding: 'utf8' });
+    expect(mutants).toContain('drop painted-slider bounds: red');
+    expect(mutants).toContain('ignore safe insets: red');
+    expect(mutants).toContain('wrong priority order: red');
+    expect(mutants).toContain('source: green');
+    expect(css).toContain('pointer-events: none');
+    expect(css).toContain('scrollbar-width: none');
+    expect(css).toContain('body.map-slot-owned');
   });
 
   it('lays the time strip on the map', () => {
@@ -374,11 +410,19 @@ describe('map chrome layout', () => {
         </div>
       </div>`,
     );
+    document.body.classList.add('map-slot-owned', 'map-slot-time');
+    document.body.style.setProperty('--slot-time-x', '8px');
+    document.body.style.setProperty('--slot-time-y', '400px');
+    document.body.style.setProperty('--slot-time-w', '500px');
+    document.body.style.setProperty('--slot-time-h', '96px');
     const command = getComputedStyle(document.querySelector('.map-command')!);
     const controls = getComputedStyle(document.querySelector('.map-controls-time')!);
     expect(command.backgroundColor).toBe('transparent');
     expect(command.borderTopWidth).toBe('0px');
-    expect(command.bottom).toBe('0px');
+    expect(command.position).toBe('absolute');
+    expect(command.top).toBe('400px');
+    expect(command.left).toBe('8px');
+    expect(command.height).toBe('96px');
     expect(css).toContain('padding: 0 0 calc(28px + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('@media (min-height: 521px)');
     expect(css).toContain('.view-map .map-command .map-controls-time {\n    padding-bottom: 8px;');

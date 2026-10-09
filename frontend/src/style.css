@@ -1083,10 +1083,6 @@ body:has(> #view.view-map) .iss-now { color: var(--text); }
 body:has(> #view.view-map) .tab { color: var(--text); }
 body:has(> #view.view-map) .tab.active { color: var(--accent); }
 body:has(> #view.view-map) > .banner {
-  position: fixed;
-  bottom: env(safe-area-inset-bottom, 0px);
-  left: 0;
-  right: 0;
   z-index: 30;
   padding: 0.2rem 3.4rem;
   font-size: 0.75rem;
@@ -1192,9 +1188,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   z-index: 0;
 }
 .view-map .map-toolbar {
-  position: absolute;
-  top: calc(var(--topbar-height) + 5px);
-  left: 8px;
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
@@ -1211,8 +1204,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 }
 .view-map .map-toolbar > .map-controls,
 .view-map .map-control-dock > .map-controls {
-  position: static;
-  transform: none;
   margin: 0;
   max-width: 100%;
   min-width: 0;
@@ -1280,9 +1271,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   font-size: 0.68rem;
 }
 .view-map .map-control-dock {
-  position: absolute;
-  top: calc(var(--topbar-height) + 5px);
-  right: 8px;
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -1323,9 +1311,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   outline-offset: 2px;
 }
 .view-map #map-launch-coverage {
-  position: absolute;
-  top: calc(var(--topbar-height) + 71px);
-  left: 8px;
   z-index: 11;
   flex: 0 1 auto;
   width: min(100% - 72px, 32rem);
@@ -1356,12 +1341,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   overflow-y: auto;
   overscroll-behavior: contain;
   color: #f4f7fb;
-}
-.view-map #map .maplibregl-ctrl-top-left {
-  top: calc(var(--topbar-height) + 71px);
-  left: calc(8px + env(safe-area-inset-left, 0px));
-  right: auto;
-  bottom: auto;
 }
 .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl { margin: 0 8px 0 0; }
 .view-map #map .maplibregl-ctrl-bottom-right,
@@ -1421,10 +1400,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   max-height: 64px;
 }
 .view-map .map-legend {
-  position: absolute;
-  left: auto;
-  right: var(--map-legend-right);
-  bottom: var(--map-corner-bottom);
   width: var(--map-legend-width);
   max-width: var(--map-legend-width);
   margin: 0;
@@ -1446,9 +1421,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   border-radius: 999px;
 }
 .view-map .map-legend-panel {
-  position: absolute;
-  right: 0;
-  bottom: var(--map-legend-panel-bottom);
   width: max-content;
   min-width: 11rem;
   max-width: min(11rem, calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
@@ -1468,9 +1440,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   bottom: 80px;
 }
 .view-map .map-chrome-toggle {
-  position: absolute;
-  right: var(--map-hide-right);
-  bottom: var(--map-corner-bottom);
   z-index: 20;
   width: var(--map-hide-width);
   height: 44px;
@@ -1660,7 +1629,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
    * stays thin — the input's box is what receives the finger. The negative
    * margin keeps the row visually compact despite the tall hit area. */
   height: 44px;
-  margin: -10px 0;
+  margin: 0;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
@@ -1712,6 +1681,11 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 /* Visible scale anchors (Codex design voice 2026-06-10): the slider's
  * range was discoverable only via title/aria — iPad users never see
  * either. "Now" and "+36h" flank the track. */
+.time-slider-end,
+.time-step-label,
+.time-step-utc {
+  pointer-events: none;
+}
 .time-slider-end {
   font-size: 0.62rem;
   color: var(--text-dim);
@@ -1887,7 +1861,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 .map-legend {
-  position: static;
   align-self: flex-start;
   flex: 0 0 auto;
   max-width: calc(100% - 24px);
@@ -1976,10 +1949,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   display: none;
 }
 .map-legend .map-imagery-date {
-  position: static;
-  left: auto;
-  right: auto;
-  bottom: auto;
   max-width: 100%;
   white-space: normal;
 }
@@ -4335,10 +4304,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 .view-map .map-command {
-  position: absolute;
-  left: calc(8px + env(safe-area-inset-left, 0px));
-  right: var(--map-corner-clear);
-  bottom: 0;
   z-index: 16;
   display: flex;
   flex-wrap: wrap;
@@ -4360,9 +4325,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 .view-map .map-command .map-controls-time {
-  position: static;
-  top: auto;
-  right: auto;
   display: flex;
   flex: 0 1 auto;
   flex-wrap: wrap;
@@ -4662,8 +4624,6 @@ summary:focus-visible {
   }
 
   .view-map .map-command {
-    right: var(--map-corner-clear);
-    bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));
     align-items: center;
     height: auto;
     max-height: none;
@@ -4686,10 +4646,6 @@ summary:focus-visible {
 
   body.shotlist-bar-visible:has(> #view.view-map) main {
     padding-bottom: 0;
-  }
-
-  body.shotlist-bar-visible .view-map .map-command {
-    bottom: var(--map-command-bottom);
   }
 
   body.shotlist-bar-visible .view-map {
@@ -4741,12 +4697,8 @@ summary:focus-visible {
 
 body.map-slot-time .view-map .map-command,
 body.map-slot-time.shotlist-bar-visible .view-map .map-command {
-  top: var(--slot-time-y);
-  left: var(--slot-time-x);
   width: var(--slot-time-w);
   height: var(--slot-time-h);
-  right: auto;
-  bottom: auto;
   max-height: none;
   min-height: 0;
   padding: 0;
@@ -4782,7 +4734,7 @@ body.map-slot-time .view-map .map-command .time-slider-row {
   flex: 1 1 0;
   min-width: 44px;
   padding: 0;
-  gap: 0;
+  gap: 8px;
 }
 
 body.map-slot-time:not(.map-slot-time-line) .view-map .map-command .time-slider-row {
@@ -4807,10 +4759,6 @@ body.map-slot-time .view-map .map-command .time-step-btn {
 
 body.map-slot-dock .view-map .map-control-dock,
 body.map-slot-dock #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
-  top: var(--slot-dock-y);
-  left: var(--slot-dock-x);
-  right: auto;
-  bottom: auto;
   width: var(--slot-dock-w);
   height: var(--slot-dock-h);
   max-width: none;
@@ -4832,7 +4780,7 @@ body.map-slot-dock-row .view-map .map-control-dock > .map-controls {
   width: max-content;
 }
 
-body.map-slot-dock-row .view-map .map-control-dock .map-group-label {
+body.map-slot-owned.map-slot-dock-row .view-map .map-control-dock .map-group-label {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -4841,11 +4789,6 @@ body.map-slot-dock-row .view-map .map-control-dock .map-group-label {
 }
 
 body.map-slot-legend .view-map .map-legend-panel {
-  position: fixed;
-  top: var(--slot-legend-y);
-  left: var(--slot-legend-x);
-  bottom: auto;
-  right: auto;
   width: var(--slot-legend-w);
   height: var(--slot-legend-h);
   min-width: 0;
@@ -4853,6 +4796,111 @@ body.map-slot-legend .view-map .map-legend-panel {
   max-height: none;
   overflow: auto;
   pointer-events: auto;
+}
+
+body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left {
+  position: absolute;
+  left: var(--slot-zoom-x);
+  top: calc(var(--slot-zoom-y) - var(--topbar-height));
+  right: auto;
+  bottom: auto;
+}
+body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl {
+  margin: 0;
+}
+body.map-slot-owned .view-map .map-toolbar {
+  position: absolute;
+  left: var(--slot-show-x);
+  top: var(--slot-show-y);
+  width: var(--slot-show-w);
+  height: var(--slot-show-h);
+  right: auto;
+  bottom: auto;
+  margin: 0;
+}
+body.map-slot-owned.map-slot-time .view-map .map-command,
+body.map-slot-owned.map-slot-time.shotlist-bar-visible .view-map .map-command {
+  position: absolute;
+  left: var(--slot-time-x);
+  top: var(--slot-time-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-time-w);
+  height: var(--slot-time-h);
+  margin: 0;
+}
+body.map-slot-owned.map-slot-dock .view-map .map-control-dock,
+body.map-slot-owned.map-slot-dock #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  position: absolute;
+  left: var(--slot-dock-x);
+  top: var(--slot-dock-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-dock-w);
+  height: var(--slot-dock-h);
+  max-height: var(--slot-dock-h);
+  margin: 0;
+}
+body.map-slot-owned .view-map .map-legend {
+  position: absolute;
+  left: var(--slot-legend-button-x);
+  top: var(--slot-legend-button-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-legend-button-w);
+  height: var(--slot-legend-button-h);
+  margin: 0;
+}
+body.map-slot-owned.map-slot-legend .view-map .map-legend-panel {
+  position: fixed;
+  left: var(--slot-legend-x);
+  top: var(--slot-legend-y);
+  right: auto;
+  bottom: auto;
+  box-sizing: border-box;
+}
+body.map-slot-owned .view-map .map-chrome-toggle {
+  position: absolute;
+  left: auto;
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  top: var(--slot-hide-y);
+  bottom: auto;
+  width: var(--slot-hide-w);
+  height: var(--slot-hide-h);
+  margin: 0;
+}
+body.map-slot-owned:has(> #view.view-map) > .banner {
+  position: fixed;
+  left: var(--slot-footer-x);
+  top: var(--slot-footer-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-footer-w);
+  height: var(--slot-footer-h);
+  box-sizing: border-box;
+  margin: 0;
+}
+body.map-slot-owned.map-slot-launch .view-map #map-launch-coverage {
+  position: absolute;
+  left: var(--slot-launch-x);
+  top: var(--slot-launch-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-launch-w);
+  height: var(--slot-launch-h);
+  max-height: var(--slot-launch-h);
+  box-sizing: border-box;
+  margin: 0;
+}
+body.map-slot-owned .view-map .map-command,
+body.map-slot-owned .view-map .map-control-dock {
+  scrollbar-width: none;
+}
+body.map-slot-owned .view-map .map-command::-webkit-scrollbar,
+body.map-slot-owned .view-map .map-control-dock::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 @media (max-width: 700px) {
@@ -4920,13 +4968,6 @@ body.map-slot-legend .view-map .map-legend-panel {
   }
 
   .brand-name { display: inline; }
-}
-
-@media (max-height: 520px) {
-  .view-map #map .maplibregl-ctrl-top-left {
-    top: 62px;
-    left: calc(8px + env(safe-area-inset-left, 0px));
-  }
 }
 
 @media (max-height: 520px) {
@@ -5009,7 +5050,6 @@ body.map-slot-legend .view-map .map-legend-panel {
   }
 
   .view-map .map-command {
-    right: var(--map-corner-clear);
     flex-wrap: nowrap;
     align-items: center;
     align-content: center;
@@ -5048,9 +5088,11 @@ body.map-slot-legend .view-map .map-legend-panel {
   }
 
   #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
-    top: calc(var(--horizon-top) + var(--horizon-height) + var(--horizon-gap));
-    right: var(--horizon-right);
     max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-dock-clear) - 16px);
+  }
+
+  body.map-slot-owned.map-slot-time .view-map .map-command .time-slider {
+    height: 32px;
   }
 
   .view-iss #iss-pane:not(:has([data-iss-fullscreen-active])) {

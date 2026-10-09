@@ -63,4 +63,18 @@ describe('map chrome', () => {
     expect(dock.scrollLeft).toBe(150);
     expect(button.textContent).toBe('Controls');
   });
+
+  it('watches each safe-area inset on its own probe', () => {
+    mount();
+    bindMapChrome();
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      const probe = document.querySelector(`[data-map-chrome-inset="${side}"]`);
+      expect(probe).toBeTruthy();
+      expect(probe?.getAttribute('data-inset-env')).toBe(`env(safe-area-inset-${side}, 0px)`);
+      const style = probe instanceof HTMLElement ? probe.style : null;
+      const axis = side === 'left' || side === 'right' ? style?.width : style?.height;
+      expect(axis === '' || axis?.includes(`safe-area-inset-${side}`)).toBe(true);
+    }
+    expect(document.querySelectorAll('[data-map-chrome-inset]').length).toBe(4);
+  });
 });

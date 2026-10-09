@@ -3,6 +3,7 @@ export type Box = { x: number; y: number; w: number; h: number };
 export type ChromeMeasure = {
   viewport: { w: number; h: number };
   insets: { top: number; right: number; bottom: number; left: number };
+  topbar: number;
   zoom: Box;
   compass: Box;
   show: Box;
@@ -12,6 +13,7 @@ export type ChromeMeasure = {
   timeButtons: Box[];
   footer: Box;
   shotList: Box;
+  launch: Box | null;
   scrollbar: number;
   pip: Box | null;
   hide: Box;
@@ -28,9 +30,16 @@ export type Slot = { x: number; y: number; w: number; h: number };
 export type DockSlot = Slot & { axis: 'row' | 'column' };
 
 export type ChromeSlots = {
+  zoom: Slot | null;
+  compass: Slot | null;
+  show: Slot | null;
   time: Slot | null;
   dock: DockSlot | null;
+  legendButton: Slot | null;
   legend: Slot | null;
+  hide: Slot | null;
+  footer: Slot | null;
+  launch: Slot | null;
 };
 
 const TARGET = 44;
@@ -69,7 +78,7 @@ function slot(x: number, y: number, w: number, h: number): Slot {
 }
 
 function cross(scrollbar: number): number {
-  return TARGET + Math.max(0, scrollbar);
+  return TARGET + Math.max(16, scrollbar);
 }
 
 function laneOf(zoom: Box, compass: Box): Box | null {
@@ -194,8 +203,10 @@ function placeWideDock(measure: ChromeMeasure, lane: Box | null): DockSlot | nul
     measure.pip,
     measure.hide,
     measure.legendButton,
+    measure.legendPanel,
     measure.footer,
     measure.shotList,
+    measure.launch,
     measure.zoom,
     measure.compass,
     measure.show,
@@ -205,7 +216,7 @@ function placeWideDock(measure: ChromeMeasure, lane: Box | null): DockSlot | nul
     ...measure.timeButtons,
   ].filter(present);
   const clusterTop = nearestTop(
-    [measure.hide, measure.legendButton, measure.footer, measure.shotList, measure.slider, measure.sliderChip, ...measure.timeButtons],
+    [measure.hide, measure.legendButton, measure.legendPanel, measure.footer, measure.shotList, measure.launch, measure.slider, measure.sliderChip, ...measure.timeButtons],
     measure.viewport.h - measure.insets.bottom,
   );
   const candidates = [clusterTop - GAP - gutter, ...obstacles.map((box) => bottomOf(box) + GAP)];
@@ -240,15 +251,134 @@ function placeWideLegend(measure: ChromeMeasure): Slot | null {
   return slot(x, top - SEPARATION - height, LEGEND_W, height);
 }
 
+const HIDE_W = 88;
+const LEGEND_BTN_W = 88;
+
+function emptySlots(): ChromeSlots {
+  return {
+    zoom: null,
+    compass: null,
+    show: null,
+    time: null,
+    dock: null,
+    legendButton: null,
+    legend: null,
+    hide: null,
+    footer: null,
+    launch: null,
+  };
+}
+
+function wideCommandHeight(measure: ChromeMeasure): number {
+  if (measure.viewport.w >= 800 && measure.viewport.h >= 600) return 96;
+  if (measure.viewport.h <= 520 && measure.viewport.w >= 720) return 52;
+  if (measure.viewport.w <= 800) return 140;
+  return 64;
+}
+
+function ownShell(measure: ChromeMeasure): ChromeMeasure {
+  const topbar = measure.topbar > 0 ? measure.topbar : 48;
+  const footerH = present(measure.footer) ? measure.footer.h : 36;
+  const footer = slot(
+    measure.insets.left,
+    measure.viewport.h - measure.insets.bottom - footerH,
+    Math.max(0, measure.viewport.w - measure.insets.left - measure.insets.right),
+    footerH,
+  );
+  const floor = present(measure.shotList) ? Math.min(footer.y, measure.shotList.y) : footer.y;
+  const hide = slot(measure.viewport.w - measure.insets.right - 12 - HIDE_W, floor - GAP - TARGET, HIDE_W, TARGET);
+  const legendButton = slot(hide.x - GAP - LEGEND_BTN_W, hide.y, LEGEND_BTN_W, TARGET);
+  const zoomY = topbar + (measure.viewport.h <= 520 ? 62 : 71);
+  let zoom = slot(measure.insets.left + EDGE, zoomY, TARGET, 88);
+  let compass = slot(zoom.x, bottomOf(zoom), TARGET, TARGET);
+  const compassLimit = floor - GAP;
+  if (bottomOf(compass) > compassLimit) {
+    const shift = bottomOf(compass) - compassLimit;
+    zoom = slot(zoom.x, zoom.y - shift, zoom.w, zoom.h);
+    compass = slot(compass.x, compass.y - shift, compass.w, compass.h);
+  }
+  const show = slot(
+    measure.insets.left + EDGE,
+    topbar + 5,
+    present(measure.show) ? measure.show.w : 180,
+    present(measure.show) ? measure.show.h : 52,
+  );
+  return { ...measure, footer, hide, legendButton, zoom, compass, show };
+}
+
+function placeWideTime(measure: ChromeMeasure): Slot {
+  const x = measure.insets.left + EDGE;
+  const right = present(measure.legendButton)
+    ? measure.legendButton.x - GAP
+    : measure.viewport.w - measure.insets.right - 204;
+  const height = wideCommandHeight(measure);
+  const floor = floorY(measure);
+  let y = Math.min(measure.viewport.h - height, floor - height);
+  const raised = showBottom(measure) + SEPARATION;
+  if (y < raised) y = raised;
+  return slot(x, y, Math.max(TARGET, right - x), height);
+}
+
+function placeWideColumn(measure: ChromeMeasure): DockSlot {
+  const gutter = cross(measure.scrollbar);
+  const x = measure.viewport.w - measure.insets.right - EDGE - gutter;
+  const y = measure.pip ? bottomOf(measure.pip) + 12 : (present(measure.show) ? measure.show.y : measure.insets.top + EDGE);
+  const stops = [measure.hide, measure.legendButton, measure.legendPanel, measure.footer, measure.shotList].filter(present);
+  const limit = stops.length ? Math.min(...stops.map((box) => box.y)) : floorY(measure);
+  const height = Math.max(TARGET, Math.min(measure.dockCorridor >= TARGET ? measure.dockCorridor : limit - y - GAP, limit - y - GAP));
+  return { ...slot(x, y, gutter, height), axis: 'column' };
+}
+
+function placeLaunch(measure: ChromeMeasure, time: Slot | null): Slot | null {
+  if (!present(measure.launch) || !time) return null;
+  const height = Math.max(32, time.y - GAP - measure.launch.y);
+  if (height < 1) return null;
+  return slot(measure.launch.x, measure.launch.y, measure.launch.w, height);
+}
+
+function widePanel(measure: ChromeMeasure): Slot | null {
+  const lifted = placeWideLegend(measure);
+  if (lifted) return lifted;
+  if (!measure.legendOpen || !present(measure.legendButton)) return null;
+  const height = present(measure.legendPanel) ? measure.legendPanel.h : 88;
+  return slot(rightOf(measure.legendButton) - LEGEND_W, measure.legendButton.y - SEPARATION - height, LEGEND_W, height);
+}
+
+function missLegend(dock: DockSlot, legend: Slot | null): DockSlot {
+  if (!legend || !meets(dock, legend)) return dock;
+  if (dock.axis === 'column' && legend.y > dock.y + TARGET) {
+    return { ...dock, h: snap(legend.y - GAP - dock.y) };
+  }
+  const cleared = shrinkClear(dock, [legend]);
+  if (cleared.w >= TARGET && !meets({ ...dock, w: cleared.w }, legend)) {
+    return { ...dock, w: snap(cleared.w) };
+  }
+  return dock;
+}
+
 export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {
-  if (measure.chromeHidden || !(measure.viewport.w > 0) || !(measure.viewport.h > 0)) {
-    return { time: null, dock: null, legend: null };
-  }
-  const lane = laneOf(measure.zoom, measure.compass);
-  if (measure.viewport.w > NARROW_MAX) {
-    return { time: null, dock: placeWideDock(measure, lane), legend: placeWideLegend(measure) };
-  }
-  const time = placeNarrowTime(measure, lane);
-  const dock = placeNarrowDock(measure, lane, time);
-  return { time, dock, legend: placeNarrowLegend(measure, lane, time, dock) };
+  if (!(measure.viewport.w > 0) || !(measure.viewport.h > 0)) return emptySlots();
+  const owned = ownShell(measure);
+  if (measure.chromeHidden) return { ...emptySlots(), hide: owned.hide, footer: owned.footer };
+  const lane = laneOf(owned.zoom, owned.compass);
+  const wide = owned.viewport.w > NARROW_MAX;
+  const time = wide ? placeWideTime(owned) : placeNarrowTime(owned, lane);
+  const legend = wide ? widePanel(owned) : null;
+  const withLegend = legend ? { ...owned, legendPanel: legend } : owned;
+  const dock = wide
+    ? (placeWideDock(withLegend, lane) ?? placeWideColumn(withLegend))
+    : placeNarrowDock(owned, lane, time);
+  const narrowLegend = wide ? legend : placeNarrowLegend(owned, lane, time, dock);
+  return {
+    zoom: owned.zoom,
+    compass: owned.compass,
+    show: owned.show,
+    time,
+    dock: missLegend(dock, narrowLegend),
+    legendButton: owned.legendButton,
+    legend: narrowLegend,
+    hide: owned.hide,
+    footer: owned.footer,
+    launch: placeLaunch(owned, time),
+  };
 }
