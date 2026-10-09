@@ -147,6 +147,26 @@ function reduceTierPick(pick: TierPick, value: string, tiers: TierCatalog): Tier
   return { kind: 'held', eventId: launch.eventId, group: launch.tier };
 }
 
+function tierGroupFromLabel(label: string): 'shot' | 'likely' | 'watch' | 'all' | null {
+  if (label === 'Shot') return 'shot';
+  if (label === 'Likely') return 'likely';
+  if (label === 'Watch') return 'watch';
+  if (label === 'All launches') return 'all';
+  return null;
+}
+
+function reduceTierIntent(pick: TierPick, value: string, groupLabel: string): TierPick {
+  if (value === '' || value === tierPickValue(pick)) return pick;
+  if (value === 'none') return { kind: 'open' };
+  const group = tierGroupFromLabel(groupLabel);
+  if (value.startsWith('all:') || group === 'all') {
+    const eventId = value.startsWith('all:') ? value.slice(4) : value;
+    return { kind: 'held', eventId, group: 'all' };
+  }
+  if (group === 'shot' || group === 'likely' || group === 'watch') return { kind: 'held', eventId: value, group };
+  return { kind: 'held', eventId: value, group: 'shot' };
+}
+
 function tierListed(tiers: TierCatalog, pick: Extract<TierPick, { kind: 'held' }>): boolean {
   if (pick.group === 'all') return tiers.all.some((launch) => launch.eventId === pick.eventId);
   if (pick.group === 'watch') return tiers.groups.watch.some((launch) => launch.eventId === pick.eventId);
@@ -346,10 +366,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   syncCupola();
   picker.addEventListener('change', () => {
     if (pickerSync) return;
-    if (frameKind === 'tiers') {
-      const tiers = readTiers();
-      if (!tiers) return;
-      const next = reduceTierPick(tierPick, picker.value, tiers);
+    const tiers = readTiers();
+    if (tiers || tierPick.kind === 'held') {
+      const selected = picker.selectedOptions[0];
+      const parent = selected?.parentElement;
+      const groupLabel = parent instanceof HTMLOptGroupElement ? parent.label : '';
+      const next = tiers ? reduceTierPick(tierPick, picker.value, tiers) : reduceTierIntent(tierPick, picker.value, groupLabel);
       if (next === tierPick) {
         if (picker.value !== tierPickValue(tierPick)) picker.value = tierPickValue(tierPick);
         return;
@@ -637,11 +659,34 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const tiers = readTiers();
     const nextKind: FrameKind = tiers ? 'tiers' : 'chances';
     if (nextKind !== frameKind) {
-      if (nextKind === 'chances') chancePick = { kind: 'open' };
+      if (nextKind === 'chances' && tierPick.kind !== 'held') chancePick = { kind: 'open' };
       frameKind = nextKind;
     }
     if (tiers) syncTierChrome(tiers);
+    else if (tierPick.kind === 'held') suspendTierFacts();
     else syncChanceChrome();
+  }
+
+  function suspendTierFacts(): void {
+    const focused = document.activeElement === picker;
+    launchCard.hidden = true;
+    launchCard.dataset.issLaunchState = '';
+    delete launchCard.dataset.issLaunchGroup;
+    syncPad(null);
+    shownLaunchSites = [];
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    launchDrawingHidden = fullscreen;
+    renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
+    const value = tierPickValue(tierPick);
+    if (value && picker.value !== value) {
+      pickerSync = true;
+      try {
+        picker.value = value;
+      } finally {
+        pickerSync = false;
+      }
+    }
+    if (focused) picker.focus();
   }
 
   function syncChanceChrome(): void {
@@ -733,6 +778,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function writePicker(rows: readonly PickerRow[], value: string): void {
+    const focused = document.activeElement === picker;
     const signature = rows.map((row) => `${row.group ?? ''}\t${row.value}\t${row.label}`).join('\n');
     pickerSync = true;
     try {
@@ -773,6 +819,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       if (picker.value !== value) picker.value = value;
     } finally {
       pickerSync = false;
+      if (focused) picker.focus();
     }
   }
 

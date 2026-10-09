@@ -198,6 +198,7 @@ describe('ISS catalog selection retention', () => {
     expect(picker.value).toBe('retained');
     expect(card.hidden).toBe(false);
     expect(drawn.at(-1)).toEqual([{ eventId: 'retained', corridor: ORIGINAL }]);
+    picker.focus();
 
     const next = await pack([item], 'same-next');
     let release!: (response: Response) => void;
@@ -210,8 +211,10 @@ describe('ISS catalog selection retention', () => {
     const pending = launchCatalog.refresh(true);
     try {
       await vi.waitFor(() => { expect(bodySeen).toBe(true); });
+      expect(picker.value).toBe('retained');
       expect(card.hidden).toBe(true);
       expect(drawn.at(-1)).toEqual([]);
+      expect(document.activeElement).toBe(picker);
       release(new Response(next.text, { status: 200, headers: { 'content-type': 'application/json' } }));
       await pending;
       await settle();
@@ -220,6 +223,7 @@ describe('ISS catalog selection retention', () => {
       expect(card.hidden).toBe(false);
       expect(card.querySelector('[data-iss-launch-name]')?.textContent).toBe('Retained event');
       expect(drawn.at(-1)).toEqual([{ eventId: 'retained', corridor: ORIGINAL }]);
+      expect(document.activeElement).toBe(picker);
     } finally {
       release(new Response('missing', { status: 404 }));
       await pending;
@@ -330,7 +334,74 @@ describe('ISS catalog selection retention', () => {
     await scene.paint();
     expect(card.hidden).toBe(true);
     expect(card.dataset.issLaunchState).not.toBe('selected');
-    expect(picker.value).toBe('');
+    expect(picker.value).toBe('retained');
     expect(drawn.at(-1)).toEqual([]);
+  });
+
+  it.each([
+    ['cold', 'shot', 'none'],
+    ['warm', 'shot', 'none'],
+    ['cold', 'likely', 'none'],
+    ['warm', 'likely', 'none'],
+    ['cold', 'shot', 'other'],
+    ['warm', 'shot', 'other'],
+    ['cold', 'likely', 'other'],
+    ['warm', 'likely', 'other'],
+  ] as const)('%s %s choice %s during a held body replaces the retained launch', async (temperature, tier, choice) => {
+    vi.spyOn(Date, 'now').mockReturnValue(viewMs);
+    const primary = liveItem({
+      tier,
+      name: tier === 'shot' ? 'Retained shot' : 'Retained likely',
+    });
+    const alternate = moved(liveItem({ event_id: 'other', tier: 'shot', name: 'Other event' }));
+    await publish([primary, alternate], `${temperature}-${tier}-${choice}`);
+    const { scene, picker, card, drawn } = await openScene();
+    await choose(scene, picker, 'retained');
+    if (temperature === 'warm') launchCatalog.tick(viewMs);
+    picker.focus();
+    expect(drawn.at(-1)).toEqual([{ eventId: 'retained', corridor: ORIGINAL }]);
+
+    const next = await pack([primary, alternate], `${temperature}-${tier}-${choice}-next`);
+    let release!: (response: Response) => void;
+    let bodySeen = false;
+    const gate = new Promise<Response>((resolve) => { release = resolve; });
+    install(next.pointer, () => {
+      bodySeen = true;
+      return gate;
+    });
+    const pending = launchCatalog.refresh(true);
+    try {
+      await vi.waitFor(() => { expect(bodySeen).toBe(true); });
+      expect(picker.value).toBe('retained');
+      expect(card.hidden).toBe(true);
+      expect(card.dataset.issLaunchState).not.toBe('selected');
+      expect(drawn.at(-1)).toEqual([]);
+      expect(document.activeElement).toBe(picker);
+      await choose(scene, picker, choice === 'none' ? 'none' : 'other');
+      expect(document.activeElement).toBe(picker);
+      expect(card.hidden).toBe(true);
+      expect(drawn.at(-1)).toEqual([]);
+      expect(picker.value).not.toBe('retained');
+      release(new Response(next.text, { status: 200, headers: { 'content-type': 'application/json' } }));
+      await pending;
+      await settle();
+      await scene.paint();
+      expect(document.activeElement).toBe(picker);
+      expect(picker.value).not.toBe('retained');
+      if (choice === 'none') {
+        expect(picker.value).toBe('');
+        expect(card.hidden).toBe(true);
+        expect(drawn.at(-1)).toEqual([]);
+      } else {
+        expect(picker.value).toBe('other');
+        expect(card.hidden).toBe(false);
+        expect(card.dataset.issLaunchState).toBe('selected');
+        expect(card.querySelector('[data-iss-launch-name]')?.textContent).toBe('Other event');
+        expect(drawn.at(-1)).toEqual([{ eventId: 'other', corridor: MOVED }]);
+      }
+    } finally {
+      release(new Response('missing', { status: 404 }));
+      await pending;
+    }
   });
 });

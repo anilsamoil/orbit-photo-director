@@ -4989,6 +4989,166 @@ function fixtureInstant(evidenceDir) {
   throw new Error('verify fixture meta missing');
 }
 
+async function armCatalogHold(baseUrl) {
+  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST' });
+  if (!armed.ok) throw new Error(`catalog hold ${armed.status}`);
+  return armed.json();
+}
+
+async function nudgeUntilCatalogPending(send, baseUrl) {
+  const started = Date.now();
+  while (Date.now() - started < 15000) {
+    await nudgeCatalogRefresh(send);
+    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`).then((response) => response.json());
+    if (status.pending) return;
+    await sleep(250);
+  }
+  throw new Error('iss tier pick pending catalog body timed out');
+}
+
+async function releaseCatalogHold(baseUrl) {
+  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST' });
+  if (!released.ok) throw new Error(`catalog release ${released.status}`);
+}
+
+async function nudgeCatalogRefresh(send) {
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (picker instanceof HTMLSelectElement) picker.focus();
+    document.dispatchEvent(new Event('visibilitychange'));
+    return true;
+  })()`);
+}
+
+async function proveCatalogTierIntent(send, baseUrl) {
+  await armCatalogHold(baseUrl);
+  await nudgeUntilCatalogPending(send, baseUrl);
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const card = document.querySelector('[data-iss-launch-card]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!(picker instanceof HTMLSelectElement) || !card || !frame) return null;
+      if (picker.value !== 'verify-ascent') return null;
+      if (!card.hidden) return null;
+      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      if (document.activeElement !== picker) return null;
+      return { ok: true };
+    })()`,
+    'iss tier pick pending catalog body',
+    15000,
+  );
+  await releaseCatalogHold(baseUrl);
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const card = document.querySelector('[data-iss-launch-card]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!(picker instanceof HTMLSelectElement) || !card || !frame) return null;
+      if (picker.value !== 'verify-ascent') return null;
+      if (card.hidden) return null;
+      if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Ascent') return null;
+      if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
+      if (document.activeElement !== picker) return null;
+      return { ok: true };
+    })()`,
+    'iss tier pick restored after catalog body',
+    20000,
+  );
+  await armCatalogHold(baseUrl);
+  await nudgeUntilCatalogPending(send, baseUrl);
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.focus();
+    picker.value = 'none';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
+  await releaseCatalogHold(baseUrl);
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const card = document.querySelector('[data-iss-launch-card]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!(picker instanceof HTMLSelectElement) || !card || !frame) return null;
+      if (picker.value === 'verify-ascent') return null;
+      if (!card.hidden && card.querySelector('[data-iss-launch-name]')?.textContent === 'Verify Ascent') return null;
+      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      if (document.activeElement !== picker) return null;
+      return { ok: true };
+    })()`,
+    'iss pending none replaces tier intent',
+    20000,
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) return null;
+      const shot = [...picker.querySelectorAll('optgroup')].find((entry) => entry.label === 'Shot');
+      const option = shot && [...shot.querySelectorAll('option')].find((entry) => entry.value === 'verify-ascent');
+      if (!option) return null;
+      return { ok: true };
+    })()`,
+    'iss tier menu after pending none',
+    15000,
+  );
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.value = 'verify-ascent';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    picker.focus();
+    return picker.value;
+  })()`);
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const card = document.querySelector('[data-iss-launch-card]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!(picker instanceof HTMLSelectElement) || !card || !frame) return null;
+      if (picker.value !== 'verify-ascent' || card.hidden) return null;
+      if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
+      return { ok: true };
+    })()`,
+    'iss tier pick rearmed',
+    15000,
+  );
+  await armCatalogHold(baseUrl);
+  await nudgeUntilCatalogPending(send, baseUrl);
+  await evaluate(send, `(() => {
+    const picker = document.querySelector('[data-iss-launch-picker]');
+    if (!(picker instanceof HTMLSelectElement)) return false;
+    picker.focus();
+    picker.value = 'verify-likely';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    return picker.value;
+  })()`);
+  await releaseCatalogHold(baseUrl);
+  await waitFor(
+    send,
+    `(() => {
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      const card = document.querySelector('[data-iss-launch-card]');
+      const frame = document.querySelector('[data-iss-frame]');
+      if (!(picker instanceof HTMLSelectElement) || !card || !frame) return null;
+      if (picker.value !== 'verify-likely') return null;
+      if (card.hidden) return null;
+      if (card.querySelector('[data-iss-launch-name]')?.textContent !== 'Verify Likely') return null;
+      if (frame.getAttribute('data-iss-launch-corridor') === 'on') return null;
+      if (document.activeElement !== picker) return null;
+      return { ok: true };
+    })()`,
+    'iss pending other launch replaces tier intent',
+    20000,
+  );
+}
+
 async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   await waitFor(
     send,
@@ -5344,6 +5504,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     'iss launch returned',
     20000,
   );
+  await proveCatalogTierIntent(send, baseUrl);
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
     if (!(picker instanceof HTMLSelectElement)) return false;
@@ -5393,7 +5554,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   const chooseLabel = await evaluate(send, `document.querySelector('[data-iss-launch-picker]')?.selectedOptions?.[0]?.textContent || ''`);
   if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \d{1,2}$/.test(chooseLabel)) throw new Error(`reload shot missed the tier label ${JSON.stringify({ choose, chooseLabel })}`);
   await shot(send, evidenceDir, 'iss-launch-reloaded');
-  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / earth ${earthPanes} / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / tier pick kept through the empty v2 body / v2 republish left the Shot selected / None / reload ${chooseLabel}`;
+  return `${selected.name} / ${selected.site} / ${selected.timeLabel} ${selected.timeValue} / ${selected.visibility} / aim held ${Number(selected.held).toFixed(3)}° / earth ${earthPanes} / ${menuNote}; selection held across a UTC tick / launch held while verifyrev-hold downloaded / tier pick kept through the empty v2 body / v2 republish left the Shot selected / catalog body restored the Shot / pending none kept / pending likely replaced the Shot / None / reload ${chooseLabel}`;
 }
 
 async function proveIssOpticalFov(send, evidenceDir) {
