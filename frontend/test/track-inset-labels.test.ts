@@ -77,7 +77,6 @@ describe('plan inset labels', () => {
     const ids = style?.layers.map((layer) => layer.id);
     expect(ids?.slice(0, 3)).toEqual(['inset-basemap', 'inset-labels', 'inset-track']);
     expect(ids).toContain('inset-countries');
-    expect(created.options?.validateStyle).toBe(false);
     expect(style?.layers[1]?.paint?.['raster-opacity']).toBe(0.85);
     expect(style?.glyphs).toBe('/glyphs/{fontstack}/{range}.pbf');
     const countries = style?.layers.find((layer) => layer.id === 'inset-countries');

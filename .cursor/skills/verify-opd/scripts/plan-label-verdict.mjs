@@ -65,7 +65,7 @@ function rasterPainted(words, country) {
 export function countrySweepZooms() {
   const zooms = [];
   for (let step = -50; step <= 310; step += 5) zooms.push(step / 100);
-  for (const extra of [1.49, 1.51, 2.49, 2.51]) zooms.push(extra);
+  for (const extra of [-0.51, -0.49, 1.49, 1.51, 2.49, 2.51]) zooms.push(extra);
   zooms.sort((left, right) => left - right);
   return zooms;
 }
@@ -427,10 +427,12 @@ function runBite() {
   const levels = loadCountryRasterLevels();
   const australiaLevels = levels.countries.Australia;
   const levelShape = Array.isArray(australiaLevels)
+    && !australiaLevels.includes(0)
     && australiaLevels.includes(1)
     && australiaLevels.includes(2)
-    && !australiaLevels.includes(3)
-    && australiaLevels.includes(4);
+    && australiaLevels.includes(3)
+    && australiaLevels.includes(4)
+    && australiaLevels.includes(6);
   const complement = sweepRows(levels, (_name, _zoom, raster) => (raster ? 0 : 1))
     .map((row) => oneNameSource(row))
     .find((verdict) => verdict.ok !== true);
@@ -439,13 +441,13 @@ function runBite() {
     const first = painted.length ? Math.min(...painted) : 3;
     return zoom < Math.max(1.5, first - 1.5) ? 1 : 0;
   }).map((row) => oneNameSource(row)).find((verdict) => verdict.ok !== true);
-  const droppedHole = sweepRows(levels, (name, zoom, _raster, tileZ) => {
+  const droppedHole = sweepRows(levels, (name, _zoom, _raster, tileZ) => {
     const painted = new Set(levels.countries[name] || []);
-    if (name === 'Australia') painted.add(3);
+    if (name === 'Australia') painted.delete(3);
     const raster = tileZ <= levels.through ? painted.has(tileZ) : painted.has(levels.through);
     return raster ? 0 : 1;
   }).map((row) => {
-    if (row.country === 'Australia' && row.tileZ === 3) return oneNameSource({ ...row, words: 'INDONESIA' });
+    if (row.country === 'Australia' && row.tileZ === 3) return oneNameSource({ ...row, words: 'AUSTRALIA' });
     return oneNameSource(row);
   }).find((verdict) => verdict.ok !== true);
   const ocean = oneNameSource({
@@ -453,7 +455,7 @@ function runBite() {
   });
   console.log(`sweep-complement ok:${complement == null}`);
   console.log(`sweep-floor ok:${restoredFloor != null && restoredFloor.ok === false}`);
-  console.log(`sweep-hole ok:${droppedHole != null && droppedHole.ok === false && droppedHole.reason === 'gap'}`);
+  console.log(`sweep-hole ok:${droppedHole != null && droppedHole.ok === false && droppedHole.reason === 'duplicate'}`);
   console.log(`sweep-ocean ok:${ocean.ok === true}`);
   console.log(`sweep-australia ok:${levelShape === true}`);
   const fractionalBite = fractionalMain.ok === false
@@ -481,7 +483,7 @@ function runBite() {
     && restoredFloor != null
     && restoredFloor.ok === false
     && droppedHole != null
-    && droppedHole.reason === 'gap'
+    && droppedHole.reason === 'duplicate'
     && ocean.ok === true
     && levelShape === true;
   if (!fractionalBite) process.exit(1);

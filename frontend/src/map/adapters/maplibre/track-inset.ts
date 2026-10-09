@@ -48,7 +48,10 @@ const INSET_FIT_PADDING_PX = 22;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
-type SymbolBand = { minzoom?: number; maxzoom?: number };
+/** A tile-0 hole cannot use maxzoom below 0. The geojson worker buckets overscaled zoom 0, and `isHidden(0)` drops that layer. */
+const TILE_ZERO_HIDE_AT = -0.5;
+
+type SymbolBand = { minzoom?: number; maxzoom?: number; hideAt?: number };
 
 function holeBands(painted: readonly number[], through: number): SymbolBand[] {
   const has = new Set(painted);
@@ -64,8 +67,12 @@ function holeBands(painted: readonly number[], through: number): SymbolBand[] {
     const first = holes[index]!;
     const last = holes[end]!;
     const band: SymbolBand = {};
-    if (first > 0) band.minzoom = first - 1.5;
-    if (!(last === through && !has.has(through))) band.maxzoom = last - 0.5;
+    if (first === 0 && last === 0) {
+      band.hideAt = TILE_ZERO_HIDE_AT;
+    } else {
+      if (first > 0) band.minzoom = first - 1.5;
+      if (!(last === through && !has.has(through))) band.maxzoom = last - 0.5;
+    }
     bands.push(band);
     index = end + 1;
   }
@@ -73,12 +80,14 @@ function holeBands(painted: readonly number[], through: number): SymbolBand[] {
 }
 
 function bandKey(band: SymbolBand): string {
+  if (band.hideAt != null) return `hide-${String(band.hideAt).replace('-', 'n').replace('.', '-')}`;
   const min = band.minzoom == null ? 'floor' : String(band.minzoom).replace('-', 'n').replace('.', '-');
   const max = band.maxzoom == null ? 'ceil' : String(band.maxzoom).replace('-', 'n').replace('.', '-');
   return `${min}-${max}`;
 }
 
 function coversView(band: SymbolBand, zoom: number): boolean {
+  if (band.hideAt != null && zoom >= band.hideAt) return false;
   const min = band.minzoom ?? Number.NEGATIVE_INFINITY;
   const max = band.maxzoom ?? Number.POSITIVE_INFINITY;
   return zoom >= min && zoom < max;
@@ -120,6 +129,7 @@ function countrySymbolLayers() {
         'text-color': '#f7f4ea',
         'text-halo-color': '#02040c',
         'text-halo-width': 1.4,
+        ...(group.band.hideAt == null ? {} : { 'text-opacity': ['step', ['zoom'], 1, group.band.hideAt, 0] as ['step', ['zoom'], 1, number, 0] }),
       },
     }));
 }
@@ -145,7 +155,6 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     attributionControl: false,
     fadeDuration: 0,
     minZoom: INSET_MIN_ZOOM,
-    validateStyle: false,
     renderWorldCopies: false,
     transformConstrain: letterboxCamera,
     style: {

@@ -4544,8 +4544,11 @@ async function proveFullscreenTelemetry(send) {
 
 function ocrRasterTile(png) {
   const script = `
-from PIL import Image, ImageOps
 import io, subprocess, sys
+try:
+    from PIL import Image, ImageOps
+except ImportError as error:
+    raise SystemExit("raster tile ocr needs Pillow") from error
 im = Image.open(io.BytesIO(sys.stdin.buffer.read())).convert("RGBA")
 def paint(bg, scale, nearest, contrast):
     base = Image.new("RGBA", im.size, bg)
@@ -4571,7 +4574,7 @@ sys.stdout.write(text)
 }
 
 async function fetchRasterTile(url) {
-  const fresh = url.includes('nocache=') ? url : `${url}${url.includes('?') ? '&' : '?'}nocache=fu121`;
+  const fresh = url.includes('nocache=') ? url : `${url}${url.includes('?') ? '&' : '?'}nocache=${Date.now()}`;
   let last = 'raster tile failed';
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const response = await fetch(fresh, { headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
@@ -4664,12 +4667,40 @@ function planTileUrls(map, sourceId, tiles) {
   if (!template) return [];
   return tiles.map((tile) => template.replace('{z}', String(tile.z)).replace('{y}', String(tile.y)).replace('{x}', String(tile.x)));
 }
+function planOpacityOn(layer, zoom) {
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (!Array.isArray(opacity) || opacity[0] !== 'step') return opacity !== 0;
+  let value = opacity[2];
+  for (let index = 3; index + 1 < opacity.length; index += 2) {
+    if (zoom >= opacity[index]) value = opacity[index + 1];
+  }
+  return value !== 0;
+}
 function planSymbolNames(map) {
+  const zoom = map.getZoom();
+  const canvas = map.getCanvas();
   const layers = ((map.getStyle() && map.getStyle().layers) || [])
-    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol')
+    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol' && planOpacityOn(layer, zoom))
     .map((layer) => layer.id);
   const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
-  return features.map((feature) => (feature.properties && feature.properties.name) || '');
+  return features.filter((feature) => {
+    const coordinates = feature.geometry && feature.geometry.coordinates;
+    if (!coordinates || coordinates.length < 2) return false;
+    const point = map.project(coordinates);
+    return point.x >= 0 && point.y >= 0 && point.x <= canvas.clientWidth && point.y <= canvas.clientHeight;
+  }).map((feature) => (feature.properties && feature.properties.name) || '');
+}
+function planLayerCovers(map, name, zoom) {
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol');
+  return layers.some((layer) => {
+    const min = layer.minzoom == null ? -Infinity : layer.minzoom;
+    const max = layer.maxzoom == null ? Infinity : layer.maxzoom;
+    if (zoom < min || zoom >= max) return false;
+    const filter = layer.filter;
+    const names = filter && filter[2] && filter[2][1];
+    return Array.isArray(names) && names.includes(name);
+  });
 }
 async function planWaitTiles(map) {
   const deadline = performance.now() + 8000;
@@ -4691,6 +4722,13 @@ async function planWaitTiles(map) {
     && pack.tiles.every((tile) => tile.state === 'loaded')
     && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y));
   const tilesOk = ready(labels) && ready(base) && map.areTilesLoaded();
+  if (tilesOk) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 400);
+      map.once('idle', () => { clearTimeout(timer); resolve(); });
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    });
+  }
   const urls = tilesOk
     ? planTileUrls(map, 'inset-labels', labels.tiles).concat(planTileUrls(map, 'inset-basemap', base.tiles))
     : [];
@@ -4746,6 +4784,14 @@ async function coldPlanTileCaches(send) {
       return { ok: false, reason: 'map', caches: names };
     }
     planHold(map);
+    if (typeof map.setTransformRequest === 'function') {
+      const bust = String(Date.now());
+      map.setTransformRequest((url) => {
+        if (!url || url.indexOf('arcgisonline.com') < 0) return { url };
+        const next = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'nocache=' + bust;
+        return { url: next, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } };
+      });
+    }
     for (const id of ['inset-labels', 'inset-basemap']) {
       const manager = map.style.tileManagers[id];
       if (manager && typeof manager.clearTiles === 'function') manager.clearTiles();
@@ -4848,6 +4894,7 @@ async function proveFractionalPlanLabels(send) {
             tileZ: waited.tileZ,
             names: planSymbolNames(map),
             country: ${JSON.stringify(country.name)},
+            covers: planLayerCovers(map, ${JSON.stringify(country.name)}, map.getZoom()),
           });
           if (!waited.tilesOk) break;
         }
