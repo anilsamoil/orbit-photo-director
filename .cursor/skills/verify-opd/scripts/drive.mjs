@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
-import { BOSTON_NADIR_EPOCH_MS, FIXTURE_COOKIE, refreshLaunchClock } from './fixtures.mjs';
+import { createDeviceContext, pinFixtureCookie } from './fixture-session.mjs';
+import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
@@ -361,7 +362,7 @@ async function waitServerRemoved(baseUrl, includes, excludes) {
   throw new Error(`profile GET did not reach ${JSON.stringify({ includes, excludes })}. Last: ${JSON.stringify(last)}`);
 }
 
-async function freshProfile(baseUrl, home, run) {
+export async function freshProfile(baseUrl, home, fixtureToken, run) {
   const debugPort = 19000 + Math.floor(Math.random() * 1000);
   const profile = resolve(home, `chrome-guest-${debugPort}`);
   rmSync(profile, { recursive: true, force: true });
@@ -385,6 +386,7 @@ async function freshProfile(baseUrl, home, run) {
     const cdp = await connectCdp(debugPort);
     try {
       await cdp.send('Page.enable');
+      await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       await cdp.send('Page.navigate', { url: `${baseUrl}/?e2e` });
       await waitFor(cdp.send, `document.readyState === 'complete' ? { ok: true } : null`, 'guest page load', 30000);
       await waitFor(
@@ -419,8 +421,8 @@ async function freshProfile(baseUrl, home, run) {
   }
 }
 
-async function expectFreshHide(baseUrl, home, { id, name, updatedAt, visible }) {
-  await freshProfile(baseUrl, home, async (send) => {
+async function expectFreshHide(baseUrl, home, fixtureToken, { id, name, updatedAt, visible }) {
+  await freshProfile(baseUrl, home, fixtureToken, async (send) => {
     await click(send, '#tab-upcoming');
     await waitFor(
       send,
@@ -542,22 +544,8 @@ const LOG_HOOK = `window.__opdLogs = [];
   const original = console.error;
   console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
 
-function slideLaunch(home, fixtureDir) {
-  const until = refreshLaunchClock(fixtureDir);
-  const stateFile = resolve(home, 'state.json');
-  if (!existsSync(stateFile)) return until;
-  const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-  state.launchValidUntil = until;
-  const tmp = `${stateFile}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state));
-  renameSync(tmp, stateFile);
-  return until;
-}
-
-async function pinFixtureCookie(send, baseUrl, token) {
-  if (!token) return;
-  await send('Network.enable');
-  await send('Network.setCookie', { name: FIXTURE_COOKIE, value: token, url: baseUrl });
+function slideLaunch(fixtureDir) {
+  return refreshLaunchClock(fixtureDir);
 }
 
 async function resetFixtureProfile(baseUrl) {
@@ -588,7 +576,7 @@ async function openApp(send, baseUrl) {
   );
 }
 
-async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport) {
+async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport, fixtureToken) {
   mkdirSync(evidenceDir, { recursive: true });
   const selected = features.includes('all') ? BROWSER_FEATURES : features;
   const notes = [];
@@ -596,11 +584,11 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir, baseUrl));
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
-    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
-    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport));
+    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
     else if (feature === 'phone') notes.push(await drivePhone(send, evidenceDir, meta, viewport));
     else if (feature === 'tracked') notes.push(await driveTracked(send, evidenceDir, meta, viewport));
@@ -610,7 +598,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
 }
 
 async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken }) {
-  slideLaunch(home, fixtureDir);
+  slideLaunch(fixtureDir);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -631,7 +619,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
       await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
       await openApp(cdp.send, baseUrl);
-      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
+      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
       cdp.close();
@@ -656,12 +644,9 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
       const folder = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}-${override.raw}` : spec.slug;
       const label = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
-      slideLaunch(home, fixtureDir);
+      slideLaunch(fixtureDir);
       await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active) });
-      if (fixtureToken) {
-        await context.addCookies([{ name: FIXTURE_COOKIE, value: fixtureToken, url: baseUrl }]);
-      }
+      const context = await createDeviceContext(browser, deviceDescriptor(active), { baseUrl, token: fixtureToken });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -677,7 +662,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
         await openApp(send, baseUrl);
-        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
+        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport, fixtureToken);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
         await context.close();
@@ -743,7 +728,7 @@ const CORNER_BOX = `
 
 export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken }) {
   mkdirSync(evidenceDir, { recursive: true });
-  slideLaunch(home, fixtureDir);
+  slideLaunch(fixtureDir);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -1783,7 +1768,7 @@ function upcomingListExpression(mesa, ascent, { hidden }) {
   })()`;
 }
 
-async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
+async function driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken) {
   const mesa = meta.names.upcoming[0];
   const ascent = meta.names.launch;
   await click(send, '#tab-upcoming');
@@ -1806,7 +1791,7 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
   const server = await waitServerRemoved(baseUrl, [mesaId], []);
-  await expectFreshHide(baseUrl, home, {
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: mesaId,
     name: mesa,
     updatedAt: server.removedCuratedUpdatedAt,
@@ -6552,7 +6537,7 @@ const LAST_GOOD_TLE = {
   at: '2026-09-29T04:10:50.460Z',
 };
 
-async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
+async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken) {
   await click(send, '#tab-profile');
   await waitFor(
     send,
@@ -6604,7 +6589,7 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
   await evaluate(send, `document.querySelector('[data-curated-id="verify-mesa"] button')?.click()`);
   await waitFor(send, `!document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'mesa restored');
   const restored = await waitServerRemoved(baseUrl, [], ['verify-mesa']);
-  await expectFreshHide(baseUrl, home, {
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: 'verify-mesa',
     name: meta.names.upcoming[0],
     updatedAt: restored.removedCuratedUpdatedAt,

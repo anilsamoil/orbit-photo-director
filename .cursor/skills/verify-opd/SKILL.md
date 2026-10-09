@@ -23,9 +23,13 @@ One instance per `OPD_VERIFY_HOME`. The default home is `/tmp/opd-verify/default
 
 `OPD_VERIFY_DRIVE_START` overrides the captured drive start. A value older than six hours before now is an error before any browser launches. The message names `OPD_VERIFY_DRIVE_START`, prints the value, and states the six-hour limit. A start inside those six hours, or a future start, is kept.
 
-Each drive copies the home fixtures into its own temp directory, stamps that copy, and registers the directory with the proxy. The browser sends the cookie `opd-verify-fixtures`. Parallel drives on one home do not rewrite one `passes.json`. The home fixture directory stays as `up` wrote it. Proxy profile memory, the log, and launch holds stay one per home.
+Each drive copies the home fixtures into its own temp directory, stamps that copy, and registers the directory with the proxy. Every browser context that drive opens sends the cookie `opd-verify-fixtures`, including desktop Chrome, a fresh Chrome profile, and each WebKit device. Parallel drives on one home do not rewrite one `passes.json`. The home fixture directory stays as `up` wrote it. `launchValidUntil` in `state.json` is the home clock from `up`. A private drive does not extend it. When that clock is in the past, `doctor` fails and `up` rebuilds instead of reusing the proxy. Proxy profile memory, the log, and launch holds stay one per home.
 
-`up` is safe to repeat. A healthy instance is reused, and reuse does not rebuild fixtures. A dead pid is replaced. If the launch fixture's `valid_until` has passed, `doctor` fails. Run `down`, then `up`.
+The drive deletes its private copy and deregisters it on a normal exit, on SIGINT, and on SIGTERM. The proxy also drops a registration whose copy directory or owner process is already gone. An unknown `opd-verify-fixtures` cookie is a 404 on fixture routes (`/manifest.json`, `/v/verify/`, `/launch/latest.json`, and `/launch/v/`) and those routes do not fall through to the home fixtures. App routes such as `/`, `/src/main.ts`, `/sw.js`, and `/api/browser/session` still load, so a browser can reload after the proxy restarts. A request with no cookie reads the home fixtures.
+
+A drive that fails exits 1. An unknown feature name exits 2.
+
+`up` is safe to repeat. A healthy instance is reused, and reuse does not rebuild fixtures. A dead pid is replaced. If the home launch clock has passed, `doctor` fails. Run `down`, then `up`.
 
 The command needs `bun`, installed `frontend/node_modules`, `lsof`, Chrome, and Playwright WebKit. Set `OPD_VERIFY_CHROME` when `google-chrome` is not on `PATH`. Install WebKit from `frontend` with `npx playwright install --with-deps webkit`. A drive fails when WebKit is missing. It does not skip the device pass. The drive uses the Node `WebSocket` global. Node 22 has it.
 

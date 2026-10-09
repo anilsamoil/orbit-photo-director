@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FIXTURE_COOKIE } from './fixtures.mjs';
+import { createDeviceContext } from './fixture-session.mjs';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
 const { devices, webkit } = require('playwright');
@@ -197,10 +197,11 @@ async function hit(page, locator) {
 export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir, fixtureToken) {
   mkdirSync(evidenceDir, { recursive: true });
   const device = deviceDescriptor(spec);
-  const context = await browser.newContext({ ...device });
-  const cookies = [{ name: 'opd-verify-session', value: 'deny', url: baseUrl }];
-  if (fixtureToken) cookies.push({ name: FIXTURE_COOKIE, value: fixtureToken, url: baseUrl });
-  await context.addCookies(cookies);
+  const context = await createDeviceContext(browser, device, {
+    baseUrl,
+    token: fixtureToken,
+    cookies: [{ name: 'opd-verify-session', value: 'deny', url: baseUrl }],
+  });
   if (spec.standalone) {
     await context.addInitScript(() => {
       Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });

@@ -95,6 +95,13 @@ async function waitForHttp(url, timeoutMs = 30000) {
   throw new Error(`${url} not ready: ${last}`);
 }
 
+function isFixturePath(path) {
+  return path === '/manifest.json'
+    || path.startsWith('/v/verify/')
+    || path === '/launch/latest.json'
+    || path.startsWith('/launch/v/');
+}
+
 function cookieValue(req, name) {
   const raw = req.headers.cookie ?? '';
   for (const part of raw.split(';')) {
@@ -211,6 +218,15 @@ function startProxy(home) {
   const homeFixtures = resolve(home, 'fixtures');
   const meta = JSON.parse(readFileSync(resolve(homeFixtures, 'meta.json'), 'utf8'));
   const driveFixtures = new Map();
+  function pruneRegistration(token) {
+    const entry = driveFixtures.get(token);
+    if (!entry) return null;
+    if (!entry.dir || !existsSync(entry.dir) || !alive(entry.pid)) {
+      driveFixtures.delete(token);
+      return null;
+    }
+    return entry.dir;
+  }
   const logEntries = [];
   const personalTargets = [];
   let removedCuratedIds = null;
@@ -239,30 +255,52 @@ function startProxy(home) {
     for (const waiter of [...launchHoldWaiters]) waiter.finish(true);
   }
   const server = createServer(async (req, res) => {
+    try {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
+    if (path === '/api/verify/fixtures' && req.method === 'GET') {
+      const entries = [...driveFixtures.entries()].map(([token, entry]) => ({
+        token,
+        dir: entry.dir,
+        pid: entry.pid,
+      }));
+      json(res, 200, { count: entries.length, entries });
+      return;
+    }
     if (path === '/api/verify/fixtures' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req) || '{}');
       const token = typeof body.token === 'string' ? body.token : '';
+      if (!/^[a-f0-9]{16}$/.test(token)) {
+        json(res, 400, { ok: false });
+        return;
+      }
+      if (body.forget === true) {
+        driveFixtures.delete(token);
+        json(res, 200, { ok: true, count: driveFixtures.size });
+        return;
+      }
       const dir = typeof body.dir === 'string' ? resolve(body.dir) : '';
+      const pid = Number(body.pid);
       const tempRoot = resolve(tmpdir());
-      const allowed = /^[a-f0-9]{16}$/.test(token)
+      const allowed = Number.isInteger(pid)
+        && pid > 0
         && dir.startsWith(`${tempRoot}${sep}`)
         && existsSync(resolve(dir, 'manifest.json'));
       if (!allowed) {
         json(res, 400, { ok: false });
         return;
       }
-      driveFixtures.set(token, dir);
+      driveFixtures.set(token, { dir, pid });
       json(res, 200, { ok: true });
       return;
     }
     const token = cookieValue(req, FIXTURE_COOKIE);
-    if (token && !driveFixtures.has(token)) {
+    const owned = token ? pruneRegistration(token) : homeFixtures;
+    if (token && !owned && isFixturePath(path)) {
       json(res, 404, { error: `unknown ${FIXTURE_COOKIE}` });
       return;
     }
-    const fixtureDir = token ? driveFixtures.get(token) : homeFixtures;
+    const fixtureDir = owned || homeFixtures;
     const sendFile = (name) => {
       const file = resolve(fixtureDir, name);
       if (!existsSync(file)) {
@@ -498,6 +536,12 @@ function startProxy(home) {
       return;
     }
     await proxyRequest(state, req, res);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(error instanceof Error ? error.message : String(error));
+      }
+    }
   });
   server.listen(state.port, '127.0.0.1');
   console.log(`proxy listening ${state.port}`);
@@ -643,19 +687,38 @@ async function drive(feature) {
   const home = homeDir();
   const published = publishDriveFixtures(resolve(home, 'fixtures'), eventStart, wall);
   const token = randomBytes(8).toString('hex');
-  let exitCode = 0;
-  try {
-    const early = readState(home);
-    if (early) {
-      early.launchValidUntil = published.launchValidUntil;
-      writeState(early);
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    rmSync(published.dir, { recursive: true, force: true });
+    const current = readState(home);
+    if (current?.url) {
+      try {
+        await fetch(`${current.url}/api/verify/fixtures`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token, forget: true }),
+          signal: AbortSignal.timeout(2000),
+        });
+      } catch {
+        /* the proxy is already gone */
+      }
     }
+  };
+  const stop = (code) => {
+    process.exitCode = code;
+    release().finally(() => process.exit(code));
+  };
+  process.once('SIGINT', () => stop(130));
+  process.once('SIGTERM', () => stop(143));
+  try {
     await doctor(home);
     const state = readState(home);
     const registered = await fetch(`${state.url}/api/verify/fixtures`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token, dir: published.dir }),
+      body: JSON.stringify({ token, dir: published.dir, pid: process.pid }),
     });
     if (!registered.ok) throw new Error(`fixture register ${registered.status}`);
     if (feature === 'map-corner') {
@@ -668,19 +731,18 @@ async function drive(feature) {
           fixtureToken: token,
         });
         console.log(note);
+        console.log(`evidence ${state.evidence}`);
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
-        exitCode = 1;
-        return;
+        process.exitCode = 1;
       }
-      console.log(`evidence ${state.evidence}`);
       return;
     }
     const meta = JSON.parse(readFileSync(resolve(published.dir, 'meta.json'), 'utf8'));
     const features = feature === 'all' ? ['all'] : [feature];
     if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
       console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, or map-corner.`);
-      exitCode = 2;
+      process.exitCode = 2;
       return;
     }
     const notes = await driveFeatures({
@@ -694,9 +756,8 @@ async function drive(feature) {
     for (const note of notes) console.log(note);
     console.log(`evidence ${state.evidence}`);
   } finally {
-    rmSync(published.dir, { recursive: true, force: true });
+    await release();
   }
-  if (exitCode) process.exit(exitCode);
 }
 
 function staticType(file) {
