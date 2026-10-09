@@ -15,7 +15,7 @@ const created = vi.hoisted(() => ({
         id: string;
         type?: string;
         source?: string;
-        paint?: { 'raster-opacity'?: number; 'text-color'?: string };
+        paint?: { 'raster-opacity'?: number; 'text-color'?: string; 'text-opacity'?: unknown };
         minzoom?: number;
         maxzoom?: number;
         filter?: unknown;
@@ -111,17 +111,35 @@ describe('plan inset labels', () => {
       }
       return filter[2][1].filter((name): name is string => typeof name === 'string');
     };
+    const opacityOn = (layer: (typeof layers)[number], zoom: number) => {
+      const opacity = layer.paint?.['text-opacity'];
+      if (!Array.isArray(opacity) || opacity[0] !== 'step') return opacity !== 0;
+      let value: unknown = opacity[2];
+      for (let index = 3; index + 1 < opacity.length; index += 2) {
+        if (zoom >= Number(opacity[index])) value = opacity[index + 1];
+      }
+      return value !== 0;
+    };
     const covers = (name: string, zoom: number) => layers.some((layer) => {
-      if (!listed(layer).includes(name)) return false;
+      if (!listed(layer).includes(name) || !opacityOn(layer, zoom)) return false;
       const min = layer.minzoom ?? Number.NEGATIVE_INFINITY;
       const max = layer.maxzoom ?? Number.POSITIVE_INFINITY;
       return zoom >= min && zoom < max;
     });
+    expect(layers.some((layer) => layer.maxzoom != null && layer.maxzoom <= 0)).toBe(false);
+    expect(covers('Australia', -1)).toBe(true);
+    expect(covers('Australia', -0.51)).toBe(true);
+    expect(covers('Australia', -0.5)).toBe(false);
     expect(covers('Australia', -0.227)).toBe(false);
     expect(covers('Australia', 1.49)).toBe(false);
-    expect(covers('Australia', 1.5)).toBe(true);
-    expect(covers('Australia', 2.49)).toBe(true);
+    expect(covers('Australia', 1.5)).toBe(false);
+    expect(covers('Australia', 2.49)).toBe(false);
     expect(covers('Australia', 2.5)).toBe(false);
+    expect(covers('Brazil', 3.5)).toBe(false);
+    expect(covers('India', 3.5)).toBe(false);
+    expect(covers('Nigeria', 1.49)).toBe(true);
+    expect(covers('Nigeria', 1.5)).toBe(false);
+    expect(covers('Nigeria', 2.49)).toBe(false);
     expect(covers('France', 1.49)).toBe(true);
     expect(covers('France', 1.5)).toBe(false);
     expect(covers('Japan', 1.49)).toBe(true);
