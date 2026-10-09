@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { deviceViewport, launchWebkit, openDeviceContext, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
@@ -649,26 +649,19 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active) });
-      if (spec.standalone) {
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-        });
-      }
-      const page = await context.newPage();
+      const cartoDark = [];
+      const session = await openDeviceContext(browser, active, {
+        requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+      });
       try {
-        const cartoDark = [];
-        page.on('request', (request) => {
-          noteRequest(cartoDark, request.url());
-        });
-        const send = playwrightSend(page);
+        const send = playwrightSend(session);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
         await openApp(send, baseUrl);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
-        await context.close();
+        await session.context.close();
       }
       notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir)}`);
     } finally {

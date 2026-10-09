@@ -1,10 +1,21 @@
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
-const { devices, webkit } = require('playwright');
+const { chromium, devices, webkit } = require('playwright');
+
+const STANDALONE_INIT = `Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });`;
+
+const desktopChrome = devices['Desktop Chrome'];
+export const DESKTOP_CHROME_SPEC = {
+  name: 'Desktop Chrome',
+  descriptor: {
+    ...desktopChrome,
+    viewport: { width: 1400, height: 900 },
+  },
+};
 
 export const WEBKIT_DEVICES = [
   { name: 'iPhone 13', slug: 'iphone-13', standalone: true, tap: 'sign-in' },
@@ -55,23 +66,143 @@ export async function launchWebkit() {
   }
 }
 
-async function syncLayoutViewport(page, width, height) {
-  const laid = await page.evaluate(({ width, height }) => {
-    const root = document.documentElement;
-    if (!root) return null;
-    if (root.clientWidth !== width || root.clientHeight !== height) {
-      const meta = document.querySelector('meta[name="viewport"]');
-      if (meta) meta.setAttribute('content', `width=${width}, height=${height}, initial-scale=1, viewport-fit=cover`);
-    }
-    return { width: root.clientWidth, height: root.clientHeight };
-  }, { width, height });
-  if (laid && (laid.width !== width || laid.height !== height)) {
-    throw new Error(`layout viewport ${laid.width}x${laid.height} after set ${width}x${height}`);
-  }
+function chromeExecutable() {
+  if (process.env.OPD_VERIFY_CHROME) return process.env.OPD_VERIFY_CHROME;
+  if (existsSync('/usr/bin/google-chrome-stable')) return '/usr/bin/google-chrome-stable';
+  if (existsSync('/usr/bin/google-chrome')) return '/usr/bin/google-chrome';
+  return 'google-chrome';
 }
 
-export function playwrightSend(page) {
+export async function launchChrome() {
+  return chromium.launch({
+    executablePath: chromeExecutable(),
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  });
+}
+
+function contextDescriptor(spec) {
+  if (spec.descriptor) return spec.descriptor;
+  return deviceDescriptor(spec);
+}
+
+export async function openDeviceContext(browser, spec, hooks = {}) {
+  const descriptor = contextDescriptor(spec);
+  const context = await browser.newContext({ ...descriptor });
+  const initScripts = [...(hooks.initScripts || [])];
+  if (spec.standalone && !initScripts.includes(STANDALONE_INIT)) initScripts.unshift(STANDALONE_INIT);
+  for (const source of initScripts) await context.addInitScript(source);
+  const page = await context.newPage();
+  const requestHandlers = [...(hooks.requestHandlers || [])];
+  for (const handler of requestHandlers) page.on('request', handler);
+  return { browser, context, page, spec, descriptor, initScripts, requestHandlers };
+}
+
+async function capturePage(page) {
+  const url = page.url();
+  let storage = { local: {}, session: {} };
+  try {
+    storage = await page.evaluate(() => {
+      const copy = (store) => {
+        const out = {};
+        for (let index = 0; index < store.length; index += 1) {
+          const key = store.key(index);
+          out[key] = store.getItem(key);
+        }
+        return out;
+      };
+      return { local: copy(localStorage), session: copy(sessionStorage) };
+    });
+  } catch {
+    storage = { local: {}, session: {} };
+  }
+  let cookies = [];
+  try {
+    cookies = await page.context().cookies();
+  } catch {
+    cookies = [];
+  }
+  return { url, storage, cookies };
+}
+
+function specForMetrics(session, params) {
+  if (!Number.isFinite(params.width) || !Number.isFinite(params.height)) {
+    throw new Error(`context size needs width and height, got ${params.width}x${params.height}`);
+  }
+  const mobile = typeof params.mobile === 'boolean' ? params.mobile : Boolean(session.descriptor.isMobile);
+  const deviceScaleFactor = mobile
+    ? session.descriptor.deviceScaleFactor
+    : (params.deviceScaleFactor ?? session.descriptor.deviceScaleFactor);
+  const viewport = { width: params.width, height: params.height };
+  if (!mobile) {
+    return {
+      name: session.spec.name,
+      descriptor: {
+        userAgent: session.descriptor.userAgent,
+        viewport,
+        deviceScaleFactor,
+        isMobile: false,
+        hasTouch: false,
+      },
+    };
+  }
+  return {
+    name: session.spec.name,
+    slug: session.spec.slug,
+    standalone: Boolean(session.spec.standalone),
+    tap: session.spec.tap,
+    viewport,
+    deviceScaleFactor,
+  };
+}
+
+async function restorePage(session, snapshot) {
+  if (!snapshot.url || snapshot.url === 'about:blank') return;
+  if (snapshot.cookies.length) await session.context.addCookies(snapshot.cookies);
+  const stored = Object.keys(snapshot.storage.local).length + Object.keys(snapshot.storage.session).length;
+  if (stored) {
+    await session.page.addInitScript((storage) => {
+      for (const [key, value] of Object.entries(storage.local)) localStorage.setItem(key, value);
+      for (const [key, value] of Object.entries(storage.session)) sessionStorage.setItem(key, value);
+    }, snapshot.storage);
+  }
+  await session.page.goto(snapshot.url, { waitUntil: 'domcontentloaded' });
+}
+
+export async function replaceDeviceContext(session, params) {
+  const snapshot = await capturePage(session.page);
+  const spec = specForMetrics(session, params);
+  const opened = await openDeviceContext(session.browser, spec, {
+    initScripts: session.initScripts,
+    requestHandlers: session.requestHandlers,
+  });
+  const previous = session.context;
+  session.context = opened.context;
+  session.page = opened.page;
+  session.spec = opened.spec;
+  session.descriptor = opened.descriptor;
+  session.initScripts = opened.initScripts;
+  await previous.close();
+  await restorePage(session, snapshot);
+}
+
+export async function readContextMetrics(page) {
+  return page.evaluate(() => ({
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio,
+    userAgent: navigator.userAgent,
+    maxTouchPoints: navigator.maxTouchPoints,
+  }));
+}
+
+export function playwrightSend(session) {
   return async function send(method, params = {}) {
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      await replaceDeviceContext(session, params);
+      return {};
+    }
+    const page = session.page;
     if (method === 'Runtime.evaluate') {
       try {
         const value = await page.evaluate(params.expression);
@@ -104,12 +235,8 @@ export function playwrightSend(page) {
     }
     if (method === 'Page.enable') return {};
     if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+      session.initScripts.push(params.source);
       await page.addInitScript(params.source);
-      return {};
-    }
-    if (method === 'Emulation.setDeviceMetricsOverride') {
-      await page.setViewportSize({ width: params.width, height: params.height });
-      await syncLayoutViewport(page, params.width, params.height);
       return {};
     }
     if (method === 'Emulation.setSafeAreaInsetsOverride') {
@@ -195,15 +322,9 @@ async function hit(page, locator) {
 
 export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
   mkdirSync(evidenceDir, { recursive: true });
-  const device = deviceDescriptor(spec);
-  const context = await browser.newContext({ ...device });
-  await context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
-  if (spec.standalone) {
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-    });
-  }
-  const page = await context.newPage();
+  const session = await openDeviceContext(browser, spec);
+  await session.context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
+  const page = session.page;
   try {
     await page.goto(`${baseUrl}/?u=anil`, { waitUntil: 'domcontentloaded' });
     const signIn = page.locator('#status-banner').getByRole('link', { name: 'Sign in' });
@@ -222,6 +343,6 @@ export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
     if (kept !== '[{"private":"unsent"}]') throw new Error(`${spec.name} recovery cleared saved ratings`);
     return `${spec.name} ${spec.tap} reached ${page.url()}`;
   } finally {
-    await context.close();
+    await session.context.close();
   }
 }
