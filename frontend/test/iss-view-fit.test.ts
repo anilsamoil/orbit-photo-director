@@ -516,8 +516,12 @@ describe('ISS frame fit', () => {
       expect(clock.contains(host.querySelector('[data-iss-houston]'))).toBe(true);
       box(host, 844, 309);
       box(root, 844, 309);
+      frame.style.width = '109px';
+      frame.style.height = '72px';
       window.dispatchEvent(new Event('resize'));
       expect(root.dataset.issSideDock).toBe('on');
+      expect(framePx(frame).width).toBeGreaterThanOrEqual(240);
+      expect(framePx(frame).height).toBeGreaterThanOrEqual(160);
       Object.defineProperty(window, 'innerHeight', { configurable: true, value: SHORT_ISS_WINDOW_PX + 1 });
       await paint(scene);
       expect(root.dataset.issSideDock).toBeUndefined();

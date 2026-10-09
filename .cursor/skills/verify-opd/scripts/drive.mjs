@@ -4712,6 +4712,24 @@ async function proveMapShowLaunches(send, evidenceDir) {
   await shot(send, evidenceDir, 'map-show-launches');
 }
 
+const EARTH_AFTER_RESIZE = `
+  const staleFrame = document.querySelector('[data-iss-frame]');
+  if (staleFrame instanceof HTMLElement) {
+    staleFrame.style.width = '109px';
+    staleFrame.style.height = '72px';
+  }
+  window.dispatchEvent(new Event('resize'));
+  const laidFrame = document.querySelector('[data-iss-frame]');
+  const laidBox = laidFrame instanceof HTMLElement ? laidFrame.getBoundingClientRect() : null;
+  if (!laidBox || laidBox.width < 80 || laidBox.height < 80) {
+    return {
+      step: 'earth',
+      width: laidBox ? Math.round(laidBox.width) : 0,
+      height: laidBox ? Math.round(laidBox.height) : 0,
+    };
+  }
+`;
+
 const LAUNCH_EARTH_CHECK = `
   const frame = document.querySelector('[data-iss-frame]');
   const card = document.querySelector('[data-iss-launch-card]');
@@ -5113,6 +5131,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
             ? scene && scene.clientWidth === ${pane.width} && scene.clientHeight === ${pane.height}
             : document.documentElement.clientWidth === ${pane.width} && document.documentElement.clientHeight === ${pane.height};
           if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scene: scene ? [scene.clientWidth, scene.clientHeight] : null };
+          ${EARTH_AFTER_RESIZE}
           const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
           if (!earth || earth.ok !== true) return earth;
           if (${JSON.stringify(pane.place)} && earth.place !== ${JSON.stringify(pane.place)}) {
