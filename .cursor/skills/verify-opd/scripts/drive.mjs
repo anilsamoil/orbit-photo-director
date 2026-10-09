@@ -3664,12 +3664,54 @@ async function driveTracked(send, evidenceDir, meta, home) {
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
 }
 
+async function armIssFovWatch(send) {
+  await evaluate(send, `(() => {
+    const watch = { bad: null, settled: false };
+    const read = () => {
+      if (watch.bad || watch.settled) return;
+      const label = document.querySelector('[data-iss-fov]');
+      if (!label || label.getAttribute('data-iss-fov-state') !== 'live') return;
+      const text = (label.textContent || '').trim();
+      const shown = Number.parseFloat(text);
+      const phase = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-phase') || '';
+      const map = window.__opdIss;
+      const fov = map && typeof map.getVerticalFieldOfView === 'function' ? map.getVerticalFieldOfView() : null;
+      const roll = map && typeof map.getRoll === 'function' ? ((map.getRoll() % 360) + 360) % 360 : null;
+      const matched = text.length > 0
+        && phase === 'running'
+        && typeof fov === 'number' && Number.isFinite(fov)
+        && Number.isFinite(shown)
+        && Math.abs(shown - fov) <= 0.15
+        && typeof roll === 'number' && Math.abs(roll - 180) <= 0.5;
+      if (matched) watch.settled = true;
+      else watch.bad = { text, shown, phase, fov, roll };
+    };
+    new MutationObserver(read).observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    const pump = () => {
+      read();
+      if (!watch.bad && !watch.settled) requestAnimationFrame(pump);
+    };
+    requestAnimationFrame(pump);
+    window.__opdFovWatch = watch;
+    return true;
+  })()`);
+}
+
 async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await dismissShotlist(send);
+  await armIssFovWatch(send);
   await click(send, '#tab-iss');
   const horizon = await waitFor(
     send,
     `(() => {
+      if (window.__opdFovWatch && window.__opdFovWatch.bad) {
+        throw new Error('live fov before the camera ' + JSON.stringify(window.__opdFovWatch.bad));
+      }
       const view = document.getElementById('view');
       const pressed = document.querySelector('[data-iss-preset="horizon"]');
       const text = document.querySelector('[data-iss-status]')?.textContent || '';
@@ -5352,6 +5394,9 @@ async function proveIssOpticalFov(send, evidenceDir) {
   const before = await waitFor(
     send,
     `(() => {
+      if (window.__opdFovWatch && window.__opdFovWatch.bad) {
+        throw new Error('live fov before the camera ' + JSON.stringify(window.__opdFovWatch.bad));
+      }
       const scene = document.querySelector('[data-iss-scene]');
       const label = document.querySelector('[data-iss-fov]');
       const map = window.__opdIss;
@@ -5360,8 +5405,14 @@ async function proveIssOpticalFov(send, evidenceDir) {
       const fov = map.getVerticalFieldOfView();
       const zoom = map.getZoom();
       const roll = ((map.getRoll() % 360) + 360) % 360;
-      const shown = Number.parseFloat((label.textContent || '').trim());
+      const text = (label.textContent || '').trim();
+      const shown = Number.parseFloat(text);
       if (scene.getAttribute('data-iss-phase') !== 'running') return null;
+      if (label.getAttribute('data-iss-fov-state') === 'live') {
+        if (!text || !Number.isFinite(fov) || !Number.isFinite(shown) || Math.abs(shown - fov) > 0.15 || Math.abs(roll - 180) > 0.5) {
+          throw new Error('live fov does not match the camera ' + JSON.stringify({ text, fov, shown, roll }));
+        }
+      }
       if (label.getAttribute('data-iss-fov-state') !== 'live') return null;
       if (!Number.isFinite(fov) || !Number.isFinite(shown)) return null;
       if (Math.abs(shown - fov) > 0.15) return null;
@@ -5757,6 +5808,7 @@ async function proveIssAimReload(send, evidenceDir) {
   );
   await shot(send, evidenceDir, 'iss-aim-cleared');
   await reloadSettled(send);
+  await armIssFovWatch(send);
   await click(send, '#tab-iss');
   await waitFor(
     send,
@@ -5799,16 +5851,25 @@ async function proveIssKeyboard(send, evidenceDir) {
   const before = await waitFor(
     send,
     `(() => {
+      if (window.__opdFovWatch && window.__opdFovWatch.bad) {
+        throw new Error('live fov before the camera ' + JSON.stringify(window.__opdFovWatch.bad));
+      }
+      const scene = document.querySelector('[data-iss-scene]');
       const map = window.__opdIss;
       const label = document.querySelector('[data-iss-fov]');
-      if (!map?.getCenter || !map.getVerticalFieldOfView || !label) return null;
+      if (!scene || !map?.getCenter || !map.getVerticalFieldOfView || !map.getRoll || !label) return null;
+      if (scene.getAttribute('data-iss-phase') !== 'running') return null;
       if (label.getAttribute('data-iss-fov-state') !== 'live') return null;
+      const text = (label.textContent || '').trim();
+      if (!text) return null;
       const center = map.getCenter();
       const fov = map.getVerticalFieldOfView();
-      const shown = Number.parseFloat((label.textContent || '').trim());
+      const roll = ((map.getRoll() % 360) + 360) % 360;
+      const shown = Number.parseFloat(text);
       if (!Number.isFinite(fov) || !Number.isFinite(shown)) return null;
-      if (Math.abs(shown - fov) > 0.2) return null;
-      return { ok: true, lat: center.lat, lng: center.lng, fov, shown };
+      if (Math.abs(shown - fov) > 0.15) return null;
+      if (Math.abs(roll - 180) > 0.5) return null;
+      return { ok: true, lat: center.lat, lng: center.lng, fov, shown, roll };
     })()`,
     'iss fov label before key',
     15000,
@@ -6114,6 +6175,7 @@ async function proveIssAimLink(send) {
     return true;
   })()`);
   await reloadSettled(send);
+  await armIssFovWatch(send);
   await click(send, '#tab-iss');
   const windowMismatch = aim.windowId === null
     ? `cupola.value !== '' || !chip.hidden`
@@ -6141,8 +6203,14 @@ async function proveIssAimLink(send) {
       if (back > 0.35 || fromOrigin < 0.2) return null;
       const fov = map.getVerticalFieldOfView();
       if (Math.abs(fov - ${aim.opticalFovDeg}) > 0.5) return null;
+      if (window.__opdFovWatch && window.__opdFovWatch.bad) {
+        throw new Error('live fov before the camera ' + JSON.stringify(window.__opdFovWatch.bad));
+      }
       const label = document.querySelector('[data-iss-fov]');
-      if (!label || Math.abs(Number.parseFloat(label.textContent || '') - ${aim.opticalFovDeg}) > 0.2) return null;
+      const text = (label?.textContent || '').trim();
+      if (!label || text.length === 0) return null;
+      const shown = Number.parseFloat(text);
+      if (!Number.isFinite(shown) || Math.abs(shown - ${aim.opticalFovDeg}) > 0.2) return null;
       const decoded = JSON.parse(hash);
       if (decoded.mode !== ${JSON.stringify(aim.mode)}) return null;
       if (decoded.azimuthDeg !== ${aim.azimuthDeg}) return null;
