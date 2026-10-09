@@ -284,7 +284,7 @@ test('proxy drops a registration whose copy or owner is gone', { timeout: 20000 
     const deadBody = await deadResponse.text();
     assert.equal(deadResponse.status, 404);
     assert.match(deadBody, /unknown opd-verify-fixtures/);
-    assert.doesNotMatch(deadBody, /2026-10-07T18:20:00Z/);
+    assert.doesNotMatch(deadBody, /2026-10-07T12:20:00Z/);
     const left = await registrations(harness.url);
     assert.equal(left.count, 0);
   } finally {
@@ -407,7 +407,7 @@ test('fresh Chrome profile sends the fixture cookie', { timeout: 60000 }, async 
       seen = evaluated.result.value;
     });
     assert.equal(seen.status, 200);
-    assert.match(seen.text, /2026-10-07T18:20:00Z/);
+    assert.match(seen.text, /2026-10-07T12:20:00Z/);
     assert.doesNotMatch(seen.text, new RegExp(HOME_REEF));
   } finally {
     for (const dir of published) rmSync(dir, { recursive: true, force: true });
@@ -441,7 +441,7 @@ test('webkit device context sends the fixture cookie', { timeout: 60000 }, async
       return { status: response.status, text: await response.text() };
     });
     assert.equal(seen.status, 200);
-    assert.match(seen.text, /2026-10-07T18:20:00Z/);
+    assert.match(seen.text, /2026-10-07T12:20:00Z/);
     assert.doesNotMatch(seen.text, new RegExp(HOME_REEF));
     const box = await page.evaluate(() => ({
       width: document.documentElement.clientWidth,

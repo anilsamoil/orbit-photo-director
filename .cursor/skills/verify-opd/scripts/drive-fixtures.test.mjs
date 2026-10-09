@@ -34,8 +34,8 @@ test('two drives stamp private fixture copies', async () => {
     ]);
     published.push(first.dir, second.dir);
     assert.equal(reef(source), '2000-01-01T00:00:00Z');
-    assert.equal(reef(first.dir), '2026-10-07T18:20:00Z');
-    assert.equal(reef(second.dir), '2026-10-07T19:20:00Z');
+    assert.equal(reef(first.dir), '2026-10-07T12:20:00Z');
+    assert.equal(reef(second.dir), '2026-10-07T13:20:00Z');
     assert.notEqual(first.dir, second.dir);
   } finally {
     rmSync(source, { recursive: true, force: true });

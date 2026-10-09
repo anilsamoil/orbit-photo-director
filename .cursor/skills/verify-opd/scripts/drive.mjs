@@ -557,8 +557,20 @@ async function resetFixtureProfile(baseUrl) {
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
 }
 
-async function openApp(send, baseUrl) {
+function pageClockSource(startMs) {
+  return `(() => {
+    const start = ${Number(startMs)};
+    const real = Date.now.bind(Date);
+    const skew = start - real();
+    Date.now = () => real() + skew;
+  })();`;
+}
+
+async function openApp(send, baseUrl, pageNowMs) {
   await send('Page.enable');
+  if (Number.isFinite(pageNowMs)) {
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: pageClockSource(pageNowMs) });
+  }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: LOG_HOOK });
   await send('Page.navigate', { url: `${baseUrl}/?e2e` });
   await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'page load', 30000);
@@ -597,7 +609,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   return notes;
 }
 
-async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken }) {
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }) {
   slideLaunch(fixtureDir);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
@@ -618,7 +630,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
       await cdp.send('Network.enable');
       await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
-      await openApp(cdp.send, baseUrl);
+      await openApp(cdp.send, baseUrl, pageNowMs);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
@@ -632,7 +644,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
   }
 }
 
-async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken }) {
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
@@ -647,6 +659,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
       slideLaunch(fixtureDir);
       await resetFixtureProfile(baseUrl);
       const context = await createDeviceContext(browser, deviceDescriptor(active), { baseUrl, token: fixtureToken });
+      if (Number.isFinite(pageNowMs)) await context.addInitScript({ content: pageClockSource(pageNowMs) });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -661,7 +674,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
         const send = playwrightSend(page);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
-        await openApp(send, baseUrl);
+        await openApp(send, baseUrl, pageNowMs);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport, fixtureToken);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
@@ -675,15 +688,15 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
   return notes;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features, fixtureDir, fixtureToken }) {
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features, fixtureDir, fixtureToken, pageNowMs }) {
   viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken }));
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }));
   if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
-    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken }));
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }));
   }
   return notes;
 }
@@ -726,7 +739,7 @@ const CORNER_BOX = `
   };
 `;
 
-export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken }) {
+export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken, pageNowMs }) {
   mkdirSync(evidenceDir, { recursive: true });
   slideLaunch(fixtureDir);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
@@ -740,7 +753,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, f
     try {
       await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
       await pinFixtureCookie(send, baseUrl, fixtureToken);
-      await openApp(send, baseUrl);
+      await openApp(send, baseUrl, pageNowMs);
       const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
       if (!shown) {
         await click(send, '#map-chrome-toggle');

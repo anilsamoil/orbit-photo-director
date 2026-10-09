@@ -729,6 +729,7 @@ async function drive(feature) {
           home,
           fixtureDir: published.dir,
           fixtureToken: token,
+          pageNowMs: eventStart,
         });
         console.log(note);
         console.log(`evidence ${state.evidence}`);
@@ -752,6 +753,7 @@ async function drive(feature) {
       features,
       fixtureDir: published.dir,
       fixtureToken: token,
+      pageNowMs: eventStart,
     });
     for (const note of notes) console.log(note);
     console.log(`evidence ${state.evidence}`);
