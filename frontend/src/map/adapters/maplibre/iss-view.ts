@@ -175,6 +175,7 @@ export function createIssRenderer(
         0,
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg, roll: EARTH_VIEW_ROLL_DEG });
+      aim.onCamera?.(map.getVerticalFieldOfView(), aim.fovEpoch ?? 0);
       launchState.aim = aim;
       if (labels) {
         requestNear();
