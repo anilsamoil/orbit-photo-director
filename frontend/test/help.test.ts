@@ -71,7 +71,16 @@ describe('openHelpModal', () => {
     expect(text).toContain('launch, day, twilight, and eclipse');
     expect(text).toContain('Anil\'s targets, Starship, and your white rings are not rows');
     expect(text).toContain('Starship is not a legend row');
-    expect(text).toContain('Tap Legend on the left edge');
+    expect(text).toContain('On a wide screen, Legend sits immediately left of Hide in the bottom-right corner');
+    expect(text).toContain('On a narrow screen, Legend stays immediately left of Hide');
+    expect(text).toContain('the open list sits above the time row when that band can hold it');
+    expect(text).toContain('the list scrolls in the free space above the footer, clear of the zoom column, the time row, and the Legend button');
+    expect(text).not.toContain('Tap Legend on the left edge');
+    expect(text).not.toContain('right of the zoom buttons');
+    expect(text).not.toContain('of the zoom buttons');
+    expect(text).toContain('The layers dock is a column on the right when that column can hold a 44px target, and a horizontal row when the corner cannot.');
+    expect(text).not.toContain('Also on the right edge');
+    expect(text).not.toContain('Right edge');
     expect(text).toContain('shows only while the legend is open');
     expect(text).toContain('A live IR warning adds a mark on Legend');
     expect(text).not.toContain('Starship: no public orbit yet');

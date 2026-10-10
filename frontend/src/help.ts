@@ -295,10 +295,13 @@ const HELP_SECTIONS: HelpSection[] = [
         text:
           'The legend reads launch, day, twilight, and eclipse. The ISS ' +
           'marker, Anil\'s targets, Starship, and your white rings are not ' +
-          'rows. It starts closed. Tap Legend on the left edge to open the ' +
-          'rows and the imagery date. On a short landscape screen, or while a ' +
-          'shoot list is open on a short phone, Legend sits just to the right ' +
-          'of the zoom buttons. Tap Legend again, or press Escape, to ' +
+          'rows. It starts closed. On a wide screen, Legend sits immediately ' +
+          'left of Hide in the bottom-right corner. Tap it to open the rows ' +
+          'and the imagery date. On a narrow screen, Legend stays immediately ' +
+          'left of Hide, and the open list sits above the time row when that ' +
+          'band can hold it. When the band cannot, the list scrolls in the ' +
+          'free space above the footer, clear of the zoom column, the time ' +
+          'row, and the Legend button. Tap Legend again, or press Escape, to ' +
           'close it. That choice is not remembered. A live IR warning adds a mark ' +
           'on Legend while the list is closed.',
       },
@@ -333,14 +336,16 @@ const HELP_SECTIONS: HelpSection[] = [
       },
       {
         icon: '☀️',
-        label: 'Right edge',
+        label: 'Layers dock',
         text:
-          'Also on the right edge: the day-night line, night lights (off ' +
-          'until you turn them on), place labels, extra ISS orbits, and ' +
-          'other satellites (Tiangong, Hubble, X-37B, or a name you add). ' +
-          'ISS up is the default and points the direction of travel up. ' +
-          'North up keeps north at the top. The target button recenters on ' +
-          'the station. Pan away to release it.',
+          'The layers dock is a column on the right when that column can ' +
+          'hold a 44px target, and a horizontal row when the corner cannot. ' +
+          'It holds the day-night line, night lights (off until you turn ' +
+          'them on), place labels, extra ISS orbits, and other satellites ' +
+          '(Tiangong, Hubble, X-37B, or a name you add). ISS up is the ' +
+          'default and points the direction of travel up. North up keeps ' +
+          'north at the top. The target button recenters on the station. ' +
+          'Pan away to release it.',
       },
     ],
   },

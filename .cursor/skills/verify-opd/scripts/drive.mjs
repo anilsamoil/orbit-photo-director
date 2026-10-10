@@ -1890,6 +1890,7 @@ async function proveMapLaidOnPane(send) {
     const fitting = innerWidth >= 800 && innerHeight >= 600;
     const shortRow = innerHeight <= 520 && innerWidth >= 720;
     const narrow = innerWidth <= 800 && !shortRow && !fitting;
+    const stacked = innerWidth <= 719;
     let reserved = null;
     if (narrow) {
       const probe = document.createElement('div');
@@ -1906,7 +1907,7 @@ async function proveMapLaidOnPane(send) {
       document.body.appendChild(insetProbe);
       const inset = Number.parseFloat(getComputedStyle(insetProbe).paddingBottom) || 0;
       insetProbe.remove();
-      reserved = { height, inset, expect: 140 + inset };
+      reserved = { height, inset, expect: (stacked ? 208 : 140) + inset };
     }
     const pipNode = document.querySelector('[data-pip="horizon"]');
     const pipShown = pipNode && !pipNode.hidden && getComputedStyle(pipNode).display !== 'none';
@@ -3036,6 +3037,685 @@ async function proveShortTimeRow(send, viewport) {
   }
 }
 
+async function proveNarrowTimeSlider(send, evidenceDir, viewport) {
+  try {
+    await setViewport(send, 390, 520, true);
+    await sleep(250);
+    const slider = await evaluate(send, `(() => {
+      const input = document.getElementById('time-slider');
+      const strip = document.querySelector('.map-command');
+      const pane = document.getElementById('map-pane');
+      if (!input || !strip || !pane) return { ok: false, reason: 'missing' };
+      const box = input.getBoundingClientRect();
+      const stripBox = strip.getBoundingClientRect();
+      const paneBox = pane.getBoundingClientRect();
+      return {
+        ok: box.width >= 100,
+        width: Math.round(box.width),
+        rightGap: Math.round(paneBox.right - stripBox.right),
+        above: stripBox.bottom <= (document.getElementById('map-chrome-toggle')?.getBoundingClientRect().top || 0) + 1,
+      };
+    })()`);
+    if (!slider?.ok || !slider.above || slider.rightGap > 24) {
+      throw new Error(`narrow time slider ${JSON.stringify(slider)}`);
+    }
+    await shot(send, evidenceDir, 'map-time-390x520');
+    await setViewport(send, 430, 400, true);
+    await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
+    await sleep(250);
+    const compass = await evaluate(send, `(() => {
+      const el = document.querySelector('.maplibregl-ctrl-compass');
+      if (!el) return { ok: false, reason: 'missing' };
+      const box = el.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const own = !!(hit && (hit === el || el.contains(hit)));
+      return {
+        ok: own,
+        hit: hit ? (hit.id || hit.getAttribute('aria-label') || hit.className || hit.tagName) : null,
+        top: Math.round(box.top),
+        bottom: Math.round(box.bottom),
+      };
+    })()`);
+    if (!compass?.ok) throw new Error(`compass under the time strip ${JSON.stringify(compass)}`);
+    await shot(send, evidenceDir, 'map-compass-430x400');
+  } finally {
+    await evaluate(send, `document.body.classList.remove('shotlist-bar-visible')`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+const BANNER_ACTIONS_MARKUP = '<p class="banner-copy">SIGN IN AGAIN</p><div class="banner-actions"><a class="banner-action" href="/api/app">Sign in</a><button class="banner-action" type="button">Reload</button></div>';
+
+function bannerInjectExpression() {
+  return `(() => {
+    const banner = document.getElementById('status-banner');
+    if (!banner) return false;
+    banner.className = 'banner banner-red';
+    banner.innerHTML = ${JSON.stringify(BANNER_ACTIONS_MARKUP)};
+    return !!banner.querySelector('.banner-actions');
+  })()`;
+}
+
+function bannerClearExpression() {
+  return `(() => {
+    const banner = document.getElementById('status-banner');
+    if (banner) banner.querySelectorAll('.banner-actions').forEach((node) => node.remove());
+    return !document.querySelector('#status-banner .banner-actions');
+  })()`;
+}
+
+async function withBannerActions(send, run) {
+  const saved = await evaluate(send, `(() => {
+    const banner = document.getElementById('status-banner');
+    if (!banner) return null;
+    return { className: banner.className, html: banner.innerHTML };
+  })()`);
+  if (!saved) throw new Error('status banner missing');
+  await evaluate(send, bannerInjectExpression());
+  await evaluate(send, `(() => {
+    setTimeout(() => {
+      document.querySelectorAll('#status-banner .banner-actions').forEach((node) => node.remove());
+    }, 20);
+    return true;
+  })()`);
+  try {
+    return await run();
+  } finally {
+    await evaluate(send, `(() => {
+      const banner = document.getElementById('status-banner');
+      if (!banner) return false;
+      banner.className = ${JSON.stringify(saved.className)};
+      banner.innerHTML = ${JSON.stringify(saved.html)};
+      return true;
+    })()`);
+  }
+}
+
+async function proveRaisedHideDock(send, evidenceDir, viewport) {
+  await setViewport(send, 1280, 700, false);
+  await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  try {
+    await withBannerActions(send, async () => {
+      await sleep(250);
+      const laid = await evaluate(send, `(() => {
+        const actions = ${bannerInjectExpression()};
+        const dock = document.querySelector('.map-control-dock');
+        const picker = document.getElementById('toggle-satellite-picker');
+        const hide = document.getElementById('map-chrome-toggle');
+        if (!dock || !picker || !hide) return { ok: false, reason: 'missing', actions };
+        dock.scrollTop = dock.scrollHeight;
+        const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        const dockBox = dock.getBoundingClientRect();
+        const pickerBox = picker.getBoundingClientRect();
+        const hideBox = hide.getBoundingClientRect();
+        const overlap = hits(pickerBox, hideBox) || hits(dockBox, hideBox);
+        return {
+          ok: actions && !overlap && dockBox.bottom <= hideBox.top + 1,
+          actions,
+          dockBottom: Math.round(dockBox.bottom),
+          hideTop: Math.round(hideBox.top),
+          hideBottom: Math.round(hideBox.bottom),
+          pickerTop: Math.round(pickerBox.top),
+          pickerBottom: Math.round(pickerBox.bottom),
+        };
+      })()`);
+      if (!laid?.ok) throw new Error(`raised hide covers the dock ${JSON.stringify(laid)}`);
+      await shot(send, evidenceDir, 'map-dock-1280x700');
+    });
+  } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function proveLegendPanelBounds(send, evidenceDir, viewport) {
+  const saved = await evaluate(send, `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const date = document.querySelector('.map-imagery-date');
+    if (!button || !date) return null;
+    return { expanded: button.getAttribute('aria-expanded'), text: date.textContent };
+  })()`);
+  if (!saved) throw new Error('legend panel missing');
+  const cases = [
+    { width: 844, height: 390, insets: { top: 0, left: 0, bottom: 21, right: 0 }, name: '844x390' },
+    { width: 800, height: 600, insets: { top: 24, left: 0, bottom: 20, right: 0 }, name: '800x600' },
+  ];
+  try {
+    await evaluate(send, `(() => {
+      const button = document.getElementById('map-legend-toggle');
+      const date = document.querySelector('.map-imagery-date');
+      button.setAttribute('aria-expanded', 'true');
+      const line = 'LIVE now (not the scrubbed time)';
+      date.textContent = Array.from({ length: 40 }, () => line).join(' ');
+      return true;
+    })()`);
+    await withBannerActions(send, async () => {
+      for (const pane of cases) {
+        await setViewport(send, pane.width, pane.height, true);
+        const applied = await safeAreaOverride(send, pane.insets);
+        if (!applied && !viewport.mobile) throw new Error(`safe area override failed at ${pane.name}`);
+        if (!applied) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+        await sleep(250);
+        const laid = await evaluate(send, `(() => {
+          const actions = ${bannerInjectExpression()};
+          const panel = document.getElementById('map-legend-panel');
+          const header = document.querySelector('.topbar');
+          const strip = document.querySelector('.map-command');
+          if (!actions || !panel || !header || !strip) return { ok: false, reason: actions ? 'missing' : 'banner', actions };
+          const box = panel.getBoundingClientRect();
+          const head = header.getBoundingClientRect();
+          const stripBox = strip.getBoundingClientRect();
+          const style = getComputedStyle(panel);
+          const hits = (a, b) => a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+          const pipNode = document.querySelector('[data-pip="horizon"]');
+          const pipShown = pipNode && !pipNode.hidden && getComputedStyle(pipNode).display !== 'none';
+          const pip = pipShown ? pipNode.getBoundingClientRect() : null;
+          const onScreen = box.top >= -1 && box.left >= -1 && box.right <= innerWidth + 1 && box.bottom <= innerHeight + 1;
+          const belowHeader = box.top >= head.bottom - 1;
+          const pipClear = !pip || !hits(box, pip);
+          const stripClear = !hits(box, stripBox);
+          const scrollable = (style.overflowY === 'auto' || style.overflowY === 'scroll') && panel.scrollHeight > panel.clientHeight + 1;
+          return {
+            ok: actions && onScreen && belowHeader && pipClear && stripClear && scrollable && style.pointerEvents === 'auto' && box.width > 88,
+            actions,
+            onScreen,
+            belowHeader,
+            pipClear,
+            stripClear,
+            scrollable,
+            events: style.pointerEvents,
+            overflow: style.overflowY,
+            width: Math.round(box.width),
+            top: Math.round(box.top),
+            bottom: Math.round(box.bottom),
+            header: Math.round(head.bottom),
+            scrollHeight: panel.scrollHeight,
+            clientHeight: panel.clientHeight,
+          };
+        })()`);
+        if (!laid?.ok) throw new Error(`legend panel ${pane.name} ${JSON.stringify(laid)}`);
+        await shot(send, evidenceDir, `map-legend-panel-${pane.name}`);
+      }
+    });
+  } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    await evaluate(send, `(() => {
+      const button = document.getElementById('map-legend-toggle');
+      const date = document.querySelector('.map-imagery-date');
+      if (button) button.setAttribute('aria-expanded', ${JSON.stringify(saved.expanded)});
+      if (date) date.textContent = ${JSON.stringify(saved.text)};
+      return true;
+    })()`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function restoreNarrowChrome(send, viewport, legendExpanded) {
+  await evaluate(send, `(() => {
+    document.body.classList.remove('shotlist-bar-visible');
+    const toggle = document.getElementById('map-legend-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', ${JSON.stringify(legendExpanded || 'false')});
+    ${bannerClearExpression()};
+    return true;
+  })()`);
+  await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+}
+
+async function proveNarrowDockScrollport(send, viewport) {
+  await setViewport(send, 430, 400, true);
+  const applied = await safeAreaOverride(send, { top: 24, left: 47, bottom: 34, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the narrow dock');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    for (const shotlist of [true, false]) {
+      const laid = await evaluate(send, `(() => {
+        ${bannerClearExpression()};
+        document.body.classList.toggle('shotlist-bar-visible', ${shotlist});
+        const toggle = document.getElementById('map-legend-toggle');
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        window.__opdSyncMapChrome?.();
+        const dock = document.querySelector('.map-control-dock');
+        const first = document.getElementById('bearing-north');
+        const last = document.getElementById('toggle-satellite-picker');
+        if (!dock || !first || !last) return { ok: false, reason: 'missing' };
+        const owns = (el) => {
+          const box = el.getBoundingClientRect();
+          const dockBox = dock.getBoundingClientRect();
+          const x = box.left + box.width / 2;
+          const y = box.top + box.height / 2;
+          const hit = document.elementFromPoint(x, y);
+          return {
+            inside: x >= dockBox.left - 0.5 && x <= dockBox.right + 0.5 && y >= dockBox.top - 0.5 && y <= dockBox.bottom + 0.5,
+            own: !!(hit && (hit === el || el.contains(hit))),
+            hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+          };
+        };
+        dock.scrollTop = 0;
+        const start = owns(first);
+        dock.scrollTop = dock.scrollHeight;
+        const end = owns(last);
+        const box = dock.getBoundingClientRect();
+        return {
+          ok: box.height >= 44 && start.inside && start.own && end.inside && end.own,
+          height: Math.round(box.height),
+          client: dock.clientHeight,
+          start,
+          end,
+        };
+      })()`);
+      if (!laid?.ok) throw new Error(`narrow dock shotlist ${shotlist} ${JSON.stringify(laid)}`);
+    }
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveLegendClearsNarrowControls(send, viewport) {
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  const sizes = [
+    { width: 390, height: 520 },
+    { width: 430, height: 400 },
+  ];
+  const toggles = [
+    { shotlist: false, banner: false },
+    { shotlist: true, banner: false },
+    { shotlist: false, banner: true },
+    { shotlist: true, banner: true },
+  ];
+  try {
+    for (const size of sizes) {
+      await setViewport(send, size.width, size.height, true);
+      await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+      for (const toggle of toggles) {
+        const laid = await evaluate(send, `(() => {
+          const actions = ${toggle.banner ? bannerInjectExpression() : bannerClearExpression()};
+          document.body.classList.toggle('shotlist-bar-visible', ${toggle.shotlist});
+          const legend = document.getElementById('map-legend-toggle');
+          if (legend) legend.setAttribute('aria-expanded', 'true');
+          window.__opdSyncMapChrome?.();
+          const panel = document.getElementById('map-legend-panel');
+          const strip = document.querySelector('.map-command');
+          const toolbar = document.querySelector('.map-toolbar');
+          if (!actions || !panel || !strip || !toolbar) return { ok: false, reason: 'missing', actions };
+          const meets = (a, b) => !!(a && b && a.width > 0 && b.width > 0 && a.height > 0 && b.height > 0 && a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5);
+          const panelBox = panel.getBoundingClientRect();
+          const stripBox = strip.getBoundingClientRect();
+          const toolBox = toolbar.getBoundingClientRect();
+          const selectors = ['#time-slider', '#time-back-90', '#time-back-45', '#time-now', '#time-fwd-45', '#time-fwd-90', '#filter-all-map', '#filter-mine-map', '#filter-launches-map'];
+          const misses = [];
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (!el) {
+              misses.push({ selector, reason: 'missing' });
+              continue;
+            }
+            const box = el.getBoundingClientRect();
+            if (meets(panelBox, box)) misses.push({ selector, reason: 'covered' });
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+            if (!hit || (hit !== el && !el.contains(hit))) misses.push({ selector, reason: 'hit', hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null });
+            if (box.width < 44 || box.height < 44) misses.push({ selector, reason: 'size', w: Math.round(box.width), h: Math.round(box.height) });
+          }
+          const aboveStrip = panelBox.bottom <= stripBox.top - 8;
+          const belowToolbar = panelBox.top >= toolBox.bottom - 1;
+          return {
+            ok: misses.length === 0 && aboveStrip && belowToolbar && panelBox.height >= 24 && panelBox.width > 88,
+            misses,
+            aboveStrip,
+            belowToolbar,
+            panel: { top: Math.round(panelBox.top), bottom: Math.round(panelBox.bottom), height: Math.round(panelBox.height), width: Math.round(panelBox.width) },
+            stripTop: Math.round(stripBox.top),
+            toolbarBottom: Math.round(toolBox.bottom),
+            actions: !!document.querySelector('#status-banner .banner-actions'),
+          };
+        })()`);
+        if (!laid?.ok || (toggle.banner && !laid.actions)) {
+          throw new Error(`legend clearance ${size.width}x${size.height} shotlist ${toggle.shotlist} banner ${toggle.banner} ${JSON.stringify(laid)}`);
+        }
+      }
+    }
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveRaisedStripClearsToolbar(send, viewport) {
+  await setViewport(send, 430, 400, true);
+  const applied = await safeAreaOverride(send, { top: 24, left: 47, bottom: 34, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the raised strip');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    const laid = await evaluate(send, `(() => {
+      const actions = ${bannerInjectExpression()};
+      document.body.classList.remove('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'false');
+      window.__opdSyncMapChrome?.();
+      const mine = document.getElementById('filter-mine-map');
+      const launches = document.getElementById('filter-launches-map');
+      const toolbar = document.querySelector('.map-toolbar');
+      const strip = document.querySelector('.map-command');
+      if (!actions || !mine || !launches || !toolbar || !strip) return { ok: false, reason: actions ? 'missing' : 'banner', actions };
+      const owns = (el) => {
+        const box = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          own: !!(hit && (hit === el || el.contains(hit))),
+          hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+          h: Math.round(box.height),
+          w: Math.round(box.width),
+        };
+      };
+      const stripBox = strip.getBoundingClientRect();
+      const toolBox = toolbar.getBoundingClientRect();
+      const steps = [...document.querySelectorAll('.map-command .time-step-btn')].map((el) => {
+        const port = strip.getBoundingClientRect();
+        let box = el.getBoundingClientRect();
+        if (box.left < port.left) strip.scrollLeft -= port.left - box.left;
+        if (box.right > port.right) strip.scrollLeft += box.right - port.right;
+        box = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          id: el.id,
+          w: Math.round(box.width),
+          h: Math.round(box.height),
+          own: !!(hit && (hit === el || el.contains(hit))),
+        };
+      });
+      const mineHit = owns(mine);
+      const launchHit = owns(launches);
+      const targets = steps.every((step) => step.w >= 44 && step.h >= 44 && step.own);
+      const gap = stripBox.top - toolBox.bottom;
+      return {
+        ok: mineHit.own && launchHit.own && mineHit.h >= 44 && launchHit.h >= 44 && targets && gap >= 4,
+        actions,
+        gap: Math.round(gap),
+        stripTop: Math.round(stripBox.top),
+        toolbarBottom: Math.round(toolBox.bottom),
+        mineHit,
+        launchHit,
+        steps,
+      };
+    })()`);
+    if (!laid?.ok) throw new Error(`raised strip upper bound ${JSON.stringify(laid)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveLegendMissesRaisedPip(send, viewport) {
+  const applied = await safeAreaOverride(send, { top: 24, left: 0, bottom: 20, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the legend and horizon inset');
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    await setViewport(send, 800, 600, false);
+    await waitFor(send, pipReadyExpression('horizon'), 'horizon inset under the legend', 15000);
+    const laid = await evaluate(send, `(() => {
+      const actions = ${bannerInjectExpression()};
+      document.body.classList.add('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'true');
+      window.__opdSyncMapChrome?.();
+      const panel = document.getElementById('map-legend-panel');
+      const date = document.querySelector('.map-imagery-date');
+      const pip = document.querySelector('[data-pip="horizon"]');
+      if (!actions || !panel || !date || !pip) return { ok: false, reason: 'missing', actions };
+      const saved = date.textContent;
+      date.textContent = Array.from({ length: 40 }, () => 'LIVE now (not the scrubbed time)').join(' ');
+      const panelBox = panel.getBoundingClientRect();
+      const pipBox = pip.getBoundingClientRect();
+      const filled = panel.scrollHeight > panel.clientHeight + 1;
+      const meets = panelBox.width > 0 && pipBox.width > 0 && panelBox.left < pipBox.right - 0.5 && panelBox.right > pipBox.left + 0.5 && panelBox.top < pipBox.bottom - 0.5 && panelBox.bottom > pipBox.top + 0.5;
+      const hit = document.elementFromPoint(600, 216);
+      const legendHit = !!(hit && hit.closest('#map-legend-panel, .map-legend-item'));
+      const pipHit = !!(hit && hit.closest('[data-pip="horizon"]'));
+      date.textContent = saved;
+      return {
+        ok: filled && !meets && pipHit && !legendHit && pipBox.height >= 44,
+        filled,
+        meets,
+        pipHit,
+        legendHit,
+        hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+        panel: { left: Math.round(panelBox.left), top: Math.round(panelBox.top), width: Math.round(panelBox.width), height: Math.round(panelBox.height), bottom: Math.round(panelBox.bottom) },
+        pip: { left: Math.round(pipBox.left), top: Math.round(pipBox.top), width: Math.round(pipBox.width), height: Math.round(pipBox.height), bottom: Math.round(pipBox.bottom) },
+        actions,
+      };
+    })()`);
+    if (!laid?.ok) throw new Error(`legend meets horizon inset ${JSON.stringify(laid)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+export function tightChromeAuditExpression() {
+  return `(() => {
+    document.body.classList.add('shotlist-bar-visible');
+    const legendToggle = document.getElementById('map-legend-toggle');
+    if (legendToggle) legendToggle.setAttribute('aria-expanded', 'true');
+    const actions = ${bannerInjectExpression()};
+    window.__opdSyncMapChrome?.();
+    const meets = (a, b) => !!(a && b && a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0 && a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5);
+    const name = (el) => {
+      if (!el) return null;
+      if (el.id) return el.id;
+      return typeof el.className === 'string' && el.className ? el.className : el.tagName;
+    };
+    const own = (el, x, y) => {
+      const hit = document.elementFromPoint(x, y);
+      return { own: !!(hit && (hit === el || el.contains(hit))), hit: name(hit) };
+    };
+    const toolbar = document.querySelector('.map-toolbar');
+    const strip = document.querySelector('.map-command');
+    const dock = document.querySelector('.map-control-dock');
+    const panel = document.getElementById('map-legend-panel');
+    const mine = document.getElementById('filter-mine-map');
+    const launches = document.getElementById('filter-launches-map');
+    const hide = document.getElementById('map-chrome-toggle');
+    const legendButton = document.getElementById('map-legend-toggle');
+    const first = document.getElementById('bearing-north');
+    const last = document.getElementById('toggle-satellite-picker');
+    if (!actions || !toolbar || !strip || !dock || !panel || !mine || !launches || !hide || !legendButton || !first || !last) {
+      return { ok: false, reason: 'missing', actions: !!actions };
+    }
+    const problems = [];
+    const boxes = {
+      toolbar: toolbar.getBoundingClientRect(),
+      strip: strip.getBoundingClientRect(),
+      dock: dock.getBoundingClientRect(),
+      panel: panel.getBoundingClientRect(),
+      mine: mine.getBoundingClientRect(),
+      launches: launches.getBoundingClientRect(),
+      hide: hide.getBoundingClientRect(),
+      legend: legendButton.getBoundingClientRect(),
+    };
+    const narrow = window.innerWidth <= 719;
+    if (narrow) {
+      for (const [a, b] of [['toolbar', 'strip'], ['toolbar', 'panel'], ['toolbar', 'dock'], ['strip', 'panel'], ['strip', 'dock'], ['panel', 'mine'], ['panel', 'launches'], ['panel', 'hide'], ['panel', 'legend'], ['strip', 'mine'], ['strip', 'launches'], ['strip', 'legend'], ['dock', 'hide'], ['dock', 'legend'], ['toolbar', 'legend']]) {
+        if (meets(boxes[a], boxes[b])) problems.push(a + ' meets ' + b);
+      }
+      for (const el of [mine, launches]) {
+        const box = el.getBoundingClientRect();
+        if (box.width < 44 || box.height < 44) problems.push(el.id + ' size');
+        for (const [x, y] of [[box.left + box.width / 2, box.top + box.height / 2], [box.left + box.width / 2, box.bottom - 1], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2]]) {
+          const hit = own(el, x, y);
+          if (!hit.own) problems.push(el.id + ' edge ' + hit.hit);
+        }
+      }
+      const bring = (el) => {
+        const port = strip.getBoundingClientRect();
+        const box = el.getBoundingClientRect();
+        if (box.left < port.left) strip.scrollLeft -= port.left - box.left;
+        if (box.right > port.right) strip.scrollLeft += box.right - port.right;
+      };
+      for (const el of document.querySelectorAll('.map-command .time-step-btn')) {
+        bring(el);
+        const box = el.getBoundingClientRect();
+        if (box.width < 44 || box.height < 44) problems.push(el.id + ' size ' + Math.round(box.width) + 'x' + Math.round(box.height));
+        const hit = own(el, box.left + box.width / 2, box.top + box.height / 2);
+        if (!hit.own) problems.push(el.id + ' center ' + hit.hit);
+      }
+      const endpoint = (el, atEnd) => {
+        dock.scrollTop = atEnd ? dock.scrollHeight : 0;
+        dock.scrollLeft = atEnd ? dock.scrollWidth : 0;
+        const box = el.getBoundingClientRect();
+        const dockBox = dock.getBoundingClientRect();
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        const inside = x >= dockBox.left - 0.5 && x <= dockBox.right + 0.5 && y >= dockBox.top - 0.5 && y <= dockBox.bottom + 0.5;
+        const hit = own(el, x, y);
+        if (box.width < 44 || box.height < 44) problems.push(el.id + ' dock size ' + Math.round(box.width) + 'x' + Math.round(box.height));
+        if (!inside || !hit.own) problems.push(el.id + ' dock ' + inside + ' ' + hit.hit);
+      };
+      endpoint(first, false);
+      endpoint(last, true);
+      if (panel.clientHeight < 32) problems.push('legend client ' + panel.clientHeight);
+      const rows = [...panel.querySelectorAll('.map-legend-item, .map-imagery-date')].filter((el) => (el.textContent || '').trim());
+      for (const row of rows) {
+        const port = () => panel.getBoundingClientRect();
+        let box = row.getBoundingClientRect();
+        if (box.top < port().top) panel.scrollTop -= port().top - box.top;
+        box = row.getBoundingClientRect();
+        if (box.bottom > port().bottom) panel.scrollTop += box.bottom - port().bottom;
+        box = row.getBoundingClientRect();
+        const frame = port();
+        if (box.top < frame.top - 1 || box.bottom > frame.bottom + 1) problems.push('legend row ' + (row.className || row.id));
+      }
+    } else if (document.body.classList.contains('map-chrome-reflow')) {
+      problems.push('reflow above 719');
+    }
+    if (hide.getBoundingClientRect().width < 80 || hide.getBoundingClientRect().height < 44) problems.push('hide size');
+    const dockType = getComputedStyle(dock).containerType;
+    const commandType = getComputedStyle(strip).containerType;
+    if (dockType === 'size' || commandType === 'size') problems.push('containment');
+    return {
+      ok: problems.length === 0,
+      problems,
+      reflow: document.body.classList.contains('map-chrome-reflow'),
+      dockRow: document.body.classList.contains('map-dock-row'),
+      panel: Math.round(panel.getBoundingClientRect().height),
+      dock: Math.round(dock.getBoundingClientRect().height),
+    };
+  })()`;
+}
+
+async function proveTightChromeReflow(send, viewport) {
+  const probe = await safeAreaOverride(send, { top: 24, left: 0, bottom: 34, right: 0 });
+  if (!probe) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the tight chrome sweep');
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  const cases = [];
+  for (const width of [360, 390, 430]) {
+    for (let height = 500; height <= 560; height += 1) cases.push([width, height]);
+  }
+  cases.push([600, 400], [719, 400], [720, 400]);
+  try {
+    for (const left of [0, 47]) {
+      const applied = await safeAreaOverride(send, { top: 24, left, bottom: 34, right: 0 });
+      if (!applied) throw new Error(`safe area override failed for left ${left}`);
+      for (const [width, height] of cases) {
+        await setViewport(send, width, height, true);
+        const laid = await evaluate(send, tightChromeAuditExpression());
+        if (!laid?.ok) throw new Error(`tight chrome ${width}x${height} left ${left} ${JSON.stringify(laid)}`);
+      }
+    }
+    await setViewport(send, 390, 521, true);
+    await safeAreaOverride(send, { top: 24, left: 0, bottom: 34, right: 0 });
+    await waitFor(
+      send,
+      `document.getElementById('live-readout')?.hidden === true ? { ok: true } : null`,
+      'narrow status collapsed before activation',
+      3000,
+    );
+    const activated = await evaluate(send, `(() => {
+      document.body.classList.add('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'true');
+      ${bannerInjectExpression()};
+      window.__opdSyncMapChrome?.();
+      const mine = document.getElementById('filter-mine-map');
+      const all = document.getElementById('filter-all-map');
+      const north = document.getElementById('bearing-north');
+      const iss = document.getElementById('bearing-iss');
+      const readout = document.getElementById('time-slider-readout');
+      if (!mine || !all || !north || !iss || !readout) return { ok: false, reason: 'missing' };
+      const before = readout.textContent;
+      const box = mine.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.bottom - 1);
+      if (!hit || (hit !== mine && !mine.contains(hit))) return { ok: false, reason: 'mine edge', hit: hit ? hit.id : null };
+      mine.click();
+      const afterMine = readout.textContent;
+      const mineOn = mine.classList.contains('active');
+      all.click();
+      north.click();
+      const northOn = north.classList.contains('active');
+      iss.click();
+      return { ok: afterMine === before && mineOn && northOn, before, afterMine, mineOn, northOn };
+    })()`);
+    if (!activated?.ok) throw new Error(`tight chrome activation ${JSON.stringify(activated)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function readPipAfterResize(send) {
+  return evaluate(send, `(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const inset = document.querySelector('[data-pip="horizon"]');
+    if (!inset) return { ok: false, reason: 'missing' };
+    const style = getComputedStyle(inset);
+    const box = inset.getBoundingClientRect();
+    const canvas = inset.querySelector('canvas');
+    const hit = box.width > 0 ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) : null;
+    const dock = document.querySelector('.map-control-dock')?.getBoundingClientRect();
+    const gap = dock && box.height > 0 ? dock.top - box.bottom : null;
+    const owns = !!(hit && (hit === inset || inset.contains(hit)));
+    return {
+      ok: !inset.hidden && style.display !== 'none' && Math.abs(box.width - 222) <= 1 && Math.abs(box.height - 144) <= 1 && !!canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0 && owns && gap != null && gap >= 8,
+      hidden: inset.hidden,
+      display: style.display,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      canvas: canvas ? [canvas.clientWidth, canvas.clientHeight] : null,
+      owns,
+      gap: gap == null ? null : Math.round(gap),
+    };
+  })()`);
+}
+
+async function provePipSurvivesNarrowResize(send, viewport) {
+  if (viewport.width !== 834 || viewport.height !== 1194) return;
+  const cycle = [[834, 1194], [390, 664], [834, 1194], [430, 400], [834, 1194]];
+  for (const [width, height] of cycle) {
+    await setViewport(send, width, height, true);
+    await sleep(50);
+  }
+  const restored = await readPipAfterResize(send);
+  if (!restored?.ok) throw new Error(`horizon inset after narrow return ${JSON.stringify(restored)}`);
+  const rounds = [[390, 664], [834, 1194], [430, 400], [834, 1194], [360, 520], [834, 1194]];
+  for (let round = 0; round < 12; round += 1) {
+    for (const [width, height] of rounds) await setViewport(send, width, height, true);
+    const sample = await readPipAfterResize(send);
+    if (!sample?.ok) throw new Error(`horizon inset round ${round} ${JSON.stringify(sample)}`);
+  }
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -3108,7 +3788,16 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       return true;
     })()`);
   }
+  await proveNarrowTimeSlider(send, evidenceDir, viewport);
+  await proveRaisedHideDock(send, evidenceDir, viewport);
+  await proveLegendPanelBounds(send, evidenceDir, viewport);
+  await proveNarrowDockScrollport(send, viewport);
+  await proveLegendClearsNarrowControls(send, viewport);
+  await proveRaisedStripClearsToolbar(send, viewport);
+  await proveTightChromeReflow(send, viewport);
+  await provePipSurvivesNarrowResize(send, viewport);
   const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
+  await proveLegendMissesRaisedPip(send, viewport);
   let chrome = '';
   if (insetViewportFits(viewport.width, viewport.height)) {
     await click(send, '#map-chrome-toggle');

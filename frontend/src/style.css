@@ -848,6 +848,9 @@ body.shotlist-bar-visible .help-fab { display: none; }
 body.shotlist-bar-visible main {
   padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
 }
+body.shotlist-bar-visible .view-map {
+  --map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px));
+}
 .shotlist-add { background: var(--accent); color: var(--bg); border: 0; }
 .shotlist-clear {
   background: transparent;
@@ -1080,10 +1083,6 @@ body:has(> #view.view-map) .iss-now { color: var(--text); }
 body:has(> #view.view-map) .tab { color: var(--text); }
 body:has(> #view.view-map) .tab.active { color: var(--accent); }
 body:has(> #view.view-map) > .banner {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
   z-index: 30;
   padding: 0.2rem 3.4rem;
   font-size: 0.75rem;
@@ -1156,6 +1155,14 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   --map-corner-bottom: calc(36px + env(safe-area-inset-bottom, 0px));
   --map-legend-right: calc(var(--map-hide-right) + var(--map-hide-width) + var(--map-corner-gap));
   --map-corner-clear: calc(var(--map-legend-right) + var(--map-legend-width) + var(--map-corner-gap));
+  --map-zoom-clear: calc(8px + 44px + 16px);
+  --map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap)));
+  --map-legend-panel-bottom: max(calc(44px + 4px), calc(var(--map-command-height) - var(--map-corner-bottom) + 12px));
+  --map-shotlist-block: 0px;
+  --map-pane-budget: calc(100dvh - var(--map-shotlist-block));
+  --map-toolbar-block: 65px;
+  --map-toolbar-clear: calc(var(--topbar-height) + var(--map-toolbar-block));
+  --map-strip-anchor: calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap));
 }
 .view-map #map-pane {
   position: relative;
@@ -1181,9 +1188,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   z-index: 0;
 }
 .view-map .map-toolbar {
-  position: absolute;
-  top: calc(var(--topbar-height) + 5px);
-  left: 8px;
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
@@ -1200,8 +1204,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 }
 .view-map .map-toolbar > .map-controls,
 .view-map .map-control-dock > .map-controls {
-  position: static;
-  transform: none;
   margin: 0;
   max-width: 100%;
   min-width: 0;
@@ -1269,9 +1271,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   font-size: 0.68rem;
 }
 .view-map .map-control-dock {
-  position: absolute;
-  top: calc(var(--topbar-height) + 5px);
-  right: 8px;
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -1280,11 +1279,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   flex: 0 0 auto;
   width: max-content;
   max-width: 76px;
-  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+  max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   overflow-y: auto;
 }
 .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+  max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
 }
 .view-map .map-control-dock > .map-controls {
   flex-direction: column;
@@ -1312,9 +1311,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   outline-offset: 2px;
 }
 .view-map #map-launch-coverage {
-  position: absolute;
-  top: calc(var(--topbar-height) + 71px);
-  left: 8px;
   z-index: 11;
   flex: 0 1 auto;
   width: min(100% - 72px, 32rem);
@@ -1345,14 +1341,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   overflow-y: auto;
   overscroll-behavior: contain;
   color: #f4f7fb;
-}
-/* Zoom stays under the toolbar. Credits own the strip above the status
- * line. Legend, imagery date, and help sit above that strip. */
-.view-map #map .maplibregl-ctrl-top-left {
-  top: calc(var(--topbar-height) + 71px);
-  left: 8px;
-  right: auto;
-  bottom: auto;
 }
 .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl { margin: 0 8px 0 0; }
 .view-map #map .maplibregl-ctrl-bottom-right,
@@ -1412,10 +1400,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   max-height: 64px;
 }
 .view-map .map-legend {
-  position: absolute;
-  left: auto;
-  right: var(--map-legend-right);
-  bottom: var(--map-corner-bottom);
   width: var(--map-legend-width);
   max-width: var(--map-legend-width);
   margin: 0;
@@ -1437,10 +1421,15 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   border-radius: 999px;
 }
 .view-map .map-legend-panel {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
+  width: max-content;
+  min-width: 11rem;
+  max-width: min(11rem, calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
   box-sizing: border-box;
+  max-height: calc(100dvh - var(--topbar-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  touch-action: pan-y;
 }
 .view-map .map-legend-rows {
   flex-wrap: wrap;
@@ -1451,9 +1440,6 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   bottom: 80px;
 }
 .view-map .map-chrome-toggle {
-  position: absolute;
-  right: var(--map-hide-right);
-  bottom: var(--map-corner-bottom);
   z-index: 20;
   width: var(--map-hide-width);
   height: 44px;
@@ -1579,9 +1565,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 .map-controls {
-  position: absolute;
-  top: 80px;
-  right: 1rem;
   display: flex;
   gap: 0.25rem;
   background: var(--surface-2);
@@ -1643,7 +1626,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
    * stays thin — the input's box is what receives the finger. The negative
    * margin keeps the row visually compact despite the tall hit area. */
   height: 44px;
-  margin: -10px 0;
+  margin: 0;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
@@ -1695,6 +1678,11 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 /* Visible scale anchors (Codex design voice 2026-06-10): the slider's
  * range was discoverable only via title/aria — iPad users never see
  * either. "Now" and "+36h" flank the track. */
+.time-slider-end,
+.time-step-label,
+.time-step-utc {
+  pointer-events: none;
+}
 .time-slider-end {
   font-size: 0.62rem;
   color: var(--text-dim);
@@ -1713,17 +1701,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
  * row is taller (UTC chip + label per button = ~50px) and can wrap on
  * narrow viewports. v1.8.0.0 bumped 170 → 206 for the slider row
  * (continuous time-slider, ~34px) inside the time control. */
-.map-controls.map-controls-bearing {
-  top: 206px;
-}
-
-/* All/Mine filter on the Map (top-left, clear of the right-edge control
- * stack and the bottom-left legend). Honors the same global pref as the
+/* All/Mine filter on the Map. Honors the same global pref as the
  * Queue/Upcoming toggles. Pill look matches the .filter-toggle in the lists. */
 .map-controls.map-controls-filter {
-  top: 80px;          /* clear the topbar, same as .map-controls-time */
-  left: 1rem;
-  right: auto;
   gap: 0.15rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1733,9 +1713,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 /* Cloud-overlay toggle sits below the bearing toggle on the same right
  * edge. Single-button row (Pettit feedback 2026-05-19 — make cloud
  * overlay toggleable). The cloud icon (☁) sits centered on a square. */
-.map-controls.map-controls-overlay {
-  top: 256px; /* follows the bearing row, which moved for the slider row */
-}
 .map-controls.map-controls-overlay .time-btn {
   font-size: 1.05rem;
   padding: 0.3rem 0.55rem;
@@ -1870,11 +1847,10 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 .map-legend {
-  position: static;
   align-self: flex-start;
   flex: 0 0 auto;
   max-width: calc(100% - 24px);
-  margin: 4px 12px;
+  margin: 0;
   display: flex;
   flex-wrap: nowrap;
   align-items: flex-end;
@@ -1959,10 +1935,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   display: none;
 }
 .map-legend .map-imagery-date {
-  position: static;
-  left: auto;
-  right: auto;
-  bottom: auto;
   max-width: 100%;
   white-space: normal;
 }
@@ -3246,14 +3218,11 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
     padding-left: calc(16px + env(safe-area-inset-left));
     padding-right: calc(16px + env(safe-area-inset-right));
   }
-  body:has(> #view.view-map) > .banner {
-    padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
-  }
   .view-map .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   }
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   }
   .view-map #map .maplibregl-ctrl-bottom-right {
     bottom: calc(28px + env(safe-area-inset-bottom));
@@ -4405,10 +4374,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 .view-map .map-command {
-  position: absolute;
-  left: 8px;
-  right: var(--map-corner-clear);
-  bottom: 0;
   z-index: 16;
   display: flex;
   flex-wrap: wrap;
@@ -4430,9 +4395,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 .view-map .map-command .map-controls-time {
-  position: static;
-  top: auto;
-  right: auto;
   display: flex;
   flex: 0 1 auto;
   flex-wrap: wrap;
@@ -4732,8 +4694,6 @@ summary:focus-visible {
   }
 
   .view-map .map-command {
-    right: var(--map-corner-clear);
-    bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));
     align-items: center;
     height: auto;
     max-height: none;
@@ -4747,7 +4707,7 @@ summary:focus-visible {
 
   .view-map .map-control-dock,
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - var(--map-command-bottom, 0px) - 16px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   }
 
   body.shotlist-bar-visible:has(> #view.view-map) {
@@ -4758,12 +4718,9 @@ summary:focus-visible {
     padding-bottom: 0;
   }
 
-  body.shotlist-bar-visible .view-map .map-command {
-    bottom: var(--map-command-bottom);
-  }
-
   body.shotlist-bar-visible .view-map {
     --map-corner-bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));
+    --map-shotlist-block: 0px;
   }
 
   .brand-expansion,
@@ -4795,10 +4752,260 @@ summary:focus-visible {
   }
 }
 
+@media (max-width: 719px) {
+  body:has(> #view.view-map):not(.map-chrome-hidden) {
+    --map-time-block: 120px;
+    --map-command-height: calc(36px + 44px + 8px + var(--map-time-block) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 @media (min-width: 701px) {
   .view-map .map-command {
     align-content: flex-end;
   }
+}
+
+body.map-slot-time .view-map .map-command,
+body.map-slot-time.shotlist-bar-visible .view-map .map-command {
+  width: var(--slot-time-w);
+  height: var(--slot-time-h);
+  max-height: none;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+body.map-slot-time .view-map .map-command .map-controls-time {
+  flex-wrap: wrap;
+  align-content: center;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: 0 2px;
+  overflow: visible;
+}
+
+body.map-slot-time-line .view-map .map-command,
+body.map-slot-time-line.shotlist-bar-visible .view-map .map-command {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+body.map-slot-time-line .view-map .map-command .map-controls-time {
+  flex-wrap: nowrap;
+  width: max-content;
+  max-width: none;
+  height: 100%;
+  overflow: visible;
+}
+
+body.map-slot-time .view-map .map-command .time-slider-row {
+  flex: 1 1 0;
+  min-width: 44px;
+  padding: 0;
+  gap: 8px;
+}
+
+body.map-slot-time:not(.map-slot-time-line) .view-map .map-command .time-slider-row {
+  flex: 1 0 100%;
+  width: 100%;
+}
+
+body.map-slot-time-line .view-map .map-command .time-slider-row {
+  flex: 0 0 auto;
+  min-width: 240px;
+  flex-wrap: nowrap;
+}
+
+body.map-slot-time .view-map .map-command .time-slider {
+  margin: 0;
+  min-width: 44px;
+  height: 44px;
+}
+
+body.map-slot-time .view-map .map-command .time-step-btn {
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+}
+
+body.map-slot-dock .view-map .map-control-dock,
+body.map-slot-dock #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  width: var(--slot-dock-w);
+  height: var(--slot-dock-h);
+  max-width: none;
+  max-height: var(--slot-dock-h);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body.map-slot-dock.map-slot-dock-row .view-map .map-control-dock,
+body.map-slot-dock.map-slot-dock-row #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-direction: row;
+}
+
+body.map-slot-dock-row .view-map .map-control-dock > .map-controls {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  width: max-content;
+}
+
+body.map-slot-owned.map-slot-dock-row .view-map .map-control-dock .map-group-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+body.map-slot-legend .view-map .map-legend-panel {
+  width: var(--slot-legend-w);
+  height: var(--slot-legend-h);
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  overflow: auto;
+  pointer-events: auto;
+  flex-shrink: 0;
+}
+
+body.map-slot-owned:not(.map-slot-legend) .view-map .map-legend-panel {
+  display: none;
+}
+
+body.map-slot-zoom-scroll .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl-group {
+  max-height: var(--slot-zoom-h);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+body.map-slot-zoom-suppressed .view-map #map .maplibregl-ctrl-top-left,
+body.map-slot-legend-focus .view-map .map-toolbar,
+body.map-slot-legend-focus .view-map .map-control-dock,
+body.map-slot-legend-focus .view-map #map .maplibregl-ctrl-top-left {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left {
+  position: absolute;
+  left: var(--slot-zoom-x);
+  top: calc(var(--slot-zoom-y) - var(--topbar-height));
+  right: auto;
+  bottom: auto;
+}
+body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl {
+  margin: 0;
+}
+body.map-slot-owned .view-map .map-toolbar,
+body.map-slot-owned.map-slot-time .view-map .map-command,
+body.map-slot-owned.map-slot-dock .view-map .map-control-dock,
+body.map-slot-owned .view-map .map-legend,
+body.map-slot-owned .view-map .map-chrome-toggle {
+  box-sizing: border-box;
+}
+body.map-slot-owned .view-map .map-toolbar {
+  position: absolute;
+  left: var(--slot-show-x);
+  top: var(--slot-show-y);
+  width: var(--slot-show-w);
+  height: var(--slot-show-h);
+  right: auto;
+  bottom: auto;
+  margin: 0;
+}
+body.map-slot-owned.map-slot-time .view-map .map-command,
+body.map-slot-owned.map-slot-time.shotlist-bar-visible .view-map .map-command {
+  position: absolute;
+  left: var(--slot-time-x);
+  top: var(--slot-time-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-time-w);
+  height: var(--slot-time-h);
+  margin: 0;
+}
+body.map-slot-owned.map-slot-dock .view-map .map-control-dock,
+body.map-slot-owned.map-slot-dock #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  position: absolute;
+  left: var(--slot-dock-x);
+  top: var(--slot-dock-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-dock-w);
+  height: var(--slot-dock-h);
+  max-height: var(--slot-dock-h);
+  margin: 0;
+}
+body.map-slot-owned .view-map .map-legend {
+  position: absolute;
+  left: var(--slot-legend-button-x);
+  top: var(--slot-legend-button-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-legend-button-w);
+  height: var(--slot-legend-button-h);
+  margin: 0;
+}
+body.map-slot-owned.map-slot-legend .view-map .map-legend-panel {
+  position: fixed;
+  left: var(--slot-legend-x);
+  top: var(--slot-legend-y);
+  right: auto;
+  bottom: auto;
+  box-sizing: border-box;
+}
+body.map-slot-owned .view-map .map-chrome-toggle {
+  position: absolute;
+  left: var(--slot-hide-x);
+  right: auto;
+  top: var(--slot-hide-y);
+  bottom: auto;
+  width: var(--slot-hide-w);
+  height: var(--slot-hide-h);
+  margin: 0;
+}
+body.map-slot-owned:has(> #view.view-map) > .banner {
+  position: fixed;
+  left: var(--slot-footer-x);
+  top: var(--slot-footer-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-footer-w);
+  height: var(--slot-footer-h);
+  box-sizing: border-box;
+  margin: 0;
+}
+body.map-slot-owned.map-slot-launch .view-map #map-launch-coverage {
+  position: absolute;
+  left: var(--slot-launch-x);
+  top: var(--slot-launch-y);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-launch-w);
+  height: auto;
+  max-height: var(--slot-launch-h);
+  box-sizing: border-box;
+  margin: 0;
+}
+body.map-slot-owned:not(.map-slot-launch) .view-map #map-launch-coverage {
+  display: none;
+}
+body.map-slot-owned .view-map .map-command,
+body.map-slot-owned .view-map .map-control-dock {
+  scrollbar-width: none;
+}
+body.map-slot-owned .view-map .map-command::-webkit-scrollbar,
+body.map-slot-owned .view-map .map-control-dock::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 @media (max-width: 700px) {
@@ -4866,13 +5073,6 @@ summary:focus-visible {
   }
 
   .brand-name { display: inline; }
-}
-
-@media (max-height: 520px) {
-  .view-map #map .maplibregl-ctrl-top-left {
-    top: 62px;
-    left: calc(8px + env(safe-area-inset-left, 0px));
-  }
 }
 
 @media (max-height: 520px) {
@@ -4955,7 +5155,6 @@ summary:focus-visible {
   }
 
   .view-map .map-command {
-    right: var(--map-corner-clear);
     flex-wrap: nowrap;
     align-items: center;
     align-content: center;
@@ -4989,10 +5188,16 @@ summary:focus-visible {
     flex-shrink: 0;
   }
 
+  .view-map .map-legend-panel {
+    max-height: calc(var(--map-pane-budget) - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px);
+  }
+
   #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
-    top: calc(var(--horizon-top) + var(--horizon-height) + var(--horizon-gap));
-    right: var(--horizon-right);
-    max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-command-height) - 16px);
+    max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-dock-clear) - 16px);
+  }
+
+  body.map-slot-owned.map-slot-time .view-map .map-command .time-slider {
+    height: 32px;
   }
 
   .view-iss #iss-pane:not(:has([data-iss-fullscreen-active])) {
@@ -5103,4 +5308,3 @@ summary:focus-visible {
     height: auto;
   }
 }
-
