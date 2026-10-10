@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { auditRasterLevels, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
-import { checkRasterOcr, clearRasterOcrRun, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
+import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
@@ -4917,20 +4917,23 @@ async function restorePlanLabelCamera(send) {
 
 export async function assertOneNameSource(row) {
   if (!row.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: row.zoom, country: row.country, detail: row.detail })}`);
-  const pack = await rasterWords(row.urls || []);
+  const centroid = PLAN_COUNTRIES.find(country => country.name === row.country);
+  if (!centroid) throw new Error(`unknown plan country ${row.country}`);
+  const pack = await rasterWords(countryRasterUrls(row.urls || [], centroid));
   const raster = readableRasterName(pack, row, row.country);
   const verdict = oneNameSource({ ...row, words: pack.text, rasterReadable: raster.readable });
   if (!verdict.ok) throw new Error(`plan label source ${JSON.stringify(verdict)}`);
   return verdict;
 }
 
-export async function proveFractionalPlanLabels(send) {
+export async function proveFractionalPlanLabels(send, progress = () => {}) {
   const zooms = countrySweepZooms();
   try {
     const fitted = await coldPlanTileCaches(send);
     if (!fitted.inside || !fitted.inside.includes('Australia')) {
       throw new Error(`plan label fitted ${JSON.stringify({ zoom: fitted.zoom, tileZ: fitted.tileZ, inside: fitted.inside, names: fitted.names })}`);
     }
+    progress({ phase: 'cold', tilesOk: fitted.tilesOk, zoom: fitted.zoom, stats: { ...rasterOcrStats } });
     const fittedWords = await rasterWords(fitted.urls || []);
     console.log(`plan labels cold tilesOk:${fitted.tilesOk} fitted:${fitted.zoom} OCR:${rasterOcrStats.calls}`);
     const audited = auditRasterLevels(loadCountryRasterLevels());
@@ -4954,8 +4957,11 @@ export async function proveFractionalPlanLabels(send) {
       rows.push(row);
     }
     for (const row of rows) {
-      const pack = await rasterWords(row.urls);
+      if (row.names.length === 0) continue;
       for (const country of new Set(row.names)) {
+        const centroid = PLAN_COUNTRIES.find(point => point.name === country);
+        if (!centroid) throw new Error(`unknown plan country ${country}`);
+        const pack = await rasterWords(countryRasterUrls(row.urls, centroid));
         const verdict = oneNameSource({ ...row, country, words: pack.text, rasterReadable: readableRasterName(pack, row, country).readable });
         if (!verdict.ok) throw new Error(`plan label fractional ${JSON.stringify(verdict)}`);
       }
@@ -4963,6 +4969,8 @@ export async function proveFractionalPlanLabels(send) {
     const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
     const sweepNotes = [];
     for (const country of PLAN_COUNTRIES) {
+      progress({ phase: 'sampling', country: country.name, samples: zooms.length, stats: { ...rasterOcrStats } });
+      console.log(`plan labels sampling ${country.name}:${zooms.length}`);
       const swept = await evaluate(send, `(async () => {
         ${PLAN_TILE_HELPERS}
         const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
@@ -4989,7 +4997,10 @@ export async function proveFractionalPlanLabels(send) {
         return { ok: true, rows };
       })()`);
       if (!swept || swept.ok !== true) throw new Error(`plan label sweep ${country.name} ${JSON.stringify(swept)}`);
-      for (const row of swept.rows) await assertOneNameSource(row);
+      for (let index = 0; index < swept.rows.length; index += 1) {
+        await assertOneNameSource(swept.rows[index]);
+        if (index % 10 === 0 || index === swept.rows.length-1) progress({ phase: 'verdicts', country: country.name, completed: index+1, samples: swept.rows.length, stats: { ...rasterOcrStats } });
+      }
       sweepNotes.push(`${country.name}:${swept.rows.length}`);
       console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
     }

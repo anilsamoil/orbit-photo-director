@@ -22,9 +22,15 @@ export function ocrPython() {
   throw new Error('raster OCR needs an explicit Pillow interpreter: set OPD_VERIFY_OCR_PYTHON');
 }
 
+function ocrTimeout(passes) {
+  const seconds = Number(process.env.OPD_VERIFY_OCR_PASS_TIMEOUT || 60);
+  if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('OPD_VERIFY_OCR_PASS_TIMEOUT must be positive seconds');
+  return Math.ceil(passes * seconds * 1000 + 20000);
+}
+
 export function checkRasterOcr() {
   const python = ocrPython();
-  const probe = spawnSync(python, [helper, '--doctor'], { encoding: 'utf8', timeout: 100000, maxBuffer: 1024 * 1024 });
+  const probe = spawnSync(python, [helper, '--doctor'], { encoding: 'utf8', timeout: ocrTimeout(1), maxBuffer: 1024 * 1024 });
   if (probe.status !== 0) throw new Error(`raster OCR known-text probe failed: ${(probe.stderr || probe.error || '').toString().slice(0, 1000)}`);
   const result = JSON.parse(probe.stdout);
   if (!result.ok) throw new Error('raster OCR known-text probe failed');
@@ -43,7 +49,7 @@ export function ocrRasterTile(tiles) {
   rasterOcrStats.calls += 1;
   const normalized = Buffer.isBuffer(tiles) ? [{ x: 0, y: 0, bytes: tiles }] : tiles;
   const input = JSON.stringify({ tiles: normalized.map(tile => ({ ...tile, bytes: tile.bytes.toString('base64') })) });
-  const result = spawnSync(ocrPython(), [helper], { input, encoding: 'utf8', timeout: 100000, maxBuffer: 16 * 1024 * 1024 });
+  const result = spawnSync(ocrPython(), [helper], { input, encoding: 'utf8', timeout: ocrTimeout(3), maxBuffer: 16 * 1024 * 1024 });
   if (result.status !== 0) throw new Error(`raster tile OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 1000)}`);
   return JSON.parse(result.stdout);
 }
@@ -65,6 +71,19 @@ async function fetchTile(url) {
   })();
   fetched.set(url, task);
   return task;
+}
+
+/** Bound OCR to loaded/rendered tiles near the independently specified centroid. */
+export function countryRasterUrls(urls, country) {
+  return urls.filter(url => {
+    const parsed = /\/tile\/(\d+)\/(\d+)\/(\d+)/.exec(url);
+    if (!parsed) throw new Error(`unrecognized raster tile URL: ${url}`);
+    const n = 2 ** Number(parsed[1]);
+    const x = Math.max(0, Math.min(n-1, Math.floor((country.lng+180)/360*n)));
+    const rad = country.lat * Math.PI/180;
+    const y = Math.max(0, Math.min(n-1, Math.floor((1-Math.asinh(Math.tan(rad))/Math.PI)/2*n)));
+    return Math.abs(Number(parsed[3])-x) <= 1 && Math.abs(Number(parsed[2])-y) <= 1;
+  });
 }
 
 export async function rasterWords(urls) {

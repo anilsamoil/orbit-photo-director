@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkRasterOcr, clearRasterOcrRun, ocrPython, ocrRasterTile, rasterWords, readableRasterName, rasterOcrStats } from './raster-ocr.mjs';
+import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, ocrPython, ocrRasterTile, rasterWords, readableRasterName, rasterOcrStats } from './raster-ocr.mjs';
 
 const moduleUrl = new URL('./raster-ocr.mjs', import.meta.url).href;
 function subprocess(env) {
@@ -65,4 +65,16 @@ test('bounded OCR retains sovereign-name context instead of accepting state or o
   assert.equal(readableRasterName(pack([[word('SOUTH',10),word('AUSTRALIA',55)]]),{viewport},'Australia').readable,false);
   assert.equal(readableRasterName(pack([[word('INDIAN',10),word('OCEAN',55)]]),{viewport},'India').readable,false);
   assert.equal(readableRasterName(pack([[word('GREAT',10),word('AUSTRALIAN',55),word('BIGHT',100)],[word('AUSTRALIA',10)]]),{viewport},'Australia').readable,true);
+});
+
+
+test('centroid neighborhoods only select already rendered URLs and retain seam neighbors', () => {
+  const urls=[];
+  for(let y=0;y<8;y++)for(let x=0;x<8;x++)urls.push(`https://tiles.invalid/reference/tile/3/${y}/${x}`);
+  const selected=countryRasterUrls(urls,{lng:134,lat:-25});
+  assert.equal(selected.length,9);
+  assert.ok(selected.includes('https://tiles.invalid/reference/tile/3/4/6'));
+  assert.ok(selected.includes('https://tiles.invalid/reference/tile/3/4/7'));
+  const available=selected.filter(url=>!url.endsWith('/4/7'));
+  assert.deepEqual(countryRasterUrls(available,{lng:134,lat:-25}),available,'missing offscreen neighbor must never be fetched or manufactured');
 });

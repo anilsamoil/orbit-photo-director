@@ -15,14 +15,15 @@ except ImportError as error:
 
 def recognize(image, psm=11):
     output = []
-    for bg, scale, threshold in [((32, 35, 38, 255), 3, False), ((255, 255, 255, 255), 4, False), ((32, 35, 38, 255), 4, True)]:
+    profiles = [((255, 255, 255, 255), 3, False)] if psm == 6 else [((32, 35, 38, 255), 3, False), ((255, 255, 255, 255), 4, False), ((32, 35, 38, 255), 4, True)]
+    for bg, scale, threshold in profiles:
         comp = Image.alpha_composite(Image.new('RGBA', image.size, bg), image.convert('RGBA')).convert('L')
         if threshold:
             comp = comp.point(lambda pixel: 0 if pixel >= 85 else 255)
         large = ImageOps.autocontrast(comp.resize((comp.width * scale, comp.height * scale), Image.Resampling.LANCZOS))
         buf = io.BytesIO()
         large.save(buf, format='PNG')
-        result = subprocess.run([os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), 'stdin', 'stdout', '-l', 'eng', '--psm', str(psm), 'tsv'], input=buf.getvalue(), capture_output=True, timeout=60, env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
+        result = subprocess.run([os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), 'stdin', 'stdout', '-l', 'eng', '--psm', str(psm), 'tsv'], input=buf.getvalue(), capture_output=True, timeout=float(os.environ.get('OPD_VERIFY_OCR_PASS_TIMEOUT', '60')), env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
         if result.returncode:
             raise RuntimeError('tesseract failed: ' + result.stderr.decode('utf8', 'replace')[:600])
         rows = csv.DictReader(io.StringIO(result.stdout.decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
