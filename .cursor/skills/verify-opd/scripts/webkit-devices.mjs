@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { installOneShotClock } from './fixture-clock.mjs';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
 const { chromium, devices, webkit } = require('playwright');
@@ -195,13 +196,14 @@ async function capturePage(page) {
       }
       const slider = document.getElementById('time-slider');
       const follow = document.getElementById('toggle-follow-iss');
+      const followPressed = follow?.getAttribute('aria-pressed');
       const details = [...document.querySelectorAll('details')].map((el) => {
         const scope = el.parentElement?.closest('[id]');
         const selector = `details${[...el.classList].map((name) => `.${CSS.escape(name)}`).join('')}`;
         const peers = [...(scope || document).querySelectorAll(selector)];
         const summary = el.querySelector(':scope > summary')?.textContent?.trim() || '';
         const labeled = peers.filter((entry) => (entry.querySelector(':scope > summary')?.textContent?.trim() || '') === summary);
-        return { id: el.id, scopeId: scope?.id || null, selector, summary, index: peers.indexOf(el), occurrence: labeled.indexOf(el), open: el.open };
+        return { id: el.id, scopeId: scope?.id || null, selector, summary, occurrence: labeled.indexOf(el), open: el.open };
       });
       const scene = document.querySelector('[data-iss-scene]');
       const picker = document.querySelector('[data-iss-launch-picker]');
@@ -214,7 +216,7 @@ async function capturePage(page) {
         details,
         expanded: [...document.querySelectorAll('[id][aria-expanded][aria-controls]')].map((el) => ({ id: el.id, open: el.getAttribute('aria-expanded') === 'true' })),
         aimHelpOpen: document.querySelector('[data-iss-aim-help]')?.getAttribute('aria-expanded') === 'true',
-        follow: follow ? follow.getAttribute('aria-pressed') === 'true' : null,
+        follow: followPressed === 'true' ? true : followPressed === 'false' ? false : null,
         time: slider && map ? {
           minutes: Number(slider.value),
           live: !document.getElementById('time-slider-readout')?.classList.contains('time-slider-scrubbed'),
@@ -568,7 +570,7 @@ async function restoreDisclosures(page, pose) {
       const scope = saved.scopeId ? document.getElementById(saved.scopeId) : document;
       const peers = [...(scope?.querySelectorAll(saved.selector) || [])];
       const labeled = peers.filter((entry) => (entry.querySelector(':scope > summary')?.textContent?.trim() || '') === saved.summary);
-      const el = saved.id ? document.getElementById(saved.id) : labeled[saved.occurrence] || peers[saved.index];
+      const el = saved.id ? document.getElementById(saved.id) : labeled[saved.occurrence];
       if (el instanceof HTMLDetailsElement) el.open = saved.open;
     }
   }, pose.details);
@@ -598,8 +600,10 @@ async function settleFocusedPose(page, pose) {
       const scope = saved.scopeId ? document.getElementById(saved.scopeId) : document;
       const peers = [...(scope?.querySelectorAll(saved.selector) || [])];
       const labeled = peers.filter((entry) => (entry.querySelector(':scope > summary')?.textContent?.trim() || '') === saved.summary);
-      const el = saved.id ? document.getElementById(saved.id) : labeled[saved.occurrence] || peers[saved.index];
-      return el instanceof HTMLDetailsElement && el.open === saved.open;
+      const el = saved.id ? document.getElementById(saved.id) : labeled[saved.occurrence];
+      // Catalog refresh can retire a disclosure. Only surviving identities
+      // carry state; a new control at the old position keeps its own default.
+      return !el || (el instanceof HTMLDetailsElement && el.open === saved.open);
     });
     const expanded = (expected.expanded || []).every((saved) => {
       const el = document.getElementById(saved.id);
@@ -607,7 +611,8 @@ async function settleFocusedPose(page, pose) {
     });
     const help = expected.view !== 'view-iss'
       || (document.querySelector('[data-iss-aim-help]')?.getAttribute('aria-expanded') === 'true') === expected.aimHelpOpen;
-    const follow = expected.follow === null || (document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'true') === expected.follow;
+    const follow = expected.follow === null
+      || document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === String(expected.follow);
     const live = !expected.time || !document.getElementById('time-slider-readout')?.classList.contains('time-slider-scrubbed') === expected.time.live;
     return { ok: disclosures && expanded && help && follow && live, disclosures, expanded, help, follow, live };
   }, 'restored controls before context switch', 10000, pose);
@@ -643,16 +648,6 @@ async function restorePage(session, snapshot) {
   await applyPose(session.page, snapshot.pose);
 }
 
-// A fixture clock must exist before SNAP creates its own map/ISS clocks.
-// It is page-local (not inherited in session.initScripts on later changes).
-async function installCapturedClock(page, pose) {
-  if (!Number.isFinite(pose?.frozenNow)) return;
-  await page.addInitScript((frozen) => {
-    window.__opdRealNow = Date.now;
-    Date.now = () => frozen;
-  }, pose.frozenNow);
-}
-
 export async function replaceDeviceContext(session, params) {
   if (metricsMatch(session, params)) return;
   const snapshot = await capturePage(session.page);
@@ -663,8 +658,9 @@ export async function replaceDeviceContext(session, params) {
     baseDescriptor: params.deviceSpec ? undefined : session.baseDescriptor,
     storageState: snapshot.storageState,
   });
+  let removeClockSeed;
   try {
-    await installCapturedClock(opened.page, snapshot.pose);
+    removeClockSeed = await installOneShotClock(opened.page, snapshot.url, snapshot.pose?.frozenNow);
     // Keep the rendered predecessor and public session untouched throughout
     // navigation, app boot, pose restoration and the final renderer frame.
     await restorePage(opened, snapshot);
@@ -673,6 +669,8 @@ export async function replaceDeviceContext(session, params) {
   } catch (error) {
     await opened.context.close();
     throw error;
+  } finally {
+    if (removeClockSeed && !opened.page.isClosed()) await removeClockSeed();
   }
   const previous = session.context;
   Object.assign(session, opened);

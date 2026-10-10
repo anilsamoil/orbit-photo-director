@@ -58,6 +58,11 @@ async function openMap(browser, served, hidden = false) {
   await session.page.goto(`${served.url}/?e2e`);
   await click(session.page, '#tab-map');
   await mapReady(session.page);
+  await session.page.evaluate(async () => {
+    const [app, { launchCatalog }] = await Promise.all([import('/src/main.ts'), import('/src/launch-catalog.ts')]);
+    await Promise.all([app.refresh(), launchCatalog.refresh()]);
+    if (!launchCatalog.read(Date.now())) throw new Error('valid tier catalog must be ready before capturing state');
+  });
   await session.page.evaluate((now) => {
     window.__opdRealNow = Date.now;
     Date.now = () => now;
