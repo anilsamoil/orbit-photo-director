@@ -6,20 +6,51 @@ import { fileURLToPath } from 'node:url';
 import { launchEarthPanes } from './drive.mjs';
 import { acceptsNatural, acceptsPhone, NATURAL_CARD_PX, naturalFrame, placementScenes, PLACEMENT_CASES } from './placement-proof.mjs';
 
+const phoneLandscapeFloor = { minShort: 160, minWidth: 240, minHeight: 160, place: 'side' };
+
+function floorOf(pane) {
+  return {
+    place: pane.place,
+    minShort: pane.minShort,
+    minWidth: pane.minWidth,
+    minHeight: pane.minHeight,
+    width: pane.width,
+    height: pane.height,
+  };
+}
+
+test('844 by 390 shares one floor from a fresh start and from the iPhone 13 walk', () => {
+  const fresh = launchEarthPanes(844, 390)[0];
+  const walked = launchEarthPanes(390, 664).find((pane) => pane.label === '844x390');
+  const expected = { ...phoneLandscapeFloor, width: 844, height: 390 };
+  assert.deepEqual(floorOf(fresh), expected);
+  assert.deepEqual(floorOf(walked), floorOf(fresh));
+});
+
+test('874 by 402 shares that same floor from a fresh start and from the iPhone 17 Pro walk', () => {
+  const fresh = launchEarthPanes(874, 402)[0];
+  const walked = launchEarthPanes(402, 874).find((pane) => pane.label === '874x402');
+  const expected = { ...phoneLandscapeFloor, width: 874, height: 402 };
+  assert.deepEqual(floorOf(fresh), expected);
+  assert.deepEqual(floorOf(walked), floorOf(fresh));
+});
+
 test('a 402 by 874 start checks 874 by 402 as a phone side pane', () => {
   const landscape = launchEarthPanes(402, 874).find((pane) => pane.label === '874x402');
-  assert.deepEqual(
-    { place: landscape.place, minShort: landscape.minShort, width: landscape.width, height: landscape.height },
-    { place: 'side', minShort: 80, width: 874, height: 402 },
-  );
+  assert.deepEqual(floorOf(landscape), { ...phoneLandscapeFloor, width: 874, height: 402 });
 });
 
 test('an 874 by 402 start uses that same phone side pane', () => {
   const [pane] = launchEarthPanes(874, 402);
   assert.deepEqual(
-    { label: pane.label, place: pane.place, minShort: pane.minShort, width: pane.width, height: pane.height },
-    { label: '874x402', place: 'side', minShort: 80, width: 874, height: 402 },
+    { label: pane.label, ...floorOf(pane) },
+    { label: '874x402', ...phoneLandscapeFloor, width: 874, height: 402 },
   );
+});
+
+test('a fresh 721 by 390 start uses the phone landscape floor', () => {
+  const [pane] = launchEarthPanes(721, 390);
+  assert.deepEqual(floorOf(pane), { ...phoneLandscapeFloor, width: 721, height: 390 });
 });
 
 test('a 565 earth scene does not choose an overlay floor from the place it sees', () => {
@@ -63,6 +94,7 @@ test('placement cases state literal frames around 120 and 132', () => {
 test('a wide pane at least 800 by 600 still requires a 200px earth', () => {
   const [pane] = launchEarthPanes(874, 700);
   assert.equal(pane.minShort, 200);
+  assert.equal(pane.minWidth, undefined);
   assert.equal(pane.width, 874);
   assert.equal(pane.height, 700);
   const drive = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'drive.mjs'), 'utf8');
@@ -148,4 +180,10 @@ test('each phone proof reads that phone and the unwrapped card', () => {
   assert.equal(acceptsPhone(iphone13, desktop), false);
   assert.equal(acceptsNatural(iphone13, desktop), false);
   assert.equal(acceptsPhone(iphone13, phoneRow(iphone13, 195, 130, 96, 'below', here)), true);
+});
+
+test('a fresh start at least 800 wide that is not those two phones stays at 200', () => {
+  const [pane] = launchEarthPanes(844, 700);
+  assert.equal(pane.minShort, 200);
+  assert.equal(pane.minWidth, undefined);
 });

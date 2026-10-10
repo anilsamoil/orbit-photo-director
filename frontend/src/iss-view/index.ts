@@ -26,14 +26,17 @@ import {
   lookToward,
   selectAllLaunches,
   type LaunchSite,
+  type LaunchTimeFact,
   type LaunchVisibility,
 } from './launches';
-import { launchVerdictBlock, selectLaunches, type LaunchSelection } from '../launch-selectors';
+import { launchCatalog, subscribeLaunchSlots } from '../launch-catalog';
+import { launchVerdictBlock, selectLaunches, utc, type LaunchSelection } from '../launch-selectors';
+import { scheduleLabel, tierLabel, tierWindowUtc, type TierCatalog, type TierLaunch } from '../launch-tiers';
 import { launchStore } from '../launch-store';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { bindIssFullscreen } from './fullscreen';
 import { paintEqualDigits } from '../digits';
-import { fitIssPane, launchCardCandidate, storedLaunchPlace, type LaunchCardPlace } from './pane-fit';
+import { fitIssPane, launchCardCandidate, SHORT_ISS_WINDOW_PX, sideDockActive, storedLaunchPlace, type LaunchCardPlace } from './pane-fit';
 import type { IssRenderer, IssRendererFactory } from './renderer';
 
 type IssSession = {
@@ -117,12 +120,87 @@ function reduceLaunchPick(pick: LaunchPick, event: LaunchPickEvent): LaunchPick 
   return { kind: 'cleared' };
 }
 
+type FrameKind = 'chances' | 'tiers';
+
+type TierPick =
+  | { kind: 'open' }
+  | { kind: 'held'; eventId: string; group: 'shot' | 'likely' | 'watch' | 'all' }
+  | { kind: 'cleared' };
+
+type PickerRow = { value: string; label: string; group: string | null };
+
+function tierPickValue(pick: TierPick): string {
+  if (pick.kind !== 'held') return '';
+  return pick.group === 'all' ? `all:${pick.eventId}` : pick.eventId;
+}
+
+function reduceTierPick(pick: TierPick, value: string, tiers: TierCatalog): TierPick {
+  if (value === '' || value === tierPickValue(pick)) return pick;
+  if (value === 'none') return { kind: 'open' };
+  if (value.startsWith('all:')) {
+    const eventId = value.slice(4);
+    if (!tiers.all.some((launch) => launch.eventId === eventId)) return pick;
+    return { kind: 'held', eventId, group: 'all' };
+  }
+  const launch = tiers.find(value);
+  if (!launch || (launch.tier !== 'shot' && launch.tier !== 'likely' && launch.tier !== 'watch')) return pick;
+  return { kind: 'held', eventId: launch.eventId, group: launch.tier };
+}
+
+function tierGroupFromLabel(label: string): 'shot' | 'likely' | 'watch' | 'all' | null {
+  if (label === 'Shot') return 'shot';
+  if (label === 'Likely') return 'likely';
+  if (label === 'Watch') return 'watch';
+  if (label === 'All launches') return 'all';
+  return null;
+}
+
+function reduceTierIntent(pick: TierPick, value: string, groupLabel: string): TierPick {
+  if (value === '' || value === tierPickValue(pick)) return pick;
+  if (value === 'none') return { kind: 'open' };
+  const group = tierGroupFromLabel(groupLabel);
+  if (value.startsWith('all:') || group === 'all') {
+    const eventId = value.startsWith('all:') ? value.slice(4) : value;
+    return { kind: 'held', eventId, group: 'all' };
+  }
+  if (group === 'shot' || group === 'likely' || group === 'watch') return { kind: 'held', eventId: value, group };
+  return { kind: 'held', eventId: value, group: 'shot' };
+}
+
+function tierListed(tiers: TierCatalog, pick: Extract<TierPick, { kind: 'held' }>): boolean {
+  if (pick.group === 'all') return tiers.all.some((launch) => launch.eventId === pick.eventId);
+  if (pick.group === 'watch') return tiers.groups.watch.some((launch) => launch.eventId === pick.eventId);
+  return tiers.pins.some((launch) => launch.eventId === pick.eventId);
+}
+
+function tierSite(launch: TierLaunch): LaunchSite {
+  return {
+    eventId: launch.eventId,
+    name: launch.name,
+    siteName: launch.site.name,
+    lat: launch.site.lat,
+    lon: launch.site.lon,
+    corridor: launch.corridor ? launch.corridor.points.map((point) => ({ lat: point.lat, lon: point.lon })) : null,
+  };
+}
+
+function tierTimeFact(launch: TierLaunch): LaunchTimeFact {
+  const { windowStartMs, windowEndMs, netMs } = launch.schedule;
+  if (windowStartMs !== null && windowEndMs !== null) return { label: 'Launch window', text: tierWindowUtc(windowStartMs, windowEndMs) };
+  return { label: 'NET, tentative', text: utc(netMs) };
+}
+
 export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions): IssScene {
   const session = bindSession(options.session ?? sessionPreset);
   const readSelections = options.launches ?? (() => selectLaunches(launchStore.getState(), options.nowMs(), 'map'));
   const readAll = options.allLaunches
     ?? (options.launches ? () => [] : () => selectAllLaunches(launchStore.getState(), options.nowMs()));
-  let pick: LaunchPick = { kind: 'open' };
+  let frameKind: FrameKind = 'chances';
+  let chancePick: LaunchPick = { kind: 'open' };
+  let tierPick: TierPick = { kind: 'open' };
+  let tierChoices = false;
+  const readTiers = (): TierCatalog | null => (options.launches ? null : launchCatalog.read(options.nowMs()));
+  const activePick = (): LaunchPick | TierPick => (frameKind === 'tiers' ? tierPick : chancePick);
   let shownLaunchSites: readonly LaunchSite[] = [];
   let launchDrawingHidden = false;
   let launchVisibility: LaunchVisibility = 'View unavailable';
@@ -142,6 +220,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let paintSerial = 0;
   const lensFovDeg = sensorField().vertical;
   let opticalFovDeg = session.opticalFovDeg;
+  let appliedFovDeg: number | null = null;
+  let fovEpoch = 0;
   let framePx = { widthPx: 640, heightPx: 400 };
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
@@ -201,7 +281,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   hint.setAttribute('aria-hidden', 'true');
   const fovReadout = document.createElement('p');
   fovReadout.dataset.issFov = '';
-  paintFov(opticalFovDeg);
+  paintFov();
   frame.append(fovReadout, hint);
   const stage = document.createElement('div');
   stage.dataset.issStage = '';
@@ -213,6 +293,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   stage.append(left, frame, right);
   const view = document.createElement('div');
   view.dataset.issView = '';
+  const side = document.createElement('div');
+  side.dataset.issSide = '';
+  side.style.display = 'none';
   const launchCard = document.createElement('article');
   launchCard.dataset.issLaunchCard = '';
   launchCard.hidden = true;
@@ -232,7 +315,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const factMissing = document.createElement('p');
   factMissing.dataset.issLaunchMissing = '';
   factMissing.textContent = 'Selected launch is no longer available';
-  view.append(stage, launchCard);
+  view.append(stage, side, launchCard);
   const card = document.createElement('article');
   card.dataset.issCard = '';
   const telemetry = document.createElement('button');
@@ -289,12 +372,25 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   syncCupola();
   picker.addEventListener('change', () => {
     if (pickerSync) return;
-    const next = reduceLaunchPick(pick, { type: 'menu', value: picker.value });
-    if (next === pick) {
-      if (picker.value !== pickValue(pick)) picker.value = pickValue(pick);
-      return;
+    const tiers = readTiers();
+    if (tiers || tierChoices) {
+      const selected = picker.selectedOptions[0];
+      const parent = selected?.parentElement;
+      const groupLabel = parent instanceof HTMLOptGroupElement ? parent.label : '';
+      const next = tiers ? reduceTierPick(tierPick, picker.value, tiers) : reduceTierIntent(tierPick, picker.value, groupLabel);
+      if (next === tierPick) {
+        if (picker.value !== tierPickValue(tierPick)) picker.value = tierPickValue(tierPick);
+        return;
+      }
+      tierPick = next;
+    } else {
+      const next = reduceLaunchPick(chancePick, { type: 'menu', value: picker.value });
+      if (next === chancePick) {
+        if (picker.value !== pickValue(chancePick)) picker.value = pickValue(chancePick);
+        return;
+      }
+      chancePick = next;
     }
-    pick = next;
     launchVisibility = 'View unavailable';
     if (phase === 'running' && rendererReady) void paint();
     else layout();
@@ -306,6 +402,11 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     layout();
   };
   splitMedia?.addEventListener('change', onSplitChange);
+  const onResize = (): void => {
+    if (phase === 'running' && rendererReady) void paint();
+    else layout();
+  };
+  window.addEventListener('resize', onResize);
   layout();
   writeLook(settleLook(session.look, session.mode, currentRoom()));
 
@@ -384,7 +485,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   const stopLaunches = options.launches
     ? () => {}
-    : launchStore.subscribe(() => {
+    : subscribeLaunchSlots(() => {
       if (phase === 'running' && rendererReady) void paint();
       else layout();
     });
@@ -436,6 +537,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       splitMedia?.removeEventListener('change', onSplitChange);
+      window.removeEventListener('resize', onResize);
       aimKeys.dispose();
       fullscreen.dispose();
       stopLaunches();
@@ -455,13 +557,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     try {
       renderer = factory(frame, {
         onLaunchLook(eventId) {
-          if (pick.kind !== 'held' || eventId !== pick.eventId) return;
-          const catalog = pick.group === 'all' ? readAll() : readSelections();
-          const selection = catalog.find((entry) => entry.item.event_id === eventId);
-          if (selection) aimToward(launchSiteFromSelection(selection));
+          const active = activePick();
+          if (active.kind !== 'held' || eventId !== active.eventId) return;
+          const site = siteForEvent(eventId, active.group);
+          if (site) aimToward(site);
         },
         onLaunchVisibility(eventId, visibility) {
-          if (pick.kind !== 'held' || eventId !== pick.eventId) return;
+          const active = activePick();
+          if (active.kind !== 'held' || eventId !== active.eventId) return;
           launchVisibility = visibility;
           if (launchCard.dataset.issLaunchState === 'selected') factVisibility.textContent = visibility;
         },
@@ -502,7 +605,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     }
   }
 
-  async function paint(): Promise<void> {
+  async function paint(source: 'timer' | 'resize' = 'resize'): Promise<void> {
     if (phase !== 'running' || !snapshot || !renderer || !rendererReady) return;
     const token = generation;
     const epoch = snapshotEpoch;
@@ -529,32 +632,92 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       fail(status.textContent ?? 'Orbit unavailable');
       return;
     }
-    const fit = layout();
+    const fit = layout(source !== 'timer');
     renderer.resize(fit.widthPx, fit.heightPx);
+    const verticalFovDeg = opticalFovDeg;
+    const issued = ++fovEpoch;
     try {
       await renderer.aim({
         pose: posed.pose,
-        verticalFovDeg: opticalFovDeg,
+        verticalFovDeg,
         widthPx: fit.widthPx,
         heightPx: fit.heightPx,
         lightingUtcMs: when,
+        fovEpoch: issued,
+        onCamera: confirmAppliedFov,
       });
     } catch (error) {
       if (token !== generation) return;
       fail(explainBoot(error));
-      return;
     }
-    if (token !== generation || epoch !== snapshotEpoch) return;
+  }
+
+  function siteForEvent(eventId: string, group: string): LaunchSite | null {
+    const tiers = readTiers();
+    if (frameKind === 'tiers' && tiers) {
+      const launch = tiers.find(eventId);
+      if (!launch) return null;
+      const listed = group === 'all'
+        ? tiers.all.some((row) => row.eventId === eventId)
+        : group === 'watch'
+          ? tiers.groups.watch.some((row) => row.eventId === eventId)
+          : tiers.pins.some((row) => row.eventId === eventId);
+      return listed ? tierSite(launch) : null;
+    }
+    const rows = group === 'all' ? readAll() : readSelections();
+    const selection = rows.find((entry) => entry.item.event_id === eventId);
+    return selection ? launchSiteFromSelection(selection) : null;
   }
 
   function syncLaunchChrome(): void {
+    const tiers = readTiers();
+    if (tiers) {
+      frameKind = 'tiers';
+      syncTierChrome(tiers);
+      return;
+    }
+    if (tierChoices) {
+      frameKind = 'tiers';
+      suspendTierFacts();
+      return;
+    }
+    if (frameKind !== 'chances') {
+      chancePick = { kind: 'open' };
+      frameKind = 'chances';
+    }
+    syncChanceChrome();
+  }
+
+  function suspendTierFacts(): void {
+    const focused = document.activeElement === picker;
+    launchCard.hidden = true;
+    launchCard.dataset.issLaunchState = '';
+    delete launchCard.dataset.issLaunchGroup;
+    syncPad(null);
+    shownLaunchSites = [];
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    launchDrawingHidden = fullscreen;
+    renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
+    const value = tierPickValue(tierPick);
+    if (picker.value !== value) {
+      pickerSync = true;
+      try {
+        picker.value = value;
+      } finally {
+        pickerSync = false;
+      }
+    }
+    if (focused) picker.focus();
+  }
+
+  function syncChanceChrome(): void {
     const selections = readSelections();
     const all = readAll();
     const state = launchStore.getState();
     const now = options.nowMs();
     const acceptedCatalog = state.artifact?.schema_version === 3 && state.availability === 'ready' && !state.superseded;
     const judged = !!options.launches || acceptedCatalog || launchVerdictBlock(state, now) === null;
-    const current = pick;
+    const current = chancePick;
     const heldId = current.kind === 'held' ? current.eventId : '';
     const catalog = current.kind === 'held' && current.group === 'all' ? all : selections;
     const present = heldId !== '' && catalog.some((entry) => entry.item.event_id === heldId);
@@ -572,27 +735,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       }
       return;
     }
-    pick = reduceLaunchPick(current, { type: 'catalog', judged, present });
-    const next = pick;
+    chancePick = reduceLaunchPick(current, { type: 'catalog', judged, present });
+    const next = chancePick;
     const choiceId = next.kind === 'held' ? next.eventId : '';
     const choiceCatalog = next.kind === 'held' && next.group === 'all' ? all : selections;
     const choice = choiceId === '' ? null : choiceCatalog.find((entry) => entry.item.event_id === choiceId) ?? null;
-    syncPicker(selections, all, state, now);
-    const site = choice ? launchSiteFromSelection(choice) : null;
-    syncPad(site);
-    paintLaunchCard(choice, state, now, next.kind === 'held' ? next.group : null);
-    shownLaunchSites = site ? [site] : [];
-    launchDrawingHidden = fullscreen;
-    renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
-  }
-
-  function syncPicker(
-    selections: readonly LaunchSelection[],
-    all: readonly LaunchSelection[],
-    state: ReturnType<typeof launchStore.getState>,
-    now: number,
-  ): void {
-    const rows: { value: string; label: string; group: string | null }[] = [
+    const rows: PickerRow[] = [
       { value: '', label: 'Choose launch', group: null },
       { value: 'none', label: 'None', group: null },
     ];
@@ -606,8 +754,54 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         group: 'All launches',
       });
     }
+    writePicker(rows, pickValue(next));
+    const site = choice ? launchSiteFromSelection(choice) : null;
+    syncPad(site);
+    paintLaunchCard(choice, state, now, next.kind === 'held' ? next.group : null);
+    shownLaunchSites = site ? [site] : [];
+    launchDrawingHidden = fullscreen;
+    renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
+  }
+
+  function syncTierChrome(tiers: TierCatalog): void {
+    tierChoices = true;
+    if (tierPick.kind === 'held' && !tierListed(tiers, tierPick)) tierPick = { kind: 'cleared' };
+    else if (tierPick.kind === 'held' && tierPick.group !== 'all') {
+      const launch = tiers.find(tierPick.eventId);
+      if (launch && (launch.tier === 'shot' || launch.tier === 'likely') && launch.tier !== tierPick.group) {
+        tierPick = { kind: 'held', eventId: launch.eventId, group: launch.tier };
+      }
+    }
+    const next = tierPick;
+    const launch = next.kind === 'held' ? tiers.find(next.eventId) : null;
+    const rows: PickerRow[] = [
+      { value: '', label: tiers.closedLabel, group: null },
+      { value: 'none', label: 'None', group: null },
+    ];
+    for (const group of [
+      ['Shot', tiers.groups.shot],
+      ['Likely', tiers.groups.likely],
+      ['Watch', tiers.groups.watch],
+    ] as const) {
+      if (!group[1].length) continue;
+      for (const item of group[1]) rows.push({ value: item.eventId, label: tierLabel(item), group: group[0] });
+    }
+    if (tiers.all.length) {
+      for (const item of tiers.all) rows.push({ value: `all:${item.eventId}`, label: scheduleLabel(item), group: 'All launches' });
+    }
+    writePicker(rows, tierPickValue(next));
+    const site = next.kind === 'held' && launch ? tierSite(launch) : null;
+    syncPad(site);
+    paintTierCard(next, launch);
+    shownLaunchSites = site ? [site] : [];
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    launchDrawingHidden = fullscreen;
+    renderer?.showLaunches?.(fullscreen ? [] : shownLaunchSites);
+  }
+
+  function writePicker(rows: readonly PickerRow[], value: string): void {
+    const focused = document.activeElement === picker;
     const signature = rows.map((row) => `${row.group ?? ''}\t${row.value}\t${row.label}`).join('\n');
-    const value = pickValue(pick);
     pickerSync = true;
     try {
       if (picker.dataset.issLaunchOptions !== signature) {
@@ -647,6 +841,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       if (picker.value !== value) picker.value = value;
     } finally {
       pickerSync = false;
+      if (focused) picker.focus();
     }
   }
 
@@ -676,11 +871,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       label.dataset.issLaunchLabel = '';
       button.append(arrow, label);
       button.addEventListener('click', () => {
-        const current = pick;
+        const current = activePick();
         if (current.kind !== 'held') return;
-        const catalog = current.group === 'all' ? readAll() : readSelections();
-        const selected = catalog.find((entry) => entry.item.event_id === current.eventId);
-        if (selected) aimToward(launchSiteFromSelection(selected));
+        const site = siteForEvent(current.eventId, current.group);
+        if (site) aimToward(site);
       });
       launchesHost.append(button);
       launchesHost.dataset.issLaunchIds = site.eventId;
@@ -705,7 +899,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     now: number,
     group: 'chance' | 'all' | null,
   ): void {
-    if (pick.kind === 'cleared') {
+    if (chancePick.kind === 'cleared') {
       launchCard.hidden = false;
       delete launchCard.dataset.issLaunchGroup;
       if (launchCard.dataset.issLaunchState !== 'missing') {
@@ -714,7 +908,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       }
       return;
     }
-    if (pick.kind !== 'held' || !choice) {
+    if (chancePick.kind !== 'held' || !choice) {
       launchCard.hidden = true;
       launchCard.dataset.issLaunchState = '';
       delete launchCard.dataset.issLaunchGroup;
@@ -730,6 +924,37 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const fact = launchTimeFact(choice, state, now);
     factName.textContent = choice.item.name;
     factSite.textContent = choice.item.site.name;
+    factTimeLabel.textContent = fact.label;
+    factTimeValue.textContent = fact.text;
+    factVisibility.textContent = launchVisibility;
+  }
+
+  function paintTierCard(pick: TierPick, launch: TierLaunch | null): void {
+    if (pick.kind === 'cleared') {
+      launchCard.hidden = false;
+      delete launchCard.dataset.issLaunchGroup;
+      if (launchCard.dataset.issLaunchState !== 'missing') {
+        launchCard.dataset.issLaunchState = 'missing';
+        launchCard.replaceChildren(factMissing);
+      }
+      return;
+    }
+    if (pick.kind !== 'held' || !launch) {
+      launchCard.hidden = true;
+      launchCard.dataset.issLaunchState = '';
+      delete launchCard.dataset.issLaunchGroup;
+      return;
+    }
+    launchCard.hidden = false;
+    if (pick.group === 'all') launchCard.dataset.issLaunchGroup = 'all';
+    else delete launchCard.dataset.issLaunchGroup;
+    if (launchCard.dataset.issLaunchState !== 'selected') {
+      launchCard.dataset.issLaunchState = 'selected';
+      launchCard.replaceChildren(factName, factSite, factTime, factVisibility);
+    }
+    const fact = tierTimeFact(launch);
+    factName.textContent = launch.name;
+    factSite.textContent = launch.site.name;
     factTimeLabel.textContent = fact.label;
     factTimeValue.textContent = fact.text;
     factVisibility.textContent = launchVisibility;
@@ -766,7 +991,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     panOrigin = null;
     if (windowId !== null) opticalFovDeg = lensFovDeg;
     session.opticalFovDeg = opticalFovDeg;
-    paintFov(opticalFovDeg);
     syncPreset();
     syncCupola();
     persistAim();
@@ -782,7 +1006,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     panOrigin = null;
     opticalFovDeg = lensFovDeg;
     session.opticalFovDeg = lensFovDeg;
-    paintFov(opticalFovDeg);
     syncPreset();
     syncCupola();
     storedAim.clear();
@@ -841,7 +1064,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       if (presetsNode) presetsNode.after(clockBlock);
       else toolbar.append(clockBlock);
     }
-    if (edition.parentElement !== toolbar) toolbar.append(edition);
+    if (edition.parentElement !== toolbar && edition.parentElement !== side) toolbar.append(edition);
     if (card.parentElement !== root) root.append(card);
     delete root.dataset.issSplit;
   }
@@ -859,10 +1082,52 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     root.dataset.issSplit = 'on';
   }
 
-  function layout(): { widthPx: number; heightPx: number } {
+  function restoreSideDock(): void {
+    const parked = launchCard.parentElement === side
+      || houston.parentElement === side
+      || dayMonth.parentElement === side
+      || weekday.parentElement === side
+      || edition.parentElement === side
+      || telemetryBody.parentElement === side;
+    if (!parked) {
+      side.style.display = 'none';
+      delete root.dataset.issSideDock;
+      return;
+    }
+    if (launchCard.parentElement === side) {
+      if (side.parentElement === view) view.insertBefore(launchCard, side);
+      else view.append(launchCard);
+    }
+    if (houston.parentElement === side || dayMonth.parentElement === side || weekday.parentElement === side) {
+      clockBlock.append(utc, gmtDay, houston, dayMonth, weekday);
+    }
+    if (edition.parentElement === side && root.dataset.issSplit !== 'on') toolbar.append(edition);
+    if (telemetryBody.parentElement === side) card.append(telemetryBody);
+    side.style.display = 'none';
+    delete root.dataset.issSideDock;
+  }
+
+  function syncSideDock(): void {
+    const fullscreen = root.hasAttribute('data-iss-fullscreen-active');
+    const split = root.dataset.issSplit === 'on';
+    const width = root.clientWidth || host.clientWidth || 0;
+    if (!sideDockActive(width, window.innerHeight, fullscreen, split)) {
+      restoreSideDock();
+      return;
+    }
+    if (side.parentElement !== view) stage.after(side);
+    side.style.removeProperty('display');
+    const order = [launchCard, houston, dayMonth, weekday, edition, telemetryBody];
+    const placed = order.length === side.childElementCount && order.every((node, index) => side.children[index] === node);
+    if (!placed) side.append(launchCard, houston, dayMonth, weekday, edition, telemetryBody);
+    root.dataset.issSideDock = 'on';
+  }
+
+  function layout(syncDock = true): { widthPx: number; heightPx: number } {
     syncSplit();
     syncLaunchChrome();
-    root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= 564);
+    if (syncDock) syncSideDock();
+    root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= SHORT_ISS_WINDOW_PX);
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
     const fit = width < 10 || height < 10
@@ -898,12 +1163,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     const bodyBorder = px(bodyStyle.borderTopWidth) + px(bodyStyle.borderBottomWidth);
     const open = !telemetryBody.hidden;
     const docked = root.dataset.issSplit === 'on';
+    const sideDock = root.dataset.issSideDock === 'on';
     const viewStyle = getComputedStyle(view);
     const cardGap = px(viewStyle.gap || viewStyle.columnGap || viewStyle.rowGap);
     const cardShown = !launchCard.hidden;
     const previous = storedLaunchPlace(root.dataset.issLaunchPlace);
     const candidate = launchCardCandidate(width, cardShown);
-    const cardBox = measureLaunchCard(candidate);
+    const cardBox = measureLaunchCard(sideDock ? 'side' : candidate);
+    const columnWidth = sideDock ? Math.max(side.offsetWidth, cardShown ? cardBox.width : 0) : cardBox.width;
     return fitIssPane({
       paneWidthPx: width,
       paneHeightPx: height,
@@ -912,13 +1179,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       gapPx: gap,
       toolbarPx: toolbar.offsetHeight,
       buttonPx: docked ? 0 : Math.max(controls.offsetHeight, telemetry.offsetHeight),
-      bodyPx: docked || !open ? 0 : telemetryBody.scrollHeight + bodyBorder + bodyMargin,
-      bodyMarginPx: docked || !open ? 0 : bodyMargin,
+      bodyPx: docked || sideDock || !open ? 0 : telemetryBody.scrollHeight + bodyBorder + bodyMargin,
+      bodyMarginPx: docked || sideDock || !open ? 0 : bodyMargin,
       sideWidthPx: port.offsetWidth + starboard.offsetWidth + stageGap * 2,
       labelPx: Math.max(port.offsetHeight, starboard.offsetHeight),
-      launchCardWidthPx: cardBox.width,
+      launchCardWidthPx: columnWidth,
       launchCardHeightPx: cardBox.height,
-      launchCardGapPx: cardShown ? cardGap : 0,
+      launchCardGapPx: sideDock || cardShown ? cardGap : 0,
     }, previous);
   }
 
@@ -935,7 +1202,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function setOpticalFov(value: number): void {
     const next = clampFov(value);
-    paintFov(next);
     if (next === opticalFovDeg) return;
     opticalFovDeg = next;
     session.opticalFovDeg = next;
@@ -944,8 +1210,19 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (phase === 'running' && rendererReady) void paint();
   }
 
-  function paintFov(degrees: number): void {
-    fovReadout.textContent = formatOpticalFov(degrees);
+  function confirmAppliedFov(applied: number, token: number): void {
+    if (token !== fovEpoch || phase !== 'running' || !Number.isFinite(applied)) return;
+    appliedFovDeg = applied;
+    paintFov();
+  }
+
+  function paintFov(): void {
+    if (appliedFovDeg === null) {
+      fovReadout.textContent = '';
+      fovReadout.dataset.issFovState = 'pending';
+      return;
+    }
+    fovReadout.textContent = formatOpticalFov(appliedFovDeg);
     fovReadout.dataset.issFovState = 'live';
   }
 
@@ -1055,7 +1332,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function startTimer(): void {
     stopTimer();
     timer = window.setInterval(() => {
-      void paint();
+      void paint('timer');
     }, 500);
   }
 
