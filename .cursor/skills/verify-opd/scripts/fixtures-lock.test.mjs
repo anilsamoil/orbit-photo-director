@@ -250,14 +250,19 @@ test('cleanup preserves stage, next-link and lock-temp artifacts whose owner is 
   const stage = `${ctx.dir}.gen-${owner.proc.pid}-aabbcc`;
   const next = `${ctx.dir}.next-${owner.proc.pid}-ddeeff`;
   const temp = `${ctx.dir}.writer.lock.${owner.proc.pid}.aabbcc`;
+  // Old rename/recovery claims were named for the recoverer, not necessarily
+  // the actual owner stored inside. Never infer their ownership from the name.
+  const legacyClaim = `${ctx.dir}.writer.lock.claim-${await deadPid(ctx)}-aabbcc`;
   mkdirSync(stage);
   writeFileSync(join(stage, 'sentinel'), 'live owner');
   symlinkSync(stage, next);
   writeFileSync(temp, String(owner.proc.pid));
+  writeFileSync(legacyClaim, String(owner.proc.pid));
   await successful(writer(ctx));
   assert.equal(readFileSync(join(stage, 'sentinel'), 'utf8'), 'live owner');
   assert.equal(readFileSync(join(next, 'sentinel'), 'utf8'), 'live owner');
   assert.equal(readFileSync(temp, 'utf8'), String(owner.proc.pid));
+  assert.equal(readFileSync(legacyClaim, 'utf8'), String(owner.proc.pid));
   owner.proc.kill('SIGKILL');
   await owner.done;
   await successful(writer(ctx));

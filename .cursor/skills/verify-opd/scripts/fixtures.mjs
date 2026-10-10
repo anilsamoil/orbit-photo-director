@@ -280,7 +280,6 @@ def cleanup_orphans():
     patterns = [
         re.compile(re.escape(base) + r'\.next-(\d+)-[a-f0-9]+$'),
         re.compile(re.escape(base) + r'\.writer\.lock\.(\d+)\.[a-f0-9]+$'),
-        re.compile(re.escape(base) + r'\.writer\.lock\.claim-(\d+)-[a-f0-9]+$'),
     ]
     for name in os.listdir(parent):
         match = next((pattern.fullmatch(name) for pattern in patterns if pattern.fullmatch(name)), None)
