@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildPassList } from '../src/map/overlays/pass-list';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome'].find((path) => existsSync(path));
-const stylesheet = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8');
+const stylesheet = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8')
+  .replace(/@font-face\s*\{[^}]*\}/g, '');
 
 function passMarkup(): string {
   const now = Date.UTC(2026, 5, 1, 12, 0, 0);
@@ -34,46 +35,56 @@ interface RowMeasure {
   relRegimeOverlap: number;
 }
 
+let browser: Browser | undefined;
+let page: Page | undefined;
+let markup = '';
+
 async function measureSheet(width: number, height: number): Promise<RowMeasure> {
-  const browser = await chromium.launch({
-    executablePath: chromePath,
-    args: ['--no-sandbox', '--disable-gpu', '--font-render-hinting=none'],
+  if (!page) throw new Error('Chrome page was not opened');
+  await page.setContent(`<!doctype html><style>${stylesheet}</style>
+    <div id="map-pane" class="map-inspector-open" style="position:relative;width:${width}px;height:${height}px">
+      <aside id="map-inspector" class="map-inspector" style="display:block;position:absolute;left:0;top:0;width:${width}px;height:${height}px;overflow:hidden">
+        <div class="maplibregl-popup"><div class="maplibregl-popup-content">${markup}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>
+      </aside>
+    </div>`, { waitUntil: 'domcontentloaded' });
+  return page.evaluate(() => {
+    const sheet = document.querySelector('#map-inspector')!.getBoundingClientRect();
+    const row = document.querySelector('.pin-pass-row')!.getBoundingClientRect();
+    const rel = document.querySelector('.pin-pass-rel')!.getBoundingClientRect();
+    const utc = document.querySelector('.pin-pass-utc')!.getBoundingClientRect();
+    const regime = document.querySelector('.pin-pass-regime')!.getBoundingClientRect();
+    const overlap = (a: DOMRect, b: DOMRect) => {
+      const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      return width > 0 && height > 0 ? Math.min(width, height) : 0;
+    };
+    const visible = Math.max(0, Math.min(row.bottom, sheet.bottom) - Math.max(row.top, sheet.top));
+    return {
+      rowHeight: row.height,
+      visible,
+      rowBottom: row.bottom - sheet.top,
+      sheetHeight: sheet.height,
+      relUtcOverlap: overlap(rel, utc),
+      relRegimeOverlap: overlap(rel, regime),
+    };
   });
-  try {
-    const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
-    await page.setContent(`<!doctype html><style>${stylesheet}</style>
-      <div id="map-pane" class="map-inspector-open" style="position:relative;width:${width}px;height:${height}px">
-        <aside id="map-inspector" class="map-inspector" style="display:block;position:absolute;left:0;top:0;width:${width}px;height:${height}px;overflow:hidden">
-          <div class="maplibregl-popup"><div class="maplibregl-popup-content">${passMarkup()}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>
-        </aside>
-      </div>`);
-    return await page.evaluate(() => {
-      const sheet = document.querySelector('#map-inspector')!.getBoundingClientRect();
-      const row = document.querySelector('.pin-pass-row')!.getBoundingClientRect();
-      const rel = document.querySelector('.pin-pass-rel')!.getBoundingClientRect();
-      const utc = document.querySelector('.pin-pass-utc')!.getBoundingClientRect();
-      const regime = document.querySelector('.pin-pass-regime')!.getBoundingClientRect();
-      const overlap = (a: DOMRect, b: DOMRect) => {
-        const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-        const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-        return width > 0 && height > 0 ? Math.min(width, height) : 0;
-      };
-      const visible = Math.max(0, Math.min(row.bottom, sheet.bottom) - Math.max(row.top, sheet.top));
-      return {
-        rowHeight: row.height,
-        visible,
-        rowBottom: row.bottom - sheet.top,
-        sheetHeight: sheet.height,
-        relUtcOverlap: overlap(rel, utc),
-        relRegimeOverlap: overlap(rel, regime),
-      };
-    });
-  } finally {
-    await browser.close();
-  }
 }
 
 describe.skipIf(!chromePath)('rendered pin pass row', () => {
+  beforeAll(async () => {
+    markup = passMarkup();
+    browser = await chromium.launch({
+      executablePath: chromePath,
+      args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run'],
+    });
+    page = await browser.newPage({ viewport: { width: 900, height: 700 } });
+    await page.route('**/*', (route) => route.abort());
+  }, 20_000);
+
+  afterAll(async () => {
+    await browser?.close();
+  });
+
   it.each([
     { label: '568×320', width: 102.8, height: 176 },
     { label: '667×375', width: 121.8, height: 260 },
