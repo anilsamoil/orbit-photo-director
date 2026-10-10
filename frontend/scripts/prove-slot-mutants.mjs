@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { ownerPlacementViolations, projectPlacementViolations, REINTRODUCTION_PATTERNS } from './census-narrow-chrome.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = readFileSync(resolve(root, 'src/chrome-slots.ts'), 'utf8');
@@ -11,6 +11,7 @@ const harness = `import { solveChromeSlots } from './chrome-slots.ts';
 const empty = { x: 0, y: 0, w: 0, h: 0 };
 function measure(over) {
   return {
+    timeNeed: 0,
     viewport: { w: 800, h: 600 },
     insets: { top: 0, right: 0, bottom: 0, left: 0 },
     topbar: 48, launch: null,
@@ -61,12 +62,14 @@ console.log('held');
 const mutants = [
   {
     name: 'drop painted-slider bounds',
+    failure: 'slider',
     apply: (src) => src
       .replace('    measure.slider,\n    measure.sliderChip,\n', '')
       .replace('measure.launch, measure.slider, measure.sliderChip, ...measure.timeButtons', 'measure.launch, ...measure.timeButtons'),
   },
   {
     name: 'ignore safe insets',
+    failure: 'insets',
     apply: (src) => src.replace(
       'export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {\n',
       'export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {\n  measure = { ...measure, insets: { top: 0, right: 0, bottom: 0, left: 0 } };\n',
@@ -74,6 +77,7 @@ const mutants = [
   },
   {
     name: 'wrong priority order',
+    failure: 'priority',
     apply: (src) => src
       .replace(
         '  const columnX = measure.viewport.w - measure.insets.right - EDGE - gutter;\n  if (columnH >= TARGET && columnX >= minX - 0.5) {',
@@ -83,31 +87,60 @@ const mutants = [
 ];
 
 function run(src) {
-  const dir = mkdtempSync(join(tmpdir(), 'opd-slot-mutant-'));
+  const scratch = resolve(root, '.slot-mutants');
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(join(scratch, 'run-'));
   writeFileSync(join(dir, 'chrome-slots.ts'), src);
   writeFileSync(join(dir, 'hold.ts'), harness);
   const result = spawnSync('bun', ['hold.ts'], { cwd: dir, encoding: 'utf8' });
   rmSync(dir, { recursive: true, force: true });
-  return result.status === 0;
+  return { passed: result.status === 0, failure: result.stderr.trim() };
 }
 
 const lines = [];
+const baseline = projectPlacementViolations(root);
+if (baseline.length || !run(source).passed) {
+  console.error(['source harness failed', ...baseline].join('\n'));
+  process.exit(1);
+}
 for (const mutant of mutants) {
   const next = mutant.apply(source);
   if (next === source) {
     console.error(`mutant did not apply: ${mutant.name}`);
     process.exit(1);
   }
-  const killed = !run(next);
+  const result = run(next);
+  const killed = !result.passed && result.failure === mutant.failure;
   lines.push(`${mutant.name}: ${killed ? 'red' : 'GREEN (survived)'}`);
   if (!killed) {
-    console.error(lines.join('\n'));
+    console.error([...lines, result.failure].join('\n'));
     process.exit(1);
   }
 }
-if (!run(source)) {
-  console.error('source harness failed');
-  process.exit(1);
+const css = readFileSync(resolve(root, 'src/style.css'), 'utf8');
+const js = readFileSync(resolve(root, 'src/map-chrome.ts'), 'utf8');
+for (const mutant of REINTRODUCTION_PATTERNS) {
+  const caught = ownerPlacementViolations(`${css}\n${mutant.css || ''}`, `${js}\n${mutant.js || ''}`);
+  if (!caught.length) {
+    console.error(`${mutant.name}: GREEN (survived)`);
+    process.exit(1);
+  }
+  lines.push(`${mutant.name}: red`);
+}
+const main = readFileSync(resolve(root, 'src/main.ts'), 'utf8');
+for (const [name, path, content] of [
+  ['imported CSS placement', 'src/slot-mutant.css', 'body.map-slot-owned .view-map .map-controls{position:absolute!important;top:80px!important;right:16px!important}'],
+  ['imported JS placement', 'src/slot-mutant.ts', 'const dock=document.querySelector(".map-control-dock");dock.style.translate="0 80px";'],
+  ['imported second slot writer', 'src/slot-mutant.ts', 'document.body.style.setProperty("--slot-time-y", "80px");'],
+]) {
+  const caught = projectPlacementViolations(root, new Map([
+    ['src/main.ts', `${main}\nimport './${path.slice(4)}';`], [path, content],
+  ]));
+  if (!caught.some((error) => error.startsWith(`${path}:`))) {
+    console.error(`${name}: GREEN (survived)`);
+    process.exit(1);
+  }
+  lines.push(`${name}: red`);
 }
 lines.push('source: green');
 process.stdout.write(`${lines.join('\n')}\n`);
