@@ -48,7 +48,7 @@ function renderer(aims: IssAim[]): IssRendererFactory {
     ready: () => Promise.resolve(),
     aim: (aim) => {
       aims.push(aim);
-      aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0);
+      aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0, 180);
       return Promise.resolve();
     },
     resize: () => {},

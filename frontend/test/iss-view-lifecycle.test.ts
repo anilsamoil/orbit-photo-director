@@ -82,7 +82,7 @@ function mount(host: HTMLElement, factory: IssRendererFactory, now = startMs + 6
 }
 
 function cameraApplies(aim: IssAim): void {
-  aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0);
+  aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0, 180);
 }
 
 function lastAim(aims: IssAim[]): IssAim {
@@ -634,7 +634,7 @@ describe('ISS chrome starts out of the way', () => {
     expect(readout.dataset.issFovState).toBe('pending');
     expect(readout.textContent).toBe('');
 
-    aim?.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0);
+    aim?.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0, 180);
     expect(readout.dataset.issFovState).toBe('live');
     expect(readout.textContent).toBe(`${(aim?.verticalFovDeg ?? 0).toFixed(1)}°`);
     let settled = false;
@@ -668,7 +668,7 @@ describe('ISS chrome starts out of the way', () => {
     const first = aims[0];
     expect(first).toBeTruthy();
     const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
-    first?.onCamera?.(first.verticalFovDeg, first.fovEpoch ?? 0);
+    first?.onCamera?.(first.verticalFovDeg, first.fovEpoch ?? 0, 180);
     expect(readout.dataset.issFovState).toBe('live');
 
     const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
@@ -677,11 +677,11 @@ describe('ISS chrome starts out of the way', () => {
     const second = aims[aims.length - 1];
     expect(second).toBeTruthy();
     expect(second).not.toBe(first);
-    second?.onCamera?.(33.01, second.fovEpoch ?? 0);
+    second?.onCamera?.(33.01, second.fovEpoch ?? 0, 180);
     expect(readout.textContent).toBe('33.0°');
     expect(readout.dataset.issFovState).toBe('live');
 
-    first?.onCamera?.(51.8, first.fovEpoch ?? 0);
+    first?.onCamera?.(51.8, first.fovEpoch ?? 0, 180);
     expect(readout.textContent).toBe('33.0°');
     expect(readout.dataset.issFovState).toBe('live');
     scene.dispose();
@@ -700,7 +700,7 @@ describe('ISS chrome starts out of the way', () => {
         return {
           ready: () => Promise.resolve(),
           aim: (aim) => {
-            aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0);
+            aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0, 180);
             return Promise.resolve();
           },
           resize: () => {},
