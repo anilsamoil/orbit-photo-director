@@ -1,6 +1,9 @@
 import type { LaunchState } from './launch-store';
+import { launchCatalog } from './launch-catalog';
 import { launchBrief, selectLaunches } from './launch-selectors';
 import { operatorLaunchLines, renderLaunchCard, renderLaunchCoverage } from './launch-card';
+import { renderTierCard } from './launch-tier-card';
+import { tierWord, type TierCatalog } from './launch-tiers';
 
 const PRIMARY_OPEN_KEY = 'opd-map-launch-brief-open';
 
@@ -20,6 +23,11 @@ function savePrimaryOpen(container: HTMLElement, open: boolean): void {
 /** Launches stay one tap away, leaving the map clear by default. */
 export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState, now: number,
   onShowMap: (eventId: string) => void): void {
+  const tiers = launchCatalog.read(now);
+  if (tiers) {
+    renderTierMapBrief(container, tiers, onShowMap);
+    return;
+  }
   const previousPrimary = container.querySelector<HTMLDetailsElement>('.map-launch-primary');
   const primaryWasOpen = previousPrimary?.open ?? savedPrimaryOpen(container);
   const primaryHadFocus = !!previousPrimary && previousPrimary.querySelector('summary') === document.activeElement;
@@ -72,5 +80,47 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
   }
   container.replaceChildren(...nodes);
   coverage.querySelector<HTMLDetailsElement>('.launch-data-details')!.open = dataWasOpen;
+  if (primaryHadFocus) container.querySelector<HTMLElement>('.map-launch-primary > summary')?.focus({ preventScroll: true });
+}
+
+function renderTierMapBrief(container: HTMLElement, tiers: TierCatalog, onShowMap: (eventId: string) => void): void {
+  const previousPrimary = container.querySelector<HTMLDetailsElement>('.map-launch-primary');
+  const primaryWasOpen = previousPrimary?.open ?? savedPrimaryOpen(container);
+  const primaryHadFocus = !!previousPrimary && previousPrimary.querySelector('summary') === document.activeElement;
+  if (previousPrimary) savePrimaryOpen(container, primaryWasOpen);
+  const moreWasOpen = container.querySelector<HTMLDetailsElement>('.map-launch-more')?.open ?? false;
+  container.className = 'map-launch-brief';
+  const primary = tiers.highlights[0] ?? null;
+  const rest = tiers.pins.filter((pin) => pin !== primary);
+  const nodes: HTMLElement[] = [];
+  if (primary) {
+    const details = document.createElement('details');
+    details.className = 'map-launch-primary';
+    details.open = primaryWasOpen;
+    const summary = document.createElement('summary');
+    summary.textContent = `Next launch · ${tierWord(primary.tier)}`;
+    details.append(summary, renderTierCard(primary, onShowMap));
+    details.addEventListener('toggle', (event) => {
+      if (event.target === details && container.querySelector('.map-launch-primary') === details) {
+        savePrimaryOpen(container, details.open);
+      }
+    });
+    nodes.push(details);
+  }
+  if (rest.length) {
+    const more = document.createElement('details');
+    more.className = 'map-launch-more';
+    more.open = moreWasOpen;
+    const summary = document.createElement('summary');
+    summary.textContent = `Other launches (${rest.length})`;
+    more.append(summary, ...rest.map((pin) => renderTierCard(pin, onShowMap)));
+    nodes.push(more);
+  }
+  if (!primary) {
+    const empty = document.createElement('p');
+    empty.textContent = 'No Shot or Likely launch in the current forecast.';
+    nodes.push(empty);
+  }
+  container.replaceChildren(...nodes);
   if (primaryHadFocus) container.querySelector<HTMLElement>('.map-launch-primary > summary')?.focus({ preventScroll: true });
 }

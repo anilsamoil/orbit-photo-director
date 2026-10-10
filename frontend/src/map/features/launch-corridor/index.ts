@@ -1,5 +1,8 @@
 import { wrapLon } from '../../../geo';
 import { openLaunchDetails, renderLegacyLaunchCard } from '../../../launch-card';
+import { launchCatalog, subscribeLaunchSlots } from '../../../launch-catalog';
+import { openTierDetails } from '../../../launch-tier-card';
+import type { Highlight } from '../../../launch-tiers';
 import { launchStore, type LaunchState } from '../../../launch-store';
 import { selectLaunches } from '../../../launch-selectors';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from '../../../map-launch-mode';
@@ -8,10 +11,10 @@ import type { MapCore } from '../../map-core/core';
 import type { MapFeature } from '../../map-core/feature';
 import { boundsOf } from '../../map-core/geometry';
 import type { Unsubscribe } from '../../map-core/vendor-map';
-import { buildAscentFeatures, buildLaunchMapFeatures, legacyPassesInHorizon } from './geometry';
+import { buildAscentFeatures, buildLaunchMapFeatures, buildTierMapFeatures, legacyPassesInHorizon } from './geometry';
 
 export { ascentPadLayer, ascentTrajectoryLayer } from './layers';
-export { buildAscentFeatures, buildLaunchMapFeatures } from './geometry';
+export { buildAscentFeatures, buildLaunchMapFeatures, buildTierMapFeatures } from './geometry';
 
 type TargetSide = {
   refreshIfPresent(): void;
@@ -74,11 +77,14 @@ function nowMs(): number {
 export function refreshAscentTrajectorySource(): void {
   const core = state.core;
   if (!core) return;
-  const launchState: LaunchState = launchStore.getState();
   const now = core.clock.now();
-  const { lines, pads } = launchState.artifact
-    ? buildLaunchMapFeatures(launchState, now)
-    : buildAscentFeatures(legacyPassesInHorizon(state.passes, now));
+  const tiers = launchCatalog.read(now);
+  const launchState: LaunchState = launchStore.getState();
+  const { lines, pads } = tiers
+    ? buildTierMapFeatures(tiers)
+    : launchState.artifact
+      ? buildLaunchMapFeatures(launchState, now)
+      : buildAscentFeatures(legacyPassesInHorizon(state.passes, now));
   core.setGeoJson('ascent-trajectory', { type: 'FeatureCollection', features: lines });
   core.setGeoJson('ascent-pad', { type: 'FeatureCollection', features: pads });
 }
@@ -130,7 +136,7 @@ export { syncMapLaunchMode as _syncMapLaunchModeForTest };
 export function bindLaunchStore(): void {
   if (state.storeBound) return;
   state.storeBound = true;
-  launchStore.subscribe(() => {
+  subscribeLaunchSlots(() => {
     if (!state.core?.hasSource('ascent-pad')) return;
     refreshAscentTrajectorySource();
     state.targets.refresh();
@@ -145,7 +151,15 @@ export function bindAscentPad(host: MapCore): void {
     const coords = (feature.geometry.coordinates as [number, number]).slice() as [number, number];
     const props = feature.properties ?? {};
     if (props.event_id) {
-      openLaunchDetails(String(props.event_id));
+      const eventId = String(props.event_id);
+      const now = state.core?.clock.now();
+      const tiers = typeof now === 'number' ? launchCatalog.read(now) : null;
+      const found = props.catalog === 'tier' && tiers ? tiers.find(eventId) : null;
+      if (found && tiers?.pins.some((pin) => pin.eventId === eventId)) {
+        openTierDetails(found);
+        return;
+      }
+      openLaunchDetails(eventId);
       return;
     }
     const pass = state.passes.find((entry) => entry.target_id === props.target_id);
@@ -161,17 +175,42 @@ export function bindAscentPad(host: MapCore): void {
   });
 }
 
+function fitLaunch(core: MapCore, points: [number, number][]): void {
+  state.exitFollow();
+  setMapLaunchMode(true);
+  applyLaunchVisibility();
+  const only = points[0];
+  if (points.length === 1 && only) core.easeTo({ center: only, zoom: 4, duration: 600 });
+  else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
+}
+
+function tierFocusPoints(pin: Highlight): [number, number][] {
+  const points: [number, number][] = [[pin.site.lon, pin.site.lat]];
+  if (!pin.corridor) return points;
+  let longitude = pin.site.lon;
+  for (const point of pin.corridor.points) {
+    longitude += wrapLon(point.lon - longitude);
+    points.push([longitude, point.lat]);
+  }
+  return points;
+}
+
 /** Fly to the launch site or fit the supplied corridor, and leave follow. */
 export function focusLaunchOnMap(eventId: string): boolean {
   const core = state.core;
   if (!core) return false;
-  const selection = selectLaunches(launchStore.getState(), nowMs(), 'map')
+  const now = nowMs();
+  const tiers = launchCatalog.read(now);
+  if (tiers) {
+    const pin = tiers.pins.find((launch) => launch.eventId === eventId);
+    if (!pin) return false;
+    fitLaunch(core, tierFocusPoints(pin));
+    return true;
+  }
+  const selection = selectLaunches(launchStore.getState(), now, 'map')
     .find(({ item }) => item.event_id === eventId);
   if (!selection) return false;
   const { site, trajectory } = selection.item;
-  state.exitFollow();
-  setMapLaunchMode(true);
-  applyLaunchVisibility();
   const points: [number, number][] = [[site.lon, site.lat]];
   if (trajectory.quality !== 'unknown' && trajectory.source && trajectory.points.length >= 2) {
     let longitude = site.lon;
@@ -180,9 +219,7 @@ export function focusLaunchOnMap(eventId: string): boolean {
       points.push([longitude, point.lat]);
     }
   }
-  const only = points[0];
-  if (points.length === 1 && only) core.easeTo({ center: only, zoom: 4, duration: 600 });
-  else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
+  fitLaunch(core, points);
   return true;
 }
 
