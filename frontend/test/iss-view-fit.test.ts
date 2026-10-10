@@ -544,6 +544,55 @@ describe('ISS frame fit', () => {
     }
   });
 
+  it('leaves the side dock in place across a paint interval', async () => {
+    const previous = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 390 });
+    try {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const fake = renderer(host);
+      const scene = mountIssScene(host, {
+        nowMs: () => startMs + 60_000,
+        createRenderer: fake.factory,
+        session: { mode: 'horizon' },
+      });
+      const root = host.querySelector('[data-iss-scene]') as HTMLElement;
+      const toolbar = host.querySelector('[data-iss-toolbar]') as HTMLElement;
+      const button = host.querySelector('[data-iss-telemetry]') as HTMLButtonElement;
+      const controls = host.querySelector('[data-iss-controls]') as HTMLElement;
+      const side = host.querySelector('[data-iss-side]') as HTMLElement;
+      const port = host.querySelector('[data-iss-port]') as HTMLElement;
+      const starboard = host.querySelector('[data-iss-starboard]') as HTMLElement;
+      const body = host.querySelector('[data-iss-telemetry-body]') as HTMLElement;
+      box(host, 844, 309);
+      box(root, 844, 309);
+      Object.defineProperty(toolbar, 'offsetHeight', { configurable: true, get: () => 44 });
+      Object.defineProperty(button, 'offsetHeight', { configurable: true, get: () => 44 });
+      Object.defineProperty(controls, 'offsetHeight', { configurable: true, get: () => 44 });
+      Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => 0 });
+      Object.defineProperty(side, 'offsetWidth', { configurable: true, get: () => 338 });
+      Object.defineProperty(port, 'offsetWidth', { configurable: true, get: () => 11 });
+      Object.defineProperty(starboard, 'offsetWidth', { configurable: true, get: () => 11 });
+      Object.defineProperty(port, 'offsetHeight', { configurable: true, get: () => 40 });
+      Object.defineProperty(starboard, 'offsetHeight', { configurable: true, get: () => 40 });
+      scene.update(shot());
+      await paint(scene);
+      expect(root.dataset.issSideDock).toBe('on');
+      const painted = fake.sizes.length;
+      box(host, 390, 526);
+      box(root, 390, 526);
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect(fake.sizes.length).toBeGreaterThan(painted);
+      expect(root.dataset.issSideDock).toBe('on');
+      window.dispatchEvent(new Event('resize'));
+      expect(root.dataset.issSideDock).toBeUndefined();
+      scene.dispose();
+      host.remove();
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: previous });
+    }
+  });
+
   it('turns the side dock on only for a short wide window', () => {
     expect(sideDockActive(844, 390, false, false)).toBe(true);
     expect(sideDockActive(874, 402, false, false)).toBe(true);

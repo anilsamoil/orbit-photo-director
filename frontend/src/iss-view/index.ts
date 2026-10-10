@@ -511,7 +511,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     }
   }
 
-  async function paint(): Promise<void> {
+  async function paint(source: 'timer' | 'resize' = 'resize'): Promise<void> {
     if (phase !== 'running' || !snapshot || !renderer || !rendererReady) return;
     const token = generation;
     const epoch = snapshotEpoch;
@@ -538,7 +538,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       fail(status.textContent ?? 'Orbit unavailable');
       return;
     }
-    const fit = layout();
+    const fit = layout(source !== 'timer');
     renderer.resize(fit.widthPx, fit.heightPx);
     try {
       await renderer.aim({
@@ -909,10 +909,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     root.dataset.issSideDock = 'on';
   }
 
-  function layout(): { widthPx: number; heightPx: number } {
+  function layout(syncDock = true): { widthPx: number; heightPx: number } {
     syncSplit();
     syncLaunchChrome();
-    syncSideDock();
+    if (syncDock) syncSideDock();
     root.toggleAttribute('data-iss-short', window.innerHeight > 0 && window.innerHeight <= SHORT_ISS_WINDOW_PX);
     const width = root.clientWidth || host.clientWidth || 640;
     const height = root.clientHeight || host.clientHeight || 400;
@@ -1108,7 +1108,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function startTimer(): void {
     stopTimer();
     timer = window.setInterval(() => {
-      void paint();
+      void paint('timer');
     }, 500);
   }
 
