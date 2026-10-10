@@ -58,9 +58,11 @@ import { gibsTrueColorUrl, precacheTilesForTargets, precacheWorldBaseTiles, yest
 import { fetchLog, fetchLogResult, mergeLogEntries, openRateModal, renderLog } from './log';
 import type { MergedRow } from './log';
 import { aggregateShootCounts, claimMapShotFetch, publishShotCounts } from './shot-counts';
+import { launchCatalog, subscribeLaunchSlots } from './launch-catalog';
 import { launchStore } from './launch-store';
 import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from './launch-selectors';
 import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
+import { renderTierCard } from './launch-tier-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
@@ -241,6 +243,7 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 }
 
 async function refresh(): Promise<void> {
+  void launchCatalog.refresh(isOnline());
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = Promise.all([launchStore.refresh(isOnline()), doRefresh()]).then(() => {}).finally(() => {
     refreshInFlight = null;
@@ -681,6 +684,33 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   if (!cards || !empty) return;
   const filter = getTargetFilter();
   const hidden = currentProfile?.removedCuratedIds ?? [];
+  const tiers = launchCatalog.read(nowMs);
+  if (tiers) {
+    const launchCards = tiers.upcoming.map((launch) => renderTierCard(launch, showLaunchOnMap));
+    const visible = applyTargetFilter(
+      filterPassesByDistance(
+        upcomingPasses(filterRemovedCurated(currentTop24h.filter((p) => !isLaunchPass(p)), hidden), nowMs),
+        queueDistanceThresholdKm(),
+      ),
+      filter,
+    );
+    if (visible.length === 0 && launchCards.length === 0) {
+      cards.replaceChildren();
+      empty.textContent = filter === 'mine'
+        ? 'None of your targets have an upcoming pass. Switch to All to see shared targets.'
+        : 'No upcoming passes in the next 36 hours.';
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    const sorted = sortPassesByOrder(visible, getSortOrder());
+    renderCards(cards, sorted, nowMs, stale, onCardAction, {
+      variant: 'forecast',
+      renderThumbnail: thumbnailRenderer(),
+    });
+    cards.prepend(...launchCards);
+    return;
+  }
   const launches = launchStore.getState();
   const launchSelections = selectLaunches(launches, nowMs, 'upcoming');
   const visible = applyTargetFilter(
@@ -714,9 +744,10 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
 
 function rerenderCountdowns(): void {
   updateIssNow();
-  launchStore.tick(Date.now());
-  if (!currentManifest) return;
   const now = Date.now();
+  launchStore.tick(now);
+  launchCatalog.tick(now);
+  if (!currentManifest) return;
   // V2-P3 perf fix (TODOS.md, 2026-05-17). Fast path: just update the
   // countdown text node in each existing card, no DOM rebuild. The
   // slow path (renderQueue) only fires when a pass crosses the
@@ -1612,7 +1643,12 @@ function resizeVisibleMap(): void {
 }
 
 function showLaunchOnMap(eventId: string): void {
-  if (!selectLaunches(launchStore.getState(), Date.now(), 'map').some(({ item }) => item.event_id === eventId)) return;
+  const now = Date.now();
+  const tiers = launchCatalog.read(now);
+  const listed = tiers
+    ? tiers.pins.some((pin) => pin.eventId === eventId)
+    : selectLaunches(launchStore.getState(), now, 'map').some(({ item }) => item.event_id === eventId);
+  if (!listed) return;
   setMapLaunchMode(true);
   pendingLaunchFocus = eventId;
   document.getElementById('tab-map')?.click();
@@ -1820,7 +1856,7 @@ async function init(): Promise<void> {
   // Initial badge from whatever's already queued, before drain finishes.
   updatePendingSyncBadge();
 
-  launchStore.subscribe(renderQueue);
+  subscribeLaunchSlots(renderQueue);
   await launchStore.restore();
   renderQueue();
   await refresh();
