@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { buildFixtures, CATALOG_NET_OFFSET_MS, fixtureClockMs, QUEUE_HORIZON_MS, QUEUE_REEF_OFFSET_MS, stampEventTimes, writeTextAtomic } from './fixtures.mjs';
+import { bodyForRequestPath, buildFixtures, CATALOG_NET_OFFSET_MS, effectiveNowMs, QUEUE_DELTA_OFFSET_MS, QUEUE_HORIZON_MS, QUEUE_REEF_OFFSET_MS, readDriveClock, stampEventTimes, writeTextAtomic } from './fixtures.mjs';
 
 const ZONED_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const ZONELESS_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
@@ -129,11 +129,66 @@ function problemsFor(snaps, starts) {
   return problems;
 }
 
-function readFromStart(fd) {
-  const size = fstatSync(fd).size;
-  const buf = Buffer.alloc(size);
-  readSync(fd, buf, 0, size, 0);
-  return buf.toString('utf8');
+function assertInstant(actual, expected, label) {
+  assert.equal(Date.parse(actual), expected, label);
+}
+
+function assertEventInstants(dir, start) {
+  const approach = {
+    'verify-reef': QUEUE_REEF_OFFSET_MS,
+    'verify-delta': QUEUE_DELTA_OFFSET_MS,
+    'verify-mesa': 8 * 60 * 60_000,
+    'cupola:verify-window': 35 * 60_000,
+  };
+  for (const name of ['passes.json', 'top5.json', 'top_24h.json']) {
+    for (const pass of JSON.parse(readFileSync(join(dir, name), 'utf8'))) {
+      assertInstant(pass.closest_approach, start + approach[pass.target_id], `${name} ${pass.target_id} closest_approach`);
+      assertInstant(pass.sample_time, start - 30_000, `${name} ${pass.target_id} sample_time`);
+    }
+  }
+  const cupola = JSON.parse(readFileSync(join(dir, 'cupola_windows.json'), 'utf8')).windows[0];
+  assertInstant(cupola.closest_approach, start + 35 * 60_000, 'cupola closest_approach');
+  assertInstant(cupola.sample_time, start - 30_000, 'cupola sample_time');
+  assertInstant(cupola.window_start, start + 30 * 60_000, 'cupola window_start');
+  assertInstant(cupola.window_end, start + 40 * 60_000, 'cupola window_end');
+  const launch = JSON.parse(readFileSync(join(dir, 'launch.json'), 'utf8'));
+  const net = start + CATALOG_NET_OFFSET_MS;
+  for (const item of launch.items) {
+    assertInstant(item.launch_window.net, net, `${item.event_id} net`);
+    assertInstant(item.launch_window.start, net, `${item.event_id} start`);
+    assertInstant(item.launch_window.end, net + 9 * 60_000, `${item.event_id} end`);
+  }
+  const capture = launch.items[0].capture_intervals[0];
+  assertInstant(capture.start, net + 60_000, 'capture start');
+  assertInstant(capture.peak, net + 4 * 60_000, 'capture peak');
+  assertInstant(capture.end, net + 8 * 60_000, 'capture end');
+  assertInstant(capture.liftoff_start, net, 'liftoff start');
+  assertInstant(capture.liftoff_end, net + 60_000, 'liftoff end');
+  assertInstant(launch.items[0].assessment.net.at, net, 'assessment net');
+  const catalog = JSON.parse(readFileSync(join(dir, 'catalog.json'), 'utf8'));
+  const schedule = catalog.items[0].schedule;
+  assertInstant(schedule.net, net, 'catalog net');
+  assertInstant(schedule.window_start, net, 'catalog window start');
+  assertInstant(schedule.window_end, net + 9 * 60_000, 'catalog window end');
+  const shot = catalog.items[0].shots[0];
+  assertInstant(shot.liftoff, net, 'shot liftoff');
+  assertInstant(shot.start, net, 'shot start');
+  assertInstant(shot.best, net + 60_000, 'shot best');
+  assertInstant(shot.end, net + 8 * 60_000, 'shot end');
+  const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+  for (const [key, name] of [['passes', 'passes.json'], ['top5', 'top5.json'], ['top_24h', 'top_24h.json'], ['cupola_windows', 'cupola_windows.json'], ['catalog', null]]) {
+    if (!name) continue;
+    const entry = manifest.artifacts[key];
+    assert.equal(entry.path, `v/verify/${entry.sha256}/${name}`, key);
+  }
+}
+
+function generationBytes(root) {
+  const bytes = new Map();
+  for (const name of readdirSync(root)) {
+    if (name.endsWith('.json')) bytes.set(name, readFileSync(join(root, name), 'utf8'));
+  }
+  return bytes;
 }
 
 function rmFixtureTree(dir) {
@@ -155,26 +210,51 @@ test('queue passes stay inside 90 minutes and every temporal path is classified'
   const dir = mkdtempSync(join(tmpdir(), 'opd-fixture-times-'));
   try {
     await buildFixtures(dir, now, now);
-    assertSampleAndNet(dir, now);
+    assertEventInstants(dir, now);
     const snaps = [];
+    let previousPasses = null;
     for (const start of starts) {
-      stampEventTimes(dir, start);
-      assert.equal(fixtureClockMs(dir, start + 60 * 60_000), start);
+      const beforeRoot = realpathSync(dir);
+      const beforeBytes = generationBytes(beforeRoot);
+      stampEventTimes(dir, start, start);
+      assert.notEqual(realpathSync(dir), beforeRoot);
+      for (const [name, text] of beforeBytes) {
+        assert.equal(readFileSync(join(beforeRoot, name), 'utf8'), text, name);
+      }
+      const clock = readDriveClock(dir);
+      assert.equal(clock.start, start);
+      assert.equal(clock.startOffset, 0);
+      assert.equal(effectiveNowMs(dir, start + 5 * 60_000), start + 5 * 60_000);
       assertQueueWindow(dir, start);
-      assertSampleAndNet(dir, start);
+      assertEventInstants(dir, start);
+      const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+      const passesText = readFileSync(join(dir, 'passes.json'), 'utf8');
+      if (previousPasses && previousPasses.text !== passesText) {
+        const oldBody = bodyForRequestPath(dir, `/${previousPasses.path}`);
+        assert.equal(oldBody.toString('utf8'), previousPasses.text);
+        assert.notEqual(oldBody.toString('utf8'), passesText);
+      }
+      previousPasses = { path: manifest.artifacts.passes.path, text: passesText };
       snaps.push(snapshot(dir));
     }
     assert.deepEqual(problemsFor(snaps, starts), []);
-    const fd = openSync(join(dir, 'passes.json'), 'r');
-    const before = readFromStart(fd);
-    stampEventTimes(dir, now + 60 * 60_000);
-    assert.equal(readFromStart(fd), before);
-    assert.notEqual(readFileSync(join(dir, 'passes.json'), 'utf8'), before);
-    closeSync(fd);
     const root = realpathSync(dir);
-    const status = JSON.parse(readFileSync(join(root, 'status.json'), 'utf8'));
+    const before = generationBytes(root);
+    const previousPath = previousPasses.path;
+    stampEventTimes(dir, now + 60 * 60_000, now);
+    assert.notEqual(realpathSync(dir), root);
+    for (const [name, text] of before) assert.equal(readFileSync(join(root, name), 'utf8'), text, name);
+    assert.notEqual(readFileSync(join(dir, 'passes.json'), 'utf8'), before.get('passes.json'));
+    assert.notEqual(readFileSync(join(dir, 'top5.json'), 'utf8'), before.get('top5.json'));
+    assert.notEqual(readFileSync(join(dir, 'catalog.json'), 'utf8'), before.get('catalog.json'));
+    const oldBody = bodyForRequestPath(dir, `/${previousPath}`);
+    assert.equal(oldBody.toString('utf8'), previousPasses.text);
+    assert.equal(readDriveClock(dir).startOffset, now + 60 * 60_000 - now);
+    assert.equal(effectiveNowMs(dir, now + 14 * 60_000), now + 60 * 60_000 + 14 * 60_000);
+    const live = realpathSync(dir);
+    const status = JSON.parse(readFileSync(join(live, 'status.json'), 'utf8'));
     status.rotted_at = '2020-01-01T00:00:00';
-    writeFileSync(join(root, 'status.json'), JSON.stringify(status));
+    writeFileSync(join(live, 'status.json'), JSON.stringify(status));
     const torn = snapshot(dir);
     const zoneProblems = problemsFor([torn, torn], [now, now]);
     assert.ok(zoneProblems.some((problem) => problem.includes('status.json/rotted_at')));

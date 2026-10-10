@@ -53,6 +53,13 @@ export const CATALOG_NET_OFFSET_MS = 2 * 60 * 60_000;
 
 const ZONED_STAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
+function fractionalMs(fraction) {
+  if (!fraction) return 0;
+  const digits = fraction.slice(1, 4).padEnd(3, '0');
+  const ms = Number(digits);
+  return Number.isInteger(ms) ? ms : Number.NaN;
+}
+
 function zonedEpoch(text) {
   const match = ZONED_STAMP.exec(text);
   if (!match) return Number.NaN;
@@ -62,10 +69,9 @@ function zonedEpoch(text) {
   const hour = Number(match[4]);
   const minute = Number(match[5]);
   const second = Number(match[6]);
-  const fraction = match[7] ? Number(match[7]) : 0;
-  const ms = Math.round(fraction * 1000);
+  const ms = fractionalMs(match[7]);
   const zone = match[8];
-  if (ms < 0 || ms > 999) return Number.NaN;
+  if (!Number.isInteger(ms) || ms < 0 || ms > 999) return Number.NaN;
   const utc = Date.UTC(year, month - 1, day, hour, minute, second, ms);
   const check = new Date(utc);
   if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day
@@ -144,36 +150,100 @@ function pidAlive(pid) {
   }
 }
 
+export function writeLockFile(lockPath, pid, link = linkSync) {
+  const tmp = `${lockPath}.${pid}.${randomBytes(4).toString('hex')}`;
+  try {
+    writeFileSync(tmp, String(pid));
+    link(tmp, lockPath);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // The temp lock file is already gone.
+    }
+    throw error;
+  }
+  try {
+    unlinkSync(tmp);
+  } catch {
+    // The temp lock file is already gone.
+  }
+  return lockPath;
+}
+
+export function stealDeadLock(lockPath, observedPid) {
+  if (pidAlive(observedPid)) return false;
+  const claim = `${lockPath}.claim-${process.pid}-${randomBytes(4).toString('hex')}`;
+  try {
+    renameSync(lockPath, claim);
+  } catch {
+    return false;
+  }
+  let claimed = Number.NaN;
+  try {
+    claimed = Number(readFileSync(claim, 'utf8').trim());
+  } catch {
+    claimed = Number.NaN;
+  }
+  const matchesDead = claimed === observedPid && !pidAlive(claimed);
+  if (!matchesDead) {
+    try {
+      linkSync(claim, lockPath);
+    } catch {
+      // A newer lock is already in place.
+    }
+  }
+  try {
+    unlinkSync(claim);
+  } catch {
+    // The claim file is already gone.
+  }
+  return matchesDead;
+}
+
+function releaseLock(lockPath, pid) {
+  const claim = `${lockPath}.claim-${pid}-${randomBytes(4).toString('hex')}`;
+  try {
+    renameSync(lockPath, claim);
+  } catch {
+    return;
+  }
+  let claimed = Number.NaN;
+  try {
+    claimed = Number(readFileSync(claim, 'utf8').trim());
+  } catch {
+    claimed = Number.NaN;
+  }
+  if (claimed !== pid) {
+    try {
+      linkSync(claim, lockPath);
+    } catch {
+      // A newer lock is already in place.
+    }
+  }
+  try {
+    unlinkSync(claim);
+  } catch {
+    // The claim file is already gone.
+  }
+}
+
 function acquireFixtureLock(dir) {
   const lockPath = `${dir}.writer.lock`;
   const deadline = Date.now() + 10_000;
-  const payload = String(process.pid);
   for (;;) {
-    const tmp = `${lockPath}.${process.pid}.${randomBytes(4).toString('hex')}`;
-    writeFileSync(tmp, payload);
     try {
-      linkSync(tmp, lockPath);
-      unlinkSync(tmp);
-      return lockPath;
+      return writeLockFile(lockPath, process.pid);
     } catch (error) {
-      try {
-        unlinkSync(tmp);
-      } catch {
-        // The temp lock file is already gone.
-      }
       if (error.code !== 'EEXIST') throw error;
       let owner = Number.NaN;
       try {
-        owner = Number(readFileSync(lockPath, 'utf8'));
+        owner = Number(readFileSync(lockPath, 'utf8').trim());
       } catch {
         owner = Number.NaN;
       }
       if (!pidAlive(owner)) {
-        try {
-          unlinkSync(lockPath);
-        } catch {
-          // Another writer removed the stale lock.
-        }
+        stealDeadLock(lockPath, owner);
         continue;
       }
       if (Date.now() > deadline) throw new Error(`fixture writer lock held by ${owner}`);
@@ -187,11 +257,7 @@ function withFixtureLock(dir, fn) {
   try {
     return fn();
   } finally {
-    try {
-      unlinkSync(lockPath);
-    } catch {
-      // The lock file is already gone.
-    }
+    releaseLock(lockPath, process.pid);
   }
 }
 
@@ -203,15 +269,22 @@ export function liveFixtureRoot(dir) {
   }
 }
 
-export function fixtureClockMs(dir, wallMs = Date.now()) {
+export function readDriveClock(dir) {
   const file = join(liveFixtureRoot(dir), 'drive-clock.json');
-  if (!existsSync(file)) return wallMs;
+  if (!existsSync(file)) return null;
   try {
-    const start = JSON.parse(readFileSync(file, 'utf8')).start;
-    return Number.isFinite(start) ? start : wallMs;
+    const body = JSON.parse(readFileSync(file, 'utf8'));
+    if (!Number.isFinite(body.start) || !Number.isFinite(body.startOffset)) return null;
+    return { start: body.start, startOffset: body.startOffset };
   } catch {
-    return wallMs;
+    return null;
   }
+}
+
+export function effectiveNowMs(dir, wallMs = Date.now()) {
+  const clock = readDriveClock(dir);
+  if (!clock) return wallMs;
+  return wallMs + clock.startOffset;
 }
 
 function listFiles(root) {
@@ -224,16 +297,102 @@ function listFiles(root) {
   return names;
 }
 
-function stageGeneration(logicalDir, sourceRoot, replacements) {
+const BODY_NAMES = new Set([
+  'passes.json',
+  'top5.json',
+  'top_24h.json',
+  'track.json',
+  'status.json',
+  'targets.json',
+  'cupola_windows.json',
+  'tracked.json',
+]);
+
+function bodyUrl(name, sha) {
+  return `v/verify/${sha}/${name}`;
+}
+
+function publishedEntry(name, entry) {
+  return { path: bodyUrl(name, entry.sha256), sha256: entry.sha256, bytes: entry.bytes };
+}
+
+export function generationRoots(logicalDir) {
+  const roots = [];
+  const seen = new Set();
+  const add = (root) => {
+    if (!root || seen.has(root)) return;
+    seen.add(root);
+    roots.push(root);
+  };
+  try {
+    add(realpathSync(logicalDir));
+  } catch {
+    // The directory is between generations.
+  }
+  const parent = dirname(logicalDir);
+  const prefix = `${basename(logicalDir)}.gen-`;
+  try {
+    for (const name of readdirSync(parent)) {
+      if (!name.startsWith(prefix)) continue;
+      add(join(parent, name));
+    }
+  } catch {
+    // The parent is gone.
+  }
+  return roots;
+}
+
+export function readBodyByHash(logicalDir, name, sha) {
+  if (!BODY_NAMES.has(name) || !/^[a-f0-9]{64}$/.test(sha)) return null;
+  for (const root of generationRoots(logicalDir)) {
+    const file = join(root, name);
+    if (!existsSync(file)) continue;
+    const body = readFileSync(file);
+    if (sha256(body) === sha) return body;
+  }
+  return null;
+}
+
+export function bodyForRequestPath(logicalDir, urlPath) {
+  const match = /^\/v\/verify\/([a-f0-9]{64})\/([^/]+)$/.exec(urlPath);
+  if (!match) return null;
+  return readBodyByHash(logicalDir, match[2], match[1]);
+}
+
+export function copyGeneration(logicalDir, sourceRoot, replacements, write = writeFileSync) {
   const next = `${logicalDir}.gen-${randomBytes(6).toString('hex')}`;
   mkdirSync(next);
-  const names = new Set(listFiles(sourceRoot));
-  for (const name of replacements.keys()) names.add(name);
-  for (const name of names) {
-    const text = replacements.has(name) ? replacements.get(name) : readFileSync(join(sourceRoot, name));
-    writeFileSync(join(next, name), text);
+  try {
+    const names = new Set(listFiles(sourceRoot));
+    for (const name of replacements.keys()) names.add(name);
+    for (const name of names) {
+      const text = replacements.has(name) ? replacements.get(name) : readFileSync(join(sourceRoot, name));
+      write(join(next, name), text);
+    }
+    return next;
+  } catch (error) {
+    rmSync(next, { recursive: true, force: true });
+    throw error;
   }
-  return next;
+}
+
+function stageGeneration(logicalDir, sourceRoot, replacements) {
+  return copyGeneration(logicalDir, sourceRoot, replacements);
+}
+
+export function swapGenerationLink(logicalDir, next, rename = renameSync) {
+  const link = `${logicalDir}.next-${randomBytes(4).toString('hex')}`;
+  try {
+    symlinkSync(next, link);
+    rename(link, logicalDir);
+  } catch (error) {
+    try {
+      unlinkSync(link);
+    } catch {
+      // The temp link is already gone.
+    }
+    throw error;
+  }
 }
 
 function pruneGenerations(logicalDir, keep) {
@@ -265,9 +424,7 @@ function sealFixtureRoot(dir) {
 
 function switchToGeneration(logicalDir, next, previousRoot) {
   if (lstatSync(logicalDir).isSymbolicLink()) {
-    const link = `${logicalDir}.next-${randomBytes(4).toString('hex')}`;
-    symlinkSync(next, link);
-    renameSync(link, logicalDir);
+    swapGenerationLink(logicalDir, next);
   } else {
     const displaced = `${logicalDir}.displaced-${randomBytes(4).toString('hex')}`;
     renameSync(logicalDir, displaced);
@@ -628,18 +785,18 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
     build_version: 'verify',
     freshness: { tle_hours: 0.1, cloud_hours: 0.1, ok: true },
     artifacts: {
-      passes: { path: 'v/verify/passes.json', sha256: files['passes.json'].sha256, bytes: files['passes.json'].bytes },
-      top5: { path: 'v/verify/top5.json', sha256: files['top5.json'].sha256, bytes: files['top5.json'].bytes },
-      top_24h: { path: 'v/verify/top_24h.json', sha256: files['top_24h.json'].sha256, bytes: files['top_24h.json'].bytes },
-      track: { path: 'v/verify/track.json', sha256: files['track.json'].sha256, bytes: files['track.json'].bytes },
-      status: { path: 'v/verify/status.json', sha256: files['status.json'].sha256, bytes: files['status.json'].bytes },
-      targets: { path: 'v/verify/targets.json', sha256: files['targets.json'].sha256, bytes: files['targets.json'].bytes },
-      cupola_windows: { path: 'v/verify/cupola_windows.json', sha256: files['cupola_windows.json'].sha256, bytes: files['cupola_windows.json'].bytes },
+      passes: publishedEntry('passes.json', files['passes.json']),
+      top5: publishedEntry('top5.json', files['top5.json']),
+      top_24h: publishedEntry('top_24h.json', files['top_24h.json']),
+      track: publishedEntry('track.json', files['track.json']),
+      status: publishedEntry('status.json', files['status.json']),
+      targets: publishedEntry('targets.json', files['targets.json']),
+      cupola_windows: publishedEntry('cupola_windows.json', files['cupola_windows.json']),
     },
   };
   if (files['tracked.json']) {
     manifest.artifacts.tracked = {
-      path: 'v/verify/tracked.json',
+      path: bodyUrl('tracked.json', files['tracked.json'].sha256),
       sha256: files['tracked.json'].sha256,
       bytes: files['tracked.json'].bytes,
     };
@@ -786,7 +943,14 @@ function stampCatalogBody(catalog, times) {
   }
 }
 
-export function stampEventTimes(dir, eventStart) {
+const MANIFEST_FILES = {
+  passes: 'passes.json',
+  top5: 'top5.json',
+  top_24h: 'top_24h.json',
+  cupola_windows: 'cupola_windows.json',
+};
+
+export function stampEventTimes(dir, eventStart, wallMs = eventStart) {
   return withFixtureLock(dir, () => {
     const times = eventInstants(eventStart);
     const root = liveFixtureRoot(dir);
@@ -821,15 +985,16 @@ export function stampEventTimes(dir, eventStart) {
       files.set('catalog-clock.json', JSON.stringify({ anchor: eventStart }));
     }
     const manifest = read('manifest.json');
-    for (const key of ['passes', 'top5', 'top_24h', 'cupola_windows']) {
+    for (const key of Object.keys(MANIFEST_FILES)) {
       manifest.artifacts[key].sha256 = written[key].sha256;
       manifest.artifacts[key].bytes = written[key].bytes;
+      manifest.artifacts[key].path = bodyUrl(MANIFEST_FILES[key], written[key].sha256);
     }
     files.set('manifest.json', JSON.stringify(manifest));
     const pointer = read('launch-latest.json');
     pointer.sha256 = written.launch.sha256;
     files.set('launch-latest.json', JSON.stringify(pointer));
-    files.set('drive-clock.json', JSON.stringify({ start: eventStart }));
+    files.set('drive-clock.json', JSON.stringify({ start: eventStart, startOffset: eventStart - wallMs }));
     publishLocked(dir, files);
     return times;
   });

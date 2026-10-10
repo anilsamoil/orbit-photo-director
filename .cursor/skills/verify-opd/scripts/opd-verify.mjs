@@ -7,7 +7,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
-import { bostonTrackText, buildFixtures, driveStartMs, fixtureClockMs, liveFixtureRoot, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
+import { bostonTrackText, bodyForRequestPath, buildFixtures, driveStartMs, effectiveNowMs, liveFixtureRoot, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -322,17 +322,21 @@ function startProxy(home) {
       res.end(body);
       return;
     }
-    const artifact = {
-      '/v/verify/passes.json': 'passes.json',
-      '/v/verify/top5.json': 'top5.json',
-      '/v/verify/top_24h.json': 'top_24h.json',
-      '/v/verify/track.json': 'track.json',
-      '/v/verify/status.json': 'status.json',
-      '/v/verify/targets.json': 'targets.json',
-      '/v/verify/cupola_windows.json': 'cupola_windows.json',
-      '/v/verify/tracked.json': 'tracked.json',
-    }[path];
-    if (artifact) return sendFile(artifact);
+    const hashed = bodyForRequestPath(resolve(home, 'fixtures'), path);
+    if (hashed) {
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': hashed.length,
+      });
+      res.end(hashed);
+      return;
+    }
+    if (/^\/v\/verify\/[a-f0-9]{64}\/[^/]+$/.test(path)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
+      return;
+    }
     if (path === '/launch/latest.json') {
       const rung = cookieValue(req, 'opd-verify-launch');
       const published = launchRung(fixtureDir, rung);
@@ -513,7 +517,7 @@ async function doctor(home = homeDir()) {
         const manifestResponse = await fetch(`http://127.0.0.1:${state.port}/manifest.json`);
         const manifest = await manifestResponse.json();
         if (!manifest.version || !manifest.generated_at) problems.push('manifest missing version');
-        const fixtureNow = fixtureClockMs(resolve(home, 'fixtures'));
+        const fixtureNow = effectiveNowMs(resolve(home, 'fixtures'));
         if (Date.parse(state.launchValidUntil) <= fixtureNow) problems.push('launch fixture expired. Run down, then up.');
       } catch (error) {
         problems.push(error instanceof Error ? error.message : String(error));
@@ -616,8 +620,10 @@ async function drive(feature) {
   const wall = Date.now();
   const eventStart = driveStartMs(process.env.OPD_VERIFY_DRIVE_START, wall);
   const home = homeDir();
-  stampEventTimes(resolve(home, 'fixtures'), eventStart);
-  const until = refreshLaunchClock(resolve(home, 'fixtures'), eventStart);
+  const fixtureDir = resolve(home, 'fixtures');
+  stampEventTimes(fixtureDir, eventStart, wall);
+  const startOffset = readDriveClock(fixtureDir).startOffset;
+  const until = refreshLaunchClock(fixtureDir, effectiveNowMs(fixtureDir));
   const early = readState(home);
   if (early) {
     early.launchValidUntil = until;
@@ -631,7 +637,7 @@ async function drive(feature) {
         baseUrl: state.url,
         evidenceDir: state.evidence,
         home,
-        pageNowMs: eventStart,
+        startOffset,
       });
       console.log(note);
     } catch (error) {
@@ -652,7 +658,7 @@ async function drive(feature) {
     evidenceDir: state.evidence,
     meta,
     features,
-    pageNowMs: eventStart,
+    startOffset,
   });
   for (const note of notes) console.log(note);
   console.log(`evidence ${state.evidence}`);
