@@ -65,6 +65,22 @@ import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderTierCard } from './launch-tier-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
+import {
+  MAP_IMPORT_URL_KEY,
+  MAP_IMPORT_VIEW_KEY,
+  assetPath,
+  loadStylesheet,
+  MAP_STYLESHEET_URL,
+  mapModuleUrl,
+  loadFreshMapModule,
+  nextMapImportStep,
+  noteMapImportSuccess,
+  readChunkStatus,
+  rememberedViewId,
+  retryMapHref,
+  stripMapImportParams,
+  type MapImportAction,
+} from './map-import';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -99,6 +115,8 @@ let refreshInFlight: Promise<void> | null = null;
 let lastSavedManifestVersion: string | null = null;
 /** Footer is showing sign-in recovery. Status ticks must not clear it. */
 let sessionBannerHeld = false;
+let mapLoadErrorHeld = false;
+let mapLoadGeneration = 0;
 /** Last access probe threw, so a held sign-in banner is still the honest one. */
 let accessProbeUnknown = false;
 
@@ -111,8 +129,10 @@ function recoveryHref(): string {
 }
 
 function showSessionRecovery(text: string): void {
+  mapLoadGeneration += 1;
   const el = document.getElementById('status-banner');
   if (!el) return;
+  mapLoadErrorHeld = false;
   sessionBannerHeld = true;
   el.className = 'banner banner-red';
   el.onclick = null;
@@ -137,8 +157,13 @@ function showSessionRecovery(text: string): void {
   el.replaceChildren(copy, actions);
 }
 
+function mapViewActive(): boolean {
+  return document.getElementById('view')?.className === 'view-map';
+}
+
 function setBanner(state: BannerState): void {
   if (sessionBannerHeld) return;
+  if (mapLoadErrorHeld && mapViewActive()) return;
   const el = document.getElementById('status-banner');
   if (!el) return;
   el.className = `banner banner-${state.level}`;
@@ -149,7 +174,9 @@ function setBanner(state: BannerState): void {
 
 /** Make the banner a one-tap escape to the Cloudflare Access login. */
 function setAuthBanner(state: BannerState): void {
+  mapLoadGeneration += 1;
   sessionBannerHeld = false;
+  mapLoadErrorHeld = false;
   setBanner(state);
   const el = document.getElementById('status-banner');
   if (!el) return;
@@ -819,6 +846,10 @@ function launchesStaleHours(status: Status | null, nowMs: number): number | unde
 
 let shotlistBarEl: HTMLElement | null = null;
 
+function updateShotlistBarHeight(bar: HTMLElement): void {
+  document.body.style.setProperty('--recovery-shotlist-height', `${bar.getBoundingClientRect().height}px`);
+}
+
 /** Toggle a pass in/out of the shot list, update its remind button(s) in place
  *  (a pass can show in both Queue and Upcoming), and refresh the bar. In-place
  *  update avoids a full re-render that would collapse open thumbnails. */
@@ -871,6 +902,8 @@ function ensureShotlistBar(): HTMLElement {
   });
   bar.append(count, addBtn, clearBtn);
   document.body.appendChild(bar);
+  const recoveryBarObserver = new ResizeObserver(() => updateShotlistBarHeight(bar));
+  recoveryBarObserver.observe(bar);
   shotlistBarEl = bar;
   return bar;
 }
@@ -883,6 +916,7 @@ function updateShotlistBar(): void {
   if (n === 0) {
     bar.hidden = true;
     document.body.classList.remove('shotlist-bar-visible');
+    updateShotlistBarHeight(bar);
     return;
   }
   const count = bar.querySelector('.shotlist-count');
@@ -890,6 +924,7 @@ function updateShotlistBar(): void {
   bar.hidden = false;
   // Pads the scroll container so the sticky bar can't hide the last card.
   document.body.classList.add('shotlist-bar-visible');
+  updateShotlistBarHeight(bar);
 }
 
 /** Build the .ics from the (pruned) shot list and hand it to the OS. Honest
@@ -1413,15 +1448,17 @@ function bindTabs(): void {
   const allTabs = [tabQueue, tabUpcoming, tabMap, tabIss, tabProfile, tabLog]
     .filter((t): t is HTMLElement => t !== null);
   const setActive = (className: string, activeTab: HTMLElement) => {
+    mapLoadGeneration += 1;
     view.className = className;
     allTabs.forEach((t) => t.classList.toggle('active', t === activeTab));
     const scroller = activeTab.parentElement;
     if (scroller instanceof HTMLElement && scroller.classList.contains('tabs')) {
       const edge = activeTab.offsetLeft + activeTab.offsetWidth - scroller.clientWidth;
       if (activeTab.offsetLeft < scroller.scrollLeft) scroller.scrollLeft = activeTab.offsetLeft;
-      else if (edge > scroller.scrollLeft) scroller.scrollLeft = edge;
+      else     if (edge > scroller.scrollLeft) scroller.scrollLeft = edge;
     }
     syncHelpButton();
+    syncMapLoadError();
   };
 
   tabQueue.addEventListener('click', () => {
@@ -1439,13 +1476,12 @@ function bindTabs(): void {
   tabMap.addEventListener('click', () => {
     insetHost?.releasePlan();
     releaseIssPane();
+    setActive('view-map', tabMap);
     loadMapPane().catch((err) => {
       // A failed lazy import (LOS mid-chunk-download) must not be a silent
       // black pane — log it; the next tab click retries the import.
       console.error('[map] map pane failed to load:', err);
-      mapModule = null; // force re-import on next attempt
     });
-    setActive('view-map', tabMap);
     // Hydrate shot counts so a target popup can answer "have I shot it yet"
     // WITHOUT waiting for a Profile-tab visit (the popup reads the shared
     // store; the Profile pane was previously the only thing that filled it).
@@ -1543,11 +1579,10 @@ function loadLookupPane(): void {
       // pattern as loadMapPane) so the MapLibre bundle stays gated.
       const tabMap = document.getElementById('tab-map') as HTMLElement | null;
       if (tabMap) tabMap.click();
-      if (!mapModule) {
-        mapModule = await import('./map');
-      }
-      // dropLookupPin re-uses MapLibre primitives; defined in map.ts.
-      mapModule.dropLookupPin?.(result);
+      const generation = mapLoadGeneration;
+      const loaded = await ensureMapModule(generation);
+      if (!loaded || !currentMapLoad(generation)) return;
+      loaded.dropLookupPin?.(result);
     });
     lookupPaneBound = true;
   });
@@ -1654,26 +1689,255 @@ function showLaunchOnMap(eventId: string): void {
   document.getElementById('tab-map')?.click();
 }
 
+function currentMapLoad(generation: number): boolean {
+  return generation === mapLoadGeneration && mapViewActive() && !sessionBannerHeld;
+}
+
+async function mapImportAction(error: unknown, generation: number): Promise<MapImportAction> {
+  try {
+    return await nextMapImportStep(error, sessionStorage, window.location.href, probeMapChunk, () => currentMapLoad(generation));
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+    return { action: 'show-error' };
+  }
+}
+
+function assetScriptEntries(): PerformanceResourceTiming[] {
+  const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+  return entries.filter((entry) => /\/assets\/[^?#]+\.js(?:[?#]|$)/.test(entry.name));
+}
+
+const importMap = () => import('./map');
+
+async function readMapModuleUrl(): Promise<string | null> {
+  return mapModuleUrl(importMap.toString(), import.meta.url);
+}
+
+async function rememberFailedMapChunk(generation: number): Promise<void> {
+  const script = await readMapModuleUrl();
+  if (!currentMapLoad(generation) || !script) return;
+  try {
+    sessionStorage.setItem(MAP_IMPORT_URL_KEY, script);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
+}
+
+async function ensureMapLibreStyles(): Promise<void> {
+  await loadStylesheet(MAP_STYLESHEET_URL);
+}
+
+async function loadMapModule(): Promise<typeof import('./map')> {
+  const nonce = new URL(window.location.href).searchParams.get('map-retry');
+  if (!nonce) return importMap();
+  const script = await readMapModuleUrl();
+  if (!script) {
+    // Development has no bundled graph or persistent failed hashed modules.
+    if (import.meta.env.DEV) return importMap();
+    throw new Error('map module identity is unavailable');
+  }
+  await ensureMapLibreStyles();
+  return loadFreshMapModule<typeof import('./map')>(script, nonce, import.meta.url);
+}
+
+async function probeMapChunk(url: string | null): Promise<number | null> {
+  const namedStatus = url ? await readChunkStatus(url) : undefined;
+  if (namedStatus !== undefined && namedStatus !== 200) return namedStatus;
+  const shell = document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/"]')?.src;
+  const candidates = [
+    ...assetScriptEntries().map((entry) => entry.name),
+    ...[...document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"][href]')].map((link) => link.href),
+  ].filter((href) => {
+    const target = new URL(href);
+    return /\/assets\/[^?#]+\.js$/.test(target.pathname)
+      && !target.searchParams.has('map-probe')
+      && assetPath(href) !== assetPath(shell ?? import.meta.url);
+  });
+  if (!candidates.length) return namedStatus ?? null;
+  // Failed preloads may be absent from Resource Timing. Their build-provided
+  // link URLs still identify the failed dependency, not just the healthy entry.
+  const statuses = await Promise.all([...new Set(candidates)].map((target) => readChunkStatus(target)));
+  if (statuses.includes(404)) return 404;
+  if (statuses.includes(null)) return null;
+  return statuses.find((status) => status !== 200) ?? 200;
+}
+
+function rememberMapImportView(): void {
+  const active = document.querySelector('.tabs .tab.active');
+  const viewId = rememberedViewId(active?.id ?? null);
+  if (!viewId) return;
+  try {
+    sessionStorage.setItem(MAP_IMPORT_VIEW_KEY, viewId);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
+}
+
+function restoreMapImportView(): void {
+  let viewId: string | null = null;
+  try {
+    viewId = sessionStorage.getItem(MAP_IMPORT_VIEW_KEY);
+    sessionStorage.removeItem(MAP_IMPORT_VIEW_KEY);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+    return;
+  }
+  if (!rememberedViewId(viewId)) return;
+  document.getElementById(viewId ?? '')?.click();
+}
+
+function clearMapImportUrlFlags(): void {
+  const clean = stripMapImportParams(window.location.href);
+  if (clean === window.location.href) return;
+  window.history.replaceState({}, '', clean);
+}
+
+function restoreStatusBanner(): void {
+  if (currentlyOffline) {
+    renderOfflineBanner();
+    return;
+  }
+  if (!currentManifest) return;
+  setBanner(bannerWithLaunchesOverlay(
+    bannerWithTleOverlay(
+      bannerFromManifest(currentManifest.generated_at, currentManifest.freshness.ok, Date.now()),
+      currentTrack?.tle_age_hours,
+    ),
+    launchesStaleHours(currentStatus, Date.now()),
+  ));
+}
+
+function paintMapLoadError(): void {
+  const el = document.getElementById('status-banner');
+  if (!el) return;
+  el.className = 'banner banner-red';
+  el.onclick = null;
+  el.style.cursor = '';
+  const copy = document.createElement('p');
+  copy.className = 'banner-copy';
+  copy.textContent = "Map couldn't load";
+  const actions = document.createElement('div');
+  actions.className = 'banner-actions';
+  const retry = document.createElement('button');
+  retry.className = 'banner-action';
+  retry.type = 'button';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', () => {
+    const generation = ++mapLoadGeneration;
+    if (!currentMapLoad(generation)) return;
+    void rememberFailedMapChunk(generation)
+      .catch((error: unknown) => {
+        console.error('[map] map pane failed to load:', error);
+      })
+      .then(() => {
+        if (!currentMapLoad(generation)) return;
+        rememberMapImportView();
+        window.location.replace(retryMapHref(window.location.href, String(Date.now())));
+      })
+      .catch((error: unknown) => {
+        console.error('[map] map pane failed to load:', error);
+      });
+  });
+  actions.append(retry);
+  el.replaceChildren(copy, actions);
+}
+
+function syncMapLoadError(): void {
+  if (!mapLoadErrorHeld || sessionBannerHeld) return;
+  if (mapViewActive()) {
+    paintMapLoadError();
+    return;
+  }
+  restoreStatusBanner();
+}
+
+function showMapLoadError(): void {
+  if (sessionBannerHeld) return;
+  mapLoadErrorHeld = true;
+  syncMapLoadError();
+}
+
+function dismissMapLoadError(): void {
+  if (!mapLoadErrorHeld) return;
+  mapLoadErrorHeld = false;
+  restoreStatusBanner();
+}
+
+async function presentMapImportFailure(error: unknown, generation: number): Promise<void> {
+  if (!currentMapLoad(generation)) return;
+  try {
+    await rememberFailedMapChunk(generation);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
+  if (!currentMapLoad(generation)) return;
+  const action = await mapImportAction(error, generation);
+  if (!currentMapLoad(generation)) return;
+  if (action.action === 'reload-once') {
+    rememberMapImportView();
+    window.location.replace(action.href);
+    return;
+  }
+  showMapLoadError();
+  console.error('[map] map pane failed to load:', error);
+}
+
+let mapModuleLoading: Promise<typeof import('./map')> | null = null;
+
+async function ensureMapModule(generation: number): Promise<typeof import('./map') | null> {
+  if (mapModule) return mapModule;
+  const loading = mapModuleLoading ??= loadMapModule();
+  try {
+    const loaded = await loading;
+    if (!currentMapLoad(generation)) return null;
+    if (typeof loaded.renderMap !== 'function' || typeof loaded.resizeMap !== 'function') {
+      throw new Error('map module API is unavailable');
+    }
+    return loaded;
+  } catch (error) {
+    if (!currentMapLoad(generation)) return null;
+    await presentMapImportFailure(error, generation);
+    return null;
+  } finally {
+    if (mapModuleLoading === loading) mapModuleLoading = null;
+  }
+}
+
 async function loadMapPane(): Promise<void> {
+  const generation = ++mapLoadGeneration;
+  if (!currentMapLoad(generation)) return;
   if (!currentManifest) {
     mapPaneWaitingForManifest = true;
     return;
   }
   mapPaneWaitingForManifest = false;
-  if (!mapModule) {
-    mapModule = await import('./map');
+  const loaded = await ensureMapModule(generation);
+  if (!loaded || !currentManifest || !currentMapLoad(generation)) return;
+  try {
+    await loaded.renderMap(currentManifest);
+    if (!currentMapLoad(generation)) return;
+  } catch (error) {
+    if (!currentMapLoad(generation)) return;
+    mapModule = null;
+    showMapLoadError();
+    console.error('[map] map pane failed to load:', error);
+    return;
   }
-  await mapModule.renderMap(currentManifest);
-  // MapLibre needs explicit resize() after its container becomes visible.
-  // The container starts hidden (display: none) so the canvas was 0×0 at init.
-  // Defer one frame so the browser reflows the now-visible container first.
+  mapModule = loaded;
+  try {
+    noteMapImportSuccess(sessionStorage);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
+  clearMapImportUrlFlags();
+  dismissMapLoadError();
   requestAnimationFrame(() => {
-    if (!mapModule) return;
+    if (!currentMapLoad(generation) || !mapModule) return;
     mapModule.resizeMap();
     if (pendingLaunchFocus) {
       const eventId = pendingLaunchFocus;
       pendingLaunchFocus = null;
-      if (document.getElementById('view')?.className === 'view-map' && mapModule.focusLaunchOnMap(eventId)) {
+      if (mapModule.focusLaunchOnMap(eventId)) {
         document.getElementById('map')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }
     }
@@ -1693,7 +1957,6 @@ function renderPendingMapPane(): void {
   }
   loadMapPane().catch((err) => {
     console.error('[map] deferred map pane render failed:', err);
-    mapModule = null;
   });
 }
 
@@ -1757,19 +2020,19 @@ async function init(): Promise<void> {
     }
     if (currentManifest) renderQueue();
   });
+  bindTabs();
+  restoreMapImportView();
   insetHost = bindInsets({
-    mounts: async () => mapModule ?? import('./map'),
+    mounts: async () => mapModule ?? loadMapModule(),
     track: () => currentTrack,
     nowMs: () => Date.now(),
   });
-  bindTabs();
   mountProfileMenu();
   // Map is the default landing tab (view-map is set in HTML). Trigger the lazy
   // load now so mapPaneWaitingForManifest is set; renderPendingMapPane() in
   // doRefresh() will complete the render once the first manifest arrives.
   loadMapPane().catch((err) => {
     console.warn('[map] auto-init pre-manifest call failed:', err);
-    mapModule = null;
   });
   // Hydrate shot counts so target popups show "already shot" badges without
   // needing a Profile-tab visit first. Mirrors the Map tab click handler.

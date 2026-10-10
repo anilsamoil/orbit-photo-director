@@ -20,6 +20,23 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
   plugins: [
+    {
+      name: 'opd-map-stylesheet-identity',
+      apply: 'build',
+      transformIndexHtml: {
+        order: 'post',
+        handler(_html, context) {
+          const stylesheets = Object.values(context.bundle ?? {}).filter((asset) =>
+            asset.type === 'asset' && /(?:^|\/)maplibre-vendor-[^/]+\.css$/.test(asset.fileName));
+          if (stylesheets.length !== 1) throw new Error('Expected one native MapLibre stylesheet');
+          return [{
+            tag: 'meta',
+            attrs: { name: 'opd-map-stylesheet', content: `/${stylesheets[0]!.fileName}` },
+            injectTo: 'head',
+          }];
+        },
+      },
+    },
     VitePWA({
       // registerType: 'prompt' so vite-plugin-pwa does not inject its own
       // clientsClaim via 'autoUpdate'. This file's workbox block is the
