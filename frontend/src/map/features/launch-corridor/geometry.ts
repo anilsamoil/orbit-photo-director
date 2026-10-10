@@ -1,5 +1,6 @@
 import { wrapLon } from '../../../geo';
 import { legacyLaunchInHorizon, selectLaunches } from '../../../launch-selectors';
+import type { TierCatalog } from '../../../launch-tiers';
 import type { LaunchState } from '../../../launch-store';
 import type { PassEntry } from '../../../types';
 
@@ -52,26 +53,56 @@ export function buildLaunchMapFeatures(launchState: LaunchState, now: number): {
     pads.push({ type: 'Feature', properties, geometry: { type: 'Point', coordinates: [item.site.lon, item.site.lat] } });
     const trajectory = item.trajectory;
     if (trajectory.quality === 'unknown' || !trajectory.source || trajectory.points.length < 2) continue;
-    const segments: GeoJSON.Feature[] = [];
-    for (let i = 1; i < trajectory.points.length; i++) {
-      const start = trajectory.points[i - 1]!;
-      const end = trajectory.points[i]!;
-      const lon = start.lon + wrapLon(end.lon - start.lon);
-      for (const offset of [-360, 0, 360]) {
-        segments.push({
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: [[start.lon + offset, start.lat], [lon + offset, end.lat]],
-          },
-        });
-      }
-    }
-    for (const segment of segments) segment.properties = { ...properties, quality: trajectory.quality };
-    lines.push(...segments);
+    lines.push(...antimeridianSegments(trajectory.points, { ...properties, quality: trajectory.quality }));
   }
   return { lines, pads };
+}
+
+/** Pads at tier pins. A corridor line exists only when that pin has one. */
+export function buildTierMapFeatures(tiers: TierCatalog): { lines: GeoJSON.Feature[]; pads: GeoJSON.Feature[] } {
+  const lines: GeoJSON.Feature[] = [];
+  const pads: GeoJSON.Feature[] = [];
+  const pins = tiers.pins;
+  for (const pin of pins) {
+    const properties = {
+      event_id: pin.eventId,
+      revision: pin.revision,
+      label: `LAUNCH / ${pin.tier === 'shot' ? 'SHOT' : 'LIKELY'}`,
+      catalog: 'tier',
+      launch_name: pin.name,
+    };
+    pads.push({
+      type: 'Feature',
+      properties,
+      geometry: { type: 'Point', coordinates: [pin.site.lon, pin.site.lat] },
+    });
+    if (pin.corridor) lines.push(...antimeridianSegments(pin.corridor.points, properties));
+  }
+  return { lines, pads };
+}
+
+function antimeridianSegments(
+  points: readonly { readonly lat: number; readonly lon: number }[],
+  properties: GeoJSON.GeoJsonProperties,
+): GeoJSON.Feature[] {
+  const segments: GeoJSON.Feature[] = [];
+  for (let i = 1; i < points.length; i += 1) {
+    const start = points[i - 1]!;
+    const end = points[i]!;
+    const lon = start.lon + wrapLon(end.lon - start.lon);
+    for (const offset of [-360, 0, 360]) {
+      segments.push({
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'LineString',
+          coordinates: [[start.lon + offset, start.lat], [lon + offset, end.lat]],
+        },
+      });
+    }
+  }
+  for (const segment of segments) segment.properties = { ...properties };
+  return segments;
 }
 
 export function legacyPassesInHorizon(passes: PassEntry[], now: number): PassEntry[] {
