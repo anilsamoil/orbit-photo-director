@@ -88,7 +88,7 @@ function contextDescriptor(spec) {
 
 export async function openDeviceContext(browser, spec, hooks = {}) {
   const descriptor = contextDescriptor(spec);
-  const context = await browser.newContext({ ...descriptor });
+  const context = await browser.newContext({ ...descriptor, serviceWorkers: 'block' });
   const initScripts = [...(hooks.initScripts || [])];
   if (spec.standalone && !initScripts.includes(STANDALONE_INIT)) initScripts.unshift(STANDALONE_INIT);
   for (const source of initScripts) await context.addInitScript(source);
@@ -96,6 +96,19 @@ export async function openDeviceContext(browser, spec, hooks = {}) {
   const requestHandlers = [...(hooks.requestHandlers || [])];
   for (const handler of requestHandlers) page.on('request', handler);
   return { browser, context, page, spec, descriptor, initScripts, requestHandlers };
+}
+
+function metricsMatch(session, params) {
+  if (!Number.isFinite(params.width) || !Number.isFinite(params.height)) return false;
+  const mobile = typeof params.mobile === 'boolean' ? params.mobile : Boolean(session.descriptor.isMobile);
+  const deviceScaleFactor = mobile
+    ? session.descriptor.deviceScaleFactor
+    : (params.deviceScaleFactor ?? session.descriptor.deviceScaleFactor);
+  const viewport = session.descriptor.viewport || {};
+  return viewport.width === params.width
+    && viewport.height === params.height
+    && session.descriptor.deviceScaleFactor === deviceScaleFactor
+    && Boolean(session.descriptor.isMobile) === mobile;
 }
 
 async function capturePage(page) {
@@ -116,13 +129,63 @@ async function capturePage(page) {
   } catch {
     storage = { local: {}, session: {} };
   }
+  let pose = null;
+  try {
+    pose = await page.evaluate(() => {
+      const viewEl = document.getElementById('view');
+      const view = viewEl ? (viewEl.className || '').split(/\s+/).find((token) => token.startsWith('view-')) || '' : '';
+      if (!view) return null;
+      const map = window.__opdMap;
+      let camera = null;
+      if (map && map.getCenter && map.getZoom) {
+        const center = map.getCenter();
+        camera = {
+          lng: center.lng,
+          lat: center.lat,
+          zoom: map.getZoom(),
+          bearing: map.getBearing ? map.getBearing() : 0,
+          pitch: map.getPitch ? map.getPitch() : 0,
+        };
+      }
+      const iss = window.__opdIss;
+      let issCamera = null;
+      if (iss && iss.getCenter && iss.getZoom) {
+        const center = iss.getCenter();
+        issCamera = {
+          lng: center.lng,
+          lat: center.lat,
+          zoom: iss.getZoom(),
+          bearing: iss.getBearing ? iss.getBearing() : 0,
+          pitch: iss.getPitch ? iss.getPitch() : 0,
+          fov: iss.getVerticalFieldOfView ? iss.getVerticalFieldOfView() : null,
+        };
+      }
+      const scene = document.querySelector('[data-iss-scene]');
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      return {
+        view,
+        chromeShown: !document.body.classList.contains('map-chrome-hidden'),
+        shotlist: document.body.classList.contains('shotlist-bar-visible'),
+        legendOpen: document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true',
+        telemetryOpen: document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'true',
+        fullscreen: !!(scene && scene.hasAttribute('data-iss-fullscreen-active')),
+        launchValue: picker instanceof HTMLSelectElement ? picker.value : '',
+        frozenNow: typeof window.__opdRealNow === 'function' && Date.now !== window.__opdRealNow ? Date.now() : null,
+        fovWatch: typeof window.__opdFovWatch === 'object' && window.__opdFovWatch !== null,
+        camera,
+        issCamera,
+      };
+    });
+  } catch {
+    pose = null;
+  }
   let cookies = [];
   try {
     cookies = await page.context().cookies();
   } catch {
     cookies = [];
   }
-  return { url, storage, cookies };
+  return { url, storage, cookies, pose };
 }
 
 function specForMetrics(session, params) {
@@ -156,20 +219,260 @@ function specForMetrics(session, params) {
   };
 }
 
+const VIEW_TABS = {
+  'view-queue': '#tab-queue',
+  'view-upcoming': '#tab-upcoming',
+  'view-map': '#tab-map',
+  'view-iss': '#tab-iss',
+  'view-profile': '#tab-profile',
+  'view-log': '#tab-log',
+};
+
+function sleep(ms) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+async function pollPage(page, read, label, timeoutMs, arg) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await page.evaluate(read, arg);
+    if (last && last.ok === true) return last;
+    await sleep(250);
+  }
+  throw new Error(`${label} timed out. Last value: ${JSON.stringify(last)}`);
+}
+
+async function matchesSoon(page, read, arg, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const last = await page.evaluate(read, arg);
+    if (last && last.ok === true) return true;
+    await sleep(100);
+  }
+  return false;
+}
+
+async function clickSelector(page, selector) {
+  await page.evaluate((target) => {
+    const el = document.querySelector(target);
+    if (el) el.click();
+  }, selector);
+}
+
+async function waitForContextSize(page, descriptor) {
+  const viewport = descriptor.viewport || {};
+  const expected = { width: viewport.width, height: viewport.height, deviceScaleFactor: descriptor.deviceScaleFactor };
+  await pollPage(page, (size) => ({
+    ok: window.innerWidth === size.width
+      && window.innerHeight === size.height
+      && window.devicePixelRatio === size.deviceScaleFactor,
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio,
+  }), `context ${viewport.width}x${viewport.height}`, 10000, expected);
+}
+
+async function applyPose(page, pose) {
+  if (!pose) return;
+  await pollPage(page, () => {
+    const text = document.getElementById('status-banner')?.textContent || '';
+    return text && !text.includes('Loading') ? { ok: true } : { text };
+  }, 'snap after context replace', 30000);
+  if (pose.fovWatch) {
+    await page.evaluate(() => {
+      if (window.__opdFovWatch) return;
+      const watch = { bad: null, settled: false };
+      const read = () => {
+        if (watch.bad || watch.settled) return;
+        const label = document.querySelector('[data-iss-fov]');
+        if (!label || label.getAttribute('data-iss-fov-state') !== 'live') return;
+        const text = (label.textContent || '').trim();
+        const shown = Number.parseFloat(text);
+        const phase = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-phase') || '';
+        const map = window.__opdIss;
+        const fov = map && typeof map.getVerticalFieldOfView === 'function' ? map.getVerticalFieldOfView() : null;
+        const roll = map && typeof map.getRoll === 'function' ? ((map.getRoll() % 360) + 360) % 360 : null;
+        const matched = text.length > 0
+          && phase === 'running'
+          && typeof fov === 'number' && Number.isFinite(fov)
+          && Number.isFinite(shown)
+          && Math.abs(shown - fov) <= 0.15
+          && typeof roll === 'number' && Math.abs(roll - 180) <= 0.5;
+        if (matched) watch.settled = true;
+        else watch.bad = { text, shown, phase, fov, roll };
+      };
+      new MutationObserver(read).observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        characterData: true,
+      });
+      const pump = () => {
+        read();
+        if (!watch.bad && !watch.settled) requestAnimationFrame(pump);
+      };
+      requestAnimationFrame(pump);
+      window.__opdFovWatch = watch;
+    });
+  }
+  const tab = VIEW_TABS[pose.view];
+  if (tab) {
+    const current = await page.evaluate(() => {
+      const view = document.getElementById('view');
+      return view ? (view.className || '').split(/\s+/).find((token) => token.startsWith('view-')) || '' : '';
+    });
+    if (current !== pose.view) await clickSelector(page, tab);
+  }
+  if (pose.view === 'view-map') {
+    await pollPage(page, () => {
+      const map = window.__opdMap;
+      const canvas = document.querySelector('#map .maplibregl-canvas');
+      if (!map || !canvas || !document.querySelector('.iss-marker') || !document.querySelector('.map-legend')) return { step: 'map' };
+      return { ok: true };
+    }, 'map after context replace', 45000);
+    if (pose.camera) {
+      await page.evaluate((camera) => {
+        const map = window.__opdMap;
+        if (map && map.jumpTo) {
+          map.jumpTo({
+            center: [camera.lng, camera.lat],
+            zoom: camera.zoom,
+            bearing: camera.bearing,
+            pitch: camera.pitch,
+          });
+        }
+      }, pose.camera);
+    }
+    const chromeSettled = await matchesSoon(page, (shown) => {
+      const hidden = document.body.classList.contains('map-chrome-hidden');
+      return (shown ? !hidden : hidden) ? { ok: true } : null;
+    }, pose.chromeShown, 2000);
+    if (!chromeSettled) await clickSelector(page, '#map-chrome-toggle');
+    await pollPage(page, (shown) => {
+      const hidden = document.body.classList.contains('map-chrome-hidden');
+      const toggle = (document.getElementById('map-chrome-toggle')?.textContent || '').trim();
+      const strip = document.querySelector('.map-command');
+      const zoom = document.querySelector('.maplibregl-ctrl-zoom-in');
+      const step = document.getElementById('time-fwd-90');
+      const stepBox = step ? step.getBoundingClientRect() : null;
+      if (shown) {
+        if (hidden || toggle !== 'Hide' || !strip || getComputedStyle(strip).display === 'none' || !zoom) {
+          return { step: 'chrome', hidden, toggle };
+        }
+        if (!stepBox || stepBox.width < 8 || stepBox.height < 8) return { step: 'time' };
+        return { ok: true };
+      }
+      if (!hidden || toggle !== 'Controls') return { step: 'hidden', hidden, toggle };
+      return { ok: true };
+    }, 'map chrome after context replace', 10000, pose.chromeShown);
+    if (pose.legendOpen) {
+      const open = await page.evaluate(() => document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true');
+      if (!open) await clickSelector(page, '#map-legend-toggle');
+    }
+  } else if (pose.view === 'view-iss') {
+    await pollPage(page, () => {
+      const scene = document.querySelector('[data-iss-scene]');
+      const frame = document.querySelector('[data-iss-frame]');
+      const box = frame ? frame.getBoundingClientRect() : null;
+      const telemetry = document.querySelector('[data-iss-telemetry]');
+      const fullscreen = document.querySelector('[data-iss-fullscreen]');
+      const telemetryBox = telemetry ? telemetry.getBoundingClientRect() : null;
+      const fullscreenBox = fullscreen ? fullscreen.getBoundingClientRect() : null;
+      if (!scene || !box || box.width < 40) return { step: 'scene' };
+      if (!telemetryBox || telemetryBox.width < 8 || !fullscreenBox || fullscreenBox.width < 8) return { step: 'controls' };
+      if (window.innerHeight <= 564 && !scene.hasAttribute('data-iss-short')) return { step: 'short' };
+      return { ok: true };
+    }, 'iss after context replace', 45000);
+    if (pose.issCamera && Number.isFinite(pose.issCamera.fov)) {
+      const fov = pose.issCamera.fov;
+      const held = await matchesSoon(page, (expected) => {
+        const current = window.__opdIss && window.__opdIss.getVerticalFieldOfView ? window.__opdIss.getVerticalFieldOfView() : null;
+        return Number.isFinite(current) && Math.abs(current - expected) <= 0.5 ? { ok: true } : { current };
+      }, fov, 5000);
+      if (!held) {
+        await page.evaluate((expected) => {
+          const map = window.__opdIss;
+          if (map && map.setVerticalFieldOfView) map.setVerticalFieldOfView(expected);
+        }, fov);
+        await pollPage(page, (expected) => {
+          const current = window.__opdIss && window.__opdIss.getVerticalFieldOfView ? window.__opdIss.getVerticalFieldOfView() : null;
+          return Number.isFinite(current) && Math.abs(current - expected) <= 0.5 ? { ok: true, current } : { current };
+        }, 'iss fov after context replace', 10000, fov);
+      }
+    }
+    if (pose.fullscreen) {
+      const held = await page.evaluate(() => document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-fullscreen-active'));
+      if (!held) await clickSelector(page, '[data-iss-fullscreen]');
+      await pollPage(page, () => (
+        document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-fullscreen-active') ? { ok: true } : null
+      ), 'iss fullscreen after context replace', 10000);
+    }
+    if (pose.telemetryOpen) {
+      const open = await page.evaluate(() => document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'true');
+      if (!open) await clickSelector(page, '[data-iss-telemetry]');
+      await pollPage(page, () => (
+        document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'true' ? { ok: true } : null
+      ), 'iss telemetry after context replace', 10000);
+    }
+    if (Number.isFinite(pose.frozenNow)) {
+      await page.evaluate((frozen) => {
+        if (typeof window.__opdRealNow !== 'function') window.__opdRealNow = Date.now;
+        Date.now = () => frozen;
+      }, pose.frozenNow);
+    }
+    if (pose.launchValue) {
+      await page.evaluate((value) => { window.__opdRestoreLaunch = value; }, pose.launchValue);
+      await pollPage(page, () => {
+        const value = window.__opdRestoreLaunch;
+        const picker = document.querySelector('[data-iss-launch-picker]');
+        if (!(picker instanceof HTMLSelectElement)) return { step: 'picker' };
+        if (!window.__opdRestoreLaunchArmed) {
+          if (![...picker.options].some((entry) => entry.value === value)) return { step: 'option', count: picker.options.length };
+          picker.value = value;
+          picker.dispatchEvent(new Event('change', { bubbles: true }));
+          window.__opdRestoreLaunchArmed = true;
+        }
+        if (value === 'none') return picker.value === 'none' ? { ok: true } : { step: 'none', value: picker.value };
+        const card = document.querySelector('[data-iss-launch-card]');
+        const name = card && card.querySelector('[data-iss-launch-name]') ? card.querySelector('[data-iss-launch-name]').textContent : '';
+        if (!card || card.hasAttribute('hidden') || !name) return { step: 'card', value: picker.value };
+        return { ok: true, name };
+      }, 'iss launch after context replace', 15000);
+    }
+  } else if (tab) {
+    await pollPage(page, (view) => {
+      const current = (document.getElementById('view')?.className || '').split(/\s+/).find((token) => token.startsWith('view-')) || '';
+      return current === view ? { ok: true } : { current };
+    }, `${pose.view} after context replace`, 20000, pose.view);
+  }
+  if (pose.shotlist) {
+    await page.evaluate(() => document.body.classList.add('shotlist-bar-visible'));
+  }
+}
+
 async function restorePage(session, snapshot) {
   if (!snapshot.url || snapshot.url === 'about:blank') return;
   if (snapshot.cookies.length) await session.context.addCookies(snapshot.cookies);
   const stored = Object.keys(snapshot.storage.local).length + Object.keys(snapshot.storage.session).length;
   if (stored) {
     await session.page.addInitScript((storage) => {
+      if (sessionStorage.getItem('__opdContextStorage') === '1') return;
       for (const [key, value] of Object.entries(storage.local)) localStorage.setItem(key, value);
-      for (const [key, value] of Object.entries(storage.session)) sessionStorage.setItem(key, value);
+      for (const [key, value] of Object.entries(storage.session)) {
+        if (key === '__opdContextStorage') continue;
+        sessionStorage.setItem(key, value);
+      }
+      sessionStorage.setItem('__opdContextStorage', '1');
     }, snapshot.storage);
   }
   await session.page.goto(snapshot.url, { waitUntil: 'domcontentloaded' });
+  await waitForContextSize(session.page, session.descriptor);
+  await applyPose(session.page, snapshot.pose);
 }
 
 export async function replaceDeviceContext(session, params) {
+  if (metricsMatch(session, params)) return;
   const snapshot = await capturePage(session.page);
   const spec = specForMetrics(session, params);
   const opened = await openDeviceContext(session.browser, spec, {
