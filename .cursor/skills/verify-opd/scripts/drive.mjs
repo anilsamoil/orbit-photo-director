@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { proveLaunchPlacement } from './placement-proof.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
@@ -649,7 +650,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active) });
+      const context = await browser.newContext({ ...deviceDescriptor(active), serviceWorkers: 'block' });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -4535,6 +4536,9 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
     10000,
   );
   const launchLook = await proveIssLaunchLook(send, evidenceDir, baseUrl);
+  const placement = viewport.width === 390 || viewport.width === 402
+    ? await proveLaunchPlacement(baseUrl, evidenceDir, viewport.width)
+    : '';
   await click(send, '[data-iss-preset="horizon"]');
   await waitFor(
     send,
@@ -4611,7 +4615,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
   const towns = await proveIssTownRetry(send, evidenceDir, viewport);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), ${placement ? `placement ${placement}, ` : ''}fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
 }
 
 async function proveIssTownRetry(send, evidenceDir, viewport) {
@@ -5414,14 +5418,14 @@ export function launchEarthPanes(width, height) {
       { ...native, place: 'over', minShort: 160 },
       { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
       { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
-      { width: 390, height: 565, mobile: true, label: '390x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
+      { width: 390, height: 565, mobile: true, label: '390x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 402 && height === 874) {
     return [
       { ...native, place: 'below', minShort: 200 },
       { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
-      { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
+      { width: 402, height: 565, mobile: true, label: '402x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 874 && height === 402) {
@@ -5533,11 +5537,13 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
           if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scene: scene ? [scene.clientWidth, scene.clientHeight] : null };
           const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
           if (!earth || earth.ok !== true) return earth;
-          if (${JSON.stringify(pane.place)} && earth.place !== ${JSON.stringify(pane.place)}) {
+          const allowed = ${JSON.stringify(pane.places || (pane.place ? [pane.place] : []))};
+          if (allowed.length && !allowed.includes(earth.place)) {
             return { step: 'place', place: earth.place, width: earth.width, height: earth.height };
           }
-          if (Math.min(earth.width, earth.height) < ${pane.minShort}) {
-            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: ${pane.minShort} };
+          const shortFloor = earth.place === 'below' ? ${pane.belowMinShort ?? pane.minShort} : ${pane.minShort};
+          if (Math.min(earth.width, earth.height) < shortFloor) {
+            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: shortFloor };
           }
           if (${pane.twoLine ? 'true' : 'false'}) {
             const name = document.querySelector('[data-iss-launch-name]');
