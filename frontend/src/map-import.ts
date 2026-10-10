@@ -2,9 +2,13 @@ export const MAP_IMPORT_RETRY_KEY = 'opd-map-import-retry';
 export const MAP_IMPORT_URL_KEY = 'opd-map-import-url';
 export const MAP_IMPORT_VIEW_KEY = 'opd-map-import-view';
 export const MAP_CHUNK_PROBE_TIMEOUT_MS = 2000;
-// Vite's public asset-URL transform supplies stylesheet identity independently
-// of private preload-helper syntax and of any discovery fetch.
-export const MAP_STYLESHEET_URL = new URL('../node_modules/maplibre-gl/dist/maplibre-gl.css', import.meta.url).href;
+export const MAP_MODULE_IDLE_TIMEOUT_MS = 10_000;
+export const MAP_MODULE_DOWNLOAD_TIMEOUT_MS = 120_000;
+// The built shell names Vite's native stylesheet without emitting a raw copy
+// or depending on private preload-helper syntax or a discovery fetch.
+export const MAP_STYLESHEET_URL = (typeof document === 'undefined' ? undefined
+  : document.querySelector<HTMLMetaElement>('meta[name="opd-map-stylesheet"]')?.content)
+  ?? '/node_modules/maplibre-gl/dist/maplibre-gl.css';
 
 const MAP_IMPORT_VIEW_IDS = ['tab-queue', 'tab-upcoming', 'tab-iss', 'tab-profile', 'tab-log'] as const;
 
@@ -105,12 +109,35 @@ function moduleTokens(source: string): ModuleToken[] {
   let cursor = 0;
   let previous = '';
   let canStartRegexp = true;
-  const parentheses: boolean[] = [];
+  type Parenthesis = { control: boolean; functionDeclaration?: boolean };
+  const parentheses: Parenthesis[] = [];
+  const declarationBodies: boolean[] = [];
+  let closedParenthesis: Parenthesis | undefined;
+  let templateExpressionStart: number | null = null;
+  const functionHeader = (): boolean | undefined => {
+    let index = tokens.length - 1;
+    if (tokens[index]?.kind === 'word' && tokens[index]?.value !== 'function') index -= 1;
+    if (tokens[index]?.value === '*') index -= 1;
+    if (tokens[index]?.kind !== 'word' || tokens[index]?.value !== 'function') return undefined;
+    index -= 1;
+    if (tokens[index]?.kind === 'word' && tokens[index]?.value === 'async') index -= 1;
+    if (templateExpressionStart !== null && index < templateExpressionStart) return false;
+    const prefix = tokens[index];
+    return !prefix
+      || (prefix.kind === 'punctuation' && [';', '{', '}'].includes(prefix.value))
+      || (prefix.kind === 'word' && (prefix.value === 'export'
+        || (prefix.value === 'default' && tokens[index - 1]?.value === 'export')));
+  };
   const push = (start: number, kind: ModuleToken['kind'], value = source.slice(start, cursor)) => {
+    const punctuation = kind === 'punctuation';
+    if (punctuation && value === '(') {
+      parentheses.push({ control: /^(?:if|while|for|with|switch|catch)$/.test(previous), functionDeclaration: functionHeader() });
+    }
+    if (punctuation && value === '{') declarationBodies.push(closedParenthesis?.functionDeclaration === true);
+    const closesDeclaration = punctuation && value === '}' && declarationBodies.pop() === true;
+    closedParenthesis = punctuation && value === ')' ? parentheses.pop() : undefined;
     tokens.push({ start, end: cursor, kind, value });
-    if (value === '(') parentheses.push(/^(?:if|while|for|with|switch|catch)$/.test(previous));
-    const closesControl = value === ')' ? parentheses.pop() === true : false;
-    canStartRegexp = closesControl || (kind !== 'string' && (
+    canStartRegexp = closesDeclaration || closedParenthesis?.control === true || (kind !== 'string' && (
       /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|yield|await|else|do)$/.test(value)
       || (kind === 'punctuation' && !/^(?:\)|\]|\}|\+\+|--|\.)$/.test(value))
     ));
@@ -142,7 +169,10 @@ function moduleTokens(source: string): ModuleToken[] {
           if (source.startsWith('${', cursor)) {
             cursor += 2;
             canStartRegexp = true;
+            const outerExpressionStart = templateExpressionStart;
+            templateExpressionStart = tokens.length;
             scan(true);
+            templateExpressionStart = outerExpressionStart;
           } else cursor += 1;
         }
         if (!closed) throw new Error('unterminated module template');
@@ -250,15 +280,39 @@ export function mapModuleUrl(loaderSource: string, baseUrl: string): string | nu
   return new URL(imports[0].specifier, baseUrl).href;
 }
 
-async function readModuleSource(url: string): Promise<string> {
+export async function readModuleSource(url: string): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MAP_CHUNK_PROBE_TIMEOUT_MS);
+  let idleTimer = setTimeout(() => controller.abort(), MAP_CHUNK_PROBE_TIMEOUT_MS);
+  const overallTimer = setTimeout(() => controller.abort(), MAP_MODULE_DOWNLOAD_TIMEOUT_MS);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const noteProgress = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), MAP_MODULE_IDLE_TIMEOUT_MS);
+  };
   try {
     const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
     if (!response.ok) throw new TypeError(`Failed to fetch dynamically imported module: ${url}`);
-    return await response.text();
+    // Headers have their own short deadline. Download time is bounded by
+    // inactivity, not chunk size or bandwidth; trickling cannot evade the cap.
+    noteProgress();
+    if (!response.body) return '';
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const source: string[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength === 0) continue;
+      noteProgress();
+      source.push(decoder.decode(value, { stream: true }));
+    }
+    source.push(decoder.decode());
+    return source.join('');
   } finally {
-    clearTimeout(timer);
+    clearTimeout(idleTimer);
+    clearTimeout(overallTimer);
+    controller.abort();
+    reader?.releaseLock();
   }
 }
 
@@ -363,7 +417,7 @@ export function loadStylesheet(href: string, timeoutMs = MAP_CHUNK_PROBE_TIMEOUT
   matching.forEach((link) => link.remove());
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = absolute;
+  link.href = href;
   const promise = new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = (failed: boolean, reason: string) => {

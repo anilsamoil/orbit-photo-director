@@ -694,6 +694,7 @@ describe('map pane when the chunk fails', () => {
     await vi.waitFor(() => expect(recovery.loadFreshMapModule).toHaveBeenCalled());
     expect(vi.mocked(recovery.loadFreshMapModule).mock.calls.at(-1)?.slice(0, 2)).toEqual(['http://127.0.0.1:42700/assets/index-MAP.js', '17']);
     await vi.waitFor(() => expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).toBeNull());
+    expect(document.querySelector('link[rel="stylesheet"]')?.getAttribute('href')).toBe('/assets/maplibre-vendor-V.css');
   });
 
   it('leaves SIGN IN AGAIN in place when the map chunk fails later', async () => {
@@ -1033,6 +1034,19 @@ describe('map module graph', () => {
 });
 
 describe('map stylesheet', () => {
+  it('preserves the native stylesheet href spelling while coalescing its absolute URL', async () => {
+    const href = '/assets/maplibre-vendor-V.css';
+    const first = loadStylesheet(href, 1000);
+    const link = document.querySelector<HTMLLinkElement>(`link[rel="stylesheet"][href="${href}"]`);
+    expect(link).not.toBeNull();
+    expect(link?.href).toBe(new URL(href, document.baseURI).href);
+    expect(loadStylesheet(new URL(href, document.baseURI).href, 1000)).toBe(first);
+    if (link) Object.defineProperty(link, 'sheet', { configurable: true, value: { cssRules: [{}] } });
+    link?.dispatchEvent(new Event('load'));
+    await first;
+    expect(document.querySelectorAll(`link[href="${href}"]`)).toHaveLength(1);
+  });
+
   it('coalesces concurrent stylesheet waiters without replacing their active link or a late timeout', async () => {
     const href = 'http://127.0.0.1:42700/assets/maplibre-vendor-V.css';
     const first = loadStylesheet(href, 50);

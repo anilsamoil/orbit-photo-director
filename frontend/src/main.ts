@@ -1724,7 +1724,7 @@ async function rememberFailedMapChunk(generation: number): Promise<void> {
 }
 
 async function ensureMapLibreStyles(): Promise<void> {
-  await loadStylesheet(new URL(MAP_STYLESHEET_URL, window.location.href).href);
+  await loadStylesheet(MAP_STYLESHEET_URL);
 }
 
 async function loadMapModule(): Promise<typeof import('./map')> {
