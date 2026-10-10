@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { openSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { freshProfile } from './drive.mjs';
 import { createDeviceContext } from './fixture-session.mjs';
-import { publishDriveFixtures } from './fixtures.mjs';
+import { discardDriveFixtures, publishDriveFixtures } from './fixtures.mjs';
 import { deviceDescriptor, launchWebkit, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 const script = join(import.meta.dirname, 'opd-verify.mjs');
@@ -92,6 +93,7 @@ async function startHarness(launchValidUntil = SENTINEL) {
     manifestVersion: 'verify-test',
     launchValidUntil,
     tleSource: 'test',
+    registrySecret: randomBytes(16).toString('hex'),
   };
   writeFileSync(join(home, 'state.json'), JSON.stringify(state));
   const proxyLog = openSync(join(home, 'proxy.log'), 'a');
@@ -130,6 +132,7 @@ async function startHarness(launchValidUntil = SENTINEL) {
     home,
     url,
     port,
+    secret: state.registrySecret,
     proxyExit,
     async stop() {
       let latest = state;
@@ -147,11 +150,35 @@ function driveEnv(home, extra = {}) {
   return { ...process.env, OPD_VERIFY_HOME: home, ...extra };
 }
 
-async function registrations(url) {
+function registryHeaders(harness) {
+  return {
+    'content-type': 'application/json',
+    'x-opd-verify-registry': harness.secret,
+  };
+}
+
+function fixtureBodyPath(dir, name) {
+  const body = readFileSync(join(dir, name));
+  const sha = createHash('sha256').update(body).digest('hex');
+  return `/v/verify/${sha}/${name}`;
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function registrations(harness) {
   let last = 'no response';
   for (let attempt = 0; attempt < 25; attempt += 1) {
     try {
-      const response = await fetch(`${url}/api/verify/fixtures`);
+      const response = await fetch(`${harness.url}/api/verify/fixtures`, {
+        headers: { 'x-opd-verify-registry': harness.secret },
+      });
       const body = await response.json();
       assert.equal(response.status, 200);
       return body;
@@ -161,6 +188,15 @@ async function registrations(url) {
     }
   }
   throw new Error(last);
+}
+
+async function registerFixture(harness, token, dir, pid) {
+  const response = await fetch(`${harness.url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: registryHeaders(harness),
+    body: JSON.stringify({ token, dir, pid }),
+  });
+  return { status: response.status, body: await response.json() };
 }
 
 async function poll(read, timeoutMs) {
@@ -184,7 +220,7 @@ test('failing map-corner drive exits 1', { timeout: 40000 }, async () => {
   const harness = await startHarness();
   try {
     const result = spawnSync(process.execPath, [script, 'drive', 'map-corner'], {
-      env: driveEnv(harness.home, { OPD_VERIFY_CHROME: '/bin/false' }),
+      env: driveEnv(harness.home, { OPD_VERIFY_CHROME: '/usr/bin/false' }),
       encoding: 'utf8',
       timeout: 30000,
     });
@@ -193,7 +229,7 @@ test('failing map-corner drive exits 1', { timeout: 40000 }, async () => {
     assert.match(output, /chrome debug port/);
     const state = JSON.parse(readFileSync(join(harness.home, 'state.json'), 'utf8'));
     assert.equal(state.launchValidUntil, SENTINEL);
-    const listed = await registrations(harness.url);
+    const listed = await registrations(harness);
     assert.equal(listed.count, 0, `proxy exit ${harness.proxyExit.code} ${harness.proxyExit.signal}`);
   } finally {
     await harness.stop();
@@ -211,16 +247,15 @@ test('unknown drive exits 2', { timeout: 20000 }, async () => {
     const output = `${result.stdout || ''}\n${result.stderr || ''}`;
     assert.equal(result.status, 2, output);
     assert.match(output, /unknown feature nonsense/);
-    assert.equal((await registrations(harness.url)).count, 0);
+    assert.equal((await registrations(harness)).count, 0);
   } finally {
     await harness.stop();
   }
 });
 
-test('SIGINT removes the private fixture copy and its registration', { timeout: 30000 }, async () => {
-  const harness = await startHarness();
+async function signalDrive(harness, signal, exitCode) {
   const child = spawn(process.execPath, [script, 'drive', 'map'], {
-    env: driveEnv(harness.home, { OPD_VERIFY_SURFACE: 'iphone-13' }),
+    env: driveEnv(harness.home, { OPD_VERIFY_SURFACE: 'desktop' }),
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -229,21 +264,47 @@ test('SIGINT removes the private fixture copy and its registration', { timeout: 
   child.stderr.on('data', (chunk) => { output += chunk; });
   try {
     const listed = await poll(async () => {
-      const body = await registrations(harness.url);
+      const body = await registrations(harness);
       return body.count > 0 ? body : null;
     }, 15000);
     assert.ok(listed, `drive never registered\n${output}`);
     const entry = listed.entries[0];
     assert.equal(existsSync(entry.dir), true);
-    child.kill('SIGINT');
+    const chromePid = await poll(async () => {
+      const file = join(harness.home, 'chrome.pid');
+      if (!existsSync(file)) return null;
+      const pid = Number(readFileSync(file, 'utf8'));
+      return pidAlive(pid) ? pid : null;
+    }, 20000);
+    assert.ok(chromePid, `chrome never started\n${output}`);
+    child.kill(signal);
     const status = await new Promise((resolveStatus) => child.once('exit', (code) => resolveStatus(code)));
-    assert.equal(status, 130, output);
+    assert.equal(status, exitCode, output);
+    assert.equal(pidAlive(chromePid), false);
     assert.equal(existsSync(entry.dir), false);
-    const after = await registrations(harness.url);
+    const after = await registrations(harness);
     assert.equal(after.entries.some((item) => item.token === entry.token), false);
     assert.equal(after.count, 0);
   } finally {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { /* group already gone */ }
+    try { process.kill(child.pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+}
+
+test('SIGINT kills the detached browser and removes the private copy', { timeout: 60000 }, async () => {
+  const harness = await startHarness();
+  try {
+    await signalDrive(harness, 'SIGINT', 130);
+  } finally {
+    await harness.stop();
+  }
+});
+
+test('SIGHUP uses the same shutdown', { timeout: 60000 }, async () => {
+  const harness = await startHarness();
+  try {
+    await signalDrive(harness, 'SIGHUP', 129);
+  } finally {
     await harness.stop();
   }
 });
@@ -258,37 +319,31 @@ test('proxy drops a registration whose copy or owner is gone', { timeout: 20000 
     published.push(first.dir, second.dir);
     const dead = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
     assert.equal(dead.status, 0);
-    const missingDir = await fetch(`${harness.url}/api/verify/fixtures`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: 'aaaaaaaaaaaaaaaa', dir: first.dir, pid: process.pid }),
-    });
+    const firstBody = fixtureBodyPath(first.dir, 'top5.json');
+    const secondBody = fixtureBodyPath(second.dir, 'top5.json');
+    const missingDir = await registerFixture(harness, 'aaaaaaaaaaaaaaaa', first.dir, process.pid);
     assert.equal(missingDir.status, 200);
-    rmSync(first.dir, { recursive: true, force: true });
-    const missingResponse = await fetch(`${harness.url}/v/verify/top5.json`, {
+    discardDriveFixtures(first.dir);
+    const missingResponse = await fetch(`${harness.url}${firstBody}`, {
       headers: { cookie: 'opd-verify-fixtures=aaaaaaaaaaaaaaaa' },
     });
     const missingBody = await missingResponse.text();
     assert.equal(missingResponse.status, 404);
     assert.match(missingBody, /unknown opd-verify-fixtures/);
     assert.doesNotMatch(missingBody, new RegExp(HOME_REEF));
-    const deadOwner = await fetch(`${harness.url}/api/verify/fixtures`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: 'bbbbbbbbbbbbbbbb', dir: second.dir, pid: dead.pid }),
-    });
+    const deadOwner = await registerFixture(harness, 'bbbbbbbbbbbbbbbb', second.dir, dead.pid);
     assert.equal(deadOwner.status, 200);
-    const deadResponse = await fetch(`${harness.url}/v/verify/top5.json`, {
+    const deadResponse = await fetch(`${harness.url}${secondBody}`, {
       headers: { cookie: 'opd-verify-fixtures=bbbbbbbbbbbbbbbb' },
     });
     const deadBody = await deadResponse.text();
     assert.equal(deadResponse.status, 404);
     assert.match(deadBody, /unknown opd-verify-fixtures/);
     assert.doesNotMatch(deadBody, /2026-10-07T12:20:00Z/);
-    const left = await registrations(harness.url);
+    const left = await registrations(harness);
     assert.equal(left.count, 0);
   } finally {
-    for (const dir of published) rmSync(dir, { recursive: true, force: true });
+    for (const dir of published) discardDriveFixtures(dir);
     await harness.stop();
   }
 });
@@ -297,14 +352,15 @@ test('unknown fixture cookie 404s fixture routes and still serves the app', { ti
   const harness = await startHarness();
   try {
     const cookie = { cookie: 'opd-verify-fixtures=cccccccccccccccc' };
-    const top5 = await fetch(`${harness.url}/v/verify/top5.json`, { headers: cookie });
+    const homeTop5 = fixtureBodyPath(join(harness.home, 'fixtures'), 'top5.json');
+    const top5 = await fetch(`${harness.url}${homeTop5}`, { headers: cookie });
     const top5Body = await top5.text();
     assert.equal(top5.status, 404);
     assert.match(top5Body, /unknown opd-verify-fixtures/);
     assert.doesNotMatch(top5Body, new RegExp(HOME_REEF));
     const manifest = await fetch(`${harness.url}/manifest.json`, { headers: cookie });
     assert.equal(manifest.status, 404);
-    const home = await fetch(`${harness.url}/v/verify/top5.json`);
+    const home = await fetch(`${harness.url}${homeTop5}`);
     const homeBody = await home.text();
     assert.equal(home.status, 200);
     assert.match(homeBody, new RegExp(HOME_REEF));
@@ -369,7 +425,7 @@ test('up rebuilds when the home launch pointer is expired', { timeout: 120000 },
 test('twenty finished drives leave the registration map at baseline', { timeout: 120000 }, async () => {
   const harness = await startHarness();
   try {
-    const before = await registrations(harness.url);
+    const before = await registrations(harness);
     for (let cycle = 0; cycle < 20; cycle += 1) {
       const result = spawnSync(process.execPath, [script, 'drive', 'nonsense'], {
         env: driveEnv(harness.home),
@@ -378,7 +434,7 @@ test('twenty finished drives leave the registration map at baseline', { timeout:
       });
       assert.equal(result.status, 2, `${cycle}\n${result.stdout}\n${result.stderr}`);
     }
-    const after = await registrations(harness.url);
+    const after = await registrations(harness);
     assert.equal(after.count, before.count, `proxy exit ${harness.proxyExit.code} ${harness.proxyExit.signal}`);
   } finally {
     await harness.stop();
@@ -391,16 +447,13 @@ test('fresh Chrome profile sends the fixture cookie', { timeout: 60000 }, async 
   try {
     const copy = publishDriveFixtures(join(harness.home, 'fixtures'), Date.parse('2026-10-07T12:00:00.000Z'), Date.parse('2026-10-07T13:00:00.000Z'));
     published.push(copy.dir);
-    const registered = await fetch(`${harness.url}/api/verify/fixtures`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: 'dddddddddddddddd', dir: copy.dir, pid: process.pid }),
-    });
+    const registered = await registerFixture(harness, 'dddddddddddddddd', copy.dir, process.pid);
     assert.equal(registered.status, 200);
+    const bodyPath = fixtureBodyPath(copy.dir, 'top5.json');
     let seen = null;
     await freshProfile(harness.url, harness.home, 'dddddddddddddddd', async (send) => {
       const evaluated = await send('Runtime.evaluate', {
-        expression: `fetch('/v/verify/top5.json').then(async (response) => ({ status: response.status, text: await response.text() }))`,
+        expression: `fetch(${JSON.stringify(bodyPath)}).then(async (response) => ({ status: response.status, text: await response.text() }))`,
         awaitPromise: true,
         returnByValue: true,
       });
@@ -410,7 +463,7 @@ test('fresh Chrome profile sends the fixture cookie', { timeout: 60000 }, async 
     assert.match(seen.text, /2026-10-07T12:20:00Z/);
     assert.doesNotMatch(seen.text, new RegExp(HOME_REEF));
   } finally {
-    for (const dir of published) rmSync(dir, { recursive: true, force: true });
+    for (const dir of published) discardDriveFixtures(dir);
     await harness.stop();
   }
 });
@@ -422,12 +475,9 @@ test('webkit device context sends the fixture cookie', { timeout: 60000 }, async
   try {
     const copy = publishDriveFixtures(join(harness.home, 'fixtures'), Date.parse('2026-10-07T12:00:00.000Z'), Date.parse('2026-10-07T13:00:00.000Z'));
     published.push(copy.dir);
-    const registered = await fetch(`${harness.url}/api/verify/fixtures`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: 'eeeeeeeeeeeeeeee', dir: copy.dir, pid: process.pid }),
-    });
+    const registered = await registerFixture(harness, 'eeeeeeeeeeeeeeee', copy.dir, process.pid);
     assert.equal(registered.status, 200);
+    const bodyPath = fixtureBodyPath(copy.dir, 'top5.json');
     const spec = WEBKIT_DEVICES.find((entry) => entry.slug === 'iphone-13');
     browser = await launchWebkit();
     const context = await createDeviceContext(browser, deviceDescriptor(spec), {
@@ -436,10 +486,10 @@ test('webkit device context sends the fixture cookie', { timeout: 60000 }, async
     });
     const page = await context.newPage();
     await page.goto(`${harness.url}/?e2e`, { waitUntil: 'domcontentloaded' });
-    const seen = await page.evaluate(async () => {
-      const response = await fetch('/v/verify/top5.json');
+    const seen = await page.evaluate(async (path) => {
+      const response = await fetch(path);
       return { status: response.status, text: await response.text() };
-    });
+    }, bodyPath);
     assert.equal(seen.status, 200);
     assert.match(seen.text, /2026-10-07T12:20:00Z/);
     assert.doesNotMatch(seen.text, new RegExp(HOME_REEF));
@@ -450,7 +500,92 @@ test('webkit device context sends the fixture cookie', { timeout: 60000 }, async
     assert.deepEqual(box, { width: 390, height: 664 });
   } finally {
     if (browser) await browser.close();
-    for (const dir of published) rmSync(dir, { recursive: true, force: true });
+    for (const dir of published) discardDriveFixtures(dir);
+    await harness.stop();
+  }
+});
+
+test('registry calls need the home secret and the registration secret', { timeout: 20000 }, async () => {
+  const harness = await startHarness();
+  const published = [];
+  try {
+    const wall = Date.parse('2026-10-07T13:00:00.000Z');
+    const first = publishDriveFixtures(join(harness.home, 'fixtures'), Date.parse('2026-10-07T12:00:00.000Z'), wall);
+    const second = publishDriveFixtures(join(harness.home, 'fixtures'), Date.parse('2026-10-07T13:00:00.000Z'), wall);
+    published.push(first.dir, second.dir);
+    const openList = await fetch(`${harness.url}/api/verify/fixtures`);
+    assert.equal(openList.status, 401);
+    assert.doesNotMatch(await openList.text(), /aaaaaaaaaaaaaaaa/);
+    const openWrite = await fetch(`${harness.url}/api/verify/fixtures`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'aaaaaaaaaaaaaaaa', dir: first.dir, pid: process.pid }),
+    });
+    assert.equal(openWrite.status, 401);
+    const registered = await registerFixture(harness, 'aaaaaaaaaaaaaaaa', first.dir, process.pid);
+    assert.equal(registered.status, 200);
+    assert.match(registered.body.secret, /^[a-f0-9]{32}$/);
+    const leaked = await fetch(`${harness.url}/api/verify/fixtures`);
+    assert.equal(leaked.status, 401);
+    assert.doesNotMatch(await leaked.text(), /aaaaaaaaaaaaaaaa/);
+    const listed = await registrations(harness);
+    assert.equal(listed.count, 1);
+    assert.equal(listed.entries[0].secret, undefined);
+    assert.equal(listed.entries[0].dir, first.dir);
+    const forgotten = await fetch(`${harness.url}/api/verify/fixtures`, {
+      method: 'POST',
+      headers: registryHeaders(harness),
+      body: JSON.stringify({ token: 'aaaaaaaaaaaaaaaa', forget: true }),
+    });
+    assert.equal(forgotten.status, 403);
+    const rebound = await fetch(`${harness.url}/api/verify/fixtures`, {
+      method: 'POST',
+      headers: registryHeaders(harness),
+      body: JSON.stringify({ token: 'aaaaaaaaaaaaaaaa', dir: second.dir, pid: process.pid }),
+    });
+    assert.equal(rebound.status, 409);
+    const still = await registrations(harness);
+    assert.equal(still.entries[0].dir, first.dir);
+    const removed = await fetch(`${harness.url}/api/verify/fixtures`, {
+      method: 'POST',
+      headers: registryHeaders(harness),
+      body: JSON.stringify({ token: 'aaaaaaaaaaaaaaaa', secret: registered.body.secret, forget: true }),
+    });
+    assert.equal(removed.status, 200);
+    assert.equal((await registrations(harness)).count, 0);
+  } finally {
+    for (const dir of published) discardDriveFixtures(dir);
+    await harness.stop();
+  }
+});
+
+test('a dead owner or a missing copy is swept without a fixture request', { timeout: 20000 }, async () => {
+  const harness = await startHarness();
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  sleeper.unref();
+  const published = [];
+  try {
+    const wall = Date.parse('2026-10-07T13:00:00.000Z');
+    const liveDir = publishDriveFixtures(join(harness.home, 'fixtures'), Date.parse('2026-10-07T12:00:00.000Z'), wall);
+    const deadDir = publishDriveFixtures(join(harness.home, 'fixtures'), Date.parse('2026-10-07T12:00:00.000Z'), wall);
+    published.push(liveDir.dir, deadDir.dir);
+    const live = await registerFixture(harness, 'aaaaaaaaaaaaaaaa', liveDir.dir, process.pid);
+    const dead = await registerFixture(harness, 'bbbbbbbbbbbbbbbb', deadDir.dir, sleeper.pid);
+    assert.equal(live.status, 200);
+    assert.equal(dead.status, 200);
+    discardDriveFixtures(liveDir.dir);
+    process.kill(sleeper.pid, 'SIGKILL');
+    const gone = await poll(async () => {
+      const body = await registrations(harness);
+      return body.count === 0 ? body : null;
+    }, 5000);
+    assert.ok(gone, 'abandoned registrations stayed listed');
+  } finally {
+    try { process.kill(sleeper.pid, 'SIGKILL'); } catch { /* already dead */ }
+    for (const dir of published) discardDriveFixtures(dir);
     await harness.stop();
   }
 });

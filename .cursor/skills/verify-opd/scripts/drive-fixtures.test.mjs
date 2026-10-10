@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { publishDriveFixtures } from './fixtures.mjs';
+import { discardDriveFixtures, publishDriveFixtures, stampEventTimes } from './fixtures.mjs';
 
 function writeSharedFixtures(dir) {
   const pass = [{ target_id: 'verify-reef', target_name: 'Verify Reef', closest_approach: '2000-01-01T00:00:00Z' }];
@@ -39,6 +39,25 @@ test('two drives stamp private fixture copies', async () => {
     assert.notEqual(first.dir, second.dir);
   } finally {
     rmSync(source, { recursive: true, force: true });
-    for (const dir of published) rmSync(dir, { recursive: true, force: true });
+    for (const dir of published) discardDriveFixtures(dir);
+  }
+});
+
+test('a private copy follows a generation symlink', () => {
+  const source = mkdtempSync(join(tmpdir(), 'opd-drive-source-'));
+  writeSharedFixtures(source);
+  const wall = Date.parse('2026-10-07T13:00:00.000Z');
+  stampEventTimes(source, Date.parse('2026-10-07T12:00:00.000Z'), wall);
+  assert.equal(lstatSync(source).isSymbolicLink(), true);
+  const sourceRoot = realpathSync(source);
+  const copy = publishDriveFixtures(source, Date.parse('2026-10-07T13:00:00.000Z'), wall);
+  try {
+    assert.equal(reef(source), '2026-10-07T12:20:00Z');
+    assert.equal(reef(copy.dir), '2026-10-07T13:20:00Z');
+    assert.notEqual(realpathSync(copy.dir), sourceRoot);
+    assert.equal(lstatSync(copy.dir).isSymbolicLink(), true);
+  } finally {
+    discardDriveFixtures(copy.dir);
+    discardDriveFixtures(source);
   }
 });

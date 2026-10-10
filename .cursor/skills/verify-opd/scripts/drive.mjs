@@ -4,10 +4,32 @@ import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
 import { createDeviceContext, pinFixtureCookie } from './fixture-session.mjs';
-import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
+import { proveLaunchPlacement } from './placement-proof.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
+
+const browserPids = new Set();
+let browsersStopped = false;
+
+export function trackBrowser(pid) {
+  if (!pid || browsersStopped) return pid;
+  browserPids.add(pid);
+  return pid;
+}
+
+export function untrackBrowser(pid) {
+  browserPids.delete(pid);
+}
+
+export function stopBrowsers() {
+  browsersStopped = true;
+  for (const pid of browserPids) {
+    try { process.kill(-pid, 'SIGTERM'); } catch { /* not a process group */ }
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+}
 
 const DESKTOP = { width: 1400, height: 900, mobile: false };
 const ISS_LENS_FOV_DEG = 81.2;
@@ -382,6 +404,7 @@ export async function freshProfile(baseUrl, home, fixtureToken, run) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  trackBrowser(child.pid);
   try {
     const cdp = await connectCdp(debugPort);
     try {
@@ -409,6 +432,7 @@ export async function freshProfile(baseUrl, home, fixtureToken, run) {
     } catch {
       /* guest already exited */
     }
+    untrackBrowser(child.pid);
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await sleep(150);
       try {
@@ -536,6 +560,11 @@ export function startChrome(home, debugPort) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  if (browsersStopped) {
+    try { process.kill(child.pid, 'SIGTERM'); } catch { /* shutting down */ }
+    throw new Error('drive is shutting down');
+  }
+  trackBrowser(child.pid);
   return child.pid;
 }
 
@@ -544,8 +573,8 @@ const LOG_HOOK = `window.__opdLogs = [];
   const original = console.error;
   console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
 
-function slideLaunch(fixtureDir) {
-  return refreshLaunchClock(fixtureDir);
+function slideLaunch(dir) {
+  return refreshLaunchClock(dir, effectiveNowMs(dir));
 }
 
 async function resetFixtureProfile(baseUrl) {
@@ -557,19 +586,18 @@ async function resetFixtureProfile(baseUrl) {
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
 }
 
-function pageClockSource(startMs) {
+function pageClockSource(startOffset) {
   return `(() => {
-    const start = ${Number(startMs)};
+    const startOffset = ${Number(startOffset)};
     const real = Date.now.bind(Date);
-    const skew = start - real();
-    Date.now = () => real() + skew;
+    Date.now = () => real() + startOffset;
   })();`;
 }
 
-async function openApp(send, baseUrl, pageNowMs) {
+async function openApp(send, baseUrl, startOffset) {
   await send('Page.enable');
-  if (Number.isFinite(pageNowMs)) {
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: pageClockSource(pageNowMs) });
+  if (Number.isFinite(startOffset)) {
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: pageClockSource(startOffset) });
   }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: LOG_HOOK });
   await send('Page.navigate', { url: `${baseUrl}/?e2e` });
@@ -609,7 +637,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   return notes;
 }
 
-async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }) {
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
   slideLaunch(fixtureDir);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
@@ -630,7 +658,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
       await cdp.send('Network.enable');
       await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
-      await openApp(cdp.send, baseUrl, pageNowMs);
+      await openApp(cdp.send, baseUrl, startOffset);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
@@ -641,14 +669,17 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
 }
 
-async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }) {
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
+    const webkitPid = browser.process()?.pid;
+    if (webkitPid) trackBrowser(webkitPid);
     try {
       const override = viewportOverride();
       const active = specForSurface(spec);
@@ -659,7 +690,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
       slideLaunch(fixtureDir);
       await resetFixtureProfile(baseUrl);
       const context = await createDeviceContext(browser, deviceDescriptor(active), { baseUrl, token: fixtureToken });
-      if (Number.isFinite(pageNowMs)) await context.addInitScript({ content: pageClockSource(pageNowMs) });
+      if (Number.isFinite(startOffset)) await context.addInitScript({ content: pageClockSource(startOffset) });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -674,7 +705,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
         const send = playwrightSend(page);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
-        await openApp(send, baseUrl, pageNowMs);
+        await openApp(send, baseUrl, startOffset);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport, fixtureToken);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
@@ -683,20 +714,21 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
       notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir, fixtureToken)}`);
     } finally {
       await browser.close();
+      if (webkitPid) untrackBrowser(webkitPid);
     }
   }
   return notes;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features, fixtureDir, fixtureToken, pageNowMs }) {
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features, fixtureDir, fixtureToken, startOffset }) {
   viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }));
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
   if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
-    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, pageNowMs }));
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
   }
   return notes;
 }
@@ -739,7 +771,7 @@ const CORNER_BOX = `
   };
 `;
 
-export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken, pageNowMs }) {
+export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken, startOffset }) {
   mkdirSync(evidenceDir, { recursive: true });
   slideLaunch(fixtureDir);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
@@ -753,7 +785,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, f
     try {
       await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
       await pinFixtureCookie(send, baseUrl, fixtureToken);
-      await openApp(send, baseUrl, pageNowMs);
+      await openApp(send, baseUrl, startOffset);
       const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
       if (!shown) {
         await click(send, '#map-chrome-toggle');
@@ -916,6 +948,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, f
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
   writeFileSync(resolve(evidenceDir, 'map-corner.txt'), `${lines.join('\n')}\n`);
   for (const line of lines) console.log(line);
@@ -3857,6 +3890,9 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
     10000,
   );
   const launchLook = await proveIssLaunchLook(send, evidenceDir, baseUrl);
+  const placement = viewport.width === 390 || viewport.width === 402
+    ? await proveLaunchPlacement(baseUrl, evidenceDir, viewport.width)
+    : '';
   await click(send, '[data-iss-preset="horizon"]');
   await waitFor(
     send,
@@ -3933,7 +3969,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
   const towns = await proveIssTownRetry(send, evidenceDir, viewport);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), ${placement ? `placement ${placement}, ` : ''}fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
 }
 
 async function proveIssTownRetry(send, evidenceDir, viewport) {
@@ -4736,14 +4772,14 @@ export function launchEarthPanes(width, height) {
       { ...native, place: 'over', minShort: 160 },
       { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
       { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
-      { width: 390, height: 565, mobile: true, label: '390x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
+      { width: 390, height: 565, mobile: true, label: '390x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 402 && height === 874) {
     return [
       { ...native, place: 'below', minShort: 200 },
       { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
-      { width: 402, height: 565, mobile: true, label: '402x565', place: 'over', minShort: 200, twoLine: true, sceneBox: true },
+      { width: 402, height: 565, mobile: true, label: '402x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 874 && height === 402) {
@@ -4855,11 +4891,13 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
           if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scene: scene ? [scene.clientWidth, scene.clientHeight] : null };
           const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
           if (!earth || earth.ok !== true) return earth;
-          if (${JSON.stringify(pane.place)} && earth.place !== ${JSON.stringify(pane.place)}) {
+          const allowed = ${JSON.stringify(pane.places || (pane.place ? [pane.place] : []))};
+          if (allowed.length && !allowed.includes(earth.place)) {
             return { step: 'place', place: earth.place, width: earth.width, height: earth.height };
           }
-          if (Math.min(earth.width, earth.height) < ${pane.minShort}) {
-            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: ${pane.minShort} };
+          const shortFloor = earth.place === 'below' ? ${pane.belowMinShort ?? pane.minShort} : ${pane.minShort};
+          if (Math.min(earth.width, earth.height) < shortFloor) {
+            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: shortFloor };
           }
           if (${pane.twoLine ? 'true' : 'false'}) {
             const name = document.querySelector('[data-iss-launch-name]');

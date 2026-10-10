@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
-import { bostonTrackText, buildFixtures, driveStartMs, FIXTURE_COOKIE, publishDriveFixtures } from './fixtures.mjs';
+import { BROWSER_FEATURES, driveFeatures, driveMapCorner, stopBrowsers } from './drive.mjs';
+import { bostonTrackText, bodyForRequestPath, buildFixtures, discardDriveFixtures, driveStartMs, effectiveNowMs, FIXTURE_COOKIE, publishDriveFixtures, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -215,6 +215,10 @@ function sendJson(res, text) {
 
 function startProxy(home) {
   const state = readState(home);
+  if (!state.registrySecret) {
+    state.registrySecret = randomBytes(16).toString('hex');
+    writeState(state);
+  }
   const homeFixtures = resolve(home, 'fixtures');
   const meta = JSON.parse(readFileSync(resolve(homeFixtures, 'meta.json'), 'utf8'));
   const driveFixtures = new Map();
@@ -258,6 +262,15 @@ function startProxy(home) {
     try {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
+    function registryAuthorized(req) {
+      const header = req.headers['x-opd-verify-registry'];
+      const presented = Array.isArray(header) ? header[0] : (header || '');
+      return presented.length > 0 && presented === state.registrySecret;
+    }
+    if (path === '/api/verify/fixtures' && (req.method === 'GET' || req.method === 'POST') && !registryAuthorized(req)) {
+      json(res, 401, { ok: false });
+      return;
+    }
     if (path === '/api/verify/fixtures' && req.method === 'GET') {
       const entries = [...driveFixtures.entries()].map(([token, entry]) => ({
         token,
@@ -274,9 +287,18 @@ function startProxy(home) {
         json(res, 400, { ok: false });
         return;
       }
+      const existing = driveFixtures.get(token);
       if (body.forget === true) {
+        if (existing && body.secret !== existing.secret) {
+          json(res, 403, { ok: false });
+          return;
+        }
         driveFixtures.delete(token);
         json(res, 200, { ok: true, count: driveFixtures.size });
+        return;
+      }
+      if (existing && body.secret !== existing.secret) {
+        json(res, 409, { ok: false });
         return;
       }
       const dir = typeof body.dir === 'string' ? resolve(body.dir) : '';
@@ -290,8 +312,9 @@ function startProxy(home) {
         json(res, 400, { ok: false });
         return;
       }
-      driveFixtures.set(token, { dir, pid });
-      json(res, 200, { ok: true });
+      const secret = existing ? existing.secret : randomBytes(16).toString('hex');
+      driveFixtures.set(token, { dir, pid, secret });
+      json(res, 200, { ok: true, secret });
       return;
     }
     const token = cookieValue(req, FIXTURE_COOKIE);
@@ -386,17 +409,21 @@ function startProxy(home) {
       res.end(body);
       return;
     }
-    const artifact = {
-      '/v/verify/passes.json': 'passes.json',
-      '/v/verify/top5.json': 'top5.json',
-      '/v/verify/top_24h.json': 'top_24h.json',
-      '/v/verify/track.json': 'track.json',
-      '/v/verify/status.json': 'status.json',
-      '/v/verify/targets.json': 'targets.json',
-      '/v/verify/cupola_windows.json': 'cupola_windows.json',
-      '/v/verify/tracked.json': 'tracked.json',
-    }[path];
-    if (artifact) return sendFile(artifact);
+    const hashed = bodyForRequestPath(fixtureDir, path);
+    if (hashed) {
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': hashed.length,
+      });
+      res.end(hashed);
+      return;
+    }
+    if (/^\/v\/verify\/[a-f0-9]{64}\/[^/]+$/.test(path)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
+      return;
+    }
     if (path === '/launch/latest.json') {
       const rung = cookieValue(req, 'opd-verify-launch');
       const published = launchRung(fixtureDir, rung);
@@ -543,6 +570,12 @@ function startProxy(home) {
       }
     }
   });
+  const sweep = setInterval(() => {
+    for (const [token, entry] of driveFixtures) {
+      if (!entry.dir || !existsSync(entry.dir) || !alive(entry.pid)) driveFixtures.delete(token);
+    }
+  }, 200);
+  sweep.unref();
   server.listen(state.port, '127.0.0.1');
   console.log(`proxy listening ${state.port}`);
 }
@@ -583,7 +616,8 @@ async function doctor(home = homeDir()) {
         const manifestResponse = await fetch(`http://127.0.0.1:${state.port}/manifest.json`);
         const manifest = await manifestResponse.json();
         if (!manifest.version || !manifest.generated_at) problems.push('manifest missing version');
-        if (Date.parse(state.launchValidUntil) <= Date.now()) problems.push('launch fixture expired. Run down, then up.');
+        const fixtureNow = effectiveNowMs(resolve(home, 'fixtures'));
+        if (Date.parse(state.launchValidUntil) <= fixtureNow) problems.push('launch fixture expired. Run down, then up.');
       } catch (error) {
         problems.push(error instanceof Error ? error.message : String(error));
       }
@@ -643,6 +677,7 @@ async function up() {
     manifestVersion: built.manifest.version,
     launchValidUntil: built.meta.launchValidUntil,
     tleSource: built.meta.tleSource,
+    registrySecret: randomBytes(16).toString('hex'),
   };
   writeState(state);
   state.proxyPid = spawnDetached(process.execPath, [fileURLToPath(import.meta.url), 'serve'], repoRoot, resolve(home, 'proxy.log'));
@@ -686,50 +721,68 @@ async function drive(feature) {
   const eventStart = driveStartMs(process.env.OPD_VERIFY_DRIVE_START, wall);
   const home = homeDir();
   const published = publishDriveFixtures(resolve(home, 'fixtures'), eventStart, wall);
+  const fixtureDir = published.dir;
+  stampEventTimes(fixtureDir, eventStart, wall);
+  const startOffset = readDriveClock(fixtureDir).startOffset;
+  refreshLaunchClock(fixtureDir, effectiveNowMs(fixtureDir));
   const token = randomBytes(8).toString('hex');
-  let released = false;
-  const release = async () => {
-    if (released) return;
-    released = true;
-    rmSync(published.dir, { recursive: true, force: true });
-    const current = readState(home);
-    if (current?.url) {
-      try {
-        await fetch(`${current.url}/api/verify/fixtures`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ token, forget: true }),
-          signal: AbortSignal.timeout(2000),
-        });
-      } catch {
-        /* the proxy is already gone */
-      }
+  let releasePromise = null;
+  const release = () => {
+    if (!releasePromise) {
+      releasePromise = (async () => {
+        stopBrowsers();
+        discardDriveFixtures(fixtureDir);
+        const current = readState(home);
+        if (current?.url && current.registrySecret) {
+          try {
+            await fetch(`${current.url}/api/verify/fixtures`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-opd-verify-registry': current.registrySecret,
+              },
+              body: JSON.stringify({ token, secret: leaseSecret, forget: true }),
+              signal: AbortSignal.timeout(2000),
+            });
+          } catch {
+            /* the proxy is already gone */
+          }
+        }
+      })();
     }
+    return releasePromise;
   };
+  let leaseSecret = '';
   const stop = (code) => {
     process.exitCode = code;
+    stopBrowsers();
     release().finally(() => process.exit(code));
   };
   process.once('SIGINT', () => stop(130));
   process.once('SIGTERM', () => stop(143));
+  process.once('SIGHUP', () => stop(129));
   try {
     await doctor(home);
     const state = readState(home);
     const registered = await fetch(`${state.url}/api/verify/fixtures`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token, dir: published.dir, pid: process.pid }),
+      headers: {
+        'content-type': 'application/json',
+        'x-opd-verify-registry': state.registrySecret,
+      },
+      body: JSON.stringify({ token, dir: fixtureDir, pid: process.pid }),
     });
     if (!registered.ok) throw new Error(`fixture register ${registered.status}`);
+    leaseSecret = (await registered.json()).secret;
     if (feature === 'map-corner') {
       try {
         const note = await driveMapCorner({
           baseUrl: state.url,
           evidenceDir: state.evidence,
           home,
-          fixtureDir: published.dir,
+          fixtureDir,
           fixtureToken: token,
-          pageNowMs: eventStart,
+          startOffset,
         });
         console.log(note);
         console.log(`evidence ${state.evidence}`);
@@ -739,7 +792,7 @@ async function drive(feature) {
       }
       return;
     }
-    const meta = JSON.parse(readFileSync(resolve(published.dir, 'meta.json'), 'utf8'));
+    const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
     const features = feature === 'all' ? ['all'] : [feature];
     if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
       console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, or map-corner.`);
@@ -751,9 +804,9 @@ async function drive(feature) {
       evidenceDir: state.evidence,
       meta,
       features,
-      fixtureDir: published.dir,
+      fixtureDir,
       fixtureToken: token,
-      pageNowMs: eventStart,
+      startOffset,
     });
     for (const note of notes) console.log(note);
     console.log(`evidence ${state.evidence}`);
