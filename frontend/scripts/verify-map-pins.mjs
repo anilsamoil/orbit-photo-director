@@ -21,6 +21,7 @@ const LABELS = 'src/map/features/labels/index.ts';
 const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
 const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
 const GROUND_TRACK = 'src/map/features/ground-track/layers.ts';
+const LAUNCH_CORRIDOR = 'src/map/features/launch-corridor/geometry.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -37,6 +38,7 @@ const PIN_FILES = [
   'test/map-ground-track-contract.test.ts',
   'src/map/features/tracked/tracked.test.ts',
   'src/map/features/targets/targets.test.ts',
+  'src/map/features/launch-corridor/launch-corridor.test.ts',
 ];
 
 const MUTATIONS = [
@@ -153,6 +155,18 @@ const MUTATIONS = [
     file: TARGETS,
     find: '    const onEdit = props.is_personal && props.target_id && !isRosterProfile(parseProfileFromURL(window.location.href))',
     replace: '    const onEdit = props.is_personal && props.target_id',
+  },
+  {
+    contract: 'Watch is not a map pin',
+    file: LAUNCH_CORRIDOR,
+    find: '  const pins = tiers.pins;',
+    replace: '  const pins = [...tiers.pins, ...tiers.groups.watch];',
+  },
+  {
+    contract: 'a tier pin with no corridor draws no line',
+    file: LAUNCH_CORRIDOR,
+    find: '    if (pin.corridor) lines.push(...antimeridianSegments(pin.corridor.points, properties));',
+    replace: '    lines.push(...antimeridianSegments(pin.corridor ? pin.corridor.points : [pin.site, pin.site], properties));',
   },
 ];
 
