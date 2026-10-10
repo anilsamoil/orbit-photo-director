@@ -87,7 +87,166 @@ function syncMapInspector(map: maplibregl.Map): void {
   const open = slot.querySelector('.maplibregl-popup') !== null;
   pane.classList.toggle('map-inspector-open', open);
   slot.hidden = !open;
+  if (open) boundMapInspector(map);
   requestAnimationFrame(() => map.resize());
+}
+
+const INSPECTOR_CHROME = '.map-toolbar, .map-control-dock, .map-controls-time, #map-legend-toggle, #map-legend-panel, .maplibregl-ctrl-group, #map-chrome-toggle, #satellite-picker-panel, #map-launch-coverage';
+const INSPECTOR_BANNERS = '#status-banner, #shotlist-bar';
+
+type InspectorRect = { left: number; top: number; right: number; bottom: number };
+
+function visibleInspectorRect(element: Element, clip: InspectorRect): InspectorRect | null {
+  const rect = element.getBoundingClientRect();
+  const result = {
+    left: Math.max(rect.left, clip.left), top: Math.max(rect.top, clip.top),
+    right: Math.min(rect.right, clip.right), bottom: Math.min(rect.bottom, clip.bottom),
+  };
+  for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+    const style = getComputedStyle(ancestor);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return null;
+    if (ancestor === element) continue;
+    const bounds = ancestor.getBoundingClientRect();
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+      result.left = Math.max(result.left, bounds.left);
+      result.right = Math.min(result.right, bounds.right);
+    }
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+      result.top = Math.max(result.top, bounds.top);
+      result.bottom = Math.min(result.bottom, bounds.bottom);
+    }
+  }
+  return result.right > result.left && result.bottom > result.top ? result : null;
+}
+
+/** Use painted chrome rectangles, including overflowing wrapped command children,
+ *  without writing any chrome styles or changing its stacking order. */
+function boundMapInspector(map: maplibregl.Map): void {
+  const slot = mapInspector(map);
+  const pane = slot?.closest('#map-pane');
+  if (!slot || !(pane instanceof HTMLElement) || slot.hidden) return;
+  const paneRect = pane.getBoundingClientRect();
+  const mapRect = map.getContainer().getBoundingClientRect();
+  const gap = 8;
+  const bounds = {
+    left: Math.max(paneRect.left, mapRect.left, 0) + gap,
+    top: Math.max(paneRect.top, mapRect.top, 0) + gap,
+    right: Math.min(paneRect.right, mapRect.right, window.innerWidth) - gap,
+    bottom: Math.min(paneRect.bottom, mapRect.bottom, window.innerHeight) - gap,
+  };
+  if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
+  const chrome = [...pane.querySelectorAll(INSPECTOR_CHROME), ...document.querySelectorAll(INSPECTOR_BANNERS)];
+  const elements = new Set(chrome.flatMap((element) => [element, ...element.querySelectorAll('button, input, select, a')]));
+  const obstacles = [...elements].flatMap((element) => {
+    const rect = visibleInspectorRect(element, bounds);
+    return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
+  });
+  const narrow = paneRect.width < 900;
+  const preferredWidth = narrow ? bounds.right - bounds.left : 320;
+  const preferredHeight = narrow ? (paneRect.height <= 520 ? 120 : 260) : bounds.bottom - bounds.top;
+  const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
+  const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
+  let best: (InspectorRect & { score: number }) | null = null;
+  for (const left of lefts) for (const right of rights) {
+    const width = Math.min(preferredWidth, right - left);
+    if (width <= 0) continue;
+    const x = right - width;
+    const blocked = obstacles.filter((rect) => rect.left < right && rect.right > x)
+      .sort((a, b) => a.top - b.top);
+    let top = bounds.top;
+    for (const obstacle of [...blocked, { top: bounds.bottom, bottom: bounds.bottom }]) {
+      const bottom = Math.min(bounds.bottom, obstacle.top);
+      const height = Math.min(preferredHeight, bottom - top);
+      if (height > 0) {
+        const usable = width >= Math.min(240, preferredWidth) && height >= Math.min(96, preferredHeight);
+        const score = (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0) + width * Math.min(height, narrow ? preferredHeight : 600)
+          + right / 1e4 + (narrow ? bottom : -top) / 1e6;
+        if (!best || score > best.score) best = {
+          left: x, right, top: narrow ? bottom - height : top,
+          bottom: narrow ? bottom : top + height, score,
+        };
+      }
+      top = Math.max(top, obstacle.bottom);
+    }
+  }
+  best ??= { left: bounds.left, right: bounds.left, top: bounds.top, bottom: bounds.top, score: 0 };
+  const layout = {
+    left: best.left - paneRect.left, top: best.top - paneRect.top,
+    width: best.right - best.left, height: best.bottom - best.top,
+  };
+  for (const [property, value] of Object.entries(layout)) {
+    const pixels = `${value}px`;
+    if (slot.style.getPropertyValue(property) !== pixels) slot.style.setProperty(property, pixels);
+  }
+}
+
+/** Observe only while a popup is open. Inspector writes and map animation do not
+ *  feed back into the observer, and layout updates never resize the map. */
+function inspectorSync(map: maplibregl.Map): () => void {
+  let resizeObserver: ResizeObserver | null = null;
+  let mutationObserver: MutationObserver | null = null;
+  let observed = new Set<Element>();
+  let pending = false;
+  let watching = false;
+  const observeSizes = (): void => {
+    const pane = mapInspector(map)?.closest('#map-pane');
+    if (!pane || !resizeObserver) return;
+    const next = new Set([pane, map.getContainer(), ...pane.querySelectorAll(INSPECTOR_CHROME), ...document.querySelectorAll(INSPECTOR_BANNERS),
+      ...pane.querySelectorAll('.map-controls-time > *')]);
+    for (const element of observed) if (!next.has(element)) resizeObserver.unobserve(element);
+    for (const element of next) if (!observed.has(element)) resizeObserver.observe(element);
+    observed = next;
+  };
+  const schedule = (): void => {
+    if (pending || !watching) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      if (!watching) return;
+      observeSizes();
+      boundMapInspector(map);
+    });
+  };
+  return () => {
+    syncMapInspector(map);
+    const slot = mapInspector(map);
+    const pane = slot?.closest('#map-pane');
+    if (!slot || !pane) return;
+    if (slot.hidden) {
+      watching = false;
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+      resizeObserver = null;
+      mutationObserver = null;
+      observed.clear();
+      window.removeEventListener('resize', schedule);
+      return;
+    }
+    if (watching) return;
+    watching = true;
+    if (typeof ResizeObserver !== 'undefined') resizeObserver = new ResizeObserver(schedule);
+    if (typeof MutationObserver !== 'undefined') {
+      mutationObserver = new MutationObserver((records) => {
+        if (records.some(({ target }) => {
+          const element = target instanceof Element ? target : target.parentElement;
+          return element && !slot.contains(element) && !element.matches('.maplibregl-ctrl-compass .maplibregl-ctrl-icon')
+            && (element === pane || element === document.body || element === pane.parentElement
+              || element.closest(INSPECTOR_CHROME) || element.closest(INSPECTOR_BANNERS)
+              || element === document.documentElement);
+        })) schedule();
+      });
+      mutationObserver.observe(pane, { attributes: true, childList: true, subtree: true, characterData: true });
+      mutationObserver.observe(document.body, { attributes: true, childList: true });
+      mutationObserver.observe(document.documentElement, { attributes: true });
+      for (const banner of document.querySelectorAll(INSPECTOR_BANNERS)) {
+        mutationObserver.observe(banner, { attributes: true, childList: true, subtree: true, characterData: true });
+      }
+      if (pane.parentElement) mutationObserver.observe(pane.parentElement, { attributes: true });
+    }
+    observeSizes();
+    window.addEventListener('resize', schedule);
+    schedule();
+  };
 }
 
 function exposeForEndToEnd(map: maplibregl.Map): void {
@@ -105,6 +264,7 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
   map.addControl(new maplibregl.NavigationControl(), 'top-left');
   collapseAttribution(options.container);
   exposeForEndToEnd(map);
+  const syncInspector = inspectorSync(map);
 
   return {
     whenLoaded: () => new Promise<void>((resolve) => map.once('load', () => resolve())),
@@ -186,10 +346,10 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
         .setDOMContent(content)
         .addTo(map);
       const release = () => {
-        syncMapInspector(map);
+        syncInspector();
       };
       popup.on('close', release);
-      syncMapInspector(map);
+      syncInspector();
       if (inspector) {
         const element = popup.getElement();
         element.querySelector<HTMLElement>('.maplibregl-popup-close-button')?.focus({ preventScroll: true });

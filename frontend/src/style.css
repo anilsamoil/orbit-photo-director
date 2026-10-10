@@ -4503,18 +4503,16 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 #map-pane.map-inspector-open {
   --map-inspector-inline: 0px;
   --map-inspector-block: 0px;
-  --map-inspector-bottom: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + 8px));
 }
 
 #map-pane.map-inspector-open .map-inspector {
   display: block;
   position: absolute;
-  top: var(--topbar-height);
-  right: 0;
-  bottom: var(--map-inspector-bottom);
-  width: 320px;
+  right: auto;
+  bottom: auto;
   z-index: 21;
   background: transparent;
+  overflow: hidden;
   pointer-events: none;
 }
 
@@ -4563,6 +4561,28 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 .dropped-pin-popup > strong {
   display: block;
   padding-right: 28px;
+}
+
+.map-inspector .dropped-pin-popup {
+  container-type: inline-size;
+}
+
+@container (max-width: 260px) {
+  .dropped-pin-popup .pin-pass-row {
+    grid-template-columns: minmax(0, 1fr) max-content !important;
+  }
+  .dropped-pin-popup .pin-pass-row > :nth-child(3) {
+    grid-column: 1;
+    grid-row: 2;
+    text-align: left !important;
+  }
+  .dropped-pin-popup .pin-pass-row > :nth-child(4) {
+    grid-row: 3 !important;
+  }
+  .dropped-pin-popup .pin-pass-row > :nth-child(5) {
+    grid-column: 2 !important;
+    grid-row: 2 !important;
+  }
 }
 
 .maplibregl-popup-content {
@@ -4718,20 +4738,12 @@ summary:focus-visible {
 
 @media (max-width: 899px) {
   #map-pane.map-inspector-open {
-    --map-inspector-inline: 0px;
-    /* 28px credit offset + 64px expanded band + 24px clearance, doubled so the map center stays above that strip. */
     --map-hit-min: calc(2 * (28px + 64px + 24px + env(safe-area-inset-bottom, 0px)));
     --map-inspector-block: min(40dvh, 260px, max(0px, calc(100dvh - var(--topbar-height) - var(--map-command-height) - var(--map-hit-min))));
   }
 
   #map-pane.map-inspector-open .map-inspector {
-    top: auto !important;
-    right: 0 !important;
-    left: 0 !important;
-    width: 100% !important;
-    max-width: none !important;
-    height: var(--map-inspector-block) !important;
-    bottom: var(--map-inspector-bottom) !important;
+    max-height: var(--map-inspector-block);
   }
 }
 

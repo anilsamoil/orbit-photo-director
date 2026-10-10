@@ -43,6 +43,7 @@ export function buildPassList(
     list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace';
     for (const p of section.passes) {
       const row = document.createElement('div');
+      row.className = 'pin-pass-row';
       row.style.cssText = 'display:grid;grid-template-columns:max-content max-content minmax(0,1fr) max-content;column-gap:8px;row-gap:2px;padding:6px 0;border-bottom:1px solid #2d3b47;align-items:baseline;white-space:nowrap';
       const rel = document.createElement('span');
       rel.style.fontWeight = '600';
