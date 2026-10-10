@@ -4047,6 +4047,90 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   overflow: hidden;
 }
 
+#view.view-iss:has([data-iss-side-dock='on']) {
+  display: flex;
+  flex-direction: column;
+}
+
+#view.view-iss:has([data-iss-side-dock='on']) #iss-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+[data-iss-side-dock='on'] {
+  overflow: hidden;
+  align-items: stretch;
+}
+
+[data-iss-side-dock='on'] [data-iss-view] {
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: flex-start;
+  min-height: 0;
+}
+
+[data-iss-side-dock='on'] [data-iss-stage] {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+[data-iss-side-dock='on'] [data-iss-side] {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: min(22rem, 40vw);
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  gap: 0.35rem;
+}
+
+[data-iss-side-dock='on'] [data-iss-side] [data-iss-launch-card] {
+  width: 100%;
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+
+[data-iss-side-dock='on'] [data-iss-side] [data-iss-edition] {
+  position: static;
+  top: auto;
+  left: auto;
+}
+
+[data-iss-side-dock='on'] [data-iss-side] > :not([data-iss-telemetry-body]) {
+  flex: 0 0 auto;
+}
+
+[data-iss-side-dock='on'] [data-iss-side] :is([data-iss-houston], [data-iss-day-month], [data-iss-weekday], [data-iss-edition]) {
+  pointer-events: none;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+[data-iss-side-dock='on'] [data-iss-side] [data-iss-telemetry-body] {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  width: 100%;
+  margin-top: 0;
+  max-height: none;
+}
+
+[data-iss-side-dock='on'] [data-iss-presets] {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+[data-iss-side-dock='on'] [data-iss-cupola] {
+  min-width: 44px;
+  max-width: 100%;
+  flex: 1 1 auto;
+}
+
 @media (max-width: 720px) {
   .view-iss #iss-pane {
     overflow: auto;
