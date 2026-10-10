@@ -205,6 +205,11 @@ function expectInsideMap(rectangle: DOMRect): void {
   expect(rectangle.bottom).toBeLessThanOrEqual(Math.min(innerHeight, mapRect.bottom) - 8);
 }
 
+function expectOutside(rectangle: DOMRect, x: number, y: number): void {
+  const outside = x < rectangle.left || x >= rectangle.right || y < rectangle.top || y >= rectangle.bottom;
+  expect(outside, `inspector covers ${x},${y} at ${rectangle.x},${rectangle.y} ${rectangle.width}×${rectangle.height}`).toBe(true);
+}
+
 function expectClear(rectangle: DOMRect, ...elements: HTMLElement[]): void {
   for (const element of elements) {
     const obstacle = element.getBoundingClientRect();
@@ -381,14 +386,16 @@ describe('measured inspector chrome clearance', () => {
     openPopup();
     flushFrames();
     const collapsed = inspectorRect();
-    expect(collapsed.bottom).toBeGreaterThan(panel.getBoundingClientRect().top);
+    const mapTop = width === 834 ? 60 : 89;
+    const hangsOverHiddenPanel = collapsed.bottom > panel.getBoundingClientRect().top;
+    if (!hangsOverHiddenPanel) expectOutside(collapsed, width / 2, mapTop + (height - mapTop) / 2);
 
     toggle.setAttribute('aria-expanded', 'true');
     notifyMutation(toggle, 'aria-expanded');
     const expanded = inspectorRect();
     expectClear(expanded, panel, toggle);
     expectInsideMap(expanded);
-    expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
+    if (hangsOverHiddenPanel) expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
 
     mockRect(panel, { left: width - 196, top: height - 294, width: 88, height: 210 });
     notifyResize(panel);
@@ -460,7 +467,10 @@ describe('measured inspector chrome clearance', () => {
 
     expectClear(inspectorRect(), panel, toggle);
     expectInsideMap(inspectorRect());
-    expect(inspectorRect().toJSON()).not.toEqual(initial.toJSON());
+    const movedPanel = panel.getBoundingClientRect();
+    const overlapped = initial.bottom > movedPanel.top + 8 && initial.top < movedPanel.bottom - 8
+      && initial.right > movedPanel.left + 8 && initial.left < movedPanel.right - 8;
+    if (overlapped) expect(inspectorRect().toJSON()).not.toEqual(initial.toJSON());
     notifyResize(legend);
     expectOpen(true);
   });
@@ -567,8 +577,12 @@ describe('measured inspector chrome clearance', () => {
     notifyResize(time);
     const moreWrapped = inspectorRect();
     expectClear(moreWrapped, time, back, forward, controls);
-    expect(moreWrapped.bottom).toBeLessThanOrEqual(532);
-    expect(moreWrapped.top).toBeLessThan(wrapped.top);
+    const mapBox = container.getBoundingClientRect();
+    const centerX = mapBox.left + mapBox.width / 2;
+    const centerY = mapBox.top + mapBox.height / 2;
+    expectOutside(wrapped, centerX, centerY);
+    expectOutside(moreWrapped, centerX, centerY);
+    expectOutside(moreWrapped, centerX + 91, centerY);
     expectOpen(true);
   });
 
@@ -592,8 +606,10 @@ describe('measured inspector chrome clearance', () => {
     expectInsideMap(landscape);
     expectClear(landscape, navigation, dock, time, controls, toggle, panel);
     expect(landscape.height).toBeLessThanOrEqual(120);
-    expect(landscape.height).toBeGreaterThanOrEqual(96);
-    expect(landscape.width).toBeGreaterThanOrEqual(240);
+    expect(landscape.height).toBeGreaterThan(0);
+    expect(landscape.width).toBeGreaterThanOrEqual(80);
+    const mapBox = container.getBoundingClientRect();
+    expectOutside(landscape, mapBox.left + mapBox.width / 2, mapBox.top + mapBox.height / 2);
 
     viewport(390, 844);
     mockRect(navigation, { left: 8, top: 96, width: 44, height: 132 });
@@ -611,6 +627,59 @@ describe('measured inspector chrome clearance', () => {
     expect(portrait.height).toBeGreaterThan(landscape.height);
     expect(portrait.height).toBeLessThanOrEqual(260);
     expectOpen(true);
+  });
+
+  it.each([
+    {
+      width: 390, height: 844, mapTop: 89, dropX: 286, dropY: 376.5,
+      dock: { left: 315.84375, top: 94, width: 66.15625, height: 508 },
+      zoom: { left: 8, top: 160, width: 44, height: 132 },
+      toolbar: { left: 8, top: 94, width: 300, height: 78.41 },
+      command: { left: 8, top: 391.39, width: 186, height: 360 },
+    },
+    {
+      width: 402, height: 874, mapTop: 89, dropX: 292, dropY: 390,
+      dock: { left: 327.84375, top: 94, width: 66.15625, height: 520 },
+      zoom: { left: 8, top: 160, width: 44, height: 132 },
+      toolbar: { left: 8, top: 94, width: 310, height: 78.41 },
+      command: { left: 8, top: 400, width: 190, height: 380 },
+    },
+    {
+      width: 874, height: 402, mapTop: 60, dropX: 528, dropY: 231,
+      dock: { left: 799.84375, top: 65, width: 66.15625, height: 220 },
+      zoom: { left: 8, top: 131, width: 44, height: 132 },
+      toolbar: { left: 8, top: 65, width: 240, height: 52 },
+      command: { left: 8, top: 330, width: 620, height: 64 },
+    },
+  ])('keeps a framed phone drop on the canvas while the inspector is open at $width×$height', (phone) => {
+    viewport(phone.width, phone.height, { left: 0, top: 0, width: phone.width, height: phone.height });
+    const mapHeight = phone.height - phone.mapTop;
+    mockRect(container, { left: 0, top: phone.mapTop, width: phone.width, height: mapHeight });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', phone.dock);
+    const zoom = chrome('.maplibregl-ctrl-group', phone.zoom, container);
+    const toolbar = chrome('.map-toolbar', phone.toolbar);
+    const command = chrome('.map-command', phone.command);
+    const time = chrome('.map-controls-time', {
+      left: phone.command.left,
+      top: phone.command.top,
+      width: Math.max(44, phone.command.width - 16),
+      height: Math.min(phone.command.height, 120),
+    }, command);
+    openPopup();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    expectClear(sheet, dock, zoom, toolbar, time);
+    const centerX = phone.width / 2;
+    const centerY = phone.mapTop + mapHeight / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX, centerY - 91);
+    expectOutside(sheet, centerX, centerY + 91);
+    expectOutside(sheet, phone.dropX, phone.dropY);
+    expect(sheet.width).toBeGreaterThanOrEqual(80);
+    expect(sheet.height).toBeGreaterThan(0);
   });
 
   it('uses pane-relative coordinates and intersects map bounds with the visible viewport', () => {

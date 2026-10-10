@@ -94,6 +94,9 @@ function syncMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
 const INSPECTOR_CHROME = '.map-toolbar, .map-control-dock, .map-controls-time, #map-legend-toggle, #map-legend-panel, .maplibregl-ctrl-group, #map-chrome-toggle, #satellite-picker-panel, #map-launch-coverage';
 const INSPECTOR_BANNERS = '#status-banner, #shotlist-bar';
 const INSPECTOR_SURFACES = `${INSPECTOR_CHROME}, ${INSPECTOR_BANNERS}`;
+/** Narrow maps keep this strip centered on the canvas so a framed drop stays on it.
+ *  232px is `--map-hit-min` with a 0px safe area. */
+const NARROW_HIT_BAND_PX = 232;
 
 type InspectorRect = { left: number; top: number; right: number; bottom: number };
 /** Preserve requested geometry alongside CSSOM's rounded pixel serialization. */
@@ -127,6 +130,14 @@ function visibleInspectorRect(element: Element, clip: InspectorRect): InspectorR
   return result.right > result.left && result.bottom > result.top ? result : null;
 }
 
+/** Full-width band around the map center. Callers inflate it by the chrome gap. */
+function narrowHitBand(mapRect: DOMRect): InspectorRect | null {
+  if (mapRect.width <= 0 || mapRect.height <= 0) return null;
+  const height = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
+  const top = mapRect.top + (mapRect.height - height) / 2;
+  return { left: mapRect.left, top, right: mapRect.right, bottom: top + height };
+}
+
 /** Use painted chrome rectangles, including overflowing wrapped command children,
  *  without writing any chrome styles or changing its stacking order. */
 function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
@@ -148,6 +159,10 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
   });
   const narrow = paneRect.width < 900;
+  if (narrow) {
+    const band = narrowHitBand(mapRect);
+    if (band) obstacles.push({ left: band.left - gap, top: band.top - gap, right: band.right + gap, bottom: band.bottom + gap });
+  }
   const preferredWidth = narrow ? bounds.right - bounds.left : 320;
   const preferredHeight = narrow ? (paneRect.height <= 520 ? 120 : 260) : bounds.bottom - bounds.top;
   const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
@@ -166,7 +181,7 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
       if (height > 0) {
         const usable = width >= Math.min(240, preferredWidth) && height >= Math.min(96, preferredHeight);
         const score = (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0) + width * Math.min(height, narrow ? preferredHeight : 600)
-          + right / 1e4 + (narrow ? bottom : -top) / 1e6;
+          + right / 1e4 + (narrow ? bottom * 1e3 : -top / 1e6);
         if (!best || score > best.score) best = {
           left: x, right, top: narrow ? bottom - height : top,
           bottom: narrow ? bottom : top + height, score,
