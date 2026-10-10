@@ -43,7 +43,7 @@ export function buildPassList(
     list.style.cssText = 'font:0.78rem/1.5 ui-monospace,Menlo,monospace';
     for (const p of section.passes) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:grid;grid-template-columns:55px 50px 55px minmax(0,1fr) 70px;gap:6px;padding:3px 0;border-bottom:1px solid #2d3b47;align-items:baseline';
+      row.style.cssText = 'display:grid;grid-template-columns:max-content max-content minmax(0,1fr) max-content;column-gap:8px;row-gap:2px;padding:6px 0;border-bottom:1px solid #2d3b47;align-items:baseline;white-space:nowrap';
       const rel = document.createElement('span');
       rel.style.fontWeight = '600';
       rel.textContent = formatRelative(p.closestApproachMs - nowMs);
@@ -53,9 +53,11 @@ export function buildPassList(
       nadir.style.textAlign = 'right';
       nadir.textContent = `${Math.round(p.nadirKm)} km`;
       const shoot = document.createElement('span');
-      shoot.style.cssText = 'font-size:0.72rem;color:#a7b6c4;min-width:0;overflow-wrap:anywhere';
+      shoot.style.cssText = 'grid-column:1/-1;grid-row:2;font-size:0.72rem;color:#a7b6c4;white-space:normal;overflow-wrap:normal';
       shoot.textContent = formatShootHint(p);
       const regime = document.createElement('span');
+      regime.style.gridColumn = '4';
+      regime.style.gridRow = '1';
       regime.style.textAlign = 'right';
       regime.style.color = regimeColor(p.regime);
       regime.textContent = regimeLabel(p.regime);

@@ -3193,7 +3193,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   font: inherit;
   cursor: pointer;
 }
-.pin-add-button:hover { background: #e6ecf3; }
+.pin-add-button:hover { background: var(--selected); color: var(--accent); }
 .pin-add-form { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .pin-add-name {
   flex: 1 1 100%;
@@ -4428,21 +4428,18 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   right: 0;
   bottom: var(--map-command-height);
   width: 320px;
-  z-index: 14;
+  z-index: 21;
   background: var(--surface);
   border-left: 1px solid var(--border);
   pointer-events: none;
 }
 
 #map-pane.map-inspector-open .maplibregl-popup {
-  position: fixed !important;
-  top: var(--topbar-height) !important;
-  right: 0 !important;
-  bottom: var(--map-command-height) !important;
-  left: auto !important;
+  position: absolute !important;
+  inset: 0 !important;
   transform: none !important;
-  width: 320px !important;
-  max-width: 320px !important;
+  width: 100% !important;
+  max-width: none !important;
   height: auto !important;
   z-index: 15;
   display: flex;
@@ -4457,6 +4454,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 
 #map-pane.map-inspector-open .maplibregl-popup-content {
   flex: 1 1 auto;
+  min-height: 0;
   max-height: none;
   overflow: auto;
   overscroll-behavior: contain;
@@ -4465,7 +4463,16 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   color: var(--text);
   border-radius: 0;
   box-shadow: none;
-  padding: 16px 16px 20px;
+  padding: 44px 16px calc(20px + var(--map-banner-clearance, 0px) + env(safe-area-inset-bottom, 0px));
+}
+
+#map-pane.map-inspector-open .maplibregl-popup-content:has(> .dropped-pin-popup) {
+  padding-top: 16px;
+}
+
+.dropped-pin-popup > strong {
+  display: block;
+  padding-right: 28px;
 }
 
 .maplibregl-popup-content {
@@ -4523,6 +4530,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   border-radius: var(--radius-control);
   background: var(--bg);
   color: var(--text);
+  min-width: 0;
 }
 
 .pin-add-save {
@@ -4630,8 +4638,7 @@ summary:focus-visible {
     bottom: calc(var(--map-command-height) + var(--map-inspector-block));
   }
 
-  #map-pane.map-inspector-open .map-inspector,
-  #map-pane.map-inspector-open .maplibregl-popup {
+  #map-pane.map-inspector-open .map-inspector {
     top: auto !important;
     right: 0 !important;
     left: 0 !important;

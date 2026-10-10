@@ -73,15 +73,20 @@ function toVendorSource(spec: SourceSpec): SourceSpecification {
   return spec;
 }
 
-/** Park an open popup in the reserved inspector and resize the map under it. */
+function mapInspector(map: maplibregl.Map): HTMLElement | null {
+  if (typeof map.getContainer !== 'function') return null;
+  return map.getContainer().closest('#map-pane')?.querySelector<HTMLElement>('#map-inspector') ?? null;
+}
+
+/** Park open popups outside the map's stacking context and reserve their space. */
 function syncMapInspector(map: maplibregl.Map): void {
-  if (typeof map.getContainer !== 'function') return;
-  const pane = map.getContainer().closest('#map-pane');
-  if (!(pane instanceof HTMLElement)) return;
-  const open = map.getContainer().querySelector('.maplibregl-popup') !== null;
+  const slot = mapInspector(map);
+  const pane = slot?.closest('#map-pane');
+  if (!slot || !(pane instanceof HTMLElement)) return;
+  for (const popup of map.getContainer().querySelectorAll('.maplibregl-popup')) slot.appendChild(popup);
+  const open = slot.querySelector('.maplibregl-popup') !== null;
   pane.classList.toggle('map-inspector-open', open);
-  const slot = document.getElementById('map-inspector');
-  if (slot) slot.hidden = !open;
+  slot.hidden = !open;
   requestAnimationFrame(() => map.resize());
 }
 
@@ -170,9 +175,11 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
       };
     },
     openPopup: ({ at, content, maxWidth, closeOnClick }): PopupHandle => {
+      const inspector = mapInspector(map);
       const popupOptions = {
         ...(maxWidth === undefined ? {} : { maxWidth }),
         ...(closeOnClick === undefined ? {} : { closeOnClick }),
+        ...(inspector ? { focusAfterOpen: false } : {}),
       };
       const popup = new maplibregl.Popup(Object.keys(popupOptions).length === 0 ? undefined : popupOptions)
         .setLngLat(at)
@@ -183,6 +190,12 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
       };
       popup.on('close', release);
       syncMapInspector(map);
+      if (inspector) {
+        const element = popup.getElement();
+        element.querySelector<HTMLElement>('.maplibregl-popup-close-button')?.focus({ preventScroll: true });
+        const scroller = element.querySelector<HTMLElement>('.maplibregl-popup-content');
+        if (scroller) scroller.scrollTop = 0;
+      }
       return {
         remove: () => {
           popup.remove();

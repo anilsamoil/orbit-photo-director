@@ -98,6 +98,75 @@ describe('sections', () => {
   });
 });
 
+describe('long-pressing the map', () => {
+  it('opens the pass list and target action after 500 ms, not after 499 ms', () => {
+    const { vendor } = mounted();
+    vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }] });
+    vi.advanceTimersByTime(499);
+    expect(pinSource(vendor)).toBeUndefined();
+    expect(vendor.popups).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
+    expect(pinSource(vendor)?.features).toHaveLength(1);
+    expect(headings(vendor)).toEqual(['ISS — next 5 passes']);
+    expect(openPopup(vendor)?.content.querySelector('.pin-add-button')?.textContent).toBe('➕ Add to my targets');
+    expect(openPopup(vendor)?.closeOnClick).toBe(false);
+  });
+
+  it('allows 8 px of drift while preserving the point where the finger landed', () => {
+    const { vendor } = mounted();
+    vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }] });
+    vi.advanceTimersByTime(200);
+    vendor.fire('touchmove', { touches: [{ x: 18, y: 10 }] });
+    vi.advanceTimersByTime(300);
+
+    expect(openPopup(vendor)?.at).toEqual([2, 49]);
+  });
+
+  it('cancels a hold after more than 8 px of movement, even if the finger returns', () => {
+    const { vendor } = mounted();
+    vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }] });
+    vi.advanceTimersByTime(200);
+    vendor.fire('touchmove', { touches: [{ x: 19, y: 10 }] });
+    vendor.fire('touchmove', { touches: [{ x: 10, y: 10 }] });
+    vi.advanceTimersByTime(500);
+
+    expect(pinSource(vendor)).toBeUndefined();
+    expect(vendor.popups).toHaveLength(0);
+  });
+
+  it('does not arm a hold that starts with two fingers', () => {
+    const { vendor } = mounted();
+    vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }, { x: 40, y: 40 }] });
+    vi.advanceTimersByTime(600);
+
+    expect(pinSource(vendor)).toBeUndefined();
+    expect(vendor.popups).toHaveLength(0);
+  });
+
+  it('cancels an armed hold when a second finger lands', () => {
+    const { vendor } = mounted();
+    vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }] });
+    vi.advanceTimersByTime(300);
+    vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }, { x: 40, y: 40 }] });
+    vi.advanceTimersByTime(600);
+
+    expect(pinSource(vendor)).toBeUndefined();
+    expect(vendor.popups).toHaveLength(0);
+  });
+
+  it('keeps a short tap from dropping a pin', () => {
+    const { vendor } = mounted();
+    vendor.fire('touchstart', { lngLat: PARIS.lngLat, touches: [{ x: 10, y: 10 }] });
+    vi.advanceTimersByTime(300);
+    vendor.fire('touchend', undefined);
+    vi.advanceTimersByTime(500);
+
+    expect(pinSource(vendor)).toBeUndefined();
+    expect(vendor.popups).toHaveLength(0);
+  });
+});
+
 describe('lifting the finger', () => {
   it('keeps the popup when the lift clicks the pin that press just dropped', () => {
     const { vendor } = mounted();
