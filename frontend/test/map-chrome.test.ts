@@ -44,4 +44,23 @@ describe('map chrome', () => {
     expect(button.textContent).toBe('Hide');
     expect(document.getElementById('map-pane')!.classList.contains('map-chrome-hidden')).toBe(false);
   });
+
+  it('leaves the dock scroll alone when the slots are unchanged', () => {
+    const button = mount();
+    const dock = document.createElement('div');
+    dock.className = 'map-control-dock';
+    document.getElementById('map-pane')!.appendChild(dock);
+    bindMapChrome();
+    dock.scrollLeft = 150;
+    const toggle = document.body.classList.toggle.bind(document.body.classList);
+    let writes = 0;
+    document.body.classList.toggle = ((name: string, force?: boolean) => {
+      writes += 1;
+      return toggle(name, force);
+    }) as typeof document.body.classList.toggle;
+    (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome?.();
+    expect(writes).toBe(0);
+    expect(dock.scrollLeft).toBe(150);
+    expect(button.textContent).toBe('Controls');
+  });
 });

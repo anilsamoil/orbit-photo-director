@@ -848,6 +848,9 @@ body.shotlist-bar-visible .help-fab { display: none; }
 body.shotlist-bar-visible main {
   padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
 }
+body.shotlist-bar-visible .view-map {
+  --map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px));
+}
 .shotlist-add { background: var(--accent); color: var(--bg); border: 0; }
 .shotlist-clear {
   background: transparent;
@@ -1081,7 +1084,7 @@ body:has(> #view.view-map) .tab { color: var(--text); }
 body:has(> #view.view-map) .tab.active { color: var(--accent); }
 body:has(> #view.view-map) > .banner {
   position: fixed;
-  bottom: 0;
+  bottom: env(safe-area-inset-bottom, 0px);
   left: 0;
   right: 0;
   z-index: 30;
@@ -1156,6 +1159,14 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   --map-corner-bottom: calc(36px + env(safe-area-inset-bottom, 0px));
   --map-legend-right: calc(var(--map-hide-right) + var(--map-hide-width) + var(--map-corner-gap));
   --map-corner-clear: calc(var(--map-legend-right) + var(--map-legend-width) + var(--map-corner-gap));
+  --map-zoom-clear: calc(8px + 44px + 16px);
+  --map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap)));
+  --map-legend-panel-bottom: max(calc(44px + 4px), calc(var(--map-command-height) - var(--map-corner-bottom) + 12px));
+  --map-shotlist-block: 0px;
+  --map-pane-budget: calc(100dvh - var(--map-shotlist-block));
+  --map-toolbar-block: 65px;
+  --map-toolbar-clear: calc(var(--topbar-height) + var(--map-toolbar-block));
+  --map-strip-anchor: calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap));
 }
 .view-map #map-pane {
   position: relative;
@@ -1280,11 +1291,11 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   flex: 0 0 auto;
   width: max-content;
   max-width: 76px;
-  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+  max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   overflow-y: auto;
 }
 .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-  max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+  max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
 }
 .view-map .map-control-dock > .map-controls {
   flex-direction: column;
@@ -1346,11 +1357,9 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   overscroll-behavior: contain;
   color: #f4f7fb;
 }
-/* Zoom stays under the toolbar. Credits own the strip above the status
- * line. Legend, imagery date, and help sit above that strip. */
 .view-map #map .maplibregl-ctrl-top-left {
   top: calc(var(--topbar-height) + 71px);
-  left: 8px;
+  left: calc(8px + env(safe-area-inset-left, 0px));
   right: auto;
   bottom: auto;
 }
@@ -1437,10 +1446,18 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   border-radius: 999px;
 }
 .view-map .map-legend-panel {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
+  position: absolute;
+  right: 0;
+  bottom: var(--map-legend-panel-bottom);
+  width: max-content;
+  min-width: 11rem;
+  max-width: min(11rem, calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
   box-sizing: border-box;
+  max-height: calc(100dvh - var(--topbar-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  touch-action: pan-y;
 }
 .view-map .map-legend-rows {
   flex-wrap: wrap;
@@ -3246,14 +3263,11 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
     padding-left: calc(16px + env(safe-area-inset-left));
     padding-right: calc(16px + env(safe-area-inset-right));
   }
-  body:has(> #view.view-map) > .banner {
-    padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
-  }
   .view-map .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   }
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - 16px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   }
   .view-map #map .maplibregl-ctrl-bottom-right {
     bottom: calc(28px + env(safe-area-inset-bottom));
@@ -4322,7 +4336,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 
 .view-map .map-command {
   position: absolute;
-  left: 8px;
+  left: calc(8px + env(safe-area-inset-left, 0px));
   right: var(--map-corner-clear);
   bottom: 0;
   z-index: 16;
@@ -4663,7 +4677,7 @@ summary:focus-visible {
 
   .view-map .map-control-dock,
   .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
-    max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - var(--map-command-bottom, 0px) - 16px);
+    max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   }
 
   body.shotlist-bar-visible:has(> #view.view-map) {
@@ -4680,6 +4694,7 @@ summary:focus-visible {
 
   body.shotlist-bar-visible .view-map {
     --map-corner-bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));
+    --map-shotlist-block: 0px;
   }
 
   .brand-expansion,
@@ -4711,10 +4726,133 @@ summary:focus-visible {
   }
 }
 
+@media (max-width: 719px) {
+  body:has(> #view.view-map):not(.map-chrome-hidden) {
+    --map-time-block: 120px;
+    --map-command-height: calc(36px + 44px + 8px + var(--map-time-block) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 @media (min-width: 701px) {
   .view-map .map-command {
     align-content: flex-end;
   }
+}
+
+body.map-slot-time .view-map .map-command,
+body.map-slot-time.shotlist-bar-visible .view-map .map-command {
+  top: var(--slot-time-y);
+  left: var(--slot-time-x);
+  width: var(--slot-time-w);
+  height: var(--slot-time-h);
+  right: auto;
+  bottom: auto;
+  max-height: none;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+body.map-slot-time .view-map .map-command .map-controls-time {
+  flex-wrap: wrap;
+  align-content: center;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: 0 2px;
+  overflow: visible;
+}
+
+body.map-slot-time-line .view-map .map-command,
+body.map-slot-time-line.shotlist-bar-visible .view-map .map-command {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+body.map-slot-time-line .view-map .map-command .map-controls-time {
+  flex-wrap: nowrap;
+  width: max-content;
+  max-width: none;
+  height: 100%;
+  overflow: visible;
+}
+
+body.map-slot-time .view-map .map-command .time-slider-row {
+  flex: 1 1 0;
+  min-width: 44px;
+  padding: 0;
+  gap: 0;
+}
+
+body.map-slot-time:not(.map-slot-time-line) .view-map .map-command .time-slider-row {
+  flex: 1 0 100%;
+  width: 100%;
+}
+
+body.map-slot-time .view-map .map-command .time-slider {
+  margin: 0;
+  min-width: 44px;
+  height: 44px;
+}
+
+body.map-slot-time .view-map .map-command .time-step-btn {
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+}
+
+body.map-slot-dock .view-map .map-control-dock,
+body.map-slot-dock #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  top: var(--slot-dock-y);
+  left: var(--slot-dock-x);
+  right: auto;
+  bottom: auto;
+  width: var(--slot-dock-w);
+  height: var(--slot-dock-h);
+  max-width: none;
+  max-height: var(--slot-dock-h);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body.map-slot-dock.map-slot-dock-row .view-map .map-control-dock,
+body.map-slot-dock.map-slot-dock-row #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-direction: row;
+}
+
+body.map-slot-dock-row .view-map .map-control-dock > .map-controls {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  width: max-content;
+}
+
+body.map-slot-dock-row .view-map .map-control-dock .map-group-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+body.map-slot-legend .view-map .map-legend-panel {
+  position: fixed;
+  top: var(--slot-legend-y);
+  left: var(--slot-legend-x);
+  bottom: auto;
+  right: auto;
+  width: var(--slot-legend-w);
+  height: var(--slot-legend-h);
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  overflow: auto;
+  pointer-events: auto;
 }
 
 @media (max-width: 700px) {
@@ -4905,10 +5043,14 @@ summary:focus-visible {
     flex-shrink: 0;
   }
 
+  .view-map .map-legend-panel {
+    max-height: calc(var(--map-pane-budget) - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px);
+  }
+
   #map-pane:not(.map-chrome-hidden):not(.map-inspector-open):not(:has(#satellite-picker-panel:not([hidden]))) .map-control-dock {
     top: calc(var(--horizon-top) + var(--horizon-height) + var(--horizon-gap));
     right: var(--horizon-right);
-    max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-command-height) - 16px);
+    max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-dock-clear) - 16px);
   }
 
   .view-iss #iss-pane:not(:has([data-iss-fullscreen-active])) {
