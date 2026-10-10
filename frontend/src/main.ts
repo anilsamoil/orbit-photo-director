@@ -814,6 +814,10 @@ function launchesStaleHours(status: Status | null, nowMs: number): number | unde
 
 let shotlistBarEl: HTMLElement | null = null;
 
+function updateShotlistBarHeight(bar: HTMLElement): void {
+  document.body.style.setProperty('--recovery-shotlist-height', `${bar.getBoundingClientRect().height}px`);
+}
+
 /** Toggle a pass in/out of the shot list, update its remind button(s) in place
  *  (a pass can show in both Queue and Upcoming), and refresh the bar. In-place
  *  update avoids a full re-render that would collapse open thumbnails. */
@@ -866,6 +870,8 @@ function ensureShotlistBar(): HTMLElement {
   });
   bar.append(count, addBtn, clearBtn);
   document.body.appendChild(bar);
+  const recoveryBarObserver = new ResizeObserver(() => updateShotlistBarHeight(bar));
+  recoveryBarObserver.observe(bar);
   shotlistBarEl = bar;
   return bar;
 }
@@ -878,6 +884,7 @@ function updateShotlistBar(): void {
   if (n === 0) {
     bar.hidden = true;
     document.body.classList.remove('shotlist-bar-visible');
+    updateShotlistBarHeight(bar);
     return;
   }
   const count = bar.querySelector('.shotlist-count');
@@ -885,6 +892,7 @@ function updateShotlistBar(): void {
   bar.hidden = false;
   // Pads the scroll container so the sticky bar can't hide the last card.
   document.body.classList.add('shotlist-bar-visible');
+  updateShotlistBarHeight(bar);
 }
 
 /** Build the .ics from the (pruned) shot list and hand it to the OS. Honest

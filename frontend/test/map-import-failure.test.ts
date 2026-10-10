@@ -974,8 +974,10 @@ describe('map load error above the shot list', () => {
     const actions = css.match(/body:has\(> #view\.view-map\) > #status-banner:has\(\.banner-actions\)\s*\{[^}]*\}/);
     expect(actions?.[0]).toContain('bottom: var(--map-shotlist-block, 0px)');
     expect(actions?.[0]).not.toContain('z-index');
+    expect(actions?.[0]).toContain('height: auto !important');
+    expect(actions?.[0]).toContain('top: auto !important');
     expect(css).toContain('--map-shotlist-block: 0px');
-    expect(css).toContain('--map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px))');
+    expect(css).toContain('--map-shotlist-block: var(--recovery-shotlist-height, 0px)');
     expect(css).toContain('--map-banner-clearance: calc(0.55rem + 0.85rem * 1.3 + 0.35rem + 44px + 0.55rem + 1px)');
     expect(css).toContain('--map-corner-bottom: calc(7.75rem + var(--map-shotlist-block))');
     expect(css).not.toMatch(/#status-banner:has\(\.banner-actions\)\s*\{[^}]*z-index:\s*70/);
