@@ -176,8 +176,10 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     show: boxOf(document.querySelector('.map-toolbar')),
     showButtons: [...document.querySelectorAll('#filter-all-map, #filter-mine-map, #filter-launches-map')].map(boxOf),
     sliderChip: boxOf(document.querySelector('.map-command .map-controls-time')),
+    timeStrip: boxOf(document.querySelector('.map-command')),
     slider: boxOf(document.getElementById('time-slider')),
     timeButtons: [...document.querySelectorAll('.map-command .time-step-btn')].map(boxOf),
+    timeReadout: boxOf(document.getElementById('time-slider-readout')),
     topbar: lengthPx(view, getComputedStyle(document.documentElement).getPropertyValue('--topbar-height').trim() || '48px'),
     footer: { x: 0, y: 0, w: footerWidth, h: intrinsicHeight(document.getElementById('status-banner'), footerWidth, 'footer') },
     shotList,
@@ -196,7 +198,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
 }
 
 let lastSlots = '';
-let mute = false;
+let syncing = false;
 let syncQueued = false;
 
 function writeSlot(name: string, value: number): void {
@@ -222,14 +224,16 @@ function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
   const key = JSON.stringify({ slots, x: origin.left, y: origin.top });
   if (key === lastSlots) return;
   lastSlots = key;
-  mute = true;
   const owned = slots.zoom !== null || slots.time !== null || slots.hide !== null;
   document.body.classList.toggle('map-slot-owned', owned);
+  document.body.classList.toggle('map-slot-zoom-scroll', slots.zoomScroll === true);
+  document.body.classList.toggle('map-slot-zoom-suppressed', slots.zoom === null);
   document.body.classList.toggle('map-slot-time', slots.time !== null);
   document.body.classList.toggle('map-slot-time-line', slots.time !== null && slots.time.h <= timeLinePx);
   document.body.classList.toggle('map-slot-dock', slots.dock !== null);
   document.body.classList.toggle('map-slot-dock-row', slots.dock?.axis === 'row');
   document.body.classList.toggle('map-slot-legend', slots.legend !== null);
+  document.body.classList.toggle('map-slot-legend-focus', slots.legendFocus === true);
   document.body.classList.toggle('map-slot-launch', slots.launch !== null);
   if (slots.zoom) placeInPane('zoom', slots.zoom, origin);
   if (slots.compass) placeInPane('compass', slots.compass, origin);
@@ -241,9 +245,6 @@ function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
   if (slots.launch) placeInPane('launch', slots.launch, origin);
   if (slots.legend) placeInView('legend', slots.legend);
   if (slots.footer) placeInView('footer', slots.footer);
-  queueMicrotask(() => {
-    mute = false;
-  });
 }
 
 function scheduleSync(): void {
@@ -256,24 +257,30 @@ function scheduleSync(): void {
 }
 
 function syncMapChrome(): void {
-  if (mute) return;
-  const view = document.querySelector('.view-map');
-  const pane = document.getElementById('map-pane');
-  if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
-    lastSlots = '';
-    document.body.classList.remove('map-slot-owned', 'map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch');
-    return;
+  if (syncing) return;
+  syncing = true;
+  try {
+    const view = document.querySelector('.view-map');
+    const pane = document.getElementById('map-pane');
+    if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
+      lastSlots = '';
+      document.body.classList.remove('map-slot-owned', 'map-slot-zoom-scroll', 'map-slot-zoom-suppressed', 'map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-legend-focus', 'map-slot-launch');
+      return;
+    }
+    if (!document.body.classList.contains('map-slot-owned')) document.body.classList.add('map-slot-owned');
+    const measure = measureChrome(view, pane);
+    const proposed = solveChromeSlots(measure);
+    if (proposed.time) {
+      measure.timeNeed = intrinsicHeight(document.querySelector('.map-command .map-controls-time'), proposed.time.w, 'time');
+    }
+    if (proposed.legend && proposed.legend.w !== measure.legendPanel.w) {
+      measure.legendPanel = { ...measure.legendPanel, w: proposed.legend.w,
+        h: intrinsicHeight(document.getElementById('map-legend-panel'), proposed.legend.w, 'legend') };
+    }
+    applySlots(solveChromeSlots(measure), pane);
+  } finally {
+    syncing = false;
   }
-  const measure = measureChrome(view, pane);
-  const proposed = solveChromeSlots(measure);
-  if (proposed.time) {
-    measure.timeNeed = intrinsicHeight(document.querySelector('.map-command .map-controls-time'), proposed.time.w, 'time');
-  }
-  if (proposed.legend && proposed.legend.w !== measure.legendPanel.w) {
-    measure.legendPanel = { ...measure.legendPanel, w: proposed.legend.w,
-      h: intrinsicHeight(document.getElementById('map-legend-panel'), proposed.legend.w, 'legend') };
-  }
-  applySlots(solveChromeSlots(measure), pane);
 }
 
 function ensureInsetProbes(): HTMLElement[] {

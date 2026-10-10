@@ -386,7 +386,7 @@ describe('chrome slots', () => {
     expect(first.footer?.y).not.toBe(second.footer?.y);
   });
 
-  it('keeps the compass above the footer at 320x360', () => {
+  it('scrolls the full navigation stack below Show and above the footer at 320x360', () => {
     const slots = solveChromeSlots(measure({
       viewport: { w: 320, h: 360 },
       insets: { top: 24, right: 0, bottom: 34, left: 47 },
@@ -394,13 +394,14 @@ describe('chrome slots', () => {
       footer: { x: 0, y: 240, w: 320, h: 86 },
       show: { x: 0, y: 0, w: 160, h: 52 },
     }));
-    expect(slots.zoom).toEqual({ x: 55, y: 100, w: 44, h: 88 });
-    expect(slots.compass).toEqual({ x: 55, y: 188, w: 44, h: 44 });
+    expect(slots.zoom).toEqual({ x: 55, y: 134, w: 44, h: 98 });
+    expect(slots.zoomScroll).toBe(true);
+    expect(slots.compass).toBeNull();
+    expect(meets(slots.zoom!, slots.show!)).toBe(false);
     expect(slots.footer).toEqual({ x: 47, y: 240, w: 273, h: 86 });
-    expect(slots.compass).not.toBeNull();
     expect(slots.hide).not.toBeNull();
-    if (!slots.compass || !slots.footer || !slots.hide) return;
-    expect(bottomOf(slots.compass)).toBeLessThanOrEqual(slots.footer.y - 8);
+    if (!slots.zoom || !slots.footer || !slots.hide) return;
+    expect(bottomOf(slots.zoom)).toBeLessThanOrEqual(slots.footer.y - 8);
     expect(bottomOf(slots.hide)).toBeLessThanOrEqual(slots.footer.y);
   });
 
@@ -436,7 +437,7 @@ describe('chrome slots', () => {
         expect(actions.footer?.h).toBe(86);
         expect(bottomOf(actions.footer!)).toBe(h - inset);
         expect(plain.footer!.y - actions.footer!.y).toBe(63);
-        for (const neighbour of [actions.hide, actions.legendButton, actions.compass, actions.time, actions.dock]) {
+        for (const neighbour of [actions.hide, actions.legendButton, actions.compass ?? actions.zoom, actions.time, actions.dock]) {
           expect(neighbour).not.toBeNull();
           expect(bottomOf(neighbour!)).toBeLessThanOrEqual(actions.footer!.y);
           expect(meets(neighbour!, actions.footer!)).toBe(false);
@@ -482,7 +483,7 @@ describe('chrome slots', () => {
       const first = solveChromeSlots(base);
       expect(first.legend?.h).toBe(206);
       expect(first.legend?.w).toBe(176);
-      expect(bottomOf(first.legend!)).toBe(first.legendButton!.y - 4);
+      expect(bottomOf(first.legend!)).toBe(first.time!.y - 4);
       expect(meets(first.legend!, first.dock!)).toBe(false);
       expect(solveChromeSlots({ ...base, legendOpen: false }).legend).toBeNull();
       expect(solveChromeSlots(base).legend).toEqual(first.legend);
@@ -517,7 +518,7 @@ describe('chrome slots', () => {
     }
   });
 
-  it('clips an intrinsically tall Legend only at the visible top boundary', () => {
+  it('caps an intrinsically tall Legend between the pane top and the whole time strip', () => {
     const slots = solveChromeSlots(measure({
       viewport: { w: 800, h: 600 },
       pane: { x: 0, y: 84, w: 800, h: 436 },
@@ -526,7 +527,7 @@ describe('chrome slots', () => {
       legendPanel: { x: 0, y: 0, w: 176, h: 800 },
     }));
     expect(slots.legend?.y).toBe(92);
-    expect(bottomOf(slots.legend!)).toBe(slots.legendButton!.y - 4);
+    expect(bottomOf(slots.legend!)).toBe(slots.time!.y - 4);
     expect(slots.legend!.h).toBeGreaterThan(200);
     expect(slots.legend!.h).toBeLessThan(800);
   });
@@ -597,7 +598,7 @@ describe('chrome slots', () => {
         });
         const slots = solveChromeSlots(input);
         for (const [name, box] of Object.entries(slots)) {
-          if (!box || name === 'footer') continue;
+          if (!box || typeof box === 'boolean' || name === 'footer') continue;
           expect(box.y, name).toBeGreaterThanOrEqual(pane.y);
           expect(bottomOf(box), name).toBeLessThanOrEqual(bottomOf(pane));
           expect(rightOf(box), name).toBeLessThanOrEqual(rightOf(pane));
@@ -643,4 +644,93 @@ describe('chrome slots', () => {
       }
     }
   });
+  it.each([[800, 600], [874, 402], [820, 1180], [834, 1194], [1180, 820], [1194, 834], [1400, 900]])(
+    'caps long Legend content in the largest readable free rectangle at %dx%d', (w, h) => {
+      const input = measure({
+        viewport: { w, h }, topbar: 84,
+        insets: { top: 24, right: 0, bottom: 20, left: 47 },
+        pane: { x: 0, y: 0, w, h: h - 80 },
+        legendOpen: true, legendPanel: { x: 0, y: 0, w: 176, h: 1200 },
+        pip: { x: w - 234, y: 89, w: 222, h: 144 },
+        footer: { x: 0, y: 0, w, h: 86 },
+        shotList: { x: 0, y: h - 84, w, h: 64 },
+      });
+      const slots = solveChromeSlots(input);
+      const panel = slots.legend!;
+      expect(panel).not.toBeNull();
+      expect(panel.w).toBe(176);
+      expect(panel.h).toBeGreaterThanOrEqual(32);
+      expect(panel.h).toBeLessThan(input.legendPanel.h);
+      expect(panel.y).toBeGreaterThanOrEqual(92);
+      for (const box of [input.pip, slots.time, slots.footer, slots.hide, slots.legendButton, slots.dock, slots.show, slots.zoom, slots.compass].filter(Boolean) as Box[]) {
+        expect(meets(panel, box), JSON.stringify(box)).toBe(false);
+      }
+      const painted = { ...input, timeStrip: slots.time!, sliderChip: slots.time!, timeReadout: { x: rightOf(slots.time!) - 90, y: bottomOf(slots.time!) - 16, w: 90, h: 12 } };
+      expect(solveChromeSlots(painted).legend).toEqual(panel);
+      expect(meets(panel, painted.timeReadout)).toBe(false);
+      const longer = solveChromeSlots({ ...painted, legendPanel: { ...input.legendPanel, h: 2400 } });
+      expect(longer.legend).toEqual(panel);
+    },
+  );
+
+  it.each([false, true])('reserves overflowing readout paint with a measured time strip=%s', (measuredStrip) => {
+    const input = measure({ viewport: { w: 800, h: 600 }, legendOpen: true,
+      legendPanel: { x: 0, y: 0, w: 176, h: 52.86 } });
+    const natural = solveChromeSlots(input).legend!;
+    const timeReadout = { x: natural.x, y: natural.y, w: natural.w, h: natural.h };
+    const slots = solveChromeSlots({ ...input, timeReadout, timeStrip: measuredStrip ? solveChromeSlots(input).time! : undefined });
+    expect(slots.legend).not.toBeNull();
+    expect(meets(slots.legend!, timeReadout)).toBe(false);
+    expect(slots.legend!.h).toBe(52.86);
+  });
+
+  it('rejects narrow slivers and gives a busy 320x360 disclosure an unobstructed close target', () => {
+    for (const bottom of [20, 34]) {
+      const input = measure({ viewport: { w: 320, h: 360 }, topbar: 84,
+        insets: { top: 24, right: 0, bottom, left: 47 },
+        footer: { x: 0, y: 0, w: 273, h: 86 },
+        show: { x: 55, y: 89, w: 203, h: 52 },
+        legendOpen: true, legendPanel: { x: 0, y: 0, w: 176, h: 935 }, timeNeed: 140,
+      });
+      const slots = solveChromeSlots(input);
+      expect(slots.legend?.w).toBeGreaterThanOrEqual(120);
+      expect(slots.legend?.h).toBeGreaterThanOrEqual(32);
+      expect(slots.legendButton?.w).toBeGreaterThanOrEqual(44);
+      expect(slots.legendButton?.h).toBe(44);
+      for (const box of [slots.legendButton, slots.hide, slots.time, slots.footer]) {
+        expect(meets(slots.legend!, box!)).toBe(false);
+      }
+      expect(solveChromeSlots({ ...input, legendOpen: false }).show).not.toBeNull();
+    }
+  });
+
+  it('scrolls a short-busy 430x360 zoom lane without moving Zoom In through Show', () => {
+    const slots = solveChromeSlots(measure({ viewport: { w: 430, h: 360 }, topbar: 84,
+      insets: { top: 24, right: 0, bottom: 20, left: 47 },
+      footer: { x: 0, y: 0, w: 383, h: 86 },
+      show: { x: 55, y: 89, w: 203, h: 52 },
+      legendOpen: true, legendPanel: { x: 0, y: 0, w: 176, h: 53 }, timeNeed: 140,
+    }));
+    expect(slots.zoomScroll).toBe(true);
+    expect(slots.zoom?.h).toBeGreaterThanOrEqual(44);
+    expect(slots.zoom?.y).toBeGreaterThanOrEqual(bottomOf(slots.show!) + 4);
+    expect(meets(slots.zoom!, slots.show!)).toBe(false);
+    expect(bottomOf(slots.zoom!)).toBeLessThanOrEqual(slots.footer!.y - 8);
+  });
+
+  it('declines an impossible sub-target navigation corridor and restores it after footer shrink', () => {
+    const input = measure({ viewport: { w: 430, h: 360 }, topbar: 84,
+      insets: { top: 24, right: 0, bottom: 20, left: 47 },
+      footer: { x: 0, y: 0, w: 383, h: 190 },
+      show: { x: 55, y: 89, w: 203, h: 52 },
+    });
+    const noRoom = solveChromeSlots(input);
+    expect(noRoom.zoom).toBeNull();
+    expect(noRoom.compass).toBeNull();
+    const restored = solveChromeSlots({ ...input, footer: { ...input.footer, h: 86 } });
+    expect(restored.zoom!.h).toBeGreaterThanOrEqual(44);
+    expect(meets(restored.zoom!, restored.show!)).toBe(false);
+    expect(meets(restored.zoom!, restored.footer!)).toBe(false);
+  });
+
 });

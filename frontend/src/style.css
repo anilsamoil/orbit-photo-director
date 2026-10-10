@@ -4875,6 +4875,24 @@ body.map-slot-legend .view-map .map-legend-panel {
   flex-shrink: 0;
 }
 
+body.map-slot-owned:not(.map-slot-legend) .view-map .map-legend-panel {
+  display: none;
+}
+
+body.map-slot-zoom-scroll .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl-group {
+  max-height: var(--slot-zoom-h);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+body.map-slot-zoom-suppressed .view-map #map .maplibregl-ctrl-top-left,
+body.map-slot-legend-focus .view-map .map-toolbar,
+body.map-slot-legend-focus .view-map .map-control-dock,
+body.map-slot-legend-focus .view-map #map .maplibregl-ctrl-top-left {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left {
   position: absolute;
   left: var(--slot-zoom-x);
