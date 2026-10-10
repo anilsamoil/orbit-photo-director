@@ -1253,6 +1253,131 @@ export function stampEventTimes(dir, eventStart, wallMs = eventStart) {
   });
 }
 
+function catalogShot(spec) {
+  return {
+    subject: spec.subject,
+    liftoff: spec.liftoff,
+    start: spec.start,
+    best: spec.best,
+    end: spec.end,
+    best_offset_s: 60,
+    look: { frame: 'orbital-lvlh', azimuth_deg: 45, off_nadir_deg: 55 },
+    window: 'W6',
+    slant_km: 490,
+    limb_margin_deg: 8,
+    plume_mrad: 1.6,
+    light: 'twilight_plume',
+    lens: 'telephoto',
+    lens_reason: 'Distant plume',
+    track: spec.track,
+    score: {
+      low: spec.score,
+      high: spec.score + 5,
+      terms: { A: [0.2, 0.4], C: [0.5, 0.5], D: [0.1, 0.2], M: [0.8, 1], R: [0.4, 0.6] },
+    },
+    confidence: { tle_age_h: 12, along_track_sigma_km: 12, timing_sigma_s: 4, robust: false },
+  };
+}
+
+export function publishVerifyCatalog(dir, wallMs = Date.now()) {
+  const meta = JSON.parse(readFileSync(resolve(dir, 'meta.json'), 'utf8'));
+  const track = JSON.parse(readFileSync(resolve(dir, 'track.json'), 'utf8'));
+  const satrec = satellite.twoline2satrec(track.tle.line1, track.tle.line2);
+  const iss = positionAt(satrec, wallMs) ?? meta.iss;
+  const pad = meta.pad;
+  const generated = launchIso(wallMs - 60_000);
+  const geometry = launchIso(wallMs - 60_000 + 14 * 60_000);
+  const schedule = launchIso(wallMs - 60_000 + 2 * 60 * 60_000);
+  const net = launchIso(wallMs + 2 * 60 * 60_000);
+  const windowEnd = launchIso(wallMs + 2 * 60 * 60_000 + 9 * 60_000);
+  const best = launchIso(wallMs + 2 * 60 * 60_000 + 60_000);
+  const shotEnd = launchIso(wallMs + 2 * 60 * 60_000 + 8 * 60_000);
+  const revision = `c${wallMs}`;
+  const none = { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null };
+  const times = { liftoff: net, start: net, best, end: shotEnd };
+  const items = [
+    {
+      event_id: 'verify-ascent',
+      revision: 'eventrev',
+      name: 'Verify Ascent',
+      rocket: 'Verify Rocket',
+      site: { name: 'Verify Pad', lat: pad.lat, lon: pad.lon },
+      schedule: { net, window_start: net, window_end: windowEnd, precision: 'Second', status: 'Go', destination: 'ISS' },
+      direction: { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss_tle_plane', off_plane_deg: 0.35 },
+      tier: 'shot',
+      why: 'Verify ascent is a shot.',
+      reasons: [],
+      shots: [catalogShot({
+        ...times,
+        subject: 'ascent',
+        score: 80,
+        track: [
+          { t_offset_s: 0, lat: pad.lat, lon: pad.lon, alt_km: 0 },
+          { t_offset_s: 60, lat: pad.lat + 0.4, lon: wrapLon(pad.lon + 0.4), alt_km: 40 },
+        ],
+      })],
+    },
+    {
+      event_id: 'verify-likely',
+      revision: 'eventrev-likely',
+      name: 'Verify Likely',
+      rocket: 'Verify Rocket',
+      site: { name: 'Verify Range', lat: pad.lat + 1.2, lon: wrapLon(pad.lon + 1.2) },
+      schedule: { net, window_start: net, window_end: windowEnd, precision: 'Second', status: 'Go', destination: null },
+      direction: none,
+      tier: 'likely',
+      why: 'Verify likely is a pad.',
+      reasons: [],
+      shots: [catalogShot({ ...times, subject: 'pad', score: 40, track: [] })],
+    },
+    {
+      event_id: 'verify-horizon',
+      revision: 'eventrev-horizon',
+      name: 'Verify Horizon',
+      rocket: 'Verify Rocket',
+      site: { name: 'Verify Coast', lat: Math.max(-90, Math.min(90, iss.lat + 0.3)), lon: iss.lon },
+      schedule: { net, window_start: net, window_end: windowEnd, precision: 'Second', status: 'Go', destination: null },
+      direction: none,
+      tier: 'watch',
+      why: 'Verify horizon is a watch.',
+      reasons: [],
+      shots: [catalogShot({ ...times, subject: 'pad', score: 10, track: [] })],
+    },
+  ];
+  const bodyObj = {
+    schema_version: 3,
+    revision,
+    generated_at: generated,
+    schedule_valid_until: schedule,
+    geometry_valid_until: geometry,
+    tle: { epoch: generated, sha256: 'a'.repeat(64), source: 'celestrak' },
+    coverage: {
+      from: launchIso(wallMs - 60 * 60_000),
+      until: launchIso(wallMs + 14 * 24 * 60 * 60_000),
+      schedule_fetched_at: generated,
+      pages: 1,
+      received: items.length,
+      listed: items.length,
+      evaluated: items.length,
+      tier_counts: { shot: 1, likely: 1, watch: 1, unassessed: 0, none: 0 },
+      complete: true,
+      reasons: [],
+    },
+    items,
+  };
+  const body = JSON.stringify(bodyObj);
+  const pointer = {
+    schema_version: 2,
+    revision,
+    generated_at: generated,
+    valid_until: geometry,
+    path: `launch/catalog/v/${revision}.json`,
+    sha256: sha256(body),
+  };
+  writeFileSync(resolve(dir, 'catalog-clock.json'), JSON.stringify({ anchor: wallMs }));
+  return { pointer, body, anchor: wallMs };
+}
+
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isDirect) {
   const dir = process.argv[2];
