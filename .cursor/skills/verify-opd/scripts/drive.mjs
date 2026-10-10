@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
-import { countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
+import { auditRasterLevels, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
 import { checkRasterOcr, clearRasterOcrRun, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
@@ -4688,7 +4688,7 @@ function planViewport(map) {
     if (box.right <= rect.left || box.left >= rect.right || box.bottom <= rect.top || box.top >= rect.bottom) continue;
     occlusions.push([box.left-rect.left, box.top-rect.top, box.right-rect.left, box.bottom-rect.top]);
   }
-  return { width: rect.width, height: rect.height, scale, origin: { x: origin.x, y: origin.y }, occlusions };
+  return { width: rect.width, height: rect.height, worldCopies: map.getRenderWorldCopies(), scale, origin: { x: origin.x, y: origin.y }, occlusions };
 }
 function planHold(map) {
   if (map.__opdLabelHold) return;
@@ -4933,6 +4933,8 @@ export async function proveFractionalPlanLabels(send) {
     }
     const fittedWords = await rasterWords(fitted.urls || []);
     console.log(`plan labels cold tilesOk:${fitted.tilesOk} fitted:${fitted.zoom} OCR:${rasterOcrStats.calls}`);
+    const audited = auditRasterLevels(loadCountryRasterLevels());
+    if (!audited.ok) throw new Error(`plan label raster audit ${JSON.stringify(audited)}`);
     for (const country of fitted.inside) {
       const verdict = oneNameSource({
         tilesOk: true,

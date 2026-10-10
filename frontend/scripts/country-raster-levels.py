@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """Regenerate country-raster-levels.json from current Esri tiles.
 
-Each zoom is one stitched neighborhood plus the centroid tile, not a pile of
-separate OCRs. A name split by a tile edge is readable only on the stitch.
+Each zoom uses a stitched neighborhood, retrying the centroid tile only when
+needed. A name split by a tile edge is readable only on the stitch.
 Reference tiles are PNG. The dark basemap is JPEG. Pillow decodes both.
 A cache-bust query is tried first. A CloudFront miss and a later hit of the
 same path are the same bytes, so the plain CDN URL is the fallback.
 
-The token rule matches plan-label-verdict.mjs. An exact name counts. A longer
-token that starts with the name (INDIAN) does not, and it suppresses a bare
-name token in that same image so Indian Ocean is not India. The centroid tile
-is judged on its own, so a real INDIA label still counts when a neighbor only
-says INDIAN.
+The token rule matches plan-label-verdict.mjs. An exact name counts even when
+an unrelated adjective (AUSTRALIAN) occurs elsewhere. Regional/ocean phrases
+are excluded locally, not by vetoing every sovereign name in the image.
+TSV glyph bounds are normalized Mercator coordinates, including a one-pixel
+margin, so the inset can distinguish raster ownership from readable lettering.
 """
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import io
 import json
 import math
+import os
+import re
 import subprocess
 import sys
+import time
+import unicodedata
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -50,6 +56,7 @@ SERVICES = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
     "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
 )
+FETCH_NONCE = str(time.time_ns())
 
 
 def tile_xy(lng: float, lat: float, zoom: int) -> tuple[int, int]:
@@ -74,23 +81,29 @@ def raster_painted(words: str, country: str) -> bool:
     if len(name) < 4:
         return False
     stem_list = stems(name)
-    tokens = [word for word in "".join(ch if ch.isalpha() else " " for ch in words.upper()).split() if len(word) >= 4]
-    extended = any(word.startswith(name) and len(word) > len(name) for word in tokens)
-    for word in tokens:
-        if extended and word == name:
-            continue
-        if word.startswith(name) and len(word) > len(name):
-            continue
-        if word in stem_list:
-            return True
-        for stem in stem_list:
-            if stem != name and stem in word and len(stem) < len(word) <= len(stem) + 4:
+    for line in words.upper().splitlines():
+        tokens = re.findall(r"[A-Z]+", line)
+        for index, word in enumerate(tokens):
+            if not sovereign_context(tokens, index, index + 1):
+                continue
+            if word.startswith(name) and len(word) > len(name):
+                continue
+            if word in stem_list:
                 return True
+            for stem in stem_list:
+                if stem != name and stem in word and len(stem) < len(word) <= len(stem) + 4:
+                    return True
     return False
 
 
+def sovereign_context(tokens: list[str], start: int, end: int) -> bool:
+    prefix = tokens[start - 1] if start else ""
+    suffix = tokens[end] if end < len(tokens) else ""
+    return prefix not in {"SOUTH", "WESTERN", "WEST", "NORTH", "NORTHERN", "NEW"} and suffix not in {"OCEAN", "SEA", "BIGHT"} and tokens[max(0, start - 2):start] != ["GULF", "OF"]
+
+
 def fetch_tile(url: str) -> bytes | None:
-    fresh = url + ("&" if "?" in url else "?") + "nocache=fu183"
+    fresh = url + ("&" if "?" in url else "?") + "nocache=" + FETCH_NONCE
     for target in (fresh, url):
         request = urllib.request.Request(
             target,
@@ -106,26 +119,66 @@ def fetch_tile(url: str) -> bytes | None:
     return None
 
 
-def ocr_image(image: Image.Image) -> str:
+def ocr_observations(image: Image.Image) -> list[list[dict]]:
     if image.getextrema()[3][1] == 0:
-        return ""
+        return []
 
-    def paint(bg: tuple[int, int, int, int], scale: int) -> str:
+    def paint(bg: tuple[int, int, int, int], scale: int, threshold: bool = False) -> list[list[dict]]:
         base = Image.new("RGBA", image.size, bg)
         gray = Image.alpha_composite(base, image).convert("L")
+        if threshold:
+            gray = gray.point(lambda pixel: 0 if pixel >= 85 else 255)
         big = ImageOps.autocontrast(gray.resize((gray.width * scale, gray.height * scale), Image.Resampling.LANCZOS))
         buf = io.BytesIO()
         big.save(buf, format="PNG")
         result = subprocess.run(
-            ["tesseract", "stdin", "stdout", "-l", "eng", "--psm", "11"],
+            ["tesseract", "stdin", "stdout", "-l", "eng", "--psm", "11", "tsv"],
             input=buf.getvalue(),
             capture_output=True,
-            timeout=20,
-            check=False,
+            timeout=60,
+            check=True,
+            env={**os.environ, "OMP_THREAD_LIMIT": "1"},
         )
-        return result.stdout.decode("utf8", "replace")
+        lines: dict[tuple[str, str, str], list[dict]] = {}
+        for row in csv.DictReader(io.StringIO(result.stdout.decode("utf8", "replace")), delimiter="\t", quoting=csv.QUOTE_NONE):
+            if row["level"] != "5" or not row["text"].strip():
+                continue
+            key = (row["block_num"], row["par_num"], row["line_num"])
+            left, top, width, height = (int(row[key]) / scale for key in ("left", "top", "width", "height"))
+            lines.setdefault(key, []).append({"text": row["text"], "box": [left, top, left + width, top + height]})
+        return list(lines.values())
 
-    return paint((32, 35, 38, 255), 3) + "\n" + paint((255, 255, 255, 255), 4)
+    return paint((32, 35, 38, 255), 3) + paint((255, 255, 255, 255), 4) + paint((32, 35, 38, 255), 4, True)
+
+
+def observation_text(lines: list[list[dict]]) -> str:
+    return "\n".join(" ".join(word["text"] for word in line) for line in lines)
+
+
+def ocr_image(image: Image.Image) -> str:
+    return observation_text(ocr_observations(image))
+
+
+def name_boxes(lines: list[list[dict]], country: str) -> list[list[float]]:
+    name = country.upper()
+    boxes = []
+    for line in lines:
+        tokens = [re.sub(r"[^A-Z]", "", unicodedata.normalize("NFKD", word["text"]).upper()) for word in line]
+        for start in range(len(tokens)):
+            for end in range(start + 1, min(len(tokens), start + len(name)) + 1):
+                joined = "".join(tokens[start:end])
+                if joined not in stems(name) or not sovereign_context(tokens, start, end):
+                    continue
+                if not all(word["text"].isupper() for word in line[start:end]):
+                    continue
+                picked = [word["box"] for word in line[start:end]]
+                box = [min(b[0] for b in picked) - 1, min(b[1] for b in picked) - 1, max(b[2] for b in picked) + 1, max(b[3] for b in picked) + 1]
+                existing = next((b for b in boxes if min(b[2], box[2]) > max(b[0], box[0]) and min(b[3], box[3]) > max(b[1], box[1])), None)
+                if existing is None:
+                    boxes.append(box)
+                else:
+                    existing[:] = [min(existing[0], box[0]), min(existing[1], box[1]), max(existing[2], box[2]), max(existing[3], box[3])]
+    return boxes
 
 
 def neighborhood(lng: float, lat: float, zoom: int) -> list[tuple[int, int]]:
@@ -151,7 +204,16 @@ def open_tile(png: bytes | None) -> Image.Image | None:
 def main() -> int:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT
     levels: dict[str, list[int]] = {name: [] for name, _lng, _lat in COUNTRIES}
+    bounds: dict[str, dict[int, list[dict]]] = {name: {} for name, _lng, _lat in COUNTRIES}
     cache: dict[str, bytes | None] = {}
+    ocr_cache: dict[str, list[list[dict]]] = {}
+
+    def observations(image: Image.Image) -> list[list[dict]]:
+        key = hashlib.sha256(str(image.size).encode() + image.tobytes()).hexdigest()
+        if key not in ocr_cache:
+            ocr_cache[key] = ocr_observations(image)
+        return ocr_cache[key]
+
     for name, lng, lat in COUNTRIES:
         for zoom in range(THROUGH + 1):
             words = []
@@ -159,7 +221,7 @@ def main() -> int:
             coords = neighborhood(lng, lat, zoom)
             xs = sorted({x for x, _y in coords})
             ys = sorted({y for _x, y in coords})
-            for service in SERVICES:
+            for service_name, service in zip(("reference", "dark"), SERVICES):
                 mosaic = Image.new("RGBA", (256 * len(xs), 256 * len(ys)), (0, 0, 0, 0))
                 center = None
                 for x, y in coords:
@@ -168,18 +230,30 @@ def main() -> int:
                         cache[url] = fetch_tile(url)
                     tile = open_tile(cache[url])
                     if tile is None:
-                        continue
+                        raise RuntimeError(f"missing raster tile: {url}")
                     mosaic.paste(tile, ((x - xs[0]) * 256, (y - ys[0]) * 256))
                     if (x, y) == (cx, cy):
                         center = tile
-                words.append(ocr_image(mosaic))
-                if center is not None:
-                    words.append(ocr_image(center))
+                observed = observations(mosaic)
+                words.append(observation_text(observed))
+                boxes = name_boxes(observed, name)
+                if center is not None and not boxes:
+                    center_observed = observations(center)
+                    words.append(observation_text(center_observed))
+                    boxes.extend([[left + (cx - xs[0]) * 256, top + (cy - ys[0]) * 256, right + (cx - xs[0]) * 256, bottom + (cy - ys[0]) * 256] for left, top, right, bottom in name_boxes(center_observed, name)])
+                for left, top, right, bottom in boxes:
+                    scale = 256 * 2**zoom
+                    box = [(left + 256 * xs[0]) / scale, (top + 256 * ys[0]) / scale, (right + 256 * xs[0]) / scale, (bottom + 256 * ys[0]) / scale]
+                    bounds[name].setdefault(zoom, []).append({"service": service_name, "box": [round(value, 9) for value in box]})
             if any(raster_painted(text, name) for text in words):
+                if not bounds[name].get(zoom):
+                    raise RuntimeError(f"{name} z{zoom}: OCR name has no readable glyph bounds")
                 levels[name].append(zoom)
             print(f"{name} z{zoom} {levels[name]}", file=sys.stderr)
-    payload = {"through": THROUGH, "countries": levels}
-    out.write_text(json.dumps(payload, indent=2) + "\n")
+    payload = {"through": THROUGH, "countries": levels, "bounds": bounds}
+    temporary = out.with_name(f".{out.name}.{FETCH_NONCE}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n")
+    temporary.replace(out)
     print(out)
     return 0
 

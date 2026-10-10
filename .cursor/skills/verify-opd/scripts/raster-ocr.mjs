@@ -106,7 +106,10 @@ function sovereignBoxes(mosaic, country) {
       if (['OCEAN','SEA','BIGHT'].includes(tokens[end])) continue;
       if (tokens[start-2] === 'GULF' && tokens[start-1] === 'OF') continue;
       const picked = line.slice(start,end).map(word=>word.box);
-      result.push({text,box:[Math.min(...picked.map(b=>b[0]))-1,Math.min(...picked.map(b=>b[1]))-1,Math.max(...picked.map(b=>b[2]))+1,Math.max(...picked.map(b=>b[3]))+1]});
+      const box = [Math.min(...picked.map(b=>b[0]))-1,Math.min(...picked.map(b=>b[1]))-1,Math.max(...picked.map(b=>b[2]))+1,Math.max(...picked.map(b=>b[3]))+1];
+      const existing = result.find(item => Math.min(item.box[2],box[2]) > Math.max(item.box[0],box[0]) && Math.min(item.box[3],box[3]) > Math.max(item.box[1],box[1]));
+      if (existing) existing.box = [Math.min(existing.box[0],box[0]),Math.min(existing.box[1],box[1]),Math.max(existing.box[2],box[2]),Math.max(existing.box[3],box[3])];
+      else result.push({text,box});
     }
   }
   return result;
@@ -118,7 +121,7 @@ export function readableRasterName(pack, row, country) {
   const boxes = [];
   for (const mosaic of pack.mosaics) for (const word of sovereignBoxes(mosaic,country)) {
     const [x1, y1, x2, y2] = word.box;
-    for (const wrap of [-1, 0, 1]) {
+    for (const wrap of row.viewport.worldCopies ? [-1, 0, 1] : [0]) {
       const world = 256 * (2 ** mosaic.z) * wrap;
       const box = [(x1+world)*scale+origin.x, y1*scale+origin.y, (x2+world)*scale+origin.x, y2*scale+origin.y];
       if (box[0] < 0 || box[1] < 0 || box[2] > width || box[3] > height) continue;

@@ -1,4 +1,4 @@
-import { Map, Marker, type LngLat, type Map as MapLibreMap } from 'maplibre-gl';
+import { Map, Marker, type LngLat, type Map as MapLibreMap, type SymbolLayerSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
@@ -13,8 +13,12 @@ const ESRI_LABEL_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
 ];
 
-/** Tile zooms whose Esri raster paints the centroid. `through` was audited; a higher tile stays painted when `through` is. */
-const COUNTRY_RASTER_LEVELS: { through: number; countries: Record<string, readonly number[]> } = countryRasterLevels;
+/** Audited national-name tile levels and their Mercator lettering bounds in each raster service. */
+const COUNTRY_RASTER_LEVELS: {
+  through: number;
+  countries: Record<string, readonly number[]>;
+  bounds?: Record<string, Record<string, readonly { service: string; box: readonly number[] }[]>>;
+} = countryRasterLevels;
 
 /** Caps the fit. A tighter track zooms in. A full orbit stays below zoom 2. */
 const INSET_FIT_MAX_ZOOM = 5;
@@ -93,6 +97,32 @@ function coversView(band: SymbolBand, zoom: number): boolean {
   return zoom >= min && zoom < max;
 }
 
+const COUNTRY_TEXT_LAYOUT: SymbolLayerSpecification['layout'] = {
+  'text-field': ['get', 'name'],
+  'text-font': ['Open Sans Regular'],
+  'text-size': 12,
+  'text-variable-anchor-offset': ['match', ['get', 'name'], 'Kenya',
+    ['literal', ['top', [0, 1.5], 'bottom', [0, -1.5], ...countryPlacementCandidates()]],
+    ['literal', countryPlacementCandidates()]],
+  'symbol-sort-key': ['match', ['get', 'name'], 'Nigeria', 0, 'Kenya', 1, 2],
+};
+
+/** Try nearby free space before moving a crowded fitted-world label farther from its centroid. */
+function countryPlacementCandidates(): Array<string | [number, number]> {
+  const candidates: Array<string | [number, number]> = ['center', [0, 0]];
+  for (const offset of [0.6, 1.5, 2]) {
+    candidates.push('left', [offset, 0], 'right', [-offset, 0], 'top', [0, offset], 'bottom', [0, -offset],
+      'top-left', [offset, offset], 'top-right', [-offset, offset], 'bottom-left', [offset, -offset], 'bottom-right', [-offset, -offset]);
+  }
+  return candidates;
+}
+
+const COUNTRY_TEXT_PAINT: SymbolLayerSpecification['paint'] = {
+  'text-color': '#f7f4ea',
+  'text-halo-color': '#02040c',
+  'text-halo-width': 1.4,
+};
+
 /** Symbol layers for the centroid names. A layer is on only where round(viewZoom + 1) is missing from that country's painted tiles. */
 function countrySymbolLayers() {
   const grouped: Record<string, { band: SymbolBand; names: string[] }> = {};
@@ -120,21 +150,56 @@ function countrySymbolLayers() {
       ...(group.band.minzoom == null ? {} : { minzoom: group.band.minzoom }),
       ...(group.band.maxzoom == null ? {} : { maxzoom: group.band.maxzoom }),
       filter: ['in', ['get', 'name'], ['literal', group.names]] as ['in', ['get', 'name'], ['literal', string[]]],
-      layout: {
-        'text-field': ['get', 'name'] as ['get', 'name'],
-        'text-font': ['Open Sans Regular'],
-        'text-size': 12,
-      },
+      layout: COUNTRY_TEXT_LAYOUT,
       paint: {
-        'text-color': '#f7f4ea',
-        'text-halo-color': '#02040c',
-        'text-halo-width': 1.4,
+        ...COUNTRY_TEXT_PAINT,
         ...(group.band.hideAt == null ? {} : { 'text-opacity': ['step', ['zoom'], 1, group.band.hideAt, 0] as ['step', ['zoom'], 1, number, 0] }),
       },
     }));
 }
 
 const COUNTRY_SYMBOL_LAYERS = countrySymbolLayers();
+
+type ScreenBox = { left: number; top: number; right: number; bottom: number };
+
+/** A raster name owns the label only when its complete lettering is visible above the inset chrome. */
+export function readableCountryName(box: ScreenBox, viewport: ScreenBox, occlusions: readonly ScreenBox[]): boolean {
+  return box.left >= viewport.left && box.top >= viewport.top
+    && box.right <= viewport.right && box.bottom <= viewport.bottom
+    && !occlusions.some((cover) => box.left < cover.right && box.right > cover.left
+      && box.top < cover.bottom && box.bottom > cover.top);
+}
+
+function mercatorLngLat(x: number, y: number): [number, number] {
+  return [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
+}
+
+function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
+  const zoom = map.getZoom();
+  const tile = Math.max(0, Math.round(zoom + 1));
+  const frameBox = frame.getBoundingClientRect();
+  const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
+  const occlusions = Array.from(frame.ownerDocument.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]'))
+    .filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden')
+    .map((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left - frameBox.left, top: box.top - frameBox.top, right: box.right - frameBox.left, bottom: box.bottom - frameBox.top };
+    });
+  return COUNTRY_CENTROIDS.features.flatMap((feature) => {
+    if (feature.geometry.type !== 'Point') return [];
+    const name = String(feature.properties?.name);
+    const painted = COUNTRY_RASTER_LEVELS.countries[name] ?? [];
+    if (!painted.includes(Math.min(tile, COUNTRY_RASTER_LEVELS.through))) return [];
+    const anchor = map.project(feature.geometry.coordinates as [number, number]);
+    if (anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
+    const readable = (COUNTRY_RASTER_LEVELS.bounds?.[name]?.[tile] ?? []).some(({ box }) => {
+      const start = map.project(mercatorLngLat(box[0]!, box[1]!));
+      const end = map.project(mercatorLngLat(box[2]!, box[3]!));
+      return readableCountryName({ left: start.x, top: start.y, right: end.x, bottom: end.y }, viewport, occlusions);
+    });
+    return readable ? [] : [name];
+  });
+}
 
 type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };
 
@@ -176,6 +241,17 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
           paint: { 'line-color': '#5cd0ff', 'line-width': 2 },
         },
         ...COUNTRY_SYMBOL_LAYERS,
+        {
+          id: 'inset-countries-viewport',
+          type: 'symbol',
+          source: 'inset-countries',
+          filter: ['in', ['get', 'name'], ['literal', []]],
+          layout: {
+            ...COUNTRY_TEXT_LAYOUT,
+            'text-variable-anchor-offset': ['top', [0, 1.5], 'bottom', [0, -1.5], ...countryPlacementCandidates()],
+          },
+          paint: COUNTRY_TEXT_PAINT,
+        },
       ],
     },
   });
@@ -196,6 +272,16 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let trackDirty = false;
   let fittedWidth = -1;
   let fittedHeight = -1;
+  let viewportNames = '';
+  const syncCountryLabels = (): void => {
+    if (removed || !map.isStyleLoaded() || frame.clientWidth < 2 || frame.clientHeight < 2) return;
+    const names = viewportFallbacks(map, frame);
+    const key = names.join('|');
+    if (key === viewportNames) return;
+    viewportNames = key;
+    map.setFilter('inset-countries-viewport', ['in', ['get', 'name'], ['literal', names]]);
+  };
+  map.on('render', syncCountryLabels);
   const apply = (): void => {
     if (removed || !map.isStyleLoaded()) return;
     map.resize();
