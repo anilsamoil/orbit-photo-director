@@ -2,8 +2,8 @@
 
 ## Release Boundary
 
-The host runs an hourly cache-only publisher. Items remain map-only for camera
-admission; release 1.22.0.9 adds a separate nominal planning brief (see the V2
+The host checks the cache-only publisher every ten minutes. Items remain map-only
+for camera admission; release 1.22.0.9 adds a separate nominal planning brief (see the V2
 contract). It does not send WhatsApp, change
 Earth scoring, claim photographic detection, or infer a physical spacecraft
 window. Source validation and notification activation are separate gates.
@@ -45,8 +45,8 @@ retain the local last-good pointer; remote acceptance can still be ambiguous.
 No new launch network fetcher is installed. Refresh uses the existing LL2 cache,
 whose normal source cadence is about one hour plus Earth-generation time.
 Map/Upcoming can label a hash-receipted schedule current for less than three hours
-from its original source check. This accommodates the hourly publisher and
-existing source cadence; it is not a promise against a late launch slip.
+from its original source check. This accommodates the existing source cadence;
+it is not a promise against a late launch slip.
 The independent 15-minute camera-evidence lifetime and all Queue gates are unchanged.
 Map-only items still have unknown capture intervals/directions and never enter Queue.
 
@@ -62,16 +62,31 @@ python -m scripts.launch_refresh --scheduled --publish \
 ```
 
 Use exactly one owner and persistent output directory. The host's launchd job
-runs at login and every 3600 seconds, with background priority/nice 10 and no
+runs at login and every 600 seconds, with background priority/nice 10 and no
 KeepAlive retry loop. It uses a pinned runtime checkout, separate from watched
 Earth source. No additional LL2/TLE fetch, Earth generation, model or sender is called.
 
 The scheduled path requires a stable, hash-matched source receipt less than
 three hours old; future/missing/stale receipts fail closed. It consumes each
-schedule-receipt/TLE identity once across restarts. Unchanged input checks remote
-ownership but performs no compute or upload. Actual source timestamps are retained.
+schedule-receipt/TLE identity once for v2 across restarts. Unchanged input checks remote
+ownership and leaves v2 untouched. The v3 catalog alone is recomputed and published
+when its geometry lease would not cover the next ten-minute check; this reruns
+geometry and tiering, not just timestamps. Actual source timestamps, schedule/TLE
+hashes and TLE epoch are retained. A receipt at least 75 minutes old cannot produce
+an actionable v3 tier on reevaluation; the existing fifteen-minute geometry lease
+is not a continuous 75-minute source-age cutoff.
 A refreshed source receipt may publish unchanged event content because the provider
 really was checked again. Source timestamp rollback is rejected.
+
+V3 Shot keeps its 24-hour epoch-to-capture limit and ordinary Likely keeps 48 hours.
+A guarded 48–96-hour Likely forecast requires a qualifying envelope at every
+admissible liftoff: score low at least 50, slant at most 800 km, robust geometry,
+and central best-time slack at least 30 seconds or three times the timing scale,
+whichever is larger. Incomplete evaluation or a recorded geometry error blocks
+this forecast path. Nonzero launch windows, TBC and Hour precision remain Watch.
+Forecast items retain `TLE_AGE_OVER_48H`, add `FORECAST_EPHEMERIS`, and say
+“Likely forecast — recheck with a fresh ISS orbit.” These are provisional planning
+guardrails; scores are not photo probabilities. Queue admission is unchanged.
 
 Each attempt journals its artifact before upload. The publisher reads and hashes
 the remote artifact, requires the saved local pointer or exact journaled commit,

@@ -53,6 +53,8 @@ SCHEDULE_LEASE_SECONDS = 75 * 60
 GEOMETRY_LEASE_SECONDS = VALID_SECONDS
 SHOT_TLE_AGE_H = 24.0
 LIKELY_TLE_AGE_H = 48.0
+FORECAST_TLE_AGE_H = 96.0
+FORECAST_SLANT_KM = 800.0
 SHOT_SCORE_LOW = 50.0
 LIKELY_SCORE_LOW = 25.0
 ORBITAL_SPEED_KM_S = 7.66
@@ -227,6 +229,17 @@ def _item(
         launch, g1, shots, tle.epoch if tle is not None else None,
         fresh_negative, finished, usable, liftoffs,
     )
+    if (
+        tier == "likely" and tle is not None
+        and not _covers(shots, liftoffs, tle.epoch, LIKELY_SCORE_LOW, LIKELY_TLE_AGE_H, False)
+    ):
+        if blocked.intersection(reasons):
+            tier = "watch"
+        else:
+            reasons.append("FORECAST_EPHEMERIS")
+    why = _why(tier, shots, reasons)
+    if "FORECAST_EPHEMERIS" in reasons:
+        why = "Likely forecast — recheck with a fresh ISS orbit. " + why
     for shot in shots:
         shot.pop("_age_h", None)
     item = {
@@ -237,7 +250,7 @@ def _item(
         "schedule": _schedule(launch, raw),
         "direction": _direction_block(direction),
         "tier": tier,
-        "why": _why(tier, shots, reasons),
+        "why": why,
         "reasons": sorted(set(reasons)),
         "shots": shots,
     }
@@ -307,7 +320,33 @@ def _tier(
         and _covers(shots, liftoffs, epoch, LIKELY_SCORE_LOW, LIKELY_TLE_AGE_H, False)
     ):
         return "likely"
+    if concrete and epoch is not None and _forecast_covers(shots, liftoffs, epoch):
+        return "likely"
     return "watch"
+
+
+def _forecast_covers(shots: list[dict], liftoffs: tuple[datetime, ...], epoch: datetime) -> bool:
+    # Forecast planning guardrails; scores are not photo probabilities.
+    def qualifies(shot: dict) -> bool:
+        age = _capture_age_h(shot, epoch)
+        best = _parse_iso8601_z(shot["best"])
+        slack = min(
+            (best - _parse_iso8601_z(shot["start"])).total_seconds(),
+            (_parse_iso8601_z(shot["end"]) - best).total_seconds(),
+        )
+        timing_scale = _sigma_km(age) / ORBITAL_SPEED_KM_S
+        return bool(
+            LIKELY_TLE_AGE_H < age <= FORECAST_TLE_AGE_H
+            and shot["score"]["low"] >= SHOT_SCORE_LOW
+            and shot["slant_km"] <= FORECAST_SLANT_KM
+            and shot["confidence"]["robust"]
+            and slack >= max(30.0, 3.0 * timing_scale)
+        )
+
+    return bool(liftoffs) and all(
+        any(shot["liftoff"] == utc(liftoff) and qualifies(shot) for shot in shots)
+        for liftoff in liftoffs
+    )
 
 
 def _covers(
@@ -372,6 +411,7 @@ def _shots(
         for span in scenario.spans:
             shot = _envelope(span, scenario, tle, direction, liftoff, launch.t0)
             if shot is None:
+                reasons.append("GEOMETRY_INVALID")
                 continue
             shots.append(shot)
             if shot["subject"] == "ascent" and isinstance(direction, IssPlaneDirection):

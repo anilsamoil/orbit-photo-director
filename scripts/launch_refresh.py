@@ -12,18 +12,21 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from generator.launch_catalog import build_launch_catalog
 from generator.launch_data import _parse_iso8601_z, validate_feed
 from generator.launch_evidence import build_launch_artifact, canonical_bytes, load_launch_cache
 from generator.launch_publish import (
+    _catalog_pointer,
     _same_pointer,
     _validate_artifact,
     _validate_catalog,
+    _verified_catalog,
     publish_launch_artifact,
     publish_launch_catalog,
+    rclone_catalog_reader,
     rclone_reader,
     rclone_uploader,
 )
@@ -31,6 +34,7 @@ from generator.orbit import TLE
 
 # Schedule refresh tolerance, NOT the 15-minute capture-evidence lifetime.
 MAX_SCHEDULE_AGE_SECONDS = 3 * 3600
+SCHEDULED_CHECK_SECONDS = 10 * 60
 
 
 @contextmanager
@@ -196,7 +200,7 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     identity = {
         # A model-policy change requires one fresh publication even when the
         # source receipt is unchanged. Retain ownership and prior receipts.
-        "policy": 5,
+        "policy": 6,
         "schedule_sha256": receipt["sha256"],
         "fetched_at": receipt["fetched_at"],
         "tle_sha256": hashlib.sha256(tle_raw).hexdigest(),
@@ -222,6 +226,18 @@ def _prepare_catalog(
     return catalog, None
 
 
+def _catalog_live_through_next_check(state: dict, now: datetime) -> bool:
+    """Missing legacy lease metadata requires a real catalog reevaluation."""
+    try:
+        generated = _parse_iso8601_z(state.get("generated_at"))
+        geometry_until = _parse_iso8601_z(state.get("geometry_valid_until"))
+        schedule_until = _parse_iso8601_z(state.get("schedule_valid_until"))
+    except ValueError:
+        return False
+    next_check = now + timedelta(seconds=SCHEDULED_CHECK_SECONDS)
+    return generated <= now and min(geometry_until, schedule_until) > next_check
+
+
 def refresh_cached(
     cache: Path,
     output: Path,
@@ -230,6 +246,7 @@ def refresh_cached(
     remote: str,
     upload: Callable,
     read_remote: Callable,
+    read_catalog: Callable[[], dict | None] | None = None,
 ) -> dict:
     """v2 commits on its own. A catalog failure is logged and never blocks v2."""
     if "out" in output.resolve().parts:
@@ -243,12 +260,30 @@ def refresh_cached(
         state_path = output / ".refresh-state.json"
         intent_path = output / ".refresh-intent.json"
         catalog_state_path = output / ".refresh-catalog-state.json"
+        catalog_intent_path = output / ".refresh-catalog-intent.json"
         state = json.loads(state_path.read_bytes()) if state_path.exists() else {}
         intent = json.loads(intent_path.read_bytes()) if intent_path.exists() else None
         catalog_state = (
             json.loads(catalog_state_path.read_bytes()) if catalog_state_path.exists() else {}
         )
-        if any(value and value["remote"] != remote for value in (state, intent, catalog_state)):
+        catalog_intent = (
+            json.loads(catalog_intent_path.read_bytes()) if catalog_intent_path.exists() else {}
+        )
+        catalog_pointer_path = output / "launch/catalog/latest.json"
+
+        def local_catalog() -> dict | None:
+            return (
+                json.loads(catalog_pointer_path.read_bytes())
+                if catalog_pointer_path.exists() else None
+            )
+
+        # Legacy injected publishers share this committed mirror and publisher lock.
+        # The scheduled CLI additionally verifies the actual remote catalog token.
+        expected_catalog = catalog_state.get(
+            "pointer", catalog_intent.get("previous", local_catalog()),
+        )
+        if any(value and value["remote"] != remote
+               for value in (state, intent, catalog_state, catalog_intent)):
             raise ValueError("REMOTE_OWNER_MISMATCH")
         _drop_expired_pending(output, now, intent)
 
@@ -278,7 +313,85 @@ def refresh_cached(
             prepared: dict | None = None,
             prepared_error: str | None = None,
         ) -> str | None:
-            if catalog_state.get("input_id") == identity["input_id"]:
+            verified_owner = None
+
+            def commit_catalog(catalog: dict, input_id: str, pointer: dict) -> None:
+                nonlocal catalog_state, catalog_intent, expected_catalog
+                committed = {
+                    "remote": remote,
+                    "input_id": input_id,
+                    "pointer": pointer,
+                    "revision": catalog["revision"],
+                    "generated_at": catalog["generated_at"],
+                    "geometry_valid_until": catalog["geometry_valid_until"],
+                    "schedule_valid_until": catalog["schedule_valid_until"],
+                }
+                _atomic_json(catalog_state_path, committed)
+                catalog_intent_path.unlink(missing_ok=True)
+                catalog_state, catalog_intent, expected_catalog = committed, {}, pointer
+
+            def reconcile_catalog(current: dict | None, local: dict | None) -> None:
+                # A shared publisher's pending file alone is not proof of our input.
+                pending_path = output / "launch/catalog/.latest.pending.json"
+                pending = catalog_intent.get("pointer")
+                if not pending and pending_path.exists():
+                    pending = json.loads(pending_path.read_bytes())
+                if not pending or current != pending or local not in (expected_catalog, pending):
+                    return
+                catalog = _verified_catalog(output, pending)
+                if catalog_intent.get("pointer"):
+                    if catalog_intent["previous"] != expected_catalog:
+                        return
+                    input_id = catalog_intent["input_id"]
+                else:
+                    # Upgrade an old interrupted commit only if its exact bytes can
+                    # be reproduced from a previously owned, still-cached input.
+                    old_input = {key: value for key, value in identity.items() if key != "input_id"}
+                    old_input["fetched_at"] = catalog["coverage"]["schedule_fetched_at"]
+                    input_id = hashlib.sha256(canonical_bytes(old_input)).hexdigest()
+                    if input_id not in (catalog_state.get("input_id"), state["input"]["input_id"]):
+                        return
+                    rebuilt = build_launch_catalog(
+                        payload, tle, _parse_iso8601_z(catalog["generated_at"]),
+                        fetched_at=_parse_iso8601_z(old_input["fetched_at"]),
+                    )
+                    if _catalog_pointer(rebuilt) != pending:
+                        return
+                _atomic_json(catalog_pointer_path, pending)
+                commit_catalog(catalog, input_id, pending)
+                pending_path.unlink(missing_ok=True)
+
+            def check_owner() -> None:
+                nonlocal verified_owner
+                observed = read_remote()
+                if not _same_pointer(observed, state["pointer"]):
+                    raise ValueError("REMOTE_LAUNCH_CONFLICT")
+                if catalog_state and (
+                    expected_catalog is None
+                    or expected_catalog.get("revision") != catalog_state.get("revision")
+                ):
+                    raise ValueError("REMOTE_LAUNCH_CATALOG_CONFLICT")
+                if catalog_state and "pointer" not in catalog_state:
+                    _verified_catalog(output, expected_catalog)
+                current_catalog = read_catalog() if read_catalog else local_catalog()
+                if current_catalog != expected_catalog or local_catalog() != expected_catalog:
+                    reconcile_catalog(current_catalog, local_catalog())
+                if current_catalog != expected_catalog or local_catalog() != expected_catalog:
+                    raise ValueError("REMOTE_LAUNCH_CATALOG_CONFLICT")
+                verified_owner = observed
+
+            def adopt_owner() -> None:
+                pointer_path = output / "launch/latest.json"
+                if json.loads(pointer_path.read_bytes()) != verified_owner:
+                    _atomic_json(pointer_path, verified_owner)
+
+            if (
+                catalog_state.get("input_id") == identity["input_id"]
+                and _catalog_live_through_next_check(catalog_state, now)
+            ):
+                with _publisher_guard(output):
+                    check_owner()
+                    adopt_owner()
                 return None
             if prepared_error:
                 return prepared_error
@@ -287,17 +400,37 @@ def refresh_cached(
                 if catalog is None:
                     catalog = build_launch_catalog(payload, tle, now, fetched_at=fetched_at)
                     _validate_catalog(catalog)
-                publish_launch_catalog(catalog, output, upload=upload)
+
+                def prepare_publish() -> None:
+                    nonlocal catalog_intent
+                    if not catalog_state and not catalog_intent:
+                        # Preserve even an absent initial owner when the first
+                        # catalog attempt loses the lock to a competing publisher.
+                        catalog_intent = {
+                            "remote": remote,
+                            "input_id": identity["input_id"],
+                            "previous": expected_catalog,
+                        }
+                        _atomic_json(catalog_intent_path, catalog_intent)
+                    check_owner()
+                    catalog_intent = {
+                        "remote": remote,
+                        "input_id": identity["input_id"],
+                        "previous": expected_catalog,
+                        "pointer": _catalog_pointer(catalog),
+                    }
+                    _atomic_json(catalog_intent_path, catalog_intent)
+
+                def committed() -> None:
+                    adopt_owner()
+                    commit_catalog(catalog, identity["input_id"], _catalog_pointer(catalog))
+
+                publish_launch_catalog(
+                    catalog, output, upload=upload,
+                    before_publish=prepare_publish, after_publish=committed,
+                )
             except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
                 return str(exc)
-            _atomic_json(
-                catalog_state_path,
-                {
-                    "remote": remote,
-                    "input_id": identity["input_id"],
-                    "revision": catalog["revision"],
-                },
-            )
             return None
 
         if (
@@ -327,13 +460,9 @@ def refresh_cached(
             if fetched_at < _parse_iso8601_z(state["input"]["fetched_at"]):
                 raise ValueError("OBSOLETE_SOURCE_RECEIPT")
             if identity["input_id"] == state["input"]["input_id"]:
-                pointer_path = output / "launch/latest.json"
-                local = json.loads(pointer_path.read_bytes())
                 observed = read_remote()
                 if observed != state["pointer"] and not _same_pointer(observed, state["pointer"]):
                     raise ValueError("REMOTE_LAUNCH_CONFLICT")
-                if local != observed:
-                    _atomic_json(pointer_path, observed)
                 skipped = ship_catalog(identity, payload, tle, fetched_at)
                 result = {
                     "ok": True,
@@ -411,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
                     remote=args.remote,
                     upload=uploader,
                     read_remote=rclone_reader(args.remote, local=args.output, upload=uploader),
+                    read_catalog=rclone_catalog_reader(args.remote),
                 )
             )
             return 0

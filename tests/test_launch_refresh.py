@@ -14,6 +14,8 @@ import pytest
 
 from generator.launch_evidence import build_launch_artifact, canonical_bytes, utc
 from generator.launch_publish import publish_launch_artifact, rclone_reader
+from generator.orbit import TLE, propagate
+from scripts import launch_refresh
 from scripts.launch_refresh import refresh_cached
 
 
@@ -78,6 +80,22 @@ def setup(tmp_path):
     return now, cache, output, payload, remote, calls, write_cache, run, upload
 
 
+@pytest.fixture
+def visible_setup(setup):
+    _, cache, output, payload, remote, calls, write_cache, run, upload = setup
+    tle_text = (Path(__file__).parent / "fixtures/iss-2026-10-05.tle").read_text()
+    tle = TLE.from_text(tle_text)
+    now = tle.epoch.replace(microsecond=0) + timedelta(hours=1)
+    net = now + timedelta(hours=3)
+    overhead = propagate(tle, net)
+    row = payload["results"][0]
+    row.update(net=utc(net), window_start=utc(net), window_end=utc(net))
+    row["pad"].update(latitude=overhead.lat, longitude=overhead.lon)
+    (cache / "iss.tle").write_text(tle_text)
+    write_cache(now)
+    return now, cache, output, payload, remote, calls, write_cache, run, upload
+
+
 def test_refresh_and_restart_noop_preserve_source_age(setup):
     now, _, output, _, remote, calls, _, run, _ = setup
     result = run()
@@ -97,12 +115,12 @@ def test_refresh_and_restart_noop_preserve_source_age(setup):
     assert "FEED_PAGINATED" in catalog["coverage"]["reasons"]
     assert not catalog["coverage"]["complete"]
     assert catalog["items"][0]["tier"] == "watch"
-    assert run(now + timedelta(hours=2))["reason"] == "UNCHANGED_INPUT"
+    assert run(now + timedelta(minutes=1))["reason"] == "UNCHANGED_INPUT"
     assert len(calls) == 4
     assert json.loads((output / "launch/latest.json").read_bytes()) == pointer
 
 
-def test_ten_minute_checks_do_not_fetch_renew_or_republish(setup):
+def test_ten_minute_checks_do_not_fetch_renew_source_or_republish_v2(setup):
     now, _, _, _, remote, calls, _, run, _ = setup
     run()
     original_pointer = remote["launch/latest.json"]
@@ -110,11 +128,114 @@ def test_ten_minute_checks_do_not_fetch_renew_or_republish(setup):
         result = run(now + timedelta(minutes=minutes))
         assert result["reason"] == "UNCHANGED_INPUT"
         assert not result["notified"] and not result["published"]
-    assert len(calls) == 4
+    assert calls.count("launch/latest.json") == 1
+    assert sum(key.startswith("launch/v/") for key in calls) == 1
     assert remote["launch/latest.json"] == original_pointer
+    assert _published_catalog(remote)["coverage"]["schedule_fetched_at"] == utc(now)
+    sent = len(calls)
     with pytest.raises(ValueError, match="CACHE_RECEIPT_EXPIRED_OR_FUTURE"):
         run(now + timedelta(hours=3))
-    assert len(calls) == 4
+    assert len(calls) == sent
+
+
+def test_ten_minute_check_recomputes_catalog_before_its_lease_expires(visible_setup, monkeypatch):
+    now, cache, output, _, remote, calls, _, run, _ = visible_setup
+    evaluations = []
+    build = launch_refresh.build_launch_catalog
+
+    def tracked_build(payload, tle, at, **kwargs):
+        evaluations.append(at)
+        return build(payload, tle, at, **kwargs)
+
+    monkeypatch.setattr(launch_refresh, "build_launch_catalog", tracked_build)
+    run(now)
+    first = _published_catalog(remote)
+    original_pointer = remote["launch/latest.json"]
+    original_input = json.loads((output / ".refresh-state.json").read_bytes())["input"]
+    original_receipt = (cache / "launches.json.receipt.json").read_bytes()
+    assert first["items"][0]["tier"] == "shot"
+    sent = len(calls)
+    checked_at = now + timedelta(minutes=10)
+    result = run(checked_at)
+    catalog = _published_catalog(remote)
+    state = json.loads((output / ".refresh-catalog-state.json").read_bytes())
+    assert evaluations == [now, checked_at]
+    assert result["reason"] == "UNCHANGED_INPUT"
+    assert not result["published"] and not result["notified"]
+    assert catalog["generated_at"] == utc(checked_at)
+    assert catalog["geometry_valid_until"] == utc(now + timedelta(minutes=25))
+    assert catalog["geometry_valid_until"] > first["geometry_valid_until"]
+    assert catalog["coverage"]["schedule_fetched_at"] == first["coverage"]["schedule_fetched_at"]
+    assert catalog["tle"] == first["tle"]
+    assert catalog["tle"]["epoch"] is not None
+    assert catalog["items"][0]["tier"] == "shot"
+    assert state["input_id"] == original_input["input_id"]
+    for field in ("generated_at", "geometry_valid_until", "schedule_valid_until"):
+        assert state[field] == catalog[field]
+    assert json.loads((output / ".refresh-state.json").read_bytes())["input"] == original_input
+    assert (cache / "launches.json.receipt.json").read_bytes() == original_receipt
+    assert remote["launch/latest.json"] == original_pointer
+    assert len(calls[sent:]) == 2
+    assert all(key.startswith("launch/catalog/") for key in calls[sent:])
+
+
+def test_catalog_is_only_rebuilt_when_lease_cannot_cover_next_check(setup):
+    now, _, _, _, _, calls, _, run, _ = setup
+    with patch.object(launch_refresh, "build_launch_catalog", wraps=launch_refresh.build_launch_catalog) as build:
+        run()
+        for seconds in (0, 60, 299):
+            run(now + timedelta(seconds=seconds))
+        assert build.call_count == 1
+        assert len(calls) == 4
+        run(now + timedelta(minutes=5))
+        assert build.call_count == 2
+        assert len(calls) == 6
+
+
+@pytest.mark.parametrize("metadata", ["legacy", "invalid", "future"])
+def test_catalog_restart_rebuilds_unusable_lease_metadata(setup, metadata):
+    now, _, output, _, remote, calls, _, run, _ = setup
+    run()
+    path = output / ".refresh-catalog-state.json"
+    state = json.loads(path.read_bytes())
+    if metadata == "legacy":
+        for field in ("generated_at", "geometry_valid_until", "schedule_valid_until"):
+            state.pop(field)
+    elif metadata == "invalid":
+        state["geometry_valid_until"] = "invalid"
+    else:
+        state["generated_at"] = utc(now + timedelta(minutes=2))
+    path.write_bytes(canonical_bytes(state))
+    assert run(now + timedelta(minutes=1))["reason"] == "UNCHANGED_INPUT"
+    assert _published_catalog(remote)["generated_at"] == utc(now + timedelta(minutes=1))
+    assert len(calls) == 6
+    assert all(key.startswith("launch/catalog/") for key in calls[4:])
+    assert run(now + timedelta(minutes=2))["reason"] == "UNCHANGED_INPUT"
+    assert len(calls) == 6
+
+
+@pytest.mark.parametrize("minutes", [75, 80, 179])
+def test_catalog_rebuild_cannot_renew_actionable_tier_from_stale_receipt(visible_setup, minutes):
+    now, _, output, _, remote, calls, _, run, _ = visible_setup
+    run(now)
+    original = _published_catalog(remote)
+    original_input = json.loads((output / ".refresh-state.json").read_bytes())["input"]
+    assert original["items"][0]["tier"] == "shot"
+    result = run(now + timedelta(minutes=minutes))
+    catalog = _published_catalog(remote)
+    assert result["reason"] == "UNCHANGED_INPUT"
+    assert not result["published"] and not result["notified"]
+    assert catalog["generated_at"] == utc(now + timedelta(minutes=minutes))
+    assert catalog["items"][0]["tier"] == "watch"
+    assert catalog["coverage"]["schedule_fetched_at"] == utc(now)
+    assert catalog["tle"] == original["tle"]
+    assert catalog["geometry_valid_until"] <= catalog["schedule_valid_until"] <= utc(now + timedelta(hours=3))
+    assert json.loads((output / ".refresh-state.json").read_bytes())["input"] == original_input
+    assert all(key.startswith("launch/catalog/") for key in calls[4:])
+    sent = len(calls)
+    with pytest.raises(ValueError, match="CACHE_RECEIPT_EXPIRED_OR_FUTURE"):
+        run(now + timedelta(hours=3))
+    assert len(calls) == sent
 
 
 def test_ten_minute_check_consumes_new_receipt_once(setup):
@@ -130,7 +251,8 @@ def test_ten_minute_check_consumes_new_receipt_once(setup):
     assert catalog["coverage"]["schedule_fetched_at"] == utc(received)
     assert len(calls) == 8
     assert run(now + timedelta(hours=3))["reason"] == "UNCHANGED_INPUT"
-    assert len(calls) == 8
+    assert len(calls) == 10
+    assert all(key.startswith("launch/catalog/") for key in calls[8:])
 
 
 def test_slip_then_tbd_removes_old_exact_event(setup):
@@ -176,13 +298,17 @@ def test_bad_cache_receipt_cannot_publish(setup, mode):
     assert calls == []
 
 
-def test_remote_conflict_does_not_upload(setup):
-    _, _, _, _, remote, calls, _, run, _ = setup
+@pytest.mark.parametrize("unchanged", [False, True])
+def test_remote_conflict_does_not_upload(setup, unchanged):
+    now, _, _, _, remote, calls, _, run, _ = setup
+    if unchanged:
+        run()
+        calls.clear()
     pointer = json.loads(remote["launch/latest.json"])
     pointer["revision"] = "different-owner"
     remote["launch/latest.json"] = canonical_bytes(pointer)
     with pytest.raises(ValueError, match="REMOTE_LAUNCH_CONFLICT"):
-        run()
+        run(now + timedelta(minutes=10))
     assert calls == []
 
 
@@ -319,7 +445,7 @@ def test_policy_upgrade_republishes_same_receipt_once_without_releasing_owner(se
     state = json.loads(state_path.read_bytes())
     assert state["remote"] == old_owner
     assert state["input"]["fetched_at"] == old_receipt
-    assert state["input"]["policy"] == 5
+    assert state["input"]["policy"] == 6
     assert len(calls) == 8
     assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
     assert len(calls) == 8
@@ -458,6 +584,32 @@ def test_catalog_outage_then_fresh_input_updates_v2_immediately(setup):
     assert second["revision"] != first["revision"]
     assert json.loads(remote["launch/latest.json"])["revision"] == second["revision"]
     assert any(key.startswith("launch/catalog/") for key in calls)
+
+
+def test_catalog_lease_refresh_failure_keeps_prior_state_and_retries(setup):
+    now, _, output, _, remote, calls, _, run, upload = setup
+    run()
+    state_path = output / ".refresh-catalog-state.json"
+    previous_state = state_path.read_bytes()
+    previous_pointer = remote["launch/catalog/latest.json"]
+    v2_pointer = remote["launch/latest.json"]
+
+    def catalog_pointer_down(path, key, immutable):
+        if key == "launch/catalog/latest.json":
+            raise RuntimeError("catalog offline")
+        upload(path, key, immutable)
+
+    failed = run(now + timedelta(minutes=10), upload=catalog_pointer_down)
+    assert failed["reason"] == "UNCHANGED_INPUT"
+    assert failed["catalog_skipped"] == "catalog offline"
+    assert state_path.read_bytes() == previous_state
+    assert remote["launch/catalog/latest.json"] == previous_pointer
+    assert remote["launch/latest.json"] == v2_pointer
+    recovered = run(now + timedelta(minutes=11))
+    assert "catalog_skipped" not in recovered
+    assert _published_catalog(remote)["generated_at"] == utc(now + timedelta(minutes=11))
+    assert remote["launch/latest.json"] == v2_pointer
+    assert all(key.startswith("launch/catalog/") for key in calls[4:])
 
 
 def test_publish_path_prevalidates_both_artifacts(tmp_path, monkeypatch, capsys):
