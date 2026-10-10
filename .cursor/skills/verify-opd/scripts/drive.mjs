@@ -3719,6 +3719,664 @@ async function driveTracked(send, evidenceDir, meta, home) {
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
 }
 
+async function planCamera(send) {
+  return evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    if (!canvas || !orbit?.getCenter || !orbit.getZoom) return null;
+    const box = canvas.getBoundingClientRect();
+    const center = orbit.getCenter();
+    return {
+      x: box.left + box.width / 2,
+      y: box.top + box.height / 2,
+      canvasWidth: box.width,
+      zoom: orbit.getZoom(),
+      lng: center.lng,
+      lat: center.lat,
+      view: document.getElementById('view')?.className || '',
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+  })()`);
+}
+
+function cameraMoved(before, after) {
+  if (!before || !after) return false;
+  return Math.abs(before.lng - after.lng) + Math.abs(before.lat - after.lat) > 0.02;
+}
+
+async function provePlanWheelSurvivesRebuild(send) {
+  const before = await planCamera(send);
+  if (!before) throw new Error('plan camera missing before the first wheel');
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: before.x, y: before.y, deltaX: 0, deltaY: -240 });
+  await waitFor(
+    send,
+    `(() => {
+      const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+      if (!orbit?.getZoom) return null;
+      const zoom = orbit.getZoom();
+      if (!(Math.abs(zoom - ${before.zoom}) > 0.05)) return null;
+      return { ok: true, zoom };
+    })()`,
+    'plan first wheel zoom',
+    8000,
+  );
+  await sleep(500);
+  const settled = await planCamera(send);
+  if (!settled || !(Math.abs(settled.zoom - before.zoom) > 0.05)) {
+    throw new Error(`plan wheel did not settle ${JSON.stringify({ before, settled })}`);
+  }
+  await sleep(5600);
+  const after = await planCamera(send);
+  if (!after || Math.abs(after.zoom - settled.zoom) > 0.03 || !(Math.abs(after.zoom - before.zoom) > 0.05)) {
+    throw new Error(`plan wheel reset by the track rebuild ${JSON.stringify({ before, settled, after })}`);
+  }
+  return after.zoom;
+}
+
+async function provePlanRasterNames(send) {
+  const laid = await evaluate(send, `(async () => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame?.querySelector('canvas');
+    const orbit = frame?.__opdTrackInset;
+    if (!canvas || !orbit?.jumpTo || !orbit.queryRenderedFeatures || !orbit.getStyle) return { ok: false, reason: 'map' };
+    canvas.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -1 }));
+    if (orbit.stop) orbit.stop();
+    const raster = orbit.getLayer('inset-labels');
+    const opacity = orbit.getPaintProperty('inset-labels', 'raster-opacity');
+    if (!raster || !(opacity > 0)) return { ok: false, reason: 'raster', opacity: opacity == null ? null : opacity };
+    const symbolLayers = (orbit.getStyle().layers || []).filter((layer) => layer.type === 'symbol');
+    const symbolIds = symbolLayers.map((layer) => layer.id);
+    const samples = [];
+    for (const zoom of [3.1, 8]) {
+      if (orbit.stop) orbit.stop();
+      orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 1200);
+        orbit.once('idle', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      const active = symbolLayers.filter((layer) => {
+        const min = layer.minzoom == null ? 0 : layer.minzoom;
+        const max = layer.maxzoom == null ? 24 : layer.maxzoom;
+        return zoom >= min && zoom < max;
+      }).map((layer) => layer.id);
+      let features = [];
+      try {
+        features = symbolIds.length ? orbit.queryRenderedFeatures(undefined, { layers: symbolIds }) : [];
+      } catch (error) {
+        return { ok: false, reason: 'query', zoom, error: String(error) };
+      }
+      const names = [];
+      for (const feature of features) {
+        const name = feature && feature.properties && feature.properties.name;
+        if (typeof name === 'string' && !names.includes(name)) names.push(name);
+      }
+      const stacked = names.filter((name) => name === 'Washington D.C.' || name === 'New York' || name === 'Washington');
+      samples.push({ zoom: orbit.getZoom(), stacked, names, active });
+      if (stacked.length || active.length || Math.abs(orbit.getZoom() - zoom) > 0.05) {
+        return { ok: false, reason: stacked.length ? 'stacked' : active.length ? 'vector' : 'zoom', samples };
+      }
+    }
+    return { ok: true, samples, opacity };
+  })()`);
+  if (!laid?.ok) throw new Error(`plan raster names ${JSON.stringify(laid)}`);
+}
+
+async function dispatchPlanTouch(send, type, x, y) {
+  const sent = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const kind = ${JSON.stringify(type)};
+    const x = ${x};
+    const y = ${y};
+    const pointer = kind === 'touchStart' ? 'pointerdown' : kind === 'touchEnd' ? 'pointerup' : 'pointermove';
+    canvas.dispatchEvent(new PointerEvent(pointer, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      pointerId: 7,
+      pointerType: 'touch',
+      isPrimary: true,
+    }));
+    let touch = null;
+    if (document.createTouch) {
+      try {
+        touch = document.createTouch(window, canvas, 7, x, y, x, y, x, y);
+      } catch (error) {
+        touch = null;
+      }
+    }
+    if (!touch && typeof Touch === 'function') {
+      try {
+        touch = new Touch({ identifier: 7, target: canvas, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y });
+      } catch (error) {
+        touch = null;
+      }
+    }
+    if (!touch) return { ok: false, reason: 'touch-ctor' };
+    const list = document.createTouchList ? document.createTouchList(touch) : [touch];
+    const empty = document.createTouchList ? document.createTouchList() : [];
+    const active = kind === 'touchEnd' ? empty : list;
+    const eventName = kind === 'touchStart' ? 'touchstart' : kind === 'touchEnd' ? 'touchend' : 'touchmove';
+    try {
+      canvas.dispatchEvent(new TouchEvent(eventName, {
+        bubbles: true,
+        cancelable: true,
+        touches: active,
+        targetTouches: active,
+        changedTouches: list,
+      }));
+    } catch (error) {
+      return { ok: false, reason: 'event', error: String(error) };
+    }
+    return { ok: true };
+  })()`);
+  if (!sent?.ok) throw new Error(`plan touch ${type} ${JSON.stringify(sent)}`);
+}
+
+async function provePlanGestureHolds(send, viewport) {
+  const start = await planCamera(send);
+  if (!start) throw new Error('plan camera missing before the gesture');
+  const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
+  await sleep(200);
+  const panned = await planCamera(send);
+  if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
+  const nextWidth = Math.max(800, Math.round(start.width) - 40);
+  await setViewport(send, nextWidth, start.height, viewport.mobile);
+  await evaluate(send, `(() => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => 2 });
+    return window.devicePixelRatio;
+  })()`);
+  let previous = panned;
+  for (let tick = 1; tick <= 3; tick += 1) {
+    await sleep(1100);
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: start.x + step * (tick + 1),
+      y: start.y,
+      button: 'left',
+      buttons: 1,
+    });
+    await sleep(150);
+    const next = await planCamera(send);
+    if (!cameraMoved(previous, next)) {
+      throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+    }
+    previous = next;
+  }
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: start.x + step * 4,
+    y: start.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(450);
+  const released = await planCamera(send);
+  if (!released || released.view !== 'view-iss') {
+    throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
+  }
+  const touchStart = await planCamera(send);
+  await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
+  await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
+  await sleep(200);
+  const touched = await planCamera(send);
+  if (!cameraMoved(touchStart, touched)) {
+    throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
+  }
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  await evaluate(send, `(() => {
+    delete window.devicePixelRatio;
+    return window.devicePixelRatio;
+  })()`);
+  let touchPrevious = touched;
+  for (let tick = 1; tick <= 3; tick += 1) {
+    await sleep(1100);
+    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
+    await sleep(150);
+    const next = await planCamera(send);
+    if (!cameraMoved(touchPrevious, next)) {
+      throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+    }
+    touchPrevious = next;
+  }
+  await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
+  await sleep(450);
+  const ended = await planCamera(send);
+  if (!ended || ended.view !== 'view-iss') {
+    throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+  }
+}
+
+async function planFrameMetrics(send) {
+  return evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame && frame.querySelector('canvas');
+    const orbit = frame && frame.__opdTrackInset;
+    if (!frame || !canvas || !orbit || !orbit.getZoom) return null;
+    const box = frame.getBoundingClientRect();
+    const canvasBox = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    let outsideX = box.right + 28;
+    let outsideY = box.top + Math.min(48, Math.max(8, box.height / 3));
+    if (outsideX > window.innerWidth - 6) outsideX = Math.max(6, box.left - 28);
+    if (outsideY < 6) outsideY = 6;
+    if (outsideY > window.innerHeight - 6) outsideY = window.innerHeight - 6;
+    const host = document.elementFromPoint(outsideX, outsideY);
+    const outsideFrame = !(host && (frame.contains(host) || host.closest('[data-pip="plan"]')));
+    return {
+      x: canvasBox.left + canvasBox.width / 2,
+      y: canvasBox.top + canvasBox.height / 2,
+      outsideX,
+      outsideY,
+      outsideFrame,
+      cssWidth: canvas.clientWidth,
+      cssHeight: canvas.clientHeight,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height,
+      frameWidth: frame.clientWidth,
+      frameHeight: frame.clientHeight,
+      dpr,
+      view: (document.getElementById('view') && document.getElementById('view').className) || '',
+      zoom: orbit.getZoom(),
+      bearing: orbit.getBearing(),
+    };
+  })()`);
+}
+
+function planCanvasReady(metrics) {
+  if (!metrics || metrics.frameWidth < 2 || metrics.frameHeight < 2 || !(metrics.dpr > 0)) return null;
+  return {
+    cssWidth: metrics.frameWidth,
+    cssHeight: metrics.frameHeight,
+    backingWidth: Math.round(metrics.frameWidth * metrics.dpr),
+    backingHeight: Math.round(metrics.frameHeight * metrics.dpr),
+  };
+}
+
+async function provePlanSmallMotion(send) {
+  const start = await planCamera(send);
+  if (!start) throw new Error('plan camera missing before a small move');
+  for (const dx of [2, 5, 10]) {
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + dx, y: start.y, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: start.x + dx, y: start.y, button: 'left', buttons: 0, clickCount: 1 });
+    await sleep(450);
+    const now = await planCamera(send);
+    if (!now || now.view !== 'view-iss') throw new Error(`plan ${dx}px move opened Map ${JSON.stringify(now)}`);
+  }
+  const second = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const box = canvas.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const point = (type, id, clientX) => canvas.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY: y,
+      pointerId: id,
+      pointerType: 'touch',
+      isPrimary: id === 1,
+    }));
+    point('pointerdown', 1, x);
+    point('pointerdown', 2, x + 36);
+    point('pointerup', 1, x);
+    point('pointerup', 2, x + 36);
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    return { ok: true };
+  })()`);
+  if (!second?.ok) throw new Error(`plan second touch ${JSON.stringify(second)}`);
+  await sleep(450);
+  const after = await planCamera(send);
+  if (!after || after.view !== 'view-iss') throw new Error(`plan second touch opened Map ${JSON.stringify(after)}`);
+}
+
+async function dispatchPlanTouches(send, name, active, changed) {
+  const sent = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const name = ${JSON.stringify(name)};
+    const activePoints = ${JSON.stringify(active)};
+    const changedPoints = ${JSON.stringify(changed)};
+    const make = (point) => {
+      let touch = null;
+      if (document.createTouch) {
+        try {
+          touch = document.createTouch(window, canvas, point.id, point.x, point.y, point.x, point.y, point.x, point.y);
+        } catch (error) {
+          touch = null;
+        }
+      }
+      if (!touch && typeof Touch === 'function') {
+        try {
+          touch = new Touch({ identifier: point.id, target: canvas, clientX: point.x, clientY: point.y, pageX: point.x, pageY: point.y, screenX: point.x, screenY: point.y });
+        } catch (error) {
+          touch = null;
+        }
+      }
+      return touch;
+    };
+    const changedTouches = [];
+    for (const point of changedPoints) {
+      const touch = make(point);
+      if (!touch) return { ok: false, reason: 'touch-ctor' };
+      changedTouches.push(touch);
+    }
+    const activeTouches = [];
+    for (const point of activePoints) {
+      const touch = make(point);
+      if (!touch) return { ok: false, reason: 'touch-ctor' };
+      activeTouches.push(touch);
+    }
+    const list = (points) => document.createTouchList ? document.createTouchList(...points) : points;
+    try {
+      canvas.dispatchEvent(new TouchEvent(name, {
+        bubbles: true,
+        cancelable: true,
+        touches: list(activeTouches),
+        targetTouches: list(activeTouches),
+        changedTouches: list(changedTouches),
+      }));
+    } catch (error) {
+      return { ok: false, reason: 'event', error: String(error) };
+    }
+    return { ok: true };
+  })()`);
+  if (!sent?.ok) throw new Error(`plan pinch ${name} ${JSON.stringify(sent)}`);
+}
+
+async function provePlanRotatingPinch(send) {
+  const armed = await evaluate(send, `(() => {
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    if (!orbit?.jumpTo || !orbit.getZoom) return null;
+    orbit.jumpTo({ zoom: 1, bearing: 0, pitch: 0 });
+    return { zoom: orbit.getZoom(), bearing: orbit.getBearing() };
+  })()`);
+  const start = await planCamera(send);
+  if (!armed || !start) throw new Error('plan camera missing before a rotating pinch');
+  start.zoom = armed.zoom;
+  const cx = start.x;
+  const cy = start.y;
+  const finger = (t) => ([
+    { id: 1, x: cx - 36 * (1 - t), y: cy - 90 * t },
+    { id: 2, x: cx + 36 * (1 - t), y: cy + 90 * t },
+  ]);
+  const first = finger(0);
+  await dispatchPlanTouches(send, 'touchstart', [first[0]], [first[0]]);
+  await dispatchPlanTouches(send, 'touchstart', first, [first[1]]);
+  for (let step = 1; step <= 6; step += 1) {
+    const next = finger(step / 6);
+    await dispatchPlanTouches(send, 'touchmove', next, next);
+  }
+  const last = finger(1);
+  await dispatchPlanTouches(send, 'touchend', [], last);
+  await sleep(250);
+  const after = await planFrameMetrics(send);
+  if (!after || Math.abs(after.bearing) > 0.5 || !(after.zoom - start.zoom > 0.2)) {
+    throw new Error(`plan rotating pinch ${JSON.stringify({ startZoom: start.zoom, after })}`);
+  }
+  if (after.view !== 'view-iss') throw new Error(`plan rotating pinch opened Map ${JSON.stringify(after)}`);
+}
+
+async function armPlanPointer(send) {
+  const armed = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    if (!frame) return { ok: false };
+    window.__opdPlanPointer = null;
+    frame.addEventListener('pointerdown', (event) => { window.__opdPlanPointer = event.pointerId; }, { capture: true, once: true });
+    return { ok: true };
+  })()`);
+  if (!armed?.ok) throw new Error('plan pointer arm failed');
+}
+
+async function endPlanGesture(send, kind, outside) {
+  if (kind === 'up') {
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: outside.outsideX,
+      y: outside.outsideY,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+  } else {
+    const ended = await evaluate(send, `(() => {
+      const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+      const id = window.__opdPlanPointer;
+      const kind = ${JSON.stringify(kind)};
+      if (!frame || id == null) return { ok: false, reason: 'pointer', id };
+      if (kind === 'cancel') {
+        window.dispatchEvent(new PointerEvent('pointercancel', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: id,
+          pointerType: 'mouse',
+          clientX: ${outside.outsideX},
+          clientY: ${outside.outsideY},
+        }));
+      } else if (kind === 'lost') {
+        if (frame.hasPointerCapture && frame.hasPointerCapture(id)) frame.releasePointerCapture(id);
+        else {
+          window.dispatchEvent(new PointerEvent('lostpointercapture', {
+            bubbles: false,
+            pointerId: id,
+            pointerType: 'mouse',
+            clientX: ${outside.outsideX},
+            clientY: ${outside.outsideY},
+          }));
+        }
+      } else {
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('data-opd-blur', '');
+        iframe.src = 'about:blank';
+        document.body.append(iframe);
+        if (iframe.contentWindow) iframe.contentWindow.focus();
+      }
+      return { ok: true, id };
+    })()`);
+    if (!ended?.ok) throw new Error(`plan ${kind} ${JSON.stringify(ended)}`);
+  }
+}
+
+async function returnToPlan(send) {
+  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  if (await evaluate(send, `document.getElementById('view')?.className === 'view-iss'`)) {
+    await waitForPip(send, 'plan', 'plan inset still open', 20000);
+    return;
+  }
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view');
+      const canvas = document.querySelector('[data-pip="plan"] canvas');
+      if (!view || view.className !== 'view-iss' || !canvas) return null;
+      return { ok: true };
+    })()`,
+    'iss after an outside plan gesture',
+    45000,
+  );
+  await waitForPip(send, 'plan', 'plan framed after an outside gesture', 20000);
+}
+
+async function provePlanOutsideEnding(send, viewport, kind, from, to) {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: from.width,
+    height: from.height,
+    deviceScaleFactor: from.dpr,
+    mobile: viewport.mobile,
+  });
+  await sleep(400);
+  await waitForPip(send, 'plan', `plan before ${kind}`, 20000);
+  const before = await planFrameMetrics(send);
+  if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
+  await armPlanPointer(send);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: before.outsideX,
+    y: before.outsideY,
+    button: 'left',
+    buttons: 1,
+  });
+  await endPlanGesture(send, kind, before);
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: to.width,
+    height: to.height,
+    deviceScaleFactor: to.dpr,
+    mobile: viewport.mobile,
+  });
+  for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
+  const after = await planFrameMetrics(send);
+  const expected = planCanvasReady(after);
+  const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
+  if (!after || !expected || !changed || after.view !== 'view-iss'
+    || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
+    || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
+    throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
+  }
+  await evaluate(send, `(() => {
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    if (orbit?.stop) orbit.stop();
+    return true;
+  })()`);
+  if (kind !== 'up') {
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: before.outsideX,
+      y: before.outsideY,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+  }
+  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  const clickAt = await planFrameMetrics(send);
+  await mouseClick(send, clickAt.x, clickAt.y);
+  await waitFor(
+    send,
+    `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
+    `plan ${kind} click opens map`,
+    8000,
+  );
+  await returnToPlan(send);
+  return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
+}
+
+async function provePlanOutsideRelease(send, viewport) {
+  const panes = viewport.mobile
+    ? [
+      { from: { width: 834, height: 1194, dpr: 2 }, to: { width: 860, height: 1080, dpr: 2 } },
+      { from: { width: 1194, height: 834, dpr: 2 }, to: { width: 1100, height: 760, dpr: 2 } },
+    ]
+    : [
+      { from: { width: 1400, height: 900, dpr: 1 }, to: { width: 1320, height: 830, dpr: 2 } },
+    ];
+  const notes = [];
+  try {
+    for (const pane of panes) {
+      for (const kind of ['up', 'cancel', 'lost', 'blur']) {
+        const sized = await provePlanOutsideEnding(send, viewport, kind, pane.from, pane.to);
+        notes.push(`${pane.from.width}x${pane.from.height} ${kind} ${sized.css} -> ${sized.backing}@${sized.dpr}`);
+      }
+    }
+  } finally {
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  }
+  return notes.join('; ');
+}
+
+async function provePlanMapLive(send, viewport) {
+  try {
+    const zoom = await provePlanWheelSurvivesRebuild(send);
+    await provePlanSmallMotion(send);
+    await evaluate(send, `(() => {
+      const canvas = document.querySelector('[data-pip="plan"] canvas');
+      if (!canvas) return false;
+      canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      return true;
+    })()`);
+    await waitForPip(send, 'plan', 'plan framed before an outside release', 20000);
+    const outside = await provePlanOutsideRelease(send, viewport);
+    await provePlanRasterNames(send);
+    await provePlanGestureHolds(send, viewport);
+    await provePlanRotatingPinch(send);
+    return `wheel ${zoom.toFixed(2)}; ${outside}`;
+  } finally {
+    await evaluate(send, `(() => { delete window.devicePixelRatio; document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function proveSnapHelpDuringShortcuts(send, viewport) {
+  const panes = [
+    { width: viewport.width, height: viewport.height },
+    { width: viewport.height, height: viewport.width },
+  ];
+  try {
+    for (const pane of panes) {
+      await setViewport(send, pane.width, pane.height, true);
+      await sleep(400);
+      await click(send, '[data-iss-aim-help]');
+      await waitFor(
+        send,
+        `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? { ok: true } : null`,
+        `shortcuts open ${pane.width}x${pane.height}`,
+        10000,
+      );
+      const aim = await evaluate(send, `(() => {
+        const button = document.querySelector('[data-iss-snap-help]');
+        const scene = document.querySelector('[data-iss-scene]');
+        if (!button || !scene?.hasAttribute('data-iss-aim-open')) return { ok: false, reason: 'closed' };
+        const box = button.getBoundingClientRect();
+        if (box.width < 8 || box.height < 8) return { ok: false, reason: 'box', width: box.width, height: box.height };
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        const node = document.elementFromPoint(x, y);
+        const onButton = !!node && (node === button || button.contains(node));
+        return { ok: onButton, x, y, hit: node ? (node.getAttribute('aria-label') || node.id || node.tagName) : null };
+      })()`);
+      if (!aim?.ok) throw new Error(`SNAP help under shortcuts ${pane.width}x${pane.height} ${JSON.stringify(aim)}`);
+      await send('Input.tap', { x: aim.x, y: aim.y });
+      await waitFor(
+        send,
+        `(() => {
+          const dialog = document.querySelector('.help-modal');
+          if (!dialog) return null;
+          const label = dialog.getAttribute('aria-label') || '';
+          if (!label.includes('Help')) return null;
+          return { ok: true, label };
+        })()`,
+        `SNAP help dialog ${pane.width}x${pane.height}`,
+        10000,
+      );
+      await click(send, '.help-close');
+      await waitFor(send, `!document.querySelector('.help-modal') ? { ok: true } : null`, 'SNAP help closed', 10000);
+      if (await evaluate(send, `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? true : false`)) {
+        await click(send, '[data-iss-aim-scrim]');
+        await waitFor(
+          send,
+          `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? null : { ok: true }`,
+          'shortcuts closed after SNAP help',
+          10000,
+        );
+      }
+    }
+  } finally {
+    await evaluate(send, `document.querySelector('.help-close')?.click()`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
 async function armIssFovWatch(send) {
   await evaluate(send, `(() => {
     const watch = { bad: null, settled: false };
@@ -3878,7 +4536,14 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   );
   const shortStage = viewport.width === 390 && viewport.height === 664 ? await proveIssShortStages(send) : '';
   const fullscreen = await proveIssFullscreen(send, evidenceDir, viewport);
+  if (!insetViewportFits(viewport.width, viewport.height)) {
+    await proveSnapHelpDuringShortcuts(send, viewport);
+  }
   const pip = await provePipSurface(send, evidenceDir, viewport, 'iss');
+  let planLive = '';
+  if (insetViewportFits(viewport.width, viewport.height)) {
+    planLive = await provePlanMapLive(send, viewport);
+  }
   if (insetViewportFits(viewport.width, viewport.height)) {
     await pressInset(send, 'plan', viewport.mobile);
     await waitFor(
@@ -4022,7 +4687,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
   const towns = await proveIssTownRetry(send, evidenceDir, viewport);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), ${placement ? `placement ${placement}, ` : ''}fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}${planLive ? ` ${planLive}` : ''}, launch look (${launchLook}), ${placement ? `placement ${placement}, ` : ''}fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
 }
 
 async function proveIssTownRetry(send, evidenceDir, viewport) {
@@ -4250,6 +4915,7 @@ const ISS_FULLSCREEN_HIDDEN = [
   '[data-iss-hint]',
   '.maplibregl-ctrl-attrib',
   '[data-iss-aim-help]',
+  '[data-iss-snap-help]',
   '[data-iss-launch-picker]',
 ];
 
@@ -4281,8 +4947,14 @@ const ISS_FULLSCREEN_OFF = `(() => {
   if ((document.fullscreenElement ?? document.webkitFullscreenElement ?? null) !== null) return { step: 'browser-held' };
   if (button.getAttribute('aria-label') !== 'Full screen' || button.title !== 'Full screen') return { step: 'label' };
   if (document.querySelectorAll('[data-iss-fullscreen]').length !== 1) return { step: 'exit-count' };
-  if (button.previousElementSibling !== document.querySelector('[data-iss-telemetry]')) return { step: 'order' };
-  if (!button.parentElement?.hasAttribute('data-iss-controls')) return { step: 'parent' };
+  if (button.parentElement !== scene) return { step: 'parent' };
+  const help = document.querySelector('[data-iss-snap-help]');
+  const picker = document.querySelector('[data-iss-launch-picker-wrap]');
+  const launches = document.querySelector('[data-iss-launches]');
+  if (!(help instanceof HTMLElement) || !(picker instanceof HTMLElement) || !(launches instanceof HTMLElement)) return { step: 'help-missing' };
+  if (picker.nextElementSibling !== help || help.nextElementSibling !== launches) return { step: 'help-order' };
+  if (help.getAttribute('aria-label') !== 'Help — how to use SNAP' || help.textContent !== '?') return { step: 'help-label', label: help.getAttribute('aria-label') };
+  if (getComputedStyle(button).position !== 'absolute') return { step: 'corner-position' };
   if (getComputedStyle(scene).position !== 'absolute') return { step: 'position' };
   if (scene.querySelector('[data-iss-presets]')?.getClientRects().length !== 1) return { step: 'presets' };
   if (${SCENE_SCROLLS}) return { step: 'scroll' };
@@ -4291,13 +4963,19 @@ const ISS_FULLSCREEN_OFF = `(() => {
   if (!button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) return { step: 'hit' };
   const telemetry = document.querySelector('[data-iss-telemetry]')?.getBoundingClientRect();
   if (!telemetry || telemetry.height < 40 || Math.abs(telemetry.height - box.height) > 1) return { step: 'height', telemetry: telemetry ? telemetry.height : null, control: box.height };
+  const sceneBox = scene.getBoundingClientRect();
+  if (sceneBox.right - box.right > 96 || sceneBox.bottom - box.bottom > 96 || box.right > sceneBox.right + 1 || box.bottom > sceneBox.bottom + 1) {
+    return { step: 'corner', scene: [sceneBox.right, sceneBox.bottom], button: [box.right, box.bottom] };
+  }
   const shownPlaces = [...document.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length;
   if (shownPlaces < 1) return { step: 'places', shown: shownPlaces };
-  const covered = [...button.parentElement.children]
-    .filter((node) => node !== button)
-    .flatMap((node) => [...node.getClientRects()])
-    .find((other) => box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5);
-  if (covered) return { step: 'overlap', button: [box.left, box.top, box.right, box.bottom], other: [covered.left, covered.top, covered.right, covered.bottom] };
+  const covered = ['[data-iss-telemetry]', '[data-iss-launch-picker]', '[data-iss-snap-help]', '[data-iss-launch]'].find((sel) => {
+    const node = document.querySelector(sel);
+    if (!node) return false;
+    const other = node.getBoundingClientRect();
+    return other.width > 1 && box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5;
+  });
+  if (covered) return { step: 'overlap', covered, button: [box.left, box.top, box.right, box.bottom] };
   return { ok: true, width: frame.width, height: frame.height };
 })()`;
 
@@ -4497,7 +5175,7 @@ const ISS_SHORT_STAGE = `(() => {
     return { step: 'overlap', frame: [Math.round(frameBox.top), Math.round(frameBox.bottom)], controls: [Math.round(controlsBox.top), Math.round(controlsBox.bottom)] };
   }
   if (!scene.hasAttribute('data-iss-short')) return { step: 'short' };
-  const sels = ['[data-iss-telemetry]', '[data-iss-fullscreen]', '[data-iss-launch-picker]', '[data-iss-aim-help]', '[data-iss-preset="horizon"]', '[data-iss-preset="nadir"]', '[data-iss-cupola]'];
+  const sels = ['[data-iss-telemetry]', '[data-iss-fullscreen]', '[data-iss-launch-picker]', '[data-iss-snap-help]', '[data-iss-aim-help]', '[data-iss-preset="horizon"]', '[data-iss-preset="nadir"]', '[data-iss-cupola]'];
   for (const sel of sels) {
     const el = document.querySelector(sel);
     if (!el) return { step: 'control-missing', sel };
@@ -4551,9 +5229,10 @@ function issSplitFullscreenExpression() {
     if (t.width < 80 || t.height < 40 || t.height > 52) return { step: 'telemetry', w: Math.round(t.width), h: Math.round(t.height) };
     const tHit = document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2);
     if (!tHit || !telemetry.contains(tHit)) return { step: 'telemetry-hit', hit: tHit ? (tHit.getAttribute('aria-label') || tHit.tagName) : null };
-    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.parentElement !== scene) return { step: 'parent' };
     if (Math.abs(b.width - 44) > 1 || Math.abs(b.height - 44) > 1) return { step: 'exit', w: Math.round(b.width), h: Math.round(b.height) };
-    if (b.left + 1 < t.right || b.left > t.right + 24) return { step: 'beside', telemetryRight: Math.round(t.right), exitLeft: Math.round(b.left) };
+    const sceneBox = scene.getBoundingClientRect();
+    if (sceneBox.right - b.right > 96 || sceneBox.bottom - b.bottom > 96) return { step: 'corner', right: Math.round(sceneBox.right - b.right), bottom: Math.round(sceneBox.bottom - b.bottom) };
     const bHit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
     if (!bHit || !button.contains(bHit)) return { step: 'exit-hit', hit: bHit ? (bHit.getAttribute('aria-label') || bHit.id || bHit.tagName) : null };
     if (button.getAttribute('aria-label') !== 'Exit full screen') return { step: 'label', label: button.getAttribute('aria-label') };
@@ -4583,7 +5262,10 @@ function issSplitDockedExpression() {
     if (scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
     if (scene.getAttribute('data-iss-split') !== 'on') return { step: 'split' };
     if (!dock.contains(card)) return { step: 'dock' };
-    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.parentElement !== scene) return { step: 'parent' };
+    const help = document.querySelector('[data-iss-snap-help]');
+    const picker = document.querySelector('[data-iss-launch-picker-wrap]');
+    if (picker?.nextElementSibling !== help) return { step: 'help-order' };
     if (button.getAttribute('aria-label') !== 'Full screen') return { step: 'label', label: button.getAttribute('aria-label') };
     const t = telemetry.getBoundingClientRect();
     const b = button.getBoundingClientRect();
@@ -5718,6 +6400,15 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
       if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
       if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
+      if (scene?.getAttribute('data-iss-split') === 'on' && window.innerWidth === 834 && window.innerHeight === 1194) {
+        const pickerBox = picker.getBoundingClientRect();
+        const helpBox = document.querySelector('[data-iss-snap-help]')?.getBoundingClientRect();
+        const siteBox = button.getBoundingClientRect();
+        const mid = (box) => (box.top + box.bottom) / 2;
+        if (!helpBox || Math.abs(mid(pickerBox) - mid(helpBox)) > 4 || Math.abs(mid(pickerBox) - mid(siteBox)) > 4) {
+          return { step: 'launch-row', width: window.innerWidth, height: window.innerHeight, picker: pickerBox.top, help: helpBox ? helpBox.top : null, site: siteBox.top };
+        }
+      }
       const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
       if (!earth || earth.ok !== true) return earth;
       const visibility = earth.visibility;

@@ -24,7 +24,7 @@ The inset hides while the pin inspector is open, while the satellite picker is o
 
 ### ISS view, the plan inset
 
-The plan map is the left column of `#iss-pane`. The cupola scene is the right column, and that column is the wider one. Telemetry and the Launch menu sit in `[data-iss-split-dock]`, under the map. The clock and `Expedition 75 Beta Edition` sit in `[data-iss-split-chrome]`, over the map. Port, Starboard, the field readout, and the hint stay on the cupola. The launch card stays with the earth. The help button is the bottom right of the viewport.
+The plan map is the left column of `#iss-pane`. The cupola scene is the right column, and that column is the wider one. Telemetry and the Launch menu sit in `[data-iss-split-dock]`, under the map. The clock and `Expedition 75 Beta Edition` sit in `[data-iss-split-chrome]`, over the map. Port, Starboard, the field readout, and the hint stay on the cupola. The launch card stays with the earth. The fullscreen button is the lower-right of the ISS scene. SNAP help on this tab is the `?` between the launch menu and the site name. Queue, Upcoming, Profile, and Log keep the corner help button.
 
 Fullscreen hides the split and moves the clock and the telemetry card back into the scene. The earth frame grows back to the fullscreen fit. Leaving fullscreen restores the two columns.
 
