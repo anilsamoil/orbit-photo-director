@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { ownerPlacementViolations, projectPlacementViolations, REINTRODUCTION_PATTERNS } from './census-narrow-chrome.mjs';
+import { mutantSyntaxDiagnostics, PLACEMENT_DIAGNOSTIC, R8_PLACEMENT_MUTANTS } from './slot-guard-mutants.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = readFileSync(resolve(root, 'src/chrome-slots.ts'), 'utf8');
@@ -188,6 +189,32 @@ for (const { name, path } of importedMutants) {
     process.exit(1);
   }
   lines.push(`${name}: red`);
+}
+const r8Overrides = new Map();
+const r8Entries = R8_PLACEMENT_MUTANTS.map(({ name, files }, index) => {
+  const diagnostics = mutantSyntaxDiagnostics(files);
+  if (diagnostics.length) {
+    console.error([`mutant syntax failure: ${name}`, ...diagnostics].join('\n'));
+    process.exit(1);
+  }
+  const prefix = `src/r8-slot-mutant-${index}`;
+  for (const [file, content] of Object.entries(files)) r8Overrides.set(`${prefix}/${file}`, content);
+  return { name, path: `${prefix}/entry.ts` };
+});
+r8Overrides.set('src/main.ts', `${main}\n${r8Entries.map(({ path }) => `import './${path.slice(4)}';`).join('\n')}`);
+const r8Errors = projectPlacementViolations(root, r8Overrides);
+for (const { name, path } of r8Entries) {
+  const failures = r8Errors.filter((error) => error.startsWith(`${path}:`) && PLACEMENT_DIAGNOSTIC.test(error));
+  if (!failures.length) {
+    console.error(`${name}: GREEN (survived; no placement ownership assertion)`);
+    process.exit(1);
+  }
+  lines.push(`${name}: red (${failures.join('; ')})`);
+}
+const restored = projectPlacementViolations(root);
+if (restored.length) {
+  console.error(['source restoration failed', ...restored].join('\n'));
+  process.exit(1);
 }
 lines.push('source: green');
 process.stdout.write(`${lines.join('\n')}\n`);

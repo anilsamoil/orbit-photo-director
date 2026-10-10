@@ -5,6 +5,7 @@ import {
   jsPlacementViolations, ownerPlacementViolations, projectPlacementViolations,
   REINTRODUCTION_PATTERNS, reintroductionMisses,
 } from '../scripts/census-narrow-chrome.mjs';
+import { mutantSyntaxDiagnostics, PLACEMENT_DIAGNOSTIC, R8_PLACEMENT_MUTANTS } from '../scripts/slot-guard-mutants.mjs';
 
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -177,5 +178,76 @@ describe('slot placement ownership (fu211)', () => {
   it('catches every mutation in the shared proof catalog', () => {
     expect(REINTRODUCTION_PATTERNS.length).toBeGreaterThanOrEqual(30);
     expect(reintroductionMisses()).toEqual([]);
+  });
+
+  it.each(R8_PLACEMENT_MUTANTS)('rejects r8 $name and restores clean ownership', ({ files, clean }) => {
+    expect(mutantSyntaxDiagnostics(files)).toEqual([]);
+    const filesByPath = Object.fromEntries(Object.entries(files).map(([name, source]) => [`src/guard/${name}`, source]));
+    const entry = 'src/guard/entry.ts';
+    const mutantSource = filesByPath[entry]!;
+    const root = project({ ...filesByPath, [entry]: clean, 'src/main.ts': "import './guard/entry';" });
+    expect(projectPlacementViolations(root)).toEqual([]);
+    const errors = projectPlacementViolations(root, new Map([[entry, mutantSource]]));
+    expect(errors.filter((error) => error.startsWith(`${entry}:`) && PLACEMENT_DIAGNOSTIC.test(error))).not.toEqual([]);
+    expect(projectPlacementViolations(root)).toEqual([]);
+  });
+
+  it('does not treat cosmetic classes and datasets as placement writers', () => {
+    const root = project({
+      'src/main.ts': `const dock=document.querySelector('.map-control-dock');
+        dock.classList.add('r8-color');dock.classList.toggle('r8-color');
+        dock.classList.replace('old','r8-color');dock.dataset.r8State='active';`,
+      'src/style.css': '.r8-color{color:red}[data-r8-state="active"]{opacity:0.5}',
+    });
+    expect(projectPlacementViolations(root)).toEqual([]);
+  });
+
+  it('allows the slot owner to apply placement classes', () => {
+    const root = project({
+      'src/main.ts': "import './map-chrome';",
+      'src/map-chrome.ts': "const dock=document.querySelector('.map-control-dock');dock.classList.add('r8-shift');",
+      'src/style.css': '.r8-shift{translate:0 -80px}',
+    });
+    expect(projectPlacementViolations(root)).toEqual([]);
+  });
+
+  it('allows a selector and geometry read but rejects an unknown element sink', () => {
+    const source = "const dock=document.querySelector('.map-control-dock');dock.getBoundingClientRect();";
+    expect(jsPlacementViolations(source, { owner: false })).toEqual([]);
+    expect(jsPlacementViolations(`${source}unknownWriter(dock);`, { owner: false }).join('\n')).toMatch(PLACEMENT_DIAGNOSTIC);
+  });
+
+  it('allows resolved opacity-only keyframes', () => {
+    expect(jsPlacementViolations(`const dock=document.querySelector('.map-control-dock');
+      const k=[{opacity:0},{opacity:1}];dock.animate(k,100);`, { owner: false })).toEqual([]);
+  });
+
+  it('allows chrome collection callbacks limited to events and cosmetic classes', () => {
+    const root = project({
+      'src/main.ts': `document.querySelectorAll('.map-control-dock').forEach(dock=>{
+        dock.addEventListener('click',()=>{});dock.classList.toggle('active',true);Number(dock.dataset.step);
+      });`,
+      'src/style.css': '.active{color:red}',
+    });
+    expect(projectPlacementViolations(root)).toEqual([]);
+  });
+
+  it.each([
+    ['showSessionRecovery', "'banner banner-red'", "'banner banner-red r8-shift'"],
+    ['setBanner', '`banner banner-${state.level}`', '`banner banner-${state.level} r8-shift`'],
+  ])('limits the existing footer color-state exception in %s to its exact write', (name, allowed, escaped) => {
+    const source = `function ${name}(state){const el=document.getElementById('status-banner');el.className=${allowed};}`;
+    const root = project({
+      'src/main.ts': source,
+      'src/style.css': '.banner{width:100%}.r8-shift{translate:0 -80px}',
+    });
+    expect(projectPlacementViolations(root)).toEqual([]);
+    const errors = projectPlacementViolations(root, new Map([['src/main.ts', source.replace(allowed!, escaped!)]]));
+    expect(errors.some((error) => error.startsWith('src/main.ts:') && PLACEMENT_DIAGNOSTIC.test(error))).toBe(true);
+    expect(projectPlacementViolations(root, new Map([['src/main.ts', ''], ['src/other.ts', source]]))
+      .some((error) => error.startsWith('src/other.ts:') && PLACEMENT_DIAGNOSTIC.test(error))).toBe(true);
+    expect(projectPlacementViolations(root, new Map([['src/style.css', '.banner{width:100%}.banner-red{translate:0 -80px}']]))
+      .some((error) => error.startsWith('src/main.ts:') && PLACEMENT_DIAGNOSTIC.test(error))).toBe(true);
+    expect(projectPlacementViolations(root)).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const placeProp = /^(position|top|right|bottom|left|inset(?:-(?:block|inline)(?:-(?:start|end))?)?|transform|translate|margin(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|animation(?:-name)?)$/;
+const effectProp = (prop) => placeProp.test(prop) || /^(?:width|height|min-width|max-width|min-height|max-height)$/.test(prop);
 const ownedName = /^(?:maplibregl-ctrl-(?:top-left|zoom(?:-in|-out)?|compass)|map-toolbar|map-command|map-controls(?:-[\w-]+)?|time-slider|time-slider-row|time-step-btn|map-control-dock|map-legend(?:-panel|-toggle)?|map-chrome-toggle|map-launch-coverage|status-banner)$/;
 const slotNames = new Map([
   ['maplibregl-ctrl-top-left', 'zoom'], ['map-toolbar', 'show'], ['map-command', 'time'],
@@ -137,7 +138,7 @@ function visit(root, fn) {
   ts.forEachChild(root, (child) => visit(child, fn));
 }
 
-function placementAnalysis(sources) {
+function placementAnalysis(sources, css = '') {
   const parseOptions = { languageVersion: ts.ScriptTarget.Latest, setExternalModuleIndicator: (file) => { file.externalModuleIndicator = true; } };
   const files = new Map([...sources].map(([name, source]) => [resolve(name), ts.createSourceFile(resolve(name), source, parseOptions, true, ts.ScriptKind.TS)]));
   const options = { noLib: true, allowJs: true, moduleDetection: ts.ModuleDetectionKind.Force,
@@ -189,6 +190,8 @@ function placementAnalysis(sources) {
   });
   const resolvedFunctions = new Map();
   const functionsOf = (expression) => {
+    if (!expression) return [];
+    if (ts.isFunctionLike(unwrap(expression))) return [unwrap(expression)];
     if (resolvedFunctions.has(expression)) return resolvedFunctions.get(expression);
     const member = property(expression);
     if (member && !callableNames.has(member.name)
@@ -207,7 +210,22 @@ function placementAnalysis(sources) {
   for (const call of calls) for (const fn of functionsOf(call.expression)) {
     fn.parameters.forEach((parameter, index) => bind(parameter.name, call.arguments[index]));
   }
+  for (const call of calls) {
+    const member = property(call.expression);
+    if (member && ['forEach', 'map', 'filter'].includes(member.name)) {
+      for (const callback of functionsOf(call.arguments[0])) if (callback.parameters[0]) bind(callback.parameters[0].name, member.object);
+    }
+  }
+  const originCache = new Map();
   const origins = (expression, path = [], seen = new Set()) => {
+    if (seen.size) return resolveOrigins(expression, path, seen);
+    let cached = originCache.get(expression);
+    if (!cached) { cached = new Map(); originCache.set(expression, cached); }
+    const key = JSON.stringify(path);
+    if (!cached.has(key)) cached.set(key, resolveOrigins(expression, path, seen));
+    return cached.get(key);
+  };
+  const resolveOrigins = (expression, path, seen) => {
     const node = unwrap(expression);
     if (!node || seen.has(node)) return [];
     const next = new Set(seen).add(node);
@@ -223,15 +241,26 @@ function placementAnalysis(sources) {
       return node.properties.flatMap((entry) => {
         if (ts.isPropertyAssignment(entry) && propertyKey(entry.name) === path[0]) return origins(entry.initializer, path.slice(1), next);
         if (ts.isShorthandPropertyAssignment(entry) && entry.name.text === path[0]) return origins(entry.name, path.slice(1), next);
+        if (ts.isSpreadAssignment(entry)) return origins(entry.expression, path, next);
         return [];
       });
     }
     if (path.length && ts.isArrayLiteralExpression(node)) return origins(node.elements[Number(path[0])], path.slice(1), next);
     const member = property(node);
-    if (member?.name === 'style') return origins(member.object, [], next).map((origin) => ({ ...origin, style: true, method: path[0] }));
-    if (path[0] === 'style') return origins(node, [], seen).map((origin) => ({ ...origin, style: true, method: path[1] }));
+    if (member && member.name === null && ts.isElementAccessExpression(node)) {
+      const keys = origins(node.argumentExpression, [], next).map(({ element }) => textOf(element));
+      if (keys.length && keys.every((key) => key !== null)) return keys.flatMap((key) => origins(member.object, [key, ...path], next));
+    }
+    if (member && ['style', 'classList', 'dataset'].includes(member.name)) {
+      return origins(member.object, [], next).map((origin) => ({ ...origin, [member.name]: true, method: path[0] }));
+    }
+    if (['style', 'classList', 'dataset'].includes(path[0])) return origins(node, [], seen).map((origin) => ({ ...origin, [path[0]]: true, method: path[1] }));
     if (path.length && ['setProperty', 'removeProperty'].includes(path[0])) {
       return origins(node, [], seen).map((origin) => ({ ...origin, method: path[0] }));
+    }
+    if (member?.name) {
+      const projected = origins(member.object, [member.name, ...path], next);
+      if (projected.some((origin) => !origin.path?.length)) return projected;
     }
     if (ts.isCallExpression(node)) {
       const returned = functionsOf(node.expression).flatMap((fn) => {
@@ -245,19 +274,39 @@ function placementAnalysis(sources) {
       });
       if (returned.length) return returned;
     }
-    return [{ element: node, style: false }];
+    return [{ element: node, style: false, path }];
   };
+  const relevantCache = new Map();
   const relevant = (origin) => {
-    let owned = false;
-    visit(origin.element, (node) => {
-      if (textOf(node) !== null && selectorOwned(textOf(node))) owned = true;
-      if (ts.isCallExpression(node) && /^(?:querySelector(?:All)?|getElementById|closest)$/.test(property(node.expression)?.name || '')) {
-        for (const value of origins(node.arguments[0])) if (textOf(value.element) !== null && selectorOwned(textOf(value.element))) owned = true;
-      }
-    });
-    return owned;
+    const node = origin.element;
+    if (relevantCache.has(node)) return relevantCache.get(node);
+    relevantCache.set(node, false);
+    const member = property(node);
+    const selectorCall = ts.isCallExpression(node) && /^(?:querySelector(?:All)?|getElementById|closest)$/.test(property(node.expression)?.name || '');
+    const owned = selectorCall && origins(node.arguments[0]).some(({ element }) => textOf(element) !== null && selectorOwned(textOf(element)))
+      || ts.isElementAccessExpression(node) && member && origins(member.object).some(relevant);
+    relevantCache.set(node, !!owned);
+    return !!owned;
   };
-  return { files, origins, relevant, calls };
+  const contents = (expression, seen = new Set()) => origins(expression).flatMap((origin) => {
+    const node = origin.element;
+    if (seen.has(node)) return [];
+    const next = new Set(seen).add(node);
+    if (!origin.style && ts.isObjectLiteralExpression(node)) return node.properties.flatMap((entry) =>
+      ts.isPropertyAssignment(entry) ? contents(entry.initializer, next)
+        : ts.isShorthandPropertyAssignment(entry) ? contents(entry.name, next)
+          : ts.isSpreadAssignment(entry) ? contents(entry.expression, next) : []);
+    if (!origin.style && ts.isArrayLiteralExpression(node)) return node.elements.flatMap((entry) =>
+      contents(ts.isSpreadElement(entry) ? entry.expression : entry, next));
+    return [origin];
+  });
+  const literals = (expression) => {
+    const values = origins(expression).map((origin) => textOf(origin.element));
+    return values.length && values.every((value) => value !== null) ? values : null;
+  };
+  const effects = rules(css.replace(/\/\*[\s\S]*?\*\//g, '')).filter((rule) =>
+    rule.declarations.some(({ prop, value }) => effectProp(prop) && !reset(prop, value)));
+  return { files, origins, relevant, calls, functionsOf, contents, literals, effects };
 }
 
 function filePlacementViolations(file, analysis, owner) {
@@ -282,12 +331,14 @@ function filePlacementViolations(file, analysis, owner) {
     if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
       && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
       const member = property(node.left);
+      if (member?.name === 'style') addWrite(origins(member.object), 'css-text', textOf(node.right), node);
       if (member) addWrite(styles(member.object), member.name ? cssProp(member.name) : null, textOf(node.right), node);
     }
     if (ts.isCallExpression(node)) {
       const member = property(node.expression);
+      if (node.expression.getText() === 'Reflect.set') addWrite(styles(node.arguments[0]), textOf(node.arguments[1]), textOf(node.arguments[2]), node);
       if (member?.name === 'setProperty') addWrite(styles(member.object), textOf(node.arguments[0]), textOf(node.arguments[1]), node);
-      if (member?.name === 'setAttribute' && textOf(node.arguments[0]) === 'style') {
+      if (member?.name === 'setAttribute' && (analysis.literals(node.arguments[0]) === null || analysis.literals(node.arguments[0]).includes('style'))) {
         addWrite(origins(member.object), 'css-text', textOf(node.arguments[1]), node);
       }
       if (node.expression.getText() === 'Object.assign' && node.arguments[0]) {
@@ -295,7 +346,8 @@ function filePlacementViolations(file, analysis, owner) {
         for (const values of node.arguments.slice(1)) {
           if (!ts.isObjectLiteralExpression(values)) addWrite(assigned, null, null, node);
           else for (const value of values.properties) {
-            if (ts.isPropertyAssignment(value)) addWrite(assigned, cssProp(textOf(value.name) || value.name.getText()), textOf(value.initializer), node);
+            if (ts.isPropertyAssignment(value)) addWrite(assigned, ts.isComputedPropertyName(value.name) ? textOf(value.name.expression) : cssProp(textOf(value.name) || value.name.getText()), textOf(value.initializer), node);
+            else addWrite(assigned, null, null, node);
           }
         }
       }
@@ -334,12 +386,14 @@ function filePlacementViolations(file, analysis, owner) {
       if (writerCount === 1) continue;
     }
     if (prop?.startsWith('--slot-')) violations.push(`js slot variable writer: ${prop}`);
-    else if (write.relevant && (prop === null || placeProp.test(prop))) {
+    // The owner retains its existing probe/intrinsic sizing writes; non-owners
+    // cannot resize a chrome actor and silently invalidate the allocated slot.
+    else if (write.relevant && (prop === null || (owner ? placeProp.test(prop) : effectProp(prop)))) {
       if (prop === null || value === null || !reset(prop, normalize(value))) violations.push(`js inline placement: ${prop || 'dynamic property'}`);
     } else if (prop === 'css-text') {
       const decls = value === null ? [] : declarations(value);
       const slotWrite = decls.some((decl) => decl.prop.startsWith('--slot-'));
-      const placement = write.relevant && (value === null || decls.some((decl) => placeProp.test(decl.prop) && !reset(decl.prop, decl.value)));
+      const placement = write.relevant && (value === null || decls.some((decl) => effectProp(decl.prop) && !reset(decl.prop, decl.value)));
       if (slotWrite || placement) violations.push('js cssText placement');
     }
   }
@@ -348,21 +402,139 @@ function filePlacementViolations(file, analysis, owner) {
       violations.push(`js second positioner: ${node.name.text}`);
     }
   });
+  const chrome = (node) => analysis.contents(node).some((origin) => textOf(origin.element) === null
+    && !ts.isFunctionLike(origin.element) && !(origin.dataset && origin.method) && analysis.relevant(origin));
+  const keyframePlacement = (expression, seen = new Set()) => {
+    const values = origins(expression);
+    if (!values.length) return true;
+    return values.some(({ element: node }) => {
+      if (seen.has(node)) return true;
+      const next = new Set(seen).add(node);
+      if (ts.isArrayLiteralExpression(node)) return node.elements.some((entry) =>
+        keyframePlacement(ts.isSpreadElement(entry) ? entry.expression : entry, next));
+      if (!ts.isObjectLiteralExpression(node)) return true;
+      return node.properties.some((entry) => {
+        if (ts.isSpreadAssignment(entry)) return keyframePlacement(entry.expression, next);
+        if (!ts.isPropertyAssignment(entry) && !ts.isShorthandPropertyAssignment(entry)) return true;
+        if (ts.isComputedPropertyName(entry.name) && textOf(entry.name.expression) === null) return true;
+        const key = propertyKey(entry.name);
+        return !key || effectProp(cssProp(key)) || key.startsWith('--slot-');
+      });
+    });
+  };
+  const classEffect = (target, expression, attribute = 'class') => {
+    if (owner || !chrome(target)) return;
+    // Existing footer status rendering preserves its base identity and changes
+    // only color/state. Pin exact module, function, target and expression; no
+    // selector/name-wide exemption for arbitrary new placement modifiers.
+    if (attribute === 'class' && /[/\\]src[/\\]main\.ts$/.test(file.fileName)
+      && origins(target).every(({ element }) => element.getText() === "document.getElementById('status-banner')")
+      && ((scopeName(expression) === 'showSessionRecovery' && expression.getText() === "'banner banner-red'")
+        || (scopeName(expression) === 'setBanner' && expression.getText() === '`banner banner-${state.level}`'))
+      && !analysis.effects.some((rule) => /banner-(?:red|yellow|orange|green|loading)(?![\w-])/.test(rule.selector))) return;
+    const values = analysis.literals(expression);
+    const matches = analysis.effects.some((rule) => splitSelectors(rule.selector).some((selector) => {
+      // Only the subject receives an element's class/attribute. Ancestor names
+      // must not make a harmless `.active` on a button a placement writer.
+      const subject = selectorParts(selector.replace(/:(?:has|not)\((?:[^()]|\([^()]*\))*\)/g, ''), /[\s>+~]/).at(-1) || '';
+      if (attribute === 'class') {
+        if (/\[class(?:\s*[*~|^$]?=|\])/.test(subject)) return true;
+        const names = [...subject.matchAll(/\.([\w-]+)/g)].map((match) => match[1]);
+        return values === null ? names.length > 0 : values.some((value) => value.split(/\s+/).some((name) => names.includes(name)));
+      }
+      return subject.includes(`[${attribute}`);
+    }));
+    if (matches) violations.push(`js class/attribute placement: ${attribute}`);
+  };
+  const stylesheetPlacement = (expression) => {
+    const values = analysis.literals(expression);
+    if (values === null) return true;
+    return values.some((value) => rules(value).some((rule) =>
+      splitSelectors(rule.selector).some(selectorOwned)
+      && rule.declarations.some(({ prop }) => effectProp(prop) || prop.startsWith('--slot-'))));
+  };
+  const styleElement = (expression) => origins(expression).some(({ element }) =>
+    ts.isCallExpression(element) && property(element.expression)?.name === 'createElement' && textOf(element.arguments[0]) === 'style');
+  visit(file, (node) => {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      const member = property(node.left);
+      if (member?.name === 'className') classEffect(member.object, node.right);
+      if (member && origins(member.object).some((origin) => origin.dataset)) {
+        classEffect(member.object, node.right, member.name ? `data-${cssProp(member.name)}` : 'data-');
+      }
+      if (!owner && member?.name === 'adoptedStyleSheets') violations.push('js stylesheet placement: adoptedStyleSheets escape');
+      if (!owner && member && ['textContent', 'innerHTML', 'innerText'].includes(member.name)
+        && styleElement(member.object) && stylesheetPlacement(node.right)) violations.push('js stylesheet placement: injected style');
+      if (!owner && member && chrome(node.right)) violations.push('js chrome placement escape: object storage');
+    }
+    if (!owner && ts.isVariableStatement(node) && node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+      && node.declarationList.declarations.some((declaration) => chrome(declaration.initializer))) violations.push('js chrome placement escape: exported object');
+    if (!owner && ts.isReturnStatement(node) && chrome(node.expression)) violations.push('js chrome placement escape: returned element/style');
+    if (!owner && ts.isArrowFunction(node) && !ts.isBlock(node.body) && chrome(node.body)) violations.push('js chrome placement escape: returned element/style');
+    if (!owner && ts.isNewExpression(node)) {
+      if (node.expression.getText() === 'CSSStyleSheet') violations.push('js stylesheet placement: constructed stylesheet escape');
+      if (node.expression.getText() === 'KeyframeEffect' && chrome(node.arguments?.[0])) violations.push('js placement animation: KeyframeEffect');
+      else if (node.arguments?.some(chrome)) violations.push('js chrome placement escape: unanalysed constructor');
+    }
+  });
   for (const call of analysis.calls.filter((node) => node.getSourceFile() === file)) {
     const name = call.expression.getText();
     if (name === 'solveChromeSlots' && (!owner || scopeName(call) !== 'syncMapChrome')) violations.push('js second solver');
     if (name === 'writeSlot' && !['placeInPane', 'placeInView'].includes(scopeName(call))) violations.push('js second slot writer');
     const member = property(call.expression);
+    if (!owner) {
+      if (member && ['add', 'toggle', 'replace', 'remove'].includes(member.name)
+        && origins(member.object).some((origin) => origin.classList)) {
+        const args = member.name === 'toggle' ? call.arguments.slice(0, 1) : call.arguments;
+        for (const arg of args) classEffect(member.object, arg);
+      }
+      if (member?.name === 'setAttribute') {
+        const attr = analysis.literals(call.arguments[0])?.[0];
+        if (attr === 'class') classEffect(member.object, call.arguments[1]);
+        else if (attr?.startsWith('data-')) classEffect(member.object, call.arguments[1], attr);
+      }
+      if (member && ['insertRule', 'replace', 'replaceSync', 'addRule'].includes(member.name)
+        && !origins(member.object).some((origin) => origin.classList)
+        && (member.name !== 'replace' || origins(member.object).some(({ element }) => /(?:styleSheets|\.sheet\b|CSSStyleSheet)/.test(element.getText()))
+          || analysis.literals(call.arguments[0])?.some((value) => /[{}]/.test(value)))
+        && stylesheetPlacement(call.arguments[0])) violations.push(`js stylesheet placement: ${member.name}`);
+      if (member?.name === 'insertAdjacentHTML' && origins(call.arguments[1]).some(({ element }) => /<style\b/i.test(element.getText())) && stylesheetPlacement(call.arguments[1])) violations.push('js stylesheet placement: injected HTML');
+      if (member && ['call', 'apply', 'bind'].includes(member.name) && /(?:insertRule|replaceSync|replace)$/.test(member.object.getText())) violations.push('js stylesheet placement: indirect stylesheet escape');
+      if (member && ['append', 'appendChild', 'replaceChildren', 'insertAdjacentText'].includes(member.name) && styleElement(member.object)
+        && call.arguments.some(stylesheetPlacement)) violations.push('js stylesheet placement: injected style text');
+      if (member?.name === 'getAnimations' && chrome(member.object)) violations.push('js placement animation: getAnimations escape');
+      if (member && ['bind', 'call', 'apply'].includes(member.name)
+        && [member.object, ...call.arguments].some(chrome)) violations.push(`js chrome placement escape: ${member.name}`);
+      if (['Object.assign', 'Reflect.set'].includes(name) && chrome(call.arguments[0]) && !styles(call.arguments[0]).length) violations.push(`js chrome placement escape: ${name} element sink`);
+      // DOM reads, events and content updates do not author placement. Mutating
+      // style/class/attribute/animation APIs are checked by their dedicated rules.
+      const allowedReceiverMethods = new Set([
+        'querySelector', 'querySelectorAll', 'getAttribute', 'hasAttribute', 'getBoundingClientRect',
+        'getClientRects', 'contains', 'closest', 'cloneNode', 'getPropertyValue', 'getPropertyPriority',
+        'addEventListener', 'removeEventListener', 'dispatchEvent', 'focus', 'blur',
+        'append', 'appendChild', 'replaceChildren', 'after', 'before', 'remove', 'setAttribute', 'removeAttribute',
+        'setProperty', 'animate', 'getAnimations', 'add', 'toggle', 'replace', 'item', 'toString',
+      ]);
+      if (member && chrome(member.object) && !analysis.functionsOf(call.expression).length
+        && !allowedReceiverMethods.has(member.name)
+        && !(['forEach', 'map', 'filter'].includes(member.name) && analysis.functionsOf(call.arguments[0]).length)) violations.push(`js chrome placement escape: unanalysed receiver ${member.name || 'dynamic method'}`);
+      if (!analysis.functionsOf(call.expression).length && call.arguments.some(chrome)
+        && !['Object.assign', 'Reflect.set'].includes(name)
+        && !['animate', 'setAttribute', 'setProperty', 'call', 'apply', 'bind'].includes(member?.name)) {
+        violations.push(`js chrome placement escape: unanalysed call ${name}`);
+      }
+    }
     if (member?.name === 'animate' && (owner || origins(member.object).some(analysis.relevant))
-      && /(?:top|left|right|bottom|inset|transform|translate|margin)\s*[:'"\]]/.test(call.arguments[0]?.getText() || '')) violations.push('js placement animation');
+      && keyframePlacement(call.arguments[0])) violations.push('js placement animation');
   }
   return [...new Set(violations)];
 }
 
-export function jsPlacementViolations(source, { owner = true } = {}) {
+export function jsPlacementViolations(source, { owner = true, css = '' } = {}) {
   if (!source.trim()) return [];
   const name = resolve('chrome.ts');
-  const analysis = placementAnalysis(new Map([[name, source]]));
+  const analysis = placementAnalysis(new Map([[name, source]]), css);
   return filePlacementViolations(analysis.files.get(name), analysis, owner);
 }
 
@@ -383,7 +555,7 @@ export function ownerPlacementViolations(css, js = '', options) {
       if (bad.length) violations.push(`css ${rule.media || '(none)'} ${selector} { ${bad.map(({ prop, value }) => `${prop}: ${value}`).join('; ')} }`);
     }
   }
-  return [...violations, ...jsPlacementViolations(js, options)];
+  return [...violations, ...jsPlacementViolations(js, { ...options, css })];
 }
 
 export const REINTRODUCTION_PATTERNS = [
@@ -442,7 +614,7 @@ export function projectPlacementViolations(root, overrides = new Map()) {
   walk(resolve(root, 'src'));
   for (const file of overrides.keys()) if (!files.includes(resolve(root, file))) files.push(resolve(root, file));
   const sources = new Map(files.map((file) => [file, overrides.get(relative(root, file)) ?? readFileSync(file, 'utf8')]));
-  const analysis = placementAnalysis(new Map([...sources].filter(([file]) => !file.endsWith('.css'))));
+  const analysis = placementAnalysis(new Map([...sources].filter(([file]) => !file.endsWith('.css'))), [...sources].filter(([file]) => file.endsWith('.css')).map(([, source]) => source).join('\n'));
   return files.flatMap((file) => {
     const name = relative(root, file);
     const source = sources.get(file);
