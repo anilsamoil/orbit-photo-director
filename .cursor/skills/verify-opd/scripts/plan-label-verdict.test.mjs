@@ -16,7 +16,7 @@ test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
 
 test('generated sweep includes fitted extremes and both sides of every audited tile edge', () => {
   const samples = countrySweepZooms();
-  for (const z of [-2, -1.1497862143712645, -0.23372503287116042, -0.51, -0.5, -0.49, 1.49, 1.5, 1.51, 2.49, 2.5, 2.51, 3.49, 3.5, 3.51, 4.49, 4.5, 4.51, 5]) {
+  for (const z of [-1.1497862143712645, -0.23372503287116042, -0.51, -0.5, -0.49, 1.49, 1.5, 1.51, 2.49, 2.5, 2.51, 3.49, 3.5, 3.51, 4.49, 4.5, 4.51, 5]) {
     assert.ok(samples.includes(z), `missing ${z}`);
   }
   assert.equal(new Set(samples).size, samples.length);

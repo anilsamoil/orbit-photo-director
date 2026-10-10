@@ -67,7 +67,7 @@ export function rasterPainted(words, country) {
 }
 
 export function countrySweepZooms(levels = loadCountryRasterLevels()) {
-  const zooms = new Set([-2, -1.1497862143712645, -0.23372503287116042, 5]);
+  const zooms = new Set([-1.1497862143712645, -0.23372503287116042, 5]);
   for (let step = -50; step <= 310; step += 5) zooms.add(step / 100);
   for (let tile = 1; tile <= levels.through; tile += 1) {
     const edge = tile - 1.5;

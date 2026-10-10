@@ -1,8 +1,9 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
-import { countrySweepZooms, fractionalCountrySymbols, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
+import { countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
+import { checkRasterOcr, clearRasterOcrRun, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
@@ -4673,82 +4674,22 @@ async function proveFullscreenTelemetry(send) {
   return `${open.w}x${open.h}`;
 }
 
-function ocrRasterTile(png) {
-  const script = `
-import io, subprocess, sys
-try:
-    from PIL import Image, ImageOps
-except ImportError as error:
-    raise SystemExit("raster tile ocr needs Pillow") from error
-im = Image.open(io.BytesIO(sys.stdin.buffer.read())).convert("RGBA")
-def paint(bg, scale, nearest, contrast):
-    base = Image.new("RGBA", im.size, bg)
-    comp = Image.alpha_composite(base, im).convert("L")
-    resample = Image.Resampling.NEAREST if nearest else Image.Resampling.LANCZOS
-    big = comp.resize((comp.width * scale, comp.height * scale), resample)
-    if contrast:
-        big = ImageOps.autocontrast(big)
-    buf = io.BytesIO()
-    big.save(buf, format="PNG")
-    result = subprocess.run(["tesseract", "stdin", "stdout", "-l", "eng", "--psm", "11"], input=buf.getvalue(), capture_output=True, timeout=12)
-    return result.stdout.decode("utf8", "replace")
-text = paint((32, 35, 38, 255), 4, True, True)
-text += "\\n" + paint((255, 255, 255, 255), 8, False, False)
-sys.stdout.write(text)
-`;
-  const result = spawnSync('python3', ['-c', script], { input: png, maxBuffer: 8 * 1024 * 1024 });
-  if (result.status !== 0) {
-    const err = result.stderr ? result.stderr.toString('utf8') : '';
-    throw new Error(`raster tile ocr failed ${err.slice(0, 200)}`);
+export const PLAN_TILE_HELPERS = `
+function planViewport(map) {
+  const canvas = map.getCanvas();
+  const rect = canvas.getBoundingClientRect();
+  const n = 2 ** planIdealZoom(map);
+  const origin = map.project([-180, 85.0511287798066]);
+  const scale = 512 * (2 ** map.getZoom()) / (256 * n);
+  const occlusions = [];
+  for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]')) {
+    const box = node.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0 || (getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden')) continue;
+    if (box.right <= rect.left || box.left >= rect.right || box.bottom <= rect.top || box.top >= rect.bottom) continue;
+    occlusions.push([box.left-rect.left, box.top-rect.top, box.right-rect.left, box.bottom-rect.top]);
   }
-  return result.stdout ? result.stdout.toString('utf8').toUpperCase() : '';
+  return { width: rect.width, height: rect.height, scale, origin: { x: origin.x, y: origin.y }, occlusions };
 }
-
-async function fetchRasterTile(url) {
-  const fresh = url.includes('nocache=') ? url : `${url}${url.includes('?') ? '&' : '?'}nocache=${Date.now()}`;
-  let last = 'raster tile failed';
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const response = await fetch(fresh, { headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
-    if (response.ok) return Buffer.from(await response.arrayBuffer());
-    last = `raster tile ${response.status} ${fresh}`;
-    await sleep(300 * (attempt + 1));
-  }
-  throw new Error(last);
-}
-
-const rasterWordCache = new Map();
-const rasterWordFile = '/tmp/opd-fu121-ocr.json';
-
-function rememberRasterWords() {
-  const saved = {};
-  for (const [url, words] of rasterWordCache) saved[url] = words;
-  writeFileSync(rasterWordFile, JSON.stringify(saved));
-}
-
-function recallRasterWords() {
-  if (!existsSync(rasterWordFile)) return;
-  const saved = JSON.parse(readFileSync(rasterWordFile, 'utf8'));
-  for (const [url, words] of Object.entries(saved)) {
-    if (typeof words === 'string' && words.length > 0) rasterWordCache.set(url, words);
-  }
-}
-
-async function rasterWords(urls) {
-  recallRasterWords();
-  const parts = [];
-  let wrote = false;
-  for (const url of urls) {
-    if (!rasterWordCache.has(url)) {
-      rasterWordCache.set(url, ocrRasterTile(await fetchRasterTile(url)));
-      wrote = true;
-    }
-    parts.push(rasterWordCache.get(url));
-  }
-  if (wrote) rememberRasterWords();
-  return parts.join('\n');
-}
-
-const PLAN_TILE_HELPERS = `
 function planHold(map) {
   if (map.__opdLabelHold) return;
   map.__opdLabelHold = {
@@ -4811,7 +4752,7 @@ function planSymbolNames(map) {
   const zoom = map.getZoom();
   const canvas = map.getCanvas();
   const layers = ((map.getStyle() && map.getStyle().layers) || [])
-    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol' && planOpacityOn(layer, zoom))
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol' && planOpacityOn(layer, zoom))
     .map((layer) => layer.id);
   const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
   return features.filter((feature) => {
@@ -4823,7 +4764,7 @@ function planSymbolNames(map) {
 }
 function planLayerCovers(map, name, zoom) {
   const layers = ((map.getStyle() && map.getStyle().layers) || [])
-    .filter((layer) => layer.source === 'inset-countries' && layer.type === 'symbol');
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol');
   return layers.some((layer) => {
     const min = layer.minzoom == null ? -Infinity : layer.minzoom;
     const max = layer.maxzoom == null ? Infinity : layer.maxzoom;
@@ -4889,6 +4830,7 @@ const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
     tilesOk: waited.tilesOk,
     detail: waited.detail,
     urls: waited.urls,
+    viewport: planViewport(map),
     zoom: map.getZoom(),
     tileZ: waited.tileZ,
     names: planSymbolNames(map),
@@ -4896,13 +4838,15 @@ const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
   };
 })`;
 
-async function readPlanLabelZoom(send, zoom, lng, lat) {
+export async function readPlanLabelZoom(send, zoom, lng, lat) {
   const sample = await evaluate(send, `(${PLAN_LABEL_READ})(${zoom}, ${lng}, ${lat})`);
   if (!sample || sample.ok !== true) throw new Error(`plan label zooms ${JSON.stringify(sample)}`);
   return sample;
 }
 
-async function coldPlanTileCaches(send) {
+export async function coldPlanTileCaches(send) {
+  checkRasterOcr();
+  clearRasterOcrRun();
   await send('Network.setCacheDisabled', { cacheDisabled: true });
   const countries = JSON.stringify(PLAN_COUNTRIES);
   const cleared = await evaluate(send, `(async () => {
@@ -4916,11 +4860,11 @@ async function coldPlanTileCaches(send) {
     }
     planHold(map);
     if (typeof map.setTransformRequest === 'function') {
-      const bust = String(Date.now());
+      const bust = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
       map.setTransformRequest((url) => {
         if (!url || url.indexOf('arcgisonline.com') < 0) return { url };
         const next = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'nocache=' + bust;
-        return { url: next, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } };
+        return { url: next };
       });
     }
     for (const id of ['inset-labels', 'inset-basemap']) {
@@ -4944,6 +4888,7 @@ async function coldPlanTileCaches(send) {
       tilesOk: waited.tilesOk,
       detail: waited.detail,
       urls: waited.urls,
+      viewport: planViewport(map),
       zoom: map.getZoom(),
       tileZ: waited.tileZ,
       names: planSymbolNames(map),
@@ -4970,15 +4915,16 @@ async function restorePlanLabelCamera(send) {
   })()`);
 }
 
-async function assertOneNameSource(row) {
+export async function assertOneNameSource(row) {
   if (!row.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: row.zoom, country: row.country, detail: row.detail })}`);
-  const words = await rasterWords(row.urls || []);
-  const verdict = oneNameSource({ ...row, words });
+  const pack = await rasterWords(row.urls || []);
+  const raster = readableRasterName(pack, row, row.country);
+  const verdict = oneNameSource({ ...row, words: pack.text, rasterReadable: raster.readable });
   if (!verdict.ok) throw new Error(`plan label source ${JSON.stringify(verdict)}`);
   return verdict;
 }
 
-async function proveFractionalPlanLabels(send) {
+export async function proveFractionalPlanLabels(send) {
   const zooms = countrySweepZooms();
   try {
     const fitted = await coldPlanTileCaches(send);
@@ -4986,6 +4932,7 @@ async function proveFractionalPlanLabels(send) {
       throw new Error(`plan label fitted ${JSON.stringify({ zoom: fitted.zoom, tileZ: fitted.tileZ, inside: fitted.inside, names: fitted.names })}`);
     }
     const fittedWords = await rasterWords(fitted.urls || []);
+    console.log(`plan labels cold tilesOk:${fitted.tilesOk} fitted:${fitted.zoom} OCR:${rasterOcrStats.calls}`);
     for (const country of fitted.inside) {
       const verdict = oneNameSource({
         tilesOk: true,
@@ -4993,7 +4940,8 @@ async function proveFractionalPlanLabels(send) {
         tileZ: fitted.tileZ,
         country,
         names: fitted.names,
-        words: fittedWords,
+        words: fittedWords.text,
+        rasterReadable: readableRasterName(fittedWords, fitted, country).readable,
       });
       if (!verdict.ok) throw new Error(`plan label fitted ${JSON.stringify(verdict)}`);
     }
@@ -5003,8 +4951,14 @@ async function proveFractionalPlanLabels(send) {
       if (!row.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom, detail: row.detail })}`);
       rows.push(row);
     }
-    const fractional = fractionalCountrySymbols(rows);
-    if (!fractional.ok) throw new Error(`plan label zooms ${JSON.stringify(fractional)}`);
+    for (const row of rows) {
+      const pack = await rasterWords(row.urls);
+      for (const country of new Set(row.names)) {
+        const verdict = oneNameSource({ ...row, country, words: pack.text, rasterReadable: readableRasterName(pack, row, country).readable });
+        if (!verdict.ok) throw new Error(`plan label fractional ${JSON.stringify(verdict)}`);
+      }
+    }
+    const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
     const sweepNotes = [];
     for (const country of PLAN_COUNTRIES) {
       const swept = await evaluate(send, `(async () => {
@@ -5021,6 +4975,7 @@ async function proveFractionalPlanLabels(send) {
             tilesOk: waited.tilesOk,
             detail: waited.detail,
             urls: waited.urls,
+            viewport: planViewport(map),
             zoom: map.getZoom(),
             tileZ: waited.tileZ,
             names: planSymbolNames(map),
@@ -5034,6 +4989,7 @@ async function proveFractionalPlanLabels(send) {
       if (!swept || swept.ok !== true) throw new Error(`plan label sweep ${country.name} ${JSON.stringify(swept)}`);
       for (const row of swept.rows) await assertOneNameSource(row);
       sweepNotes.push(`${country.name}:${swept.rows.length}`);
+      console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
     }
     const france = await readPlanLabelZoom(send, 1.2, 2, 46);
     if (!france.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: france.detail })}`);
@@ -5043,7 +4999,7 @@ async function proveFractionalPlanLabels(send) {
     if (!japan.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: japan.detail })}`);
     const japanKept = keptCountrySymbol(japan.names, 'Japan');
     if (!japanKept.ok) throw new Error(`plan label Japan ${JSON.stringify(japanKept)}`);
-    return `caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
+    return `tilesOk:true OCR ${JSON.stringify(rasterOcrStats)} caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
   } finally {
     await restorePlanLabelCamera(send);
   }

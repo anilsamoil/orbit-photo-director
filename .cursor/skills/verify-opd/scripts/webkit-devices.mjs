@@ -117,16 +117,8 @@ export function playwrightSend(page) {
     }
     if (method === 'Page.enable') return {};
     if (method === 'Network.setCacheDisabled') {
-      if (params.cacheDisabled) {
-        await page.route(/arcgisonline\.com/, async (route) => {
-          const headers = {
-            ...route.request().headers(),
-            'cache-control': 'no-cache',
-            pragma: 'no-cache',
-          };
-          await route.continue({ headers });
-        });
-      }
+      // Fresh WebKit contexts plus coldPlanTileCaches' unique URL nonce avoid
+      // cached tiles without forbidden cross-origin Cache-Control headers.
       return {};
     }
     if (method === 'Page.addScriptToEvaluateOnNewDocument') {
