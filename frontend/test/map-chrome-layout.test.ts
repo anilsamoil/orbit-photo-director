@@ -324,6 +324,12 @@ describe('map chrome layout', () => {
     expect(heights).not.toContain('104px');
   });
 
+  it('places the zoom stack under the toolbar, inside the map that already starts at the top bar', () => {
+    expect(ruleStyle('.view-map #map').top).toBe('var(--topbar-height)');
+    expect(ruleStyle('.view-map #map .maplibregl-ctrl-top-left').top).toBe('71px');
+    expect(css).not.toContain('.maplibregl-ctrl-top-left {\n  top: calc(var(--topbar-height) + 71px)');
+  });
+
   it('lays the time strip on the map', () => {
     mount('view-map');
     document.querySelector('#map-pane')!.insertAdjacentHTML(

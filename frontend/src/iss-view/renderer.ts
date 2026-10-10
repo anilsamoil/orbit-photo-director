@@ -9,7 +9,7 @@ export type IssAim = {
   heightPx: number;
   lightingUtcMs: number;
   fovEpoch?: number;
-  onCamera?: (appliedFovDeg: number, fovEpoch: number) => void;
+  onCamera?: (appliedFovDeg: number, fovEpoch: number, rollDeg?: number) => void;
 };
 
 export type IssRendererHooks = {

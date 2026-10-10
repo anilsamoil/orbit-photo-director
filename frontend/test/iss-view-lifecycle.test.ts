@@ -689,11 +689,12 @@ describe('ISS chrome starts out of the way', () => {
 
   it('keeps the applied field when the context is lost and the wheel asks for another', async () => {
     const caught: { hooks: IssRendererHooks | null } = { hooks: null };
+    const session: { mode: 'horizon'; opticalFovDeg?: number } = { mode: 'horizon' };
     const host = document.createElement('div');
     const scene = mountIssScene(host, {
       nowMs: () => startMs + 60_000,
       drive: 'manual',
-      session: { mode: 'horizon' },
+      session,
       createRenderer: (_frame, next) => {
         caught.hooks = next;
         return {
@@ -714,15 +715,58 @@ describe('ISS chrome starts out of the way', () => {
       await Promise.resolve();
     }
     const applied = readout.textContent;
+    const heldFov = session.opticalFovDeg;
     expect(readout.dataset.issFovState).toBe('live');
     expect(applied).toBe(`${sensorField().vertical.toFixed(1)}°`);
-    caught.hooks?.onContextLost();
+    const lost = caught.hooks;
+    const generation = scene.generation();
+    lost?.onContextLost();
     expect(scene.phase()).toBe('error');
+    expect(scene.generation()).toBeGreaterThan(generation);
     const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
     frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    expect(session.opticalFovDeg).toBe(heldFov);
     expect(readout.textContent).toBe(applied);
     expect(readout.textContent).not.toBe('38.4°');
     expect(readout.dataset.issFovState).toBe('live');
+    scene.retry();
+    for (let i = 0; i < 30 && scene.phase() !== 'running'; i += 1) await Promise.resolve();
+    expect(scene.phase()).toBe('running');
+    expect(caught.hooks).not.toBe(lost);
+    lost?.onContextLost();
+    expect(scene.phase()).toBe('running');
+    expect(host.querySelector('[data-iss-status]')?.textContent).not.toBe('WebGL context lost');
+    caught.hooks?.onContextLost();
+    expect(scene.phase()).toBe('error');
+    expect(host.querySelector('[data-iss-status]')?.textContent).toBe('WebGL context lost');
+    scene.dispose();
+  });
+
+  it('stays pending until the camera roll is the earth view', async () => {
+    let confirmed = 0;
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          confirmed += 1;
+          aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0, 0);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    scene.update(shot('fov-roll'));
+    const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+    for (let i = 0; i < 20 && scene.phase() !== 'running'; i += 1) await Promise.resolve();
+    expect(confirmed).toBeGreaterThan(0);
+    expect(scene.phase()).toBe('running');
+    expect(readout.dataset.issFovState).toBe('pending');
+    expect(readout.textContent).toBe('');
     scene.dispose();
   });
 

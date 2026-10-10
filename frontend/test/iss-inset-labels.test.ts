@@ -21,8 +21,15 @@ vi.mock('maplibre-gl', () => {
     on(): void {}
     setMaxPitch(): void {}
     fov = 36.87;
+    roll = 0;
     setVerticalFieldOfView(value: number): void { this.fov = value; }
     getVerticalFieldOfView(): number { return this.fov; }
+    getRoll(): number { return this.roll; }
+    jumpTo(camera?: { roll?: number }): void {
+      if ((globalThis as { __issKeepRoll?: boolean }).__issKeepRoll) return;
+      const roll = camera?.roll;
+      if (typeof roll === 'number' && Number.isFinite(roll)) this.roll = roll;
+    }
     getPixelRatio(): number { return 1; }
     setPixelRatio(): void {}
     resize(): void {}
@@ -30,7 +37,6 @@ vi.mock('maplibre-gl', () => {
     addSource(): void {}
     addLayer(): void {}
     calculateCameraOptionsFromTo(): { center: number[] } { return { center: [0, 0] }; }
-    jumpTo(): void {}
     isMoving(): boolean { return false; }
     remove(): void {}
     getCanvas(): { clientWidth: number; clientHeight: number } {
@@ -153,6 +159,32 @@ describe('horizon inset labels', () => {
       renderer.destroy();
     } finally {
       delete (globalThis as { __holdIssIdle?: boolean }).__holdIssIdle;
+    }
+  });
+
+  it('does not confirm the field before the camera roll is applied', async () => {
+    (globalThis as { __issKeepRoll?: boolean }).__issKeepRoll = true;
+    try {
+      vi.stubGlobal('fetch', fetchMock);
+      const { createIssRenderer } = await import('../src/map/adapters/maplibre/iss-view');
+      const frame = document.createElement('div');
+      document.body.append(frame);
+      const renderer = createIssRenderer(frame, {
+        onImagery() {},
+        onContextLost() {},
+      }, { labels: false });
+      let applied: number | null = null;
+      await renderer.aim({
+        ...sampleAim(),
+        fovEpoch: 4,
+        onCamera(degrees) {
+          applied = degrees;
+        },
+      });
+      expect(applied).toBeNull();
+      renderer.destroy();
+    } finally {
+      delete (globalThis as { __issKeepRoll?: boolean }).__issKeepRoll;
     }
   });
 });
