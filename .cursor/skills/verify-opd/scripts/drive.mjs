@@ -5,9 +5,10 @@ import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { deviceDescriptor, deviceViewport, launchWebkit, openDeviceContext, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
@@ -678,26 +679,19 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active), serviceWorkers: 'block' });
-      if (spec.standalone) {
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-        });
-      }
-      const page = await context.newPage();
+      const cartoDark = [];
+      const session = await openDeviceContext(browser, active, {
+        requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+      });
       try {
-        const cartoDark = [];
-        page.on('request', (request) => {
-          noteRequest(cartoDark, request.url());
-        });
-        const send = playwrightSend(page);
+        const send = playwrightSend(session);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
         await openApp(send, baseUrl);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
-        await context.close();
+        await session.context.close();
       }
       notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir)}`);
     } finally {
@@ -1043,12 +1037,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
   const before = shown.text;
   const beforeAge = bannerAgeToken(before);
   if (!beforeAge) throw new Error(`stale TLE banner has no age label: ${before}`);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const base = Date.now();
-    Date.now = () => base + 70000;
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(Date.now() + 70000)`);
   let afterTick = before;
   let afterAge = beforeAge;
   const started = Date.now();
@@ -1073,7 +1062,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
       await sleep(100);
     }
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   if (!afterTick.includes(suffix) || bannerAgeNormalized(afterTick) !== bannerAgeNormalized(before)) {
     throw new Error(`countdown dropped the TLE suffix: ${afterTick}`);
@@ -4037,7 +4026,7 @@ async function proveIssTownRetry(send, evidenceDir, viewport) {
     return `${portrait}; ${landscape}`;
   } finally {
     await evaluate(send, `(() => {
-      if (window.__opdRealNow) Date.now = window.__opdRealNow;
+      (${restoreFixtureClock.toString()})();
       document.cookie = 'opd-verify-towns=; path=/; max-age=0';
       document.cookie = 'opd-verify-nadir=; path=/; max-age=0';
       return true;
@@ -4062,11 +4051,7 @@ async function proveIssTownsOnce(send, evidenceDir, shotSuffix) {
     return true;
   })()`);
   await reloadSettled(send);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    Date.now = () => ${BOSTON_NADIR_EPOCH_MS};
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(${BOSTON_NADIR_EPOCH_MS})`);
   await click(send, '#tab-iss');
   const blocked = await waitFor(
     send,
@@ -5621,12 +5606,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   );
   await shot(send, evidenceDir, 'iss-all-launches');
   const frozen = fixtureInstant(evidenceDir);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const frozen = ${frozen};
-    Date.now = () => frozen;
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
   try {
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
@@ -5671,7 +5651,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   );
   await shot(send, evidenceDir, 'iss-all-launches-pin');
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
