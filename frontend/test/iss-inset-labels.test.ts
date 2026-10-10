@@ -14,11 +14,15 @@ vi.mock('maplibre-gl', () => {
   }
   class Map {
     constructor(public options: { container: HTMLElement }) {}
-    loaded(): boolean { return true; }
+    loaded(): boolean {
+      return !(globalThis as { __holdIssIdle?: boolean }).__holdIssIdle;
+    }
     once(): void {}
     on(): void {}
     setMaxPitch(): void {}
-    setVerticalFieldOfView(): void {}
+    fov = 36.87;
+    setVerticalFieldOfView(value: number): void { this.fov = value; }
+    getVerticalFieldOfView(): number { return this.fov; }
     getPixelRatio(): number { return 1; }
     setPixelRatio(): void {}
     resize(): void {}
@@ -113,5 +117,42 @@ describe('horizon inset labels', () => {
       expect(catalogFetches().some((url) => url.includes('label-catalog.json'))).toBe(true);
     });
     renderer.destroy();
+  });
+
+  it('confirms the applied field before map idle', async () => {
+    (globalThis as { __holdIssIdle?: boolean }).__holdIssIdle = true;
+    try {
+      vi.stubGlobal('fetch', fetchMock);
+      const { createIssRenderer } = await import('../src/map/adapters/maplibre/iss-view');
+      const frame = document.createElement('div');
+      document.body.append(frame);
+      const renderer = createIssRenderer(frame, {
+        onImagery() {},
+        onContextLost() {},
+      }, { labels: false });
+      let applied: number | null = null;
+      let epoch = 0;
+      let settled = false;
+      const pending = renderer.aim({
+        ...sampleAim(),
+        fovEpoch: 7,
+        onCamera(degrees, token) {
+          applied = degrees;
+          epoch = token;
+        },
+      });
+      void pending.then(() => {
+        settled = true;
+      }, () => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(epoch).toBe(7);
+      expect(applied).toBe(60);
+      renderer.destroy();
+    } finally {
+      delete (globalThis as { __holdIssIdle?: boolean }).__holdIssIdle;
+    }
   });
 });
