@@ -5004,6 +5004,7 @@ export const SIDE_COLUMN_REACH = `(() => {
   const sels = ['[data-iss-launch-name]', '[data-iss-launch-visibility]', '[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]', '[data-iss-edition]', '[data-iss-status]', '[data-iss-details] summary'];
   const sample = (el) => {
     const box = el.getBoundingClientRect();
+    const scrollPort = column.getBoundingClientRect();
     const port = clipPortFor(el, column);
     const visible = elementVisibleHeight(el, column);
     const textRects = textRectsOf(el);
@@ -5011,8 +5012,8 @@ export const SIDE_COLUMN_REACH = `(() => {
       visible,
       height: box.height,
       top: box.top,
-      portTop: port.top,
-      portHeight: port.height,
+      scrollPortTop: scrollPort.top,
+      scrollPortHeight: scrollPort.height,
       textOk: textVisibleInPort(textRects, port),
       textRects,
       port,
@@ -5027,18 +5028,18 @@ export const SIDE_COLUMN_REACH = `(() => {
     if (overflowY !== 'auto' && overflowY !== 'scroll') return { ok: false, ...sample(el), overflowY };
     const before = sample(el);
     const max = Math.max(0, column.scrollHeight - column.clientHeight);
-    const alignTop = Math.max(0, Math.min(max, column.scrollTop + (before.top - before.portTop)));
+    const alignTop = Math.max(0, Math.min(max, column.scrollTop + (before.top - before.scrollPortTop)));
     column.scrollTop = alignTop;
     if (fits(el)) return { ok: true, ...sample(el) };
-    if (before.height <= before.portHeight + 1) return { ok: false, ...sample(el), overflowY };
+    if (before.height <= before.scrollPortHeight + 1) return { ok: false, ...sample(el), overflowY };
     const mid = sample(el);
-    const alignBottom = Math.max(0, Math.min(max, column.scrollTop + (mid.top + mid.height - (mid.portTop + mid.portHeight))));
+    const alignBottom = Math.max(0, Math.min(max, column.scrollTop + (mid.top + mid.height - (mid.scrollPortTop + mid.scrollPortHeight))));
     column.scrollTop = alignBottom;
     const end = sample(el);
-    const bottomIn = end.textOk && end.visible > 1 && end.top + end.height <= end.portTop + end.portHeight + 1;
+    const bottomIn = end.textOk && end.visible > 1 && end.top + end.height <= end.scrollPortTop + end.scrollPortHeight + 1;
     column.scrollTop = alignTop;
     const start = sample(el);
-    const topIn = start.textOk && start.visible > 1 && start.top >= start.portTop - 1;
+    const topIn = start.textOk && start.visible > 1 && start.top >= start.scrollPortTop - 1;
     return { ok: topIn && bottomIn, ...start, overflowY };
   };
   for (const sel of sels) {

@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import {
+  earthAfterResizeReaders,
   missingListenerMutant,
   POISONED_EARTH,
   rafWrappedMutant,
@@ -14,6 +16,76 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const drive = readFileSync(resolve(here, 'drive.mjs'), 'utf8');
+
+function emittedResize(listener) {
+  let frameNumber = 0;
+  let queued = [];
+  let rafId = 0;
+  const reads = [];
+  const dispatches = [];
+  class Frame {
+    style = { width: '278px', height: '185px' };
+
+    getBoundingClientRect() {
+      const box = { width: parseFloat(this.style.width), height: parseFloat(this.style.height) };
+      reads.push({ ...box, frameNumber });
+      return box;
+    }
+  }
+  const frame = new Frame();
+  const requestAnimationFrame = (callback) => {
+    queued.push(callback);
+    return ++rafId;
+  };
+  const recover = () => Object.assign(frame.style, { width: '278px', height: '185px' });
+  const result = runInNewContext(`${earthAfterResizeReaders()}\nsettleEarthAfterResize()`, {
+    HTMLElement: Frame,
+    Event: class { constructor(type) { this.type = type; } },
+    requestAnimationFrame,
+    document: {
+      querySelector(selector) {
+        assert.equal(selector, '[data-iss-frame]');
+        return frame;
+      },
+    },
+    window: {
+      dispatchEvent(event) {
+        dispatches.push({ type: event.type, ...frame.style });
+        if (listener === 'sync') recover();
+        if (listener === 'raf') requestAnimationFrame(recover);
+        return true;
+      },
+    },
+  });
+  return {
+    result,
+    reads,
+    dispatches,
+    async advanceFrame() {
+      frameNumber++;
+      const callbacks = queued;
+      queued = [];
+      for (const callback of callbacks) callback(frameNumber * 1000 / 60);
+      await Promise.resolve();
+    },
+  };
+}
+
+for (const listener of ['sync', 'raf', 'missing']) {
+  test(`emitted resize reader waits two frames with a ${listener} listener`, async () => {
+    const probe = emittedResize(listener);
+    assert.deepEqual(probe.dispatches, [{ type: 'resize', width: '109px', height: '72px' }]);
+    assert.deepEqual(probe.reads, [], 'must not read the poisoned frame in the dispatch turn');
+    await probe.advanceFrame();
+    assert.deepEqual(probe.reads, [], 'the first rAF is not the settling boundary');
+    await probe.advanceFrame();
+    const expected = listener === 'missing'
+      ? { step: 'earth', width: 109, height: 72 }
+      : { ok: true, width: 278, height: 185 };
+    assert.deepEqual(probe.reads, [{ width: expected.width, height: expected.height, frameNumber: 2 }]);
+    assert.deepEqual({ ...await probe.result }, expected);
+  });
+}
 
 test('same-turn oracle fails a correct rAF-wrapped onResize', () => {
   const sample = rafWrappedMutant();
