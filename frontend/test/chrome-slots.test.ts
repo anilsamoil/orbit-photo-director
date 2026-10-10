@@ -27,6 +27,7 @@ function measure(over: Partial<ChromeMeasure>): ChromeMeasure {
     legendNaturalBottom: 0,
     dockCorridor: 0,
     chromeHidden: false,
+    timeNeed: 0,
     ...over,
   };
 }

@@ -13,7 +13,7 @@ const actors = [
   ['ir', /map-imagery-date|map-legend-warning/],
 ];
 
-const ownedSelector = /maplibregl-ctrl-top-left|maplibregl-ctrl-zoom|maplibregl-ctrl-compass|map-toolbar|map-command|(?:^|[\s>+~.#])time-slider(?![-a-z])|map-control-dock|(?:^|[\s>+~.#])\.map-legend(?![-a-z])|map-legend-panel|map-legend-toggle|map-chrome-toggle|map-launch-coverage|(?:^|[\s>+~])#status-banner\b|view-map\)\s*>\s*\.banner/;
+const ownedSelector = /maplibregl-ctrl-top-left|maplibregl-ctrl-zoom|maplibregl-ctrl-compass|map-toolbar|map-command|map-controls|time-slider(?![-a-z])|map-control-dock|(?:^|[\s>+~.#])\.map-legend(?![-a-z])|map-legend-panel|map-legend-toggle|map-chrome-toggle|map-launch-coverage|(?:^|[\s>+~])#status-banner\b|view-map\)\s*>\s*\.banner/;
 
 const jsPlacement = [
   ['inline style.top', /(?<!probe)\.style\.top\s*=/],

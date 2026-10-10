@@ -23,6 +23,7 @@ export type ChromeMeasure = {
   legendNaturalBottom: number;
   dockCorridor: number;
   chromeHidden: boolean;
+  timeNeed: number;
 };
 
 export type Slot = { x: number; y: number; w: number; h: number };
@@ -129,7 +130,8 @@ function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot {
   const candidate = (height: number): Box => ({ x, y: cornerTop - GAP - height, w: width, h: height });
   const fits = (box: Box) => box.y >= raisedY - 0.5 && !blockers.some((obstacle) => meets(box, obstacle));
   const bandAfter = (box: Box) => box.y - GAP - raisedY;
-  const tall = candidate(TIME_STACK);
+  const stack = measure.timeNeed > TIME_STACK ? measure.timeNeed : TIME_STACK;
+  const tall = candidate(stack);
   const line = candidate(TARGET);
   const stackedOk = fits(tall) && (!measure.legendOpen || bandAfter(tall) >= MIN_LEGEND);
   const chosen = stackedOk ? tall : fits(line) ? line : { x, y: raisedY, w: width, h: TARGET };
@@ -300,8 +302,8 @@ function ownShell(measure: ChromeMeasure): ChromeMeasure {
   const show = slot(
     measure.insets.left + EDGE,
     topbar + 5,
-    present(measure.show) ? measure.show.w : 180,
-    present(measure.show) ? measure.show.h : 52,
+    present(measure.show) && measure.show.w >= TARGET ? measure.show.w : 180,
+    present(measure.show) && measure.show.h >= 32 ? measure.show.h : 52,
   );
   return { ...measure, footer, hide, legendButton, zoom, compass, show };
 }

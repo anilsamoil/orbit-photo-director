@@ -157,7 +157,21 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     legendNaturalBottom: naturalLegendBottom(view),
     dockCorridor: naturalDockCorridor(view, pane),
     chromeHidden: document.body.classList.contains('map-chrome-hidden'),
+    timeNeed: timeNeedPx(),
   };
+}
+
+function timeNeedPx(): number {
+  const chip = document.querySelector('.map-command .map-controls-time');
+  if (!(chip instanceof HTMLElement)) return 0;
+  const top = chip.getBoundingClientRect().top;
+  let low = top;
+  for (const el of chip.querySelectorAll('button, input, .time-slider-end, .time-slider-readout')) {
+    const rect = el.getBoundingClientRect();
+    if (rect.height < 1) continue;
+    low = Math.max(low, rect.bottom);
+  }
+  return Math.max(0, low - top);
 }
 
 let lastSlots = '';

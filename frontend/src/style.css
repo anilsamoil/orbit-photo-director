@@ -1565,9 +1565,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 .map-controls {
-  position: absolute;
-  top: 80px;
-  right: 1rem;
   display: flex;
   gap: 0.25rem;
   background: var(--surface-2);
@@ -1704,17 +1701,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
  * row is taller (UTC chip + label per button = ~50px) and can wrap on
  * narrow viewports. v1.8.0.0 bumped 170 → 206 for the slider row
  * (continuous time-slider, ~34px) inside the time control. */
-.map-controls.map-controls-bearing {
-  top: 206px;
-}
-
-/* All/Mine filter on the Map (top-left, clear of the right-edge control
- * stack and the bottom-left legend). Honors the same global pref as the
+/* All/Mine filter on the Map. Honors the same global pref as the
  * Queue/Upcoming toggles. Pill look matches the .filter-toggle in the lists. */
 .map-controls.map-controls-filter {
-  top: 80px;          /* clear the topbar, same as .map-controls-time */
-  left: 1rem;
-  right: auto;
   gap: 0.15rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1724,9 +1713,6 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 /* Cloud-overlay toggle sits below the bearing toggle on the same right
  * edge. Single-button row (Pettit feedback 2026-05-19 — make cloud
  * overlay toggleable). The cloud icon (☁) sits centered on a square. */
-.map-controls.map-controls-overlay {
-  top: 256px; /* follows the bearing row, which moved for the slider row */
-}
 .map-controls.map-controls-overlay .time-btn {
   font-size: 1.05rem;
   padding: 0.3rem 0.55rem;
@@ -4807,6 +4793,13 @@ body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left {
 }
 body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl {
   margin: 0;
+}
+body.map-slot-owned .view-map .map-toolbar,
+body.map-slot-owned.map-slot-time .view-map .map-command,
+body.map-slot-owned.map-slot-dock .view-map .map-control-dock,
+body.map-slot-owned .view-map .map-legend,
+body.map-slot-owned .view-map .map-chrome-toggle {
+  box-sizing: border-box;
 }
 body.map-slot-owned .view-map .map-toolbar {
   position: absolute;
