@@ -101,8 +101,9 @@ const NARROW_HIT_BAND_PX = 232;
 const NARROW_HIT_CORE_PX = 182;
 /** Narrowest sheet that still has a pass-row column. Head height is separate. */
 const NARROW_PASS_ROW_PX = 96;
-/** Panes no taller than this reserve a centered drop, including a 521px-tall phone. */
-const SHORT_PANE_PX = 540;
+/** Panes no taller than this reserve a centered drop. 560px keeps 550px phones
+ *  on the side column and leaves a 568px-tall portrait on the full-width band. */
+const SHORT_PANE_PX = 560;
 /** Title and heading already filled a 120px sheet when the wrapped first row measured 104px. */
 const SHORT_PASS_HEAD_PX = 224;
 /** Heading plus the 70px first row WebKit measured once the sheet is wider than the pass-row container. */

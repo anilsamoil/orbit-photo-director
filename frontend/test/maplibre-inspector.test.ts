@@ -243,14 +243,10 @@ function openPassList(): PopupHandle {
   return vendor.openPopup({ at: [10, 20], content, closeOnClick: false });
 }
 
-/** WebKit showed 53/70, 31/87, and 0/104 of the first row inside a 120px sheet.
- *  Wider than the pass-row container, the heading plus that 70px row needs 137px.
- *  A wrapped row needs the 87px measurement once the sheet is at least 140px wide,
- *  and the narrower wrap still has to clear the old 120px cap by reaching 200px. */
+/** Sheet floors the rendered-row probe also has to clear. A column no wider than
+ *  the pass-row container keeps the first row inside 176px; a wider sheet needs 137px. */
 function firstPassRowExtent(sheetWidth: number): number {
-  if (sheetWidth > 260) return (120 - 53) + 70;
-  if (sheetWidth >= 140) return (120 - 31) + 87;
-  return 200;
+  return sheetWidth > 260 ? 137 : 176;
 }
 
 function expectFullFirstPassRow(sheet: DOMRect): void {
@@ -726,6 +722,8 @@ describe('measured inspector chrome clearance', () => {
     { width: 667, height: 375, mapTop: 48 },
     { width: 740, height: 360, mapTop: 48 },
     { width: 874, height: 521, mapTop: 60 },
+    { width: 874, height: 541, mapTop: 60 },
+    { width: 874, height: 550, mapTop: 60 },
   ])('keeps a readable pass list beside the hit square at $width×$height', ({ width, height, mapTop }) => {
     viewport(width, height, { left: 0, top: 0, width, height });
     const mapHeight = height - mapTop;
