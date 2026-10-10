@@ -36,12 +36,19 @@ const PIN_FILES = [
   'test/map-pin-drop-contract.test.ts',
   'test/map-satellites-contract.test.ts',
   'test/map-ground-track-contract.test.ts',
+  'test/map-chrome-layout.test.ts',
   'src/map/features/tracked/tracked.test.ts',
   'src/map/features/targets/targets.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
 ];
 
 const MUTATIONS = [
+  {
+    contract: 'all three navigation hit areas clear a wrapped or raised time strip',
+    file: 'src/style.css',
+    find: '  top: var(--map-nav-top, 0px);\n  left: 8px;\n  right: auto;\n  bottom: auto;\n  transform: translateX(var(--map-nav-shift, 0px));',
+    replace: '  top: 71px;\n  left: 8px;\n  right: auto;\n  bottom: auto;',
+  },
   {
     contract: 'night overlays stay below the ISS ground track',
     file: CATALOG,

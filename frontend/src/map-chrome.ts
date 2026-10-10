@@ -1,3 +1,5 @@
+import { bindMapNavigationLayout } from './map-navigation-layout';
+
 const STORAGE_KEY = 'opd-map-chrome';
 
 export function readMapChromeShown(): boolean {
@@ -20,6 +22,8 @@ export function applyMapChrome(shown: boolean): void {
 
 export function bindMapChrome(): void {
   applyMapChrome(readMapChromeShown());
+  const pane = document.getElementById('map-pane');
+  if (pane) bindMapNavigationLayout(pane);
   document.getElementById('map-chrome-toggle')?.addEventListener('click', () => {
     const shown = document.body.classList.contains('map-chrome-hidden');
     try {

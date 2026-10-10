@@ -1158,6 +1158,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   --map-corner-clear: calc(var(--map-legend-right) + var(--map-legend-width) + var(--map-corner-gap));
 }
 .view-map #map-pane {
+  --map-nav-toolbar-gap: 14px;
   position: relative;
   height: 100%;
   min-height: 240px;
@@ -1346,15 +1347,21 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   overscroll-behavior: contain;
   color: #f4f7fb;
 }
-/* Zoom stays under the toolbar. Credits own the strip above the status
- * line. Legend, imagery date, and help sit above that strip. */
+/* Measured navigation placement keeps every full hit target clear of the
+ * wrapped time chip, toolbar, dock and expanded legend. */
 .view-map #map .maplibregl-ctrl-top-left {
-  top: 71px;
+  top: var(--map-nav-top, 0px);
   left: 8px;
   right: auto;
   bottom: auto;
+  transform: translateX(var(--map-nav-shift, 0px));
 }
 .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl { margin: 0 8px 0 0; }
+.view-map #map-pane[data-map-navigation="row"] .maplibregl-ctrl-top-left .maplibregl-ctrl-group { display: flex; }
+.view-map #map-pane[data-map-navigation="row"] .maplibregl-ctrl-group button + button {
+  border-top: 0;
+  border-left: 1px solid #ddd;
+}
 .view-map #map .maplibregl-ctrl-bottom-right,
 .view-map #map .maplibregl-ctrl-attrib,
 .view-map #map .maplibregl-ctrl-attrib-button {
@@ -4869,8 +4876,10 @@ summary:focus-visible {
 }
 
 @media (max-height: 520px) {
+  .view-map #map-pane {
+    --map-nav-toolbar-gap: 5px;
+  }
   .view-map #map .maplibregl-ctrl-top-left {
-    top: 62px;
     left: calc(8px + env(safe-area-inset-left, 0px));
   }
 }
@@ -5103,4 +5112,3 @@ summary:focus-visible {
     height: auto;
   }
 }
-

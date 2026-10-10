@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 const html = readFileSync(resolve('index.html'), 'utf8');
 import { describe, expect, it } from 'vitest';
+import { layoutMapNavigation } from '../src/map-navigation-layout';
 
 const css = readFileSync(resolve('src/style.css'), 'utf8');
 
@@ -324,10 +325,98 @@ describe('map chrome layout', () => {
     expect(heights).not.toContain('104px');
   });
 
-  it('places the zoom stack under the toolbar, inside the map that already starts at the top bar', () => {
-    expect(ruleStyle('.view-map #map').top).toBe('var(--topbar-height)');
-    expect(ruleStyle('.view-map #map .maplibregl-ctrl-top-left').top).toBe('71px');
-    expect(css).not.toContain('.maplibregl-ctrl-top-left {\n  top: calc(var(--topbar-height) + 71px)');
+  it.each([
+    { name: '320×568 closed', width: 320, height: 568, timeTop: 262.40625, timeWidth: 108, shotlist: false },
+    { name: '320×568 shot list', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
+    { name: '320×568 shot list and legend', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
+    { name: '390×564 closed', width: 390, height: 564, timeTop: 354.40625, timeWidth: 178, shotlist: false },
+    { name: '390×564 shot list', width: 390, height: 564, timeTop: 274.40625, timeWidth: 178, shotlist: true },
+    { name: '390×564 shot list and legend', width: 390, height: 564, timeTop: 274.40625, timeWidth: 178, shotlist: true },
+    { name: '430×400 closed with expanded legend', width: 430, height: 400, timeTop: 243.40625, timeWidth: 202, shotlist: false },
+    { name: '430×400 shot list', width: 430, height: 400, timeTop: 202.40625, timeWidth: 202, shotlist: true },
+    { name: '430×400 shot list and legend', width: 430, height: 400, timeTop: 202.40625, timeWidth: 202, shotlist: true },
+    { name: '664×390 shot list', width: 664, height: 390, timeTop: 222, timeWidth: 436, shotlist: true },
+    { name: '844×390 shot list', width: 844, height: 390, timeTop: 270, timeWidth: 604.765625, shotlist: true },
+  ])('keeps all three full navigation hit areas clear of the measured time strip: $name', (sample) => {
+    mount('view-map');
+    const pane = document.getElementById('map-pane')!;
+    const map = document.getElementById('map')!;
+    const short = sample.height <= 520;
+    const mapTop = short ? 48 : 89;
+    const toolbarBottom = short ? 105 : 146;
+    const inset = short ? 16 : 8;
+    const rect = (x: number, y: number, width: number, height: number) => new DOMRect(x, y, width, height);
+    pane.style.setProperty('--map-nav-toolbar-gap', `${short ? 5 : 14}px`);
+    map.getBoundingClientRect = () => rect(0, mapTop, sample.width, sample.height - mapTop - (sample.shotlist && !short ? 80 : 0));
+    const toolbar = pane.querySelector('.map-toolbar')!;
+    toolbar.getBoundingClientRect = () => rect(8, mapTop + 5, sample.width === 320 ? 193.8125 : 203.40625, toolbarBottom - mapTop - 5);
+    const dock = pane.querySelector('.map-control-dock')!;
+    const dockBottom = short ? sample.height - (sample.shotlist ? 215 : 174) : sample.height - (sample.shotlist ? 231 : 151);
+    dock.getBoundingClientRect = () => rect(sample.width - 74.15625, mapTop + 5, 66.15625, dockBottom - mapTop - 5);
+    const legend = pane.querySelector('.map-legend-panel')!;
+    const legendTop = short ? (sample.shotlist ? 132 : 164) : sample.height - 235.953125 - (sample.shotlist ? 80 : 0);
+    if (sample.name.includes('legend')) legend.getBoundingClientRect = () => rect(sample.width - 196, legendTop, 88, 151.953125);
+    const legendToggle = pane.querySelector('.map-legend-toggle')!;
+    const cornerTop = short ? sample.height - (sample.shotlist ? 112 : 80) : sample.height - (sample.shotlist ? 160 : 80);
+    legendToggle.getBoundingClientRect = () => rect(sample.width - 196, cornerTop, 88, 44);
+    pane.insertAdjacentHTML('beforeend', '<button class="map-chrome-toggle">Hide</button>');
+    const hide = pane.querySelector('.map-chrome-toggle')!;
+    hide.getBoundingClientRect = () => rect(sample.width - 100, cornerTop, 88, 44);
+    map.insertAdjacentHTML('beforeend', `<div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group">
+      <button class="maplibregl-ctrl-zoom-in"></button><button class="maplibregl-ctrl-zoom-out"></button><button class="maplibregl-ctrl-compass"></button>
+    </div></div>`);
+    pane.insertAdjacentHTML('beforeend', '<div class="map-command"><div class="map-controls-time"><div class="time-slider-row"><input class="time-slider" /></div></div></div>');
+    const time = pane.querySelector<HTMLElement>('.map-controls-time')!;
+    time.getBoundingClientRect = () => rect(inset, sample.timeTop, sample.timeWidth, sample.height - sample.timeTop - (sample.shotlist ? 108 : 28));
+    const row = time.querySelector<HTMLElement>('.time-slider-row')!;
+    row.getBoundingClientRect = () => rect(inset + 8, sample.timeTop + 4, Math.max(160, sample.timeWidth - 16), 24);
+    const slider = time.querySelector<HTMLElement>('.time-slider')!;
+    slider.getBoundingClientRect = () => rect(inset + 39, sample.timeTop - 6, 27, 44);
+    const corner = map.querySelector<HTMLElement>('.maplibregl-ctrl-top-left')!;
+    const group = corner.querySelector<HTMLElement>('.maplibregl-ctrl-group')!;
+    const buttons = [...group.querySelectorAll('button')];
+    const horizontal = () => pane.dataset.mapNavigation === 'row'
+      && ruleStyle('.view-map #map-pane[data-map-navigation="row"] .maplibregl-ctrl-top-left .maplibregl-ctrl-group').display === 'flex';
+    group.getBoundingClientRect = () => {
+      const style = getComputedStyle(corner);
+      const shift = Number.parseFloat(style.transform.match(/translateX\(\s*([-\d.]+)px/)?.[1] ?? '0');
+      return rect(8 + shift, mapTop + Number.parseFloat(style.top), horizontal() ? 132 : 44, horizontal() ? 44 : 132);
+    };
+    for (const [index, button] of buttons.entries()) {
+      button.getBoundingClientRect = () => {
+        const box = group.getBoundingClientRect();
+        return rect(box.left + (horizontal() ? index * 44 : 0), box.top + (horizontal() ? 0 : index * 44), px(`.${button.className}`, 'width'), px(`.${button.className}`, 'height'));
+      };
+    }
+
+    layoutMapNavigation(pane);
+    const first = group.getBoundingClientRect();
+    layoutMapNavigation(pane);
+    expect(group.getBoundingClientRect()).toEqual(first);
+    const obstacles = [time, row, slider, toolbar, dock, legendToggle, hide].map((element) => element.getBoundingClientRect());
+    if (sample.name.includes('legend')) obstacles.push(legend.getBoundingClientRect());
+    if (sample.name === '430×400 closed with expanded legend') {
+      expect(first.left).toBe(8);
+    }
+    for (const button of buttons) {
+      const box = button.getBoundingClientRect();
+      expect(box.width).toBe(44);
+      expect(box.height).toBe(44);
+      expect(box.top).toBeGreaterThanOrEqual(mapTop);
+      expect(box.right).toBeLessThanOrEqual(sample.width);
+      expect(box.bottom).toBeLessThanOrEqual(map.getBoundingClientRect().bottom);
+      for (const obstacle of obstacles) {
+        expect(box.left >= obstacle.right || box.right <= obstacle.left || box.top >= obstacle.bottom || box.bottom <= obstacle.top,
+          JSON.stringify({ control: button.className, box, obstacle, layout: pane.dataset.mapNavigation })).toBe(true);
+      }
+      for (const [x, y] of [[box.left + 1, box.top + 1], [box.right - 1, box.top + 1], [box.left + 1, box.bottom - 1], [box.right - 1, box.bottom - 1], [box.left + 22, box.top + 22]] as const) {
+        expect(obstacles.some((obstacle) => x >= obstacle.left && x < obstacle.right && y >= obstacle.top && y < obstacle.bottom)).toBe(false);
+      }
+    }
+    if (sample.name === '390×564 closed') {
+      expect(first.left).toBe(8);
+      expect(time.getBoundingClientRect().top - buttons[2]!.getBoundingClientRect().bottom).toBeCloseTo(62.40625, 4);
+    }
   });
 
   it('lays the time strip on the map', () => {
