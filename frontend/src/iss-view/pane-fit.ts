@@ -28,7 +28,20 @@ export type PaneFit = {
   launchCardPlace: LaunchCardPlace;
 };
 
+export const SHORT_ISS_WINDOW_PX = 564;
+
 const NARROW_ISS_PANE_PX = 720;
+
+export function sideDockActive(
+  sceneWidthPx: number,
+  windowHeightPx: number,
+  fullscreen: boolean,
+  split: boolean,
+): boolean {
+  if (fullscreen || split) return false;
+  if (!(windowHeightPx > 0) || windowHeightPx > SHORT_ISS_WINDOW_PX) return false;
+  return sceneWidthPx > NARROW_ISS_PANE_PX;
+}
 
 /** A card under the earth that leaves a shorter frame than this collapses the globe. */
 export const USABLE_BELOW_EARTH_PX = 120;
