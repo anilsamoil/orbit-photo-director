@@ -12,7 +12,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from generator.launch_catalog import build_launch_catalog
@@ -31,6 +31,7 @@ from generator.orbit import TLE
 
 # Schedule refresh tolerance, NOT the 15-minute capture-evidence lifetime.
 MAX_SCHEDULE_AGE_SECONDS = 3 * 3600
+SCHEDULED_CHECK_SECONDS = 10 * 60
 
 
 @contextmanager
@@ -196,7 +197,7 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     identity = {
         # A model-policy change requires one fresh publication even when the
         # source receipt is unchanged. Retain ownership and prior receipts.
-        "policy": 5,
+        "policy": 6,
         "schedule_sha256": receipt["sha256"],
         "fetched_at": receipt["fetched_at"],
         "tle_sha256": hashlib.sha256(tle_raw).hexdigest(),
@@ -220,6 +221,18 @@ def _prepare_catalog(
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
         return None, str(exc)
     return catalog, None
+
+
+def _catalog_live_through_next_check(state: dict, now: datetime) -> bool:
+    """Missing legacy lease metadata requires a real catalog reevaluation."""
+    try:
+        generated = _parse_iso8601_z(state.get("generated_at"))
+        geometry_until = _parse_iso8601_z(state.get("geometry_valid_until"))
+        schedule_until = _parse_iso8601_z(state.get("schedule_valid_until"))
+    except ValueError:
+        return False
+    next_check = now + timedelta(seconds=SCHEDULED_CHECK_SECONDS)
+    return generated <= now and min(geometry_until, schedule_until) > next_check
 
 
 def refresh_cached(
@@ -278,7 +291,10 @@ def refresh_cached(
             prepared: dict | None = None,
             prepared_error: str | None = None,
         ) -> str | None:
-            if catalog_state.get("input_id") == identity["input_id"]:
+            if (
+                catalog_state.get("input_id") == identity["input_id"]
+                and _catalog_live_through_next_check(catalog_state, now)
+            ):
                 return None
             if prepared_error:
                 return prepared_error
@@ -296,6 +312,9 @@ def refresh_cached(
                     "remote": remote,
                     "input_id": identity["input_id"],
                     "revision": catalog["revision"],
+                    "generated_at": catalog["generated_at"],
+                    "geometry_valid_until": catalog["geometry_valid_until"],
+                    "schedule_valid_until": catalog["schedule_valid_until"],
                 },
             )
             return None

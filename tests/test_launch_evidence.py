@@ -527,16 +527,22 @@ def test_overhead_pad_is_a_shot_with_one_sentence(sample_tle, tmp_path):
     assert not (output / "launch/latest.json").exists()
 
 
-def test_tle_age_splits_likely_and_watch(sample_tle):
+def test_tle_age_splits_likely_forecast_and_watch(sample_tle):
     epoch = sample_tle.epoch.replace(microsecond=0)
     now = epoch + timedelta(hours=1)
     likely = build_launch_catalog(
         _overhead(sample_tle, epoch + timedelta(hours=30)), sample_tle, now, fetched_at=now,
     )
-    watch = build_launch_catalog(
+    forecast = build_launch_catalog(
         _overhead(sample_tle, epoch + timedelta(hours=49)), sample_tle, now, fetched_at=now,
     )
+    watch = build_launch_catalog(
+        _overhead(sample_tle, epoch + timedelta(hours=97)), sample_tle, now, fetched_at=now,
+    )
     assert likely["items"][0]["tier"] == "likely"
+    assert "FORECAST_EPHEMERIS" not in likely["items"][0]["reasons"]
+    assert forecast["items"][0]["tier"] == "likely"
+    assert "FORECAST_EPHEMERIS" in forecast["items"][0]["reasons"]
     assert watch["items"][0]["tier"] == "watch"
 
 

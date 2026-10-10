@@ -17,6 +17,8 @@ const fixture = fixtureRaw as {
 
 const viewMs = Date.parse(fixture.start) + 60_000;
 const at = (minutes: number) => new Date(Date.parse(fixture.start) + minutes * 60_000).toISOString();
+const CRS35_ID = 'bf2c3027-a314-403e-a416-2bfd5d165ad1';
+const CRS35_NAME = 'Falcon 9 Block 5 | Dragon CRS-2 SpX-35';
 const ORIGINAL = [
   { lat: 28.5, lon: -80.6 },
   { lat: 28.6, lon: -80.5 },
@@ -167,6 +169,19 @@ async function choose(scene: ReturnType<typeof mountIssScene>, picker: HTMLSelec
   await scene.paint();
 }
 
+async function choosePrefix(
+  scene: ReturnType<typeof mountIssScene>, picker: HTMLSelectElement, prefix: string, group: string,
+): Promise<HTMLOptionElement> {
+  const option = [...picker.options].find((entry) => entry.textContent?.startsWith(prefix)
+    && entry.parentElement instanceof HTMLOptGroupElement && entry.parentElement.label === group);
+  if (!option) throw new Error(`missing ${prefix} option in ${group}`);
+  picker.selectedIndex = [...picker.options].indexOf(option);
+  picker.dispatchEvent(new Event('change', { bubbles: true }));
+  await settle();
+  await scene.paint();
+  return option;
+}
+
 function moved(item: LaunchCatalogItem): LaunchCatalogItem {
   return {
     ...item,
@@ -189,6 +204,70 @@ afterEach(() => {
 });
 
 describe('ISS catalog selection retention', () => {
+  it.each([
+    ['Watch', 'CRS'], ['Watch', 'SpX-35'],
+    ['All launches', 'CRS'], ['All launches', 'SpX-35'],
+  ])('commits the exact LL2 event through the %s %s prefix option', async (group, prefix) => {
+    vi.spyOn(Date, 'now').mockReturnValue(viewMs);
+    await publish([liveItem({ event_id: CRS35_ID, name: CRS35_NAME, tier: 'watch' })], 'aliases');
+    const { scene, picker, card, drawn } = await openScene();
+    await choose(scene, picker, 'none');
+    picker.focus();
+    const option = await choosePrefix(scene, picker, prefix, group);
+    expect(picker.value).toBe(group === 'All launches' ? `all:${CRS35_ID}` : CRS35_ID);
+    expect(picker.selectedOptions[0]).toBe(option);
+    expect(document.activeElement).toBe(picker);
+    expect(card.hidden).toBe(false);
+    expect(card.querySelector('[data-iss-launch-name]')?.textContent).toBe(CRS35_NAME);
+    expect(drawn.at(-1)?.map((site) => site.eventId)).toEqual([CRS35_ID]);
+    await scene.paint();
+    expect(picker.selectedOptions[0]).toBe(option);
+    expect(document.activeElement).toBe(picker);
+    await choose(scene, picker, 'none');
+    expect(picker.value).toBe('');
+    expect(card.hidden).toBe(true);
+    expect(drawn.at(-1)).toEqual([]);
+  });
+
+  it.each(['none', 'CRS', 'SpX-35'])('keeps %s intent while the alias catalog body is pending', async (choice) => {
+    vi.spyOn(Date, 'now').mockReturnValue(viewMs);
+    const item = liveItem({ event_id: CRS35_ID, name: CRS35_NAME, tier: 'watch' });
+    await publish([item, liveItem()], 'alias-pending');
+    const { scene, picker, card, drawn } = await openScene();
+    await choosePrefix(scene, picker, 'CRS', 'Watch');
+    picker.focus();
+    const next = await pack([item, liveItem()], 'alias-pending-next');
+    let release!: (response: Response) => void;
+    let bodySeen = false;
+    const gate = new Promise<Response>((resolve) => { release = resolve; });
+    install(next.pointer, () => {
+      bodySeen = true;
+      return gate;
+    });
+    const pending = launchCatalog.refresh(true);
+    try {
+      await vi.waitFor(() => { expect(bodySeen).toBe(true); });
+      await choose(scene, picker, 'none');
+      if (choice !== 'none') await choosePrefix(scene, picker, choice, 'Watch');
+      expect(picker.value).toBe(choice === 'none' ? '' : CRS35_ID);
+      expect(card.hidden).toBe(true);
+      expect(drawn.at(-1)).toEqual([]);
+      expect(document.activeElement).toBe(picker);
+      release(new Response(next.text, { status: 200, headers: { 'content-type': 'application/json' } }));
+      await pending;
+      await settle();
+      await scene.paint();
+      expect(picker.value).toBe(choice === 'none' ? '' : CRS35_ID);
+      expect(card.hidden).toBe(choice === 'none');
+      expect(drawn.at(-1)?.map((site) => site.eventId)).toEqual(choice === 'none' ? [] : [CRS35_ID]);
+      expect(document.activeElement).toBe(picker);
+      if (choice !== 'none') expect(card.querySelector('[data-iss-launch-name]')?.textContent).toBe(CRS35_NAME);
+    } finally {
+      release(new Response('missing', { status: 404 }));
+      await pending;
+    }
+  });
+
   it('retains the selected ISS event after a newer catalog revision settles', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(viewMs);
     const item = liveItem();

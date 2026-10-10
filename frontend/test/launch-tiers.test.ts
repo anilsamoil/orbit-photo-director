@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseLaunchArtifact, type LaunchCatalogItem, type ShotEnvelope } from '../src/launch-schema';
-import { tiersAt, tierLabel } from '../src/launch-tiers';
+import { launchPickerLabels, scheduleLabel, tiersAt, tierLabel } from '../src/launch-tiers';
 import { catalog, catalogItem, iso, NOW, shot } from './launch-fixtures';
 import legacyCatalog from './fixtures/launch-catalog-v3-251.json' with { type: 'json' };
 
@@ -39,6 +39,23 @@ function row(
 }
 
 describe('tier projection', () => {
+  it('exposes CRS and SpX prefixes for the exact LL2 title without using the CRS program number', () => {
+    const name = 'Falcon 9 Block 5 | Dragon CRS-2 SpX-35';
+    const launch = tiersAt(catalog([row('crs35', 'likely', 10, 60, name)]), NOW)!.groups.likely[0]!;
+    expect(tierLabel(launch)).toBe('SpX-35 · Likely · Sep 7');
+    expect(launchPickerLabels(name, tierLabel(launch))).toEqual([
+      'SpX-35 · Likely · Sep 7',
+      'CRS-35 · SpX-35 · Likely · Sep 7',
+    ]);
+    expect(launchPickerLabels(name, scheduleLabel(launch))).toEqual([
+      `${name} · Kennedy · Sep 7`,
+      `SpX-35 · ${name} · Kennedy · Sep 7`,
+      `CRS-35 · ${name} · Kennedy · Sep 7`,
+    ]);
+    expect(launchPickerLabels('Dragon CRS-35', 'CRS-35 · Watch · Sep 7')).toEqual(['CRS-35 · Watch · Sep 7']);
+    expect(launchPickerLabels('Example SpX-35', 'SpX-35 · Watch · Sep 7')).toEqual(['SpX-35 · Watch · Sep 7']);
+  });
+
   it('splits shot, likely, watch, unassessed, and none', () => {
     const tiers = tiersAt(catalog([
       row('shot-1', 'shot', 40, 10),
