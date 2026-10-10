@@ -4514,6 +4514,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   background: transparent;
   overflow: hidden;
   pointer-events: none;
+  container-type: inline-size;
 }
 
 #map-pane.map-inspector-open .maplibregl-popup {
@@ -4579,38 +4580,46 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 
 @container (max-width: 260px) {
   .dropped-pin-popup .pin-pass-row {
-    grid-template-columns: minmax(0, 1fr) max-content !important;
+    display: flex !important;
+    flex-wrap: wrap;
     column-gap: 6px !important;
     row-gap: 1px !important;
     padding: 3px 0 !important;
     line-height: 1.2;
     white-space: normal !important;
   }
-  .dropped-pin-popup .pin-pass-rel {
-    grid-column: 1;
-    grid-row: 1;
+  .dropped-pin-popup .pin-pass-row > span {
     min-width: 0;
+    overflow-wrap: anywhere !important;
+    text-align: left !important;
   }
-  .dropped-pin-popup .pin-pass-utc {
-    grid-column: 1;
-    grid-row: 2;
-    min-width: 0;
-  }
+  .dropped-pin-popup .pin-pass-utc,
   .dropped-pin-popup .pin-pass-nadir {
-    grid-column: 2 !important;
-    grid-row: 2 !important;
-    text-align: right !important;
+    order: 1;
   }
   .dropped-pin-popup .pin-pass-shoot {
-    grid-column: 1 / -1 !important;
-    grid-row: 3 !important;
+    order: 2;
+    flex-basis: 100%;
     font-size: 0.68rem !important;
     line-height: 1.15;
   }
-  .dropped-pin-popup .pin-pass-regime {
-    grid-column: 2 !important;
-    grid-row: 1 !important;
-    text-align: right !important;
+}
+
+@container (max-width: 140px) {
+  #map-pane.map-inspector-open .maplibregl-popup-content:has(> .dropped-pin-popup) {
+    padding: 2px;
+  }
+  .dropped-pin-popup .pin-pass-heading {
+    font-size: 0.72rem !important;
+    overflow-wrap: anywhere;
+  }
+}
+
+@container (max-width: 110px) {
+  .dropped-pin-popup .pin-pass-row {
+    font-size: 0.72rem;
+    column-gap: 3px !important;
+    line-height: 1.3;
   }
 }
 
