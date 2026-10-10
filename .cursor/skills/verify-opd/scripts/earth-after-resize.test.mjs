@@ -45,5 +45,6 @@ test('drive earth wait settles after resize instead of reading the same turn', (
   assert.match(drive, /settleEarthAfterResize/);
   assert.match(drive, /requestAnimationFrame/);
   assert.match(drive, /from '\.\/earth-after-resize\.mjs'/);
+  assert.match(drive, /resize listener/);
   assert.equal(drive.includes("staleFrame.style.width = '109px';\n  staleFrame.style.height = '72px';\n  }\n  window.dispatchEvent(new Event('resize'));\n  const laidFrame"), false);
 });

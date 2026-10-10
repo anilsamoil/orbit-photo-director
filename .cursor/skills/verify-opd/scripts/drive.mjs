@@ -5203,13 +5203,12 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
       })()`);
       const earth = await waitFor(
         send,
-        `(() => (async () => {
+        `(() => {
           const scene = document.querySelector('[data-iss-scene]');
           const laid = ${pane.sceneBox ? 'true' : 'false'}
             ? scene && scene.clientWidth === ${pane.width} && scene.clientHeight === ${pane.height}
             : document.documentElement.clientWidth === ${pane.width} && document.documentElement.clientHeight === ${pane.height};
           if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scene: scene ? [scene.clientWidth, scene.clientHeight] : null };
-          ${EARTH_AFTER_RESIZE}
           const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
           if (!earth || earth.ok !== true) return earth;
           const allowed = ${JSON.stringify(pane.places || (pane.place ? [pane.place] : []))};
@@ -5231,10 +5230,22 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
             if (lines < 2) return { step: 'name-lines', lines, height: name ? Math.round(name.getBoundingClientRect().height) : 0, max: name instanceof HTMLElement ? name.style.maxWidth : '', place: earth.place };
           }
           return earth;
-        })())()`,
+        })()`,
         `iss launch earth ${pane.label}`,
         10000,
       );
+      const resizeListener = await evaluate(
+        send,
+        `(() => (async () => {
+          ${EARTH_AFTER_RESIZE}
+          return { ok: true };
+        })())()`,
+      );
+      if (!resizeListener || resizeListener.ok !== true) {
+        throw new Error(
+          `iss launch earth ${pane.label} resize listener ${JSON.stringify(resizeListener)}`,
+        );
+      }
       const heldCard = await proveLaunchCardHolds(send, pane.label);
       if (pane.label === '844x390' || pane.label === '874x402' || pane.label === '721x390') await provePhoneLandscapeTelemetry(send, pane);
       if (pane.twoLine) {

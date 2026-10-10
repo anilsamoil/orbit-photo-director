@@ -62,7 +62,11 @@ export function syncListenerHealthy() {
   };
 }
 
-/** Page expression body: poison, dispatch, settle on rAF, then read. */
+/**
+ * Page expression body: poison, dispatch, settle on two animation frames, then read.
+ * Two rAFs cover an onResize wrapped in requestAnimationFrame without waiting long
+ * enough for the 500ms paint timer to clear a missing listener.
+ */
 export function earthAfterResizeReaders() {
   return `
 async function settleEarthAfterResize() {
@@ -72,23 +76,9 @@ async function settleEarthAfterResize() {
     staleFrame.style.height = '${POISONED_EARTH.height}px';
   }
   window.dispatchEvent(new Event('resize'));
-  const frame = () => document.querySelector('[data-iss-frame]');
-  const read = () => {
-    const node = frame();
-    return node instanceof HTMLElement ? node.getBoundingClientRect() : null;
-  };
-  const poisoned = (box) => !!box
-    && Math.round(box.width) === ${POISONED_EARTH.width}
-    && Math.round(box.height) === ${POISONED_EARTH.height};
-  const deadline = performance.now() + 250;
-  do {
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    const box = read();
-    if (box && !poisoned(box) && box.width >= ${SETTLED_EARTH_FLOOR.width} && box.height >= ${SETTLED_EARTH_FLOOR.height}) {
-      break;
-    }
-  } while (performance.now() < deadline);
-  const laidBox = read();
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const laidFrame = document.querySelector('[data-iss-frame]');
+  const laidBox = laidFrame instanceof HTMLElement ? laidFrame.getBoundingClientRect() : null;
   if (!laidBox || laidBox.width < ${SETTLED_EARTH_FLOOR.width} || laidBox.height < ${SETTLED_EARTH_FLOOR.height}) {
     return {
       step: 'earth',
