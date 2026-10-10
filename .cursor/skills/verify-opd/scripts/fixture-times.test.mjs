@@ -288,7 +288,12 @@ test('concurrent restamps publish one whole version', async () => {
       const proc = spawn(process.execPath, ['--input-type=module', '-e', `
         import { stampEventTimes } from ${JSON.stringify(moduleUrl)};
         for (let i = 0; i < 12; i += 1) stampEventTimes(${JSON.stringify(dir)}, ${start} + i * 1000);
-      `], { stdio: ['ignore', 'pipe', 'pipe'] });
+      `], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // This is a publication-integrity stress test; the short bounded wait
+        // is independently pinned in fixtures-lock.test.mjs.
+        env: { ...process.env, OPD_VERIFY_LOCK_TIMEOUT_MS: '60000' },
+      });
       proc.stdout.on('data', (buf) => chunks.push(buf));
       proc.stderr.on('data', (buf) => chunks.push(buf));
       proc.output = () => Buffer.concat(chunks).toString('utf8');

@@ -638,7 +638,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
 }
 
 async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
-  slideLaunch(fixtureDir);
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -687,7 +687,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
       const folder = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}-${override.raw}` : spec.slug;
       const label = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
-      slideLaunch(fixtureDir);
+      slideLaunch(fixtureDir || resolve(home, 'fixtures'));
       await resetFixtureProfile(baseUrl);
       const context = await createDeviceContext(browser, deviceDescriptor(active), { baseUrl, token: fixtureToken });
       if (Number.isFinite(startOffset)) await context.addInitScript({ content: pageClockSource(startOffset) });
@@ -773,7 +773,7 @@ const CORNER_BOX = `
 
 export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken, startOffset }) {
   mkdirSync(evidenceDir, { recursive: true });
-  slideLaunch(fixtureDir);
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
