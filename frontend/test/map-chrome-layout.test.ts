@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 const html = readFileSync(resolve('index.html'), 'utf8');
 import { describe, expect, it } from 'vitest';
 import { layoutMapNavigation } from '../src/map-navigation-layout';
+import { paintEqualDigits } from '../src/digits';
 
 const css = readFileSync(resolve('src/style.css'), 'utf8');
 
@@ -329,6 +330,7 @@ describe('map chrome layout', () => {
     { name: '320×568 closed', width: 320, height: 568, timeTop: 262.40625, timeWidth: 108, shotlist: false },
     { name: '320×568 shot list', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
     { name: '320×568 shot list and legend', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
+    { name: '320×568 deep scrub, shot list and legend', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
     { name: '390×564 closed', width: 390, height: 564, timeTop: 354.40625, timeWidth: 178, shotlist: false },
     { name: '390×564 shot list', width: 390, height: 564, timeTop: 274.40625, timeWidth: 178, shotlist: true },
     { name: '390×564 shot list and legend', width: 390, height: 564, timeTop: 274.40625, timeWidth: 178, shotlist: true },
@@ -354,8 +356,9 @@ describe('map chrome layout', () => {
     const dockBottom = short ? sample.height - (sample.shotlist ? 215 : 174) : sample.height - (sample.shotlist ? 231 : 151);
     dock.getBoundingClientRect = () => rect(sample.width - 74.15625, mapTop + 5, 66.15625, dockBottom - mapTop - 5);
     const legend = pane.querySelector('.map-legend-panel')!;
-    const legendTop = short ? (sample.shotlist ? 132 : 164) : sample.height - 235.953125 - (sample.shotlist ? 80 : 0);
-    if (sample.name.includes('legend')) legend.getBoundingClientRect = () => rect(sample.width - 196, legendTop, 88, 151.953125);
+    const deep = sample.name.includes('deep scrub');
+    const legendTop = short ? (sample.shotlist ? 132 : 164) : sample.height - 235.953125 - (sample.shotlist ? 80 : 0) - (deep ? 18 : 0);
+    if (sample.name.includes('legend')) legend.getBoundingClientRect = () => rect(sample.width - 196, legendTop, 88, deep ? 169.953125 : 151.953125);
     const legendToggle = pane.querySelector('.map-legend-toggle')!;
     const cornerTop = short ? sample.height - (sample.shotlist ? 112 : 80) : sample.height - (sample.shotlist ? 160 : 80);
     legendToggle.getBoundingClientRect = () => rect(sample.width - 196, cornerTop, 88, 44);
@@ -365,13 +368,15 @@ describe('map chrome layout', () => {
     map.insertAdjacentHTML('beforeend', `<div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group">
       <button class="maplibregl-ctrl-zoom-in"></button><button class="maplibregl-ctrl-zoom-out"></button><button class="maplibregl-ctrl-compass"></button>
     </div></div>`);
-    pane.insertAdjacentHTML('beforeend', '<div class="map-command"><div class="map-controls-time"><div class="time-slider-row"><input class="time-slider" /></div></div></div>');
+    pane.insertAdjacentHTML('beforeend', '<div class="map-command"><div class="map-controls-time"><div class="time-slider-row"><input class="time-slider" /><span class="time-slider-readout"></span></div></div></div>');
     const time = pane.querySelector<HTMLElement>('.map-controls-time')!;
     time.getBoundingClientRect = () => rect(inset, sample.timeTop, sample.timeWidth, sample.height - sample.timeTop - (sample.shotlist ? 108 : 28));
     const row = time.querySelector<HTMLElement>('.time-slider-row')!;
     row.getBoundingClientRect = () => rect(inset + 8, sample.timeTop + 4, Math.max(160, sample.timeWidth - 16), 24);
     const slider = time.querySelector<HTMLElement>('.time-slider')!;
     slider.getBoundingClientRect = () => rect(inset + 39, sample.timeTop - 6, 27, 44);
+    const readout = time.querySelector<HTMLElement>('.time-slider-readout')!;
+    readout.getBoundingClientRect = () => deep ? rect(108, 186.40625, 64, 24) : rect(0, 0, 0, 0);
     const corner = map.querySelector<HTMLElement>('.maplibregl-ctrl-top-left')!;
     const group = corner.querySelector<HTMLElement>('.maplibregl-ctrl-group')!;
     const buttons = [...group.querySelectorAll('button')];
@@ -393,7 +398,7 @@ describe('map chrome layout', () => {
     const first = group.getBoundingClientRect();
     layoutMapNavigation(pane);
     expect(group.getBoundingClientRect()).toEqual(first);
-    const obstacles = [time, row, slider, toolbar, dock, legendToggle, hide].map((element) => element.getBoundingClientRect());
+    const obstacles = [time, row, slider, readout, toolbar, dock, legendToggle, hide].map((element) => element.getBoundingClientRect());
     if (sample.name.includes('legend')) obstacles.push(legend.getBoundingClientRect());
     if (sample.name === '430×400 closed with expanded legend') {
       expect(first.left).toBe(8);
@@ -417,6 +422,20 @@ describe('map chrome layout', () => {
       expect(first.left).toBe(8);
       expect(time.getBoundingClientRect().top - buttons[2]!.getBoundingClientRect().bottom).toBeCloseTo(62.40625, 4);
     }
+  });
+
+  it('wraps the complete deep-scrub time and stale-TLE warning inside its measured readout', () => {
+    mount('view-map');
+    document.getElementById('map-pane')!.insertAdjacentHTML('beforeend', '<div class="map-command"><div class="map-controls-time"><span class="time-slider-readout time-slider-scrubbed time-slider-stale"></span></div></div>');
+    const readout = document.querySelector<HTMLElement>('.time-slider-readout')!;
+    const label = '+2d 04:54Z · stale TLE';
+    paintEqualDigits(readout, label);
+    const style = getComputedStyle(readout);
+    expect(readout.textContent).toBe(label);
+    expect(style.whiteSpace).toBe('normal');
+    expect(style.overflowWrap).toBe('anywhere');
+    expect(style.overflow).not.toBe('hidden');
+    expect(style.textOverflow).not.toBe('ellipsis');
   });
 
   it('lays the time strip on the map', () => {

@@ -4492,6 +4492,11 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   color: #f4f7fb;
 }
 
+.view-map .map-command .time-slider-readout {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .view-map .map-toolbar .filter-btn {
   border: 1px solid var(--control-border);
   border-radius: var(--radius-control);
