@@ -23,7 +23,17 @@ const ISS_CLOCK_EXPR = `(() => {
     if (el.hasAttribute('data-iss-weekday')) return 'weekday';
     return el.tagName;
   });
-  if (names.join(',') !== 'utc,gmt-day,houston,day-month,weekday') return { step: 'order', names };
+  const docked = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-side-dock') === 'on';
+  const side = document.querySelector('[data-iss-side]');
+  if (docked) {
+    if (names.join(',') !== 'utc,gmt-day') return { step: 'order', names };
+    for (const sel of ['[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]', '[data-iss-edition]']) {
+      const el = document.querySelector(sel);
+      if (!side || !el || !side.contains(el)) return { step: 'side', sel };
+    }
+  } else if (names.join(',') !== 'utc,gmt-day,houston,day-month,weekday') {
+    return { step: 'order', names };
+  }
   const text = (sel) => document.querySelector(sel)?.textContent || '';
   const utc = text('[data-iss-utc]');
   const status = document.querySelector('[data-iss-status]')?.textContent || '';
@@ -74,8 +84,10 @@ const ISS_CLOCK_EXPR = `(() => {
     if (style.minHeight !== '0px') return { step: 'min', sel, minHeight: style.minHeight };
   }
   const boxes = [...root.children].map((el) => el.getBoundingClientRect());
-  for (let i = 1; i < boxes.length; i += 1) {
-    if (boxes[i].top < boxes[i - 1].bottom - 0.5) return { step: 'stack', line: names[i], top: boxes[i].top, above: boxes[i - 1].bottom };
+  if (!docked) {
+    for (let i = 1; i < boxes.length; i += 1) {
+      if (boxes[i].top < boxes[i - 1].bottom - 0.5) return { step: 'stack', line: names[i], top: boxes[i].top, above: boxes[i - 1].bottom };
+    }
   }
   const [utcBox, gmtBox] = boxes;
   if (Math.abs(gmtBox.top - utcBox.bottom) > 0.5) return { step: 'gmt-under', utcBottom: utcBox.bottom, gmtTop: gmtBox.top };
@@ -94,12 +106,22 @@ const ISS_CLOCK_EXPR = `(() => {
     if (!horizonBox || Math.abs(utcBox.top - horizonBox.top) > 1) return { step: 'band-row', utcTop: utcBox.top, horizonTop: horizonBox?.top };
   }
   const px = (el) => Number.parseFloat(getComputedStyle(el).fontSize);
-  const [utcPx, gmtPx, ...small] = [...root.children].map(px);
+  const dockSmall = docked
+    ? ['[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]'].map((sel) => document.querySelector(sel))
+    : null;
+  if (dockSmall && dockSmall.some((el) => !el || getComputedStyle(el).visibility === 'hidden' || getComputedStyle(el).display === 'none')) {
+    return { step: 'visible' };
+  }
+  const [utcPx, gmtPx, ...small] = docked
+    ? [root.querySelector('[data-iss-utc]'), root.querySelector('[data-iss-gmt-day]'), ...dockSmall].map(px)
+    : [...root.children].map(px);
   const rootPx = px(document.documentElement);
   if (Math.abs(gmtPx - utcPx) > 0.01) return { step: 'gmt-size', utcPx, gmtPx };
   if (small.some((size) => Math.abs(size - 0.68 * rootPx) > 0.01)) return { step: 'small-size', small, rootPx };
   if (!(utcPx > small[0])) return { step: 'size-rank', utcPx, small: small[0] };
-  for (const el of [root, ...root.children]) {
+  const clipNodes = docked ? [root, ...root.children, ...dockSmall, document.querySelector('[data-iss-edition]')] : [root, ...root.children];
+  for (const el of clipNodes) {
+    if (!el) return { step: 'clip-missing' };
     if (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight) return { step: 'clip', line: Object.keys(el.dataset).join(','), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
   }
   for (const sel of ['[data-iss-utc]', '[data-iss-gmt-day]', '[data-iss-edition]']) {
@@ -128,17 +150,20 @@ function selectedSurfaceNames() {
 function viewportOverride() {
   const raw = (process.env.OPD_VERIFY_VIEWPORT || '').trim();
   if (!raw) return null;
-  if ((process.env.OPD_VERIFY_SURFACE || '').trim() !== 'iphone-17-pro') {
-    throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro. There is no 874x402 surface value.');
-  }
+  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim();
   const match = /^(\d+)x(\d+)$/.exec(raw);
   if (!match) throw new Error(`OPD_VERIFY_VIEWPORT must be WIDTHxHEIGHT, got ${raw}`);
-  return { width: Number(match[1]), height: Number(match[2]), raw };
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (surface === 'iphone-17-pro') return { width, height, raw };
+  if (surface === 'iphone-13' && width === 844 && height === 390) return { width, height, raw };
+  throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro, or iphone-13 with 844x390.');
 }
 
 function specForSurface(spec) {
   const override = viewportOverride();
-  if (!override || spec.slug !== 'iphone-17-pro') return spec;
+  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim();
+  if (!override || spec.slug !== surface) return spec;
   return { ...spec, viewport: { width: override.width, height: override.height } };
 }
 
@@ -645,8 +670,9 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const override = viewportOverride();
       const active = specForSurface(spec);
       const viewport = deviceViewport(active);
-      const folder = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}-${override.raw}` : spec.slug;
-      const label = override && spec.slug === 'iphone-17-pro' ? `${spec.slug}@${override.raw}` : spec.slug;
+      const overridden = override && spec.slug === (process.env.OPD_VERIFY_SURFACE || '').trim();
+      const folder = overridden ? `${spec.slug}-${override.raw}` : spec.slug;
+      const label = overridden ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
@@ -4069,7 +4095,26 @@ async function proveIssClockCleared(send, evidenceDir) {
         const status = document.querySelector('[data-iss-status]')?.textContent || '';
         if (!status.includes('Orbit unavailable')) return null;
         const root = document.querySelector('[data-iss-clock]');
-        if (!root || root.children.length !== 5) return { step: 'block' };
+        const side = document.querySelector('[data-iss-side]');
+        const docked = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-side-dock') === 'on';
+        if (!root) return { step: 'block' };
+        const names = [...root.children].map((el) => {
+          if (el.hasAttribute('data-iss-utc')) return 'utc';
+          if (el.hasAttribute('data-iss-gmt-day')) return 'gmt-day';
+          if (el.hasAttribute('data-iss-houston')) return 'houston';
+          if (el.hasAttribute('data-iss-day-month')) return 'day-month';
+          if (el.hasAttribute('data-iss-weekday')) return 'weekday';
+          return el.tagName;
+        });
+        if (docked) {
+          if (names.join(',') !== 'utc,gmt-day') return { step: 'block', names };
+          for (const sel of ['[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]']) {
+            const el = document.querySelector(sel);
+            if (!side || !el || !side.contains(el)) return { step: 'side', sel };
+          }
+        } else if (names.join(',') !== 'utc,gmt-day,houston,day-month,weekday') {
+          return { step: 'block', names };
+        }
         const sels = ['[data-iss-utc]', '[data-iss-houston]', '[data-iss-gmt-day]', '[data-iss-day-month]', '[data-iss-weekday]'];
         for (const sel of sels) {
           const el = document.querySelector(sel);
@@ -4109,6 +4154,18 @@ const ISS_EDITION_EXPR = `(() => {
   const utcSize = getComputedStyle(utcLine).fontSize;
   if (style.fontSize !== utcSize) return { step: 'edition-size', edition: style.fontSize, utc: utcSize };
   if (edition.scrollWidth > edition.clientWidth) return { step: 'edition-clip', scrollWidth: edition.scrollWidth, clientWidth: edition.clientWidth };
+  const side = edition.closest('[data-iss-side]');
+  if (side && document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-side-dock') === 'on') {
+    const sideBox = side.getBoundingClientRect();
+    if (editionBox.left < sideBox.left - 1 || editionBox.right > sideBox.right + 1 || editionBox.top < sideBox.top - 1 || editionBox.bottom > sideBox.bottom + 1) {
+      return { step: 'side-edition' };
+    }
+    const covered = [...document.querySelectorAll('[data-iss-presets] > *, [data-iss-aim-help], [data-iss-telemetry], [data-iss-fullscreen]')]
+      .map((node) => node.getBoundingClientRect())
+      .find((box) => box.width > 0 && box.height > 0 && editionBox.left < box.right - 0.5 && editionBox.right > box.left + 0.5 && editionBox.top < box.bottom - 0.5 && editionBox.bottom > box.top + 0.5);
+    if (covered) return { step: 'side-cover' };
+    return { ok: true, place: 'side-dock', width: window.innerWidth };
+  }
   const wide = window.innerWidth > 720;
   const splitChrome = edition.closest('[data-iss-split-chrome]');
   if (splitChrome) {
@@ -4701,6 +4758,24 @@ async function proveMapShowLaunches(send, evidenceDir) {
   await shot(send, evidenceDir, 'map-show-launches');
 }
 
+const EARTH_AFTER_RESIZE = `
+  const staleFrame = document.querySelector('[data-iss-frame]');
+  if (staleFrame instanceof HTMLElement) {
+    staleFrame.style.width = '109px';
+    staleFrame.style.height = '72px';
+  }
+  window.dispatchEvent(new Event('resize'));
+  const laidFrame = document.querySelector('[data-iss-frame]');
+  const laidBox = laidFrame instanceof HTMLElement ? laidFrame.getBoundingClientRect() : null;
+  if (!laidBox || laidBox.width < 80 || laidBox.height < 80) {
+    return {
+      step: 'earth',
+      width: laidBox ? Math.round(laidBox.width) : 0,
+      height: laidBox ? Math.round(laidBox.height) : 0,
+    };
+  }
+`;
+
 const LAUNCH_EARTH_CHECK = `
   const frame = document.querySelector('[data-iss-frame]');
   const card = document.querySelector('[data-iss-launch-card]');
@@ -4764,26 +4839,43 @@ function splitLaunchPlace(width, height) {
   return width - mapColumn <= 720 ? 'below' : 'side';
 }
 
+const PHONE_LANDSCAPE_FLOOR = { minShort: 160, minWidth: 240, minHeight: 160 };
+
+function phoneLandscapeFloor(width, height) {
+  if ((width === 844 && height === 390) || (width === 874 && height === 402) || (width === 721 && height === 390)) return PHONE_LANDSCAPE_FLOOR;
+  return null;
+}
+
+function phoneLandscapePane(width, height) {
+  return {
+    width,
+    height,
+    mobile: true,
+    label: `${width}x${height}`,
+    place: 'side',
+    ...PHONE_LANDSCAPE_FLOOR,
+  };
+}
+
 export function launchEarthPanes(width, height) {
   const native = { width, height, mobile: width < 1100, label: `${width}x${height}`, place: '', minShort: 80 };
   if (width === 390 && height === 664) {
     return [
       { ...native, place: 'over', minShort: 160 },
       { width: 390, height: 844, mobile: true, label: '390x844', place: 'below', minShort: 200 },
-      { width: 844, height: 390, mobile: true, label: '844x390', place: 'side', minShort: 80 },
+      phoneLandscapePane(844, 390),
       { width: 390, height: 565, mobile: true, label: '390x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
   if (width === 402 && height === 874) {
     return [
       { ...native, place: 'below', minShort: 200 },
-      { width: 874, height: 402, mobile: true, label: '874x402', place: 'side', minShort: 80 },
+      phoneLandscapePane(874, 402),
       { width: 402, height: 565, mobile: true, label: '402x565', place: '', places: ['below', 'over'], minShort: 120, twoLine: true, sceneBox: true },
     ];
   }
-  if (width === 874 && height === 402) {
-    return [{ ...native, place: 'side', minShort: 80 }];
-  }
+  const freshLandscape = phoneLandscapeFloor(width, height);
+  if (freshLandscape) return [{ ...native, place: 'side', ...freshLandscape }];
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
     return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
@@ -4794,10 +4886,20 @@ export function launchEarthPanes(width, height) {
 
 async function setLayoutViewport(send, width, height, mobile) {
   const current = await evaluate(send, `({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight })`);
+  if (current?.w === width && current?.h === height) return;
   if (current?.w === width && current?.h !== height) {
     await setViewport(send, width + 40, height, mobile);
   }
   await setViewport(send, width, height, mobile);
+}
+
+async function readIssSceneBox(send) {
+  return evaluate(send, `(() => {
+    window.dispatchEvent(new Event('resize'));
+    const scene = document.querySelector('[data-iss-scene]');
+    if (!scene) return null;
+    return { sceneW: scene.clientWidth, sceneH: scene.clientHeight, docW: document.documentElement.clientWidth, docH: document.documentElement.clientHeight };
+  })()`);
 }
 
 async function setIssSceneBox(send, width, height, mobile) {
@@ -4806,13 +4908,14 @@ async function setIssSceneBox(send, width, height, mobile) {
   let laid = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await setLayoutViewport(send, viewW, viewH, mobile);
-    laid = await evaluate(send, `(() => {
-      const scene = document.querySelector('[data-iss-scene]');
-      if (!scene) return null;
-      return { sceneW: scene.clientWidth, sceneH: scene.clientHeight, docW: document.documentElement.clientWidth, docH: document.documentElement.clientHeight };
-    })()`);
+    laid = await readIssSceneBox(send);
     if (!laid) throw new Error('missing iss scene');
-    if (laid.sceneW === width && laid.sceneH === height) return { width: viewW, height: viewH, scene: laid };
+    if (laid.sceneW === width && laid.sceneH === height) {
+      const again = await readIssSceneBox(send);
+      if (again?.sceneW === width && again?.sceneH === height) return { width: viewW, height: viewH, scene: again };
+      if (!again) throw new Error('missing iss scene');
+      laid = again;
+    }
     const nextW = viewW + (width - laid.sceneW);
     const nextH = viewH + (height - laid.sceneH);
     if (nextW === viewW && nextH === viewH) break;
@@ -4859,8 +4962,194 @@ async function proveLaunchCardHolds(send, label) {
   return held;
 }
 
+export const SIDE_COLUMN_REACH = `(() => {
+  const column = document.querySelector('[data-iss-side]');
+  const scene = document.querySelector('[data-iss-scene]');
+  const frame = document.querySelector('[data-iss-frame]');
+  const details = document.querySelector('[data-iss-details]');
+  const summary = details?.querySelector('summary');
+  if (!column || !scene || !frame || scene.getAttribute('data-iss-side-dock') !== 'on') return { step: 'dock' };
+  if (document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') !== 'true') return null;
+  if (!details || details.hidden || !summary || summary.textContent !== 'Details') return null;
+  const earthNow = () => frame.getBoundingClientRect();
+  const frameBox = earthNow();
+  if (frameBox.width < 240 || frameBox.height < 160) {
+    return { step: 'earth', width: Math.round(frameBox.width), height: Math.round(frameBox.height) };
+  }
+  if (scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth) {
+    return { step: 'scene-scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth] };
+  }
+  const overflowY = getComputedStyle(column).overflowY;
+  const sels = ['[data-iss-launch-name]', '[data-iss-launch-visibility]', '[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]', '[data-iss-edition]', '[data-iss-status]', '[data-iss-details] summary'];
+  const sample = (el) => {
+    const box = el.getBoundingClientRect();
+    const port = column.getBoundingClientRect();
+    const visible = Math.max(0, Math.min(box.bottom, port.bottom) - Math.max(box.top, port.top));
+    return { visible, height: box.height, top: box.top, portTop: port.top, portHeight: port.height };
+  };
+  const fits = (el) => {
+    const reading = sample(el);
+    return reading.height > 1 && reading.visible >= reading.height - 1;
+  };
+  const reveal = (el) => {
+    if (fits(el)) return { ok: true, ...sample(el) };
+    if (overflowY !== 'auto' && overflowY !== 'scroll') return { ok: false, ...sample(el), overflowY };
+    const before = sample(el);
+    const max = Math.max(0, column.scrollHeight - column.clientHeight);
+    const alignTop = Math.max(0, Math.min(max, column.scrollTop + (before.top - before.portTop)));
+    column.scrollTop = alignTop;
+    if (fits(el)) return { ok: true, ...sample(el) };
+    if (before.height <= before.portHeight + 1) return { ok: false, ...sample(el), overflowY };
+    const mid = sample(el);
+    const alignBottom = Math.max(0, Math.min(max, column.scrollTop + (mid.top + mid.height - (mid.portTop + mid.portHeight))));
+    column.scrollTop = alignBottom;
+    const end = sample(el);
+    const bottomIn = end.visible > 1 && end.top + end.height <= end.portTop + end.portHeight + 1;
+    column.scrollTop = alignTop;
+    const start = sample(el);
+    const topIn = start.visible > 1 && start.top >= start.portTop - 1;
+    return { ok: topIn && bottomIn, ...start, overflowY };
+  };
+  for (const sel of sels) {
+    const el = document.querySelector(sel);
+    if (!el || !column.contains(el)) return { step: 'missing', sel };
+    const reached = reveal(el);
+    if (!reached.ok) {
+      return {
+        step: 'clipped',
+        sel,
+        visible: Math.round(reached.visible * 100) / 100,
+        height: Math.round(reached.height * 100) / 100,
+        overflowY,
+      };
+    }
+  }
+  if (!reveal(summary).ok) return { step: 'details-reach' };
+  const box = summary.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.left + Math.min(28, box.width / 2), box.top + box.height / 2);
+  if (!hit || (hit !== summary && !summary.contains(hit))) {
+    return { step: 'details-hit', tag: hit ? hit.tagName : null, text: hit ? (hit.textContent || '').slice(0, 40) : null };
+  }
+  const after = earthNow();
+  if (after.width < 240 || after.height < 160) {
+    return { step: 'earth', width: Math.round(after.width), height: Math.round(after.height) };
+  }
+  if (scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth) {
+    return { step: 'scene-scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth] };
+  }
+  column.scrollTop = 0;
+  return { ok: true, earth: [Math.round(after.width), Math.round(after.height)], overflowY };
+})()`;
+
+async function setSimulatedInsets(send, insets) {
+  await evaluate(send, `(() => {
+    document.getElementById('opd-side-inset')?.remove();
+    const insets = ${insets ? JSON.stringify(insets) : 'null'};
+    if (insets) {
+      const swap = (text) => text
+        .replaceAll('env(safe-area-inset-top, 0px)', insets.top + 'px')
+        .replaceAll('env(safe-area-inset-right, 0px)', insets.right + 'px')
+        .replaceAll('env(safe-area-inset-bottom, 0px)', insets.bottom + 'px')
+        .replaceAll('env(safe-area-inset-left, 0px)', insets.left + 'px')
+        .replaceAll('env(safe-area-inset-top)', insets.top + 'px')
+        .replaceAll('env(safe-area-inset-right)', insets.right + 'px')
+        .replaceAll('env(safe-area-inset-bottom)', insets.bottom + 'px')
+        .replaceAll('env(safe-area-inset-left)', insets.left + 'px');
+      const chunks = [];
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try { rules = [...sheet.cssRules]; } catch { continue; }
+        for (const rule of rules) {
+          if (rule.cssText && rule.cssText.includes('safe-area-inset')) chunks.push(swap(rule.cssText));
+        }
+      }
+      const style = document.createElement('style');
+      style.id = 'opd-side-inset';
+      style.textContent = chunks.join('\\n');
+      document.head.append(style);
+    }
+    window.dispatchEvent(new Event('resize'));
+    return true;
+  })()`);
+}
+
+async function setLaunchNameLines(send, lines) {
+  await evaluate(send, `(() => {
+    const name = document.querySelector('[data-iss-launch-name]');
+    if (!(name instanceof HTMLElement)) return false;
+    name.style.width = '';
+    name.style.maxWidth = ${lines > 1 ? "'9ch'" : "''"};
+    return true;
+  })()`);
+  if (lines < 2) return;
+  await waitFor(
+    send,
+    `(() => {
+      const name = document.querySelector('[data-iss-launch-name]');
+      if (!(name instanceof HTMLElement)) return null;
+      const range = document.createRange();
+      range.selectNodeContents(name);
+      const count = range.getClientRects().length;
+      if (count < 2) return { step: 'name-lines', count };
+      return { ok: true, count };
+    })()`,
+    'iss side column two-line name',
+    10000,
+  );
+}
+
+async function proveSideColumnMatrix(send, pane) {
+  const cases = [
+    { lines: 1, insets: null, label: 'one line' },
+    { lines: 1, insets: { top: 0, left: 59, right: 59, bottom: 21 }, label: 'one line inset 59' },
+    { lines: 2, insets: null, label: 'two lines' },
+    { lines: 2, insets: { top: 0, left: 59, right: 59, bottom: 21 }, label: 'two lines inset 59' },
+  ];
+  for (const item of cases) {
+    await setSimulatedInsets(send, item.insets);
+    await setLaunchNameLines(send, item.lines);
+    await waitFor(send, SIDE_COLUMN_REACH, `iss side column ${pane.label} ${item.label}`, 10000);
+  }
+}
+
+async function provePhoneLandscapeTelemetry(send, pane) {
+  const floor = `(() => {
+    const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
+    if (!earth || earth.ok !== true) return earth;
+    if (earth.width < 240 || earth.height < 160) {
+      return { step: 'earth', width: earth.width, height: earth.height, place: earth.place };
+    }
+    const name = document.querySelector('[data-iss-launch-name]');
+    const line = document.querySelector('[data-iss-launch-visibility]');
+    const nameBox = name instanceof HTMLElement ? name.getBoundingClientRect() : null;
+    const lineBox = line instanceof HTMLElement ? line.getBoundingClientRect() : null;
+    if (!name || !name.textContent.trim() || !nameBox || nameBox.height < 4 || nameBox.width < 8) return { step: 'name' };
+    if (!line || !line.textContent.trim() || !lineBox || lineBox.height < 4 || lineBox.width < 8) return { step: 'visibility-line' };
+    return earth;
+  })()`;
+  await click(send, '[data-iss-telemetry]');
+  try {
+    await waitFor(send, floor, `iss launch earth ${pane.label} telemetry open`, 10000);
+    await proveSideColumnMatrix(send, pane);
+  } finally {
+    await setSimulatedInsets(send, null);
+    await setLaunchNameLines(send, 1);
+    await evaluate(send, `(() => { const column = document.querySelector('[data-iss-side]'); if (column) column.scrollTop = 0; return true; })()`);
+    const expanded = await evaluate(send, `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded')`);
+    if (expanded === 'true') await click(send, '[data-iss-telemetry]');
+  }
+  await waitFor(
+    send,
+    `document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'false' ? { ok: true } : null`,
+    `iss launch earth ${pane.label} telemetry collapsed`,
+    10000,
+  );
+  await waitFor(send, floor, `iss launch earth ${pane.label} telemetry closed`, 10000);
+}
+
 async function proveLaunchEarthPanes(send, evidenceDir) {
   const size = await evaluate(send, `({ width: window.innerWidth, height: window.innerHeight })`);
+  const startFloor = phoneLandscapeFloor(size.width, size.height);
   const panes = launchEarthPanes(size.width, size.height);
   const mobile = size.width < 1100;
   const held = [];
@@ -4888,6 +5177,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
             ? scene && scene.clientWidth === ${pane.width} && scene.clientHeight === ${pane.height}
             : document.documentElement.clientWidth === ${pane.width} && document.documentElement.clientHeight === ${pane.height};
           if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scene: scene ? [scene.clientWidth, scene.clientHeight] : null };
+          ${EARTH_AFTER_RESIZE}
           const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
           if (!earth || earth.ok !== true) return earth;
           const allowed = ${JSON.stringify(pane.places || (pane.place ? [pane.place] : []))};
@@ -4897,6 +5187,9 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
           const shortFloor = earth.place === 'below' ? ${pane.belowMinShort ?? pane.minShort} : ${pane.minShort};
           if (Math.min(earth.width, earth.height) < shortFloor) {
             return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minShort: shortFloor };
+          }
+          if (${pane.minWidth || 0} > 0 && (earth.width < ${pane.minWidth || 0} || earth.height < ${pane.minHeight || 0})) {
+            return { step: 'earth', width: earth.width, height: earth.height, place: earth.place, minWidth: ${pane.minWidth || 0}, minHeight: ${pane.minHeight || 0} };
           }
           if (${pane.twoLine ? 'true' : 'false'}) {
             const name = document.querySelector('[data-iss-launch-name]');
@@ -4911,6 +5204,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
         10000,
       );
       const heldCard = await proveLaunchCardHolds(send, pane.label);
+      if (pane.label === '844x390' || pane.label === '874x402' || pane.label === '721x390') await provePhoneLandscapeTelemetry(send, pane);
       if (pane.twoLine) {
         const wrapped = await evaluate(send, `(() => {
           const name = document.querySelector('[data-iss-launch-name]');
@@ -4945,6 +5239,9 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
     `(() => {
       const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
       if (!earth || earth.ok !== true) return earth;
+      if (${startFloor ? startFloor.minWidth : 0} > 0 && (earth.width < ${startFloor ? startFloor.minWidth : 0} || earth.height < ${startFloor ? startFloor.minHeight : 0})) {
+        return { step: 'earth', width: earth.width, height: earth.height, minWidth: ${startFloor ? startFloor.minWidth : 0}, minHeight: ${startFloor ? startFloor.minHeight : 0} };
+      }
       const stage = document.querySelector('[data-iss-stage]');
       const frame = document.querySelector('[data-iss-frame]');
       const canvas = frame?.querySelector('canvas');
@@ -6499,7 +6796,7 @@ async function proveIssLandscape(send, evidenceDir) {
     const port = document.querySelector('[data-iss-port]')?.getBoundingClientRect();
     const starboard = document.querySelector('[data-iss-starboard]')?.getBoundingClientRect();
     if (!hostBox || !scene || !frame || !card || !port || !starboard) return null;
-    if (frame.width < 80 || frame.height < 72) return null;
+    if (frame.width < 240 || frame.height < 160) return { step: 'earth', width: frame.width, height: frame.height };
     if (${SCENE_SCROLLS}) return { step: 'scroll', height: [scene.scrollHeight, scene.clientHeight], width: [scene.scrollWidth, scene.clientWidth] };
     const within = (box) => box.width > 1 && box.height > 1 && box.left >= hostBox.left - 1 && box.right <= hostBox.right + 1 && box.top >= hostBox.top - 1 && box.bottom <= hostBox.bottom + 1;
     if (!within(frame) || !within(card) || !within(port) || !within(starboard)) return null;
@@ -6542,7 +6839,9 @@ async function proveIssLandscape(send, evidenceDir) {
           `iss landscape ${label} telemetry collapsed`,
           10000,
         );
-        if (open.height < 72 || after.height < 72) throw new Error(`iss landscape ${label} frame ${open.height} then ${after.height}`);
+        if (open.width < 240 || open.height < 160 || after.width < 240 || after.height < 160) {
+          throw new Error(`iss landscape ${label} frame ${open.width}x${open.height} then ${after.width}x${after.height}`);
+        }
         held.push(label);
       }
       await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
