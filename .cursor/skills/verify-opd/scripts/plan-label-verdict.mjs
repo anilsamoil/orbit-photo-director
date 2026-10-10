@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
 
@@ -44,7 +45,7 @@ export function keptCountrySymbol(names, country) {
   return { ok: true, country, count };
 }
 
-function rasterPainted(words, country) {
+export function rasterPainted(words, country) {
   const name = String(country || '').toUpperCase();
   if (name.length < 4) return false;
   const stems = [name];
@@ -52,22 +53,27 @@ function rasterPainted(words, country) {
     const stem = name.slice(0, index) + name.slice(index + 1);
     if (stem.length >= 4) stems.push(stem);
   }
-  const tokens = String(words || '').toUpperCase().split(/[^A-Z]+/).filter((word) => word.length >= 4);
-  const extended = tokens.some((word) => word.startsWith(name) && word.length > name.length);
-  return tokens.some((word) => {
-    if (extended && word === name) return false;
-    if (word.startsWith(name) && word.length > name.length) return false;
-    if (stems.includes(word)) return true;
-    return stems.some((stem) => stem !== name && word.includes(stem) && word.length > stem.length && word.length <= stem.length + 4);
+  return String(words || '').toUpperCase().split(/\r?\n/).some((line) => {
+    const tokens = line.split(/[^A-Z]+/).filter(Boolean);
+    return tokens.some((word, index) => {
+      if (['SOUTH', 'WESTERN', 'WEST', 'NORTH', 'NORTHERN', 'NEW'].includes(tokens[index - 1])) return false;
+      if (tokens[index - 2] === 'GULF' && tokens[index - 1] === 'OF') return false;
+      if (['OCEAN', 'SEA', 'BIGHT'].includes(tokens[index + 1])) return false;
+      if (word.startsWith(name) && word.length > name.length) return false;
+      if (stems.includes(word)) return true;
+      return stems.some((stem) => stem !== name && word.includes(stem) && word.length > stem.length && word.length <= stem.length + 4);
+    });
   });
 }
 
-export function countrySweepZooms() {
-  const zooms = [];
-  for (let step = -50; step <= 310; step += 5) zooms.push(step / 100);
-  for (const extra of [-0.51, -0.49, 1.49, 1.51, 2.49, 2.51]) zooms.push(extra);
-  zooms.sort((left, right) => left - right);
-  return zooms;
+export function countrySweepZooms(levels = loadCountryRasterLevels()) {
+  const zooms = new Set([-2, -1.1497862143712645, -0.23372503287116042, 5]);
+  for (let step = -50; step <= 310; step += 5) zooms.add(step / 100);
+  for (let tile = 1; tile <= levels.through; tile += 1) {
+    const edge = tile - 1.5;
+    for (const offset of [-0.01, 0, 0.01]) zooms.add(Number((edge + offset).toFixed(2)));
+  }
+  return [...zooms].sort((left, right) => left - right);
 }
 
 export const PLAN_COUNTRIES = [
@@ -88,6 +94,70 @@ export const PLAN_COUNTRIES = [
 export function loadCountryRasterLevels() {
   const file = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/src/map/adapters/maplibre/country-raster-levels.json');
   return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+/** Independent of the generated file: the reviewed fresh Esri sovereign-name audit, through tile z6. */
+export const AUDITED_RASTER_LEVELS = {
+  through: 6,
+  countries: Object.fromEntries(PLAN_COUNTRIES.map(({ name }) => [name,
+    name === 'Australia' ? [1, 2, 3, 4, 5, 6] : name === 'Kenya' ? [4, 5, 6] : [3, 4, 5, 6],
+  ])),
+};
+
+export function auditRasterLevels(levels) {
+  if (levels?.through !== AUDITED_RASTER_LEVELS.through) return { ok: false, reason: 'audit-through' };
+  for (const { name } of PLAN_COUNTRIES) {
+    if (JSON.stringify(levels.countries?.[name]) !== JSON.stringify(AUDITED_RASTER_LEVELS.countries[name])) {
+      return { ok: false, reason: 'audit-levels', country: name, actual: levels.countries?.[name], expected: AUDITED_RASTER_LEVELS.countries[name] };
+    }
+  }
+  return { ok: true };
+}
+
+/** Read the production style builder, not a second implementation of its hole-band algorithm. */
+export function loadCountrySymbolLayers() {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const file = resolve(root, 'frontend/src/map/adapters/maplibre/track-inset.ts');
+  const require = createRequire(resolve(root, 'frontend/package.json'));
+  const ts = require('typescript');
+  const source = readFileSync(file, 'utf8') + '\nexport { countrySymbolLayers };\n';
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+  const module = { exports: {} };
+  const context = vm.createContext({ module, exports: module.exports, require: (id) => {
+    if (id === './country-raster-levels.json') return loadCountryRasterLevels();
+    return {};
+  } });
+  vm.runInContext(compiled, context, { filename: file });
+  return JSON.parse(JSON.stringify(module.exports.countrySymbolLayers()));
+}
+
+function opacityAt(value, zoom) {
+  if (value == null) return 1;
+  if (typeof value === 'number') return value;
+  if (!Array.isArray(value) || value[0] !== 'step') return 0;
+  let result = value[2];
+  for (let index = 3; index + 1 < value.length; index += 2) {
+    if (zoom >= Number(value[index])) result = value[index + 1];
+  }
+  return Number(result);
+}
+
+export function countryStyleVerdict(layers, levels = loadCountryRasterLevels()) {
+  const audit = auditRasterLevels(levels);
+  if (!audit.ok) return audit;
+  for (const { name } of PLAN_COUNTRIES) {
+    for (const zoom of countrySweepZooms(levels)) {
+      const count = layers.filter((layer) => {
+        const names = layer.filter?.[2]?.[1];
+        return Array.isArray(names) && names.includes(name)
+          && zoom >= (layer.minzoom ?? -Infinity) && zoom < (layer.maxzoom ?? Infinity)
+          && layer.layout?.visibility !== 'none' && opacityAt(layer.paint?.['text-opacity'], zoom) > 0;
+      }).length;
+      const expected = levelPaints(AUDITED_RASTER_LEVELS, name, idealTile(zoom)) ? 0 : 1;
+      if (count !== expected) return { ok: false, reason: 'style-coverage', country: name, zoom, count, expected };
+    }
+  }
+  return { ok: true };
 }
 
 function idealTile(zoom) {
@@ -114,7 +184,7 @@ export function oneNameSource(row) {
   const names = nameList(row.names);
   const count = names.filter((name) => name === row.country).length;
   if (count > 1) return { ok: false, reason: 'symbol', country: row.country, zoom, count, names };
-  const painted = rasterPainted(row.words, row.country);
+  const painted = typeof row.rasterReadable === 'boolean' ? row.rasterReadable : rasterPainted(row.words, row.country);
   const sources = (count === 1 ? 1 : 0) + (painted ? 1 : 0);
   if (sources !== 1) {
     return {
@@ -432,8 +502,11 @@ function runBite() {
     && australiaLevels.includes(2)
     && australiaLevels.includes(3)
     && australiaLevels.includes(4)
+    && australiaLevels.includes(5)
     && australiaLevels.includes(6);
-  const complement = sweepRows(levels, (_name, _zoom, raster) => (raster ? 0 : 1))
+  const style = countryStyleVerdict(loadCountrySymbolLayers(), levels);
+  console.log(`production-style ok:${style.ok === true} ${style.ok ? '' : JSON.stringify(style)}`);
+  const complement = sweepRows(AUDITED_RASTER_LEVELS, (_name, _zoom, raster) => (raster ? 0 : 1))
     .map((row) => oneNameSource(row))
     .find((verdict) => verdict.ok !== true);
   const restoredFloor = sweepRows(levels, (name, zoom) => {
@@ -451,7 +524,7 @@ function runBite() {
     return oneNameSource(row);
   }).find((verdict) => verdict.ok !== true);
   const ocean = oneNameSource({
-    tilesOk: true, zoom: 0, tileZ: 1, country: 'India', names: ['India'], words: 'INDIAN OCEAN india',
+    tilesOk: true, zoom: 0, tileZ: 1, country: 'India', names: ['India'], words: 'INDIAN OCEAN',
   });
   console.log(`sweep-complement ok:${complement == null}`);
   console.log(`sweep-floor ok:${restoredFloor != null && restoredFloor.ok === false}`);
@@ -485,6 +558,7 @@ function runBite() {
     && droppedHole != null
     && droppedHole.reason === 'duplicate'
     && ocean.ok === true
+    && style.ok === true
     && levelShape === true;
   if (!fractionalBite) process.exit(1);
   const line = (name, verdict) => `${name} ok:${verdict.ok === true}`;
