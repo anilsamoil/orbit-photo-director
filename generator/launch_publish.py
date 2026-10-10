@@ -542,6 +542,33 @@ def publish_launch_artifact(
         return pointer
 
 
+def _catalog_pointer(artifact: dict) -> dict:
+    return {
+        "schema_version": 2,
+        "revision": artifact["revision"],
+        "generated_at": artifact["generated_at"],
+        "valid_until": artifact["geometry_valid_until"],
+        "path": f"launch/catalog/v/{artifact['revision']}.json",
+        "sha256": hashlib.sha256(canonical_bytes(artifact)).hexdigest(),
+    }
+
+
+def _verified_catalog(output: Path, pointer: dict) -> dict:
+    """Verify local immutable bytes before adopting a remotely accepted commit."""
+    revision = pointer.get("revision")
+    if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{24}", revision):
+        raise ValueError("INVALID_PENDING_LAUNCH_CATALOG")
+    body = (output / f"launch/catalog/v/{revision}.json").read_bytes()
+    artifact = json.loads(body)
+    _validate_catalog(artifact)
+    if (
+        pointer != _catalog_pointer(artifact)
+        or hashlib.sha256(body).hexdigest() != pointer["sha256"]
+    ):
+        raise ValueError("INVALID_PENDING_LAUNCH_CATALOG")
+    return artifact
+
+
 def publish_launch_catalog(
     artifact: dict,
     output: Path,
@@ -581,14 +608,7 @@ def publish_launch_catalog(
         pending_artifact = artifact_path.with_suffix(".pending")
         _write_bytes_atomic(pending_artifact, body)
         os.replace(pending_artifact, artifact_path)
-        pointer = {
-            "schema_version": 2,
-            "revision": revision,
-            "generated_at": artifact["generated_at"],
-            "valid_until": artifact["geometry_valid_until"],
-            "path": relative,
-            "sha256": hashlib.sha256(body).hexdigest(),
-        }
+        pointer = _catalog_pointer(artifact)
         pointer_path.parent.mkdir(parents=True, exist_ok=True)
         pending = output / "launch/catalog/.latest.pending.json"
         _write_bytes_atomic(pending, canonical_bytes(pointer))

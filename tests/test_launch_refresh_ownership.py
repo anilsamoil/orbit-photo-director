@@ -4,6 +4,9 @@ import copy
 import fcntl
 import hashlib
 import json
+import subprocess
+import sys
+import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -65,6 +68,53 @@ class LaunchHarness:
 
     def catalog(self):
         return json.loads(self.remote[self.read_catalog()["path"]])
+
+    def run_restarted(self, at):
+        remote_path = self.output.parent / "restart-remote.json"
+        remote_path.write_bytes(canonical_bytes({
+            key: value.decode() for key, value in self.remote.items()
+        }))
+        script = textwrap.dedent("""
+            import json
+            import socket
+            import sys
+            from datetime import datetime
+            from pathlib import Path
+
+            import requests
+            from scripts.launch_refresh import refresh_cached
+
+            def forbidden(*args, **kwargs):
+                raise AssertionError("source fetch or network forbidden")
+
+            requests.get = forbidden
+            socket.create_connection = forbidden
+            cache, output, at, remote_path = sys.argv[1:]
+            remote = json.loads(Path(remote_path).read_text())
+            calls = []
+
+            def upload(path, key, immutable):
+                calls.append(key)
+                remote[key] = path.read_text()
+
+            result = refresh_cached(
+                Path(cache), Path(output), datetime.fromisoformat(at),
+                remote="test:bucket", upload=upload,
+                read_remote=lambda: json.loads(remote["launch/latest.json"]),
+                read_catalog=lambda: json.loads(remote["launch/catalog/latest.json"]),
+            )
+            print(json.dumps({"result": result, "remote": remote, "calls": calls}))
+        """)
+        process = subprocess.run(  # noqa: S603 - fixed script and isolated pytest paths
+            [sys.executable, "-c", script, str(self.cache), str(self.output),
+             at.isoformat(), str(remote_path)],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        outcome = json.loads(process.stdout)
+        self.remote = {key: value.encode() for key, value in outcome["remote"].items()}
+        self.calls.extend(outcome["calls"])
+        return outcome["result"]
 
     def competitor(self, publish_v2=True, readback=True):
         payload = copy.deepcopy(self.payload)
@@ -151,6 +201,102 @@ def test_renewal_rejects_competitor_after_ownership_readback(harness, publish_v2
     assert harness.calls[sent:] == []
     assert result["reason"] == "UNCHANGED_INPUT"
     assert "CONFLICT" in result["catalog_skipped"] or "OBSOLETE" in result["catalog_skipped"]
+
+
+@pytest.mark.parametrize("legacy_state", [False, True], ids=["current-state", "legacy-state"])
+@pytest.mark.parametrize("retry", ["immediate", "next-check", "restart"])
+def test_catalog_only_conflict_survives_later_invocation(harness, legacy_state, retry):
+    catalog_state_path = harness.output / ".refresh-catalog-state.json"
+    if legacy_state:
+        legacy = json.loads(catalog_state_path.read_bytes())
+        legacy.pop("pointer", None)
+        catalog_state_path.write_bytes(canonical_bytes(legacy))
+    states = {
+        path: path.read_bytes() for path in (
+            harness.output / ".refresh-state.json", catalog_state_path,
+            harness.cache / "launches.json.receipt.json",
+        )
+    }
+    publish_competitor = harness.competitor(publish_v2=False)
+    interleaved = []
+
+    def read_then_publish():
+        observed = harness.read_remote()
+        if not interleaved:
+            rival_v2, rival_catalog = publish_competitor()
+            interleaved.append((rival_v2, rival_catalog, len(harness.calls)))
+        return observed
+
+    first = harness.run(
+        RENEWAL, read_remote=read_then_publish, read_catalog=harness.read_catalog,
+    )
+    assert first["catalog_skipped"] == "REMOTE_LAUNCH_CATALOG_CONFLICT"
+    rival_v2, rival_catalog, sent = interleaved[0]
+    assert harness.calls[sent:] == []
+    assert {path: path.read_bytes() for path in states} == states
+
+    at = RIVAL_TIME + timedelta(seconds=1) if retry == "immediate" else NOW + timedelta(minutes=20)
+    result = (
+        harness.run_restarted(at) if retry == "restart"
+        else harness.run(at, read_catalog=harness.read_catalog)
+    )
+
+    assert harness.catalog()["items"][0]["schedule"]["status"] == "TBC"
+    assert harness.catalog()["items"][0]["tier"] == "watch"
+    assert harness.remote["launch/latest.json"] == rival_v2
+    assert harness.remote["launch/catalog/latest.json"] == rival_catalog
+    assert (harness.output / "launch/catalog/latest.json").read_bytes() == rival_catalog
+    assert {path: path.read_bytes() for path in states} == states
+    assert harness.calls[sent:] == []
+    assert result["reason"] == "UNCHANGED_INPUT"
+    assert result["catalog_skipped"] == "REMOTE_LAUNCH_CATALOG_CONFLICT"
+
+
+@pytest.mark.parametrize("restart", [False, True], ids=["next-check", "restart"])
+def test_first_catalog_conflict_survives_later_invocation(tmp_path, monkeypatch, restart):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("source fetch or network forbidden")
+
+    monkeypatch.setattr("requests.get", forbidden)
+    monkeypatch.setattr("socket.create_connection", forbidden)
+    harness = LaunchHarness(tmp_path)
+    publish_competitor = harness.competitor(publish_v2=False)
+    publish_catalog = launch_refresh.publish_launch_catalog
+    interleaved = []
+
+    def compete_before_first_catalog(*args, **kwargs):
+        if not interleaved:
+            rival_v2, rival_catalog = publish_competitor()
+            interleaved.append((rival_v2, rival_catalog, len(harness.calls)))
+        return publish_catalog(*args, **kwargs)
+
+    monkeypatch.setattr(launch_refresh, "publish_launch_catalog", compete_before_first_catalog)
+    first = harness.run(RENEWAL, read_catalog=harness.read_catalog)
+    assert first["reason"] == "PUBLISHED"
+    assert first["catalog_skipped"] == "REMOTE_LAUNCH_CATALOG_CONFLICT"
+    assert not (harness.output / ".refresh-catalog-state.json").exists()
+    rival_v2, rival_catalog, sent = interleaved[0]
+    assert harness.calls[sent:] == []
+    states = {path: path.read_bytes() for path in harness.output.glob(".refresh*.json")}
+    receipt_path = harness.cache / "launches.json.receipt.json"
+    states[receipt_path] = receipt_path.read_bytes()
+
+    at = NOW + timedelta(minutes=20)
+    result = (
+        harness.run_restarted(at) if restart
+        else harness.run(at, read_catalog=harness.read_catalog)
+    )
+
+    assert harness.catalog()["items"][0]["schedule"]["status"] == "TBC"
+    assert harness.catalog()["items"][0]["tier"] == "watch"
+    assert harness.remote["launch/latest.json"] == rival_v2
+    assert harness.remote["launch/catalog/latest.json"] == rival_catalog
+    assert (harness.output / "launch/catalog/latest.json").read_bytes() == rival_catalog
+    assert not (harness.output / ".refresh-catalog-state.json").exists()
+    assert {path: path.read_bytes() for path in states} == states
+    assert harness.calls[sent:] == []
+    assert result["reason"] == "UNCHANGED_INPUT"
+    assert result["catalog_skipped"] == "REMOTE_LAUNCH_CATALOG_CONFLICT"
 
 
 def test_published_path_rejects_competitor_before_catalog_commit(harness, monkeypatch):
