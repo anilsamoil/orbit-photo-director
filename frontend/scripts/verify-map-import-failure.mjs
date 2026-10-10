@@ -1,13 +1,15 @@
 /** Production-build recovery checks. Every case uses a fresh browser context.
  * Run after `bun run build`: node scripts/verify-map-import-failure.mjs [--sizes]
+ * OPD_VERIFY_NATIVE_HTTP=1 fixtures only external fetches, without intercepting production asset requests.
  * OPD_VERIFY_PORT selects an explicitly preflighted port (default 42710).
  */
 import { createHash } from 'node:crypto';
+import { RASTER_TILE_PNG } from './raster-tile-fixture.mjs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,7 +20,8 @@ const outDir = process.argv.includes('--out')
   ? resolve(process.argv[process.argv.indexOf('--out') + 1])
   : join(root, 'dist-map-import-evidence');
 const port = Number(process.env.OPD_VERIFY_PORT ?? 42710);
-if (!Number.isInteger(port) || port < 42700 || port > 42719) throw new Error('OPD_VERIFY_PORT must be in 42700–42719');
+const nativeHttp = process.env.OPD_VERIFY_NATIVE_HTTP === '1';
+if (!Number.isInteger(port) || port < 42700 || port > 42759) throw new Error('OPD_VERIFY_PORT must be in 42700–42759');
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.geojson': 'application/geo+json', '.png': 'image/png' };
 const shotKey = 'opd_shotlist_v1:anil';
 const retryKey = 'opd-map-import-retry';
@@ -85,13 +88,14 @@ async function openCase(surface, options = {}) {
     const reply = (status, body, type = 'text/plain') => {
       if (res.destroyed) return;
       hits.responses.push({ path, search: url.search, destination: req.headers['sec-fetch-dest'], status, at: Date.now() });
-      res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
+      res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...(nativeHttp ? { 'content-security-policy': "connect-src 'self' data: blob:; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'" } : {}) });
       res.end(body);
     };
     const staticReply = () => {
       try {
-        const file = path === '/' ? '/index.html' : path;
-        reply(200, readFileSync(join(dist, file)), types[extname(file)] ?? 'application/octet-stream');
+        const file = resolve(dist, `.${path === '/' ? '/index.html' : decodeURIComponent(path)}`);
+        if (!file.startsWith(`${dist}${sep}`)) return reply(404, 'missing');
+        reply(200, readFileSync(file), types[extname(file)] ?? 'application/octet-stream');
       } catch { reply(404, 'missing'); }
     };
     if (path === '/api/browser/session') return reply(200, JSON.stringify({ ok: true, profile: { name: 'anil', displayName: 'Anil' } }), 'application/json');
@@ -144,16 +148,31 @@ async function openCase(surface, options = {}) {
   };
   try {
     context = await surface.browser.newContext({ ...surface.options, serviceWorkers: 'block' });
-    await context.route('**/*', (route) => {
+    if (!nativeHttp) await context.route('**/*', (route) => {
       const url = new URL(route.request().url());
       if (url.protocol === 'http:' && url.hostname === '127.0.0.1' && Number(url.port) === port) return route.continue();
       if (url.protocol === 'blob:' || url.protocol === 'data:') return route.continue();
       if (route.request().resourceType() === 'image' || /\/(?:tile|tiles)\//.test(url.pathname) || /\.(?:png|jpg|jpeg)$/.test(url.pathname)) {
-        return route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64') });
+        return route.fulfill({ status: 200, contentType: 'image/png', body: RASTER_TILE_PNG });
       }
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     });
-    await context.addInitScript(({ saved, seedShot, disableClear }) => {
+    await context.addInitScript(({ saved, seedShot, disableClear, rasterTile }) => {
+      if (rasterTile) {
+        const nativeFetch = window.fetch;
+        window.fetch = function (input, options) {
+          const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+          if (url.origin === location.origin || ['blob:', 'data:'].includes(url.protocol)) return nativeFetch.call(this, input, options);
+          const raster = /\/(?:tile|tiles)\//.test(url.pathname) || /\.(?:png|jpg|jpeg)$/.test(url.pathname);
+          const glyph = /\.pbf$/.test(url.pathname);
+          const body = raster ? Uint8Array.from(atob(rasterTile), (byte) => byte.charCodeAt(0)) : glyph ? new Uint8Array() : '{}';
+          return Promise.resolve(new Response(body, {
+            status: 200,
+            headers: { 'content-type': raster ? 'image/png' : glyph ? 'application/x-protobuf' : 'application/json' },
+          }));
+        };
+      }
+
       if (!localStorage.getItem('verify-map-seeded')) {
         localStorage.setItem('opd-snapshot', saved);
         localStorage.setItem('verify-map-seeded', '1');
@@ -178,7 +197,7 @@ async function openCase(surface, options = {}) {
         style.textContent = 'body.shotlist-bar-visible .shotlist-clear { pointer-events: none !important; }';
         document.head.appendChild(style);
       });
-    }, { saved: fixture.saved, seedShot: options.seedShot ?? true, disableClear: process.argv.includes('--mutant-disable-real-clear') });
+    }, { rasterTile: nativeHttp ? RASTER_TILE_PNG.toString('base64') : null, saved: fixture.saved, seedShot: options.seedShot ?? true, disableClear: process.argv.includes('--mutant-disable-real-clear') });
     const page = await context.newPage();
     const errors = [];
     const consoleErrors = [];
@@ -357,6 +376,29 @@ async function runRecovery(surface, targetName, fault) {
       && opened.hits.documents.length === before.documents + 1
       && failed.storedUrl?.includes(assets.entry) && !failed.storedUrl?.includes('maplibre-vendor');
     return { label: `${surface.slug}-${targetName}-${fault}-retry`, pass, failed, before, freshDependency, ...evidence };
+  } finally { await opened.close(); }
+}
+
+async function runRecoveryNavigation(surface) {
+  const opened = await openCase(surface, { target: assets.entry, fault: 'abort', seedShot: false });
+  try {
+    await waitForError(opened.page);
+    opened.control.fault = 'ok';
+    await clickCenter(opened.page, '#status-banner button');
+    const recovered = await waitForHealthy(opened.page);
+    await opened.page.click('#tab-iss');
+    await opened.page.waitForFunction(() => document.getElementById('view')?.className === 'view-iss'
+      && Boolean(window.__opdIss?.getCanvas()), null, { timeout: 20000 });
+    const iss = await state(opened.page);
+    await opened.page.click('#tab-map');
+    const returned = await waitForHealthy(opened.page);
+    const measured = returned && healthy(returned) ? await geometry(opened.page) : null;
+    const geometryMatchesControl = sameGeometry(measured, healthyGeometry.get(surface.slug));
+    const stylesheets = await opened.page.locator('link[rel="stylesheet"][href*="maplibre"]').count();
+    const evidence = await capture(opened, `${surface.slug}-recovery-iss-map`);
+    const pass = healthy(recovered) && iss.cssRules === 124 && healthy(returned)
+      && stylesheets === 1 && geometryMatchesControl && opened.hits.documents.length === 2;
+    return { label: `${surface.slug}-recovery-iss-map`, pass, recovered, iss, stylesheets, geometryMatchesControl, ...evidence };
   } finally { await opened.close(); }
 }
 
@@ -544,6 +586,7 @@ try {
       await run(`${surface.slug}-404`, () => runFailure(surface));
       for (const fault of ['404', 'abort', '500', 'delayed404']) await run(`${surface.slug}-vendor-${fault}`, () => runRecovery(surface, 'vendor', fault));
       for (const fault of ['404', 'abort']) await run(`${surface.slug}-entry-${fault}`, () => runRecovery(surface, 'entry', fault));
+      await run(`${surface.slug}-recovery-iss-map`, () => runRecoveryNavigation(surface));
       for (const view of ['queue', 'iss']) await run(`${surface.slug}-delayed404-${view}`, () => runViewPreserve(surface, view));
       await run(`${surface.slug}-auth-mid`, () => runAuthMid(surface));
       await run(`${surface.slug}-retry-later-queue`, () => runRetryRace(surface));
