@@ -419,4 +419,228 @@ describe('chrome slots', () => {
     expect(bottomOf(slots.time)).toBeLessThanOrEqual(slots.footer.y);
     expect(meets(slots.time, slots.footer)).toBe(false);
   });
+
+  it('reserves growing and shrinking intrinsic footer content before its neighbours', () => {
+    for (const [w, h] of [[320, 360], [320, 400], [1320, 440]] as const) {
+      for (const inset of [0, 34]) {
+        const base = measure({
+          viewport: { w, h },
+          insets: { top: inset ? 24 : 0, right: 0, bottom: inset, left: inset ? 47 : 0 },
+          topbar: inset ? 72 : 48,
+          show: { x: 0, y: 0, w: 160, h: 52 },
+          timeNeed: 140,
+        });
+        const plain = solveChromeSlots({ ...base, footer: { x: 0, y: h - 23, w, h: 23 } });
+        const actions = solveChromeSlots({ ...base, footer: { ...plain.footer!, h: 86 } });
+        const removed = solveChromeSlots({ ...base, footer: { ...actions.footer!, h: 23 } });
+        expect(actions.footer?.h).toBe(86);
+        expect(bottomOf(actions.footer!)).toBe(h - inset);
+        expect(plain.footer!.y - actions.footer!.y).toBe(63);
+        for (const neighbour of [actions.hide, actions.legendButton, actions.compass, actions.time, actions.dock]) {
+          expect(neighbour).not.toBeNull();
+          expect(bottomOf(neighbour!)).toBeLessThanOrEqual(actions.footer!.y);
+          expect(meets(neighbour!, actions.footer!)).toBe(false);
+        }
+        expect(removed).toEqual(plain);
+      }
+    }
+  });
+
+  it('allocates launch coverage independently of its unplaced origin and width', () => {
+    for (const [w, h, bottom] of [[720, 500, 34], [800, 600, 20]] as const) {
+      const base = measure({
+        viewport: { w, h },
+        insets: { top: 24, right: 0, bottom, left: 47 },
+        topbar: 72,
+        show: { x: 0, y: 0, w: 204, h: 52 },
+        pip: w === 800 ? { x: 566, y: 77, w: 222, h: 144 } : null,
+        launch: { x: 9, y: 9, w: 494, h: 44 },
+      });
+      const first = solveChromeSlots(base);
+      const stale = solveChromeSlots({ ...base, launch: { x: -100, y: -50, w: 17, h: 44 } });
+      expect(stale.launch).toEqual(first.launch);
+      expect(first.launch).not.toBeNull();
+      const launch = first.launch!;
+      expect(launch.y).toBeGreaterThanOrEqual(bottomOf(first.show!) + 8);
+      expect(launch.x).toBeGreaterThanOrEqual(rightOf(first.zoom!) + 8);
+      expect(rightOf(launch)).toBeLessThanOrEqual(w - 8);
+      expect(bottomOf(launch)).toBeLessThanOrEqual(first.time!.y - 8);
+      for (const neighbour of [first.show, first.zoom, first.compass, first.dock, base.pip].filter(Boolean) as Box[]) {
+        expect(meets(launch, neighbour)).toBe(false);
+      }
+    }
+  });
+
+  it('reserves the first-open Legend intrinsic height rather than the toggle shell', () => {
+    for (const [w, h] of [[800, 600], [1400, 900]] as const) {
+      const base = measure({
+        viewport: { w, h },
+        legendOpen: true,
+        legendButton: { x: w - 196, y: h - 88, w: 88, h: 44 },
+        legendPanel: { x: 0, y: 0, w: 176, h: 206 },
+      });
+      const first = solveChromeSlots(base);
+      expect(first.legend?.h).toBe(206);
+      expect(first.legend?.w).toBe(176);
+      expect(bottomOf(first.legend!)).toBe(first.legendButton!.y - 4);
+      expect(meets(first.legend!, first.dock!)).toBe(false);
+      expect(solveChromeSlots({ ...base, legendOpen: false }).legend).toBeNull();
+      expect(solveChromeSlots(base).legend).toEqual(first.legend);
+      const changed = solveChromeSlots({ ...base, legendPanel: { ...base.legendPanel, h: 238 } });
+      expect(changed.legend?.h).toBe(238);
+    }
+  });
+
+  it('declines an obstructed launch slot and recovers when its unchanged intent has room', () => {
+    const input = measure({
+      viewport: { w: 320, h: 360 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      topbar: 72,
+      timeNeed: 140,
+      footer: { x: 0, y: 0, w: 273, h: 23 },
+      launch: { x: 0, y: 0, w: 176, h: 44 },
+      legendPanel: { x: 0, y: 0, w: 176, h: 206 },
+      legendOpen: true,
+    });
+    const obstructed = solveChromeSlots(input);
+    expect(obstructed.legend?.x).toBe(107);
+    expect(obstructed.launch).toBeNull();
+    const closed = solveChromeSlots({ ...input, legendOpen: false });
+    expect(closed.launch).not.toBeNull();
+    const noRoom = solveChromeSlots({ ...input, viewport: { w: 320, h: 400 }, legendOpen: false });
+    expect(noRoom.launch).toBeNull();
+    const expanded = solveChromeSlots({ ...input, viewport: { w: 720, h: 500 } });
+    expect(expanded.launch).not.toBeNull();
+    expect(expanded.launch!.y).toBeGreaterThanOrEqual(bottomOf(expanded.show!) + 8);
+    for (const box of [expanded.dock, expanded.legend, expanded.time].filter(Boolean) as Box[]) {
+      expect(meets(expanded.launch!, box)).toBe(false);
+    }
+  });
+
+  it('clips an intrinsically tall Legend only at the visible top boundary', () => {
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 800, h: 600 },
+      pane: { x: 0, y: 84, w: 800, h: 436 },
+      topbar: 84,
+      legendOpen: true,
+      legendPanel: { x: 0, y: 0, w: 176, h: 800 },
+    }));
+    expect(slots.legend?.y).toBe(92);
+    expect(bottomOf(slots.legend!)).toBe(slots.legendButton!.y - 4);
+    expect(slots.legend!.h).toBeGreaterThan(200);
+    expect(slots.legend!.h).toBeLessThan(800);
+  });
+
+  it('does not treat the intrinsic closed Legend probe as a placed dock obstacle', () => {
+    for (const dockCorridor of [0, 43, 180]) {
+      const input = measure({
+        viewport: { w: 800, h: 600 },
+        legendOpen: false,
+        pip: { x: 566, y: 65, w: 222, h: 144 },
+        dockCorridor,
+      });
+      const closed = solveChromeSlots(input);
+      const measured = solveChromeSlots({ ...input, legendPanel: { x: 0, y: 0, w: 176, h: 206 } });
+      expect(measured).toEqual(closed);
+      expect(measured.dock!.h).toBeGreaterThan(44);
+    }
+  });
+
+  it('keeps desktop strip, corner and PiP clearances across bottom insets', () => {
+    for (const [w, h] of [[1024, 700], [1280, 700], [1400, 900]] as const) {
+      for (const bottom of [0, 20, 34]) {
+        for (const busy of [false, true]) {
+          const input = measure({
+            viewport: { w, h },
+            insets: { top: 24, right: 0, bottom, left: 47 },
+            topbar: 84,
+            footer: { x: 0, y: 0, w, h: busy ? 86 : 23 },
+            shotList: busy ? { x: 0, y: h - 90 - bottom, w, h: 90 + bottom } : empty,
+            pip: { x: w - 234, y: 89, w: 222, h: 144 },
+            legendOpen: busy,
+            legendPanel: { x: 0, y: 0, w: 176, h: 206 },
+          });
+          const slots = solveChromeSlots(input);
+          expect(slots.time?.h).toBe(96 + bottom);
+          expect(rightOf(slots.time!)).toBe(w - 204);
+          expect(slots.hide?.w).toBe(88);
+          expect(slots.hide?.h).toBe(44);
+          expect(rightOf(slots.hide!)).toBe(w - 12);
+          expect(slots.hide!.x - rightOf(slots.legendButton!)).toBe(8);
+          expect(slots.dock!.y - bottomOf(input.pip!)).toBe(12);
+          const floor = busy ? input.shotList.y : slots.footer!.y;
+          expect(bottomOf(slots.time!)).toBe(floor);
+          expect(floor).toBe(h - bottom - (busy ? 90 : 23));
+          expect(slots.hide!.y + 44 + 8).toBe(floor);
+          expect(meets(slots.dock!, input.pip!)).toBe(false);
+          if (slots.legend) expect(meets(slots.dock!, slots.legend)).toBe(false);
+        }
+      }
+    }
+    expect(solveChromeSlots(measure({ viewport: { w: 1320, h: 440 }, insets: { top: 24, right: 0, bottom: 34, left: 47 } })).time?.h).toBe(52);
+  });
+
+  it('keeps every pane-owned slot above the real shot-list pane clip', () => {
+    for (const [w, h] of [[1024, 700], [1400, 900]] as const) {
+      for (const bottom of [0, 20, 34]) {
+        const pane = { x: 0, y: 0, w, h: h - 80 - bottom };
+        const input = measure({
+          viewport: { w, h }, pane,
+          insets: { top: 0, right: 0, bottom, left: 0 },
+          topbar: 60,
+          footer: { x: 0, y: 0, w, h: 23 },
+          shotList: { x: 0, y: h - 64.19 - bottom, w, h: 64.19 + bottom },
+          pip: { x: w - 234, y: 65, w: 222, h: 144 },
+          launch: { x: 9, y: 9, w: 494, h: 44 },
+          legendOpen: true,
+          legendPanel: { x: 0, y: 0, w: 176, h: 206 },
+        });
+        const slots = solveChromeSlots(input);
+        for (const [name, box] of Object.entries(slots)) {
+          if (!box || name === 'footer') continue;
+          expect(box.y, name).toBeGreaterThanOrEqual(pane.y);
+          expect(bottomOf(box), name).toBeLessThanOrEqual(bottomOf(pane));
+          expect(rightOf(box), name).toBeLessThanOrEqual(rightOf(pane));
+        }
+        expect(bottomOf(slots.time!)).toBe(bottomOf(pane));
+        expect(bottomOf(slots.hide!) + 8).toBe(bottomOf(pane));
+        expect(bottomOf(slots.legendButton!) + 8).toBe(bottomOf(pane));
+      }
+    }
+  });
+
+  it('uses the independent intrinsic stacked time requirement without overcounting', () => {
+    for (const timeNeed of [118, 140, 184]) {
+      const slots = solveChromeSlots(measure({
+        viewport: { w: 390, h: 900 },
+        insets: { top: 24, right: 0, bottom: 34, left: 47 },
+        topbar: 84,
+        timeNeed,
+      }));
+      expect(slots.time?.h).toBe(timeNeed);
+    }
+  });
+
+  it('reaches a fixed point with nonzero timeNeed even when the painted chip uses line fallback', () => {
+    for (const h of [360, 400]) {
+      for (const legendOpen of [false, true]) {
+        let input = measure({
+          viewport: { w: 320, h },
+          insets: { top: 24, right: 0, bottom: 34, left: 47 },
+          topbar: 72,
+          timeNeed: 140,
+          legendOpen,
+          legendPanel: { x: 0, y: 0, w: 176, h: 206 },
+          footer: { x: 0, y: 0, w: 273, h: 23 },
+        });
+        const first = solveChromeSlots(input);
+        expect(first.time?.h).toBe(h === 400 && !legendOpen ? 140 : 44);
+        for (let frame = 0; frame < 12; frame++) {
+          input = { ...input, zoom: first.zoom!, compass: first.compass!, show: first.show!, hide: first.hide!, legendButton: first.legendButton!, sliderChip: first.time!, slider: { ...first.time!, h: 44 } };
+          expect(solveChromeSlots(input)).toEqual(first);
+          expect(input.timeNeed).toBe(140);
+        }
+      }
+    }
+  });
 });

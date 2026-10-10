@@ -2,6 +2,7 @@ export type Box = { x: number; y: number; w: number; h: number };
 
 export type ChromeMeasure = {
   viewport: { w: number; h: number };
+  pane?: Box;
   insets: { top: number; right: number; bottom: number; left: number };
   topbar: number;
   zoom: Box;
@@ -102,11 +103,27 @@ function showBottom(measure: ChromeMeasure): number {
   return lows.length ? Math.max(...lows) : measure.insets.top;
 }
 
+function paneBottom(measure: ChromeMeasure): number {
+  return Math.min(measure.viewport.h - measure.insets.bottom, present(measure.pane) ? bottomOf(measure.pane) : measure.viewport.h);
+}
+
+function paneLeft(measure: ChromeMeasure): number {
+  return Math.max(measure.insets.left, present(measure.pane) ? measure.pane.x : 0);
+}
+
+function paneRight(measure: ChromeMeasure): number {
+  return Math.min(measure.viewport.w - measure.insets.right, present(measure.pane) ? rightOf(measure.pane) : measure.viewport.w);
+}
+
+function paneTop(measure: ChromeMeasure): number {
+  return Math.max(measure.insets.top, measure.topbar, present(measure.pane) ? measure.pane.y : 0);
+}
+
 function floorY(measure: ChromeMeasure): number {
-  return nearestTop(
+  return Math.min(paneBottom(measure), nearestTop(
     [measure.footer, measure.shotList],
-    measure.viewport.h - measure.insets.bottom,
-  );
+    paneBottom(measure),
+  ));
 }
 
 function shrinkClear(draft: Box, obstacles: Box[]): Box {
@@ -122,7 +139,7 @@ function shrinkClear(draft: Box, obstacles: Box[]): Box {
 function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot {
   const laneRight = lane ? rightOf(lane) : measure.insets.left + EDGE;
   const x = laneRight + GAP;
-  const rightEdge = measure.viewport.w - measure.insets.right - RIGHT_MARGIN;
+  const rightEdge = paneRight(measure) - RIGHT_MARGIN;
   const width = Math.max(0, rightEdge - x);
   const raisedY = showBottom(measure) + SEPARATION;
   const cornerTop = nearestTop([measure.hide, measure.legendButton], floorY(measure));
@@ -144,7 +161,7 @@ function placeNarrowDock(measure: ChromeMeasure, lane: Box | null, time: Slot): 
   const gutter = cross(measure.scrollbar);
   const minX = (lane ? rightOf(lane) : measure.insets.left) + GAP;
   const columnBottom = nearestTop([time, measure.hide, measure.legendButton, measure.footer, measure.shotList], floorY(measure)) - GAP;
-  const columnTop = Math.max(measure.insets.top, present(measure.show) ? measure.show.y : measure.insets.top);
+  const columnTop = Math.max(paneTop(measure), present(measure.show) ? measure.show.y : paneTop(measure));
   const columnH = columnBottom - columnTop;
   const columnX = measure.viewport.w - measure.insets.right - EDGE - gutter;
   if (columnH >= TARGET && columnX >= minX - 0.5) {
@@ -160,12 +177,13 @@ function placeNarrowDock(measure: ChromeMeasure, lane: Box | null, time: Slot): 
 
 function legendSlot(measure: ChromeMeasure, lane: Box | null, y: number, h: number, panelRight: number): Slot | null {
   const minX = (lane ? rightOf(lane) : measure.insets.left) + GAP;
-  const cap = Math.min(panelRight, measure.viewport.w - measure.insets.right - EDGE);
+  const cap = Math.min(panelRight, paneRight(measure) - EDGE);
   const width = Math.min(LEGEND_W, Math.max(0, cap - minX));
   if (width < 1 || h < 1) return null;
   const x = Math.max(minX, cap - width);
   const top = snap(y);
-  const low = Math.floor(Math.min(y + h, floorY(measure) - GAP) * 100) / 100;
+  const intrinsicH = present(measure.legendPanel) ? measure.legendPanel.h : h;
+  const low = Math.floor(Math.min(y + h, y + intrinsicH, floorY(measure) - GAP) * 100) / 100;
   const height = Math.max(0, Math.floor((low - top) * 100) / 100);
   if (height < 1) return null;
   return { x: snap(x), y: top, w: snap(width), h: height };
@@ -227,8 +245,8 @@ function placeWideDock(measure: ChromeMeasure, lane: Box | null): DockSlot | nul
     const y = snap(raw);
     if (seen.has(y)) continue;
     seen.add(y);
-    if (y < measure.insets.top - 0.5) continue;
-    if (y + gutter > measure.viewport.h - measure.insets.bottom + 0.5) continue;
+    if (y < paneTop(measure) - 0.5) continue;
+    if (y + gutter > paneBottom(measure) + 0.5) continue;
     const cleared = shrinkClear({ x, y, w: span, h: gutter }, obstacles);
     const row = { x, y, w: cleared.w, h: gutter };
     if (row.w >= TARGET && !obstacles.some((box) => meets(row, box))) {
@@ -250,7 +268,7 @@ function placeWideLegend(measure: ChromeMeasure): Slot | null {
   if (!offenders.length) return null;
   const top = Math.min(...offenders.map((box) => box.y));
   const height = present(measure.legendPanel) ? measure.legendPanel.h : 88;
-  return slot(x, top - SEPARATION - height, LEGEND_W, height);
+  return boundedWidePanel(measure, x, top - SEPARATION, height);
 }
 
 const HIDE_W = 88;
@@ -272,14 +290,14 @@ function emptySlots(): ChromeSlots {
 }
 
 function wideCommandHeight(measure: ChromeMeasure): number {
-  if (measure.viewport.w >= 800 && measure.viewport.h >= 600) return 96;
+  if (measure.viewport.w >= 800 && measure.viewport.h >= 600) return 96 + measure.insets.bottom;
   if (measure.viewport.h <= 520 && measure.viewport.w >= 720) return 52;
   if (measure.viewport.w <= 800) return 140;
   return 64;
 }
 
 function ownShell(measure: ChromeMeasure): ChromeMeasure {
-  const topbar = measure.topbar > 0 ? measure.topbar : 48;
+  const topbar = Math.max(measure.topbar > 0 ? measure.topbar : 48, present(measure.pane) ? measure.pane.y : 0);
   const footerH = present(measure.footer) ? measure.footer.h : 36;
   const footer = slot(
     measure.insets.left,
@@ -287,11 +305,11 @@ function ownShell(measure: ChromeMeasure): ChromeMeasure {
     Math.max(0, measure.viewport.w - measure.insets.left - measure.insets.right),
     footerH,
   );
-  const floor = present(measure.shotList) ? Math.min(footer.y, measure.shotList.y) : footer.y;
-  const hide = slot(measure.viewport.w - measure.insets.right - 12 - HIDE_W, floor - GAP - TARGET, HIDE_W, TARGET);
+  const floor = Math.min(paneBottom(measure), present(measure.shotList) ? Math.min(footer.y, measure.shotList.y) : footer.y);
+  const hide = slot(paneRight(measure) - 12 - HIDE_W, floor - GAP - TARGET, HIDE_W, TARGET);
   const legendButton = slot(hide.x - GAP - LEGEND_BTN_W, hide.y, LEGEND_BTN_W, TARGET);
   const zoomY = topbar + (measure.viewport.h <= 520 ? 62 : 71);
-  let zoom = slot(measure.insets.left + EDGE, zoomY, TARGET, 88);
+  let zoom = slot(paneLeft(measure) + EDGE, zoomY, TARGET, 88);
   let compass = slot(zoom.x, bottomOf(zoom), TARGET, TARGET);
   const compassLimit = floor - GAP;
   if (bottomOf(compass) > compassLimit) {
@@ -300,16 +318,16 @@ function ownShell(measure: ChromeMeasure): ChromeMeasure {
     compass = slot(compass.x, compass.y - shift, compass.w, compass.h);
   }
   const show = slot(
-    measure.insets.left + EDGE,
+    paneLeft(measure) + EDGE,
     topbar + 5,
-    present(measure.show) && measure.show.w >= TARGET ? measure.show.w : 180,
+    Math.min(paneRight(measure) - paneLeft(measure) - EDGE * 2, present(measure.show) && measure.show.w >= TARGET ? measure.show.w : 180),
     present(measure.show) && measure.show.h >= 32 ? measure.show.h : 52,
   );
-  return { ...measure, footer, hide, legendButton, zoom, compass, show };
+  return { ...measure, topbar, footer, hide, legendButton, zoom, compass, show };
 }
 
 function placeWideTime(measure: ChromeMeasure): Slot {
-  const x = measure.insets.left + EDGE;
+  const x = paneLeft(measure) + EDGE;
   const right = present(measure.legendButton)
     ? measure.legendButton.x - GAP
     : measure.viewport.w - measure.insets.right - 204;
@@ -323,19 +341,33 @@ function placeWideTime(measure: ChromeMeasure): Slot {
 
 function placeWideColumn(measure: ChromeMeasure): DockSlot {
   const gutter = cross(measure.scrollbar);
-  const x = measure.viewport.w - measure.insets.right - EDGE - gutter;
+  const x = paneRight(measure) - EDGE - gutter;
   const y = measure.pip ? bottomOf(measure.pip) + 12 : (present(measure.show) ? measure.show.y : measure.insets.top + EDGE);
   const stops = [measure.hide, measure.legendButton, measure.legendPanel, measure.footer, measure.shotList].filter(present);
-  const limit = stops.length ? Math.min(...stops.map((box) => box.y)) : floorY(measure);
+  const limit = Math.min(floorY(measure), stops.length ? Math.min(...stops.map((box) => box.y)) : floorY(measure));
   const height = Math.max(TARGET, Math.min(measure.dockCorridor >= TARGET ? measure.dockCorridor : limit - y - GAP, limit - y - GAP));
   return { ...slot(x, y, gutter, height), axis: 'column' };
 }
 
-function placeLaunch(measure: ChromeMeasure, time: Slot | null): Slot | null {
+function placeLaunch(measure: ChromeMeasure, time: Slot | null, dock: DockSlot | null, legend: Slot | null): Slot | null {
   if (!present(measure.launch) || !time) return null;
-  const height = Math.max(32, time.y - GAP - measure.launch.y);
-  if (height < 1) return null;
-  return slot(measure.launch.x, measure.launch.y, measure.launch.w, height);
+  const x = Math.max(paneLeft(measure) + EDGE, rightOf(measure.zoom) + GAP);
+  const y = Math.max(paneTop(measure) + GAP, showBottom(measure) + GAP);
+  const height = Math.max(0, Math.min(time.y - GAP, floorY(measure) - GAP) - y);
+  if (height < TARGET) return null;
+  const obstacles = [dock, legend, measure.pip].filter(present);
+  const draft = shrinkClear({ x, y, w: Math.min(512, paneRight(measure) - EDGE - x), h: height }, obstacles);
+  if (draft.w < TARGET || obstacles.some((obstacle) => meets(draft, obstacle))) return null;
+  return slot(draft.x, draft.y, draft.w, draft.h);
+}
+
+function boundedWidePanel(measure: ChromeMeasure, x: number, bottom: number, intrinsicH: number): Slot | null {
+  const top = paneTop(measure) + GAP;
+  const low = Math.min(bottom, floorY(measure) - GAP);
+  const h = Math.min(intrinsicH, Math.max(0, low - top));
+  if (h < 1) return null;
+  const left = Math.max(paneLeft(measure) + EDGE, x);
+  return slot(left, low - h, Math.min(LEGEND_W, paneRight(measure) - EDGE - left), h);
 }
 
 function widePanel(measure: ChromeMeasure): Slot | null {
@@ -343,7 +375,7 @@ function widePanel(measure: ChromeMeasure): Slot | null {
   if (lifted) return lifted;
   if (!measure.legendOpen || !present(measure.legendButton)) return null;
   const height = present(measure.legendPanel) ? measure.legendPanel.h : 88;
-  return slot(rightOf(measure.legendButton) - LEGEND_W, measure.legendButton.y - SEPARATION - height, LEGEND_W, height);
+  return boundedWidePanel(measure, rightOf(measure.legendButton) - LEGEND_W, measure.legendButton.y - SEPARATION, height);
 }
 
 function missLegend(dock: DockSlot, legend: Slot | null): DockSlot {
@@ -366,7 +398,8 @@ export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {
   const wide = owned.viewport.w > NARROW_MAX;
   const time = wide ? placeWideTime(owned) : placeNarrowTime(owned, lane);
   const legend = wide ? widePanel(owned) : null;
-  const withLegend = legend ? { ...owned, legendPanel: legend } : owned;
+  const launch = placeLaunch(owned, time, null, legend);
+  const withLegend = { ...owned, launch, legendPanel: legend ?? { x: 0, y: 0, w: 0, h: 0 } };
   const dock = wide
     ? (placeWideDock(withLegend, lane) ?? placeWideColumn(withLegend))
     : placeNarrowDock(owned, lane, time);
@@ -381,6 +414,6 @@ export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {
     legend: narrowLegend,
     hide: owned.hide,
     footer: owned.footer,
-    launch: placeLaunch(owned, time),
+    launch: placeLaunch(owned, time, dock, narrowLegend),
   };
 }

@@ -1,7 +1,7 @@
 import { solveChromeSlots, type Box, type ChromeMeasure, type ChromeSlots } from './chrome-slots';
 
 const STORAGE_KEY = 'opd-map-chrome';
-const timeLinePx = 44;
+const timeLinePx = 52;
 
 export function readMapChromeShown(): boolean {
   try {
@@ -97,9 +97,8 @@ function gutterPx(dock: HTMLElement | null): number {
 function launchBox(): Box | null {
   const node = document.getElementById('map-launch-coverage');
   if (!(node instanceof HTMLElement) || node.hidden) return null;
-  if (getComputedStyle(node).display === 'none') return null;
   const box = boxOf(node);
-  return box.h >= 1 ? box : null;
+  return { ...box, w: Math.max(44, box.w), h: Math.max(44, box.h) };
 }
 
 function visiblePip(): Box | null {
@@ -129,14 +128,49 @@ function naturalLegendBottom(view: HTMLElement): number {
   return legend.getBoundingClientRect().bottom - offset;
 }
 
+function intrinsicHeight(node: Element | null, width: number, kind: 'footer' | 'legend' | 'time'): number {
+  if (!(node instanceof HTMLElement) || !node.parentElement || width <= 0) return 0;
+  const probe = node.cloneNode(true) as HTMLElement;
+  probe.setAttribute('data-map-chrome-measure', kind);
+  probe.setAttribute('aria-hidden', 'true');
+  probe.inert = true;
+  const styles: Record<string, string> = {
+    position: 'fixed', left: '0', top: '0', right: 'auto', bottom: 'auto',
+    visibility: 'hidden', 'pointer-events': 'none', 'box-sizing': 'border-box',
+    width: `${width}px`, 'min-width': '0', 'max-width': 'none',
+    height: 'auto', 'min-height': '0', 'max-height': 'none',
+    flex: 'none', overflow: 'visible', margin: '0',
+    display: kind === 'footer' ? 'block' : 'flex',
+  };
+  if (kind === 'time') {
+    styles['flex-wrap'] = 'wrap';
+    styles['align-content'] = 'start';
+    const row = probe.querySelector<HTMLElement>('.time-slider-row');
+    row?.style.setProperty('flex', '1 0 100%', 'important');
+    row?.style.setProperty('width', '100%', 'important');
+    row?.style.setProperty('min-width', '44px', 'important');
+  }
+  for (const [property, value] of Object.entries(styles)) probe.style.setProperty(property, value, 'important');
+  node.parentElement.appendChild(probe);
+  try {
+    return Math.ceil(probe.getBoundingClientRect().height * 100) / 100;
+  } finally {
+    probe.remove();
+  }
+}
+
 function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
   const shotList = document.body.classList.contains('shotlist-bar-visible')
     ? boxOf(document.getElementById('shotlist-bar'))
     : emptyBox();
   const dock = document.querySelector('.map-control-dock');
+  const insets = { top: insetPx('top'), right: insetPx('right'), bottom: insetPx('bottom'), left: insetPx('left') };
+  const footerWidth = window.innerWidth - insets.left - insets.right;
+  const panel = document.getElementById('map-legend-panel');
   return {
     viewport: { w: window.innerWidth, h: window.innerHeight },
-    insets: { top: insetPx('top'), right: insetPx('right'), bottom: insetPx('bottom'), left: insetPx('left') },
+    pane: boxOf(pane),
+    insets,
     zoom: unionBox([...document.querySelectorAll('.maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out')]),
     compass: boxOf(document.querySelector('.maplibregl-ctrl-compass')),
     show: boxOf(document.querySelector('.map-toolbar')),
@@ -145,33 +179,20 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     slider: boxOf(document.getElementById('time-slider')),
     timeButtons: [...document.querySelectorAll('.map-command .time-step-btn')].map(boxOf),
     topbar: lengthPx(view, getComputedStyle(document.documentElement).getPropertyValue('--topbar-height').trim() || '48px'),
-    footer: boxOf(document.getElementById('status-banner')),
+    footer: { x: 0, y: 0, w: footerWidth, h: intrinsicHeight(document.getElementById('status-banner'), footerWidth, 'footer') },
     shotList,
     launch: launchBox(),
     scrollbar: gutterPx(dock instanceof HTMLElement ? dock : null),
     pip: visiblePip(),
     hide: boxOf(document.getElementById('map-chrome-toggle')),
     legendButton: boxOf(document.getElementById('map-legend-toggle')),
-    legendPanel: boxOf(document.getElementById('map-legend-panel')),
+    legendPanel: { x: 0, y: 0, w: 176, h: intrinsicHeight(panel, 176, 'legend') },
     legendOpen: document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true',
     legendNaturalBottom: naturalLegendBottom(view),
     dockCorridor: naturalDockCorridor(view, pane),
     chromeHidden: document.body.classList.contains('map-chrome-hidden'),
-    timeNeed: timeNeedPx(),
+    timeNeed: 0,
   };
-}
-
-function timeNeedPx(): number {
-  const chip = document.querySelector('.map-command .map-controls-time');
-  if (!(chip instanceof HTMLElement)) return 0;
-  const top = chip.getBoundingClientRect().top;
-  let low = top;
-  for (const el of chip.querySelectorAll('button, input, .time-slider-end, .time-slider-readout')) {
-    const rect = el.getBoundingClientRect();
-    if (rect.height < 1) continue;
-    low = Math.max(low, rect.bottom);
-  }
-  return Math.max(0, low - top);
 }
 
 let lastSlots = '';
@@ -197,10 +218,10 @@ function placeInView(name: string, box: { x: number; y: number; w: number; h: nu
 }
 
 function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
-  const key = JSON.stringify(slots);
+  const origin = pane.getBoundingClientRect();
+  const key = JSON.stringify({ slots, x: origin.left, y: origin.top });
   if (key === lastSlots) return;
   lastSlots = key;
-  const origin = pane.getBoundingClientRect();
   mute = true;
   const owned = slots.zoom !== null || slots.time !== null || slots.hide !== null;
   document.body.classList.toggle('map-slot-owned', owned);
@@ -243,7 +264,16 @@ function syncMapChrome(): void {
     document.body.classList.remove('map-slot-owned', 'map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch');
     return;
   }
-  applySlots(solveChromeSlots(measureChrome(view, pane)), pane);
+  const measure = measureChrome(view, pane);
+  const proposed = solveChromeSlots(measure);
+  if (proposed.time) {
+    measure.timeNeed = intrinsicHeight(document.querySelector('.map-command .map-controls-time'), proposed.time.w, 'time');
+  }
+  if (proposed.legend && proposed.legend.w !== measure.legendPanel.w) {
+    measure.legendPanel = { ...measure.legendPanel, w: proposed.legend.w,
+      h: intrinsicHeight(document.getElementById('map-legend-panel'), proposed.legend.w, 'legend') };
+  }
+  applySlots(solveChromeSlots(measure), pane);
 }
 
 function ensureInsetProbes(): HTMLElement[] {
@@ -285,10 +315,38 @@ export function bindMapChrome(): void {
   const observer = new ResizeObserver(() => scheduleSync());
   observer.observe(document.documentElement);
   for (const probe of ensureInsetProbes()) observer.observe(probe);
-  const mutations = new MutationObserver(() => scheduleSync());
+  const watchedContent = new WeakSet<Element>();
+  const watchContent = () => {
+    for (const selector of ['.map-command', '#map-legend-panel', '#map-launch-coverage']) {
+      const node = document.querySelector(selector);
+      if (!node || watchedContent.has(node)) continue;
+      watchedContent.add(node);
+      mutations.observe(node, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    }
+  };
+  const mutations = new MutationObserver((records) => {
+    watchContent();
+    const realChange = records.some((record) => {
+      if (record.type !== 'childList') return true;
+      return [...record.addedNodes, ...record.removedNodes].some((node) => (
+        !(node instanceof HTMLElement && node.hasAttribute('data-map-chrome-measure'))
+      ));
+    });
+    if (realChange) scheduleSync();
+  });
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  mutations.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
   const banner = document.getElementById('status-banner');
-  if (banner) mutations.observe(banner, { childList: true, subtree: true });
+  if (banner) {
+    mutations.observe(banner, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    observer.observe(banner);
+  }
+  const pane = document.getElementById('map-pane');
+  if (pane) {
+    observer.observe(pane);
+    mutations.observe(pane, { childList: true });
+  }
+  watchContent();
   const legend = document.getElementById('map-legend-toggle');
   if (legend) mutations.observe(legend, { attributes: true, attributeFilter: ['aria-expanded'] });
   const map = document.getElementById('map');
@@ -311,6 +369,8 @@ export function bindMapChrome(): void {
   }
   window.addEventListener('resize', scheduleSync);
   window.visualViewport?.addEventListener('resize', scheduleSync);
+  document.fonts?.ready.then(scheduleSync);
+  document.fonts?.addEventListener('loadingdone', scheduleSync);
   (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChrome;
   syncMapChrome();
 }

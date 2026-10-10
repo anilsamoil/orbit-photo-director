@@ -1850,7 +1850,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   align-self: flex-start;
   flex: 0 0 auto;
   max-width: calc(100% - 24px);
-  margin: 4px 12px;
+  margin: 0;
   display: flex;
   flex-wrap: nowrap;
   align-items: flex-end;
@@ -4812,6 +4812,12 @@ body.map-slot-time:not(.map-slot-time-line) .view-map .map-command .time-slider-
   width: 100%;
 }
 
+body.map-slot-time-line .view-map .map-command .time-slider-row {
+  flex: 0 0 auto;
+  min-width: 240px;
+  flex-wrap: nowrap;
+}
+
 body.map-slot-time .view-map .map-command .time-slider {
   margin: 0;
   min-width: 44px;
@@ -4866,6 +4872,7 @@ body.map-slot-legend .view-map .map-legend-panel {
   max-height: none;
   overflow: auto;
   pointer-events: auto;
+  flex-shrink: 0;
 }
 
 body.map-slot-owned .view-map #map .maplibregl-ctrl-top-left {
@@ -4938,8 +4945,8 @@ body.map-slot-owned.map-slot-legend .view-map .map-legend-panel {
 }
 body.map-slot-owned .view-map .map-chrome-toggle {
   position: absolute;
-  left: auto;
-  right: calc(12px + env(safe-area-inset-right, 0px));
+  left: var(--slot-hide-x);
+  right: auto;
   top: var(--slot-hide-y);
   bottom: auto;
   width: var(--slot-hide-w);
@@ -4964,10 +4971,13 @@ body.map-slot-owned.map-slot-launch .view-map #map-launch-coverage {
   right: auto;
   bottom: auto;
   width: var(--slot-launch-w);
-  height: var(--slot-launch-h);
+  height: auto;
   max-height: var(--slot-launch-h);
   box-sizing: border-box;
   margin: 0;
+}
+body.map-slot-owned:not(.map-slot-launch) .view-map #map-launch-coverage {
+  display: none;
 }
 body.map-slot-owned .view-map .map-command,
 body.map-slot-owned .view-map .map-control-dock {
@@ -5280,4 +5290,3 @@ body.map-slot-owned .view-map .map-control-dock::-webkit-scrollbar {
     height: auto;
   }
 }
-

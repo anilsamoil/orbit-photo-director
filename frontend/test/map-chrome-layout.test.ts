@@ -226,6 +226,7 @@ describe('map chrome layout', () => {
     );
     const button = document.querySelector('#map-chrome-toggle')!;
     document.body.classList.add('map-slot-owned');
+    document.body.style.setProperty('--slot-hide-x', '700px');
     document.body.style.setProperty('--slot-hide-y', '500px');
     document.body.style.setProperty('--slot-hide-w', '88px');
     document.body.style.setProperty('--slot-hide-h', '44px');
@@ -239,7 +240,8 @@ describe('map chrome layout', () => {
     button.textContent = 'Hide';
     expect(place()).toBe(hiddenPlace);
     const style = getComputedStyle(button);
-    expect(css).toContain('right: calc(12px + env(safe-area-inset-right, 0px))');
+    expect(getComputedStyle(document.querySelector('#map-chrome-toggle')!).left).toBe('700px');
+    expect(getComputedStyle(document.querySelector('#map-chrome-toggle')!).right).toBe('auto');
     expect(style.top).toBe('500px');
     expect(style.width).toBe('88px');
     expect(style.minWidth).toBe('88px');
@@ -304,6 +306,7 @@ describe('map chrome layout', () => {
     document.body.style.setProperty('--slot-legend-button-y', '500px');
     document.body.style.setProperty('--slot-legend-button-w', '88px');
     document.body.style.setProperty('--slot-legend-button-h', '44px');
+    document.body.style.setProperty('--slot-hide-x', '700px');
     document.body.style.setProperty('--slot-hide-y', '500px');
     document.body.style.setProperty('--slot-hide-w', '88px');
     document.body.style.setProperty('--slot-hide-h', '44px');
@@ -312,7 +315,8 @@ describe('map chrome layout', () => {
     expect(legend.position).toBe('absolute');
     expect(legend.top).toBe(hide.top);
     expect(Number.parseFloat(legend.left)).toBe(704);
-    expect(css).toContain('right: calc(12px + env(safe-area-inset-right, 0px))');
+    expect(getComputedStyle(document.querySelector('#map-chrome-toggle')!).left).toBe('700px');
+    expect(getComputedStyle(document.querySelector('#map-chrome-toggle')!).right).toBe('auto');
     expect(legend.flexDirection).toBe('column-reverse');
     expect(legend.width).toBe('88px');
     expect(getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')!).display).toBe('none');
