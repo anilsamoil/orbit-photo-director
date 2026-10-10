@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -40,6 +41,17 @@ export function bostonTrackText(fixtureDir) {
 
 function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
+}
+
+// The schema requires the body revision in its URL. Hash the payload without
+// that self-reference; the pointer separately hashes the complete wire bytes.
+function launchRevision(body) {
+  return sha256(JSON.stringify({ ...body, revision: undefined }));
+}
+
+function launchArtifact(body) {
+  body.revision = launchRevision(body);
+  return artifact(body);
 }
 
 function launchIso(ms) {
@@ -146,14 +158,37 @@ function pidAlive(pid) {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return error.code === 'EPERM';
+    // Only ESRCH confirms that the owner is gone; unexpected errors are not
+    // permission to remove another process's files.
+    return error.code !== 'ESRCH';
   }
+}
+
+// Opt-in, file-based rendezvous points let subprocess tests stop at publication
+// boundaries without racing a sleep. Production runs do not enter this path.
+function fixtureTestHook(point, details = {}) {
+  const hookDir = process.env.OPD_VERIFY_FIXTURE_HOOK_DIR;
+  const points = (process.env.OPD_VERIFY_FIXTURE_HOOKS || '').split(',');
+  if (!hookDir || !points.includes(point)) return;
+  const gate = join(hookDir, `${point}.${process.pid}`);
+  writeFileSync(`${gate}.ready`, JSON.stringify({ pid: process.pid, ...details }));
+  const deadline = Date.now() + 30_000;
+  while (!existsSync(`${gate}.continue`)) {
+    if (Date.now() >= deadline) throw new Error(`fixture test hook timed out: ${point}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+}
+
+export function generationOwnerAlive(root) {
+  const match = /\.gen-(\d+)-[a-f0-9]+$/.exec(basename(root));
+  return !!match && pidAlive(Number(match[1]));
 }
 
 export function writeLockFile(lockPath, pid, link = linkSync) {
   const tmp = `${lockPath}.${pid}.${randomBytes(4).toString('hex')}`;
   try {
     writeFileSync(tmp, String(pid));
+    fixtureTestHook('lock-temp-created', { lockPath, tmp });
     link(tmp, lockPath);
   } catch (error) {
     try {
@@ -171,93 +206,228 @@ export function writeLockFile(lockPath, pid, link = linkSync) {
   return lockPath;
 }
 
-export function stealDeadLock(lockPath, observedPid) {
-  if (pidAlive(observedPid)) return false;
-  const claim = `${lockPath}.claim-${process.pid}-${randomBytes(4).toString('hex')}`;
-  try {
-    renameSync(lockPath, claim);
-  } catch {
-    return false;
-  }
-  let claimed = Number.NaN;
-  try {
-    claimed = Number(readFileSync(claim, 'utf8').trim());
-  } catch {
-    claimed = Number.NaN;
-  }
-  const matchesDead = claimed === observedPid && !pidAlive(claimed);
-  if (!matchesDead) {
-    try {
-      linkSync(claim, lockPath);
-    } catch {
-      // A newer lock is already in place.
+// Python's standard-library flock is available on the developer Mac (unlike a
+// flock CLI). The permanent guard inode MUST NOT be unlinked: all acquisition,
+// dead-owner recovery and release checks serialize on this same OS lock. A
+// killed helper automatically releases flock, so the guard itself cannot go
+// stale and there is no rename/restore acquisition gap.
+const LOCK_HELPER = String.raw`
+import errno, fcntl, json, os, re, sys, time
+
+request = json.loads(sys.argv[1])
+lock_path = request['lockPath']
+caller = request['caller']
+deadline = time.monotonic() + request['timeoutMs'] / 1000
+
+def alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as error:
+        return error.errno != errno.ESRCH
+
+def owner_alive(owner):
+    if not owner or not isinstance(owner.get('pid'), int) or owner['pid'] <= 0:
+        return True
+    # Only ESRCH proves the PID is gone. PID reuse or legacy start-time formats
+    # may delay recovery, but can never justify deleting a live process's lock.
+    # The start/token metadata still identifies the exact claim during release.
+    return alive(owner['pid'])
+
+def check_caller():
+    # This helper is the caller's direct child. Reparenting detects its death
+    # without PID-reuse ambiguity or repeatedly spawning ps during gate waits.
+    if os.getppid() != caller['pid']:
+        # Do not continue publishing on behalf of a killed Node writer. Leave
+        # its named temp for the next writer's dead-owner cleanup if needed.
+        os._exit(75)
+
+def hook(point, **details):
+    hook_dir = os.environ.get('OPD_VERIFY_FIXTURE_HOOK_DIR')
+    points = os.environ.get('OPD_VERIFY_FIXTURE_HOOKS', '').split(',')
+    if not hook_dir or point not in points:
+        return
+    gate = os.path.join(hook_dir, point + '.' + str(caller['pid']))
+    with open(gate + '.ready', 'w') as output:
+        json.dump(dict(pid=caller['pid'], guardPid=os.getpid(), **details), output)
+    hook_deadline = time.monotonic() + 30
+    while not os.path.exists(gate + '.continue'):
+        check_caller()
+        if time.monotonic() >= hook_deadline:
+            raise RuntimeError('fixture test hook timed out: ' + point)
+        time.sleep(.01)
+    check_caller()
+
+def read_owner():
+    try:
+        with open(lock_path) as source:
+            text = source.read().strip()
+        try:
+            owner = json.loads(text)
+        except (ValueError, TypeError):
+            return {}
+        if isinstance(owner, int):
+            return dict(pid=owner)
+        return owner if isinstance(owner, dict) else {}
+    except FileNotFoundError:
+        return None
+
+def cleanup_orphans():
+    parent = os.path.dirname(lock_path)
+    base = os.path.basename(lock_path[:-len('.writer.lock')])
+    patterns = [
+        re.compile(re.escape(base) + r'\.next-(\d+)-[a-f0-9]+$'),
+        re.compile(re.escape(base) + r'\.writer\.lock\.(\d+)\.[a-f0-9]+$'),
+        re.compile(re.escape(base) + r'\.writer\.lock\.claim-(\d+)-[a-f0-9]+$'),
+    ]
+    for name in os.listdir(parent):
+        match = next((pattern.fullmatch(name) for pattern in patterns if pattern.fullmatch(name)), None)
+        if not match or alive(int(match.group(1))):
+            continue
+        try:
+            os.unlink(os.path.join(parent, name))
+        except FileNotFoundError:
+            pass
+
+with open(lock_path[:-len('.lock')] + '.guard', 'a') as guard:
+    while True:
+        check_caller()
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            hook('writer-lock-waiting', lockPath=lock_path)
+            if time.monotonic() >= deadline:
+                print(json.dumps(dict(status='busy', owner=None)))
+                sys.exit(0)
+            time.sleep(.01)
+    check_caller()
+    owner = read_owner()
+    action = request['action']
+    if action == 'release':
+        # A release may only remove this exact caller's claim, never a new
+        # owner that acquired after it. No lock is renamed before checking.
+        matches = owner and all(owner.get(key) == caller.get(key) for key in ('pid', 'started', 'token'))
+        if matches:
+            os.unlink(lock_path)
+        print(json.dumps(dict(status='released' if matches else 'unchanged')))
+    else:
+        if owner is not None:
+            hook('writer-lock-observed', lockPath=lock_path, owner=owner)
+            check_caller()
+            expected = request.get('observedPid')
+            matches = action != 'recover' or owner.get('pid') == expected
+            if matches and not owner_alive(owner):
+                os.unlink(lock_path)
+                owner = None
+                recovered = True
+            else:
+                recovered = False
+        else:
+            recovered = False
+        if action == 'recover':
+            print(json.dumps(dict(status='recovered' if recovered else 'unchanged')))
+        elif owner is not None:
+            hook('writer-lock-waiting', lockPath=lock_path, owner=owner)
+            print(json.dumps(dict(status='busy', owner=owner)))
+        else:
+            tmp = lock_path + '.' + str(caller['pid']) + '.' + request['nonce']
+            try:
+                with open(tmp, 'x') as output:
+                    json.dump(caller, output)
+                hook('lock-temp-created', lockPath=lock_path, tmp=tmp)
+                check_caller()
+                os.link(tmp, lock_path)
+            finally:
+                try:
+                    os.unlink(tmp)
+                except FileNotFoundError:
+                    pass
+            try:
+                cleanup_orphans()
+            except BaseException:
+                # Acquisition has not returned to Node yet: do not strand its
+                # live owner if orphan cleanup itself fails. flock still guards
+                # this exact newly-created claim.
+                os.unlink(lock_path)
+                raise
+            print(json.dumps(dict(status='acquired')))
+`;
+
+let fixtureLockOwner;
+function lockOwner() {
+  if (!fixtureLockOwner) {
+    const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], {
+      encoding: 'utf8', env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+    });
+    if (result.error || result.status !== 0 || !result.stdout.trim()) {
+      throw new Error('cannot determine fixture writer process start time');
     }
+    fixtureLockOwner = { pid: process.pid, started: result.stdout.trim(), token: randomBytes(16).toString('hex') };
   }
-  try {
-    unlinkSync(claim);
-  } catch {
-    // The claim file is already gone.
-  }
-  return matchesDead;
+  return fixtureLockOwner;
 }
 
-function releaseLock(lockPath, pid) {
-  const claim = `${lockPath}.claim-${pid}-${randomBytes(4).toString('hex')}`;
-  try {
-    renameSync(lockPath, claim);
-  } catch {
-    return;
+function lockTimeoutMs() {
+  const raw = process.env.OPD_VERIFY_LOCK_TIMEOUT_MS;
+  const timeout = raw === undefined ? 10_000 : Number(raw);
+  if (!Number.isFinite(timeout) || timeout < 1 || timeout > 60_000) {
+    throw new Error('OPD_VERIFY_LOCK_TIMEOUT_MS must be between 1 and 60000');
   }
-  let claimed = Number.NaN;
-  try {
-    claimed = Number(readFileSync(claim, 'utf8').trim());
-  } catch {
-    claimed = Number.NaN;
+  return timeout;
+}
+
+function guardedLockAction(lockPath, action, timeoutMs, extra = {}) {
+  const request = { lockPath, action, timeoutMs, caller: lockOwner(), nonce: randomBytes(4).toString('hex'), ...extra };
+  const result = spawnSync('python3', ['-c', LOCK_HELPER, JSON.stringify(request)], {
+    encoding: 'utf8',
+    timeout: Math.max(1_000, timeoutMs + 1_000) + (process.env.OPD_VERIFY_FIXTURE_HOOK_DIR ? 31_000 : 0),
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`fixture writer guard failed: ${result.error?.message || result.stderr.trim() || result.status}`);
   }
-  if (claimed !== pid) {
-    try {
-      linkSync(claim, lockPath);
-    } catch {
-      // A newer lock is already in place.
-    }
-  }
-  try {
-    unlinkSync(claim);
-  } catch {
-    // The claim file is already gone.
-  }
+  return JSON.parse(result.stdout);
+}
+
+export function stealDeadLock(lockPath, observedPid) {
+  return guardedLockAction(lockPath, 'recover', lockTimeoutMs(), { observedPid }).status === 'recovered';
+}
+
+function releaseLock(lockPath) {
+  const result = guardedLockAction(lockPath, 'release', lockTimeoutMs());
+  if (result.status === 'busy') throw new Error('fixture writer guard timed out during release');
 }
 
 function acquireFixtureLock(dir) {
   const lockPath = `${dir}.writer.lock`;
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + lockTimeoutMs();
   for (;;) {
+    let result;
     try {
-      return writeLockFile(lockPath, process.pid);
+      result = guardedLockAction(lockPath, 'acquire', Math.max(1, deadline - Date.now()));
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      let owner = Number.NaN;
-      try {
-        owner = Number(readFileSync(lockPath, 'utf8').trim());
-      } catch {
-        owner = Number.NaN;
-      }
-      if (!pidAlive(owner)) {
-        stealDeadLock(lockPath, owner);
-        continue;
-      }
-      if (Date.now() > deadline) throw new Error(`fixture writer lock held by ${owner}`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      // A helper can fail after linking our claim but before acknowledging it.
+      // Exact-owner release is safe even if it failed before acquisition.
+      try { releaseLock(lockPath); } catch { /* Preserve the acquisition error. */ }
+      throw error;
     }
+    if (result.status === 'acquired') return lockPath;
+    if (Date.now() >= deadline) {
+      throw new Error(`fixture writer lock held by ${result.owner?.pid || 'unknown owner'} (timeout)`);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
 }
 
 function withFixtureLock(dir, fn) {
   const lockPath = acquireFixtureLock(dir);
   try {
+    fixtureTestHook('writer-lock-acquired', { lockPath });
     return fn();
   } finally {
-    releaseLock(lockPath, process.pid);
+    releaseLock(lockPath);
   }
 }
 
@@ -320,6 +490,11 @@ export function generationRoots(logicalDir) {
   const roots = [];
   const seen = new Set();
   const add = (root) => {
+    try {
+      root = realpathSync(root);
+    } catch {
+      return;
+    }
     if (!root || seen.has(root)) return;
     seen.add(root);
     roots.push(root);
@@ -346,23 +521,40 @@ export function readBodyByHash(logicalDir, name, sha) {
   if (!BODY_NAMES.has(name) || !/^[a-f0-9]{64}$/.test(sha)) return null;
   for (const root of generationRoots(logicalDir)) {
     const file = join(root, name);
-    if (!existsSync(file)) continue;
-    const body = readFileSync(file);
-    if (sha256(body) === sha) return body;
+    try {
+      const body = readFileSync(file);
+      if (sha256(body) === sha) return body;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   }
   return null;
 }
 
 export function bodyForRequestPath(logicalDir, urlPath) {
+  const launch = /^\/launch\/v\/([a-f0-9]{64})\.json$/.exec(urlPath);
+  if (launch) {
+    for (const root of generationRoots(logicalDir)) {
+      try {
+        const text = readFileSync(join(root, 'launch.json'));
+        const body = JSON.parse(text);
+        if (body.revision === launch[1] && launchRevision(body) === launch[1]) return text;
+      } catch (error) {
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
+    }
+    return null;
+  }
   const match = /^\/v\/verify\/([a-f0-9]{64})\/([^/]+)$/.exec(urlPath);
   if (!match) return null;
   return readBodyByHash(logicalDir, match[2], match[1]);
 }
 
 export function copyGeneration(logicalDir, sourceRoot, replacements, write = writeFileSync) {
-  const next = `${logicalDir}.gen-${randomBytes(6).toString('hex')}`;
+  const next = `${logicalDir}.gen-${process.pid}-${randomBytes(6).toString('hex')}`;
   mkdirSync(next);
   try {
+    fixtureTestHook('generation-staged', { logicalDir, next });
     const names = new Set(listFiles(sourceRoot));
     for (const name of replacements.keys()) names.add(name);
     for (const name of names) {
@@ -381,9 +573,10 @@ function stageGeneration(logicalDir, sourceRoot, replacements) {
 }
 
 export function swapGenerationLink(logicalDir, next, rename = renameSync) {
-  const link = `${logicalDir}.next-${randomBytes(4).toString('hex')}`;
+  const link = `${logicalDir}.next-${process.pid}-${randomBytes(4).toString('hex')}`;
   try {
     symlinkSync(next, link);
+    fixtureTestHook('next-link-created', { logicalDir, next, link });
     rename(link, logicalDir);
   } catch (error) {
     try {
@@ -395,20 +588,64 @@ export function swapGenerationLink(logicalDir, next, rename = renameSync) {
   }
 }
 
-function pruneGenerations(logicalDir, keep) {
-  const parent = dirname(logicalDir);
-  const prefix = `${basename(logicalDir)}.gen-`;
-  for (const name of readdirSync(parent)) {
-    if (!name.startsWith(prefix)) continue;
-    const full = join(parent, name);
-    if (keep.has(full)) continue;
-    rmSync(full, { recursive: true, force: true });
+// A reader may hold a manifest for this long after it stops being current.
+// Capacity applies backpressure, never early eviction of an unexpired body.
+export const FIXTURE_RETENTION_MS = 15 * 60_000;
+export const FIXTURE_MAX_GENERATIONS = 1024;
+
+function retentionPolicy() {
+  const retentionMs = Number(process.env.OPD_VERIFY_FIXTURE_RETENTION_MS ?? FIXTURE_RETENTION_MS);
+  const maxGenerations = Number(process.env.OPD_VERIFY_FIXTURE_MAX_GENERATIONS ?? FIXTURE_MAX_GENERATIONS);
+  if (!Number.isSafeInteger(retentionMs) || retentionMs < 0
+    || !Number.isSafeInteger(maxGenerations) || maxGenerations < 2) {
+    throw new Error('invalid fixture retention policy');
   }
+  return { retentionMs, maxGenerations };
+}
+
+function retirementTime(root, now) {
+  const file = join(root, '.retired-at');
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8'))?.retiredAt;
+    if (Number.isSafeInteger(value)) return value;
+  } catch (error) {
+    if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+  }
+  // Missing or interrupted metadata errs toward retaining a reader's body.
+  writeTextAtomic(file, JSON.stringify({ retiredAt: now }));
+  return now;
+}
+
+function pruneGenerations(logicalDir, keep) {
+  const { retentionMs } = retentionPolicy();
+  const canonicalKeep = new Set([...keep].map((root) => realpathSync(root)));
+  const now = Date.now();
+  let retained = 0;
+  for (const full of generationRoots(logicalDir)) {
+    if (canonicalKeep.has(full)) {
+      retained += 1;
+      continue;
+    }
+    if (!existsSync(join(full, '.published')) && generationOwnerAlive(full)) continue;
+    // Owned, incomplete stages were never exposed to readers.
+    if (!existsSync(join(full, '.published')) && /\.gen-\d+-/.test(basename(full))) {
+      rmSync(full, { recursive: true, force: true });
+      continue;
+    }
+    const retiredAt = retirementTime(full, now);
+    if (now - retiredAt >= retentionMs) {
+      rmSync(full, { recursive: true, force: true });
+    } else {
+      retained += 1;
+    }
+  }
+  return retained;
 }
 
 function sealFixtureRoot(dir) {
   if (lstatSync(dir).isSymbolicLink()) return;
-  const next = `${dir}.gen-${randomBytes(6).toString('hex')}`;
+  const next = `${dir}.gen-${process.pid}-${randomBytes(6).toString('hex')}`;
+  writeFileSync(join(dir, '.published'), '');
   renameSync(dir, next);
   try {
     symlinkSync(next, dir);
@@ -423,6 +660,10 @@ function sealFixtureRoot(dir) {
 }
 
 function switchToGeneration(logicalDir, next, previousRoot) {
+  if (previousRoot) {
+    writeFileSync(join(previousRoot, '.published'), '');
+    rmSync(join(previousRoot, '.retired-at'), { force: true });
+  }
   if (lstatSync(logicalDir).isSymbolicLink()) {
     swapGenerationLink(logicalDir, next);
   } else {
@@ -440,18 +681,26 @@ function switchToGeneration(logicalDir, next, previousRoot) {
     }
     rmSync(displaced, { recursive: true, force: true });
   }
-  const keep = new Set([next]);
-  if (previousRoot && previousRoot !== logicalDir && previousRoot !== next) keep.add(previousRoot);
-  pruneGenerations(logicalDir, keep);
+  writeFileSync(join(next, '.published'), '');
+  // Start the reader window only after the old manifest stops being current.
+  // A crash before this write leaves no timestamp; GC starts it conservatively.
+  if (previousRoot && existsSync(previousRoot)) {
+    writeTextAtomic(join(previousRoot, '.retired-at'), JSON.stringify({ retiredAt: Date.now() }));
+  }
+  pruneGenerations(logicalDir, new Set([next]));
 }
 
 function publishLocked(logicalDir, replacements) {
   const sourceRoot = liveFixtureRoot(logicalDir);
+  const retained = pruneGenerations(logicalDir, new Set([sourceRoot]));
+  if (retained >= retentionPolicy().maxGenerations) {
+    throw new Error('fixture retention capacity reached; retry after the reader retention window');
+  }
   const next = stageGeneration(logicalDir, sourceRoot, replacements);
   try {
     switchToGeneration(logicalDir, next, sourceRoot);
   } catch (error) {
-    if (liveFixtureRoot(logicalDir) !== next) rmSync(next, { recursive: true, force: true });
+    if (liveFixtureRoot(logicalDir) !== liveFixtureRoot(next)) rmSync(next, { recursive: true, force: true });
     throw error;
   }
 }
@@ -770,7 +1019,7 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
     'status.json': artifact(status),
     'targets.json': artifact(targets),
     'cupola_windows.json': artifact({ version: 'verify', generated_at: generated, windows: [cupolaPass] }),
-    'launch.json': artifact(launchBody),
+    'launch.json': launchArtifact(launchBody),
   };
   if (tracked) files['tracked.json'] = artifact(tracked);
   for (const [name, entry] of Object.entries(files)) {
@@ -805,10 +1054,10 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
   const launchText = files['launch.json'].text;
   const pointer = {
     schema_version: 2,
-    revision: 'verifyrev',
+    revision: launchBody.revision,
     generated_at: generatedLaunch,
     valid_until: pointerUntil,
-    path: 'launch/v/verifyrev.json',
+    path: `launch/v/${launchBody.revision}.json`,
     sha256: sha256(launchText),
   };
   writeFileSync(resolve(dir, 'launch-latest.json'), JSON.stringify(pointer));
@@ -876,11 +1125,13 @@ export function refreshLaunchClock(dir, nowMs = Date.now()) {
         item.assessment.tle_epoch = generated;
       }
     }
-    const text = JSON.stringify(launch);
+    const text = launchArtifact(launch).text;
     const pointer = JSON.parse(readFileSync(join(root, 'launch-latest.json'), 'utf8'));
     pointer.generated_at = generated;
     pointer.valid_until = until;
     pointer.sha256 = sha256(text);
+    pointer.revision = launch.revision;
+    pointer.path = `launch/v/${launch.revision}.json`;
     publishLocked(dir, new Map([
       ['launch.json', text],
       ['launch-latest.json', JSON.stringify(pointer)],
@@ -965,6 +1216,7 @@ export function stampEventTimes(dir, eventStart, wallMs = eventStart) {
     stampPassList(top24, times);
     stampPassList(cupola.windows, times);
     stampLaunchBody(launch, times);
+    launchArtifact(launch);
     const files = new Map();
     const put = (name, body) => {
       const entry = artifact(body);
@@ -993,6 +1245,8 @@ export function stampEventTimes(dir, eventStart, wallMs = eventStart) {
     files.set('manifest.json', JSON.stringify(manifest));
     const pointer = read('launch-latest.json');
     pointer.sha256 = written.launch.sha256;
+    pointer.revision = launch.revision;
+    pointer.path = `launch/v/${launch.revision}.json`;
     files.set('launch-latest.json', JSON.stringify(pointer));
     files.set('drive-clock.json', JSON.stringify({ start: eventStart, startOffset: eventStart - wallMs }));
     publishLocked(dir, files);

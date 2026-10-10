@@ -366,7 +366,11 @@ function startProxy(home) {
       sendJson(res, launchRung(fixtureDir, 'back').body);
       return;
     }
-    if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
+    if (/^\/launch\/v\/[a-f0-9]{64}\.json$/.test(path)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
+      return;
+    }
     if (path === '/api/browser/session') {
       const denied = (req.headers.cookie ?? '').split(';').some((part) => part.trim() === 'opd-verify-session=deny');
       if (denied) {
