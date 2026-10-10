@@ -1,7 +1,8 @@
-import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -116,6 +117,44 @@ export function driveStartMs(raw, wallMs) {
     throw new Error(`OPD_VERIFY_DRIVE_START ${text} is outside the 90-minute horizon at ${new Date(wallMs).toISOString()}`);
   }
   return parsed;
+}
+
+export const FIXTURE_COOKIE = 'opd-verify-fixtures';
+
+export function copyFixtureFiles(sourceDir, destDir) {
+  const root = liveFixtureRoot(sourceDir);
+  mkdirSync(destDir, { recursive: true });
+  for (const name of readdirSync(root)) {
+    if (name.startsWith('.')) continue;
+    const from = join(root, name);
+    const stat = lstatSync(from);
+    if (stat.isSymbolicLink() || !stat.isFile()) continue;
+    copyFileSync(from, join(destDir, name));
+  }
+}
+
+export function discardDriveFixtures(dir) {
+  if (!dir) return;
+  const parent = dirname(dir);
+  const base = basename(dir);
+  rmSync(dir, { recursive: true, force: true });
+  if (!existsSync(parent)) return;
+  for (const name of readdirSync(parent)) {
+    if (name === base || name.startsWith(`${base}.`)) rmSync(join(parent, name), { recursive: true, force: true });
+  }
+}
+
+export function publishDriveFixtures(sourceDir, eventStart, wallMs = Date.now()) {
+  const dir = mkdtempSync(join(tmpdir(), 'opd-drive-fixtures-'));
+  try {
+    copyFixtureFiles(sourceDir, dir);
+    stampEventTimes(dir, eventStart, wallMs);
+    const launchValidUntil = refreshLaunchClock(dir, effectiveNowMs(dir, wallMs));
+    return { dir, launchValidUntil };
+  } catch (error) {
+    discardDriveFixtures(dir);
+    throw error;
+  }
 }
 
 function eventInstants(start) {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -14,15 +15,18 @@ function rmFixtureTree(dir) {
 }
 
 const wall = Date.parse('2026-10-09T13:00:00.000Z');
+const script = join(import.meta.dirname, 'opd-verify.mjs');
 
 test('an empty drive start is the wall clock', () => {
   assert.equal(driveStartMs('', wall), wall);
   assert.equal(driveStartMs(undefined, wall), wall);
+  assert.equal(driveStartMs('   ', wall), wall);
 });
 
 test('a naive drive start is rejected', () => {
   assert.throws(() => driveStartMs('2026-10-09T13:00:00', wall), /OPD_VERIFY_DRIVE_START must be a zoned timestamp/);
   assert.throws(() => driveStartMs('2026-10-09T13:00:00.000', wall), /OPD_VERIFY_DRIVE_START must be a zoned timestamp/);
+  assert.throws(() => driveStartMs('2020-01-01', wall), /OPD_VERIFY_DRIVE_START must be a zoned timestamp: 2020-01-01/);
 });
 
 test('an expired drive start is rejected', () => {
@@ -233,4 +237,19 @@ test('a failed staging write, link swap, or lock create leaves no temp file', ()
   } finally {
     rmFixtureTree(dir);
   }
+});
+
+test('drive rejects 2020-01-01 before a browser starts', () => {
+  const script = join(import.meta.dirname, 'opd-verify.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'opd-drive-start-'));
+  const result = spawnSync(process.execPath, [script, 'drive', 'queue'], {
+    env: { ...process.env, OPD_VERIFY_DRIVE_START: '2020-01-01', OPD_VERIFY_HOME: home },
+    encoding: 'utf8',
+    timeout: 20000,
+  });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  assert.notEqual(result.status, 0);
+  assert.match(output, /OPD_VERIFY_DRIVE_START must be a zoned timestamp: 2020-01-01/);
+  assert.doesNotMatch(output, /queue cards timed out/);
+  assert.doesNotMatch(output, /WebKit/);
 });
