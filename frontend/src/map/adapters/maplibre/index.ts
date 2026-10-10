@@ -79,7 +79,7 @@ function mapInspector(map: maplibregl.Map): HTMLElement | null {
 }
 
 /** Park open popups outside the map's stacking context and reserve their space. */
-function syncMapInspector(map: maplibregl.Map): void {
+function syncMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   const slot = mapInspector(map);
   const pane = slot?.closest('#map-pane');
   if (!slot || !(pane instanceof HTMLElement)) return;
@@ -87,14 +87,22 @@ function syncMapInspector(map: maplibregl.Map): void {
   const open = slot.querySelector('.maplibregl-popup') !== null;
   pane.classList.toggle('map-inspector-open', open);
   slot.hidden = !open;
-  if (open) boundMapInspector(map);
+  if (open) boundMapInspector(map, applied);
   requestAnimationFrame(() => map.resize());
 }
 
 const INSPECTOR_CHROME = '.map-toolbar, .map-control-dock, .map-controls-time, #map-legend-toggle, #map-legend-panel, .maplibregl-ctrl-group, #map-chrome-toggle, #satellite-picker-panel, #map-launch-coverage';
 const INSPECTOR_BANNERS = '#status-banner, #shotlist-bar';
+const INSPECTOR_SURFACES = `${INSPECTOR_CHROME}, ${INSPECTOR_BANNERS}`;
 
 type InspectorRect = { left: number; top: number; right: number; bottom: number };
+/** Preserve requested geometry alongside CSSOM's rounded pixel serialization. */
+type InspectorLayout = Map<string, { value: number; serialized: string }>;
+
+function inspectorChromeElements(pane: Element): Set<Element> {
+  const chrome = [...pane.querySelectorAll(INSPECTOR_CHROME), ...document.querySelectorAll(INSPECTOR_BANNERS)];
+  return new Set(chrome.flatMap((element) => [element, ...element.querySelectorAll('button, input, select, a')]));
+}
 
 function visibleInspectorRect(element: Element, clip: InspectorRect): InspectorRect | null {
   const rect = element.getBoundingClientRect();
@@ -121,7 +129,7 @@ function visibleInspectorRect(element: Element, clip: InspectorRect): InspectorR
 
 /** Use painted chrome rectangles, including overflowing wrapped command children,
  *  without writing any chrome styles or changing its stacking order. */
-function boundMapInspector(map: maplibregl.Map): void {
+function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   const slot = mapInspector(map);
   const pane = slot?.closest('#map-pane');
   if (!slot || !(pane instanceof HTMLElement) || slot.hidden) return;
@@ -135,9 +143,7 @@ function boundMapInspector(map: maplibregl.Map): void {
     bottom: Math.min(paneRect.bottom, mapRect.bottom, window.innerHeight) - gap,
   };
   if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
-  const chrome = [...pane.querySelectorAll(INSPECTOR_CHROME), ...document.querySelectorAll(INSPECTOR_BANNERS)];
-  const elements = new Set(chrome.flatMap((element) => [element, ...element.querySelectorAll('button, input, select, a')]));
-  const obstacles = [...elements].flatMap((element) => {
+  const obstacles = [...inspectorChromeElements(pane)].flatMap((element) => {
     const rect = visibleInspectorRect(element, bounds);
     return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
   });
@@ -175,26 +181,34 @@ function boundMapInspector(map: maplibregl.Map): void {
     width: best.right - best.left, height: best.bottom - best.top,
   };
   for (const [property, value] of Object.entries(layout)) {
+    const current = slot.style.getPropertyValue(property);
+    const previous = applied.get(property);
+    if (previous?.value === value && previous.serialized === current) continue;
     const pixels = `${value}px`;
-    if (slot.style.getPropertyValue(property) !== pixels) slot.style.setProperty(property, pixels);
+    if (current !== pixels) slot.style.setProperty(property, pixels);
+    applied.set(property, { value, serialized: slot.style.getPropertyValue(property) });
   }
 }
 
-/** Observe only while a popup is open. Inspector writes and map animation do not
- *  feed back into the observer, and layout updates never resize the map. */
+/** Follow chrome and its layout ancestors only while a popup is open. Inspector
+ *  writes and map animation do not feed back, and updates never resize the map. */
 function inspectorSync(map: maplibregl.Map): () => void {
   let resizeObserver: ResizeObserver | null = null;
   let mutationObserver: MutationObserver | null = null;
   let observed = new Set<Element>();
   let pending = false;
   let watching = false;
+  const applied: InspectorLayout = new Map();
   const observeSizes = (): void => {
     const pane = mapInspector(map)?.closest('#map-pane');
-    if (!pane || !resizeObserver) return;
-    const next = new Set([pane, map.getContainer(), ...pane.querySelectorAll(INSPECTOR_CHROME), ...document.querySelectorAll(INSPECTOR_BANNERS),
+    if (!pane) return;
+    const next = new Set([pane, map.getContainer(), ...inspectorChromeElements(pane),
       ...pane.querySelectorAll('.map-controls-time > *')]);
-    for (const element of observed) if (!next.has(element)) resizeObserver.unobserve(element);
-    for (const element of next) if (!observed.has(element)) resizeObserver.observe(element);
+    for (const element of [...next]) {
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) next.add(ancestor);
+    }
+    for (const element of observed) if (!next.has(element)) resizeObserver?.unobserve(element);
+    for (const element of next) if (!observed.has(element)) resizeObserver?.observe(element);
     observed = next;
   };
   const schedule = (): void => {
@@ -204,11 +218,11 @@ function inspectorSync(map: maplibregl.Map): () => void {
       pending = false;
       if (!watching) return;
       observeSizes();
-      boundMapInspector(map);
+      boundMapInspector(map, applied);
     });
   };
   return () => {
-    syncMapInspector(map);
+    syncMapInspector(map, applied);
     const slot = mapInspector(map);
     const pane = slot?.closest('#map-pane');
     if (!slot || !pane) return;
@@ -230,18 +244,12 @@ function inspectorSync(map: maplibregl.Map): () => void {
         if (records.some(({ target }) => {
           const element = target instanceof Element ? target : target.parentElement;
           return element && !slot.contains(element) && !element.matches('.maplibregl-ctrl-compass .maplibregl-ctrl-icon')
-            && (element === pane || element === document.body || element === pane.parentElement
-              || element.closest(INSPECTOR_CHROME) || element.closest(INSPECTOR_BANNERS)
-              || element === document.documentElement);
+            && (observed.has(element) || element.closest(INSPECTOR_SURFACES) || element.querySelector(INSPECTOR_SURFACES));
         })) schedule();
       });
       mutationObserver.observe(pane, { attributes: true, childList: true, subtree: true, characterData: true });
-      mutationObserver.observe(document.body, { attributes: true, childList: true });
+      mutationObserver.observe(document.body, { attributes: true, childList: true, subtree: true, characterData: true });
       mutationObserver.observe(document.documentElement, { attributes: true });
-      for (const banner of document.querySelectorAll(INSPECTOR_BANNERS)) {
-        mutationObserver.observe(banner, { attributes: true, childList: true, subtree: true, characterData: true });
-      }
-      if (pane.parentElement) mutationObserver.observe(pane.parentElement, { attributes: true });
     }
     observeSizes();
     window.addEventListener('resize', schedule);

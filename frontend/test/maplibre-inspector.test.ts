@@ -152,6 +152,35 @@ function notifyMutation(target: Node, attributeName = 'class'): void {
   flushFrames();
 }
 
+function notifyChildList(target: Node): void {
+  const observers = mutationObservers.filter((observer) => [...observer.observed].some(([root, options]) =>
+    (root === target || (options.subtree && root.contains(target))) && options.childList));
+  expect(observers.length, 'MutationObserver must cover dynamically added chrome').toBeGreaterThan(0);
+  for (const observer of observers) {
+    observer.callback([{ target, type: 'childList' } as unknown as MutationRecord], observer as unknown as MutationObserver);
+  }
+  flushFrames();
+}
+
+function portraitChrome(width: number, height: number): { legend: HTMLElement; toggle: HTMLElement; panel: HTMLElement } {
+  viewport(width, height, { left: 0, top: 0, width, height });
+  pane.classList.remove('map-chrome-hidden');
+  const tablet = width === 834;
+  mockRect(container, { left: 0, top: tablet ? 60 : 89, width, height: height - (tablet ? 60 : 89) });
+  chrome('.map-control-dock', { left: width - 74.15625, top: tablet ? 65 : 94, width: 66.15625, height: 508 });
+  chrome('.maplibregl-ctrl-group', { left: 8, top: tablet ? 191 : 249, width: 44, height: 132 }, container);
+  const command = chrome('.map-command', { left: 8, top: tablet ? 1112 : 628.40625, width: width - 220, height: tablet ? 44 : 187.59375 });
+  chrome('.map-controls-time', { left: tablet ? 16 : 8, top: tablet ? 1112 : 628.40625, width: width - (tablet ? 228 : 212), height: tablet ? 44 : 187.59375 }, command);
+  chrome('#map-chrome-toggle', { left: width - 100, top: height - 80, width: 88, height: 44 });
+  const legend = chrome('.map-legend', { left: width - 196, top: height - 254, width: 88, height: 218 });
+  const toggle = chrome('#map-legend-toggle', { left: width - 196, top: height - 80, width: 88, height: 44 }, legend);
+  toggle.className = 'map-legend-toggle';
+  toggle.setAttribute('aria-expanded', 'false');
+  const panel = chrome('#map-legend-panel', { left: width - 196, top: height - 254, width: 88, height: 170 }, legend);
+  panel.className = 'map-legend-panel';
+  return { legend, toggle, panel };
+}
+
 function inspectorRect(): DOMRect {
   const [left = 0, top = 0, width = 0, height = 0] = ['left', 'top', 'width', 'height'].map((property) => {
     const value = inspector.style.getPropertyValue(property);
@@ -343,6 +372,94 @@ describe('measured inspector chrome clearance', () => {
     expectOpen(true);
   });
 
+  it.each([[834, 1194], [390, 844]])('re-places the open sheet for first Legend expansion and subsequent panel growth at %i×%i', (width, height) => {
+    const { toggle, panel } = portraitChrome(width, height);
+    openPopup();
+    flushFrames();
+    const collapsed = inspectorRect();
+    expect(collapsed.bottom).toBeGreaterThan(panel.getBoundingClientRect().top);
+
+    toggle.setAttribute('aria-expanded', 'true');
+    notifyMutation(toggle, 'aria-expanded');
+    const expanded = inspectorRect();
+    expectClear(expanded, panel, toggle);
+    expectInsideMap(expanded);
+    expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
+
+    mockRect(panel, { left: width - 196, top: height - 294, width: 88, height: 210 });
+    notifyResize(panel);
+    expectClear(inspectorRect(), panel, toggle);
+    expectInsideMap(inspectorRect());
+    toggle.setAttribute('aria-expanded', 'false');
+    notifyMutation(toggle, 'aria-expanded');
+    expect(inspectorRect().toJSON()).toEqual(collapsed.toJSON());
+    expectOpen(true);
+  });
+
+  it.each([[834, 1194], [390, 844]])('follows an expanded Legend ancestor moving without changing panel size at %i×%i', (width, height) => {
+    const { legend, toggle, panel } = portraitChrome(width, height);
+    toggle.setAttribute('aria-expanded', 'true');
+    openPopup();
+    flushFrames();
+    const initial = inspectorRect();
+
+    legend.style.transform = 'translateY(-48px)';
+    for (const element of [legend, toggle, panel]) {
+      const rect = element.getBoundingClientRect();
+      mockRect(element, { left: rect.left, top: rect.top - 48, width: rect.width, height: rect.height });
+    }
+    notifyMutation(legend, 'style');
+
+    expectClear(inspectorRect(), panel, toggle);
+    expectInsideMap(inspectorRect());
+    expect(inspectorRect().toJSON()).not.toEqual(initial.toJSON());
+    notifyResize(legend);
+    expectOpen(true);
+  });
+
+  it('re-places beside the restored Controls dock at iPad landscape size', () => {
+    viewport(1194, 834, { left: 0, top: 0, width: 1194, height: 834 });
+    mockRect(container, { left: 0, top: 60, width: 1194, height: 774 });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: 1119.84375, top: 65, width: 66.15625, height: 508 });
+    chrome('#map-chrome-toggle', { left: 1094, top: 754, width: 88, height: 44 });
+    openPopup();
+    flushFrames();
+    expectClear(inspectorRect(), dock);
+    const cameraCalls = [...map.cameraCalls];
+
+    pane.classList.add('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1186);
+    pane.classList.remove('map-chrome-hidden');
+    notifyMutation(pane);
+
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+    expect(map.cameraCalls).toEqual(cameraCalls);
+    expectOpen(true);
+  });
+
+  it('follows a restored dock layout ancestor without waiting for a later Legend event', () => {
+    viewport(1194, 834);
+    pane.classList.remove('map-chrome-hidden');
+    const wrapper = chrome('.dock-layout', { left: 1119.84375, top: 90, width: 66.15625, height: 508 });
+    const dock = chrome('.map-control-dock', { left: 1119.84375, top: 90, width: 66.15625, height: 508 });
+    wrapper.appendChild(dock);
+    wrapper.style.visibility = 'hidden';
+    openPopup();
+    flushFrames();
+    expect(inspectorRect().right).toBe(1186);
+
+    wrapper.style.visibility = 'visible';
+    notifyMutation(wrapper, 'style');
+
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+    expectInsideMap(inspectorRect());
+    notifyResize(wrapper);
+  });
+
   it('measures actual wrapped time buttons outside the nominal command rect and follows wrap changes', () => {
     viewport(390, 844);
     pane.classList.remove('map-chrome-hidden');
@@ -479,6 +596,39 @@ describe('measured inspector chrome clearance', () => {
     expectOpen(true);
   });
 
+  it('discovers nested chrome and external banners added after opening, then follows their ancestors', () => {
+    pane.classList.remove('map-chrome-hidden');
+    const command = chrome('.map-command', { left: 0, top: 780, width: 1400, height: 44 });
+    const bannerHost = document.createElement('footer');
+    document.body.appendChild(bannerHost);
+    openPopup();
+    flushFrames();
+
+    const time = chrome('.map-controls-time', { left: 0, top: 780, width: 1400, height: 44 }, command);
+    notifyChildList(command);
+    expectClear(inspectorRect(), time);
+    notifyResize(time);
+
+    command.style.transform = 'translateY(-80px)';
+    mockRect(time, { left: 0, top: 700, width: 1400, height: 44 });
+    notifyMutation(command, 'style');
+    expectClear(inspectorRect(), time);
+
+    const banner = chrome('#status-banner', { left: 0, top: 620, width: 1400, height: 160 }, bannerHost);
+    notifyChildList(bannerHost);
+    expectClear(inspectorRect(), banner, time);
+    notifyResize(banner);
+    bannerHost.style.transform = 'translateY(-80px)';
+    mockRect(banner, { left: 0, top: 540, width: 1400, height: 160 });
+    notifyMutation(bannerHost, 'style');
+    expectClear(inspectorRect(), banner, time);
+
+    banner.remove();
+    notifyChildList(bannerHost);
+    expect(inspectorRect().bottom).toBe(692);
+    for (const observer of resizeObservers) expect(observer.observed.has(banner)).toBe(false);
+  });
+
   it('coalesces geometry signals, ignores popup mutations and disconnects only after the last close', () => {
     const navigation = chrome('.maplibregl-ctrl-group', { left: 8, top: 96, width: 44, height: 132 }, container);
     const compass = chrome('.maplibregl-ctrl-compass', { left: 8, top: 184, width: 44, height: 44 }, navigation);
@@ -516,6 +666,33 @@ describe('measured inspector chrome clearance', () => {
     for (const observer of [...observers, ...mutations]) expect(observer.disconnect).toHaveBeenCalledTimes(1);
     window.dispatchEvent(new Event('resize'));
     expect(frames).toHaveLength(0);
+  });
+
+  it('does not rewrite unchanged fractional bounds after CSSOM serializes pixel lengths', () => {
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: 1325.84375, top: 90, width: 66.15625, height: 710 });
+    const setProperty = inspector.style.setProperty.bind(inspector.style);
+    const writes = vi.spyOn(inspector.style, 'setProperty').mockImplementation((property, value, priority) => {
+      const pixels = Number.parseFloat(value ?? '');
+      setProperty(property, Number.isFinite(pixels) ? `${Number(pixels.toPrecision(6))}px` : value, priority);
+    });
+    openPopup();
+    flushFrames();
+    expect(inspector.style.left).toBe('997.844px');
+    writes.mockClear();
+    const cameraCalls = [...map.cameraCalls];
+
+    for (let repeat = 0; repeat < 5; repeat++) {
+      notifyMutation(pane);
+      notifyResize(dock);
+    }
+
+    expect(writes).not.toHaveBeenCalled();
+    expect(map.cameraCalls).toEqual(cameraCalls);
+    setProperty('left', '1px');
+    notifyResize(dock);
+    expect(inspector.style.left).toBe('997.844px');
+    expect(writes).toHaveBeenCalledTimes(1);
   });
 });
 

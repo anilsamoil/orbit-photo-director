@@ -254,7 +254,7 @@ async function checkFooter(page, name) {
   assert(footer.inside, `${name}: Add is inside the visible popup after scroll`);
   assert(footer.hits.every((hit) => hit.clear), `${name}: chrome does not cover Add: ${JSON.stringify(footer.hits)}`);
   assert(footer.tail <= 22, `${name}: no empty opaque tail below Add (${footer.tail}px)`);
-  await page.screenshot({ path: resolve(outputDir, `${name}-footer.png`) });
+  await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${name}-footer.png`) });
   await button.click();
   await page.locator('.pin-add-name').waitFor({ state: 'visible' });
   await page.locator('.pin-add-cancel').click();
@@ -290,7 +290,7 @@ async function checkTarget(page, name, keepPin = false) {
   const target = await inspect(page, '.map-target-popup');
   assertReadable(target, `${name}: target`, keepPin ? 2 : 1);
   assert(target.text.includes('Verify Reef'), `${name}: real fixture target opened`);
-  await page.screenshot({ path: resolve(outputDir, `${name}-target.png`) });
+  await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${name}-target.png`) });
   await closePopup(page, keepPin ? 1 : 0);
   if (keepPin) {
     target.survivingPin = await inspect(page, '.dropped-pin-popup');
@@ -303,7 +303,7 @@ async function checkTarget(page, name, keepPin = false) {
 
 async function checkLegacyLaunch() {
   const name = 'after-iphone-portrait-legacy-launch';
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, deviceScaleFactor: 1, serviceWorkers: 'block' });
+  const context = await browser.newContext({ ...devices['iPhone 13'], viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
   const page = await context.newPage();
   try {
     await configure(page, true);
@@ -326,7 +326,7 @@ async function checkLegacyLaunch() {
     const launch = await inspect(page, '.launch-ascent-card');
     assertReadable(launch, name);
     assert(launch.text.includes('Verify Legacy Launch'), 'Legacy launch fixture opens through its pad');
-    await page.screenshot({ path: resolve(outputDir, `${name}.png`) });
+    await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${name}.png`) });
     results.push({ name, launch, scope: 'Legacy shared inspector popup, not CRS-35 or the schema-3 picker.' });
     await closePopup(page);
     console.log(`${name}: passed`);
@@ -368,7 +368,7 @@ async function checkLongPress(page, name) {
   await touchEvent(page, 'touchend');
   const held = await inspect(page, '.dropped-pin-popup');
   assertReadable(held, `${name}: synthetic 600 ms hold`);
-  await page.screenshot({ path: resolve(outputDir, `${name}-long-press.png`) });
+  await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${name}-long-press.png`) });
   await closePopup(page);
   await touchEvent(page, 'touchstart');
   await touchEvent(page, 'touchmove', 30);
@@ -533,6 +533,72 @@ async function checkAction(page, row, id, touch) {
   return { id, before, after };
 }
 
+// These reads must not change pointer-events or any other chrome styles: a
+// diagnostic style mutation can itself wake the placement observer and hide a
+// missed transition before the next check.
+async function checkTransition(page, row, stage) {
+  await page.waitForTimeout(150);
+  const snapshot = await page.evaluate(() => {
+    const box = (element) => {
+      const r = element.getBoundingClientRect();
+      return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+    };
+    const content = box(document.querySelector('#map-inspector .maplibregl-popup-content'));
+    const surfaces = ['#map-legend-panel', '.map-control-dock', '.map-controls-time', '#shotlist-bar', '#status-banner'].flatMap((selector) => {
+      const element = document.querySelector(selector);
+      if (!element || !element.getClientRects().length) return [];
+      const rect = box(element);
+      const width = Math.max(0, Math.min(content.right, rect.right) - Math.max(content.x, rect.x));
+      const height = Math.max(0, Math.min(content.bottom, rect.bottom) - Math.max(content.y, rect.y));
+      const samples = [[0.15, 0.15], [0.85, 0.15], [0.5, 0.5], [0.15, 0.85], [0.85, 0.85]].map(([fx, fy]) => {
+        const x = rect.x + rect.width * fx, y = rect.y + rect.height * fy;
+        const hit = document.elementFromPoint(x, y);
+        return { x, y, hit: hit?.id || hit?.className || hit?.tagName, inspector: !!hit?.closest('#map-inspector') };
+      });
+      return [{ selector, rect, overlap: { width, height, area: width * height }, samples }];
+    });
+    return { content, surfaces };
+  });
+  row.transitions ??= [];
+  row.transitions.push({ stage, ...snapshot });
+  for (const surface of snapshot.surfaces) {
+    expect(row, categoryFor(surface.selector), `${stage}: ${surface.selector} has zero painted overlap`, surface.overlap.area === 0, surface);
+    expect(row, categoryFor(surface.selector), `${stage}: natural paint samples do not hit inspector`, surface.samples.every((sample) => !sample.inspector), surface.samples);
+  }
+  await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${row.name}-${stage}.png`) });
+}
+
+async function checkFirstChromeTransitions(page, row, touch) {
+  const tap = async (selector) => {
+    if (touch) await page.locator(selector).tap(); else await page.locator(selector).click();
+    expect(row, 'lifecycle', `${selector}: first transition keeps pin open`, await page.locator('.dropped-pin-popup').count() === 1);
+  };
+  // Exercise disclosure before any other chrome interactions or paint probes.
+  if (!row.chromeShown) {
+    await tap('#map-chrome-toggle');
+    await checkTransition(page, row, 'first-Controls-shown');
+  }
+  await tap('#map-legend-toggle');
+  await checkTransition(page, row, 'first-Legend-expanded');
+  await tap('#map-legend-toggle');
+  await checkTransition(page, row, 'first-Legend-collapsed');
+  await tap('#map-chrome-toggle');
+  await checkTransition(page, row, 'first-Controls-hidden');
+  await tap('#map-chrome-toggle');
+  await checkTransition(page, row, 'first-Controls-restored');
+  if (!row.chromeShown) await tap('#map-chrome-toggle');
+  await page.waitForTimeout(250);
+  const writes = await page.evaluate(async () => {
+    let writes = 0;
+    const observer = new MutationObserver((records) => { writes += records.length; });
+    observer.observe(document.querySelector('#map-inspector'), { attributes: true, attributeFilter: ['style'] });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    observer.disconnect();
+    return writes;
+  });
+  expect(row, 'lifecycle', 'steady geometry causes zero inspector style writes', writes === 0, { writes, durationMs: 1200 });
+}
+
 async function checkChromeActions(page, row, touch) {
   row.actions = [];
   const initial = await geometry(page);
@@ -577,7 +643,7 @@ async function checkChromeActions(page, row, touch) {
     await capture(row, 'legend', 'Legend expanded and collapsed', async () => {
       row.actions.push(await checkAction(page, row, 'map-legend-toggle', touch));
       await checkClearance(page, row, 'expanded-Legend');
-      await page.screenshot({ path: resolve(outputDir, `${row.name}-legend.png`) });
+      await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${row.name}-legend.png`) });
       row.actions.push(await checkAction(page, row, 'map-legend-toggle', touch));
       await checkClearance(page, row, 'collapsed-Legend');
     });
@@ -693,8 +759,10 @@ try {
         await configure(page);
         if (chromeShown) await page.locator('#map-chrome-toggle').click();
         await dropPin(page);
+        await checkTransition(page, row, 'initial-pin');
+        await checkFirstChromeTransitions(page, row, touch);
         row.pin = await inspect(page, '.dropped-pin-popup');
-        await page.screenshot({ path: resolve(outputDir, `${name}.png`) });
+        await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${name}.png`) });
         await capture(row, 'popup', 'initial readability', async () => assertReadable(row.pin, name));
         await checkClearance(page, row, 'initial');
         await checkChromeActions(page, row, touch);
@@ -713,7 +781,7 @@ try {
       } catch (error) {
         expect(row, 'setup', 'scenario completed', false, error.stack);
       } finally {
-        if (row.failures.length) await page.screenshot({ path: resolve(outputDir, `${name}-failure.png`) }).catch(() => {});
+        if (row.failures.length) await page.screenshot({ caret: 'initial', path: resolve(outputDir, `${name}-failure.png`) }).catch(() => {});
         await context.close();
         console.log(`${name}: ${row.checks.length - row.failures.length}/${row.checks.length} passed; failures: ${[...new Set(row.failures.map((check) => check.category))].join(', ') || 'none'}`);
         writeFileSync(resolve(outputDir, values.baseline ? 'baseline-report.json' : 'report.json'), JSON.stringify(results, null, 2));
