@@ -4812,7 +4812,7 @@ summary:focus-visible {
 
 @media (max-height: 520px) and (max-width: 899px) {
   #map-pane.map-inspector-open {
-    --map-inspector-block: min(28dvh, 120px);
+    --map-inspector-block: 120px;
   }
 }
 

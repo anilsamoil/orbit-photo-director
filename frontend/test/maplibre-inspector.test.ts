@@ -606,10 +606,12 @@ describe('measured inspector chrome clearance', () => {
     expectInsideMap(landscape);
     expectClear(landscape, navigation, dock, time, controls, toggle, panel);
     expect(landscape.height).toBeLessThanOrEqual(120);
-    expect(landscape.height).toBeGreaterThan(0);
-    expect(landscape.width).toBeGreaterThanOrEqual(80);
+    expect(landscape.height).toBeGreaterThanOrEqual(96);
+    expect(landscape.width).toBeGreaterThanOrEqual(120);
     const mapBox = container.getBoundingClientRect();
     expectOutside(landscape, mapBox.left + mapBox.width / 2, mapBox.top + mapBox.height / 2);
+    expectOutside(landscape, mapBox.left + mapBox.width / 2 + 91, mapBox.top + mapBox.height / 2);
+    expectOutside(landscape, mapBox.left + mapBox.width / 2, mapBox.top + mapBox.height / 2 - 91);
 
     viewport(390, 844);
     mockRect(navigation, { left: 8, top: 96, width: 44, height: 132 });
@@ -678,8 +680,45 @@ describe('measured inspector chrome clearance', () => {
     expectOutside(sheet, centerX, centerY - 91);
     expectOutside(sheet, centerX, centerY + 91);
     expectOutside(sheet, phone.dropX, phone.dropY);
-    expect(sheet.width).toBeGreaterThanOrEqual(80);
-    expect(sheet.height).toBeGreaterThan(0);
+    expect(sheet.width).toBeGreaterThanOrEqual(120);
+    expect(sheet.height, 'the sheet must show a pin pass row').toBeGreaterThanOrEqual(96);
+    if (phone.height <= 520) expect(sheet.height).toBeLessThanOrEqual(120);
+  });
+
+  it.each([
+    { width: 568, height: 320, mapTop: 89 },
+    { width: 874, height: 280, mapTop: 60 },
+    { width: 874, height: 402, mapTop: 60 },
+  ])('keeps a readable pass list beside the hit square at $width×$height', ({ width, height, mapTop }) => {
+    viewport(width, height, { left: 0, top: 0, width, height });
+    const mapHeight = height - mapTop;
+    mockRect(container, { left: 0, top: mapTop, width, height: mapHeight });
+    pane.classList.remove('map-chrome-hidden');
+    const dockLeft = width - 74;
+    const dock = chrome('.map-control-dock', { left: dockLeft, top: mapTop + 5, width: 66, height: Math.min(220, mapHeight - 40) });
+    const zoom = chrome('.maplibregl-ctrl-group', { left: 8, top: mapTop + 71, width: 44, height: 132 }, container);
+    const toolbar = chrome('.map-toolbar', { left: 8, top: mapTop + 5, width: Math.min(240, width * 0.4), height: 52 });
+    const commandTop = height - Math.min(72, Math.round(height * 0.22));
+    const command = chrome('.map-command', { left: 8, top: commandTop, width: Math.min(width - 220, width * 0.7), height: height - commandTop - 8 });
+    const time = chrome('.map-controls-time', {
+      left: 8, top: commandTop, width: Math.max(44, Math.min(width - 236, width * 0.7) - 16), height: Math.min(64, height - commandTop - 12),
+    }, command);
+    const controls = chrome('#map-chrome-toggle', { left: width - 100, top: height - 52, width: 88, height: 44 });
+    openPopup();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    expectClear(sheet, dock, zoom, toolbar, time, controls);
+    const centerX = width / 2;
+    const centerY = mapTop + mapHeight / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX - 91, centerY);
+    expectOutside(sheet, centerX, centerY - 91);
+    expectOutside(sheet, centerX, centerY + 91);
+    expect(sheet.width).toBeGreaterThanOrEqual(96);
+    expect(sheet.height).toBeGreaterThanOrEqual(96);
+    expect(sheet.height).toBeLessThanOrEqual(120);
   });
 
   it('uses pane-relative coordinates and intersects map bounds with the visible viewport', () => {

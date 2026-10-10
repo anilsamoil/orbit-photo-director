@@ -380,7 +380,7 @@ describe('map chrome layout', () => {
     expect(blocks).toContain(
       'min(40dvh, 260px, max(0px, calc(100dvh - var(--topbar-height) - var(--map-command-height) - var(--map-hit-min))))',
     );
-    expect(blocks).toContain('min(28dvh, 120px)');
+    expect(blocks).toContain('120px');
     const hit = rulesFor('#map-pane.map-inspector-open').map((style) => style.getPropertyValue('--map-hit-min')).find(Boolean);
     expect(hit).toBe('calc(2 * (28px + 64px + 24px + env(safe-area-inset-bottom, 0px)))');
   });

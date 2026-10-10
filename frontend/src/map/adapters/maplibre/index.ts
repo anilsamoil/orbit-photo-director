@@ -94,9 +94,13 @@ function syncMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
 const INSPECTOR_CHROME = '.map-toolbar, .map-control-dock, .map-controls-time, #map-legend-toggle, #map-legend-panel, .maplibregl-ctrl-group, #map-chrome-toggle, #satellite-picker-panel, #map-launch-coverage';
 const INSPECTOR_BANNERS = '#status-banner, #shotlist-bar';
 const INSPECTOR_SURFACES = `${INSPECTOR_CHROME}, ${INSPECTOR_BANNERS}`;
-/** Narrow maps keep this strip centered on the canvas so a framed drop stays on it.
+/** Narrow maps keep this much of the canvas free so a framed drop stays on it.
  *  232px is `--map-hit-min` with a 0px safe area. */
 const NARROW_HIT_BAND_PX = 232;
+/** Centered width that still covers a zoom-4 drop a few degrees off the framed point. */
+const NARROW_HIT_CORE_PX = 182;
+/** A pin pass row stays readable under the title at this sheet size. */
+const NARROW_PASS_ROW_PX = 96;
 
 type InspectorRect = { left: number; top: number; right: number; bottom: number };
 /** Preserve requested geometry alongside CSSOM's rounded pixel serialization. */
@@ -130,12 +134,59 @@ function visibleInspectorRect(element: Element, clip: InspectorRect): InspectorR
   return result.right > result.left && result.bottom > result.top ? result : null;
 }
 
-/** Full-width band around the map center. Callers inflate it by the chrome gap. */
-function narrowHitBand(mapRect: DOMRect): InspectorRect | null {
+/** Centered drop protection. Callers inflate it by the chrome gap. */
+function narrowHitObstacle(mapRect: DOMRect, bandWidth: number, bandHeight: number): InspectorRect | null {
   if (mapRect.width <= 0 || mapRect.height <= 0) return null;
-  const height = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
+  const width = Math.min(bandWidth, mapRect.width);
+  const height = Math.min(bandHeight, mapRect.height);
+  if (width <= 0 || height <= 0) return null;
   const top = mapRect.top + (mapRect.height - height) / 2;
-  return { left: mapRect.left, top, right: mapRect.right, bottom: top + height };
+  const left = mapRect.left + (mapRect.width - width) / 2;
+  return { left, top, right: left + width, bottom: top + height };
+}
+
+function inflateObstacle(rect: InspectorRect, gap: number): InspectorRect {
+  return { left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap };
+}
+
+/** Largest free rectangle among the measured obstacles. */
+function chooseInspectorSlot(
+  bounds: InspectorRect,
+  obstacles: InspectorRect[],
+  preferredWidth: number,
+  preferredHeight: number,
+  narrow: boolean,
+  sideColumn: boolean,
+  rowHeight: number,
+): (InspectorRect & { score: number }) | null {
+  const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
+  const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
+  let best: (InspectorRect & { score: number }) | null = null;
+  for (const left of lefts) for (const right of rights) {
+    const width = Math.min(preferredWidth, right - left);
+    if (width <= 0) continue;
+    const x = right - width;
+    const blocked = obstacles.filter((rect) => rect.left < right && rect.right > x)
+      .sort((a, b) => a.top - b.top);
+    let top = bounds.top;
+    for (const obstacle of [...blocked, { top: bounds.bottom, bottom: bounds.bottom }]) {
+      const bottom = Math.min(bounds.bottom, obstacle.top);
+      const height = Math.min(preferredHeight, bottom - top);
+      if (height > 0) {
+        const readable = width >= rowHeight && height >= rowHeight;
+        const usable = width >= Math.min(sideColumn ? rowHeight : 240, preferredWidth) && readable;
+        const score = (readable ? 1e9 : 0) + (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0)
+          + width * Math.min(height, narrow ? preferredHeight : 600)
+          + right / 1e4 + (narrow ? bottom * 1e3 : -top / 1e6);
+        if (!best || score > best.score) best = {
+          left: x, right, top: narrow ? bottom - height : top,
+          bottom: narrow ? bottom : top + height, score,
+        };
+      }
+      top = Math.max(top, obstacle.bottom);
+    }
+  }
+  return best;
 }
 
 /** Use painted chrome rectangles, including overflowing wrapped command children,
@@ -159,36 +210,28 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
   });
   const narrow = paneRect.width < 900;
-  if (narrow) {
-    const band = narrowHitBand(mapRect);
-    if (band) obstacles.push({ left: band.left - gap, top: band.top - gap, right: band.right + gap, bottom: band.bottom + gap });
-  }
+  const sideColumn = narrow && paneRect.height <= 520;
   const preferredWidth = narrow ? bounds.right - bounds.left : 320;
   const preferredHeight = narrow ? (paneRect.height <= 520 ? 120 : 260) : bounds.bottom - bounds.top;
-  const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
-  const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
-  let best: (InspectorRect & { score: number }) | null = null;
-  for (const left of lefts) for (const right of rights) {
-    const width = Math.min(preferredWidth, right - left);
-    if (width <= 0) continue;
-    const x = right - width;
-    const blocked = obstacles.filter((rect) => rect.left < right && rect.right > x)
-      .sort((a, b) => a.top - b.top);
-    let top = bounds.top;
-    for (const obstacle of [...blocked, { top: bounds.bottom, bottom: bounds.bottom }]) {
-      const bottom = Math.min(bounds.bottom, obstacle.top);
-      const height = Math.min(preferredHeight, bottom - top);
-      if (height > 0) {
-        const usable = width >= Math.min(240, preferredWidth) && height >= Math.min(96, preferredHeight);
-        const score = (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0) + width * Math.min(height, narrow ? preferredHeight : 600)
-          + right / 1e4 + (narrow ? bottom * 1e3 : -top / 1e6);
-        if (!best || score > best.score) best = {
-          left: x, right, top: narrow ? bottom - height : top,
-          bottom: narrow ? bottom : top + height, score,
-        };
-      }
-      top = Math.max(top, obstacle.bottom);
-    }
+  const rowHeight = Math.min(NARROW_PASS_ROW_PX, preferredHeight);
+  const place = (extra: InspectorRect | null) => chooseInspectorSlot(
+    bounds,
+    extra ? [...obstacles, inflateObstacle(extra, gap)] : obstacles,
+    preferredWidth,
+    preferredHeight,
+    narrow,
+    sideColumn,
+    rowHeight,
+  );
+  const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
+  let best = narrow
+    ? place(narrowHitObstacle(mapRect, sideColumn ? Math.min(NARROW_HIT_BAND_PX, mapRect.width) : mapRect.width, hitHeight))
+    : place(null);
+  const readableSlot = (slot: InspectorRect | null): boolean =>
+    slot !== null && slot.right - slot.left >= rowHeight && slot.bottom - slot.top >= rowHeight;
+  if (sideColumn && !readableSlot(best)) {
+    const core = place(narrowHitObstacle(mapRect, Math.min(NARROW_HIT_CORE_PX, mapRect.width), hitHeight));
+    if (readableSlot(core)) best = core;
   }
   best ??= { left: bounds.left, right: bounds.left, top: bounds.top, bottom: bounds.top, score: 0 };
   const layout = {
