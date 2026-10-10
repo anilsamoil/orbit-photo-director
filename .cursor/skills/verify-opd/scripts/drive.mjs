@@ -5874,6 +5874,7 @@ async function proveIssKeyboard(send, evidenceDir) {
       const shown = Number.parseFloat(text);
       if (!Number.isFinite(fov) || !Number.isFinite(shown)) return null;
       if (Math.abs(shown - fov) > 0.15) return null;
+      if (!Number.isFinite(roll)) throw new Error('iss roll is NaN');
       if (Math.abs(roll - 180) > 0.5) return null;
       return { ok: true, lat: center.lat, lng: center.lng, fov, shown, roll };
     })()`,
@@ -6203,20 +6204,31 @@ async function proveIssAimLink(send) {
       if (horizon?.getAttribute('aria-pressed') !== ${JSON.stringify(aim.mode === 'horizon' ? 'true' : 'false')}) return null;
       if (nadir?.getAttribute('aria-pressed') !== ${JSON.stringify(aim.mode === 'nadir' ? 'true' : 'false')}) return null;
       if (${windowMismatch}) return null;
+      const phase = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-phase') || '';
+      if (phase === 'error') throw new Error('iss aim restore is in error');
+      if (phase !== 'running') return null;
+      const label = document.querySelector('[data-iss-fov]');
+      const state = label?.getAttribute('data-iss-fov-state') || '';
+      if (state === 'pending' || state === '') return null;
+      if (state !== 'live') throw new Error('iss aim restore fov state ' + state);
       const center = map.getCenter();
+      if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng)) {
+        throw new Error('iss aim restore center is NaN');
+      }
       const back = Math.abs(center.lat - ${stored.lat}) + Math.abs(center.lng - ${stored.lng});
       const fromOrigin = Math.abs(center.lat - ${origin.lat}) + Math.abs(center.lng - ${origin.lng});
       if (back > 0.35 || fromOrigin < 0.2) return null;
       const fov = map.getVerticalFieldOfView();
+      if (!Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');
       if (Math.abs(fov - ${aim.opticalFovDeg}) > 0.5) return null;
       if (window.__opdFovWatch && window.__opdFovWatch.bad) {
         throw new Error('live fov before the camera ' + JSON.stringify(window.__opdFovWatch.bad));
       }
-      const label = document.querySelector('[data-iss-fov]');
       const text = (label?.textContent || '').trim();
-      if (!label || text.length === 0) return null;
+      if (!text) return null;
       const shown = Number.parseFloat(text);
-      if (!Number.isFinite(shown) || Math.abs(shown - ${aim.opticalFovDeg}) > 0.2) return null;
+      if (!Number.isFinite(shown)) throw new Error('iss aim restore label is NaN');
+      if (Math.abs(shown - ${aim.opticalFovDeg}) > 0.2) return null;
       const decoded = JSON.parse(hash);
       if (decoded.mode !== ${JSON.stringify(aim.mode)}) return null;
       if (decoded.azimuthDeg !== ${aim.azimuthDeg}) return null;
