@@ -140,7 +140,7 @@ function notifyResize(element: Element): void {
   flushFrames();
 }
 
-function notifyMutation(target: Node, attributeName = 'class'): void {
+function emitMutation(target: Node, attributeName = 'class'): void {
   const observers = mutationObservers.filter((observer) => [...observer.observed].some(([root, options]) =>
     (root === target || (options.subtree && root.contains(target)))
       && options.attributes
@@ -149,6 +149,10 @@ function notifyMutation(target: Node, attributeName = 'class'): void {
   for (const observer of observers) {
     observer.callback([{ target, type: 'attributes', attributeName } as unknown as MutationRecord], observer as unknown as MutationObserver);
   }
+}
+
+function notifyMutation(target: Node, attributeName = 'class'): void {
+  emitMutation(target, attributeName);
   flushFrames();
 }
 
@@ -396,6 +400,50 @@ describe('measured inspector chrome clearance', () => {
     expectOpen(true);
   });
 
+  it('re-places a later Legend expansion before the next animation frame', () => {
+    const { toggle, panel } = portraitChrome(834, 1194);
+    openPopup();
+    flushFrames();
+    const collapsed = inspectorRect();
+    toggle.setAttribute('aria-expanded', 'true');
+    emitMutation(toggle, 'aria-expanded');
+    const expanded = inspectorRect();
+    expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
+    expectClear(expanded, panel, toggle);
+    expectInsideMap(expanded);
+    expect(frames.length).toBeGreaterThan(0);
+  });
+
+  it('re-places a later Legend expansion when the first box read is still the collapsed shell', () => {
+    const { toggle, panel } = portraitChrome(834, 1194);
+    openPopup();
+    flushFrames();
+    toggle.setAttribute('aria-expanded', 'true');
+    notifyMutation(toggle, 'aria-expanded');
+    expectClear(inspectorRect(), panel, toggle);
+    toggle.setAttribute('aria-expanded', 'false');
+    notifyMutation(toggle, 'aria-expanded');
+    const collapsed = inspectorRect();
+
+    const width = 834;
+    const height = 1194;
+    const expandedRect = new DOMRect(width - 196, height - 294, 88, 210);
+    let reads = 0;
+    vi.spyOn(panel, 'getBoundingClientRect').mockImplementation(() => {
+      reads += 1;
+      return reads === 1 ? new DOMRect(0, 0, 0, 0) : expandedRect;
+    });
+    toggle.setAttribute('aria-expanded', 'true');
+    notifyMutation(toggle, 'aria-expanded');
+
+    expect(reads).toBeGreaterThan(1);
+    const expanded = inspectorRect();
+    expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
+    expectClear(expanded, panel, toggle);
+    expectInsideMap(expanded);
+    expectOpen(true);
+  });
+
   it.each([[834, 1194], [390, 844]])('follows an expanded Legend ancestor moving without changing panel size at %i×%i', (width, height) => {
     const { legend, toggle, panel } = portraitChrome(width, height);
     toggle.setAttribute('aria-expanded', 'true');
@@ -437,6 +485,43 @@ describe('measured inspector chrome clearance', () => {
     expect(inspectorRect().right).toBe(1111.84375);
     expectClear(inspectorRect(), dock);
     expect(map.cameraCalls).toEqual(cameraCalls);
+    expectOpen(true);
+  });
+
+  it('re-places beside the dock on a later Controls restore when the first dock read is still hidden', () => {
+    viewport(1194, 834, { left: 0, top: 0, width: 1194, height: 834 });
+    mockRect(container, { left: 0, top: 60, width: 1194, height: 774 });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: 1119.84375, top: 65, width: 66.15625, height: 508 });
+    chrome('#map-chrome-toggle', { left: 1094, top: 754, width: 88, height: 44 });
+    openPopup();
+    flushFrames();
+    expectClear(inspectorRect(), dock);
+
+    pane.classList.add('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1186);
+    pane.classList.remove('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+
+    pane.classList.add('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1186);
+    pane.classList.remove('map-chrome-hidden');
+    const shown = new DOMRect(1119.84375, 65, 66.15625, 508);
+    let reads = 0;
+    vi.spyOn(dock, 'getBoundingClientRect').mockImplementation(() => {
+      reads += 1;
+      return reads === 1 ? new DOMRect(0, 0, 0, 0) : shown;
+    });
+    notifyMutation(pane);
+
+    expect(reads).toBeGreaterThan(1);
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+    expectInsideMap(inspectorRect());
     expectOpen(true);
   });
 

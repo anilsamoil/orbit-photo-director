@@ -190,14 +190,18 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
   }
 }
 
-/** Follow chrome and its layout ancestors only while a popup is open. Inspector
- *  writes and map animation do not feed back, and updates never resize the map. */
+/** Follow chrome and its layout ancestors only while a popup is open. Disclosure
+ *  remeasures immediately and again after layout, so a later expand does not keep
+ *  the collapsed shell. Inspector writes and map animation do not feed back, and
+ *  updates never resize the map. */
 function inspectorSync(map: maplibregl.Map): () => void {
   let resizeObserver: ResizeObserver | null = null;
   let mutationObserver: MutationObserver | null = null;
   let observed = new Set<Element>();
   let pending = false;
+  let dirty = false;
   let watching = false;
+  let epoch = 0;
   const applied: InspectorLayout = new Map();
   const observeSizes = (): void => {
     const pane = mapInspector(map)?.closest('#map-pane');
@@ -211,16 +215,36 @@ function inspectorSync(map: maplibregl.Map): () => void {
     for (const element of next) if (!observed.has(element)) resizeObserver?.observe(element);
     observed = next;
   };
+  const remeasure = (): void => {
+    if (!watching) return;
+    observeSizes();
+    boundMapInspector(map, applied);
+  };
   const schedule = (): void => {
-    if (pending || !watching) return;
+    if (!watching) return;
+    dirty = true;
+    if (pending) return;
     pending = true;
+    const scheduledEpoch = epoch;
     requestAnimationFrame(() => {
-      pending = false;
-      if (!watching) return;
-      observeSizes();
-      boundMapInspector(map, applied);
+      requestAnimationFrame(() => {
+        if (scheduledEpoch !== epoch) return;
+        pending = false;
+        if (!watching || !dirty) return;
+        dirty = false;
+        remeasure();
+        if (dirty) schedule();
+      });
     });
   };
+  const remeasureDisclosure = (): void => {
+    remeasure();
+    schedule();
+  };
+  const watchedChrome = (element: Element, slot: HTMLElement): boolean =>
+    !slot.contains(element)
+    && !element.matches('.maplibregl-ctrl-compass .maplibregl-ctrl-icon')
+    && (observed.has(element) || element.closest(INSPECTOR_SURFACES) !== null || element.querySelector(INSPECTOR_SURFACES) !== null);
   return () => {
     syncMapInspector(map, applied);
     const slot = mapInspector(map);
@@ -228,6 +252,9 @@ function inspectorSync(map: maplibregl.Map): () => void {
     if (!slot || !pane) return;
     if (slot.hidden) {
       watching = false;
+      dirty = false;
+      pending = false;
+      epoch += 1;
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       resizeObserver = null;
@@ -241,11 +268,18 @@ function inspectorSync(map: maplibregl.Map): () => void {
     if (typeof ResizeObserver !== 'undefined') resizeObserver = new ResizeObserver(schedule);
     if (typeof MutationObserver !== 'undefined') {
       mutationObserver = new MutationObserver((records) => {
-        if (records.some(({ target }) => {
-          const element = target instanceof Element ? target : target.parentElement;
-          return element && !slot.contains(element) && !element.matches('.maplibregl-ctrl-compass .maplibregl-ctrl-icon')
-            && (observed.has(element) || element.closest(INSPECTOR_SURFACES) || element.querySelector(INSPECTOR_SURFACES));
-        })) schedule();
+        let disclosure = false;
+        let later = false;
+        for (const record of records) {
+          const element = record.target instanceof Element ? record.target : record.target.parentElement;
+          if (!element || !watchedChrome(element, slot)) continue;
+          const attribute = record.attributeName;
+          if (record.type === 'childList' || attribute === 'class' || attribute === 'hidden'
+            || attribute === 'aria-expanded' || attribute === 'aria-hidden') disclosure = true;
+          else later = true;
+        }
+        if (disclosure) remeasureDisclosure();
+        else if (later) schedule();
       });
       mutationObserver.observe(pane, { attributes: true, childList: true, subtree: true, characterData: true });
       mutationObserver.observe(document.body, { attributes: true, childList: true, subtree: true, characterData: true });
