@@ -67,59 +67,8 @@ test('a WebKit size change restores the captured SNAP pose', async () => {
   }
 });
 
-test('a WebKit size change reselects the open ISS launch', async () => {
-  const browser = await launchWebkit();
-  try {
-    const session = await openDeviceContext(browser, WEBKIT_DEVICES[0]);
-    const body = [
-      '<div id="status-banner">Ready</div>',
-      '<div id="view" class="view-iss"></div>',
-      '<button id="tab-iss">ISS</button>',
-      '<div data-iss-scene>',
-      '<div data-iss-frame style="width:120px;height:120px"></div>',
-      '<button data-iss-telemetry style="width:44px;height:44px">Telemetry</button>',
-      '<button data-iss-fullscreen style="width:44px;height:44px">Full</button>',
-      '<select data-iss-launch-picker><option value="">Choose</option><option value="pad">Verify</option></select>',
-      '<div data-iss-launch-card hidden><span data-iss-launch-name></span></div>',
-      '</div>',
-      '<script>',
-      'const scene = document.querySelector("[data-iss-scene]");',
-      'if (window.innerHeight <= 564) scene.setAttribute("data-iss-short", "");',
-      'document.querySelector("[data-iss-launch-picker]").addEventListener("change", (event) => {',
-      '  const card = document.querySelector("[data-iss-launch-card]");',
-      '  const name = card.querySelector("[data-iss-launch-name]");',
-      '  card.hidden = event.target.value !== "pad";',
-      '  name.textContent = event.target.value === "pad" ? "Verify Ascent" : "";',
-      '});',
-      '</script>',
-    ].join('');
-    await session.page.goto(pageUrl(body), { waitUntil: 'domcontentloaded' });
-    await session.page.evaluate(() => {
-      const picker = document.querySelector('[data-iss-launch-picker]');
-      picker.value = 'pad';
-      picker.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    const send = playwrightSend(session);
-    await send('Emulation.setDeviceMetricsOverride', {
-      width: 874,
-      height: 402,
-      deviceScaleFactor: 1,
-      mobile: true,
-    });
-    const restored = await session.page.evaluate(() => ({
-      value: document.querySelector('[data-iss-launch-picker]').value,
-      name: document.querySelector('[data-iss-launch-name]').textContent,
-      hidden: document.querySelector('[data-iss-launch-card]').hidden,
-      short: document.querySelector('[data-iss-scene]').hasAttribute('data-iss-short'),
-    }));
-    assert.equal(restored.value, 'pad');
-    assert.equal(restored.name, 'Verify Ascent');
-    assert.equal(restored.hidden, false);
-    assert.equal(restored.short, true);
-  } finally {
-    await browser.close();
-  }
-});
+// ISS launch/control/renderer restoration is exercised against real SNAP in
+// context-state.test.mjs; DOM boxes alone are not a ready ISS renderer.
 
 async function serveHtml(body) {
   const html = `${META}${body}`;
@@ -176,5 +125,46 @@ test('a restored clock keeps ticking across a size change', async () => {
   } finally {
     served.server.close();
     await browser.close();
+  }
+});
+
+test('inserted disclosure wrappers do not redirect saved open or closed states', async () => {
+  let documents = 0;
+  const server = createServer((req, res) => {
+    documents += 1;
+    const primary = documents > 1;
+    res.setHeader('content-type', 'text/html');
+    res.end(`${META}<div id="status-banner">Ready</div><div id="view" class="view-queue"></div>
+      <section id="queue-pane"><details class="launch-data-details"><summary>Launch data</summary></details></section>
+      <section id="map-pane">
+        ${primary ? '<details class="map-launch-primary"><summary>New primary</summary>' : ''}
+        <details class="launch-data-details"><summary>Launch data</summary></details>
+        ${primary ? '</details>' : ''}
+        <details class="launch-data-details"><summary>Duplicate label</summary></details>
+        <details class="launch-data-details"><summary>Duplicate label</summary></details>
+      </section>`);
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  let browser;
+  try {
+    browser = await launchWebkit();
+    const session = await openDeviceContext(browser, WEBKIT_DEVICES[0]);
+    await session.page.goto(`http://127.0.0.1:${server.address().port}/snap`);
+    await session.page.evaluate(() => {
+      document.querySelectorAll('details').forEach((el, index) => { el.open = index !== 2; });
+    });
+    await playwrightSend(session)('Emulation.setDeviceMetricsOverride', { width: 874, height: 402 });
+    assert.deepEqual(await session.page.evaluate(() => [...document.querySelectorAll('details')].map((el) => ({
+      summary: el.querySelector(':scope > summary').textContent, open: el.open,
+    }))), [
+      { summary: 'Launch data', open: true },
+      { summary: 'New primary', open: false },
+      { summary: 'Launch data', open: true },
+      { summary: 'Duplicate label', open: false },
+      { summary: 'Duplicate label', open: true },
+    ]);
+  } finally {
+    try { await browser?.close(); }
+    finally { server.closeAllConnections(); await new Promise((done) => server.close(done)); }
   }
 });
