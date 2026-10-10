@@ -5234,16 +5234,20 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
         `iss launch earth ${pane.label}`,
         10000,
       );
-      const resizeListener = await evaluate(
-        send,
-        `(() => (async () => {
+      const resizeProbe = `(() => (async () => {
           ${EARTH_AFTER_RESIZE}
           return { ok: true };
-        })())()`,
-      );
+        })())()`;
+      const resizeListener = await evaluate(send, resizeProbe);
       if (!resizeListener || resizeListener.ok !== true) {
         throw new Error(
           `iss launch earth ${pane.label} resize listener ${JSON.stringify(resizeListener)}`,
+        );
+      }
+      const resizeConfirm = await evaluate(send, resizeProbe);
+      if (!resizeConfirm || resizeConfirm.ok !== true) {
+        throw new Error(
+          `iss launch earth ${pane.label} resize listener ${JSON.stringify(resizeConfirm)}`,
         );
       }
       const heldCard = await proveLaunchCardHolds(send, pane.label);
