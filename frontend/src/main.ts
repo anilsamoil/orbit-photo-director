@@ -64,20 +64,18 @@ import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 import {
-  MAP_CHUNK_PROBE_TIMEOUT_MS,
   MAP_IMPORT_URL_KEY,
   MAP_IMPORT_VIEW_KEY,
   assetPath,
-  isMapLibreVendorUrl,
-  isNonMapScriptUrl,
   loadStylesheet,
-  mapModuleFromViteDeps,
+  MAP_STYLESHEET_URL,
+  mapModuleUrl,
+  loadFreshMapModule,
   nextMapImportStep,
   noteMapImportSuccess,
   readChunkStatus,
   rememberedViewId,
   retryMapHref,
-  retryMapModuleUrl,
   stripMapImportParams,
   type MapImportAction,
 } from './map-import';
@@ -116,6 +114,7 @@ let lastSavedManifestVersion: string | null = null;
 /** Footer is showing sign-in recovery. Status ticks must not clear it. */
 let sessionBannerHeld = false;
 let mapLoadErrorHeld = false;
+let mapLoadGeneration = 0;
 /** Last access probe threw, so a held sign-in banner is still the honest one. */
 let accessProbeUnknown = false;
 
@@ -128,6 +127,7 @@ function recoveryHref(): string {
 }
 
 function showSessionRecovery(text: string): void {
+  mapLoadGeneration += 1;
   const el = document.getElementById('status-banner');
   if (!el) return;
   mapLoadErrorHeld = false;
@@ -172,6 +172,7 @@ function setBanner(state: BannerState): void {
 
 /** Make the banner a one-tap escape to the Cloudflare Access login. */
 function setAuthBanner(state: BannerState): void {
+  mapLoadGeneration += 1;
   sessionBannerHeld = false;
   mapLoadErrorHeld = false;
   setBanner(state);
@@ -1416,6 +1417,7 @@ function bindTabs(): void {
   const allTabs = [tabQueue, tabUpcoming, tabMap, tabIss, tabProfile, tabLog]
     .filter((t): t is HTMLElement => t !== null);
   const setActive = (className: string, activeTab: HTMLElement) => {
+    mapLoadGeneration += 1;
     view.className = className;
     allTabs.forEach((t) => t.classList.toggle('active', t === activeTab));
     const scroller = activeTab.parentElement;
@@ -1443,13 +1445,12 @@ function bindTabs(): void {
   tabMap.addEventListener('click', () => {
     insetHost?.releasePlan();
     releaseIssPane();
+    setActive('view-map', tabMap);
     loadMapPane().catch((err) => {
       // A failed lazy import (LOS mid-chunk-download) must not be a silent
       // black pane — log it; the next tab click retries the import.
       console.error('[map] map pane failed to load:', err);
-      mapModule = null; // force re-import on next attempt
     });
-    setActive('view-map', tabMap);
     // Hydrate shot counts so a target popup can answer "have I shot it yet"
     // WITHOUT waiting for a Profile-tab visit (the popup reads the shared
     // store; the Profile pane was previously the only thing that filled it).
@@ -1547,8 +1548,9 @@ function loadLookupPane(): void {
       // pattern as loadMapPane) so the MapLibre bundle stays gated.
       const tabMap = document.getElementById('tab-map') as HTMLElement | null;
       if (tabMap) tabMap.click();
-      const loaded = await ensureMapModule();
-      if (!loaded) return;
+      const generation = mapLoadGeneration;
+      const loaded = await ensureMapModule(generation);
+      if (!loaded || !currentMapLoad(generation)) return;
       loaded.dropLookupPin?.(result);
     });
     lookupPaneBound = true;
@@ -1651,9 +1653,13 @@ function showLaunchOnMap(eventId: string): void {
   document.getElementById('tab-map')?.click();
 }
 
-async function mapImportAction(error: unknown): Promise<MapImportAction> {
+function currentMapLoad(generation: number): boolean {
+  return generation === mapLoadGeneration && mapViewActive() && !sessionBannerHeld;
+}
+
+async function mapImportAction(error: unknown, generation: number): Promise<MapImportAction> {
   try {
-    return await nextMapImportStep(error, sessionStorage, window.location.href, probeMapChunk);
+    return await nextMapImportStep(error, sessionStorage, window.location.href, probeMapChunk, () => currentMapLoad(generation));
   } catch (storageError) {
     console.error('[map] map pane failed to load:', storageError);
     return { action: 'show-error' };
@@ -1665,115 +1671,59 @@ function assetScriptEntries(): PerformanceResourceTiming[] {
   return entries.filter((entry) => /\/assets\/[^?#]+\.js(?:[?#]|$)/.test(entry.name));
 }
 
-function mapChunkCandidate(url: string, graphScript: string | null): string | null {
-  if (!url || isNonMapScriptUrl(url)) return null;
-  if (graphScript && assetPath(url) !== assetPath(graphScript)) return null;
-  return url;
+const importMap = () => import('./map');
+
+async function readMapModuleUrl(): Promise<string | null> {
+  return mapModuleUrl(importMap.toString(), import.meta.url);
 }
 
-async function failedAssetScriptUrl(graphScript: string | null): Promise<string | null> {
-  const scripts = assetScriptEntries().filter((entry) => !isNonMapScriptUrl(entry.name));
-  const missing = [...scripts].reverse().find((entry) => entry.responseStatus === 404);
-  const missingUrl = mapChunkCandidate(missing?.name ?? '', graphScript);
-  if (missingUrl) return missingUrl;
-  const httpError = [...scripts].reverse().find((entry) => {
-    const status = entry.responseStatus;
-    return typeof status === 'number' && status !== 0 && status !== 200;
-  });
-  const httpErrorUrl = mapChunkCandidate(httpError?.name ?? '', graphScript);
-  if (httpErrorUrl) return httpErrorUrl;
-  for (const entry of [...scripts].reverse()) {
-    if (entry.responseStatus === 200) continue;
-    if (entry.transferSize !== 0 || entry.encodedBodySize !== 0 || entry.decodedBodySize !== 0) continue;
-    if (graphScript && assetPath(entry.name) !== assetPath(graphScript)) continue;
-    const status = await readChunkStatus(entry.name);
-    if (status !== null && status !== 200) {
-      const candidate = mapChunkCandidate(entry.name, graphScript);
-      if (candidate) return candidate;
-      continue;
-    }
-    if (status === null && graphScript && assetPath(entry.name) === assetPath(graphScript)) return graphScript;
-  }
-  return null;
-}
-
-async function readMapModuleGraph(): Promise<{ script: string; stylesheets: string[] } | null> {
-  const entry = document.querySelector('script[type="module"][src*="/assets/"]');
-  const src = entry?.getAttribute('src');
-  if (!src) return null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MAP_CHUNK_PROBE_TIMEOUT_MS);
+async function rememberFailedMapChunk(generation: number): Promise<void> {
+  const script = await readMapModuleUrl();
+  if (!currentMapLoad(generation) || !script) return;
   try {
-    const response = await fetch(new URL(src, window.location.href), {
-      cache: 'force-cache',
-      signal: controller.signal,
-    });
-    if (!response.ok) return null;
-    return mapModuleFromViteDeps(await response.text());
-  } catch (error) {
-    console.error('[map] map pane failed to load:', error);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function absoluteAssetUrl(file: string): string {
-  return new URL(file, window.location.origin).href;
-}
-
-async function rememberFailedMapChunk(): Promise<void> {
-  const graph = await readMapModuleGraph();
-  const graphScript = graph ? absoluteAssetUrl(graph.script) : null;
-  const timed = mapChunkCandidate(await failedAssetScriptUrl(graphScript) ?? '', graphScript);
-  const found = graphScript ?? timed;
-  if (!found || isMapLibreVendorUrl(found)) return;
-  try {
-    sessionStorage.setItem(MAP_IMPORT_URL_KEY, found);
+    sessionStorage.setItem(MAP_IMPORT_URL_KEY, script);
   } catch (storageError) {
     console.error('[map] map pane failed to load:', storageError);
   }
 }
 
 async function ensureMapLibreStyles(): Promise<void> {
-  const graph = await readMapModuleGraph();
-  if (!graph) return;
-  for (const file of graph.stylesheets) {
-    await loadStylesheet(absoluteAssetUrl(file));
-  }
-}
-
-function readStoredMapChunk(): string | null {
-  try {
-    const stored = sessionStorage.getItem(MAP_IMPORT_URL_KEY);
-    if (!stored || isMapLibreVendorUrl(stored)) return null;
-    return stored;
-  } catch (storageError) {
-    console.error('[map] map pane failed to load:', storageError);
-    return null;
-  }
+  await loadStylesheet(new URL(MAP_STYLESHEET_URL, window.location.href).href);
 }
 
 async function loadMapModule(): Promise<typeof import('./map')> {
   const nonce = new URL(window.location.href).searchParams.get('map-retry');
-  if (!nonce) return import('./map');
-  let stored = readStoredMapChunk();
-  if (!stored) {
-    const graph = await readMapModuleGraph();
-    if (graph) stored = absoluteAssetUrl(graph.script);
+  if (!nonce) return importMap();
+  const script = await readMapModuleUrl();
+  if (!script) {
+    // Development has no bundled graph or persistent failed hashed modules.
+    if (import.meta.env.DEV) return importMap();
+    throw new Error('map module identity is unavailable');
   }
-  if (!stored || isMapLibreVendorUrl(stored)) return import('./map');
   await ensureMapLibreStyles();
-  return import(/* @vite-ignore */ retryMapModuleUrl(stored, nonce)) as Promise<typeof import('./map')>;
+  return loadFreshMapModule<typeof import('./map')>(script, nonce, import.meta.url);
 }
 
 async function probeMapChunk(url: string | null): Promise<number | null> {
-  const graph = await readMapModuleGraph();
-  const graphScript = graph ? absoluteAssetUrl(graph.script) : null;
-  const named = mapChunkCandidate(url ?? '', graphScript);
-  const target = named ?? graphScript ?? mapChunkCandidate(await failedAssetScriptUrl(null) ?? '', null);
-  if (!target || isMapLibreVendorUrl(target)) return null;
-  return readChunkStatus(target);
+  const namedStatus = url ? await readChunkStatus(url) : undefined;
+  if (namedStatus !== undefined && namedStatus !== 200) return namedStatus;
+  const shell = document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/"]')?.src;
+  const candidates = [
+    ...assetScriptEntries().map((entry) => entry.name),
+    ...[...document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"][href]')].map((link) => link.href),
+  ].filter((href) => {
+    const target = new URL(href);
+    return /\/assets\/[^?#]+\.js$/.test(target.pathname)
+      && !target.searchParams.has('map-probe')
+      && assetPath(href) !== assetPath(shell ?? import.meta.url);
+  });
+  if (!candidates.length) return namedStatus ?? null;
+  // Failed preloads may be absent from Resource Timing. Their build-provided
+  // link URLs still identify the failed dependency, not just the healthy entry.
+  const statuses = await Promise.all([...new Set(candidates)].map((target) => readChunkStatus(target)));
+  if (statuses.includes(404)) return 404;
+  if (statuses.includes(null)) return null;
+  return statuses.find((status) => status !== 200) ?? 200;
 }
 
 function rememberMapImportView(): void {
@@ -1837,11 +1787,14 @@ function paintMapLoadError(): void {
   retry.type = 'button';
   retry.textContent = 'Retry';
   retry.addEventListener('click', () => {
-    void rememberFailedMapChunk()
+    const generation = ++mapLoadGeneration;
+    if (!currentMapLoad(generation)) return;
+    void rememberFailedMapChunk(generation)
       .catch((error: unknown) => {
         console.error('[map] map pane failed to load:', error);
       })
       .then(() => {
+        if (!currentMapLoad(generation)) return;
         rememberMapImportView();
         window.location.replace(retryMapHref(window.location.href, String(Date.now())));
       })
@@ -1874,14 +1827,16 @@ function dismissMapLoadError(): void {
   restoreStatusBanner();
 }
 
-async function presentMapImportFailure(error: unknown): Promise<void> {
-  if (sessionBannerHeld) return;
+async function presentMapImportFailure(error: unknown, generation: number): Promise<void> {
+  if (!currentMapLoad(generation)) return;
   try {
-    await rememberFailedMapChunk();
+    await rememberFailedMapChunk(generation);
   } catch (storageError) {
     console.error('[map] map pane failed to load:', storageError);
   }
-  const action = await mapImportAction(error);
+  if (!currentMapLoad(generation)) return;
+  const action = await mapImportAction(error, generation);
+  if (!currentMapLoad(generation)) return;
   if (action.action === 'reload-once') {
     rememberMapImportView();
     window.location.replace(action.href);
@@ -1891,51 +1846,62 @@ async function presentMapImportFailure(error: unknown): Promise<void> {
   console.error('[map] map pane failed to load:', error);
 }
 
-async function ensureMapModule(): Promise<typeof import('./map') | null> {
+let mapModuleLoading: Promise<typeof import('./map')> | null = null;
+
+async function ensureMapModule(generation: number): Promise<typeof import('./map') | null> {
   if (mapModule) return mapModule;
+  const loading = mapModuleLoading ??= loadMapModule();
   try {
-    mapModule = await loadMapModule();
-    try {
-      noteMapImportSuccess(sessionStorage);
-    } catch (storageError) {
-      console.error('[map] map pane failed to load:', storageError);
+    const loaded = await loading;
+    if (!currentMapLoad(generation)) return null;
+    if (typeof loaded.renderMap !== 'function' || typeof loaded.resizeMap !== 'function') {
+      throw new Error('map module API is unavailable');
     }
-    clearMapImportUrlFlags();
-    return mapModule;
+    return loaded;
   } catch (error) {
-    mapModule = null;
-    await presentMapImportFailure(error);
+    if (!currentMapLoad(generation)) return null;
+    await presentMapImportFailure(error, generation);
     return null;
+  } finally {
+    if (mapModuleLoading === loading) mapModuleLoading = null;
   }
 }
 
 async function loadMapPane(): Promise<void> {
+  const generation = ++mapLoadGeneration;
+  if (!currentMapLoad(generation)) return;
   if (!currentManifest) {
     mapPaneWaitingForManifest = true;
     return;
   }
   mapPaneWaitingForManifest = false;
-  const loaded = await ensureMapModule();
-  if (!loaded || !currentManifest) return;
+  const loaded = await ensureMapModule(generation);
+  if (!loaded || !currentManifest || !currentMapLoad(generation)) return;
   try {
     await loaded.renderMap(currentManifest);
+    if (!currentMapLoad(generation)) return;
   } catch (error) {
+    if (!currentMapLoad(generation)) return;
     mapModule = null;
     showMapLoadError();
     console.error('[map] map pane failed to load:', error);
     return;
   }
+  mapModule = loaded;
+  try {
+    noteMapImportSuccess(sessionStorage);
+  } catch (storageError) {
+    console.error('[map] map pane failed to load:', storageError);
+  }
+  clearMapImportUrlFlags();
   dismissMapLoadError();
-  // MapLibre needs explicit resize() after its container becomes visible.
-  // The container starts hidden (display: none) so the canvas was 0×0 at init.
-  // Defer one frame so the browser reflows the now-visible container first.
   requestAnimationFrame(() => {
-    if (!mapModule) return;
+    if (!currentMapLoad(generation) || !mapModule) return;
     mapModule.resizeMap();
     if (pendingLaunchFocus) {
       const eventId = pendingLaunchFocus;
       pendingLaunchFocus = null;
-      if (document.getElementById('view')?.className === 'view-map' && mapModule.focusLaunchOnMap(eventId)) {
+      if (mapModule.focusLaunchOnMap(eventId)) {
         document.getElementById('map')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }
     }
@@ -1955,7 +1921,6 @@ function renderPendingMapPane(): void {
   }
   loadMapPane().catch((err) => {
     console.error('[map] deferred map pane render failed:', err);
-    mapModule = null;
   });
 }
 
@@ -2032,7 +1997,6 @@ async function init(): Promise<void> {
   // doRefresh() will complete the render once the first manifest arrives.
   loadMapPane().catch((err) => {
     console.warn('[map] auto-init pre-manifest call failed:', err);
-    mapModule = null;
   });
   // Hydrate shot counts so target popups show "already shot" badges without
   // needing a Profile-tab visit first. Mirrors the Map tab click handler.

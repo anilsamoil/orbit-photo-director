@@ -2,6 +2,9 @@ export const MAP_IMPORT_RETRY_KEY = 'opd-map-import-retry';
 export const MAP_IMPORT_URL_KEY = 'opd-map-import-url';
 export const MAP_IMPORT_VIEW_KEY = 'opd-map-import-view';
 export const MAP_CHUNK_PROBE_TIMEOUT_MS = 2000;
+// Vite's public asset-URL transform supplies stylesheet identity independently
+// of private preload-helper syntax and of any discovery fetch.
+export const MAP_STYLESHEET_URL = new URL('../node_modules/maplibre-gl/dist/maplibre-gl.css', import.meta.url).href;
 
 const MAP_IMPORT_VIEW_IDS = ['tab-queue', 'tab-upcoming', 'tab-iss', 'tab-profile', 'tab-log'] as const;
 
@@ -79,49 +82,295 @@ export function rememberedViewId(activeTabId: string | null): string | null {
   return (MAP_IMPORT_VIEW_IDS as readonly string[]).includes(activeTabId) ? activeTabId : null;
 }
 
-export function mapModuleFromViteDeps(source: string): { script: string; stylesheets: string[] } | null {
-  const body = source.match(/m\.f\|\|\(m\.f=\[([^\]]+)\]\)/)?.[1];
-  if (!body) return null;
-  const files = [...body.matchAll(/"([^"]+)"/g)].flatMap((match) => (match[1] ? [match[1]] : []));
-  const calls = [...source.matchAll(/__vite__mapDeps\(\[([0-9,]+)\]\)/g)].flatMap((match) => {
-    const raw = match[1];
-    if (!raw) return [];
-    const nums = raw.split(',').map(Number);
-    if (nums.length <= 4 || nums.some((num) => !Number.isInteger(num))) return [];
-    return [nums];
-  });
-  const mapCall = [...calls].sort((a, b) => (b[0] ?? 0) - (a[0] ?? 0))[0];
-  const scriptIndex = mapCall?.[0];
-  if (!mapCall || scriptIndex === undefined) return null;
-  const script = files[scriptIndex];
-  if (!script || !script.endsWith('.js') || isMapLibreVendorUrl(script)) return null;
-  const stylesheets = mapCall
-    .map((index) => files[index])
-    .filter((file): file is string => typeof file === 'string' && file.endsWith('.css'));
-  return { script, stylesheets };
+interface ModuleToken {
+  value: string;
+  start: number;
+  end: number;
+  kind: 'word' | 'string' | 'punctuation';
+}
+
+export interface ModuleReference {
+  start: number;
+  end: number;
+  /** null identifies import.meta.url; other values are module specifiers. */
+  specifier: string | null;
+  dynamic: boolean;
+}
+
+/** Tokenize only to locate ECMAScript module references, never Vite's private
+ * preload tables. Literal/comment/regexp text is not executable module syntax.
+ * Template interpolations are executable, so they are visited recursively. */
+function moduleTokens(source: string): ModuleToken[] {
+  const tokens: ModuleToken[] = [];
+  let cursor = 0;
+  let previous = '';
+  let canStartRegexp = true;
+  const parentheses: boolean[] = [];
+  const push = (start: number, kind: ModuleToken['kind'], value = source.slice(start, cursor)) => {
+    tokens.push({ start, end: cursor, kind, value });
+    if (value === '(') parentheses.push(/^(?:if|while|for|with|switch|catch)$/.test(previous));
+    const closesControl = value === ')' ? parentheses.pop() === true : false;
+    canStartRegexp = closesControl || (kind !== 'string' && (
+      /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|yield|await|else|do)$/.test(value)
+      || (kind === 'punctuation' && !/^(?:\)|\]|\}|\+\+|--|\.)$/.test(value))
+    ));
+    previous = value;
+  };
+  const scan = (templateExpression = false): void => {
+    let braces = 0;
+    while (cursor < source.length) {
+      const character = source[cursor] ?? '';
+      if (/\s/.test(character)) { cursor += 1; continue; }
+      if (source.startsWith('//', cursor)) {
+        const newline = source.indexOf('\n', cursor + 2);
+        cursor = newline === -1 ? source.length : newline + 1;
+        continue;
+      }
+      if (source.startsWith('/*', cursor)) {
+        const end = source.indexOf('*/', cursor + 2);
+        if (end === -1) throw new Error('unterminated module comment');
+        cursor = end + 2;
+        continue;
+      }
+      if (templateExpression && character === '}' && braces === 0) { cursor += 1; return; }
+      if (character === '`') {
+        cursor += 1;
+        let closed = false;
+        while (cursor < source.length) {
+          if (source[cursor] === '\\') { cursor += 2; continue; }
+          if (source[cursor] === '`') { cursor += 1; closed = true; break; }
+          if (source.startsWith('${', cursor)) {
+            cursor += 2;
+            canStartRegexp = true;
+            scan(true);
+          } else cursor += 1;
+        }
+        if (!closed) throw new Error('unterminated module template');
+        previous = '`';
+        canStartRegexp = false;
+        continue;
+      }
+      if (character === '"' || character === "'") {
+        const start = cursor++;
+        let value = '';
+        let closed = false;
+        while (cursor < source.length) {
+          const next = source[cursor++];
+          if (next === character) { closed = true; break; }
+          if (next !== '\\') { value += next; continue; }
+          const escaped = source[cursor++] ?? '';
+          if (escaped === '\n') continue;
+          if (escaped === '\r') { if (source[cursor] === '\n') cursor += 1; continue; }
+          const escapes: Record<string, string> = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v', '0': '\0' };
+          if (escaped === 'x' || escaped === 'u') {
+            const braced = escaped === 'u' && source[cursor] === '{';
+            if (braced) cursor += 1;
+            const end = braced ? source.indexOf('}', cursor) : cursor + (escaped === 'x' ? 2 : 4);
+            const hex = source.slice(cursor, end);
+            if (!/^[\da-f]+$/i.test(hex)) throw new Error('invalid module string escape');
+            value += String.fromCodePoint(parseInt(hex, 16));
+            cursor = end + (braced ? 1 : 0);
+          } else value += escapes[escaped] ?? escaped;
+        }
+        if (!closed) throw new Error('unterminated module string');
+        push(start, 'string', value);
+        continue;
+      }
+      if (character === '/' && canStartRegexp) {
+        cursor += 1;
+        let characterClass = false;
+        let closed = false;
+        while (cursor < source.length) {
+          const next = source[cursor++];
+          if (next === '\\') { cursor += 1; continue; }
+          if (next === '[') characterClass = true;
+          else if (next === ']') characterClass = false;
+          else if (next === '/' && !characterClass) { closed = true; break; }
+        }
+        if (!closed) throw new Error('unterminated module regexp');
+        while (/[a-z]/i.test(source[cursor] ?? '')) cursor += 1;
+        previous = '/';
+        canStartRegexp = false;
+        continue;
+      }
+      const start = cursor++;
+      if (/[\w$]/.test(character)) {
+        while (/[\w$]/.test(source[cursor] ?? '')) cursor += 1;
+        push(start, 'word');
+        continue;
+      }
+      if (character === '{') braces += 1;
+      if (character === '}') braces -= 1;
+      if ((character === '+' || character === '-') && source[cursor] === character) cursor += 1;
+      push(start, 'punctuation');
+    }
+  };
+  scan();
+  return tokens;
+}
+
+export function moduleReferences(source: string): ModuleReference[] {
+  const tokens = moduleTokens(source);
+  const references: ModuleReference[] = [];
+  const add = (token: ModuleToken | undefined, dynamic = false) => {
+    if (token?.kind === 'string') references.push({ start: token.start, end: token.end, specifier: token.value, dynamic });
+  };
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token?.kind !== 'word' || tokens[index - 1]?.value === '.') continue;
+    if (token.value === 'import') {
+      const next = tokens[index + 1];
+      if (next?.kind === 'string') { add(next); continue; }
+      if (next?.value === '(') {
+        if (tokens[index + 3]?.value === ')' || tokens[index + 3]?.value === ',') add(tokens[index + 2], true);
+        continue;
+      }
+      if (next?.value === '.') {
+        if (tokens[index + 2]?.value === 'meta' && tokens[index + 3]?.value === '.' && tokens[index + 4]?.value === 'url') {
+          references.push({ start: token.start, end: tokens[index + 4]?.end ?? token.end, specifier: null, dynamic: false });
+        }
+        continue;
+      }
+      if (next?.kind !== 'word' && next?.value !== '{' && next?.value !== '*') continue;
+    } else if (token.value !== 'export' || !['{', '*'].includes(tokens[index + 1]?.value ?? '')) continue;
+    for (let following = index + 1; following < tokens.length; following += 1) {
+      const candidate = tokens[following];
+      if (candidate?.value === ';') break;
+      if (candidate?.kind === 'word' && candidate.value === 'from') { add(tokens[following + 1]); break; }
+    }
+  }
+  return references.filter((reference, index) => references.findIndex((other) => other.start === reference.start) === index);
+}
+
+/** The lazy loader's literal import is emitted by the build. No filename,
+ * preload count/order, or minifier/helper name identifies the map entry. */
+export function mapModuleUrl(loaderSource: string, baseUrl: string): string | null {
+  const imports = moduleReferences(loaderSource).filter((reference) => reference.dynamic && reference.specifier !== null);
+  if (imports.length !== 1 || !imports[0]?.specifier) return null;
+  return new URL(imports[0].specifier, baseUrl).href;
+}
+
+async function readModuleSource(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MAP_CHUNK_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+    if (!response.ok) throw new TypeError(`Failed to fetch dynamically imported module: ${url}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const freshModuleLoads = new Map<string, Promise<unknown>>();
+
+/** A query on just the entry leaves WebKit's failed transitive module records
+ * intact. Each recovered source gets a new Blob module identity, and every
+ * import in that graph points to the corresponding fresh dependency. The
+ * already-running shell and its static dependency closure retain their native
+ * identities, so recovery does not execute the application twice. */
+export function loadFreshMapModule<T>(entryUrl: string, nonce: string, shellUrl: string): Promise<T> {
+  const key = `${entryUrl}\n${nonce}\n${shellUrl}`;
+  const existing = freshModuleLoads.get(key);
+  if (existing) return existing as Promise<T>;
+  const promise = buildFreshMapModule<T>(entryUrl, nonce, shellUrl);
+  freshModuleLoads.set(key, promise);
+  void promise.catch(() => { if (freshModuleLoads.get(key) === promise) freshModuleLoads.delete(key); });
+  return promise;
+}
+
+async function buildFreshMapModule<T>(entryUrl: string, nonce: string, shellUrl: string): Promise<T> {
+  const stable = new Set<string>();
+  const preserve = async (url: string): Promise<void> => {
+    if (stable.has(url)) return;
+    stable.add(url);
+    const source = await readModuleSource(url);
+    const references = moduleReferences(source).filter((reference) => reference.specifier !== null && !reference.dynamic);
+    await Promise.all(references.map((reference) => preserve(new URL(reference.specifier ?? '', url).href)));
+  };
+  // Missing graph discovery is a real recovery failure, never "styles OK".
+  await preserve(shellUrl);
+  const sources = new Map<string, { source: string; references: ModuleReference[] }>();
+  const visiting = new Set<string>();
+  const discover = async (url: string): Promise<void> => {
+    if (stable.has(url) || visiting.has(url)) return;
+    visiting.add(url);
+    if (new URL(url).origin !== new URL(shellUrl).origin) throw new Error('map module graph must be same-origin');
+    const source = await readModuleSource(retryMapModuleUrl(url, nonce));
+    const references = moduleReferences(source);
+    sources.set(url, { source, references });
+    await Promise.all(references.filter((reference) => reference.specifier !== null).map((reference) => discover(new URL(reference.specifier ?? '', url).href)));
+  };
+  await discover(entryUrl);
+  const blobs = new Map<string, string>();
+  const constructing = new Set<string>();
+  const rewrite = (url: string): string => {
+    if (stable.has(url)) return url;
+    const existing = blobs.get(url);
+    if (existing) return existing;
+    if (constructing.has(url)) throw new Error('cyclic map recovery graph');
+    const module = sources.get(url);
+    if (!module) throw new Error('incomplete map recovery graph');
+    constructing.add(url);
+    let source = module.source;
+    for (const reference of [...module.references].sort((left, right) => right.start - left.start)) {
+      const replacement = reference.specifier === null ? url : rewrite(new URL(reference.specifier, url).href);
+      source = source.slice(0, reference.start) + JSON.stringify(replacement) + source.slice(reference.end);
+    }
+    const blob = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+    blobs.set(url, blob);
+    constructing.delete(url);
+    return blob;
+  };
+  try {
+    const root = rewrite(entryUrl);
+    // Successful Blob URLs live with this document. Later dynamic imports must
+    // still be able to dereference them, including after a bfcache restoration.
+    return await import(/* @vite-ignore */ root) as T;
+  } catch (error) {
+    blobs.forEach((blob) => URL.revokeObjectURL(blob));
+    throw error;
+  }
+}
+
+function stylesheetApplied(link: HTMLLinkElement): boolean {
+  try {
+    return !link.disabled && (!link.media || window.matchMedia(link.media).matches)
+      && link.sheet !== null && !link.sheet.disabled && link.sheet.cssRules.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function sameStylesheet(link: HTMLLinkElement, href: string): boolean {
   return link.href === href || assetPath(link.href) === assetPath(href);
 }
 
+const stylesheetLoads = new Map<string, Promise<void>>();
+
 export function loadStylesheet(href: string, timeoutMs = MAP_CHUNK_PROBE_TIMEOUT_MS): Promise<void> {
-  const existing = [...document.querySelectorAll('link[rel="stylesheet"]')].find(
-    (node): node is HTMLLinkElement => node instanceof HTMLLinkElement && sameStylesheet(node, href) && node.dataset.opdStyleReady === '1',
+  const absolute = new URL(href, document.baseURI).href;
+  const key = assetPath(absolute);
+  const pending = stylesheetLoads.get(key);
+  if (pending) return pending;
+  const matching = [...document.querySelectorAll('link[rel="stylesheet"]')].filter(
+    (node): node is HTMLLinkElement => node instanceof HTMLLinkElement && sameStylesheet(node, absolute),
   );
-  if (existing) return Promise.resolve();
-  document.querySelectorAll('link[rel="stylesheet"]').forEach((node) => {
-    if (node instanceof HTMLLinkElement && sameStylesheet(node, href)) node.remove();
-  });
+  // A successful native preload is usable too. Do not replace a healthy link.
+  if (matching.some(stylesheetApplied)) return Promise.resolve();
+  // Only failed/unowned preload links remain here. Active recovery links are
+  // shared by the promise above, so another waiter can never remove one.
+  matching.forEach((link) => link.remove());
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = href;
-  return new Promise((resolve, reject) => {
+  link.href = absolute;
+  const promise = new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = (failed: boolean, reason: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      stylesheetLoads.delete(key);
       if (!failed) {
         link.dataset.opdStyleReady = '1';
         resolve();
@@ -131,10 +380,12 @@ export function loadStylesheet(href: string, timeoutMs = MAP_CHUNK_PROBE_TIMEOUT
       reject(new Error(reason));
     };
     const timer = setTimeout(() => finish(true, 'map stylesheet timed out'), timeoutMs);
-    link.addEventListener('load', () => finish(false, ''), { once: true });
+    link.addEventListener('load', () => finish(!stylesheetApplied(link), 'map stylesheet has no applied rules'), { once: true });
     link.addEventListener('error', () => finish(true, 'map stylesheet failed'), { once: true });
     document.head.appendChild(link);
   });
+  stylesheetLoads.set(key, promise);
+  return promise;
 }
 
 export async function readChunkStatus(
@@ -199,8 +450,10 @@ export async function nextMapImportStep(
   store: MapImportFlagStore,
   href: string,
   probe: (url: string | null) => Promise<number | null>,
+  isCurrent: () => boolean = () => true,
 ): Promise<MapImportAction> {
   const kind = await classifyMapImportFailure(error, probe);
+  if (!isCurrent()) return { action: 'show-error' };
   const action = planMapImportRecovery(kind, store.getItem(MAP_IMPORT_RETRY_KEY) === '1', href);
   if (action.action !== 'reload-once') return action;
   store.setItem(MAP_IMPORT_RETRY_KEY, '1');
