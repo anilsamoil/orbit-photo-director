@@ -4417,8 +4417,9 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 #map-pane.map-inspector-open {
-  --map-inspector-inline: 320px;
+  --map-inspector-inline: 0px;
   --map-inspector-block: 0px;
+  --map-inspector-bottom: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + 8px));
 }
 
 #map-pane.map-inspector-open .map-inspector {
@@ -4426,21 +4427,21 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   position: absolute;
   top: var(--topbar-height);
   right: 0;
-  bottom: var(--map-command-height);
+  bottom: var(--map-inspector-bottom);
   width: 320px;
   z-index: 21;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  background: transparent;
   pointer-events: none;
 }
 
 #map-pane.map-inspector-open .maplibregl-popup {
   position: absolute !important;
-  inset: 0 !important;
+  inset: 0 0 auto !important;
   transform: none !important;
   width: 100% !important;
   max-width: none !important;
   height: auto !important;
+  max-height: 100%;
   z-index: 15;
   display: flex;
   flex-direction: column;
@@ -4452,8 +4453,12 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   display: none;
 }
 
+#map-pane.map-inspector-open .map-inspector > .maplibregl-popup:not(:last-child) {
+  display: none;
+}
+
 #map-pane.map-inspector-open .maplibregl-popup-content {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
   max-height: none;
   overflow: auto;
@@ -4461,9 +4466,10 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   touch-action: pan-y;
   background: var(--surface);
   color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 0;
   box-shadow: none;
-  padding: 44px 16px calc(20px + var(--map-banner-clearance, 0px) + env(safe-area-inset-bottom, 0px));
+  padding: 44px 16px 20px;
 }
 
 #map-pane.map-inspector-open .maplibregl-popup-content:has(> .dropped-pin-popup) {
@@ -4634,10 +4640,6 @@ summary:focus-visible {
     --map-inspector-block: min(40dvh, 260px, max(0px, calc(100dvh - var(--topbar-height) - var(--map-command-height) - var(--map-hit-min))));
   }
 
-  #map-pane.map-inspector-open #map {
-    bottom: calc(var(--map-command-height) + var(--map-inspector-block));
-  }
-
   #map-pane.map-inspector-open .map-inspector {
     top: auto !important;
     right: 0 !important;
@@ -4645,7 +4647,7 @@ summary:focus-visible {
     width: 100% !important;
     max-width: none !important;
     height: var(--map-inspector-block) !important;
-    bottom: var(--map-command-height) !important;
+    bottom: var(--map-inspector-bottom) !important;
   }
 }
 

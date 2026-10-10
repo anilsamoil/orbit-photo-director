@@ -24,6 +24,7 @@ const sizes = [
   ['ipad-landscape', 1180, 820],
   ['iphone-portrait', 390, 844],
   ['iphone-se', 320, 568],
+  ['phone-landscape', 874, 402],
 ];
 
 async function configure(page, legacyLaunch = false) {
@@ -75,7 +76,11 @@ async function configure(page, legacyLaunch = false) {
 async function dropPin(page, fraction = 0.42) {
   const box = await page.locator('#map > .maplibregl-canvas-container > .maplibregl-canvas').boundingBox();
   assert(box, 'Map canvas exists');
-  await page.mouse.click(box.x + box.width * fraction, box.y + box.height * 0.5, { button: 'right' });
+  const x = box.x + box.width * fraction;
+  const inspector = await page.locator('#map-inspector').boundingBox();
+  const bottom = inspector && x >= inspector.x && x <= inspector.x + inspector.width
+    ? Math.min(box.y + box.height, inspector.y) : box.y + box.height;
+  await page.mouse.click(x, (box.y + bottom) / 2, { button: 'right' });
   await page.waitForSelector('.dropped-pin-popup');
   await page.waitForTimeout(150);
 }
@@ -103,6 +108,9 @@ async function inspect(page, bodySelector) {
     const headerBox = box(header);
     const contentBox = box(content);
     const popupBox = box(popup);
+    const controls = document.querySelector('#map-chrome-toggle');
+    const controlsBox = box(controls);
+    const controlsHit = document.elementFromPoint(controlsBox.x + controlsBox.width / 2, controlsBox.y + controlsBox.height / 2);
     const firstPassRow = body.matches('.dropped-pin-popup')
       ? [...body.querySelectorAll('div')].find((element) => getComputedStyle(element).display === 'grid') : null;
     const firstPassTime = firstPassRow?.children[1];
@@ -150,6 +158,10 @@ async function inspect(page, bodySelector) {
       splitWords,
       popupCount: document.querySelectorAll('.maplibregl-popup').length,
       inspectorHidden: inspector.hidden,
+      inspectorBackground: getComputedStyle(inspector).backgroundColor,
+      controlsClear: controls === controlsHit || controls.contains(controlsHit),
+      controlsGap: controlsBox.y - popupBox.bottom,
+      map: box(document.querySelector('#map')),
     };
   }, bodySelector);
 }
@@ -166,6 +178,11 @@ function assertReadable(row, label, popupCount = 1) {
   assert(row.paintedHeaderIsPopup, `${label}: header paints above inspector, including when its pointer events are enabled`);
   assert(row.horizontalOverflow <= 1, `${label}: no horizontal popup overflow (${row.horizontalOverflow}px)`);
   assert.deepEqual(row.splitWords, [], `${label}: track and Cupola are not split inside words`);
+  assert(row.controlsClear, `${label}: Controls is directly tappable with the popup open`);
+  assert(row.controlsGap >= 7, `${label}: popup stays above Controls, not behind it (${row.controlsGap}px gap)`);
+  assert.equal(row.inspectorBackground, 'rgba(0, 0, 0, 0)', `${label}: unused inspector area is transparent`);
+  assert(row.map.right >= row.popup.right - 1 && row.map.bottom >= row.popup.bottom - 1,
+    `${label}: the map extends under the inspector instead of leaving an empty reserved strip`);
 }
 
 async function closePopup(page, remaining = 0) {
@@ -184,6 +201,7 @@ async function checkFooter(page, name) {
     const points = [[0.1, 0.1], [0.5, 0.5], [0.9, 0.9]];
     return {
       inside: rect.top >= content.top - 1 && rect.bottom <= content.bottom + 1,
+      tail: content.bottom - rect.bottom,
       hits: points.map(([x, y]) => {
         const hit = document.elementFromPoint(rect.x + rect.width * x, rect.y + rect.height * y);
         return { clear: hit === element || element.contains(hit), hit: hit?.id || hit?.className || hit?.tagName }; 
@@ -192,12 +210,26 @@ async function checkFooter(page, name) {
   });
   assert(footer.inside, `${name}: Add is inside the visible popup after scroll`);
   assert(footer.hits.every((hit) => hit.clear), `${name}: chrome does not cover Add: ${JSON.stringify(footer.hits)}`);
+  assert(footer.tail <= 22, `${name}: no empty opaque tail below Add (${footer.tail}px)`);
   await page.screenshot({ path: resolve(outputDir, `${name}-footer.png`) });
   await button.click();
   await page.locator('.pin-add-name').waitFor({ state: 'visible' });
   await page.locator('.pin-add-cancel').click();
   assert.equal(await page.locator('.pin-add-button').count(), 1, `${name}: Cancel restores Add`);
   return footer;
+}
+
+async function checkControls(page, name) {
+  const toggle = page.locator('#map-chrome-toggle');
+  const initial = await toggle.getAttribute('aria-expanded');
+  for (const expanded of [initial === 'true' ? 'false' : 'true', initial]) {
+    await toggle.click({ timeout: 3000 });
+    assert.equal(await toggle.getAttribute('aria-expanded'), expanded, `${name}: Controls toggles while the pin remains open`);
+    assert.equal(await page.locator('.dropped-pin-popup').count(), 1, `${name}: toggling Controls preserves the pin`);
+    await page.locator('.maplibregl-popup-content').evaluate((element) => { element.scrollTop = 0; });
+    assertReadable(await inspect(page, '.dropped-pin-popup'), `${name}: Controls expanded=${expanded}`);
+  }
+  return { toggledOpenAndClosed: true };
 }
 
 async function checkTarget(page, name, keepPin = false) {
@@ -228,7 +260,7 @@ async function checkTarget(page, name, keepPin = false) {
 
 async function checkLegacyLaunch() {
   const name = 'after-iphone-portrait-legacy-launch';
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, deviceScaleFactor: 1 });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, deviceScaleFactor: 1, serviceWorkers: 'block' });
   const page = await context.newPage();
   try {
     await configure(page, true);
@@ -307,7 +339,7 @@ try {
   for (const [device, width, height] of sizes) {
     for (const chromeShown of values.baseline ? [false] : [false, true]) {
       const name = `${values.baseline ? 'before' : 'after'}-${device}-${chromeShown ? 'controls-shown' : 'controls-hidden'}`;
-      const context = await browser.newContext({ viewport: { width, height }, hasTouch: true, deviceScaleFactor: 1 });
+      const context = await browser.newContext({ viewport: { width, height }, hasTouch: true, deviceScaleFactor: 1, serviceWorkers: 'block' });
       const page = await context.newPage();
       const pageErrors = [];
       page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -326,6 +358,7 @@ try {
           assert.equal(pin.firstPassTimeVisible, true, `${name}: first pass UTC time is initially visible`);
           assert(/\d{2}:\d{2}Z/.test(pin.text), `${name}: actual upcoming pass times are present`);
           row.footer = await checkFooter(page, name);
+          row.controls = await checkControls(page, name);
           await dropPin(page, 0.32);
           row.replacement = await inspect(page, '.dropped-pin-popup');
           assertReadable(row.replacement, `${name}: replacement`);
