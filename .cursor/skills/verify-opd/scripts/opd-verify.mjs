@@ -8,7 +8,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner, stopBrowsers } from './drive.mjs';
-import { bostonTrackText, bodyForRequestPath, buildFixtures, discardDriveFixtures, driveStartMs, effectiveNowMs, FIXTURE_COOKIE, publishDriveFixtures, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
+import { bostonTrackText, bodyForRequestPath, buildFixtures, discardDriveFixtures, driveStartMs, effectiveNowMs, FIXTURE_COOKIE, liveFixtureRoot, publishDriveFixtures, publishVerifyCatalog, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -99,7 +99,8 @@ function isFixturePath(path) {
   return path === '/manifest.json'
     || path.startsWith('/v/verify/')
     || path === '/launch/latest.json'
-    || path.startsWith('/launch/v/');
+    || path.startsWith('/launch/v/')
+    || path.startsWith('/launch/catalog/');
 }
 
 function cookieValue(req, name) {
@@ -236,6 +237,17 @@ function startProxy(home) {
   let removedCuratedIds = null;
   let removedCuratedUpdatedAt = null;
   const launchHoldWaiters = [];
+  const catalogHoldWaiters = [];
+  const catalogBodies = new Map();
+  let catalogLive = null;
+  let catalogGate = null;
+  function currentCatalog() {
+    const now = Date.now();
+    if (catalogLive && now < catalogLive.anchor + 8 * 60_000 && catalogBodies.has(catalogLive.pointer.path)) return catalogLive;
+    catalogLive = publishVerifyCatalog(liveFixtureRoot(homeFixtures), now);
+    catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
+    return catalogLive;
+  }
   function parkLaunchBody(res, body) {
     return new Promise((resolvePark) => {
       let settled = false;
@@ -257,6 +269,74 @@ function startProxy(home) {
   }
   function releaseLaunchHold() {
     for (const waiter of [...launchHoldWaiters]) waiter.finish(true);
+  }
+  function parkCatalogBody(res, body) {
+    return new Promise((resolvePark) => {
+      let settled = false;
+      const waiter = {
+        finish(send) {
+          if (settled) return;
+          settled = true;
+          const index = catalogHoldWaiters.indexOf(waiter);
+          if (index >= 0) catalogHoldWaiters.splice(index, 1);
+          if (send && !res.writableEnded) {
+            try { sendJson(res, body); } catch { /* the browser already left */ }
+          }
+          resolvePark();
+        },
+      };
+      catalogHoldWaiters.push(waiter);
+      res.on('close', () => waiter.finish(false));
+    });
+  }
+  function bumpHeldCatalog() {
+    const live = currentCatalog();
+    const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
+    const bodyObj = JSON.parse(base);
+    let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
+    let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
+    let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
+    let revision = `c${generatedMs}`;
+    const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
+      || (catalogGate && catalogGate.pointer.revision === candidate);
+    for (let step = 0; taken(revision) && step < 8; step += 1) {
+      generatedMs += 1000;
+      geometryMs += 1000;
+      scheduleMs += 1000;
+      revision = `c${generatedMs}`;
+    }
+    const generated = new Date(generatedMs).toISOString();
+    const geometry = new Date(geometryMs).toISOString();
+    const schedule = new Date(scheduleMs).toISOString();
+    bodyObj.generated_at = generated;
+    bodyObj.geometry_valid_until = geometry;
+    bodyObj.schedule_valid_until = schedule;
+    bodyObj.revision = revision;
+    if (bodyObj.tle && typeof bodyObj.tle === 'object') bodyObj.tle.epoch = generated;
+    const body = JSON.stringify(bodyObj);
+    const pointer = {
+      schema_version: 2,
+      revision,
+      generated_at: generated,
+      valid_until: geometry,
+      path: `launch/catalog/v/${revision}.json`,
+      sha256: createHash('sha256').update(body).digest('hex'),
+    };
+    return { pointer, body };
+  }
+  function armCatalogGate() {
+    const next = bumpHeldCatalog();
+    catalogBodies.set(next.pointer.path, next.body);
+    catalogGate = { pointer: next.pointer, body: next.body, released: false };
+    return next.pointer;
+  }
+  function releaseCatalogGate() {
+    if (catalogGate && !catalogGate.released) {
+      catalogGate.released = true;
+      catalogLive = { pointer: catalogGate.pointer, body: catalogGate.body, anchor: Date.now() };
+      catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
+    }
+    for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
   }
   const server = createServer(async (req, res) => {
     try {
@@ -441,6 +521,22 @@ function startProxy(home) {
       json(res, 200, { ok: true, pending: launchHoldWaiters.length });
       return;
     }
+    if (path === '/api/verify/catalog-hold' && req.method === 'GET') {
+      json(res, 200, { pending: catalogHoldWaiters.length > 0 });
+      return;
+    }
+    if (path === '/api/verify/catalog-hold' && req.method === 'POST') {
+      await readBody(req);
+      const pointer = armCatalogGate();
+      json(res, 200, { ok: true, revision: pointer.revision });
+      return;
+    }
+    if (path === '/api/verify/catalog-release' && req.method === 'POST') {
+      await readBody(req);
+      releaseCatalogGate();
+      json(res, 200, { ok: true, pending: catalogHoldWaiters.length });
+      return;
+    }
     if (path === '/launch/v/verifyrev-hold.json') {
       await parkLaunchBody(res, launchRung(fixtureDir, 'hold').body);
       return;
@@ -451,6 +547,26 @@ function startProxy(home) {
     }
     if (path === '/launch/v/verifyrev-back.json') {
       sendJson(res, launchRung(fixtureDir, 'back').body);
+      return;
+    }
+    if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
+    if (path === '/launch/catalog/latest.json') {
+      const pointer = catalogGate && !catalogGate.released ? catalogGate.pointer : currentCatalog().pointer;
+      sendJson(res, JSON.stringify(pointer));
+      return;
+    }
+    if (path.startsWith('/launch/catalog/v/') && path.endsWith('.json')) {
+      if (catalogGate && !catalogGate.released && path.slice(1) === catalogGate.pointer.path) {
+        await parkCatalogBody(res, catalogGate.body);
+        return;
+      }
+      const body = catalogBodies.get(path.slice(1));
+      if (!body) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end('missing');
+        return;
+      }
+      sendJson(res, body);
       return;
     }
     if (/^\/launch\/v\/[a-f0-9]{64}\.json$/.test(path)) {

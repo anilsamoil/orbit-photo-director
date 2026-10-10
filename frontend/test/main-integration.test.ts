@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as manifestModule from '../src/manifest';
 import type { Manifest, PassEntry, Track } from '../src/types';
-import { artifact as launchArtifact, assessment, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
+import { artifact as launchArtifact, assessment, catalog, catalogItem, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
 import * as profileApi from '../src/profile-api';
 
 const schedulerStops = vi.hoisted(() => new Set<() => void>());
@@ -1149,6 +1149,51 @@ describe('main.ts: common launch lane', () => {
     expect(document.querySelector('#cards .card-score')).not.toBeNull();
     expect(document.querySelectorAll('#upcoming-cards [data-launch="legacy"]')).toHaveLength(knownTime ? 1 : 0);
     expect(document.getElementById('cards-launch-coverage')?.textContent).toContain('coverage unknown');
+  });
+
+  it('keeps Queue on the v2 launch when the catalog names a different shot', async () => {
+    const { launchCatalog } = await import('../src/launch-catalog');
+    const { launchStore } = await import('../src/launch-store');
+    const { bootFromSnapshot } = await import('../src/main');
+    const body = catalog([catalogItem({
+      event_id: 'catalog-shot',
+      name: 'Catalog Shot',
+      tier: 'shot',
+    })]);
+    const text = JSON.stringify(body);
+    const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const pointer = {
+      schema_version: 2,
+      revision: body.revision,
+      generated_at: body.generated_at,
+      valid_until: body.geometry_valid_until,
+      path: `launch/catalog/v/${body.revision}.json`,
+      sha256,
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : new URL(input.url).pathname;
+      const payload = path === '/launch/catalog/latest.json' ? JSON.stringify(pointer) : text;
+      if (path !== '/launch/catalog/latest.json' && path !== `/${pointer.path}`) return new Response('missing', { status: 404 });
+      return new Response(payload, { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    await launchCatalog.refresh(true);
+    vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
+    vi.spyOn(launchStore, 'getState').mockReturnValue({
+      artifact: launchArtifact([supported({ event_id: 'queue-ascent', name: 'Queue Ascent' })]),
+      pointer: null,
+      availability: 'ready',
+    });
+    expect(launchCatalog.read(LAUNCH_NOW)?.pins.map((pin) => pin.name)).toEqual(['Catalog Shot']);
+    seedSnapshot([buildPass({ target_name: 'Ground pass' })]);
+    bootFromSnapshot();
+    const names = (root: string) => [...document.querySelectorAll(`${root} .card-name`)].map((node) => node.textContent);
+    expect(names('#cards')).toContain('Queue Ascent');
+    expect(names('#cards')).not.toContain('Catalog Shot');
+    expect(document.querySelector('#cards [data-launch="tier"]')).toBeNull();
+    expect(document.querySelector('#cards [data-launch="v2"]')?.textContent).toContain('Queue Ascent');
+    expect(names('#upcoming-cards')).toContain('Catalog Shot');
+    expect(names('#upcoming-cards')).not.toContain('Queue Ascent');
+    expect(document.querySelector('#upcoming-cards [data-launch="tier"]')).not.toBeNull();
   });
 });
 
