@@ -70,17 +70,34 @@ async function configure(page, legacyLaunch = false) {
   await page.goto(values.url);
   await page.locator('#tab-map').click();
   await page.waitForFunction(() => window.__opdMap?.isStyleLoaded() && window.__opdMap.getSource('iss-track'));
+  await page.evaluate(async () => { await document.fonts.ready; });
+  if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') {
+    await page.locator('#map-chrome-toggle').click();
+    await page.locator('#toggle-follow-iss').click();
+    await page.locator('#map-chrome-toggle').click();
+  }
   await page.evaluate(({ lat, lon }) => window.__opdMap.jumpTo({ center: [lon, lat], zoom: 3 }), meta.iss);
 }
 
 async function dropPin(page, fraction = 0.42) {
   const box = await page.locator('#map > .maplibregl-canvas-container > .maplibregl-canvas').boundingBox();
   assert(box, 'Map canvas exists');
-  const x = box.x + box.width * fraction;
   const inspector = await page.locator('#map-inspector').boundingBox();
-  const bottom = inspector && x >= inspector.x && x <= inspector.x + inspector.width
-    ? Math.min(box.y + box.height, inspector.y) : box.y + box.height;
-  await page.mouse.click(x, (box.y + bottom) / 2, { button: 'right' });
+  const point = await page.evaluate(({ box, inspector, fraction }) => {
+    const canvas = document.querySelector('#map > .maplibregl-canvas-container > .maplibregl-canvas');
+    for (const across of [fraction, 0.25, 0.6]) {
+      const x = box.x + box.width * across;
+      const bottom = inspector && x >= inspector.x && x <= inspector.x + inspector.width
+        ? Math.min(box.y + box.height, inspector.y) : box.y + box.height;
+      for (const down of [0.5, 0.35, 0.65]) {
+        const y = box.y + (bottom - box.y) * down;
+        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+      }
+    }
+    return null;
+  }, { box, inspector, fraction });
+  assert(point, 'An uncovered map canvas point exists outside the inspector and markers');
+  await page.mouse.click(point.x, point.y, { button: 'right' });
   await page.waitForSelector('.dropped-pin-popup');
   await page.waitForTimeout(150);
 }
