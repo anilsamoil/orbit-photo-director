@@ -2,9 +2,11 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
+import { earthAfterResizeReaders } from './earth-after-resize.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
+import { sideColumnReachReaders } from './side-column-reach.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
@@ -4789,21 +4791,9 @@ async function proveMapShowLaunches(send, evidenceDir) {
 }
 
 const EARTH_AFTER_RESIZE = `
-  const staleFrame = document.querySelector('[data-iss-frame]');
-  if (staleFrame instanceof HTMLElement) {
-    staleFrame.style.width = '109px';
-    staleFrame.style.height = '72px';
-  }
-  window.dispatchEvent(new Event('resize'));
-  const laidFrame = document.querySelector('[data-iss-frame]');
-  const laidBox = laidFrame instanceof HTMLElement ? laidFrame.getBoundingClientRect() : null;
-  if (!laidBox || laidBox.width < 80 || laidBox.height < 80) {
-    return {
-      step: 'earth',
-      width: laidBox ? Math.round(laidBox.width) : 0,
-      height: laidBox ? Math.round(laidBox.height) : 0,
-    };
-  }
+  ${earthAfterResizeReaders()}
+  const settled = await settleEarthAfterResize();
+  if (!settled || settled.ok !== true) return settled;
 `;
 
 const LAUNCH_EARTH_CHECK = `
@@ -4993,6 +4983,7 @@ async function proveLaunchCardHolds(send, label) {
 }
 
 export const SIDE_COLUMN_REACH = `(() => {
+  ${sideColumnReachReaders()}
   const column = document.querySelector('[data-iss-side]');
   const scene = document.querySelector('[data-iss-scene]');
   const frame = document.querySelector('[data-iss-frame]');
@@ -5013,13 +5004,23 @@ export const SIDE_COLUMN_REACH = `(() => {
   const sels = ['[data-iss-launch-name]', '[data-iss-launch-visibility]', '[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]', '[data-iss-edition]', '[data-iss-status]', '[data-iss-details] summary'];
   const sample = (el) => {
     const box = el.getBoundingClientRect();
-    const port = column.getBoundingClientRect();
-    const visible = Math.max(0, Math.min(box.bottom, port.bottom) - Math.max(box.top, port.top));
-    return { visible, height: box.height, top: box.top, portTop: port.top, portHeight: port.height };
+    const port = clipPortFor(el, column);
+    const visible = elementVisibleHeight(el, column);
+    const textRects = textRectsOf(el);
+    return {
+      visible,
+      height: box.height,
+      top: box.top,
+      portTop: port.top,
+      portHeight: port.height,
+      textOk: textVisibleInPort(textRects, port),
+      textRects,
+      port,
+    };
   };
   const fits = (el) => {
     const reading = sample(el);
-    return reading.height > 1 && reading.visible >= reading.height - 1;
+    return reading.height > 1 && reading.visible >= reading.height - 1 && reading.textOk;
   };
   const reveal = (el) => {
     if (fits(el)) return { ok: true, ...sample(el) };
@@ -5034,10 +5035,10 @@ export const SIDE_COLUMN_REACH = `(() => {
     const alignBottom = Math.max(0, Math.min(max, column.scrollTop + (mid.top + mid.height - (mid.portTop + mid.portHeight))));
     column.scrollTop = alignBottom;
     const end = sample(el);
-    const bottomIn = end.visible > 1 && end.top + end.height <= end.portTop + end.portHeight + 1;
+    const bottomIn = end.textOk && end.visible > 1 && end.top + end.height <= end.portTop + end.portHeight + 1;
     column.scrollTop = alignTop;
     const start = sample(el);
-    const topIn = start.visible > 1 && start.top >= start.portTop - 1;
+    const topIn = start.textOk && start.visible > 1 && start.top >= start.portTop - 1;
     return { ok: topIn && bottomIn, ...start, overflowY };
   };
   for (const sel of sels) {
@@ -5048,6 +5049,7 @@ export const SIDE_COLUMN_REACH = `(() => {
       return {
         step: 'clipped',
         sel,
+        reason: reached.textOk === false ? 'text' : 'box',
         visible: Math.round(reached.visible * 100) / 100,
         height: Math.round(reached.height * 100) / 100,
         overflowY,
@@ -5201,7 +5203,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
       })()`);
       const earth = await waitFor(
         send,
-        `(() => {
+        `(() => (async () => {
           const scene = document.querySelector('[data-iss-scene]');
           const laid = ${pane.sceneBox ? 'true' : 'false'}
             ? scene && scene.clientWidth === ${pane.width} && scene.clientHeight === ${pane.height}
@@ -5229,7 +5231,7 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
             if (lines < 2) return { step: 'name-lines', lines, height: name ? Math.round(name.getBoundingClientRect().height) : 0, max: name instanceof HTMLElement ? name.style.maxWidth : '', place: earth.place };
           }
           return earth;
-        })()`,
+        })())()`,
         `iss launch earth ${pane.label}`,
         10000,
       );
