@@ -23,7 +23,8 @@ test('verify-opd scripts open a context per size and do not resize the page', ()
   const hits = [];
   for (const path of scriptFiles(scriptsDir)) {
     const text = readFileSync(path, 'utf8');
-    if (text.includes(needle)) hits.push(relative(scriptsDir, path));
+    const joinedLiterals = text.replace(/(['"])\s*\+\s*(['"])/g, '');
+    if (joinedLiterals.includes(needle)) hits.push(relative(scriptsDir, path));
   }
   assert.deepEqual(hits, []);
 });
