@@ -67,7 +67,10 @@ import {
   MAP_CHUNK_PROBE_TIMEOUT_MS,
   MAP_IMPORT_URL_KEY,
   MAP_IMPORT_VIEW_KEY,
+  assetPath,
   isMapLibreVendorUrl,
+  isNonMapScriptUrl,
+  loadStylesheet,
   mapModuleFromViteDeps,
   nextMapImportStep,
   noteMapImportSuccess,
@@ -152,8 +155,13 @@ function showSessionRecovery(text: string): void {
   el.replaceChildren(copy, actions);
 }
 
+function mapViewActive(): boolean {
+  return document.getElementById('view')?.className === 'view-map';
+}
+
 function setBanner(state: BannerState): void {
-  if (sessionBannerHeld || mapLoadErrorHeld) return;
+  if (sessionBannerHeld) return;
+  if (mapLoadErrorHeld && mapViewActive()) return;
   const el = document.getElementById('status-banner');
   if (!el) return;
   el.className = `banner banner-${state.level}`;
@@ -1406,9 +1414,10 @@ function bindTabs(): void {
     if (scroller instanceof HTMLElement && scroller.classList.contains('tabs')) {
       const edge = activeTab.offsetLeft + activeTab.offsetWidth - scroller.clientWidth;
       if (activeTab.offsetLeft < scroller.scrollLeft) scroller.scrollLeft = activeTab.offsetLeft;
-      else if (edge > scroller.scrollLeft) scroller.scrollLeft = edge;
+      else     if (edge > scroller.scrollLeft) scroller.scrollLeft = edge;
     }
     syncHelpButton();
+    syncMapLoadError();
   };
 
   tabQueue.addEventListener('click', () => {
@@ -1648,28 +1657,34 @@ function assetScriptEntries(): PerformanceResourceTiming[] {
   return entries.filter((entry) => /\/assets\/[^?#]+\.js(?:[?#]|$)/.test(entry.name));
 }
 
-function mapChunkCandidate(url: string): string | null {
-  if (!url || isMapLibreVendorUrl(url)) return null;
+function mapChunkCandidate(url: string, graphScript: string | null): string | null {
+  if (!url || isNonMapScriptUrl(url)) return null;
+  if (graphScript && assetPath(url) !== assetPath(graphScript)) return null;
   return url;
 }
 
-async function failedAssetScriptUrl(): Promise<string | null> {
-  const scripts = assetScriptEntries().filter((entry) => !isMapLibreVendorUrl(entry.name));
+async function failedAssetScriptUrl(graphScript: string | null): Promise<string | null> {
+  const scripts = assetScriptEntries().filter((entry) => !isNonMapScriptUrl(entry.name));
   const missing = [...scripts].reverse().find((entry) => entry.responseStatus === 404);
-  const missingUrl = mapChunkCandidate(missing?.name ?? '');
+  const missingUrl = mapChunkCandidate(missing?.name ?? '', graphScript);
   if (missingUrl) return missingUrl;
   const httpError = [...scripts].reverse().find((entry) => {
     const status = entry.responseStatus;
     return typeof status === 'number' && status !== 0 && status !== 200;
   });
-  const httpErrorUrl = mapChunkCandidate(httpError?.name ?? '');
+  const httpErrorUrl = mapChunkCandidate(httpError?.name ?? '', graphScript);
   if (httpErrorUrl) return httpErrorUrl;
   for (const entry of [...scripts].reverse()) {
     if (entry.responseStatus === 200) continue;
     if (entry.transferSize !== 0 || entry.encodedBodySize !== 0 || entry.decodedBodySize !== 0) continue;
+    if (graphScript && assetPath(entry.name) !== assetPath(graphScript)) continue;
     const status = await readChunkStatus(entry.name);
-    if (status !== null && status !== 200) return entry.name;
-    if (status === null && /\/assets\/index-[^/]+\.js(?:[?#]|$)/.test(entry.name)) return entry.name;
+    if (status !== null && status !== 200) {
+      const candidate = mapChunkCandidate(entry.name, graphScript);
+      if (candidate) return candidate;
+      continue;
+    }
+    if (status === null && graphScript && assetPath(entry.name) === assetPath(graphScript)) return graphScript;
   }
   return null;
 }
@@ -1700,11 +1715,10 @@ function absoluteAssetUrl(file: string): string {
 }
 
 async function rememberFailedMapChunk(): Promise<void> {
-  let found = mapChunkCandidate(await failedAssetScriptUrl() ?? '');
-  if (!found) {
-    const graph = await readMapModuleGraph();
-    if (graph) found = absoluteAssetUrl(graph.script);
-  }
+  const graph = await readMapModuleGraph();
+  const graphScript = graph ? absoluteAssetUrl(graph.script) : null;
+  const timed = mapChunkCandidate(await failedAssetScriptUrl(graphScript) ?? '', graphScript);
+  const found = graphScript ?? timed;
   if (!found || isMapLibreVendorUrl(found)) return;
   try {
     sessionStorage.setItem(MAP_IMPORT_URL_KEY, found);
@@ -1716,16 +1730,8 @@ async function rememberFailedMapChunk(): Promise<void> {
 async function ensureMapLibreStyles(): Promise<void> {
   const graph = await readMapModuleGraph();
   if (!graph) return;
-  const present = new Set(
-    [...document.querySelectorAll('link[rel="stylesheet"]')].map((link) => (link as HTMLLinkElement).href),
-  );
   for (const file of graph.stylesheets) {
-    const href = absoluteAssetUrl(file);
-    if (present.has(href)) continue;
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = href;
-    document.head.appendChild(link);
+    await loadStylesheet(absoluteAssetUrl(file));
   }
 }
 
@@ -1754,7 +1760,10 @@ async function loadMapModule(): Promise<typeof import('./map')> {
 }
 
 async function probeMapChunk(url: string | null): Promise<number | null> {
-  const target = mapChunkCandidate(url ?? '') ?? await failedAssetScriptUrl();
+  const graph = await readMapModuleGraph();
+  const graphScript = graph ? absoluteAssetUrl(graph.script) : null;
+  const named = mapChunkCandidate(url ?? '', graphScript);
+  const target = named ?? graphScript ?? mapChunkCandidate(await failedAssetScriptUrl(null) ?? '', null);
   if (!target || isMapLibreVendorUrl(target)) return null;
   return readChunkStatus(target);
 }
@@ -1804,11 +1813,9 @@ function restoreStatusBanner(): void {
   ));
 }
 
-function showMapLoadError(): void {
-  if (sessionBannerHeld) return;
+function paintMapLoadError(): void {
   const el = document.getElementById('status-banner');
   if (!el) return;
-  mapLoadErrorHeld = true;
   el.className = 'banner banner-red';
   el.onclick = null;
   el.style.cursor = '';
@@ -1822,17 +1829,35 @@ function showMapLoadError(): void {
   retry.type = 'button';
   retry.textContent = 'Retry';
   retry.addEventListener('click', () => {
-    rememberMapImportView();
     void rememberFailedMapChunk()
       .catch((error: unknown) => {
         console.error('[map] map pane failed to load:', error);
       })
       .then(() => {
+        rememberMapImportView();
         window.location.replace(retryMapHref(window.location.href, String(Date.now())));
+      })
+      .catch((error: unknown) => {
+        console.error('[map] map pane failed to load:', error);
       });
   });
   actions.append(retry);
   el.replaceChildren(copy, actions);
+}
+
+function syncMapLoadError(): void {
+  if (!mapLoadErrorHeld || sessionBannerHeld) return;
+  if (mapViewActive()) {
+    paintMapLoadError();
+    return;
+  }
+  restoreStatusBanner();
+}
+
+function showMapLoadError(): void {
+  if (sessionBannerHeld) return;
+  mapLoadErrorHeld = true;
+  syncMapLoadError();
 }
 
 function dismissMapLoadError(): void {

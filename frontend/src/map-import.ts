@@ -56,14 +56,22 @@ export function chunkProbeUrl(chunkUrl: string, nonce: string): string {
   return url.toString();
 }
 
-export function isMapLibreVendorUrl(url: string): boolean {
-  let path = url;
+export function assetPath(url: string): string {
   try {
-    path = new URL(url, 'http://localhost').pathname;
+    return new URL(url, 'http://localhost').pathname;
   } catch {
-    return false;
+    return url;
   }
+}
+
+export function isMapLibreVendorUrl(url: string): boolean {
+  const path = assetPath(url);
   return /\/maplibre-vendor-[^/]+\.js$/.test(path) || /\/maplibre-gl-worker-[^/]+\.js$/.test(path);
+}
+
+export function isNonMapScriptUrl(url: string): boolean {
+  if (!url || isMapLibreVendorUrl(url)) return true;
+  return /\/(?:iss-view|satellites|profile-ui|profile-crud|photo-lookup)-[^/]+\.js$/.test(assetPath(url));
 }
 
 export function rememberedViewId(activeTabId: string | null): string | null {
@@ -91,6 +99,42 @@ export function mapModuleFromViteDeps(source: string): { script: string; stylesh
     .map((index) => files[index])
     .filter((file): file is string => typeof file === 'string' && file.endsWith('.css'));
   return { script, stylesheets };
+}
+
+function sameStylesheet(link: HTMLLinkElement, href: string): boolean {
+  return link.href === href || assetPath(link.href) === assetPath(href);
+}
+
+export function loadStylesheet(href: string, timeoutMs = MAP_CHUNK_PROBE_TIMEOUT_MS): Promise<void> {
+  const existing = [...document.querySelectorAll('link[rel="stylesheet"]')].find(
+    (node): node is HTMLLinkElement => node instanceof HTMLLinkElement && sameStylesheet(node, href) && node.dataset.opdStyleReady === '1',
+  );
+  if (existing) return Promise.resolve();
+  document.querySelectorAll('link[rel="stylesheet"]').forEach((node) => {
+    if (node instanceof HTMLLinkElement && sameStylesheet(node, href)) node.remove();
+  });
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = href;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (failed: boolean, reason: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!failed) {
+        link.dataset.opdStyleReady = '1';
+        resolve();
+        return;
+      }
+      link.remove();
+      reject(new Error(reason));
+    };
+    const timer = setTimeout(() => finish(true, 'map stylesheet timed out'), timeoutMs);
+    link.addEventListener('load', () => finish(false, ''), { once: true });
+    link.addEventListener('error', () => finish(true, 'map stylesheet failed'), { once: true });
+    document.head.appendChild(link);
+  });
 }
 
 export async function readChunkStatus(

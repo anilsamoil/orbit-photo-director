@@ -848,6 +848,10 @@ body.shotlist-bar-visible .help-fab { display: none; }
 body.shotlist-bar-visible main {
   padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
 }
+body.shotlist-bar-visible,
+body.shotlist-bar-visible .view-map {
+  --map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px));
+}
 .shotlist-add { background: var(--accent); color: var(--bg); border: 0; }
 .shotlist-clear {
   background: transparent;
@@ -1092,12 +1096,18 @@ body:has(> #view.view-map) > .banner {
 body:has(> #view.view-map) {
   --map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);
 }
+body:has(> #view.view-map):has(#status-banner .banner-actions) {
+  --map-banner-clearance: calc(0.55rem + 0.85rem * 1.3 + 0.35rem + 44px + 0.55rem + 1px);
+}
 body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 body:has(> #view.view-map) > #status-banner:has(.banner-actions) {
-  z-index: 70;
-  padding: 0.55rem 0.75rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
+  bottom: var(--map-shotlist-block, 0px);
+  padding: 0.55rem 0.75rem 0.55rem;
   font-size: 0.85rem;
   line-height: 1.3;
+}
+body:not(.shotlist-bar-visible):has(> #view.view-map) > #status-banner:has(.banner-actions) {
+  padding-bottom: calc(0.55rem + env(safe-area-inset-bottom, 0px));
 }
 
 .pending-badge {
@@ -1160,6 +1170,7 @@ body:has(> #view.view-map) > #status-banner:has(.banner-actions) {
   --map-legend-width: 88px;
   --map-corner-gap: 8px;
   --map-corner-bottom: calc(36px + env(safe-area-inset-bottom, 0px));
+  --map-shotlist-block: 0px;
   --map-legend-right: calc(var(--map-hide-right) + var(--map-hide-width) + var(--map-corner-gap));
   --map-corner-clear: calc(var(--map-legend-right) + var(--map-legend-width) + var(--map-corner-gap));
 }
@@ -1480,6 +1491,12 @@ body:has(> #view.view-map) > #status-banner:has(.banner-actions) {
 }
 body:has(#status-banner .banner-actions) .view-map {
   --map-corner-bottom: calc(7.75rem + env(safe-area-inset-bottom));
+}
+body.shotlist-bar-visible:has(#status-banner .banner-actions) .view-map {
+  --map-corner-bottom: calc(7.75rem + var(--map-shotlist-block));
+}
+body.shotlist-bar-visible:has(> #view.view-map):has(#status-banner .banner-actions) {
+  --map-command-bottom: calc(var(--map-shotlist-block) + var(--map-banner-clearance));
 }
 #map-pane.map-chrome-hidden .map-toolbar,
 #map-pane.map-chrome-hidden .map-command,

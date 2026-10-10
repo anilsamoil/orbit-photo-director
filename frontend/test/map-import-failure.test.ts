@@ -6,8 +6,11 @@ import {
   MAP_IMPORT_RETRY_KEY,
   MAP_IMPORT_URL_KEY,
   MAP_IMPORT_VIEW_KEY,
+  assetPath,
   chunkProbeUrl,
   isMapLibreVendorUrl,
+  isNonMapScriptUrl,
+  loadStylesheet,
   mapModuleFromViteDeps,
   nextMapImportStep,
   noteMapImportSuccess,
@@ -34,6 +37,8 @@ const mapGate = vi.hoisted(() => ({
 const net = vi.hoisted(() => ({
   chunkStatus: 404,
   hang: false,
+  entryGate: null as Promise<void> | null,
+  nullProbe: false,
 }));
 
 const VITE_DEPS = `const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/index-ENTRY.js","assets/iss-view-X.js","assets/maplibre-vendor-V.js","assets/maplibre-vendor-V.css","assets/satellites-S.js","assets/index-MAP.js"])))=>i.map(i=>d[i]);
@@ -208,6 +213,8 @@ function stubResources(entries: ReturnType<typeof emptyScript>[]): void {
   });
 }
 
+const styleObservers: MutationObserver[] = [];
+
 const staleError = new TypeError(
   'Failed to fetch dynamically imported module: http://localhost/assets/map-stale.js',
 );
@@ -361,6 +368,8 @@ beforeEach(() => {
   mapGate.arm();
   net.chunkStatus = 404;
   net.hang = false;
+  net.entryGate = null;
+  net.nullProbe = false;
   document.body.innerHTML = DOM;
   vi.spyOn(performance, 'getEntriesByType').mockImplementation((type: string) => {
     if (type !== 'resource') return [];
@@ -372,7 +381,14 @@ beforeEach(() => {
   resetCachedMapModule();
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes('/assets/index-ENTRY.js')) return new Response(VITE_DEPS, { status: 200 });
+    if (url.includes('/assets/index-ENTRY.js')) {
+      if (net.entryGate) await net.entryGate;
+      return new Response(VITE_DEPS, { status: 200 });
+    }
+    if (url.includes('.css')) return new Response('/* map */', { status: 200 });
+    if (net.nullProbe && url.includes('map-probe=')) {
+      throw new DOMException('aborted', 'AbortError');
+    }
     if (net.hang && (url.includes('map-stale.js') || url.includes('map-probe='))) {
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
@@ -395,6 +411,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const observer of styleObservers) observer.disconnect();
+  styleObservers.length = 0;
   mapGate.release();
   document.head.querySelectorAll('script[src*="/assets/"]').forEach((node) => node.remove());
   document.head.querySelectorAll('link[href*="maplibre-vendor"]').forEach((node) => node.remove());
@@ -610,6 +628,7 @@ describe('map pane when the chunk fails', () => {
     document.head.insertAdjacentHTML('beforeend', '<script type="module" src="/assets/index-ENTRY.js"></script>');
     window.history.replaceState({}, '', '/?u=anil&map-retry=17');
     sessionStorage.setItem(MAP_IMPORT_URL_KEY, 'http://localhost/assets/maplibre-vendor-V.js');
+    settleStylesheets('load');
     const { init } = await import('../src/main');
     await init();
     await vi.waitFor(() => {
@@ -708,15 +727,258 @@ describe('map pane when the chunk fails', () => {
   }, 15000);
 });
 
+function settleStylesheets(kind: 'load' | 'error'): void {
+  const observer = new MutationObserver(() => {
+    document.head.querySelectorAll('link[rel="stylesheet"]').forEach((node) => {
+      if (!(node instanceof HTMLLinkElement) || node.dataset.opdStyleReady === '1') return;
+      node.dispatchEvent(new Event(kind));
+    });
+  });
+  observer.observe(document.head, { childList: true });
+  styleObservers.push(observer);
+}
+
+describe('map error footer stays on the map', () => {
+  it('hides the map error on Queue and ISS and shows it again on Map', async () => {
+    seedSnapshot();
+    sessionStorage.setItem(MAP_IMPORT_RETRY_KEY, '1');
+    vi.spyOn(window.location, 'replace').mockImplementation(() => {});
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    });
+    document.getElementById('tab-queue')?.click();
+    expect(document.getElementById('view')?.className).toBe('view-queue');
+    expect(document.getElementById('status-banner')?.textContent ?? '').not.toContain("Map couldn't load");
+    document.getElementById('tab-iss')?.click();
+    expect(document.getElementById('view')?.className).toBe('view-iss');
+    expect(document.getElementById('status-banner')?.textContent ?? '').not.toContain("Map couldn't load");
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(document.getElementById('status-banner')?.textContent ?? '').not.toContain("Map couldn't load");
+    document.getElementById('tab-map')?.click();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    });
+  }, 15000);
+
+  it('remembers the later tab when Retry is still reading the module graph', async () => {
+    seedSnapshot();
+    sessionStorage.setItem(MAP_IMPORT_RETRY_KEY, '1');
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    });
+    let release = () => {};
+    net.entryGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    document.head.insertAdjacentHTML('beforeend', '<script type="module" src="/assets/index-ENTRY.js"></script>');
+    document.querySelector('#status-banner button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    document.getElementById('tab-queue')?.click();
+    document.getElementById('tab-iss')?.click();
+    release();
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledTimes(1);
+    });
+    expect(sessionStorage.getItem(MAP_IMPORT_VIEW_KEY)).toBe('tab-iss');
+    expect(String(replace.mock.calls[0]?.[0])).toMatch(/map-retry=\d+/);
+  }, 15000);
+
+  it('reloads into the later tab when the operator leaves Map during the chunk failure', async () => {
+    mapGate.mode = 'delay-stale';
+    seedSnapshot();
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    const pending = init();
+    await vi.waitFor(() => {
+      expect(mapGate.evaluations).toBeGreaterThan(0);
+    }, { timeout: 8000 });
+    document.getElementById('tab-queue')?.click();
+    document.getElementById('tab-iss')?.click();
+    mapGate.release();
+    await pending;
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledTimes(1);
+    });
+    expect(sessionStorage.getItem(MAP_IMPORT_VIEW_KEY)).toBe('tab-iss');
+  }, 15000);
+
+  it('catches a throw from the retry navigation', async () => {
+    seedSnapshot();
+    sessionStorage.setItem(MAP_IMPORT_RETRY_KEY, '1');
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    const replace = vi.fn(() => {
+      throw new Error('nav');
+    });
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    });
+    document.querySelector('#status-banner button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledTimes(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    process.off('unhandledRejection', onUnhandled);
+    expect(unhandled).toEqual([]);
+  }, 15000);
+});
+
+describe('map module graph', () => {
+  it('stores the graph script when timing sees the entry chunk', async () => {
+    mapGate.mode = 'webkit';
+    seedSnapshot();
+    document.head.insertAdjacentHTML('beforeend', '<script type="module" src="/assets/index-ENTRY.js"></script>');
+    stubResources([emptyScript('http://localhost/assets/index-ENTRY.js', 404)]);
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    }, { timeout: 8000 });
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).toContain('index-MAP.js');
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).not.toContain('index-ENTRY');
+    expect(replace).not.toHaveBeenCalled();
+  }, 15000);
+
+  it('stores the graph script when timing sees a satellites chunk', async () => {
+    mapGate.mode = 'webkit';
+    seedSnapshot();
+    document.head.insertAdjacentHTML('beforeend', '<script type="module" src="/assets/index-ENTRY.js"></script>');
+    stubResources([emptyScript('http://localhost/assets/satellites-S.js', 404)]);
+    vi.spyOn(window.location, 'replace').mockImplementation(() => {});
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).toContain('index-MAP.js');
+    }, { timeout: 8000 });
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).not.toContain('satellites');
+  }, 15000);
+
+  it('does not store a satellites chunk or a hung index script when the graph is missing', async () => {
+    mapGate.mode = 'webkit';
+    seedSnapshot();
+    net.nullProbe = true;
+    stubResources([
+      emptyScript('http://localhost/assets/satellites-S.js', 404),
+      emptyScript('http://localhost/assets/index-ENTRY.js'),
+    ]);
+    const replace = vi.fn();
+    vi.spyOn(window.location, 'replace').mockImplementation(replace);
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    }, { timeout: 8000 });
+    expect(sessionStorage.getItem(MAP_IMPORT_URL_KEY)).toBeNull();
+    expect(replace).not.toHaveBeenCalled();
+  }, 15000);
+
+  it('names the chunks that are not the map module', () => {
+    expect(isNonMapScriptUrl('http://localhost/assets/satellites-S.js')).toBe(true);
+    expect(isNonMapScriptUrl('http://localhost/assets/iss-view-X.js')).toBe(true);
+    expect(isNonMapScriptUrl('http://localhost/assets/profile-ui-P.js')).toBe(true);
+    expect(isNonMapScriptUrl('http://localhost/assets/profile-crud-C.js')).toBe(true);
+    expect(isNonMapScriptUrl('http://localhost/assets/photo-lookup-L.js')).toBe(true);
+    expect(isNonMapScriptUrl('http://localhost/assets/maplibre-vendor-V.js')).toBe(true);
+    expect(isNonMapScriptUrl('http://localhost/assets/maplibre-gl-worker-W.js')).toBe(true);
+    expect(isNonMapScriptUrl('http://localhost/assets/index-MAP.js')).toBe(false);
+    expect(assetPath('http://localhost/assets/index-MAP.js?map-probe=1')).toBe('/assets/index-MAP.js');
+  });
+});
+
+describe('map stylesheet', () => {
+  it('rejects a stylesheet that errors', async () => {
+    const failed = loadStylesheet('http://localhost/assets/maplibre-vendor-V.css', 1000);
+    await expect(failed).rejects.toThrow('map stylesheet failed');
+    expect(document.querySelector('link[href*="maplibre-vendor"]')).toBeNull();
+  });
+
+  it('rejects a stylesheet that never loads', async () => {
+    const real = HTMLLinkElement.prototype.addEventListener;
+    vi.spyOn(HTMLLinkElement.prototype, 'addEventListener').mockImplementation(function (
+      this: HTMLLinkElement,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) {
+      if (type === 'error') return;
+      return real.call(this, type, listener, options);
+    });
+    const hung = loadStylesheet('http://localhost/assets/maplibre-vendor-V.css', 20);
+    await expect(hung).rejects.toThrow('map stylesheet timed out');
+    expect(document.querySelector('link[href*="maplibre-vendor"]')).toBeNull();
+  });
+
+  it('does not treat a failed stylesheet link as loaded', async () => {
+    const stale = document.createElement('link');
+    stale.id = 'stale-css';
+    stale.rel = 'stylesheet';
+    stale.href = new URL('/assets/maplibre-vendor-V.css', window.location.href).href;
+    document.head.appendChild(stale);
+    const pending = loadStylesheet(stale.href, 1000);
+    expect(document.getElementById('stale-css')).toBeNull();
+    const fresh = document.querySelector('link[rel="stylesheet"]');
+    expect(fresh).not.toBe(stale);
+    fresh?.dispatchEvent(new Event('load'));
+    await pending;
+    expect((fresh as HTMLLinkElement | null)?.dataset.opdStyleReady).toBe('1');
+  });
+
+  it('does not clear the retry flag when the map stylesheet fails', async () => {
+    mapGate.mode = 'ok';
+    seedSnapshot();
+    sessionStorage.setItem(MAP_IMPORT_RETRY_KEY, '1');
+    sessionStorage.setItem(MAP_IMPORT_URL_KEY, 'http://localhost/assets/index-MAP.js');
+    window.history.replaceState({}, '', '/?u=anil&map-retry=17');
+    document.head.insertAdjacentHTML('beforeend', '<script type="module" src="/assets/index-ENTRY.js"></script>');
+    const stale = document.createElement('link');
+    stale.id = 'stale-css';
+    stale.rel = 'stylesheet';
+    stale.href = 'http://localhost/assets/maplibre-vendor-V.css';
+    document.head.appendChild(stale);
+    settleStylesheets('error');
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args.map((part) => String(part)).join(' '));
+    });
+    const { init } = await import('../src/main');
+    await init();
+    await vi.waitFor(() => {
+      expect(document.getElementById('status-banner')?.textContent).toContain("Map couldn't load");
+    }, { timeout: 8000 });
+    expect(errors.join('\n')).toContain('map stylesheet failed');
+    expect(errors.join('\n')).not.toContain('ERR_UNSUPPORTED_ESM_URL_SCHEME');
+    expect(window.location.href).toContain('map-retry=17');
+    expect(sessionStorage.getItem(MAP_IMPORT_RETRY_KEY)).toBe('1');
+    expect(mapGate.evaluations).toBe(0);
+    expect(document.getElementById('stale-css')).toBeNull();
+  }, 15000);
+});
+
 describe('map load error above the shot list', () => {
-  it('keeps Retry above the shot list', () => {
+  it('reserves the shot bar under the map error footer', () => {
     const css = readFileSync(resolve('src/style.css'), 'utf8');
     const actions = css.match(/body:has\(> #view\.view-map\) > #status-banner:has\(\.banner-actions\)\s*\{[^}]*\}/);
-    const bar = css.match(/#shotlist-bar\s*\{[^}]*\}/);
-    const actionsZ = Number(actions?.[0].match(/z-index:\s*(\d+)/)?.[1]);
-    const barZ = Number(bar?.[0].match(/z-index:\s*(\d+)/)?.[1]);
-    expect(actionsZ).toBe(70);
-    expect(barZ).toBe(60);
-    expect(actionsZ).toBeGreaterThan(barZ);
+    expect(actions?.[0]).toContain('bottom: var(--map-shotlist-block, 0px)');
+    expect(actions?.[0]).not.toContain('z-index');
+    expect(css).toContain('--map-shotlist-block: 0px');
+    expect(css).toContain('--map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px))');
+    expect(css).toContain('--map-banner-clearance: calc(0.55rem + 0.85rem * 1.3 + 0.35rem + 44px + 0.55rem + 1px)');
+    expect(css).toContain('--map-corner-bottom: calc(7.75rem + var(--map-shotlist-block))');
+    expect(css).not.toMatch(/#status-banner:has\(\.banner-actions\)\s*\{[^}]*z-index:\s*70/);
+    expect(css).toMatch(/\.map-chrome-toggle\s*\{[^}]*bottom:\s*var\(--map-corner-bottom\)/);
   });
 });

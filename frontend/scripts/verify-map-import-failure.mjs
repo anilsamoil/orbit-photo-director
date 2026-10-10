@@ -191,6 +191,7 @@ async function readState(page) {
       markerInside: markerInsideMap(),
       storedUrl: sessionStorage.getItem('opd-map-import-url') ?? '',
       hit: retryHit(),
+      barHit: barHit(),
       viewport: { width: window.innerWidth, height: window.innerHeight },
     };
     function markerInsideMap() {
@@ -210,6 +211,13 @@ async function readState(page) {
       const box = retry.getBoundingClientRect();
       const node = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
       return node instanceof HTMLElement ? (node.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
+    }
+    function barHit() {
+      const button = document.querySelector('#shotlist-bar button');
+      if (!button) return false;
+      const box = button.getBoundingClientRect();
+      const node = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return node instanceof Node && (node === button || button.contains(node));
     }
   });
 }
@@ -265,7 +273,14 @@ async function raiseShotList(page) {
     if (document.getElementById('shotlist-bar')) return;
     const bar = document.createElement('div');
     bar.id = 'shotlist-bar';
-    bar.textContent = '2 selected';
+    const count = document.createElement('span');
+    count.className = 'shotlist-count';
+    count.textContent = '2 selected';
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'shotlist-clear';
+    clear.textContent = 'Clear';
+    bar.append(count, clear);
     document.body.append(bar);
   });
 }
@@ -283,7 +298,17 @@ async function runFailure(browser, mapChunk, options = {}) {
     const state = await readState(opened.page);
     const shot = join(outDir, options.shot ?? 'map-import-red.png');
     await opened.page.screenshot({ path: shot, fullPage: true });
-    return { hits: opened.hits, state, consoleErrors: opened.consoleErrors, shot, tabbable, held };
+    const views = await opened.page.evaluate(() => {
+      const text = () => (document.getElementById('status-banner')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+      document.getElementById('tab-queue')?.click();
+      const queue = text();
+      document.getElementById('tab-iss')?.click();
+      const iss = text();
+      return { queue, iss };
+    });
+    await opened.page.click('#tab-map');
+    await waitForMapError(opened.page);
+    return { hits: opened.hits, state, consoleErrors: opened.consoleErrors, shot, tabbable, held, views };
   } finally {
     if (opened.ownsContext) await opened.context.close();
     await new Promise((done) => opened.server.close(done));
@@ -299,13 +324,18 @@ function judgeFailure(result, expected) {
     && result.state.retryBottom <= result.state.viewport.height + 1;
   const reloaded = result.state.href.includes('map-chunk=1');
   const hit = result.state.hit === 'Retry';
+  const barHit = result.state.barHit === true;
+  const keptOffMap = !result.views.queue.includes("Map couldn't load")
+    && !result.views.iss.includes("Map couldn't load");
   const pass = showed && result.held && retry && tap && onScreen && result.tabbable
     && result.state.retryTabIndex >= 0
     && result.hits.documents === expected.documents
     && reloaded === expected.reload
     && !result.state.href.includes('map-retry=')
     && result.hits.map >= 1
-    && hit;
+    && hit
+    && barHit
+    && keptOffMap;
   return {
     label: expected.label,
     pass,
@@ -316,6 +346,10 @@ function judgeFailure(result, expected) {
     onScreen,
     tabbable: result.tabbable,
     hit,
+    barHit,
+    keptOffMap,
+    queueBanner: result.views.queue,
+    issBanner: result.views.iss,
     retryTabIndex: result.state.retryTabIndex,
     documents: result.hits.documents,
     reload: reloaded,
