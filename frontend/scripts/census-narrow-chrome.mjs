@@ -115,14 +115,13 @@ const cssProp = (name) => name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerC
 function textOf(node) {
   return node && (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : null;
 }
+function propertyKey(node) {
+  return node && (ts.isComputedPropertyName(node) ? textOf(node.expression) : textOf(node) || node.getText());
+}
 function property(node) {
   if (ts.isPropertyAccessExpression(node)) return { object: node.expression, name: node.name.text };
   if (ts.isElementAccessExpression(node)) return { object: node.expression, name: textOf(node.argumentExpression) };
   return null;
-}
-function styleTarget(node) {
-  const member = property(node);
-  return member?.name === 'style' ? member.object : null;
 }
 function scopeOf(node) {
   let scope = node.parent;
@@ -138,93 +137,209 @@ function visit(root, fn) {
   ts.forEachChild(root, (child) => visit(child, fn));
 }
 
-export function jsPlacementViolations(source, { owner = true } = {}) {
-  if (!/\bstyle\b|solveChromeSlots\s*\(|\bwriteSlot\s*\(|\bplace(?:Zoom|Dock|Show|Hide|Legend|Footer|Time|Chrome)\b|\banimate\s*\(/.test(source)) return [];
-  const file = ts.createSourceFile('chrome.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function placementAnalysis(sources) {
+  const parseOptions = { languageVersion: ts.ScriptTarget.Latest, setExternalModuleIndicator: (file) => { file.externalModuleIndicator = true; } };
+  const files = new Map([...sources].map(([name, source]) => [resolve(name), ts.createSourceFile(resolve(name), source, parseOptions, true, ts.ScriptKind.TS)]));
+  const options = { noLib: true, allowJs: true, moduleDetection: ts.ModuleDetectionKind.Force,
+    moduleResolution: ts.ModuleResolutionKind.Bundler, module: ts.ModuleKind.ESNext };
+  const host = {
+    getSourceFile: (name) => files.get(resolve(name)), getDefaultLibFileName: () => '',
+    writeFile() {}, getCurrentDirectory: () => '/', getDirectories: () => [],
+    fileExists: (name) => files.has(resolve(name)), readFile: (name) => files.get(resolve(name))?.text,
+    getCanonicalFileName: (name) => name, useCaseSensitiveFileNames: () => true, getNewLine: () => '\n',
+  };
+  const checker = ts.createProgram([...files.keys()], options, host).getTypeChecker();
+  const symbolOf = (node) => {
+    const symbol = checker.getSymbolAtLocation(node);
+    return symbol?.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  };
+  const unwrap = (node) => {
+    while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)
+      || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
+    return node;
+  };
+  const bindings = new Map();
+  const calls = [];
+  const callableNames = new Set();
+  const bind = (name, expression, path = []) => {
+    if (!expression) return;
+    if (ts.isIdentifier(name)) {
+      const symbol = symbolOf(name);
+      if (symbol) bindings.set(symbol, [...(bindings.get(symbol) || []), { expression, path }]);
+    } else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
+      name.elements.forEach((entry, index) => {
+        if (!ts.isBindingElement(entry) || entry.dotDotDotToken) return;
+        const key = ts.isArrayBindingPattern(name) ? String(index) : propertyKey(entry.propertyName) || entry.name.getText();
+        bind(entry.name, expression, [...path, key]);
+        if (entry.initializer) bind(entry.name, entry.initializer);
+      });
+    } else if (ts.isObjectLiteralExpression(name)) {
+      for (const entry of name.properties) {
+        if (ts.isPropertyAssignment(entry)) bind(entry.initializer, expression, [...path, propertyKey(entry.name)]);
+        else if (ts.isShorthandPropertyAssignment(entry)) bind(entry.name, expression, [...path, entry.name.text]);
+      }
+    } else if (ts.isArrayLiteralExpression(name)) name.elements.forEach((entry, index) => bind(entry, expression, [...path, String(index)]));
+  };
+  for (const file of files.values()) visit(file, (node) => {
+    if (ts.isFunctionLike(node) && 'name' in node && node.name) callableNames.add(propertyKey(node.name));
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isFunctionLike(unwrap(node.initializer))) callableNames.add(node.name.getText());
+    if (ts.isVariableDeclaration(node)) bind(node.name, node.initializer);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) bind(unwrap(node.left), node.right);
+    if (ts.isCallExpression(node)) calls.push(node);
+  });
+  const resolvedFunctions = new Map();
+  const functionsOf = (expression) => {
+    if (resolvedFunctions.has(expression)) return resolvedFunctions.get(expression);
+    const member = property(expression);
+    if (member && !callableNames.has(member.name)
+      && !(ts.isIdentifier(member.object) && symbolOf(member.object)?.flags & ts.SymbolFlags.NamespaceModule)) return [];
+    const symbol = symbolOf(expression);
+    const functions = (symbol?.declarations || []).flatMap((declaration) => {
+      if (ts.isFunctionLike(declaration)) return [declaration];
+      const initial = ts.isVariableDeclaration(declaration) && unwrap(declaration.initializer);
+      return initial && ts.isFunctionLike(initial) ? [initial] : [];
+    });
+    resolvedFunctions.set(expression, functions);
+    return functions;
+  };
+  // Imports and parameters carry the same provenance as local aliases. A helper
+  // in another source file must not become a second writer through indirection.
+  for (const call of calls) for (const fn of functionsOf(call.expression)) {
+    fn.parameters.forEach((parameter, index) => bind(parameter.name, call.arguments[index]));
+  }
+  const origins = (expression, path = [], seen = new Set()) => {
+    const node = unwrap(expression);
+    if (!node || seen.has(node)) return [];
+    const next = new Set(seen).add(node);
+    if (ts.isIdentifier(node)) {
+      const aliases = bindings.get(symbolOf(node));
+      if (aliases?.length) return aliases.flatMap((alias) => origins(alias.expression, [...alias.path, ...path], next));
+    }
+    if (ts.isConditionalExpression(node)) return [node.whenTrue, node.whenFalse].flatMap((branch) => origins(branch, path, next));
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken].includes(node.operatorToken.kind)) {
+      return [node.left, node.right].flatMap((branch) => origins(branch, path, next));
+    }
+    if (path.length && ts.isObjectLiteralExpression(node)) {
+      return node.properties.flatMap((entry) => {
+        if (ts.isPropertyAssignment(entry) && propertyKey(entry.name) === path[0]) return origins(entry.initializer, path.slice(1), next);
+        if (ts.isShorthandPropertyAssignment(entry) && entry.name.text === path[0]) return origins(entry.name, path.slice(1), next);
+        return [];
+      });
+    }
+    if (path.length && ts.isArrayLiteralExpression(node)) return origins(node.elements[Number(path[0])], path.slice(1), next);
+    const member = property(node);
+    if (member?.name === 'style') return origins(member.object, [], next).map((origin) => ({ ...origin, style: true, method: path[0] }));
+    if (path[0] === 'style') return origins(node, [], seen).map((origin) => ({ ...origin, style: true, method: path[1] }));
+    if (path.length && ['setProperty', 'removeProperty'].includes(path[0])) {
+      return origins(node, [], seen).map((origin) => ({ ...origin, method: path[0] }));
+    }
+    if (ts.isCallExpression(node)) {
+      const returned = functionsOf(node.expression).flatMap((fn) => {
+        if (!fn.body) return [];
+        if (!ts.isBlock(fn.body)) return origins(fn.body, path, next);
+        const values = [];
+        visit(fn.body, (child) => {
+          if (ts.isReturnStatement(child) && scopeOf(child) === fn) values.push(...origins(child.expression, path, next));
+        });
+        return values;
+      });
+      if (returned.length) return returned;
+    }
+    return [{ element: node, style: false }];
+  };
+  const relevant = (origin) => {
+    let owned = false;
+    visit(origin.element, (node) => {
+      if (textOf(node) !== null && selectorOwned(textOf(node))) owned = true;
+      if (ts.isCallExpression(node) && /^(?:querySelector(?:All)?|getElementById|closest)$/.test(property(node.expression)?.name || '')) {
+        for (const value of origins(node.arguments[0])) if (textOf(value.element) !== null && selectorOwned(textOf(value.element))) owned = true;
+      }
+    });
+    return owned;
+  };
+  return { files, origins, relevant, calls };
+}
+
+function filePlacementViolations(file, analysis, owner) {
+  const { origins } = analysis;
   const violations = [];
-  const targets = new Set();
   const writes = [];
   const hidden = new Map();
-  const calls = [];
   const objects = new Map();
-  const relevant = (node) => owner || targets.has(node.getText(file))
-    || [...node.getText(file).matchAll(/["']([^"']+)["']/g)].some((match) => selectorOwned(match[1]));
+  const addWrite = (targets, prop, value, node) => {
+    for (const target of targets) writes.push({ target: target.element, prop, value, node, relevant: owner || analysis.relevant(target) });
+  };
+  const styles = (node) => origins(node).filter((origin) => origin.style);
   visit(file, (node) => {
-    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
       if (ts.isObjectLiteralExpression(node.initializer)) {
-        objects.set(node.name.text + ':' + scopeOf(node)?.pos, new Map(node.initializer.properties.flatMap((prop) => {
+        objects.set(node.name.getText() + ':' + scopeOf(node)?.pos, new Map(node.initializer.properties.flatMap((prop) => {
           if (!ts.isPropertyAssignment(prop)) return [];
-          return [[textOf(prop.name) || prop.name.getText(file), textOf(prop.initializer)]];
+          return [[textOf(prop.name) || prop.name.getText(), textOf(prop.initializer)]];
         })));
-      }
-      const strings = [...node.initializer.getText(file).matchAll(/["']([^"']+)["']/g)];
-      if (strings.some((match) => selectorOwned(match[1]))) targets.add(node.name.text);
-      if (/\.(?:createElement|cloneNode)\(/.test(node.initializer.getText(file))) {
-        hidden.set(node.name.text + ':' + scopeOf(node)?.pos, { values: new Map() });
       }
     }
     if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
       && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
       const member = property(node.left);
-      const target = member && styleTarget(member.object);
-      if (target) writes.push({ target, prop: member.name ? cssProp(member.name) : null, value: textOf(node.right), node });
+      if (member) addWrite(styles(member.object), member.name ? cssProp(member.name) : null, textOf(node.right), node);
     }
     if (ts.isCallExpression(node)) {
-      calls.push(node);
       const member = property(node.expression);
-      const target = member && styleTarget(member.object);
-      if (target && member.name === 'setProperty') {
-        writes.push({ target, prop: textOf(node.arguments[0]), value: textOf(node.arguments[1]), node });
-      }
+      if (member?.name === 'setProperty') addWrite(styles(member.object), textOf(node.arguments[0]), textOf(node.arguments[1]), node);
       if (member?.name === 'setAttribute' && textOf(node.arguments[0]) === 'style') {
-        writes.push({ target: member.object, prop: 'css-text', value: textOf(node.arguments[1]), node });
+        addWrite(origins(member.object), 'css-text', textOf(node.arguments[1]), node);
       }
-      if (node.expression.getText(file) === 'Object.assign' && node.arguments[0]) {
-        const assigned = styleTarget(node.arguments[0]);
-        if (assigned) for (const values of node.arguments.slice(1)) {
-          if (!ts.isObjectLiteralExpression(values)) writes.push({ target: assigned, prop: null, value: null, node });
+      if (node.expression.getText() === 'Object.assign' && node.arguments[0]) {
+        const assigned = styles(node.arguments[0]);
+        for (const values of node.arguments.slice(1)) {
+          if (!ts.isObjectLiteralExpression(values)) addWrite(assigned, null, null, node);
           else for (const value of values.properties) {
-            if (ts.isPropertyAssignment(value)) writes.push({ target: assigned, prop: cssProp(textOf(value.name) || value.name.getText(file)), value: textOf(value.initializer), node });
+            if (ts.isPropertyAssignment(value)) addWrite(assigned, cssProp(textOf(value.name) || value.name.getText()), textOf(value.initializer), node);
           }
+        }
+      }
+      if (member?.name === 'call' || member?.name === 'apply') {
+        for (const method of origins(member.object).filter((origin) => origin.style && origin.method === 'setProperty')) {
+          const args = member.name === 'call' ? node.arguments.slice(1)
+            : node.arguments[1] && ts.isArrayLiteralExpression(node.arguments[1]) ? node.arguments[1].elements : [];
+          addWrite([method], textOf(args[0]), textOf(args[1]), node);
         }
       }
     }
   });
   for (const write of writes) {
-    const record = hidden.get(write.target.getText(file) + ':' + scopeOf(write.node)?.pos);
-    if (record) {
-      record.values.set(write.prop, write.value);
-      let loop = write.node.parent;
-      while (loop && !ts.isForOfStatement(loop) && loop !== scopeOf(write.node)) loop = loop.parent;
-      if (write.prop === null && loop && ts.isForOfStatement(loop) && ts.isCallExpression(loop.expression)
-        && loop.expression.expression.getText(file) === 'Object.entries') {
-        const object = objects.get(loop.expression.arguments[0]?.getText(file) + ':' + scopeOf(write.node)?.pos);
-        if (object) for (const [prop, value] of object) record.values.set(prop, value);
-      }
+    if (!ts.isCallExpression(write.target) || !/^(?:createElement|cloneNode)$/.test(property(write.target.expression)?.name || '')) continue;
+    const values = hidden.get(write.target) || new Map();
+    hidden.set(write.target, values);
+    values.set(write.prop, write.value);
+    let loop = write.node.parent;
+    while (loop && !ts.isForOfStatement(loop) && loop !== scopeOf(write.node)) loop = loop.parent;
+    if (write.prop === null && loop && ts.isForOfStatement(loop) && ts.isCallExpression(loop.expression)
+      && loop.expression.expression.getText() === 'Object.entries') {
+      const object = objects.get(loop.expression.arguments[0]?.getText() + ':' + scopeOf(write.node)?.pos);
+      if (object) for (const [prop, value] of object) values.set(prop, value);
     }
   }
-  const invisible = (write) => {
-    const values = hidden.get(write.target.getText(file) + ':' + scopeOf(write.node)?.pos)?.values;
-    return values?.get('visibility') === 'hidden' && values?.get('pointer-events') === 'none';
-  };
   let writerCount = 0;
   for (const write of writes) {
     const { prop, value, node } = write;
-    if (invisible(write)) continue;
+    const hiddenValues = hidden.get(write.target);
+    if (hiddenValues?.get('visibility') === 'hidden' && hiddenValues?.get('pointer-events') === 'none') continue;
     if (prop === null && owner && scopeName(node) === 'writeSlot'
-      && write.target.getText(file) === 'document.body'
-      && node.arguments?.[0]?.getText(file) === 'name'
-      && node.arguments?.[1]?.getText(file) === '`${value}px`') {
+      && write.target.getText() === 'document.body'
+      && node.arguments?.[0]?.getText() === 'name'
+      && node.arguments?.[1]?.getText() === '`${value}px`') {
       writerCount += 1;
       if (writerCount === 1) continue;
     }
     if (prop?.startsWith('--slot-')) violations.push(`js slot variable writer: ${prop}`);
-    else if (relevant(write.target) && (prop === null || placeProp.test(prop))) {
+    else if (write.relevant && (prop === null || placeProp.test(prop))) {
       if (prop === null || value === null || !reset(prop, normalize(value))) violations.push(`js inline placement: ${prop || 'dynamic property'}`);
     } else if (prop === 'css-text') {
       const decls = value === null ? [] : declarations(value);
       const slotWrite = decls.some((decl) => decl.prop.startsWith('--slot-'));
-      const placement = relevant(write.target) && (value === null || decls.some((decl) => placeProp.test(decl.prop) && !reset(decl.prop, decl.value)));
+      const placement = write.relevant && (value === null || decls.some((decl) => placeProp.test(decl.prop) && !reset(decl.prop, decl.value)));
       if (slotWrite || placement) violations.push('js cssText placement');
     }
   }
@@ -233,17 +348,22 @@ export function jsPlacementViolations(source, { owner = true } = {}) {
       violations.push(`js second positioner: ${node.name.text}`);
     }
   });
-  for (const call of calls) {
-    const name = call.expression.getText(file);
-    if (name === 'solveChromeSlots') {
-      if (!owner || scopeName(call) !== 'syncMapChrome') violations.push('js second solver');
-    }
+  for (const call of analysis.calls.filter((node) => node.getSourceFile() === file)) {
+    const name = call.expression.getText();
+    if (name === 'solveChromeSlots' && (!owner || scopeName(call) !== 'syncMapChrome')) violations.push('js second solver');
     if (name === 'writeSlot' && !['placeInPane', 'placeInView'].includes(scopeName(call))) violations.push('js second slot writer');
     const member = property(call.expression);
-    if (member?.name === 'animate' && relevant(member.object)
-      && /(?:top|left|right|bottom|inset|transform|translate|margin)\s*[:'"\]]/.test(call.arguments[0]?.getText(file) || '')) violations.push('js placement animation');
+    if (member?.name === 'animate' && (owner || origins(member.object).some(analysis.relevant))
+      && /(?:top|left|right|bottom|inset|transform|translate|margin)\s*[:'"\]]/.test(call.arguments[0]?.getText() || '')) violations.push('js placement animation');
   }
-  return violations;
+  return [...new Set(violations)];
+}
+
+export function jsPlacementViolations(source, { owner = true } = {}) {
+  if (!source.trim()) return [];
+  const name = resolve('chrome.ts');
+  const analysis = placementAnalysis(new Map([[name, source]]));
+  return filePlacementViolations(analysis.files.get(name), analysis, owner);
 }
 
 function selectorOwned(selector) {
@@ -294,6 +414,15 @@ export const REINTRODUCTION_PATTERNS = [
   { name: 'js style attribute', js: 'el.setAttribute("style", "top:80px");' },
   { name: 'js cssText slot writer', js: 'document.body.style.cssText += "--slot-time-y:80px";' },
   { name: 'js dynamic property', js: 'const property="top";el.style[property]="80px";' },
+  { name: 'js style alias', js: 'const placement=el.style;placement.top="0px";' },
+  { name: 'js destructured style alias', js: 'const {style:placement}=el;placement.top="0px";' },
+  { name: 'js assigned style alias', js: 'let placement;placement=el.style;placement.top="0px";' },
+  { name: 'js destructuring assignment alias', js: 'let placement;({style:placement}=el);placement.top="0px";' },
+  { name: 'js alias setProperty', js: 'const placement=el.style;placement.setProperty("top","0px");' },
+  { name: 'js alias Object.assign', js: 'const placement=el.style;Object.assign(placement,{top:"0px"});' },
+  { name: 'js alias cssText', js: 'const placement=el.style;placement.cssText="top:0px";' },
+  { name: 'js alias slot writer', js: 'const {style:placement}=document.body;placement.setProperty("--slot-time-y","80px");' },
+  { name: 'js destructured style method', js: 'const {style:{setProperty:put}}=el;put.call(el.style,"top","0px");' },
   { name: 'placement animation', js: 'el.animate([{ translate: "0 0" }, { translate: "0 80px" }], 1);' },
 ];
 
@@ -312,12 +441,14 @@ export function projectPlacementViolations(root, overrides = new Map()) {
   };
   walk(resolve(root, 'src'));
   for (const file of overrides.keys()) if (!files.includes(resolve(root, file))) files.push(resolve(root, file));
+  const sources = new Map(files.map((file) => [file, overrides.get(relative(root, file)) ?? readFileSync(file, 'utf8')]));
+  const analysis = placementAnalysis(new Map([...sources].filter(([file]) => !file.endsWith('.css'))));
   return files.flatMap((file) => {
     const name = relative(root, file);
-    const source = overrides.get(name) ?? readFileSync(file, 'utf8');
+    const source = sources.get(file);
     const owner = name === 'src/map-chrome.ts';
     const errors = name.endsWith('.css') ? ownerPlacementViolations(source)
-      : [...jsPlacementViolations(source, { owner }), ...(owner ? narrowPlacementViolations('', source) : [])];
+      : [...filePlacementViolations(analysis.files.get(file), analysis, owner), ...(owner ? narrowPlacementViolations('', source) : [])];
     return errors.map((error) => `${name}: ${error}`);
   });
 }

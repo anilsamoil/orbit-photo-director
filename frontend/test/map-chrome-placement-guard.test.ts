@@ -92,6 +92,88 @@ describe('slot placement ownership (fu211)', () => {
     expect(errors.some((error) => error.startsWith('src/other.ts:'))).toBe(false);
   });
 
+  it.each([
+    `const placement=dock.style;placement.top='0px';`,
+    `const {style:placement}=dock;placement.top='0px';`,
+    `const {['style']:placement}=dock;placement.top='0px';`,
+    `const {style}=dock;style.translate='0 80px';`,
+    `let placement;placement=dock.style;placement.insetBlockStart='0px';`,
+    `let placement;({style:placement}=dock);placement.setProperty('top','0px');`,
+    `const element=dock;const first=element.style;const placement=first;placement['left']='0px';`,
+    `const placement=(dock as HTMLElement).style;Object.assign(placement,{top:'0px'});`,
+    `const placement=dock.style;placement.cssText='top:0px';`,
+    `const placement=dock.style;const property='top';placement[property]='0px';`,
+    `const {style:{setProperty:put}}=dock;put.call(dock.style,'top','0px');`,
+    `const [placement]=[dock.style];placement.top='0px';`,
+  ])('rejects style alias placement with element provenance: %s', (write) => {
+    const source = `const dock=document.querySelector('.map-control-dock');${write}`;
+    expect(jsPlacementViolations(source, { owner: false })).not.toEqual([]);
+    expect(jsPlacementViolations(source.replace('.map-control-dock', '.thumbnail'), { owner: false })).toEqual([]);
+  });
+
+  it('retains selector provenance through assignment and literal aliases', () => {
+    expect(jsPlacementViolations(`
+      const selector='.map-control-dock';let dock;dock=document.querySelector(selector);
+      const {style:placement}=dock;placement.top='0px';
+    `, { owner: false })).not.toEqual([]);
+  });
+
+  it('retains element provenance when the style alias is exported and imported', () => {
+    const root = project({
+      'src/main.ts': `import {placement as s} from './extra';s.top='0px';`,
+      'src/extra.ts': `export const {style:placement}=document.querySelector('.map-control-dock');`,
+    });
+    expect(projectPlacementViolations(root)).toContain('src/main.ts: js inline placement: top');
+  });
+
+  it('does not confuse equally named aliases in different imported modules', () => {
+    const root = project({
+      'src/main.ts': `import './owned';import './unrelated';`,
+      'src/owned.ts': `const dock=document.querySelector('.map-control-dock');const s=dock.style;s.top='0px';`,
+      'src/unrelated.ts': `const dock=document.querySelector('.thumbnail');const s=dock.style;s.top='0px';`,
+    });
+    expect(projectPlacementViolations(root)).toEqual(['src/owned.ts: js inline placement: top']);
+  });
+
+  it('tracks aliases by lexical binding, including destructured hidden probes', () => {
+    expect(jsPlacementViolations(`
+      const dock=document.querySelector('.map-control-dock');
+      function thumbnail(){const dock=document.createElement('img');const {style:s}=dock;s.top='0px';}
+    `, { owner: false })).toEqual([]);
+    expect(jsPlacementViolations(`
+      function measure(){const probe=document.createElement('div');const {style:s}=probe;
+        s.visibility='hidden';s.pointerEvents='none';s.top='0px';}
+    `)).toEqual([]);
+    expect(jsPlacementViolations(`
+      function measure(){const probe=document.createElement('div');const {style:s}=probe;
+        s.visibility='hidden';s.pointerEvents='none';s.top='0px';}
+      function escape(){const probe=document.querySelector('.map-control-dock');const {style:s}=probe;s.top='0px';}
+    `, { owner: false })).not.toEqual([]);
+  });
+
+  it('allows aliased harmless resets but rejects aliased slot writers on any element', () => {
+    expect(jsPlacementViolations(`
+      const {style:s}=document.querySelector('.map-control-dock');
+      s.top='auto';s.position='static';s.margin='0';s.translate='none';
+    `, { owner: false })).toEqual([]);
+    expect(jsPlacementViolations(`const s=document.body.style;s.setProperty('--slot-time-y','80px');`, { owner: false })).not.toEqual([]);
+    expect(jsPlacementViolations(`const {style:s}=document.body;s.cssText+='--slot-time-y:80px';`, { owner: false })).not.toEqual([]);
+  });
+
+  it.each([
+    `export function move(){const dock=document.querySelector('.map-control-dock');const s=dock.style;s.top='0px';}`,
+    `export function move(){const {style:s}=document.querySelector('.map-control-dock');s.top='0px';}`,
+    `export function move(dock){const {style:s}=dock;s.top='0px';}`,
+    `export function move({style:s}){s.top='0px';}`,
+    `export function move(dock){write(dock.style);}function write(s){s.setProperty('top','0px');}`,
+  ])('rejects an imported and called aliased style writer: %s', (writer) => {
+    const root = project({
+      'src/main.ts': `import {move as relocate} from './extra';relocate(document.querySelector('.map-control-dock'));`,
+      'src/extra.ts': writer,
+    });
+    expect(projectPlacementViolations(root)).toContain('src/extra.ts: js inline placement: top');
+  });
+
   it('catches every mutation in the shared proof catalog', () => {
     expect(REINTRODUCTION_PATTERNS.length).toBeGreaterThanOrEqual(30);
     expect(reintroductionMisses()).toEqual([]);

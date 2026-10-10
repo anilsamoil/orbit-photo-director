@@ -56,6 +56,22 @@ const row = solveChromeSlots(measure({
   scrollbar: 6,
 }));
 if (!row.zoom || !row.dock || row.dock.x < row.zoom.x + row.zoom.w + 8 || meets(row.dock, row.zoom)) fail('priority');
+const longInput = measure({
+  viewport: { w: 800, h: 600 },
+  insets: { top: 24, right: 0, bottom: 20, left: 47 },
+  topbar: 84, show: { x: 55, y: 89, w: 180, h: 52 },
+  footer: { x: 47, y: 480, w: 753, h: 100 },
+  pip: { x: 566, y: 89, w: 222, h: 144 },
+  legendOpen: true, legendPanel: { x: 0, y: 0, w: 176, h: 1000 },
+});
+const long = solveChromeSlots(longInput);
+if (!long.legend || long.legend.h >= longInput.legendPanel.h || bottomOf(long.legend) > 480) fail('legend-cap');
+if (meets(long.legend, longInput.pip)) fail('legend-horizon');
+if (meets(long.legend, long.time)) fail('legend-time');
+if (meets(long.legend, long.footer)) fail('legend-footer');
+const readout = { x: 100, y: 220, w: 600, h: 40 };
+const withReadout = solveChromeSlots({ ...longInput, timeReadout: readout });
+if (!withReadout.legend || meets(withReadout.legend, readout)) fail('legend-readout');
 console.log('held');
 `;
 
@@ -83,6 +99,26 @@ const mutants = [
         '  const columnX = measure.viewport.w - measure.insets.right - EDGE - gutter;\n  if (columnH >= TARGET && columnX >= minX - 0.5) {',
         '  const columnX = measure.insets.left;\n  if (columnH >= TARGET) {',
       ),
+  },
+  {
+    name: 'drop Legend horizon obstacle',
+    failure: 'legend-horizon',
+    apply: (src) => src.replace('    measure.pip,\n    time, ...timePaint(measure, time),', '    time, ...timePaint(measure, time),'),
+  },
+  {
+    name: 'drop Legend whole time-strip obstacles',
+    failure: 'legend-time',
+    apply: (src) => src.replace('    time, ...timePaint(measure, time),\n', ''),
+  },
+  {
+    name: 'drop Legend readout obstacle',
+    failure: 'legend-readout',
+    apply: (src) => src.replace('const parts = [measure.timeReadout, measure.sliderChip, measure.slider, ...measure.timeButtons].filter(present);', 'const parts = [measure.sliderChip, measure.slider, ...measure.timeButtons].filter(present);'),
+  },
+  {
+    name: 'use intrinsic instead of allocated Legend height',
+    failure: 'legend-cap',
+    apply: (src) => src.replace('const height = Math.min(intrinsic, lo - low);', 'const height = intrinsic;'),
   },
 ];
 
@@ -128,15 +164,26 @@ for (const mutant of REINTRODUCTION_PATTERNS) {
   lines.push(`${mutant.name}: red`);
 }
 const main = readFileSync(resolve(root, 'src/main.ts'), 'utf8');
-for (const [name, path, content] of [
+const importedMutants = [
   ['imported CSS placement', 'src/slot-mutant.css', 'body.map-slot-owned .view-map .map-controls{position:absolute!important;top:80px!important;right:16px!important}'],
   ['imported JS placement', 'src/slot-mutant.ts', 'const dock=document.querySelector(".map-control-dock");dock.style.translate="0 80px";'],
   ['imported second slot writer', 'src/slot-mutant.ts', 'document.body.style.setProperty("--slot-time-y", "80px");'],
-]) {
-  const caught = projectPlacementViolations(root, new Map([
-    ['src/main.ts', `${main}\nimport './${path.slice(4)}';`], [path, content],
-  ]));
-  if (!caught.some((error) => error.startsWith(`${path}:`))) {
+  ['imported called style alias', 'src/slot-mutant.ts', 'export function displace(){const dock=document.querySelector(".map-control-dock");const placement=dock.style;placement.top="0px";}', 'displace()'],
+  ['imported called destructured style', 'src/slot-mutant.ts', 'export function displace(){const {style:placement}=document.querySelector(".map-control-dock");placement.top="0px";}', 'displace()'],
+  ['imported called assigned style alias', 'src/slot-mutant.ts', 'export function displace(){let dock;dock=document.querySelector(".map-control-dock");let placement;placement=dock.style;placement.top="0px";}', 'displace()'],
+  ['imported called destructuring assignment', 'src/slot-mutant.ts', 'export function displace(){let placement;({style:placement}=document.querySelector(".map-control-dock"));placement.setProperty("top","0px");}', 'displace()'],
+  ['imported called element parameter', 'src/slot-mutant.ts', 'export function displace(dock){const {style:placement}=dock;placement.top="0px";}', 'displace(document.querySelector(".map-control-dock"))'],
+  ['imported called style parameter', 'src/slot-mutant.ts', 'export function displace(placement){placement.setProperty("top","0px");}', 'displace(document.querySelector(".map-control-dock").style)'],
+].map(([name, path, content, importedCall = ''], index) => ({
+  name, path: path.replace('slot-mutant', `slot-mutant-${index}`), content, importedCall, index,
+}));
+const importedOverrides = new Map(importedMutants.map(({ path, content }) => [path, content]));
+importedOverrides.set('src/main.ts', `${main}\n${importedMutants.map(({ path, importedCall, index }) => importedCall
+  ? `import { displace as displace${index} } from './${path.slice(4)}';${importedCall.replace('displace(', `displace${index}(`)};`
+  : `import './${path.slice(4)}';`).join('\n')}`);
+const importedErrors = projectPlacementViolations(root, importedOverrides);
+for (const { name, path } of importedMutants) {
+  if (!importedErrors.some((error) => error.startsWith(`${path}:`))) {
     console.error(`${name}: GREEN (survived)`);
     process.exit(1);
   }
