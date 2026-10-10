@@ -81,6 +81,10 @@ function mount(host: HTMLElement, factory: IssRendererFactory, now = startMs + 6
   });
 }
 
+function cameraApplies(aim: IssAim): void {
+  aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0);
+}
+
 function lastAim(aims: IssAim[]): IssAim {
   const aim = aims[aims.length - 1];
   if (!aim) throw new Error('missing aim');
@@ -311,7 +315,8 @@ describe('ISS scene lifecycle', () => {
     expect(host2.querySelector('[data-iss-gmt-day]')?.textContent).toBe('');
     expect(host2.querySelector('[data-iss-day-month]')?.textContent).toBe('');
     expect(host2.querySelector('[data-iss-weekday]')?.textContent).toBe('');
-    expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe(`${sensorField().vertical.toFixed(1)}°`);
+    expect(host2.querySelector('[data-iss-fov]')?.textContent).toBe('');
+    expect(host2.querySelector('[data-iss-fov]')?.getAttribute('data-iss-fov-state')).toBe('pending');
     const generation = again.generation();
     again.retry();
     await again.paint();
@@ -599,8 +604,129 @@ describe('ISS chrome starts out of the way', () => {
     scene.dispose();
   });
 
-  it('shows the optical field on the frame and updates it while wheeling or pinching', () => {
-    vi.useFakeTimers();
+  it('keeps the field pending while aim is held and publishes the applied field before aim settles', async () => {
+    const idle = deferred();
+    let captured: IssAim | null = null;
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          captured = aim;
+          return idle.promise;
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+    expect(readout.dataset.issFovState).toBe('pending');
+    expect(readout.textContent).toBe('');
+
+    scene.update(shot('fov-held'));
+    for (let i = 0; i < 20 && captured === null; i += 1) await Promise.resolve();
+    const aim = captured as IssAim | null;
+    expect(aim).not.toBeNull();
+    expect(scene.phase()).toBe('running');
+    expect(readout.dataset.issFovState).toBe('pending');
+    expect(readout.textContent).toBe('');
+
+    aim?.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0);
+    expect(readout.dataset.issFovState).toBe('live');
+    expect(readout.textContent).toBe(`${(aim?.verticalFovDeg ?? 0).toFixed(1)}°`);
+    let settled = false;
+    void idle.promise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    scene.dispose();
+  });
+
+  it('ignores a stale field confirmation after a newer camera application', async () => {
+    const aims: IssAim[] = [];
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      createRenderer: () => ({
+        ready: () => Promise.resolve(),
+        aim: (aim) => {
+          aims.push(aim);
+          return Promise.resolve();
+        },
+        resize: () => {},
+        destroy: () => {},
+      }),
+    });
+    scene.update(shot('fov-stale'));
+    for (let i = 0; i < 20 && aims.length < 1; i += 1) await Promise.resolve();
+    const first = aims[0];
+    expect(first).toBeTruthy();
+    const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+    first?.onCamera?.(first.verticalFovDeg, first.fovEpoch ?? 0);
+    expect(readout.dataset.issFovState).toBe('live');
+
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    for (let i = 0; i < 20 && aims.length < 2; i += 1) await Promise.resolve();
+    const second = aims[aims.length - 1];
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+    second?.onCamera?.(33.01, second.fovEpoch ?? 0);
+    expect(readout.textContent).toBe('33.0°');
+    expect(readout.dataset.issFovState).toBe('live');
+
+    first?.onCamera?.(51.8, first.fovEpoch ?? 0);
+    expect(readout.textContent).toBe('33.0°');
+    expect(readout.dataset.issFovState).toBe('live');
+    scene.dispose();
+  });
+
+  it('keeps the applied field when the context is lost and the wheel asks for another', async () => {
+    const caught: { hooks: IssRendererHooks | null } = { hooks: null };
+    const host = document.createElement('div');
+    const scene = mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      drive: 'manual',
+      session: { mode: 'horizon' },
+      createRenderer: (_frame, next) => {
+        caught.hooks = next;
+        return {
+          ready: () => Promise.resolve(),
+          aim: (aim) => {
+            aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0);
+            return Promise.resolve();
+          },
+          resize: () => {},
+          destroy: () => {},
+        };
+      },
+    });
+    scene.update(shot('fov-lost'));
+    const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+    for (let i = 0; i < 20 && readout.dataset.issFovState !== 'live'; i += 1) {
+      await scene.paint();
+      await Promise.resolve();
+    }
+    const applied = readout.textContent;
+    expect(readout.dataset.issFovState).toBe('live');
+    expect(applied).toBe(`${sensorField().vertical.toFixed(1)}°`);
+    caught.hooks?.onContextLost();
+    expect(scene.phase()).toBe('error');
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+    expect(readout.textContent).toBe(applied);
+    expect(readout.textContent).not.toBe('38.4°');
+    expect(readout.dataset.issFovState).toBe('live');
+    scene.dispose();
+  });
+
+  it('shows the optical field on the frame and updates it while wheeling or pinching', async () => {
     const host = document.createElement('div');
     const scene = mountIssScene(host, {
       nowMs: () => startMs,
@@ -608,15 +734,24 @@ describe('ISS chrome starts out of the way', () => {
       session: { mode: 'horizon' },
       createRenderer: () => ({
         ready: () => Promise.resolve(),
-        aim: () => Promise.resolve(),
+        aim: (aim) => {
+          cameraApplies(aim);
+          return Promise.resolve();
+        },
         resize: () => {},
         destroy: () => {},
       }),
     });
+    scene.update(shot('fov-label'));
+    const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+    const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+    for (let i = 0; i < 20 && readout.dataset.issFovState !== 'live'; i += 1) {
+      await scene.paint();
+      await Promise.resolve();
+    }
+    vi.useFakeTimers();
     try {
       const lens = `${sensorField().vertical.toFixed(1)}°`;
-      const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
-      const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
       expect(readout.textContent).toBe(lens);
       expect(readout.dataset.issFovState).toBe('live');
       frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
@@ -663,6 +798,7 @@ describe('ISS chrome starts out of the way', () => {
         ready: () => Promise.resolve(),
         aim: (aim) => {
           aims.push(aim);
+          cameraApplies(aim);
           return Promise.resolve();
         },
         resize: () => {},
@@ -703,6 +839,7 @@ describe('ISS chrome starts out of the way', () => {
         ready: () => Promise.resolve(),
         aim: (aim) => {
           aims2.push(aim);
+          cameraApplies(aim);
           return Promise.resolve();
         },
         resize: () => {},
