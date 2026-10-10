@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } 
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { checkRasterOcr } from './raster-ocr.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
 import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
 
@@ -610,6 +611,8 @@ function ownedBy(rootPid, pid) {
 async function doctor(home = homeDir()) {
   const state = readState(home);
   const problems = [];
+  let ocr;
+  try { ocr = checkRasterOcr(); } catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
   if (!state) problems.push('no state file');
   else {
     if (!alive(state.proxyPid)) problems.push(`proxy pid ${state.proxyPid} is not running`);
@@ -634,6 +637,7 @@ async function doctor(home = homeDir()) {
   }
   if (problems.length) throw new Error(problems.join('\n'));
   console.log(`ok ${state.url}`);
+  console.log(`OCR ${ocr.python}: ${ocr.probe}`);
   console.log(`proxy ${state.proxyPid} vite ${state.vitePid}`);
   console.log(`manifest ${state.manifestVersion}`);
   console.log(`launch valid until ${state.launchValidUntil}`);

@@ -116,6 +116,11 @@ export function playwrightSend(page) {
       return {};
     }
     if (method === 'Page.enable') return {};
+    if (method === 'Network.setCacheDisabled') {
+      // Fresh WebKit contexts plus coldPlanTileCaches' unique URL nonce avoid
+      // cached tiles without forbidden cross-origin Cache-Control headers.
+      return {};
+    }
     if (method === 'Page.addScriptToEvaluateOnNewDocument') {
       await page.addInitScript(params.source);
       return {};

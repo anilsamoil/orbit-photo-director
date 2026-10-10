@@ -1,7 +1,249 @@
+import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { pathToFileURL } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
+
+export const FRACTIONAL_LABEL_ZOOMS = [2.5, 2.9, 3, 3.1];
+
+function nameList(names) {
+  return Array.isArray(names) ? names.filter((name) => typeof name === 'string') : [];
+}
+
+/** Symbol texts at the zooms where the reference raster already draws country names. */
+export function fractionalCountrySymbols(rows) {
+  if (!Array.isArray(rows) || rows.length !== FRACTIONAL_LABEL_ZOOMS.length) {
+    return { ok: false, reason: 'zooms', rows: Array.isArray(rows) ? rows.length : 0 };
+  }
+  const counts = [];
+  for (let index = 0; index < FRACTIONAL_LABEL_ZOOMS.length; index += 1) {
+    const expected = FRACTIONAL_LABEL_ZOOMS[index];
+    const row = rows[index];
+    const zoom = row && Number(row.zoom);
+    if (!row || !Number.isFinite(zoom) || Math.abs(zoom - expected) > 0.001) {
+      return { ok: false, reason: 'zoom', zoom: row && row.zoom, expected };
+    }
+    const names = nameList(row.names);
+    const seen = new Map();
+    for (const name of names) seen.set(name, (seen.get(name) || 0) + 1);
+    const duplicated = [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+    if (names.length > 0 || duplicated.length > 0) {
+      return { ok: false, reason: 'symbols', zoom, count: names.length, names, duplicated };
+    }
+    counts.push({ zoom, count: 0 });
+  }
+  return { ok: true, counts };
+}
+
+/** France or Japan still has one symbol text at the zoom below the raster names. */
+export function keptCountrySymbol(names, country) {
+  const list = nameList(names);
+  const count = list.filter((name) => name === country).length;
+  if (count !== 1) return { ok: false, reason: 'kept', country, count, names: list };
+  return { ok: true, country, count };
+}
+
+export function rasterPainted(words, country) {
+  const name = String(country || '').toUpperCase();
+  if (name.length < 4) return false;
+  const stems = [name];
+  for (let index = 0; index < name.length; index += 1) {
+    const stem = name.slice(0, index) + name.slice(index + 1);
+    if (stem.length >= 4) stems.push(stem);
+  }
+  return String(words || '').toUpperCase().split(/\r?\n/).some((line) => {
+    const tokens = line.split(/[^A-Z]+/).filter(Boolean);
+    return tokens.some((word, index) => {
+      if (['SOUTH', 'WESTERN', 'WEST', 'NORTH', 'NORTHERN', 'NEW'].includes(tokens[index - 1])) return false;
+      if (tokens[index - 2] === 'GULF' && tokens[index - 1] === 'OF') return false;
+      if (['OCEAN', 'SEA', 'BIGHT'].includes(tokens[index + 1])) return false;
+      if (word.startsWith(name) && word.length > name.length) return false;
+      if (stems.includes(word)) return true;
+      return stems.some((stem) => stem !== name && word.includes(stem) && word.length > stem.length && word.length <= stem.length + 4);
+    });
+  });
+}
+
+export function countrySweepZooms(levels = loadCountryRasterLevels()) {
+  const zooms = new Set([-1.1497862143712645, -0.23372503287116042, 5]);
+  for (let step = -50; step <= 310; step += 5) zooms.add(step / 100);
+  for (let tile = 1; tile <= levels.through; tile += 1) {
+    const edge = tile - 1.5;
+    for (const offset of [-0.01, 0, 0.01]) zooms.add(Number((edge + offset).toFixed(2)));
+  }
+  return [...zooms].sort((left, right) => left - right);
+}
+
+export const PLAN_COUNTRIES = [
+  { name: 'Canada', lng: -100, lat: 50 },
+  { name: 'Mexico', lng: -102, lat: 23 },
+  { name: 'Brazil', lng: -55, lat: -10 },
+  { name: 'Argentina', lng: -64, lat: -34 },
+  { name: 'France', lng: 2, lat: 46 },
+  { name: 'Egypt', lng: 30, lat: 26 },
+  { name: 'Nigeria', lng: 8, lat: 10 },
+  { name: 'Kenya', lng: 38, lat: 1 },
+  { name: 'China', lng: 104, lat: 35 },
+  { name: 'India', lng: 79, lat: 22 },
+  { name: 'Japan', lng: 138, lat: 36 },
+  { name: 'Australia', lng: 134, lat: -25 },
+];
+
+export function loadCountryRasterLevels() {
+  const file = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/src/map/adapters/maplibre/country-raster-levels.json');
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+/** Independent of the generated file: the reviewed fresh Esri sovereign-name audit, through tile z6. */
+export const AUDITED_RASTER_LEVELS = {
+  through: 6,
+  countries: Object.fromEntries(PLAN_COUNTRIES.map(({ name }) => [name,
+    name === 'Australia' ? [1, 2, 3, 4, 5, 6] : name === 'Kenya' ? [4, 5, 6] : [3, 4, 5, 6],
+  ])),
+};
+
+export function auditRasterLevels(levels) {
+  if (levels?.through !== AUDITED_RASTER_LEVELS.through) return { ok: false, reason: 'audit-through' };
+  for (const { name } of PLAN_COUNTRIES) {
+    if (JSON.stringify(levels.countries?.[name]) !== JSON.stringify(AUDITED_RASTER_LEVELS.countries[name])) {
+      return { ok: false, reason: 'audit-levels', country: name, actual: levels.countries?.[name], expected: AUDITED_RASTER_LEVELS.countries[name] };
+    }
+  }
+  return { ok: true };
+}
+
+/** Read the production style builder, not a second implementation of its hole-band algorithm. */
+export function loadCountrySymbolLayers() {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const file = resolve(root, 'frontend/src/map/adapters/maplibre/track-inset.ts');
+  const require = createRequire(resolve(root, 'frontend/package.json'));
+  const ts = require('typescript');
+  const source = readFileSync(file, 'utf8') + '\nexport { countrySymbolLayers };\n';
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+  const module = { exports: {} };
+  const context = vm.createContext({ module, exports: module.exports, require: (id) => {
+    if (id === './country-raster-levels.json') return loadCountryRasterLevels();
+    return {};
+  } });
+  vm.runInContext(compiled, context, { filename: file });
+  return JSON.parse(JSON.stringify(module.exports.countrySymbolLayers()));
+}
+
+function opacityAt(value, zoom) {
+  if (value == null) return 1;
+  if (typeof value === 'number') return value;
+  if (!Array.isArray(value) || value[0] !== 'step') return 0;
+  let result = value[2];
+  for (let index = 3; index + 1 < value.length; index += 2) {
+    if (zoom >= Number(value[index])) result = value[index + 1];
+  }
+  return Number(result);
+}
+
+export function countryStyleVerdict(layers, levels = loadCountryRasterLevels()) {
+  const audit = auditRasterLevels(levels);
+  if (!audit.ok) return audit;
+  for (const { name } of PLAN_COUNTRIES) {
+    for (const zoom of countrySweepZooms(levels)) {
+      const count = layers.filter((layer) => {
+        const names = layer.filter?.[2]?.[1];
+        return Array.isArray(names) && names.includes(name)
+          && zoom >= (layer.minzoom ?? -Infinity) && zoom < (layer.maxzoom ?? Infinity)
+          && layer.layout?.visibility !== 'none' && opacityAt(layer.paint?.['text-opacity'], zoom) > 0;
+      }).length;
+      const expected = levelPaints(AUDITED_RASTER_LEVELS, name, idealTile(zoom)) ? 0 : 1;
+      if (count !== expected) return { ok: false, reason: 'style-coverage', country: name, zoom, count, expected };
+    }
+  }
+  return { ok: true };
+}
+
+function idealTile(zoom) {
+  return Math.max(0, Math.round(Number(zoom) + 1));
+}
+
+function levelPaints(levels, country, tileZoom) {
+  const painted = levels.countries[country] || [];
+  if (tileZoom <= levels.through) return painted.includes(tileZoom);
+  return painted.includes(levels.through);
+}
+
+/** Exactly one name source: the centroid symbol, or the raster lettering, never both and never neither. */
+export function oneNameSource(row) {
+  if (!row || row.tilesOk !== true) {
+    return { ok: false, reason: 'tiles', country: row && row.country, zoom: row && row.zoom, detail: row && row.detail };
+  }
+  const zoom = Number(row.zoom);
+  if (!Number.isFinite(zoom)) return { ok: false, reason: 'zoom', zoom: row && row.zoom };
+  const ideal = idealTile(zoom);
+  if (row.tileZ !== ideal) {
+    return { ok: false, reason: 'tile', tileZ: row.tileZ, expected: ideal, country: row.country, zoom };
+  }
+  const names = nameList(row.names);
+  const count = names.filter((name) => name === row.country).length;
+  if (count > 1) return { ok: false, reason: 'symbol', country: row.country, zoom, count, names };
+  const painted = typeof row.rasterReadable === 'boolean' ? row.rasterReadable : rasterPainted(row.words, row.country);
+  const sources = (count === 1 ? 1 : 0) + (painted ? 1 : 0);
+  if (sources !== 1) {
+    return {
+      ok: false,
+      reason: sources === 0 ? 'gap' : 'duplicate',
+      country: row.country,
+      zoom,
+      count,
+      raster: painted,
+    };
+  }
+  return { ok: true, country: row.country, zoom, count, raster: painted };
+}
+
+function sweepRows(levels, symbolCount) {
+  const rows = [];
+  for (const country of PLAN_COUNTRIES) {
+    for (const zoom of countrySweepZooms()) {
+      const tileZ = idealTile(zoom);
+      const raster = levelPaints(levels, country.name, tileZ);
+      const count = symbolCount(country.name, zoom, raster, tileZ);
+      rows.push({
+        tilesOk: true,
+        zoom,
+        tileZ,
+        country: country.name,
+        names: count === 1 ? [country.name] : [],
+        words: raster ? country.name.toUpperCase() : 'OCEAN',
+      });
+    }
+  }
+  return rows;
+}
+
+/** One handoff sample. tilesOk false is a failure, including a wait that timed out.
+ *  After the cutoff the symbol is gone and the raster lettering is in the OCR words.
+ *  Before the cutoff the symbol is still there. */
+export function handoffSample(row, expect) {
+  if (!row || row.tilesOk !== true) {
+    return { ok: false, reason: 'tiles', country: expect && expect.country, zoom: expect && expect.zoom, detail: row && row.detail };
+  }
+  const zoom = Number(row.zoom);
+  if (!expect || !Number.isFinite(zoom) || Math.abs(zoom - expect.zoom) > 0.001) {
+    return { ok: false, reason: 'zoom', zoom: row.zoom, expected: expect && expect.zoom };
+  }
+  if (row.tileZ !== expect.tileZ) {
+    return { ok: false, reason: 'tile', tileZ: row.tileZ, expected: expect.tileZ, country: expect.country };
+  }
+  const names = nameList(row.names);
+  const count = names.filter((name) => name === expect.country).length;
+  if (count !== expect.symbols) {
+    return { ok: false, reason: 'symbol', country: expect.country, zoom, count, names };
+  }
+  const painted = rasterPainted(row.words, expect.country);
+  if (expect.raster && !painted) {
+    return { ok: false, reason: 'raster', country: expect.country, zoom, words: row.words };
+  }
+  return { ok: true, country: expect.country, zoom, count, raster: painted };
+}
 
 export function planLabelVerdict(sample) {
   function resolvedOpacity(value) {
@@ -80,9 +322,17 @@ function readPlanLabels(orbit, glyphs, width, height) {
   const textField = orbit.getLayoutProperty('inset-countries', 'text-field');
   const textAllowOverlap = orbit.getLayoutProperty('inset-countries', 'text-allow-overlap');
   const textIgnorePlacement = orbit.getLayoutProperty('inset-countries', 'text-ignore-placement');
+  let labelLayers = ['inset-countries'];
+  if (typeof orbit.getStyle === 'function') {
+    const style = orbit.getStyle();
+    const listed = style && style.layers
+      ? style.layers.filter((layer) => layer && layer.source === 'inset-countries' && layer.type === 'symbol').map((layer) => layer.id)
+      : [];
+    if (listed.length) labelLayers = listed;
+  }
   let labelFeatures = [];
   try {
-    labelFeatures = orbit.queryRenderedFeatures({ layers: ['inset-countries'] }) || [];
+    labelFeatures = orbit.queryRenderedFeatures({ layers: labelLayers }) || [];
   } catch (error) {
     return { ok: false, step: 'labels', reason: 'query', glyphs: glyphs };
   }
@@ -200,6 +450,117 @@ export function biteReport() {
 
 function runBite() {
   const report = biteReport();
+  const fractionalMain = fractionalCountrySymbols([2.5, 2.9, 3, 3.1].map((zoom) => ({
+    zoom,
+    names: ['Canada', 'France', 'Japan', 'France'],
+  })));
+  const fractionalFixed = fractionalCountrySymbols([2.5, 2.9, 3, 3.1].map((zoom) => ({
+    zoom,
+    names: [],
+  })));
+  const keptFrance = keptCountrySymbol(['Egypt', 'France', 'Nigeria'], 'France');
+  const keptJapan = keptCountrySymbol(['China', 'Japan'], 'Japan');
+  const keptMissing = keptCountrySymbol(['China'], 'Japan');
+  console.log(`fractional-main ok:${fractionalMain.ok === true}`);
+  console.log(`fractional-fixed ok:${fractionalFixed.ok === true}`);
+  console.log(`kept-france ok:${keptFrance.ok === true}`);
+  console.log(`kept-japan ok:${keptJapan.ok === true}`);
+  console.log(`kept-missing ok:${keptMissing.ok === true}`);
+  const handoffTiles = handoffSample({ tilesOk: false, detail: 'timeout' }, {
+    zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3,
+  });
+  const handoffGap = handoffSample({
+    tilesOk: true, zoom: 1.49, tileZ: 2, names: [], words: 'EUROPE',
+  }, { zoom: 1.49, country: 'France', symbols: 1, raster: false, tileZ: 2 });
+  const handoffDuplicate = handoffSample({
+    tilesOk: true, zoom: 1.5, tileZ: 3, names: ['France'], words: 'FRANCE',
+  }, { zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3 });
+  const handoffFrance = handoffSample({
+    tilesOk: true, zoom: 1.5, tileZ: 3, names: ['Spain'], words: 'FARIS RANCEMMAI',
+  }, { zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3 });
+  const handoffKenya = handoffSample({
+    tilesOk: true, zoom: 2.5, tileZ: 4, names: [], words: 'KENYA',
+  }, { zoom: 2.5, country: 'Kenya', symbols: 0, raster: true, tileZ: 4 });
+  const handoffKenyaEarly = handoffSample({
+    tilesOk: true, zoom: 2.49, tileZ: 3, names: [], words: 'AFRICA',
+  }, { zoom: 2.49, country: 'Kenya', symbols: 1, raster: false, tileZ: 3 });
+  const handoffMiss = handoffSample({
+    tilesOk: true, zoom: 1.5, tileZ: 3, names: [], words: 'EUROPE SPAIN',
+  }, { zoom: 1.5, country: 'France', symbols: 0, raster: true, tileZ: 3 });
+  console.log(`handoff-tiles ok:${handoffTiles.ok === true}`);
+  console.log(`handoff-gap ok:${handoffGap.ok === true}`);
+  console.log(`handoff-duplicate ok:${handoffDuplicate.ok === true}`);
+  console.log(`handoff-france ok:${handoffFrance.ok === true}`);
+  console.log(`handoff-kenya ok:${handoffKenya.ok === true}`);
+  console.log(`handoff-kenya-early ok:${handoffKenyaEarly.ok === true}`);
+  console.log(`handoff-miss ok:${handoffMiss.ok === true}`);
+  const levels = loadCountryRasterLevels();
+  const australiaLevels = levels.countries.Australia;
+  const levelShape = Array.isArray(australiaLevels)
+    && !australiaLevels.includes(0)
+    && australiaLevels.includes(1)
+    && australiaLevels.includes(2)
+    && australiaLevels.includes(3)
+    && australiaLevels.includes(4)
+    && australiaLevels.includes(5)
+    && australiaLevels.includes(6);
+  const style = countryStyleVerdict(loadCountrySymbolLayers(), levels);
+  console.log(`production-style ok:${style.ok === true} ${style.ok ? '' : JSON.stringify(style)}`);
+  const complement = sweepRows(AUDITED_RASTER_LEVELS, (_name, _zoom, raster) => (raster ? 0 : 1))
+    .map((row) => oneNameSource(row))
+    .find((verdict) => verdict.ok !== true);
+  const restoredFloor = sweepRows(levels, (name, zoom) => {
+    const painted = levels.countries[name] || [];
+    const first = painted.length ? Math.min(...painted) : 3;
+    return zoom < Math.max(1.5, first - 1.5) ? 1 : 0;
+  }).map((row) => oneNameSource(row)).find((verdict) => verdict.ok !== true);
+  const droppedHole = sweepRows(levels, (name, _zoom, _raster, tileZ) => {
+    const painted = new Set(levels.countries[name] || []);
+    if (name === 'Australia') painted.delete(3);
+    const raster = tileZ <= levels.through ? painted.has(tileZ) : painted.has(levels.through);
+    return raster ? 0 : 1;
+  }).map((row) => {
+    if (row.country === 'Australia' && row.tileZ === 3) return oneNameSource({ ...row, words: 'AUSTRALIA' });
+    return oneNameSource(row);
+  }).find((verdict) => verdict.ok !== true);
+  const ocean = oneNameSource({
+    tilesOk: true, zoom: 0, tileZ: 1, country: 'India', names: ['India'], words: 'INDIAN OCEAN',
+  });
+  console.log(`sweep-complement ok:${complement == null}`);
+  console.log(`sweep-floor ok:${restoredFloor != null && restoredFloor.ok === false}`);
+  console.log(`sweep-hole ok:${droppedHole != null && droppedHole.ok === false && droppedHole.reason === 'duplicate'}`);
+  console.log(`sweep-ocean ok:${ocean.ok === true}`);
+  console.log(`sweep-australia ok:${levelShape === true}`);
+  const fractionalBite = fractionalMain.ok === false
+    && fractionalMain.reason === 'symbols'
+    && fractionalMain.zoom === 2.5
+    && fractionalMain.duplicated.includes('France')
+    && fractionalFixed.ok === true
+    && keptFrance.ok === true
+    && keptJapan.ok === true
+    && keptMissing.ok === false
+    && keptMissing.reason === 'kept'
+    && handoffTiles.ok === false
+    && handoffTiles.reason === 'tiles'
+    && handoffGap.ok === false
+    && handoffGap.reason === 'symbol'
+    && handoffDuplicate.ok === false
+    && handoffDuplicate.reason === 'symbol'
+    && handoffFrance.ok === true
+    && handoffKenya.ok === true
+    && handoffKenyaEarly.ok === false
+    && handoffKenyaEarly.reason === 'symbol'
+    && handoffMiss.ok === false
+    && handoffMiss.reason === 'raster'
+    && complement == null
+    && restoredFloor != null
+    && restoredFloor.ok === false
+    && droppedHole != null
+    && droppedHole.reason === 'duplicate'
+    && ocean.ok === true
+    && style.ok === true
+    && levelShape === true;
+  if (!fractionalBite) process.exit(1);
   const line = (name, verdict) => `${name} ok:${verdict.ok === true}`;
   console.log(line('unmutated', report.unmutated));
   console.log(line('text-opacity', report.textOpacity));

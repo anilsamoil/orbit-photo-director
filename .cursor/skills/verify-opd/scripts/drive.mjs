@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
-import { planLabelReaders } from './plan-label-verdict.mjs';
+import { auditRasterLevels, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
+import { checkRasterOcr, clearRasterOcrRun, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
@@ -683,6 +684,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
         });
       }
       const page = await context.newPage();
+      page.setDefaultTimeout(600000);
       try {
         const cartoDark = [];
         page.on('request', (request) => {
@@ -4672,6 +4674,339 @@ async function proveFullscreenTelemetry(send) {
   return `${open.w}x${open.h}`;
 }
 
+export const PLAN_TILE_HELPERS = `
+function planViewport(map) {
+  const canvas = map.getCanvas();
+  const rect = canvas.getBoundingClientRect();
+  const n = 2 ** planIdealZoom(map);
+  const origin = map.project([-180, 85.0511287798066]);
+  const scale = 512 * (2 ** map.getZoom()) / (256 * n);
+  const occlusions = [];
+  for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]')) {
+    const box = node.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0 || (getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden')) continue;
+    if (box.right <= rect.left || box.left >= rect.right || box.bottom <= rect.top || box.top >= rect.bottom) continue;
+    occlusions.push([box.left-rect.left, box.top-rect.top, box.right-rect.left, box.bottom-rect.top]);
+  }
+  return { width: rect.width, height: rect.height, worldCopies: map.getRenderWorldCopies(), scale, origin: { x: origin.x, y: origin.y }, occlusions };
+}
+function planHold(map) {
+  if (map.__opdLabelHold) return;
+  map.__opdLabelHold = {
+    fit: map.fitBounds.bind(map),
+    resize: map.resize.bind(map),
+    center: map.getCenter(),
+    zoom: map.getZoom(),
+  };
+  map.fitBounds = () => map;
+  map.resize = () => map;
+}
+function planIdealZoom(map) {
+  return Math.max(0, Math.round(map.getZoom() + 1));
+}
+function planCenterTile(map, z) {
+  const center = map.getCenter();
+  const n = 2 ** z;
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((center.lng + 180) / 360) * n)));
+  const rad = center.lat * Math.PI / 180;
+  const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+  const y = Math.max(0, Math.min(n - 1, yRaw));
+  return { x, y };
+}
+function planVisibleTiles(map, sourceId) {
+  const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
+  const z = planIdealZoom(map);
+  const center = planCenterTile(map, z);
+  if (!manager || typeof manager.getVisibleCoordinates !== 'function') {
+    return { z, tiles: [], center, state: 'manager' };
+  }
+  const tiles = [];
+  for (const coord of manager.getVisibleCoordinates() || []) {
+    if (!coord.canonical || coord.canonical.z !== z) continue;
+    const tile = typeof manager.getTile === 'function' ? manager.getTile(coord) : null;
+    tiles.push({
+      z,
+      x: coord.canonical.x,
+      y: coord.canonical.y,
+      state: tile ? tile.state : 'missing',
+    });
+  }
+  return { z, tiles, center };
+}
+function planTileUrls(map, sourceId, tiles) {
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
+  const template = spec && spec.tiles && spec.tiles[0];
+  if (!template) return [];
+  return tiles.map((tile) => template.replace('{z}', String(tile.z)).replace('{y}', String(tile.y)).replace('{x}', String(tile.x)));
+}
+function planOpacityOn(layer, zoom) {
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (!Array.isArray(opacity) || opacity[0] !== 'step') return opacity !== 0;
+  let value = opacity[2];
+  for (let index = 3; index + 1 < opacity.length; index += 2) {
+    if (zoom >= opacity[index]) value = opacity[index + 1];
+  }
+  return value !== 0;
+}
+function planSymbolNames(map) {
+  const zoom = map.getZoom();
+  const canvas = map.getCanvas();
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol' && planOpacityOn(layer, zoom))
+    .map((layer) => layer.id);
+  const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
+  return features.filter((feature) => {
+    const coordinates = feature.geometry && feature.geometry.coordinates;
+    if (!coordinates || coordinates.length < 2) return false;
+    const point = map.project(coordinates);
+    return point.x >= 0 && point.y >= 0 && point.x <= canvas.clientWidth && point.y <= canvas.clientHeight;
+  }).map((feature) => (feature.properties && feature.properties.name) || '');
+}
+function planLayerCovers(map, name, zoom) {
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol');
+  return layers.some((layer) => {
+    const min = layer.minzoom == null ? -Infinity : layer.minzoom;
+    const max = layer.maxzoom == null ? Infinity : layer.maxzoom;
+    if (zoom < min || zoom >= max) return false;
+    const filter = layer.filter;
+    const names = filter && filter[2] && filter[2][1];
+    return Array.isArray(names) && names.includes(name);
+  });
+}
+async function planWaitTiles(map) {
+  const deadline = performance.now() + 8000;
+  let labels = null;
+  let base = null;
+  while (performance.now() < deadline) {
+    labels = planVisibleTiles(map, 'inset-labels');
+    base = planVisibleTiles(map, 'inset-basemap');
+    const ready = (pack) => pack.tiles.length > 0
+      && pack.tiles.every((tile) => tile.state === 'loaded')
+      && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y);
+    if (ready(labels) && ready(base) && map.areTilesLoaded()) break;
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 100);
+      map.once('idle', () => { clearTimeout(timer); resolve(); });
+    });
+  }
+  const ready = (pack) => !!(pack && pack.tiles.length > 0
+    && pack.tiles.every((tile) => tile.state === 'loaded')
+    && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y));
+  const tilesOk = ready(labels) && ready(base) && map.areTilesLoaded();
+  if (tilesOk) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 400);
+      map.once('idle', () => { clearTimeout(timer); resolve(); });
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    });
+  }
+  const urls = tilesOk
+    ? planTileUrls(map, 'inset-labels', labels.tiles).concat(planTileUrls(map, 'inset-basemap', base.tiles))
+    : [];
+  return {
+    tilesOk,
+    tileZ: labels ? labels.z : null,
+    urls,
+    detail: tilesOk ? null : { labels, base },
+  };
+}
+`;
+
+const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
+  ${PLAN_TILE_HELPERS}
+  const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+  const map = frame && frame.__opdTrackInset;
+  if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
+    return { ok: false, reason: 'map' };
+  }
+  planHold(map);
+  map.jumpTo({ center: [lng, lat], zoom });
+  const waited = await planWaitTiles(map);
+  const canvas = map.getCanvas();
+  const box = canvas.getBoundingClientRect();
+  return {
+    ok: true,
+    tilesOk: waited.tilesOk,
+    detail: waited.detail,
+    urls: waited.urls,
+    viewport: planViewport(map),
+    zoom: map.getZoom(),
+    tileZ: waited.tileZ,
+    names: planSymbolNames(map),
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+  };
+})`;
+
+export async function readPlanLabelZoom(send, zoom, lng, lat) {
+  const sample = await evaluate(send, `(${PLAN_LABEL_READ})(${zoom}, ${lng}, ${lat})`);
+  if (!sample || sample.ok !== true) throw new Error(`plan label zooms ${JSON.stringify(sample)}`);
+  return sample;
+}
+
+export async function coldPlanTileCaches(send) {
+  checkRasterOcr();
+  clearRasterOcrRun();
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
+  const countries = JSON.stringify(PLAN_COUNTRIES);
+  const cleared = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const names = (typeof caches !== 'undefined' && caches.keys) ? await caches.keys() : [];
+    await Promise.all(names.map((name) => caches.delete(name)));
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map || !map.style || !map.style.tileManagers || typeof map.jumpTo !== 'function') {
+      return { ok: false, reason: 'map', caches: names };
+    }
+    planHold(map);
+    if (typeof map.setTransformRequest === 'function') {
+      const bust = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+      map.setTransformRequest((url) => {
+        if (!url || url.indexOf('arcgisonline.com') < 0) return { url };
+        const next = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'nocache=' + bust;
+        return { url: next };
+      });
+    }
+    for (const id of ['inset-labels', 'inset-basemap']) {
+      const manager = map.style.tileManagers[id];
+      if (manager && typeof manager.clearTiles === 'function') manager.clearTiles();
+    }
+    const center = map.getCenter();
+    map.jumpTo({ center, zoom: map.getZoom() });
+    const waited = await planWaitTiles(map);
+    const canvas = map.getCanvas();
+    const box = canvas.getBoundingClientRect();
+    const inside = [];
+    for (const country of ${countries}) {
+      const point = map.project([country.lng, country.lat]);
+      if (point.x >= 8 && point.y >= 8 && point.x <= box.width - 8 && point.y <= box.height - 8) inside.push(country.name);
+    }
+    return {
+      ok: waited.tilesOk === true,
+      cold: true,
+      caches: names,
+      tilesOk: waited.tilesOk,
+      detail: waited.detail,
+      urls: waited.urls,
+      viewport: planViewport(map),
+      zoom: map.getZoom(),
+      tileZ: waited.tileZ,
+      names: planSymbolNames(map),
+      inside,
+    };
+  })()`);
+  if (!cleared || cleared.cold !== true || cleared.tilesOk !== true) {
+    throw new Error(`plan label caches ${JSON.stringify(cleared)}`);
+  }
+  return cleared;
+}
+
+async function restorePlanLabelCamera(send) {
+  await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    const hold = map && map.__opdLabelHold;
+    if (!map || !hold) return { ok: false };
+    map.jumpTo({ center: hold.center, zoom: hold.zoom });
+    map.fitBounds = hold.fit;
+    map.resize = hold.resize;
+    delete map.__opdLabelHold;
+    return { ok: true, zoom: map.getZoom() };
+  })()`);
+}
+
+export async function assertOneNameSource(row) {
+  if (!row.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: row.zoom, country: row.country, detail: row.detail })}`);
+  const pack = await rasterWords(row.urls || []);
+  const raster = readableRasterName(pack, row, row.country);
+  const verdict = oneNameSource({ ...row, words: pack.text, rasterReadable: raster.readable });
+  if (!verdict.ok) throw new Error(`plan label source ${JSON.stringify(verdict)}`);
+  return verdict;
+}
+
+export async function proveFractionalPlanLabels(send) {
+  const zooms = countrySweepZooms();
+  try {
+    const fitted = await coldPlanTileCaches(send);
+    if (!fitted.inside || !fitted.inside.includes('Australia')) {
+      throw new Error(`plan label fitted ${JSON.stringify({ zoom: fitted.zoom, tileZ: fitted.tileZ, inside: fitted.inside, names: fitted.names })}`);
+    }
+    const fittedWords = await rasterWords(fitted.urls || []);
+    console.log(`plan labels cold tilesOk:${fitted.tilesOk} fitted:${fitted.zoom} OCR:${rasterOcrStats.calls}`);
+    const audited = auditRasterLevels(loadCountryRasterLevels());
+    if (!audited.ok) throw new Error(`plan label raster audit ${JSON.stringify(audited)}`);
+    for (const country of fitted.inside) {
+      const verdict = oneNameSource({
+        tilesOk: true,
+        zoom: fitted.zoom,
+        tileZ: fitted.tileZ,
+        country,
+        names: fitted.names,
+        words: fittedWords.text,
+        rasterReadable: readableRasterName(fittedWords, fitted, country).readable,
+      });
+      if (!verdict.ok) throw new Error(`plan label fitted ${JSON.stringify(verdict)}`);
+    }
+    const rows = [];
+    for (const zoom of [2.5, 2.9, 3, 3.1]) {
+      const row = await readPlanLabelZoom(send, zoom, 2, 46);
+      if (!row.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom, detail: row.detail })}`);
+      rows.push(row);
+    }
+    for (const row of rows) {
+      const pack = await rasterWords(row.urls);
+      for (const country of new Set(row.names)) {
+        const verdict = oneNameSource({ ...row, country, words: pack.text, rasterReadable: readableRasterName(pack, row, country).readable });
+        if (!verdict.ok) throw new Error(`plan label fractional ${JSON.stringify(verdict)}`);
+      }
+    }
+    const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
+    const sweepNotes = [];
+    for (const country of PLAN_COUNTRIES) {
+      const swept = await evaluate(send, `(async () => {
+        ${PLAN_TILE_HELPERS}
+        const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+        const map = frame && frame.__opdTrackInset;
+        if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+        planHold(map);
+        const rows = [];
+        for (const zoom of ${JSON.stringify(zooms)}) {
+          map.jumpTo({ center: [${country.lng}, ${country.lat}], zoom });
+          const waited = await planWaitTiles(map);
+          rows.push({
+            tilesOk: waited.tilesOk,
+            detail: waited.detail,
+            urls: waited.urls,
+            viewport: planViewport(map),
+            zoom: map.getZoom(),
+            tileZ: waited.tileZ,
+            names: planSymbolNames(map),
+            country: ${JSON.stringify(country.name)},
+            covers: planLayerCovers(map, ${JSON.stringify(country.name)}, map.getZoom()),
+          });
+          if (!waited.tilesOk) break;
+        }
+        return { ok: true, rows };
+      })()`);
+      if (!swept || swept.ok !== true) throw new Error(`plan label sweep ${country.name} ${JSON.stringify(swept)}`);
+      for (const row of swept.rows) await assertOneNameSource(row);
+      sweepNotes.push(`${country.name}:${swept.rows.length}`);
+      console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
+    }
+    const france = await readPlanLabelZoom(send, 1.2, 2, 46);
+    if (!france.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: france.detail })}`);
+    const franceKept = keptCountrySymbol(france.names, 'France');
+    if (!franceKept.ok) throw new Error(`plan label France ${JSON.stringify(franceKept)}`);
+    const japan = await readPlanLabelZoom(send, 1.2, 138, 36);
+    if (!japan.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: japan.detail })}`);
+    const japanKept = keptCountrySymbol(japan.names, 'Japan');
+    if (!japanKept.ok) throw new Error(`plan label Japan ${JSON.stringify(japanKept)}`);
+    return `tilesOk:true OCR ${JSON.stringify(rasterOcrStats)} caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
+  } finally {
+    await restorePlanLabelCamera(send);
+  }
+}
+
 async function proveIssFullscreen(send, evidenceDir, viewport) {
   const phone = viewport.mobile && viewport.width < 600;
   if (phone && !await evaluate(send, ISS_FULLSCREEN_STRIP)) throw new Error('iss fullscreen request methods still present');
@@ -4697,8 +5032,10 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     }
     await pressIssFullscreen(send);
     const back = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen exit by button', 10000);
+    let planSymbols = '';
     if (insetViewportFits(viewport.width, viewport.height)) {
       await waitForPip(send, 'plan', 'plan inset back after fullscreen', 20000);
+      planSymbols = await proveFractionalPlanLabels(send);
     }
     if (!sameFrame(idle, back)) throw new Error(`iss frame after fullscreen ${JSON.stringify(back)} is not ${JSON.stringify(idle)}`);
     await click(send, '[data-iss-preset="nadir"]');
@@ -4742,7 +5079,8 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}, Escape kept aim`;
+    const symbolNote = planSymbols ? `, plan symbols ${planSymbols}` : '';
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}${symbolNote}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }
