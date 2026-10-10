@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
-import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
@@ -569,7 +569,8 @@ const LOG_HOOK = `window.__opdLogs = [];
   console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
 
 function slideLaunch(home) {
-  const until = refreshLaunchClock(resolve(home, 'fixtures'));
+  const dir = resolve(home, 'fixtures');
+  const until = refreshLaunchClock(dir, effectiveNowMs(dir));
   const stateFile = resolve(home, 'state.json');
   if (!existsSync(stateFile)) return until;
   const state = JSON.parse(readFileSync(stateFile, 'utf8'));
@@ -587,8 +588,19 @@ async function resetFixtureProfile(baseUrl) {
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
 }
 
-async function openApp(send, baseUrl) {
+function pageClockSource(startOffset) {
+  return `(() => {
+    const startOffset = ${Number(startOffset)};
+    const real = Date.now.bind(Date);
+    Date.now = () => real() + startOffset;
+  })();`;
+}
+
+async function openApp(send, baseUrl, startOffset) {
   await send('Page.enable');
+  if (Number.isFinite(startOffset)) {
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: pageClockSource(startOffset) });
+  }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: LOG_HOOK });
   await send('Page.navigate', { url: `${baseUrl}/?e2e` });
   await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'page load', 30000);
@@ -627,7 +639,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   return notes;
 }
 
-async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home, startOffset }) {
   slideLaunch(home);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
   const chromePid = startChrome(home, debugPort);
@@ -647,7 +659,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
       });
       await cdp.send('Network.enable');
       cdp.send.cartoDark = cartoDark;
-      await openApp(cdp.send, baseUrl);
+      await openApp(cdp.send, baseUrl, startOffset);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
@@ -661,7 +673,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
   }
 }
 
-async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, startOffset }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
@@ -677,6 +689,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
       const context = await browser.newContext({ ...deviceDescriptor(active), serviceWorkers: 'block' });
+      if (Number.isFinite(startOffset)) await context.addInitScript({ content: pageClockSource(startOffset) });
       if (spec.standalone) {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -705,15 +718,15 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
   return notes;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features, startOffset }) {
   viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home }));
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, startOffset }));
   if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
-    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }));
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, startOffset }));
   }
   return notes;
 }
@@ -756,7 +769,7 @@ const CORNER_BOX = `
   };
 `;
 
-export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
+export async function driveMapCorner({ baseUrl, evidenceDir, home, startOffset }) {
   mkdirSync(evidenceDir, { recursive: true });
   slideLaunch(home);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
@@ -769,7 +782,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
     const send = cdp.send;
     try {
       await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
-      await openApp(send, baseUrl);
+      await openApp(send, baseUrl, startOffset);
       const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
       if (!shown) {
         await click(send, '#map-chrome-toggle');

@@ -1,6 +1,6 @@
 # Queue
 
-Queue is the next passes to shoot. The fixture puts Verify Reef and Verify Delta inside the next 90 minutes.
+Queue is the next passes to shoot. The fixture puts Verify Reef 20 minutes after the drive start and Verify Delta 50 minutes after it, so both cards sit inside the 90-minute queue and read a near-term time.
 
 ## Sub-features
 
@@ -43,7 +43,7 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 ## Gotchas
 
 - Shoot on a stale manifest is disabled. `up` stamps `generated_at` 30 seconds before it starts, and a reused `up` does not rebuild that stamp. `doctor` fails about 13 minutes after `up`, while the manifest is still under the 60-minute Shoot gate.
-- Verify Reef's closest approach is 20 minutes after that same stamp, and Verify Delta's is 50 minutes. The queue only lists a pass until that time. A drive started after Reef's approach waits on both card names and times out even when `removedCuratedIds` is empty. `resetFixtureProfile` clears hides and does not rebuild pass times. `down` then `up` stamps a new pair.
+- The queue lists a pass until its closest approach. The drive rewrites Verify Reef to 20 minutes after its captured start and Verify Delta to 50 minutes. The page clock is that start plus elapsed time, so the cards stay near-term for the drive. `resetFixtureProfile` clears hides and does not rebuild pass times. A new `drive` stamps the times again.
 - The mine filter matches personal targets. The fixture cards are shared, and an added personal target has no pass in this fixture, so Mine stays empty. Mine writes the shared `opd_target_filter_v1=mine`, so Upcoming and the map follow Mine on purpose. Launches does not write that key. This drive clicks All after Launches, which sets both keys back to `all` before Hide.
 - Forecast cards in Upcoming do not have Shoot. Shoot lives on Queue.
 - Hide on Queue and Hide on Upcoming write the same `removedCuratedIds` list. The proxy keeps that list until `down`. `drive upcoming` reloads the same Chrome, then opens a new Chrome profile and checks that Verify Mesa is already gone. It does not check Verify Delta.

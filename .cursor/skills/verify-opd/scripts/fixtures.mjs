@@ -1,7 +1,8 @@
-import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -42,8 +43,665 @@ function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }
 
+// The schema requires the body revision in its URL. Hash the payload without
+// that self-reference; the pointer separately hashes the complete wire bytes.
+function launchRevision(body) {
+  return sha256(JSON.stringify({ ...body, revision: undefined }));
+}
+
+function launchArtifact(body) {
+  body.revision = launchRevision(body);
+  return artifact(body);
+}
+
 function launchIso(ms) {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+export const QUEUE_HORIZON_MS = 90 * 60_000;
+export const QUEUE_REEF_OFFSET_MS = 20 * 60_000;
+export const QUEUE_DELTA_OFFSET_MS = 50 * 60_000;
+export const CATALOG_NET_OFFSET_MS = 2 * 60 * 60_000;
+
+const ZONED_STAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function fractionalMs(fraction) {
+  if (!fraction) return 0;
+  const digits = fraction.slice(1, 4).padEnd(3, '0');
+  const ms = Number(digits);
+  return Number.isInteger(ms) ? ms : Number.NaN;
+}
+
+function zonedEpoch(text) {
+  const match = ZONED_STAMP.exec(text);
+  if (!match) return Number.NaN;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const ms = fractionalMs(match[7]);
+  const zone = match[8];
+  if (!Number.isInteger(ms) || ms < 0 || ms > 999) return Number.NaN;
+  const utc = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const check = new Date(utc);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day
+    || check.getUTCHours() !== hour || check.getUTCMinutes() !== minute || check.getUTCSeconds() !== second
+    || check.getUTCMilliseconds() !== ms) {
+    return Number.NaN;
+  }
+  if (zone === 'Z') return utc;
+  const sign = zone.startsWith('-') ? -1 : 1;
+  const zoneHour = Number(zone.slice(1, 3));
+  const zoneMinute = Number(zone.slice(4, 6));
+  if (zoneHour > 23 || zoneMinute > 59) return Number.NaN;
+  return utc - sign * (zoneHour * 60 + zoneMinute) * 60_000;
+}
+
+export function driveStartMs(raw, wallMs) {
+  const text = String(raw ?? '').trim();
+  if (!text) return wallMs;
+  if (!ZONED_STAMP.test(text)) {
+    throw new Error(`OPD_VERIFY_DRIVE_START must be a zoned timestamp: ${text}`);
+  }
+  const parsed = zonedEpoch(text);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`OPD_VERIFY_DRIVE_START is not a valid date: ${text}`);
+  }
+  if (parsed + QUEUE_REEF_OFFSET_MS <= wallMs) {
+    throw new Error(`OPD_VERIFY_DRIVE_START ${text} is expired at ${new Date(wallMs).toISOString()}`);
+  }
+  if (parsed + QUEUE_DELTA_OFFSET_MS >= wallMs + QUEUE_HORIZON_MS) {
+    throw new Error(`OPD_VERIFY_DRIVE_START ${text} is outside the 90-minute horizon at ${new Date(wallMs).toISOString()}`);
+  }
+  return parsed;
+}
+
+function eventInstants(start) {
+  const launchBase = start + CATALOG_NET_OFFSET_MS;
+  return {
+    reef: launchIso(start + QUEUE_REEF_OFFSET_MS),
+    delta: launchIso(start + QUEUE_DELTA_OFFSET_MS),
+    mesa: launchIso(start + 8 * 60 * 60_000),
+    keepsake: launchIso(start + 35 * 60_000),
+    windowStart: launchIso(start + 30 * 60_000),
+    windowEnd: launchIso(start + 40 * 60_000),
+    sample: launchIso(start - 30_000),
+    net: launchIso(launchBase),
+    launchWindowEnd: launchIso(launchBase + 9 * 60_000),
+    captureStart: launchIso(launchBase + 60_000),
+    capturePeak: launchIso(launchBase + 4 * 60_000),
+    captureEnd: launchIso(launchBase + 8 * 60_000),
+    liftoffEnd: launchIso(launchBase + 60_000),
+  };
+}
+
+export function writeTextAtomic(path, text, write = writeFileSync) {
+  const tmp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
+  try {
+    write(tmp, text);
+    renameSync(tmp, path);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // No temp file was left to remove.
+    }
+    throw error;
+  }
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Only ESRCH confirms that the owner is gone; unexpected errors are not
+    // permission to remove another process's files.
+    return error.code !== 'ESRCH';
+  }
+}
+
+// Opt-in, file-based rendezvous points let subprocess tests stop at publication
+// boundaries without racing a sleep. Production runs do not enter this path.
+function fixtureTestHook(point, details = {}) {
+  const hookDir = process.env.OPD_VERIFY_FIXTURE_HOOK_DIR;
+  const points = (process.env.OPD_VERIFY_FIXTURE_HOOKS || '').split(',');
+  if (!hookDir || !points.includes(point)) return;
+  const gate = join(hookDir, `${point}.${process.pid}`);
+  writeFileSync(`${gate}.ready`, JSON.stringify({ pid: process.pid, ...details }));
+  const deadline = Date.now() + 30_000;
+  while (!existsSync(`${gate}.continue`)) {
+    if (Date.now() >= deadline) throw new Error(`fixture test hook timed out: ${point}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+}
+
+export function generationOwnerAlive(root) {
+  const match = /\.gen-(\d+)-[a-f0-9]+$/.exec(basename(root));
+  return !!match && pidAlive(Number(match[1]));
+}
+
+export function writeLockFile(lockPath, pid, link = linkSync) {
+  const tmp = `${lockPath}.${pid}.${randomBytes(4).toString('hex')}`;
+  try {
+    writeFileSync(tmp, String(pid));
+    fixtureTestHook('lock-temp-created', { lockPath, tmp });
+    link(tmp, lockPath);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // The temp lock file is already gone.
+    }
+    throw error;
+  }
+  try {
+    unlinkSync(tmp);
+  } catch {
+    // The temp lock file is already gone.
+  }
+  return lockPath;
+}
+
+// Python's standard-library flock is available on the developer Mac (unlike a
+// flock CLI). The permanent guard inode MUST NOT be unlinked: all acquisition,
+// dead-owner recovery and release checks serialize on this same OS lock. A
+// killed helper automatically releases flock, so the guard itself cannot go
+// stale and there is no rename/restore acquisition gap.
+const LOCK_HELPER = String.raw`
+import errno, fcntl, json, os, re, sys, time
+
+request = json.loads(sys.argv[1])
+lock_path = request['lockPath']
+caller = request['caller']
+deadline = time.monotonic() + request['timeoutMs'] / 1000
+
+def alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as error:
+        return error.errno != errno.ESRCH
+
+def owner_alive(owner):
+    if not owner or not isinstance(owner.get('pid'), int) or owner['pid'] <= 0:
+        return True
+    # Only ESRCH proves the PID is gone. PID reuse or legacy start-time formats
+    # may delay recovery, but can never justify deleting a live process's lock.
+    # The start/token metadata still identifies the exact claim during release.
+    return alive(owner['pid'])
+
+def check_caller():
+    # This helper is the caller's direct child. Reparenting detects its death
+    # without PID-reuse ambiguity or repeatedly spawning ps during gate waits.
+    if os.getppid() != caller['pid']:
+        # Do not continue publishing on behalf of a killed Node writer. Leave
+        # its named temp for the next writer's dead-owner cleanup if needed.
+        os._exit(75)
+
+def hook(point, **details):
+    hook_dir = os.environ.get('OPD_VERIFY_FIXTURE_HOOK_DIR')
+    points = os.environ.get('OPD_VERIFY_FIXTURE_HOOKS', '').split(',')
+    if not hook_dir or point not in points:
+        return
+    gate = os.path.join(hook_dir, point + '.' + str(caller['pid']))
+    with open(gate + '.ready', 'w') as output:
+        json.dump(dict(pid=caller['pid'], guardPid=os.getpid(), **details), output)
+    hook_deadline = time.monotonic() + 30
+    while not os.path.exists(gate + '.continue'):
+        check_caller()
+        if time.monotonic() >= hook_deadline:
+            raise RuntimeError('fixture test hook timed out: ' + point)
+        time.sleep(.01)
+    check_caller()
+
+def read_owner():
+    try:
+        with open(lock_path) as source:
+            text = source.read().strip()
+        try:
+            owner = json.loads(text)
+        except (ValueError, TypeError):
+            return {}
+        if isinstance(owner, int):
+            return dict(pid=owner)
+        return owner if isinstance(owner, dict) else {}
+    except FileNotFoundError:
+        return None
+
+def cleanup_orphans():
+    parent = os.path.dirname(lock_path)
+    base = os.path.basename(lock_path[:-len('.writer.lock')])
+    patterns = [
+        re.compile(re.escape(base) + r'\.next-(\d+)-[a-f0-9]+$'),
+        re.compile(re.escape(base) + r'\.writer\.lock\.(\d+)\.[a-f0-9]+$'),
+    ]
+    for name in os.listdir(parent):
+        match = next((pattern.fullmatch(name) for pattern in patterns if pattern.fullmatch(name)), None)
+        if not match or alive(int(match.group(1))):
+            continue
+        try:
+            os.unlink(os.path.join(parent, name))
+        except FileNotFoundError:
+            pass
+
+with open(lock_path[:-len('.lock')] + '.guard', 'a') as guard:
+    while True:
+        check_caller()
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            hook('writer-lock-waiting', lockPath=lock_path)
+            if time.monotonic() >= deadline:
+                print(json.dumps(dict(status='busy', owner=None)))
+                sys.exit(0)
+            time.sleep(.01)
+    check_caller()
+    owner = read_owner()
+    action = request['action']
+    if action == 'release':
+        # A release may only remove this exact caller's claim, never a new
+        # owner that acquired after it. No lock is renamed before checking.
+        matches = owner and all(owner.get(key) == caller.get(key) for key in ('pid', 'started', 'token'))
+        if matches:
+            os.unlink(lock_path)
+        print(json.dumps(dict(status='released' if matches else 'unchanged')))
+    else:
+        if owner is not None:
+            hook('writer-lock-observed', lockPath=lock_path, owner=owner)
+            check_caller()
+            expected = request.get('observedPid')
+            matches = action != 'recover' or owner.get('pid') == expected
+            if matches and not owner_alive(owner):
+                os.unlink(lock_path)
+                owner = None
+                recovered = True
+            else:
+                recovered = False
+        else:
+            recovered = False
+        if action == 'recover':
+            print(json.dumps(dict(status='recovered' if recovered else 'unchanged')))
+        elif owner is not None:
+            hook('writer-lock-waiting', lockPath=lock_path, owner=owner)
+            print(json.dumps(dict(status='busy', owner=owner)))
+        else:
+            tmp = lock_path + '.' + str(caller['pid']) + '.' + request['nonce']
+            try:
+                with open(tmp, 'x') as output:
+                    json.dump(caller, output)
+                hook('lock-temp-created', lockPath=lock_path, tmp=tmp)
+                check_caller()
+                os.link(tmp, lock_path)
+            finally:
+                try:
+                    os.unlink(tmp)
+                except FileNotFoundError:
+                    pass
+            try:
+                cleanup_orphans()
+            except BaseException:
+                # Acquisition has not returned to Node yet: do not strand its
+                # live owner if orphan cleanup itself fails. flock still guards
+                # this exact newly-created claim.
+                os.unlink(lock_path)
+                raise
+            print(json.dumps(dict(status='acquired')))
+`;
+
+let fixtureLockOwner;
+function lockOwner() {
+  if (!fixtureLockOwner) {
+    const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], {
+      encoding: 'utf8', env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+    });
+    if (result.error || result.status !== 0 || !result.stdout.trim()) {
+      throw new Error('cannot determine fixture writer process start time');
+    }
+    fixtureLockOwner = { pid: process.pid, started: result.stdout.trim(), token: randomBytes(16).toString('hex') };
+  }
+  return fixtureLockOwner;
+}
+
+function lockTimeoutMs() {
+  const raw = process.env.OPD_VERIFY_LOCK_TIMEOUT_MS;
+  const timeout = raw === undefined ? 10_000 : Number(raw);
+  if (!Number.isFinite(timeout) || timeout < 1 || timeout > 60_000) {
+    throw new Error('OPD_VERIFY_LOCK_TIMEOUT_MS must be between 1 and 60000');
+  }
+  return timeout;
+}
+
+function guardedLockAction(lockPath, action, timeoutMs, extra = {}) {
+  const request = { lockPath, action, timeoutMs, caller: lockOwner(), nonce: randomBytes(4).toString('hex'), ...extra };
+  const result = spawnSync('python3', ['-c', LOCK_HELPER, JSON.stringify(request)], {
+    encoding: 'utf8',
+    timeout: Math.max(1_000, timeoutMs + 1_000) + (process.env.OPD_VERIFY_FIXTURE_HOOK_DIR ? 31_000 : 0),
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`fixture writer guard failed: ${result.error?.message || result.stderr.trim() || result.status}`);
+  }
+  return JSON.parse(result.stdout);
+}
+
+export function stealDeadLock(lockPath, observedPid) {
+  return guardedLockAction(lockPath, 'recover', lockTimeoutMs(), { observedPid }).status === 'recovered';
+}
+
+function releaseLock(lockPath) {
+  const result = guardedLockAction(lockPath, 'release', lockTimeoutMs());
+  if (result.status === 'busy') throw new Error('fixture writer guard timed out during release');
+}
+
+function acquireFixtureLock(dir) {
+  const lockPath = `${dir}.writer.lock`;
+  const deadline = Date.now() + lockTimeoutMs();
+  for (;;) {
+    let result;
+    try {
+      result = guardedLockAction(lockPath, 'acquire', Math.max(1, deadline - Date.now()));
+    } catch (error) {
+      // A helper can fail after linking our claim but before acknowledging it.
+      // Exact-owner release is safe even if it failed before acquisition.
+      try { releaseLock(lockPath); } catch { /* Preserve the acquisition error. */ }
+      throw error;
+    }
+    if (result.status === 'acquired') return lockPath;
+    if (Date.now() >= deadline) {
+      throw new Error(`fixture writer lock held by ${result.owner?.pid || 'unknown owner'} (timeout)`);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+}
+
+function withFixtureLock(dir, fn) {
+  const lockPath = acquireFixtureLock(dir);
+  try {
+    fixtureTestHook('writer-lock-acquired', { lockPath });
+    return fn();
+  } finally {
+    releaseLock(lockPath);
+  }
+}
+
+export function liveFixtureRoot(dir) {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
+export function readDriveClock(dir) {
+  const file = join(liveFixtureRoot(dir), 'drive-clock.json');
+  if (!existsSync(file)) return null;
+  try {
+    const body = JSON.parse(readFileSync(file, 'utf8'));
+    if (!Number.isFinite(body.start) || !Number.isFinite(body.startOffset)) return null;
+    return { start: body.start, startOffset: body.startOffset };
+  } catch {
+    return null;
+  }
+}
+
+export function effectiveNowMs(dir, wallMs = Date.now()) {
+  const clock = readDriveClock(dir);
+  if (!clock) return wallMs;
+  return wallMs + clock.startOffset;
+}
+
+function listFiles(root) {
+  const names = [];
+  for (const name of readdirSync(root)) {
+    if (name.startsWith('.')) continue;
+    const full = join(root, name);
+    if (lstatSync(full).isFile()) names.push(name);
+  }
+  return names;
+}
+
+const BODY_NAMES = new Set([
+  'passes.json',
+  'top5.json',
+  'top_24h.json',
+  'track.json',
+  'status.json',
+  'targets.json',
+  'cupola_windows.json',
+  'tracked.json',
+]);
+
+function bodyUrl(name, sha) {
+  return `v/verify/${sha}/${name}`;
+}
+
+function publishedEntry(name, entry) {
+  return { path: bodyUrl(name, entry.sha256), sha256: entry.sha256, bytes: entry.bytes };
+}
+
+export function generationRoots(logicalDir) {
+  const roots = [];
+  const seen = new Set();
+  const add = (root) => {
+    try {
+      root = realpathSync(root);
+    } catch {
+      return;
+    }
+    if (!root || seen.has(root)) return;
+    seen.add(root);
+    roots.push(root);
+  };
+  try {
+    add(realpathSync(logicalDir));
+  } catch {
+    // The directory is between generations.
+  }
+  const parent = dirname(logicalDir);
+  const prefix = `${basename(logicalDir)}.gen-`;
+  try {
+    for (const name of readdirSync(parent)) {
+      if (!name.startsWith(prefix)) continue;
+      add(join(parent, name));
+    }
+  } catch {
+    // The parent is gone.
+  }
+  return roots;
+}
+
+export function readBodyByHash(logicalDir, name, sha) {
+  if (!BODY_NAMES.has(name) || !/^[a-f0-9]{64}$/.test(sha)) return null;
+  for (const root of generationRoots(logicalDir)) {
+    const file = join(root, name);
+    try {
+      const body = readFileSync(file);
+      if (sha256(body) === sha) return body;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  return null;
+}
+
+export function bodyForRequestPath(logicalDir, urlPath) {
+  const launch = /^\/launch\/v\/([a-f0-9]{64})\.json$/.exec(urlPath);
+  if (launch) {
+    for (const root of generationRoots(logicalDir)) {
+      try {
+        const text = readFileSync(join(root, 'launch.json'));
+        const body = JSON.parse(text);
+        if (body.revision === launch[1] && launchRevision(body) === launch[1]) return text;
+      } catch (error) {
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
+    }
+    return null;
+  }
+  const match = /^\/v\/verify\/([a-f0-9]{64})\/([^/]+)$/.exec(urlPath);
+  if (!match) return null;
+  return readBodyByHash(logicalDir, match[2], match[1]);
+}
+
+export function copyGeneration(logicalDir, sourceRoot, replacements, write = writeFileSync) {
+  const next = `${logicalDir}.gen-${process.pid}-${randomBytes(6).toString('hex')}`;
+  mkdirSync(next);
+  try {
+    fixtureTestHook('generation-staged', { logicalDir, next });
+    const names = new Set(listFiles(sourceRoot));
+    for (const name of replacements.keys()) names.add(name);
+    for (const name of names) {
+      const text = replacements.has(name) ? replacements.get(name) : readFileSync(join(sourceRoot, name));
+      write(join(next, name), text);
+    }
+    return next;
+  } catch (error) {
+    rmSync(next, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function stageGeneration(logicalDir, sourceRoot, replacements) {
+  return copyGeneration(logicalDir, sourceRoot, replacements);
+}
+
+export function swapGenerationLink(logicalDir, next, rename = renameSync) {
+  const link = `${logicalDir}.next-${process.pid}-${randomBytes(4).toString('hex')}`;
+  try {
+    symlinkSync(next, link);
+    fixtureTestHook('next-link-created', { logicalDir, next, link });
+    rename(link, logicalDir);
+  } catch (error) {
+    try {
+      unlinkSync(link);
+    } catch {
+      // The temp link is already gone.
+    }
+    throw error;
+  }
+}
+
+// A reader may hold a manifest for this long after it stops being current.
+// Capacity applies backpressure, never early eviction of an unexpired body.
+export const FIXTURE_RETENTION_MS = 15 * 60_000;
+export const FIXTURE_MAX_GENERATIONS = 1024;
+
+function retentionPolicy() {
+  const retentionMs = Number(process.env.OPD_VERIFY_FIXTURE_RETENTION_MS ?? FIXTURE_RETENTION_MS);
+  const maxGenerations = Number(process.env.OPD_VERIFY_FIXTURE_MAX_GENERATIONS ?? FIXTURE_MAX_GENERATIONS);
+  if (!Number.isSafeInteger(retentionMs) || retentionMs < 0
+    || !Number.isSafeInteger(maxGenerations) || maxGenerations < 2) {
+    throw new Error('invalid fixture retention policy');
+  }
+  return { retentionMs, maxGenerations };
+}
+
+function retirementTime(root, now) {
+  const file = join(root, '.retired-at');
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8'))?.retiredAt;
+    if (Number.isSafeInteger(value)) return value;
+  } catch (error) {
+    if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+  }
+  // Missing or interrupted metadata errs toward retaining a reader's body.
+  writeTextAtomic(file, JSON.stringify({ retiredAt: now }));
+  return now;
+}
+
+function pruneGenerations(logicalDir, keep) {
+  const { retentionMs } = retentionPolicy();
+  const canonicalKeep = new Set([...keep].map((root) => realpathSync(root)));
+  const now = Date.now();
+  let retained = 0;
+  for (const full of generationRoots(logicalDir)) {
+    if (canonicalKeep.has(full)) {
+      retained += 1;
+      continue;
+    }
+    if (!existsSync(join(full, '.published')) && generationOwnerAlive(full)) continue;
+    // Owned, incomplete stages were never exposed to readers.
+    if (!existsSync(join(full, '.published')) && /\.gen-\d+-/.test(basename(full))) {
+      rmSync(full, { recursive: true, force: true });
+      continue;
+    }
+    const retiredAt = retirementTime(full, now);
+    if (now - retiredAt >= retentionMs) {
+      rmSync(full, { recursive: true, force: true });
+    } else {
+      retained += 1;
+    }
+  }
+  return retained;
+}
+
+function sealFixtureRoot(dir) {
+  if (lstatSync(dir).isSymbolicLink()) return;
+  const next = `${dir}.gen-${process.pid}-${randomBytes(6).toString('hex')}`;
+  writeFileSync(join(dir, '.published'), '');
+  renameSync(dir, next);
+  try {
+    symlinkSync(next, dir);
+  } catch (error) {
+    try {
+      renameSync(next, dir);
+    } catch {
+      // The original directory could not be restored.
+    }
+    throw error;
+  }
+}
+
+function switchToGeneration(logicalDir, next, previousRoot) {
+  if (previousRoot) {
+    writeFileSync(join(previousRoot, '.published'), '');
+    rmSync(join(previousRoot, '.retired-at'), { force: true });
+  }
+  if (lstatSync(logicalDir).isSymbolicLink()) {
+    swapGenerationLink(logicalDir, next);
+  } else {
+    const displaced = `${logicalDir}.displaced-${randomBytes(4).toString('hex')}`;
+    renameSync(logicalDir, displaced);
+    try {
+      symlinkSync(next, logicalDir);
+    } catch (error) {
+      try {
+        renameSync(displaced, logicalDir);
+      } catch {
+        // The original directory could not be restored.
+      }
+      throw error;
+    }
+    rmSync(displaced, { recursive: true, force: true });
+  }
+  writeFileSync(join(next, '.published'), '');
+  // Start the reader window only after the old manifest stops being current.
+  // A crash before this write leaves no timestamp; GC starts it conservatively.
+  if (previousRoot && existsSync(previousRoot)) {
+    writeTextAtomic(join(previousRoot, '.retired-at'), JSON.stringify({ retiredAt: Date.now() }));
+  }
+  pruneGenerations(logicalDir, new Set([next]));
+}
+
+function publishLocked(logicalDir, replacements) {
+  const sourceRoot = liveFixtureRoot(logicalDir);
+  const retained = pruneGenerations(logicalDir, new Set([sourceRoot]));
+  if (retained >= retentionPolicy().maxGenerations) {
+    throw new Error('fixture retention capacity reached; retry after the reader retention window');
+  }
+  const next = stageGeneration(logicalDir, sourceRoot, replacements);
+  try {
+    switchToGeneration(logicalDir, next, sourceRoot);
+  } catch (error) {
+    if (liveFixtureRoot(logicalDir) !== liveFixtureRoot(next)) rmSync(next, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function wrapLon(lon) {
@@ -158,16 +816,18 @@ function artifact(body) {
   return { text, sha256: sha256(text), bytes: Buffer.byteLength(text) };
 }
 
-export async function buildFixtures(dir, now = Date.now()) {
+export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
   mkdirSync(dir, { recursive: true });
   const tle = await loadTle();
   const satrec = satellite.twoline2satrec(tle.line1, tle.line2);
   const hereNow = positionAt(satrec, now) ?? { lat: 0, lon: 0, altKm: 420 };
   const generated = launchIso(now - 30_000);
-  const queueAt = launchIso(now + 20 * 60_000);
-  const queueAt2 = launchIso(now + 50 * 60_000);
-  const upcomingAt = launchIso(now + 8 * 60 * 60_000);
-  const keepsakeAt = launchIso(now + 35 * 60_000);
+  const events = eventInstants(eventStart);
+  const sample = events.sample;
+  const queueAt = events.reef;
+  const queueAt2 = events.delta;
+  const upcomingAt = events.mesa;
+  const keepsakeAt = events.keepsake;
   const reef = { lat: hereNow.lat, lon: wrapLon(hereNow.lon + 8) };
   const delta = { lat: hereNow.lat, lon: wrapLon(hereNow.lon + 12) };
   const mesa = { lat: hereNow.lat, lon: wrapLon(hereNow.lon - 12) };
@@ -175,18 +835,18 @@ export async function buildFixtures(dir, now = Date.now()) {
   const keepsake = { lat: hereNow.lat, lon: wrapLon(hereNow.lon + 4) };
 
   const top5 = [
-    pass({ id: 'verify-reef', name: 'Verify Reef', ...reef, at: queueAt, score: 86, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
-    pass({ id: 'verify-delta', name: 'Verify Delta', ...delta, at: queueAt2, score: 64, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
+    pass({ id: 'verify-reef', name: 'Verify Reef', ...reef, at: queueAt, score: 86, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
+    pass({ id: 'verify-delta', name: 'Verify Delta', ...delta, at: queueAt2, score: 64, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
   ];
   const top24h = [
-    pass({ id: 'verify-mesa', name: 'Verify Mesa', ...mesa, at: upcomingAt, score: 71, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
+    pass({ id: 'verify-mesa', name: 'Verify Mesa', ...mesa, at: upcomingAt, score: 71, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
   ];
   const cupolaPass = {
-    ...pass({ id: 'cupola:verify-window', name: 'Verify Keepsake', ...keepsake, at: keepsakeAt, score: 77, generated, issLat: hereNow.lat, issLon: hereNow.lon }),
+    ...pass({ id: 'cupola:verify-window', name: 'Verify Keepsake', ...keepsake, at: keepsakeAt, score: 77, generated: sample, issLat: hereNow.lat, issLon: hereNow.lon }),
     golden_hour: true,
     water_pct: 0.45,
-    window_start: launchIso(now + 30 * 60_000),
-    window_end: launchIso(now + 40 * 60_000),
+    window_start: events.windowStart,
+    window_end: events.windowEnd,
   };
   const points = [];
   for (let t = 0; t <= 200 * 60; t += 30) {
@@ -231,8 +891,8 @@ export async function buildFixtures(dir, now = Date.now()) {
     { id: 'verify-mesa', name: 'Verify Mesa', geom: { type: 'point', lat: mesa.lat, lon: mesa.lon }, priority: 3, regime: 'day', category: 'terrain' },
   ];
 
-  const net = launchIso(now + 2 * 60 * 60_000);
-  const windowEnd = launchIso(now + 2 * 60 * 60_000 + 9 * 60_000);
+  const net = events.net;
+  const windowEnd = events.launchWindowEnd;
   const generatedLaunch = launchIso(now - 60_000);
   const pointerUntil = launchIso(now - 60_000 + 14 * 60_000);
   const assessmentUntil = launchIso(now - 60_000 + 2 * 60 * 60_000);
@@ -265,11 +925,11 @@ export async function buildFixtures(dir, now = Date.now()) {
         launch_window: { net, start: net, end: windowEnd, precision: 'second' },
         capture_intervals: [
           {
-            start: launchIso(now + 2 * 60 * 60_000 + 60_000),
-            peak: launchIso(now + 2 * 60 * 60_000 + 4 * 60_000),
-            end: launchIso(now + 2 * 60 * 60_000 + 8 * 60_000),
+            start: events.captureStart,
+            peak: events.capturePeak,
+            end: events.captureEnd,
             liftoff_start: net,
-            liftoff_end: launchIso(now + 2 * 60 * 60_000 + 60_000),
+            liftoff_end: events.liftoffEnd,
             look: { frame: 'orbital-lvlh', azimuth_deg: 45, off_nadir_deg: 55 },
           },
         ],
@@ -358,7 +1018,7 @@ export async function buildFixtures(dir, now = Date.now()) {
     'status.json': artifact(status),
     'targets.json': artifact(targets),
     'cupola_windows.json': artifact({ version: 'verify', generated_at: generated, windows: [cupolaPass] }),
-    'launch.json': artifact(launchBody),
+    'launch.json': launchArtifact(launchBody),
   };
   if (tracked) files['tracked.json'] = artifact(tracked);
   for (const [name, entry] of Object.entries(files)) {
@@ -373,18 +1033,18 @@ export async function buildFixtures(dir, now = Date.now()) {
     build_version: 'verify',
     freshness: { tle_hours: 0.1, cloud_hours: 0.1, ok: true },
     artifacts: {
-      passes: { path: 'v/verify/passes.json', sha256: files['passes.json'].sha256, bytes: files['passes.json'].bytes },
-      top5: { path: 'v/verify/top5.json', sha256: files['top5.json'].sha256, bytes: files['top5.json'].bytes },
-      top_24h: { path: 'v/verify/top_24h.json', sha256: files['top_24h.json'].sha256, bytes: files['top_24h.json'].bytes },
-      track: { path: 'v/verify/track.json', sha256: files['track.json'].sha256, bytes: files['track.json'].bytes },
-      status: { path: 'v/verify/status.json', sha256: files['status.json'].sha256, bytes: files['status.json'].bytes },
-      targets: { path: 'v/verify/targets.json', sha256: files['targets.json'].sha256, bytes: files['targets.json'].bytes },
-      cupola_windows: { path: 'v/verify/cupola_windows.json', sha256: files['cupola_windows.json'].sha256, bytes: files['cupola_windows.json'].bytes },
+      passes: publishedEntry('passes.json', files['passes.json']),
+      top5: publishedEntry('top5.json', files['top5.json']),
+      top_24h: publishedEntry('top_24h.json', files['top_24h.json']),
+      track: publishedEntry('track.json', files['track.json']),
+      status: publishedEntry('status.json', files['status.json']),
+      targets: publishedEntry('targets.json', files['targets.json']),
+      cupola_windows: publishedEntry('cupola_windows.json', files['cupola_windows.json']),
     },
   };
   if (files['tracked.json']) {
     manifest.artifacts.tracked = {
-      path: 'v/verify/tracked.json',
+      path: bodyUrl('tracked.json', files['tracked.json'].sha256),
       sha256: files['tracked.json'].sha256,
       bytes: files['tracked.json'].bytes,
     };
@@ -393,13 +1053,34 @@ export async function buildFixtures(dir, now = Date.now()) {
   const launchText = files['launch.json'].text;
   const pointer = {
     schema_version: 2,
-    revision: 'verifyrev',
+    revision: launchBody.revision,
     generated_at: generatedLaunch,
     valid_until: pointerUntil,
-    path: 'launch/v/verifyrev.json',
+    path: `launch/v/${launchBody.revision}.json`,
     sha256: sha256(launchText),
   };
   writeFileSync(resolve(dir, 'launch-latest.json'), JSON.stringify(pointer));
+  const catalog = {
+    schema_version: 3,
+    revision: 'verify-catalog',
+    generated_at: generatedLaunch,
+    schedule_valid_until: assessmentUntil,
+    geometry_valid_until: pointerUntil,
+    coverage: {
+      from: launchIso(now - 60 * 60_000),
+      until: launchIso(now + 14 * 24 * 60 * 60_000),
+    },
+    items: [
+      {
+        event_id: 'verify-ascent',
+        name: 'Verify Ascent',
+        schedule: { net, window_start: net, window_end: windowEnd },
+        shots: [{ liftoff: net, start: net, best: events.captureStart, end: events.captureEnd }],
+      },
+    ],
+  };
+  writeFileSync(resolve(dir, 'catalog.json'), JSON.stringify(catalog));
+  writeFileSync(resolve(dir, 'catalog-clock.json'), JSON.stringify({ anchor: eventStart }));
   const meta = {
     now,
     tleSource: tle.source,
@@ -421,35 +1102,155 @@ export async function buildFixtures(dir, now = Date.now()) {
     standIn: standIn ? standIn.name : null,
   };
   writeFileSync(resolve(dir, 'meta.json'), JSON.stringify(meta, null, 2));
+  sealFixtureRoot(dir);
   return { manifest, meta, pointer, launchBody };
 }
 
-export function refreshLaunchClock(dir, wallMs = Date.now()) {
-  const launchPath = resolve(dir, 'launch.json');
-  const pointerPath = resolve(dir, 'launch-latest.json');
-  const launch = JSON.parse(readFileSync(launchPath, 'utf8'));
-  const generated = new Date(wallMs - 60_000).toISOString();
-  const until = new Date(wallMs - 60_000 + 14 * 60_000).toISOString();
-  const assessmentUntil = new Date(wallMs - 60_000 + 2 * 60 * 60_000).toISOString();
-  launch.generated_at = generated;
-  launch.valid_until = until;
-  if (launch.coverage) launch.coverage.fetched_at = generated;
-  for (const item of launch.items || []) {
-    for (const source of item.sources || []) source.fetched_at = generated;
-    if (item.assessment) {
-      item.assessment.checked_at = generated;
-      item.assessment.valid_until = assessmentUntil;
-      item.assessment.tle_epoch = generated;
+export function refreshLaunchClock(dir, nowMs = Date.now()) {
+  return withFixtureLock(dir, () => {
+    const root = liveFixtureRoot(dir);
+    const launch = JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8'));
+    const generated = new Date(nowMs - 60_000).toISOString();
+    const until = new Date(nowMs - 60_000 + 14 * 60_000).toISOString();
+    const assessmentUntil = new Date(nowMs - 60_000 + 2 * 60 * 60_000).toISOString();
+    launch.generated_at = generated;
+    launch.valid_until = until;
+    if (launch.coverage) launch.coverage.fetched_at = generated;
+    for (const item of launch.items || []) {
+      for (const source of item.sources || []) source.fetched_at = generated;
+      if (item.assessment) {
+        item.assessment.checked_at = generated;
+        item.assessment.valid_until = assessmentUntil;
+        item.assessment.tle_epoch = generated;
+      }
+    }
+    const text = launchArtifact(launch).text;
+    const pointer = JSON.parse(readFileSync(join(root, 'launch-latest.json'), 'utf8'));
+    pointer.generated_at = generated;
+    pointer.valid_until = until;
+    pointer.sha256 = sha256(text);
+    pointer.revision = launch.revision;
+    pointer.path = `launch/v/${launch.revision}.json`;
+    publishLocked(dir, new Map([
+      ['launch.json', text],
+      ['launch-latest.json', JSON.stringify(pointer)],
+    ]));
+    return until;
+  });
+}
+
+const PASS_EVENT = {
+  'verify-reef': 'reef',
+  'verify-delta': 'delta',
+  'verify-mesa': 'mesa',
+  'cupola:verify-window': 'keepsake',
+};
+
+function stampPassList(passes, times) {
+  for (const pass of passes) {
+    const key = PASS_EVENT[pass.target_id];
+    if (!key) continue;
+    pass.closest_approach = times[key];
+    pass.sample_time = times.sample;
+    if (pass.target_id === 'cupola:verify-window') {
+      pass.window_start = times.windowStart;
+      pass.window_end = times.windowEnd;
     }
   }
-  const text = JSON.stringify(launch);
-  writeFileSync(launchPath, text);
-  const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
-  pointer.generated_at = generated;
-  pointer.valid_until = until;
-  pointer.sha256 = sha256(text);
-  writeFileSync(pointerPath, JSON.stringify(pointer));
-  return until;
+}
+
+function stampLaunchBody(launch, times) {
+  for (const item of launch.items || []) {
+    if (item.launch_window) {
+      item.launch_window.net = times.net;
+      item.launch_window.start = times.net;
+      item.launch_window.end = times.launchWindowEnd;
+    }
+    for (const interval of item.capture_intervals || []) {
+      interval.start = times.captureStart;
+      interval.peak = times.capturePeak;
+      interval.end = times.captureEnd;
+      interval.liftoff_start = times.net;
+      interval.liftoff_end = times.liftoffEnd;
+    }
+    if (item.assessment?.net) item.assessment.net.at = times.net;
+  }
+}
+
+function stampCatalogBody(catalog, times) {
+  for (const item of catalog.items || []) {
+    if (item.schedule) {
+      item.schedule.net = times.net;
+      item.schedule.window_start = times.net;
+      item.schedule.window_end = times.launchWindowEnd;
+    }
+    for (const shot of item.shots || []) {
+      shot.liftoff = times.net;
+      shot.start = times.net;
+      shot.best = times.captureStart;
+      shot.end = times.captureEnd;
+    }
+  }
+}
+
+const MANIFEST_FILES = {
+  passes: 'passes.json',
+  top5: 'top5.json',
+  top_24h: 'top_24h.json',
+  cupola_windows: 'cupola_windows.json',
+};
+
+export function stampEventTimes(dir, eventStart, wallMs = eventStart) {
+  return withFixtureLock(dir, () => {
+    const times = eventInstants(eventStart);
+    const root = liveFixtureRoot(dir);
+    const read = (name) => JSON.parse(readFileSync(join(root, name), 'utf8'));
+    const passes = read('passes.json');
+    const top5 = read('top5.json');
+    const top24 = read('top_24h.json');
+    const cupola = read('cupola_windows.json');
+    const launch = read('launch.json');
+    stampPassList(passes, times);
+    stampPassList(top5, times);
+    stampPassList(top24, times);
+    stampPassList(cupola.windows, times);
+    stampLaunchBody(launch, times);
+    launchArtifact(launch);
+    const files = new Map();
+    const put = (name, body) => {
+      const entry = artifact(body);
+      files.set(name, entry.text);
+      return entry;
+    };
+    const written = {
+      passes: put('passes.json', passes),
+      top5: put('top5.json', top5),
+      top_24h: put('top_24h.json', top24),
+      cupola_windows: put('cupola_windows.json', cupola),
+      launch: put('launch.json', launch),
+    };
+    if (existsSync(join(root, 'catalog.json'))) {
+      const catalog = read('catalog.json');
+      stampCatalogBody(catalog, times);
+      files.set('catalog.json', JSON.stringify(catalog));
+      files.set('catalog-clock.json', JSON.stringify({ anchor: eventStart }));
+    }
+    const manifest = read('manifest.json');
+    for (const key of Object.keys(MANIFEST_FILES)) {
+      manifest.artifacts[key].sha256 = written[key].sha256;
+      manifest.artifacts[key].bytes = written[key].bytes;
+      manifest.artifacts[key].path = bodyUrl(MANIFEST_FILES[key], written[key].sha256);
+    }
+    files.set('manifest.json', JSON.stringify(manifest));
+    const pointer = read('launch-latest.json');
+    pointer.sha256 = written.launch.sha256;
+    pointer.revision = launch.revision;
+    pointer.path = `launch/v/${launch.revision}.json`;
+    files.set('launch-latest.json', JSON.stringify(pointer));
+    files.set('drive-clock.json', JSON.stringify({ start: eventStart, startOffset: eventStart - wallMs }));
+    publishLocked(dir, files);
+    return times;
+  });
 }
 
 function catalogShot(spec) {
