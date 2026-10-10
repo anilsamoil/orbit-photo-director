@@ -6,6 +6,7 @@ import { createVendorMap } from '../src/map/adapters/maplibre';
 import { createClock } from '../src/map/map-core/clock';
 import { createMapCore } from '../src/map/map-core/core';
 import type { PopupHandle, VendorMap } from '../src/map/map-core/vendor-map';
+import { buildPassList } from '../src/map/overlays/pass-list';
 import { currentMaplibreDouble, RecordingMap, RecordingPopup, resetMaplibreDouble } from './maplibre-double';
 
 vi.mock('maplibre-gl', async () => (await import('./maplibre-double')).maplibreModuleMock());
@@ -224,6 +225,39 @@ function openPopup(label = 'Dropped pin'): PopupHandle {
   content.className = 'dropped-pin-popup';
   content.textContent = label;
   return vendor.openPopup({ at: [10, 20], content, closeOnClick: false });
+}
+
+function openPassList(): PopupHandle {
+  const content = buildPassList(24.05, -81.4, 2, [{
+    name: 'ISS',
+    color: '#75c9ff',
+    passes: [{
+      closestApproachMs: 1_700_000_000_000,
+      nadirKm: 420,
+      regime: 'iss-day',
+      issAltKm: 420,
+      angleOffNadirDeg: 38,
+      relativeBearingDeg: 96,
+    }],
+  }], 1_699_000_000_000);
+  return vendor.openPopup({ at: [10, 20], content, closeOnClick: false });
+}
+
+/** WebKit showed 53/70, 31/87, and 0/104 of the first row inside a 120px sheet.
+ *  Wider than the pass-row container, the heading plus that 70px row needs 137px.
+ *  A wrapped row needs the 87px measurement once the sheet is at least 140px wide,
+ *  and the narrower wrap still has to clear the old 120px cap by reaching 200px. */
+function firstPassRowExtent(sheetWidth: number): number {
+  if (sheetWidth > 260) return (120 - 53) + 70;
+  if (sheetWidth >= 140) return (120 - 31) + 87;
+  return 200;
+}
+
+function expectFullFirstPassRow(sheet: DOMRect): void {
+  const row = inspector.querySelector('.pin-pass-row');
+  expect(row, 'inspector shows the pin pass list').toBeInstanceOf(HTMLElement);
+  expect(inspector.querySelector('.dropped-pin-popup strong')?.textContent).toContain('24.05°N');
+  expect(sheet.height, `first pass row clipped in a ${sheet.width}×${sheet.height} sheet`).toBeGreaterThanOrEqual(firstPassRowExtent(sheet.width));
 }
 
 function popupAt(index: number): ContainerPopup {
@@ -600,13 +634,12 @@ describe('measured inspector chrome clearance', () => {
     toggle.setAttribute('aria-expanded', 'true');
     const panel = chrome('#map-legend-panel', { left: 542, top: 205, width: 185, height: 104 }, legend);
     panel.className = 'map-legend-panel';
-    openPopup();
+    openPassList();
     flushFrames();
     const landscape = inspectorRect();
     expectInsideMap(landscape);
     expectClear(landscape, navigation, dock, time, controls, toggle, panel);
-    expect(landscape.height).toBeLessThanOrEqual(120);
-    expect(landscape.height).toBeGreaterThanOrEqual(96);
+    expectFullFirstPassRow(landscape);
     expect(landscape.width).toBeGreaterThanOrEqual(120);
     const mapBox = container.getBoundingClientRect();
     expectOutside(landscape, mapBox.left + mapBox.width / 2, mapBox.top + mapBox.height / 2);
@@ -668,7 +701,7 @@ describe('measured inspector chrome clearance', () => {
       width: Math.max(44, phone.command.width - 16),
       height: Math.min(phone.command.height, 120),
     }, command);
-    openPopup();
+    openPassList();
     flushFrames();
     const sheet = inspectorRect();
     expectInsideMap(sheet);
@@ -681,14 +714,18 @@ describe('measured inspector chrome clearance', () => {
     expectOutside(sheet, centerX, centerY + 91);
     expectOutside(sheet, phone.dropX, phone.dropY);
     expect(sheet.width).toBeGreaterThanOrEqual(120);
-    expect(sheet.height, 'the sheet must show a pin pass row').toBeGreaterThanOrEqual(96);
-    if (phone.height <= 520) expect(sheet.height).toBeLessThanOrEqual(120);
+    if (phone.height <= 540) expectFullFirstPassRow(sheet);
+    else expect(sheet.height, 'the sheet must show a pin pass row').toBeGreaterThanOrEqual(96);
   });
 
   it.each([
-    { width: 568, height: 320, mapTop: 89 },
-    { width: 874, height: 280, mapTop: 60 },
-    { width: 874, height: 402, mapTop: 60 },
+    { width: 568, height: 320, mapTop: 48 },
+    { width: 874, height: 280, mapTop: 48 },
+    { width: 874, height: 402, mapTop: 48 },
+    { width: 844, height: 390, mapTop: 48 },
+    { width: 667, height: 375, mapTop: 48 },
+    { width: 740, height: 360, mapTop: 48 },
+    { width: 874, height: 521, mapTop: 60 },
   ])('keeps a readable pass list beside the hit square at $width×$height', ({ width, height, mapTop }) => {
     viewport(width, height, { left: 0, top: 0, width, height });
     const mapHeight = height - mapTop;
@@ -704,7 +741,7 @@ describe('measured inspector chrome clearance', () => {
       left: 8, top: commandTop, width: Math.max(44, Math.min(width - 236, width * 0.7) - 16), height: Math.min(64, height - commandTop - 12),
     }, command);
     const controls = chrome('#map-chrome-toggle', { left: width - 100, top: height - 52, width: 88, height: 44 });
-    openPopup();
+    openPassList();
     flushFrames();
     const sheet = inspectorRect();
     expectInsideMap(sheet);
@@ -717,8 +754,59 @@ describe('measured inspector chrome clearance', () => {
     expectOutside(sheet, centerX, centerY - 91);
     expectOutside(sheet, centerX, centerY + 91);
     expect(sheet.width).toBeGreaterThanOrEqual(96);
-    expect(sheet.height).toBeGreaterThanOrEqual(96);
-    expect(sheet.height).toBeLessThanOrEqual(120);
+    expectFullFirstPassRow(sheet);
+  });
+
+  it('shows the full wrapped first pass row on a short phone when controls are hidden', () => {
+    const width = 568;
+    const height = 320;
+    const mapTop = 48;
+    viewport(width, height, { left: 0, top: 0, width, height });
+    mockRect(container, { left: 0, top: mapTop, width, height: height - mapTop });
+    openPassList();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    const mapBox = container.getBoundingClientRect();
+    const centerX = mapBox.left + mapBox.width / 2;
+    const centerY = mapBox.top + mapBox.height / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX - 91, centerY);
+    expect(sheet.width).toBeGreaterThanOrEqual(96);
+    expect(sheet.height).toBeGreaterThanOrEqual(120 + 104);
+    expectFullFirstPassRow(sheet);
+  });
+
+  it('keeps a wide short phone re-pin off the open inspector', () => {
+    const width = 932;
+    const height = 430;
+    const mapTop = 48;
+    viewport(width, height, { left: 0, top: 0, width, height });
+    const mapHeight = height - mapTop;
+    mockRect(container, { left: 0, top: mapTop, width, height: mapHeight });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: width - 74, top: mapTop + 5, width: 66, height: Math.min(220, mapHeight - 40) });
+    const zoom = chrome('.maplibregl-ctrl-group', { left: 8, top: mapTop + 71, width: 44, height: 132 }, container);
+    const toolbar = chrome('.map-toolbar', { left: 8, top: mapTop + 5, width: 240, height: 52 });
+    const commandTop = height - 64;
+    const command = chrome('.map-command', { left: 8, top: commandTop, width: width - 180, height: 56 });
+    const time = chrome('.map-controls-time', { left: 8, top: commandTop, width: width - 200, height: 48 }, command);
+    const controls = chrome('#map-chrome-toggle', { left: width - 100, top: height - 52, width: 88, height: 44 });
+    openPassList();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    expectClear(sheet, dock, zoom, toolbar, time, controls);
+    const centerX = width / 2;
+    const centerY = mapTop + mapHeight / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX - 91, centerY);
+    expectOutside(sheet, centerX, centerY - 91);
+    expectOutside(sheet, centerX, centerY + 91);
+    expect(sheet.width).toBeGreaterThanOrEqual(240);
+    expectFullFirstPassRow(sheet);
   });
 
   it('uses pane-relative coordinates and intersects map bounds with the visible viewport', () => {

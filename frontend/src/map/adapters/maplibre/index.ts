@@ -99,8 +99,14 @@ const INSPECTOR_SURFACES = `${INSPECTOR_CHROME}, ${INSPECTOR_BANNERS}`;
 const NARROW_HIT_BAND_PX = 232;
 /** Centered width that still covers a zoom-4 drop a few degrees off the framed point. */
 const NARROW_HIT_CORE_PX = 182;
-/** A pin pass row stays readable under the title at this sheet size. */
+/** Narrowest sheet that still has a pass-row column. Head height is separate. */
 const NARROW_PASS_ROW_PX = 96;
+/** Panes no taller than this reserve a centered drop, including a 521px-tall phone. */
+const SHORT_PANE_PX = 540;
+/** Title and heading already filled a 120px sheet when the wrapped first row measured 104px. */
+const SHORT_PASS_HEAD_PX = 224;
+/** Heading plus the 70px first row WebKit measured once the sheet is wider than the pass-row container. */
+const WIDE_PASS_HEAD_PX = 137;
 
 type InspectorRect = { left: number; top: number; right: number; bottom: number };
 /** Preserve requested geometry alongside CSSOM's rounded pixel serialization. */
@@ -158,6 +164,7 @@ function chooseInspectorSlot(
   narrow: boolean,
   sideColumn: boolean,
   rowHeight: number,
+  passHead: number,
 ): (InspectorRect & { score: number }) | null {
   const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
   const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
@@ -173,9 +180,13 @@ function chooseInspectorSlot(
       const bottom = Math.min(bounds.bottom, obstacle.top);
       const height = Math.min(preferredHeight, bottom - top);
       if (height > 0) {
-        const readable = width >= rowHeight && height >= rowHeight;
+        const headTarget = passHead > 0 ? (width > 260 ? WIDE_PASS_HEAD_PX : passHead) : 0;
+        const column = width >= rowHeight && height >= rowHeight;
+        const fitsPassHead = headTarget <= 0 || height >= Math.min(headTarget, preferredHeight);
+        const readable = column && fitsPassHead;
         const usable = width >= Math.min(sideColumn ? rowHeight : 240, preferredWidth) && readable;
         const score = (readable ? 1e9 : 0) + (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0)
+          + (passHead > 0 && column ? Math.min(height, headTarget) * 1e4 : 0)
           + width * Math.min(height, narrow ? preferredHeight : 600)
           + right / 1e4 + (narrow ? bottom * 1e3 : -top / 1e6);
         if (!best || score > best.score) best = {
@@ -210,10 +221,12 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
   });
   const narrow = paneRect.width < 900;
-  const sideColumn = narrow && paneRect.height <= 520;
+  const short = paneRect.height <= SHORT_PANE_PX;
+  const sideColumn = short && narrow;
   const preferredWidth = narrow ? bounds.right - bounds.left : 320;
-  const preferredHeight = narrow ? (paneRect.height <= 520 ? 120 : 260) : bounds.bottom - bounds.top;
+  const preferredHeight = narrow ? 260 : bounds.bottom - bounds.top;
   const rowHeight = Math.min(NARROW_PASS_ROW_PX, preferredHeight);
+  const passHead = sideColumn ? SHORT_PASS_HEAD_PX : 0;
   const place = (extra: InspectorRect | null) => chooseInspectorSlot(
     bounds,
     extra ? [...obstacles, inflateObstacle(extra, gap)] : obstacles,
@@ -222,16 +235,28 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     narrow,
     sideColumn,
     rowHeight,
+    passHead,
   );
   const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
-  let best = narrow
-    ? place(narrowHitObstacle(mapRect, sideColumn ? Math.min(NARROW_HIT_BAND_PX, mapRect.width) : mapRect.width, hitHeight))
+  const square = short;
+  let best = narrow || short
+    ? place(narrowHitObstacle(
+      mapRect,
+      square ? Math.min(NARROW_HIT_BAND_PX, mapRect.width) : mapRect.width,
+      hitHeight,
+    ))
     : place(null);
-  const readableSlot = (slot: InspectorRect | null): boolean =>
-    slot !== null && slot.right - slot.left >= rowHeight && slot.bottom - slot.top >= rowHeight;
-  if (sideColumn && !readableSlot(best)) {
+  const readableSlot = (candidate: InspectorRect | null): boolean => {
+    if (candidate === null) return false;
+    const width = candidate.right - candidate.left;
+    const height = candidate.bottom - candidate.top;
+    const headTarget = passHead > 0 ? (width > 260 ? WIDE_PASS_HEAD_PX : passHead) : 0;
+    return width >= rowHeight && height >= rowHeight
+      && (headTarget <= 0 || height >= Math.min(headTarget, preferredHeight));
+  };
+  if (square && !readableSlot(best)) {
     const core = place(narrowHitObstacle(mapRect, Math.min(NARROW_HIT_CORE_PX, mapRect.width), hitHeight));
-    if (readableSlot(core)) best = core;
+    if (core && (best === null || core.score > best.score)) best = core;
   }
   best ??= { left: bounds.left, right: bounds.left, top: bounds.top, bottom: bounds.top, score: 0 };
   const layout = {
