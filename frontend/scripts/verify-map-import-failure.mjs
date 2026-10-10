@@ -169,6 +169,8 @@ function watchChunk(page, mapChunk, hits) {
 
 async function readState(page) {
   return page.evaluate(() => {
+    const shotList = document.getElementById('shotlist-bar');
+    if (document.body.classList.contains('shotlist-bar-visible') && shotList) shotList.hidden = false;
     const banner = document.getElementById('status-banner');
     const retry = document.querySelector('#status-banner button');
     const box = retry?.getBoundingClientRect();
@@ -270,18 +272,23 @@ async function openFailurePage(browser, mapChunk, options) {
 async function raiseShotList(page) {
   await page.evaluate(() => {
     document.body.classList.add('shotlist-bar-visible');
-    if (document.getElementById('shotlist-bar')) return;
-    const bar = document.createElement('div');
-    bar.id = 'shotlist-bar';
-    const count = document.createElement('span');
-    count.className = 'shotlist-count';
-    count.textContent = '2 selected';
-    const clear = document.createElement('button');
-    clear.type = 'button';
-    clear.className = 'shotlist-clear';
-    clear.textContent = 'Clear';
-    bar.append(count, clear);
-    document.body.append(bar);
+    let bar = document.getElementById('shotlist-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'shotlist-bar';
+      const count = document.createElement('span');
+      count.className = 'shotlist-count';
+      count.textContent = '2 selected';
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.className = 'btn shotlist-clear';
+      clear.textContent = 'Clear';
+      bar.append(count, clear);
+      document.body.append(bar);
+    }
+    bar.hidden = false;
+    const count = bar.querySelector('.shotlist-count');
+    if (count && !count.textContent?.trim()) count.textContent = '2 selected';
   });
 }
 
