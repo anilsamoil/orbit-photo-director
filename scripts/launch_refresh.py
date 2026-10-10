@@ -24,6 +24,7 @@ from generator.launch_publish import (
     _validate_catalog,
     publish_launch_artifact,
     publish_launch_catalog,
+    rclone_catalog_reader,
     rclone_reader,
     rclone_uploader,
 )
@@ -243,6 +244,7 @@ def refresh_cached(
     remote: str,
     upload: Callable,
     read_remote: Callable,
+    read_catalog: Callable[[], dict | None] | None = None,
 ) -> dict:
     """v2 commits on its own. A catalog failure is logged and never blocks v2."""
     if "out" in output.resolve().parts:
@@ -261,6 +263,17 @@ def refresh_cached(
         catalog_state = (
             json.loads(catalog_state_path.read_bytes()) if catalog_state_path.exists() else {}
         )
+        catalog_pointer_path = output / "launch/catalog/latest.json"
+
+        def local_catalog() -> dict | None:
+            return (
+                json.loads(catalog_pointer_path.read_bytes())
+                if catalog_pointer_path.exists() else None
+            )
+
+        # Legacy injected publishers share this committed mirror and publisher lock.
+        # The scheduled CLI additionally verifies the actual remote catalog token.
+        expected_catalog = local_catalog()
         if any(value and value["remote"] != remote for value in (state, intent, catalog_state)):
             raise ValueError("REMOTE_OWNER_MISMATCH")
         _drop_expired_pending(output, now, intent)
@@ -291,10 +304,30 @@ def refresh_cached(
             prepared: dict | None = None,
             prepared_error: str | None = None,
         ) -> str | None:
+            verified_owner = None
+
+            def check_owner() -> None:
+                nonlocal verified_owner
+                observed = read_remote()
+                if not _same_pointer(observed, state["pointer"]):
+                    raise ValueError("REMOTE_LAUNCH_CONFLICT")
+                current_catalog = read_catalog() if read_catalog else local_catalog()
+                if current_catalog != expected_catalog or local_catalog() != expected_catalog:
+                    raise ValueError("REMOTE_LAUNCH_CATALOG_CONFLICT")
+                verified_owner = observed
+
+            def adopt_owner() -> None:
+                pointer_path = output / "launch/latest.json"
+                if json.loads(pointer_path.read_bytes()) != verified_owner:
+                    _atomic_json(pointer_path, verified_owner)
+
             if (
                 catalog_state.get("input_id") == identity["input_id"]
                 and _catalog_live_through_next_check(catalog_state, now)
             ):
+                with _publisher_guard(output):
+                    check_owner()
+                    adopt_owner()
                 return None
             if prepared_error:
                 return prepared_error
@@ -303,20 +336,27 @@ def refresh_cached(
                 if catalog is None:
                     catalog = build_launch_catalog(payload, tle, now, fetched_at=fetched_at)
                     _validate_catalog(catalog)
-                publish_launch_catalog(catalog, output, upload=upload)
+
+                def committed() -> None:
+                    adopt_owner()
+                    _atomic_json(
+                        catalog_state_path,
+                        {
+                            "remote": remote,
+                            "input_id": identity["input_id"],
+                            "revision": catalog["revision"],
+                            "generated_at": catalog["generated_at"],
+                            "geometry_valid_until": catalog["geometry_valid_until"],
+                            "schedule_valid_until": catalog["schedule_valid_until"],
+                        },
+                    )
+
+                publish_launch_catalog(
+                    catalog, output, upload=upload,
+                    before_publish=check_owner, after_publish=committed,
+                )
             except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
                 return str(exc)
-            _atomic_json(
-                catalog_state_path,
-                {
-                    "remote": remote,
-                    "input_id": identity["input_id"],
-                    "revision": catalog["revision"],
-                    "generated_at": catalog["generated_at"],
-                    "geometry_valid_until": catalog["geometry_valid_until"],
-                    "schedule_valid_until": catalog["schedule_valid_until"],
-                },
-            )
             return None
 
         if (
@@ -346,13 +386,9 @@ def refresh_cached(
             if fetched_at < _parse_iso8601_z(state["input"]["fetched_at"]):
                 raise ValueError("OBSOLETE_SOURCE_RECEIPT")
             if identity["input_id"] == state["input"]["input_id"]:
-                pointer_path = output / "launch/latest.json"
-                local = json.loads(pointer_path.read_bytes())
                 observed = read_remote()
                 if observed != state["pointer"] and not _same_pointer(observed, state["pointer"]):
                     raise ValueError("REMOTE_LAUNCH_CONFLICT")
-                if local != observed:
-                    _atomic_json(pointer_path, observed)
                 skipped = ship_catalog(identity, payload, tle, fetched_at)
                 result = {
                     "ok": True,
@@ -430,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
                     remote=args.remote,
                     upload=uploader,
                     read_remote=rclone_reader(args.remote, local=args.output, upload=uploader),
+                    read_catalog=rclone_catalog_reader(args.remote),
                 )
             )
             return 0

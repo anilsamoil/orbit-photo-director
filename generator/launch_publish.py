@@ -547,6 +547,8 @@ def publish_launch_catalog(
     output: Path,
     *,
     upload: Callable[[Path, str, bool], None] | None = None,
+    before_publish: Callable[[], None] | None = None,
+    after_publish: Callable[[], None] | None = None,
 ) -> dict:
     """Schema 3 catalog beside the live schema 2 publication."""
     _validate_catalog(artifact)
@@ -558,7 +560,18 @@ def publish_launch_catalog(
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("LAUNCH_PUBLISHER_BUSY") from exc
+        if before_publish:
+            before_publish()
         revision = artifact["revision"]
+        pointer_path = output / "launch/catalog/latest.json"
+        if pointer_path.exists():
+            previous = json.loads(pointer_path.read_bytes())
+            generated = _parse_iso8601_z(artifact["generated_at"])
+            previous_generated = _parse_iso8601_z(previous.get("generated_at"))
+            if previous_generated > generated:
+                raise ValueError("OBSOLETE_LAUNCH_CATALOG")
+            if previous_generated == generated and previous.get("revision") != revision:
+                raise ValueError("CONFLICTING_LAUNCH_CATALOG_REVISION")
         relative = f"launch/catalog/v/{revision}.json"
         artifact_path = output / relative
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -576,7 +589,6 @@ def publish_launch_catalog(
             "path": relative,
             "sha256": hashlib.sha256(body).hexdigest(),
         }
-        pointer_path = output / "launch/catalog/latest.json"
         pointer_path.parent.mkdir(parents=True, exist_ok=True)
         pending = output / "launch/catalog/.latest.pending.json"
         _write_bytes_atomic(pending, canonical_bytes(pointer))
@@ -584,7 +596,54 @@ def publish_launch_catalog(
             upload(artifact_path, relative, True)
             upload(pending, "launch/catalog/latest.json", False)
         os.replace(pending, pointer_path)
+        if after_publish:
+            after_publish()
         return pointer
+
+
+def rclone_catalog_reader(remote: str) -> Callable[[], dict | None]:
+    """Read the catalog commit token; only a confirmed missing object is absent."""
+    if not remote or remote.startswith("-") or "\n" in remote:
+        raise ValueError("invalid remote")
+    executable = shutil.which("rclone")
+    if executable is None:
+        raise FileNotFoundError("rclone executable not found")
+    executable = str(Path(executable).resolve())
+
+    def read() -> dict | None:
+        try:
+            result = _rclone(
+                [executable, "cat", f"{remote.rstrip('/')}/launch/catalog/latest.json",
+                 "--count", "4097"],
+                45,
+            )
+        except ValueError as exc:
+            if str(exc).startswith(("RCLONE_EXIT_3:", "RCLONE_EXIT_4:")):
+                return None
+            raise
+        if len(result.stdout) > 4096:
+            raise ValueError("REMOTE_LAUNCH_CATALOG_TOO_LARGE")
+        try:
+            pointer = json.loads(result.stdout)
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER") from exc
+        if not isinstance(pointer, dict) or set(pointer) != {
+            "schema_version", "revision", "generated_at", "valid_until", "path", "sha256",
+        }:
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER")
+        revision, digest = pointer["revision"], pointer["sha256"]
+        if (
+            pointer["schema_version"] != 2
+            or not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{24}", revision)
+            or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            or pointer["path"] != f"launch/catalog/v/{revision}.json"
+        ):
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER")
+        if _parse_iso8601_z(pointer["valid_until"]) <= _parse_iso8601_z(pointer["generated_at"]):
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER")
+        return pointer
+
+    return read
 
 
 def rclone_uploader(remote: str) -> Callable[[Path, str, bool], None]:
