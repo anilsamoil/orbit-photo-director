@@ -4587,7 +4587,8 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
     display: flex !important;
     flex-wrap: wrap;
     column-gap: 6px !important;
-    row-gap: 1px !important;
+    row-gap: 3px !important;
+    align-items: start !important;
     padding: 3px 0 !important;
     line-height: 1.2;
     white-space: normal !important;
@@ -4606,11 +4607,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
     flex-basis: 100%;
     font-size: 0.68rem !important;
     line-height: 1.15;
-  }
-  @media (max-width: 931px) {
-    .dropped-pin-popup .pin-pass-row {
-      row-gap: 3px !important;
-    }
   }
 }
 
