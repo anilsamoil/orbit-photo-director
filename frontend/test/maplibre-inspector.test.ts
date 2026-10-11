@@ -1,0 +1,1091 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createVendorMap } from '../src/map/adapters/maplibre';
+import { createClock } from '../src/map/map-core/clock';
+import { createMapCore } from '../src/map/map-core/core';
+import type { PopupHandle, VendorMap } from '../src/map/map-core/vendor-map';
+import { buildPassList } from '../src/map/overlays/pass-list';
+import { currentMaplibreDouble, RecordingMap, RecordingPopup, resetMaplibreDouble } from './maplibre-double';
+
+vi.mock('maplibre-gl', async () => (await import('./maplibre-double')).maplibreModuleMock());
+
+class ContainerMap extends RecordingMap {
+  getContainer(): HTMLElement {
+    return this.options.container as HTMLElement;
+  }
+}
+
+class ContainerPopup extends RecordingPopup {
+  readonly element = document.createElement('div');
+  readonly closeButton = document.createElement('button');
+  readonly scroller = document.createElement('div');
+
+  constructor(options?: Record<string, unknown>) {
+    super(options);
+    this.element.className = 'maplibregl-popup';
+    this.scroller.className = 'maplibregl-popup-content';
+    this.closeButton.className = 'maplibregl-popup-close-button';
+    this.closeButton.addEventListener('click', () => this.remove());
+    this.element.appendChild(this.scroller);
+  }
+
+  override setDOMContent(content: HTMLElement): this {
+    super.setDOMContent(content);
+    this.scroller.replaceChildren(content, this.closeButton);
+    this.scroller.scrollTop = 80;
+    return this;
+  }
+
+  override addTo(map: RecordingMap): this {
+    super.addTo(map);
+    if (!(map instanceof ContainerMap)) throw new Error('Popup requires a container-backed map');
+    map.getContainer().appendChild(this.element);
+    return this;
+  }
+
+  getElement(): HTMLElement {
+    return this.element;
+  }
+
+  override remove(): this {
+    if (!this.isOpen()) return this;
+    this.element.remove();
+    super.remove();
+    for (const listener of [...this.listeners.close ?? []]) listener();
+    return this;
+  }
+}
+
+const stylesheet = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8');
+let vendor: VendorMap;
+let map: ContainerMap;
+let pane: HTMLElement;
+let container: HTMLElement;
+let inspector: HTMLElement;
+let styles: HTMLStyleElement;
+let frames: FrameRequestCallback[];
+let resizeObservers: ResizeObserverDouble[];
+let mutationObservers: MutationObserverDouble[];
+
+class ResizeObserverDouble {
+  readonly observed = new Set<Element>();
+  readonly disconnect = vi.fn(() => this.observed.clear());
+
+  constructor(readonly callback: ResizeObserverCallback) {
+    resizeObservers.push(this);
+  }
+
+  observe(element: Element): void { this.observed.add(element); }
+  unobserve(element: Element): void { this.observed.delete(element); }
+}
+
+class MutationObserverDouble {
+  readonly observed = new Map<Node, MutationObserverInit>();
+  readonly disconnect = vi.fn(() => this.observed.clear());
+
+  constructor(readonly callback: MutationCallback) {
+    mutationObservers.push(this);
+  }
+
+  observe(element: Node, options: MutationObserverInit): void { this.observed.set(element, options); }
+  takeRecords(): MutationRecord[] { return []; }
+}
+
+interface TestRect { left: number; top: number; width: number; height: number }
+
+function mockRect(element: Element, rectangle: TestRect): TestRect {
+  vi.spyOn(element, 'getBoundingClientRect').mockImplementation(() =>
+    new DOMRect(rectangle.left, rectangle.top, rectangle.width, rectangle.height));
+  return rectangle;
+}
+
+function viewport(width: number, height: number, bounds: TestRect = {
+  left: 0, top: 80, width, height: height - 80,
+}): void {
+  vi.stubGlobal('innerWidth', width);
+  vi.stubGlobal('innerHeight', height);
+  mockRect(pane, bounds);
+  mockRect(container, { ...bounds });
+  for (const ancestor of [pane.parentElement!, document.body, document.documentElement]) {
+    mockRect(ancestor, { left: 0, top: 0, width, height });
+  }
+}
+
+function chrome(selector: string, bounds: TestRect, parent = pane): HTMLElement {
+  let element = parent.querySelector<HTMLElement>(selector);
+  if (!element) {
+    element = document.createElement(selector.startsWith('#') ? 'button' : 'div');
+    if (selector.startsWith('#')) element.id = selector.slice(1);
+    else element.className = selector.slice(1);
+    parent.appendChild(element);
+  }
+  mockRect(element, bounds);
+  return element;
+}
+
+function flushFrames(): void {
+  for (let iteration = 0; frames.length > 0 && iteration < 10; iteration++) {
+    for (const frame of frames.splice(0)) frame(iteration);
+  }
+  expect(frames, 'inspector layout must settle without a resize/frame loop').toHaveLength(0);
+}
+
+function notifyResize(element: Element): void {
+  const observers = resizeObservers.filter((observer) => observer.observed.has(element));
+  expect(observers.length, `ResizeObserver must cover ${element.id || element.className}`).toBeGreaterThan(0);
+  for (const observer of observers) {
+    observer.callback([{ target: element } as unknown as ResizeObserverEntry], observer as unknown as ResizeObserver);
+  }
+  flushFrames();
+}
+
+function emitMutation(target: Node, attributeName = 'class'): void {
+  const observers = mutationObservers.filter((observer) => [...observer.observed].some(([root, options]) =>
+    (root === target || (options.subtree && root.contains(target)))
+      && options.attributes
+      && (!options.attributeFilter || options.attributeFilter.includes(attributeName))));
+  expect(observers.length, 'MutationObserver must cover chrome visibility changes').toBeGreaterThan(0);
+  for (const observer of observers) {
+    observer.callback([{ target, type: 'attributes', attributeName } as unknown as MutationRecord], observer as unknown as MutationObserver);
+  }
+}
+
+function notifyMutation(target: Node, attributeName = 'class'): void {
+  emitMutation(target, attributeName);
+  flushFrames();
+}
+
+function notifyChildList(target: Node): void {
+  const observers = mutationObservers.filter((observer) => [...observer.observed].some(([root, options]) =>
+    (root === target || (options.subtree && root.contains(target))) && options.childList));
+  expect(observers.length, 'MutationObserver must cover dynamically added chrome').toBeGreaterThan(0);
+  for (const observer of observers) {
+    observer.callback([{ target, type: 'childList' } as unknown as MutationRecord], observer as unknown as MutationObserver);
+  }
+  flushFrames();
+}
+
+function portraitChrome(width: number, height: number): { legend: HTMLElement; toggle: HTMLElement; panel: HTMLElement } {
+  viewport(width, height, { left: 0, top: 0, width, height });
+  pane.classList.remove('map-chrome-hidden');
+  const tablet = width === 834;
+  mockRect(container, { left: 0, top: tablet ? 60 : 89, width, height: height - (tablet ? 60 : 89) });
+  chrome('.map-control-dock', { left: width - 74.15625, top: tablet ? 65 : 94, width: 66.15625, height: 508 });
+  chrome('.maplibregl-ctrl-group', { left: 8, top: tablet ? 191 : 249, width: 44, height: 132 }, container);
+  const command = chrome('.map-command', { left: 8, top: tablet ? 1112 : 628.40625, width: width - 220, height: tablet ? 44 : 187.59375 });
+  chrome('.map-controls-time', { left: tablet ? 16 : 8, top: tablet ? 1112 : 628.40625, width: width - (tablet ? 228 : 212), height: tablet ? 44 : 187.59375 }, command);
+  chrome('#map-chrome-toggle', { left: width - 100, top: height - 80, width: 88, height: 44 });
+  const legend = chrome('.map-legend', { left: width - 196, top: height - 254, width: 88, height: 218 });
+  const toggle = chrome('#map-legend-toggle', { left: width - 196, top: height - 80, width: 88, height: 44 }, legend);
+  toggle.className = 'map-legend-toggle';
+  toggle.setAttribute('aria-expanded', 'false');
+  const panel = chrome('#map-legend-panel', { left: width - 196, top: height - 254, width: 88, height: 170 }, legend);
+  panel.className = 'map-legend-panel';
+  return { legend, toggle, panel };
+}
+
+function inspectorRect(): DOMRect {
+  const [left = 0, top = 0, width = 0, height = 0] = ['left', 'top', 'width', 'height'].map((property) => {
+    const value = inspector.style.getPropertyValue(property);
+    expect(value, `the inspector ${property} must come from measured geometry`).toMatch(/^\d+(?:\.\d+)?px$/);
+    return Number.parseFloat(value);
+  });
+  const paneRect = pane.getBoundingClientRect();
+  return new DOMRect(paneRect.left + left, paneRect.top + top, width, height);
+}
+
+function expectInsideMap(rectangle: DOMRect): void {
+  const mapRect = container.getBoundingClientRect();
+  expect(rectangle.width).toBeGreaterThan(0);
+  expect(rectangle.height).toBeGreaterThan(0);
+  expect(rectangle.left).toBeGreaterThanOrEqual(Math.max(0, mapRect.left) + 8);
+  expect(rectangle.top).toBeGreaterThanOrEqual(Math.max(0, mapRect.top) + 8);
+  expect(rectangle.right).toBeLessThanOrEqual(Math.min(innerWidth, mapRect.right) - 8);
+  expect(rectangle.bottom).toBeLessThanOrEqual(Math.min(innerHeight, mapRect.bottom) - 8);
+}
+
+function expectOutside(rectangle: DOMRect, x: number, y: number): void {
+  const outside = x < rectangle.left || x >= rectangle.right || y < rectangle.top || y >= rectangle.bottom;
+  expect(outside, `inspector covers ${x},${y} at ${rectangle.x},${rectangle.y} ${rectangle.width}×${rectangle.height}`).toBe(true);
+}
+
+function expectClear(rectangle: DOMRect, ...elements: HTMLElement[]): void {
+  for (const element of elements) {
+    const obstacle = element.getBoundingClientRect();
+    const gap = Math.max(obstacle.left - rectangle.right, rectangle.left - obstacle.right,
+      obstacle.top - rectangle.bottom, rectangle.top - obstacle.bottom);
+    expect(gap, `inspector overlaps visible ${element.id || element.className}`).toBeGreaterThanOrEqual(8);
+  }
+}
+
+function openPopup(label = 'Dropped pin'): PopupHandle {
+  const content = document.createElement('div');
+  content.className = 'dropped-pin-popup';
+  content.textContent = label;
+  return vendor.openPopup({ at: [10, 20], content, closeOnClick: false });
+}
+
+function openPassList(): PopupHandle {
+  const content = buildPassList(24.05, -81.4, 2, [{
+    name: 'ISS',
+    color: '#75c9ff',
+    passes: [{
+      closestApproachMs: 1_700_000_000_000,
+      nadirKm: 420,
+      regime: 'iss-day',
+      issAltKm: 420,
+      angleOffNadirDeg: 38,
+      relativeBearingDeg: 96,
+    }],
+  }], 1_699_000_000_000);
+  return vendor.openPopup({ at: [10, 20], content, closeOnClick: false });
+}
+
+/** Sheet floors the rendered-row probe also has to clear. A column no wider than
+ *  the pass-row container keeps the first row inside 176px; a wider sheet needs 137px. */
+function firstPassRowExtent(sheetWidth: number): number {
+  return sheetWidth > 260 ? 137 : 176;
+}
+
+function expectFullFirstPassRow(sheet: DOMRect): void {
+  const row = inspector.querySelector('.pin-pass-row');
+  expect(row, 'inspector shows the pin pass list').toBeInstanceOf(HTMLElement);
+  expect(inspector.querySelector('.dropped-pin-popup strong')?.textContent).toContain('24.05°N');
+  expect(sheet.height, `first pass row clipped in a ${sheet.width}×${sheet.height} sheet`).toBeGreaterThanOrEqual(firstPassRowExtent(sheet.width));
+}
+
+function popupAt(index: number): ContainerPopup {
+  const popup = currentMaplibreDouble().popups[index];
+  if (!(popup instanceof ContainerPopup)) throw new Error(`Missing popup ${index}`);
+  return popup;
+}
+
+function expectOpen(open: boolean): void {
+  expect(pane.classList.contains('map-inspector-open')).toBe(open);
+  expect(inspector.hidden).toBe(!open);
+}
+
+beforeEach(() => {
+  const double = resetMaplibreDouble();
+  double.maplibregl.Map.mockImplementation((options) => {
+    const instance = new ContainerMap(options);
+    double.constructed.push(instance);
+    return instance;
+  });
+  double.maplibregl.Popup.mockImplementation((options) => {
+    const popup = new ContainerPopup(options);
+    double.popups.push(popup);
+    return popup;
+  });
+  document.body.innerHTML = `
+    <main id="view" class="view-map">
+      <section id="map-pane" class="pane map-chrome-hidden">
+        <div id="map" class="map"></div>
+        <div class="map-control-dock"></div>
+        <button id="map-chrome-toggle" class="map-chrome-toggle" type="button">Controls</button>
+        <aside id="map-inspector" class="map-inspector" hidden></aside>
+      </section>
+    </main>`;
+  pane = document.getElementById('map-pane')!;
+  container = document.getElementById('map')!;
+  inspector = document.getElementById('map-inspector')!;
+  styles = document.createElement('style');
+  styles.textContent = stylesheet;
+  document.head.appendChild(styles);
+  frames = [];
+  resizeObservers = [];
+  mutationObservers = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  vi.stubGlobal('ResizeObserver', ResizeObserverDouble);
+  vi.stubGlobal('MutationObserver', MutationObserverDouble);
+  viewport(1400, 900);
+  vendor = createVendorMap({
+    container,
+    style: { sources: {}, layers: [] },
+    camera: { center: [10, 20], zoom: 3 },
+  });
+  map = double.constructed[0] as ContainerMap;
+});
+
+afterEach(() => {
+  for (const popup of currentMaplibreDouble().popups) popup.remove();
+  styles.remove();
+  document.body.replaceChildren();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe('measured inspector chrome clearance', () => {
+  beforeEach(() => {
+    styles.textContent = `
+      #map-pane { overflow-x: hidden; overflow-y: hidden; }
+      .map-control-dock { overflow-y: auto; }
+      [hidden] { display: none !important; }
+      #map-pane.map-chrome-hidden .map-control-dock,
+      #map-pane.map-chrome-hidden .map-toolbar,
+      #map-pane.map-chrome-hidden .map-command,
+      #map-pane.map-chrome-hidden .map-legend,
+      #map-pane.map-chrome-hidden .maplibregl-ctrl-top-left,
+      #map-pane.map-chrome-hidden #satellite-picker-panel,
+      #map-pane.map-chrome-hidden #map-launch-coverage { display: none; }
+      .map-legend-toggle:not([aria-expanded='true']) + .map-legend-panel { display: none; }
+    `;
+  });
+
+  it.each([[1400, 900], [1194, 834]])('places a 320px panel beside the dock and above commands at %i×%i', (width, height) => {
+    viewport(width, height);
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: width - 84, top: 90, width: 76, height: height - 210 });
+    const toolbar = chrome('.map-toolbar', { left: 10, top: 90, width: 240, height: 50 });
+    const navigation = chrome('.maplibregl-ctrl-group', { left: 10, top: 150, width: 44, height: 132 }, container);
+    const command = chrome('.map-command', { left: 8, top: height - 120, width: width - 210, height: 112 });
+    const time = chrome('.map-controls-time', { left: 8, top: height - 120, width: width - 210, height: 90 }, command);
+    const controls = chrome('#map-chrome-toggle', { left: width - 100, top: height - 54, width: 88, height: 44 });
+    const legend = chrome('.map-legend', { left: width - 470, top: height - 215, width: 360, height: 205 });
+    const legendToggle = chrome('#map-legend-toggle', { left: width - 194, top: height - 54, width: 86, height: 44 }, legend);
+    legendToggle.setAttribute('aria-expanded', 'true');
+    const legendPanel = chrome('#map-legend-panel', { left: width - 470, top: height - 215, width: 360, height: 148 }, legend);
+    legendPanel.className = 'map-legend-panel';
+
+    openPopup();
+    flushFrames();
+    const bounds = inspectorRect();
+
+    expectInsideMap(bounds);
+    expect(bounds.width).toBe(320);
+    expect(bounds.height).toBeGreaterThan(250);
+    expect(bounds.right).toBeLessThanOrEqual(dock.getBoundingClientRect().left - 8);
+    expect(bounds.bottom).toBeLessThanOrEqual(time.getBoundingClientRect().top - 8);
+    expectClear(bounds, dock, toolbar, navigation, time, controls, legendToggle, legendPanel);
+    expectOpen(true);
+  });
+
+  it('reclaims hidden chrome space and responds to show/hide without resizing the map', () => {
+    const dock = chrome('.map-control-dock', { left: 1260, top: 88, width: 132, height: 730 });
+    const controls = chrome('#map-chrome-toggle', { left: 1292, top: 838, width: 96, height: 44 });
+    openPopup();
+    flushFrames();
+    const hidden = inspectorRect();
+    expectClear(hidden, controls);
+    expect(hidden.right).toBeGreaterThan(dock.getBoundingClientRect().left);
+    const cameraCalls = [...map.cameraCalls];
+
+    pane.classList.remove('map-chrome-hidden');
+    notifyMutation(pane);
+    const shown = inspectorRect();
+    expectClear(shown, dock, controls);
+    expect(shown.right).toBeLessThanOrEqual(dock.getBoundingClientRect().left - 8);
+    expect(map.cameraCalls).toEqual(cameraCalls);
+
+    pane.classList.add('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().toJSON()).toEqual(hidden.toJSON());
+    expect(map.cameraCalls).toEqual(cameraCalls);
+    expectOpen(true);
+  });
+
+  it('avoids expanded Legend paint and restores space after its toggle closes', () => {
+    pane.classList.remove('map-chrome-hidden');
+    const legend = chrome('.map-legend', { left: 1040, top: 240, width: 348, height: 642 });
+    const toggle = chrome('#map-legend-toggle', { left: 1196, top: 838, width: 88, height: 44 }, legend);
+    toggle.className = 'map-legend-toggle';
+    toggle.setAttribute('aria-expanded', 'false');
+    const panel = chrome('#map-legend-panel', { left: 1040, top: 240, width: 348, height: 580 }, legend);
+    panel.className = 'map-legend-panel';
+    openPopup();
+    flushFrames();
+    const closed = inspectorRect();
+    expect(closed.right).toBeGreaterThan(panel.getBoundingClientRect().left);
+
+    toggle.setAttribute('aria-expanded', 'true');
+    notifyMutation(toggle, 'aria-expanded');
+    expectClear(inspectorRect(), toggle, panel);
+    expectInsideMap(inspectorRect());
+
+    toggle.setAttribute('aria-expanded', 'false');
+    notifyMutation(toggle, 'aria-expanded');
+    expect(inspectorRect().toJSON()).toEqual(closed.toJSON());
+    expectOpen(true);
+  });
+
+  it.each([[834, 1194], [390, 844]])('re-places the open sheet for first Legend expansion and subsequent panel growth at %i×%i', (width, height) => {
+    const { toggle, panel } = portraitChrome(width, height);
+    openPopup();
+    flushFrames();
+    const collapsed = inspectorRect();
+    const mapTop = width === 834 ? 60 : 89;
+    const hangsOverHiddenPanel = collapsed.bottom > panel.getBoundingClientRect().top;
+    if (!hangsOverHiddenPanel) expectOutside(collapsed, width / 2, mapTop + (height - mapTop) / 2);
+
+    toggle.setAttribute('aria-expanded', 'true');
+    notifyMutation(toggle, 'aria-expanded');
+    const expanded = inspectorRect();
+    expectClear(expanded, panel, toggle);
+    expectInsideMap(expanded);
+    if (hangsOverHiddenPanel) expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
+
+    mockRect(panel, { left: width - 196, top: height - 294, width: 88, height: 210 });
+    notifyResize(panel);
+    expectClear(inspectorRect(), panel, toggle);
+    expectInsideMap(inspectorRect());
+    toggle.setAttribute('aria-expanded', 'false');
+    notifyMutation(toggle, 'aria-expanded');
+    expect(inspectorRect().toJSON()).toEqual(collapsed.toJSON());
+    expectOpen(true);
+  });
+
+  it('re-places a later Legend expansion before the next animation frame', () => {
+    const { toggle, panel } = portraitChrome(834, 1194);
+    openPopup();
+    flushFrames();
+    const collapsed = inspectorRect();
+    toggle.setAttribute('aria-expanded', 'true');
+    emitMutation(toggle, 'aria-expanded');
+    const expanded = inspectorRect();
+    expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
+    expectClear(expanded, panel, toggle);
+    expectInsideMap(expanded);
+    expect(frames.length).toBeGreaterThan(0);
+  });
+
+  it('re-places a later Legend expansion when the first box read is still the collapsed shell', () => {
+    const { toggle, panel } = portraitChrome(834, 1194);
+    openPopup();
+    flushFrames();
+    toggle.setAttribute('aria-expanded', 'true');
+    notifyMutation(toggle, 'aria-expanded');
+    expectClear(inspectorRect(), panel, toggle);
+    toggle.setAttribute('aria-expanded', 'false');
+    notifyMutation(toggle, 'aria-expanded');
+    const collapsed = inspectorRect();
+
+    const width = 834;
+    const height = 1194;
+    const expandedRect = new DOMRect(width - 196, height - 294, 88, 210);
+    let reads = 0;
+    vi.spyOn(panel, 'getBoundingClientRect').mockImplementation(() => {
+      reads += 1;
+      return reads === 1 ? new DOMRect(0, 0, 0, 0) : expandedRect;
+    });
+    toggle.setAttribute('aria-expanded', 'true');
+    notifyMutation(toggle, 'aria-expanded');
+
+    expect(reads).toBeGreaterThan(1);
+    const expanded = inspectorRect();
+    expect(expanded.toJSON()).not.toEqual(collapsed.toJSON());
+    expectClear(expanded, panel, toggle);
+    expectInsideMap(expanded);
+    expectOpen(true);
+  });
+
+  it.each([[834, 1194], [390, 844]])('follows an expanded Legend ancestor moving without changing panel size at %i×%i', (width, height) => {
+    const { legend, toggle, panel } = portraitChrome(width, height);
+    toggle.setAttribute('aria-expanded', 'true');
+    openPopup();
+    flushFrames();
+    const initial = inspectorRect();
+
+    legend.style.transform = 'translateY(-48px)';
+    for (const element of [legend, toggle, panel]) {
+      const rect = element.getBoundingClientRect();
+      mockRect(element, { left: rect.left, top: rect.top - 48, width: rect.width, height: rect.height });
+    }
+    notifyMutation(legend, 'style');
+
+    expectClear(inspectorRect(), panel, toggle);
+    expectInsideMap(inspectorRect());
+    const movedPanel = panel.getBoundingClientRect();
+    const overlapped = initial.bottom > movedPanel.top + 8 && initial.top < movedPanel.bottom - 8
+      && initial.right > movedPanel.left + 8 && initial.left < movedPanel.right - 8;
+    if (overlapped) expect(inspectorRect().toJSON()).not.toEqual(initial.toJSON());
+    notifyResize(legend);
+    expectOpen(true);
+  });
+
+  it('re-places beside the restored Controls dock at iPad landscape size', () => {
+    viewport(1194, 834, { left: 0, top: 0, width: 1194, height: 834 });
+    mockRect(container, { left: 0, top: 60, width: 1194, height: 774 });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: 1119.84375, top: 65, width: 66.15625, height: 508 });
+    chrome('#map-chrome-toggle', { left: 1094, top: 754, width: 88, height: 44 });
+    openPopup();
+    flushFrames();
+    expectClear(inspectorRect(), dock);
+    const cameraCalls = [...map.cameraCalls];
+
+    pane.classList.add('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1186);
+    pane.classList.remove('map-chrome-hidden');
+    notifyMutation(pane);
+
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+    expect(map.cameraCalls).toEqual(cameraCalls);
+    expectOpen(true);
+  });
+
+  it('re-places beside the dock on a later Controls restore when the first dock read is still hidden', () => {
+    viewport(1194, 834, { left: 0, top: 0, width: 1194, height: 834 });
+    mockRect(container, { left: 0, top: 60, width: 1194, height: 774 });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: 1119.84375, top: 65, width: 66.15625, height: 508 });
+    chrome('#map-chrome-toggle', { left: 1094, top: 754, width: 88, height: 44 });
+    openPopup();
+    flushFrames();
+    expectClear(inspectorRect(), dock);
+
+    pane.classList.add('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1186);
+    pane.classList.remove('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+
+    pane.classList.add('map-chrome-hidden');
+    notifyMutation(pane);
+    expect(inspectorRect().right).toBe(1186);
+    pane.classList.remove('map-chrome-hidden');
+    const shown = new DOMRect(1119.84375, 65, 66.15625, 508);
+    let reads = 0;
+    vi.spyOn(dock, 'getBoundingClientRect').mockImplementation(() => {
+      reads += 1;
+      return reads === 1 ? new DOMRect(0, 0, 0, 0) : shown;
+    });
+    notifyMutation(pane);
+
+    expect(reads).toBeGreaterThan(1);
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+    expectInsideMap(inspectorRect());
+    expectOpen(true);
+  });
+
+  it('follows a restored dock layout ancestor without waiting for a later Legend event', () => {
+    viewport(1194, 834);
+    pane.classList.remove('map-chrome-hidden');
+    const wrapper = chrome('.dock-layout', { left: 1119.84375, top: 90, width: 66.15625, height: 508 });
+    const dock = chrome('.map-control-dock', { left: 1119.84375, top: 90, width: 66.15625, height: 508 });
+    wrapper.appendChild(dock);
+    wrapper.style.visibility = 'hidden';
+    openPopup();
+    flushFrames();
+    expect(inspectorRect().right).toBe(1186);
+
+    wrapper.style.visibility = 'visible';
+    notifyMutation(wrapper, 'style');
+
+    expect(inspectorRect().right).toBe(1111.84375);
+    expectClear(inspectorRect(), dock);
+    expectInsideMap(inspectorRect());
+    notifyResize(wrapper);
+  });
+
+  it('measures actual wrapped time buttons outside the nominal command rect and follows wrap changes', () => {
+    viewport(390, 844);
+    pane.classList.remove('map-chrome-hidden');
+    pane.style.setProperty('--map-command-height', '72px');
+    const command = chrome('.map-command', { left: 8, top: 756, width: 266, height: 72 });
+    const time = chrome('.map-controls-time', { left: 8, top: 756, width: 266, height: 64 }, command);
+    const back = chrome('#time-back-90', { left: 8, top: 632, width: 120, height: 44 }, time);
+    const forward = chrome('#time-fwd-45', { left: 132, top: 632, width: 142, height: 44 }, time);
+    const controls = chrome('#map-chrome-toggle', { left: 282, top: 770, width: 96, height: 48 });
+    openPopup();
+    flushFrames();
+    const wrapped = inspectorRect();
+    expectInsideMap(wrapped);
+    expectClear(wrapped, time, back, forward, controls);
+    expect(wrapped.height).toBeLessThanOrEqual(260);
+    expect(wrapped.bottom).toBeLessThanOrEqual(624);
+
+    mockRect(back, { left: 8, top: 540, width: 120, height: 44 });
+    mockRect(forward, { left: 132, top: 540, width: 142, height: 44 });
+    notifyResize(time);
+    const moreWrapped = inspectorRect();
+    expectClear(moreWrapped, time, back, forward, controls);
+    const mapBox = container.getBoundingClientRect();
+    const centerX = mapBox.left + mapBox.width / 2;
+    const centerY = mapBox.top + mapBox.height / 2;
+    expectOutside(wrapped, centerX, centerY);
+    expectOutside(moreWrapped, centerX, centerY);
+    expectOutside(moreWrapped, centerX + 91, centerY);
+    expectOpen(true);
+  });
+
+  it('leaves the compass and clipped dock hittable in short landscape and recalculates on orientation change', () => {
+    viewport(844, 390, { left: 0, top: 60, width: 844, height: 330 });
+    pane.classList.remove('map-chrome-hidden');
+    const navigation = chrome('.maplibregl-ctrl-group', { left: 8, top: 156, width: 44, height: 132 }, container);
+    const dock = chrome('.map-control-dock', { left: 776, top: 70, width: 60, height: 214 });
+    const command = chrome('.map-command', { left: 8, top: 306, width: 620, height: 76 });
+    const time = chrome('.map-controls-time', { left: 8, top: 306, width: 620, height: 68 }, command);
+    const controls = chrome('#map-chrome-toggle', { left: 736, top: 326, width: 96, height: 44 });
+    const legend = chrome('.map-legend', { left: 542, top: 205, width: 185, height: 169 });
+    const toggle = chrome('#map-legend-toggle', { left: 642, top: 326, width: 86, height: 44 }, legend);
+    toggle.className = 'map-legend-toggle';
+    toggle.setAttribute('aria-expanded', 'true');
+    const panel = chrome('#map-legend-panel', { left: 542, top: 205, width: 185, height: 104 }, legend);
+    panel.className = 'map-legend-panel';
+    openPassList();
+    flushFrames();
+    const landscape = inspectorRect();
+    expectInsideMap(landscape);
+    expectClear(landscape, navigation, dock, time, controls, toggle, panel);
+    expectFullFirstPassRow(landscape);
+    expect(landscape.width).toBeGreaterThanOrEqual(120);
+    const mapBox = container.getBoundingClientRect();
+    expectOutside(landscape, mapBox.left + mapBox.width / 2, mapBox.top + mapBox.height / 2);
+    expectOutside(landscape, mapBox.left + mapBox.width / 2 + 91, mapBox.top + mapBox.height / 2);
+    expectOutside(landscape, mapBox.left + mapBox.width / 2, mapBox.top + mapBox.height / 2 - 91);
+
+    viewport(390, 844);
+    mockRect(navigation, { left: 8, top: 96, width: 44, height: 132 });
+    mockRect(dock, { left: 320, top: 90, width: 62, height: 540 });
+    mockRect(command, { left: 8, top: 674, width: 266, height: 160 });
+    mockRect(time, { left: 8, top: 674, width: 266, height: 146 });
+    mockRect(controls, { left: 282, top: 778, width: 96, height: 44 });
+    toggle.setAttribute('aria-expanded', 'false');
+    mockRect(toggle, { left: 184, top: 778, width: 90, height: 44 });
+    window.dispatchEvent(new Event('resize'));
+    flushFrames();
+    const portrait = inspectorRect();
+    expectInsideMap(portrait);
+    expectClear(portrait, navigation, dock, time, controls, toggle);
+    expect(portrait.height).toBeGreaterThan(landscape.height);
+    expect(portrait.height).toBeLessThanOrEqual(260);
+    expectOpen(true);
+  });
+
+  it.each([
+    {
+      width: 390, height: 844, mapTop: 89, dropX: 286, dropY: 376.5,
+      dock: { left: 315.84375, top: 94, width: 66.15625, height: 508 },
+      zoom: { left: 8, top: 160, width: 44, height: 132 },
+      toolbar: { left: 8, top: 94, width: 300, height: 78.41 },
+      command: { left: 8, top: 391.39, width: 186, height: 360 },
+    },
+    {
+      width: 402, height: 874, mapTop: 89, dropX: 292, dropY: 390,
+      dock: { left: 327.84375, top: 94, width: 66.15625, height: 520 },
+      zoom: { left: 8, top: 160, width: 44, height: 132 },
+      toolbar: { left: 8, top: 94, width: 310, height: 78.41 },
+      command: { left: 8, top: 400, width: 190, height: 380 },
+    },
+    {
+      width: 874, height: 402, mapTop: 60, dropX: 528, dropY: 231,
+      dock: { left: 799.84375, top: 65, width: 66.15625, height: 220 },
+      zoom: { left: 8, top: 131, width: 44, height: 132 },
+      toolbar: { left: 8, top: 65, width: 240, height: 52 },
+      command: { left: 8, top: 330, width: 620, height: 64 },
+    },
+  ])('keeps a framed phone drop on the canvas while the inspector is open at $width×$height', (phone) => {
+    viewport(phone.width, phone.height, { left: 0, top: 0, width: phone.width, height: phone.height });
+    const mapHeight = phone.height - phone.mapTop;
+    mockRect(container, { left: 0, top: phone.mapTop, width: phone.width, height: mapHeight });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', phone.dock);
+    const zoom = chrome('.maplibregl-ctrl-group', phone.zoom, container);
+    const toolbar = chrome('.map-toolbar', phone.toolbar);
+    const command = chrome('.map-command', phone.command);
+    const time = chrome('.map-controls-time', {
+      left: phone.command.left,
+      top: phone.command.top,
+      width: Math.max(44, phone.command.width - 16),
+      height: Math.min(phone.command.height, 120),
+    }, command);
+    openPassList();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    expectClear(sheet, dock, zoom, toolbar, time);
+    const centerX = phone.width / 2;
+    const centerY = phone.mapTop + mapHeight / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX, centerY - 91);
+    expectOutside(sheet, centerX, centerY + 91);
+    expectOutside(sheet, phone.dropX, phone.dropY);
+    expect(sheet.width).toBeGreaterThanOrEqual(120);
+    if (phone.height <= 540) expectFullFirstPassRow(sheet);
+    else expect(sheet.height, 'the sheet must show a pin pass row').toBeGreaterThanOrEqual(96);
+  });
+
+  it.each([
+    { width: 568, height: 320, mapTop: 48 },
+    { width: 874, height: 280, mapTop: 48 },
+    { width: 874, height: 402, mapTop: 48 },
+    { width: 844, height: 390, mapTop: 48 },
+    { width: 667, height: 375, mapTop: 48 },
+    { width: 740, height: 360, mapTop: 48 },
+    { width: 874, height: 521, mapTop: 60 },
+    { width: 874, height: 541, mapTop: 60 },
+    { width: 874, height: 550, mapTop: 60 },
+  ])('keeps a readable pass list beside the hit square at $width×$height', ({ width, height, mapTop }) => {
+    viewport(width, height, { left: 0, top: 0, width, height });
+    const mapHeight = height - mapTop;
+    mockRect(container, { left: 0, top: mapTop, width, height: mapHeight });
+    pane.classList.remove('map-chrome-hidden');
+    const dockLeft = width - 74;
+    const dock = chrome('.map-control-dock', { left: dockLeft, top: mapTop + 5, width: 66, height: Math.min(220, mapHeight - 40) });
+    const zoom = chrome('.maplibregl-ctrl-group', { left: 8, top: mapTop + 71, width: 44, height: 132 }, container);
+    const toolbar = chrome('.map-toolbar', { left: 8, top: mapTop + 5, width: Math.min(240, width * 0.4), height: 52 });
+    const commandTop = height - Math.min(72, Math.round(height * 0.22));
+    const command = chrome('.map-command', { left: 8, top: commandTop, width: Math.min(width - 220, width * 0.7), height: height - commandTop - 8 });
+    const time = chrome('.map-controls-time', {
+      left: 8, top: commandTop, width: Math.max(44, Math.min(width - 236, width * 0.7) - 16), height: Math.min(64, height - commandTop - 12),
+    }, command);
+    const controls = chrome('#map-chrome-toggle', { left: width - 100, top: height - 52, width: 88, height: 44 });
+    openPassList();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    expectClear(sheet, dock, zoom, toolbar, time, controls);
+    const centerX = width / 2;
+    const centerY = mapTop + mapHeight / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX - 91, centerY);
+    expectOutside(sheet, centerX, centerY - 91);
+    expectOutside(sheet, centerX, centerY + 91);
+    expect(sheet.width).toBeGreaterThanOrEqual(96);
+    expectFullFirstPassRow(sheet);
+  });
+
+  it('shows the full wrapped first pass row on a short phone when controls are hidden', () => {
+    const width = 568;
+    const height = 320;
+    const mapTop = 48;
+    viewport(width, height, { left: 0, top: 0, width, height });
+    mockRect(container, { left: 0, top: mapTop, width, height: height - mapTop });
+    openPassList();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    const mapBox = container.getBoundingClientRect();
+    const centerX = mapBox.left + mapBox.width / 2;
+    const centerY = mapBox.top + mapBox.height / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX - 91, centerY);
+    expect(sheet.width).toBeGreaterThanOrEqual(96);
+    expect(sheet.height).toBeGreaterThanOrEqual(120 + 104);
+    expectFullFirstPassRow(sheet);
+  });
+
+  it('keeps a wide short phone re-pin off the open inspector', () => {
+    const width = 932;
+    const height = 430;
+    const mapTop = 48;
+    viewport(width, height, { left: 0, top: 0, width, height });
+    const mapHeight = height - mapTop;
+    mockRect(container, { left: 0, top: mapTop, width, height: mapHeight });
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: width - 74, top: mapTop + 5, width: 66, height: Math.min(220, mapHeight - 40) });
+    const zoom = chrome('.maplibregl-ctrl-group', { left: 8, top: mapTop + 71, width: 44, height: 132 }, container);
+    const toolbar = chrome('.map-toolbar', { left: 8, top: mapTop + 5, width: 240, height: 52 });
+    const commandTop = height - 64;
+    const command = chrome('.map-command', { left: 8, top: commandTop, width: width - 180, height: 56 });
+    const time = chrome('.map-controls-time', { left: 8, top: commandTop, width: width - 200, height: 48 }, command);
+    const controls = chrome('#map-chrome-toggle', { left: width - 100, top: height - 52, width: 88, height: 44 });
+    openPassList();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    expectClear(sheet, dock, zoom, toolbar, time, controls);
+    const centerX = width / 2;
+    const centerY = mapTop + mapHeight / 2;
+    expectOutside(sheet, centerX, centerY);
+    expectOutside(sheet, centerX + 91, centerY);
+    expectOutside(sheet, centerX - 91, centerY);
+    expectOutside(sheet, centerX, centerY - 91);
+    expectOutside(sheet, centerX, centerY + 91);
+    expect(sheet.width).toBeGreaterThanOrEqual(240);
+    expectFullFirstPassRow(sheet);
+  });
+
+  it('uses pane-relative coordinates and intersects map bounds with the visible viewport', () => {
+    viewport(1000, 760, { left: 100, top: 90, width: 1100, height: 800 });
+    mockRect(container, { left: 112, top: 134, width: 1080, height: 730 });
+    const controls = chrome('#map-chrome-toggle', { left: 878, top: 702, width: 96, height: 44 });
+    openPopup();
+    flushFrames();
+    const bounds = inspectorRect();
+    expectInsideMap(bounds);
+    expectClear(bounds, controls);
+    expect(bounds.width).toBe(320);
+    expect(Number.parseFloat(inspector.style.left)).toBe(bounds.left - 100);
+    expect(Number.parseFloat(inspector.style.top)).toBe(bounds.top - 90);
+  });
+
+  it('ignores hidden, zero-area and scrolled-out controls but follows visible secondary panels', () => {
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: 1308, top: 88, width: 84, height: 120 });
+    dock.style.overflowY = 'auto';
+    const clipped = chrome('#toggle-labels', { left: 1308, top: 500, width: 84, height: 44 }, dock);
+    const hidden = chrome('#satellite-picker-panel', { left: 1000, top: 230, width: 392, height: 570 });
+    hidden.hidden = true;
+    const zero = chrome('#map-launch-coverage', { left: 1100, top: 300, width: 0, height: 400 });
+    openPopup();
+    flushFrames();
+    const initial = inspectorRect();
+    expectClear(initial, dock);
+    expect(initial.right).toBeGreaterThan(clipped.getBoundingClientRect().left);
+    expect(initial.top).toBeLessThan(clipped.getBoundingClientRect().top);
+    expect(initial.bottom).toBeGreaterThan(clipped.getBoundingClientRect().bottom);
+
+    hidden.hidden = false;
+    notifyMutation(hidden, 'hidden');
+    expectClear(inspectorRect(), dock, hidden);
+    hidden.hidden = true;
+    notifyMutation(hidden, 'hidden');
+    expect(inspectorRect().toJSON()).toEqual(initial.toJSON());
+
+    mockRect(zero, { left: 1000, top: 230, width: 392, height: 570 });
+    notifyResize(zero);
+    expectClear(inspectorRect(), dock, zero);
+    expectOpen(true);
+  });
+
+  it('remeasures external status and shot-list banners without moving their controls', () => {
+    const status = chrome('#status-banner', { left: 0, top: 740, width: 1400, height: 160 }, document.body);
+    const shotlist = chrome('#shotlist-bar', { left: 0, top: 88, width: 1400, height: 60 }, document.body);
+    openPopup();
+    flushFrames();
+    const first = inspectorRect();
+    expectClear(first, status, shotlist);
+    expectInsideMap(first);
+    const cameraCalls = [...map.cameraCalls];
+
+    mockRect(status, { left: 0, top: 640, width: 1400, height: 260 });
+    notifyResize(status);
+    expectClear(inspectorRect(), status, shotlist);
+    expect(inspectorRect().bottom).toBeLessThan(first.bottom);
+    expect(status.style.cssText).toBe('');
+    expect(shotlist.style.cssText).toBe('');
+    expect(map.cameraCalls).toEqual(cameraCalls);
+
+    status.hidden = true;
+    notifyMutation(status, 'hidden');
+    expect(inspectorRect().bottom).toBeGreaterThan(first.bottom);
+    expectClear(inspectorRect(), shotlist);
+    expectOpen(true);
+  });
+
+  it('discovers nested chrome and external banners added after opening, then follows their ancestors', () => {
+    pane.classList.remove('map-chrome-hidden');
+    const command = chrome('.map-command', { left: 0, top: 780, width: 1400, height: 44 });
+    const bannerHost = document.createElement('footer');
+    document.body.appendChild(bannerHost);
+    openPopup();
+    flushFrames();
+
+    const time = chrome('.map-controls-time', { left: 0, top: 780, width: 1400, height: 44 }, command);
+    notifyChildList(command);
+    expectClear(inspectorRect(), time);
+    notifyResize(time);
+
+    command.style.transform = 'translateY(-80px)';
+    mockRect(time, { left: 0, top: 700, width: 1400, height: 44 });
+    notifyMutation(command, 'style');
+    expectClear(inspectorRect(), time);
+
+    const banner = chrome('#status-banner', { left: 0, top: 620, width: 1400, height: 160 }, bannerHost);
+    notifyChildList(bannerHost);
+    expectClear(inspectorRect(), banner, time);
+    notifyResize(banner);
+    bannerHost.style.transform = 'translateY(-80px)';
+    mockRect(banner, { left: 0, top: 540, width: 1400, height: 160 });
+    notifyMutation(bannerHost, 'style');
+    expectClear(inspectorRect(), banner, time);
+
+    banner.remove();
+    notifyChildList(bannerHost);
+    expect(inspectorRect().bottom).toBe(692);
+    for (const observer of resizeObservers) expect(observer.observed.has(banner)).toBe(false);
+  });
+
+  it('coalesces geometry signals, ignores popup mutations and disconnects only after the last close', () => {
+    const navigation = chrome('.maplibregl-ctrl-group', { left: 8, top: 96, width: 44, height: 132 }, container);
+    const compass = chrome('.maplibregl-ctrl-compass', { left: 8, top: 184, width: 44, height: 44 }, navigation);
+    const icon = chrome('.maplibregl-ctrl-icon', { left: 20, top: 196, width: 20, height: 20 }, compass);
+    const first = openPopup('First');
+    const second = openPopup('Second');
+    flushFrames();
+    const observers = [...resizeObservers];
+    const mutations = mutationObservers.filter((observer) => observer.observed.has(pane));
+    expect(observers.length).toBeGreaterThan(0);
+    expect(mutations.length).toBeGreaterThan(0);
+    const cameraCalls = [...map.cameraCalls];
+    for (const observer of observers) {
+      observer.callback([{ target: pane } as unknown as ResizeObserverEntry], observer as unknown as ResizeObserver);
+      observer.callback([{ target: pane } as unknown as ResizeObserverEntry], observer as unknown as ResizeObserver);
+    }
+    expect(frames).toHaveLength(1);
+    flushFrames();
+    expect(map.cameraCalls).toEqual(cameraCalls);
+    for (const observer of mutations) {
+      observer.callback([{ target: popupAt(1).scroller, type: 'attributes', attributeName: 'style' } as unknown as MutationRecord],
+        observer as unknown as MutationObserver);
+      observer.callback([{ target: icon, type: 'attributes', attributeName: 'style' } as unknown as MutationRecord],
+        observer as unknown as MutationObserver);
+    }
+    expect(frames).toHaveLength(0);
+
+    first.remove();
+    flushFrames();
+    expectOpen(true);
+    for (const observer of [...observers, ...mutations]) expect(observer.disconnect).not.toHaveBeenCalled();
+    second.remove();
+    flushFrames();
+    expectOpen(false);
+    for (const observer of [...observers, ...mutations]) expect(observer.disconnect).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event('resize'));
+    expect(frames).toHaveLength(0);
+  });
+
+  it('does not rewrite unchanged fractional bounds after CSSOM serializes pixel lengths', () => {
+    pane.classList.remove('map-chrome-hidden');
+    const dock = chrome('.map-control-dock', { left: 1325.84375, top: 90, width: 66.15625, height: 710 });
+    const setProperty = inspector.style.setProperty.bind(inspector.style);
+    const writes = vi.spyOn(inspector.style, 'setProperty').mockImplementation((property, value, priority) => {
+      const pixels = Number.parseFloat(value ?? '');
+      setProperty(property, Number.isFinite(pixels) ? `${Number(pixels.toPrecision(6))}px` : value, priority);
+    });
+    openPopup();
+    flushFrames();
+    expect(inspector.style.left).toBe('997.844px');
+    writes.mockClear();
+    const cameraCalls = [...map.cameraCalls];
+
+    for (let repeat = 0; repeat < 5; repeat++) {
+      notifyMutation(pane);
+      notifyResize(dock);
+    }
+
+    expect(writes).not.toHaveBeenCalled();
+    expect(map.cameraCalls).toEqual(cameraCalls);
+    setProperty('left', '1px');
+    notifyResize(dock);
+    expect(inspector.style.left).toBe('997.844px');
+    expect(writes).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('container-backed map inspector', () => {
+  it('reparents the popup out of the map stacking context and opens the inspector', () => {
+    expectOpen(false);
+    const appendToMap = vi.spyOn(container, 'appendChild');
+    openPopup();
+    const popup = popupAt(0);
+
+    expect(appendToMap).toHaveBeenCalledWith(popup.element);
+    expect(popup.element.parentElement).toBe(inspector);
+    expect(inspector.parentElement).toBe(pane);
+    expect(container.querySelector('.maplibregl-popup')).toBeNull();
+    expectOpen(true);
+    expect(popup.options).toMatchObject({ closeOnClick: false, focusAfterOpen: false });
+    expect(document.activeElement).toBe(popup.closeButton);
+    expect(popup.scroller.scrollTop).toBe(0);
+    expect(map.cameraCalls).toEqual([]);
+    for (const frame of frames.splice(0)) frame(0);
+    expect(map.cameraCalls).toEqual([{ method: 'resize', args: [] }]);
+  });
+
+  it('keeps the inspector open until the last popup closes, including the close button path', () => {
+    const first = openPopup('First pin');
+    const second = openPopup('Another popup');
+    const closed = vi.fn();
+    second.onClose(closed);
+    expect(inspector.querySelectorAll('.maplibregl-popup')).toHaveLength(2);
+    expect(getComputedStyle(popupAt(0).element).display).toBe('none');
+    expect(getComputedStyle(popupAt(1).element).display).toBe('flex');
+
+    popupAt(1).closeButton.click();
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(popupAt(1).element.isConnected).toBe(false);
+    expect(inspector.querySelectorAll('.maplibregl-popup')).toHaveLength(1);
+    expect(getComputedStyle(popupAt(0).element).display).toBe('flex');
+    expectOpen(true);
+    first.remove();
+    expect(inspector.querySelector('.maplibregl-popup')).toBeNull();
+    expectOpen(false);
+    second.remove();
+    expect(closed).toHaveBeenCalledTimes(1);
+    expectOpen(false);
+  });
+
+  it('replaces an owned pin without leaving stale popup DOM or losing inspector state', () => {
+    const core = createMapCore(vendor, createClock());
+    const firstContent = document.createElement('div');
+    const nextContent = document.createElement('div');
+    firstContent.textContent = 'First pin';
+    nextContent.textContent = 'Replacement pin';
+    core.openPopup({ at: [10, 20], content: firstContent, owner: 'pin' });
+    core.openPopup({ at: [30, 40], content: nextContent, owner: 'pin' });
+
+    expect(popupAt(0).element.isConnected).toBe(false);
+    expect(inspector.querySelectorAll('.maplibregl-popup')).toHaveLength(1);
+    expect(inspector.contains(firstContent)).toBe(false);
+    expect(inspector.contains(nextContent)).toBe(true);
+    expectOpen(true);
+    core.closePopup('pin');
+    expect(inspector.querySelector('.maplibregl-popup')).toBeNull();
+    expectOpen(false);
+  });
+
+  it('does not steal a popup into an inspector belonging to a different map pane', () => {
+    const outside = document.createElement('div');
+    document.body.appendChild(outside);
+    const otherMap = createVendorMap({
+      container: outside,
+      style: { sources: {}, layers: [] },
+      camera: { center: [10, 20], zoom: 3 },
+    });
+    const handle = otherMap.openPopup({ at: [10, 20], content: document.createElement('div') });
+    expect(popupAt(0).element.parentElement).toBe(outside);
+    expect(popupAt(0).options).not.toHaveProperty('focusAfterOpen');
+    expect(inspector.children).toHaveLength(0);
+    expectOpen(false);
+    handle.remove();
+  });
+
+  it('paints the reparented inspector above dock controls without raising the Controls toggle', () => {
+    pane.classList.remove('map-chrome-hidden');
+    openPopup();
+    const popup = popupAt(0).element;
+    const dock = pane.querySelector<HTMLElement>('.map-control-dock')!;
+    const controls = document.getElementById('map-chrome-toggle')!;
+
+    expect(getComputedStyle(pane).isolation).toBe('isolate');
+    expect(getComputedStyle(container).zIndex).toBe('0');
+    expect(popup.parentElement).toBe(inspector);
+    expect(Number(getComputedStyle(inspector).zIndex)).toBeGreaterThan(Number(getComputedStyle(dock).zIndex));
+    expect(getComputedStyle(inspector).pointerEvents).toBe('none');
+    expect(getComputedStyle(popup).pointerEvents).toBe('auto');
+    expect(getComputedStyle(controls).zIndex).toBe('20');
+  });
+
+  it.each([1280, 390])('limits the opaque panel to content and its scroll area at %ipx', (width) => {
+    vi.stubGlobal('innerWidth', width);
+    openPopup();
+    const popup = popupAt(0);
+    const slotStyle = getComputedStyle(inspector);
+    const popupStyle = getComputedStyle(popup.element);
+    const contentStyle = getComputedStyle(popup.scroller);
+
+    expect(slotStyle.backgroundColor).toBe('transparent');
+    expect(popupStyle.getPropertyValue('inset')).toBe('0 0 auto');
+    expect(popupStyle.height).toBe('auto');
+    expect(popupStyle.maxHeight).toBe('100%');
+    expect(contentStyle.flexGrow).toBe('0');
+    expect(contentStyle.flexShrink).toBe('1');
+    expect(contentStyle.minHeight).toBe('0');
+    expect(contentStyle.overflowY).toBe('auto');
+    expect(slotStyle.pointerEvents).toBe('none');
+    expect(getComputedStyle(container).right).toBe('0px');
+  });
+});
