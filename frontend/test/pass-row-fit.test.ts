@@ -17,11 +17,20 @@ const chromePath = [
 const stylesheet = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8')
   .replace(/url\('\/fonts\/([^']+)'\)/g, (_, filename: string) =>
     `url('data:font/woff2;base64,${readFileSync(resolve(__dirname, '../public/fonts', filename)).toString('base64')}')`);
+// Native Menlo has a 15px text content area on macOS; other monospace fonts
+// exceed the narrow row's old 14.976px line-height. Exercise a real 17px face
+// as well as the platform stack so the collision cannot hide behind OS metrics.
+const metricFont = readFileSync(resolve(__dirname, 'fixtures/fonts/JetBrainsMono-Regular.ttf')).toString('base64');
+const metricStylesheet = `@font-face {
+  font-family: "Pass row metrics";
+  src: url(data:font/ttf;base64,${metricFont}) format("truetype");
+}
+.metric-font .pin-pass-row { font-family: "Pass row metrics", monospace; }`;
 const vendorStylesheet = readFileSync(resolve(__dirname, '../node_modules/maplibre-gl/dist/maplibre-gl.css'), 'utf8');
 const html = readFileSync(resolve(__dirname, '../index.html'), 'utf8')
   .replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '')
   .replace(/<link\b[^>]*>/g, '')
-  .replace('</head>', `<style>${vendorStylesheet}\n${stylesheet}</style></head>`);
+  .replace('</head>', `<style>${vendorStylesheet}\n${stylesheet}\n${metricStylesheet}</style></head>`);
 const adapter = readFileSync(resolve(__dirname, '../src/map/adapters/maplibre/index.ts'), 'utf8');
 // Execute the production solver and observers, not a copied algorithm or fixed sheet dimensions.
 const placementSource = adapter.slice(adapter.indexOf('function mapInspector('), adapter.indexOf('function exposeForEndToEnd('));
@@ -63,7 +72,7 @@ interface RenderedMeasure {
 
 async function measure(page: Page, targetRow = 0): Promise<RenderedMeasure> {
   return page.evaluate((targetRow) => {
-    const epsilon = 0.1;
+    const epsilon = 0.01;
     const clippingBounds = (element: Element) => {
       const bounds = [{ name: 'viewport', left: 0, top: 0, right: innerWidth, bottom: innerHeight }];
       for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
@@ -117,24 +126,38 @@ async function measure(page: Page, targetRow = 0): Promise<RenderedMeasure> {
     const first = rows[targetRow]!;
     const fields = new Set<string>();
     let visibleRows = 0;
+    const rowFields = rows.map((row) => [...row.children].map((element) => {
+      fields.add(element.className);
+      return { name: element.className, rects: textRects(element) };
+    }));
+    const checkOverlap = (a: typeof rowFields[number][number], b: typeof a, row: number) => {
+      for (const { rect: left } of a.rects) for (const { rect: right } of b.rects) {
+        const width = Math.min(left.right, right.right) - Math.max(left.left, right.left);
+        const height = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top);
+        if (width > epsilon && height > epsilon) overlaps.push({ row, a: a.name, b: b.name, width, height });
+      }
+    };
     rows.forEach((row, index) => {
+      const current = rowFields[index]!;
+      // Check intrinsic text geometry even for trailing rows outside the scrollport.
+      for (let a = 0; a < current.length; a += 1) for (let b = a + 1; b < current.length; b += 1) {
+        checkOverlap(current[a]!, current[b]!, index);
+      }
+      for (const field of current) for (const next of rowFields[index + 1] ?? []) {
+        checkOverlap(field, { ...next, name: `next row ${next.name}` }, index);
+      }
+      if (row === row.parentElement?.firstElementChild) {
+        const heading = row.parentElement.previousElementSibling;
+        if (heading?.matches('.pin-pass-heading')) for (const field of current) {
+          checkOverlap({ name: 'pin-pass-heading', rects: textRects(heading) }, field, index);
+        }
+      }
       const rect = row.getBoundingClientRect();
       const visible = visibleRect(row);
-      // Scrollable trailing rows may be partly outside the viewport; the first must fit in full.
+      // Scrollable trailing rows may be partly outside the viewport; the target must fit in full.
       if (index !== targetRow && (visible.width < rect.width - epsilon || visible.height < rect.height - epsilon)) return;
       visibleRows += 1;
       checkClips(row);
-      const rowFields = [...row.children].map((element) => {
-        fields.add(element.className);
-        return { name: element.className, rects: textRects(element) };
-      });
-      for (let a = 0; a < rowFields.length; a += 1) for (let b = a + 1; b < rowFields.length; b += 1) {
-        for (const { rect: left } of rowFields[a]!.rects) for (const { rect: right } of rowFields[b]!.rects) {
-          const width = Math.min(left.right, right.right) - Math.max(left.left, right.left);
-          const height = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top);
-          if (width > epsilon && height > epsilon) overlaps.push({ row: index, a: rowFields[a]!.name, b: rowFields[b]!.name, width, height });
-        }
-      }
     });
     if (targetRow === 0) for (const header of document.querySelectorAll('.dropped-pin-popup > strong, .pin-pass-heading')) checkClips(header);
     const sheet = document.querySelector('#map-inspector')!.getBoundingClientRect();
@@ -158,7 +181,7 @@ function expectReadable(measured: RenderedMeasure, label: string): void {
   expect.soft(measured.overlaps, details).toEqual([]);
   expect.soft(measured.clips, details).toEqual([]);
   for (const popup of measured.popupWidths) expect.soft(popup.scrollWidth, details).toBeLessThanOrEqual(popup.clientWidth);
-  expect.soft(measured.firstRowVisible, details).toBeGreaterThanOrEqual(measured.firstRowHeight - 0.1);
+  expect.soft(measured.firstRowVisible, details).toBeGreaterThanOrEqual(measured.firstRowHeight - 0.01);
 }
 
 let browser: Browser | undefined;
@@ -173,28 +196,30 @@ describe.skipIf(!chromePath)('rendered pin pass row', () => {
       executablePath: chromePath,
       args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run'],
     });
-  }, 30_000);
+  }, 60_000);
 
   afterAll(async () => {
     await browser?.close();
-  }, 30_000);
+  }, 60_000);
 
   it.each([
     { width: 568, height: 320 }, { width: 667, height: 375 }, { width: 740, height: 360 }, { width: 844, height: 390 },
     { width: 874, height: 280 }, { width: 874, height: 402 }, { width: 874, height: 541 },
     { width: 874, height: 550 }, { width: 932, height: 430 }, { width: 1440, height: 900 },
-  ])('fits every painted field at $width×$height with real placement', async ({ width, height }) => {
+  ].flatMap((size) => [1, 3].flatMap((deviceScaleFactor) => (size.width < 932 ? ['native', 'metric'] : ['native']).map((font) => ({ ...size, deviceScaleFactor, font })))))('fits every painted field at $width×$height DPR$deviceScaleFactor $font font with real placement', async ({ width, height, deviceScaleFactor, font }) => {
     if (!browser) throw new Error('Chrome was not opened');
-    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 3, isMobile: width < 1000, hasTouch: width < 1000 });
+    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor, isMobile: deviceScaleFactor === 3 && width < 1000, hasTouch: deviceScaleFactor === 3 && width < 1000 });
     try {
       const page = await context.newPage();
       await page.route('**/*', (route) => route.abort());
       await page.setContent(html, { waitUntil: 'domcontentloaded' });
       await page.evaluate(() => document.fonts.ready);
-      await page.evaluate(() => {
+      await page.evaluate((font) => {
+        document.body.classList.toggle('metric-font', font === 'metric');
+        document.querySelector('#view')!.classList.add('view-map');
         document.querySelector('#map-pane')!.classList.add('active');
         document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button></button><button></button><button></button></div></div></div>';
-      });
+      }, font);
       await page.addScriptTag({ content: `${placementScript}\nwindow.placeInspector = inspectorSync({ getContainer: () => document.querySelector('#map'), resize() {} });` });
       for (const shown of [false, true]) for (const variant of variants) {
         await page.evaluate(({ markup, shown }) => {
@@ -206,9 +231,10 @@ describe.skipIf(!chromePath)('rendered pin pass row', () => {
           document.querySelector('#map-inspector')!.innerHTML = `<div class="maplibregl-popup"><div class="maplibregl-popup-content">${markup}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>`;
           (window as unknown as { placeInspector: () => void }).placeInspector();
         }, { markup: passMarkup(variant), shown });
+        await page.evaluate(() => document.fonts.ready);
         await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
         const measured = await measure(page);
-        const label = `${width}×${height} ${shown ? 'shown' : 'hidden'} ${variant}`;
+        const label = `${width}×${height} DPR${deviceScaleFactor} ${font} ${shown ? 'shown' : 'hidden'} ${variant}`;
         expectReadable(measured, `${label} scrollTop=0`);
         for (let row = 1; row < passes.length; row += 1) {
           await page.evaluate((index) => {
@@ -222,5 +248,5 @@ describe.skipIf(!chromePath)('rendered pin pass row', () => {
     } finally {
       await context.close();
     }
-  }, 30_000);
+  }, 60_000);
 });

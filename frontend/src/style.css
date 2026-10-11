@@ -4607,6 +4607,11 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
     font-size: 0.68rem !important;
     line-height: 1.15;
   }
+  @media (max-width: 931px) {
+    .dropped-pin-popup .pin-pass-row {
+      row-gap: 3px !important;
+    }
+  }
 }
 
 @container (max-width: 140px) {
@@ -4614,6 +4619,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
     padding: 2px;
   }
   .dropped-pin-popup .pin-pass-heading {
+    margin-top: 1px !important;
     font-size: 0.72rem !important;
   }
 }
