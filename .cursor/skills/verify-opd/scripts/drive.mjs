@@ -348,6 +348,91 @@ async function setViewport(send, width, height, mobile) {
   });
 }
 
+async function reportViewport(send, feature, viewport) {
+  const size = await evaluate(send, '({ w: window.innerWidth, h: window.innerHeight })');
+  const created = (process.env.OPD_VERIFY_VIEWPORT || '').trim();
+  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim() || 'desktop';
+  const opened = `${viewport.width}x${viewport.height}`;
+  const now = size ? `${size.w}x${size.h}` : 'unknown';
+  const how = created && created === opened ? 'created-at-size' : created ? `env ${created}` : surface === 'desktop' ? 'chrome-metrics' : 'device-context';
+  console.log(`viewport ${feature} surface ${surface} opened ${opened} now ${now} ${how}`);
+}
+
+async function provePinInspector(send) {
+  const row = await evaluate(send, `(() => {
+    const inspector = document.getElementById('map-inspector');
+    const body = document.querySelector('#map-inspector .dropped-pin-popup');
+    const popup = body && body.closest('.maplibregl-popup');
+    const map = document.getElementById('map');
+    const pane = document.getElementById('map-pane');
+    const heading = body && body.querySelector('.pin-pass-heading');
+    const pass = body && body.querySelector('.pin-pass-row');
+    const add = body && body.querySelector('.pin-add-button');
+    if (!inspector || !body || !popup || !map || !pane || !heading || !pass || !add) {
+      return { ok: false, missing: true, hasBody: !!body, hasHeading: !!heading, hasPass: !!pass, hasAdd: !!add };
+    }
+    const textBoxes = (element) => {
+      const node = element && element.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE || !node.textContent) return [];
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return [...range.getClientRects()].filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+    };
+    const overlaps = (a, b) => a.right > b.left + 0.01 && b.right > a.left + 0.01 && a.bottom > b.top + 0.01 && b.bottom > a.top + 0.01;
+    const names = ['pin-pass-rel', 'pin-pass-utc', 'pin-pass-regime', 'pin-pass-shoot'];
+    const fields = {};
+    for (const name of names) fields[name] = pass.querySelector('.' + name);
+    const missingField = names.find((name) => !fields[name]) || '';
+    const shootBoxes = missingField ? [] : textBoxes(fields['pin-pass-shoot']);
+    const hits = [];
+    if (!missingField) {
+      for (const name of ['pin-pass-rel', 'pin-pass-utc', 'pin-pass-regime']) {
+        for (const box of textBoxes(fields[name])) {
+          if (shootBoxes.some((shoot) => overlaps(box, shoot))) hits.push(name);
+        }
+      }
+    }
+    const header = heading.getBoundingClientRect();
+    const previous = inspector.style.pointerEvents;
+    inspector.style.pointerEvents = 'auto';
+    const paint = document.elementFromPoint(header.left + header.width / 2, header.top + Math.min(6, header.height / 2));
+    inspector.style.pointerEvents = previous;
+    const popupBox = popup.getBoundingClientRect();
+    const mapBox = map.getBoundingClientRect();
+    const background = getComputedStyle(inspector).backgroundColor;
+    const inline = getComputedStyle(pane).getPropertyValue('--map-inspector-inline').trim();
+    const rowGap = getComputedStyle(pass).rowGap;
+    const container = body.clientWidth;
+    const transparent = background === 'rgba(0, 0, 0, 0)' || background === 'transparent';
+    const mapUnder = mapBox.right >= popupBox.right - 1 && mapBox.bottom >= popupBox.bottom - 1;
+    const paints = !!(paint && popup.contains(paint));
+    const addText = (add.textContent || '').includes('Add to my targets');
+    const gapOk = container > 260 || rowGap === '3px';
+    const inlineOk = inline === '0px' || inline === '0';
+    return {
+      ok: !missingField && hits.length === 0 && transparent && mapUnder && paints && addText && gapOk && inlineOk,
+      missingField,
+      hits,
+      transparent,
+      mapUnder,
+      paints,
+      addText,
+      gapOk,
+      inlineOk,
+      background,
+      inline,
+      rowGap,
+      container,
+      viewport: window.innerWidth + 'x' + window.innerHeight,
+      sheet: Math.round(popupBox.width) + 'x' + Math.round(popupBox.height),
+    };
+  })()`);
+  if (!row?.ok) throw new Error(`pin inspector ${JSON.stringify(row)}`);
+  const note = `viewport ${row.viewport} sheet ${row.sheet} container ${row.container}px row-gap ${row.rowGap}`;
+  console.log(`pin inspector ${note}`);
+  return note;
+}
+
 async function safeAreaOverride(send, insets) {
   try {
     await send('Emulation.setSafeAreaInsetsOverride', { insets });
@@ -613,6 +698,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   const selected = features.includes('all') ? BROWSER_FEATURES : features;
   const notes = [];
   for (const feature of selected) {
+    await reportViewport(send, feature, viewport);
     if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir, baseUrl));
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
@@ -3274,6 +3360,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     'pin drop',
     10000,
   );
+  const pinNote = await provePinInspector(send);
   await shot(send, evidenceDir, 'map-pin-drop');
   await evaluate(send, `[...document.querySelectorAll('.maplibregl-popup-close-button')].forEach((button) => button.click())`);
   await waitFor(send, `document.querySelector('.maplibregl-popup') ? null : { ok: true }`, 'popups closed before launch', 5000);
@@ -3363,7 +3450,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
   const narrowNote = narrowLaid && narrowLaid.reserved ? ` narrow command ${Math.round(narrowLaid.reserved.height)}px` : '';
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, Esri dark maxzoom ${ready.maxzoom}, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px${narrowNote}, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, Esri dark maxzoom ${ready.maxzoom}, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px${narrowNote}, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop ${pinNote}, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {
