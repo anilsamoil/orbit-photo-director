@@ -57,6 +57,11 @@ async function emailBinding(email: string, name: string) {
   const bindings = JSON.parse(env.ACCESS_PROFILE_BINDINGS || '{}');
   Object.assign(env, { ACCESS_PROFILE_BINDINGS: JSON.stringify({ ...bindings, [key]: name }) });
 }
+async function emailAddition(email: string, name: string) {
+  const key = await emailKey(email);
+  const additions = JSON.parse(env.ACCESS_PROFILE_BINDINGS_ADDITIONS || '{}');
+  env.ACCESS_PROFILE_BINDINGS_ADDITIONS = JSON.stringify({ ...additions, [key]: name });
+}
 async function emailGrants(email: string, profiles: unknown) {
   const key = await emailKey(email);
   const grants = JSON.parse(env.ACCESS_PROFILE_GRANTS || '{}');
@@ -135,6 +140,152 @@ describe('account-owned browser profiles', () => {
     delete env.ACCESS_PROFILE_BINDINGS;
     await emailBinding('jessica@example.com', 'u-' + 'a'.repeat(28));
     expect((await call('/api/browser/session', await jwt())).status).toBe(503);
+  });
+});
+describe('private binding additions', () => {
+  it('resolves a normalized signed email to its named profile and existing targets without writes', async () => {
+    await emailAddition('pilot@example.com', 'pilot');
+    const assertion = await jwt('pilot-id', ' PILOT@EXAMPLE.COM ', { name: 'Test Pilot' });
+    records.set('profiles/pilot/targets.json', JSON.stringify([target('pilot')]));
+    expect(await session(assertion)).toEqual({ ok: true, profile: { name: 'pilot', displayName: 'Test Pilot' },
+      profiles: [{ name: 'pilot', displayName: 'Test Pilot' }] });
+    expect(await (await call('/api/browser/profiles/pilot/targets', assertion)).json()).toEqual({
+      targets: [target('pilot')], removedCuratedIds: null, removedCuratedUpdatedAt: null,
+    });
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+  it('keeps base precedence and existing grants while additions grant no other profiles', async () => {
+    await emailBinding('controller@example.com', 'controller');
+    await emailAddition('controller@example.com', 'pilot');
+    await emailAddition('pilot@example.com', 'pilot');
+    await emailGrants('controller@example.com', [
+      { name: 'controller', displayName: 'Ignored rename' }, { name: 'shared', displayName: 'Shared' },
+    ]);
+    await emailGrants('pilot@example.com', [{ name: 'pilot', displayName: 'Ignored rename' }]);
+    const base = await jwt('controller-id', 'controller@example.com', { name: 'Controller' });
+    const added = await jwt('pilot-id', 'pilot@example.com', { name: 'Test Pilot' });
+    expect(await session(base)).toEqual({ ok: true, profile: { name: 'controller', displayName: 'Controller' },
+      profiles: [{ name: 'controller', displayName: 'Controller' }, { name: 'shared', displayName: 'Shared' }] });
+    expect(await session(added)).toEqual({ ok: true, profile: { name: 'pilot', displayName: 'Test Pilot' },
+      profiles: [{ name: 'pilot', displayName: 'Test Pilot' }] });
+    expect((await call('/api/browser/profiles/shared/targets', base)).status).toBe(200);
+    expect((await call('/api/browser/profiles/pilot/targets', base)).status).toBe(403);
+    expect((await call('/api/browser/profiles/shared/targets', added)).status).toBe(403);
+  });
+  it('keeps absent and empty maps compatible and unrelated accounts opaque', async () => {
+    const ordinary = await session(await jwt());
+    await emailBinding('controller@example.com', 'controller');
+    await emailGrants('controller@example.com', [{ name: 'shared', displayName: 'Shared' }]);
+    const base = await jwt('controller-id', 'controller@example.com', { name: 'Controller' });
+    const expected = { ok: true, profile: { name: 'controller', displayName: 'Controller' },
+      profiles: [{ name: 'controller', displayName: 'Controller' }, { name: 'shared', displayName: 'Shared' }] };
+    expect(await session(base)).toEqual(expected);
+    for (const value of ['', '{}']) {
+      env.ACCESS_PROFILE_BINDINGS_ADDITIONS = value;
+      expect(await session(base)).toEqual(expected);
+      expect(await session(await jwt())).toEqual(ordinary);
+    }
+    await emailAddition('pilot@example.com', 'pilot');
+    expect(await session(await jwt())).toEqual(ordinary);
+    delete env.ACCESS_PROFILE_BINDINGS;
+    env.ACCESS_PROFILE_BINDINGS = '';
+    expect((await session(await jwt('pilot-id', 'pilot@example.com'))).profile.name).toBe('pilot');
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+  it('denies malformed additions for valid base callers before targets or ratings storage', async () => {
+    await emailBinding('controller@example.com', 'controller');
+    const assertion = await jwt('controller-id', 'controller@example.com');
+    const unrelated = await emailKey('unrelated@example.com');
+    const invalidValues: unknown[] = [null, 1, {}, [], '', 'Pilot', '../pilot', 'u-' + 'a'.repeat(28)];
+    const invalidMaps = ['not-json', 'null', '[]', '1', 'true', '{"raw@example.com":"pilot"}', '{"email:bad":"pilot"}',
+      ...invalidValues.map((value) => JSON.stringify({ [unrelated]: value }))];
+    for (const value of invalidMaps) {
+      env.ACCESS_PROFILE_BINDINGS_ADDITIONS = value;
+      for (const path of ['/api/browser/session', '/api/browser/profiles/controller/targets', '/api/log']) {
+        const response = await call(path, assertion);
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({ error: 'identity_configuration_unavailable' });
+      }
+      const write = await call('/api/log', assertion, 'POST', {
+        target_id: 'test', pass_time: '2026-09-12T01:00:00Z', action: 'shoot',
+      });
+      expect(write.status).toBe(503);
+      expect(await write.json()).toEqual({ error: 'identity_configuration_unavailable' });
+    }
+    expect(bucket.get).not.toHaveBeenCalled(); expect(bucket.put).not.toHaveBeenCalled(); expect(bucket.list).not.toHaveBeenCalled();
+  });
+  it('still validates the complete base map and grants for an additions caller', async () => {
+    await emailAddition('pilot@example.com', 'pilot');
+    const assertion = await jwt('pilot-id', 'pilot@example.com');
+    const unrelated = await emailKey('unrelated@example.com');
+    env.ACCESS_PROFILE_BINDINGS = JSON.stringify({ [unrelated]: 'u-' + 'a'.repeat(28) });
+    const baseDenied = await call('/api/browser/session', assertion);
+    expect(baseDenied.status).toBe(503);
+    expect(await baseDenied.json()).toEqual({ error: 'identity_configuration_unavailable' });
+    delete env.ACCESS_PROFILE_BINDINGS;
+    env.ACCESS_PROFILE_GRANTS = JSON.stringify({ [unrelated]: [{ name: 'shared' }] });
+    const grantsDenied = await call('/api/browser/profiles/pilot/targets', assertion);
+    expect(grantsDenied.status).toBe(503);
+    expect(await grantsDenied.json()).toEqual({ error: 'identity_configuration_unavailable' });
+    expect(bucket.get).not.toHaveBeenCalled(); expect(bucket.put).not.toHaveBeenCalled();
+  });
+  it('permits owned target CRUD and denies ungranted profiles despite client identity headers', async () => {
+    await emailAddition('pilot@example.com', 'pilot');
+    const assertion = await jwt('pilot-id', 'pilot@example.com');
+    const own = '/api/browser/profiles/pilot/targets';
+    expect((await call(own, assertion, 'POST', target('pilot'))).status).toBe(200);
+    expect(await (await call(own, assertion)).json()).toEqual({ targets: [target('pilot')],
+      removedCuratedIds: null, removedCuratedUpdatedAt: null });
+    expect((await call(own, assertion, 'PUT', { targets: [target('pilot')] })).status).toBe(200);
+    expect((await call(`${own}/personal%3Apilot%3Atest`, assertion, 'DELETE')).status).toBe(200);
+    expect(await (await call(own, assertion)).json()).toEqual({ targets: [], removedCuratedIds: null, removedCuratedUpdatedAt: null });
+    vi.mocked(bucket.get).mockClear(); vi.mocked(bucket.put).mockClear();
+    for (const prefix of ['/api/browser/profiles', '/api/profiles']) {
+      for (const method of ['GET', 'POST', 'PUT', 'DELETE']) {
+        expect((await call(`${prefix}/controller/targets${method === 'DELETE' ? '/personal%3Acontroller%3Atest' : ''}`,
+          assertion, method, method === 'POST' ? target('controller') : method === 'PUT' ? { targets: [target('controller')] } : undefined,
+          { 'cf-access-authenticated-user-email': 'controller@example.com', 'x-calib-token': 'legacy' })).status).toBe(403);
+      }
+    }
+    expect(bucket.get).not.toHaveBeenCalled(); expect(bucket.put).not.toHaveBeenCalled();
+  });
+  it('retains named rating ownership and separates dedupe from another account', async () => {
+    await emailAddition('pilot@example.com', 'pilot');
+    const assertion = await jwt('pilot-id', 'pilot@example.com');
+    const body = { target_id: 'test', pass_time: '2026-09-12T01:00:00Z', action: 'shoot', dedupe_key: 'existing-pilot-photo' };
+    expect(await (await call('/api/log', undefined, 'POST', { ...body, profile: 'pilot' },
+      { 'x-calib-token': 'legacy' })).json()).toMatchObject({ ok: true, deduped: false });
+    expect(await (await call('/api/log', assertion)).json()).toMatchObject({ entries: [{ profile: 'pilot' }], count: 1 });
+    const newBody = { ...body, dedupe_key: 'new-pilot-photo' };
+    expect(await (await call('/api/log', assertion, 'POST', newBody)).json()).toMatchObject({ ok: true, deduped: false });
+    expect(await (await call('/api/log', assertion, 'POST', newBody)).json()).toMatchObject({ ok: true, deduped: true });
+    expect(await (await call('/api/log?profile=pilot', assertion)).json()).toMatchObject({
+      entries: [{ profile: 'pilot' }, { profile: 'pilot' }], count: 2,
+    });
+    vi.mocked(bucket.get).mockClear(); vi.mocked(bucket.put).mockClear(); vi.mocked(bucket.list).mockClear();
+    expect((await call('/api/log?profile=controller', assertion)).status).toBe(403);
+    expect((await call('/api/log', assertion, 'POST', { ...body, profile: 'controller' })).status).toBe(403);
+    const other = await jwt('other-id', 'other@example.com');
+    expect((await call('/api/log?profile=pilot', other)).status).toBe(403);
+    expect((await call('/api/log', other, 'POST', { ...body, profile: 'pilot' })).status).toBe(403);
+    expect(bucket.get).not.toHaveBeenCalled(); expect(bucket.put).not.toHaveBeenCalled(); expect(bucket.list).not.toHaveBeenCalled();
+  });
+  it('keeps forged identities and cross-origin writes denied with additions configured', async () => {
+    await emailAddition('pilot@example.com', 'pilot');
+    const assertion = await jwt('pilot-id', 'pilot@example.com');
+    expect((await call('/api/browser/session', undefined, 'GET', undefined,
+      { 'cf-access-authenticated-user-email': 'pilot@example.com', 'x-calib-token': 'legacy' })).status).toBe(401);
+    for (const forged of ['forged', 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJwaWxvdC1pZCJ9.',
+      await jwt('pilot-id', 'pilot@example.com', { exp: 1 })]) {
+      expect((await call('/api/browser/session', forged)).status).toBe(401);
+    }
+    for (const headers of [{ origin: 'https://evil.example' }, { origin: '' }, { 'sec-fetch-site': 'cross-site' }]) {
+      expect((await call('/api/browser/profiles/pilot/targets', assertion, 'POST', target('pilot'), headers)).status).toBe(403);
+      expect((await call('/api/log', assertion, 'POST', {
+        target_id: 'test', pass_time: '2026-09-12T01:00:00Z', action: 'shoot',
+      }, headers)).status).toBe(403);
+    }
+    expect(bucket.get).not.toHaveBeenCalled(); expect(bucket.put).not.toHaveBeenCalled(); expect(bucket.list).not.toHaveBeenCalled();
   });
 });
 describe('explicit delegated profiles', () => {

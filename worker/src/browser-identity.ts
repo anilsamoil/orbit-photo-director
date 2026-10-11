@@ -3,6 +3,7 @@ import { isValidProfileName, jsonResponse } from './shared';
 
 export interface BrowserProfile { name: string; displayName: string }
 export type ProfileResolution = { profile: BrowserProfile; profiles: BrowserProfile[]; legacy: boolean } | { denied: Response };
+type ProfileBindings = Record<string, string>;
 
 const EMAIL_HASH_KEY = /^email:[a-f0-9]{64}$/;
 const MAX_GRANT_CONFIG_CHARS = 65_536;
@@ -11,6 +12,19 @@ const MAX_GRANTED_PROFILES = 32;
 
 export function isOpaqueProfileName(name: string): boolean {
   return /^u-[a-f0-9]{28}$/.test(name);
+}
+
+function parseBindings(raw: string | undefined): ProfileBindings {
+  if (!raw) return {};
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+  const bindings: ProfileBindings = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!EMAIL_HASH_KEY.test(key) || typeof value !== 'string' || !isValidProfileName(value)
+      || isOpaqueProfileName(value)) throw new Error();
+    bindings[key] = value;
+  }
+  return bindings;
 }
 
 /** Grants are operator-managed configuration, never user-supplied suggestions.
@@ -48,28 +62,18 @@ async function sha256(value: string): Promise<string> {
 /** Explicit private email-hash aliases preserve existing named data. Never
  * adopt a legacy profile from ?u=, a local nickname, or the first caller. */
 export async function resolveBrowserProfile(identity: AccessIdentity, env: CalibrationAuthEnv): Promise<ProfileResolution> {
-  let bindings: Record<string, string> = {};
+  let bindings: ProfileBindings;
+  let additions: ProfileBindings;
   let grants: Record<string, BrowserProfile[]>;
   try {
     grants = parseGrants(env.ACCESS_PROFILE_GRANTS);
+    bindings = parseBindings(env.ACCESS_PROFILE_BINDINGS);
+    additions = parseBindings(env.ACCESS_PROFILE_BINDINGS_ADDITIONS);
   } catch {
     return { denied: jsonResponse({ error: 'identity_configuration_unavailable' }, 503) };
   }
-  if (env.ACCESS_PROFILE_BINDINGS) {
-    try {
-      const parsed: unknown = JSON.parse(env.ACCESS_PROFILE_BINDINGS);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-      for (const [key, value] of Object.entries(parsed)) {
-        if (!EMAIL_HASH_KEY.test(key) || typeof value !== 'string' || !isValidProfileName(value)
-          || isOpaqueProfileName(value)) throw new Error();
-      }
-      bindings = parsed as Record<string, string>;
-    } catch {
-      return { denied: jsonResponse({ error: 'identity_configuration_unavailable' }, 503) };
-    }
-  }
   const emailKey = 'email:' + await sha256(identity.email.trim().toLowerCase());
-  const alias = bindings[emailKey];
+  const alias = bindings[emailKey] ?? additions[emailKey];
   const name = alias ?? 'u-' + (await sha256(identity.issuer + '\0' + identity.subject)).slice(0, 28);
   // This label is presentation only. The full email/sub never leaves the Worker.
   const suggested = identity.displayName?.trim() || identity.email.split('@')[0]!.replace(/[._+-]+/g, ' ');

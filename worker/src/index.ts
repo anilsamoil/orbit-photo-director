@@ -30,6 +30,7 @@ export interface Env {
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string; // private verified-email hash to legacy profile aliases
+  ACCESS_PROFILE_BINDINGS_ADDITIONS?: string;
   ACCESS_PROFILE_GRANTS?: string; // private verified-email hash to explicit additional profiles
   STALE_THRESHOLD_SECONDS: string;
 }

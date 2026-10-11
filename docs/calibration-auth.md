@@ -26,6 +26,33 @@ first visitor take it. Invalid configuration fails closed. Existing generated
 opportunity artifacts remain shared map data; account target CRUD and ratings
 are the owned data boundary.
 
+`ACCESS_PROFILE_BINDINGS_ADDITIONS` is an optional private Worker secret with the
+same email-hash-to-profile map format. It adds a named default for an account
+absent from `ACCESS_PROFILE_BINDINGS`. A base binding always wins a conflict.
+The Worker validates every entry in both maps and `ACCESS_PROFILE_GRANTS`
+before resolving browser ownership. A malformed entry returns HTTP 503 with
+`identity_configuration_unavailable`, including for an account with a valid base
+binding. An absent or empty additions secret preserves the existing resolver
+behavior.
+The additions map changes only the default alias. Explicit grants still come
+from `ACCESS_PROFILE_GRANTS`, and the signed identity supplies the display label.
+
+To provision an authorized account when the complete base map is unavailable,
+deploy a reviewed Worker that supports the additions secret first. Compute
+SHA-256 over the account's verified email after trimming and lowercasing it.
+Store `{"email:<SHA256(normalized-email)>":"<existing-profile-name>"}` in the
+encrypted additions secret. Keep the email and hash outside source, tests,
+documentation, and logs. Preserve existing additions when updating that secret.
+If its current complete value is unavailable, recover it before replacing it.
+Preserve the base binding map and grants. Access admission is a separate step
+through the existing Access application. This binding secret does not grant
+admission. Confirm the secret metadata and deployed version, then verify a real
+signed-in session and the account's existing targets and ratings. Also verify
+existing accounts retain their defaults and grants. A secret write or synthetic
+JWT test alone does not prove the account's login. If the base map already binds
+that email, resolve the conflict separately without replacing an unreadable base
+map.
+
 The frontend waits for identity before personal hydration, cached snapshots or
 rating queue drain. Offline reload can resume only this tab's last verified
 identity, with a visible offline label and writes held until a fresh verification.
