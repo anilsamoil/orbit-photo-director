@@ -28,20 +28,26 @@ const placementSource = adapter.slice(adapter.indexOf('function mapInspector('),
 const now = Date.parse(fixture.start);
 const track: Track = { ...fixture, tle_epoch: new Date(tleEpochMs(fixture.tle)!).toISOString(), tle_age_hours: 0, tle_freshness_factor: 1 };
 const passes = findUpcomingPasses(track, 40, -90, now);
-const variants = ['normal', 'long-time', 'long-name', 'long-both'] as const;
+const unbrokenName = 'INTERNATIONALSPACESTATIONZARYA';
+const variants = ['normal', 'long-time', 'long-name', 'long-both', 'unbroken-name', 'longer-unbroken-name', 'unbroken-both', 'unbroken-title'] as const;
 type Variant = typeof variants[number];
 
 function passMarkup(variant: Variant): string {
-  return buildPassList(40, -90, 1, [{
-    name: variant === 'long-name' || variant === 'long-both' ? 'INTERNATIONAL SPACE STATION (ZARYA)' : 'ISS',
+  const name = variant === 'longer-unbroken-name' ? `${unbrokenName}EXPEDITION`
+    : variant === 'unbroken-name' || variant === 'unbroken-both' ? unbrokenName
+    : variant === 'long-name' || variant === 'long-both' ? 'INTERNATIONAL SPACE STATION (ZARYA)' : 'ISS';
+  const body = buildPassList(40, -90, 1, [{
+    name,
     color: '#5cd0ff',
-    passes: passes.map((pass, index) => variant === 'long-time' || variant === 'long-both' ? {
+    passes: passes.map((pass, index) => variant === 'long-time' || variant === 'long-both' || variant === 'unbroken-both' ? {
       ...pass,
       closestApproachMs: now + (23 * 60 + 59 + index) * 60_000,
       nadirKm: 1480,
       regime: 'iss-twilight',
     } : pass),
-  }], now).outerHTML;
+  }], now);
+  if (variant === 'unbroken-title') body.querySelector('strong')!.textContent = unbrokenName;
+  return body.outerHTML;
 }
 
 interface RenderedMeasure {
@@ -50,6 +56,7 @@ interface RenderedMeasure {
   firstRowVisible: number;
   visibleRows: number;
   fields: string[];
+  popupWidths: { element: string; clientWidth: number; scrollWidth: number }[];
   overlaps: { row: number; a: string; b: string; width: number; height: number }[];
   clips: { text: string; ancestor: string; overflow: number }[];
 }
@@ -135,6 +142,9 @@ async function measure(page: Page, targetRow = 0): Promise<RenderedMeasure> {
       sheet: { x: sheet.x, y: sheet.y, width: sheet.width, height: sheet.height },
       firstRowHeight: first.getBoundingClientRect().height,
       firstRowVisible: visibleRect(first).height,
+      popupWidths: [...document.querySelectorAll('.maplibregl-popup-content, .dropped-pin-popup')].map((element) => ({
+        element: element.className, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth,
+      })),
       visibleRows, fields: [...fields], overlaps, clips,
     };
   }, targetRow);
@@ -147,6 +157,7 @@ function expectReadable(measured: RenderedMeasure, label: string): void {
   expect.soft(measured.fields, details).toEqual(expect.arrayContaining(['pin-pass-rel', 'pin-pass-utc', 'pin-pass-nadir', 'pin-pass-regime', 'pin-pass-shoot']));
   expect.soft(measured.overlaps, details).toEqual([]);
   expect.soft(measured.clips, details).toEqual([]);
+  for (const popup of measured.popupWidths) expect.soft(popup.scrollWidth, details).toBeLessThanOrEqual(popup.clientWidth);
   expect.soft(measured.firstRowVisible, details).toBeGreaterThanOrEqual(measured.firstRowHeight - 0.1);
 }
 
@@ -169,7 +180,7 @@ describe.skipIf(!chromePath)('rendered pin pass row', () => {
   }, 30_000);
 
   it.each([
-    { width: 568, height: 320 }, { width: 667, height: 375 }, { width: 740, height: 360 },
+    { width: 568, height: 320 }, { width: 667, height: 375 }, { width: 740, height: 360 }, { width: 844, height: 390 },
     { width: 874, height: 280 }, { width: 874, height: 402 }, { width: 874, height: 541 },
     { width: 874, height: 550 }, { width: 932, height: 430 }, { width: 1440, height: 900 },
   ])('fits every painted field at $width×$height with real placement', async ({ width, height }) => {

@@ -4579,6 +4579,10 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 @container (max-width: 260px) {
+  .dropped-pin-popup > strong,
+  .dropped-pin-popup .pin-pass-heading {
+    overflow-wrap: anywhere;
+  }
   .dropped-pin-popup .pin-pass-row {
     display: flex !important;
     flex-wrap: wrap;
@@ -4611,7 +4615,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   }
   .dropped-pin-popup .pin-pass-heading {
     font-size: 0.72rem !important;
-    overflow-wrap: anywhere;
   }
 }
 
