@@ -1,4 +1,4 @@
-import { solveChromeSlots, type Box, type ChromeMeasure, type ChromeSlots } from './chrome-slots';
+import { solveChromeSlots, TIME_LINE_WIDTH, type Box, type ChromeMeasure, type ChromeSlots } from './chrome-slots';
 
 const STORAGE_KEY = 'opd-map-chrome';
 const timeLinePx = 44;
@@ -149,6 +149,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     picker: boxOf(document.getElementById('satellite-picker-panel')),
     dock: boxOf(dock),
     sliderChip: boxOf(document.querySelector('.map-command .map-controls-time')),
+    timeStrip: boxOf(document.querySelector('.map-command')),
     slider: boxOf(document.getElementById('time-slider')),
     timeButtons: [...document.querySelectorAll('.map-command .time-step-btn')].map(boxOf),
     footer: boxOf(document.getElementById('status-banner')),
@@ -159,6 +160,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     legendButton: boxOf(document.getElementById('map-legend-toggle')),
     legendPanel: boxOf(document.getElementById('map-legend-panel')),
     legendContentHeight: legendContentHeight(),
+    legendRowHeight: Math.max(0, ...[...document.querySelectorAll('#map-legend-panel > *')].map(boxOf).map((box) => box.h)) + 2,
     legendOpen: document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true',
     legendNaturalBottom: naturalLegendBottom(view),
     dockCorridor: naturalDockCorridor(view, pane),
@@ -182,6 +184,7 @@ function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
   mute = true;
   document.body.classList.toggle('map-slot-time', slots.time !== null);
   document.body.classList.toggle('map-slot-time-line', slots.time !== null && slots.time.h <= timeLinePx);
+  document.body.classList.toggle('map-slot-time-compact', slots.time !== null && slots.time.h <= timeLinePx && slots.time.w < TIME_LINE_WIDTH);
   document.body.classList.toggle('map-slot-dock', slots.dock !== null);
   document.body.classList.toggle('map-slot-dock-row', slots.dock?.axis === 'row');
   document.body.classList.toggle('map-slot-legend', slots.legend !== null);
@@ -259,7 +262,8 @@ function syncFooterClearance(pane: HTMLElement): void {
     set('--map-time-lift', 0);
     return;
   }
-  set('--map-time-lift', chip.h ? Math.ceil(Math.max(0, chip.y + chip.h + current - floor + 8)) : 0);
+  const strip = boxOf(pane.querySelector('.map-command'));
+  set('--map-time-lift', strip.h ? Math.ceil(Math.max(0, strip.y + strip.h + current - floor + 8)) : 0);
 }
 
 function syncMapChrome(): void {
@@ -268,13 +272,20 @@ function syncMapChrome(): void {
   const pane = document.getElementById('map-pane');
   if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
     lastSlots = '';
-    const staleSlots = ['map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch', 'map-slot-picker']
+    const staleSlots = ['map-slot-time', 'map-slot-time-line', 'map-slot-time-compact', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch', 'map-slot-picker']
       .filter((name) => document.body.classList.contains(name));
     if (staleSlots.length) document.body.classList.remove(...staleSlots);
     return;
   }
   syncFooterClearance(pane);
-  applySlots(solveChromeSlots(measureChrome(view, pane)), pane);
+  const hadTimeSlot = document.body.classList.contains('map-slot-time');
+  const slots = solveChromeSlots(measureChrome(view, pane));
+  applySlots(slots, pane);
+  if (hadTimeSlot && !slots.time) {
+    // Clearing the slot exposes natural CSS; lift that strip before it paints.
+    syncFooterClearance(pane);
+    applySlots(solveChromeSlots(measureChrome(view, pane)), pane);
+  }
 }
 
 function ensureInsetProbe(): HTMLElement {
@@ -312,7 +323,11 @@ export function bindMapChrome(): void {
     const node = document.querySelector(selector);
     if (node) observer.observe(node);
   }
-  const mutations = new MutationObserver(() => scheduleSync());
+  const mutations = new MutationObserver(() => {
+    // Let slot writes release mute, then settle derived classes before another input.
+    queueMicrotask(syncMapChrome);
+    scheduleSync();
+  });
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   const banner = document.getElementById('status-banner');
   if (banner) mutations.observe(banner, { childList: true, subtree: true });

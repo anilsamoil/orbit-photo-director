@@ -281,9 +281,13 @@ describe('chrome slots', () => {
       dockCorridor: 30,
       scrollbar: 6,
     }));
-    expect(slots.time).toBeNull();
+    expect(slots.time).not.toBeNull();
     expect(slots.dock).not.toBeNull();
-    if (!slots.dock) return;
+    if (!slots.dock || !slots.time) return;
+    expect(slots.time.h).toBe(44);
+    expect(meets(slots.time, zoom)).toBe(false);
+    expect(meets(slots.time, footer)).toBe(false);
+    expect(meets(slots.time, slots.dock)).toBe(false);
     expect(slots.dock.h).toBeGreaterThanOrEqual(50);
     expect(slots.dock.x).toBeGreaterThanOrEqual(rightOf(zoom) + 8);
     expect(meets(slots.dock, zoom)).toBe(false);

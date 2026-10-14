@@ -193,8 +193,8 @@ for (const engine of [
     } finally { await context.close(); }
   }, 30_000);
 
-  it.each([521, 600])('keeps all five slider hit points clear of numeric labels at 402x%i', async (height) => {
-    const context = await browser.newContext({ viewport: { width: 402, height } });
+  it.each([{ width: 719, height: 521 }, { width: 402, height: 521 }, { width: 402, height: 600 }])('keeps all five slider hit points clear of numeric labels at $width×$height', async ({ width, height }) => {
+    const context = await browser.newContext({ viewport: { width, height } });
     try {
       const page = await context.newPage();
       await page.route('**/*', (route) => route.abort());
@@ -229,7 +229,7 @@ for (const engine of [
         const points = [[r.x + r.width / 2, r.y + r.height / 2], [r.x + 2, r.y + r.height / 2], [r.right - 2, r.y + r.height / 2], [r.x + r.width / 2, r.y + 2], [r.x + r.width / 2, r.bottom - 2]];
         return { compact: document.body.classList.contains('map-slot-time-line'), width: r.width, height: r.height, points, hits: points.map(([x, y]) => document.elementFromPoint(x!, y!) === element) };
       });
-      expect(geometry.compact).toBe(true);
+      if (width === 719) expect(geometry.compact).toBe(true);
       expect(geometry.width).toBeGreaterThanOrEqual(44);
       expect(geometry.height).toBe(44);
       expect.soft(geometry.hits).toEqual([true, true, true, true, true]);

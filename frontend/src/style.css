@@ -4987,6 +4987,20 @@ body.map-slot-time-line .view-map .map-command .time-slider-row {
   flex: 0 0 auto;
 }
 
+body.map-slot-time-compact .view-map .map-command .map-controls-time {
+  width: 100%;
+  max-width: 100%;
+  gap: 2px;
+}
+
+body.map-slot-time-compact .view-map .map-command .time-slider-row {
+  flex: 1 1 44px;
+}
+
+body.map-slot-time-compact .view-map .map-command :is(.time-slider-end, .time-slider-readout) {
+  display: none;
+}
+
 body.map-slot-time:not(.map-slot-time-line) .view-map .map-command .time-slider-row {
   flex: 1 0 100%;
   width: 100%;
@@ -5214,11 +5228,11 @@ body.map-slot-legend .view-map .map-legend-panel {
   .view-map .map-command {
     right: var(--map-corner-clear);
     flex-wrap: nowrap;
-    align-items: center;
-    align-content: center;
+    align-items: flex-end;
+    align-content: flex-end;
     height: var(--map-command-height);
     max-height: var(--map-command-height);
-    padding: 8px 8px calc(32px + env(safe-area-inset-bottom, 0px)) 8px;
+    padding: 8px 8px 4px;
   }
 
   .view-map .map-command .map-controls-time {
@@ -5364,4 +5378,3 @@ body.map-slot-legend .view-map .map-legend-panel {
     height: auto;
   }
 }
-
