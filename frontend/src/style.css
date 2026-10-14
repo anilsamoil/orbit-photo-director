@@ -830,6 +830,10 @@ main.view-map { padding-top: 0; }
   border-top: 1px solid var(--border);
   box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.35);
 }
+body:has(> #view.view-map) #shotlist-bar {
+  padding-left: calc(0.9rem + env(safe-area-inset-left, 0px));
+  padding-right: calc(0.9rem + env(safe-area-inset-right, 0px));
+}
 #shotlist-bar[hidden] { display: none; }
 /* Count takes the remaining width on the left; min-width:0 lets it ellipsize
  * instead of overflowing, so the action buttons always fit on the right. */
@@ -1084,7 +1088,7 @@ body:has(> #view.view-map) .tab { color: var(--text); }
 body:has(> #view.view-map) .tab.active { color: var(--accent); }
 body:has(> #view.view-map) > .banner {
   position: fixed;
-  bottom: env(safe-area-inset-bottom, 0px);
+  bottom: var(--map-banner-bottom, env(safe-area-inset-bottom, 0px));
   left: 0;
   right: 0;
   z-index: 30;
@@ -1160,7 +1164,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   --map-legend-right: calc(var(--map-hide-right) + var(--map-hide-width) + var(--map-corner-gap));
   --map-corner-clear: calc(var(--map-legend-right) + var(--map-legend-width) + var(--map-corner-gap));
   --map-zoom-clear: calc(8px + 44px + 16px);
-  --map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap)));
+  --map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px) + var(--map-time-lift, 0px)), calc(var(--map-corner-bottom) + var(--map-corner-lift, 0px) + 44px + var(--map-corner-gap)));
   --map-legend-panel-bottom: max(calc(44px + 4px), calc(var(--map-command-height) - var(--map-corner-bottom) + 12px));
   --map-shotlist-block: 0px;
   --map-pane-budget: calc(100dvh - var(--map-shotlist-block));
@@ -1194,7 +1198,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map .map-toolbar {
   position: absolute;
   top: calc(var(--topbar-height) + 5px);
-  left: 8px;
+  left: calc(8px + env(safe-area-inset-left, 0px));
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
@@ -1358,7 +1362,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   color: #f4f7fb;
 }
 .view-map #map .maplibregl-ctrl-top-left {
-  top: calc(var(--topbar-height) + 71px);
+  top: 71px;
   left: calc(8px + env(safe-area-inset-left, 0px));
   right: auto;
   bottom: auto;
@@ -1424,7 +1428,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   position: absolute;
   left: auto;
   right: var(--map-legend-right);
-  bottom: var(--map-corner-bottom);
+  bottom: calc(var(--map-corner-bottom) + var(--map-corner-lift, 0px));
   width: var(--map-legend-width);
   max-width: var(--map-legend-width);
   margin: 0;
@@ -1470,7 +1474,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map .map-chrome-toggle {
   position: absolute;
   right: var(--map-hide-right);
-  bottom: var(--map-corner-bottom);
+  bottom: calc(var(--map-corner-bottom) + var(--map-corner-lift, 0px));
   z-index: 20;
   width: var(--map-hide-width);
   height: 44px;
@@ -4422,7 +4426,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   position: absolute;
   left: calc(8px + env(safe-area-inset-left, 0px));
   right: var(--map-corner-clear);
-  bottom: 0;
+  bottom: var(--map-time-lift, 0px);
   z-index: 16;
   display: flex;
   flex-wrap: wrap;
@@ -4813,7 +4817,7 @@ summary:focus-visible {
 
   .view-map .map-command {
     right: var(--map-corner-clear);
-    bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));
+    bottom: calc(var(--map-command-bottom, env(safe-area-inset-bottom, 0px)) + var(--map-time-lift, 0px));
     align-items: center;
     height: auto;
     max-height: none;
@@ -4839,7 +4843,7 @@ summary:focus-visible {
   }
 
   body.shotlist-bar-visible .view-map .map-command {
-    bottom: var(--map-command-bottom);
+    bottom: calc(var(--map-command-bottom) + var(--map-time-lift, 0px));
   }
 
   body.shotlist-bar-visible .view-map {
@@ -4866,7 +4870,27 @@ summary:focus-visible {
 
   .view-map .map-command .map-controls-time {
     flex-wrap: nowrap;
-    overflow-x: visible;
+    height: 44px;
+    padding: 0 4px;
+    overflow-x: auto;
+  }
+
+  .view-map .map-command .time-step-btn {
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    white-space: nowrap;
+  }
+
+  .view-map .map-command .time-slider-row {
+    flex-shrink: 0;
+    min-width: 160px;
+    padding: 0;
+  }
+
+  .view-map .map-command .time-slider {
+    margin: 0;
   }
 }
 
@@ -4887,6 +4911,21 @@ summary:focus-visible {
   .view-map .map-command {
     align-content: flex-end;
   }
+}
+
+body.map-zoom-row .view-map #map .maplibregl-ctrl-top-left .maplibregl-ctrl-group {
+  display: flex;
+}
+
+body.map-zoom-row .view-map .map-command {
+  left: calc(148px + env(safe-area-inset-left, 0px));
+}
+
+body.map-slot-launch .view-map #map-launch-coverage {
+  left: var(--slot-launch-x);
+  top: var(--slot-launch-y);
+  width: var(--slot-launch-w);
+  max-height: var(--slot-launch-h);
 }
 
 body.map-slot-time .view-map .map-command,
@@ -4979,6 +5018,7 @@ body.map-slot-dock.map-slot-dock-row #map-pane:not(.map-chrome-hidden):not(.map-
 body.map-slot-dock-row .view-map .map-control-dock > .map-controls {
   flex-direction: row;
   flex-wrap: nowrap;
+  flex-shrink: 0;
   width: max-content;
 }
 

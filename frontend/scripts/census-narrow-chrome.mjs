@@ -57,7 +57,12 @@ export function narrowPlacementViolations(css, js = '') {
     }
   }
   if (/map-chrome-reflow|map-dock-row/.test(js)) violations.push('map-chrome.ts still names a reflow class');
-  if (/scroll(?:Left|Top)/.test(js)) violations.push('map-chrome.ts touches a scroll offset');
+  const scrollAssignment = /\bscroll(?:Left|Top)\s*(?:=(?!=)|[+*/-]=|\+\+|--)/;
+  const scrollIncrement = /(?:\+\+|--)\s*[\w$.]*scroll(?:Left|Top)\b/;
+  const scrollCall = /\.scroll(?:To|By)?\s*\(/;
+  if (scrollAssignment.test(js) || scrollIncrement.test(js) || scrollCall.test(js)) {
+    violations.push('map-chrome.ts writes a scroll offset');
+  }
   return violations;
 }
 

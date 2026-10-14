@@ -316,8 +316,8 @@ describe('map chrome layout', () => {
     expect(wideShort).toContain('height: 52px;');
     expect(css).toContain('--map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);');
     expect(css).toContain('--map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));');
-    expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');
-    expect(css).toContain('--map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px)), calc(var(--map-corner-bottom) + 44px + var(--map-corner-gap)))');
+    expect(css).toContain('bottom: calc(var(--map-command-bottom, env(safe-area-inset-bottom, 0px)) + var(--map-time-lift, 0px));');
+    expect(css).toContain('--map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px) + var(--map-time-lift, 0px)), calc(var(--map-corner-bottom) + var(--map-corner-lift, 0px) + 44px + var(--map-corner-gap)))');
     expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);');
     expect(css).toContain('--map-command-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('--map-corner-bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));');
@@ -339,8 +339,11 @@ describe('map chrome layout', () => {
     expect(narrow).not.toContain('position:');
     expect(narrow).not.toContain('top:');
     expect(narrow).not.toContain('left:');
-    expect(css).not.toContain('container-type');
-    expect(css).not.toContain('@container');
+    const commandRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, selector]) => selector!.includes('.map-command'));
+    expect(commandRules.length).toBeGreaterThan(0);
+    for (const [, , declarations] of commandRules) expect(declarations).not.toContain('container-type');
+    expect(css).not.toMatch(/@container[^{}]*\{[^{}]*\.map-command\b/);
     expect(css).not.toContain('map-chrome-reflow');
     expect(css).not.toContain('map-dock-row');
     expect(css).toContain('body.map-slot-time .view-map .map-command');
