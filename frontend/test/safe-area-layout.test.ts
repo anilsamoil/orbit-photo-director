@@ -17,12 +17,15 @@ function launchMarkup(): string {
   container.querySelector('details')!.open = true;
   return container.innerHTML;
 }
-for (const engine of [{ name: 'Chrome', type: chromium }, { name: 'WebKit', type: webkit }]) describe(`safe-area painted layout ${engine.name}`, () => {
+for (const engine of [
+  { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
+  { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
+]) describe.skipIf(!existsSync(engine.executablePath))(`safe-area painted layout ${engine.name}`, () => {
   let browser: Browser;
   let ownerScript: string;
   beforeAll(async () => {
     ownerScript = (await transformWithEsbuild(source, 'chrome-owner.ts', { loader: 'ts', target: 'es2022' })).code;
-    browser = await engine.type.launch({ headless: true, ...(engine.name === 'Chrome' && chromePath ? { executablePath: chromePath } : {}) });
+    browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
   });
   afterAll(async () => { await browser?.close(); });
   it.each(['plain', 'actions', 'long'].flatMap((banner) => [false, true].map((legend) => ({ banner, legend }))))('keeps the numeric 720px row and launch action reachable: $banner Legend=$legend', async ({ banner, legend }) => {
@@ -124,6 +127,68 @@ for (const engine of [{ name: 'Chrome', type: chromium }, { name: 'WebKit', type
       expect(result.lift).toBeGreaterThan(0);
       expect(result.writes).toEqual([]);
       expect(result.final).toBe(result.initial);
+    } finally { await context.close(); }
+  }, 30_000);
+  it.each([
+    { top: 0, bottom: 0, left: 0, legend: false },
+    { top: 0, bottom: 0, left: 0, legend: true },
+    { top: 24, bottom: 34, left: 47, legend: false },
+    { top: 24, bottom: 34, left: 47, legend: true },
+  ])('keeps a 719px launch action clear below time: bottom=$bottom Legend=$legend', async ({ top, bottom, left, legend }) => {
+    const context = await browser.newContext({ viewport: { width: 719, height: 521 } });
+    try {
+      const page = await context.newPage();
+      await page.route('**/*', (route) => route.abort());
+      const insets = { top, right: 0, bottom, left };
+      const insetCss = stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof typeof insets) => `${insets[side]}px`);
+      await page.setContent(html.replace('</head>', `<style>${vendor}\n${insetCss}</style></head>`));
+      await page.evaluate(({ markup, legend, long }) => {
+        document.querySelector('#view')!.className = 'view-map';
+        document.querySelector('#map-pane')!.classList.add('active');
+        document.body.classList.add('shotlist-bar-visible');
+        document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button class="maplibregl-ctrl-zoom-in"></button><button class="maplibregl-ctrl-zoom-out"></button><button class="maplibregl-ctrl-compass"></button></div></div></div>';
+        for (const e of document.querySelectorAll('[data-time-utc]')) e.textContent = '12:34Z';
+        const brief = document.createElement('div');
+        brief.id = 'map-launch-coverage'; brief.className = 'map-launch-brief'; brief.innerHTML = markup;
+        document.querySelector('#map-pane')!.appendChild(brief);
+        brief.querySelector<HTMLButtonElement>('.launch-brief-actions .btn')!.onclick = (e) => (e.currentTarget as HTMLElement).dataset.pressed = 'yes';
+        const bar = document.createElement('div');
+        bar.id = 'shotlist-bar'; bar.innerHTML = '<span class="shotlist-count">1 queued</span><button class="btn">Export</button><button class="btn">Clear</button>';
+        document.body.appendChild(bar);
+        const banner = document.querySelector('#status-banner')!;
+        banner.className = 'banner banner-red';
+        banner.innerHTML = `<p class="banner-copy">${long ? 'SIGN IN AGAIN. The session ended while disconnected. Reconnect to restore the latest orbit predictions, then sign in again to synchronize your selected photography targets and shot list.' : 'Orbit data ready'}</p><div class="banner-actions"><button class="banner-action">Sign in</button><button class="banner-action">Reload</button></div>`;
+        document.querySelector('#map-legend-toggle')!.setAttribute('aria-expanded', String(legend));
+        document.querySelector('#map-legend')!.classList.toggle('map-legend-open', legend);
+      }, { markup: launchMarkup(), legend, long: bottom > 0 });
+      const probes = ownerScript.replace('const value = Number.parseFloat(getComputedStyle(probe)[prop]) || 0;', `const value = (${JSON.stringify(insets)})[side];`);
+      await page.addScriptTag({ content: `${probes}\nbindMapChrome(); applyMapChrome(true); window.__opdSyncMapChrome();` });
+      await page.evaluate(() => document.fonts.ready);
+      await page.waitForTimeout(500);
+      const collisions = await page.evaluate(() => {
+        const brief = document.querySelector('#map-launch-coverage')!.getBoundingClientRect();
+        return ['.map-toolbar', '.maplibregl-ctrl-group', '.map-command', '.map-control-dock', '#map-legend-panel', '#map-legend-toggle', '#map-chrome-toggle', '#status-banner', '#shotlist-bar'].filter((selector) => {
+          const r = document.querySelector(selector)!.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && brief.left < r.right - .5 && brief.right > r.left + .5 && brief.top < r.bottom - .5 && brief.bottom > r.top + .5;
+        });
+      });
+      expect(collisions).toEqual([]);
+      const action = page.locator('#map-launch-coverage .launch-brief-actions .btn');
+      await action.evaluate((e) => {
+        const scroller = document.querySelector('#map-launch-coverage')!;
+        const r = e.getBoundingClientRect(), s = scroller.getBoundingClientRect();
+        scroller.scrollTop += r.top - s.top - (s.height - r.height) / 2;
+      });
+      const target = await action.evaluate((e) => {
+        const r = e.getBoundingClientRect(), scroll = document.querySelector('#map-launch-coverage')!.getBoundingClientRect();
+        const points = [[r.x + r.width / 2, r.y + r.height / 2], [r.x + 2, r.y + r.height / 2], [r.right - 2, r.y + r.height / 2], [r.x + r.width / 2, r.y + 2], [r.x + r.width / 2, r.bottom - 2]];
+        return { h: r.height, complete: r.top >= scroll.top && r.bottom <= scroll.bottom, hits: points.map(([x, y]) => { const hit = document.elementFromPoint(x!, y!); return hit === e || !!hit && e.contains(hit); }) };
+      });
+      expect(target.h).toBeGreaterThanOrEqual(44);
+      expect(target.complete).toBe(true);
+      expect(target.hits).toEqual([true, true, true, true, true]);
+      await action.click();
+      expect(await action.getAttribute('data-pressed')).toBe('yes');
     } finally { await context.close(); }
   }, 30_000);
 

@@ -275,8 +275,9 @@ function placeLaunch(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlot
   const top = Math.max(measure.insets.top, showBottom(measure) + SEPARATION);
   const time = (slots.time ? [slots.time] : [measure.sliderChip, measure.slider, ...measure.timeButtons])
     .filter((box) => present(box) && bottomOf(box) > top);
-  const bottom = nearestTop([...time, measure.footer, measure.shotList], measure.viewport.h - measure.insets.bottom) - GAP;
+  const bottom = nearestTop([measure.footer, measure.shotList], measure.viewport.h - measure.insets.bottom) - GAP;
   const obstacles = [
+    ...time,
     slots.dock ?? measure.dock,
     measure.legendOpen ? slots.legend ?? measure.legendPanel : null,
     measure.pip,

@@ -432,6 +432,42 @@ describe('chrome slots', () => {
     }
   });
 
+  it.each([
+    { bottom: 0, legendOpen: false },
+    { bottom: 0, legendOpen: true },
+    { bottom: 34, legendOpen: false },
+    { bottom: 34, legendOpen: true },
+  ])('uses the clear launch region below narrow time with bottom $bottom and Legend=$legendOpen', ({ bottom, legendOpen }) => {
+    const inset = bottom > 0;
+    const input = measure({
+      viewport: { w: 719, h: 521 },
+      insets: { top: inset ? 24 : 0, right: 0, bottom, left: inset ? 47 : 0 },
+      zoom: inset ? { x: 55, y: 155, w: 44, h: 88 } : { x: 8, y: 131, w: 88, h: 44 },
+      compass: inset ? { x: 55, y: 243, w: 44, h: 44 } : { x: 96, y: 131, w: 44, h: 44 },
+      show: { x: inset ? 55 : 8, y: inset ? 89 : 65, w: 203.640625, h: 52 },
+      hide: { x: 619, y: inset ? 205 : 273, w: 88, h: 44 },
+      legendButton: { x: 523, y: inset ? 205 : 273, w: 88, h: 44 },
+      legendPanel: inset ? { x: 339, y: 257.828125, w: 176, h: 70 } : { x: 435, y: 121, w: 176, h: 40 },
+      legendContentHeight: 70,
+      legendOpen,
+      footer: { x: 0, y: inset ? 335.84375 : 384.84375, w: 719, h: inset ? 86.96875 : 71.96875 },
+      shotList: { x: 0, y: inset ? 422.8125 : 456.8125, w: 719, h: inset ? 98.1875 : 64.1875 },
+      launchBrief: { x: 8, y: inset ? 155 : 131, w: 512, h: inset ? 203.5 : 220.5 },
+      scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    const launch = slots.launch ?? input.launchBrief!;
+    for (const obstacle of [slots.time, slots.dock, slots.legend, input.zoom, input.compass, input.show, input.hide, input.legendButton, input.footer, input.shotList].filter((box): box is Box => !!box)) {
+      expect(meets(launch, obstacle)).toBe(false);
+    }
+    expect(slots.launch).toBeTruthy();
+    expect(launch.w).toBeGreaterThanOrEqual(180);
+    expect(launch.h).toBeGreaterThanOrEqual(64);
+    expect(launch.y).toBeGreaterThanOrEqual(bottomOf(slots.time!) + 8);
+    expect(bottomOf(launch)).toBeLessThanOrEqual(input.footer.y - 8 + 0.01);
+    expect(solveChromeSlots({ ...input, launchBrief: launch })).toEqual(slots);
+  });
+
   it('hides every slot when the chrome is hidden', () => {
     expect(solveChromeSlots(measure({
       viewport: { w: 390, h: 520 },
