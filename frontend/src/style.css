@@ -4928,6 +4928,15 @@ body.map-slot-launch .view-map #map-launch-coverage {
   max-height: var(--slot-launch-h);
 }
 
+body.map-slot-picker .view-map .satellite-picker-panel {
+  left: var(--slot-picker-x);
+  top: var(--slot-picker-y);
+  right: auto;
+  width: var(--slot-picker-w);
+  max-width: none;
+  max-height: var(--slot-picker-h);
+}
+
 body.map-slot-time .view-map .map-command,
 body.map-slot-time.shotlist-bar-visible .view-map .map-command {
   top: var(--slot-time-y);

@@ -146,6 +146,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     show: boxOf(document.querySelector('.map-toolbar')),
     showButtons: [...document.querySelectorAll('#filter-all-map, #filter-mine-map, #filter-launches-map')].map(boxOf),
     launchBrief: boxOf(document.getElementById('map-launch-coverage')),
+    picker: boxOf(document.getElementById('satellite-picker-panel')),
     dock: boxOf(dock),
     sliderChip: boxOf(document.querySelector('.map-command .map-controls-time')),
     slider: boxOf(document.getElementById('time-slider')),
@@ -185,6 +186,7 @@ function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
   document.body.classList.toggle('map-slot-dock-row', slots.dock?.axis === 'row');
   document.body.classList.toggle('map-slot-legend', slots.legend !== null);
   document.body.classList.toggle('map-slot-launch', !!slots.launch);
+  document.body.classList.toggle('map-slot-picker', !!slots.picker);
   if (slots.time) {
     writeSlot('--slot-time-x', slots.time.x - origin.left);
     writeSlot('--slot-time-y', slots.time.y - origin.top);
@@ -202,6 +204,12 @@ function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
     writeSlot('--slot-launch-y', slots.launch.y - origin.top);
     writeSlot('--slot-launch-w', slots.launch.w);
     writeSlot('--slot-launch-h', slots.launch.h);
+  }
+  if (slots.picker) {
+    writeSlot('--slot-picker-x', slots.picker.x - origin.left);
+    writeSlot('--slot-picker-y', slots.picker.y - origin.top);
+    writeSlot('--slot-picker-w', slots.picker.w);
+    writeSlot('--slot-picker-h', slots.picker.h);
   }
   if (slots.legend) {
     writeSlot('--slot-legend-x', slots.legend.x);
@@ -260,7 +268,7 @@ function syncMapChrome(): void {
   const pane = document.getElementById('map-pane');
   if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
     lastSlots = '';
-    const staleSlots = ['map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch']
+    const staleSlots = ['map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch', 'map-slot-picker']
       .filter((name) => document.body.classList.contains(name));
     if (staleSlots.length) document.body.classList.remove(...staleSlots);
     return;
@@ -300,7 +308,7 @@ export function bindMapChrome(): void {
   const observer = new ResizeObserver(() => scheduleSync());
   observer.observe(document.documentElement);
   observer.observe(ensureInsetProbe());
-  for (const selector of ['#status-banner', '#shotlist-bar', '.map-controls-time']) {
+  for (const selector of ['#status-banner', '#shotlist-bar', '.map-controls-time', '#satellite-picker-panel']) {
     const node = document.querySelector(selector);
     if (node) observer.observe(node);
   }

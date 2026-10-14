@@ -24,6 +24,7 @@ export type ChromeMeasure = {
   dockCorridor: number;
   dock?: Box;
   launchBrief?: Box;
+  picker?: Box;
   chromeHidden: boolean;
 };
 
@@ -36,6 +37,7 @@ export type ChromeSlots = {
   dock: DockSlot | null;
   legend: Slot | null;
   launch?: Slot | null;
+  picker?: Slot | null;
 };
 
 const TARGET = 44;
@@ -52,6 +54,9 @@ const DROP_CORE_HEIGHT = 232;
 const SHORT_MAP_HEIGHT = 560;
 const LAUNCH_MIN = 64;
 const LAUNCH_W = 512;
+const PICKER_W = 288;
+const PICKER_MIN_W = 180;
+const PICKER_MIN_H = 64;
 
 function present(box: Box | null | undefined): box is Box {
   return !!box && box.w >= 1 && box.h >= 1;
@@ -320,8 +325,46 @@ function placeLaunch(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlot
   return best;
 }
 
-function withLaunch(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlots): ChromeSlots {
-  return present(measure.launchBrief) ? { ...slots, launch: placeLaunch(measure, lane, slots) } : slots;
+function placePicker(measure: ChromeMeasure, slots: ChromeSlots): Slot | null {
+  if (!present(measure.picker)) return null;
+  const left = measure.insets.left + EDGE;
+  const right = measure.viewport.w - measure.insets.right - EDGE;
+  const top = Math.max(measure.insets.top, measure.map?.y ?? showBottom(measure));
+  const bottom = floorY(measure) - GAP;
+  const obstacles = [
+    measure.show, ...measure.showButtons, measure.zoom, measure.compass,
+    ...(slots.time ? [slots.time] : [measure.sliderChip, measure.slider, ...measure.timeButtons]),
+    slots.dock ?? measure.dock,
+    measure.legendOpen ? slots.legend ?? measure.legendPanel : null,
+    slots.launch ?? measure.launchBrief, measure.pip, measure.hide, measure.legendButton,
+  ].filter(present);
+  const tops = [top, ...obstacles.map((box) => bottomOf(box) + GAP)].filter((y) => y >= top && y < bottom);
+  const bottoms = [bottom, ...obstacles.map((box) => box.y - GAP)].filter((y) => y <= bottom && y > top);
+  let best: Slot | null = null;
+  const consider = (x: number, y: number, far: number, low: number) => {
+    const width = Math.min(PICKER_W, far - x);
+    const height = low - y;
+    if (width < PICKER_MIN_W || height < PICKER_MIN_H) return;
+    const candidate = slot(far - width, y, width, height);
+    if (!best || candidate.w * candidate.h > best.w * best.h) best = candidate;
+  };
+  for (const y of tops) for (const low of bottoms) {
+    if (low - y < PICKER_MIN_H) continue;
+    const blocked = obstacles.filter((box) => y < bottomOf(box) + GAP && low > box.y - GAP)
+      .sort((a, b) => a.x - b.x);
+    let x = left;
+    for (const box of blocked) {
+      consider(x, y, Math.min(right, box.x - GAP), low);
+      x = Math.max(x, rightOf(box) + GAP);
+    }
+    consider(x, y, right, low);
+  }
+  return best;
+}
+
+function withPanels(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlots): ChromeSlots {
+  const launch = present(measure.launchBrief) ? { ...slots, launch: placeLaunch(measure, lane, slots) } : slots;
+  return present(measure.picker) ? { ...launch, picker: placePicker(measure, launch) } : launch;
 }
 
 export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {
@@ -340,9 +383,9 @@ export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {
       legendPanel: { ...measure.legendPanel, y: measure.legendNaturalBottom - legendHeight, h: legendHeight },
     } : measure;
     const legend = placeWideLegend(effective, time);
-    return withLaunch(effective, lane, { time, dock: placeWideDock(effective, lane, legend), legend });
+    return withPanels(effective, lane, { time, dock: placeWideDock(effective, lane, legend), legend });
   }
   const time = placeNarrowTime(measure, lane);
   const dock = placeNarrowDock(measure, lane, time);
-  return withLaunch(measure, lane, { time, dock, legend: placeNarrowLegend(measure, lane, time, dock) });
+  return withPanels(measure, lane, { time, dock, legend: placeNarrowLegend(measure, lane, time, dock) });
 }
