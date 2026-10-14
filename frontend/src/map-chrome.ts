@@ -139,6 +139,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
   const dock = document.querySelector('.map-control-dock');
   return {
     viewport: { w: window.innerWidth, h: window.innerHeight },
+    map: boxOf(document.getElementById('map')),
     insets: { top: insetPx('top'), right: insetPx('right'), bottom: insetPx('bottom'), left: insetPx('left') },
     zoom: unionBox([...document.querySelectorAll('.maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out')]),
     compass: boxOf(document.querySelector('.maplibregl-ctrl-compass')),
@@ -259,7 +260,9 @@ function syncMapChrome(): void {
   const pane = document.getElementById('map-pane');
   if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
     lastSlots = '';
-    document.body.classList.remove('map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch');
+    const staleSlots = ['map-slot-time', 'map-slot-time-line', 'map-slot-dock', 'map-slot-dock-row', 'map-slot-legend', 'map-slot-launch']
+      .filter((name) => document.body.classList.contains(name));
+    if (staleSlots.length) document.body.classList.remove(...staleSlots);
     return;
   }
   syncFooterClearance(pane);

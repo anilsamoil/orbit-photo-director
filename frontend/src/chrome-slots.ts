@@ -2,6 +2,7 @@ export type Box = { x: number; y: number; w: number; h: number };
 
 export type ChromeMeasure = {
   viewport: { w: number; h: number };
+  map?: Box;
   insets: { top: number; right: number; bottom: number; left: number };
   zoom: Box;
   compass: Box;
@@ -46,6 +47,9 @@ const RIGHT_MARGIN = 20;
 const EDGE = 8;
 const MIN_LEGEND = 32;
 const TIME_STACK = 96;
+const DROP_CORE_WIDTH = 182;
+const DROP_CORE_HEIGHT = 232;
+const SHORT_MAP_HEIGHT = 560;
 const LAUNCH_MIN = 64;
 const LAUNCH_W = 512;
 
@@ -128,7 +132,14 @@ function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot {
   const bandAfter = (box: Box) => box.y - GAP - raisedY;
   const tall = candidate(TIME_STACK);
   const line = candidate(TARGET);
-  const stackedOk = fits(tall) && (!measure.legendOpen || bandAfter(tall) >= MIN_LEGEND);
+  const map = measure.map;
+  const dropCore = present(map) && map.h <= SHORT_MAP_HEIGHT ? {
+    x: map.x + (map.w - Math.min(DROP_CORE_WIDTH, map.w)) / 2,
+    y: map.y + (map.h - Math.min(DROP_CORE_HEIGHT, map.h)) / 2,
+    w: Math.min(DROP_CORE_WIDTH, map.w),
+    h: Math.min(DROP_CORE_HEIGHT, map.h),
+  } : null;
+  const stackedOk = fits(tall) && !meets(tall, dropCore) && (!measure.legendOpen || bandAfter(tall) >= MIN_LEGEND);
   const chosen = stackedOk ? tall : fits(line) ? line : { x, y: raisedY, w: width, h: TARGET };
   const side = [measure.hide, measure.legendButton, measure.footer, measure.shotList].filter(present);
   const cleared = shrinkClear(chosen, side);

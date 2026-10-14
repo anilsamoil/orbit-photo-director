@@ -111,6 +111,40 @@ describe('chrome slots', () => {
     }
   });
 
+  it.each([
+    { top: 0, bottom: 0, left: 0, mapTop: 60, cornerTop: 441 },
+    { top: 24, bottom: 34, left: 47, mapTop: 84, cornerTop: 407 },
+  ])('uses a compact 719px time row when stacking covers the drop core: bottom=$bottom', ({ top, bottom, left, mapTop, cornerTop }) => {
+    const input = measure({
+      viewport: { w: 719, h: 521 },
+      map: { x: 0, y: mapTop, w: 719, h: 521 - mapTop },
+      insets: { top, right: 0, bottom, left },
+      zoom: { x: left + 8, y: mapTop + 70, w: 44, h: 88 },
+      compass: { x: left + 8, y: mapTop + 158, w: 44, h: 44 },
+      show: { x: left + 8, y: mapTop + 8, w: 203, h: 52 },
+      hide: { x: 619, y: cornerTop, w: 88, h: 44 },
+      legendButton: { x: 523, y: cornerTop, w: 88, h: 44 },
+    });
+    const time = solveChromeSlots(input).time!;
+    expect(time.h).toBe(44);
+    expect(time.y).toBe(cornerTop - 8 - 44);
+    expect(time.y).toBeGreaterThan(mapTop + (521 - mapTop) / 2 + (bottom ? 5 : 91));
+  });
+
+  it('retains the tall portrait time stack when its footer brings it near the map center', () => {
+    const time = solveChromeSlots(measure({
+      viewport: { w: 402, h: 874 },
+      map: { x: 0, y: 84, w: 402, h: 790 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom: { x: 55, y: 154, w: 44, h: 88 },
+      compass: { x: 55, y: 242, w: 44, h: 44 },
+      show: { x: 55, y: 92, w: 203, h: 52 },
+      hide: { x: 302, y: 672, w: 88, h: 44 },
+      legendButton: { x: 206, y: 672, w: 88, h: 44 },
+    })).time;
+    expect(time).toEqual({ x: 107, y: 568, w: 275, h: 96 });
+  });
+
   it('leaves the wide time strip alone and lifts a legend panel off T+90', () => {
     const t90: Box = { x: 440.609, y: 378.422, w: 59.36, h: 49.578 };
     const hide: Box = { x: 620, y: 388, w: 88, h: 44 };

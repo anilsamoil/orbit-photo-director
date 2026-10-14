@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Browser } from 'playwright';
 import { transformWithEsbuild } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { paintEqualDigits } from '../src/digits';
 import { renderMapLaunchBrief } from '../src/launch-map-brief';
 import { assessment, iso, launch, NOW, state } from './launch-fixtures';
 
@@ -189,6 +190,53 @@ for (const engine of [
       expect(target.hits).toEqual([true, true, true, true, true]);
       await action.click();
       expect(await action.getAttribute('data-pressed')).toBe('yes');
+    } finally { await context.close(); }
+  }, 30_000);
+
+  it.each([521, 600])('keeps all five slider hit points clear of numeric labels at 402x%i', async (height) => {
+    const context = await browser.newContext({ viewport: { width: 402, height } });
+    try {
+      const page = await context.newPage();
+      await page.route('**/*', (route) => route.abort());
+      const insets = { top: 24, right: 0, bottom: 34, left: 47 };
+      const css = stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof typeof insets) => `${insets[side]}px`);
+      await page.setContent(html.replace('</head>', `<style>${vendor}\n${css}</style></head>`));
+      const end = document.createElement('span');
+      paintEqualDigits(end, '+36h');
+      await page.evaluate((digits) => {
+        document.querySelector('#view')!.className = 'view-map';
+        document.querySelector('#map-pane')!.classList.add('active');
+        document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button class="maplibregl-ctrl-zoom-in"></button><button class="maplibregl-ctrl-zoom-out"></button><button class="maplibregl-ctrl-compass"></button></div></div></div>';
+        document.querySelectorAll('.time-slider-end')[1]!.innerHTML = digits;
+        for (const e of document.querySelectorAll('[data-time-utc]')) e.textContent = '12:34Z';
+        const banner = document.querySelector('#status-banner')!;
+        banner.className = 'banner banner-red';
+        banner.innerHTML = '<p class="banner-copy">Orbit data ready · verify fixture</p><div class="banner-actions"><button class="banner-action">Sign in</button><button class="banner-action">Reload</button></div>';
+        document.querySelector('#time-slider')!.addEventListener('input', (event) => (event.target as HTMLElement).dataset.trustedInput = String(event.isTrusted));
+      }, end.innerHTML);
+      const probes = ownerScript.replace('const value = Number.parseFloat(getComputedStyle(probe)[prop]) || 0;', `const value = (${JSON.stringify(insets)})[side];`);
+      await page.addScriptTag({ content: `${probes}\nbindMapChrome(); applyMapChrome(true); window.__opdSyncMapChrome();` });
+      await page.evaluate(() => document.fonts.ready);
+      await page.waitForTimeout(400);
+      const slider = page.locator('#time-slider');
+      await slider.evaluate((element) => {
+        const scroll = document.querySelector('.map-command')!;
+        const r = element.getBoundingClientRect(), s = scroll.getBoundingClientRect();
+        scroll.scrollLeft += Math.ceil(r.left - s.left - (s.width - r.width) / 2);
+      });
+      const geometry = await slider.evaluate((element) => {
+        const r = element.getBoundingClientRect();
+        const points = [[r.x + r.width / 2, r.y + r.height / 2], [r.x + 2, r.y + r.height / 2], [r.right - 2, r.y + r.height / 2], [r.x + r.width / 2, r.y + 2], [r.x + r.width / 2, r.bottom - 2]];
+        return { compact: document.body.classList.contains('map-slot-time-line'), width: r.width, height: r.height, points, hits: points.map(([x, y]) => document.elementFromPoint(x!, y!) === element) };
+      });
+      expect(geometry.compact).toBe(true);
+      expect(geometry.width).toBeGreaterThanOrEqual(44);
+      expect(geometry.height).toBe(44);
+      expect.soft(geometry.hits).toEqual([true, true, true, true, true]);
+      const [x, y] = geometry.points[2]!;
+      await page.mouse.click(x!, y!);
+      expect(Number(await slider.inputValue())).toBeGreaterThan(0);
+      expect(await slider.getAttribute('data-trusted-input')).toBe('true');
     } finally { await context.close(); }
   }, 30_000);
 
