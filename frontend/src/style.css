@@ -4574,6 +4574,8 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 .map-inspector .pin-pass-heading {
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 4px 0 0 !important;
   line-height: 1.2;
 }
