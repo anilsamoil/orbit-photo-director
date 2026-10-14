@@ -5,7 +5,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 ## Baseline preconditions
 
 - Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs up` from the repo root.
-- Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs doctor` and require the `ok` line, the proxy pid, and a launch `valid_until` in the future.
+- Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs doctor` and require the `ok` line, the proxy pid, and a launch `valid_until` in the future. A green `doctor` after `drive` does not mean Verify Reef and Verify Delta are still in the 90-minute queue. Reef leaves 20 minutes after `up`, and Delta leaves at 50 minutes. Run `down`, then `up`, and rerun.
 - Open only the URL `doctor` prints. The default is `http://127.0.0.1:41731`.
 - Keep a second run on its own `OPD_VERIFY_HOME` and `OPD_VERIFY_PORT`.
 - The fixture signs in as Anil. Cards are `Verify Reef`, `Verify Delta`, `Verify Mesa`, and `Verify Keepsake`. `Verify Ascent` is the Shot highlight, `Verify Likely` is a pad with no corridor, and `Verify Horizon` is Watch. Upcoming and the map list Ascent and Likely. They do not list Horizon.
