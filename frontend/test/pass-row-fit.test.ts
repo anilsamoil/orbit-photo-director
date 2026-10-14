@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { transformWithEsbuild } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -38,11 +38,13 @@ const now = Date.parse(fixture.start);
 const track: Track = { ...fixture, tle_epoch: new Date(tleEpochMs(fixture.tle)!).toISOString(), tle_age_hours: 0, tle_freshness_factor: 1 };
 const passes = findUpcomingPasses(track, 40, -90, now);
 const unbrokenName = 'INTERNATIONALSPACESTATIONZARYA';
-const variants = ['normal', 'long-time', 'long-name', 'long-both', 'unbroken-name', 'longer-unbroken-name', 'unbroken-both', 'unbroken-title'] as const;
+const heading60 = 'INTERNATIONALSPACESTATIONZARYAEXPEDITIONINTERNATIONALSPACEST';
+const variants = ['heading60', 'normal', 'long-time', 'long-name', 'long-both', 'unbroken-name', 'longer-unbroken-name', 'unbroken-both', 'unbroken-title'] as const;
 type Variant = typeof variants[number];
 
 function passMarkup(variant: Variant): string {
-  const name = variant === 'longer-unbroken-name' ? `${unbrokenName}EXPEDITION`
+  const name = variant === 'heading60' ? heading60
+    : variant === 'longer-unbroken-name' ? `${unbrokenName}EXPEDITION`
     : variant === 'unbroken-name' || variant === 'unbroken-both' ? unbrokenName
     : variant === 'long-name' || variant === 'long-both' ? 'INTERNATIONAL SPACE STATION (ZARYA)' : 'ISS';
   const body = buildPassList(40, -90, 1, [{
@@ -184,69 +186,77 @@ function expectReadable(measured: RenderedMeasure, label: string): void {
   expect.soft(measured.firstRowVisible, details).toBeGreaterThanOrEqual(measured.firstRowHeight - 0.01);
 }
 
-let browser: Browser | undefined;
-let placementScript = '';
+for (const engine of [
+  { name: 'Chromium', browserType: chromium, executablePath: chromePath },
+  { name: 'WebKit', browserType: webkit, executablePath: webkit.executablePath() },
+]) {
+  describe.skipIf(!engine.executablePath || !existsSync(engine.executablePath))(`${engine.name} rendered pin pass row`, () => {
+    let browser: Browser | undefined;
+    let placementScript = '';
 
-describe.skipIf(!chromePath)('rendered pin pass row', () => {
-  beforeAll(async () => {
-    expect(passes).toHaveLength(5);
-    expect(placementSource).toContain('function inspectorSync(');
-    placementScript = (await transformWithEsbuild(placementSource, 'inspector-placement.ts', { target: 'es2022' })).code;
-    browser = await chromium.launch({
-      executablePath: chromePath,
-      args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run'],
-    });
-  }, 60_000);
+    beforeAll(async () => {
+      expect(passes).toHaveLength(5);
+      expect(heading60).toHaveLength(60);
+      expect(placementSource).toContain('function inspectorSync(');
+      placementScript = (await transformWithEsbuild(placementSource, 'inspector-placement.ts', { target: 'es2022' })).code;
+      browser = await engine.browserType.launch({
+        executablePath: engine.executablePath,
+        ...(engine.name === 'Chromium' ? { args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run'] } : {}),
+      });
+    }, 60_000);
 
-  afterAll(async () => {
-    await browser?.close();
-  }, 60_000);
+    afterAll(async () => {
+      await browser?.close();
+    }, 60_000);
 
-  it.each([
-    { width: 568, height: 320 }, { width: 667, height: 375 }, { width: 740, height: 360 }, { width: 844, height: 390 },
-    { width: 874, height: 280 }, { width: 874, height: 402 }, { width: 874, height: 541 },
-    { width: 874, height: 550 }, { width: 932, height: 430 }, { width: 1440, height: 900 },
-  ].flatMap((size) => [1, 3].flatMap((deviceScaleFactor) => (size.width < 932 ? ['native', 'metric'] : ['native']).map((font) => ({ ...size, deviceScaleFactor, font })))))('fits every painted field at $width×$height DPR$deviceScaleFactor $font font with real placement', async ({ width, height, deviceScaleFactor, font }) => {
-    if (!browser) throw new Error('Chrome was not opened');
-    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor, isMobile: deviceScaleFactor === 3 && width < 1000, hasTouch: deviceScaleFactor === 3 && width < 1000 });
-    try {
-      const page = await context.newPage();
-      await page.route('**/*', (route) => route.abort());
-      await page.setContent(html, { waitUntil: 'domcontentloaded' });
-      await page.evaluate(() => document.fonts.ready);
-      await page.evaluate((font) => {
-        document.body.classList.toggle('metric-font', font === 'metric');
-        document.querySelector('#view')!.classList.add('view-map');
-        document.querySelector('#map-pane')!.classList.add('active');
-        document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button></button><button></button><button></button></div></div></div>';
-      }, font);
-      await page.addScriptTag({ content: `${placementScript}\nwindow.placeInspector = inspectorSync({ getContainer: () => document.querySelector('#map'), resize() {} });` });
-      for (const shown of [false, true]) for (const variant of variants) {
-        await page.evaluate(({ markup, shown }) => {
-          document.body.classList.toggle('map-chrome-hidden', !shown);
-          document.querySelector('#map-pane')!.classList.toggle('map-chrome-hidden', !shown);
-          const toggle = document.querySelector('#map-chrome-toggle')!;
-          toggle.textContent = shown ? 'Hide' : 'Controls';
-          toggle.setAttribute('aria-expanded', String(shown));
-          document.querySelector('#map-inspector')!.innerHTML = `<div class="maplibregl-popup"><div class="maplibregl-popup-content">${markup}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>`;
-          (window as unknown as { placeInspector: () => void }).placeInspector();
-        }, { markup: passMarkup(variant), shown });
+    it.each([
+      { width: 568, height: 320 }, { width: 667, height: 375 }, { width: 740, height: 360 }, { width: 844, height: 390 },
+      { width: 874, height: 280 }, { width: 874, height: 402 }, { width: 874, height: 541 },
+      { width: 874, height: 550 }, { width: 932, height: 430 }, { width: 1440, height: 900 },
+      { width: 402, height: 874 }, { width: 834, height: 1210 }, { width: 1210, height: 834 },
+      { width: 768, height: 1024 }, { width: 1024, height: 768 },
+    ].flatMap((size) => [1, 3].flatMap((deviceScaleFactor) => (size.width <= 932 ? ['native', 'metric'] : ['native']).map((font) => ({ ...size, deviceScaleFactor, font })))))('fits every painted field at $width×$height DPR$deviceScaleFactor $font font with real placement', async ({ width, height, deviceScaleFactor, font }) => {
+      if (!browser) throw new Error(`${engine.name} was not opened`);
+      const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor, isMobile: deviceScaleFactor === 3 && width < 1440, hasTouch: deviceScaleFactor === 3 && width < 1440 });
+      try {
+        const page = await context.newPage();
+        await page.route('**/*', (route) => route.abort());
+        await page.setContent(html, { waitUntil: 'domcontentloaded' });
         await page.evaluate(() => document.fonts.ready);
-        await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
-        const measured = await measure(page);
-        const label = `${width}×${height} DPR${deviceScaleFactor} ${font} ${shown ? 'shown' : 'hidden'} ${variant}`;
-        expectReadable(measured, `${label} scrollTop=0`);
-        for (let row = 1; row < passes.length; row += 1) {
-          await page.evaluate((index) => {
-            const scroller = document.querySelector<HTMLElement>('.maplibregl-popup-content')!;
-            const target = document.querySelectorAll('.pin-pass-row')[index]!;
-            scroller.scrollTop = Math.floor(scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientTop) - 2;
-          }, row);
-          expectReadable(await measure(page, row), `${label} scrolled row ${row + 1}`);
+        await page.evaluate((font) => {
+          document.body.classList.toggle('metric-font', font === 'metric');
+          document.querySelector('#view')!.classList.add('view-map');
+          document.querySelector('#map-pane')!.classList.add('active');
+          document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button></button><button></button><button></button></div></div></div>';
+        }, font);
+        await page.addScriptTag({ content: `${placementScript}\nwindow.placeInspector = inspectorSync({ getContainer: () => document.querySelector('#map'), resize() {} });` });
+        for (const shown of [false, true]) for (const variant of variants) {
+          await page.evaluate(({ markup, shown }) => {
+            document.body.classList.toggle('map-chrome-hidden', !shown);
+            document.querySelector('#map-pane')!.classList.toggle('map-chrome-hidden', !shown);
+            const toggle = document.querySelector('#map-chrome-toggle')!;
+            toggle.textContent = shown ? 'Hide' : 'Controls';
+            toggle.setAttribute('aria-expanded', String(shown));
+            document.querySelector('#map-inspector')!.innerHTML = `<div class="maplibregl-popup"><div class="maplibregl-popup-content">${markup}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>`;
+            (window as unknown as { placeInspector: () => void }).placeInspector();
+          }, { markup: passMarkup(variant), shown });
+          await page.evaluate(() => document.fonts.ready);
+          await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          const measured = await measure(page);
+          const label = `${engine.name} ${width}×${height} DPR${deviceScaleFactor} ${font} ${shown ? 'shown' : 'hidden'} ${variant}`;
+          expectReadable(measured, `${label} scrollTop=0`);
+          for (let row = 1; row < passes.length; row += 1) {
+            await page.evaluate((index) => {
+              const scroller = document.querySelector<HTMLElement>('.maplibregl-popup-content')!;
+              const target = document.querySelectorAll('.pin-pass-row')[index]!;
+              scroller.scrollTop = Math.floor(scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientTop) - 2;
+            }, row);
+            expectReadable(await measure(page, row), `${label} scrolled row ${row + 1}`);
+          }
         }
+      } finally {
+        await context.close();
       }
-    } finally {
-      await context.close();
-    }
-  }, 60_000);
-});
+    }, 120_000);
+  });
+}
