@@ -629,5 +629,35 @@ describe('chrome slots', () => {
     const closed = solveChromeSlots({ ...input, picker: empty });
     expect(closed.picker).toBeUndefined();
     expect({ ...slots, picker: undefined }).toEqual(closed);
+    expect(solveChromeSlots({ ...input, inspectorOpen: true })).toEqual(slots);
+  });
+
+  it('keeps the tall phone inspector readable when the picker opens', () => {
+    const input = measure({
+      viewport: { w: 402, h: 874 },
+      map: { x: 0, y: 113, w: 402, h: 761 },
+      insets: { top: 24, right: 0, bottom: 20, left: 47 },
+      show: { x: 55, y: 118, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 184, w: 44, h: 88 },
+      compass: { x: 55, y: 272, w: 44, h: 44 },
+      hide: { x: 302, y: 763, w: 88, h: 44 },
+      legendButton: { x: 206, y: 763, w: 88, h: 44 },
+      footer: { x: 0, y: 815.4375, w: 402, h: 38.5625 },
+      legendOpen: true, legendContentHeight: 72, scrollbar: 8,
+      picker: { x: 107, y: 178, w: 227, h: 287.53125 },
+    });
+    const closed = solveChromeSlots(input);
+    const opened = solveChromeSlots({ ...input, inspectorOpen: true });
+    expect(opened.picker).toEqual({ x: 55, y: 377.5, w: 279, h: 193.5 });
+    if (!opened.picker) throw new Error('Expected a usable picker slot');
+    expect(meets(opened.picker, { x: 107, y: 178, w: 227, h: 191.5 })).toBe(false);
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, opened.time!, opened.dock!, opened.legend!]) {
+      expect(meets(opened.picker, obstacle)).toBe(false);
+    }
+    expect({ ...opened, picker: undefined }).toEqual({ ...closed, picker: undefined });
+    expect(solveChromeSlots({ ...input, inspectorOpen: false })).toEqual(closed);
+    expect(solveChromeSlots({ ...input, inspectorOpen: true, picker: opened.picker })).toEqual(opened);
+    const short = { ...input, viewport: { w: 719, h: 521 }, map: { x: 0, y: 113, w: 719, h: 408 } };
+    expect(solveChromeSlots({ ...short, inspectorOpen: true })).toEqual(solveChromeSlots(short));
   });
 });

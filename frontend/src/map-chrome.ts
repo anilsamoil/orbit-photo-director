@@ -147,6 +147,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     showButtons: [...document.querySelectorAll('#filter-all-map, #filter-mine-map, #filter-launches-map')].map(boxOf),
     launchBrief: boxOf(document.getElementById('map-launch-coverage')),
     picker: boxOf(document.getElementById('satellite-picker-panel')),
+    inspectorOpen: pane.classList.contains('map-inspector-open'),
     dock: boxOf(dock),
     sliderChip: boxOf(document.querySelector('.map-command .map-controls-time')),
     timeStrip: boxOf(document.querySelector('.map-command')),

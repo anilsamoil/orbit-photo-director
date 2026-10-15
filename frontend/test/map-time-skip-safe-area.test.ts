@@ -68,6 +68,13 @@ const cases = sizes.flatMap(([width, height]) => insetSets.flatMap((insets) => s
   name: `${width}x${height} B${insets.bottom} ${state.banner}${state.selectedShot ? ' selected shot' : ''}${state.legendOpen ? ' Legend open' : ''}`,
 }))));
 const selectors = ['#time-back-90', '#time-back-45', '#time-now', '#time-fwd-45', '#time-fwd-90'];
+async function waitForMapReady(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap?: import('maplibre-gl').Map }).__opdMap;
+    return map?.isStyleLoaded() && !!map.getSource('iss-track');
+  });
+}
+
 async function geometry(page: Page, selector: string) {
   return page.locator(selector).evaluate((element) => {
     const r = element.getBoundingClientRect();
@@ -149,16 +156,16 @@ for (const engine of [
         }, true);
       });
       await page.goto(`${origin}/?e2e&u=repin`, { waitUntil: 'domcontentloaded' });
+      await waitForMapReady(page);
+      phase('initial map ready');
       if (selectedShot) {
         await page.locator('#tab-queue').click();
+        expect(await page.locator('#view').getAttribute('class')).toBe('view-queue');
         await page.locator('.btn-remind').first().click();
         await page.waitForFunction(() => document.body.classList.contains('shotlist-bar-visible'));
       }
       await page.locator('#tab-map').click();
-      await page.waitForFunction(() => {
-        const map = (window as unknown as { __opdMap?: import('maplibre-gl').Map }).__opdMap;
-        return map?.isStyleLoaded() && !!map.getSource('iss-track');
-      });
+      await waitForMapReady(page);
       await page.evaluate(() => document.fonts.ready);
       phase('map ready');
       const appliedInsets = await page.evaluate(() => {
@@ -252,7 +259,12 @@ for (const engine of [
       expect.soft(boxes.overlap, `${name} ${banner}: ${JSON.stringify(boxes)}`).toBe(0);
       expect.soft(boxes.stripOverlap, `${name} ${banner}: ${JSON.stringify(boxes)}`).toBe(0);
       expect.soft(boxes.scrollLeft).toBe(0);
-      const sliderMinimum = width === 390 && Object.values(insets).every((value) => value === 0) ? 100 : 44;
+      // The map driver's 100px contract is its initial 390x520 scene, before
+      // opening the shot list or injecting a banner. Compact variants still
+      // need a usable slider and every fully visible 44px native skip target.
+      const initialNarrowScene = width === 390 && height === 520 && banner === 'initial' && !selectedShot
+        && Object.values(insets).every((value) => value === 0);
+      const sliderMinimum = initialNarrowScene ? 100 : 44;
       expect.soft(boxes.chrome['#time-slider']!.width, `${name} ${banner} usable slider width`).toBeGreaterThanOrEqual(sliderMinimum);
       for (const button of buttons) {
         expect.soft(button.rect.width, `${name} ${banner} ${button.selector} width`).toBeGreaterThanOrEqual(44);

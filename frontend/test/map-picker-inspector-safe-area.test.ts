@@ -77,7 +77,7 @@ async function inspectorGeometry(page: Page, heading: string) {
       if (rect.bottom <= bounds.top || rect.top >= bounds.bottom) return [];
       return [{ name: target.className, rect: rect.toJSON() }];
     });
-    return { popup: bounds.toJSON(), heading: texts(element), row: texts(row), firstRow: row.getBoundingClientRect().toJSON(), targets };
+    return { popup: bounds.toJSON(), horizontalOverflow: scroll.scrollWidth - scroll.clientWidth, heading: texts(element), row: texts(row), firstRow: row.getBoundingClientRect().toJSON(), targets };
   });
 }
 
@@ -88,8 +88,8 @@ for (const engine of [
   let browser: Browser;
   beforeAll(async () => { browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath }); }, 30_000);
   afterAll(async () => { await browser?.close(); }, 30_000);
-  it.each(['ISS', longHeading])('keeps rendered %s heading, first pass and exposed targets inside safe insets after native picker click', async (heading) => {
-    const context = await browser.newContext({ viewport: { width: 719, height: 521 }, serviceWorkers: 'block', hasTouch: true });
+  it.each([[719, 521], [402, 874]].flatMap(([width, height]) => ['ISS', longHeading].map((heading) => ({ width: width!, height: height!, heading }))))('keeps rendered $heading and first pass safe at $width×$height after native picker click', async ({ width, height, heading }) => {
+    const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: true });
     try {
       const page = await context.newPage();
       page.setDefaultTimeout(10_000);
@@ -186,10 +186,10 @@ for (const engine of [
       await page.waitForTimeout(500);
       const after = await inspectorGeometry(page, heading);
       const events = await page.evaluate(() => (window as unknown as { __inspectorEvents: { type: string; trusted: boolean; target: string }[] }).__inspectorEvents);
-      const evidence = { engine: engine.name, heading, viewport: { width: 719, height: 521 }, insets, appliedInsets, before, opener, after, events };
+      const evidence = { engine: engine.name, heading, viewport: { width, height }, insets, appliedInsets, before, opener, after, events };
       if (process.env.OPD_INSPECTOR_EVIDENCE_DIR) {
         mkdirSync(process.env.OPD_INSPECTOR_EVIDENCE_DIR, { recursive: true });
-        const path = resolve(process.env.OPD_INSPECTOR_EVIDENCE_DIR, `${engine.name.toLowerCase()}-${heading === 'ISS' ? 'ordinary' : 'long'}`);
+        const path = resolve(process.env.OPD_INSPECTOR_EVIDENCE_DIR, `${engine.name.toLowerCase()}-${width}x${height}-${heading === 'ISS' ? 'ordinary' : 'long'}`);
         writeFileSync(`${path}.json`, JSON.stringify(evidence, null, 2));
         await page.screenshot({ path: `${path}.png` });
       }
@@ -201,8 +201,10 @@ for (const engine of [
         expect.soft(phase.row.length).toBeGreaterThan(0);
         const content = [...phase.heading, ...phase.row];
         const exposed = [...content, ...phase.targets.map((target) => target.rect)];
-        expect.soft(exposed.filter((rect) => rect.left < insets.left || rect.right > 719 - insets.right)).toEqual([]);
-        expect.soft(content.filter((rect) => rect.top < insets.top || rect.bottom > 521 - insets.bottom)).toEqual([]);
+        expect.soft(phase.horizontalOverflow).toBe(0);
+        expect.soft(content.filter((rect) => rect.left < phase.popup.left || rect.right > phase.popup.right || rect.top < phase.popup.top || rect.bottom > phase.popup.bottom)).toEqual([]);
+        expect.soft(exposed.filter((rect) => rect.left < insets.left || rect.right > width - insets.right)).toEqual([]);
+        expect.soft(content.filter((rect) => rect.top < insets.top || rect.bottom > height - insets.bottom)).toEqual([]);
         expect.soft(phase.firstRow.bottom, JSON.stringify(evidence)).toBeLessThanOrEqual(phase.popup.bottom);
       }
     } finally { await context.close(); }

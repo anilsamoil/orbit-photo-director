@@ -27,6 +27,7 @@ export type ChromeMeasure = {
   dock?: Box;
   launchBrief?: Box;
   picker?: Box;
+  inspectorOpen?: boolean;
   chromeHidden: boolean;
 };
 
@@ -384,6 +385,13 @@ function placePicker(measure: ChromeMeasure, slots: ChromeSlots): Slot | null {
   const right = measure.viewport.w - measure.insets.right - EDGE;
   const top = Math.max(measure.insets.top, measure.map?.y ?? showBottom(measure));
   const bottom = floorY(measure) - GAP;
+  // Tall narrow inspectors need the space above their protected center band.
+  // Prefer a scrollable picker below that space instead of squeezing the sheet
+  // into an inset-safe but unreadable side sliver. Keep the ordinary candidates
+  // available when no usable lower rectangle exists.
+  const inspectorTop = measure.inspectorOpen && measure.viewport.w <= NARROW_MAX
+    && present(measure.map) && measure.viewport.h > SHORT_MAP_HEIGHT
+    ? measure.map.y + (measure.map.h - Math.min(DROP_CORE_HEIGHT, measure.map.h)) / 2 : null;
   const obstacles = [
     measure.show, ...measure.showButtons, measure.zoom, measure.compass,
     ...(slots.time ? [slots.time] : [measure.sliderChip, measure.slider, ...measure.timeButtons]),
@@ -391,7 +399,7 @@ function placePicker(measure: ChromeMeasure, slots: ChromeSlots): Slot | null {
     measure.legendOpen ? slots.legend ?? measure.legendPanel : null,
     slots.launch ?? measure.launchBrief, measure.pip, measure.hide, measure.legendButton,
   ].filter(present);
-  const tops = [top, ...obstacles.map((box) => bottomOf(box) + GAP)].filter((y) => y >= top && y < bottom);
+  const tops = [top, ...(inspectorTop === null ? [] : [inspectorTop]), ...obstacles.map((box) => bottomOf(box) + GAP)].filter((y) => y >= top && y < bottom);
   const bottoms = [bottom, ...obstacles.map((box) => box.y - GAP)].filter((y) => y <= bottom && y > top);
   let best: Slot | null = null;
   const consider = (x: number, y: number, far: number, low: number) => {
@@ -399,7 +407,10 @@ function placePicker(measure: ChromeMeasure, slots: ChromeSlots): Slot | null {
     const height = low - y;
     if (width < PICKER_MIN_W || height < PICKER_MIN_H) return;
     const candidate = slot(far - width, y, width, height);
-    if (!best || candidate.w * candidate.h > best.w * best.h) best = candidate;
+    const belowInspector = inspectorTop !== null && candidate.y >= inspectorTop;
+    const bestBelowInspector = best !== null && inspectorTop !== null && best.y >= inspectorTop;
+    if (!best || (belowInspector && !bestBelowInspector)
+      || (belowInspector === bestBelowInspector && candidate.w * candidate.h > best.w * best.h)) best = candidate;
   };
   for (const y of tops) for (const low of bottoms) {
     if (low - y < PICKER_MIN_H) continue;
