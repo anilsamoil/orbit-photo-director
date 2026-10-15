@@ -113,6 +113,21 @@ type InspectorRect = { left: number; top: number; right: number; bottom: number 
 /** Preserve requested geometry alongside CSSOM's rounded pixel serialization. */
 type InspectorLayout = Map<string, { value: number; serialized: string }>;
 
+/** A persistent env probe also lets ResizeObserver follow inset changes. */
+function inspectorInsetProbe(slot: HTMLElement): HTMLElement {
+  const existing = slot.querySelector<HTMLElement>('[data-map-inspector-insets]');
+  if (existing) return existing;
+  const probe = document.createElement('div');
+  probe.setAttribute('data-map-inspector-insets', '');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none';
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    probe.style.setProperty(`padding-${side}`, `env(safe-area-inset-${side}, 0px)`);
+  }
+  slot.prepend(probe);
+  return probe;
+}
+
 function inspectorChromeElements(pane: Element): Set<Element> {
   const chrome = [...pane.querySelectorAll(INSPECTOR_CHROME), ...document.querySelectorAll(INSPECTOR_BANNERS)];
   return new Set(chrome.flatMap((element) => [element, ...element.querySelectorAll('button, input, select, a')]));
@@ -209,12 +224,14 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
   if (!slot || !(pane instanceof HTMLElement) || slot.hidden) return;
   const paneRect = pane.getBoundingClientRect();
   const mapRect = map.getContainer().getBoundingClientRect();
+  const insetStyle = getComputedStyle(inspectorInsetProbe(slot));
+  const inset = (side: 'Top' | 'Right' | 'Bottom' | 'Left'): number => Number.parseFloat(insetStyle[`padding${side}`]) || 0;
   const gap = 8;
   const bounds = {
-    left: Math.max(paneRect.left, mapRect.left, 0) + gap,
-    top: Math.max(paneRect.top, mapRect.top, 0) + gap,
-    right: Math.min(paneRect.right, mapRect.right, window.innerWidth) - gap,
-    bottom: Math.min(paneRect.bottom, mapRect.bottom, window.innerHeight) - gap,
+    left: Math.max(paneRect.left, mapRect.left, inset('Left')) + gap,
+    top: Math.max(paneRect.top, mapRect.top, inset('Top')) + gap,
+    right: Math.min(paneRect.right, mapRect.right, window.innerWidth - inset('Right')) - gap,
+    bottom: Math.min(paneRect.bottom, mapRect.bottom, window.innerHeight - inset('Bottom')) - gap,
   };
   if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
   const obstacles = [...inspectorChromeElements(pane)].flatMap((element) => {
@@ -291,7 +308,7 @@ function inspectorSync(map: maplibregl.Map): () => void {
     const pane = mapInspector(map)?.closest('#map-pane');
     if (!pane) return;
     const next = new Set([pane, map.getContainer(), ...inspectorChromeElements(pane),
-      ...pane.querySelectorAll('.map-controls-time > *')]);
+      ...pane.querySelectorAll('.map-controls-time > *, [data-map-inspector-insets]')]);
     for (const element of [...next]) {
       for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) next.add(ancestor);
     }

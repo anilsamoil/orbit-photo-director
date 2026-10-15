@@ -7,6 +7,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
+import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -749,10 +750,24 @@ async function drive(feature) {
     console.log(`evidence ${state.evidence}`);
     return;
   }
+  if (feature === 'map-safe-area') {
+    try {
+      const note = await driveMapSafeArea({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
   if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, or map-corner.`);
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-corner, or map-safe-area.`);
     process.exit(2);
   }
   const notes = await driveFeatures({
@@ -883,6 +898,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-corner>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-corner|map-safe-area>|sw|down|check|serve');
   process.exit(2);
 }
