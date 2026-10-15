@@ -15,6 +15,30 @@ const html = readFileSync(resolve(root, 'index.html'), 'utf8').replace(/<script\
 const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNg5+L9DwABWAEegV7pegAAAABJRU5ErkJggg==', 'base64');
 const origin = 'http://127.0.0.1:45111';
 const sourceHashes = Object.fromEntries(['src/chrome-slots.ts', 'src/map-chrome.ts', 'src/style.css', 'src/map/adapters/maplibre/index.ts'].filter((name) => existsSync(resolve(root, name))).map((name) => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')]));
+type StartupPhase = { name: string; elapsedMs: number; error?: string };
+type RunPhase = <T>(name: string, action: () => Promise<T>) => Promise<T>;
+
+function startupPhases(receipts: StartupPhase[]): RunPhase {
+  return async (name, action) => {
+    const started = Date.now();
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // Bound each operation, including evaluate(), without charging earlier
+      // healthy navigation/fixture work against the next native input's budget.
+      const result = await Promise.race([action(), new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error(`Startup phase ${name} exceeded 10000ms`)), 10_000);
+      })]);
+      receipts.push({ name, elapsedMs: Date.now() - started });
+      return result;
+    } catch (error) {
+      receipts.push({ name, elapsedMs: Date.now() - started, error: String(error) });
+      throw new Error(JSON.stringify({ phase: name, phases: receipts }));
+    } finally {
+      if (watchdog !== undefined) clearTimeout(watchdog);
+    }
+  };
+}
+
 type Insets = { top: number; right: number; bottom: number; left: number };
 type InputEvent = { type: string; target: string; trusted: boolean; control?: string; expanded?: string | null; x?: number; y?: number };
 type TestWindow = Window & { __opdMap: import('maplibre-gl').Map; __shortEvents: InputEvent[]; __shortBanner?: MutationObserver };
@@ -30,11 +54,11 @@ beforeAll(async () => {
   script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
 }, 60_000);
 
-async function prepare(page: Page, cdp: CDPSession | null, insets: Insets) {
+async function prepare(page: Page, cdp: CDPSession | null, insets: Insets, phase: RunPhase) {
   const fixture = inspectorFixture;
   const now = (JSON.parse(fixture['meta.json']) as { now: number }).now;
-  if (cdp) await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
-  else await page.addInitScript((values) => {
+  if (cdp) await phase('apply Chrome safe-area insets', () => cdp.send('Emulation.setSafeAreaInsetsOverride', { insets }));
+  else await phase('install WebKit safe-area insets', () => page.addInitScript((values) => {
     const replace = (value: string) => value.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof typeof values) => `${values[side]}px`);
     const proto = CSSStyleDeclaration.prototype;
     for (const key of ['cssText', 'padding', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'width', 'height']) {
@@ -48,10 +72,10 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets) {
       if (child instanceof HTMLElement && child.style.cssText.includes('safe-area-inset-')) child.style.cssText = replace(child.style.cssText);
       return append.call(this, child) as T;
     };
-  }, insets);
-  await page.clock.setFixedTime(new Date(now));
+  }, insets));
+  await phase('fix fixture clock', () => page.clock.setFixedTime(new Date(now)));
   const css = cdp ? stylesheet : stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof Insets) => `${insets[side]}px`);
-  await page.route('**/*', async (route) => {
+  await phase('install fixture routes', () => page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (url.origin === origin && url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html.replace('</head>', `<style>${vendor}\n${css}</style></head>`).replace('</body>', `<script src="/${script}"></script></body>`) });
     const asset = assets.get(url.pathname);
@@ -64,8 +88,8 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets) {
     if (url.pathname.startsWith('/api/')) return route.fulfill({ status: 401, json: { error: 'not_authenticated' } });
     if (/\.(png|jpe?g)$/.test(url.pathname) || url.pathname.includes('/MapServer/tile/')) return route.fulfill({ contentType: 'image/png', body: raster });
     return route.abort();
-  });
-  await page.addInitScript((shown) => {
+  }));
+  await phase('install trusted-input recorder', () => page.addInitScript((shown) => {
     localStorage.setItem('opd-map-chrome', shown ? 'shown' : 'hidden');
     Object.defineProperty(navigator, 'standalone', { get: () => true });
     const state = window as unknown as TestWindow;
@@ -77,23 +101,23 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets) {
         control: control?.id, expanded: control?.getAttribute('aria-expanded'),
         x: event instanceof MouseEvent ? event.clientX : undefined, y: event instanceof MouseEvent ? event.clientY : undefined });
     }, true);
-  }, true);
-  await page.goto(`${origin}/?e2e&u=short-viewport`, { waitUntil: 'domcontentloaded' });
-  await page.locator('.maplibregl-ctrl-compass').waitFor({ state: 'attached' });
-  await page.locator('#tab-map').click();
-  await page.waitForFunction(() => {
+  }, true));
+  await phase('navigate fixture', () => page.goto(`${origin}/?e2e&u=short-viewport`, { waitUntil: 'domcontentloaded' }));
+  await phase('attach map compass', () => page.locator('.maplibregl-ctrl-compass').waitFor({ state: 'attached' }));
+  await phase('select Map tab', () => page.locator('#tab-map').click());
+  await phase('load map style and ISS track', () => page.waitForFunction(() => {
     const map = (window as unknown as TestWindow).__opdMap;
     return map?.isStyleLoaded() && !!map.getSource('iss-track');
-  });
-  await page.evaluate(() => document.fonts.ready);
-  const appliedInsets = await page.evaluate(() => {
+  }));
+  await phase('load fonts', () => page.evaluate(() => document.fonts.ready));
+  const appliedInsets = await phase('measure applied insets', () => page.evaluate(() => {
     const probe = document.createElement('div');
     for (const side of ['top', 'right', 'bottom', 'left']) probe.style.setProperty(`padding-${side}`, `env(safe-area-inset-${side}, 0px)`);
     document.body.appendChild(probe);
     const css = getComputedStyle(probe);
     const values = { top: parseFloat(css.paddingTop), right: parseFloat(css.paddingRight), bottom: parseFloat(css.paddingBottom), left: parseFloat(css.paddingLeft) };
     probe.remove(); return values;
-  });
+  }));
   expect(appliedInsets).toEqual(insets);
 }
 
@@ -113,7 +137,8 @@ for (const engine of [
     const browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
     const samples: unknown[] = [];
     let ready = false;
-    let error = '';
+    const phases: StartupPhase[] = [];
+    const phase = startupPhases(phases);
     try {
       const context = await browser.newContext({ viewport: { width, height }, screen: { width, height }, isMobile: width < 1280, hasTouch: width < 1280, deviceScaleFactor: Math.min(width, height) < 500 ? 3 : width < 1280 ? 2 : 1, serviceWorkers: 'block' });
       const page = await context.newPage();
@@ -141,36 +166,33 @@ for (const engine of [
         };
       });
       const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
-      const preparation = prepare(page, cdp, insets).then(async () => {
+      try {
+        await prepare(page, cdp, insets, phase);
         if (width > height) {
-          await page.evaluate(() => {
+          await phase('set plain landscape banner', () => page.evaluate(() => {
             const banner = document.querySelector('#status-banner')!;
             banner.className = 'banner banner-red';
             banner.textContent = 'Orbit data ready · verify fixture';
-          });
-          await page.locator('#map-legend-toggle').click();
-          await page.waitForTimeout(300);
-          await page.evaluate(() => {
+          }));
+          await phase('open landscape Legend', () => page.locator('#map-legend-toggle').click());
+          await phase('settle open Legend', () => page.waitForTimeout(300));
+          await phase('install landscape banner actions', () => page.evaluate(() => {
             document.querySelector('#map-legend-toggle')!.addEventListener('click', () => {
               const banner = document.querySelector('#status-banner')!;
               banner.innerHTML = '<p class="banner-copy">Orbit data ready · verify fixture</p><div class="banner-actions"><a class="banner-action" role="button" tabindex="0">Sign in</a><button class="banner-action" role="button" tabindex="0">Reload</button></div>';
             }, { once: true, capture: true });
-          });
-          await page.locator('#map-legend-toggle').click();
-          await page.waitForFunction(() => document.querySelector('#map-legend-toggle')?.getAttribute('aria-expanded') === 'false');
+          }));
+          await phase('close landscape Legend', () => page.locator('#map-legend-toggle').click());
+          await phase('verify landscape Legend closed', () => page.waitForFunction(() => document.querySelector('#map-legend-toggle')?.getAttribute('aria-expanded') === 'false'));
         }
         ready = true;
-      }).catch((caught: unknown) => { error = String(caught); });
-      await Promise.race([preparation, new Promise((done) => setTimeout(done, 10_000))]);
-      if (!ready) {
-        const evidence = { engine: engine.name, width, height, insets, ready, error, samples, sourceRoot: root, sourceHashes };
+      } catch (error) {
+        const evidence = { engine: engine.name, width, height, insets, ready, error: String(error), phases, samples, sourceRoot: root, sourceHashes };
         if (process.env.OPD_STARTUP_EVIDENCE_DIR) {
           mkdirSync(process.env.OPD_STARTUP_EVIDENCE_DIR, { recursive: true });
           writeFileSync(resolve(process.env.OPD_STARTUP_EVIDENCE_DIR, `${engine.name}-${width}x${height}-T${insets.top}-B${insets.bottom}.json`), JSON.stringify(evidence, null, 2));
         }
-        await browser.close(); await preparation;
-        expect(ready, JSON.stringify(evidence)).toBe(true);
-        return;
+        throw new Error(JSON.stringify(evidence));
       }
       await page.waitForTimeout(500);
       const actions: unknown[] = [];
@@ -211,7 +233,7 @@ for (const engine of [
         const after = { counts: { ...state.__startupWrites }, geometry: geometry() };
         return { before, after, writes: { class: after.counts.class - before.counts.class, style: after.counts.style - before.counts.style }, events: state.__shortEvents };
       });
-      const evidence = { engine: engine.name, width, height, insets, ready, actions, idle, sourceRoot: root, sourceHashes };
+      const evidence = { engine: engine.name, width, height, insets, ready, phases, actions, idle, sourceRoot: root, sourceHashes };
       if (process.env.OPD_STARTUP_EVIDENCE_DIR) {
         mkdirSync(process.env.OPD_STARTUP_EVIDENCE_DIR, { recursive: true });
         const path = resolve(process.env.OPD_STARTUP_EVIDENCE_DIR, `${engine.name}-${width}x${height}-T${insets.top}-B${insets.bottom}`);
