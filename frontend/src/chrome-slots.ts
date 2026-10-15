@@ -64,6 +64,9 @@ const LAUNCH_W = 512;
 const PICKER_W = 288;
 const PICKER_MIN_W = 180;
 const PICKER_MIN_H = 64;
+const INSPECTOR_ROW = 96;
+const INSPECTOR_MIN_H = INSPECTOR_ROW + GAP * 2;
+const INSPECTOR_MIN_W = TARGET * 2 - GAP;
 
 function present(box: Box | null | undefined): box is Box {
   return !!box && box.w >= 1 && box.h >= 1;
@@ -426,9 +429,120 @@ function placePicker(measure: ChromeMeasure, slots: ChromeSlots): Slot | null {
   return best;
 }
 
+function clearRectangles(bounds: Box, obstacles: Box[], minWidth: number, minHeight: number): Slot[] {
+  const tops = [...new Set([bounds.y, ...obstacles.map((box) => bottomOf(box) + GAP)])]
+    .filter((y) => y >= bounds.y && y <= bottomOf(bounds) - minHeight);
+  const bottoms = [...new Set([bottomOf(bounds), ...obstacles.map((box) => box.y - GAP)])]
+    .filter((y) => y <= bottomOf(bounds) && y >= bounds.y + minHeight);
+  const result: Slot[] = [];
+  for (const y of tops) for (const low of bottoms) {
+    if (low - y < minHeight) continue;
+    const blocked = obstacles.filter((box) => y < bottomOf(box) + GAP && low > box.y - GAP)
+      .sort((a, b) => a.x - b.x);
+    let x = bounds.x;
+    const add = (far: number) => {
+      if (far - x >= minWidth) result.push(slot(x, y, far - x, low - y));
+    };
+    for (const box of blocked) {
+      add(Math.min(rightOf(bounds), box.x - GAP));
+      x = Math.max(x, rightOf(box) + GAP);
+    }
+    add(rightOf(bounds));
+  }
+  return result;
+}
+
+function narrowFallback(measure: ChromeMeasure, lane: Box | null, preferred: ChromeSlots): ChromeSlots | null {
+  const map = measure.map;
+  if (measure.viewport.w > NARROW_MAX || !present(map) || map.h > SHORT_MAP_HEIGHT) return null;
+  const needsInspector = !!measure.inspectorOpen;
+  const needsLaunch = present(measure.launchBrief);
+  if (!needsInspector && (!needsLaunch || preferred.launch)) return null;
+  const bounds = { x: measure.insets.left + EDGE, y: Math.max(map.y, measure.insets.top),
+    w: measure.viewport.w - measure.insets.right - EDGE - measure.insets.left - EDGE,
+    h: floorY(measure) - GAP - Math.max(map.y, measure.insets.top) };
+  const fixed = [measure.show, ...measure.showButtons, measure.zoom, measure.compass,
+    measure.hide, measure.legendButton, measure.footer, measure.shotList, measure.pip].filter(present);
+  const center = { x: map.x + map.w / 2, y: map.y + map.h / 2 };
+  const dropCore = { x: center.x - DROP_CORE_WIDTH / 2, y: center.y - Math.min(DROP_CORE_HEIGHT, map.h) / 2,
+    w: DROP_CORE_WIDTH, h: Math.min(DROP_CORE_HEIGHT, map.h) };
+  const preferredObstacles = [preferred.time, preferred.dock, preferred.legend, preferred.launch].filter(present);
+  if ((!needsLaunch || preferred.launch) && needsInspector
+    && clearRectangles(bounds, [...fixed, ...preferredObstacles, dropCore], INSPECTOR_MIN_W, INSPECTOR_MIN_H).length) return null;
+  // A full protected core cannot fit beside all short-screen chrome. Preserve
+  // its center and edge-midpoint inputs when ranking the feasible fallbacks;
+  // equal intersection areas alone cannot distinguish those working targets.
+  const points = ([[0, 0], [DROP_CORE_WIDTH / 2, 0], [-DROP_CORE_WIDTH / 2, 0], [0, DROP_CORE_WIDTH / 2], [0, -DROP_CORE_WIDTH / 2]] as const)
+    .map(([x, y]) => ({ x: center.x + x - 1, y: center.y + y - 1, w: 2, h: 2 }))
+    .filter((point) => !fixed.some((box) => meets(point, box)));
+  const reservations: Array<Slot | null> = [null];
+  if (needsInspector) {
+    const x = center.x + DROP_CORE_WIDTH / 2 + GAP;
+    const width = rightOf(bounds) - x;
+    const height = INSPECTOR_MIN_H;
+    if (width >= INSPECTOR_MIN_W) {
+      const tops = new Set([bounds.y + GAP, showBottom(measure) + SEPARATION + TARGET + GAP,
+        ...fixed.map((box) => bottomOf(box) + GAP), ...fixed.map((box) => box.y - GAP - height)]);
+      for (const y of tops) {
+        const reserve = slot(x, y, width, height);
+        if (y >= bounds.y && bottomOf(reserve) <= bottomOf(bounds)
+          && !fixed.some((box) => meets(reserve, box))) reservations.push(reserve);
+      }
+    }
+  }
+  let best: ChromeSlots | null = null;
+  let bestScore = -Infinity;
+  const gutter = cross(measure.scrollbar);
+  for (const reserve of reservations) {
+    if (needsInspector && !reserve) continue;
+    const obstacles = [...fixed, ...(reserve ? [reserve] : [])];
+    const areas = clearRectangles(bounds, obstacles, TIME_COMPACT_WIDTH, TARGET);
+    const times = areas.flatMap((area) => [
+      slot(area.x, area.y, TIME_COMPACT_WIDTH, TARGET),
+      slot(rightOf(area) - TIME_COMPACT_WIDTH, area.y, TIME_COMPACT_WIDTH, TARGET),
+      slot(area.x, bottomOf(area) - TARGET, TIME_COMPACT_WIDTH, TARGET),
+      slot(rightOf(area) - TIME_COMPACT_WIDTH, bottomOf(area) - TARGET, TIME_COMPACT_WIDTH, TARGET),
+    ]);
+    if (preferred.time && !obstacles.some((box) => meets(preferred.time!, box))) times.unshift(preferred.time);
+    const triedTime = new Set<string>();
+    for (const time of times) {
+      const key = JSON.stringify(time);
+      if (triedTime.has(key)) continue;
+      triedTime.add(key);
+      const dockAreas = clearRectangles(bounds, [...obstacles, time], gutter, gutter);
+      for (const area of dockAreas) {
+        const docks: DockSlot[] = [
+          { ...slot(rightOf(area) - gutter, area.y, gutter, area.h), axis: 'column' },
+          { ...slot(area.x, area.y, area.w, gutter), axis: 'row' },
+          { ...slot(area.x, area.y, gutter, gutter), axis: 'column' },
+        ];
+        for (const dock of docks) {
+          const legend = placeNarrowLegend(measure, lane, time, dock);
+          if (measure.legendOpen && (!legend || obstacles.some((box) => meets(legend, box)) || meets(legend, time) || meets(legend, dock))) continue;
+          const slots: ChromeSlots = { time, dock, legend };
+          const launchAreas = needsLaunch
+            ? clearRectangles(bounds, [...obstacles, time, dock, ...(legend ? [legend] : [])], LAUNCH_MIN, LAUNCH_MIN) : [];
+          const launch = launchAreas.map((area) => slot(area.x, area.y, Math.min(LAUNCH_W, area.w), area.h))
+            .sort((a, b) => Number(b.w >= 180) - Number(a.w >= 180) || b.w * b.h - a.w * a.h)[0] ?? null;
+          if (needsLaunch && !launch) continue;
+          if (needsLaunch) slots.launch = launch;
+          const moving = [time, dock, legend, launch].filter(present);
+          const blocked = needsInspector ? points.filter((point) => moving.some((box) => meets(point, box))).length : 0;
+          const score = -blocked * 1e8 + (launch ? Math.min(launch.w, 180) * Math.min(launch.h, 120) : 0)
+            + (reserve ? reserve.w * reserve.h : 0) + (dock.axis === 'column' ? dock.h : dock.w)
+            - Math.abs(time.y - (preferred.time?.y ?? time.y)) / 100;
+          if (score > bestScore) { best = slots; bestScore = score; }
+        }
+      }
+    }
+  }
+  return best;
+}
+
 function withPanels(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlots): ChromeSlots {
   const launch = present(measure.launchBrief) ? { ...slots, launch: placeLaunch(measure, lane, slots) } : slots;
-  return present(measure.picker) ? { ...launch, picker: placePicker(measure, launch) } : launch;
+  const fitted = narrowFallback(measure, lane, launch) ?? launch;
+  return present(measure.picker) ? { ...fitted, picker: placePicker(measure, fitted) } : fitted;
 }
 
 export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {
