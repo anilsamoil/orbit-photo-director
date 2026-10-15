@@ -121,15 +121,27 @@ function naturalLegendBottom(view: HTMLElement): number {
   return legend.getBoundingClientRect().bottom - offset;
 }
 
-function legendContentHeight(): number {
+function legendContentSize(): { height: number; rowHeight: number } {
   const panel = document.getElementById('map-legend-panel');
-  if (!panel) return 0;
-  const children = [...panel.children].map(boxOf).filter((box) => box.h > 0);
-  if (!children.length) return 0;
-  const style = getComputedStyle(panel);
-  const bottom = Math.max(...children.map((box) => box.y + box.h));
-  return Math.ceil(bottom - panel.getBoundingClientRect().top + panel.scrollTop
-    + (Number.parseFloat(style.paddingBottom) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0));
+  if (!(panel instanceof HTMLElement) || !panel.getClientRects().length) return { height: 0, rowHeight: 0 };
+  // The allocated width and height can wrap or flex-shrink the live content.
+  // Measure its natural 11rem demand independently of the previous slot.
+  const host = document.createElement('div');
+  host.className = 'view-map';
+  host.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none';
+  const legend = document.createElement('div');
+  legend.className = 'map-legend';
+  const intrinsic = panel.cloneNode(true) as HTMLElement;
+  intrinsic.removeAttribute('id');
+  for (const child of intrinsic.querySelectorAll('[id]')) child.removeAttribute('id');
+  intrinsic.style.cssText = 'position:static;width:11rem;height:auto;min-width:0;max-width:none;max-height:none;overflow:visible';
+  legend.appendChild(intrinsic);
+  host.appendChild(legend);
+  document.body.appendChild(host);
+  const height = Math.ceil(intrinsic.getBoundingClientRect().height);
+  const rowHeight = Math.max(0, ...[...intrinsic.children].map(boxOf).map((box) => box.h)) + 2;
+  host.remove();
+  return { height, rowHeight };
 }
 
 function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
@@ -137,6 +149,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     ? boxOf(document.getElementById('shotlist-bar'))
     : emptyBox();
   const dock = document.querySelector('.map-control-dock');
+  const legend = legendContentSize();
   return {
     viewport: { w: window.innerWidth, h: window.innerHeight },
     map: boxOf(document.getElementById('map')),
@@ -160,8 +173,8 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
     hide: boxOf(document.getElementById('map-chrome-toggle')),
     legendButton: boxOf(document.getElementById('map-legend-toggle')),
     legendPanel: boxOf(document.getElementById('map-legend-panel')),
-    legendContentHeight: legendContentHeight(),
-    legendRowHeight: Math.max(0, ...[...document.querySelectorAll('#map-legend-panel > *')].map(boxOf).map((box) => box.h)) + 2,
+    legendContentHeight: legend.height,
+    legendRowHeight: legend.rowHeight,
     legendOpen: document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true',
     legendNaturalBottom: naturalLegendBottom(view),
     dockCorridor: naturalDockCorridor(view, pane),
@@ -251,7 +264,9 @@ function syncFooterClearance(pane: HTMLElement): void {
   set('--map-corner-lift', corner.h ? Math.ceil(Math.max(0, corner.y + corner.h + cornerLift - floor + 8)) : 0);
   const chip = boxOf(pane.querySelector('.map-controls-time'));
   const zoom = boxOf(pane.querySelector('.maplibregl-ctrl-zoom-in'));
-  const zoomRow = needsZoomRow(zoom, chip, floor);
+  const naturalOverflow = !document.body.classList.contains('map-slot-time')
+    && chip.y < zoom.y && chip.y + chip.h > zoom.y;
+  const zoomRow = needsZoomRow(zoom, naturalOverflow ? { ...chip, y: zoom.y } : chip, floor);
   if (document.body.classList.contains('map-zoom-row') !== zoomRow) document.body.classList.toggle('map-zoom-row', zoomRow);
   if (window.innerWidth <= 719 || document.body.classList.contains('map-chrome-hidden')) {
     set('--map-time-lift', 0);
