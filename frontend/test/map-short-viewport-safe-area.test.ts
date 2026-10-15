@@ -183,11 +183,37 @@ for (const engine of [
       if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') await page.locator('#toggle-follow-iss').click();
       await page.locator('#map-chrome-toggle').click();
       await page.evaluate((center) => (window as unknown as TestWindow).__opdMap.jumpTo({ center, zoom: 3, bearing: 0 }), [40.90095837248486, -41.72518486424848] as [number, number]);
-      await page.waitForTimeout(600);
-      const seed = await page.locator('.maplibregl-canvas').evaluate((element) => {
-        const r = element.getBoundingClientRect(); return { x: r.x + r.width * .3, y: r.y + r.height * .35 };
+      await page.waitForFunction(() => {
+        const map = (window as unknown as TestWindow).__opdMap;
+        const canvas = map.getCanvas(), r = canvas.getBoundingClientRect(), center = map.getCenter();
+        return !map.isMoving() && Math.abs(map.getBearing()) < .01 && Math.abs(map.getZoom() - 3) < .01
+          && Math.abs(center.lng - 40.90095837248486) < .000001 && Math.abs(center.lat + 41.72518486424848) < .000001
+          && map.listens('contextmenu') && document.body.classList.contains('map-chrome-hidden')
+          && document.querySelector('#map-pane')!.classList.contains('map-chrome-hidden')
+          && document.querySelector('#toggle-follow-iss')!.getAttribute('aria-pressed') === 'false'
+          && document.elementFromPoint(r.x + r.width * .3, r.y + r.height * .35) === canvas;
       });
-      await page.mouse.click(seed.x, seed.y, { button: 'right' });
+      const seed = await page.evaluate(() => {
+        const map = (window as unknown as TestWindow).__opdMap, r = map.getCanvas().getBoundingClientRect();
+        const point = { x: r.x + r.width * .3, y: r.y + r.height * .35 };
+        const ll = map.unproject([point.x - r.x, point.y - r.y]);
+        return { ...point, bearing: map.getBearing(), expectedPin: [Math.round(ll.lng), Math.round(ll.lat)] };
+      });
+      expect(seed.expectedPin).toEqual(width === 568 ? [31, -39] : [34, -37]);
+      if (cdp) {
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: seed.x, y: seed.y, radiusX: 2, radiusY: 2, force: 1 }] });
+        await page.waitForTimeout(650);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      } else await page.mouse.click(seed.x, seed.y, { button: 'right' });
+      const seeded = await page.evaluate(async () => {
+        const state = window as unknown as TestWindow;
+        const source = state.__opdMap.getSource('dropped-pin') as import('maplibre-gl').GeoJSONSource | undefined;
+        const data = source ? await source.getData() : null;
+        return { pin: data?.type === 'FeatureCollection' && data.features[0]?.geometry.type === 'Point' ? data.features[0].geometry.coordinates : null,
+          events: state.__shortEvents.filter((event) => event.type === 'touchstart' || event.type === 'contextmenu') };
+      });
+      expect(seeded.pin, JSON.stringify({ seed, seeded })).toEqual(seed.expectedPin);
+      expect(seeded.events.some((event) => event.trusted && event.target === 'maplibregl-canvas')).toBe(true);
       await page.locator('.pin-pass-row').first().waitFor();
       await page.locator('#map-chrome-toggle').click();
       await page.waitForTimeout(800);
@@ -225,7 +251,7 @@ for (const engine of [
         if (data.type !== 'FeatureCollection' || data.features[0]?.geometry.type !== 'Point') throw new Error('No dropped point');
         return { pin: data.features[0].geometry.coordinates, time: (document.querySelector('#time-slider') as HTMLInputElement).value, events: state.__shortEvents };
       });
-      const evidence = { engine: engine.name, width, height, insets, idle, pass, before, after };
+      const evidence = { engine: engine.name, width, height, insets, seed, seeded, idle, pass, before, after };
       await save(page, `${engine.name.toLowerCase()}-inspector-${width}x${height}`, evidence);
       expect.soft(idle, JSON.stringify(evidence)).toEqual([]);
       expect.soft(after.pin, JSON.stringify(evidence)).toEqual(before.expected);
