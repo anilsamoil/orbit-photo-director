@@ -16,7 +16,7 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const origin = 'http://127.0.0.1:45111';
 const sourceHashes = Object.fromEntries(['src/chrome-slots.ts', 'src/map-chrome.ts', 'src/style.css', 'src/map/adapters/maplibre/index.ts'].filter((name) => existsSync(resolve(root, name))).map((name) => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')]));
 type Insets = { top: number; right: number; bottom: number; left: number };
-type InputEvent = { type: string; target: string; trusted: boolean };
+type InputEvent = { type: string; target: string; trusted: boolean; control?: string; expanded?: string | null; x?: number; y?: number };
 type TestWindow = Window & { __opdMap: import('maplibre-gl').Map; __shortEvents: InputEvent[]; __shortBanner?: MutationObserver };
 let assets: Map<string, string | Uint8Array>;
 let script: string;
@@ -72,7 +72,10 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets) {
     state.__shortEvents = [];
     for (const type of ['click', 'touchstart', 'touchend', 'contextmenu']) document.addEventListener(type, (event) => {
       const target = event.target as Element;
-      state.__shortEvents.push({ type, trusted: event.isTrusted, target: target.id || target.className || target.tagName });
+      const control = target.closest('#map-chrome-toggle');
+      state.__shortEvents.push({ type, trusted: event.isTrusted, target: target.id || target.className || target.tagName,
+        control: control?.id, expanded: control?.getAttribute('aria-expanded'),
+        x: event instanceof MouseEvent ? event.clientX : undefined, y: event instanceof MouseEvent ? event.clientY : undefined });
     }, true);
   }, true);
   await page.goto(`${origin}/?e2e&u=short-viewport`, { waitUntil: 'domcontentloaded' });
@@ -98,14 +101,21 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets) {
 for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
-]) describe.skipIf(!existsSync(engine.executablePath))(`two-sided narrow startup ${engine.name}`, () => {
-  it.each([{ width: 390, height: 520, top: 0, bottom: 21, left: 47, right: 47 }, { width: 390, height: 520, top: 24, bottom: 20, left: 47, right: 47 }, { width: 568, height: 320, top: 0, bottom: 0, left: 0, right: 0 }])('settles and accepts native Controls clicks at $width×$height T$top/B$bottom/L$left/R$right', async ({ width, height, ...insets }) => {
+]) describe.skipIf(!existsSync(engine.executablePath))(`supported safe-area startup ${engine.name}`, () => {
+  it.each([
+    { width: 402, height: 874, top: 62, bottom: 34, left: 0, right: 0 },
+    { width: 874, height: 402, top: 0, bottom: 21, left: 62, right: 62 },
+    { width: 834, height: 1210, top: 24, bottom: 20, left: 0, right: 0 },
+    { width: 1210, height: 834, top: 24, bottom: 20, left: 0, right: 0 },
+    { width: 1280, height: 800, top: 0, bottom: 0, left: 0, right: 0 },
+    { width: 1440, height: 900, top: 0, bottom: 0, left: 0, right: 0 },
+  ])('settles and accepts native Controls clicks at $width×$height T$top/B$bottom/L$left/R$right', async ({ width, height, ...insets }) => {
     const browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
     const samples: unknown[] = [];
     let ready = false;
     let error = '';
     try {
-      const context = await browser.newContext({ viewport: { width, height }, screen: { width, height }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, serviceWorkers: 'block' });
+      const context = await browser.newContext({ viewport: { width, height }, screen: { width, height }, isMobile: width < 1280, hasTouch: width < 1280, deviceScaleFactor: Math.min(width, height) < 500 ? 3 : width < 1280 ? 2 : 1, serviceWorkers: 'block' });
       const page = await context.newPage();
       page.setDefaultTimeout(10_000);
       page.on('console', (message) => { if (message.text().startsWith('STARTUP_WRITES ')) samples.push(JSON.parse(message.text().slice(15))); });
@@ -132,7 +142,7 @@ for (const engine of [
       });
       const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
       const preparation = prepare(page, cdp, insets).then(async () => {
-        if (width === 568) {
+        if (width > height) {
           await page.evaluate(() => {
             const banner = document.querySelector('#status-banner')!;
             banner.className = 'banner banner-red';
@@ -182,10 +192,15 @@ for (const engine of [
           return { x, y, owns: hit === element || !!hit && element.contains(hit), rect: r.toJSON() };
         });
         expect(target.owns, JSON.stringify(target)).toBe(true);
-        await page.mouse.click(target.x, target.y);
-        await page.waitForFunction((value) => document.querySelector('#map-chrome-toggle')?.getAttribute('aria-expanded') === value, expected);
+        await page.locator(selector).click();
+        const input = await page.evaluate(() => (window as unknown as TestWindow).__shortEvents.filter((event) => event.type === 'click').at(-1));
+        expect(input?.trusted, JSON.stringify(input)).toBe(true);
+        expect(input?.control, JSON.stringify(input)).toBe('map-chrome-toggle');
+        expect(input?.expanded, JSON.stringify(input)).toBe(expected === 'false' ? 'true' : 'false');
+        await page.waitForFunction((value) => document.querySelector('#map-chrome-toggle')?.getAttribute('aria-expanded') === value, expected)
+          .catch((error: unknown) => { throw new Error(JSON.stringify({ selector, expected, target, input, error: String(error) })); });
         expect(await page.locator('#map-chrome-toggle').getAttribute('aria-expanded')).toBe(expected);
-        actions.push({ selector, expected, target });
+        actions.push({ selector, expected, target, input });
       }
       await page.waitForTimeout(500);
       const idle = await page.evaluate(async () => {
