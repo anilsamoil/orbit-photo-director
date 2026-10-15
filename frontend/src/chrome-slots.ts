@@ -97,6 +97,11 @@ function cross(scrollbar: number): number {
   return TARGET + Math.max(0, scrollbar);
 }
 
+export function needsZoomRow(zoom: Box, time: Box, floor: number): boolean {
+  const limit = time.h > 0 && time.y >= zoom.y ? Math.min(floor, time.y) : floor;
+  return zoom.h > 0 && zoom.y + TARGET * 3 + GAP > limit;
+}
+
 function laneOf(zoom: Box, compass: Box): Box | null {
   const parts = [zoom, compass].filter(present);
   if (!parts.length) return null;
@@ -382,7 +387,7 @@ function placeLaunch(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlot
   return best;
 }
 
-function placePicker(measure: ChromeMeasure, slots: ChromeSlots): Slot | null {
+function placePicker(measure: ChromeMeasure, slots: ChromeSlots, inspector: Box | null = null): Slot | null {
   if (!present(measure.picker)) return null;
   const left = measure.insets.left + EDGE;
   const right = measure.viewport.w - measure.insets.right - EDGE;
@@ -400,7 +405,7 @@ function placePicker(measure: ChromeMeasure, slots: ChromeSlots): Slot | null {
     ...(slots.time ? [slots.time] : [measure.sliderChip, measure.slider, ...measure.timeButtons]),
     slots.dock ?? measure.dock,
     measure.legendOpen ? slots.legend ?? measure.legendPanel : null,
-    slots.launch ?? measure.launchBrief, measure.pip, measure.hide, measure.legendButton,
+    slots.launch ?? measure.launchBrief, measure.pip, measure.hide, measure.legendButton, inspector,
   ].filter(present);
   const tops = [top, ...(inspectorTop === null ? [] : [inspectorTop]), ...obstacles.map((box) => bottomOf(box) + GAP)].filter((y) => y >= top && y < bottom);
   const bottoms = [bottom, ...obstacles.map((box) => box.y - GAP)].filter((y) => y <= bottom && y > top);
@@ -457,6 +462,7 @@ function narrowFallback(measure: ChromeMeasure, lane: Box | null, preferred: Chr
   if (measure.viewport.w > NARROW_MAX || !present(map) || map.h > SHORT_MAP_HEIGHT) return null;
   const needsInspector = !!measure.inspectorOpen;
   const needsLaunch = present(measure.launchBrief);
+  const needsPicker = present(measure.picker);
   if (!needsInspector && (!needsLaunch || preferred.launch)) return null;
   const bounds = { x: measure.insets.left + EDGE, y: Math.max(map.y, measure.insets.top),
     w: measure.viewport.w - measure.insets.right - EDGE - measure.insets.left - EDGE,
@@ -466,8 +472,8 @@ function narrowFallback(measure: ChromeMeasure, lane: Box | null, preferred: Chr
   const center = { x: map.x + map.w / 2, y: map.y + map.h / 2 };
   const dropCore = { x: center.x - DROP_CORE_WIDTH / 2, y: center.y - Math.min(DROP_CORE_HEIGHT, map.h) / 2,
     w: DROP_CORE_WIDTH, h: Math.min(DROP_CORE_HEIGHT, map.h) };
-  const preferredObstacles = [preferred.time, preferred.dock, preferred.legend, preferred.launch].filter(present);
-  if ((!needsLaunch || preferred.launch) && needsInspector
+  const preferredObstacles = [preferred.time, preferred.dock, preferred.legend, preferred.launch, preferred.picker].filter(present);
+  if ((!needsLaunch || preferred.launch) && (!needsPicker || preferred.picker) && needsInspector
     && clearRectangles(bounds, [...fixed, ...preferredObstacles, dropCore], INSPECTOR_MIN_W, INSPECTOR_MIN_H).length) return null;
   // A full protected core cannot fit beside all short-screen chrome. Preserve
   // its center and edge-midpoint inputs when ranking the feasible fallbacks;
@@ -477,10 +483,11 @@ function narrowFallback(measure: ChromeMeasure, lane: Box | null, preferred: Chr
     .filter((point) => !fixed.some((box) => meets(point, box)));
   const reservations: Array<Slot | null> = [null];
   if (needsInspector) {
-    const x = center.x + DROP_CORE_WIDTH / 2 + GAP;
-    const width = rightOf(bounds) - x;
+    const available = rightOf(bounds) - center.x - DROP_CORE_WIDTH / 2 - GAP;
     const height = INSPECTOR_MIN_H;
-    if (width >= INSPECTOR_MIN_W) {
+    const widths = needsPicker ? [...new Set([available, INSPECTOR_ROW, INSPECTOR_MIN_W])] : [available];
+    for (const width of widths.filter((width) => width >= INSPECTOR_MIN_W && width <= available)) {
+      const x = rightOf(bounds) - width;
       const tops = new Set([bounds.y + GAP, showBottom(measure) + SEPARATION + TARGET + GAP,
         ...fixed.map((box) => bottomOf(box) + GAP), ...fixed.map((box) => box.y - GAP - height)]);
       for (const y of tops) {
@@ -509,6 +516,8 @@ function narrowFallback(measure: ChromeMeasure, lane: Box | null, preferred: Chr
       const key = JSON.stringify(time);
       if (triedTime.has(key)) continue;
       triedTime.add(key);
+      if (needsPicker && present(measure.zoom)
+        && needsZoomRow(measure.zoom, time, floorY(measure)) !== (measure.zoom.w > measure.zoom.h)) continue;
       const dockAreas = clearRectangles(bounds, [...obstacles, time], gutter, gutter);
       for (const area of dockAreas) {
         const docks: DockSlot[] = [
@@ -526,7 +535,10 @@ function narrowFallback(measure: ChromeMeasure, lane: Box | null, preferred: Chr
             .sort((a, b) => Number(b.w >= 180) - Number(a.w >= 180) || b.w * b.h - a.w * a.h)[0] ?? null;
           if (needsLaunch && !launch) continue;
           if (needsLaunch) slots.launch = launch;
-          const moving = [time, dock, legend, launch].filter(present);
+          const picker = needsPicker ? placePicker(measure, slots, reserve) : null;
+          if (needsPicker && !picker) continue;
+          if (needsPicker) slots.picker = picker;
+          const moving = [time, dock, legend, launch, picker].filter(present);
           const blocked = needsInspector ? points.filter((point) => moving.some((box) => meets(point, box))).length : 0;
           const score = -blocked * 1e8 + (launch ? Math.min(launch.w, 180) * Math.min(launch.h, 120) : 0)
             + (reserve ? reserve.w * reserve.h : 0) + (dock.axis === 'column' ? dock.h : dock.w)
@@ -541,8 +553,8 @@ function narrowFallback(measure: ChromeMeasure, lane: Box | null, preferred: Chr
 
 function withPanels(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlots): ChromeSlots {
   const launch = present(measure.launchBrief) ? { ...slots, launch: placeLaunch(measure, lane, slots) } : slots;
-  const fitted = narrowFallback(measure, lane, launch) ?? launch;
-  return present(measure.picker) ? { ...fitted, picker: placePicker(measure, fitted) } : fitted;
+  const panels = present(measure.picker) ? { ...launch, picker: placePicker(measure, launch) } : launch;
+  return narrowFallback(measure, lane, panels) ?? panels;
 }
 
 export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {

@@ -708,6 +708,54 @@ describe('chrome slots', () => {
     expect(solveChromeSlots({ ...input, inspectorOpen: true })).toEqual(slots);
   });
 
+  it('jointly keeps a readable inspector beside Satellite on the 568x320 inset screen', () => {
+    const input = measure({
+      viewport: { w: 568, h: 320 }, map: { x: 0, y: 72, w: 568, h: 248 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      show: { x: 55, y: 77, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 134, w: 88, h: 44 },
+      compass: { x: 143, y: 134, w: 44, h: 44 },
+      hide: { x: 468, y: 206, w: 88, h: 44 },
+      legendButton: { x: 372, y: 206, w: 88, h: 44 },
+      footer: { x: 0, y: 263.03125, w: 568, h: 22.96875 },
+      picker: { x: 192, y: 143, w: 288, h: 160 },
+      scrollbar: 8, inspectorOpen: true,
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.picker).toBeTruthy();
+    if (!slots.picker || !slots.time || !slots.dock) throw new Error('Expected a joint picker/time/dock solution');
+    expect(slots.picker.w).toBeGreaterThanOrEqual(180);
+    expect(slots.picker.h).toBeGreaterThanOrEqual(64);
+    const inspector = { x: 480, y: 80, w: 80, h: 112 };
+    const fixed = [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer];
+    for (const item of [slots.time, slots.dock, slots.picker]) {
+      for (const obstacle of [...fixed, inspector]) expect(meets(item, obstacle)).toBe(false);
+    }
+    expect(meets(slots.time, slots.dock)).toBe(false);
+    expect(meets(slots.time, slots.picker)).toBe(false);
+    expect(meets(slots.dock, slots.picker)).toBe(false);
+    expect(solveChromeSlots({ ...input, dock: slots.dock, sliderChip: slots.time, picker: slots.picker })).toEqual(slots);
+  });
+
+  it('keeps the measured zoom column stable when jointly opening the 390x520 picker', () => {
+    const input = measure({
+      viewport: { w: 390, h: 520 }, map: { x: 0, y: 48, w: 390, h: 472 },
+      zoom: { x: 8, y: 110, w: 44, h: 88 }, compass: { x: 8, y: 198, w: 44, h: 44 },
+      show: { x: 8, y: 53, w: 203.40625, h: 52 },
+      dock: { x: 330, y: 53, w: 52, h: 327 },
+      hide: { x: 290, y: 440, w: 88, h: 44 },
+      legendButton: { x: 194, y: 440, w: 88, h: 44 },
+      footer: { x: 0, y: 497.03125, w: 390, h: 22.96875 },
+      picker: { x: 60, y: 113, w: 262, h: 267 }, inspectorOpen: true, scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    if (!slots.time || !slots.dock || !slots.picker) throw new Error('Expected a joint picker/time/dock solution');
+    expect(slots.time.y).toBeGreaterThanOrEqual(bottomOf(input.compass) + 8);
+    expect(meets(slots.picker, slots.time)).toBe(false);
+    expect(meets(slots.picker, slots.dock)).toBe(false);
+    expect(solveChromeSlots({ ...input, dock: slots.dock, sliderChip: slots.time, picker: slots.picker })).toEqual(slots);
+  });
+
   it('keeps the tall phone inspector readable when the picker opens', () => {
     const input = measure({
       viewport: { w: 402, h: 874 },

@@ -262,6 +262,83 @@ for (const engine of [
       if (width === 568) expect.soft(pass.before.row.bottom, JSON.stringify(evidence)).toBeLessThanOrEqual(pass.before.scrollport.bottom);
     } finally { await context.close(); }
   }, 30_000);
+  it.each([{ width: 568, height: 320, bottom: 34 }, { width: 390, height: 520, bottom: 0 }])('keeps a complete first pass exposable after the native Satellite click at $width×$height B$bottom', async ({ width, height, bottom }) => {
+    const insets = insetsFor(bottom);
+    const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, serviceWorkers: 'block' });
+    try {
+      const page = await context.newPage(); page.setDefaultTimeout(15_000);
+      const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
+      await prepare(page, cdp, insets, 'inspector');
+      await page.locator('#map-chrome-toggle').click();
+      if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') await page.locator('#toggle-follow-iss').click();
+      await page.locator('#bearing-north').click();
+      await page.locator('#map-chrome-toggle').click();
+      await page.evaluate(() => (window as unknown as TestWindow).__opdMap.jumpTo({ center: [-90, 40], zoom: 3, bearing: 0 }));
+      await banner(page, 'plain');
+      await page.waitForFunction(() => !(window as unknown as TestWindow).__opdMap.isMoving());
+      const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
+        const r = canvas.getBoundingClientRect(), x = r.x + r.width * .3, y = r.y + r.height * .35;
+        return { x, y, owned: document.elementFromPoint(x, y) === canvas };
+      });
+      expect(seed.owned).toBe(true);
+      await page.mouse.click(seed.x, seed.y, { button: 'right' });
+      await page.locator('.pin-pass-row').first().waitFor();
+      await page.locator('#map-chrome-toggle').click();
+      await page.waitForTimeout(800);
+      const measure = () => page.locator('.pin-pass-row').first().evaluate((row) => {
+        const popup = row.closest('.maplibregl-popup-content') as HTMLElement;
+        const r = popup.getBoundingClientRect();
+        return { popup: r.toJSON(), row: row.getBoundingClientRect().toJSON(), clientHeight: popup.clientHeight,
+          horizontalOverflow: popup.scrollWidth - popup.clientWidth,
+          scrollport: { top: r.top + popup.clientTop, bottom: r.top + popup.clientTop + popup.clientHeight },
+          pickerOpen: !(document.querySelector('#satellite-picker-panel') as HTMLElement).hidden,
+          time: (document.querySelector('#time-slider') as HTMLInputElement).value };
+      });
+      const exposeRow = async () => {
+        const before = await measure();
+        if (cdp) {
+          await page.mouse.move(before.popup.x + before.popup.width / 2, before.popup.y + before.popup.height / 2);
+          await page.mouse.wheel(0, Math.floor(before.row.top - before.scrollport.top));
+          await page.waitForTimeout(500);
+        } else await page.locator('.pin-pass-row').first().evaluate((row) => {
+          const popup = row.closest('.maplibregl-popup-content') as HTMLElement;
+          popup.scrollTop += Math.floor(row.getBoundingClientRect().top - popup.getBoundingClientRect().top - popup.clientTop);
+        });
+        return measure();
+      };
+      const before = await exposeRow();
+      await ownScroll(page, '#toggle-satellite-picker');
+      await page.waitForTimeout(400);
+      const opener = await targetGeometry(page, '#toggle-satellite-picker');
+      expect(opener.points[0]!.owns, JSON.stringify(opener)).toBe(true);
+      await page.mouse.click(opener.points[0]!.x, opener.points[0]!.y);
+      await page.locator('#satellite-picker-panel:not([hidden])').waitFor();
+      await page.waitForTimeout(800);
+      const opened = await measure();
+      const after = await exposeRow();
+      const idle = await idleLayout(page);
+      const events = await page.evaluate(() => (window as unknown as TestWindow).__shortEvents);
+      const evidence = { engine: engine.name, width, height, insets, seed, before, opener, opened, after, idle, events };
+      await save(page, `${engine.name.toLowerCase()}-picker-inspector-${width}x${height}`, evidence);
+      expect.soft(events.every((event) => event.trusted), JSON.stringify(events)).toBe(true);
+      expect.soft(events.some((event) => event.type === 'contextmenu' && event.target === 'maplibregl-canvas')).toBe(true);
+      expect.soft(events.some((event) => event.type === 'click' && event.target === 'toggle-satellite-picker')).toBe(true);
+      expect.soft(opened.pickerOpen).toBe(true);
+      expect.soft(after.pickerOpen).toBe(true);
+      expect.soft(after.time).toBe(before.time);
+      expect.soft(idle, JSON.stringify(evidence)).toEqual([]);
+      for (const phase of [before, after]) {
+        expect.soft(phase.row.height, JSON.stringify(evidence)).toBeLessThanOrEqual(phase.clientHeight);
+        expect.soft(phase.row.top, JSON.stringify(evidence)).toBeGreaterThanOrEqual(phase.scrollport.top);
+        expect.soft(phase.row.bottom, JSON.stringify(evidence)).toBeLessThanOrEqual(phase.scrollport.bottom);
+        expect.soft(phase.horizontalOverflow).toBe(0);
+        expect.soft(phase.popup.left).toBeGreaterThanOrEqual(insets.left);
+        expect.soft(phase.popup.right).toBeLessThanOrEqual(width - insets.right);
+        expect.soft(phase.popup.top).toBeGreaterThanOrEqual(insets.top);
+        expect.soft(phase.popup.bottom).toBeLessThanOrEqual(height - insets.bottom);
+      }
+    } finally { await context.close(); }
+  }, 30_000);
   it.each(launchCases)('delivers the own-scrolled $name center while Launches is visible', async ({ name, width, height, bottom, selectedShot, banner: variant, selector, outcome }) => {
     const insets = insetsFor(bottom);
     const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, serviceWorkers: 'block' });

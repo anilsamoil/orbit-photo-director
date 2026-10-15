@@ -1,4 +1,4 @@
-import { solveChromeSlots, TIME_LINE_WIDTH, type Box, type ChromeMeasure, type ChromeSlots } from './chrome-slots';
+import { needsZoomRow, solveChromeSlots, TIME_LINE_WIDTH, type Box, type ChromeMeasure, type ChromeSlots } from './chrome-slots';
 
 const STORAGE_KEY = 'opd-map-chrome';
 const timeLinePx = 44;
@@ -251,8 +251,7 @@ function syncFooterClearance(pane: HTMLElement): void {
   set('--map-corner-lift', corner.h ? Math.ceil(Math.max(0, corner.y + corner.h + cornerLift - floor + 8)) : 0);
   const chip = boxOf(pane.querySelector('.map-controls-time'));
   const zoom = boxOf(pane.querySelector('.maplibregl-ctrl-zoom-in'));
-  const zoomFloor = chip.h > 0 && chip.y >= zoom.y ? Math.min(floor, chip.y) : floor;
-  const zoomRow = zoom.h > 0 && zoom.y + 132 + 8 > zoomFloor;
+  const zoomRow = needsZoomRow(zoom, chip, floor);
   if (document.body.classList.contains('map-zoom-row') !== zoomRow) document.body.classList.toggle('map-zoom-row', zoomRow);
   if (window.innerWidth <= 719 || document.body.classList.contains('map-chrome-hidden')) {
     set('--map-time-lift', 0);
