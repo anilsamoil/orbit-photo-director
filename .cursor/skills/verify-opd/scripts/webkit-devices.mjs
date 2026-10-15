@@ -6,6 +6,25 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
 const { devices, webkit } = require('playwright');
 
+export const IPAD_M4_VIEWPORTS = [
+  { width: 834, height: 1210 },
+  { width: 1210, height: 834 },
+];
+
+export function parseViewportOverride(surface, raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const match = /^(\d+)x(\d+)$/.exec(text);
+  if (!match) throw new Error(`OPD_VERIFY_VIEWPORT must be WIDTHxHEIGHT, got ${text}`);
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const size = { width, height, raw: text };
+  if (surface === 'iphone-17-pro') return size;
+  if (surface === 'iphone-13' && width === 844 && height === 390) return size;
+  if (surface === 'ipad-pro-11' && IPAD_M4_VIEWPORTS.some((entry) => entry.width === width && entry.height === height)) return size;
+  throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro, iphone-13 with 844x390, or ipad-pro-11 with 834x1210 or 1210x834.');
+}
+
 export const WEBKIT_DEVICES = [
   { name: 'iPhone 13', slug: 'iphone-13', standalone: true, tap: 'sign-in' },
   { name: 'iPad Pro 11', slug: 'ipad-pro-11', standalone: false, tap: 'reload' },
