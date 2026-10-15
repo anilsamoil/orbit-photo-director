@@ -50,10 +50,16 @@ export function narrowPlacementViolations(css, js = '') {
     if (!rule.props.length) continue;
     const actor = actors.find(([, pattern]) => pattern.test(rule.selector));
     if (!actor) continue;
+    const bannerCopy = actor[0] === 'footer' && !rule.selector.includes(',')
+      && /#status-banner\s+(?:>\s*)?\.banner-copy$/.test(rule.selector);
+    const placement = bannerCopy
+      ? rule.props.filter((property) => !['min-width', 'max-height', 'overflow-y'].includes(property))
+      : rule.props;
+    if (!placement.length) continue;
     const narrow = /max-width:\s*719px/.test(rule.media);
     const reflow = /map-chrome-reflow|map-dock-row/.test(rule.selector) || /map-chrome-reflow|map-dock-row/.test(rule.media);
     if (narrow || reflow) {
-      violations.push(`${actor[0]}: ${rule.media || '(none)'} ${rule.selector} { ${rule.props.join(', ')} }`);
+      violations.push(`${actor[0]}: ${rule.media || '(none)'} ${rule.selector} { ${placement.join(', ')} }`);
     }
   }
   if (/map-chrome-reflow|map-dock-row/.test(js)) violations.push('map-chrome.ts still names a reflow class');

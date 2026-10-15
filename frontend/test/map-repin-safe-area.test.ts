@@ -21,6 +21,7 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const origin = 'http://repin.test';
 type Insets = { top: number; right: number; bottom: number; left: number };
 const samples = [
+  { name: 'short zero center', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: 0, width: 568, height: 320 },
   { name: 'zero center', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: 0 },
   { name: 'zero center+91', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: 91 },
   { name: 'zero center-91', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: -91 },
@@ -65,8 +66,8 @@ for (const engine of [
   }, 60_000);
   afterAll(async () => { await browser?.close(); }, 30_000);
 
-  it.each(samples)('keeps $name on the canvas with an open inspector and unchanged time', async ({ name, insets, offset }) => {
-    const context = await browser.newContext({ viewport: { width: 719, height: 521 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  it.each(samples)('keeps $name on the canvas with an open inspector and unchanged time', async ({ name, insets, offset, width = 719, height = 521 }) => {
+    const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
     try {
       const page = await context.newPage();
       const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;

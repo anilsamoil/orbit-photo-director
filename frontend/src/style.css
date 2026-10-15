@@ -4894,6 +4894,33 @@ summary:focus-visible {
   }
 }
 
+@media (max-height: 360px) and (max-width: 719px) {
+  body:has(> #view.view-map) #shotlist-bar {
+    padding-top: 4px;
+    padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body:has(> #view.view-map) #status-banner:has(.banner-actions) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  body:has(> #view.view-map) #status-banner .banner-copy {
+    flex: 1 1 0;
+    min-width: 0;
+    max-height: 44px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  body:has(> #view.view-map) #status-banner .banner-actions {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    margin-top: 0;
+  }
+}
+
 @media (max-height: 560px) and (max-width: 899px) {
   #map-pane.map-inspector-open {
     --map-inspector-block: 260px;

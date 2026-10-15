@@ -145,6 +145,89 @@ describe('chrome slots', () => {
     expect(time).toEqual({ x: 107, y: 568, w: 275, h: 96 });
   });
 
+  it('keeps the short landscape canvas center clear even when the time row is narrow', () => {
+    const time = solveChromeSlots(measure({
+      viewport: { w: 568, h: 320 },
+      map: { x: 0, y: 48, w: 568, h: 272 },
+      show: { x: 8, y: 53, w: 203.40625, h: 52 },
+      zoom: { x: 8, y: 110, w: 88, h: 44 },
+      compass: { x: 96, y: 110, w: 44, h: 44 },
+      hide: { x: 468, y: 240, w: 88, h: 44 },
+      legendButton: { x: 372, y: 240, w: 88, h: 44 },
+      footer: { x: 0, y: 297.03125, w: 568, h: 22.96875 },
+    })).time!;
+    expect(time).toEqual({ x: 148, y: 188, w: 400, h: 44 });
+    expect(meets(time, { x: 283, y: 183, w: 2, h: 2 })).toBe(false);
+  });
+
+  it('uses the free space below the zoom lane for a readable narrow portrait slider', () => {
+    const time = solveChromeSlots(measure({
+      viewport: { w: 390, h: 520 },
+      map: { x: 0, y: 48, w: 390, h: 472 },
+      show: { x: 8, y: 53, w: 203.40625, h: 52 },
+      zoom: { x: 8, y: 110, w: 44, h: 88 },
+      compass: { x: 8, y: 198, w: 44, h: 44 },
+      hide: { x: 290, y: 440, w: 88, h: 44 },
+      legendButton: { x: 194, y: 440, w: 88, h: 44 },
+      footer: { x: 0, y: 497.03125, w: 390, h: 22.96875 },
+    })).time!;
+    expect(time).toEqual({ x: 8, y: 388, w: 362, h: 44 });
+    expect(time.w - (5 * 44 + 5 * 2 + 4)).toBeGreaterThanOrEqual(100);
+  });
+
+  it('uses the free band between raised corners and time before squeezing Legend below time', () => {
+    const input = measure({
+      viewport: { w: 360, h: 521 },
+      map: { x: 0, y: 113, w: 360, h: 408 },
+      insets: { top: 24, right: 0, bottom: 34, left: 0 },
+      show: { x: 8, y: 118, w: 203.40625, h: 52 },
+      zoom: { x: 8, y: 184, w: 44, h: 88 },
+      compass: { x: 8, y: 272, w: 44, h: 44 },
+      hide: { x: 260, y: 205, w: 88, h: 44 },
+      legendButton: { x: 164, y: 205, w: 88, h: 44 },
+      footer: { x: 0, y: 414.4375, w: 360, h: 72.5625 },
+      legendOpen: true, legendContentHeight: 70, scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.legend).toEqual({ x: 76, y: 257, w: 176, h: 59 });
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, slots.time!, slots.dock!]) {
+      expect(meets(slots.legend!, obstacle)).toBe(false);
+    }
+  });
+
+  it('places all six compact time targets beside Show after the short footer reflows', () => {
+    const input = measure({
+      viewport: { w: 568, h: 320 },
+      map: { x: 0, y: 72, w: 568, h: 248 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      show: { x: 55, y: 77, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 134, w: 88, h: 44 },
+      compass: { x: 143, y: 134, w: 44, h: 44 },
+      hide: { x: 468, y: 118, w: 88, h: 44 },
+      legendButton: { x: 372, y: 118, w: 88, h: 44 },
+      footer: { x: 0, y: 182, w: 568, h: 51 },
+      shotList: { x: 0, y: 233, w: 568, h: 87 },
+    });
+    const { time, dock } = solveChromeSlots(input);
+    expect(time).not.toBeNull();
+    expect(dock).not.toBeNull();
+    if (!time || !dock) return;
+    expect(time).toEqual({ x: 266.41, y: 72, w: 281.59, h: 44 });
+    expect(dock.y).toBe(bottomOf(input.show));
+    expect(meets(dock, input.show)).toBe(false);
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, input.shotList]) {
+      expect(meets(time, obstacle)).toBe(false);
+    }
+    const opened = solveChromeSlots({ ...input, legendOpen: true, scrollbar: 8 });
+    expect(opened.time).toEqual(time);
+    expect(opened.dock).toEqual({ x: 195, y: 129, w: 52, h: 52, axis: 'row' });
+    expect(opened.legend).toEqual({ x: 255, y: 129, w: 109, h: 52 });
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, input.shotList, time, opened.dock!]) {
+      expect(meets(opened.legend!, obstacle)).toBe(false);
+    }
+    expect(solveChromeSlots({ ...input, footer: { x: 0, y: 149.25, w: 568, h: 72.5625 }, hide: { ...input.hide, y: 97 }, legendButton: { ...input.legendButton, y: 97 } }).time).toBeNull();
+  });
+
   it('leaves the wide time strip alone and lifts a legend panel off T+90', () => {
     const t90: Box = { x: 440.609, y: 378.422, w: 59.36, h: 49.578 };
     const hide: Box = { x: 620, y: 388, w: 88, h: 44 };

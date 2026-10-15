@@ -53,6 +53,7 @@ const MIN_LEGEND = 32;
 const TIME_STACK = 96;
 export const TIME_LINE_WIDTH = 480;
 const TIME_COMPACT_WIDTH = TARGET * 6 + 2 * 5 + 4;
+const TIME_SLIDER_WIDTH = TIME_COMPACT_WIDTH + 100 - TARGET;
 const TIME_STACK_WIDTH = TARGET * 5 + 4 * 4 + 4;
 const DROP_CORE_WIDTH = 182;
 const DROP_CORE_HEIGHT = 232;
@@ -129,7 +130,7 @@ function shrinkClear(draft: Box, obstacles: Box[]): Box {
   return { ...draft, w: Math.max(0, limit - x) };
 }
 
-function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot {
+function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot | null {
   const laneRight = lane ? rightOf(lane) : measure.insets.left + EDGE;
   const x = laneRight + GAP;
   const rightEdge = measure.viewport.w - measure.insets.right - RIGHT_MARGIN;
@@ -140,7 +141,8 @@ function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot {
   const candidate = (height: number): Box => {
     const y = cornerTop - GAP - height;
     const minWidth = height === TARGET ? TIME_COMPACT_WIDTH : TIME_STACK_WIDTH;
-    const left = width < minWidth && lane && y >= bottomOf(lane) + GAP ? measure.insets.left + EDGE : x;
+    const preferredWidth = height === TARGET ? TIME_SLIDER_WIDTH : minWidth;
+    const left = width < preferredWidth && lane && y >= bottomOf(lane) + GAP ? measure.insets.left + EDGE : x;
     return { x: left, y, w: rightEdge - left, h: height };
   };
   const fits = (box: Box) => box.y >= raisedY - 0.5 && !blockers.some((obstacle) => meets(box, obstacle));
@@ -154,28 +156,31 @@ function placeNarrowTime(measure: ChromeMeasure, lane: Box | null): Slot {
     w: Math.min(DROP_CORE_WIDTH, map.w),
     h: Math.min(DROP_CORE_HEIGHT, map.h),
   } : null;
-  const needsStack = width < TIME_LINE_WIDTH;
-  const stackedOk = tall.w >= TIME_STACK_WIDTH && fits(tall) && (needsStack || !meets(tall, dropCore)) && (!measure.legendOpen || bandAfter(tall) >= Math.max(MIN_LEGEND, measure.legendRowHeight ?? 0));
+  const stackedOk = tall.w >= TIME_STACK_WIDTH && fits(tall) && !meets(tall, dropCore) && (!measure.legendOpen || bandAfter(tall) >= Math.max(MIN_LEGEND, measure.legendRowHeight ?? 0));
   let chosen = stackedOk ? tall : fits(line) ? line : { x, y: raisedY, w: width, h: TARGET };
   const side = [measure.hide, measure.legendButton, measure.footer, measure.shotList].filter(present);
-  if (chosen.h === TARGET && shrinkClear(chosen, side).w < TIME_COMPACT_WIDTH) {
+  const obstacles = [...blockers, ...side, measure.zoom, measure.compass].filter(present);
+  const valid = (box: Box) => box.w >= (box.h === TARGET ? TIME_COMPACT_WIDTH : TIME_STACK_WIDTH)
+    && box.y >= measure.insets.top && bottomOf(box) <= floorY(measure) - 2
+    && !obstacles.some((obstacle) => meets(box, obstacle));
+  if (!valid(shrinkClear(chosen, side))) {
     const afterShow = Math.max(measure.insets.left + EDGE, ...[measure.show, ...measure.showButtons].filter(present).map(rightOf)) + GAP;
     const options = [
       { x: afterShow, y: measure.map?.y ?? measure.show.y, w: rightEdge - afterShow, h: TARGET },
       { x: measure.insets.left + EDGE, y: Math.max(raisedY, lane ? bottomOf(lane) + GAP : raisedY), w: rightEdge - measure.insets.left - EDGE, h: TARGET },
       { x: measure.insets.left + EDGE, y: Math.max(raisedY, ...side.filter((box) => box !== measure.footer && box !== measure.shotList).map(bottomOf)) + SEPARATION, w: rightEdge - measure.insets.left - EDGE, h: TARGET },
     ];
-    const obstacles = [...blockers, ...side, measure.zoom, measure.compass].filter(present);
     for (const option of options) {
       const clear = shrinkClear(option, obstacles);
-      if (clear.w >= TIME_COMPACT_WIDTH && clear.y >= measure.insets.top && bottomOf(clear) <= floorY(measure) - 2 && !obstacles.some((box) => meets(clear, box))) {
+      if (valid(clear)) {
         chosen = clear;
         break;
       }
     }
   }
   const cleared = shrinkClear(chosen, side);
-  return slot(cleared.x, cleared.y, Math.max(TARGET, cleared.w), chosen.h);
+  if (!valid(cleared)) return null;
+  return slot(cleared.x, cleared.y, cleared.w, chosen.h);
 }
 
 function placeNarrowDock(measure: ChromeMeasure, lane: Box | null, time: Slot): DockSlot {
@@ -188,7 +193,7 @@ function placeNarrowDock(measure: ChromeMeasure, lane: Box | null, time: Slot): 
   if (columnH >= TARGET && columnX >= minX - 0.5) {
     return { ...slot(columnX, columnTop, gutter, columnH), axis: 'column' };
   }
-  const y = bottomOf(time) + GAP;
+  const y = Math.max(bottomOf(time) + GAP, showBottom(measure));
   const draft = shrinkClear(
     { x: minX, y, w: measure.viewport.w - measure.insets.right - RIGHT_MARGIN - minX, h: gutter },
     [measure.hide, measure.legendButton, measure.footer, measure.shotList, measure.zoom, measure.compass, ...(measure.pip ? [measure.pip] : [])].filter(present),
@@ -226,6 +231,12 @@ function placeNarrowLegend(measure: ChromeMeasure, lane: Box | null, time: Slot,
   if (bandH >= minimum) {
     const above = legendSlot(measure, lane, bandTop, bandH, clearOfDock(bandTop, bandH, buttonRight));
     if (above) return above;
+  }
+  const afterCorners = Math.max(naturalTop, ...[measure.hide, measure.legendButton].filter(present).map((box) => bottomOf(box) + GAP));
+  const beforeTime = time.y - GAP - afterCorners;
+  if (beforeTime >= minimum) {
+    const between = legendSlot(measure, lane, afterCorners, beforeTime, clearOfDock(afterCorners, beforeTime, buttonRight));
+    if (between) return between;
   }
   const controlTop = nearestTop([measure.legendButton, measure.hide], floorY(measure));
   const belowTop = Math.max(bottomOf(time), bottomOf(dock)) + GAP;
@@ -428,6 +439,17 @@ export function solveChromeSlots(measure: ChromeMeasure): ChromeSlots {
     return withPanels(effective, lane, { time, dock: placeWideDock(effective, lane, legend), legend });
   }
   const time = placeNarrowTime(measure, lane);
-  const dock = placeNarrowDock(measure, lane, time);
-  return withPanels(measure, lane, { time, dock, legend: placeNarrowLegend(measure, lane, time, dock) });
+  if (!time) return withPanels(measure, lane, { time: null, dock: null, legend: null });
+  let dock = placeNarrowDock(measure, lane, time);
+  let legend = placeNarrowLegend(measure, lane, time, dock);
+  if (!legend && measure.legendOpen && dock.axis === 'row') {
+    const dockWidth = cross(measure.scrollbar);
+    const panel = slot(dock.x + dockWidth + GAP, dock.y, dock.w - dockWidth - GAP, dock.h);
+    const obstacles = [measure.show, ...measure.showButtons, measure.zoom, measure.compass, time, measure.hide, measure.legendButton, measure.footer, measure.shotList].filter(present);
+    if (panel.w >= TARGET * 2 && panel.h >= TARGET && !obstacles.some((box) => meets(panel, box))) {
+      dock = { ...dock, w: dockWidth };
+      legend = panel;
+    }
+  }
+  return withPanels(measure, lane, { time, dock, legend });
 }

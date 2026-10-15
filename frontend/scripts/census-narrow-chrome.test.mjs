@@ -15,3 +15,15 @@ test('rejects scroll writes, increments, and scrolling methods', () => {
 test('still rejects a second narrow chrome positioner', () => {
   assert.equal(narrowPlacementViolations('@media (max-width: 719px) { .map-control-dock { left: 0; } }').length, 1);
 });
+
+test('permits the banner copy to scroll inside its measured footer', () => {
+  assert.deepEqual(narrowPlacementViolations('@media (max-width: 719px) { #status-banner .banner-copy { min-width: 0; max-height: 44px; overflow-y: auto; } }'), []);
+});
+
+test('still rejects placement of the footer and its copy', () => {
+  for (const selector of ['#status-banner', '#status-banner .banner-copy', '#status-banner .banner-copy, .map-control-dock']) {
+    assert.equal(narrowPlacementViolations(`@media (max-width: 719px) { ${selector} { left: 0; } }`).length, 1);
+  }
+  assert.equal(narrowPlacementViolations('@media (max-width: 719px) { #status-banner { max-height: 44px; } }').length, 1);
+  assert.equal(narrowPlacementViolations('@media (max-width: 719px) { .map-control-dock, #status-banner .banner-copy { max-height: 44px; } }').length, 1);
+});
