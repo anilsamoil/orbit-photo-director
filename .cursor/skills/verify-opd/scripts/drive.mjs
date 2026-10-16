@@ -7,7 +7,7 @@ import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
@@ -150,16 +150,7 @@ function selectedSurfaceNames() {
 }
 
 function viewportOverride() {
-  const raw = (process.env.OPD_VERIFY_VIEWPORT || '').trim();
-  if (!raw) return null;
-  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim();
-  const match = /^(\d+)x(\d+)$/.exec(raw);
-  if (!match) throw new Error(`OPD_VERIFY_VIEWPORT must be WIDTHxHEIGHT, got ${raw}`);
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (surface === 'iphone-17-pro') return { width, height, raw };
-  if (surface === 'iphone-13' && width === 844 && height === 390) return { width, height, raw };
-  throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro, or iphone-13 with 844x390.');
+  return parseViewportOverride((process.env.OPD_VERIFY_SURFACE || '').trim(), process.env.OPD_VERIFY_VIEWPORT || '');
 }
 
 function specForSurface(spec) {
@@ -999,11 +990,16 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
             actions: !!document.querySelector('#status-banner .banner-actions'),
           };
         })()`);
-        lines.push(`${frame.name} panel ${cornerRound(sample?.panel?.left)},${cornerRound(sample?.panel?.top)} ${cornerRound(sample?.panel?.width)}x${cornerRound(sample?.panel?.height)} clip-above ${cornerRound(sample?.clipAbovePane)} pip ${cornerRound(sample?.pip?.top)}-${cornerRound(sample?.pip?.bottom)} overlap ${sample?.overlapPip === true}`);
         const clips = [sample?.clipAbovePane, sample?.clipBelowPane, sample?.clipAboveViewport, sample?.clipBelowViewport];
         const warning = /LIVE now|feed unavailable/.test(sample?.text || '');
+        lines.push(`${frame.name} panel ${cornerRound(sample?.panel?.left)},${cornerRound(sample?.panel?.top)} ${cornerRound(sample?.panel?.width)}x${cornerRound(sample?.panel?.height)} clip-above ${cornerRound(sample?.clipAbovePane)} pip ${cornerRound(sample?.pip?.top)}-${cornerRound(sample?.pip?.bottom)} overlap ${sample?.overlapPip === true} warning ${warning} insideX ${sample?.insideX === true}`);
         if (!warning || clips.some((value) => value == null || value > 0.5) || !sample?.insideX) {
-          failures.push(`${frame.name} panel clipped above-pane ${cornerRound(sample?.clipAbovePane)} below-pane ${cornerRound(sample?.clipBelowPane)} above-view ${cornerRound(sample?.clipAboveViewport)} below-view ${cornerRound(sample?.clipBelowViewport)}`);
+          const why = [
+            warning ? '' : 'warning-text',
+            clips.some((value) => value == null || value > 0.5) ? 'clip' : '',
+            sample?.insideX ? '' : 'insideX',
+          ].filter(Boolean).join('+') || 'panel';
+          failures.push(`${frame.name} ${why} above-pane ${cornerRound(sample?.clipAbovePane)} below-pane ${cornerRound(sample?.clipBelowPane)} above-view ${cornerRound(sample?.clipAboveViewport)} below-view ${cornerRound(sample?.clipBelowViewport)}`);
         }
         if (frame.banner && !sample?.actions) failures.push(`${frame.name} banner actions missing during the rect read`);
         if (frame.pip && !sample?.pipShown) failures.push(`${frame.name} horizon inset missing`);
