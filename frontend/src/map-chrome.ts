@@ -184,6 +184,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
 
 let lastSlots = '';
 let mute = false;
+let syncing = false;
 let syncQueued = false;
 
 function writeSlot(name: string, value: number): void {
@@ -253,18 +254,29 @@ function syncFooterClearance(pane: HTMLElement): void {
     const next = `${Math.round(value * 100) / 100}px`;
     if (document.body.style.getPropertyValue(name) !== next) document.body.style.setProperty(name, next);
   };
+  const banner = document.getElementById('status-banner');
+  const toggle = document.getElementById('map-chrome-toggle');
+  const toggleBox = boxOf(toggle);
+  if (toggleBox.h && toggle) {
+    const used = Number.parseFloat(getComputedStyle(toggle).bottom) || 0;
+    if (Math.abs(toggleBox.y + toggleBox.h - (window.innerHeight - used)) > 1) {
+      scheduleSync();
+      return;
+    }
+  }
   const bottomInset = insetPx('bottom');
   const shotList = document.body.classList.contains('shotlist-bar-visible')
     ? boxOf(document.getElementById('shotlist-bar')) : emptyBox();
   set('--map-banner-bottom', Math.max(bottomInset, shotList.h));
-  const footer = boxOf(document.getElementById('status-banner'));
+  const footer = boxOf(banner);
   const floor = Math.min(footer.h ? footer.y : window.innerHeight - bottomInset, shotList.h ? shotList.y : window.innerHeight);
-  const clearance = (name: string, node: Element | null): number => {
-    set(name, 0);
+  const applied = (name: string): number => Number.parseFloat(document.body.style.getPropertyValue(name)) || 0;
+  const demand = (name: string, node: Element | null): number => {
     const box = boxOf(node);
-    return box.h ? Math.ceil(Math.max(0, box.y + box.h - floor + 8)) : 0;
+    if (!box.h) return 0;
+    return Math.ceil(Math.max(0, box.y + box.h + applied(name) - floor + 8));
   };
-  set('--map-corner-lift', clearance('--map-corner-lift', document.getElementById('map-chrome-toggle')));
+  set('--map-corner-lift', demand('--map-corner-lift', toggle));
   const chip = boxOf(pane.querySelector('.map-controls-time'));
   const zoom = boxOf(pane.querySelector('.maplibregl-ctrl-zoom-in'));
   const naturalOverflow = !document.body.classList.contains('map-slot-time')
@@ -275,11 +287,24 @@ function syncFooterClearance(pane: HTMLElement): void {
     set('--map-time-lift', 0);
     return;
   }
-  set('--map-time-lift', clearance('--map-time-lift', pane.querySelector('.map-command')));
+  set('--map-time-lift', demand('--map-time-lift', pane.querySelector('.map-command')));
 }
 
 function syncMapChrome(): void {
   if (mute) return;
+  if (syncing) {
+    scheduleSync();
+    return;
+  }
+  syncing = true;
+  try {
+    syncMapChromeBody();
+  } finally {
+    syncing = false;
+  }
+}
+
+function syncMapChromeBody(): void {
   const view = document.querySelector('.view-map');
   const pane = document.getElementById('map-pane');
   if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
@@ -365,8 +390,8 @@ export function bindMapChrome(): void {
       watchMap.observe(controls, { childList: true, subtree: true });
     }
   }
-  window.addEventListener('resize', scheduleSync);
-  window.visualViewport?.addEventListener('resize', scheduleSync);
+  window.addEventListener('resize', syncMapChrome);
+  window.visualViewport?.addEventListener('resize', syncMapChrome);
   (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChrome;
   syncMapChrome();
 }

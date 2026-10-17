@@ -193,10 +193,9 @@ for (const engine of [
       await holdTallBanner(page);
       await showChrome(page);
       const raised = await hideBox(page);
-      expect(raised.lift.endsWith('px')).toBe(true);
-      expect(Number.parseFloat(raised.lift)).toBeGreaterThan(0);
       const banner = await page.locator('#status-banner').boundingBox();
       expect(banner!.height).toBeGreaterThan(30);
+      expect(raised.bottom).toBeLessThanOrEqual(banner!.y - 7);
       await page.clock.fastForward(3000);
       await frames(page);
       expect(await hideBox(page)).toEqual(raised);
@@ -211,17 +210,25 @@ for (const engine of [
     try {
       await showChrome(page);
       await page.evaluate(() => {
-        document.getElementById('status-banner')!.textContent = 'Last updated 4 min ago · TLE 499h old — live track may drift';
+        const element = document.getElementById('status-banner')!;
+        const text = 'Last updated 4 min ago · TLE 499h old — live track may drift';
+        const apply = () => { if (element.textContent !== text) element.textContent = text; };
+        apply();
+        new MutationObserver(apply).observe(element, { childList: true, subtree: true, characterData: true });
       });
       await frames(page);
       await page.setViewportSize({ width: 932, height: 430 });
       await frames(page);
+      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       await page.setViewportSize({ width: 402, height: 874 });
+      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       const immediate = await hideBox(page);
       await frames(page);
       const settled = await hideBox(page);
-      const place = ({ lift, top, bottom }: HideBox) => ({ lift, top, bottom });
-      expect(Number.parseFloat(settled.lift)).toBeGreaterThan(0);
+      const place = ({ top, bottom }: HideBox) => ({ top, bottom });
+      const banner = await page.locator('#status-banner').boundingBox();
+      expect(banner!.height).toBeGreaterThan(30);
+      expect(immediate.bottom).toBeLessThanOrEqual(banner!.y - 7);
       expect(place(immediate)).toEqual(place(settled));
       await page.locator('#map-chrome-toggle').click();
       await frames(page);
@@ -272,7 +279,13 @@ for (const engine of [
       expect(after.writes).toBe(0);
       await page.mouse.click(scrolled!.x, scrolled!.y);
       await frames(page);
-      await expect(page.locator('#satellite-picker-panel')).toBeVisible();
+      const open = await page.evaluate(() => {
+        const panel = document.getElementById('satellite-picker-panel');
+        if (!panel || panel.hidden) return false;
+        const rect = panel.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      expect(open).toBe(true);
     } finally {
       await context.close();
     }
