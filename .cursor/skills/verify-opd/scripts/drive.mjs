@@ -7,11 +7,11 @@ import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { desktopViewport, deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
-const DESKTOP = { width: 1400, height: 900, mobile: false };
+const DESKTOP = desktopViewport((process.env.OPD_VERIFY_SURFACE || '').trim(), process.env.OPD_VERIFY_VIEWPORT || '');
 const ISS_LENS_FOV_DEG = 81.2;
 const SCENE_SCROLLS = 'scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth';
 const ISS_CLOCK_EXPR = `(() => {

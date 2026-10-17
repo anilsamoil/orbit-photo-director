@@ -6,10 +6,41 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
 const { devices, webkit } = require('playwright');
 
-export const IPAD_M4_VIEWPORTS = [
-  { width: 834, height: 1210 },
-  { width: 1210, height: 834 },
-];
+export const VIEWPORT_ALLOWLIST = {
+  desktop: [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 800 },
+  ],
+  'iphone-13': [
+    { width: 844, height: 390 },
+  ],
+  'ipad-pro-11': [
+    { width: 834, height: 1210 },
+    { width: 1210, height: 834 },
+  ],
+};
+
+export const IPAD_M4_VIEWPORTS = VIEWPORT_ALLOWLIST['ipad-pro-11'];
+
+function viewportToken(entry) {
+  return `${entry.width}x${entry.height}`;
+}
+
+function viewportOverrideHelp() {
+  const desktop = VIEWPORT_ALLOWLIST.desktop.map(viewportToken).join(' or ');
+  const phone = VIEWPORT_ALLOWLIST['iphone-13'].map(viewportToken).join(' or ');
+  const ipad = VIEWPORT_ALLOWLIST['ipad-pro-11'].map(viewportToken).join(' or ');
+  return `OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=desktop with ${desktop}, iphone-17-pro, iphone-13 with ${phone}, or ipad-pro-11 with ${ipad}.`;
+}
+
+export function desktopViewport(surface, raw) {
+  const override = surface === 'desktop' ? parseViewportOverride('desktop', raw) : null;
+  return {
+    width: override?.width ?? 1400,
+    height: override?.height ?? 900,
+    mobile: false,
+  };
+}
 
 export function parseViewportOverride(surface, raw) {
   const text = String(raw || '').trim();
@@ -20,9 +51,9 @@ export function parseViewportOverride(surface, raw) {
   const height = Number(match[2]);
   const size = { width, height, raw: text };
   if (surface === 'iphone-17-pro') return size;
-  if (surface === 'iphone-13' && width === 844 && height === 390) return size;
-  if (surface === 'ipad-pro-11' && IPAD_M4_VIEWPORTS.some((entry) => entry.width === width && entry.height === height)) return size;
-  throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro, iphone-13 with 844x390, or ipad-pro-11 with 834x1210 or 1210x834.');
+  const allowed = VIEWPORT_ALLOWLIST[surface];
+  if (allowed?.some((entry) => entry.width === width && entry.height === height)) return size;
+  throw new Error(viewportOverrideHelp());
 }
 
 export const WEBKIT_DEVICES = [
