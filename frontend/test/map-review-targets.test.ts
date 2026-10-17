@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { chromium, webkit, type Browser, type Page } from 'playwright';
+import { chromium, webkit, type Page } from 'playwright';
 import { build } from 'vite';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { tleEpochMs } from '../src/iss-sgp4';
 import fixture from './fixtures/iss-sgp4-fixture.json';
 import { buildPassList } from '../src/map/overlays/pass-list';
@@ -127,13 +127,22 @@ async function evidence(page: Page, name: string, value: unknown) {
   await page.screenshot({ path: `${path}.png`, scale: 'css' });
 }
 
-async function prepare(browser: Browser, engine: string, target: Target) {
+const engines = [
+  { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
+  { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
+];
+
+async function prepare(engine: typeof engines[number], target: Target) {
   const { width, height, insets } = target;
-  const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: width < 1300, deviceScaleFactor: width < 900 ? 3 : 1 });
+  // Each case owns the complete browser process tree, including GPU resources.
+  // Match the established startup harness's default backend instead of forcing
+  // SwiftShader and retaining its GPU process across all sixteen map contexts.
+  const browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
   try {
+    const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: width < 1300, deviceScaleFactor: width < 900 ? 3 : 1 });
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
-    const cdp = engine === 'Chrome' ? await context.newCDPSession(page) : null;
+    const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
     if (cdp) await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
     else await emulateInsets(page, insets);
     await page.clock.setFixedTime(new Date(fixture.start));
@@ -216,20 +225,13 @@ async function prepare(browser: Browser, engine: string, target: Target) {
       probe.remove(); return values;
     });
     expect(applied).toEqual(insets);
-    return { page, context };
-  } catch (error) { await context.close(); throw error; }
+    return { page, browser };
+  } catch (error) { await browser.close(); throw error; }
 }
 
-for (const engine of [
-  { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
-  { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
-]) describe.skipIf(!existsSync(engine.executablePath))(`supported review regressions ${engine.name}`, () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath, ...(engine.name === 'Chrome' ? { args: ['--enable-webgl', '--ignore-gpu-blocklist', '--use-angle=swiftshader', '--disable-crashpad-for-testing'] } : {}) }); }, 30_000);
-  afterAll(async () => { await browser?.close(); }, 30_000);
-
+for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath))(`supported review regressions ${engine.name}`, () => {
   it.each(targets)('F1: picker has 44px effective native targets at $width×$height', async (target) => {
-    const { page, context } = await prepare(browser, engine.name, target);
+    const { page, browser } = await prepare(engine, target);
     try {
       await click(page, '#map-legend-toggle');
       await click(page, '#toggle-satellite-picker');
@@ -256,11 +258,11 @@ for (const engine of [
       expect(await page.locator('#satellite-picker-input').inputValue()).toBe('');
       const events = await page.evaluate(() => (window as unknown as { __reviewEvents: unknown[] }).__reviewEvents);
       await evidence(page, `${engine.name}-F1-${target.width}x${target.height}`, { target, measured, events });
-    } finally { await context.close(); }
+    } finally { await browser.close(); }
   }, 60_000);
 
   it.each(targets)('F2: schema-2 fallback title opens details with a 44px native target at $width×$height', async (target) => {
-    const { page, context } = await prepare(browser, engine.name, target);
+    const { page, browser } = await prepare(engine, target);
     try {
       await click(page, '#filter-launches-map');
       await page.waitForSelector('.map-launch-brief summary');
@@ -273,14 +275,14 @@ for (const engine of [
       expect(await page.locator('#launch-details-title').textContent()).toBe('LAUNCH / ASCENT: Verify Ascent');
       const events = await page.evaluate(() => (window as unknown as { __reviewEvents: unknown[] }).__reviewEvents);
       await evidence(page, `${engine.name}-F2-${target.width}x${target.height}`, { target, title, events });
-    } finally { await context.close(); }
+    } finally { await browser.close(); }
   }, 60_000);
 
   it.each([false, true].flatMap((legend) => [
     { legend, shown: true, target: { width: 874, height: 402, insets: { top: 0, right: 62, bottom: 21, left: 62 } } },
     { legend, shown: false, target: { width: 402, height: 874, insets: { top: 62, right: 0, bottom: 34, left: 0 } } },
   ]))('F3: long pass fixture clears Close and fits first row at $target.width×$target.height, Controls=$shown, Legend=$legend', async ({ legend, shown, target }) => {
-    const { page, context } = await prepare(browser, engine.name, target);
+    const { page, browser } = await prepare(engine, target);
     try {
       if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') await click(page, '#toggle-follow-iss');
       await click(page, '#bearing-north');
@@ -338,6 +340,6 @@ for (const engine of [
       expect.soft(measured.events.some((event) => event.type === 'contextmenu' && event.target === 'maplibregl-canvas')).toBe(true);
       await click(page, '#map-inspector .maplibregl-popup-close-button');
       expect(await page.locator('.dropped-pin-popup').count()).toBe(0);
-    } finally { await context.close(); }
+    } finally { await browser.close(); }
   }, 60_000);
 });
