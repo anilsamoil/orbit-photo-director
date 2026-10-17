@@ -21,11 +21,11 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const origin = 'http://repin.test';
 type Insets = { top: number; right: number; bottom: number; left: number };
 const samples = [
-  { name: 'short zero center', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: 0, width: 568, height: 320 },
-  { name: 'zero center', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: 0 },
-  { name: 'zero center+91', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: 91 },
-  { name: 'zero center-91', insets: { top: 0, right: 0, bottom: 0, left: 0 }, offset: -91 },
-  { name: 'B34 center+5', insets: { top: 24, right: 0, bottom: 34, left: 47 }, offset: 5 },
+  { name: 'iPhone portrait center', insets: { top: 62, right: 0, bottom: 34, left: 0 }, offset: 0, width: 402, height: 874 },
+  { name: 'iPhone landscape center', insets: { top: 0, right: 62, bottom: 21, left: 62 }, offset: 0, width: 874, height: 402 },
+  { name: 'iPhone landscape center+91', insets: { top: 0, right: 62, bottom: 21, left: 62 }, offset: 91, width: 874, height: 402 },
+  { name: 'iPhone landscape center-91', insets: { top: 0, right: 62, bottom: 21, left: 62 }, offset: -91, width: 874, height: 402 },
+  { name: 'iPad landscape center+5', insets: { top: 24, right: 0, bottom: 20, left: 0 }, offset: 5, width: 1210, height: 834 },
 ];
 
 async function emulateInsets(page: Page, insets: Insets): Promise<void> {
@@ -66,7 +66,7 @@ for (const engine of [
   }, 60_000);
   afterAll(async () => { await browser?.close(); }, 30_000);
 
-  it.each(samples)('keeps $name on the canvas with an open inspector and unchanged time', async ({ name, insets, offset, width = 719, height = 521 }) => {
+  it.each(samples)('keeps $name on the canvas with an open inspector and unchanged time', async ({ name, insets, offset, width, height }) => {
     const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
     try {
       const page = await context.newPage();
@@ -91,7 +91,9 @@ for (const engine of [
         return route.abort();
       });
       await page.goto(`${origin}/?e2e&u=repin`, { waitUntil: 'domcontentloaded' });
-      await page.locator('#tab-map').click();
+      // Observe the initial Map load without starting a second concurrent render.
+      await page.waitForFunction(() => document.querySelector('#view')?.className === 'view-map'
+        && document.querySelector('#tab-map')?.classList.contains('active'));
       await page.waitForFunction(() => {
         const map = (window as unknown as { __opdMap?: import('maplibre-gl').Map }).__opdMap;
         return map?.isStyleLoaded() && !!map.getSource('iss-track');
@@ -140,17 +142,29 @@ for (const engine of [
         (window as unknown as { __repinEvents: typeof events }).__repinEvents = events;
         for (const type of ['touchstart', 'contextmenu']) document.addEventListener(type, (event) => events.push({ trusted: event.isTrusted, target: (event.target as HTMLElement).className, type }), true);
       });
+      const waitForPin = () => page.evaluate(async (expected) => {
+        const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
+        const source = map.getSource('dropped-pin') as import('maplibre-gl').GeoJSONSource;
+        const deadline = performance.now() + 5_000;
+        do {
+          const data = await source.getData();
+          if (data.type === 'FeatureCollection' && data.features[0]?.geometry.type === 'Point'
+            && data.features[0].geometry.coordinates.every((value, index) => value === expected[index])) return;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        } while (performance.now() < deadline);
+        throw new Error(`Native hold did not update the pin to ${expected}`);
+      }, before.expected);
       if (cdp) {
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: before.point.x, y: before.point.y, radiusX: 2, radiusY: 2, force: 1 }] });
-        await page.waitForTimeout(650);
-        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        try { await waitForPin(); }
+        finally { await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); }
       } else {
         await page.mouse.move(before.point.x, before.point.y);
         await page.mouse.down({ button: 'right' });
         await page.waitForTimeout(650);
         await page.mouse.up({ button: 'right' });
       }
-      await page.waitForTimeout(200);
+      await waitForPin();
       const after = await page.evaluate(async () => {
         const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
         const source = map.getSource('dropped-pin') as import('maplibre-gl').GeoJSONSource;
