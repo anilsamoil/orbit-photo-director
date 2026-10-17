@@ -11,7 +11,9 @@ import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, 
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
-const DESKTOP = { width: 1400, height: 900, mobile: false };
+const FIXED_SURFACE = process.env.OPD_VERIFY_FIXED_SURFACE === '1';
+const desktopOverride = process.env.OPD_VERIFY_SURFACE === 'desktop' ? parseViewportOverride('desktop', process.env.OPD_VERIFY_VIEWPORT || '') : null;
+const DESKTOP = { width: desktopOverride?.width ?? 1400, height: desktopOverride?.height ?? 900, mobile: false };
 const ISS_LENS_FOV_DEG = 81.2;
 const SCENE_SCROLLS = 'scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth';
 const ISS_CLOCK_EXPR = `(() => {
@@ -331,6 +333,7 @@ async function mouseClick(send, x, y, button = 'left') {
 }
 
 async function setViewport(send, width, height, mobile) {
+  if (FIXED_SURFACE) throw new Error(`fixed-surface drive attempted resize to ${width}x${height}`);
   await send('Emulation.setDeviceMetricsOverride', {
     width,
     height,
@@ -466,7 +469,8 @@ async function waitServerRemoved(baseUrl, includes, excludes) {
 }
 
 async function freshProfile(baseUrl, home, run) {
-  const debugPort = 19000 + Math.floor(Math.random() * 1000);
+  const debugPort = Number(process.env.OPD_VERIFY_GUEST_CDP_PORT || 19000 + Math.floor(Math.random() * 1000));
+  if (debugPort === Number(process.env.OPD_VERIFY_CDP_PORT)) throw new Error('guest and primary Chrome debugging ports must differ');
   const profile = resolve(home, `chrome-guest-${debugPort}`);
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
@@ -708,7 +712,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
 
 async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
   slideLaunch(home);
-  const debugPort = 9300 + Math.floor(Math.random() * 500);
+  const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
   try {
@@ -838,7 +842,7 @@ const CORNER_BOX = `
 export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
   mkdirSync(evidenceDir, { recursive: true });
   slideLaunch(home);
-  const debugPort = 9300 + Math.floor(Math.random() * 500);
+  const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
   const lines = [];
@@ -1529,11 +1533,13 @@ async function proveMapChromeMemory(send) {
   await waitChromeChoice(send, true);
   await reloadSettled(send);
   await waitChromeChoice(send, true);
+  if (FIXED_SURFACE) await click(send, '#tab-map');
   await waitMapLayer(send);
   await click(send, '#map-chrome-toggle');
   await waitChromeChoice(send, false);
   await reloadSettled(send);
   await waitChromeChoice(send, false);
+  if (FIXED_SURFACE) await click(send, '#tab-map');
   await showMapChrome(send);
   await waitMapLayer(send);
 }
@@ -2038,7 +2044,7 @@ async function proveMapLaidOnPane(send) {
   const geometry = laid && (!laid.fitting || (
     Math.abs(laid.stripHeight - 96) <= 2
     && Math.abs(laid.rightGap - 204) <= 2
-    && Math.abs(laid.slider - 32) <= 1
+    && laid.slider >= 44
   ));
   const narrowOk = laid && (!laid.narrow || (
     laid.reserved
@@ -3015,7 +3021,7 @@ async function proveLegendWarning(send, evidenceDir) {
 }
 
 async function proveStaleReadoutClearsSkip(send, viewport) {
-  const sizes = [
+  const sizes = FIXED_SURFACE ? [[viewport.width, viewport.height]] : [
     [834, 1194],
     [800, 600],
   ];
@@ -3051,7 +3057,7 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
     const short = buttons.filter((button) => button.width < 44 || button.height < 44);
     const overflow = el.scrollWidth - el.clientWidth;
     const inkRight = readout.left + el.scrollWidth;
-    if (el.textContent !== text || overflow > 1 || inkRight > skip.left + 1 || short.length) {
+    if (el.textContent !== text || overflow > 1 || (readout.bottom > skip.top + 0.5 && readout.top < skip.bottom - 0.5 && inkRight > skip.left + 1) || short.length) {
       return {
         pending: true,
         text: el.textContent,
@@ -3067,11 +3073,11 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   })()`;
   try {
     for (const [width, height] of sizes) {
-      await setViewport(send, width, height, width < 900);
+      if (!FIXED_SURFACE) await setViewport(send, width, height, width < 900);
       await waitFor(send, expression, `stale readout clear of T-90 at ${width}x${height}`, 8000);
     }
   } finally {
-    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    if (!FIXED_SURFACE) await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
   await evaluate(send, `(() => {
     const el = document.getElementById('time-slider-readout');
@@ -3800,6 +3806,85 @@ async function provePipSurvivesNarrowResize(send, viewport) {
   await setViewport(send, viewport.width, viewport.height, viewport.mobile);
 }
 
+async function proveFixedMapPip(send, evidenceDir, viewport) {
+  if (!insetViewportFits(viewport.width, viewport.height)) {
+    await waitFor(send, pipAbsentExpression('horizon'), 'fixed horizon inset absent', 10000);
+    await shot(send, evidenceDir, 'pip-map-absent');
+    return `absent ${viewport.width}x${viewport.height}`;
+  }
+  const ready = await waitForPip(send, 'horizon', 'fixed horizon inset');
+  await openMapLegend(send);
+  await waitFor(send, pipClearExpression('horizon', PIP_MAP_OBSTACLES), 'fixed horizon inset clear', 10000);
+  await waitFor(send, legendCentersMissInset(), 'fixed horizon legend centers', 10000);
+  await shot(send, evidenceDir, 'pip-map');
+  await closeMapLegend(send);
+  return `present ${ready.width}x${ready.height} clear ${viewport.width}x${viewport.height}`;
+}
+
+async function proveFixedMapChrome(send, evidenceDir, viewport) {
+  const expression = `(() => {
+    const visible = (el) => el && !el.hidden && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
+    const box = (el) => { const r = el.getBoundingClientRect(); return { left:r.left, top:r.top, right:r.right, bottom:r.bottom, width:r.width, height:r.height }; };
+    const overlap = (a,b) => Math.min(a.right,b.right)-Math.max(a.left,b.left)>0.5 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>0.5;
+    const groups = ['.maplibregl-ctrl-top-left','.map-toolbar','.map-controls-time','.map-control-dock','#map-chrome-toggle','#map-legend-toggle','#map-legend-panel','[data-pip="horizon"]','#status-banner','#shotlist-bar'];
+    const nodes=groups.map(sel=>({sel,el:document.querySelector(sel)})).filter(({el})=>visible(el)).map(({sel,el})=>({sel,el,rect:box(el)}));
+    const intersections=[];
+    for(let a=0;a<nodes.length;a++)for(let b=a+1;b<nodes.length;b++)if(!nodes[a].el.contains(nodes[b].el)&&!nodes[b].el.contains(nodes[a].el)&&overlap(nodes[a].rect,nodes[b].rect))intersections.push([nodes[a].sel,nodes[b].sel]);
+    const outside=nodes.filter(({rect:r})=>r.left<-.5||r.top<-.5||r.right>innerWidth+.5||r.bottom>innerHeight+.5).map(({sel,rect})=>({sel,rect}));
+    const selectors=['.maplibregl-ctrl-zoom-in','.maplibregl-ctrl-zoom-out','.maplibregl-ctrl-compass','#filter-all-map','#filter-mine-map','#filter-launches-map','#map-chrome-toggle','#map-legend-toggle','#time-slider','#time-back-90','#time-back-45','#time-now','#time-fwd-45','#time-fwd-90','.shotlist-add','.shotlist-clear'];
+    const misses=[];
+    for(const sel of selectors){
+      if(sel.startsWith('.shotlist-')&&!document.body.classList.contains('shotlist-bar-visible'))continue;
+      const el=document.querySelector(sel);
+      if(!visible(el)){misses.push({sel,reason:'missing'});continue;}
+      const r=box(el),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+      if(r.width<44||r.height<44)misses.push({sel,reason:'target below 44px',rect:r});
+      if(!(hit===el||el.contains(hit)))misses.push({sel,hit:hit?.id||hit?.className||null,rect:r});
+    }
+    const t90=document.getElementById('time-fwd-90');const t=visible(t90)?box(t90):null;
+    const panel=document.getElementById('map-legend-panel');
+    const legend=visible(panel)?{rect:box(panel),clientHeight:panel.clientHeight,scrollHeight:panel.scrollHeight,overflow:getComputedStyle(panel).overflowY}:null;
+    const legendBad=legend&&(legend.clientHeight<44||(legend.scrollHeight>legend.clientHeight+1&&!['auto','scroll'].includes(legend.overflow)));
+    const ok=!intersections.length&&!outside.length&&!misses.length&&!legendBad&&t&&t.left>=0&&t.top>=0&&t.right<=innerWidth+.5&&t.bottom<=innerHeight+.5;
+    return {ok,intersections,outside,misses,legend,t90:t,groups:nodes.map(({sel,rect})=>({sel,rect}))};
+  })()`;
+  const snapshots=[];
+  for (const shotlist of [false,true]) {
+    if(shotlist){
+      await click(send,'#tab-queue');
+      await waitFor(send,`document.querySelector('.btn-remind') ? {ok:true} : null`,'fixed shot list reminder');
+      await click(send,'.btn-remind');
+      await waitFor(send,`document.body.classList.contains('shotlist-bar-visible') ? {ok:true} : null`,'fixed shot list open');
+      await click(send,'#tab-map');
+      await ensureMapChromeShown(send);
+    }
+    for(const legend of [false,true]){
+      if(legend)await openMapLegend(send);else await closeMapLegend(send);
+      await sleep(250);
+      const sample=await waitFor(send,expression,`fixed chrome ${viewport.width}x${viewport.height} shotlist=${shotlist} legend=${legend}`,5000);
+      snapshots.push({shotlist,legend,...sample});
+      await proveMapControlHits(send,`fixed shotlist=${shotlist} legend=${legend}`);
+      const dockIds=await evaluate(send,`[...document.querySelectorAll('.map-control-dock button')].filter(el=>!el.hidden&&getComputedStyle(el).display!=='none').map(el=>el.id).filter(Boolean)`);
+      for(const id of dockIds){
+        await evaluate(send,`(() => {const el=document.getElementById(${JSON.stringify(id)});el.scrollIntoView({block:'nearest',inline:'nearest'});return true;})()`);
+        await sleep(40);
+        await assertControlCenters(send,`fixed dock ${id}`,['#'+id]);
+        const size=await evaluate(send,`(() => {const r=document.getElementById(${JSON.stringify(id)}).getBoundingClientRect();return {width:r.width,height:r.height};})()`);
+        if(size.width<44||size.height<44)throw new Error(`fixed dock ${id} below 44px ${JSON.stringify(size)}`);
+      }
+      await evaluate(send,`(() => {const dock=document.querySelector('.map-control-dock');dock.scrollTop=0;dock.scrollLeft=0;return true;})()`);
+      await shot(send,evidenceDir,`map-fixed-${shotlist?'shotlist':'closed'}-${legend?'legend':'tab'}`);
+    }
+    await closeMapLegend(send);
+    await hideMapChrome(send);
+    await assertControlCenters(send,'fixed hidden',shotlist?['#map-chrome-toggle','.shotlist-add','.shotlist-clear']:['#map-chrome-toggle']);
+    await showMapChrome(send);
+  }
+  await click(send,'.shotlist-clear');
+  await waitFor(send,`!document.body.classList.contains('shotlist-bar-visible') ? {ok:true} : null`,'fixed shot list cleared');
+  writeFileSync(resolve(evidenceDir,'map-fixed-chrome.json'),JSON.stringify(snapshots,null,2));
+}
+
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await click(send, '#tab-map');
   const ready = await waitFor(
@@ -3850,7 +3935,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
   let narrowLaid = laid.narrow ? laid : null;
-  if (!laid.narrow) {
+  if (!FIXED_SURFACE && !laid.narrow) {
     await setViewport(send, 390, 664, true);
     await sleep(200);
     try {
@@ -3860,6 +3945,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       await sleep(200);
     }
   }
+  let pip;
+  if (FIXED_SURFACE) {
+    await proveFixedMapChrome(send, evidenceDir, viewport);
+    pip = await proveFixedMapPip(send, evidenceDir, viewport);
+  } else {
   await proveMapControlHits(send, 'shot list closed');
   await proveShortTimeRow(send, viewport);
   await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
@@ -3880,8 +3970,9 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await proveRaisedStripClearsToolbar(send, viewport);
   await proveTightChromeReflow(send, viewport);
   await provePipSurvivesNarrowResize(send, viewport);
-  const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
+  pip = await provePipSurface(send, evidenceDir, viewport, 'map');
   await proveLegendMissesRaisedPip(send, viewport);
+  }
   let chrome = '';
   if (insetViewportFits(viewport.width, viewport.height)) {
     await click(send, '#map-chrome-toggle');
@@ -3928,7 +4019,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   }
   await sleep(1200);
   await shot(send, evidenceDir, 'map-globe');
-  await proveLegendDisclosure(send, evidenceDir, viewport);
+  await proveLegendDisclosure(send, evidenceDir, viewport, FIXED_SURFACE ? 'fixed' : '');
   await dismissShotlist(send);
   await assertMapInfoControlsGone(send);
   await assertChromeToggleStationary(send);
@@ -4135,7 +4226,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
   const narrowNote = narrowLaid && narrowLaid.reserved ? ` narrow command ${Math.round(narrowLaid.reserved.height)}px` : '';
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, Esri dark maxzoom ${ready.maxzoom}, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px${narrowNote}, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop ${pinNote}, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, Esri dark maxzoom ${ready.maxzoom}, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px${narrowNote}, stale readout clear ${FIXED_SURFACE ? `${viewport.width}x${viewport.height}` : '834x1194 800x600'}, control hits, time skip on screen, tool rail, picker, target popup, pin drop ${pinNote}, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {
@@ -4331,7 +4422,7 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
   );
   await ensureMapChromeShown(send);
   await shot(send, evidenceDir, name('profile-legend-anil'));
-  if (!shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
+  if (!FIXED_SURFACE && !shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
     await setViewport(send, 874, 402, true);
     await proveProfileMenuRoundTrip(send, evidenceDir, { width: 874, height: 402, mobile: true }, 'land');
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);

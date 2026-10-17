@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { solveChromeSlots, type Box, type ChromeMeasure, type Slot } from '../src/chrome-slots';
+import { needsZoomRow, solveChromeSlots, type Box, type ChromeMeasure, type Slot } from '../src/chrome-slots';
 
 const empty: Box = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -44,6 +44,19 @@ function meets(a: Slot | Box, b: Slot | Box): boolean {
 }
 
 describe('chrome slots', () => {
+  it('keeps the landscape zoom column when all three targets clear the raised footer', () => {
+    const zoom: Box = { x: 70, y: 110, w: 44, h: 88 };
+    const time: Box = { x: 281.40625, y: 57, w: 448.4375, h: 44 };
+    expect(needsZoomRow(zoom, time, 244.84375)).toBe(false);
+    expect(needsZoomRow(zoom, time, 243)).toBe(true);
+  });
+
+  it('retains the full zoom-to-time separation even when the footer is lower', () => {
+    const zoom: Box = { x: 70, y: 110, w: 44, h: 88 };
+    expect(needsZoomRow(zoom, { x: 122, y: 249, w: 400, h: 44 }, 381)).toBe(true);
+    expect(needsZoomRow(zoom, { x: 122, y: 250, w: 400, h: 44 }, 381)).toBe(false);
+  });
+
   it('returns the same slots for the same painted boxes', () => {
     const input = measure({
       viewport: { w: 430, h: 400 },
