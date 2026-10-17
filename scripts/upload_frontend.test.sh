@@ -121,4 +121,51 @@ if [ "$last" != "$expected" ]; then
 fi
 assert_present "assets/app.js"
 
+run_unreadable() {
+  local work keys
+  work=$(mktemp -d)
+  keys="$work/keys"
+  : > "$keys"
+  make_dist "$work/dist"
+  mkdir -p "$work/dist/sealed"
+  printf 'hidden' > "$work/dist/sealed/note"
+  chmod 000 "$work/dist/sealed"
+  cat > "$work/wrangler" <<'EOF'
+#!/bin/sh
+key=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "put" ]; then
+    key=$arg
+  fi
+  prev=$arg
+done
+printf '%s\n' "$key" >> "$WRANGLER_KEYS"
+exit 0
+EOF
+  chmod +x "$work/wrangler"
+  set +e
+  PATH="$work:$PATH" \
+    WRANGLER_KEYS="$keys" \
+    OPD_R2_BUCKET="test-bucket" \
+    "$SCRIPT" "$work/dist" >"$work/out" 2>"$work/err"
+  local code=$?
+  set -e
+  chmod 700 "$work/dist/sealed"
+  CASE_CODE=$code
+  CASE_KEYS=$(cat "$keys")
+  rm -rf "$work"
+  echo "== unreadable subdir exit $CASE_CODE"
+}
+
+run_unreadable
+if [ "$CASE_CODE" -eq 0 ]; then
+  echo "FAIL: unreadable subdir exited 0" >&2
+  printf '%s\n' "$CASE_KEYS" >&2
+  exit 1
+fi
+for shell_name in manifest.webmanifest sw-shell.js registerSW.js index.html sw.js; do
+  assert_absent "$shell_name"
+done
+
 echo "upload_frontend.test.sh passed"
