@@ -46,6 +46,7 @@ assert_arg() {
   fi
 }
 
+unset ACCESS_SERVICE_TOKEN_CLIENT_IDS
 run_deploy
 if [ "$CASE_CODE" -ne 0 ]; then
   echo "FAIL: unset deploy exited $CASE_CODE" >&2
