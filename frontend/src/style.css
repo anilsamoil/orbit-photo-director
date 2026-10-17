@@ -1156,7 +1156,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 
 /* The map fills the pane. Controls float on it. */
 .view-map {
-  --map-hide-right: 12px;
+  --map-hide-right: calc(12px + env(safe-area-inset-right, 0px));
   --map-hide-width: 88px;
   --map-legend-width: 88px;
   --map-corner-gap: 8px;
@@ -1286,7 +1286,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map .map-control-dock {
   position: absolute;
   top: calc(var(--topbar-height) + 5px);
-  right: 8px;
+  right: calc(8px + env(safe-area-inset-right, 0px));
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -1297,6 +1297,12 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   max-width: 76px;
   max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   overflow-y: auto;
+  scrollbar-width: none;
+}
+.view-map .map-control-dock::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
   max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
@@ -5275,7 +5281,7 @@ body.map-slot-legend .view-map .map-legend-panel {
   }
 
   .view-map .map-command .time-slider {
-    height: 32px;
+    height: 44px;
   }
 
   .view-map .map-command .time-step-btn {
