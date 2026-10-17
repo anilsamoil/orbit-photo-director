@@ -43,3 +43,9 @@ test('an empty viewport override stays on the device descriptor', () => {
   assert.equal(parseViewportOverride('ipad-pro-11', '   '), null);
   assert.throws(() => parseViewportOverride('ipad-pro-11', '834'), /WIDTHxHEIGHT/);
 });
+
+test('desktop accepts the two target overrides, retaining non-mobile metrics', () => {
+  assert.deepEqual(parseViewportOverride('desktop', '1440x900'), { width: 1440, height: 900, raw: '1440x900' });
+  assert.deepEqual(parseViewportOverride('desktop', '1280x800'), { width: 1280, height: 800, raw: '1280x800' });
+  assert.throws(() => parseViewportOverride('desktop', '1280x700'));
+});

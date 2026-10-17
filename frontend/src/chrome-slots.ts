@@ -98,8 +98,8 @@ function cross(scrollbar: number): number {
 }
 
 export function needsZoomRow(zoom: Box, time: Box, floor: number): boolean {
-  const limit = time.h > 0 && time.y >= zoom.y ? Math.min(floor, time.y) : floor;
-  return zoom.h > 0 && zoom.y + TARGET * 3 + GAP > limit;
+  const limit = time.h > 0 && time.y >= zoom.y ? Math.min(floor - 2, time.y - GAP) : floor - 2;
+  return zoom.h > 0 && zoom.y + TARGET * 3 > limit;
 }
 
 function laneOf(zoom: Box, compass: Box): Box | null {

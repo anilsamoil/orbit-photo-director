@@ -19,6 +19,7 @@ export function parseViewportOverride(surface, raw) {
   const width = Number(match[1]);
   const height = Number(match[2]);
   const size = { width, height, raw: text };
+  if (surface === 'desktop' && ((width === 1440 && height === 900) || (width === 1280 && height === 800))) return size;
   if (surface === 'iphone-17-pro') return size;
   if (surface === 'iphone-13' && width === 844 && height === 390) return size;
   if (surface === 'ipad-pro-11' && IPAD_M4_VIEWPORTS.some((entry) => entry.width === width && entry.height === height)) return size;

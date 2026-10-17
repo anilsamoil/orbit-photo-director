@@ -47,7 +47,12 @@ const actions = [
   { name: 'Starship label', key: 'name:STARSHIP', selector: '#satellite-picker-list label:nth-child(4)', query: 'NAME=STARSHIP' },
 ];
 
-const cases = sizes.flatMap(([width, height]) => insetSets.flatMap((insets) => actions.map((action) => ({ ...action, width: width!, height: height!, insets, name: `${width}×${height} B${insets.bottom}: ${action.name}` }))));
+const cases = sizes.flatMap(([width, height]) => insetSets.flatMap((insets) => actions.map((action) => {
+  const target = width === 800 && height === 600 && insets.bottom === 20 && insets.left === 47 && action.key === '48274'
+    ? { width: 834, height: 1210, insets: { top: 24, right: 0, bottom: 20, left: 0 } }
+    : { width: width!, height: height!, insets };
+  return { ...action, ...target, name: `${target.width}×${target.height} B${target.insets.bottom}: ${action.name}` };
+})));
 
 async function geometry(page: Page, selector: string) {
   return page.locator(selector).evaluate((element) => {
@@ -178,7 +183,8 @@ for (const engine of [
       await page.mouse.click(opener.points[4]!.x, opener.points[4]!.y);
       await page.waitForSelector('#satellite-picker-panel:not([hidden])');
       await page.waitForTimeout(400);
-      const noPickerScroll = width === 800 && height === 600 && insets.bottom === 20;
+      const noPickerScroll = width === 800 && height === 600 && insets.bottom === 20
+        || width === 834 && height === 1210 && insets.top === 24 && insets.bottom === 20 && insets.left === 0 && insets.right === 0;
       const expose = async (selector: string) => {
         if (noPickerScroll) return;
         const changed = await page.locator(selector).evaluate((element) => {

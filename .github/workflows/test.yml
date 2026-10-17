@@ -52,5 +52,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: cd frontend && bun install
       - run: cd frontend && bun run typecheck
-      - run: cd frontend && bun run test
+      # Each browser-backed file builds the app and launches real browsers.
+      # Keep those files serial within the hosted runner's resource budget.
+      - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
       - run: cd frontend && bun run build
