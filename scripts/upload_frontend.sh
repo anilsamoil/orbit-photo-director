@@ -56,6 +56,14 @@ fi
 COUNT=0
 GLYPHS_UPLOADED=0
 FAILED_FILES=()
+file_list=$(mktemp)
+trap 'rm -f "$file_list"' EXIT
+find_status=0
+find "$DIST_DIR" -type f -print0 > "$file_list" || find_status=$?
+if [ "$find_status" -ne 0 ]; then
+  echo "ERROR: listing $DIST_DIR failed (find exit $find_status). No file was published." >&2
+  exit 2
+fi
 report_failures() {
   echo "" >&2
   echo "==> $COUNT files uploaded, ${#FAILED_FILES[@]} FAILED:" >&2
@@ -90,18 +98,23 @@ upload_one() {
 }
 
 SHELL_FILES=()
-while IFS= read -r FILE; do
+while IFS= read -r -d '' FILE; do
   REL_PATH="${FILE#$DIST_DIR/}"
   if is_shell_entry "$REL_PATH"; then
     SHELL_FILES+=("$FILE")
     continue
   fi
   upload_one "$FILE" || true
-done < <(find "$DIST_DIR" -type f)
+done < "$file_list"
 
 if [ "${#FAILED_FILES[@]}" -gt 0 ]; then
   echo "==> Asset upload failed. No shell file was published." >&2
   report_failures
+fi
+
+if [ "$GLYPHS_UPLOADED" -ne 1 ]; then
+  echo "ERROR: $GLYPH_REL was not uploaded." >&2
+  exit 3
 fi
 
 # Helper and registration before the document, sw.js last. The new worker
@@ -113,11 +126,6 @@ for name in manifest.webmanifest sw-shell.js registerSW.js index.html sw.js; do
     fi
   done
 done
-
-if [ "$GLYPHS_UPLOADED" -ne 1 ]; then
-  echo "ERROR: $GLYPH_REL was not uploaded." >&2
-  exit 3
-fi
 
 echo "==> Uploaded $COUNT frontend files to $BUCKET"
 echo "==> Live at https://map.astroanil.dev"
