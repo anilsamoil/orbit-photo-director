@@ -7,12 +7,14 @@ main = "src/index.ts"
 compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Worker routes ALL of map.astroanil.dev. The Worker handles /api/log and
+# Worker routes both map hosts. The Worker handles /api/log and
 # /api/health directly; all other GETs are streamed from the SITE bucket
 # (handleStatic). This way `/` correctly serves index.html — R2 alone doesn't
-# do that for custom-domain bindings.
+# do that for custom-domain bindings. map.expedition75.com stays on its own
+# host. The zone redirect in front of this route has to be removed first.
 routes = [
   { pattern = "map.astroanil.dev/*", zone_name = "astroanil.dev" },
+  { pattern = "map.expedition75.com/*", zone_name = "expedition75.com" },
 ]
 
 [[r2_buckets]]
