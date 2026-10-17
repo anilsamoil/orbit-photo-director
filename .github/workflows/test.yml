@@ -39,9 +39,9 @@ jobs:
     name: Cloudflare Worker
     steps:
       - uses: actions/checkout@v4
-      - run: bash worker/deploy.test.sh
       - uses: oven-sh/setup-bun@v2
       - run: cd worker && bun install
+      - run: bash worker/deploy.test.sh
       - run: cd worker && bun run typecheck
       - run: cd worker && bun run test
 
