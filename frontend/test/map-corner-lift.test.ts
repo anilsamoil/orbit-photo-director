@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Manifest, Track } from '../src/types';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
+if (!existsSync(webkit.executablePath())) throw new Error(`WebKit is required at ${webkit.executablePath()}`);
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45141';
 const iphone17 = devices['iPhone 17 Pro']?.viewport
@@ -158,7 +159,7 @@ beforeAll(async () => {
 for (const engine of [
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
-]) describe.skipIf(!existsSync(engine.executablePath))(`map corner lift ${engine.name}`, () => {
+]) describe.skipIf(engine.name === 'Chrome' && !existsSync(engine.executablePath))(`map corner lift ${engine.name}`, () => {
   let browser: Browser;
 
   beforeAll(async () => {
@@ -196,29 +197,82 @@ for (const engine of [
       expect(Number.parseFloat(raised.lift)).toBeGreaterThan(0);
       const banner = await page.locator('#status-banner').boundingBox();
       expect(banner!.height).toBeGreaterThan(30);
+      await page.clock.fastForward(3000);
+      await frames(page);
+      expect(await hideBox(page)).toEqual(raised);
       await cycle(page, 5, raised);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
 
-      const raced = await page.evaluate(() => {
-        const hide = document.getElementById('map-chrome-toggle')!;
-        const prior = document.body.style.getPropertyValue('--map-corner-lift');
-        document.body.style.setProperty('--map-corner-lift', '0px');
-        const natural = hide.getBoundingClientRect();
-        document.body.style.setProperty('--map-corner-lift', prior);
-        const original = Element.prototype.getBoundingClientRect;
-        Element.prototype.getBoundingClientRect = function () {
-          if (this.id === 'map-chrome-toggle') return new DOMRect(natural.x, natural.y, natural.width, natural.height);
-          return original.call(this);
-        };
-        hide.click();
-        const lift = document.body.style.getPropertyValue('--map-corner-lift');
-        Element.prototype.getBoundingClientRect = original;
-        return lift;
+  it('lifts Hide for the wrapped banner before the next read on return to 402x874', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.textContent = 'Last updated 4 min ago · TLE 499h old — live track may drift';
       });
       await frames(page);
+      await page.setViewportSize({ width: 932, height: 430 });
+      await frames(page);
+      await page.setViewportSize({ width: 402, height: 874 });
+      const immediate = await hideBox(page);
+      await frames(page);
       const settled = await hideBox(page);
-      const place = ({ lift, top, right, bottom, left, width, height }: HideBox) => ({ lift, top, right, bottom, left, width, height });
-      expect(raced).toBe(raised.lift);
-      expect(place(settled)).toEqual(place(raised));
+      const place = ({ lift, top, bottom }: HideBox) => ({ lift, top, bottom });
+      expect(Number.parseFloat(settled.lift)).toBeGreaterThan(0);
+      expect(place(immediate)).toEqual(place(settled));
+      await page.locator('#map-chrome-toggle').click();
+      await frames(page);
+      await page.locator('#map-chrome-toggle').click();
+      await frames(page);
+      expect(place(await hideBox(page))).toEqual(place(settled));
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+    const page = await context.newPage();
+    try {
+      await boot(page, assets, script);
+      await showChrome(page);
+      const scrolled = await page.evaluate(() => {
+        const dock = document.querySelector('.map-control-dock');
+        if (!(dock instanceof HTMLElement)) return null;
+        dock.scrollTop = dock.scrollHeight;
+        const button = document.getElementById('toggle-satellite-picker')!;
+        const rect = button.getBoundingClientRect();
+        return {
+          scrollTop: dock.scrollTop,
+          overflow: dock.scrollHeight - dock.clientHeight,
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+        };
+      });
+      expect(scrolled).not.toBeNull();
+      expect(scrolled!.overflow).toBeGreaterThan(20);
+      expect(scrolled!.scrollTop).toBeGreaterThan(20);
+      await page.evaluate(() => {
+        const writes: string[] = [];
+        (window as unknown as { __styleWrites: string[] }).__styleWrites = writes;
+        new MutationObserver((records) => {
+          for (const record of records) writes.push(record.attributeName ?? '');
+        }).observe(document.body, { attributes: true, attributeFilter: ['style'] });
+      });
+      await page.clock.fastForward(3000);
+      await frames(page);
+      const after = await page.evaluate(() => ({
+        scrollTop: (document.querySelector('.map-control-dock') as HTMLElement).scrollTop,
+        writes: (window as unknown as { __styleWrites: string[] }).__styleWrites.length,
+      }));
+      expect(after.scrollTop).toBe(scrolled!.scrollTop);
+      expect(after.writes).toBe(0);
+      await page.mouse.click(scrolled!.x, scrolled!.y);
+      await frames(page);
+      await expect(page.locator('#satellite-picker-panel')).toBeVisible();
     } finally {
       await context.close();
     }
