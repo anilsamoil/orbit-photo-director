@@ -7,6 +7,7 @@ import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
+import { NARROW_SLIDER_RIGHT_GAP, timeStripLaidFailures } from './map-strip-contract.mjs';
 import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
@@ -1927,29 +1928,6 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   return `upcoming: ${ascent} and Verify Likely above ${mesa}, Verify Horizon omitted, score sort, hide persisted ${mesaId}, fresh profile hid it`;
 }
 
-function rgbaChannels(color) {
-  const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(String(color || ''));
-  if (!match) return null;
-  return {
-    r: Number(match[1]),
-    g: Number(match[2]),
-    b: Number(match[3]),
-    a: match[4] === undefined ? 1 : Number(match[4]),
-  };
-}
-
-function chipBacking(color) {
-  const parsed = rgbaChannels(color);
-  if (!parsed) return false;
-  return parsed.a >= 0.7 && parsed.r <= 20 && parsed.g <= 24 && parsed.b <= 30;
-}
-
-function paintIsClear(color) {
-  if (color === 'transparent') return true;
-  const parsed = rgbaChannels(color);
-  return !!parsed && parsed.a === 0;
-}
-
 async function proveMapLaidOnPane(send) {
   const laid = await evaluate(send, `(() => {
     const pane = document.getElementById('map-pane');
@@ -2019,9 +1997,15 @@ async function proveMapLaidOnPane(send) {
       paneBottom: paneBox.bottom,
       stripTop: stripBox.top,
       stripBottom: stripBox.bottom,
+      stripLeft: stripBox.left,
+      stripRight: stripBox.right,
       stripWidth: stripBox.width,
       stripHeight: stripBox.height,
       rightGap: paneBox.right - stripBox.right,
+      paneLeft: paneBox.left,
+      paneRight: paneBox.right,
+      innerWidth,
+      innerHeight,
       slider: sliderBox ? sliderBox.height : null,
       fitting,
       narrow,
@@ -2035,23 +2019,9 @@ async function proveMapLaidOnPane(send) {
       events: stripStyle.pointerEvents,
     };
   })()`);
-  const paddingClear = laid
-    && laid.paddingTop === '0px'
-    && laid.paddingRight === '0px'
-    && laid.paddingBottom === '0px'
-    && laid.paddingLeft === '0px';
-  const gapClear = laid && laid.rowGap === '0px' && laid.columnGap === '0px';
-  const geometry = laid && (!laid.fitting || (
-    Math.abs(laid.stripHeight - 96) <= 2
-    && Math.abs(laid.rightGap - 204) <= 2
-    && laid.slider >= 44
-  ));
-  const narrowOk = laid && (!laid.narrow || (
-    laid.reserved
-    && Math.abs(laid.reserved.height - laid.reserved.expect) <= 2
-  ));
-  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !paintIsClear(laid.color) || !chipBacking(laid.controls) || laid.fullBleed || laid.hide || laid.legend || laid.zoom || laid.pip || laid.events !== 'none' || !geometry || !narrowOk) {
-    throw new Error(`time strip not laid on the map ${JSON.stringify(laid)}`);
+  const failures = timeStripLaidFailures(laid);
+  if (failures.length) {
+    throw new Error(`time strip not laid on the map ${failures.join(' ')} ${JSON.stringify(laid)}`);
   }
   return laid;
 }
@@ -3146,7 +3116,7 @@ async function proveNarrowTimeSlider(send, evidenceDir, viewport) {
         above: stripBox.bottom <= (document.getElementById('map-chrome-toggle')?.getBoundingClientRect().top || 0) + 1,
       };
     })()`);
-    if (!slider?.ok || !slider.above || slider.rightGap > 24) {
+    if (!slider?.ok || !slider.above || slider.rightGap > NARROW_SLIDER_RIGHT_GAP) {
       throw new Error(`narrow time slider ${JSON.stringify(slider)}`);
     }
     await shot(send, evidenceDir, 'map-time-390x520');
