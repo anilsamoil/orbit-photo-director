@@ -11,7 +11,9 @@ compatibility_flags = ["nodejs_compat"]
 # /api/health directly; all other GETs are streamed from the SITE bucket
 # (handleStatic). This way `/` correctly serves index.html — R2 alone doesn't
 # do that for custom-domain bindings. map.expedition75.com stays on its own
-# host. The zone redirect in front of this route has to be removed first.
+# host. Leave the zone redirect enabled until this Worker is deployed and
+# map.astroanil.dev still answers. Then disable the redirect. Re-enable it
+# to roll back. Do not delete the rule.
 routes = [
   { pattern = "map.astroanil.dev/*", zone_name = "astroanil.dev" },
   { pattern = "map.expedition75.com/*", zone_name = "expedition75.com" },
@@ -38,6 +40,10 @@ STALE_THRESHOLD_SECONDS = "7200"
 ACCESS_TEAM_DOMAIN = "https://anilsamoil.cloudflareaccess.com"
 # Public application audience, not a credential. Only the map app is trusted.
 ACCESS_AUD = "af736f6a51f794ce6f0aefd9c9939168cbed99ba19251cbebe4a6c53dee59710"
+# Comma-separated Access service-token client ids (JWT common_name).
+# GET and HEAD /api/health are the only routes that accept one. Empty rejects
+# every service token. The client secret stays in Access, not in this Worker.
+ACCESS_SERVICE_TOKEN_CLIENT_IDS = ""
 
 [observability]
 enabled = true

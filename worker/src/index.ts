@@ -20,7 +20,7 @@ import { handleCloudRequest } from './cloud';
 import { handleWxRequest } from './wx';
 import { handleProfilesRequest } from './profiles';
 import { isValidProfileName } from './shared';
-import { authenticateCalibration } from './calibration-auth';
+import { authenticateCalibration, authenticateHealth } from './calibration-auth';
 import { handleBrowserSession, isOpaqueProfileName, resolveBrowserProfile } from './browser-identity';
 
 export interface Env {
@@ -31,6 +31,7 @@ export interface Env {
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string; // private verified-email hash to legacy profile aliases
   ACCESS_PROFILE_GRANTS?: string; // private verified-email hash to explicit additional profiles
+  ACCESS_SERVICE_TOKEN_CLIENT_IDS?: string; // common_name allowlist for GET/HEAD /api/health
   STALE_THRESHOLD_SECONDS: string;
 }
 
@@ -606,7 +607,10 @@ export default {
     }
 
     if (!isMachineProfilePath(url.pathname)) {
-      const auth = await authenticateCalibration(request, env, true);
+      const healthRead = url.pathname === '/api/health' && (request.method === 'GET' || request.method === 'HEAD');
+      const auth = healthRead
+        ? await authenticateHealth(request, env)
+        : await authenticateCalibration(request, env, true);
       if ('denied' in auth) return withCors(auth.denied, origin);
     }
 
