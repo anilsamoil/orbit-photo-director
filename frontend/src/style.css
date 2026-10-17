@@ -1540,7 +1540,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 .map-launch-primary > .launch-brief > .launch-details[open] { grid-row: 5; grid-column: 1 / -1; }
 .map-launch-primary > .launch-brief .launch-brief-actions .btn { flex: 0 1 auto; width: auto; }
-.map-launch-primary > .launch-brief .launch-name { min-height: 30px; font-size: 0.95rem; }
+.map-launch-primary > .launch-brief .launch-name { min-height: 44px; font-size: 0.95rem; }
 .map-launch-primary > .launch-brief .launch-summary { gap: 0.25rem; font-size: 0.82rem; }
 .map-launch-primary > .launch-brief .launch-brief-reason { font-size: 0.84rem; line-height: 1.4; }
 .map-launch-more { margin-top: 0.35rem; }
@@ -1798,6 +1798,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 .satellite-picker-list label {
   display: flex;
   align-items: center;
+  min-height: 44px;
   gap: 0.4rem;
   padding: 0.3rem 0;
   cursor: pointer;
@@ -1840,6 +1841,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 .satellite-picker-custom input {
   width: 100%;
+  min-height: 44px;
   padding: 0.3rem 0.5rem;
   font-size: 0.82rem;
   margin-bottom: 0.4rem;
@@ -1847,6 +1849,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+#satellite-picker-add {
+  min-height: 44px;
 }
 .satellite-picker-status {
   font-size: 0.72rem;
@@ -4597,6 +4602,13 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   container-type: inline-size;
 }
 
+.map-inspector .dropped-pin-popup::before {
+  content: '';
+  float: right;
+  width: var(--pin-close-ink-size, 0px);
+  height: var(--pin-close-ink-size, 0px);
+}
+
 .map-inspector .pin-pass-heading {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -4605,6 +4617,10 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 @container (max-width: 260px) {
+  #map-pane.map-inspector-open .maplibregl-popup-content:has(> .dropped-pin-popup) {
+    --pin-close-ink-size: 28px;
+    padding-top: 4px;
+  }
   .dropped-pin-popup > strong,
   .dropped-pin-popup .pin-pass-heading {
     overflow-wrap: anywhere;
