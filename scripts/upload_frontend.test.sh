@@ -89,6 +89,8 @@ if [ "$CASE_CODE" -eq 0 ]; then
   echo "FAIL: helper failure exited 0" >&2
   exit 1
 fi
+assert_present "manifest.webmanifest"
+assert_absent "index.html"
 assert_absent "sw.js"
 
 run_case "document failure" "index.html"
@@ -96,6 +98,7 @@ if [ "$CASE_CODE" -eq 0 ]; then
   echo "FAIL: document failure exited 0" >&2
   exit 1
 fi
+assert_present "index.html"
 assert_absent "sw.js"
 
 run_case "success" ""
