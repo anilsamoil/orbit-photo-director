@@ -901,7 +901,7 @@ function exportShotlist(): void {
   const nowMs = Date.now();
   const entries = pruneExpired(nowMs);
   updateShotlistBar();
-  const ics = buildIcs(entries, nowMs, nextSequence());
+  const ics = buildIcs(entries, nowMs, nextSequence(), location.origin);
   if (!ics) {
     showToast('Nothing to add — selected passes are already in the past.', 'error');
     return;
