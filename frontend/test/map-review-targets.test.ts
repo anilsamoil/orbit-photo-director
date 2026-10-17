@@ -139,7 +139,9 @@ async function prepare(engine: typeof engines[number], target: Target) {
   // SwiftShader and retaining its GPU process across all sixteen map contexts.
   const browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
   try {
-    const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: width < 1300, deviceScaleFactor: width < 900 ? 3 : 1 });
+    // Native backing scales: iPhone 3x, iPad M4 2x in both orientations, desktop 1x.
+    const deviceScaleFactor = Math.min(width, height) < 500 ? 3 : width < 1280 ? 2 : 1;
+    const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: width < 1300, deviceScaleFactor });
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
