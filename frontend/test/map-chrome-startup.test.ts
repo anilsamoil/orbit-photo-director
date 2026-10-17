@@ -104,7 +104,9 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets, phase
   }, true));
   await phase('navigate fixture', () => page.goto(`${origin}/?e2e&u=short-viewport`, { waitUntil: 'domcontentloaded' }));
   await phase('attach map compass', () => page.locator('.maplibregl-ctrl-compass').waitFor({ state: 'attached' }));
-  await phase('select Map tab', () => page.locator('#tab-map').click());
+  // Map starts loading by default; another tab click would start a second render before load completes.
+  await phase('confirm default Map tab', () => page.waitForFunction(() =>
+    document.querySelector('#view')?.className === 'view-map' && document.querySelector('#tab-map')?.classList.contains('active')));
   await phase('load map style and ISS track', () => page.waitForFunction(() => {
     const map = (window as unknown as TestWindow).__opdMap;
     return map?.isStyleLoaded() && !!map.getSource('iss-track');
