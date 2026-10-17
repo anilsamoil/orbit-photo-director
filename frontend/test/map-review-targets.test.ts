@@ -54,6 +54,12 @@ const targets = [
   { width: 1280, height: 800, insets: { top: 0, right: 0, bottom: 0, left: 0 } },
 ].filter((target) => !process.env.OPD_REVIEW_SIZE || process.env.OPD_REVIEW_SIZE === `${target.width}x${target.height}`);
 type Target = typeof targets[number];
+type PickerEdgeState = {
+  started: number;
+  scrolledAt: number | null;
+  scrollTrusted: boolean;
+  events: { type: string; trusted: boolean; owns: boolean; target: string; elapsed: number | null }[];
+};
 const track = { ...fixture, tle_epoch: manifest.tle_epoch, tle_age_hours: 0, tle_freshness_factor: 1 };
 const now = Date.parse(fixture.start);
 const passes = findUpcomingPasses(track, 6.4, 40.8, now);
@@ -230,17 +236,22 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       const before = await page.evaluate((selector) => {
         const panel = document.querySelector('#satellite-picker-panel')!;
         const element = document.querySelector(selector)!;
-        const started = performance.now();
-        const events: { type: string; trusted: boolean; owns: boolean; target: string; elapsed: number }[] = [];
-        (window as unknown as { __pickerEdge: { started: number; events: typeof events } }).__pickerEdge = { started, events };
+        const edge: PickerEdgeState = { started: performance.now(), scrolledAt: null, scrollTrusted: false, events: [] };
+        (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge = edge;
+        panel.addEventListener('scroll', (event) => {
+          edge.scrolledAt = event.timeStamp;
+          edge.scrollTrusted = event.isTrusted;
+        }, { once: true });
         for (const type of ['pointerdown', 'pointerup', 'click', 'focus']) document.addEventListener(type, (event) => {
           const hit = event.target as Element;
-          events.push({ type, trusted: event.isTrusted, owns: hit === element || element.contains(hit), target: hit.id || hit.tagName, elapsed: performance.now() - started });
+          edge.events.push({ type, trusted: event.isTrusted, owns: hit === element || element.contains(hit), target: hit.id || hit.tagName, elapsed: edge.scrolledAt === null ? null : event.timeStamp - edge.scrolledAt });
         }, true);
         return { scrollTop: panel.scrollTop };
       }, target.selector);
       await page.locator(target.selector).scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge.scrolledAt !== null);
       // Exercise the visible native scrollbar, not the settled state after its fade.
+      // Locator preparation can be slow; the timing origin is the browser's scroll event.
       await page.waitForTimeout(100);
       const measured = await geometry(page, target.selector);
       const point = measured.points[2]!;
@@ -248,21 +259,26 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       await page.waitForTimeout(100);
       const after = await page.evaluate((selector) => {
         const element = document.querySelector(selector)!;
-        const edge = (window as unknown as { __pickerEdge: { started: number; events: { type: string; trusted: boolean; owns: boolean; target: string; elapsed: number }[] } }).__pickerEdge;
+        const edge = (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge;
         return {
           scrollTop: document.querySelector('#satellite-picker-panel')!.scrollTop,
+          scrolledAt: edge.scrolledAt,
+          scrollTrusted: edge.scrollTrusted,
+          preScrollElapsed: edge.scrolledAt === null ? null : edge.scrolledAt - edge.started,
           activated: element.matches('label') ? element.querySelector<HTMLInputElement>('input')!.checked : document.activeElement === element,
           events: edge.events,
         };
       }, target.selector);
       await evidence(page, `${engine.name}-P2-${target.width}x${target.height}-${target.control}`, { target, before, measured, after });
       expect.soft(after.scrollTop, JSON.stringify({ before, after })).toBeGreaterThan(before.scrollTop);
+      expect.soft(after.scrollTrusted, JSON.stringify(after)).toBe(true);
       expect.soft(measured.rect.height).toBeGreaterThanOrEqual(44);
       expect.soft(point.owns, JSON.stringify({ point, after })).toBe(true);
       expect.soft(after.activated, JSON.stringify(after)).toBe(true);
       expect.soft(after.events.some((event) => event.type === 'click' && event.trusted && event.owns), JSON.stringify(after)).toBe(true);
       const down = after.events.find((event) => event.type === 'pointerdown');
       expect.soft(down?.trusted, JSON.stringify(after)).toBe(true);
+      expect.soft(down?.elapsed, JSON.stringify(after)).toBeGreaterThanOrEqual(0);
       expect.soft(down?.elapsed, JSON.stringify(after)).toBeLessThan(1000);
     } finally { await browser.close(); }
   }, 60_000);
