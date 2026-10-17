@@ -7,7 +7,6 @@ export interface CalibrationAuthEnv {
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string;
   ACCESS_PROFILE_GRANTS?: string;
-  /** Comma-separated Access service-token client ids. Health is the only reader. */
   ACCESS_SERVICE_TOKEN_CLIENT_IDS?: string;
 }
 
@@ -22,7 +21,6 @@ export interface AccessIdentity {
   displayName?: string;
 }
 
-/** An Access service token. It is not a person and cannot write logs or profiles. */
 export interface ServiceIdentity {
   kind: 'service';
   issuer: string;
@@ -97,9 +95,6 @@ export async function authenticateCalibration(
   return { principal: human };
 }
 
-/** GET and HEAD /api/health. Same signature, issuer, audience, and expiry as a person.
- * A service token is accepted only when its common_name is on the allowlist.
- * No assertion is still a denial. The machine token does not open health. */
 export async function authenticateHealth(
   request: Request, env: CalibrationAuthEnv,
 ): Promise<AuthenticationResult> {

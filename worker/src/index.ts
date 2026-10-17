@@ -31,7 +31,7 @@ export interface Env {
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string; // private verified-email hash to legacy profile aliases
   ACCESS_PROFILE_GRANTS?: string; // private verified-email hash to explicit additional profiles
-  ACCESS_SERVICE_TOKEN_CLIENT_IDS?: string; // common_name allowlist for GET/HEAD /api/health
+  ACCESS_SERVICE_TOKEN_CLIENT_IDS?: string;
   STALE_THRESHOLD_SECONDS: string;
 }
 

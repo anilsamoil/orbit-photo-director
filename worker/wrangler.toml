@@ -40,9 +40,6 @@ STALE_THRESHOLD_SECONDS = "7200"
 ACCESS_TEAM_DOMAIN = "https://anilsamoil.cloudflareaccess.com"
 # Public application audience, not a credential. Only the map app is trusted.
 ACCESS_AUD = "af736f6a51f794ce6f0aefd9c9939168cbed99ba19251cbebe4a6c53dee59710"
-# Comma-separated Access service-token client ids (JWT common_name).
-# GET and HEAD /api/health are the only routes that accept one. Empty rejects
-# every service token. The client secret stays in Access, not in this Worker.
 ACCESS_SERVICE_TOKEN_CLIENT_IDS = ""
 
 [observability]
