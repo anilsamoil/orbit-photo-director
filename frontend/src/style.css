@@ -1156,7 +1156,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 
 /* The map fills the pane. Controls float on it. */
 .view-map {
-  --map-hide-right: 12px;
+  --map-hide-right: calc(12px + env(safe-area-inset-right, 0px));
   --map-hide-width: 88px;
   --map-legend-width: 88px;
   --map-corner-gap: 8px;
@@ -1286,7 +1286,7 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
 .view-map .map-control-dock {
   position: absolute;
   top: calc(var(--topbar-height) + 5px);
-  right: 8px;
+  right: calc(8px + env(safe-area-inset-right, 0px));
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -1297,6 +1297,12 @@ body:has(> #view.view-map) > .banner.banner-loading { color: #f4f7fb; }
   max-width: 76px;
   max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
   overflow-y: auto;
+  scrollbar-width: none;
+}
+.view-map .map-control-dock::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 .view-map:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) .map-control-dock {
   max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);
@@ -1534,7 +1540,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 .map-launch-primary > .launch-brief > .launch-details[open] { grid-row: 5; grid-column: 1 / -1; }
 .map-launch-primary > .launch-brief .launch-brief-actions .btn { flex: 0 1 auto; width: auto; }
-.map-launch-primary > .launch-brief .launch-name { min-height: 30px; font-size: 0.95rem; }
+.map-launch-primary > .launch-brief .launch-name { min-height: 44px; font-size: 0.95rem; }
 .map-launch-primary > .launch-brief .launch-summary { gap: 0.25rem; font-size: 0.82rem; }
 .map-launch-primary > .launch-brief .launch-brief-reason { font-size: 0.84rem; line-height: 1.4; }
 .map-launch-more { margin-top: 0.35rem; }
@@ -1792,6 +1798,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 .satellite-picker-list label {
   display: flex;
   align-items: center;
+  min-height: 44px;
   gap: 0.4rem;
   padding: 0.3rem 0;
   cursor: pointer;
@@ -1834,6 +1841,7 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 .satellite-picker-custom input {
   width: 100%;
+  min-height: 44px;
   padding: 0.3rem 0.5rem;
   font-size: 0.82rem;
   margin-bottom: 0.4rem;
@@ -1841,6 +1849,9 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+#satellite-picker-add {
+  min-height: 44px;
 }
 .satellite-picker-status {
   font-size: 0.72rem;
@@ -4591,6 +4602,13 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   container-type: inline-size;
 }
 
+.map-inspector .dropped-pin-popup::before {
+  content: '';
+  float: right;
+  width: var(--pin-close-ink-size, 0px);
+  height: var(--pin-close-ink-size, 0px);
+}
+
 .map-inspector .pin-pass-heading {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -4599,6 +4617,10 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 }
 
 @container (max-width: 260px) {
+  #map-pane.map-inspector-open .maplibregl-popup-content:has(> .dropped-pin-popup) {
+    --pin-close-ink-size: 28px;
+    padding-top: 4px;
+  }
   .dropped-pin-popup > strong,
   .dropped-pin-popup .pin-pass-heading {
     overflow-wrap: anywhere;
@@ -4962,6 +4984,8 @@ body.map-slot-picker .view-map .satellite-picker-panel {
   width: var(--slot-picker-w);
   max-width: none;
   max-height: var(--slot-picker-h);
+  /* Keep native overlay-scrollbar hits outside controls, including label hover expansion. */
+  padding-right: calc(0.7rem + 1rem);
 }
 
 body.map-slot-time .view-map .map-command,
@@ -5275,7 +5299,7 @@ body.map-slot-legend .view-map .map-legend-panel {
   }
 
   .view-map .map-command .time-slider {
-    height: 32px;
+    height: 44px;
   }
 
   .view-map .map-command .time-step-btn {

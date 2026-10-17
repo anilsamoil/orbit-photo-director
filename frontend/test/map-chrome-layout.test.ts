@@ -8,7 +8,9 @@ import { describe, expect, it } from 'vitest';
 const css = readFileSync(resolve('src/style.css'), 'utf8');
 
 function mount(viewClass: string): void {
-  document.head.innerHTML = `<style>${css}</style>`;
+  const zeroRightInset = css.replace(/env\(safe-area-inset-right(?:\s*,[^)]*)?\)/g, '0px')
+    .replace(/calc\((\d+)px \+ 0px\)/g, '$1px');
+  document.head.innerHTML = `<style>${zeroRightInset}</style>`;
   document.body.innerHTML = `
     <header class="topbar">
       <span class="brand-expansion">SNAP</span>

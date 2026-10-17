@@ -29,6 +29,76 @@ for (const engine of [
     browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
   });
   afterAll(async () => { await browser?.close(); });
+  it.each([
+    { width: 402, height: 874, insets: { top: 62, right: 0, bottom: 34, left: 0 } },
+    { width: 874, height: 402, insets: { top: 0, right: 62, bottom: 21, left: 62 } },
+    { width: 834, height: 1210, insets: { top: 24, right: 0, bottom: 20, left: 0 } },
+    { width: 1210, height: 834, insets: { top: 24, right: 0, bottom: 20, left: 0 } },
+    { width: 1440, height: 900, insets: { top: 0, right: 0, bottom: 0, left: 0 } },
+    { width: 1280, height: 800, insets: { top: 0, right: 0, bottom: 0, left: 0 } },
+  ])('keeps corner controls inset-safe and the time slider tappable at $width×$height', async ({ width, height, insets }) => {
+    const context = await browser.newContext({ viewport: { width, height } });
+    try {
+      const page = await context.newPage();
+      await page.route('**/*', (route) => route.abort());
+      const insetCss = stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof typeof insets) => `${insets[side]}px`);
+      await page.setContent(html.replace('</head>', `<style>${vendor}\n${insetCss}</style></head>`));
+      await page.evaluate(() => {
+        document.querySelector('#view')!.className = 'view-map';
+        document.querySelector('#map-pane')!.classList.add('active');
+        document.querySelector<HTMLElement>('#live-readout')!.hidden = true;
+        document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button class="maplibregl-ctrl-zoom-in"></button><button class="maplibregl-ctrl-zoom-out"></button><button class="maplibregl-ctrl-compass"></button></div></div></div>';
+        document.querySelector('#status-banner')!.textContent = 'Track ready';
+        for (const element of document.querySelectorAll('[data-time-utc]')) element.textContent = '12:34Z';
+      });
+      const probes = ownerScript.replace('const value = Number.parseFloat(getComputedStyle(probe)[prop]) || 0;', `const value = (${JSON.stringify(insets)})[side];`);
+      await page.addScriptTag({ content: `${probes}\nbindMapChrome();` });
+      await page.evaluate(() => document.fonts.ready);
+      for (const shown of [false, true]) {
+        await page.evaluate((shown) => {
+          const toggle = document.querySelector<HTMLButtonElement>('#map-chrome-toggle')!;
+          if (toggle.getAttribute('aria-expanded') === String(!shown)) toggle.click();
+        }, shown);
+        await page.waitForTimeout(100);
+        for (const selector of shown ? ['#map-chrome-toggle', '#map-legend-toggle', '.map-control-dock', '#bearing-north', '#time-slider'] : ['#map-chrome-toggle']) {
+          const result = await page.locator(selector).evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            const points = [[rect.x + rect.width / 2, rect.y + rect.height / 2], [rect.left + 2, rect.y + rect.height / 2], [rect.right - 2, rect.y + rect.height / 2], [rect.x + rect.width / 2, rect.top + 2], [rect.x + rect.width / 2, rect.bottom - 2]];
+            return { rect: rect.toJSON(), owns: points.map(([x, y]) => { const hit = document.elementFromPoint(x!, y!); return hit === element || !!hit && element.contains(hit); }) };
+          });
+          expect(result.rect.left, selector).toBeGreaterThanOrEqual(insets.left);
+          expect(result.rect.right, selector).toBeLessThanOrEqual(width - insets.right);
+          expect(result.rect.top, selector).toBeGreaterThanOrEqual(insets.top);
+          expect(result.rect.bottom, selector).toBeLessThanOrEqual(height - insets.bottom);
+          expect(result.rect.width, selector).toBeGreaterThanOrEqual(44);
+          expect(result.rect.height, selector).toBeGreaterThanOrEqual(44);
+          if (selector !== '.map-control-dock') expect(result.owns, selector).toEqual([true, true, true, true, true]);
+        }
+        if (shown) {
+          const controls = await page.evaluate(async () => {
+            const dock = document.querySelector<HTMLElement>('.map-control-dock')!;
+            const results = [];
+            for (const button of [...dock.querySelectorAll('button')].filter((button) => button.getClientRects().length)) {
+              const before = button.getBoundingClientRect();
+              const bounds = dock.getBoundingClientRect();
+              dock.scrollTop += before.top - bounds.top - (bounds.height - before.height) / 2;
+              await new Promise(requestAnimationFrame);
+              await new Promise(requestAnimationFrame);
+              const rect = button.getBoundingClientRect();
+              const points = [[rect.x + rect.width / 2, rect.y + rect.height / 2], [rect.left + 2, rect.y + rect.height / 2], [rect.right - 2, rect.y + rect.height / 2], [rect.x + rect.width / 2, rect.top + 2], [rect.x + rect.width / 2, rect.bottom - 2]];
+              results.push({ id: button.id, clipped: rect.top < bounds.top || rect.bottom > bounds.bottom, owns: points.map(([x, y]) => { const hit = document.elementFromPoint(x!, y!); return hit === button || !!hit && button.contains(hit); }) });
+            }
+            return results;
+          });
+          expect(controls.length).toBeGreaterThan(0);
+          for (const control of controls) {
+            expect(control.clipped, control.id).toBe(false);
+            expect(control.owns, control.id).toEqual([true, true, true, true, true]);
+          }
+        }
+      }
+    } finally { await context.close(); }
+  }, 30_000);
   it.each(['plain', 'actions', 'long'].flatMap((banner) => [false, true].map((legend) => ({ banner, legend }))))('keeps the numeric 720px row and launch action reachable: $banner Legend=$legend', async ({ banner, legend }) => {
     const context = await browser.newContext({ viewport: { width: 720, height: 500 } });
     try {
