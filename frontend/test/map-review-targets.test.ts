@@ -60,6 +60,10 @@ type PickerEdgeState = {
   scrollTrusted: boolean;
   events: { type: string; trusted: boolean; owns: boolean; target: string; elapsed: number | null }[];
 };
+type PickerTouchState = {
+  events: { type: string; trusted: boolean; owns: boolean; target: string; pointerType: string | null; rect: DOMRectJSON }[];
+};
+type DOMRectJSON = { left: number; right: number; top: number; bottom: number; width: number; height: number };
 const track = { ...fixture, tle_epoch: manifest.tle_epoch, tle_age_hours: 0, tle_freshness_factor: 1 };
 const now = Date.parse(fixture.start);
 const passes = findUpcomingPasses(track, 6.4, 40.8, now);
@@ -224,6 +228,77 @@ async function prepare(engine: typeof engines[number], target: Target) {
 }
 
 for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath))(`supported review regressions ${engine.name}`, () => {
+  it.each(targets.filter((target) => target.width === 402 || target.width === 874).flatMap((target) =>
+    [3, 4].flatMap((row) => [1, 2].map((inset) => ({ ...target, row, inset }))),
+  ))('P2: repeated native picker touches keep row $row hit geometry at $width×$height, edge $inset px', async (target) => {
+    const { page, browser } = await prepare(engine, target);
+    try {
+      await click(page, '#map-legend-toggle');
+      await click(page, '#toggle-satellite-picker');
+      const selector = `#satellite-picker-list label:nth-child(${target.row})`;
+      await page.locator(selector).scrollIntoViewIfNeeded();
+      // Let the scrollbar fade: this regression is the touch-induced hover box,
+      // independently of the immediate-after-scroll reservation test below.
+      await page.waitForTimeout(3200);
+      await page.evaluate((selector) => {
+        const state: PickerTouchState = { events: [] };
+        (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch = state;
+        for (const type of ['pointerdown', 'pointerup', 'click']) document.addEventListener(type, (event) => {
+          // Selection renders a fresh list; resolve the current label each time.
+          const element = document.querySelector(selector)!;
+          const hit = event.target as Element;
+          const rect = element.getBoundingClientRect();
+          state.events.push({ type, trusted: event.isTrusted, owns: hit === element || element.contains(hit), target: hit.id || hit.tagName,
+            pointerType: event instanceof PointerEvent ? event.pointerType : null,
+            rect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height } });
+        }, true);
+      }, selector);
+      const initial = await geometry(page, selector);
+      expect(initial.points[0]!.owns, JSON.stringify(initial)).toBe(true);
+      await page.touchscreen.tap(initial.points[0]!.x, initial.points[0]!.y);
+      await page.waitForFunction(() => document.querySelector('#satellite-picker-status')!.textContent === 'Tracking added');
+      expect(await page.locator(`${selector} input`).isChecked()).toBe(true);
+      await page.waitForTimeout(250);
+      const centerEvents = await page.evaluate(() => (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch.events);
+      const touches = [];
+      // Uncheck at the painted edge, then recheck there without a mouse move or
+      // a center recovery. Both gestures must retain their original hit target.
+      for (const checked of [false, true]) {
+        const before = await geometry(page, selector);
+        const point = { x: before.rect.right - target.inset, y: before.rect.y + before.rect.height / 2 };
+        const owns = await page.locator(selector).evaluate((element, point) => {
+          const hit = document.elementFromPoint(point.x, point.y);
+          return hit === element || !!hit && element.contains(hit);
+        }, point);
+        await page.evaluate(() => { (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch.events.length = 0; });
+        await page.touchscreen.tap(point.x, point.y);
+        await page.waitForTimeout(250);
+        touches.push({ before, point, owns, expectedChecked: checked,
+          checked: await page.locator(`${selector} input`).isChecked(), after: await geometry(page, selector),
+          events: await page.evaluate(() => (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch.events) });
+      }
+      await evidence(page, `${engine.name}-P2-repeat-${target.width}x${target.height}-row${target.row}-edge${target.inset}`, { target, initial, centerEvents, touches });
+      for (const type of ['pointerdown', 'pointerup', 'click']) {
+        expect.soft(centerEvents.some((event) => event.type === type && event.trusted && event.owns), JSON.stringify(centerEvents)).toBe(true);
+      }
+      for (const touch of touches) {
+        const detail = JSON.stringify(touch);
+        expect.soft(touch.owns, detail).toBe(true);
+        expect.soft(touch.checked, detail).toBe(touch.expectedChecked);
+        for (const type of ['pointerdown', 'pointerup', 'click']) {
+          expect.soft(touch.events.some((event) => event.type === type && event.trusted && event.owns), detail).toBe(true);
+        }
+        expect.soft(touch.events.filter((event) => event.type.startsWith('pointer')).map((event) => event.pointerType), detail).toEqual(['touch', 'touch']);
+        for (const rect of [touch.before.rect, ...touch.events.map((event) => event.rect), touch.after.rect]) {
+          expect.soft(rect.height, detail).toBeGreaterThanOrEqual(44);
+          for (const edge of ['left', 'right', 'top', 'bottom'] as const) {
+            expect.soft(Math.abs(rect[edge] - initial.rect[edge]), detail).toBeLessThanOrEqual(0.1);
+          }
+        }
+      }
+    } finally { await browser.close(); }
+  }, 60_000);
+
   it.each(targets.filter((target) => target.width === 402 || target.width === 874).flatMap((target) => [
     { ...target, control: 'label', selector: '#satellite-picker-list label:nth-child(3)' },
     { ...target, control: 'input', selector: '#satellite-picker-input' },

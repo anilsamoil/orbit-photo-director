@@ -4988,6 +4988,13 @@ body.map-slot-picker .view-map .satellite-picker-panel {
   padding-right: calc(0.7rem + 1rem);
 }
 
+/* Native touch can clear sticky :hover between pointerdown and pointerup.
+ * Keep the painted label edge inside the same hit box throughout the gesture. */
+body.map-slot-picker .view-map .satellite-picker-list label {
+  margin: 0 -0.4rem;
+  padding: 0.3rem 0.4rem;
+}
+
 body.map-slot-time .view-map .map-command,
 body.map-slot-time.shotlist-bar-visible .view-map .map-command {
   top: var(--slot-time-y);
