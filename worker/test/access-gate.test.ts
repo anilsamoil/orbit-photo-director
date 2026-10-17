@@ -38,6 +38,17 @@ async function token(overrides: Record<string, unknown> = {}) {
   }).setProtectedHeader({ alg: 'RS256', kid: 'gate-key' }).sign(pair.privateKey);
 }
 
+async function serviceToken(commonName: string, overrides: Record<string, unknown> = {}) {
+  return new SignJWT({
+    iss: issuer,
+    aud: audience,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 300,
+    common_name: commonName,
+    ...overrides,
+  }).setProtectedHeader({ alg: 'RS256', kid: 'gate-key' }).sign(pair.privateKey);
+}
+
 function site(objects: Record<string, string>, failOnRead = false) {
   const reads: string[] = [];
   const bucket = {
@@ -159,5 +170,56 @@ describe('map Access gate', () => {
     }), env, {} as ExecutionContext);
     expect(denied.status).toBe(401);
     expect(denied.headers.get('access-control-allow-origin')).toBe('https://map.expedition75.com');
+  });
+
+  it('accepts an allowlisted service token only on health', async () => {
+    const manifest = JSON.stringify({
+      version: 'verify',
+      generated_at: new Date().toISOString(),
+      freshness: { tle_hours: 1, cloud_hours: 1, ok: true },
+    });
+    const worker = (await import('../src/index')).default;
+    const bucket = site({
+      'manifest.json': manifest,
+      'index.html': '<html>map</html>',
+      'sw.js': 'self.skipWaiting()',
+      'v/demo/passes.json': '{"passes":[]}',
+    });
+    const env = {
+      SITE: bucket,
+      CALIB: bucket,
+      CALIB_TOKEN: 'machine-secret',
+      ACCESS_TEAM_DOMAIN: issuer,
+      ACCESS_AUD: audience,
+      ACCESS_SERVICE_TOKEN_CLIENT_IDS: 'uptime-robot, other-monitor',
+      STALE_THRESHOLD_SECONDS: '7200',
+    } as unknown as Env;
+    const allowed = await serviceToken('uptime-robot');
+    const health = await worker.fetch(new Request('https://map.astroanil.dev/api/health', {
+      headers: { 'cf-access-jwt-assertion': allowed },
+    }), env, {} as ExecutionContext);
+    expect(health.status).toBe(200);
+    for (const path of ['/', '/sw.js', '/v/demo/passes.json']) {
+      const denied = await worker.fetch(new Request(`https://map.expedition75.com${path}`, {
+        headers: { 'cf-access-jwt-assertion': allowed },
+      }), env, {} as ExecutionContext);
+      expect(denied.status).toBe(401);
+    }
+    const unknown = await worker.fetch(new Request('https://map.astroanil.dev/api/health', {
+      headers: { 'cf-access-jwt-assertion': await serviceToken('not-on-the-list') },
+    }), env, {} as ExecutionContext);
+    expect(unknown.status).toBe(401);
+    const human = await worker.fetch(new Request('https://map.expedition75.com/api/health', {
+      headers: { 'cf-access-jwt-assertion': await token() },
+    }), env, {} as ExecutionContext);
+    expect(human.status).toBe(200);
+    const anonymous = await worker.fetch(new Request('https://map.astroanil.dev/api/health', {
+      headers: { 'x-calib-token': 'machine-secret' },
+    }), env, {} as ExecutionContext);
+    expect(anonymous.status).toBe(401);
+    const expired = await worker.fetch(new Request('https://map.astroanil.dev/api/health', {
+      headers: { 'cf-access-jwt-assertion': await serviceToken('uptime-robot', { exp: 1 }) },
+    }), env, {} as ExecutionContext);
+    expect(expired.status).toBe(401);
   });
 });
