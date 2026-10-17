@@ -16,17 +16,17 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const origin = 'http://127.0.0.1:45111';
 const sourceHashes = Object.fromEntries(['src/chrome-slots.ts', 'src/map-chrome.ts', 'src/style.css', 'src/map/adapters/maplibre/index.ts'].filter((name) => existsSync(resolve(root, name))).map((name) => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')]));
 type StartupPhase = { name: string; elapsedMs: number; error?: string };
-type RunPhase = <T>(name: string, action: () => Promise<T>) => Promise<T>;
+type RunPhase = <T>(name: string, action: () => Promise<T>, timeoutMs?: number) => Promise<T>;
 
 function startupPhases(receipts: StartupPhase[]): RunPhase {
-  return async (name, action) => {
+  return async (name, action, timeoutMs = 10_000) => {
     const started = Date.now();
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     try {
       // Bound each operation, including evaluate(), without charging earlier
       // healthy navigation/fixture work against the next native input's budget.
       const result = await Promise.race([action(), new Promise<never>((_, reject) => {
-        watchdog = setTimeout(() => reject(new Error(`Startup phase ${name} exceeded 10000ms`)), 10_000);
+        watchdog = setTimeout(() => reject(new Error(`Startup phase ${name} exceeded ${timeoutMs}ms`)), timeoutMs);
       })]);
       receipts.push({ name, elapsedMs: Date.now() - started });
       return result;
@@ -107,10 +107,29 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets, phase
   // Map starts loading by default; another tab click would start a second render before load completes.
   await phase('confirm default Map tab', () => page.waitForFunction(() =>
     document.querySelector('#view')?.className === 'view-map' && document.querySelector('#tab-map')?.classList.contains('active')));
-  await phase('load map style and ISS track', () => page.waitForFunction(() => {
-    const map = (window as unknown as TestWindow).__opdMap;
-    return map?.isStyleLoaded() && !!map.getSource('iss-track');
-  }));
+  // isStyleLoaded() also waits for every imagery tile and pending source update.
+  // Require the actual rendered fixture track instead of global source quiescence.
+  const mapSetupBudget = process.env.CI ? 30_000 : 10_000;
+  await phase('render initial ISS track', () => page.waitForFunction(() => {
+    const state = window as unknown as TestWindow & { __startupMapState?: string };
+    const map = state.__opdMap;
+    const trackSource = !!map?.getSource('iss-track');
+    const trackLayer = !!map?.getLayer('iss-track-layer');
+    const canvas = map?.getCanvas();
+    const readiness = {
+      map: !!map, styleLoaded: !!map?.isStyleLoaded(), trackSource, trackLayer,
+      trackSourceLoaded: trackSource && map.isSourceLoaded('iss-track'),
+      renderedTrackFeatures: trackLayer ? map.queryRenderedFeatures({ layers: ['iss-track-layer'] }).length : 0,
+      marker: !!document.querySelector('.iss-marker'), canvasWidth: canvas?.width ?? 0, canvasHeight: canvas?.height ?? 0,
+    };
+    const snapshot = JSON.stringify(readiness);
+    if (snapshot !== state.__startupMapState) {
+      state.__startupMapState = snapshot;
+      console.log('STARTUP_MAP_STATE ' + snapshot);
+    }
+    return readiness.trackSource && readiness.trackLayer && readiness.trackSourceLoaded
+      && readiness.renderedTrackFeatures > 0 && readiness.marker && readiness.canvasWidth > 0 && readiness.canvasHeight > 0;
+  }, undefined, { timeout: mapSetupBudget, polling: 100 }), mapSetupBudget);
   await phase('load fonts', () => page.evaluate(() => document.fonts.ready));
   const appliedInsets = await phase('measure applied insets', () => page.evaluate(() => {
     const probe = document.createElement('div');
@@ -138,6 +157,7 @@ for (const engine of [
   ])('settles and accepts native Controls clicks at $width×$height T$top/B$bottom/L$left/R$right', async ({ width, height, ...insets }) => {
     const browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
     const samples: unknown[] = [];
+    const mapReadiness: unknown[] = [];
     let ready = false;
     const phases: StartupPhase[] = [];
     const phase = startupPhases(phases);
@@ -146,6 +166,7 @@ for (const engine of [
       const page = await context.newPage();
       page.setDefaultTimeout(10_000);
       page.on('console', (message) => { if (message.text().startsWith('STARTUP_WRITES ')) samples.push(JSON.parse(message.text().slice(15))); });
+      page.on('console', (message) => { if (message.text().startsWith('STARTUP_MAP_STATE ')) mapReadiness.push(JSON.parse(message.text().slice(18))); });
       await page.addInitScript(() => {
         const counts = { class: 0, style: 0 };
         (window as unknown as { __startupWrites: typeof counts }).__startupWrites = counts;
@@ -189,7 +210,7 @@ for (const engine of [
         }
         ready = true;
       } catch (error) {
-        const evidence = { engine: engine.name, width, height, insets, ready, error: String(error), phases, samples, sourceRoot: root, sourceHashes };
+        const evidence = { engine: engine.name, width, height, insets, ready, error: String(error), phases, samples, mapReadiness, sourceRoot: root, sourceHashes };
         if (process.env.OPD_STARTUP_EVIDENCE_DIR) {
           mkdirSync(process.env.OPD_STARTUP_EVIDENCE_DIR, { recursive: true });
           writeFileSync(resolve(process.env.OPD_STARTUP_EVIDENCE_DIR, `${engine.name}-${width}x${height}-T${insets.top}-B${insets.bottom}.json`), JSON.stringify(evidence, null, 2));
@@ -235,7 +256,7 @@ for (const engine of [
         const after = { counts: { ...state.__startupWrites }, geometry: geometry() };
         return { before, after, writes: { class: after.counts.class - before.counts.class, style: after.counts.style - before.counts.style }, events: state.__shortEvents };
       });
-      const evidence = { engine: engine.name, width, height, insets, ready, phases, actions, idle, sourceRoot: root, sourceHashes };
+      const evidence = { engine: engine.name, width, height, insets, ready, phases, mapReadiness, actions, idle, sourceRoot: root, sourceHashes };
       if (process.env.OPD_STARTUP_EVIDENCE_DIR) {
         mkdirSync(process.env.OPD_STARTUP_EVIDENCE_DIR, { recursive: true });
         const path = resolve(process.env.OPD_STARTUP_EVIDENCE_DIR, `${engine.name}-${width}x${height}-T${insets.top}-B${insets.bottom}`);
@@ -246,5 +267,5 @@ for (const engine of [
       expect(idle.after.geometry).toEqual(idle.before.geometry);
       expect(idle.events.filter((event) => event.type === 'click').every((event) => event.trusted)).toBe(true);
     } finally { await browser.close(); }
-  }, 45_000);
+  }, process.env.CI ? 75_000 : 45_000);
 });
