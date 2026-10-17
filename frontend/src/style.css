@@ -4984,6 +4984,8 @@ body.map-slot-picker .view-map .satellite-picker-panel {
   width: var(--slot-picker-w);
   max-width: none;
   max-height: var(--slot-picker-h);
+  /* Keep native overlay-scrollbar hits outside controls, including label hover expansion. */
+  padding-right: calc(0.7rem + 1rem);
 }
 
 body.map-slot-time .view-map .map-command,

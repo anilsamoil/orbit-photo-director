@@ -97,22 +97,8 @@ async function geometry(page: Page, selector: string) {
 }
 
 async function click(page: Page, selector: string) {
-  const positions = await page.locator(selector).first().evaluate((element) => {
-    const result = [];
-    for (let parent = element.parentElement; parent; parent = parent.parentElement) result.push([parent.scrollLeft, parent.scrollTop]);
-    return result;
-  });
   await page.locator(selector).first().scrollIntoViewIfNeeded();
-  const scrolled = await page.locator(selector).first().evaluate((element, before) => {
-    let index = 0;
-    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-      const previous = before[index++];
-      if (previous && (parent.scrollLeft !== previous[0] || parent.scrollTop !== previous[1])) return true;
-    }
-    return false;
-  }, positions);
-  // Let native overlay scrollbars fade before the five unadjusted hit probes.
-  await page.waitForTimeout(scrolled ? 2800 : 120);
+  await page.waitForTimeout(120);
   const measured = await geometry(page, selector);
   expect(measured.points[0]!.owns, JSON.stringify({ selector, measured })).toBe(true);
   await page.mouse.click(measured.points[0]!.x, measured.points[0]!.y);
@@ -232,6 +218,55 @@ async function prepare(engine: typeof engines[number], target: Target) {
 }
 
 for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath))(`supported review regressions ${engine.name}`, () => {
+  it.each(targets.filter((target) => target.width === 402 || target.width === 874).flatMap((target) => [
+    { ...target, control: 'label', selector: '#satellite-picker-list label:nth-child(3)' },
+    { ...target, control: 'input', selector: '#satellite-picker-input' },
+  ]))('P2: picker $control accepts a native right-edge tap immediately after scrolling at $width×$height', async (target) => {
+    const { page, browser } = await prepare(engine, target);
+    try {
+      await click(page, '#map-legend-toggle');
+      await click(page, '#toggle-satellite-picker');
+      await page.waitForSelector('#satellite-picker-panel:not([hidden])');
+      const before = await page.evaluate((selector) => {
+        const panel = document.querySelector('#satellite-picker-panel')!;
+        const element = document.querySelector(selector)!;
+        const started = performance.now();
+        const events: { type: string; trusted: boolean; owns: boolean; target: string; elapsed: number }[] = [];
+        (window as unknown as { __pickerEdge: { started: number; events: typeof events } }).__pickerEdge = { started, events };
+        for (const type of ['pointerdown', 'pointerup', 'click', 'focus']) document.addEventListener(type, (event) => {
+          const hit = event.target as Element;
+          events.push({ type, trusted: event.isTrusted, owns: hit === element || element.contains(hit), target: hit.id || hit.tagName, elapsed: performance.now() - started });
+        }, true);
+        return { scrollTop: panel.scrollTop };
+      }, target.selector);
+      await page.locator(target.selector).scrollIntoViewIfNeeded();
+      // Exercise the visible native scrollbar, not the settled state after its fade.
+      await page.waitForTimeout(100);
+      const measured = await geometry(page, target.selector);
+      const point = measured.points[2]!;
+      await page.touchscreen.tap(point.x, point.y);
+      await page.waitForTimeout(100);
+      const after = await page.evaluate((selector) => {
+        const element = document.querySelector(selector)!;
+        const edge = (window as unknown as { __pickerEdge: { started: number; events: { type: string; trusted: boolean; owns: boolean; target: string; elapsed: number }[] } }).__pickerEdge;
+        return {
+          scrollTop: document.querySelector('#satellite-picker-panel')!.scrollTop,
+          activated: element.matches('label') ? element.querySelector<HTMLInputElement>('input')!.checked : document.activeElement === element,
+          events: edge.events,
+        };
+      }, target.selector);
+      await evidence(page, `${engine.name}-P2-${target.width}x${target.height}-${target.control}`, { target, before, measured, after });
+      expect.soft(after.scrollTop, JSON.stringify({ before, after })).toBeGreaterThan(before.scrollTop);
+      expect.soft(measured.rect.height).toBeGreaterThanOrEqual(44);
+      expect.soft(point.owns, JSON.stringify({ point, after })).toBe(true);
+      expect.soft(after.activated, JSON.stringify(after)).toBe(true);
+      expect.soft(after.events.some((event) => event.type === 'click' && event.trusted && event.owns), JSON.stringify(after)).toBe(true);
+      const down = after.events.find((event) => event.type === 'pointerdown');
+      expect.soft(down?.trusted, JSON.stringify(after)).toBe(true);
+      expect.soft(down?.elapsed, JSON.stringify(after)).toBeLessThan(1000);
+    } finally { await browser.close(); }
+  }, 60_000);
+
   it.each(targets)('F1: picker has 44px effective native targets at $width×$height', async (target) => {
     const { page, browser } = await prepare(engine, target);
     try {
