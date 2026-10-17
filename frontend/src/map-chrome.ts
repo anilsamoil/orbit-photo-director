@@ -259,26 +259,23 @@ function syncFooterClearance(pane: HTMLElement): void {
   set('--map-banner-bottom', Math.max(bottomInset, shotList.h));
   const footer = boxOf(document.getElementById('status-banner'));
   const floor = Math.min(footer.h ? footer.y : window.innerHeight - bottomInset, shotList.h ? shotList.y : window.innerHeight);
-  const corner = boxOf(document.getElementById('map-chrome-toggle'));
-  const cornerLift = Number.parseFloat(document.body.style.getPropertyValue('--map-corner-lift')) || 0;
-  set('--map-corner-lift', corner.h ? Math.ceil(Math.max(0, corner.y + corner.h + cornerLift - floor + 8)) : 0);
+  const clearance = (name: string, node: Element | null): number => {
+    set(name, 0);
+    const box = boxOf(node);
+    return box.h ? Math.ceil(Math.max(0, box.y + box.h - floor + 8)) : 0;
+  };
+  set('--map-corner-lift', clearance('--map-corner-lift', document.getElementById('map-chrome-toggle')));
   const chip = boxOf(pane.querySelector('.map-controls-time'));
   const zoom = boxOf(pane.querySelector('.maplibregl-ctrl-zoom-in'));
   const naturalOverflow = !document.body.classList.contains('map-slot-time')
     && chip.y < zoom.y && chip.y + chip.h > zoom.y;
   const zoomRow = needsZoomRow(zoom, naturalOverflow ? { ...chip, y: zoom.y } : chip, floor);
   if (document.body.classList.contains('map-zoom-row') !== zoomRow) document.body.classList.toggle('map-zoom-row', zoomRow);
-  if (window.innerWidth <= 719 || document.body.classList.contains('map-chrome-hidden')) {
+  if (window.innerWidth <= 719 || document.body.classList.contains('map-chrome-hidden') || document.body.classList.contains('map-slot-time')) {
     set('--map-time-lift', 0);
     return;
   }
-  const current = Number.parseFloat(document.body.style.getPropertyValue('--map-time-lift')) || 0;
-  if (document.body.classList.contains('map-slot-time')) {
-    set('--map-time-lift', 0);
-    return;
-  }
-  const strip = boxOf(pane.querySelector('.map-command'));
-  set('--map-time-lift', strip.h ? Math.ceil(Math.max(0, strip.y + strip.h + current - floor + 8)) : 0);
+  set('--map-time-lift', clearance('--map-time-lift', pane.querySelector('.map-command')));
 }
 
 function syncMapChrome(): void {
