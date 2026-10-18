@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const WEBKIT_PASSED_FLOOR = 190;
 
@@ -27,13 +27,23 @@ export type WebKitFloorReport = {
   readonly reasons: readonly string[];
 };
 
-type Assertion = { readonly fullName: string; readonly status: string };
+type Assertion = {
+  readonly fullName: string;
+  readonly status: string;
+  readonly ancestorTitles: readonly string[];
+};
 type TestFile = { readonly name: string; readonly assertionResults: readonly Assertion[] };
 type VitestReport = { readonly testResults: readonly TestFile[] };
+
+const frontendRoot = import.meta.url.startsWith('file:')
+  ? resolve(fileURLToPath(import.meta.url), '..', '..')
+  : process.cwd();
 
 export function evaluateWebKitReports(reports: readonly unknown[]): WebKitFloorReport {
   const passedByFile = new Map<string, number>();
   for (const file of Object.keys(BROWSER_FILE_MINIMUMS)) passedByFile.set(file, 0);
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
   let passed = 0;
   let skipped = 0;
   let failed = 0;
@@ -42,7 +52,13 @@ export function evaluateWebKitReports(reports: readonly unknown[]): WebKitFloorR
       const file = browserFile(testFile.name);
       if (file === null) continue;
       for (const assertion of testFile.assertionResults) {
-        if (!assertion.fullName.includes('WebKit')) continue;
+        if (!isWebKitCase(assertion)) continue;
+        const id = `${file}\0${assertion.fullName}`;
+        if (seen.has(id)) {
+          duplicates.push(`duplicate webkit case ${file} ${assertion.fullName}`);
+          continue;
+        }
+        seen.add(id);
         if (assertion.status === 'passed') {
           passed += 1;
           passedByFile.set(file, (passedByFile.get(file) ?? 0) + 1);
@@ -66,25 +82,45 @@ export function evaluateWebKitReports(reports: readonly unknown[]): WebKitFloorR
   for (const row of perFile) {
     if (row.passed < row.minimum) reasons.push(`${row.file} passed ${row.passed} below minimum ${row.minimum}`);
   }
+  reasons.push(...duplicates);
   return { passed, skipped, failed, perFile, reasons };
 }
 
 export function loadWebKitReports(path: string): unknown[] {
   const stats = statSync(path);
-  if (stats.isDirectory()) {
-    const files = readdirSync(path).filter((name) => name.endsWith('.json')).sort();
-    if (files.length === 0) throw new Error(`no vitest json reports in ${path}`);
-    return files.map((name) => JSON.parse(readFileSync(resolve(path, name), 'utf8')) as unknown);
+  if (!stats.isDirectory()) return [JSON.parse(readFileSync(path, 'utf8')) as unknown];
+  const files = jsonFiles(path);
+  if (files.length === 0) throw new Error(`no vitest json reports in ${path}`);
+  return files.map((file) => JSON.parse(readFileSync(file, 'utf8')) as unknown);
+}
+
+function jsonFiles(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = resolve(dir, entry.name);
+    if (entry.isDirectory()) found.push(...jsonFiles(full));
+    else if (entry.name.endsWith('.json')) found.push(full);
   }
-  return [JSON.parse(readFileSync(path, 'utf8')) as unknown];
+  found.sort();
+  return found;
 }
 
 function browserFile(name: string): string | null {
   const normalized = name.replaceAll('\\', '/');
-  for (const file of Object.keys(BROWSER_FILE_MINIMUMS)) {
-    if (normalized.endsWith(file)) return file;
+  const candidates = [normalized];
+  if (!normalized.startsWith('/')) {
+    candidates.push(relative(frontendRoot, resolve(frontendRoot, normalized)).replaceAll('\\', '/'));
+  }
+  for (const candidate of candidates) {
+    for (const file of Object.keys(BROWSER_FILE_MINIMUMS)) {
+      if (candidate === file || candidate.endsWith(`/${file}`)) return file;
+    }
   }
   return null;
+}
+
+function isWebKitCase(assertion: Assertion): boolean {
+  return assertion.ancestorTitles.some((title) => /(?:^|\s)WebKit(?:$|\s)/.test(title));
 }
 
 function vitestReport(value: unknown): VitestReport {
@@ -104,7 +140,10 @@ function vitestReport(value: unknown): VitestReport {
           const fullName = row?.fullName;
           const status = row?.status;
           if (typeof fullName !== 'string' || typeof status !== 'string') throw new Error('vitest assertion is missing fullName or status');
-          return { fullName, status };
+          const ancestorTitles = Array.isArray(row?.ancestorTitles)
+            ? row.ancestorTitles.filter((title): title is string => typeof title === 'string')
+            : [];
+          return { fullName, status, ancestorTitles };
         }),
       };
     }),
@@ -122,7 +161,14 @@ function main(): void {
     process.stderr.write('usage: webkit-floor.ts <vitest-json-or-directory>\n');
     process.exit(2);
   }
-  const verdict = evaluateWebKitReports(loadWebKitReports(resolve(target)));
+  let verdict: WebKitFloorReport;
+  try {
+    verdict = evaluateWebKitReports(loadWebKitReports(resolve(target)));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`webkit floor: ${message.replace(/\s+/g, ' ').trim()}\n`);
+    process.exit(1);
+  }
   if (verdict.reasons.length > 0) {
     for (const reason of verdict.reasons) process.stderr.write(`${reason}\n`);
     process.exit(1);

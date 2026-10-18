@@ -7,10 +7,26 @@ import { BROWSER_FILE_MINIMUMS, WEBKIT_PASSED_FLOOR, evaluateWebKitReports, load
 
 const root = resolve(__dirname, '..');
 
+const WEBKIT_DESCRIBE: Readonly<Record<string, string>> = {
+  'test/map-time-skip-safe-area.test.ts': 'trusted time controls WebKit',
+  'test/pass-row-fit.test.ts': 'WebKit rendered pin pass row',
+  'test/map-review-targets.test.ts': 'supported review regressions WebKit',
+  'test/safe-area-layout.test.ts': 'safe-area painted layout WebKit',
+  'test/map-corner-lift.test.ts': 'map corner lift WebKit',
+  'test/map-chrome-startup.test.ts': 'supported safe-area startup WebKit',
+  'test/map-repin-safe-area.test.ts': 'trusted centered re-pin WebKit',
+  'test/map-chrome-idle.test.ts': 'map chrome tab lifecycle WebKit',
+  'test/map-picker-inspector-safe-area.test.ts': 'picker inspector safe insets WebKit',
+  'test/map-satellite-picker-safe-area.test.ts': 'trusted satellite picker WebKit',
+  'test/map-bearing-retarget.test.ts': 'bearing retarget WebKit',
+  'test/map-joint-panel-convergence.test.ts': 'joint panel convergence WebKit',
+};
+
 function cases(count: number, status: string, label: string): { ancestorTitles: string[]; fullName: string; status: string }[] {
+  const suite = WEBKIT_DESCRIBE[label] ?? 'WebKit';
   return Array.from({ length: count }, (_, index) => ({
-    ancestorTitles: ['WebKit'],
-    fullName: `${label} WebKit case ${index}`,
+    ancestorTitles: [suite],
+    fullName: `${suite} case ${index}`,
     status,
   }));
 }

@@ -49,7 +49,8 @@ jobs:
     # Playwright 1.55.0 has no WebKit build for ubuntu 26.04. ubuntu-latest starts
     # moving there on 2026-10-19.
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # c629d11 ran 53m48s against a 60 minute cap. Re-measure after #312.
+    timeout-minutes: 90
     name: Frontend
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +73,6 @@ jobs:
           set +e
           /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose --reporter=json --outputFile.json=webkit-report.json
           status=$?
-          set -e
           bun scripts/webkit-floor.ts webkit-report.json
           floor=$?
           if [ "$status" -ne 0 ]; then
