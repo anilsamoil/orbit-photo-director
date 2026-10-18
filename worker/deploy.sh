@@ -93,13 +93,57 @@ if [[ "$emails" == *$'\n'* || "$emails" == *$'\r'* ]]; then
   exit 2
 fi
 
-if ! printf '%s' "$emails" | node --input-type=module -e 'import { parseEmailAllowlist } from "./src/email-allowlist.mjs"; import { readFileSync } from "node:fs"; process.exit(parseEmailAllowlist(readFileSync(0, "utf8")).length > 0 ? 0 : 1);'; then
-  if [ "$dry" -eq 0 ]; then
-    echo "ERROR: ACCESS_ALLOWED_EMAILS is empty. Refusing to deploy." >&2
-    exit 2
-  fi
-  echo "WARN: ACCESS_ALLOWED_EMAILS is empty. --dry-run still passes an empty binding." >&2
+if ! command -v node >/dev/null 2>&1; then
+  echo "ERROR: node is not on PATH, so the email allowlist parser did not run." >&2
+  exit 127
 fi
+
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+unset ACCESS_ALLOWED_EMAILS
+parser_raw=$(
+  set +e
+  printf '%s' "$emails" | ACCESS_ALLOWED_EMAILS= node --input-type=module -e 'import { parseEmailAllowlist } from "./src/email-allowlist.mjs"; setTimeout(() => { process.exit(2); }, 10000).unref(); const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk); const raw = Buffer.concat(chunks).toString("utf8"); const list = parseEmailAllowlist(raw); process.stdout.write(list.length > 0 ? "ok\n" : "empty\n");' 2>/dev/null
+  parser_status=${PIPESTATUS[1]}
+  printf '%s' "__OPD_STATUS__:${parser_status}"
+)
+parser_status=${parser_raw##*__OPD_STATUS__:}
+parser_out=${parser_raw%__OPD_STATUS__:*}
+
+case "$parser_status" in
+  127)
+    echo "ERROR: node is not on PATH, so the email allowlist parser did not run." >&2
+    exit 127
+    ;;
+  2)
+    echo "ERROR: the email allowlist parser timed out after 10s." >&2
+    exit 2
+    ;;
+  0)
+    ;;
+  *)
+    echo "ERROR: the email allowlist parser failed (exit ${parser_status})." >&2
+    exit 2
+    ;;
+esac
+case "$parser_out" in
+  $'ok\n')
+    ;;
+  $'empty\n')
+    if [ "$dry" -eq 0 ]; then
+      echo "ERROR: ACCESS_ALLOWED_EMAILS is empty. Refusing to deploy." >&2
+      exit 2
+    fi
+    echo "WARN: ACCESS_ALLOWED_EMAILS is empty. --dry-run still passes an empty binding." >&2
+    ;;
+  *)
+    echo "ERROR: the email allowlist parser printed unexpected output." >&2
+    exit 2
+    ;;
+esac
+trap - HUP INT TERM
 
 if [ -z "$ids" ]; then
   echo "WARN: ACCESS_SERVICE_TOKEN_CLIENT_IDS is unset. This deploy empties the allowlist. /api/health stays human-only." >&2
