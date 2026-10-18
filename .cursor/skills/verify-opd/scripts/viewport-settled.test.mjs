@@ -118,6 +118,24 @@ function hungSend(abortHangs) {
   };
 }
 
+function hangSend(which) {
+  return (method, params) => {
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      if (which === 'viewport') return new Promise(() => {});
+      return {};
+    }
+    if (method !== 'Runtime.evaluate') throw new Error(`unexpected ${method}`);
+    const expression = params?.expression ?? '';
+    if (which === 'install' && expression.includes('__opdViewportSettled = new Promise')) {
+      return new Promise(() => {});
+    }
+    if (expression === 'window.__opdViewportSettled' || expression.includes('__opdAbortViewportLayout?.()')) {
+      return new Promise(() => {});
+    }
+    return { result: { value: true } };
+  };
+}
+
 test('a stalled abort still rejects at the drive deadline', { timeout: 20_000 }, async () => {
   const result = await raceCall(whenViewportLaidOut(hungSend(true), 390, 520), 13_000);
   assert.equal(result.status, 'rejected', JSON.stringify(result));
@@ -130,6 +148,20 @@ test('a failed viewport command rejects while abort is still pending', { timeout
   assert.equal(result.status, 'rejected', JSON.stringify(result));
   assert.match(result.message, /viewport command failed/);
   assert.ok(result.elapsed < 500, String(result.elapsed));
+});
+
+test('a hung install evaluate rejects at the drive deadline', { timeout: 20_000 }, async () => {
+  const result = await raceCall(whenViewportLaidOut(hangSend('install'), 390, 520), 13_000);
+  assert.equal(result.status, 'rejected', JSON.stringify(result));
+  assert.match(result.message, /"deadline":true/);
+  assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
+});
+
+test('a hung setViewport rejects at the drive deadline', { timeout: 20_000 }, async () => {
+  const result = await raceCall(whenViewportLaidOut(hangSend('viewport'), 390, 520), 13_000);
+  assert.equal(result.status, 'rejected', JSON.stringify(result));
+  assert.match(result.message, /"deadline":true/);
+  assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
 });
 
 for (const engine of ['Chrome', 'WebKit']) {
@@ -221,6 +253,30 @@ for (const engine of ['Chrome', 'WebKit']) {
       assert.ok(Date.now() - started < 2_000);
       assert.equal(trace.timers, 0);
       assert.equal(trace.listeners, 0);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`an already matching viewport resolves after two frames on ${engine}`, { timeout: 15_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      const send = playwrightSend(page);
+      await whenViewportLaidOut(send, 390, 520);
+      await stallFrames(page, false, 2);
+      const started = Date.now();
+      await whenViewportLaidOut(send, 390, 520);
+      const elapsed = Date.now() - started;
+      const trace = await frameTrace(page);
+      assert.ok(elapsed < 2_000, String(elapsed));
+      assert.deepEqual(trace.resizes, []);
+      assert.deepEqual(trace.scheduledFrames, [1, 2]);
+      assert.deepEqual(trace.pendingFrames, []);
+      assert.equal(trace.timers, 0);
+      assert.equal(trace.listeners, 0);
+      const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+      assert.deepEqual(size, [390, 520]);
     } finally {
       await browser.close();
     }

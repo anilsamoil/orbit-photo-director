@@ -3090,25 +3090,8 @@ function voidViewportAbort(send) {
   aborting.catch(() => {});
 }
 
-async function readViewportSettled(send) {
-  let timer;
-  const pending = evaluate(send, 'window.__opdViewportSettled');
-  pending.catch(() => {});
-  const deadline = new Promise((resolve) => {
-    timer = setTimeout(() => {
-      voidViewportAbort(send);
-      resolve({ deadline: true });
-    }, VIEWPORT_DEADLINE_MS);
-  });
-  try {
-    return await Promise.race([pending, deadline]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export async function whenViewportLaidOut(send, width, height) {
-  await evaluate(send, `(() => {
+function viewportLayoutScript(width, height) {
+  return `(() => {
     const width = ${width};
     const height = ${height};
     window.__opdViewportSettled = new Promise((resolve) => {
@@ -3128,9 +3111,8 @@ export async function whenViewportLaidOut(send, width, height) {
         cleanup();
         resolve(value);
       }
-      function onResize() {
+      function finishFrames() {
         if (finishing || settled) return;
-        if (window.innerWidth !== width || window.innerHeight !== height) return;
         finishing = true;
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -3140,23 +3122,54 @@ export async function whenViewportLaidOut(send, width, height) {
           });
         });
       }
+      function onResize() {
+        if (finishing || settled) return;
+        if (window.innerWidth !== width || window.innerHeight !== height) return;
+        finishFrames();
+      }
       const timer = setTimeout(() => {
         done({ w: window.innerWidth, h: window.innerHeight, timedOut: true });
       }, ${VIEWPORT_LAYOUT_MS});
       window.__opdAbortViewportLayout = () => done({ w: window.innerWidth, h: window.innerHeight, aborted: true });
       window.addEventListener('resize', onResize);
+      if (window.innerWidth === width && window.innerHeight === height) finishFrames();
     });
     return true;
-  })()`);
+  })()`;
+}
+
+async function readViewportSettled(send) {
+  return evaluate(send, 'window.__opdViewportSettled');
+}
+
+async function layOutViewport(send, width, height) {
+  await evaluate(send, viewportLayoutScript(width, height));
   try {
     await setViewport(send, width, height, true);
   } catch (error) {
     voidViewportAbort(send);
     throw error;
   }
-  const settled = await readViewportSettled(send);
-  if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height) {
-    throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
+  return readViewportSettled(send);
+}
+
+export async function whenViewportLaidOut(send, width, height) {
+  let timer;
+  const pending = layOutViewport(send, width, height);
+  pending.catch(() => {});
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      voidViewportAbort(send);
+      resolve({ deadline: true });
+    }, VIEWPORT_DEADLINE_MS);
+  });
+  try {
+    const settled = await Promise.race([pending, deadline]);
+    if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height) {
+      throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
