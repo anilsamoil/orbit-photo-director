@@ -8,16 +8,21 @@ export interface CalibrationAuthEnv {
   ACCESS_PROFILE_BINDINGS?: string;
   ACCESS_PROFILE_GRANTS?: string;
   ACCESS_SERVICE_TOKEN_CLIENT_IDS?: string;
+  ACCESS_ALLOWED_EMAILS?: string;
 }
 
 let cachedIssuer = '';
 let cachedKeys: ReturnType<typeof createRemoteJWKSet> | undefined;
 
+declare const admittedEmail: unique symbol;
+
+export type AdmittedEmail = string & { readonly [admittedEmail]: true };
+
 export interface AccessIdentity {
   kind: 'access';
   issuer: string;
   subject: string;
-  email: string;
+  email: AdmittedEmail;
   displayName?: string;
 }
 
@@ -38,12 +43,48 @@ function serviceClientIds(raw: string | undefined): Set<string> {
   return new Set(ids);
 }
 
-function humanIdentity(payload: JWTPayload, issuer: string): AccessIdentity | null {
+interface VerifiedHumanClaim {
+  issuer: string;
+  subject: string;
+  email: string;
+  displayName?: string;
+}
+
+type EmailAllowlist = ReadonlySet<string>;
+
+function mailboxKey(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function humanClaim(payload: JWTPayload, issuer: string): VerifiedHumanClaim | null {
   if (typeof payload.email !== 'string' || !payload.email.includes('@')
     || typeof payload.sub !== 'string' || !payload.sub) return null;
   return {
-    kind: 'access', issuer, subject: payload.sub, email: payload.email,
+    issuer, subject: payload.sub, email: payload.email,
     ...(typeof payload.name === 'string' ? { displayName: payload.name } : {}),
+  };
+}
+
+function parseEmailAllowlist(raw: string | undefined): EmailAllowlist {
+  if (!raw) return new Set();
+  return new Set(raw.split(',').map((token) => mailboxKey(token)).filter((key) => key.length > 0));
+}
+
+function admitHuman(
+  claim: VerifiedHumanClaim,
+  rawAllowlist: string | undefined,
+): { principal: AccessIdentity } | { denied: Response } {
+  if (!parseEmailAllowlist(rawAllowlist).has(mailboxKey(claim.email))) {
+    return { denied: jsonResponse({ error: 'email_not_allowlisted' }, 403) };
+  }
+  return {
+    principal: {
+      kind: 'access',
+      issuer: claim.issuer,
+      subject: claim.subject,
+      email: claim.email as AdmittedEmail,
+      ...(claim.displayName !== undefined ? { displayName: claim.displayName } : {}),
+    },
   };
 }
 
@@ -90,9 +131,9 @@ export async function authenticateCalibration(
   }
   const verified = await verifyAccessJwt(request, env, assertion, ['exp', 'iat', 'sub', 'email']);
   if ('denied' in verified) return verified;
-  const human = humanIdentity(verified.payload, verified.issuer);
-  if (!human) return { denied: jsonResponse({ error: 'unauthorized' }, 401) };
-  return { principal: human };
+  const claim = humanClaim(verified.payload, verified.issuer);
+  if (!claim) return { denied: jsonResponse({ error: 'unauthorized' }, 401) };
+  return admitHuman(claim, env.ACCESS_ALLOWED_EMAILS);
 }
 
 export async function authenticateHealth(
@@ -105,8 +146,8 @@ export async function authenticateHealth(
   }
   const verified = await verifyAccessJwt(request, env, assertion, ['exp', 'iat']);
   if ('denied' in verified) return verified;
-  const human = humanIdentity(verified.payload, verified.issuer);
-  if (human) return { principal: human };
+  const claim = humanClaim(verified.payload, verified.issuer);
+  if (claim) return admitHuman(claim, env.ACCESS_ALLOWED_EMAILS);
   const commonName = typeof verified.payload.common_name === 'string'
     ? verified.payload.common_name.trim() : '';
   if (commonName && serviceClientIds(env.ACCESS_SERVICE_TOKEN_CLIENT_IDS).has(commonName)) {

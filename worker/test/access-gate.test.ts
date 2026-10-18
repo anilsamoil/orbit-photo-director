@@ -84,6 +84,7 @@ function envFor(objects: Record<string, string>, failOnRead = false): Env {
     CALIB_TOKEN: 'machine-secret',
     ACCESS_TEAM_DOMAIN: issuer,
     ACCESS_AUD: audience,
+    ACCESS_ALLOWED_EMAILS: 'realvr@gmail.com',
     STALE_THRESHOLD_SECONDS: '7200',
   } as unknown as Env;
 }
@@ -192,6 +193,7 @@ describe('map Access gate', () => {
       ACCESS_TEAM_DOMAIN: issuer,
       ACCESS_AUD: audience,
       ACCESS_SERVICE_TOKEN_CLIENT_IDS: 'uptime-robot, other-monitor',
+      ACCESS_ALLOWED_EMAILS: 'realvr@gmail.com',
       STALE_THRESHOLD_SECONDS: '7200',
     } as unknown as Env;
     const allowed = await serviceToken('uptime-robot');
@@ -221,5 +223,88 @@ describe('map Access gate', () => {
       headers: { 'cf-access-jwt-assertion': await serviceToken('uptime-robot', { exp: 1 }) },
     }), env, {} as ExecutionContext);
     expect(expired.status).toBe(401);
+  });
+});
+
+function allowEnv(emails?: string, extra: Record<string, string> = {}): Env {
+  const bucket = site({
+    'sw.js': 'self.skipWaiting()',
+    'index.html': '<html>map</html>',
+    'manifest.json': JSON.stringify({
+      version: 'verify',
+      generated_at: new Date().toISOString(),
+      freshness: { tle_hours: 1, cloud_hours: 1, ok: true },
+    }),
+  });
+  const env: Record<string, unknown> = {
+    SITE: bucket,
+    CALIB: bucket,
+    CALIB_TOKEN: 'machine-secret',
+    ACCESS_TEAM_DOMAIN: issuer,
+    ACCESS_AUD: audience,
+    STALE_THRESHOLD_SECONDS: '7200',
+    ...extra,
+  };
+  if (emails !== undefined) env.ACCESS_ALLOWED_EMAILS = emails;
+  return env as unknown as Env;
+}
+
+async function allowFetch(path: string, env: Env, jwt?: string, extra: Record<string, string> = {}) {
+  const worker = (await import('../src/index')).default;
+  const headers = new Headers(extra);
+  if (jwt) headers.set('cf-access-jwt-assertion', jwt);
+  return worker.fetch(new Request(`https://map.astroanil.dev${path}`, { headers }), env, {} as ExecutionContext);
+}
+
+describe('email allowlist', () => {
+  it('admits a listed mailbox on a gated path and rejects a different mailbox', async () => {
+    const env = allowEnv('person@example.com');
+    const allowed = await allowFetch('/sw.js', env, await token({ email: 'person@example.com' }));
+    expect(allowed.status).toBe(200);
+    const denied = await allowFetch('/sw.js', env, await token({ email: 'other@example.com' }));
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: 'email_not_allowlisted' });
+  });
+
+  it('matches trim and case on the claim and the list, and rejects a longer suffix', async () => {
+    const spacedList = allowEnv(' person@example.com ');
+    const cased = await allowFetch('/sw.js', spacedList, await token({ email: 'Person@Example.com' }));
+    expect(cased.status).toBe(200);
+    const spacedClaim = await allowFetch('/sw.js', allowEnv('person@example.com'), await token({ email: ' person@example.com ' }));
+    expect(spacedClaim.status).toBe(200);
+    const evil = await allowFetch('/sw.js', spacedList, await token({ email: 'person@example.com.evil' }));
+    expect(evil.status).toBe(403);
+    expect(await evil.json()).toEqual({ error: 'email_not_allowlisted' });
+    const neighbor = await allowFetch('/sw.js', spacedList, await token({ email: 'notperson@example.com' }));
+    expect(neighbor.status).toBe(403);
+    expect(await neighbor.json()).toEqual({ error: 'email_not_allowlisted' });
+  });
+
+  it('returns 403 for a human when the list is empty, unset, or only commas and whitespace', async () => {
+    const lists: Array<string | undefined> = ['', '   ', ',', ' , ', undefined];
+    for (const emails of lists) {
+      const env = emails === undefined ? allowEnv() : allowEnv(emails);
+      for (const path of ['/sw.js', '/api/health']) {
+        const response = await allowFetch(path, env, await token({ email: 'person@example.com' }));
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: 'email_not_allowlisted' });
+      }
+    }
+  });
+
+  it('keeps service health and machine profiles when the email list is empty, and does not fall through to common_name', async () => {
+    const empty = allowEnv('', { ACCESS_SERVICE_TOKEN_CLIENT_IDS: 'uptime-robot' });
+    const human = await allowFetch('/api/health', empty, await token({ email: 'person@example.com' }));
+    expect(human.status).toBe(403);
+    expect(await human.json()).toEqual({ error: 'email_not_allowlisted' });
+    const health = await allowFetch('/api/health', empty, await serviceToken('uptime-robot'));
+    expect(health.status).toBe(200);
+    const profiles = await allowFetch('/api/profiles/anil/targets', allowEnv(''), undefined, { 'x-calib-token': 'machine-secret' });
+    expect(profiles.status).toBe(200);
+    const borrowed = await allowFetch('/api/health', allowEnv('person@example.com', {
+      ACCESS_SERVICE_TOKEN_CLIENT_IDS: 'uptime-robot',
+    }), await token({ email: 'other@example.com', common_name: 'uptime-robot' }));
+    expect(borrowed.status).toBe(403);
+    expect(await borrowed.json()).toEqual({ error: 'email_not_allowlisted' });
   });
 });
