@@ -165,6 +165,163 @@ EOF
 } > "$hold_dir/bin/sweep"
 
 chmod +x "$hold_dir/bin/note" "$hold_dir/bin/reap-one" "$hold_dir/bin/reap" "$hold_dir/bin/collect" "$hold_dir/bin/sweep"
+cat > "$hold_dir/bin/stall.py" << 'PY'
+#!/usr/bin/env python3
+"""Delay the second write to fd 1 so an early-closing reader can win."""
+import array
+import ctypes
+import errno
+import os
+import select
+import signal
+import socket
+import struct
+import sys
+import time
+
+BPF_LD_W_ABS = 0x20
+BPF_JMP_JEQ_K = 0x15
+BPF_RET_K = 0x06
+SECCOMP_RET_USER_NOTIF = 0x7FC00000
+SECCOMP_RET_ALLOW = 0x7FFF0000
+SECCOMP_SET_MODE_FILTER = 1
+SECCOMP_FILTER_FLAG_NEW_LISTENER = 1 << 3
+SECCOMP_USER_NOTIF_FLAG_CONTINUE = 1
+PR_SET_NO_NEW_PRIVS = 38
+SYS_seccomp = 317
+NR_write = 1
+DELAY_S = 0.03
+
+
+class SockFilter(ctypes.Structure):
+    _fields_ = [
+        ("code", ctypes.c_uint16),
+        ("jt", ctypes.c_uint8),
+        ("jf", ctypes.c_uint8),
+        ("k", ctypes.c_uint32),
+    ]
+
+
+class SockFprog(ctypes.Structure):
+    _fields_ = [("len", ctypes.c_uint16), ("filter", ctypes.POINTER(SockFilter))]
+
+
+def stmt(code, k):
+    return SockFilter(code, 0, 0, k)
+
+
+def jump(code, k, jt, jf):
+    return SockFilter(code, jt, jf, k)
+
+
+def ioc(direction, nr, size):
+    return (direction << 30) | (size << 16) | (ord("!") << 8) | nr
+
+
+def main():
+    if len(sys.argv) < 2:
+        return 2
+    libc = ctypes.CDLL(None, use_errno=True)
+    parent, child_sock = socket.socketpair()
+    filters = (SockFilter * 6)(
+        stmt(BPF_LD_W_ABS, 0),
+        jump(BPF_JMP_JEQ_K, NR_write, 0, 3),
+        stmt(BPF_LD_W_ABS, 16),
+        jump(BPF_JMP_JEQ_K, 1, 0, 1),
+        stmt(BPF_RET_K, SECCOMP_RET_USER_NOTIF),
+        stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
+    )
+    prog = SockFprog(6, filters)
+    pid = os.fork()
+    if pid == 0:
+        parent.close()
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+        if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+            os._exit(127)
+        listener = libc.syscall(
+            SYS_seccomp,
+            SECCOMP_SET_MODE_FILTER,
+            SECCOMP_FILTER_FLAG_NEW_LISTENER,
+            ctypes.byref(prog),
+        )
+        if listener < 0:
+            os._exit(127)
+        child_sock.sendmsg(
+            [b"x"],
+            [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [listener]).tobytes())],
+        )
+        os.close(listener)
+        child_sock.close()
+        os.execvp(sys.argv[1], sys.argv[1:])
+        os._exit(127)
+
+    child_sock.close()
+    _, anc, _, _ = parent.recvmsg(1, socket.CMSG_SPACE(4))
+    parent.close()
+    listener = None
+    for level, typ, data in anc:
+        if level == socket.SOL_SOCKET and typ == socket.SCM_RIGHTS:
+            listener = struct.unpack("i", data[:4])[0]
+    if listener is None:
+        return 127
+
+    sizes = (ctypes.c_uint16 * 3)()
+    got = libc.syscall(SYS_seccomp, 3, 0, ctypes.byref(sizes))
+    if got != 0:
+        notif_size, resp_size = 80, 24
+    else:
+        notif_size, resp_size = int(sizes[0]), int(sizes[1])
+    recv_ioctl = ioc(3, 0, notif_size)
+    send_ioctl = ioc(3, 1, resp_size)
+    counts = {}
+    libc.ioctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_void_p]
+    while True:
+        ready, _, _ = select.select([listener], [], [], 0.2)
+        if not ready:
+            wpid, status = os.waitpid(pid, os.WNOHANG)
+            if wpid == pid:
+                os.close(listener)
+                if os.WIFEXITED(status):
+                    return os.WEXITSTATUS(status)
+                if os.WIFSIGNALED(status):
+                    return 128 + os.WTERMSIG(status)
+                return 1
+            continue
+        buf = ctypes.create_string_buffer(notif_size)
+        rc = libc.ioctl(listener, recv_ioctl, buf)
+        if rc != 0:
+            err = ctypes.get_errno()
+            if err in (errno.EINTR, errno.EAGAIN):
+                continue
+            break
+        raw = buf.raw
+        note_id = struct.unpack_from("<Q", raw, 0)[0]
+        note_pid = struct.unpack_from("<I", raw, 8)[0]
+        fd = struct.unpack_from("<Q", raw, 32)[0]
+        nr = struct.unpack_from("<i", raw, 16)[0]
+        n = counts.get(note_pid, 0) + 1
+        counts[note_pid] = n
+        if nr == NR_write and fd == 1 and n == 2:
+            time.sleep(DELAY_S)
+        resp = ctypes.create_string_buffer(resp_size)
+        struct.pack_into("<QqII", resp, 0, note_id, 0, 0, SECCOMP_USER_NOTIF_FLAG_CONTINUE)
+        libc.ioctl(listener, send_ioctl, resp)
+    wpid, status = os.waitpid(pid, 0)
+    os.close(listener)
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    if os.WIFSIGNALED(status):
+        return 128 + os.WTERMSIG(status)
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+PY
+chmod +x "$hold_dir/bin/stall.py"
 
 ps_lstart() {
   LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
@@ -250,14 +407,25 @@ hold_collect() {
   "$hold_dir/bin/collect" "$hold_dir"
 }
 
+reap_recorded_tree() {
+  local piddir root
+  if [ -z "${hold_dir-}" ] || [ ! -x "${hold_dir}/bin/reap" ]; then
+    return 0
+  fi
+  for piddir in "$hold_dir"/pids "$hold_dir"/*/*/pids "$hold_dir"/*/*/*/pids "$hold_dir"/*/*/*/*/pids; do
+    if [ -d "$piddir" ]; then
+      root=$(dirname "$piddir")
+      "${hold_dir}/bin/reap" "$root" || true
+    fi
+  done
+}
+
 cleanup_on_exit() {
   trap '' INT TERM HUP
   if [ -n "${hold_dir-}" ] && [ -x "${hold_dir}/bin/sweep" ]; then
     "${hold_dir}/bin/sweep" "$$" "$hold_dir" || true
   fi
-  if [ -n "${hold_dir-}" ] && [ -x "${hold_dir}/bin/reap" ]; then
-    "${hold_dir}/bin/reap" "$hold_dir" || true
-  fi
+  reap_recorded_tree
   if [ -n "${hold_dir-}" ] && [ -f "${hold_dir}/kids" ]; then
     while read -r kid; do
       case "$kid" in
@@ -289,6 +457,89 @@ hold_resume() {
 
 trap cleanup_on_exit EXIT
 trap 'exit' INT TERM HUP
+
+start_paired_suites() {
+  local mode
+  mode=${1:-suite}
+  race1=$(mktemp "$hold_dir/race.XXXXXX")
+  race2=$(mktemp "$hold_dir/race.XXXXXX")
+  suite_tmp=$(mktemp -d "$hold_dir/suites.XXXXXX")
+  if [ "$mode" = holder ]; then
+    TMPDIR="$suite_tmp" OPD_HOLDER_WAIT=1 "$BASH" "$suite_path" >"$race1" 2>&1 &
+    race_a=$!
+    TMPDIR="$suite_tmp" OPD_HOLDER_WAIT=1 "$BASH" "$suite_path" >"$race2" 2>&1 &
+    race_b=$!
+  else
+    TMPDIR="$suite_tmp" OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race1" 2>&1 &
+    race_a=$!
+    TMPDIR="$suite_tmp" OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race2" 2>&1 &
+    race_b=$!
+  fi
+}
+
+if [ "${OPD_HOLDER_WAIT:-}" = 1 ]; then
+  /bin/sh -c 'sleep 180 & echo $! > "$1"; wait' _ "$hold_dir/helper.pid" &
+  helper=$!
+  spins=0
+  while [ ! -s "$hold_dir/helper.pid" ]; do
+    spins=$((spins + 1))
+    if [ "$spins" -gt 50 ]; then
+      exit 1
+    fi
+    sleep 0.05
+  done
+  "$hold_dir/bin/note" "$helper" "$$" "$hold_dir/pids" || exit 1
+  printf '%s\n' "$helper" > "$hold_dir/helper.ppid"
+  : > "$hold_dir/ready"
+  while true; do
+    wait "$helper" || true
+    if ! kill -0 "$helper" 2>/dev/null; then
+      exit 0
+    fi
+  done
+fi
+
+if [ "${OPD_CANCEL_PROBE:-}" = 1 ]; then
+  start_paired_suites holder
+  spins=0
+  while true; do
+    ready_n=0
+    for ready in "$suite_tmp"/*/ready; do
+      if [ -f "$ready" ]; then
+        ready_n=$((ready_n + 1))
+      fi
+    done
+    if [ "$ready_n" -ge 2 ]; then
+      break
+    fi
+    spins=$((spins + 1))
+    if [ "$spins" -gt 100 ]; then
+      echo "FAIL: cancel probe children did not start" >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+  {
+    printf 'HOLD %s\n' "$hold_dir"
+    printf 'RACE %s\n' "$race1"
+    printf 'RACE %s\n' "$race2"
+    printf 'SUITES %s\n' "$suite_tmp"
+    for meta in "$suite_tmp"/*/helper.pid; do
+      child_dir=$(dirname "$meta")
+      sleep_pid=$(tr -d ' ' < "$meta")
+      helper_pid=$(tr -d ' ' < "$child_dir/helper.ppid")
+      printf 'CHILD %s\n' "$child_dir"
+      printf 'SLEEP %s %s\n' "$sleep_pid" "$(ps_lstart "$sleep_pid")"
+      printf 'SLEEP %s %s\n' "$helper_pid" "$(ps_lstart "$helper_pid")"
+    done
+  } > "$OPD_CANCEL_INFO"
+  while true; do
+    wait "$race_a" || true
+    if ! kill -0 "$race_a" 2>/dev/null; then
+      exit 0
+    fi
+  done
+fi
 
 if [ "${OPD_TRAP_PROBE:-}" = 1 ]; then
   hold_defer
@@ -399,9 +650,42 @@ EOF
   rm -rf "$work"
 }
 
+grep_lines() {
+  local flags="$1"
+  local pattern="$2"
+  shift 2
+  local file code
+  file=$(mktemp "$hold_dir/lines.XXXXXX")
+  printf '%s\n' "$@" > "$file"
+  code=0
+  case "$flags" in
+    Fxq) grep -Fxq -- "$pattern" "$file" || code=$? ;;
+    Fq) grep -F -q -- "$pattern" "$file" || code=$? ;;
+    q) grep -q -- "$pattern" "$file" || code=$? ;;
+    *) code=2 ;;
+  esac
+  rm -f "$file"
+  return "$code"
+}
+
+grep_both() {
+  local first="$1"
+  local second="$2"
+  shift 2
+  local file mid code
+  file=$(mktemp "$hold_dir/lines.XXXXXX")
+  mid=$(mktemp "$hold_dir/lines.XXXXXX")
+  printf '%s\n' "$@" > "$file"
+  grep -F -- "$first" "$file" > "$mid" || true
+  code=0
+  grep -F -q -- "$second" "$mid" || code=$?
+  rm -f "$file" "$mid"
+  return "$code"
+}
+
 assert_arg() {
   local expected="$1"
-  if ! printf '%s\n' "$CASE_ARGS" | grep -Fxq -- "$expected"; then
+  if ! grep_lines Fxq "$expected" "$CASE_ARGS"; then
     echo "FAIL: missing arg $expected" >&2
     printf '%s\n' "$CASE_ARGS" >&2
     exit 1
@@ -420,6 +704,130 @@ assert_var_last() {
   fi
 }
 
+if [ "${OPD_PIPE_PROBE:-}" = 1 ]; then
+  CASE_ARGS="deploy
+--dry-run
+--env
+staging
+--config
+other.toml
+--var
+ACCESS_ALLOWED_EMAILS:person@example.com
+--var
+ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
+  assert_arg "deploy"
+  echo "pipe probe passed"
+  exit 0
+fi
+
+run_pipe_probe() {
+  local pipe_out pipe_err pipe_code
+  pipe_out=$(mktemp "$hold_dir/pipe.XXXXXX")
+  pipe_err=$(mktemp "$hold_dir/pipe.XXXXXX")
+  set +e
+  OPD_PIPE_PROBE=1 python3 "$hold_dir/bin/stall.py" "$BASH" "$suite_path" >"$pipe_out" 2>"$pipe_err"
+  pipe_code=$?
+  set -e
+  if [ "$pipe_code" -ne 0 ] || ! grep -F -q "pipe probe passed" "$pipe_out"; then
+    echo "FAIL: self-test pipe: stalled read missed deploy" >&2
+    cat "$pipe_err" >&2
+    cat "$pipe_out" >&2
+    rm -f "$pipe_out" "$pipe_err"
+    exit 1
+  fi
+  if grep -F -q "Broken pipe" "$pipe_err"; then
+    echo "FAIL: self-test pipe: broken pipe" >&2
+    cat "$pipe_err" >&2
+    rm -f "$pipe_out" "$pipe_err"
+    exit 1
+  fi
+  echo "self-test pipe: stalled second write still saw deploy"
+  rm -f "$pipe_out" "$pipe_err"
+}
+
+cancel_runner() {
+  local sig="$1"
+  local info out runner spins line path rest pid lstart now child_n sleep_n
+  info=$(mktemp "$hold_dir/cancel.XXXXXX")
+  out=$(mktemp "$hold_dir/cancel.XXXXXX")
+  set +e
+  OPD_CANCEL_PROBE=1 OPD_CANCEL_INFO="$info" \
+    python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$out" 2>&1 &
+  runner=$!
+  set -e
+  spins=0
+  while true; do
+    child_n=$(grep -c '^CHILD ' "$info" 2>/dev/null || true)
+    sleep_n=$(grep -c '^SLEEP ' "$info" 2>/dev/null || true)
+    if [ "${child_n:-0}" -ge 2 ] && [ "${sleep_n:-0}" -ge 4 ]; then
+      break
+    fi
+    spins=$((spins + 1))
+    if [ "$spins" -gt 100 ]; then
+      echo "FAIL: self-test cancel $sig: runner did not record holders" >&2
+      cat "$out" >&2
+      cat "$info" >&2
+      rm -f "$info" "$out"
+      exit 1
+    fi
+    sleep 0.05
+  done
+  kill -s "$sig" "$runner" 2>/dev/null || true
+  spins=0
+  while true; do
+    state=$(LC_ALL=C ps -p "$runner" -o stat= 2>/dev/null | tr -d ' ' || true)
+    case "$state" in
+      ''|Z*) break ;;
+    esac
+    spins=$((spins + 1))
+    if [ "$spins" -gt 50 ]; then
+      echo "FAIL: self-test cancel $sig: runner $runner did not end" >&2
+      rm -f "$info" "$out"
+      exit 1
+    fi
+    sleep 0.05
+  done
+  set +e
+  wait "$runner"
+  set -e
+  while IFS= read -r line; do
+    case "$line" in
+      HOLD\ *|RACE\ *|SUITES\ *|CHILD\ *)
+        path=${line#* }
+        if [ -e "$path" ]; then
+          echo "FAIL: self-test cancel $sig: left $path" >&2
+          rm -f "$info" "$out"
+          exit 1
+        fi
+        ;;
+      SLEEP\ *)
+        rest=${line#SLEEP }
+        pid=${rest%% *}
+        lstart=${rest#* }
+        now=$(ps_lstart "$pid")
+        if [ -n "$now" ] && [ "$now" = "$lstart" ]; then
+          echo "FAIL: self-test cancel $sig: left holder $pid" >&2
+          rm -f "$info" "$out"
+          exit 1
+        fi
+        ;;
+    esac
+  done < "$info"
+  echo "self-test cancel $sig: runner $runner ended and left 0 holders"
+  rm -f "$info" "$out"
+}
+
+if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
+  run_pipe_probe
+  cancel_runner TERM
+  cancel_runner INT
+fi
+
 unset ACCESS_SERVICE_TOKEN_CLIENT_IDS
 ACCESS_ALLOWED_EMAILS='person@example.com' run_deploy
 if [ "$CASE_CODE" -ne 0 ]; then
@@ -430,12 +838,12 @@ fi
 assert_arg "deploy"
 assert_arg "--var"
 assert_arg "ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
-if ! printf '%s\n' "$CASE_ERR" | grep -q "empties the allowlist"; then
+if ! grep_lines q "empties the allowlist" "$CASE_ERR"; then
   echo "FAIL: unset deploy did not warn that the allowlist is emptied" >&2
   printf '%s\n' "$CASE_ERR" >&2
   exit 1
 fi
-if printf '%s\n' "$CASE_ARGS" | grep -q "machine-secret"; then
+if grep_lines q "machine-secret" "$CASE_ARGS"; then
   echo "FAIL: deploy forwarded the calibration secret" >&2
   exit 1
 fi
@@ -446,11 +854,11 @@ if [ "$CASE_CODE" -ne 0 ]; then
   exit 1
 fi
 assert_arg "ACCESS_SERVICE_TOKEN_CLIENT_IDS:uptime-robot, other-monitor"
-if printf '%s\n' "$CASE_ERR" | grep -q "empties the allowlist"; then
+if grep_lines q "empties the allowlist" "$CASE_ERR"; then
   echo "FAIL: a set allowlist still warned" >&2
   exit 1
 fi
-if printf '%s\n' "$CASE_ARGS" | grep -q "machine-secret"; then
+if grep_lines q "machine-secret" "$CASE_ARGS"; then
   echo "FAIL: deploy forwarded the calibration secret" >&2
   exit 1
 fi
@@ -549,7 +957,7 @@ reject_allowlist_override() {
     printf '%s\n' "$CASE_ARGS" >&2
     exit 1
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F "ACCESS_ALLOWED_EMAILS" | grep -F -q "ACCESS_SERVICE_TOKEN_CLIENT_IDS"; then
+  if ! grep_both "ACCESS_ALLOWED_EMAILS" "ACCESS_SERVICE_TOKEN_CLIENT_IDS" "$CASE_ERR"; then
     echo "FAIL: rejected allowlist --var did not name both variables ($1)" >&2
     printf '%s\n' "$CASE_ERR" >&2
     exit 1
@@ -609,7 +1017,7 @@ expect_reject() {
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F -q -- "$needle"; then
+  if ! grep_lines Fq "$needle" "$CASE_ERR"; then
     echo "FAIL: $label did not name $needle" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
@@ -626,7 +1034,7 @@ expect_var_names() {
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F "ACCESS_ALLOWED_EMAILS" | grep -F -q "ACCESS_SERVICE_TOKEN_CLIENT_IDS"; then
+  if ! grep_both "ACCESS_ALLOWED_EMAILS" "ACCESS_SERVICE_TOKEN_CLIENT_IDS" "$CASE_ERR"; then
     echo "FAIL: $label did not name both variables" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
@@ -816,14 +1224,14 @@ expect_locale_emails() {
       new_failures=$((new_failures + 1))
       return 0
     fi
-    if ! printf '%s\n' "$CASE_ERR" | grep -F -q "ACCESS_ALLOWED_EMAILS is empty"; then
+    if ! grep_lines Fq "ACCESS_ALLOWED_EMAILS is empty" "$CASE_ERR"; then
       echo "FAIL: $runner LC_ALL=$locale $label did not refuse a blank list" >&2
       printf '%s\n' "$CASE_ERR" >&2
       new_failures=$((new_failures + 1))
     fi
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ARGS" | grep -F -q "person@example.com"; then
+  if ! grep_lines Fq "person@example.com" "$CASE_ARGS"; then
     echo "FAIL: $runner LC_ALL=$locale $label did not pass the mailbox" >&2
     printf '%s\n' "$CASE_ARGS" >&2
     new_failures=$((new_failures + 1))
@@ -939,19 +1347,19 @@ expect_parser_failure() {
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F -q -- "$needle"; then
+  if ! grep_lines Fq "$needle" "$CASE_ERR"; then
     echo "FAIL: $label did not say $needle" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q "list is empty"; then
+  if grep_lines Fq "list is empty" "$CASE_ERR" "$CASE_OUT"; then
     echo "FAIL: $label printed list is empty" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q "is empty"; then
+  if grep_lines Fq "is empty" "$CASE_ERR" "$CASE_OUT"; then
     echo "FAIL: $label printed the empty-list message" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
@@ -1027,7 +1435,7 @@ printf '%s\n' "$CASE_ERR"
 expect_parser_failure "node printed garbage" "unexpected output"
 
 
-if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
   echo "FAIL: hung node leaked the allowlist on stdio" >&2
   new_failures=$((new_failures + 1))
 fi
@@ -1060,7 +1468,7 @@ if [ $((close_end - close_start)) -ge 3 ]; then
   echo "FAIL: early stdin close took $((close_end - close_start))s" >&2
   new_failures=$((new_failures + 1))
 fi
-if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
   echo "FAIL: early stdin close leaked the allowlist on stdio" >&2
   new_failures=$((new_failures + 1))
 fi
@@ -1175,7 +1583,7 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>
     ps_command "$PARSER_PID" >&2
     new_failures=$((new_failures + 1))
   fi
-  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+  if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
     echo "FAIL: signal $sig leaked the allowlist on stdio" >&2
     new_failures=$((new_failures + 1))
   fi
@@ -1458,13 +1866,8 @@ fi
 echo "self-test d: pid $reused with a different start time was not killed"
 
 if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
-  race1=$(mktemp)
-  race2=$(mktemp)
+  start_paired_suites suite
   set +e
-  OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race1" 2>&1 &
-  race_a=$!
-  OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race2" 2>&1 &
-  race_b=$!
   wait "$race_a"
   race_a_code=$?
   wait "$race_b"
@@ -1477,20 +1880,24 @@ if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
     echo "---- suite B ----" >&2
     cat "$race2" >&2
     rm -f "$race1" "$race2"
+    rm -rf "$suite_tmp"
     exit 1
   fi
   if grep -F -q "missing arg deploy" "$race1" "$race2"; then
     echo "FAIL: self-test e: missing arg deploy" >&2
     rm -f "$race1" "$race2"
+    rm -rf "$suite_tmp"
     exit 1
   fi
   if ! grep -F -q "deploy.test.sh passed" "$race1" || ! grep -F -q "deploy.test.sh passed" "$race2"; then
     echo "FAIL: self-test e: a suite did not pass" >&2
     rm -f "$race1" "$race2"
+    rm -rf "$suite_tmp"
     exit 1
   fi
   echo "self-test e: both suites passed"
   rm -f "$race1" "$race2"
+  rm -rf "$suite_tmp"
 fi
 
 if [ -n "$wrangler_target" ] && [ "$(readlink node_modules/.bin/wrangler)" != "$wrangler_target" ]; then
