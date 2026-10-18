@@ -82,6 +82,28 @@ it('resumes the cached session when the session fetch ignores abort', async () =
   }
 });
 
+it('rejects a session body that never finishes once the deadline passes', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      new ReadableStream({ pull() {}, cancel() {} }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    const session = await import('../src/profile-session');
+    let outcome = 'pending';
+    void session.resolveAccountProfile('https://map.astroanil.dev/?u=anil').then(
+      () => { outcome = 'resolved'; },
+      () => { outcome = 'rejected'; },
+    );
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(outcome).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toBe('rejected');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('preserves read-only offline access when iOS reports online but transport fails', async () => {
   const session = await login();
   session.fetch.mockRejectedValue(new TypeError('Failed to fetch'));
