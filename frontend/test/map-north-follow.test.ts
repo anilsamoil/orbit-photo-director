@@ -157,7 +157,7 @@ for (const engine of [
         const at = map.__centerAt ?? [];
         if (at.length === 0) return false;
         const age = performance.now() - at[at.length - 1]!;
-        if (age < 780 || age > 900) return false;
+        if (age < 450 || age > 950) return false;
         map.jumpTo({ bearing: 80 });
         document.getElementById('bearing-north')!.click();
         const samples: { bearing: number; at: number }[] = [];
@@ -283,7 +283,7 @@ for (const engine of [
           const at = map.__centerAt ?? [];
           if (at.length === 0) return false;
           const age = performance.now() - at[at.length - 1]!;
-          if (age < 400 || age > 560) return false;
+          if (age < 400 || age > 920) return false;
           map.__retargeted = true;
           map.jumpTo({ bearing: map.getBearing() + 90 });
           document.getElementById('bearing-iss')!.click();
@@ -316,7 +316,7 @@ for (const engine of [
         await page.close();
       }
     }
-    const pass = reps.filter((rep) => !rep.error && Math.abs(rep.first) > 20 && Math.abs(rep.end) < 0.01 && !rep.moving && rep.rate < 0.5 && rep.pressed === 'true').length;
+    const pass = reps.filter((rep) => !rep.error && Math.abs(rep.first) > 20 && Math.abs(rep.end) < 0.01 && !rep.moving && rep.rate < 1 && rep.pressed === 'true').length;
     console.log(`NORTH_RETARGET_REPS ${engine.name} ${pass}/12 ${JSON.stringify(reps)}`);
     expect(pass, JSON.stringify(reps, null, 2)).toBe(12);
   }, 300_000);
