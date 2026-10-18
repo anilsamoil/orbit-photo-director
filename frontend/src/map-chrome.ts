@@ -394,15 +394,38 @@ export function bindMapChrome(): void {
   observer.observe(document.documentElement);
   observer.observe(ensureInsetProbe());
   const cornerSelectors = ['#status-banner', '#shotlist-bar', '.map-controls-time', '#satellite-picker-panel'];
+  const observed = new Set<Element>();
   const observeCorners = (): void => {
+    const live = new Set<Element>();
     for (const selector of cornerSelectors) {
       const node = document.querySelector(selector);
-      if (node) observer.observe(node);
+      if (node) live.add(node);
+    }
+    for (const node of [...observed]) {
+      if (live.has(node)) continue;
+      observer.unobserve(node);
+      observed.delete(node);
+    }
+    for (const node of live) {
+      if (observed.has(node)) continue;
+      observer.observe(node);
+      observed.add(node);
     }
   };
   observeCorners();
+  const traceSyncs = new URLSearchParams(window.location.search).has('e2e');
+  const noteScheduledSync = (): void => {
+    if (!traceSyncs) return;
+    const view = window as Window & { __opdCornerSyncs?: number };
+    view.__opdCornerSyncs = (view.__opdCornerSyncs ?? 0) + 1;
+  };
+  let syncPending = false;
   const syncNow = (): void => {
+    if (syncPending) return;
+    syncPending = true;
+    noteScheduledSync();
     queueMicrotask(() => {
+      syncPending = false;
       if (mute) {
         queueMicrotask(syncMapChrome);
         scheduleSync();
@@ -411,48 +434,76 @@ export function bindMapChrome(): void {
       syncMapChrome();
     });
   };
-  const footerContent = new MutationObserver(syncNow);
+  let watchedFooter: Element | null = null;
+  const footerNode = (node: Node): HTMLElement | null => {
+    const element = node instanceof Element ? node : node.parentElement;
+    if (!(element instanceof HTMLElement)) return null;
+    if (element.id === 'status-banner') return element;
+    const footer = element.closest('#status-banner');
+    return footer instanceof HTMLElement ? footer : null;
+  };
+  const footerContent = new MutationObserver((records) => {
+    for (const record of records) {
+      const footer = footerNode(record.target);
+      if (!footer || footer !== watchedFooter || !footer.isConnected) continue;
+      syncNow();
+      return;
+    }
+  });
   const footerStyle = new MutationObserver((records) => {
     for (const record of records) {
       if (record.target === document.body || record.target === document.documentElement) continue;
       if (!(record.target instanceof HTMLElement) || record.target.id !== 'status-banner') continue;
+      if (!record.target.isConnected || record.target !== watchedFooter) continue;
       syncNow();
       return;
     }
   });
   const watchFooter = (node: Element): void => {
+    if (watchedFooter === node) return;
+    footerContent.disconnect();
+    footerStyle.disconnect();
     footerContent.observe(node, { childList: true, subtree: true, characterData: true });
     footerStyle.observe(node, { attributes: true, attributeFilter: ['style', 'class'] });
+    watchedFooter = node;
   };
-  const footerIn = (node: Element): Element | null => node.matches('#status-banner') ? node : node.querySelector('#status-banner');
+  const releaseFooter = (): void => {
+    if (!watchedFooter) return;
+    footerContent.disconnect();
+    footerStyle.disconnect();
+    watchedFooter = null;
+  };
+  const isCornerNode = (node: Node): node is Element => node instanceof Element && (
+    observed.has(node)
+    || node === watchedFooter
+    || cornerSelectors.some((selector) => node.matches(selector) || node.querySelector(selector) !== null)
+  );
   const cornerArrivals = new MutationObserver((records) => {
-    let footer: Element | null = null;
+    let changed = false;
     for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (!(node instanceof Element)) continue;
-        if (cornerSelectors.some((selector) => node.matches(selector) || node.querySelector(selector) !== null)) {
-          observeCorners();
-          footer = footerIn(node) ?? footer;
-        }
+      for (const node of [...record.addedNodes, ...record.removedNodes]) {
+        if (!isCornerNode(node)) continue;
+        changed = true;
+        break;
       }
+      if (changed) break;
     }
-    if (footer) {
-      watchFooter(footer);
-      syncNow();
-    }
+    if (!changed) return;
+    observeCorners();
+    const footer = document.getElementById('status-banner');
+    if (footer) watchFooter(footer);
+    else releaseFooter();
+    syncNow();
   });
   cornerArrivals.observe(document.body, { childList: true, subtree: true });
   const mutations = new MutationObserver(() => {
     // Let slot writes release mute, then settle derived classes before another input.
-    queueMicrotask(syncMapChrome);
+    syncNow();
     scheduleSync();
   });
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   const banner = document.getElementById('status-banner');
-  if (banner) {
-    mutations.observe(banner, { childList: true, subtree: true });
-    watchFooter(banner);
-  }
+  if (banner) watchFooter(banner);
   const legend = document.getElementById('map-legend-toggle');
   if (legend) mutations.observe(legend, { attributes: true, attributeFilter: ['aria-expanded'] });
   const pane = document.getElementById('map-pane');
