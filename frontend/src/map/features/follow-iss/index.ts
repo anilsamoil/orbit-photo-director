@@ -69,11 +69,15 @@ export function setFollowEnv(core: MapCore | null, follow: boolean): void {
   state.follow = follow;
 }
 
-/** Recenter on the live ISS while follow is on and the view is live. */
+/** Recenter on the live ISS while follow is on and the view is live.
+ *  setCenter aborts an in-progress rotate, so the bearing mode is committed
+ *  in the same turn. A north ease killed here would otherwise stay mid-angle. */
 export function applyFollowISS(pos: MarkerPosition): void {
   const core = state.core;
   if (!state.follow || !core || core.clock.isScrubbed()) return;
   core.setCenter([pos.lon, pos.lat]);
+  if (state.mode === 'north') core.setBearing(0);
+  else applyBearing(false);
 }
 
 /** Leave follow and update the dock button. */
