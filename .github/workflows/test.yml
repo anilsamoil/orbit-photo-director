@@ -49,6 +49,7 @@ jobs:
     # Playwright 1.55.0 has no WebKit build for ubuntu 26.04. ubuntu-latest starts
     # moving there on 2026-10-19.
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     name: Frontend
     steps:
       - uses: actions/checkout@v4
@@ -65,5 +66,17 @@ jobs:
         run: cd frontend && ./node_modules/.bin/playwright install --with-deps webkit
       # Each browser-backed file builds the app and launches real browsers.
       # Keep those files serial within the hosted runner's resource budget.
-      - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
+      - name: Test
+        working-directory: frontend
+        run: |
+          set +e
+          /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose --reporter=json --outputFile.json=webkit-report.json
+          status=$?
+          set -e
+          bun scripts/webkit-floor.ts webkit-report.json
+          floor=$?
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          exit "$floor"
       - run: cd frontend && bun run build
