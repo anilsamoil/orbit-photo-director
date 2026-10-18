@@ -231,13 +231,12 @@ export async function connectCdp(port) {
   };
 }
 
-async function evaluate(send, expression, options = {}) {
+async function evaluate(send, expression) {
   const params = {
     expression,
     awaitPromise: true,
     returnByValue: true,
   };
-  if (options.timeout === 0) params.timeout = 0;
   const result = await send('Runtime.evaluate', params);
   if (result.exceptionDetails) {
     const text = result.exceptionDetails.text || result.exceptionDetails.exception?.description || 'evaluate failed';
@@ -564,24 +563,26 @@ async function hideNamed(send, container, name) {
   return id;
 }
 
-async function reloadSettled(send) {
+const RELOAD_BANNER_MS = 30_000;
+
+export async function reloadSettled(send) {
   await send('Page.reload');
-  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', 30000);
-  await evaluate(send, `new Promise((resolve) => {
-    const ready = () => {
+  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', RELOAD_BANNER_MS);
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < RELOAD_BANNER_MS) {
+    last = await evaluate(send, `(() => {
       const banner = document.getElementById('status-banner');
       const text = banner ? banner.textContent || '' : '';
-      if (!text || text.includes('Loading')) return false;
-      resolve({ ok: true });
-      return true;
-    };
-    if (ready()) return;
-    const target = document.getElementById('status-banner') || document.documentElement;
-    const observer = new MutationObserver(() => {
-      if (ready()) observer.disconnect();
-    });
-    observer.observe(target, { childList: true, characterData: true, subtree: true });
-  })`, { timeout: 0 });
+      if (!text || text.includes('Loading')) return null;
+      return { ok: true };
+    })()`);
+    if (last && last.ok) return;
+    const remaining = RELOAD_BANNER_MS - (Date.now() - started);
+    if (remaining <= 0) break;
+    await sleep(Math.min(100, remaining));
+  }
+  throw new Error(`banner after reload timed out. Last value: ${JSON.stringify(last)}`);
 }
 
 function touchPoint(x, y) {
