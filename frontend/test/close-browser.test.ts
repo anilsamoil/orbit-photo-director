@@ -117,7 +117,6 @@ describe('closeBrowser', () => {
             kill: async () => {
               killGroup(root.pid);
             },
-            process: () => ({ pid: root.pid }),
           },
         }, 'exited-leader').then(() => {
           returned = true;
@@ -159,7 +158,6 @@ describe('closeBrowser', () => {
         async launchServer() {
           return {
             wsEndpoint: () => 'ws://127.0.0.1/failed',
-            process: () => ({ pid: undefined }),
             close: () => new Promise<void>(() => {}),
             kill: async () => {},
           };
@@ -187,7 +185,6 @@ describe('closeBrowser', () => {
         host = options?.host;
         return {
           wsEndpoint: () => 'ws://127.0.0.1/loopback',
-          process: () => ({ pid: undefined }),
           close: async () => {},
           kill: async () => {},
         };
