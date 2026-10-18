@@ -224,4 +224,20 @@ describe('ISS view import lifetime', () => {
     }
   });
 
+  it('second init() replaces the countdown interval', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      await boot();
+      const readout = document.getElementById('iss-now');
+      if (!readout) throw new Error('missing iss-now');
+      readout.innerHTML = 'sentinel';
+      const { stopCountdown } = await import('../src/main');
+      stopCountdown();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(readout.innerHTML).toBe('sentinel');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
