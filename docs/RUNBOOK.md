@@ -358,6 +358,7 @@ If the calibration token leaks (it lives in browser localStorage, plaintext), ro
    A value that is only spaces, including Unicode spaces, or commas is empty too.
    `--dry-run` with an empty list still runs and warns.
    `deploy.sh` reads `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS` from the environment.
+   Node.js 16.17.0 or newer must be on PATH. That is the minimum Wrangler accepts. `deploy.sh` uses `node` to parse the email list.
    The email list is the `--var` immediately before the client ids.
    The wrapper accepts only `--dry-run`, `--env <name>`, `--env=<name>`, `--config <path>`, and `--config=<path>`.
    Any caller `--var`, any other flag, any positional argument, and `--` make it exit before wrangler runs.

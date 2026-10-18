@@ -93,13 +93,85 @@ if [[ "$emails" == *$'\n'* || "$emails" == *$'\r'* ]]; then
   exit 2
 fi
 
-if ! printf '%s' "$emails" | node --input-type=module -e 'import { parseEmailAllowlist } from "./src/email-allowlist.mjs"; import { readFileSync } from "node:fs"; process.exit(parseEmailAllowlist(readFileSync(0, "utf8")).length > 0 ? 0 : 1);'; then
-  if [ "$dry" -eq 0 ]; then
-    echo "ERROR: ACCESS_ALLOWED_EMAILS is empty. Refusing to deploy." >&2
-    exit 2
+read_allowlist_status() {
+  if ! command -v node >/dev/null 2>&1; then
+    printf '%s\n' missing
+    return 0
   fi
-  echo "WARN: ACCESS_ALLOWED_EMAILS is empty. --dry-run still passes an empty binding." >&2
-fi
+  local input output pid waited status token timed_out
+  input=$(mktemp "${TMPDIR:-/tmp}/opd-email.XXXXXX")
+  output=$(mktemp "${TMPDIR:-/tmp}/opd-email.XXXXXX")
+  printf '%s' "$emails" > "$input"
+  node --input-type=module -e 'import { parseEmailAllowlist } from "./src/email-allowlist.mjs"; import { readFileSync } from "node:fs"; const list = parseEmailAllowlist(readFileSync(0, "utf8")); process.stdout.write(list.length > 0 ? "ok\n" : "empty\n");' <"$input" >"$output" 2>/dev/null &
+  pid=$!
+  waited=0
+  timed_out=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge 100 ]; then
+      timed_out=1
+      kill -TERM "$pid" 2>/dev/null || true
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  status=0
+  wait "$pid" || status=$?
+  if [ "$timed_out" -eq 1 ]; then
+    rm -f "$input" "$output"
+    printf '%s\n' timeout
+    return 0
+  fi
+  if [ "$status" -ne 0 ]; then
+    rm -f "$input" "$output"
+    printf '%s\n' "failed:$status"
+    return 0
+  fi
+  token=$(cat "$output")
+  rm -f "$input" "$output"
+  case "$token" in
+    ok|empty)
+      printf '%s\n' "$token"
+      ;;
+    *)
+      printf '%s\n' garbage
+      ;;
+  esac
+}
+
+allowlist_status=$(read_allowlist_status)
+case "$allowlist_status" in
+  ok)
+    ;;
+  empty)
+    if [ "$dry" -eq 0 ]; then
+      echo "ERROR: ACCESS_ALLOWED_EMAILS is empty. Refusing to deploy." >&2
+      exit 2
+    fi
+    echo "WARN: ACCESS_ALLOWED_EMAILS is empty. --dry-run still passes an empty binding." >&2
+    ;;
+  missing)
+    echo "ERROR: node is not on PATH, so the email allowlist parser did not run." >&2
+    exit 2
+    ;;
+  timeout)
+    echo "ERROR: the email allowlist parser timed out after 10s." >&2
+    exit 2
+    ;;
+  garbage)
+    echo "ERROR: the email allowlist parser printed unexpected output." >&2
+    exit 2
+    ;;
+  failed:*)
+    echo "ERROR: the email allowlist parser failed because node exited ${allowlist_status#failed:}." >&2
+    exit 2
+    ;;
+  *)
+    echo "ERROR: the email allowlist parser printed unexpected output." >&2
+    exit 2
+    ;;
+esac
 
 if [ -z "$ids" ]; then
   echo "WARN: ACCESS_SERVICE_TOKEN_CLIENT_IDS is unset. This deploy empties the allowlist. /api/health stays human-only." >&2
