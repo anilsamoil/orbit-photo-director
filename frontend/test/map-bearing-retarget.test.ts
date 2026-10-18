@@ -78,73 +78,34 @@ async function openMap(page: Page): Promise<void> {
   });
 }
 
-async function cameraSnap(page: Page): Promise<unknown> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __opdMap: {
-        getBearing(): number;
-        isMoving(): boolean;
-        isRotating(): boolean;
-        isZooming(): boolean;
-        _camera?: { _moving?: boolean; _easeStart?: number; _easeOptions?: { duration?: number }; _easeFrameId?: unknown };
-      };
-    }).__opdMap;
-    const camera = map._camera;
-    const samples = (window as unknown as { __bearingSamples?: unknown[] }).__bearingSamples ?? [];
-    return {
-      bearing: map.getBearing(),
-      moving: map.isMoving(),
-      rotating: map.isRotating(),
-      zooming: map.isZooming(),
-      hidden: document.hidden,
-      visibility: document.visibilityState,
-      perf: performance.now(),
-      camMoving: camera?._moving ?? null,
-      easeStart: camera?._easeStart ?? null,
-      easeDuration: camera?._easeOptions?.duration ?? null,
-      easeFrame: camera?._easeFrameId != null,
-      samples,
-    };
-  });
-}
-
-async function armSamples(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const target = window as unknown as { __bearingSamples?: unknown[]; __bearingSampleTimer?: number };
-    if (target.__bearingSampleTimer !== undefined) window.clearInterval(target.__bearingSampleTimer);
-    target.__bearingSamples = [];
-    const started = performance.now();
-    target.__bearingSampleTimer = window.setInterval(() => {
-      const map = (window as unknown as {
-        __opdMap: { getBearing(): number; isMoving(): boolean; isRotating(): boolean };
-      }).__opdMap;
-      target.__bearingSamples?.push({
-        t: Math.round(performance.now() - started),
-        bearing: map.getBearing(),
-        moving: map.isMoving(),
-        rotating: map.isRotating(),
-      });
-    }, 250);
-  });
-}
-
-async function settled(page: Page, phase: string): Promise<{ bearing: number; moving: boolean }> {
-  await armSamples(page);
-  try {
-    await page.waitForFunction(() => {
-      const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
-      return !map.isMoving();
-    }, undefined, { timeout: 4000 });
-  } catch (error) {
-    const snap = await cameraSnap(page).catch((err: unknown) => ({ evalError: String(err) }));
-    console.log(`SETTLE_TIMEOUT ${phase} ${JSON.stringify(snap)}`);
-    throw error;
-  }
+async function settled(page: Page): Promise<{ bearing: number; moving: boolean }> {
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
+    return !map.isMoving();
+  }, undefined, { timeout: 4000 });
   await page.waitForTimeout(50);
   return page.evaluate(() => {
     const map = (window as unknown as { __opdMap: { getBearing(): number; isMoving(): boolean } }).__opdMap;
     return { bearing: map.getBearing(), moving: map.isMoving() };
   });
+}
+
+async function retargetOnce(page: Page): Promise<{ north: number; northMoving: boolean; iss: number; heading: number; issMoving: boolean }> {
+  await page.evaluate(() => {
+    document.getElementById('toggle-follow-iss')!.click();
+    document.getElementById('bearing-north')!.click();
+    document.getElementById('bearing-iss')!.click();
+    document.getElementById('bearing-north')!.click();
+  });
+  const north = await settled(page);
+  await page.evaluate(() => document.getElementById('bearing-iss')!.click());
+  const headed = await settled(page);
+  await page.evaluate(() => {
+    document.getElementById('bearing-north')!.click();
+    document.getElementById('bearing-iss')!.click();
+  });
+  const iss = await settled(page);
+  return { north: north.bearing, northMoving: north.moving, iss: iss.bearing, heading: headed.bearing, issMoving: iss.moving };
 }
 
 function northOk(sample: { bearing: number; moving: boolean }): boolean {
@@ -168,21 +129,7 @@ for (const engine of [
       try {
         await install(page);
         await openMap(page);
-        await page.evaluate(() => {
-          document.getElementById('toggle-follow-iss')!.click();
-          document.getElementById('bearing-north')!.click();
-          document.getElementById('bearing-iss')!.click();
-          document.getElementById('bearing-north')!.click();
-        });
-        const north = await settled(page, 'after-north');
-        await page.evaluate(() => document.getElementById('bearing-iss')!.click());
-        const headed = await settled(page, 'after-heading');
-        await page.evaluate(() => {
-          document.getElementById('bearing-north')!.click();
-          document.getElementById('bearing-iss')!.click();
-        });
-        const iss = await settled(page, 'after-retarget');
-        reps.push({ north: north.bearing, northMoving: north.moving, iss: iss.bearing, heading: headed.bearing, issMoving: iss.moving });
+        reps.push(await retargetOnce(page));
       } catch (error) {
         reps.push({ north: Number.NaN, northMoving: true, iss: Number.NaN, heading: Number.NaN, issMoving: true, error: String(error) });
       } finally {
@@ -195,4 +142,22 @@ for (const engine of [
     console.log(`BEARING_REPS ${JSON.stringify(summary)}`);
     expect(summary, JSON.stringify(summary, null, 2)).toEqual({ ...summary, northPass: REPS, issPass: REPS });
   }, 180_000);
+
+  it('settles North when no animation frame arrives', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    try {
+      await install(page);
+      await openMap(page);
+      await page.evaluate(() => {
+        window.requestAnimationFrame = () => 0;
+      });
+      const sample = await retargetOnce(page);
+      expect(northOk({ bearing: sample.north, moving: sample.northMoving }), JSON.stringify(sample)).toBe(true);
+      expect(!sample.issMoving && Math.abs((((sample.iss - sample.heading) % 360) + 540) % 360 - 180) < 0.01, JSON.stringify(sample)).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
 });
