@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { webKitCaseId } from './webkit-floor.ts';
 
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const includeRoots = ['test', join('src', 'map')];
@@ -8,7 +9,6 @@ const includeRoots = ['test', join('src', 'map')];
 export const SHARD_COUNT = 2;
 export const UNSHARDED_WEBKIT_CASES = 204;
 const DEFAULT_WEIGHT_SECONDS = 60;
-const executedStatuses = new Set(['passed', 'failed']);
 
 export type ShardPlan = {
   readonly files: readonly string[];
@@ -26,6 +26,7 @@ export type TimeReport = {
 };
 
 type JsonAssertion = {
+  readonly ancestorTitles?: readonly string[];
   readonly fullName?: string;
   readonly status?: string;
 };
@@ -118,7 +119,7 @@ export function countWebKitCases(
   reports: readonly JsonReport[],
   importsWebKit: (file: string) => boolean,
 ): WebKitCount {
-  let cases = 0;
+  const seen = new Set<string>();
   const files = new Set<string>();
   for (const report of reports) {
     for (const result of report.testResults ?? []) {
@@ -126,13 +127,17 @@ export function countWebKitCases(
       files.add(file);
       if (!importsWebKit(file)) continue;
       for (const assertion of result.assertionResults ?? []) {
-        if (!executedStatuses.has(assertion.status ?? '')) continue;
-        if (!(assertion.fullName ?? '').includes('WebKit')) continue;
-        cases += 1;
+        if (assertion.status !== 'passed') continue;
+        const id = webKitCaseId(result.name ?? '', {
+          ancestorTitles: assertion.ancestorTitles ?? [],
+          fullName: assertion.fullName ?? '',
+        });
+        if (id === null || seen.has(id)) continue;
+        seen.add(id);
       }
     }
   }
-  return { cases, files: [...files].sort() };
+  return { cases: seen.size, files: [...files].sort() };
 }
 
 export function assertExecutedFiles(discovered: readonly string[], executed: readonly string[]): void {
