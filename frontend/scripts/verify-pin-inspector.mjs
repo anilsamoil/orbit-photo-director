@@ -155,7 +155,7 @@ async function inspect(page, bodySelector) {
     const controlsBox = box(controls);
     const controlsHit = document.elementFromPoint(controlsBox.x + controlsBox.width / 2, controlsBox.y + controlsBox.height / 2);
     const firstPassRow = body.matches('.dropped-pin-popup')
-      ? [...body.querySelectorAll('div')].find((element) => getComputedStyle(element).display === 'grid') : null;
+      ? body.querySelector('.pin-pass-row') : null;
     const firstPassTime = firstPassRow?.children[1];
     const firstPassTimeBox = firstPassTime ? box(firstPassTime) : null;
     const oldPointerEvents = inspector.style.pointerEvents;
@@ -437,7 +437,7 @@ async function geometry(page) {
     const popup = document.querySelector('.dropped-pin-popup')?.closest('.maplibregl-popup');
     const parts = popup ? [
       ['header', popup.querySelector('.dropped-pin-popup > strong, .dropped-pin-popup strong')],
-      ...[...popup.querySelectorAll('.dropped-pin-popup div')].filter((element) => getComputedStyle(element).display === 'grid').map((element, index) => [`pass-row-${index}`, element]),
+      ...[...popup.querySelectorAll('.dropped-pin-popup .pin-pass-row')].map((element, index) => [`pass-row-${index}`, element]),
       ...['.pin-add-button', '.pin-add-save', '.pin-add-cancel', '.maplibregl-popup-close-button'].map((selector) => [selector, popup.querySelector(selector)]),
     ].flatMap(([label, element]) => {
       if (!element) return [];
@@ -661,11 +661,11 @@ async function checkPopupParts(page, row, touch) {
   const content = page.locator('.dropped-pin-popup').locator('..');
   await content.evaluate((element) => { element.scrollTop = 0; });
   await checkClearance(page, row, 'header-and-initial-pass-rows');
-  const passes = await page.locator('.dropped-pin-popup div').evaluateAll((elements) => elements.filter((element) => getComputedStyle(element).display === 'grid').map((element, index) => ({ index, text: element.textContent })));
+  const passes = await page.locator('.dropped-pin-popup .pin-pass-row').evaluateAll((elements) => elements.map((element, index) => ({ index, text: element.textContent })));
   expect(row, 'popup', 'fixture has actual upcoming pass rows', passes.length > 0, passes);
   for (const { index } of passes) {
     await page.locator('.dropped-pin-popup').evaluate((body, index) => {
-      const rows = [...body.querySelectorAll('div')].filter((element) => getComputedStyle(element).display === 'grid');
+      const rows = [...body.querySelectorAll('.pin-pass-row')];
       const content = body.closest('.maplibregl-popup-content');
       const target = rows[index];
       content.scrollTop += target.getBoundingClientRect().top - content.getBoundingClientRect().top - 8;
