@@ -122,4 +122,16 @@ describe('bearing retarget while an ease is in flight', () => {
     north.click();
     expect(calls.at(-1)).toMatchObject({ bearing: 0 });
   });
+
+  it('reapplies active ISS-up after a gesture settles away from the commanded heading', () => {
+    const { vendor, calls, iss } = arm(nowMs);
+    api().applyBearing(true);
+    const heading = api().computeIssHeading(nowMs)!;
+    vendor.setBearing(33);
+    vendor.fire('moveend', undefined);
+    const beforeTap = calls.length;
+    iss.click();
+    expect(calls.length).toBe(beforeTap + 1);
+    expect(calls.at(-1)?.bearing).toBeCloseTo(heading, 5);
+  });
 });

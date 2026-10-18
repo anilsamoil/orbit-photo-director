@@ -94,6 +94,53 @@ function northOk(sample: { bearing: number; moving: boolean }): boolean {
   return !sample.moving && Math.abs(sample.bearing) < 0.01;
 }
 
+function apart(a: number, b: number): number {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+async function dragRotate(page: Page): Promise<void> {
+  const box = await page.locator('#map canvas').boundingBox();
+  if (!box) throw new Error('map canvas missing');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(x + 220, y - 30);
+  await page.mouse.up({ button: 'right' });
+}
+
+async function interruptAndRetap(page: Page, heading: number): Promise<{ before: number; moving: boolean }> {
+  const seen: number[] = [];
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await page.evaluate(() => document.getElementById('bearing-north')!.click());
+    await settled(page);
+    await page.evaluate(() => document.getElementById('bearing-iss')!.click());
+    await page.waitForFunction(() => {
+      const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
+      return map.isMoving();
+    }, undefined, { timeout: 2000 });
+    await dragRotate(page);
+    await page.waitForFunction(() => {
+      const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
+      return !map.isMoving();
+    }, undefined, { timeout: 4000 });
+    const retap = await page.evaluate((target: number) => {
+      const map = (window as unknown as { __opdMap: { getBearing(): number; isMoving(): boolean } }).__opdMap;
+      const before = map.getBearing();
+      const gap = Math.abs(((before - target + 540) % 360) - 180);
+      if (gap < 8) return { before, moving: false, skipped: true };
+      document.getElementById('bearing-iss')!.click();
+      return { before, moving: map.isMoving(), skipped: false };
+    }, heading);
+    if (retap.skipped) {
+      seen.push(retap.before);
+      continue;
+    }
+    return { before: retap.before, moving: retap.moving };
+  }
+  throw new Error(`rotate gesture never left heading ${heading}; settled at ${seen.join(', ')}`);
+}
+
 for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
@@ -138,4 +185,30 @@ for (const engine of [
     console.log(`BEARING_REPS ${JSON.stringify(summary)}`);
     expect(summary, JSON.stringify(summary, null, 2)).toEqual({ ...summary, northPass: REPS, issPass: REPS });
   }, 180_000);
+
+  it('starts a fresh ISS-up ease after a rotate gesture interrupts the active ease', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    try {
+      await page.addInitScript(() => window.addEventListener('contextmenu', (event) => event.preventDefault(), true));
+      await install(page);
+      await openMap(page);
+      await page.evaluate(() => {
+        document.getElementById('toggle-follow-iss')!.click();
+        document.getElementById('bearing-iss')!.click();
+      });
+      const headed = await settled(page);
+      const retap = await interruptAndRetap(page, headed.bearing);
+      const summary = { engine: engine.name, heading: headed.bearing, before: retap.before, moving: retap.moving };
+      console.log(`BEARING_GESTURE ${JSON.stringify(summary)}`);
+      expect(apart(retap.before, headed.bearing)).toBeGreaterThan(8);
+      expect(retap.moving).toBe(true);
+      const landed = await settled(page);
+      expect(landed.moving).toBe(false);
+      expect(apart(landed.bearing, headed.bearing)).toBeLessThan(0.01);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
 });
