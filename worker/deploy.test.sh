@@ -132,7 +132,7 @@ EOF
   set +e
   PATH="${HOME}/.bun/bin:${PATH}" \
     WRANGLER_ARGS="$work/args" \
-    bun run deploy "$@" >"$work/out" 2>"$work/err"
+    "${PACKAGE_TOOL:-bun}" run deploy "$@" >"$work/out" 2>"$work/err"
   local code=$?
   set -e
   restore_package_wrangler
@@ -152,8 +152,7 @@ if [ ! -L node_modules/.bin/wrangler ]; then
   exit 1
 fi
 
-unset ACCESS_ALLOWED_EMAILS
-run_package_deploy --dry-run --env staging --config other.toml
+ACCESS_ALLOWED_EMAILS='person@example.com' run_package_deploy --dry-run --env staging --config other.toml
 if [ "$CASE_CODE" -ne 0 ]; then
   echo "FAIL: bun run deploy --dry-run exited $CASE_CODE" >&2
   printf '%s\n' "$CASE_ERR" >&2
@@ -308,29 +307,6 @@ expect_last_four() {
   return 0
 }
 
-expect_dry_blank() {
-  if [ "$CASE_CODE" -ne 0 ]; then
-    echo "FAIL: dry-run blank list exited $CASE_CODE" >&2
-    printf '%s\n' "$CASE_ERR" >&2
-    new_failures=$((new_failures + 1))
-    return 0
-  fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F -q "WARN: ACCESS_ALLOWED_EMAILS"; then
-    echo "FAIL: dry-run blank list did not warn" >&2
-    printf '%s\n' "$CASE_ERR" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  local last expected
-  last=$(printf '%s\n' "$CASE_ARGS" | tail -n 4)
-  expected=$(printf '%s\n' "--var" "ACCESS_ALLOWED_EMAILS:" "--var" "ACCESS_SERVICE_TOKEN_CLIENT_IDS:")
-  if [ "$last" != "$expected" ]; then
-    echo "FAIL: dry-run blank list bindings" >&2
-    printf '%s\n' "$CASE_ARGS" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  return 0
-}
-
 run_package_deploy --config=--var=X
 expect_reject "--config=--var=X" "ERROR: --config"
 
@@ -417,8 +393,32 @@ ACCESS_ALLOWED_EMAILS=$'person@example.com\r' run_package_deploy --dry-run
 expect_reject "cr ACCESS_ALLOWED_EMAILS on --dry-run" "ERROR: ACCESS_ALLOWED_EMAILS"
 
 unset ACCESS_ALLOWED_EMAILS
+run_deploy --dry-run
+expect_reject "bash deploy.sh --dry-run unset" "ACCESS_ALLOWED_EMAILS is empty"
+ACCESS_ALLOWED_EMAILS='' run_deploy --dry-run
+expect_reject "bash deploy.sh --dry-run empty" "ACCESS_ALLOWED_EMAILS is empty"
+ACCESS_ALLOWED_EMAILS='   ' run_deploy --dry-run
+expect_reject "bash deploy.sh --dry-run whitespace" "ACCESS_ALLOWED_EMAILS is empty"
+
+unset ACCESS_ALLOWED_EMAILS
 run_package_deploy --dry-run
-expect_dry_blank
+expect_reject "bun run deploy --dry-run unset" "ACCESS_ALLOWED_EMAILS is empty"
+ACCESS_ALLOWED_EMAILS='' run_package_deploy --dry-run
+expect_reject "bun run deploy --dry-run empty" "ACCESS_ALLOWED_EMAILS is empty"
+ACCESS_ALLOWED_EMAILS='   ' run_package_deploy --dry-run
+expect_reject "bun run deploy --dry-run whitespace" "ACCESS_ALLOWED_EMAILS is empty"
+
+if command -v npm >/dev/null 2>&1; then
+  PACKAGE_TOOL=npm
+  unset ACCESS_ALLOWED_EMAILS
+  run_package_deploy -- --dry-run
+  expect_reject "npm run deploy -- --dry-run unset" "ACCESS_ALLOWED_EMAILS is empty"
+  ACCESS_ALLOWED_EMAILS='' run_package_deploy -- --dry-run
+  expect_reject "npm run deploy -- --dry-run empty" "ACCESS_ALLOWED_EMAILS is empty"
+  ACCESS_ALLOWED_EMAILS='   ' run_package_deploy -- --dry-run
+  expect_reject "npm run deploy -- --dry-run whitespace" "ACCESS_ALLOWED_EMAILS is empty"
+  unset PACKAGE_TOOL
+fi
 
 ACCESS_ALLOWED_EMAILS='person@example.com' \
   ACCESS_SERVICE_TOKEN_CLIENT_IDS='client.example' \
@@ -428,6 +428,16 @@ expect_last_four "non-dry-run success" \
   "ACCESS_SERVICE_TOKEN_CLIENT_IDS:client.example"
 
 bom=$(printf '\357\273\277')
+ACCESS_ALLOWED_EMAILS="$bom" run_deploy --dry-run
+expect_reject "bash deploy.sh --dry-run bom" "ACCESS_ALLOWED_EMAILS is empty"
+ACCESS_ALLOWED_EMAILS="$bom" run_package_deploy --dry-run
+expect_reject "bun run deploy --dry-run bom" "ACCESS_ALLOWED_EMAILS is empty"
+if command -v npm >/dev/null 2>&1; then
+  PACKAGE_TOOL=npm
+  ACCESS_ALLOWED_EMAILS="$bom" run_package_deploy -- --dry-run
+  expect_reject "npm run deploy -- --dry-run bom" "ACCESS_ALLOWED_EMAILS is empty"
+  unset PACKAGE_TOOL
+fi
 nbsp=$(printf '\302\240')
 ideo=$(printf '\343\200\200')
 lsep=$(printf '\342\200\250')
