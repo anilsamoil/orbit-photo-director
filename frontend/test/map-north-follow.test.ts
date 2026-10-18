@@ -247,4 +247,68 @@ for (const engine of [
       await page.close();
     }
   }, 30_000);
+
+  it('keeps a smooth north retarget when a follow tick lands inside it', async () => {
+    const reps: { end: number; moving: boolean; rate: number; pressed: string | null; first: number; error?: string }[] = [];
+    for (let rep = 0; rep < 12; rep += 1) {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      try {
+        page.setDefaultTimeout(15_000);
+        await openMap(page);
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
+          return !!map && !map.isMoving();
+        });
+        await page.evaluate(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          const orig = map.setCenter.bind(map);
+          map.__centerAt = [];
+          map.setCenter = (center) => {
+            map.__centerAt!.push(performance.now());
+            return orig(center);
+          };
+        });
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle & { __retargeted?: boolean } }).__opdMap;
+          if (map.__retargeted) return true;
+          const at = map.__centerAt ?? [];
+          if (at.length === 0) return false;
+          const age = performance.now() - at[at.length - 1]!;
+          if (age < 400 || age > 560) return false;
+          map.__retargeted = true;
+          map.jumpTo({ bearing: map.getBearing() + 90 });
+          document.getElementById('bearing-iss')!.click();
+          document.getElementById('bearing-north')!.click();
+          const samples: { bearing: number; at: number }[] = [];
+          map.__samples = samples as unknown as number[];
+          map.on('move', () => { samples.push({ bearing: map.getBearing(), at: performance.now() }); });
+          return true;
+        });
+        await page.waitForTimeout(1100);
+        const end = await page.evaluate(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return {
+            bearing: map.getBearing(),
+            moving: map.isMoving(),
+            samples: (map.__samples ?? []) as unknown as { bearing: number; at: number }[],
+          };
+        });
+        const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
+        reps.push({
+          end: end.bearing,
+          moving: end.moving,
+          rate: fastestDegPerMs(end.samples),
+          pressed,
+          first: end.samples[0]?.bearing ?? 0,
+        });
+      } catch (error) {
+        reps.push({ end: Number.NaN, moving: true, rate: 99, pressed: null, first: 0, error: String(error) });
+      } finally {
+        await page.close();
+      }
+    }
+    const pass = reps.filter((rep) => !rep.error && Math.abs(rep.first) > 20 && Math.abs(rep.end) < 0.01 && !rep.moving && rep.rate < 0.5 && rep.pressed === 'true').length;
+    console.log(`NORTH_RETARGET_REPS ${engine.name} ${pass}/12 ${JSON.stringify(reps)}`);
+    expect(pass, JSON.stringify(reps, null, 2)).toBe(12);
+  }, 300_000);
 });

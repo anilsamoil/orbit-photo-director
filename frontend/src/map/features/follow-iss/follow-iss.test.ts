@@ -123,3 +123,119 @@ describe('bearing retarget while an ease is in flight', () => {
     expect(calls.at(-1)).toMatchObject({ bearing: 0 });
   });
 });
+
+describe('deferred north recenter', () => {
+  const nowMs = Date.parse(fixture.start);
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function armFollow(): {
+    vendor: VendorDouble;
+    calls: CameraMove[];
+    frames: FrameRequestCallback[];
+    centers: () => [number, number][];
+    depth: () => number;
+    north: HTMLButtonElement;
+    iss: HTMLButtonElement;
+  } {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    const { vendor, calls } = heldCamera();
+    let depth = 0;
+    let maxDepth = 0;
+    const orig = vendor.setCenter.bind(vendor);
+    vendor.setCenter = (at) => {
+      depth += 1;
+      maxDepth = Math.max(maxDepth, depth);
+      orig(at);
+      vendor.fire('moveend', undefined);
+      depth -= 1;
+    };
+    vendor.easeTo = (move) => {
+      calls.push(move);
+      if (move.duration === 0) vendor.fire('moveend', undefined);
+    };
+    const core = createMapCore(vendor, createClock(() => nowMs));
+    core.setTrack(TRACK);
+    api().noteFollowCore(core);
+    api().setFollowEnv(core, true);
+    document.body.innerHTML = '<button id="toggle-follow-iss"></button><button id="bearing-north"></button><button id="bearing-iss"></button>';
+    api().bindFollowToggle();
+    api().bindBearingToggle();
+    return {
+      vendor,
+      calls,
+      frames,
+      centers: () => vendor.cameraCalls.filter((call) => call.method === 'setCenter').map((call) => call.args[0] as [number, number]),
+      depth: () => maxDepth,
+      north: document.getElementById('bearing-north') as HTMLButtonElement,
+      iss: document.getElementById('bearing-iss') as HTMLButtonElement,
+    };
+  }
+
+  it('applies a follow tick from a north ease on the next frame, not inside moveend', () => {
+    const { vendor, calls, frames, centers, depth, north } = armFollow();
+    vendor.setBearing(80);
+    north.click();
+    expect(calls.at(-1)).toMatchObject({ bearing: 0, duration: 600 });
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(centers()).toEqual([]);
+    vendor.setBearing(0);
+    vendor.fire('moveend', undefined);
+    expect(centers()).toEqual([]);
+    expect(frames).toHaveLength(1);
+    frames[0]!(0);
+    expect(centers()).toEqual([[34, 12]]);
+    expect(depth()).toBe(1);
+    expect(calls.filter((call) => call.duration === 600)).toHaveLength(1);
+  });
+
+  it('drops the deferred center when a duration-0 cancel ends the north ease', () => {
+    const { vendor, calls, frames, centers, north, iss } = armFollow();
+    const heading = api().computeIssHeading(nowMs);
+    expect(heading).not.toBeNull();
+    vendor.setBearing(heading!);
+    north.click();
+    api().applyFollowISS({ lat: 3, lon: 4 });
+    iss.click();
+    expect(calls.at(-1)).toMatchObject({ bearing: heading, duration: 0 });
+    expect(frames).toHaveLength(0);
+    expect(centers()).toEqual([]);
+  });
+
+  it('skips the deferred center when a new ease starts before the frame', () => {
+    const { vendor, frames, centers, north, iss } = armFollow();
+    vendor.setBearing(80);
+    north.click();
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    vendor.setBearing(0);
+    vendor.fire('moveend', undefined);
+    expect(frames).toHaveLength(1);
+    const heading = api().computeIssHeading(nowMs);
+    expect(heading).not.toBeNull();
+    vendor.setBearing(heading! + 90);
+    iss.click();
+    frames[0]!(0);
+    expect(centers()).toEqual([]);
+  });
+
+  it('a user rotate releases follow and does not recenter', () => {
+    const { vendor, frames, centers } = armFollow();
+    vendor.setBearing(80);
+    (document.getElementById('bearing-north') as HTMLButtonElement).click();
+    api().applyFollowISS({ lat: 1, lon: 2 });
+    vendor.fire('rotatestart', { byUser: false });
+    expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
+    vendor.fire('rotatestart', { byUser: true });
+    expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('false');
+    vendor.setBearing(0);
+    vendor.fire('moveend', undefined);
+    expect(frames).toHaveLength(0);
+    expect(centers()).toEqual([]);
+  });
+});
