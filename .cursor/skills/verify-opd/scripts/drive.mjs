@@ -231,12 +231,14 @@ export async function connectCdp(port) {
   };
 }
 
-async function evaluate(send, expression) {
-  const result = await send('Runtime.evaluate', {
+async function evaluate(send, expression, options = {}) {
+  const params = {
     expression,
     awaitPromise: true,
     returnByValue: true,
-  });
+  };
+  if (options.timeout === 0) params.timeout = 0;
+  const result = await send('Runtime.evaluate', params);
   if (result.exceptionDetails) {
     const text = result.exceptionDetails.text || result.exceptionDetails.exception?.description || 'evaluate failed';
     throw new Error(text);
@@ -565,17 +567,21 @@ async function hideNamed(send, container, name) {
 async function reloadSettled(send) {
   await send('Page.reload');
   await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', 30000);
-  await waitFor(
-    send,
-    `(() => {
+  await evaluate(send, `new Promise((resolve) => {
+    const ready = () => {
       const banner = document.getElementById('status-banner');
       const text = banner ? banner.textContent || '' : '';
-      if (!text || text.includes('Loading')) return null;
-      return { ok: true };
-    })()`,
-    'banner after reload',
-    30000,
-  );
+      if (!text || text.includes('Loading')) return false;
+      resolve({ ok: true });
+      return true;
+    };
+    if (ready()) return;
+    const target = document.getElementById('status-banner') || document.documentElement;
+    const observer = new MutationObserver(() => {
+      if (ready()) observer.disconnect();
+    });
+    observer.observe(target, { childList: true, characterData: true, subtree: true });
+  })`, { timeout: 0 });
 }
 
 function touchPoint(x, y) {

@@ -219,7 +219,13 @@ function startProxy(home) {
   let catalogGate = null;
   function currentCatalog() {
     const now = Date.now();
-    if (catalogLive && now < catalogLive.anchor + 8 * 60_000 && catalogBodies.has(catalogLive.pointer.path)) return catalogLive;
+    const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
+    const cached = catalogLive
+      && now < catalogLive.anchor + 8 * 60_000
+      && Number.isFinite(until)
+      && now < until
+      && catalogBodies.has(catalogLive.pointer.path);
+    if (cached) return catalogLive;
     catalogLive = publishVerifyCatalog(fixtureDir, now);
     catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
     return catalogLive;

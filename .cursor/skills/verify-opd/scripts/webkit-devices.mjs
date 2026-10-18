@@ -174,12 +174,16 @@ async function syncLayoutViewport(page, width, height) {
 export function playwrightSend(page) {
   return async function send(method, params = {}) {
     if (method === 'Runtime.evaluate') {
+      const unbounded = params.timeout === 0;
+      if (unbounded) page.setDefaultTimeout(0);
       try {
         const value = await page.evaluate(params.expression);
         return { result: { value } };
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         return { exceptionDetails: { text }, result: {} };
+      } finally {
+        if (unbounded) page.setDefaultTimeout(30_000);
       }
     }
     if (method === 'Page.captureScreenshot') {
