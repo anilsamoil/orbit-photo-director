@@ -123,6 +123,24 @@ describe('bearing retarget while an ease is in flight', () => {
     expect(calls.at(-1)).toMatchObject({ bearing: 0 });
   });
 
+  it('does not restart an ISS-up ease already aimed at the heading', () => {
+    const { calls, iss } = arm(nowMs);
+    api().applyBearing(true);
+    const started = calls.length;
+    iss.click();
+    expect(calls.length).toBe(started);
+  });
+
+  it('does not ease when the camera is already inside the north noop band', () => {
+    const { vendor, calls, north } = arm(nowMs);
+    api().applyBearing(true);
+    vendor.fire('moveend', undefined);
+    vendor.setBearing(0.4);
+    const before = calls.length;
+    north.click();
+    expect(calls.length).toBe(before);
+  });
+
   it('reapplies active ISS-up after a gesture settles away from the commanded heading', () => {
     const { vendor, calls, iss } = arm(nowMs);
     api().applyBearing(true);
