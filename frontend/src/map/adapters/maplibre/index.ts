@@ -25,6 +25,7 @@ import type {
   VendorMap,
   VendorMapOptions,
 } from '../../map-core/vendor-map';
+import { getMapLaunchMode, launchCardBuried } from '../../../map-launch-mode';
 import { collapseAttribution } from './attribution';
 import { layerListener, mapListener, toHit, toLngLat } from './events';
 
@@ -88,6 +89,7 @@ function syncMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   pane.classList.toggle('map-inspector-open', open);
   slot.hidden = !open;
   if (open) boundMapInspector(map, applied);
+  else syncLaunchBrief(slot);
   requestAnimationFrame(() => map.resize());
 }
 
@@ -181,6 +183,7 @@ function chooseInspectorSlot(
   sideColumn: boolean,
   rowHeight: number,
   passHead: number,
+  reserveDrop: boolean,
 ): (InspectorRect & { score: number }) | null {
   const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
   const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
@@ -216,12 +219,21 @@ function chooseInspectorSlot(
   return best;
 }
 
-/** Use painted chrome rectangles, including overflowing wrapped command children,
- *  without writing any chrome styles or changing its stacking order. */
+function syncLaunchBrief(slot: HTMLElement): void {
+  const brief = slot.closest('#map-pane')?.querySelector<HTMLElement>('#map-launch-coverage');
+  if (!brief) return;
+  if (launchCardBuried(slot)) {
+    if (!brief.hidden) brief.hidden = true;
+    return;
+  }
+  if (getMapLaunchMode() && brief.hidden) brief.hidden = false;
+}
+
 function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   const slot = mapInspector(map);
   const pane = slot?.closest('#map-pane');
   if (!slot || !(pane instanceof HTMLElement) || slot.hidden) return;
+  syncLaunchBrief(slot);
   const paneRect = pane.getBoundingClientRect();
   const mapRect = map.getContainer().getBoundingClientRect();
   const insetStyle = getComputedStyle(inspectorInsetProbe(slot));
@@ -258,6 +270,7 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     sideColumn,
     rowHeight,
     passHead,
+    reserveDrop,
   );
   const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
   const square = short;
