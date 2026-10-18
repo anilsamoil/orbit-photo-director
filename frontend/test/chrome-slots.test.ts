@@ -797,4 +797,28 @@ describe('chrome slots', () => {
     const short = { ...input, viewport: { w: 719, h: 521 }, map: { x: 0, y: 113, w: 719, h: 408 } };
     expect(solveChromeSlots({ ...short, inspectorOpen: true })).toEqual(solveChromeSlots(short));
   });
+
+  it('keeps a short landscape launch brief off the map center', () => {
+    const map: Box = { x: 0, y: 60, w: 874, h: 342 };
+    const input = measure({
+      viewport: { w: 874, h: 402 },
+      map,
+      zoom: { x: 8, y: 130, w: 44, h: 132 },
+      compass: { x: 8, y: 270, w: 44, h: 44 },
+      show: { x: 8, y: 68, w: 204, h: 52 },
+      sliderChip: { x: 60, y: 300, w: 640, h: 70 },
+      footer: { x: 0, y: 370, w: 874, h: 32 },
+      hide: { x: 770, y: 340, w: 88, h: 44 },
+      legendButton: { x: 670, y: 340, w: 88, h: 44 },
+      dock: { x: 810, y: 68, w: 52, h: 220 },
+      launchBrief: { x: 60, y: 130, w: 512, h: 160 },
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.launch).toBeTruthy();
+    if (!slots.launch) return;
+    const center: Box = { x: map.x + map.w / 2 - 1, y: map.y + map.h / 2 - 1, w: 2, h: 2 };
+    expect(meets(slots.launch, center)).toBe(false);
+    expect(slots.launch.w).toBeGreaterThanOrEqual(180);
+    expect(slots.launch.h).toBeGreaterThanOrEqual(64);
+  });
 });

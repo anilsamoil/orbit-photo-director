@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { BROWSER_FILE_MINIMUMS, WEBKIT_PASSED_FLOOR, evaluateWebKitReports, loadWebKitReports } from '../scripts/webkit-floor';
 
 const root = resolve(__dirname, '..');
+const webKitCases = Object.values(BROWSER_FILE_MINIMUMS).reduce((sum, count) => sum + count, 0);
 
 const WEBKIT_DESCRIBE: Readonly<Record<string, string>> = {
   'test/map-time-skip-safe-area.test.ts': 'trusted time controls WebKit',
@@ -13,6 +14,7 @@ const WEBKIT_DESCRIBE: Readonly<Record<string, string>> = {
   'test/map-review-targets.test.ts': 'supported review regressions WebKit',
   'test/safe-area-layout.test.ts': 'safe-area painted layout WebKit',
   'test/map-corner-lift.test.ts': 'map corner lift WebKit',
+  'test/legacy-launch-card.test.ts': 'pin inspector over a legacy launch card WebKit',
   'test/map-chrome-startup.test.ts': 'supported safe-area startup WebKit',
   'test/map-repin-safe-area.test.ts': 'trusted centered re-pin WebKit',
   'test/map-chrome-idle.test.ts': 'map chrome tab lifecycle WebKit',
@@ -90,12 +92,12 @@ describe('webkit floor', () => {
     const report = browserReport(() => 'skipped');
     const verdict = evaluateWebKitReports([report]);
     expect(verdict.passed).toBe(0);
-    expect(verdict.skipped).toBe(193);
-    expect(verdict.reasons.join('\n')).toContain('webkit skipped 193');
+    expect(verdict.skipped).toBe(webKitCases);
+    expect(verdict.reasons.join('\n')).toContain(`webkit skipped ${webKitCases}`);
     expect(verdict.reasons.join('\n')).toContain(`webkit passed 0 below floor ${WEBKIT_PASSED_FLOOR}`);
     const cli = runCli(report);
     expect(cli.status).not.toBe(0);
-    expect(cli.stderr).toContain('webkit skipped 193');
+    expect(cli.stderr).toContain(`webkit skipped ${webKitCases}`);
   });
 
   it('rejects a webkit-gate-only run', () => {
@@ -121,15 +123,15 @@ describe('webkit floor', () => {
     const report = browserReport((file) => file === 'test/map-bearing-retarget.test.ts' ? 'passed' : 'skipped');
     const verdict = evaluateWebKitReports([report]);
     expect(verdict.passed).toBe(1);
-    expect(verdict.skipped).toBe(192);
-    expect(verdict.reasons.join('\n')).toContain('webkit passed 1 below floor 190');
+    expect(verdict.skipped).toBe(webKitCases - 1);
+    expect(verdict.reasons.join('\n')).toContain(`webkit passed 1 below floor ${WEBKIT_PASSED_FLOOR}`);
     expect(runCli(report).status).not.toBe(0);
   });
 
   it('rejects one skipped WebKit case inside an otherwise complete run', () => {
     const report = browserReport((file, index) => file === 'test/map-satellite-picker-safe-area.test.ts' && index === 0 ? 'skipped' : 'passed');
     const verdict = evaluateWebKitReports([report]);
-    expect(verdict.passed).toBe(192);
+    expect(verdict.passed).toBe(webKitCases - 1);
     expect(verdict.skipped).toBe(1);
     expect(verdict.reasons).toContain('webkit skipped 1');
     expect(verdict.reasons).toContain('test/map-satellite-picker-safe-area.test.ts passed 2 below minimum 3');
@@ -164,11 +166,11 @@ describe('webkit floor', () => {
     const report = browserReport(() => 'passed');
     const verdict = evaluateWebKitReports([report]);
     expect(verdict.reasons).toEqual([]);
-    expect(verdict.passed).toBe(193);
-    expect(verdict.passed).toBeGreaterThanOrEqual(WEBKIT_PASSED_FLOOR);
+    expect(verdict.passed).toBe(webKitCases);
+    expect(verdict.passed).toBe(WEBKIT_PASSED_FLOOR);
     const cli = runCli(report);
     expect(cli.status).toBe(0);
-    expect(cli.stdout).toContain('webkit floor ok: 193 passed');
+    expect(cli.stdout).toContain(`webkit floor ok: ${webKitCases} passed`);
   });
 
   it('accepts shard reports only when every shard is present', () => {
@@ -178,7 +180,7 @@ describe('webkit floor', () => {
     writeFileSync(join(dir, 'shard-2.json'), JSON.stringify({ testResults: report.testResults.slice(4) }));
     const verdict = evaluateWebKitReports(loadWebKitReports(dir));
     expect(verdict.reasons).toEqual([]);
-    expect(verdict.passed).toBe(193);
+    expect(verdict.passed).toBe(webKitCases);
     expect(evaluateWebKitReports(loadWebKitReports(join(dir, 'shard-1.json'))).reasons.length).toBeGreaterThan(0);
   });
 
@@ -231,7 +233,7 @@ describe('webkit floor', () => {
         : file),
     };
     const verdict = evaluateWebKitReports([withChromeTitle]);
-    expect(verdict.passed).toBe(193);
+    expect(verdict.passed).toBe(webKitCases);
     expect(verdict.reasons).toEqual([]);
   });
 
