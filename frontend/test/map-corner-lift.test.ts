@@ -710,6 +710,51 @@ for (const engine of [
     }
   }, 60_000);
 
+  it('schedules one sync when footer style and text change in the same turn', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      const delta = await page.evaluate(() => new Promise<number>((resolve) => {
+        const before = (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0;
+        const element = document.getElementById('status-banner')!;
+        element.style.height = '96px';
+        element.textContent = `${element.textContent ?? ''} · styled`;
+        queueMicrotask(() => {
+          resolve(((window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0) - before);
+        });
+      }));
+      expect(delta).toBe(1);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('schedules no sync for a text change on a footer that is not the watched one', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      const delta = await page.evaluate(() => new Promise<number>((resolve) => {
+        const banner = document.getElementById('status-banner')!;
+        const nested = document.createElement('span');
+        nested.id = 'status-banner';
+        nested.textContent = 'nested';
+        banner.appendChild(nested);
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            const before = (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0;
+            nested.textContent = 'nested · changed';
+            queueMicrotask(() => {
+              resolve(((window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0) - before);
+            });
+          });
+        });
+      }));
+      expect(delta).toBe(0);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
   it('keeps T+90 inside the 390x520 viewport when the time strip is visible', async () => {
     const { context, page } = await contextAt(390, 520);
     try {
