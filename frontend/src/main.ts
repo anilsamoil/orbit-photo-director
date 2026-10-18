@@ -64,7 +64,7 @@ import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from 
 import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderTierCard } from './launch-tier-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
-import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
+import { getMapLaunchMode, launchCardBuried, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -541,12 +541,13 @@ function renderQueue(): void {
     }
     if (anchorId === 'map') {
       const enabled = getMapLaunchMode();
-      if (enabled && notice.hidden) {
+      const hidden = !enabled || launchCardBuried(document.getElementById('map-inspector'));
+      if (enabled && !hidden && notice.hidden) {
         notice.dataset.launchBriefOpen = '1';
         const primary = notice.querySelector<HTMLDetailsElement>('.map-launch-primary');
         if (primary) primary.open = true;
       }
-      notice.hidden = !enabled;
+      notice.hidden = hidden;
       renderMapLaunchBrief(notice, launches, now, showLaunchOnMap);
       resizeVisibleMap();
     }
@@ -745,6 +746,14 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
     renderThumbnail: thumbnailRenderer(),
   });
   cards.prepend(...launchSelections.map((selection) => renderLaunchCard(selection, launches, nowMs, showLaunchOnMap)));
+}
+
+let countdownTimer: number | null = null;
+
+function stopCountdown(): void {
+  if (countdownTimer === null) return;
+  window.clearInterval(countdownTimer);
+  countdownTimer = null;
 }
 
 function rerenderCountdowns(): void {
@@ -1875,7 +1884,8 @@ async function init(): Promise<void> {
     onPoll: () => void refresh(),
   });
   // Per-second countdown updates without re-fetching the manifest
-  window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);
+  stopCountdown();
+  countdownTimer = window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);
 }
 
 // Auto-init in the browser. Skipped under vitest so test files can drive
@@ -1888,6 +1898,7 @@ export {
   init,
   refresh,
   rerenderCountdowns,
+  stopCountdown,
   // Test surface — exposed so frontend/test/main-integration.test.ts can
   // exercise the orchestration helpers without going through the full
   // init() / setInterval chain. Production code should use init().
