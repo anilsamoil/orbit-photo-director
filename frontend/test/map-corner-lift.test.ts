@@ -543,6 +543,75 @@ for (const engine of [
     }
   }, 60_000);
 
+  it('drops the corner-lift observers on pagehide so a mutation writes nothing', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '160px';
+      });
+      const raised = await hideBox(page);
+      expect(Number.parseFloat(raised.lift)).toBeGreaterThan(0);
+      const armed = await page.evaluate(() => (window as unknown as { __opdCornerObservers?: number }).__opdCornerObservers ?? 0);
+      expect(armed).toBeGreaterThan(0);
+      const hidden = await page.evaluate(() => new Promise<{ observers: number; writes: number; lift: string }>((resolve) => {
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        let writes = 0;
+        const style = document.body.style;
+        const setProperty = style.setProperty.bind(style);
+        style.setProperty = (property: string, value: string, priority?: string) => {
+          writes += 1;
+          return setProperty(property, value, priority);
+        };
+        const banner = document.getElementById('status-banner')!;
+        banner.style.height = '240px';
+        banner.textContent = `${banner.textContent ?? ''} x`;
+        document.body.classList.add('map-slot-probe');
+        document.body.classList.remove('map-slot-probe');
+        setTimeout(() => {
+          resolve({
+            observers: (window as unknown as { __opdCornerObservers?: number }).__opdCornerObservers ?? -1,
+            writes,
+            lift: document.body.style.getPropertyValue('--map-corner-lift'),
+          });
+        }, 50);
+      }));
+      expect(hidden.observers).toBe(0);
+      expect(hidden.writes).toBe(0);
+      expect(hidden.lift).toBe(raised.lift);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('lifts the corners again after a persisted pageshow', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '80px';
+      });
+      const before = await hideBox(page);
+      expect(Number.parseFloat(before.lift)).toBeGreaterThan(0);
+      const restored = await page.evaluate(() => new Promise<{ observers: number; lift: string }>((resolve) => {
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        const hidden = (window as unknown as { __opdCornerObservers?: number }).__opdCornerObservers ?? -1;
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+        document.getElementById('status-banner')!.style.height = '200px';
+        setTimeout(() => {
+          resolve({
+            observers: hidden === 0 ? ((window as unknown as { __opdCornerObservers?: number }).__opdCornerObservers ?? -1) : -1,
+            lift: document.body.style.getPropertyValue('--map-corner-lift'),
+          });
+        }, 50);
+      }));
+      expect(restored.observers).toBeGreaterThan(0);
+      expect(Number.parseFloat(restored.lift)).toBeGreaterThan(Number.parseFloat(before.lift));
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
   it('keeps T+90 inside the 390x520 viewport when the time strip is visible', async () => {
     const { context, page } = await contextAt(390, 520);
     try {
