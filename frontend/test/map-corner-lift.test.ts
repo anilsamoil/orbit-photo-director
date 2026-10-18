@@ -219,9 +219,7 @@ for (const engine of [
       await frames(page);
       await page.setViewportSize({ width: 932, height: 430 });
       await frames(page);
-      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       await page.setViewportSize({ width: 402, height: 874 });
-      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       const immediate = await hideBox(page);
       await frames(page);
       const settled = await hideBox(page);
@@ -239,6 +237,68 @@ for (const engine of [
       await context.close();
     }
   }, 60_000);
+
+  it('keeps Hide still under a trusted tap that returns to 402x874 before any resize event', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        const element = document.getElementById('status-banner')!;
+        const text = 'Last updated 4 min ago · TLE 499h old — live track may drift';
+        const apply = () => { if (element.textContent !== text) element.textContent = text; };
+        apply();
+        new MutationObserver(apply).observe(element, { childList: true, subtree: true, characterData: true });
+        const toggle = document.getElementById('map-chrome-toggle')!;
+        const log: { type: string; top: number; bottom: number; lift: string; bannerTop: number; bannerH: number }[] = [];
+        (window as unknown as { __tapLog: typeof log }).__tapLog = log;
+        for (const type of ['pointerdown', 'pointerup', 'click']) {
+          toggle.addEventListener(type, () => {
+            const box = toggle.getBoundingClientRect();
+            const banner = element.getBoundingClientRect();
+            log.push({
+              type,
+              top: box.top,
+              bottom: box.bottom,
+              lift: document.body.style.getPropertyValue('--map-corner-lift'),
+              bannerTop: banner.top,
+              bannerH: banner.height,
+            });
+          }, true);
+        }
+      });
+      await frames(page);
+      const point = await page.evaluate(() => {
+        const box = document.getElementById('map-chrome-toggle')!.getBoundingClientRect();
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      });
+      const jumps: { from: string; rep: number; down: unknown; afterTop: number }[] = [];
+      for (const from of [{ width: 932, height: 430 }, { width: 874, height: 402 }]) {
+        for (let rep = 0; rep < 12; rep++) {
+          if ((await page.locator('#map-chrome-toggle').textContent()) !== 'Hide') {
+            await page.touchscreen.tap(point.x, point.y);
+            await frames(page);
+          }
+          await page.setViewportSize(from);
+          await frames(page);
+          const mark = await page.evaluate(() => (window as unknown as { __tapLog: unknown[] }).__tapLog.length);
+          await page.setViewportSize({ width: 402, height: 874 });
+          await page.touchscreen.tap(point.x, point.y);
+          const sample = await page.evaluate((start) => {
+            const log = (window as unknown as { __tapLog: { type: string; top: number; bottom: number; lift: string; bannerTop: number; bannerH: number }[] }).__tapLog;
+            const down = log.slice(start).find((entry) => entry.type === 'pointerdown') ?? null;
+            const after = document.getElementById('map-chrome-toggle')!.getBoundingClientRect();
+            return { down, afterTop: after.top, afterBottom: after.bottom };
+          }, mark);
+          const down = sample.down;
+          const moved = !down || Math.abs(down.top - sample.afterTop) > 1 || down.bannerH <= 30 || down.bottom > down.bannerTop - 7;
+          if (moved) jumps.push({ from: `${from.width}x${from.height}`, rep, down, afterTop: sample.afterTop });
+        }
+      }
+      expect(jumps).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  }, 180_000);
 
   it('keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
