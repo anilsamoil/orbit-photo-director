@@ -1761,7 +1761,8 @@ async function init(): Promise<void> {
     currentProfile = null;
     console.warn('[profile] account initialization failed:', e);
     const text = e instanceof Error ? e.message : 'Could not verify your profile. Please reload.';
-    showSessionRecovery(text);
+    if (getAccountProfile()) setBanner({ level: 'red', text });
+    else showSessionRecovery(text);
     return;
   }
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
