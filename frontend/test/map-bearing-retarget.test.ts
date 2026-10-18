@@ -191,7 +191,14 @@ for (const engine of [
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     try {
-      await page.addInitScript(() => window.addEventListener('contextmenu', (event) => event.preventDefault(), true));
+      await page.addInitScript(`
+        window.addEventListener('contextmenu', (event) => event.preventDefault(), true);
+        const native = window.setInterval.bind(window);
+        window.setInterval = (handler, timeout, ...args) => {
+          if (typeof timeout === 'number' && timeout >= 1000) return native(() => {}, 60000);
+          return native(handler, timeout, ...args);
+        };
+      `);
       await install(page);
       await openMap(page);
       await page.evaluate(() => {
