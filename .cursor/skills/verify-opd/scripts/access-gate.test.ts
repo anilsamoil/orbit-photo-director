@@ -80,7 +80,7 @@ function site(objects: Record<string, string>) {
 const syntheticAllowlist = allowedEmail;
 const gatedPaths = ['/', '/sw.js', '/api/health'] as const;
 
-function envFor(emails: string | null = syntheticAllowlist): Env {
+function envFor(emails: string | null = syntheticAllowlist, clientIds: string | null = serviceClientId): Env {
   const manifest = JSON.stringify({
     version: 'verify',
     generated_at: new Date().toISOString(),
@@ -98,10 +98,10 @@ function envFor(emails: string | null = syntheticAllowlist): Env {
     CALIB_TOKEN: calibToken,
     ACCESS_TEAM_DOMAIN: issuer,
     ACCESS_AUD: audience,
-    ACCESS_SERVICE_TOKEN_CLIENT_IDS: serviceClientId,
     STALE_THRESHOLD_SECONDS: '7200',
   };
   if (emails !== null) env.ACCESS_ALLOWED_EMAILS = emails;
+  if (clientIds !== null) env.ACCESS_SERVICE_TOKEN_CLIENT_IDS = clientIds;
   return env as unknown as Env;
 }
 
@@ -111,9 +111,14 @@ async function call(
   headers: Record<string, string> = {},
   method = 'GET',
   emails: string | null = syntheticAllowlist,
+  clientIds: string | null = serviceClientId,
 ) {
   const worker = (await import('../../../../worker/src/index.ts')).default;
-  return worker.fetch(new Request(`https://${host}${path}`, { method, headers }), envFor(emails), {} as ExecutionContext);
+  return worker.fetch(
+    new Request(`https://${host}${path}`, { method, headers }),
+    envFor(emails, clientIds),
+    {} as ExecutionContext,
+  );
 }
 
 describe('local map Access gate', () => {
@@ -199,6 +204,28 @@ describe('local map Access gate', () => {
       expect(offList.status).toBe(401);
       const machine = await call(host, '/api/health', { 'x-calib-token': calibToken });
       expect(machine.status).toBe(401);
+    }
+  });
+
+  it('keeps /api/health human-only on both hosts when the service client id list is empty', async () => {
+    const service = { 'cf-access-jwt-assertion': await serviceToken(serviceClientId) };
+    const human = { 'cf-access-jwt-assertion': await token() };
+    for (const clientIds of ['', null] as const) {
+      for (const host of hosts) {
+        const health = await call(host, '/api/health', service, 'GET', syntheticAllowlist, clientIds);
+        expect(health.status, `${JSON.stringify(clientIds)} ${host} service`).toBe(401);
+        expect(await health.json()).toEqual({ error: 'unauthorized' });
+        expect(health.headers.get('location')).toBeNull();
+        const humanHealth = await call(host, '/api/health', human, 'GET', syntheticAllowlist, clientIds);
+        expect(humanHealth.status, `${JSON.stringify(clientIds)} ${host} human`).toBe(200);
+        const profiles = await call(host, '/api/profiles', {}, 'GET', syntheticAllowlist, clientIds);
+        expect(profiles.status, `${host} profiles`).toBe(401);
+        expect(await profiles.json()).toEqual({ error: 'unauthorized' });
+        expect(profiles.headers.get('location')).toBeNull();
+        const page = await call(host, '/', {}, 'GET', syntheticAllowlist, clientIds);
+        expect(page.status, `${host} page`).toBe(401);
+        expect(page.headers.get('location')).toBeNull();
+      }
     }
   });
 
