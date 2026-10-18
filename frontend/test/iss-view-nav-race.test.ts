@@ -206,4 +206,22 @@ describe('ISS view import lifetime', () => {
     }
   });
 
+  it('a second init leaves one manifest poll', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      await boot();
+      const stops = [...schedulerStops];
+      expect(stops.length).toBe(2);
+      const latest = stops[1];
+      if (!latest) throw new Error('missing poll stop');
+      latest();
+      const before = vi.mocked(manifestModule.fetchManifest).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(vi.mocked(manifestModule.fetchManifest).mock.calls.length - before).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });

@@ -30,7 +30,7 @@ import {
 import { buildPayload, drainQueue, postCalib, queuedCalibCount } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
-import { createPollScheduler, isOnline } from './network-status';
+import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from './pass-filter';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
 import { probeConnectivity } from './network-probe';
@@ -748,6 +748,12 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
 }
 
 let countdownTimer: number | null = null;
+let pollScheduler: PollScheduler | null = null;
+
+function stopPollScheduler(): void {
+  pollScheduler?.stop();
+  pollScheduler = null;
+}
 
 function stopCountdown(): void {
   if (countdownTimer === null) return;
@@ -1878,7 +1884,8 @@ async function init(): Promise<void> {
   // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
   // watching and gives the user fresh data the moment they look at the
   // page after a long pause.
-  createPollScheduler({
+  stopPollScheduler();
+  pollScheduler = createPollScheduler({
     intervalMs: REFRESH_MS,
     onPoll: () => void refresh(),
   });
