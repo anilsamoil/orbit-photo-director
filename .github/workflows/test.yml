@@ -56,5 +56,11 @@ jobs:
       - run: bash scripts/upload_frontend.test.sh
       # Each browser-backed file builds the app and launches real browsers.
       # Keep those files serial within the hosted runner's resource budget.
-      - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
+      # map-corner-lift.test.ts throws at load when Playwright WebKit is absent, which
+      # fails this job before Chrome in that file runs. It is the next step.
+      - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose --exclude test/map-corner-lift.test.ts
+      - name: Install WebKit
+        run: cd frontend && bunx playwright install --with-deps webkit
+      - name: Corner lift on WebKit and Chrome
+        run: cd frontend && bun run test test/map-corner-lift.test.ts --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
       - run: cd frontend && bun run build
