@@ -282,7 +282,7 @@ function startProxy(home) {
     let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
     let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
     let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
-    let revision = `c${generatedMs}`;
+    let revision = `c${siteAnchor}-${generatedMs}`;
     const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
       || (catalogGate && catalogGate.pointer.revision === candidate);
     for (let step = 0; taken(revision) && step < 8; step += 1) {

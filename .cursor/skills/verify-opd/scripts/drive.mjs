@@ -6470,7 +6470,16 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-all-launches');
-  const frozen = fixtureInstant(evidenceDir);
+  const loadedAnchor = await evaluate(send, `(() => {
+    const entries = performance.getEntriesByType('resource');
+    let anchor = 0;
+    for (const entry of entries) {
+      const match = String(entry.name).match(/\\/launch\\/catalog\\/v\\/c(\\d+)/);
+      if (match) anchor = Number(match[1]);
+    }
+    return anchor > 0 ? anchor : null;
+  })()`);
+  const frozen = loadedAnchor || fixtureInstant(evidenceDir);
   await evaluate(send, `(() => {
     window.__opdRealNow = Date.now;
     const frozen = ${frozen};
