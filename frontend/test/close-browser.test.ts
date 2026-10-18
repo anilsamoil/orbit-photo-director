@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { chromium, webkit } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -195,33 +196,126 @@ describe('closeBrowser', () => {
     } as never, { headless: true }).catch(() => {});
     expect(host).toBe('127.0.0.1');
   });
+
+  it('treats process exit as closed while stdio stays open', async () => {
+    const child = new EventEmitter() as EventEmitter & { exitCode: number | null; signalCode: NodeJS.Signals | null };
+    child.exitCode = null;
+    child.signalCode = null;
+    let killed = false;
+    const started = Date.now();
+    await closeBrowser({
+      browser: {
+        close: async () => {
+          child.exitCode = 0;
+          child.emit('exit', 0, null);
+        },
+      },
+      server: {
+        process: () => child,
+        close: () => new Promise<void>(() => {}),
+        kill: async () => { killed = true; },
+      },
+    }, 'crashpad');
+    expect(killed).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('stops a hung kill at its deadline', async () => {
+    const started = Date.now();
+    let settled = false;
+    await Promise.race([
+      closeBrowser({
+        browser: { close: () => new Promise<void>(() => {}) },
+        server: {
+          close: () => new Promise<void>(() => {}),
+          kill: () => new Promise<void>(() => {}),
+        },
+      }, 'hung-kill').then(() => { settled = true; }),
+      new Promise<void>((resolve) => setTimeout(resolve, 4_000)),
+    ]);
+    expect(settled).toBe(true);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  }, 12_000);
+
+  it('leaves a group member alive after the leader exits', async () => {
+    const root = track(detached('bash', ['-c', 'sleep 30 & echo $!; wait'], 'pipe'));
+    const line = await new Promise<string>((resolve) => {
+      root.stdout?.once('data', (buf) => resolve(buf.toString().trim()));
+    });
+    const member = Number(line);
+    let killed = false;
+    try {
+      await closeBrowser({
+        browser: {
+          close: async () => {
+            try { process.kill(root.pid!, 'SIGKILL'); } catch {}
+          },
+        },
+        server: {
+          process: () => root,
+          close: () => new Promise<void>(() => {}),
+          kill: async () => {
+            killed = true;
+            killGroup(root.pid);
+          },
+        },
+      }, 'stdio-dropped');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(killed).toBe(false);
+      expect(await dead(root.pid, root)).toBe(true);
+      expect(alive(member)).toBe(true);
+    } finally {
+      killGroup(root.pid);
+      killGroup(member);
+    }
+  }, 12_000);
 });
 
-const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome'].find((path) => existsSync(path));
-const engines = [
-  chromePath ? { name: 'chrome', type: chromium, options: { headless: true, executablePath: chromePath } } : undefined,
-  existsSync(webkit.executablePath()) ? { name: 'webkit', type: webkit, options: { headless: true } } : undefined,
-].filter((engine) => engine !== undefined);
+export const CHROME_CANDIDATES = [
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/google-chrome',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+];
+
+const chromePath = CHROME_CANDIDATES.find((path) => existsSync(path));
+
+it('keeps a macOS Chrome path in the launch candidates', () => {
+  expect(CHROME_CANDIDATES).toContain('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
+});
+
+async function stoppedEngine(name: string, type: typeof chromium, executablePath: string): Promise<void> {
+  const sibling = track(detached('sleep', ['30']));
+  const session = await launchTracked(type, { headless: true, executablePath });
+  const leader = session.server.process().pid;
+  process.kill(leader!, 'SIGSTOP');
+  const started = Date.now();
+  try {
+    await closeBrowser(session, `stopped-${name}`);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(await dead(leader)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sibling.exitCode).toBeNull();
+    expect(sibling.signalCode).toBeNull();
+  } finally {
+    killGroup(sibling.pid);
+    try { await session.server.kill(); } catch {}
+  }
+}
 
 describe('launched browsers', () => {
-  for (const engine of engines) {
-    it(`kills a stopped ${engine.name} process within the hook budget`, async () => {
-      const sibling = track(detached('sleep', ['30']));
-      const session = await launchTracked(engine.type, engine.options);
-      const leader = session.server.process().pid;
-      process.kill(leader!, 'SIGSTOP');
-      const started = Date.now();
-      try {
-        await closeBrowser(session, `stopped-${engine.name}`);
-        expect(Date.now() - started).toBeLessThan(10_000);
-        expect(await dead(leader)).toBe(true);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        expect(sibling.exitCode).toBeNull();
-        expect(sibling.signalCode).toBeNull();
-      } finally {
-        killGroup(sibling.pid);
-        try { await session.server.kill(); } catch {}
-      }
-    }, 30_000);
-  }
+  it('kills a stopped chrome process within the hook budget', async (ctx) => {
+    if (!chromePath) {
+      ctx.skip();
+      return;
+    }
+    await stoppedEngine('chrome', chromium, chromePath);
+  }, 30_000);
+
+  it('kills a stopped webkit process within the hook budget', async (ctx) => {
+    if (!existsSync(webkit.executablePath())) {
+      ctx.skip();
+      return;
+    }
+    await stoppedEngine('webkit', webkit, webkit.executablePath());
+  }, 30_000);
 });
