@@ -350,13 +350,28 @@ R2 user API tokens don't expire by default but Cloudflare may revoke them if the
 If the calibration token leaks (it lives in browser localStorage, plaintext), rotate:
 
 1. Generate a new token: `python3 -c "import secrets; print(secrets.token_hex(32))"` (copy output).
-2. Set on Worker:
+2. Set the Worker secret, then deploy with the full service-token allowlist.
+   A bare `wrangler deploy` clears `ACCESS_SERVICE_TOKEN_CLIENT_IDS`.
+   `deploy.sh` reads that name from the environment and passes it as the last `--var`.
+   The wrapper accepts only `--dry-run`, `--env <name>`, `--env=<name>`, `--config <path>`, and `--config=<path>`.
+   Any caller `--var`, any other flag, any positional argument, and `--` make it exit before wrangler runs.
+   Replace the value below with every client id, comma-separated. Leave the client secret out.
+
    ```bash
    cd ~/orbit-photo-director/worker
    echo "NEW_TOKEN_HERE" | wrangler secret put CALIB_TOKEN
-   wrangler deploy
+   ACCESS_SERVICE_TOKEN_CLIENT_IDS='CLIENT_ID_ONE,CLIENT_ID_TWO' ./deploy.sh
    ```
-3. Update credentials.json:
+3. Confirm the service token. `/api/health` returns 200. Any other path returns 401.
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     -H "Cf-Access-Jwt-Assertion: $SERVICE_JWT" \
+     https://map.astroanil.dev/api/health
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     -H "Cf-Access-Jwt-Assertion: $SERVICE_JWT" \
+     https://map.astroanil.dev/
+   ```
+4. Update credentials.json:
    ```bash
    python3 -c "
    import json, os
@@ -368,7 +383,7 @@ If the calibration token leaks (it lives in browser localStorage, plaintext), ro
    os.chmod(p, 0o600)
    "
    ```
-4. **Important**: any browser that previously visited `map.astroanil.dev` has the OLD token in localStorage. The `/api/log` Worker will return 401 on those POSTs and the frontend (per its hardening) will clear the token + show the setup banner. The astronaut needs to paste the new token into localStorage on the ISS-side device:
+5. **Important**: any browser that previously visited `map.astroanil.dev` has the OLD token in localStorage. The `/api/log` Worker will return 401 on those POSTs and the frontend (per its hardening) will clear the token + show the setup banner. The astronaut needs to paste the new token into localStorage on the ISS-side device:
    ```js
    // In browser DevTools console on map.astroanil.dev:
    localStorage.setItem('opd-calib-token', 'NEW_TOKEN_HERE');

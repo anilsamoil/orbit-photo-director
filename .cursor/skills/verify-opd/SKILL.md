@@ -7,7 +7,7 @@ description: Drive the SNAP frontend for Orbit Photo Director in a local browser
 
 SNAP is the browser app in `frontend/`. This skill starts an isolated Vite server, serves a disposable shot queue at the manifest boundary, and drives the page the way an astronaut would. Read `features/README.md` before a drive, then follow one feature file.
 
-The live site `https://map.astroanil.dev` sits behind Cloudflare Access. An unauthenticated request is not the app. Do not point this skill at that URL. `scripts/verify-sw-upgrade.sh` in the repo root is for a preview build this skill starts, or for an origin that answers without Cloudflare Access. The script sends no Access headers.
+The live site `https://map.astroanil.dev` sits behind Cloudflare Access. An unauthenticated request is not the app. Do not point this skill at that URL. `https://map.expedition75.com` is the same map on its own host. It must not redirect to `map.astroanil.dev`. Both hosts use the existing Access app. A crew member signs in with Google or a one-time PIN. This harness does not show that login page and does not use a password form. `scripts/verify-sw-upgrade.sh` in the repo root is for a preview build this skill starts, or for an origin that answers without Cloudflare Access. The script sends no Access headers.
 
 ## Launch
 

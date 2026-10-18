@@ -56,26 +56,40 @@ fi
 COUNT=0
 GLYPHS_UPLOADED=0
 FAILED_FILES=()
+file_list=$(mktemp)
+trap 'rm -f "$file_list"' EXIT
+find_status=0
+find "$DIST_DIR" -type f -print0 > "$file_list" || find_status=$?
+if [ "$find_status" -ne 0 ]; then
+  echo "ERROR: listing $DIST_DIR failed (find exit $find_status). No file was published." >&2
+  exit 2
+fi
+report_failures() {
+  echo "" >&2
+  echo "==> $COUNT files uploaded, ${#FAILED_FILES[@]} FAILED:" >&2
+  local f
+  for f in "${FAILED_FILES[@]}"; do
+    echo "    $f" >&2
+  done
+  echo "==> Re-run upload_frontend.sh after the failed puts succeed." >&2
+  exit 3
+}
 upload_one() {
   local FILE="$1"
   local REL_PATH="${FILE#$DIST_DIR/}"
   local CT CC WRANGLER_ERR
   CT=$(content_type_for "$REL_PATH")
   CC=$(cache_control_for "$REL_PATH")
-  # Capture stderr so we can surface real errors instead of silently
-  # leaving index.html pointing at a 404'd asset on R2. `wrangler r2
-  # object put` writes useful error detail (auth failure, network, R2
-  # quota) to stderr.
-  WRANGLER_ERR=$(wrangler r2 object put "$BUCKET/$REL_PATH" \
+  if ! WRANGLER_ERR=$(wrangler r2 object put "$BUCKET/$REL_PATH" \
     --file "$FILE" \
     --content-type "$CT" \
     --cache-control "$CC" \
-    --remote 2>&1 >/dev/null) || {
+    --remote 2>&1 >/dev/null); then
     echo "  ✗ $REL_PATH" >&2
     echo "    $WRANGLER_ERR" | head -5 | sed 's/^/    /' >&2
     FAILED_FILES+=("$REL_PATH")
-    return
-  }
+    return 1
+  fi
   COUNT=$((COUNT + 1))
   if [ "$REL_PATH" = "$GLYPH_REL" ]; then
     GLYPHS_UPLOADED=1
@@ -84,41 +98,34 @@ upload_one() {
 }
 
 SHELL_FILES=()
-while IFS= read -r FILE; do
+while IFS= read -r -d '' FILE; do
   REL_PATH="${FILE#$DIST_DIR/}"
   if is_shell_entry "$REL_PATH"; then
     SHELL_FILES+=("$FILE")
     continue
   fi
-  upload_one "$FILE"
-done < <(find "$DIST_DIR" -type f)
-
-# Helper and registration before the document, sw.js last. The new worker
-# imports sw-shell.js and seeds index.html as soon as sw.js is fetched.
-for name in manifest.webmanifest sw-shell.js registerSW.js index.html sw.js; do
-  for FILE in "${SHELL_FILES[@]}"; do
-    if [ "${FILE#$DIST_DIR/}" = "$name" ]; then
-      upload_one "$FILE"
-    fi
-  done
-done
+  upload_one "$FILE" || true
+done < "$file_list"
 
 if [ "${#FAILED_FILES[@]}" -gt 0 ]; then
-  echo "" >&2
-  echo "==> $COUNT files uploaded, ${#FAILED_FILES[@]} FAILED:" >&2
-  for f in "${FAILED_FILES[@]}"; do
-    echo "    $f" >&2
-  done
-  echo "==> NOT updating index.html assumption — the site may reference" >&2
-  echo "    assets that didn't upload. Re-run upload_frontend.sh, or" >&2
-  echo "    inspect the errors above." >&2
-  exit 3
+  echo "==> Asset upload failed. No shell file was published." >&2
+  report_failures
 fi
 
 if [ "$GLYPHS_UPLOADED" -ne 1 ]; then
   echo "ERROR: $GLYPH_REL was not uploaded." >&2
   exit 3
 fi
+
+# Helper and registration before the document, sw.js last. The new worker
+# imports sw-shell.js and seeds index.html as soon as sw.js is fetched.
+for name in manifest.webmanifest sw-shell.js registerSW.js index.html sw.js; do
+  for FILE in "${SHELL_FILES[@]}"; do
+    if [ "${FILE#$DIST_DIR/}" = "$name" ]; then
+      upload_one "$FILE" || report_failures
+    fi
+  done
+done
 
 echo "==> Uploaded $COUNT frontend files to $BUCKET"
 echo "==> Live at https://map.astroanil.dev"
