@@ -77,7 +77,10 @@ function site(objects: Record<string, string>) {
   };
 }
 
-function envFor(): Env {
+const syntheticAllowlist = allowedEmail;
+const gatedPaths = ['/', '/sw.js', '/api/health'] as const;
+
+function envFor(emails: string | null = syntheticAllowlist): Env {
   const manifest = JSON.stringify({
     version: 'verify',
     generated_at: new Date().toISOString(),
@@ -89,7 +92,7 @@ function envFor(): Env {
     'manifest.json': manifest,
     'v/demo/passes.json': '{"passes":[]}',
   });
-  return {
+  const env: Record<string, unknown> = {
     SITE: bucket,
     CALIB: bucket,
     CALIB_TOKEN: calibToken,
@@ -97,12 +100,20 @@ function envFor(): Env {
     ACCESS_AUD: audience,
     ACCESS_SERVICE_TOKEN_CLIENT_IDS: serviceClientId,
     STALE_THRESHOLD_SECONDS: '7200',
-  } as unknown as Env;
+  };
+  if (emails !== null) env.ACCESS_ALLOWED_EMAILS = emails;
+  return env as unknown as Env;
 }
 
-async function call(host: string, path: string, headers: Record<string, string> = {}, method = 'GET') {
+async function call(
+  host: string,
+  path: string,
+  headers: Record<string, string> = {},
+  method = 'GET',
+  emails: string | null = syntheticAllowlist,
+) {
   const worker = (await import('../../../../worker/src/index.ts')).default;
-  return worker.fetch(new Request(`https://${host}${path}`, { method, headers }), envFor(), {} as ExecutionContext);
+  return worker.fetch(new Request(`https://${host}${path}`, { method, headers }), envFor(emails), {} as ExecutionContext);
 }
 
 describe('local map Access gate', () => {
@@ -120,17 +131,52 @@ describe('local map Access gate', () => {
     }
   });
 
-  it('serves a page and health for an allowed map JWT on both hosts', async () => {
+  it('serves gated paths for allowed-one on both hosts', async () => {
     const jwt = await token();
     for (const host of hosts) {
-      const page = await call(host, '/', { 'cf-access-jwt-assertion': jwt });
-      const health = await call(host, '/api/health', { 'cf-access-jwt-assertion': jwt });
-      expect(page.status).toBe(200);
-      expect(await page.text()).toContain('map');
-      expect(page.headers.get('location')).toBeNull();
-      expect(health.status).toBe(200);
-      expect(health.headers.get('location')).toBeNull();
+      for (const path of gatedPaths) {
+        const response = await call(host, path, { 'cf-access-jwt-assertion': jwt });
+        expect(response.status, `${host} ${path}`).toBe(200);
+        expect(response.headers.get('location')).toBeNull();
+        if (path === '/') expect(await response.text()).toContain('map');
+      }
     }
+  });
+
+  it('returns 403 email_not_allowlisted for off-list on /, /sw.js, and /api/health', async () => {
+    const jwt = await token({ email: offListEmail, sub: 'crew-off-list' });
+    for (const host of hosts) {
+      for (const path of gatedPaths) {
+        const denied = await call(host, path, { 'cf-access-jwt-assertion': jwt });
+        expect(denied.status, `${host} ${path}`).toBe(403);
+        expect(await denied.json()).toEqual({ error: 'email_not_allowlisted' });
+        expect(denied.headers.get('location')).toBeNull();
+      }
+    }
+  });
+
+  it('returns 403 for every human when the allowlist is empty, unset, or Unicode-blank', async () => {
+    const humans = [
+      await token(),
+      await token({ email: offListEmail, sub: 'crew-off-list' }),
+    ];
+    const lists: Array<string | null> = ['', null, '\uFEFF', '\u00A0', '\uFEFF,\u00A0'];
+    for (const emails of lists) {
+      for (const host of hosts) {
+        for (const jwt of humans) {
+          for (const path of gatedPaths) {
+            const denied = await call(host, path, { 'cf-access-jwt-assertion': jwt }, 'GET', emails);
+            expect(denied.status, `${JSON.stringify(emails)} ${host} ${path}`).toBe(403);
+            expect(await denied.json()).toEqual({ error: 'email_not_allowlisted' });
+          }
+        }
+      }
+    }
+    const service = { 'cf-access-jwt-assertion': await serviceToken(serviceClientId) };
+    const health = await call(hosts[0], '/api/health', service, 'GET', '');
+    expect(health.status).toBe(200);
+    const page = await call(hosts[0], '/', service, 'GET', null);
+    expect(page.status).toBe(401);
   });
 
   it('accepts an allowlisted service token only on exact /api/health', async () => {
@@ -168,6 +214,7 @@ describe('local map Access gate', () => {
       expect(await opened.json()).toMatchObject({ targets: [] });
       const signedIn = await call(host, '/api/profiles/anil/targets', { 'cf-access-jwt-assertion': jwt });
       expect(signedIn.status).toBe(403);
+      expect(await signedIn.json()).toEqual({ error: 'profile_forbidden' });
       const service = await call(host, '/api/profiles/anil/targets', {
         'cf-access-jwt-assertion': await serviceToken(serviceClientId),
       });
