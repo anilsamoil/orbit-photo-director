@@ -245,7 +245,8 @@ async function dropPinOverLaunch(page: Page): Promise<number> {
   }));
   expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+    await page.mouse.move(seed!.x, seed!.y);
+    await page.mouse.click(seed!.x, seed!.y, { button: 'right', delay: 40 });
     if (await pinOverLaunch(page)) return attempt;
   }
   const state = await page.evaluate(() => {
