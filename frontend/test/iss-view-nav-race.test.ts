@@ -106,9 +106,35 @@ beforeEach(() => {
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
 });
 
-afterEach(() => {
+function track(): Track {
+  return {
+    iss_polynomial: {
+      start: '2024-10-17T12:00:00Z',
+      duration_seconds: 60,
+      lat_coeffs: [0],
+      lon_coeffs: [0],
+      polynomial_order: 0,
+    },
+    tle_epoch: '2024-10-16T18:58:11.999Z',
+    tle_age_hours: 1,
+    tle_freshness_factor: 1,
+  };
+}
+
+async function boot(): Promise<void> {
+  vi.mocked(manifestModule.fetchManifest).mockResolvedValue(manifest());
+  vi.mocked(manifestModule.fetchTrack).mockResolvedValue(track());
+  const { init } = await import('../src/main');
+  await init();
+}
+
+function releasePage(): void {
   for (const stop of schedulerStops) stop();
   schedulerStops.clear();
+}
+
+afterEach(() => {
+  releasePage();
   gate.release({
     mountIssScene: () => ({ update() {}, dispose() {} }),
   });
@@ -118,21 +144,7 @@ afterEach(() => {
 
 describe('ISS view import lifetime', () => {
   it('does not mount a scene whose import finishes after the operator leaves', async () => {
-    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(manifest());
-    vi.mocked(manifestModule.fetchTrack).mockResolvedValue({
-      iss_polynomial: {
-        start: '2024-10-17T12:00:00Z',
-        duration_seconds: 60,
-        lat_coeffs: [0],
-        lon_coeffs: [0],
-        polynomial_order: 0,
-      },
-      tle_epoch: '2024-10-16T18:58:11.999Z',
-      tle_age_hours: 1,
-      tle_freshness_factor: 1,
-    } satisfies Track);
-    const { init } = await import('../src/main');
-    await init();
+    await boot();
     (document.getElementById('tab-iss') as HTMLElement).click();
     await Promise.resolve();
     expect(gate.mounts.n).toBe(0);
@@ -157,5 +169,22 @@ describe('ISS view import lifetime', () => {
     await Promise.resolve();
     expect(gate.mounts.n).toBe(0);
     expect(document.querySelector('[data-iss-scene]')).toBeNull();
+  });
+
+  it('does not call updateIssNow after the page is released', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      const readout = document.getElementById('iss-now');
+      if (!readout) throw new Error('missing iss-now');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(readout.textContent).toContain('ISS');
+      readout.innerHTML = 'sentinel';
+      releasePage();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(readout.innerHTML).toBe('sentinel');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
