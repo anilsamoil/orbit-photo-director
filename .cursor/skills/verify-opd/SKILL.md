@@ -7,7 +7,21 @@ description: Drive the SNAP frontend for Orbit Photo Director in a local browser
 
 SNAP is the browser app in `frontend/`. This skill starts an isolated Vite server, serves a disposable shot queue at the manifest boundary, and drives the page the way an astronaut would. Read `features/README.md` before a drive, then follow one feature file.
 
-The live site `https://map.astroanil.dev` sits behind Cloudflare Access. An unauthenticated request is not the app. Do not point this skill at that URL. `https://map.expedition75.com` is the same map on its own host. It must not redirect to `map.astroanil.dev`. Both hosts use the existing Access app. A crew member signs in with Google or a one-time PIN. This harness does not show that login page and does not use a password form. `scripts/verify-sw-upgrade.sh` in the repo root is for a preview build this skill starts, or for an origin that answers without Cloudflare Access. The script sends no Access headers.
+The live sites `https://map.astroanil.dev` and `https://map.expedition75.com` sit behind the same Cloudflare Access app. An unauthenticated request is not the app. Do not point this skill at either URL, and do not fetch them. `map.expedition75.com` is a second host for the same map. It must not redirect to `map.astroanil.dev`. The zone redirect that used to send that host to `map.astroanil.dev` is disabled, not deleted, so it can be turned back on to roll back. This skill does not change that rule. A crew member signs in with Google or a one-time PIN. This harness does not show that login page and does not use a password form.
+
+The Worker requires a valid `Cf-Access-Jwt-Assertion` for the map audience on every path except `/api/profiles` and `/api/profiles/*`. Preflight `OPTIONS` stays open and does not require a JWT. `GET` and `HEAD` `/api/health` also accept a service token whose `common_name` is listed in `ACCESS_SERVICE_TOKEN_CLIENT_IDS`. That acceptance is the exact pathname `/api/health` only, including a query string. `/api/health/` and any other path return 401 for that token. The machine `x-calib-token` does not open `/api/health`. `/api/profiles` and `/api/profiles/*` skip the Access JWT gate and authenticate with `x-calib-token`. A map JWT without that token is not the machine read. Shot-list calendar links use the page host (`location.origin` passed into `buildIcs`). Event UIDs stay `@map.astroanil.dev`. On this drive the page host is the local proxy.
+
+This browser drive does not prove that gate. `up` signs the page in as profile `anil` with display name `Anil`. That identity is a fixture. It is not a Google session. The drive does not send `Cf-Access-Jwt-Assertion`. The proxy is not the Worker. A green `drive` leaves the gate unchecked. `scripts/verify-sw-upgrade.sh` is for a preview build this skill starts, or for an origin that answers without Cloudflare Access. The script sends no Access headers. Against either public host it fails closed on the login redirect. That failure is not a bad build.
+
+The local gate check imports the Worker module the same way `worker/test/access-gate.test.ts` does: a vitest file, an RS256 key, a stubbed JWKS fetch, and `worker.fetch` against an in-memory bucket. It does not start wrangler, deploy, read secrets, or touch R2. The issuer is `https://verify-team.cloudflareaccess.com`. The audience is `map-audience`. Emails in that file are `allowed-one@example.test` and `off-list@example.test`. The allowlisted service client id is `monitor-one`. The calib fixture is `machine-secret`.
+
+```bash
+cd worker && bunx vitest run --config ../.cursor/skills/verify-opd/scripts/vitest.config.mjs
+bash worker/deploy.test.sh
+bash scripts/upload_frontend.test.sh
+```
+
+`worker/deploy.test.sh` shims wrangler. It checks that `worker/deploy.sh` accepts only `--dry-run`, `--env`, and `--config`, and that `ACCESS_SERVICE_TOKEN_CLIENT_IDS` is the last `--var`. `scripts/upload_frontend.test.sh` shims wrangler. It checks that the file list is built first and that a failed listing or a failed asset put publishes no shell file. Neither script deploys or writes real R2. Run the vitest line and both `bash` lines from the repo root. Run `cd worker && bun install` once so vitest and `jose` resolve.
 
 ## Launch
 
@@ -43,7 +57,7 @@ Open the feature file and run its command. A full browser pass is:
 node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive all
 ```
 
-For a map pass that never resizes a browser context, set `OPD_VERIFY_FIXED_SURFACE=1` and run `drive map` once per surface and viewport. Use `OPD_VERIFY_SURFACE=desktop OPD_VERIFY_VIEWPORT=1440x900` (or `1280x800`), `iphone-17-pro` with `402x874` or `874x402`, and `ipad-pro-11` with `834x1210` or `1210x834`. The fixed pass retains the map behavior walkthrough, checks chrome intersections, control ownership, T+90 visibility, expanded Legend bounds/scrolling, and the actual shot-list states at the opened size. Legacy resize-only probes run only without this flag. Every attempted resize in fixed mode throws. `OPD_VERIFY_CDP_PORT` pins the primary Chrome debugging listener when port ranges are restricted; fresh-profile probes use the distinct `OPD_VERIFY_GUEST_CDP_PORT`. Insets remain a separate browser-matrix proof; WebKit does not emulate native safe-area env values.
+For a map pass that never resizes a browser context, set `OPD_VERIFY_FIXED_SURFACE=1` and run `drive map` once per surface and viewport. Use `OPD_VERIFY_SURFACE=desktop OPD_VERIFY_VIEWPORT=1440x900` (or `1280x800`), `iphone-17-pro` with `402x874` or `874x402`, and `ipad-pro-11` with `834x1210` or `1210x834`. The fixed pass retains the map behavior walkthrough, checks chrome intersections, control ownership, T+90 visibility, expanded Legend bounds/scrolling, and the actual shot-list states at the opened size. Legacy resize-only probes run only without this flag. Every attempted resize in fixed mode throws. `OPD_VERIFY_CDP_PORT` pins the primary Chrome debugging listener when port ranges are restricted; fresh-profile probes use the distinct `OPD_VERIFY_GUEST_CDP_PORT`. Insets remain a separate browser-matrix proof; WebKit does not emulate native safe-area env values. On WebKit at 402 by 874, `--map-corner-lift` can move Hide by 10px after a wide layout returns. That is an open product issue. The write-up is in `features/map.md`. The fix is PR #291 and is not in this tree. This skill does not change that product code.
 
 One feature is `drive banner`, `drive topbar`, `drive queue`, `drive upcoming`, `drive map`, `drive iss`, `drive help`, `drive profile`, `drive log`, `drive phone`, or `drive tracked`.
 
@@ -124,6 +138,9 @@ node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive all
 node .cursor/skills/verify-opd/scripts/opd-verify.mjs sw
 node .cursor/skills/verify-opd/scripts/opd-verify.mjs down
 node .cursor/skills/verify-opd/scripts/opd-verify.mjs check
+cd worker && bunx vitest run --config ../.cursor/skills/verify-opd/scripts/vitest.config.mjs
+bash worker/deploy.test.sh
+bash scripts/upload_frontend.test.sh
 ```
 
 `check` confirms every feature file is linked from `features/README.md`, uses the four headings below, and names both iPhone and iPad. Run it after editing the map. A feature file that omits iPhone or iPad fails `check`.
@@ -134,4 +151,4 @@ node .cursor/skills/verify-opd/scripts/opd-verify.mjs check
 
 ## Maintenance
 
-When the app changes, run `/maintain-verification-skill` so the map stays aligned with the page. A behavior the app no longer has is either a map fix or a product bug. Report the bug. Do not change product code from this skill. At HEAD `7a36604` the LAN preview was `http://192.168.87.60:43147/`. Production received an additive `rclone copy` of `frontend/dist` because `upload_frontend.sh` had no `CLOUDFLARE_API_TOKEN`. `rclone check` reported 0 diffs across 41 files. This skill still does not use real R2, `rclone sync`, or the Mac launchd plist. `.map-inspector .pin-pass-heading` wraps with `min-width: 0` and `overflow-wrap: anywhere`. `frontend/test/pass-row-fit.test.ts` runs that 60-character `heading60` name in Chromium and WebKit, including the iPad sizes. Deleting those two declarations clips the heading in the 294px iPad-landscape column.
+When the app changes, run `/maintain-verification-skill` so the map stays aligned with the page. A behavior the app no longer has is either a map fix or a product bug. Report the bug. Do not change product code from this skill. This skill does not deploy, does not use real R2, `rclone sync`, or `rclone copy`, and does not touch the Mac launchd plist. Do not fetch `https://map.astroanil.dev` or `https://map.expedition75.com`. `.map-inspector .pin-pass-heading` wraps with `min-width: 0` and `overflow-wrap: anywhere`. `frontend/test/pass-row-fit.test.ts` runs that 60-character `heading60` name in Chromium and WebKit, including the iPad sizes. Deleting those two declarations clips the heading in the 294px iPad-landscape column.
