@@ -28,7 +28,7 @@ for (const engine of [
     ownerScript = (await transformWithEsbuild(source, 'chrome-owner.ts', { loader: 'ts', target: 'es2022' })).code;
     browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
   });
-  afterAll(async () => { await browser?.close(); }, 30_000);
+  afterAll(async () => { await browser?.close(); });
   it.each([
     { width: 402, height: 874, insets: { top: 62, right: 0, bottom: 34, left: 0 } },
     { width: 874, height: 402, insets: { top: 0, right: 62, bottom: 21, left: 62 } },
