@@ -212,6 +212,17 @@ const pinEngines = [
   { name: 'Chrome', ready: chromeReady, browser: () => chromeBrowser },
 ];
 
+async function pinOverLaunch(page: Page): Promise<boolean> {
+  return page.waitForFunction(() => {
+    const slot = document.getElementById('map-inspector');
+    if (!slot) return false;
+    const popups = [...slot.querySelectorAll(':scope > .maplibregl-popup')];
+    const last = popups.at(-1);
+    const buriedLaunch = popups.slice(0, -1).some((popup) => popup.querySelector('.launch-ascent-card'));
+    return buriedLaunch && !!last?.querySelector('.dropped-pin-popup');
+  }, undefined, { timeout: 8_000 }).then(() => true, () => false);
+}
+
 async function dropPinOverLaunch(page: Page) {
   const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
     const box = canvas.getBoundingClientRect();
@@ -225,15 +236,16 @@ async function dropPinOverLaunch(page: Page) {
     return null;
   });
   expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
-  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
-  await page.waitForFunction(() => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+    if (await pinOverLaunch(page)) return;
+  }
+  const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
-    if (!slot) return false;
-    const popups = [...slot.querySelectorAll(':scope > .maplibregl-popup')];
-    const last = popups.at(-1);
-    const buriedLaunch = popups.slice(0, -1).some((popup) => popup.querySelector('.launch-ascent-card'));
-    return buriedLaunch && !!last?.querySelector('.dropped-pin-popup');
+    const popups = [...(slot?.querySelectorAll(':scope > .maplibregl-popup') ?? [])].map((popup) => popup.querySelector('.launch-ascent-card, .dropped-pin-popup')?.className ?? 'empty');
+    return { popups, pins: document.querySelectorAll('.dropped-pin-popup').length };
   });
+  throw new Error(`pin did not open over the legacy card: ${JSON.stringify(state)}`);
 }
 
 async function centerTap(page: Page) {
