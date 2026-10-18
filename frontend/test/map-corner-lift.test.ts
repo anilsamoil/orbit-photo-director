@@ -89,7 +89,7 @@ function insetHook(insets: Insets): string {
   })();</script>`;
 }
 
-async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string, lateFooter = false, css = stylesheet, hook = ''): Promise<void> {
+async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string, lateFooter = false, css = stylesheet, hook = '', e2e = true): Promise<void> {
   await freezeDate(page, now);
   const documentHtml = lateFooter ? html.replace(/<footer id="status-banner"[\s\S]*?<\/footer>\s*/, '') : html;
   await page.route('**/*', async (route) => {
@@ -121,10 +121,12 @@ async function boot(page: Page, assets: Map<string, string | Uint8Array>, script
     }
     return route.abort();
   });
-  await page.goto(`${origin}/?e2e`, { waitUntil: 'domcontentloaded' });
+  await page.goto(e2e ? `${origin}/?e2e` : `${origin}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => {
-    const map = (window as Window & { __opdMap?: { isStyleLoaded(): boolean }; __opdSyncMapChrome?: () => void }).__opdMap;
-    return !!map?.isStyleLoaded() && !!(window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome;
+    const view = window as Window & { __opdMap?: { isStyleLoaded(): boolean }; __opdSyncMapChrome?: () => void };
+    if (!view.__opdSyncMapChrome) return false;
+    if (!new URLSearchParams(location.search).has('e2e')) return true;
+    return !!view.__opdMap?.isStyleLoaded();
   }, undefined, { timeout: 20_000 });
   await page.locator('#tab-map').click();
   await page.evaluate(() => document.fonts.ready);
@@ -185,6 +187,7 @@ let script: string;
 beforeAll(async () => {
   const output = await build({
     configFile: false, root, logLevel: 'silent',
+    mode: 'production',
     define: { __APP_VERSION__: JSON.stringify('lift-fixture') },
     build: { write: false, minify: false, lib: { entry: resolve(root, 'src/main.ts'), name: 'lift', formats: ['iife'] } },
   });
@@ -207,13 +210,51 @@ for (const engine of [
   }, 30_000);
   afterAll(async () => { await closeBrowser(session, `corner-lift-${engine.name}`); });
 
-  async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets): Promise<{ context: BrowserContext; page: Page }> {
+  async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets, trackFooters = false, e2e = true, countFrames = false): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
       ...iphone17,
       viewport: { width, height },
       serviceWorkers: 'block',
     });
     try {
+      if (trackFooters) {
+        await context.addInitScript(() => {
+          const targets = new Set<Element>();
+          const observe = ResizeObserver.prototype.observe;
+          const unobserve = ResizeObserver.prototype.unobserve;
+          ResizeObserver.prototype.observe = function (target: Element) {
+            if (target instanceof Element && target.id === 'status-banner') targets.add(target);
+            return observe.call(this, target);
+          };
+          ResizeObserver.prototype.unobserve = function (target: Element) {
+            targets.delete(target);
+            return unobserve.call(this, target);
+          };
+          (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets = () =>
+            [...targets].map((node) => ({ connected: node.isConnected }));
+        });
+      }
+      if (countFrames) {
+        await context.addInitScript(() => {
+          const view = window as unknown as { __rafs: number; __ros: number };
+          view.__rafs = 0;
+          view.__ros = 0;
+          const raf = window.requestAnimationFrame.bind(window);
+          window.requestAnimationFrame = (callback: FrameRequestCallback) => raf((time) => {
+            view.__rafs += 1;
+            callback(time);
+          });
+          const Native = window.ResizeObserver;
+          const Counting = function (this: ResizeObserver, callback: ResizeObserverCallback): ResizeObserver {
+            return new Native((entries, observer) => {
+              view.__ros += 1;
+              callback(entries, observer);
+            });
+          };
+          Counting.prototype = Native.prototype;
+          window.ResizeObserver = Counting as unknown as typeof ResizeObserver;
+        });
+      }
       if (engine.name === 'WebKit') {
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -225,7 +266,7 @@ for (const engine of [
         await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
       }
       const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
-      await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook);
+      await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook, e2e);
       return { context, page };
     } catch (error) {
       await context.close();
@@ -546,6 +587,132 @@ for (const engine of [
         return rect.width > 0 && rect.height > 0;
       });
       expect(open).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('clears the corner lift in the same frame when the footer is removed', async () => {
+    const { context, page } = await contextAt(402, 874, false, undefined, false, true, true);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '160px';
+      });
+      const raised = await hideBox(page);
+      expect(Number.parseFloat(raised.lift)).toBeGreaterThan(0);
+      const cleared = await page.evaluate(async () => {
+        const view = window as unknown as { __rafs: number; __ros: number };
+        view.__rafs = 0;
+        view.__ros = 0;
+        document.getElementById('status-banner')!.remove();
+        await Promise.resolve();
+        await Promise.resolve();
+        return {
+          lift: document.body.style.getPropertyValue('--map-corner-lift'),
+          rafs: view.__rafs,
+          ros: view.__ros,
+          gone: document.getElementById('status-banner') === null,
+        };
+      });
+      expect(cleared.rafs).toBe(0);
+      expect(cleared.ros).toBe(0);
+      expect(cleared.lift).toBe('0px');
+      expect(cleared.gone).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('follows a replacement footer and ignores the detached one', async () => {
+    const { context, page } = await contextAt(402, 874, false, undefined, true);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '80px';
+      });
+      const before = await hideBox(page);
+      expect(Number.parseFloat(before.lift)).toBeGreaterThan(0);
+      await page.evaluate(() => {
+        const old = document.getElementById('status-banner')!;
+        const next = document.createElement('footer');
+        next.id = 'status-banner';
+        next.className = old.className;
+        next.textContent = old.textContent ?? '';
+        next.style.height = '80px';
+        old.replaceWith(next);
+        (window as unknown as { __oldFooter: HTMLElement }).__oldFooter = old;
+      });
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '180px';
+      });
+      const raised = await hideBox(page);
+      expect(Number.parseFloat(raised.lift)).toBeGreaterThan(Number.parseFloat(before.lift));
+      const scheduled = await page.evaluate(() => (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs);
+      expect(scheduled).toBeGreaterThan(0);
+      await page.evaluate(() => {
+        (window as unknown as { __oldFooter: HTMLElement }).__oldFooter.style.height = '400px';
+      });
+      expect(await page.evaluate(() => (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs)).toBe(scheduled);
+      expect((await hideBox(page)).lift).toBe(raised.lift);
+      const targets = await page.evaluate(() => (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets());
+      expect(targets).toEqual([{ connected: true }]);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('schedules one sync when the detached footer is edited in the same task', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      const delta = await page.evaluate(() => new Promise<number>((resolve) => {
+        const before = (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0;
+        const old = document.getElementById('status-banner')!;
+        const next = document.createElement('footer');
+        next.id = 'status-banner';
+        next.className = old.className;
+        next.textContent = old.textContent ?? '';
+        old.replaceWith(next);
+        old.textContent = `${old.textContent ?? ''} · detached`;
+        queueMicrotask(() => {
+          resolve(((window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0) - before);
+        });
+      }));
+      expect(delta).toBe(1);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('does not publish the sync counter on a production page', async () => {
+    const { context, page } = await contextAt(402, 874, false, undefined, false, false);
+    try {
+      await showChrome(page);
+      const exposed = await page.evaluate(() => new Promise<boolean>((resolve) => {
+        const banner = document.getElementById('status-banner');
+        if (banner) banner.textContent = `${banner.textContent ?? ''} · extra`;
+        queueMicrotask(() => resolve(Object.prototype.hasOwnProperty.call(window, '__opdCornerSyncs')));
+      }));
+      expect(exposed).toBe(false);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('schedules one sync for a footer mutation batch', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      const delta = await page.evaluate(() => new Promise<number>((resolve) => {
+        const before = (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0;
+        const element = document.getElementById('status-banner')!;
+        element.textContent = `${element.textContent ?? ''} · extra`;
+        queueMicrotask(() => {
+          resolve(((window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0) - before);
+        });
+      }));
+      expect(delta).toBe(1);
     } finally {
       await context.close();
     }
