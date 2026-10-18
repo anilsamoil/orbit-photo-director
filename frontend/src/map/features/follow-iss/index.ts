@@ -5,7 +5,6 @@ import type { MapCore } from '../../map-core/core';
 import type { MapFeature } from '../../map-core/feature';
 import { PREF_KEYS } from '../../map-core/prefs';
 
-/** North-up, or rotated so the ISS direction of travel points up. */
 export type BearingMode = 'north' | 'iss-up';
 
 const BEARING_NOOP_THRESHOLD_DEG = 0.5;
@@ -47,7 +46,6 @@ const state: Runtime = {
   position: () => null,
 };
 
-/** Default iss-up. Only a stored `'north'` selects north-up. */
 export function readBearingMode(): BearingMode {
   return readStoredMode();
 }
@@ -64,7 +62,6 @@ export function noteFollowCore(core: MapCore | null): void {
   state.core = core;
 }
 
-/** Marker position for the follow click. The root installs the ISS marker. */
 export function bindFollowMarker(marker: { hasTrack(): boolean; position(): MarkerPosition | null }): void {
   state.hasTrack = marker.hasTrack;
   state.position = marker.position;
@@ -106,7 +103,6 @@ function settleMotion(): void {
   });
 }
 
-/** Leave follow and update the dock button. */
 export function exitFollow(): void {
   if (!state.follow) return;
   state.follow = false;
@@ -123,7 +119,6 @@ function reflectFollowButton(): void {
     : 'Recenter on ISS — click again or pan to release';
 }
 
-/** Heading from a sample now and a sample 30 seconds ahead. */
 export function computeIssHeading(nowMs: number): number | null {
   const core = state.core;
   const track = core?.view().track;
@@ -240,7 +235,6 @@ export function bindBearingToggle(): void {
   state.bearingBound = true;
 }
 
-/** Tests assume follow is off and bearing is north. The stored key is cleared separately. */
 export function resetFollowMemoryForTest(): void {
   state.follow = false;
   state.mode = 'north';
@@ -261,7 +255,6 @@ export function _resetFollowStateForTest(): void {
   state.follow = false;
 }
 
-/** Follow the ISS, and rotate the map to its direction of travel. */
 export const followIss: MapFeature = {
   id: 'follow-iss',
   mount(core) {
