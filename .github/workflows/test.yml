@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, "feat/**", "fix/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "cursor/**"]
 
 jobs:
   python:
@@ -45,17 +45,21 @@ jobs:
       - run: cd worker && bun run typecheck
       - run: cd worker && bun run test
 
-  frontend:
+  frontend-shard:
     # Playwright 1.55.0 has no WebKit build for ubuntu 26.04. ubuntu-latest starts
     # moving there on 2026-10-19.
     runs-on: ubuntu-24.04
-    name: Frontend
+    name: Frontend shard ${{ matrix.shard }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: cd frontend && bun install
       - run: cd frontend && bun run typecheck
-      - run: bash scripts/upload_frontend.test.sh
+      - run: cd frontend && bun scripts/frontend-shards.ts --check
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -63,7 +67,68 @@ jobs:
           key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/bun.lock') }}
       - name: Install Playwright WebKit
         run: cd frontend && ./node_modules/.bin/playwright install --with-deps webkit
-      # Each browser-backed file builds the app and launches real browsers.
-      # Keep those files serial within the hosted runner's resource budget.
-      - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
+      # PR 257 serialized browser files after the runner killed parallel workers
+      # with exit 137 and 143. One worker on each shard keeps that memory budget.
+      - name: Test shard
+        working-directory: frontend
+        run: |
+          set +e
+          bun scripts/frontend-shards.ts --shard ${{ matrix.shard }}/${{ strategy.job-total }} > shard-files.txt
+          assign=$?
+          set -e
+          if [ "$assign" -ne 0 ]; then
+            cat shard-files.txt
+            exit "$assign"
+          fi
+          mapfile -t files < shard-files.txt
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "shard ${{ matrix.shard }} assigned no files"
+            exit 1
+          fi
+          set +e
+          /usr/bin/time -v -o "shard-${{ matrix.shard }}-time.txt" \
+            bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism \
+            --reporter=verbose --reporter=json \
+            --outputFile.json="shard-${{ matrix.shard }}-results.json" \
+            "${files[@]}"
+          status=$?
+          set -e
+          cat "shard-${{ matrix.shard }}-time.txt"
+          if [ -f "shard-${{ matrix.shard }}-results.json" ]; then
+            bun scripts/frontend-shards.ts --webkit-count "shard-${{ matrix.shard }}-results.json" --shard-log
+          fi
+          exit "$status"
+      - name: Upload shard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-shard-${{ matrix.shard }}
+          if-no-files-found: warn
+          path: |
+            frontend/shard-${{ matrix.shard }}-results.json
+            frontend/shard-${{ matrix.shard }}-time.txt
+
+  frontend:
+    name: Frontend
+    needs: frontend-shard
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: cd frontend && bun install
+      - run: cd frontend && bun run typecheck
+      - run: bash scripts/upload_frontend.test.sh
       - run: cd frontend && bun run build
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frontend-shard-*
+          path: shard-reports
+          merge-multiple: true
+      - name: Check shard coverage and WebKit count
+        run: |
+          bun frontend/scripts/frontend-shards.ts --check
+          bun frontend/scripts/frontend-shards.ts --webkit-count shard-reports
+      - name: Fail when a shard failed
+        if: needs.frontend-shard.result != 'success'
+        run: exit 1
