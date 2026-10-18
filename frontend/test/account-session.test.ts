@@ -38,6 +38,7 @@ it('an expired session cannot fall back to a previous profile, even after going 
   session.fetch.mockResolvedValue(new Response('', { status: 401 }));
   await expect(session.resolveAccountProfile()).rejects.toThrow('sign in');
   expect(session.getAccountProfile()).toBeNull();
+  expect(sessionStorage.getItem('opd-account-session-v1')).toBeNull();
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
   await expect(session.resolveAccountProfile()).rejects.toThrow('Connect once');
 });
@@ -109,6 +110,7 @@ it('preserves read-only offline access when iOS reports online but transport fai
   session.fetch.mockRejectedValue(new TypeError('Failed to fetch'));
   expect(navigator.onLine).toBe(true);
   expect(await session.resolveAccountProfile()).toMatchObject({ name: 'u-jessica', isVerified: false });
+  expect(sessionStorage.getItem('opd-account-session-v1')).toContain('u-jessica');
   const { postProfileTarget } = await import('../src/profile-api');
   const count = session.fetch.mock.calls.length;
   expect(await postProfileTarget('u-jessica', {} as never)).toMatchObject({ ok: false, reason: 'authentication' });
@@ -122,6 +124,44 @@ it('rejects redirected login HTML and malformed identities', async () => {
   session.fetch.mockResolvedValue(new Response(JSON.stringify({ ok: true, profile: { name: '../anil', displayName: 'X' } })));
   await expect(session.resolveAccountProfile()).rejects.toThrow('verify');
   expect(session.getAccountProfile()).toBeNull();
+});
+
+it('a cold network error offers Sign in and Reload without opening the shell', async () => {
+  document.body.innerHTML = '<footer id="status-banner">Loading…</footer><main id="view"><div id="cards"></div></main>';
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Load failed'))));
+  const { init } = await import('../src/main');
+  const started = performance.now();
+  await init();
+  expect(performance.now() - started).toBeLessThan(1_000);
+  const banner = document.getElementById('status-banner');
+  expect(banner?.textContent).toContain('Load failed');
+  expect(banner?.querySelector('a.banner-action')?.textContent).toBe('Sign in');
+  expect(banner?.querySelector('a.banner-action')?.getAttribute('href')).toBe('/api/app');
+  expect(banner?.querySelector('button.banner-action')?.textContent).toBe('Reload');
+  expect(document.querySelector('#cards')?.childElementCount).toBe(0);
+});
+
+it('a cold session that ignores abort offers Sign in and Reload at the deadline', async () => {
+  vi.useFakeTimers();
+  try {
+    document.body.innerHTML = '<footer id="status-banner">Loading…</footer><main id="view"><div id="cards"></div></main>';
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(() => {
+      init?.signal?.addEventListener('abort', () => {});
+    })));
+    const { init } = await import('../src/main');
+    const boot = init();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(document.querySelector('#status-banner .banner-action')).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await boot;
+    const banner = document.getElementById('status-banner');
+    expect(banner?.textContent).toContain('The session request timed out');
+    expect(banner?.querySelector('a.banner-action')?.textContent).toBe('Sign in');
+    expect(banner?.querySelector('button.banner-action')?.textContent).toBe('Reload');
+    expect(document.querySelector('#cards')?.childElementCount).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('boot waits for identity and never renders or deletes previous personal data after denial', async () => {
