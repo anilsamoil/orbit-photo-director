@@ -67,8 +67,6 @@ jobs:
           key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/bun.lock') }}
       - name: Install Playwright WebKit
         run: cd frontend && ./node_modules/.bin/playwright install --with-deps webkit
-      # PR 257 serialized browser files after the runner killed parallel workers
-      # with exit 137 and 143. One worker on each shard keeps that memory budget.
       - name: Test shard
         working-directory: frontend
         run: |
