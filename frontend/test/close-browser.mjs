@@ -33,16 +33,30 @@ export async function launchTracked(browserType, options = {}) {
   }
 }
 
+function whenExited(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve('exited');
+  return new Promise((resolve) => {
+    child.once('exit', () => resolve('exited'));
+  });
+}
+
 async function graceful(session) {
   const browser = session.browser;
   if (browser && typeof browser.contexts === 'function') {
     await Promise.all(browser.contexts().map((context) => context.close().catch(() => {})));
   }
-  const closing = [];
-  if (browser && typeof browser.close === 'function') closing.push(browser.close().catch(() => {}));
-  if (session.server) closing.push(session.server.close());
-  else if (typeof session.close === 'function') closing.push(session.close());
-  await Promise.all(closing);
+  if (browser && typeof browser.close === 'function') await browser.close().catch(() => {});
+  const child = session.server?.process?.();
+  if (child) return whenExited(child);
+  if (session.server) {
+    await session.server.close();
+    return 'closed';
+  }
+  if (typeof session.close === 'function') {
+    await session.close();
+    return 'closed';
+  }
+  return 'closed';
 }
 
 export async function closeBrowser(session, label = 'browser') {
@@ -50,10 +64,10 @@ export async function closeBrowser(session, label = 'browser') {
   const started = Date.now();
   let killed = false;
   const grace = delay(GRACE_MS);
-  const done = graceful(session).then(() => 'closed', () => 'failed');
+  const done = graceful(session).then((status) => status, () => 'failed');
   const result = await Promise.race([done, grace.promise.then(() => 'grace')]);
   grace.cancel();
-  if (result !== 'closed') {
+  if (result !== 'closed' && result !== 'exited') {
     killed = true;
     const kill = session.server?.kill ?? session.kill;
     if (kill) await within(() => kill.call(session.server ?? session), KILL_DEADLINE_MS);
