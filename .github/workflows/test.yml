@@ -49,6 +49,7 @@ jobs:
     # Playwright 1.55.0 has no WebKit build for ubuntu 26.04. ubuntu-latest starts
     # moving there on 2026-10-19.
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     name: Frontend shard ${{ matrix.shard }}
     strategy:
       fail-fast: false
@@ -111,6 +112,7 @@ jobs:
     needs: frontend-shard
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -127,6 +129,7 @@ jobs:
         run: |
           bun frontend/scripts/frontend-shards.ts --check
           bun frontend/scripts/frontend-shards.ts --webkit-count shard-reports
+          bun frontend/scripts/webkit-floor.ts shard-reports
       - name: Fail when a shard failed
         if: needs.frontend-shard.result != 'success'
         run: exit 1

@@ -171,6 +171,7 @@
   "test/track-offset.test.ts": 0.339,
   "test/tracked.test.ts": 0.333,
   "test/viirs-alpha.test.ts": 0.381,
+  "test/webkit-floor.test.ts": 1,
   "test/webkit-gate.test.ts": 0.644,
   "test/wx.test.ts": 0.348
 }
