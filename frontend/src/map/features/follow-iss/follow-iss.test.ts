@@ -240,21 +240,31 @@ describe('deferred north recenter', () => {
   });
 
   it('drops the click a rotate release delivers to North', () => {
-    const { vendor, calls, frames, north } = armFollow();
-    vendor.setBearing(40);
-    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    vendor.fire('rotatestart', { byUser: true });
-    const before = calls.length;
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    north.click();
-    expect(calls.length).toBe(before);
-    expect(vendor.bearing()).toBe(40);
-    expect(frames).toHaveLength(1);
-    frames[0]!(0);
-    expect(frames).toHaveLength(2);
-    frames[1]!(0);
-    north.click();
-    expect(calls.at(-1)).toMatchObject({ bearing: 0, duration: 600 });
+    vi.useFakeTimers();
+    try {
+      const { vendor, calls, north } = armFollow();
+      vendor.setBearing(40);
+      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      vendor.fire('rotatestart', { byUser: true });
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      north.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      const before = calls.length;
+      north.click();
+      expect(calls.length).toBe(before);
+      expect(vendor.bearing()).toBe(40);
+      vi.advanceTimersByTime(200);
+      north.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      north.click();
+      expect(calls.at(-1)).toMatchObject({ bearing: 0, duration: 600 });
+      vendor.setBearing(40);
+      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      vendor.fire('rotatestart', { byUser: true });
+      const guarded = calls.length;
+      api().applyBearing(true);
+      expect(calls.length).toBe(guarded);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a keyboard rotate still accepts the next North click', () => {

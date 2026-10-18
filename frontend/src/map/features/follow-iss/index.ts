@@ -22,9 +22,12 @@ type Runtime = {
   toggleBound: boolean;
   bearingBound: boolean;
   clickGuard: boolean;
+  bearingPress: boolean;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
+
+const ROTATE_CLICK_MS = 200;
 
 function readStoredMode(): BearingMode {
   try {
@@ -44,6 +47,7 @@ const state: Runtime = {
   toggleBound: false,
   bearingBound: false,
   clickGuard: false,
+  bearingPress: false,
   hasTrack: () => false,
   position: () => null,
 };
@@ -174,6 +178,7 @@ export function applyBearing(animate: boolean): void {
     return;
   }
   if (animate) {
+    if (state.clickGuard) return;
     core.easeTo({ bearing: desired, duration: 600 });
     state.motion = { toward: desired, pending: null };
     if (nearBearing(core.bearing(), desired)) state.motion = null;
@@ -207,24 +212,34 @@ export function bindFollowToggle(): void {
     core.on('zoomstart', ({ byUser }) => {
       if (byUser) exitFollow();
     });
-    const pointer = { held: false };
-    const releaseClickGuard = (): void => {
+    const pointer = { held: false, release: 0 };
+    const pressPointer = (event: Event): void => {
+      pointer.held = true;
+      const mouse = event as MouseEvent;
+      const target = event.target;
+      state.bearingPress = mouse.button === 0
+        && target instanceof Element
+        && target.closest('#bearing-north, #bearing-iss') !== null;
+    };
+    const releasePointer = (): void => {
       pointer.held = false;
       if (!state.clickGuard) return;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => { state.clickGuard = false; });
-      });
+      window.clearTimeout(pointer.release);
+      pointer.release = window.setTimeout(() => { state.clickGuard = false; }, ROTATE_CLICK_MS);
     };
-    const pressPointer = (): void => { pointer.held = true; };
     document.addEventListener('pointerdown', pressPointer, true);
     document.addEventListener('mousedown', pressPointer, true);
-    document.addEventListener('pointerup', releaseClickGuard, true);
-    document.addEventListener('mouseup', releaseClickGuard, true);
+    document.addEventListener('pointerup', releasePointer, true);
+    document.addEventListener('mouseup', releasePointer, true);
     core.on('rotatestart', ({ byUser }) => {
       if (!byUser) return;
       state.motion = null;
       exitFollow();
-      if (pointer.held) state.clickGuard = true;
+      if (!pointer.held) return;
+      state.bearingPress = false;
+      state.clickGuard = true;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && (active.id === 'bearing-north' || active.id === 'bearing-iss')) active.blur();
     });
     core.on('moveend', () => { settleMotion(); });
   }
@@ -247,15 +262,17 @@ export function bindBearingToggle(): void {
     reflectActive();
     applyBearing(true);
   };
-  const onBearingClick = (mode: BearingMode): void => {
-    if (!state.clickGuard) {
-      setMode(mode);
+  const onBearingClick = (mode: BearingMode, event: MouseEvent): void => {
+    const pressedHere = state.bearingPress;
+    state.bearingPress = false;
+    if (state.clickGuard || (event.isTrusted && !pressedHere)) {
+      state.clickGuard = false;
       return;
     }
-    state.clickGuard = false;
+    setMode(mode);
   };
-  northBtn.addEventListener('click', () => onBearingClick('north'));
-  issBtn.addEventListener('click', () => onBearingClick('iss-up'));
+  northBtn.addEventListener('click', (event) => onBearingClick('north', event));
+  issBtn.addEventListener('click', (event) => onBearingClick('iss-up', event));
   state.bearingBound = true;
 }
 
@@ -265,6 +282,7 @@ export function resetFollowMemoryForTest(): void {
   state.motion = null;
   state.motionWatch = false;
   state.clickGuard = false;
+  state.bearingPress = false;
 }
 
 export function clearBearingPref(): void {

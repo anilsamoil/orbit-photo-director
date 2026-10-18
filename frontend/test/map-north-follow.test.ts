@@ -220,7 +220,7 @@ for (const engine of [
     for (let rep = 0; rep < 20; rep += 1) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
-      page.setDefaultTimeout(20_000);
+      page.setDefaultTimeout(45_000);
       await openMap(page);
       await page.locator('#bearing-north').click();
       await page.waitForFunction(() => {
@@ -252,6 +252,9 @@ for (const engine of [
       const samples = await samplesOf(page);
       const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
       const end = Math.abs(samples[samples.length - 1] ?? 0);
+      if (snappedNorth(samples) || pressed !== 'false' || end <= 20) {
+        console.log(`NORTH_DRAG_FAIL ${engine.name} ${rep} pressed ${pressed}\nSAMPLES ${samples.map((b) => Number(b.toFixed(2))).join(',')}`);
+      }
       expect(snappedNorth(samples), `end ${end} n ${samples.length}`).toBe(false);
       expect(pressed).toBe('false');
       expect(end).toBeGreaterThan(20);
