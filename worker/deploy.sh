@@ -7,7 +7,6 @@ emails="${ACCESS_ALLOWED_EMAILS-}"
 forward=()
 seen_env=0
 seen_config=0
-dry=0
 
 accept_named() {
   local flag="$1"
@@ -45,7 +44,6 @@ while [ "$#" -gt 0 ]; do
       exit 2
       ;;
     --dry-run)
-      dry=1
       forward+=("--dry-run")
       shift
       ;;
@@ -132,11 +130,8 @@ case "$parser_out" in
   $'ok\n')
     ;;
   $'empty\n')
-    if [ "$dry" -eq 0 ]; then
-      echo "ERROR: ACCESS_ALLOWED_EMAILS is empty. Refusing to deploy." >&2
-      exit 2
-    fi
-    echo "WARN: ACCESS_ALLOWED_EMAILS is empty. --dry-run still passes an empty binding." >&2
+    echo "ERROR: ACCESS_ALLOWED_EMAILS is empty. Refusing to deploy." >&2
+    exit 2
     ;;
   *)
     echo "ERROR: the email allowlist parser printed unexpected output." >&2
