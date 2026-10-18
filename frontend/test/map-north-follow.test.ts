@@ -137,6 +137,8 @@ for (const engine of [
   afterAll(async () => { await browser?.close(); });
 
   it('eases to north while follow stays on', async () => {
+    for (let rep = 0; rep < 12; rep += 1) {
+    console.log(`NORTH_EASE ${engine.name} ${rep}`);
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
       page.setDefaultTimeout(15_000);
@@ -182,9 +184,12 @@ for (const engine of [
     } finally {
       await page.close();
     }
-  }, 30_000);
+    }
+  }, 300_000);
 
   it('a right-drag across a follow tick does not snap north', async () => {
+    for (let rep = 0; rep < 12; rep += 1) {
+    console.log(`NORTH_DRAG ${engine.name} ${rep}`);
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
       page.setDefaultTimeout(15_000);
@@ -216,9 +221,12 @@ for (const engine of [
     } finally {
       await page.close();
     }
-  }, 30_000);
+    }
+  }, 300_000);
 
   it('a keyboard rotate across a follow tick does not snap north', async () => {
+    for (let rep = 0; rep < 12; rep += 1) {
+    console.log(`NORTH_KEYS ${engine.name} ${rep}`);
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
       page.setDefaultTimeout(15_000);
@@ -246,7 +254,8 @@ for (const engine of [
     } finally {
       await page.close();
     }
-  }, 30_000);
+    }
+  }, 300_000);
 
   it('keeps a smooth north retarget when a follow tick lands inside it', async () => {
     const reps: { end: number; moving: boolean; rate: number; pressed: string | null; first: number; error?: string }[] = [];
