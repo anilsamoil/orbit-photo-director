@@ -93,8 +93,7 @@ if [[ "$emails" == *$'\n'* || "$emails" == *$'\r'* ]]; then
   exit 2
 fi
 
-email_remainder="${emails//[[:space:],]/}"
-if [ -z "$email_remainder" ]; then
+if ! printf '%s' "$emails" | node --input-type=module -e 'import { parseEmailAllowlist } from "./src/email-allowlist.mjs"; import { readFileSync } from "node:fs"; process.exit(parseEmailAllowlist(readFileSync(0, "utf8")).length > 0 ? 0 : 1);'; then
   if [ "$dry" -eq 0 ]; then
     echo "ERROR: ACCESS_ALLOWED_EMAILS is empty. Refusing to deploy." >&2
     exit 2

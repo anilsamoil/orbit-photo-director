@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from 'jose';
+import { mailboxKey, parseEmailAllowlist } from './email-allowlist.mjs';
 import { constantTimeEqual, jsonResponse } from './shared';
 
 export interface CalibrationAuthEnv {
@@ -52,10 +53,6 @@ interface VerifiedHumanClaim {
 
 type EmailAllowlist = ReadonlySet<string>;
 
-function mailboxKey(email: string): string {
-  return email.trim().toLowerCase();
-}
-
 function humanClaim(payload: JWTPayload, issuer: string): VerifiedHumanClaim | null {
   if (typeof payload.email !== 'string' || !payload.email.includes('@')
     || typeof payload.sub !== 'string' || !payload.sub) return null;
@@ -65,16 +62,15 @@ function humanClaim(payload: JWTPayload, issuer: string): VerifiedHumanClaim | n
   };
 }
 
-function parseEmailAllowlist(raw: string | undefined): EmailAllowlist {
-  if (!raw) return new Set();
-  return new Set(raw.split(',').map((token) => mailboxKey(token)).filter((key) => key.length > 0));
+function emailAllowlist(raw: string | undefined): EmailAllowlist {
+  return new Set(parseEmailAllowlist(raw));
 }
 
 function admitHuman(
   claim: VerifiedHumanClaim,
   rawAllowlist: string | undefined,
 ): { principal: AccessIdentity } | { denied: Response } {
-  if (!parseEmailAllowlist(rawAllowlist).has(mailboxKey(claim.email))) {
+  if (!emailAllowlist(rawAllowlist).has(mailboxKey(claim.email))) {
     return { denied: jsonResponse({ error: 'email_not_allowlisted' }, 403) };
   }
   return {

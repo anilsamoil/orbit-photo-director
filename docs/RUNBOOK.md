@@ -355,7 +355,7 @@ If the calibration token leaks (it lives in browser localStorage, plaintext), ro
    Keep that env var and the dashboard list the same.
    A bare `wrangler deploy` clears `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS`.
    An empty `ACCESS_ALLOWED_EMAILS` makes `deploy.sh` exit 2.
-   A value that is only spaces or commas is empty too.
+   A value that is only spaces, including Unicode spaces, or commas is empty too.
    `--dry-run` with an empty list still runs and warns.
    `deploy.sh` reads `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS` from the environment.
    The email list is the `--var` immediately before the client ids.
