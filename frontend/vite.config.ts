@@ -361,6 +361,7 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    globalSetup: 'test/webkit-gate.ts',
     setupFiles: ['test/setup.ts'],
     include: ['test/**/*.test.ts', 'src/map/**/*.test.ts'],
     coverage: {
