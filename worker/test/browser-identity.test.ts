@@ -28,7 +28,10 @@ beforeEach(() => {
       objects: [...records.keys()].filter((key) => key.startsWith(prefix)).slice(0, limit).map((key) => ({ key })),
     })),
   };
-  env = { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUD: 'map-audience', CALIB_TOKEN: 'legacy', SITE: bucket, CALIB: bucket } as unknown as Env;
+  env = {
+    ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUD: 'map-audience', CALIB_TOKEN: 'legacy', SITE: bucket, CALIB: bucket,
+    ACCESS_ALLOWED_EMAILS: 'jessica@example.com,changed@example.com,other@example.com,other-owner@example.com,owner@example.com',
+  } as unknown as Env;
   vi.stubGlobal('fetch', vi.fn(async () => new Response(jwks, { headers: { 'content-type': 'application/json' } })));
 });
 afterEach(() => { vi.unstubAllGlobals(); });

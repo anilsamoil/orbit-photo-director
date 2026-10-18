@@ -111,6 +111,7 @@ interface TestEnv {
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string;
   ACCESS_PROFILE_GRANTS?: string;
+  ACCESS_ALLOWED_EMAILS?: string;
 }
 
 function makeEnv(overrides: Partial<TestEnv> = {}): TestEnv {
@@ -123,6 +124,7 @@ function makeEnv(overrides: Partial<TestEnv> = {}): TestEnv {
     ACCESS_AUD,
     ACCESS_PROFILE_BINDINGS: accessBindings,
     ACCESS_PROFILE_GRANTS: accessGrants,
+    ACCESS_ALLOWED_EMAILS: ACCESS_EMAIL,
     ...overrides,
   };
 }

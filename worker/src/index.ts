@@ -32,6 +32,7 @@ export interface Env {
   ACCESS_PROFILE_BINDINGS?: string; // private verified-email hash to legacy profile aliases
   ACCESS_PROFILE_GRANTS?: string; // private verified-email hash to explicit additional profiles
   ACCESS_SERVICE_TOKEN_CLIENT_IDS?: string;
+  ACCESS_ALLOWED_EMAILS?: string;
   STALE_THRESHOLD_SECONDS: string;
 }
 

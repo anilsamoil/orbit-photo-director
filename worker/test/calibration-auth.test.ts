@@ -1,10 +1,17 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { Env } from '../src/index';
+import type { AccessIdentity } from '../src/calibration-auth';
+
+// @ts-expect-error a plain object is not an admitted Access identity
+const forged: AccessIdentity = { kind: 'access', issuer: 'https://test-team.cloudflareaccess.com', subject: 's', email: 'one@example.com' };
 
 const issuer = 'https://test-team.cloudflareaccess.com';
 const origin = 'https://map.astroanil.dev';
-const authEnv = { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUD: 'map-audience', CALIB_TOKEN: 'legacy' };
+const authEnv = {
+  ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUD: 'map-audience', CALIB_TOKEN: 'legacy',
+  ACCESS_ALLOWED_EMAILS: 'test@example.com',
+};
 let pair: Awaited<ReturnType<typeof generateKeyPair>>;
 let jwks: string;
 beforeAll(async () => {
