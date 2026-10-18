@@ -40,16 +40,26 @@ function whenExited(child) {
   });
 }
 
+function releaseStdio(child) {
+  for (const stream of child.stdio ?? []) stream?.destroy?.();
+}
+
 async function graceful(session) {
   const browser = session.browser;
   if (browser && typeof browser.contexts === 'function') {
     await Promise.all(browser.contexts().map((context) => context.close().catch(() => {})));
   }
   if (browser && typeof browser.close === 'function') await browser.close().catch(() => {});
-  const child = session.server?.process?.();
-  if (child) return whenExited(child);
-  if (session.server) {
-    await session.server.close();
+  const server = session.server;
+  const child = server?.process?.();
+  if (child) {
+    if (typeof server.close === 'function') Promise.resolve(server.close()).catch(() => {});
+    const status = await whenExited(child);
+    releaseStdio(child);
+    return status;
+  }
+  if (server) {
+    await server.close();
     return 'closed';
   }
   if (typeof session.close === 'function') {
