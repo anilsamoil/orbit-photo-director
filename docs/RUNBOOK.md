@@ -352,8 +352,9 @@ If the calibration token leaks (it lives in browser localStorage, plaintext), ro
 1. Generate a new token: `python3 -c "import secrets; print(secrets.token_hex(32))"` (copy output).
 2. Set the Worker secret, then deploy with the full service-token allowlist.
    A bare `wrangler deploy` clears `ACCESS_SERVICE_TOKEN_CLIENT_IDS`.
-   `deploy.sh` reads that name from the environment and passes one `--var`.
-   If the command line also sets that name with `--var`, `deploy.sh` exits and does not call wrangler.
+   `deploy.sh` reads that name from the environment and passes it as the last `--var`.
+   The wrapper accepts only `--dry-run`, `--env <name>`, `--env=<name>`, `--config <path>`, and `--config=<path>`.
+   Any caller `--var`, any other flag, any positional argument, and `--` make it exit before wrangler runs.
    Replace the value below with every client id, comma-separated. Leave the client secret out.
 
    ```bash
