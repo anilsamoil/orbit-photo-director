@@ -223,7 +223,7 @@ async function pinOverLaunch(page: Page): Promise<boolean> {
   }, undefined, { timeout: 8_000 }).then(() => true, () => false);
 }
 
-async function dropPinOverLaunch(page: Page) {
+async function dropPinOverLaunch(page: Page): Promise<number> {
   const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
     const box = canvas.getBoundingClientRect();
     for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
@@ -236,9 +236,9 @@ async function dropPinOverLaunch(page: Page) {
     return null;
   });
   expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
-    if (await pinOverLaunch(page)) return;
+    if (await pinOverLaunch(page)) return attempt;
   }
   const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
@@ -355,6 +355,41 @@ function withinCouple(actual: SheetBox, expected: SheetBox) {
     && Math.abs(actual.h - expected.h) <= 2;
 }
 
+function overlapArea(a: SheetBox | null, b: SheetBox | null) {
+  if (!a || !b) return 0;
+  const width = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const height = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return width > 0 && height > 0 ? width * height : 0;
+}
+
+async function briefState(page: Page) {
+  return page.evaluate(() => {
+    const brief = document.getElementById('map-launch-coverage');
+    const slot = document.getElementById('map-inspector');
+    const boxOf = (element: Element | null) => {
+      const box = element?.getBoundingClientRect();
+      if (!box || box.width === 0 || box.height === 0) return null;
+      return { x: box.x, y: box.y, w: box.width, h: box.height };
+    };
+    const briefBox = boxOf(brief);
+    const sheet = boxOf(slot);
+    const style = brief ? getComputedStyle(brief) : null;
+    const hitAt = (box: { x: number; y: number; w: number; h: number } | null) => {
+      if (!box) return 'none';
+      const hit = document.elementFromPoint(box.x + box.w / 2, box.y + box.h / 2);
+      const host = hit?.closest('#map-launch-coverage, #map-inspector, .maplibregl-canvas');
+      return host?.id || (typeof host?.className === 'string' ? host.className : hit?.tagName) || 'none';
+    };
+    return {
+      hidden: brief?.hidden ?? null,
+      display: style?.display ?? 'missing',
+      brief: briefBox,
+      sheet,
+      hit: hitAt(briefBox),
+    };
+  });
+}
+
 for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector over a legacy launch card ${engine.name}`, () => {
   it.each([
     { width: 402, height: 874 },
@@ -419,6 +454,47 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
       expect(insideViewport(buried.shoot!, width, height), JSON.stringify(evidence)).toBe(true);
       expect(buried.canvas && tap.trustedCanvas, JSON.stringify(evidence)).toBe(true);
       expect(withinCouple(buried.sheet, plain.sheet), JSON.stringify(evidence)).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 90_000);
+
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('hides the launch brief while a pin replaces the card and brings it back at $width×$height', async ({ width, height }) => {
+    const context = await phoneContext(engine, width, height);
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      await prepare(page);
+      const pad = await padPoint(page);
+      await page.touchscreen.tap(pad.x, pad.y);
+      await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+      const open = await briefState(page);
+      const attempts = await dropPinOverLaunch(page);
+      const buried = await briefState(page);
+      const buriedOverlap = overlapArea(buried.brief, buried.sheet);
+      await page.locator('#map-inspector > .maplibregl-popup:last-child .maplibregl-popup-close-button').click();
+      await page.waitForFunction(() => {
+        const slot = document.getElementById('map-inspector');
+        const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
+        return !!last?.querySelector('.launch-ascent-card') && document.getElementById('map-launch-coverage')?.hidden === false;
+      });
+      const restored = await briefState(page);
+      const restoredOverlap = overlapArea(restored.brief, restored.sheet);
+      const evidence = { engine: engine.name, width, height, attempts, open, buried, buriedOverlap, restored, restoredOverlap };
+      console.log(`BRIEF_HOLD ${JSON.stringify(evidence)}`);
+      expect(attempts, JSON.stringify(evidence)).toBe(1);
+      expect(open.hidden, JSON.stringify(evidence)).toBe(false);
+      expect(buried.hidden, JSON.stringify(evidence)).toBe(true);
+      expect(buried.display, JSON.stringify(evidence)).toBe('none');
+      expect(buriedOverlap, JSON.stringify(evidence)).toBe(0);
+      expect(restored.hidden, JSON.stringify(evidence)).toBe(false);
+      expect(restored.display, JSON.stringify(evidence)).not.toBe('none');
+      expect(restored.brief, JSON.stringify(evidence)).not.toBeNull();
+      expect(restoredOverlap, JSON.stringify(evidence)).toBe(0);
+      expect(restored.hit, JSON.stringify(evidence)).toBe('map-launch-coverage');
     } finally {
       await context.close();
     }
