@@ -128,13 +128,15 @@ async function boot(): Promise<void> {
   await init();
 }
 
-function releasePage(): void {
+async function releasePage(): Promise<void> {
   for (const stop of schedulerStops) stop();
   schedulerStops.clear();
+  const { stopCountdown } = await import('../src/main');
+  stopCountdown();
 }
 
-afterEach(() => {
-  releasePage();
+afterEach(async () => {
+  await releasePage();
   gate.release({
     mountIssScene: () => ({ update() {}, dispose() {} }),
   });
@@ -180,7 +182,7 @@ describe('ISS view import lifetime', () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(readout.textContent).toContain('ISS');
       readout.innerHTML = 'sentinel';
-      releasePage();
+      await releasePage();
       await vi.advanceTimersByTimeAsync(5_000);
       expect(readout.innerHTML).toBe('sentinel');
     } finally {
