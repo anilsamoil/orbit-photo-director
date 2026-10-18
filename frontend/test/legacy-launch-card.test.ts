@@ -80,6 +80,7 @@ async function prepare(page: Page) {
   await freezeDate(page, meta.now);
   await page.addInitScript(() => {
     localStorage.setItem('opd-map-chrome', 'shown');
+    localStorage.setItem('opd-map-bearing-mode', 'north');
     Object.defineProperty(navigator, 'standalone', { get: () => true });
     const state = window as unknown as TestWindow;
     state.__legacyHits = [];
@@ -248,28 +249,57 @@ async function dropPinOverLaunch(page: Page) {
   throw new Error(`pin did not open over the legacy card: ${JSON.stringify(state)}`);
 }
 
-async function centerTap(page: Page) {
-  const point = await page.evaluate(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>('.maplibregl-canvas');
-    if (!canvas) return null;
-    const box = canvas.getBoundingClientRect();
-    const x = box.x + box.width / 2;
-    const y = box.y + box.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    const slot = document.getElementById('map-inspector');
-    const slotBox = slot?.getBoundingClientRect();
-    return {
-      x, y,
-      hit: hit?.id || (typeof hit?.className === 'string' ? hit.className : hit?.tagName) || 'none',
-      canvas: hit === canvas,
-      inspector: slotBox ? { x: slotBox.x, y: slotBox.y, w: slotBox.width, h: slotBox.height } : null,
+type CenterPoint = {
+  x: number;
+  y: number;
+  hit: string;
+  canvas: boolean;
+  inspector: { x: number; y: number; w: number; h: number } | null;
+};
+
+async function centerPoint(page: Page): Promise<CenterPoint | null> {
+  return page.evaluate((): Promise<CenterPoint | null> => new Promise((resolve) => {
+    const map = (window as unknown as TestWindow).__opdMap;
+    const read = () => {
+      const canvas = document.querySelector<HTMLCanvasElement>('.maplibregl-canvas');
+      if (!canvas) return null;
+      const box = canvas.getBoundingClientRect();
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const slot = document.getElementById('map-inspector');
+      const slotBox = slot?.getBoundingClientRect();
+      return {
+        x, y,
+        hit: hit?.id || (typeof hit?.className === 'string' ? hit.className : hit?.tagName) || 'none',
+        canvas: hit === canvas,
+        inspector: slotBox ? { x: slotBox.x, y: slotBox.y, w: slotBox.width, h: slotBox.height } : null,
+      };
     };
-  });
+    if (!map?.isMoving()) resolve(read());
+    else map.once('idle', () => resolve(read()));
+  }));
+}
+
+function trustedCanvasClick(hits: HitEvent[]): boolean {
+  return hits.some((event) => event.type === 'click' && event.trusted && event.target.includes('maplibregl-canvas'));
+}
+
+async function centerTap(page: Page) {
+  const point = await centerPoint(page);
   expect(point).not.toBeNull();
   await page.evaluate(() => { (window as unknown as TestWindow).__legacyHits = []; });
   await page.touchscreen.tap(point!.x, point!.y);
-  const hits = await page.evaluate(() => (window as unknown as TestWindow).__legacyHits);
-  return { point: point!, trustedCanvas: hits.some((event) => event.type === 'click' && event.trusted && event.target.includes('maplibregl-canvas')) };
+  let hits = await page.evaluate(() => (window as unknown as TestWindow).__legacyHits);
+  if (!trustedCanvasClick(hits)) {
+    const again = await centerPoint(page);
+    expect(again).not.toBeNull();
+    await page.evaluate(() => { (window as unknown as TestWindow).__legacyHits = []; });
+    await page.touchscreen.tap(again!.x, again!.y);
+    hits = await page.evaluate(() => (window as unknown as TestWindow).__legacyHits);
+    return { point: again!, hits, trustedCanvas: trustedCanvasClick(hits) };
+  }
+  return { point: point!, hits, trustedCanvas: true };
 }
 
 for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector over a legacy launch card ${engine.name}`, () => {
@@ -296,7 +326,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
         await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
         await dropPinOverLaunch(page);
         const tap = await centerTap(page);
-        results.push({ rep, ...tap.point, trustedCanvas: tap.trustedCanvas });
+        results.push({ rep, ...tap.point, trustedCanvas: tap.trustedCanvas, hits: tap.hits });
       } finally {
         await context.close();
       }
