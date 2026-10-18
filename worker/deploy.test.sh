@@ -46,6 +46,18 @@ assert_arg() {
   fi
 }
 
+assert_var_last() {
+  local value="$1"
+  local last expected
+  last=$(printf '%s\n' "$CASE_ARGS" | tail -n 2)
+  expected=$(printf '%s\n' "--var" "$value")
+  if [ "$last" != "$expected" ]; then
+    echo "FAIL: allowlist --var was not last" >&2
+    printf '%s\n' "$CASE_ARGS" >&2
+    exit 1
+  fi
+}
+
 unset ACCESS_SERVICE_TOKEN_CLIENT_IDS
 run_deploy
 if [ "$CASE_CODE" -ne 0 ]; then
@@ -144,6 +156,29 @@ assert_arg "--config"
 assert_arg "other.toml"
 assert_arg "--var"
 assert_arg "ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
+assert_var_last "ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
+
+run_package_deploy --env "staging name" --config "other file.toml"
+if [ "$CASE_CODE" -ne 0 ]; then
+  echo "FAIL: quoted --env/--config exited $CASE_CODE" >&2
+  printf '%s\n' "$CASE_ERR" >&2
+  exit 1
+fi
+assert_arg "--env"
+assert_arg "staging name"
+assert_arg "--config"
+assert_arg "other file.toml"
+assert_var_last "ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
+
+run_package_deploy --env=staging --config=other.toml
+if [ "$CASE_CODE" -ne 0 ]; then
+  echo "FAIL: --env= and --config= exited $CASE_CODE" >&2
+  printf '%s\n' "$CASE_ERR" >&2
+  exit 1
+fi
+assert_arg "--env=staging"
+assert_arg "--config=other.toml"
+assert_var_last "ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
 
 reject_allowlist_override() {
   if [ "$CASE_CODE" -eq 0 ]; then
@@ -168,5 +203,34 @@ reject_allowlist_override "--var"
 
 run_package_deploy --var=ACCESS_SERVICE_TOKEN_CLIENT_IDS:evil
 reject_allowlist_override "--var="
+
+reject_closed() {
+  local label="$1"
+  if [ "$CASE_CODE" -eq 0 ]; then
+    echo "FAIL: $label exited 0" >&2
+    printf '%s\n' "$CASE_ARGS" >&2
+    exit 1
+  fi
+  if [ -n "$CASE_ARGS" ]; then
+    echo "FAIL: wrangler ran for $label" >&2
+    printf '%s\n' "$CASE_ARGS" >&2
+    exit 1
+  fi
+}
+
+run_package_deploy --var OTHER:x ACCESS_SERVICE_TOKEN_CLIENT_IDS:caller.access
+reject_closed "grouped --var"
+
+run_package_deploy --var=OTHER:x ACCESS_SERVICE_TOKEN_CLIENT_IDS:caller.access
+reject_closed "grouped --var="
+
+run_package_deploy ACCESS_SERVICE_TOKEN_CLIENT_IDS:caller.access
+reject_closed "bare continuation"
+
+run_package_deploy src/alternate.ts --dry-run
+reject_closed "positional entrypoint"
+
+run_package_deploy -- --
+reject_closed "--"
 
 echo "deploy.test.sh passed"
