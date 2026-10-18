@@ -11,6 +11,9 @@ import { VitePWA } from 'vite-plugin-pwa';
 // `profile-crud.ts` as `APP_VERSION = '1.6.12.0'` — stale on every ship.
 const APP_VERSION = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
 
+const noWebStorage = '--no-experimental-webstorage';
+const testExecArgv = process.allowedNodeEnvironmentFlags?.has(noWebStorage) ? [noWebStorage] : [];
+
 export default defineConfig({
   cacheDir: '.vite-cache',
   define: {
@@ -361,6 +364,10 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    poolOptions: {
+      forks: { execArgv: testExecArgv },
+      threads: { execArgv: testExecArgv },
+    },
     setupFiles: ['test/setup.ts'],
     include: ['test/**/*.test.ts', 'src/map/**/*.test.ts'],
     coverage: {
