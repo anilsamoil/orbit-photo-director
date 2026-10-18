@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Browser, type CDPSession, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { freezeDate } from './freeze-date';
 import fixture from './fixtures/joint-panels.json';
 
 const root = resolve(process.env.OPD_JOINT_SOURCE_ROOT ?? resolve(__dirname, '..'));
@@ -49,7 +50,7 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets) {
       return append.call(this, child) as T;
     };
   }, insets);
-  await page.clock.setFixedTime(new Date(now));
+  await freezeDate(page, now);
   const css = cdp ? stylesheet : stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof Insets) => `${insets[side]}px`);
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
