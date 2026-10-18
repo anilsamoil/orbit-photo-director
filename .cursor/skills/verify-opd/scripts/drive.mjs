@@ -3074,6 +3074,37 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   );
 }
 
+export async function whenViewportLaidOut(send, width, height) {
+  await evaluate(send, `(() => {
+    const width = ${width};
+    const height = ${height};
+    window.__opdViewportSettled = new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener('resize', onResize);
+        resolve({ w: window.innerWidth, h: window.innerHeight, timedOut: true });
+      }, 8000);
+      const finish = () => {
+        clearTimeout(timer);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          resolve({ w: window.innerWidth, h: window.innerHeight, timedOut: false });
+        }));
+      };
+      function onResize() {
+        if (window.innerWidth !== width || window.innerHeight !== height) return;
+        window.removeEventListener('resize', onResize);
+        finish();
+      }
+      window.addEventListener('resize', onResize);
+    });
+    return true;
+  })()`);
+  await setViewport(send, width, height, true);
+  const settled = await evaluate(send, 'window.__opdViewportSettled');
+  if (!settled || settled.timedOut || settled.w !== width || settled.h !== height) {
+    throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
+  }
+}
+
 async function proveShortTimeRow(send, viewport) {
   const sizes = [
     { width: 390, height: 520 },
@@ -3083,8 +3114,7 @@ async function proveShortTimeRow(send, viewport) {
   ];
   try {
     for (const size of sizes) {
-      await setViewport(send, size.width, size.height, true);
-      await sleep(200);
+      await whenViewportLaidOut(send, size.width, size.height);
       const laid = await evaluate(send, `(() => {
         const button = document.getElementById('time-fwd-90');
         const chip = document.querySelector('.map-command .map-controls-time');
