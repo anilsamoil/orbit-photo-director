@@ -53,17 +53,25 @@ function expand(seeds) {
 }
 
 /**
- * `browser.close()` waits until the launched tree closes Playwright's pipes.
- * A WebKit web process can outlive the UI process and hold that pipe until its
- * 10s watchdog, which is the whole vitest hook budget. If the graceful close
- * is still pending, kill the tree recorded at launch.
+ * `browser.close()` waits until every process holding the launched stdio
+ * pipes has exited. A WebKit web process can hold its pipe for the 10s
+ * watchdog. Chrome children inherit those pipes too, including the `cat`
+ * processes the Chrome wrapper inserts on stdout and stderr, so one child
+ * that does not exit keeps the close open until Playwright's 30s kill.
+ * Close leftover contexts first, and if that is still pending, kill the
+ * tree recorded at launch.
  */
 export async function closeBrowser(browser, rootPids, label = 'browser') {
   if (!browser) return;
   const pids = expand(rootPids ?? []);
   const started = Date.now();
   let killed = false;
-  const done = browser.close().then(() => 'closed', () => 'closed');
+  const done = (async () => {
+    if (typeof browser.contexts === 'function') {
+      await Promise.all(browser.contexts().map((context) => context.close().catch(() => {})));
+    }
+    await browser.close();
+  })().then(() => 'closed', () => 'closed');
   let timer;
   const killer = new Promise((resolve) => {
     timer = setTimeout(() => {

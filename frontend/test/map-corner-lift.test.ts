@@ -214,19 +214,24 @@ for (const engine of [
       viewport: { width, height },
       serviceWorkers: 'block',
     });
-    if (engine.name === 'WebKit') {
-      await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-      });
+    try {
+      if (engine.name === 'WebKit') {
+        await context.addInitScript(() => {
+          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
+        });
+      }
+      const page = await context.newPage();
+      if (insets && engine.name === 'Chrome') {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+      }
+      const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
+      await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook);
+      return { context, page };
+    } catch (error) {
+      await context.close();
+      throw error;
     }
-    const page = await context.newPage();
-    if (insets && engine.name === 'Chrome') {
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
-    }
-    const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
-    await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook);
-    return { context, page };
   }
 
   it('keeps Hide in the same place across five show/hide cycles at 402x874', async () => {
@@ -498,8 +503,8 @@ for (const engine of [
 
   it('keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
-    const page = await context.newPage();
     try {
+      const page = await context.newPage();
       await boot(page, assets, script);
       await showChrome(page);
       const scrolled = await page.evaluate(() => {
