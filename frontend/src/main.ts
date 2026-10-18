@@ -64,7 +64,7 @@ import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from 
 import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderTierCard } from './launch-tier-card';
 import { renderMapLaunchBrief } from './launch-map-brief';
-import { getMapLaunchMode, mapLaunchBriefHidden, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
+import { getMapLaunchMode, launchCardBuried, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 
 const REFRESH_MS = 60_000;
 const COUNTDOWN_TICK_MS = 1_000;
@@ -541,7 +541,7 @@ function renderQueue(): void {
     }
     if (anchorId === 'map') {
       const enabled = getMapLaunchMode();
-      const hidden = mapLaunchBriefHidden(document.getElementById('map-inspector'));
+      const hidden = !enabled || launchCardBuried(document.getElementById('map-inspector'));
       if (enabled && !hidden && notice.hidden) {
         notice.dataset.launchBriefOpen = '1';
         const primary = notice.querySelector<HTMLDetailsElement>('.map-launch-primary');

@@ -25,7 +25,7 @@ import type {
   VendorMap,
   VendorMapOptions,
 } from '../../map-core/vendor-map';
-import { mapLaunchBriefHidden } from '../../../map-launch-mode';
+import { getMapLaunchMode, launchCardBuried } from '../../../map-launch-mode';
 import { collapseAttribution } from './attribution';
 import { layerListener, mapListener, toHit, toLngLat } from './events';
 
@@ -224,8 +224,11 @@ function chooseInspectorSlot(
 function syncLaunchBrief(slot: HTMLElement): void {
   const brief = slot.closest('#map-pane')?.querySelector<HTMLElement>('#map-launch-coverage');
   if (!brief) return;
-  const hidden = mapLaunchBriefHidden(slot);
-  if (brief.hidden !== hidden) brief.hidden = hidden;
+  if (launchCardBuried(slot)) {
+    if (!brief.hidden) brief.hidden = true;
+    return;
+  }
+  if (getMapLaunchMode() && brief.hidden) brief.hidden = false;
 }
 
 function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
