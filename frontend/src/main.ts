@@ -9,7 +9,7 @@
 import { renderCards, type CardAction } from './card';
 import { renderPassThumbnail } from './pass-thumbnail';
 import { bindHelp, syncHelpButton } from './help';
-import { bindMapChrome } from './map-chrome';
+import { bindMapChrome, syncMapChrome } from './map-chrome';
 import { bindInsets, type InsetHost } from './insets/host';
 import { bindLegendDisclosure } from './map-legend';
 import { bindLiveReadout } from './live-readout';
@@ -145,6 +145,7 @@ function setBanner(state: BannerState): void {
   el.textContent = state.text;
   el.onclick = null;
   el.style.cursor = '';
+  syncMapChrome();
 }
 
 /** Make the banner a one-tap escape to the Cloudflare Access login. */

@@ -293,7 +293,7 @@ function syncFooterClearance(pane: HTMLElement): void {
   set('--map-time-lift', demand('--map-time-lift', pane.querySelector('.map-command')));
 }
 
-function syncMapChrome(): void {
+export function syncMapChrome(): void {
   if (mute) return;
   if (syncing) {
     scheduleSync();
@@ -370,15 +370,33 @@ export function bindMapChrome(): void {
     }
   };
   observeCorners();
+  const syncNow = (): void => {
+    if (mute) {
+      queueMicrotask(syncMapChrome);
+      scheduleSync();
+      return;
+    }
+    syncMapChrome();
+  };
+  const footerWatch = new MutationObserver(syncNow);
+  const watchFooter = (node: Element): void => {
+    footerWatch.observe(node, { attributes: true, attributeFilter: ['style', 'class'], childList: true, subtree: true, characterData: true });
+  };
+  const footerIn = (node: Element): Element | null => node.matches('#status-banner') ? node : node.querySelector('#status-banner');
   const cornerArrivals = new MutationObserver((records) => {
+    let footer: Element | null = null;
     for (const record of records) {
       for (const node of record.addedNodes) {
         if (!(node instanceof Element)) continue;
         if (cornerSelectors.some((selector) => node.matches(selector) || node.querySelector(selector) !== null)) {
           observeCorners();
-          return;
+          footer = footerIn(node) ?? footer;
         }
       }
+    }
+    if (footer) {
+      watchFooter(footer);
+      syncNow();
     }
   });
   cornerArrivals.observe(document.body, { childList: true, subtree: true });
@@ -389,7 +407,10 @@ export function bindMapChrome(): void {
   });
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   const banner = document.getElementById('status-banner');
-  if (banner) mutations.observe(banner, { childList: true, subtree: true });
+  if (banner) {
+    mutations.observe(banner, { childList: true, subtree: true });
+    watchFooter(banner);
+  }
   const legend = document.getElementById('map-legend-toggle');
   if (legend) mutations.observe(legend, { attributes: true, attributeFilter: ['aria-expanded'] });
   const pane = document.getElementById('map-pane');
