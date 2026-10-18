@@ -7,6 +7,7 @@ import { tleEpochMs } from '../src/iss-sgp4';
 import fixture from './fixtures/iss-sgp4-fixture.json';
 import { buildPassList } from '../src/map/overlays/pass-list';
 import { findUpcomingPasses } from '../src/pin-drop';
+import { freezeDate } from './freeze-date';
 import { artifact, supported, assessment, envelope, NOW } from './launch-fixtures';
 import { parseLaunchArtifact } from '../src/launch-schema';
 
@@ -143,7 +144,7 @@ async function prepare(engine: typeof engines[number], target: Target) {
     const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
     if (cdp) await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
     else await emulateInsets(page, insets);
-    await page.clock.setFixedTime(new Date(fixture.start));
+    await freezeDate(page, fixture.start);
     const css = cdp ? stylesheet : stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof Insets) => `${insets[side]}px`);
     await page.route('**/*', async (route) => {
       const url = new URL(route.request().url());
