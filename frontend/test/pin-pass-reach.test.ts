@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { passRowReachable } from '../scripts/pin-pass-reach.mjs';
+import { passRowReachable } from './pin-pass-reach.mjs';
 
 describe('pass row reachability', () => {
   it('rejects a 240px row that shows only 80px inside a wider sheet', () => {

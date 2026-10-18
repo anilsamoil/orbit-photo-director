@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium, devices, webkit } from 'playwright';
 import { installFrozenDate } from '../test/frozen-date.mjs';
-import { passRowReachable } from './pin-pass-reach.mjs';
+import { passRowReachable } from '../test/pin-pass-reach.mjs';
 
 const { values } = parseArgs({
   options: {
