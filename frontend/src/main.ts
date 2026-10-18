@@ -42,7 +42,7 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
-import { getAccountProfile, resolveAccountProfile, SessionSignInRequired } from './profile-session';
+import { getAccountProfile, resolveAccountProfile } from './profile-session';
 import { isRosterProfile } from './crew-roster';
 import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
@@ -1761,8 +1761,7 @@ async function init(): Promise<void> {
     currentProfile = null;
     console.warn('[profile] account initialization failed:', e);
     const text = e instanceof Error ? e.message : 'Could not verify your profile. Please reload.';
-    if (e instanceof SessionSignInRequired) showSessionRecovery(text);
-    else setBanner({ level: 'red', text });
+    showSessionRecovery(text);
     return;
   }
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
