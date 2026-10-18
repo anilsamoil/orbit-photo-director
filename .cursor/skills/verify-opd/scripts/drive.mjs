@@ -5741,7 +5741,8 @@ export function launchEarthPanes(width, height) {
   if (freshLandscape) return [{ ...native, place: 'side', ...freshLandscape }];
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
-    return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
+    const minShort = splitPlace ? (height >= 900 ? 300 : 200) : 400;
+    return [{ ...native, place: splitPlace || 'side', minShort }];
   }
   if (width >= 800) return [{ ...native, place: splitLaunchPlace(width, height) || 'side', minShort: 200 }];
   return [native];
