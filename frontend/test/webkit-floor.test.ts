@@ -309,6 +309,53 @@ describe('webkit floor', () => {
     expect(runCliOn(dir).status).not.toBe(0);
   });
 
+  it('rejects a skipped or omitted launch-card WebKit case', () => {
+    const file = 'test/legacy-launch-card.test.ts';
+    const named = [
+      'legacy launch card WebKit opens from a trusted tap when controls are shown in landscape',
+      'legacy launch card WebKit gives the portrait scrollport a usable width and a height above the 66.5px band',
+    ];
+    const reportFor = (present: string[], skipped: string[]) => {
+      const base = browserReport(() => 'passed') as {
+        testResults: { name: string; assertionResults: { ancestorTitles: string[]; fullName: string; status: string }[] }[];
+      };
+      return {
+        ...base,
+        testResults: base.testResults.map((entry) => {
+          if (!entry.name.endsWith(file)) return entry;
+          const pin = 'pin inspector over a legacy launch card WebKit';
+          const assertions = [
+            ...Array.from({ length: 6 }, (_, index) => ({
+              ancestorTitles: [pin],
+              fullName: `${pin} case ${index}`,
+              status: 'passed',
+            })),
+            ...present.map((fullName) => ({
+              ancestorTitles: ['legacy launch card WebKit'],
+              fullName,
+              status: skipped.includes(fullName) ? 'skipped' : 'passed',
+            })),
+          ];
+          return { ...entry, assertionResults: assertions };
+        }),
+      };
+    };
+    const complete = evaluateWebKitReports([reportFor(named, [])]);
+    expect(complete.reasons).toEqual([]);
+    expect(complete.passed).toBe(206);
+    for (const fullName of named) {
+      const skipped = evaluateWebKitReports([reportFor(named, [fullName])]);
+      expect(skipped.reasons).toContain('webkit skipped 1');
+      expect(skipped.reasons).toContain(`${file} passed 7 below minimum 8`);
+      const omitted = evaluateWebKitReports([reportFor(named.filter((name) => name !== fullName), [])]);
+      expect(omitted.passed).toBe(205);
+      expect(omitted.reasons).toContain('webkit passed 205 below floor 206');
+      expect(omitted.reasons).toContain(`${file} passed 7 below minimum 8`);
+    }
+    const source = readFileSync(join(root, 'test/legacy-launch-card.test.ts'), 'utf8');
+    expect(source).toContain("describe.skipIf(!webkitReady)('legacy launch card WebKit'");
+  });
+
   it('does not count a Chrome case whose title is WebKit', () => {
     const report = browserReport(() => 'passed') as { testResults: { name: string; assertionResults: object[] }[] };
     const withChromeTitle = {
