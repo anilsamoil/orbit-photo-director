@@ -14,3 +14,10 @@ export function subscribeMapLaunchMode(listener: (enabled: boolean) => void): ()
   listeners.add(listener);
   return () => { listeners.delete(listener); };
 }
+
+export function mapLaunchBriefHidden(slot: ParentNode | null): boolean {
+  if (!enabled) return true;
+  if (!slot) return false;
+  const launchInFront = slot.querySelector(':scope > .maplibregl-popup:last-child .launch-ascent-card') !== null;
+  return !launchInFront && slot.querySelector('.launch-ascent-card') !== null;
+}

@@ -25,6 +25,7 @@ import type {
   VendorMap,
   VendorMapOptions,
 } from '../../map-core/vendor-map';
+import { mapLaunchBriefHidden } from '../../../map-launch-mode';
 import { collapseAttribution } from './attribution';
 import { layerListener, mapListener, toHit, toLngLat } from './events';
 
@@ -88,6 +89,7 @@ function syncMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   pane.classList.toggle('map-inspector-open', open);
   slot.hidden = !open;
   if (open) boundMapInspector(map, applied);
+  else syncLaunchBrief(slot);
   requestAnimationFrame(() => map.resize());
 }
 
@@ -219,12 +221,18 @@ function chooseInspectorSlot(
   return best;
 }
 
-/** Use painted chrome rectangles, including overflowing wrapped command children,
- *  without writing any chrome styles or changing its stacking order. */
+function syncLaunchBrief(slot: HTMLElement): void {
+  const brief = slot.closest('#map-pane')?.querySelector<HTMLElement>('#map-launch-coverage');
+  if (!brief) return;
+  const hidden = mapLaunchBriefHidden(slot);
+  if (brief.hidden !== hidden) brief.hidden = hidden;
+}
+
 function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   const slot = mapInspector(map);
   const pane = slot?.closest('#map-pane');
   if (!slot || !(pane instanceof HTMLElement) || slot.hidden) return;
+  syncLaunchBrief(slot);
   const paneRect = pane.getBoundingClientRect();
   const mapRect = map.getContainer().getBoundingClientRect();
   const insetStyle = getComputedStyle(inspectorInsetProbe(slot));
