@@ -9,6 +9,7 @@ import { PREF_KEYS } from '../../map-core/prefs';
 export type BearingMode = 'north' | 'iss-up';
 
 const BEARING_NOOP_THRESHOLD_DEG = 0.5;
+const BEARING_EASE_MS = 600;
 
 type MarkerPosition = { lat: number; lon: number };
 
@@ -20,6 +21,7 @@ type Runtime = {
   bearingBound: boolean;
   easingToward: number | null;
   easingWatch: boolean;
+  commit: number;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
@@ -41,6 +43,7 @@ const state: Runtime = {
   bearingBound: false,
   easingToward: null,
   easingWatch: false,
+  commit: 0,
   hasTrack: () => false,
   position: () => null,
 };
@@ -123,6 +126,10 @@ function watchEasing(core: MapCore): void {
   core.on('moveend', () => { state.easingToward = null; });
 }
 
+function releaseBearingCommit(): void {
+  state.commit += 1;
+}
+
 function desiredBearing(core: MapCore): number | null {
   if (state.mode === 'north') return 0;
   return computeIssHeading(core.clock.viewMs());
@@ -139,16 +146,28 @@ export function applyBearing(animate: boolean): void {
   const current = core.bearing();
   if (nearBearing(current, desired)) {
     if (state.easingToward !== null) {
+      releaseBearingCommit();
       state.easingToward = null;
       core.easeTo({ bearing: desired, duration: 0 });
     }
     return;
   }
   if (animate) {
-    core.easeTo({ bearing: desired, duration: 600 });
+    releaseBearingCommit();
+    const token = state.commit;
+    core.easeTo({ bearing: desired, duration: BEARING_EASE_MS });
     state.easingToward = desired;
+    window.setTimeout(() => {
+      if (token !== state.commit) return;
+      if (state.easingToward === null || !nearBearing(state.easingToward, desired)) return;
+      const live = state.core;
+      if (live !== core) return;
+      state.easingToward = null;
+      live.setBearing(desired);
+    }, BEARING_EASE_MS);
     return;
   }
+  releaseBearingCommit();
   state.easingToward = null;
   core.setBearing(desired);
 }
@@ -173,9 +192,14 @@ export function bindFollowToggle(): void {
   });
   const core = state.core;
   if (core) {
-    core.on('dragstart', () => { exitFollow(); });
+    core.on('dragstart', () => {
+      releaseBearingCommit();
+      exitFollow();
+    });
     core.on('zoomstart', ({ byUser }) => {
-      if (byUser) exitFollow();
+      if (!byUser) return;
+      releaseBearingCommit();
+      exitFollow();
     });
   }
   state.toggleBound = true;
@@ -208,6 +232,7 @@ export function resetFollowMemoryForTest(): void {
   state.mode = 'north';
   state.easingToward = null;
   state.easingWatch = false;
+  state.commit = 0;
 }
 
 export function clearBearingPref(): void {
