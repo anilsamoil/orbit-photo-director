@@ -747,6 +747,14 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   cards.prepend(...launchSelections.map((selection) => renderLaunchCard(selection, launches, nowMs, showLaunchOnMap)));
 }
 
+let countdownTimer: number | null = null;
+
+function stopCountdown(): void {
+  if (countdownTimer === null) return;
+  window.clearInterval(countdownTimer);
+  countdownTimer = null;
+}
+
 function rerenderCountdowns(): void {
   updateIssNow();
   const now = Date.now();
@@ -1875,7 +1883,8 @@ async function init(): Promise<void> {
     onPoll: () => void refresh(),
   });
   // Per-second countdown updates without re-fetching the manifest
-  window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);
+  stopCountdown();
+  countdownTimer = window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);
 }
 
 // Auto-init in the browser. Skipped under vitest so test files can drive
@@ -1888,6 +1897,7 @@ export {
   init,
   refresh,
   rerenderCountdowns,
+  stopCountdown,
   // Test surface — exposed so frontend/test/main-integration.test.ts can
   // exercise the orchestration helpers without going through the full
   // init() / setInterval chain. Production code should use init().
