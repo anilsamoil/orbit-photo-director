@@ -225,17 +225,24 @@ async function pinOverLaunch(page: Page): Promise<boolean> {
 }
 
 async function dropPinOverLaunch(page: Page): Promise<number> {
-  const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
-    const box = canvas.getBoundingClientRect();
-    for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-      for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-        const x = box.x + box.width * fx;
-        const y = box.y + box.height * fy;
-        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+  const seed = await page.evaluate(() => new Promise<{ x: number; y: number } | null>((resolve) => {
+    const map = (window as unknown as TestWindow).__opdMap;
+    const pick = () => {
+      const canvas = document.querySelector<HTMLCanvasElement>('.maplibregl-canvas');
+      if (!canvas) return null;
+      const box = canvas.getBoundingClientRect();
+      for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
+        for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
+          const x = box.x + box.width * fx;
+          const y = box.y + box.height * fy;
+          if (document.elementFromPoint(x, y) === canvas) return { x, y };
+        }
       }
-    }
-    return null;
-  });
+      return null;
+    };
+    if (!map?.isMoving()) resolve(pick());
+    else map.once('idle', () => resolve(pick()));
+  }));
   expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
