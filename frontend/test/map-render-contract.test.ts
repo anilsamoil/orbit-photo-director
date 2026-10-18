@@ -182,6 +182,7 @@ describe('renderMap bring-up', () => {
       'mouseenter:dropped-pin-layer',
       'mouseleave:dropped-pin-layer',
       'error:*',
+      'moveend:*',
     ]);
   });
 
