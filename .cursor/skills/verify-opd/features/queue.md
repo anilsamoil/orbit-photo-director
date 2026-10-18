@@ -24,7 +24,7 @@ Queue is the next passes to shoot. The fixture puts Verify Reef and Verify Delta
 Preconditions:
 
 - `doctor` prints `ok`.
-- The manifest `generated_at` is under 60 minutes old, or Shoot stays disabled.
+- The manifest `generated_at` is under 60 minutes old and `freshness.ok` is true, or Shoot stays disabled. `isStaleManifest` in `frontend/src/main.ts` is true when that age is at least 60 minutes or when `freshness.ok` is false.
 - Run `down`, then `up`, when an earlier drive on this proxy hid a fixture card. The proxy keeps `removedCuratedIds` until `down`, and a fresh Chrome hides those cards before any click.
 
 - **Open Queue.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive queue`. The card list contains Verify Reef and Verify Delta.
@@ -42,7 +42,7 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 
 ## Gotchas
 
-- Shoot on a stale manifest is disabled. `up` stamps `generated_at` 30 seconds before it starts, and a reused `up` does not rebuild that stamp. A bare `doctor` fails about 13 minutes after `up`, while the manifest is still under the 60-minute Shoot gate. `drive` calls `refreshLaunchClock` before `doctor`, which slides that launch clock and leaves the pass times alone, so `doctor` can print `ok` after a pass has left.
+- Shoot on a stale manifest is disabled, including when `freshness.ok` is false inside the 60-minute window. `up` stamps `generated_at` 30 seconds before it starts, and a reused `up` does not rebuild that stamp. A bare `doctor` fails about 13 minutes after `up`, while the manifest is still under the 60-minute Shoot gate. `drive` calls `refreshLaunchClock` before `doctor`, which slides that launch clock and leaves the pass times alone, so `doctor` can print `ok` after a pass has left.
 - Verify Reef's closest approach is 20 minutes after that same stamp, and Verify Delta's is 50 minutes. The queue only lists a pass until that time. A drive started after Reef's approach waits on both card names and times out even when `removedCuratedIds` is empty. `resetFixtureProfile` clears hides and does not rebuild pass times. Run `down`, then `up`, and rerun. That stamps a new pair.
 - The mine filter matches personal targets. The fixture cards are shared, and an added personal target has no pass in this fixture, so Mine stays empty. Mine writes the shared `opd_target_filter_v1=mine`, so Upcoming and the map follow Mine on purpose. Launches does not write that key. This drive clicks All after Launches, which sets both keys back to `all` before Hide.
 - Forecast cards in Upcoming do not have Shoot. Shoot lives on Queue.
