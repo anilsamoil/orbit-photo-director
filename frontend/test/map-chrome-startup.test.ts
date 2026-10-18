@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type CDPSession, type Page } from 'playwright';
 import { build } from 'vite';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { freezeDate } from './freeze-date';
 import inspectorFixture from './fixtures/short-inspector.json';
 
 const root = resolve(process.env.OPD_STARTUP_SOURCE_ROOT ?? resolve(__dirname, '..'));
@@ -73,7 +74,7 @@ async function prepare(page: Page, cdp: CDPSession | null, insets: Insets, phase
       return append.call(this, child) as T;
     };
   }, insets));
-  await phase('fix fixture clock', () => page.clock.setFixedTime(new Date(now)));
+  await phase('fix fixture clock', () => freezeDate(page, now));
   const css = cdp ? stylesheet : stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof Insets) => `${insets[side]}px`);
   await phase('install fixture routes', () => page.route('**/*', async (route) => {
     const url = new URL(route.request().url());

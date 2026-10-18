@@ -12,13 +12,14 @@ const BEARING_NOOP_THRESHOLD_DEG = 0.5;
 
 type MarkerPosition = { lat: number; lon: number };
 
-type NorthEase = { pending: MarkerPosition | null };
+type Motion = { toward: number; pending: MarkerPosition | null };
 
 type Runtime = {
   core: MapCore | null;
   mode: BearingMode;
   follow: boolean;
-  northEase: NorthEase | null;
+  motion: Motion | null;
+  motionWatch: boolean;
   toggleBound: boolean;
   bearingBound: boolean;
   hasTrack: () => boolean;
@@ -38,7 +39,8 @@ const state: Runtime = {
   core: null,
   mode: readStoredMode(),
   follow: true,
-  northEase: null,
+  motion: null,
+  motionWatch: false,
   toggleBound: false,
   bearingBound: false,
   hasTrack: () => false,
@@ -79,22 +81,29 @@ export function setFollowEnv(core: MapCore | null, follow: boolean): void {
 export function applyFollowISS(pos: MarkerPosition): void {
   const core = state.core;
   if (!state.follow || !core || core.clock.isScrubbed()) return;
-  if (state.mode === 'north' && state.northEase) {
-    state.northEase.pending = pos;
+  if (state.mode === 'north' && state.motion) {
+    state.motion.pending = pos;
     return;
   }
   core.setCenter([pos.lon, pos.lat]);
   if (state.mode === 'north') core.setBearing(0);
 }
 
-function settleNorthEase(): void {
-  const ease = state.northEase;
-  if (!ease) return;
-  state.northEase = null;
+/** The follow handler is registered before the ease watch. It reads a pending
+ *  center before that watch clears the record, and applies the center on a
+ *  later frame. setCenter here would fire another moveend inside this one. */
+function settleMotion(): void {
+  const motion = state.motion;
+  if (!motion?.pending) return;
   const core = state.core;
   if (!core || !state.follow || state.mode !== 'north') return;
   if (Math.abs(core.bearing()) >= 0.01) return;
-  if (ease.pending) core.setCenter([ease.pending.lon, ease.pending.lat]);
+  const center: [number, number] = [motion.pending.lon, motion.pending.lat];
+  requestAnimationFrame(() => {
+    const live = state.core;
+    if (live !== core || state.motion || !state.follow || state.mode !== 'north') return;
+    live.setCenter(center);
+  });
 }
 
 /** Leave follow and update the dock button. */
@@ -126,29 +135,54 @@ export function computeIssHeading(nowMs: number): number | null {
   return greatCircleBearingDeg(here.lat, here.lon, ahead.lat, ahead.lon);
 }
 
-/** Apply the bearing mode. Skips a write when the camera is already there.
- *  The north ease is marked after easeTo, so the moveend from the ease
- *  just interrupted does not drop that mark. A zero-duration ease has
- *  already finished, and that path settles in this same turn. */
+function bearingApart(a: number, b: number): number {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+function nearBearing(a: number, b: number): boolean {
+  return bearingApart(a, b) < BEARING_NOOP_THRESHOLD_DEG;
+}
+
+function watchMotion(core: MapCore): void {
+  if (state.motionWatch) return;
+  state.motionWatch = true;
+  core.on('moveend', () => {
+    state.motion = null;
+  });
+}
+
+function desiredBearing(core: MapCore): number | null {
+  if (state.mode === 'north') return 0;
+  return computeIssHeading(core.clock.viewMs());
+}
+
+/** Apply the bearing mode. A camera already on that bearing stays put, and an ease toward another bearing is replaced.
+ *  The record is marked after easeTo, so the moveend from the ease just
+ *  interrupted does not drop that mark. An ease that has already finished,
+ *  including a duration-0 cancel, clears the record in this same turn. */
 export function applyBearing(animate: boolean): void {
   const core = state.core;
   if (!core) return;
+  watchMotion(core);
+  const desired = desiredBearing(core);
+  if (desired === null) return;
+  if (state.motion !== null && nearBearing(state.motion.toward, desired)) return;
   const current = core.bearing();
-  if (state.mode === 'north') {
-    if (Math.abs(current) < BEARING_NOOP_THRESHOLD_DEG) return;
-    if (animate) {
-      core.easeTo({ bearing: 0, duration: 600 });
-      state.northEase = { pending: null };
-      if (Math.abs(core.bearing()) < 0.01) settleNorthEase();
-    } else core.setBearing(0);
+  if (nearBearing(current, desired)) {
+    if (state.motion !== null) {
+      state.motion = null;
+      core.easeTo({ bearing: desired, duration: 0 });
+    }
     return;
   }
-  const heading = computeIssHeading(core.clock.viewMs());
-  if (heading === null) return;
-  const delta = Math.abs(((heading - current + 540) % 360) - 180);
-  if (delta < BEARING_NOOP_THRESHOLD_DEG) return;
-  if (animate) core.easeTo({ bearing: heading, duration: 600 });
-  else core.setBearing(heading);
+  if (animate) {
+    core.easeTo({ bearing: desired, duration: 600 });
+    state.motion = { toward: desired, pending: null };
+    if (nearBearing(core.bearing(), desired)) state.motion = null;
+    return;
+  }
+  state.motion = null;
+  core.setBearing(desired);
 }
 
 export function bindFollowToggle(): void {
@@ -177,10 +211,10 @@ export function bindFollowToggle(): void {
     });
     core.on('rotatestart', ({ byUser }) => {
       if (!byUser) return;
-      state.northEase = null;
+      state.motion = null;
       exitFollow();
     });
-    core.on('moveend', () => { settleNorthEase(); });
+    core.on('moveend', () => { settleMotion(); });
   }
   state.toggleBound = true;
 }
@@ -196,7 +230,6 @@ export function bindBearingToggle(): void {
   };
   reflectActive();
   const setMode = (mode: BearingMode): void => {
-    if (mode === state.mode) return;
     state.mode = mode;
     try { localStorage.setItem(PREF_KEYS.bearingMode, mode); } catch {}
     reflectActive();
@@ -211,7 +244,8 @@ export function bindBearingToggle(): void {
 export function resetFollowMemoryForTest(): void {
   state.follow = false;
   state.mode = 'north';
-  state.northEase = null;
+  state.motion = null;
+  state.motionWatch = false;
 }
 
 export function clearBearingPref(): void {

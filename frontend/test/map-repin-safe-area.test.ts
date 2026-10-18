@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { freezeDate } from './freeze-date';
 import fixture from './fixtures/iss-sgp4-fixture.json';
 
 const root = resolve(__dirname, '..');
@@ -73,7 +74,7 @@ for (const engine of [
       const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
       if (cdp) await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
       else await emulateInsets(page, insets);
-      await page.clock.setFixedTime(new Date(fixture.start));
+      await freezeDate(page, fixture.start);
       const css = cdp ? stylesheet : stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof Insets) => `${insets[side]}px`);
       await page.route('**/*', async (route) => {
         const url = new URL(route.request().url());

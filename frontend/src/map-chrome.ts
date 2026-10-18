@@ -184,6 +184,8 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
 
 let lastSlots = '';
 let mute = false;
+let syncing = false;
+let staleSkips = 0;
 let syncQueued = false;
 
 function writeSlot(name: string, value: number): void {
@@ -253,36 +255,59 @@ function syncFooterClearance(pane: HTMLElement): void {
     const next = `${Math.round(value * 100) / 100}px`;
     if (document.body.style.getPropertyValue(name) !== next) document.body.style.setProperty(name, next);
   };
+  const banner = document.getElementById('status-banner');
+  const toggle = document.getElementById('map-chrome-toggle');
+  const bannerBox = boxOf(banner);
+  if (banner && bannerBox.h) {
+    const used = Number.parseFloat(getComputedStyle(banner).bottom) || 0;
+    if (Math.abs(bannerBox.y + bannerBox.h - (window.innerHeight - used)) > 1 && staleSkips < 4) {
+      staleSkips += 1;
+      scheduleSync();
+      return;
+    }
+  }
+  staleSkips = 0;
   const bottomInset = insetPx('bottom');
   const shotList = document.body.classList.contains('shotlist-bar-visible')
     ? boxOf(document.getElementById('shotlist-bar')) : emptyBox();
   set('--map-banner-bottom', Math.max(bottomInset, shotList.h));
-  const footer = boxOf(document.getElementById('status-banner'));
+  const footer = boxOf(banner);
   const floor = Math.min(footer.h ? footer.y : window.innerHeight - bottomInset, shotList.h ? shotList.y : window.innerHeight);
-  const corner = boxOf(document.getElementById('map-chrome-toggle'));
-  const cornerLift = Number.parseFloat(document.body.style.getPropertyValue('--map-corner-lift')) || 0;
-  set('--map-corner-lift', corner.h ? Math.ceil(Math.max(0, corner.y + corner.h + cornerLift - floor + 8)) : 0);
+  const applied = (name: string): number => Number.parseFloat(document.body.style.getPropertyValue(name)) || 0;
+  const demand = (name: string, node: Element | null): number => {
+    const box = boxOf(node);
+    if (!box.h) return 0;
+    return Math.ceil(Math.max(0, box.y + box.h + applied(name) - floor + 8));
+  };
+  set('--map-corner-lift', demand('--map-corner-lift', toggle));
   const chip = boxOf(pane.querySelector('.map-controls-time'));
   const zoom = boxOf(pane.querySelector('.maplibregl-ctrl-zoom-in'));
   const naturalOverflow = !document.body.classList.contains('map-slot-time')
     && chip.y < zoom.y && chip.y + chip.h > zoom.y;
   const zoomRow = needsZoomRow(zoom, naturalOverflow ? { ...chip, y: zoom.y } : chip, floor);
   if (document.body.classList.contains('map-zoom-row') !== zoomRow) document.body.classList.toggle('map-zoom-row', zoomRow);
-  if (window.innerWidth <= 719 || document.body.classList.contains('map-chrome-hidden')) {
+  if (window.innerWidth <= 719 || document.body.classList.contains('map-chrome-hidden') || document.body.classList.contains('map-slot-time')) {
     set('--map-time-lift', 0);
     return;
   }
-  const current = Number.parseFloat(document.body.style.getPropertyValue('--map-time-lift')) || 0;
-  if (document.body.classList.contains('map-slot-time')) {
-    set('--map-time-lift', 0);
-    return;
-  }
-  const strip = boxOf(pane.querySelector('.map-command'));
-  set('--map-time-lift', strip.h ? Math.ceil(Math.max(0, strip.y + strip.h + current - floor + 8)) : 0);
+  set('--map-time-lift', demand('--map-time-lift', pane.querySelector('.map-command')));
 }
 
 function syncMapChrome(): void {
   if (mute) return;
+  if (syncing) {
+    scheduleSync();
+    return;
+  }
+  syncing = true;
+  try {
+    syncMapChromeBody();
+  } finally {
+    syncing = false;
+  }
+}
+
+function syncMapChromeBody(): void {
   const view = document.querySelector('.view-map');
   const pane = document.getElementById('map-pane');
   if (!(view instanceof HTMLElement) || !(pane instanceof HTMLElement)) {
@@ -331,7 +356,10 @@ export function bindMapChrome(): void {
     applyMapChrome(shown);
     syncMapChrome();
   });
-  const observer = new ResizeObserver(() => scheduleSync());
+  const observer = new ResizeObserver(() => {
+    if (mute) scheduleSync();
+    else syncMapChrome();
+  });
   observer.observe(document.documentElement);
   observer.observe(ensureInsetProbe());
   for (const selector of ['#status-banner', '#shotlist-bar', '.map-controls-time', '#satellite-picker-panel']) {
@@ -368,8 +396,10 @@ export function bindMapChrome(): void {
       watchMap.observe(controls, { childList: true, subtree: true });
     }
   }
-  window.addEventListener('resize', scheduleSync);
-  window.visualViewport?.addEventListener('resize', scheduleSync);
+  window.addEventListener('resize', syncMapChrome);
+  window.addEventListener('orientationchange', syncMapChrome);
+  screen.orientation?.addEventListener('change', syncMapChrome);
+  window.visualViewport?.addEventListener('resize', syncMapChrome);
   (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChrome;
   syncMapChrome();
 }

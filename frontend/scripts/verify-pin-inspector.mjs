@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium, devices, webkit } from 'playwright';
+import { installFrozenDate } from '../test/frozen-date.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -59,7 +60,7 @@ async function configure(page, legacyLaunch = false) {
     replacements.set('passes.json', body);
     replacements.set('manifest.json', JSON.stringify(manifest));
   }
-  await page.clock.setFixedTime(new Date(meta.now));
+  await page.addInitScript(installFrozenDate, meta.now);
   await page.route('**/*', async (route) => {
     const request = route.request();
     const requestUrl = new URL(request.url());

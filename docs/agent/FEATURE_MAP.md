@@ -175,7 +175,7 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | Control it in code | `applyFollowISS` no-ops while follow is off, the core is missing, or the view is scrubbed. `exitFollow` is what a drag, a user zoom, and `focusLaunchOnMap` call. `readBearingMode` reads `PREF_KEYS.bearingMode` (default iss-up; only `'north'` selects north). The 1 Hz bearing uses `currentBearingMode`, the in-memory value, which `_resetMapStateForTest` sets to north. `bindFollowToggle` and `bindBearingToggle` run in `renderMap` before `FEATURES` mount, so drag and zoom stay ahead of the pin-drop handlers. |
 | Files | `index.ts` is the whole feature. Heading samples are `src/iss.ts`, `src/iss-sgp4.ts`, and `src/pin-drop.ts` (`greatCircleBearingDeg`). |
 | Tests | `src/map/features/follow-iss/follow-iss.test.ts`. `test/map-follow.test.ts`, `test/map-bearing.test.ts`, `test/map-overlay-prefs.test.ts`, `test/launch-map-brief.test.ts`. |
-| Traps | The follow click flies with `flyTo({ duration: 800 })` and does not pass `essential`. Recurring follow is `setCenter`, not `easeTo`. A scrubbed follow click flies to the marker on screen. `applyBearing` skips a write within 0.5°. |
+| Traps | The follow click flies with `flyTo({ duration: 800 })` and does not pass `essential`. Recurring follow is `setCenter`, not `easeTo`. A scrubbed follow click flies to the marker on screen. `applyBearing` skips a write within 0.5° only when the camera is already on the requested bearing and no ease toward another bearing is in flight. A repeat tap of the active mode retargets. A `moveend` clears that in-flight bearing, so a drag-rotate is left where the gesture ended. |
 
 ## Composition root
 

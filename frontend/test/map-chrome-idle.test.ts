@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Page } from 'playwright';
 import { build } from 'vite';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { freezeDate } from './freeze-date';
 import type { Manifest, Track } from '../src/types';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
@@ -30,7 +31,7 @@ const manifest: Manifest = {
 const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNg5+L9DwABWAEegV7pegAAAABJRU5ErkJggg==', 'base64');
 const idleMs = Number(process.env.OPD_CHROME_IDLE_MS ?? 2100);
 async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string): Promise<void> {
-  await page.clock.setFixedTime(new Date(now));
+  await freezeDate(page, now);
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (url.origin === base && url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html.replace('</head>', `<style>${vendor}\n${stylesheet}</style></head>`).replace('</body>', `<script src="/${script}"></script></body>`) });
