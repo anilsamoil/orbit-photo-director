@@ -29,7 +29,7 @@ afterEach(() => {
 async function token(overrides: Record<string, unknown> = {}) {
   return new SignJWT({
     sub: 'pyotr',
-    email: 'realvr@gmail.com',
+    email: 'alice@example.com',
     iss: issuer,
     aud: audience,
     iat: Math.floor(Date.now() / 1000),
@@ -84,7 +84,7 @@ function envFor(objects: Record<string, string>, failOnRead = false): Env {
     CALIB_TOKEN: 'machine-secret',
     ACCESS_TEAM_DOMAIN: issuer,
     ACCESS_AUD: audience,
-    ACCESS_ALLOWED_EMAILS: 'realvr@gmail.com',
+    ACCESS_ALLOWED_EMAILS: 'alice@example.com,bob@example.com',
     STALE_THRESHOLD_SECONDS: '7200',
   } as unknown as Env;
 }
@@ -193,7 +193,7 @@ describe('map Access gate', () => {
       ACCESS_TEAM_DOMAIN: issuer,
       ACCESS_AUD: audience,
       ACCESS_SERVICE_TOKEN_CLIENT_IDS: 'uptime-robot, other-monitor',
-      ACCESS_ALLOWED_EMAILS: 'realvr@gmail.com',
+      ACCESS_ALLOWED_EMAILS: 'alice@example.com,bob@example.com',
       STALE_THRESHOLD_SECONDS: '7200',
     } as unknown as Env;
     const allowed = await serviceToken('uptime-robot');
