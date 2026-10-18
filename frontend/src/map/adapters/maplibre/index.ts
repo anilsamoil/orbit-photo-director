@@ -25,6 +25,7 @@ import type {
   VendorMap,
   VendorMapOptions,
 } from '../../map-core/vendor-map';
+import { getMapLaunchMode, launchCardBuried } from '../../../map-launch-mode';
 import { collapseAttribution } from './attribution';
 import { layerListener, mapListener, toHit, toLngLat } from './events';
 
@@ -88,6 +89,7 @@ function syncMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   pane.classList.toggle('map-inspector-open', open);
   slot.hidden = !open;
   if (open) boundMapInspector(map, applied);
+  else syncLaunchBrief(slot);
   requestAnimationFrame(() => map.resize());
 }
 
@@ -181,6 +183,7 @@ function chooseInspectorSlot(
   sideColumn: boolean,
   rowHeight: number,
   passHead: number,
+  reserveDrop: boolean,
 ): (InspectorRect & { score: number }) | null {
   const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
   const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
@@ -204,7 +207,9 @@ function chooseInspectorSlot(
         const score = (readable ? 1e9 : 0) + (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0)
           + (passHead > 0 && column ? Math.min(height, headTarget) * 1e4 : 0)
           + width * Math.min(height, narrow ? preferredHeight : 600)
-          + right / 1e4 + (narrow ? bottom * 1e3 : -top / 1e6);
+          + right / 1e4 + (narrow
+            ? (reserveDrop || (width >= rowHeight && height >= rowHeight) ? bottom * 1e3 : 0)
+            : -top / 1e6);
         if (!best || score > best.score) best = {
           left: x, right, top: narrow ? bottom - height : top,
           bottom: narrow ? bottom : top + height, score,
@@ -216,12 +221,21 @@ function chooseInspectorSlot(
   return best;
 }
 
-/** Use painted chrome rectangles, including overflowing wrapped command children,
- *  without writing any chrome styles or changing its stacking order. */
+function syncLaunchBrief(slot: HTMLElement): void {
+  const brief = slot.closest('#map-pane')?.querySelector<HTMLElement>('#map-launch-coverage');
+  if (!brief) return;
+  if (launchCardBuried(slot)) {
+    if (!brief.hidden) brief.hidden = true;
+    return;
+  }
+  if (getMapLaunchMode() && brief.hidden) brief.hidden = false;
+}
+
 function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
   const slot = mapInspector(map);
   const pane = slot?.closest('#map-pane');
   if (!slot || !(pane instanceof HTMLElement) || slot.hidden) return;
+  syncLaunchBrief(slot);
   const paneRect = pane.getBoundingClientRect();
   const mapRect = map.getContainer().getBoundingClientRect();
   const insetStyle = getComputedStyle(inspectorInsetProbe(slot));
@@ -234,7 +248,11 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     bottom: Math.min(paneRect.bottom, mapRect.bottom, window.innerHeight - inset('Bottom')) - gap,
   };
   if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
+  const launchSheet = slot.querySelector(':scope > .maplibregl-popup:last-child .launch-ascent-card') !== null;
+  const buriedLaunch = !launchSheet && slot.querySelector('.launch-ascent-card') !== null;
+  const reserveDrop = !launchSheet;
   const obstacles = [...inspectorChromeElements(pane)].flatMap((element) => {
+    if (buriedLaunch && element.closest('#map-launch-coverage')) return [];
     const rect = visibleInspectorRect(element, bounds);
     return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
   });
@@ -254,10 +272,11 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     sideColumn,
     rowHeight,
     passHead,
+    reserveDrop,
   );
   const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
   const square = short;
-  let best = narrow || short
+  let best = (narrow || short) && reserveDrop
     ? place(narrowHitObstacle(
       mapRect,
       square ? Math.min(NARROW_HIT_BAND_PX, mapRect.width) : mapRect.width,
@@ -272,7 +291,7 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     return width >= rowHeight && height >= rowHeight
       && (headTarget <= 0 || height >= Math.min(headTarget, preferredHeight));
   };
-  if (square && !readableSlot(best)) {
+  if (reserveDrop && square && !readableSlot(best)) {
     const core = place(narrowHitObstacle(mapRect, Math.min(NARROW_HIT_CORE_PX, mapRect.width), hitHeight));
     if (core && (best === null || core.score > best.score)) best = core;
   }
