@@ -362,6 +362,14 @@ function placeLaunch(measure: ChromeMeasure, lane: Box | null, slots: ChromeSlot
     measure.hide,
     measure.legendButton,
   ].filter(present);
+  if (present(measure.map)) {
+    obstacles.push({
+      x: measure.map.x + measure.map.w / 2 - 18,
+      y: measure.map.y + measure.map.h / 2 - 18,
+      w: 36,
+      h: 36,
+    });
+  }
   const tops = [top, ...obstacles.map((box) => bottomOf(box) + GAP)].filter((y) => y >= top && y <= bottom - LAUNCH_MIN);
   const bottoms = [bottom, ...obstacles.map((box) => box.y - GAP)].filter((y) => y <= bottom && y >= top + LAUNCH_MIN);
   let best: Slot | null = null;
