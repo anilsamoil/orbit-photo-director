@@ -163,6 +163,32 @@ afterEach(async () => {
 });
 
 describe('ISS view import lifetime', () => {
+  it('mounts the scene when this test releases the import while ISS stays open', async () => {
+    await boot();
+    (document.getElementById('tab-iss') as HTMLElement).click();
+    await vi.dynamicImportSettled();
+    expect(gate.mounts.n).toBe(0);
+    expect(document.querySelector('[data-iss-scene]')).toBeNull();
+    gate.release({
+      mountIssScene(host) {
+        gate.mounts.n += 1;
+        const node = document.createElement('section');
+        node.dataset.issScene = '';
+        host.append(node);
+        return {
+          update() {},
+          dispose() {
+            node.remove();
+          },
+        };
+      },
+    });
+    await gate.promise();
+    await vi.dynamicImportSettled();
+    expect(gate.mounts.n).toBe(1);
+    expect(document.querySelector('[data-iss-scene]')).not.toBeNull();
+  });
+
   it('does not mount a scene whose import finishes after the operator leaves', async () => {
     await boot();
     (document.getElementById('tab-iss') as HTMLElement).click();
