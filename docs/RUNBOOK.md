@@ -358,7 +358,7 @@ If the calibration token leaks (it lives in browser localStorage, plaintext), ro
    A value that is only spaces, including Unicode spaces, or commas is empty too.
    `--dry-run` with an empty list still runs and warns.
    `deploy.sh` reads `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS` from the environment.
-   Node.js 16.17.0 or newer must be on PATH. That is the minimum Wrangler accepts. `deploy.sh` uses `node` to parse the email list. Once that process is running JavaScript, it stops the parse after 10 seconds if the list cannot be read. A `node` that hangs before it runs any JavaScript is outside this wrapper. Wrangler is `node` and is the next command, so that hang is a hung deploy either way.
+   Node.js 16.17.0 or newer must be on PATH. That is the minimum Wrangler accepts. If `node` is missing, `deploy.sh` exits 127. `deploy.sh` parses the email list with `node`. After `email-allowlist.mjs` has loaded, that process stops the parse after 10 seconds if the read does not finish, and `deploy.sh` exits 2. Node startup and the static import of `email-allowlist.mjs` are not covered. A hang there stops when you press Ctrl-C. Ctrl-C signals the whole foreground process group, so `node` dies with the script and wrangler does not run. A HUP, INT, or TERM sent only to the `deploy.sh` pid waits until `node` finishes or that 10 second timer fires. The script then exits 129, 130, or 143, and wrangler does not run.
    The email list is the `--var` immediately before the client ids.
    The wrapper accepts only `--dry-run`, `--env <name>`, `--env=<name>`, `--config <path>`, and `--config=<path>`.
    Any caller `--var`, any other flag, any positional argument, and `--` make it exit before wrangler runs.

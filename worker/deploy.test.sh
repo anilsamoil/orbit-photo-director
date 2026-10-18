@@ -532,6 +532,30 @@ exit 0
 EOF
       chmod +x "$work/node"
       ;;
+    close-stdin)
+      cat > "$work/node" <<'EOF'
+#!/bin/sh
+exec 0<&-
+exit 1
+EOF
+      chmod +x "$work/node"
+      ;;
+    extra-nl)
+      cat > "$work/node" <<'EOF'
+#!/bin/sh
+printf 'ok\n\n'
+exit 0
+EOF
+      chmod +x "$work/node"
+      ;;
+    junk)
+      cat > "$work/node" <<'EOF'
+#!/bin/sh
+printf 'ok junk\n'
+exit 0
+EOF
+      chmod +x "$work/node"
+      ;;
   esac
   set +e
   PATH="$work:/usr/bin:/bin" \
@@ -549,13 +573,19 @@ EOF
   fi
   CASE_ERR=$(cat "$work/err")
   CASE_OUT=$(cat "$work/out")
+  if [ -n "${leak_notes-}" ] && [ -n "${STUB_EMAILS-}" ] && [ -f "$leak_notes" ]; then
+    if find "$work" -type f -exec grep -F -q -- "$STUB_EMAILS" {} + 2>/dev/null; then
+      echo "file" >> "$leak_notes"
+    fi
+  fi
   rm -rf "$work"
 }
 
 expect_parser_failure() {
   local label="$1"
   local needle="$2"
-  if [ "$CASE_CODE" -ne 2 ]; then
+  local want="${3:-2}"
+  if [ "$CASE_CODE" -ne "$want" ]; then
     echo "FAIL: $label exited $CASE_CODE" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
@@ -590,7 +620,7 @@ expect_parser_failure() {
 run_stub_node missing
 echo "== node not on PATH exit $CASE_CODE"
 printf '%s\n' "$CASE_ERR"
-expect_parser_failure "node not on PATH" "node is not on PATH"
+expect_parser_failure "node not on PATH" "node is not on PATH" 127
 
 run_stub_node exit --dry-run
 echo "== node exited non-zero exit $CASE_CODE"
@@ -653,134 +683,20 @@ printf '%s\n' "$CASE_ERR"
 expect_parser_failure "node printed garbage" "unexpected output"
 
 
-marker_pids() {
-  ps ax -o pid=,command= | SENTINEL="$1" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { print $1 }'
-}
-
-expect_no_marker() {
-  local label="$1"
-  local marker="$2"
-  local live
-  live=$(marker_pids "$marker")
-  if [ -n "$live" ]; then
-    echo "FAIL: $label left a parser child" >&2
-    ps ax -o pid=,ppid=,command= | SENTINEL="$marker" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { print }' >&2
-    new_failures=$((new_failures + 1))
-    local pid
-    for pid in $live; do
-      kill -KILL "$pid" 2>/dev/null || true
-    done
-  fi
-}
-
-expect_no_list_files() {
-  local label="$1"
-  local dir="$2"
-  local needle="$3"
-  local left
-  left=$(find "$dir" -name 'opd-email.*' -print 2>/dev/null)
-  if [ -n "$left" ]; then
-    echo "FAIL: $label left an allowlist temp file" >&2
-    printf '%s\n' "$left" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if [ -n "$needle" ] && find "$dir" -type f -exec grep -F -q -- "$needle" {} + 2>/dev/null; then
-    echo "FAIL: $label wrote the allowlist to a file" >&2
-    new_failures=$((new_failures + 1))
-  fi
-}
-
-run_marked() {
-  local mode="$1"
-  shift
-  local work marker emails
-  work=$(mktemp -d)
-  marker="opdmark${RANDOM}${RANDOM}"
-  GROUP_MARKER=$marker
-  GROUP_DIR=$work
-  emails="${STUB_EMAILS:-alice@example.com}"
-  cat > "$work/wrangler" << 'ENDWR'
-#!/bin/sh
-for arg in "$@"; do
-  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
-done
-exit 0
-ENDWR
-  chmod +x "$work/wrangler"
-  case "$mode" in
-    close-stdin)
-      cat > "$work/node" << ENDNODE
-#!/bin/sh
-exec 0<&-
-/bin/sh -c 'sleep 30 & wait' $marker &
-exit 1
-ENDNODE
-      ;;
-    spawn-exit)
-      cat > "$work/node" << ENDNODE
-#!/bin/sh
-/bin/sh -c 'sleep 30 & wait' $marker &
-exit 0
-ENDNODE
-      ;;
-    extra-nl)
-      cat > "$work/node" << 'ENDNODE'
-#!/bin/sh
-printf 'ok\n\n'
-exit 0
-ENDNODE
-      ;;
-    junk)
-      cat > "$work/node" << 'ENDNODE'
-#!/bin/sh
-printf 'ok junk\n'
-exit 0
-ENDNODE
-      ;;
-    signal)
-      cat > "$work/node" << ENDNODE
-#!/bin/sh
-exec /bin/sh -c 'sleep 30 & wait' $marker
-ENDNODE
-      ;;
-  esac
-  chmod +x "$work/node"
-  set -m
-  set +e
-  PATH="$work:/usr/bin:/bin" \
-    TMPDIR="$work" \
-    WRANGLER_ARGS="$work/args" \
-    ACCESS_ALLOWED_EMAILS="$emails" \
-    "$deploy_bash" ./deploy.sh "$@" >"$work/out" 2>"$work/err"
-  local code=$?
-  set -e
-  set +m
-  CASE_CODE=$code
-  if [ -f "$work/args" ]; then
-    CASE_ARGS=$(cat "$work/args")
-  else
-    CASE_ARGS=""
-  fi
-  CASE_ERR=$(cat "$work/err")
-  CASE_OUT=$(cat "$work/out")
-}
-
-if grep -E 'setpgrp|[[:space:]]perl[[:space:]]' deploy.sh >/dev/null; then
-  echo "FAIL: deploy.sh still supervises the parser with perl" >&2
+if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+  echo "FAIL: hung node leaked the allowlist on stdio" >&2
   new_failures=$((new_failures + 1))
 fi
 
-run_marked extra-nl --dry-run
+run_stub_node extra-nl --dry-run
 echo "== ok with an extra newline exit $CASE_CODE"
 printf '%s\n' "$CASE_ERR"
 expect_parser_failure "ok with an extra newline" "unexpected output"
-rm -rf "$GROUP_DIR"
 
-run_marked junk --dry-run
+run_stub_node junk --dry-run
 echo "== ok junk exit $CASE_CODE"
 printf '%s\n' "$CASE_ERR"
 expect_parser_failure "ok junk" "unexpected output"
-rm -rf "$GROUP_DIR"
 
 big_list=$list_sentinel
 pad=0
@@ -790,40 +706,41 @@ while [ "$pad" -lt 6500 ]; do
 done
 STUB_EMAILS=$big_list
 close_start=$(date +%s)
-run_marked close-stdin
+run_stub_node close-stdin
 close_end=$(date +%s)
 unset STUB_EMAILS
 echo "== early stdin close exit $CASE_CODE in $((close_end - close_start))s"
 printf '%s\n' "$CASE_ERR"
 expect_parser_failure "early stdin close" "failed (exit 1)"
-expect_no_marker "early stdin close" "$GROUP_MARKER"
-expect_no_list_files "early stdin close" "$GROUP_DIR" "$list_sentinel"
 if [ $((close_end - close_start)) -ge 3 ]; then
   echo "FAIL: early stdin close took $((close_end - close_start))s" >&2
   new_failures=$((new_failures + 1))
 fi
-ps ax -o command= | SENTINEL="$list_sentinel" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { print }' > "$GROUP_DIR/argv-scan" || true
-if [ -s "$GROUP_DIR/argv-scan" ]; then
-  echo "FAIL: early stdin close left the allowlist in argv" >&2
-  cat "$GROUP_DIR/argv-scan" >&2
+if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+  echo "FAIL: early stdin close leaked the allowlist on stdio" >&2
   new_failures=$((new_failures + 1))
 fi
-rm -rf "$GROUP_DIR"
+if ps ax -o command= | SENTINEL="$list_sentinel" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'; then
+  echo "FAIL: early stdin close left the allowlist in argv" >&2
+  new_failures=$((new_failures + 1))
+fi
 
-run_marked spawn-exit --dry-run
-echo "== node spawned a child and exited $CASE_CODE"
-printf '%s\n' "$CASE_ERR"
-expect_parser_failure "node spawned a child" "unexpected output"
-expect_no_marker "node spawned a child" "$GROUP_MARKER"
-expect_no_list_files "node spawned a child" "$GROUP_DIR" ""
-rm -rf "$GROUP_DIR"
+if grep -E 'setpgrp|mkfifo|kill |[[:space:]]perl[[:space:]]' deploy.sh >/dev/null; then
+  echo "FAIL: deploy.sh still supervises the parser process tree" >&2
+  new_failures=$((new_failures + 1))
+fi
+
+parser_still_running() {
+  ps ax -o command= | awk 'index($0, "parseEmailAllowlist") && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }' \
+    || ps ax -o command= | awk 'index($0, "opd-hold") && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'
+}
 
 run_signal_case() {
   local sig="$1"
   local want="$2"
-  local work marker dpid spins start end code
+  local how="$3"
+  local work dpid spins start end code pgid
   work=$(mktemp -d)
-  marker="opdmark${RANDOM}${RANDOM}"
   cat > "$work/wrangler" << 'ENDWR'
 #!/bin/sh
 for arg in "$@"; do
@@ -832,24 +749,34 @@ done
 exit 0
 ENDWR
   chmod +x "$work/wrangler"
-  cat > "$work/node" << ENDNODE
+  cat > "$work/node" << EOF
 #!/bin/sh
-exec /bin/sh -c 'sleep 30 & wait' $marker
-ENDNODE
+fifo=\$(mktemp -u "\$TMPDIR/opd-hold.XXXXXX")
+mkfifo "\$fifo"
+/bin/sh -c 'sleep 60 & wait' > "\$fifo" &
+holder=\$!
+$real_node "\$@" < "\$fifo"
+rc=\$?
+kill -KILL \$holder 2>/dev/null || true
+rm -f "\$fifo"
+exit \$rc
+EOF
   chmod +x "$work/node"
-  set -m
   PATH="$work:/usr/bin:/bin" \
     TMPDIR="$work" \
     WRANGLER_ARGS="$work/args" \
     ACCESS_ALLOWED_EMAILS="$list_sentinel" \
-    "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
+    python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
   dpid=$!
-  set +m
   spins=0
-  while [ -z "$(marker_pids "$marker")" ]; do
+  while ! ps ax -o command= | awk 'index($0, "parseEmailAllowlist") && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'; do
     spins=$((spins + 1))
     if [ "$spins" -ge 30 ]; then
-      echo "FAIL: signal $sig never started the parser child" >&2
+      echo "FAIL: signal $sig never started node" >&2
       new_failures=$((new_failures + 1))
       kill -KILL "$dpid" 2>/dev/null || true
       wait "$dpid" 2>/dev/null || true
@@ -858,8 +785,17 @@ ENDNODE
     fi
     sleep 0.1
   done
+  pgid=$(ps -o pgid= -p "$dpid" | tr -d ' ')
+  if [ "$pgid" != "$dpid" ]; then
+    echo "FAIL: signal $sig deploy pid $dpid is not its process group" >&2
+    new_failures=$((new_failures + 1))
+  fi
   start=$(date +%s)
-  kill -s "$sig" "$dpid" 2>/dev/null || true
+  if [ "$how" = "group" ]; then
+    python3 -c 'import os, signal, sys; os.killpg(int(sys.argv[1]), getattr(signal, "SIG" + sys.argv[2]))' "$dpid" "$sig"
+  else
+    kill -s "$sig" "$dpid" 2>/dev/null || true
+  fi
   set +e
   wait "$dpid"
   code=$?
@@ -872,27 +808,46 @@ ENDNODE
     CASE_ARGS=""
   fi
   CASE_ERR=$(cat "$work/err")
-  echo "== signal $sig exit $CASE_CODE in $((end - start))s"
+  CASE_OUT=$(cat "$work/out")
+  echo "== signal $sig $how exit $CASE_CODE in $((end - start))s"
   printf '%s\n' "$CASE_ERR"
   if [ "$CASE_CODE" -ne "$want" ]; then
-    echo "FAIL: signal $sig exited $CASE_CODE, want $want" >&2
+    echo "FAIL: signal $sig $how exited $CASE_CODE, want $want" >&2
     new_failures=$((new_failures + 1))
   fi
   if [ -n "$CASE_ARGS" ]; then
-    echo "FAIL: wrangler ran for signal $sig" >&2
+    echo "FAIL: wrangler ran for signal $sig $how" >&2
     new_failures=$((new_failures + 1))
   fi
-  if [ $((end - start)) -ge 3 ]; then
-    echo "FAIL: signal $sig took $((end - start))s" >&2
+  if [ "$how" = "group" ]; then
+    if [ $((end - start)) -ge 3 ]; then
+      echo "FAIL: signal $sig to the group took $((end - start))s" >&2
+      new_failures=$((new_failures + 1))
+    fi
+  elif [ $((end - start)) -le 8 ] || [ $((end - start)) -ge 16 ]; then
+    echo "FAIL: signal $sig to the pid took $((end - start))s" >&2
     new_failures=$((new_failures + 1))
   fi
-  expect_no_marker "signal $sig" "$marker"
-  expect_no_list_files "signal $sig" "$work" "$list_sentinel"
+  if parser_still_running; then
+    echo "FAIL: signal $sig $how left node running" >&2
+    ps ax -o pid=,command= | awk 'index($0, "parseEmailAllowlist") || index($0, "opd-hold") { print }' >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+    echo "FAIL: signal $sig leaked the allowlist on stdio" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if find "$work" -type f -exec grep -F -q -- "$list_sentinel" {} + 2>/dev/null; then
+    echo "FAIL: signal $sig wrote the allowlist to a file" >&2
+    new_failures=$((new_failures + 1))
+  fi
   rm -rf "$work"
 }
 
-run_signal_case TERM 143
-run_signal_case INT 130
+run_signal_case TERM 143 pid
+run_signal_case INT 130 pid
+run_signal_case HUP 129 pid
+run_signal_case INT 130 group
 
 if [ "$new_failures" -ne 0 ]; then
   echo "FAIL: $new_failures new deploy cases" >&2
