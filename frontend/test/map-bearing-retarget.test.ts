@@ -106,7 +106,23 @@ async function dragRotate(page: Page): Promise<void> {
   await page.mouse.move(x, y);
   await page.mouse.down({ button: 'right' });
   await page.mouse.move(x + 220, y - 30);
+  await page.evaluate(() => {
+    const map = (window as unknown as { __opdMap: { on(event: string, fn: () => void): void; off(event: string, fn: () => void): void } }).__opdMap;
+    (window as unknown as { __opdDragMoveEnd: Promise<void> }).__opdDragMoveEnd = new Promise((resolve) => {
+      let released = false;
+      window.addEventListener('mouseup', () => { released = true; }, { capture: true, once: true });
+      const timer = window.setTimeout(resolve, 4000);
+      const onEnd = () => {
+        if (!released) return;
+        window.clearTimeout(timer);
+        map.off('moveend', onEnd);
+        resolve();
+      };
+      map.on('moveend', onEnd);
+    });
+  });
   await page.mouse.up({ button: 'right' });
+  await page.evaluate(() => (window as unknown as { __opdDragMoveEnd: Promise<void> }).__opdDragMoveEnd);
 }
 
 async function interruptAndRetap(page: Page, heading: number): Promise<{ before: number; moving: boolean }> {
@@ -120,17 +136,24 @@ async function interruptAndRetap(page: Page, heading: number): Promise<{ before:
       return map.isMoving();
     }, undefined, { timeout: 2000 });
     await dragRotate(page);
-    await page.waitForFunction(() => {
-      const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
-      return !map.isMoving();
-    }, undefined, { timeout: 4000 });
     const retap = await page.evaluate((target: number) => {
       const map = (window as unknown as { __opdMap: { getBearing(): number; isMoving(): boolean } }).__opdMap;
       const before = map.getBearing();
       const gap = Math.abs(((before - target + 540) % 360) - 180);
-      if (gap < 8) return { before, moving: false, skipped: true };
-      document.getElementById('bearing-iss')!.click();
-      return { before, moving: map.isMoving(), skipped: false };
+      if (gap < 8) return Promise.resolve({ before, moving: false, skipped: true });
+      const button = document.getElementById('bearing-iss');
+      if (!button) throw new Error('bearing-iss missing');
+      const deliver = (tries: number): Promise<{ before: number; moving: boolean; skipped: false }> => new Promise((resolve, reject) => {
+        let received = false;
+        const mark = () => { received = true; };
+        button.addEventListener('click', mark);
+        button.click();
+        button.removeEventListener('click', mark);
+        if (received) resolve({ before, moving: map.isMoving(), skipped: false });
+        else if (tries <= 1) reject(new Error('bearing-iss click suppressed'));
+        else window.setTimeout(() => { deliver(tries - 1).then(resolve, reject); }, 0);
+      });
+      return deliver(5);
     }, heading);
     if (retap.skipped) {
       seen.push(retap.before);
@@ -187,6 +210,9 @@ for (const engine of [
   }, 180_000);
 
   it('starts a fresh ISS-up ease after a rotate gesture interrupts the active ease', async () => {
+    const loops = Number(process.env.GESTURE_LOOPS ?? 1);
+    const failures: string[] = [];
+    for (let loop = 0; loop < loops; loop += 1) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
@@ -207,15 +233,20 @@ for (const engine of [
       });
       const headed = await settled(page);
       const retap = await interruptAndRetap(page, headed.bearing);
-      const summary = { engine: engine.name, heading: headed.bearing, before: retap.before, moving: retap.moving };
+      const summary = { engine: engine.name, heading: headed.bearing, before: retap.before, moving: retap.moving, loop };
       console.log(`BEARING_GESTURE ${JSON.stringify(summary)}`);
-      expect(apart(retap.before, headed.bearing)).toBeGreaterThan(8);
-      expect(retap.moving).toBe(true);
+      if (retap.moving !== true || apart(retap.before, headed.bearing) <= 8) {
+        failures.push(JSON.stringify(summary));
+        continue;
+      }
       const landed = await settled(page);
-      expect(landed.moving).toBe(false);
-      expect(apart(landed.bearing, headed.bearing)).toBeLessThan(0.01);
+      if (landed.moving !== false || apart(landed.bearing, headed.bearing) >= 0.01) {
+        failures.push(JSON.stringify({ ...summary, landed }));
+      }
     } finally {
       await context.close();
     }
-  }, 60_000);
+    }
+    expect(failures, failures.join('\n')).toEqual([]);
+  }, 400_000);
 });
