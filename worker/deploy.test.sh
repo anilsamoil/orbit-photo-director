@@ -394,19 +394,19 @@ expect_var_names "caller --var="
 
 unset ACCESS_ALLOWED_EMAILS
 run_package_deploy
-expect_reject "unset ACCESS_ALLOWED_EMAILS" "ERROR: ACCESS_ALLOWED_EMAILS"
+expect_reject "unset ACCESS_ALLOWED_EMAILS" "ACCESS_ALLOWED_EMAILS is empty"
 
 ACCESS_ALLOWED_EMAILS='' run_package_deploy
-expect_reject "empty ACCESS_ALLOWED_EMAILS" "ERROR: ACCESS_ALLOWED_EMAILS"
+expect_reject "empty ACCESS_ALLOWED_EMAILS" "ACCESS_ALLOWED_EMAILS is empty"
 
 ACCESS_ALLOWED_EMAILS=' , ' run_package_deploy
-expect_reject "comma-space ACCESS_ALLOWED_EMAILS" "ERROR: ACCESS_ALLOWED_EMAILS"
+expect_reject "comma-space ACCESS_ALLOWED_EMAILS" "ACCESS_ALLOWED_EMAILS is empty"
 
 ACCESS_ALLOWED_EMAILS='   ' run_package_deploy
-expect_reject "whitespace ACCESS_ALLOWED_EMAILS" "ERROR: ACCESS_ALLOWED_EMAILS"
+expect_reject "whitespace ACCESS_ALLOWED_EMAILS" "ACCESS_ALLOWED_EMAILS is empty"
 
 ACCESS_ALLOWED_EMAILS=',' run_package_deploy
-expect_reject "comma-only ACCESS_ALLOWED_EMAILS" "ERROR: ACCESS_ALLOWED_EMAILS"
+expect_reject "comma-only ACCESS_ALLOWED_EMAILS" "ACCESS_ALLOWED_EMAILS is empty"
 
 ACCESS_ALLOWED_EMAILS=$'person@example.com\n' run_package_deploy --dry-run
 expect_reject "newline ACCESS_ALLOWED_EMAILS on --dry-run" "ERROR: ACCESS_ALLOWED_EMAILS"
@@ -456,7 +456,7 @@ expect_locale_emails() {
       new_failures=$((new_failures + 1))
       return 0
     fi
-    if ! printf '%s\n' "$CASE_ERR" | grep -F -q "ERROR: ACCESS_ALLOWED_EMAILS"; then
+    if ! printf '%s\n' "$CASE_ERR" | grep -F -q "ACCESS_ALLOWED_EMAILS is empty"; then
       echo "FAIL: $runner LC_ALL=$locale $label did not refuse a blank list" >&2
       printf '%s\n' "$CASE_ERR" >&2
       new_failures=$((new_failures + 1))
@@ -478,6 +478,125 @@ for locale in C en_US.UTF-8; do
     expect_locale_emails "$locale" "$runner" "mailbox-wrapped" "${bom}person@example.com${nbsp}" 0
   done
 done
+
+run_stub_node() {
+  local mode="$1"
+  shift
+  local work
+  work=$(mktemp -d)
+  cat > "$work/wrangler" <<'EOF'
+#!/bin/sh
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
+done
+exit 0
+EOF
+  chmod +x "$work/wrangler"
+  case "$mode" in
+    missing)
+      ;;
+    exit)
+      cat > "$work/node" <<'EOF'
+#!/bin/sh
+echo node-stub-exit >&2
+exit 3
+EOF
+      chmod +x "$work/node"
+      ;;
+    hang)
+      cat > "$work/node" <<'EOF'
+#!/bin/sh
+exec sleep 30
+EOF
+      chmod +x "$work/node"
+      ;;
+    garbage)
+      cat > "$work/node" <<'EOF'
+#!/bin/sh
+printf '%s\n' 'not-a-parse'
+exit 0
+EOF
+      chmod +x "$work/node"
+      ;;
+  esac
+  set +e
+  PATH="$work:/usr/bin:/bin" \
+    WRANGLER_ARGS="$work/args" \
+    ACCESS_ALLOWED_EMAILS='alice@example.com' \
+    bash ./deploy.sh "$@" >"$work/out" 2>"$work/err"
+  local code=$?
+  set -e
+  CASE_CODE=$code
+  if [ -f "$work/args" ]; then
+    CASE_ARGS=$(cat "$work/args")
+  else
+    CASE_ARGS=""
+  fi
+  CASE_ERR=$(cat "$work/err")
+  CASE_OUT=$(cat "$work/out")
+  rm -rf "$work"
+}
+
+expect_parser_failure() {
+  local label="$1"
+  local needle="$2"
+  if [ "$CASE_CODE" -ne 2 ]; then
+    echo "FAIL: $label exited $CASE_CODE" >&2
+    printf '%s\n' "$CASE_ERR" >&2
+    new_failures=$((new_failures + 1))
+    return 0
+  fi
+  if [ -n "$CASE_ARGS" ]; then
+    echo "FAIL: wrangler ran for $label" >&2
+    printf '%s\n' "$CASE_ARGS" >&2
+    new_failures=$((new_failures + 1))
+    return 0
+  fi
+  if ! printf '%s\n' "$CASE_ERR" | grep -F -q -- "$needle"; then
+    echo "FAIL: $label did not say $needle" >&2
+    printf '%s\n' "$CASE_ERR" >&2
+    new_failures=$((new_failures + 1))
+    return 0
+  fi
+  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q "list is empty"; then
+    echo "FAIL: $label printed list is empty" >&2
+    printf '%s\n' "$CASE_ERR" >&2
+    new_failures=$((new_failures + 1))
+    return 0
+  fi
+  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q "is empty"; then
+    echo "FAIL: $label printed the empty-list message" >&2
+    printf '%s\n' "$CASE_ERR" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  return 0
+}
+
+run_stub_node missing
+echo "== node not on PATH exit $CASE_CODE"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "node not on PATH" "node is not on PATH"
+
+run_stub_node exit --dry-run
+echo "== node exited non-zero exit $CASE_CODE"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "node exited non-zero" "node exited 3"
+
+hang_start=$(date +%s)
+run_stub_node hang
+hang_end=$(date +%s)
+echo "== hung node exit $CASE_CODE in $((hang_end - hang_start))s"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "hung node" "timed out after 10s"
+if [ $((hang_end - hang_start)) -ge 20 ]; then
+  echo "FAIL: hung node took $((hang_end - hang_start))s" >&2
+  new_failures=$((new_failures + 1))
+fi
+
+run_stub_node garbage --dry-run
+echo "== node printed garbage exit $CASE_CODE"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "node printed garbage" "unexpected output"
 
 if [ "$new_failures" -ne 0 ]; then
   echo "FAIL: $new_failures new deploy cases" >&2
