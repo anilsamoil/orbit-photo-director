@@ -204,12 +204,29 @@ for (const engine of [
   }, 30_000);
   afterAll(async () => { await browser?.close(); }, 30_000);
 
-  async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets): Promise<{ context: BrowserContext; page: Page }> {
+  async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets, trackFooters = false): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
       ...iphone17,
       viewport: { width, height },
       serviceWorkers: 'block',
     });
+    if (trackFooters) {
+      await context.addInitScript(() => {
+        const targets = new Set<Element>();
+        const observe = ResizeObserver.prototype.observe;
+        const unobserve = ResizeObserver.prototype.unobserve;
+        ResizeObserver.prototype.observe = function (target: Element) {
+          if (target instanceof Element && target.id === 'status-banner') targets.add(target);
+          return observe.call(this, target);
+        };
+        ResizeObserver.prototype.unobserve = function (target: Element) {
+          targets.delete(target);
+          return unobserve.call(this, target);
+        };
+        (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets = () =>
+          [...targets].map((node) => ({ connected: node.isConnected }));
+      });
+    }
     if (engine.name === 'WebKit') {
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -538,6 +555,87 @@ for (const engine of [
         return rect.width > 0 && rect.height > 0;
       });
       expect(open).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('clears the corner lift in the same frame when the footer is removed', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '160px';
+      });
+      const raised = await hideBox(page);
+      expect(Number.parseFloat(raised.lift)).toBeGreaterThan(0);
+      await page.evaluate(() => {
+        (window as unknown as { __resizes: number }).__resizes = 0;
+        window.addEventListener('resize', () => {
+          (window as unknown as { __resizes: number }).__resizes += 1;
+        });
+        document.getElementById('status-banner')!.remove();
+      });
+      const cleared = await hideBox(page);
+      expect(await page.evaluate(() => (window as unknown as { __resizes: number }).__resizes)).toBe(0);
+      expect(cleared.lift).toBe('0px');
+      expect(await page.locator('#status-banner').count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('follows a replacement footer and ignores the detached one', async () => {
+    const { context, page } = await contextAt(402, 874, false, undefined, true);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '80px';
+      });
+      const before = await hideBox(page);
+      expect(Number.parseFloat(before.lift)).toBeGreaterThan(0);
+      await page.evaluate(() => {
+        const old = document.getElementById('status-banner')!;
+        const next = document.createElement('footer');
+        next.id = 'status-banner';
+        next.className = old.className;
+        next.textContent = old.textContent ?? '';
+        next.style.height = '80px';
+        old.replaceWith(next);
+        (window as unknown as { __oldFooter: HTMLElement }).__oldFooter = old;
+      });
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '180px';
+      });
+      const raised = await hideBox(page);
+      expect(Number.parseFloat(raised.lift)).toBeGreaterThan(Number.parseFloat(before.lift));
+      const scheduled = await page.evaluate(() => (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs);
+      expect(scheduled).toBeGreaterThan(0);
+      await page.evaluate(() => {
+        (window as unknown as { __oldFooter: HTMLElement }).__oldFooter.style.height = '400px';
+      });
+      expect(await page.evaluate(() => (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs)).toBe(scheduled);
+      expect((await hideBox(page)).lift).toBe(raised.lift);
+      const targets = await page.evaluate(() => (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets());
+      expect(targets).toEqual([{ connected: true }]);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('schedules one sync for a footer mutation batch', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      const delta = await page.evaluate(() => new Promise<number>((resolve) => {
+        const before = (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0;
+        const element = document.getElementById('status-banner')!;
+        element.textContent = `${element.textContent ?? ''} · extra`;
+        queueMicrotask(() => {
+          resolve(((window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0) - before);
+        });
+      }));
+      expect(delta).toBe(1);
     } finally {
       await context.close();
     }
