@@ -52,14 +52,15 @@ type HideBox = {
   height: number;
 };
 
-async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string): Promise<void> {
+async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string, lateFooter = false): Promise<void> {
   await page.clock.setFixedTime(new Date(now));
+  const documentHtml = lateFooter ? html.replace(/<footer id="status-banner"[\s\S]*?<\/footer>\s*/, '') : html;
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (url.origin === origin && url.pathname === '/') {
       return route.fulfill({
         contentType: 'text/html',
-        body: html.replace('</head>', `<style>${vendor}\n${stylesheet}</style></head>`).replace('</body>', `<script src="/${script}"></script></body>`),
+        body: documentHtml.replace('</head>', `<style>${vendor}\n${stylesheet}</style></head>`).replace('</body>', `<script src="/${script}"></script></body>`),
       });
     }
     const asset = assets.get(url.pathname);
@@ -167,7 +168,7 @@ for (const engine of [
   }, 30_000);
   afterAll(async () => { await browser?.close(); });
 
-  async function contextAt(width: number, height: number): Promise<{ context: BrowserContext; page: Page }> {
+  async function contextAt(width: number, height: number, lateFooter = false): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
       ...iphone17,
       viewport: { width, height },
@@ -179,7 +180,7 @@ for (const engine of [
       });
     }
     const page = await context.newPage();
-    await boot(page, assets, script);
+    await boot(page, assets, script, lateFooter);
     return { context, page };
   }
 
@@ -299,6 +300,57 @@ for (const engine of [
       await context.close();
     }
   }, 180_000);
+
+  it('updates the corner lift when a late footer wraps and a trusted tap leaves Hide still', async () => {
+    const { context, page } = await contextAt(402, 874, true);
+    try {
+      await showChrome(page);
+      expect(await page.locator('#status-banner').count()).toBe(0);
+      await page.evaluate(() => {
+        const created = document.createElement('footer');
+        created.id = 'status-banner';
+        created.className = 'banner banner-orange';
+        created.textContent = 'Track ready';
+        document.body.appendChild(created);
+      });
+      await frames(page);
+      const before = await hideBox(page);
+      const short = await page.locator('#status-banner').boundingBox();
+      await page.evaluate(() => {
+        (window as unknown as { __resizes: number }).__resizes = 0;
+        window.addEventListener('resize', () => {
+          (window as unknown as { __resizes: number }).__resizes += 1;
+        });
+        document.getElementById('status-banner')!.textContent = 'Last updated 4 min ago · TLE 499h old — live track may drift';
+      });
+      await frames(page);
+      const settled = await hideBox(page);
+      const banner = await page.locator('#status-banner').boundingBox();
+      const resizes = await page.evaluate(() => (window as unknown as { __resizes: number }).__resizes);
+      expect(resizes).toBe(0);
+      expect(banner!.height).toBeGreaterThan(short!.height);
+      expect(banner!.height).toBeGreaterThan(30);
+      expect(settled.lift).not.toBe(before.lift);
+      expect(settled.bottom).toBeLessThanOrEqual(banner!.y - 7);
+      const point = await page.evaluate(() => {
+        const toggle = document.getElementById('map-chrome-toggle')!;
+        const tops: number[] = [];
+        (window as unknown as { __tapTops: number[] }).__tapTops = tops;
+        toggle.addEventListener('pointerdown', () => {
+          tops.push(toggle.getBoundingClientRect().top);
+        }, true);
+        const box = toggle.getBoundingClientRect();
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      });
+      await page.touchscreen.tap(point.x, point.y);
+      await frames(page);
+      const tops = await page.evaluate(() => (window as unknown as { __tapTops: number[] }).__tapTops);
+      expect(tops).toEqual([settled.top]);
+      expect((await hideBox(page)).top).toBe(settled.top);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
 
   it('keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
