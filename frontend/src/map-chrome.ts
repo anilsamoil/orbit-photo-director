@@ -187,6 +187,7 @@ let mute = false;
 let syncing = false;
 let staleSkips = 0;
 let syncQueued = false;
+let chromeLive = false;
 const writtenPx = new Map<string, number>();
 
 function wholePx(value: number): number {
@@ -325,7 +326,7 @@ function syncFooterClearance(pane: HTMLElement): void {
 }
 
 export function syncMapChrome(): void {
-  if (mute) return;
+  if (!chromeLive || mute) return;
   if (syncing) {
     scheduleSync();
     return;
@@ -466,6 +467,7 @@ export function bindMapChrome(): () => void {
   const connect = (): void => {
     if (connected) return;
     connected = true;
+    chromeLive = true;
     observer.observe(document.documentElement);
     observer.observe(probe);
     observeCorners();
@@ -499,6 +501,7 @@ export function bindMapChrome(): () => void {
   const release = (): void => {
     if (!connected) return;
     connected = false;
+    chromeLive = false;
     for (const item of owned) item.disconnect();
     window.removeEventListener('resize', syncMapChrome);
     window.removeEventListener('orientationchange', syncMapChrome);
