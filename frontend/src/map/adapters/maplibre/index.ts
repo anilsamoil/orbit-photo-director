@@ -248,7 +248,7 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
   const preferredHeight = narrow ? 260 : bounds.bottom - bounds.top;
   const rowHeight = Math.min(NARROW_PASS_ROW_PX, preferredHeight);
   const passHead = sideColumn ? SHORT_PASS_HEAD_PX : 0;
-  const launchSheet = slot.querySelector('.launch-ascent-card') !== null;
+  const launchSheet = slot.querySelector(':scope > .maplibregl-popup:last-child .launch-ascent-card') !== null;
   const place = (extra: InspectorRect | null) => chooseInspectorSlot(
     bounds,
     extra ? [...obstacles, inflateObstacle(extra, gap)] : obstacles,

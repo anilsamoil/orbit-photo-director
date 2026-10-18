@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { webkit, type Browser, type Page } from 'playwright';
+import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/joint-panels.json';
 
 const webkitReady = existsSync(webkit.executablePath());
+const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
+const chromeReady = chromePath !== undefined && existsSync(chromePath);
 
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45123';
@@ -23,6 +25,7 @@ type TestWindow = Window & { __opdMap: import('maplibre-gl').Map; __legacyHits: 
 let assets: Map<string, string | Uint8Array>;
 let script: string;
 let browser: Browser;
+let chromeBrowser: Browser;
 
 function legacyBodies(): Record<string, string> {
   const passes = JSON.parse(fixture['passes.json']) as Array<Record<string, unknown>>;
@@ -52,7 +55,7 @@ function legacyBodies(): Record<string, string> {
 }
 
 beforeAll(async () => {
-  if (!webkitReady) return;
+  if (!webkitReady && !chromeReady) return;
   const output = await build({
     configFile: false,
     root,
@@ -64,11 +67,13 @@ beforeAll(async () => {
   if (!('output' in bundle)) throw new Error('Expected one in-memory browser bundle');
   assets = new Map(bundle.output.map((item) => [`/${item.fileName}`, item.type === 'chunk' ? item.code : item.source]));
   script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
-  browser = await webkit.launch({ headless: true, executablePath: webkit.executablePath() });
+  if (webkitReady) browser = await webkit.launch({ headless: true, executablePath: webkit.executablePath() });
+  if (chromeReady) chromeBrowser = await chromium.launch({ headless: true, executablePath: chromePath });
 }, 90_000);
 
 afterAll(async () => {
   await browser?.close();
+  await chromeBrowser?.close();
 });
 
 async function prepare(page: Page) {
@@ -200,4 +205,91 @@ describe.skipIf(!webkitReady)('legacy launch card', () => {
       await context.close();
     }
   }, 45_000);
+});
+
+const pinEngines = [
+  { name: 'WebKit', ready: webkitReady, browser: () => browser },
+  { name: 'Chrome', ready: chromeReady, browser: () => chromeBrowser },
+];
+
+async function dropPinOverLaunch(page: Page) {
+  const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
+    const box = canvas.getBoundingClientRect();
+    for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
+      for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
+        const x = box.x + box.width * fx;
+        const y = box.y + box.height * fy;
+        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+      }
+    }
+    return null;
+  });
+  expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
+  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+  await page.waitForFunction(() => {
+    const slot = document.getElementById('map-inspector');
+    if (!slot) return false;
+    const popups = [...slot.querySelectorAll(':scope > .maplibregl-popup')];
+    const last = popups.at(-1);
+    const buriedLaunch = popups.slice(0, -1).some((popup) => popup.querySelector('.launch-ascent-card'));
+    return buriedLaunch && !!last?.querySelector('.dropped-pin-popup');
+  });
+}
+
+async function centerTap(page: Page) {
+  const point = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('.maplibregl-canvas');
+    if (!canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    const slot = document.getElementById('map-inspector');
+    const slotBox = slot?.getBoundingClientRect();
+    return {
+      x, y,
+      hit: hit?.id || (typeof hit?.className === 'string' ? hit.className : hit?.tagName) || 'none',
+      canvas: hit === canvas,
+      inspector: slotBox ? { x: slotBox.x, y: slotBox.y, w: slotBox.width, h: slotBox.height } : null,
+    };
+  });
+  expect(point).not.toBeNull();
+  await page.evaluate(() => { (window as unknown as TestWindow).__legacyHits = []; });
+  await page.touchscreen.tap(point!.x, point!.y);
+  const hits = await page.evaluate(() => (window as unknown as TestWindow).__legacyHits);
+  return { point: point!, trustedCanvas: hits.some((event) => event.type === 'click' && event.trusted && event.target.includes('maplibregl-canvas')) };
+}
+
+for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector over a legacy launch card ${engine.name}`, () => {
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('keeps a center tap on the canvas at $width×$height', async ({ width, height }) => {
+    const results = [];
+    for (let rep = 1; rep <= 3; rep += 1) {
+      const context = await engine.browser().newContext({
+        viewport: { width, height },
+        screen: { width, height },
+        isMobile: true,
+        hasTouch: true,
+        deviceScaleFactor: 3,
+        serviceWorkers: 'block',
+      });
+      try {
+        const page = await context.newPage();
+        page.setDefaultTimeout(20_000);
+        await prepare(page);
+        const pad = await padPoint(page);
+        await page.touchscreen.tap(pad.x, pad.y);
+        await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+        await dropPinOverLaunch(page);
+        const tap = await centerTap(page);
+        results.push({ rep, ...tap.point, trustedCanvas: tap.trustedCanvas });
+      } finally {
+        await context.close();
+      }
+    }
+    console.log(`PIN_OVER_LEGACY ${JSON.stringify({ engine: engine.name, width, height, results })}`);
+    expect(results.every((result) => result.canvas && result.trustedCanvas), JSON.stringify(results)).toBe(true);
+  }, 120_000);
 });
