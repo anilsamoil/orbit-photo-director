@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { desktopViewport, deviceDescriptor, parseViewportOverride } from './webkit-devices.mjs';
+import { desktopViewport, deviceDescriptor, parseViewportOverride, surfacesFor } from './webkit-devices.mjs';
 
 const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const desktopLegal = '`OPD_VERIFY_VIEWPORT` is legal for `desktop` at `1440x900` or `1280x800`, for `iphone-17-pro` at any `WIDTHxHEIGHT`, for `iphone-13` at `844x390`, and for `ipad-pro-11` at `834x1210` or `1210x834`.';
+const desktopLegal = '`OPD_VERIFY_VIEWPORT` is legal for `desktop` at `1440x900` or `1280x800`, for `iphone-17-pro` at any `WIDTHxHEIGHT`, for `iphone-13` at `844x390`, for `ipad-pro-11` at `834x1210` or `1210x834`, and for `ipad-3` at `768x1024` or `1024x768`.';
 
 test('iphone-17-pro accepts any WIDTHxHEIGHT, including a context created at 874x402', () => {
   assert.deepEqual(parseViewportOverride('iphone-17-pro', '874x402'), { width: 874, height: 402, raw: '874x402' });
@@ -40,8 +40,51 @@ test('ipad-pro-11 accepts the M4 sizes created at 834x1210 and 1210x834', () => 
 
 test('ipad-pro-11 rejects the stock 834x1194 override and other sizes', () => {
   assert.throws(() => parseViewportOverride('ipad-pro-11', '834x1194'), /834x1210 or 1210x834/);
+  assert.throws(() => parseViewportOverride('ipad-pro-11', '768x1024'), /834x1210 or 1210x834/);
   assert.throws(() => parseViewportOverride('ipad-pro-11', '1024x768'), /834x1210 or 1210x834/);
   assert.throws(() => parseViewportOverride('desktop', '1400x900'), /834x1210 or 1210x834/);
+});
+
+test('ipad-3 is the 3rd-generation iPad at 768x1024 and 1024x768, DPR 2, and stays out of the default pass', () => {
+  assert.deepEqual(parseViewportOverride('ipad-3', '768x1024'), { width: 768, height: 1024, raw: '768x1024' });
+  assert.deepEqual(parseViewportOverride('ipad-3', '1024x768'), { width: 1024, height: 768, raw: '1024x768' });
+  assert.throws(() => parseViewportOverride('ipad-3', '834x1210'), /ipad-3 with 768x1024 or 1024x768/);
+  const portrait = deviceDescriptor({
+    name: 'iPad (3rd generation)',
+    slug: 'ipad-3',
+    viewport: { width: 768, height: 1024 },
+    deviceScaleFactor: 2,
+    deviceBase: 'iPad (gen 5)',
+  });
+  const landscape = deviceDescriptor({
+    name: 'iPad (3rd generation)',
+    slug: 'ipad-3',
+    viewport: { width: 1024, height: 768 },
+    deviceScaleFactor: 2,
+    deviceBase: 'iPad (gen 5)',
+  });
+  assert.equal(portrait.viewport.width, 768);
+  assert.equal(portrait.viewport.height, 1024);
+  assert.equal(landscape.viewport.width, 1024);
+  assert.equal(landscape.viewport.height, 768);
+  assert.equal(portrait.deviceScaleFactor, 2);
+  assert.equal(landscape.deviceScaleFactor, 2);
+  assert.equal(portrait.defaultBrowserType, 'webkit');
+  assert.equal(portrait.isMobile, true);
+  assert.equal(portrait.hasTouch, true);
+  assert.match(portrait.userAgent, /iPad/);
+  assert.equal(portrait.userAgent.includes('iPhone'), false);
+  assert.deepEqual(surfacesFor('all'), ['desktop', 'iphone-13', 'iphone-17-pro', 'ipad-pro-11']);
+  assert.deepEqual(surfacesFor('ipad-3'), ['ipad-3']);
+  assert.deepEqual(surfacesFor(''), ['desktop', 'iphone-13', 'iphone-17-pro', 'ipad-pro-11']);
+});
+
+test('desktop drive resets hidden targets before the page loads', () => {
+  const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'drive.mjs'), 'utf8');
+  const chrome = source.slice(source.indexOf('async function driveChrome'), source.indexOf('async function driveWebkitSurfaces'));
+  const reset = chrome.indexOf('await resetFixtureProfile(baseUrl)');
+  const open = chrome.indexOf('openApp(');
+  assert.ok(reset !== -1 && open !== -1 && reset < open);
 });
 
 test('desktop accepts 1440x900 and 1280x800, and the help text names them', () => {
