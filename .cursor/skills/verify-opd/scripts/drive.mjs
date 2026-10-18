@@ -3085,12 +3085,19 @@ async function abortViewportLayout(send) {
   }
 }
 
+function voidViewportAbort(send) {
+  const aborting = abortViewportLayout(send);
+  aborting.catch(() => {});
+}
+
 async function readViewportSettled(send) {
   let timer;
   const pending = evaluate(send, 'window.__opdViewportSettled');
+  pending.catch(() => {});
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => {
-      abortViewportLayout(send).then(() => resolve({ deadline: true }));
+      voidViewportAbort(send);
+      resolve({ deadline: true });
     }, VIEWPORT_DEADLINE_MS);
   });
   try {
@@ -3144,7 +3151,7 @@ export async function whenViewportLaidOut(send, width, height) {
   try {
     await setViewport(send, width, height, true);
   } catch (error) {
-    await abortViewportLayout(send);
+    voidViewportAbort(send);
     throw error;
   }
   const settled = await readViewportSettled(send);

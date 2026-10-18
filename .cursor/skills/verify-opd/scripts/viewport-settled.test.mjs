@@ -24,8 +24,8 @@ async function open(browser) {
   return page;
 }
 
-async function stallFrames(page, swallowPageTimer) {
-  await page.evaluate((swallow) => {
+async function stallFrames(page, swallowPageTimer, releaseFrames = 0) {
+  await page.evaluate(({ swallow, releaseFrames: release }) => {
     window.__resizes = [];
     window.addEventListener('resize', () => window.__resizes.push([window.innerWidth, window.innerHeight]));
     const realSet = window.setTimeout;
@@ -34,6 +34,11 @@ async function stallFrames(page, swallowPageTimer) {
     const realRemove = window.removeEventListener.bind(window);
     window.__timers = new Set();
     window.__resizeListeners = 0;
+    window.__pendingFrames = new Set();
+    window.__scheduledFrames = [];
+    window.__cancelledFrames = [];
+    let nextFrame = 1;
+    let released = 0;
     window.setTimeout = (fn, ms, ...args) => {
       if (swallow && ms >= 8000) return 0;
       const id = realSet(fn, ms, ...args);
@@ -52,9 +57,37 @@ async function stallFrames(page, swallowPageTimer) {
       if (type === 'resize') window.__resizeListeners -= 1;
       return realRemove(type, listener, options);
     };
-    window.requestAnimationFrame = () => 1;
-    window.cancelAnimationFrame = () => {};
-  }, swallowPageTimer);
+    window.requestAnimationFrame = (callback) => {
+      const id = nextFrame;
+      nextFrame += 1;
+      window.__pendingFrames.add(id);
+      window.__scheduledFrames.push(id);
+      if (released < release) {
+        released += 1;
+        Promise.resolve().then(() => {
+          if (!window.__pendingFrames.has(id)) return;
+          window.__pendingFrames.delete(id);
+          callback(0);
+        });
+      }
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      window.__cancelledFrames.push(id);
+      window.__pendingFrames.delete(id);
+    };
+  }, { swallow: swallowPageTimer, releaseFrames });
+}
+
+function frameTrace(page) {
+  return page.evaluate(() => ({
+    resizes: window.__resizes,
+    timers: window.__timers.size,
+    listeners: window.__resizeListeners,
+    pendingFrames: [...window.__pendingFrames],
+    scheduledFrames: window.__scheduledFrames,
+    cancelledFrames: window.__cancelledFrames,
+  }));
 }
 
 function raceCall(pending, ms) {
@@ -70,6 +103,35 @@ function raceCall(pending, ms) {
   ]);
 }
 
+function hungSend(abortHangs) {
+  return (method, params) => {
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      if (!abortHangs) throw new Error('viewport command failed');
+      return {};
+    }
+    if (method !== 'Runtime.evaluate') throw new Error(`unexpected ${method}`);
+    const expression = params?.expression ?? '';
+    if (expression === 'window.__opdViewportSettled' || expression.includes('__opdAbortViewportLayout?.()')) {
+      return new Promise(() => {});
+    }
+    return { result: { value: true } };
+  };
+}
+
+test('a stalled abort still rejects at the drive deadline', { timeout: 20_000 }, async () => {
+  const result = await raceCall(whenViewportLaidOut(hungSend(true), 390, 520), 13_000);
+  assert.equal(result.status, 'rejected', JSON.stringify(result));
+  assert.match(result.message, /"deadline":true/);
+  assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
+});
+
+test('a failed viewport command rejects while abort is still pending', { timeout: 5_000 }, async () => {
+  const result = await raceCall(whenViewportLaidOut(hungSend(false), 390, 520), 1_000);
+  assert.equal(result.status, 'rejected', JSON.stringify(result));
+  assert.match(result.message, /viewport command failed/);
+  assert.ok(result.elapsed < 500, String(result.elapsed));
+});
+
 for (const engine of ['Chrome', 'WebKit']) {
   test(`stalled frames after a matching resize reject on ${engine}`, { timeout: 20_000 }, async () => {
     const browser = await launch(engine);
@@ -77,16 +139,36 @@ for (const engine of ['Chrome', 'WebKit']) {
     try {
       await stallFrames(page, false);
       const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 11_000);
-      const trace = await page.evaluate(() => ({
-        resizes: window.__resizes,
-        timers: window.__timers.size,
-        listeners: window.__resizeListeners,
-      }));
+      const trace = await frameTrace(page);
       assert.ok(trace.resizes.some((size) => size[0] === 390 && size[1] === 520), JSON.stringify(trace));
       assert.equal(result.status, 'rejected', JSON.stringify(result));
       assert.match(result.message, /390x520/);
       assert.match(result.message, /"timedOut":true/);
-      assert.ok(result.elapsed >= 6_500 && result.elapsed < 11_000, String(result.elapsed));
+      assert.ok(result.elapsed >= 7_500 && result.elapsed < 9_000, String(result.elapsed));
+      assert.equal(trace.timers, 0);
+      assert.equal(trace.listeners, 0);
+      assert.deepEqual(trace.scheduledFrames, [1]);
+      assert.deepEqual(trace.pendingFrames, []);
+      assert.deepEqual(trace.cancelledFrames, [1]);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a second stalled frame is cancelled on ${engine}`, { timeout: 20_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await stallFrames(page, false, 1);
+      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 11_000);
+      const trace = await frameTrace(page);
+      assert.ok(trace.resizes.some((size) => size[0] === 390 && size[1] === 520), JSON.stringify(trace));
+      assert.equal(result.status, 'rejected', JSON.stringify(result));
+      assert.match(result.message, /"timedOut":true/);
+      assert.ok(result.elapsed >= 7_500 && result.elapsed < 9_000, String(result.elapsed));
+      assert.deepEqual(trace.scheduledFrames, [1, 2]);
+      assert.deepEqual(trace.pendingFrames, []);
+      assert.deepEqual(trace.cancelledFrames, [2]);
       assert.equal(trace.timers, 0);
       assert.equal(trace.listeners, 0);
     } finally {
