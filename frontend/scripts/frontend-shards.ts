@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { webKitCaseId } from './webkit-floor.ts';
+import { webKitCaseId } from './webkit-floor';
 
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const includeRoots = ['test', join('src', 'map')];
