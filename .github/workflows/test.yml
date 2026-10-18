@@ -61,6 +61,6 @@ jobs:
       - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose --exclude test/map-corner-lift.test.ts
       - name: Install WebKit
         run: cd frontend && bunx playwright install --with-deps webkit
-      - name: Corner lift on WebKit and Chrome
-        run: cd frontend && bun run test test/map-corner-lift.test.ts --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
+      - name: WebKit map checks
+        run: cd frontend && bun run test test/map-corner-lift.test.ts test/legacy-launch-card.test.ts --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
       - run: cd frontend && bun run build
