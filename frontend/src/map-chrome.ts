@@ -413,13 +413,19 @@ export function bindMapChrome(): void {
     }
   };
   observeCorners();
+  const traceSyncs = new URLSearchParams(window.location.search).has('e2e');
   const noteScheduledSync = (): void => {
+    if (!traceSyncs) return;
     const view = window as Window & { __opdCornerSyncs?: number };
     view.__opdCornerSyncs = (view.__opdCornerSyncs ?? 0) + 1;
   };
+  let syncPending = false;
   const syncNow = (): void => {
+    if (syncPending) return;
+    syncPending = true;
     noteScheduledSync();
     queueMicrotask(() => {
+      syncPending = false;
       if (mute) {
         queueMicrotask(syncMapChrome);
         scheduleSync();
@@ -428,17 +434,31 @@ export function bindMapChrome(): void {
       syncMapChrome();
     });
   };
-  const footerContent = new MutationObserver(syncNow);
-  const footerStyle = new MutationObserver((records) => {
+  let watchedFooter: Element | null = null;
+  const footerNode = (node: Node): HTMLElement | null => {
+    const element = node instanceof Element ? node : node.parentElement;
+    if (!(element instanceof HTMLElement)) return null;
+    if (element.id === 'status-banner') return element;
+    const footer = element.closest('#status-banner');
+    return footer instanceof HTMLElement ? footer : null;
+  };
+  const footerContent = new MutationObserver((records) => {
     for (const record of records) {
-      if (record.target === document.body || record.target === document.documentElement) continue;
-      if (!(record.target instanceof HTMLElement) || record.target.id !== 'status-banner') continue;
-      if (!record.target.isConnected) continue;
+      const footer = footerNode(record.target);
+      if (!footer || footer !== watchedFooter || !footer.isConnected) continue;
       syncNow();
       return;
     }
   });
-  let watchedFooter: Element | null = null;
+  const footerStyle = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.target === document.body || record.target === document.documentElement) continue;
+      if (!(record.target instanceof HTMLElement) || record.target.id !== 'status-banner') continue;
+      if (!record.target.isConnected || record.target !== watchedFooter) continue;
+      syncNow();
+      return;
+    }
+  });
   const watchFooter = (node: Element): void => {
     if (watchedFooter === node) return;
     footerContent.disconnect();
@@ -478,8 +498,7 @@ export function bindMapChrome(): void {
   cornerArrivals.observe(document.body, { childList: true, subtree: true });
   const mutations = new MutationObserver(() => {
     // Let slot writes release mute, then settle derived classes before another input.
-    noteScheduledSync();
-    queueMicrotask(syncMapChrome);
+    syncNow();
     scheduleSync();
   });
   mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
