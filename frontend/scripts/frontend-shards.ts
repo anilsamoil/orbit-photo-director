@@ -231,7 +231,7 @@ function printCheck(root: string): void {
   assertPartition(files, shards);
   const missing = unweightedFiles(files, weights);
   if (missing.length > 0) {
-    process.stderr.write(`default weight for ${missing.length} file(s): ${missing.join(', ')}\n`);
+    throw new Error(`default weight for ${missing.length} file(s): ${missing.join(', ')}`);
   }
   shards.forEach((shard, index) => {
     process.stdout.write(`shard ${index + 1}: ${shard.files.length} files, ${shard.loadSeconds.toFixed(1)}s\n`);
@@ -272,19 +272,25 @@ function printWebKitCount(path: string, shardLog: boolean, root: string): void {
   process.stdout.write(`webkit floor ok: ${counted.cases} >= ${UNSHARDED_WEBKIT_CASES}\n`);
 }
 
+function shardRoot(): string {
+  const override = process.env.FRONTEND_SHARD_ROOT;
+  return override ? resolve(override) : frontendRoot;
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const command = args[0];
+  const root = shardRoot();
   if (command === '--check') {
-    printCheck(frontendRoot);
+    printCheck(root);
     return;
   }
   if (command === '--shard' && args[1]) {
-    printShard(args[1], frontendRoot);
+    printShard(args[1], root);
     return;
   }
   if (command === '--webkit-count' && args[1]) {
-    printWebKitCount(args[1], args.includes('--shard-log'), frontendRoot);
+    printWebKitCount(args[1], args.includes('--shard-log'), root);
     return;
   }
   throw new Error('usage: frontend-shards.ts --check | --shard <index>/<count> | --webkit-count <report-or-dir> [--shard-log]');

@@ -96,9 +96,10 @@ function runBlock(workflow: string, stepName: string): string {
   const nameAt = workflow.indexOf(`name: ${stepName}\n`);
   if (nameAt < 0) throw new Error(`missing step ${stepName}`);
   const runAt = workflow.indexOf('run: |\n', nameAt);
+  if (runAt < 0) throw new Error(`missing run block for ${stepName}`);
   const nextAt = workflow.indexOf('\n      - ', runAt + 1);
-  if (runAt < 0 || nextAt < 0) throw new Error(`missing run block for ${stepName}`);
-  return workflow.slice(runAt + 'run: |\n'.length, nextAt).replace(/^ {10}/gm, '').trimEnd();
+  const end = nextAt < 0 ? workflow.length : nextAt;
+  return workflow.slice(runAt + 'run: |\n'.length, end).replace(/^ {10}/gm, '').trimEnd();
 }
 
 function bash(script: string, cwd: string, env: Readonly<Record<string, string>> = {}): { status: number; stdout: string; stderr: string } {

@@ -91,7 +91,6 @@ jobs:
             --outputFile.json="shard-${{ matrix.shard }}-results.json" \
             "${files[@]}"
           status=$?
-          set -e
           cat "shard-${{ matrix.shard }}-time.txt"
           if [ -f "shard-${{ matrix.shard }}-results.json" ]; then
             bun scripts/frontend-shards.ts --webkit-count "shard-${{ matrix.shard }}-results.json" --shard-log
@@ -110,10 +109,13 @@ jobs:
   frontend:
     name: Frontend
     needs: frontend-shard
-    if: always() && !cancelled()
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      - name: Fail when a shard failed
+        if: always() && needs.frontend-shard.result != 'success'
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: cd frontend && bun install
@@ -130,6 +132,3 @@ jobs:
           bun frontend/scripts/frontend-shards.ts --check
           bun frontend/scripts/frontend-shards.ts --webkit-count shard-reports
           bun frontend/scripts/webkit-floor.ts shard-reports
-      - name: Fail when a shard failed
-        if: needs.frontend-shard.result != 'success'
-        run: exit 1
