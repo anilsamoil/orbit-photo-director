@@ -82,10 +82,10 @@ describe('frontend shards', () => {
     expect(() => assertExecutedFiles(['test/digits.test.ts'], counted.files)).toThrow(/not executed/);
   });
 
-  it('keeps the WebKit floor at the unsharded count from run 39110856056', () => {
-    expect(UNSHARDED_WEBKIT_CASES).toBe(190);
-    expect(() => assertWebKitFloor(190)).not.toThrow();
-    expect(() => assertWebKitFloor(189)).toThrow(/below unsharded count 190/);
+  it('keeps the WebKit floor at the current per-file sum', () => {
+    expect(UNSHARDED_WEBKIT_CASES).toBe(204);
+    expect(() => assertWebKitFloor(204)).not.toThrow();
+    expect(() => assertWebKitFloor(203)).toThrow(/below unsharded count 204/);
   });
 
   it('reads max RSS and rejects exit 137 and 143', () => {

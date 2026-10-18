@@ -81,6 +81,7 @@
   "test/launch-store.test.ts": 0.421,
   "test/launch-tier-card.test.ts": 0.586,
   "test/launch-tiers.test.ts": 0.381,
+  "test/legacy-launch-card.test.ts": 60,
   "test/live-cloud.test.ts": 0.346,
   "test/log-load-state.test.ts": 0.476,
   "test/log.test.ts": 0.453,
