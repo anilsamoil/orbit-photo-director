@@ -185,6 +185,7 @@ function measureChrome(view: HTMLElement, pane: HTMLElement): ChromeMeasure {
 let lastSlots = '';
 let mute = false;
 let syncing = false;
+let staleSkips = 0;
 let syncQueued = false;
 
 function writeSlot(name: string, value: number): void {
@@ -259,11 +260,13 @@ function syncFooterClearance(pane: HTMLElement): void {
   const bannerBox = boxOf(banner);
   if (banner && bannerBox.h) {
     const used = Number.parseFloat(getComputedStyle(banner).bottom) || 0;
-    if (Math.abs(bannerBox.y + bannerBox.h - (window.innerHeight - used)) > 1) {
+    if (Math.abs(bannerBox.y + bannerBox.h - (window.innerHeight - used)) > 1 && staleSkips < 4) {
+      staleSkips += 1;
       scheduleSync();
       return;
     }
   }
+  staleSkips = 0;
   const bottomInset = insetPx('bottom');
   const shotList = document.body.classList.contains('shotlist-bar-visible')
     ? boxOf(document.getElementById('shotlist-bar')) : emptyBox();
@@ -353,7 +356,10 @@ export function bindMapChrome(): void {
     applyMapChrome(shown);
     syncMapChrome();
   });
-  const observer = new ResizeObserver(() => scheduleSync());
+  const observer = new ResizeObserver(() => {
+    if (mute) scheduleSync();
+    else syncMapChrome();
+  });
   observer.observe(document.documentElement);
   observer.observe(ensureInsetProbe());
   for (const selector of ['#status-banner', '#shotlist-bar', '.map-controls-time', '#satellite-picker-panel']) {
@@ -391,6 +397,8 @@ export function bindMapChrome(): void {
     }
   }
   window.addEventListener('resize', syncMapChrome);
+  window.addEventListener('orientationchange', syncMapChrome);
+  screen.orientation?.addEventListener('change', syncMapChrome);
   window.visualViewport?.addEventListener('resize', syncMapChrome);
   (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChrome;
   syncMapChrome();

@@ -109,7 +109,7 @@ export async function launchWebkit() {
 const productViewportMeta = new WeakMap();
 
 async function syncLayoutViewport(page, width, height) {
-  const laid = await page.evaluate(async ({ width, height, product }) => {
+  const laid = await page.evaluate(({ width, height, product }) => {
     const root = document.documentElement;
     const meta = document.querySelector('meta[name="viewport"]');
     if (!root) return null;
@@ -122,8 +122,6 @@ async function syncLayoutViewport(page, width, height) {
       meta.setAttribute('content', remembered);
       if (!matches()) meta.setAttribute('content', explicit);
     }
-    window.dispatchEvent(new Event('resize'));
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     return {
       width: root.clientWidth,
       height: root.clientHeight,
