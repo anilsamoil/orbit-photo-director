@@ -5,6 +5,7 @@ import { chromium, devices, webkit, type Browser, type BrowserContext, type Page
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Manifest, Track } from '../src/types';
+import { browserPidSnapshot, browserPidsLaunchedSince, closeBrowser } from './close-browser.mjs';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
 if (!existsSync(webkit.executablePath())) throw new Error(`WebKit is required at ${webkit.executablePath()}`);
@@ -161,11 +162,14 @@ for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
 ]) describe.skipIf(engine.name === 'Chrome' && !existsSync(engine.executablePath))(`map corner lift ${engine.name}`, () => {
   let browser: Browser;
+  let launched: number[] = [];
 
   beforeAll(async () => {
+    const before = browserPidSnapshot();
     browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
+    launched = browserPidsLaunchedSince(before);
   }, 30_000);
-  afterAll(async () => { await browser?.close(); });
+  afterAll(async () => { await closeBrowser(browser, launched, `corner-lift-${engine.name}`); });
 
   async function contextAt(width: number, height: number): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
