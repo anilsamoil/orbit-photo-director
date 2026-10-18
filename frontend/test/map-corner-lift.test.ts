@@ -5,6 +5,7 @@ import { chromium, devices, webkit, type Browser, type BrowserContext, type Page
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Manifest, Track } from '../src/types';
+import { freezeDate } from './freeze-date';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
 if (!existsSync(webkit.executablePath())) throw new Error(`WebKit is required at ${webkit.executablePath()}`);
@@ -53,7 +54,7 @@ type HideBox = {
 };
 
 async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string, lateFooter = false): Promise<void> {
-  await page.clock.setFixedTime(new Date(now));
+  await freezeDate(page, now);
   const documentHtml = lateFooter ? html.replace(/<footer id="status-banner"[\s\S]*?<\/footer>\s*/, '') : html;
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
@@ -197,7 +198,7 @@ for (const engine of [
       const banner = await page.locator('#status-banner').boundingBox();
       expect(banner!.height).toBeGreaterThan(30);
       expect(raised.bottom).toBeLessThanOrEqual(banner!.y - 7);
-      await page.clock.fastForward(3000);
+      await page.waitForTimeout(3000);
       await frames(page);
       expect(await hideBox(page)).toEqual(raised);
       await cycle(page, 5, raised);
@@ -323,7 +324,7 @@ for (const engine of [
         });
         document.getElementById('status-banner')!.textContent = 'Last updated 4 min ago · TLE 499h old — live track may drift';
       });
-      await frames(page);
+      await page.waitForFunction((previous) => document.body.style.getPropertyValue('--map-corner-lift') !== previous, before.lift);
       const settled = await hideBox(page);
       const banner = await page.locator('#status-banner').boundingBox();
       const resizes = await page.evaluate(() => (window as unknown as { __resizes: number }).__resizes);
@@ -381,7 +382,7 @@ for (const engine of [
           for (const record of records) writes.push(record.attributeName ?? '');
         }).observe(document.body, { attributes: true, attributeFilter: ['style'] });
       });
-      await page.clock.fastForward(3000);
+      await page.waitForTimeout(3000);
       await frames(page);
       const after = await page.evaluate(() => ({
         scrollTop: (document.querySelector('.map-control-dock') as HTMLElement).scrollTop,
