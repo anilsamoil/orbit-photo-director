@@ -18,6 +18,8 @@ type Runtime = {
   follow: boolean;
   toggleBound: boolean;
   bearingBound: boolean;
+  easingToward: number | null;
+  easingWatch: boolean;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
@@ -37,6 +39,8 @@ const state: Runtime = {
   follow: true,
   toggleBound: false,
   bearingBound: false,
+  easingToward: null,
+  easingWatch: false,
   hasTrack: () => false,
   position: () => null,
 };
@@ -105,23 +109,48 @@ export function computeIssHeading(nowMs: number): number | null {
   return greatCircleBearingDeg(here.lat, here.lon, ahead.lat, ahead.lon);
 }
 
-/** Apply the bearing mode. Skips a write when the camera is already there. */
+function bearingApart(a: number, b: number): number {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+function nearBearing(a: number, b: number): boolean {
+  return bearingApart(a, b) < BEARING_NOOP_THRESHOLD_DEG;
+}
+
+function watchEasing(core: MapCore): void {
+  if (state.easingWatch) return;
+  state.easingWatch = true;
+  core.on('moveend', () => { state.easingToward = null; });
+}
+
+function desiredBearing(core: MapCore): number | null {
+  if (state.mode === 'north') return 0;
+  return computeIssHeading(core.clock.viewMs());
+}
+
+/** Apply the bearing mode. A camera already on that bearing stays put, and an ease toward another bearing is replaced. */
 export function applyBearing(animate: boolean): void {
   const core = state.core;
   if (!core) return;
+  watchEasing(core);
+  const desired = desiredBearing(core);
+  if (desired === null) return;
+  if (state.easingToward !== null && nearBearing(state.easingToward, desired)) return;
   const current = core.bearing();
-  if (state.mode === 'north') {
-    if (Math.abs(current) < BEARING_NOOP_THRESHOLD_DEG) return;
-    if (animate) core.easeTo({ bearing: 0, duration: 600 });
-    else core.setBearing(0);
+  if (nearBearing(current, desired)) {
+    if (state.easingToward !== null) {
+      state.easingToward = null;
+      core.easeTo({ bearing: desired, duration: 0 });
+    }
     return;
   }
-  const heading = computeIssHeading(core.clock.viewMs());
-  if (heading === null) return;
-  const delta = Math.abs(((heading - current + 540) % 360) - 180);
-  if (delta < BEARING_NOOP_THRESHOLD_DEG) return;
-  if (animate) core.easeTo({ bearing: heading, duration: 600 });
-  else core.setBearing(heading);
+  if (animate) {
+    core.easeTo({ bearing: desired, duration: 600 });
+    state.easingToward = desired;
+    return;
+  }
+  state.easingToward = null;
+  core.setBearing(desired);
 }
 
 export function bindFollowToggle(): void {
@@ -163,7 +192,6 @@ export function bindBearingToggle(): void {
   };
   reflectActive();
   const setMode = (mode: BearingMode): void => {
-    if (mode === state.mode) return;
     state.mode = mode;
     try { localStorage.setItem(PREF_KEYS.bearingMode, mode); } catch {}
     reflectActive();
@@ -178,6 +206,8 @@ export function bindBearingToggle(): void {
 export function resetFollowMemoryForTest(): void {
   state.follow = false;
   state.mode = 'north';
+  state.easingToward = null;
+  state.easingWatch = false;
 }
 
 export function clearBearingPref(): void {
