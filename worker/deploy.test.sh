@@ -3,6 +3,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+deploy_bash=${DEPLOY_BASH:-bash}
+real_node=$(command -v node)
 
 if grep -n -E '^ACCESS_SERVICE_TOKEN_CLIENT_IDS[[:space:]]*=' wrangler.toml; then
   echo "FAIL: wrangler.toml assigns ACCESS_SERVICE_TOKEN_CLIENT_IDS" >&2
@@ -32,7 +34,7 @@ EOF
     WRANGLER_CALLS="$calls" \
     WRANGLER_ARGS="$args" \
     CALIB_TOKEN="machine-secret" \
-    bash ./deploy.sh "$@" >"$work/out" 2>"$work/err"
+    "$deploy_bash" ./deploy.sh "$@" >"$work/out" 2>"$work/err"
   local code=$?
   set -e
   CASE_CODE=$code
@@ -523,7 +525,7 @@ EOF
   PATH="$work:/usr/bin:/bin" \
     WRANGLER_ARGS="$work/args" \
     ACCESS_ALLOWED_EMAILS='alice@example.com' \
-    bash ./deploy.sh "$@" >"$work/out" 2>"$work/err"
+    "$deploy_bash" ./deploy.sh "$@" >"$work/out" 2>"$work/err"
   local code=$?
   set -e
   CASE_CODE=$code
@@ -597,6 +599,224 @@ run_stub_node garbage --dry-run
 echo "== node printed garbage exit $CASE_CODE"
 printf '%s\n' "$CASE_ERR"
 expect_parser_failure "node printed garbage" "unexpected output"
+
+marker_pids() {
+  ps -eo pid,args | awk -v m="$1" 'index($0, m) && index($0, "awk") == 0 { print $1 }'
+}
+
+kill_marker() {
+  local pid
+  for pid in $(marker_pids "$1"); do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+}
+
+expect_no_marker() {
+  local label="$1"
+  local marker="$2"
+  local live
+  live=$(marker_pids "$marker")
+  if [ -n "$live" ]; then
+    echo "FAIL: $label left a parser child" >&2
+    ps -eo pid,ppid,args | awk -v m="$marker" 'index($0, m) && index($0, "awk") == 0 { print }' >&2
+    new_failures=$((new_failures + 1))
+    kill_marker "$marker"
+  fi
+}
+
+expect_no_email_temps() {
+  local label="$1"
+  local dir="$2"
+  local left
+  left=$(find "$dir" -name 'opd-email.*' -print 2>/dev/null)
+  if [ -n "$left" ]; then
+    echo "FAIL: $label left an allowlist temp file" >&2
+    printf '%s\n' "$left" >&2
+    new_failures=$((new_failures + 1))
+  fi
+}
+
+run_group_node() {
+  local mode="$1"
+  shift
+  local work marker
+  work=$(mktemp -d)
+  marker="opdgrp${RANDOM}${RANDOM}"
+  GROUP_MARKER=$marker
+  GROUP_DIR=$work
+  cat > "$work/wrangler" <<'EOF'
+#!/bin/sh
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
+done
+exit 0
+EOF
+  chmod +x "$work/wrangler"
+  case "$mode" in
+    shim)
+      cat > "$work/node" << EOF
+#!/bin/sh
+/bin/sh -c 'sleep 30' $marker
+EOF
+      ;;
+    node-child)
+      cat > "$work/node" << EOF
+#!/bin/sh
+exec "$real_node" -e 'const {spawn}=require("child_process"); spawn("/bin/sh", ["-c", "sleep 30", process.env.OPD_MARKER], {stdio:"ignore"}); setInterval(()=>{}, 1e9);'
+EOF
+      ;;
+    extra-nl)
+      cat > "$work/node" << 'EOF'
+#!/bin/sh
+printf 'ok\n\n'
+exit 0
+EOF
+      ;;
+    junk)
+      cat > "$work/node" << 'EOF'
+#!/bin/sh
+printf 'ok junk\n'
+exit 0
+EOF
+      ;;
+  esac
+  chmod +x "$work/node"
+  set +e
+  PATH="$work:/usr/bin:/bin" \
+    TMPDIR="$work" \
+    WRANGLER_ARGS="$work/args" \
+    OPD_MARKER="$marker" \
+    ACCESS_ALLOWED_EMAILS='alice@example.com' \
+    "$deploy_bash" ./deploy.sh "$@" >"$work/out" 2>"$work/err"
+  local code=$?
+  set -e
+  CASE_CODE=$code
+  if [ -f "$work/args" ]; then
+    CASE_ARGS=$(cat "$work/args")
+  else
+    CASE_ARGS=""
+  fi
+  CASE_ERR=$(cat "$work/err")
+  CASE_OUT=$(cat "$work/out")
+}
+
+hang_start=$(date +%s)
+run_group_node shim
+hang_end=$(date +%s)
+echo "== non-exec shim exit $CASE_CODE in $((hang_end - hang_start))s"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "non-exec shim" "timed out after 10s"
+expect_no_marker "non-exec shim" "$GROUP_MARKER"
+expect_no_email_temps "non-exec shim" "$GROUP_DIR"
+if [ $((hang_end - hang_start)) -ge 20 ]; then
+  echo "FAIL: non-exec shim took $((hang_end - hang_start))s" >&2
+  new_failures=$((new_failures + 1))
+fi
+rm -rf "$GROUP_DIR"
+
+hang_start=$(date +%s)
+run_group_node node-child --dry-run
+hang_end=$(date +%s)
+echo "== node child exit $CASE_CODE in $((hang_end - hang_start))s"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "node child" "timed out after 10s"
+expect_no_marker "node child" "$GROUP_MARKER"
+expect_no_email_temps "node child" "$GROUP_DIR"
+rm -rf "$GROUP_DIR"
+
+run_group_node extra-nl --dry-run
+echo "== ok with an extra newline exit $CASE_CODE"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "ok with an extra newline" "unexpected output"
+rm -rf "$GROUP_DIR"
+
+run_group_node junk --dry-run
+echo "== ok junk exit $CASE_CODE"
+printf '%s\n' "$CASE_ERR"
+expect_parser_failure "ok junk" "unexpected output"
+rm -rf "$GROUP_DIR"
+
+run_signal_case() {
+  local sig="$1"
+  local want="$2"
+  local how="$3"
+  local work marker dpid start end code live
+  work=$(mktemp -d)
+  marker="opdgrp${RANDOM}${RANDOM}"
+  cat > "$work/wrangler" <<'EOF'
+#!/bin/sh
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
+done
+exit 0
+EOF
+  chmod +x "$work/wrangler"
+  cat > "$work/node" << EOF
+#!/bin/sh
+/bin/sh -c 'sleep 30' $marker
+EOF
+  chmod +x "$work/node"
+  set -m
+  PATH="$work:/usr/bin:/bin" \
+    TMPDIR="$work" \
+    WRANGLER_ARGS="$work/args" \
+    ACCESS_ALLOWED_EMAILS='alice@example.com' \
+    "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
+  dpid=$!
+  set +m
+  local spins=0
+  while [ -z "$(marker_pids "$marker")" ]; do
+    spins=$((spins + 1))
+    if [ "$spins" -ge 30 ]; then
+      echo "FAIL: signal $sig $how never started the parser child" >&2
+      new_failures=$((new_failures + 1))
+      kill -KILL "$dpid" 2>/dev/null || true
+      wait "$dpid" 2>/dev/null || true
+      rm -rf "$work"
+      return 0
+    fi
+    sleep 0.1
+  done
+  start=$(date +%s)
+  if [ "$how" = group ]; then
+    kill -s "$sig" -- -"$dpid" 2>/dev/null || true
+  else
+    kill -s "$sig" "$dpid" 2>/dev/null || true
+  fi
+  set +e
+  wait "$dpid"
+  code=$?
+  set -e
+  end=$(date +%s)
+  CASE_CODE=$code
+  if [ -f "$work/args" ]; then
+    CASE_ARGS=$(cat "$work/args")
+  else
+    CASE_ARGS=""
+  fi
+  CASE_ERR=$(cat "$work/err")
+  echo "== signal $sig $how exit $CASE_CODE in $((end - start))s"
+  printf '%s\n' "$CASE_ERR"
+  if [ "$CASE_CODE" -ne "$want" ]; then
+    echo "FAIL: signal $sig $how exited $CASE_CODE, want $want" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if [ -n "$CASE_ARGS" ]; then
+    echo "FAIL: wrangler ran for signal $sig $how" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if [ $((end - start)) -ge 3 ]; then
+    echo "FAIL: signal $sig $how took $((end - start))s" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  expect_no_marker "signal $sig $how" "$marker"
+  expect_no_email_temps "signal $sig $how" "$work"
+  rm -rf "$work"
+}
+
+run_signal_case TERM 143 pid
+run_signal_case INT 130 group
+run_signal_case HUP 129 pid
 
 if [ "$new_failures" -ne 0 ]; then
   echo "FAIL: $new_failures new deploy cases" >&2
