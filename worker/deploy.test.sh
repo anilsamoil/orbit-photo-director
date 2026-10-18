@@ -165,164 +165,6 @@ EOF
 } > "$hold_dir/bin/sweep"
 
 chmod +x "$hold_dir/bin/note" "$hold_dir/bin/reap-one" "$hold_dir/bin/reap" "$hold_dir/bin/collect" "$hold_dir/bin/sweep"
-cat > "$hold_dir/bin/stall.py" << 'PY'
-#!/usr/bin/env python3
-"""Delay the second write to fd 1 so an early-closing reader can win."""
-import array
-import ctypes
-import errno
-import os
-import select
-import signal
-import socket
-import struct
-import sys
-import time
-
-BPF_LD_W_ABS = 0x20
-BPF_JMP_JEQ_K = 0x15
-BPF_RET_K = 0x06
-SECCOMP_RET_USER_NOTIF = 0x7FC00000
-SECCOMP_RET_ALLOW = 0x7FFF0000
-SECCOMP_SET_MODE_FILTER = 1
-SECCOMP_FILTER_FLAG_NEW_LISTENER = 1 << 3
-SECCOMP_USER_NOTIF_FLAG_CONTINUE = 1
-PR_SET_NO_NEW_PRIVS = 38
-SYS_seccomp = 317
-NR_write = 1
-DELAY_S = 0.03
-
-
-class SockFilter(ctypes.Structure):
-    _fields_ = [
-        ("code", ctypes.c_uint16),
-        ("jt", ctypes.c_uint8),
-        ("jf", ctypes.c_uint8),
-        ("k", ctypes.c_uint32),
-    ]
-
-
-class SockFprog(ctypes.Structure):
-    _fields_ = [("len", ctypes.c_uint16), ("filter", ctypes.POINTER(SockFilter))]
-
-
-def stmt(code, k):
-    return SockFilter(code, 0, 0, k)
-
-
-def jump(code, k, jt, jf):
-    return SockFilter(code, jt, jf, k)
-
-
-def ioc(direction, nr, size):
-    return (direction << 30) | (size << 16) | (ord("!") << 8) | nr
-
-
-def main():
-    if len(sys.argv) < 2:
-        return 2
-    libc = ctypes.CDLL(None, use_errno=True)
-    parent, child_sock = socket.socketpair()
-    filters = (SockFilter * 6)(
-        stmt(BPF_LD_W_ABS, 0),
-        jump(BPF_JMP_JEQ_K, NR_write, 0, 3),
-        stmt(BPF_LD_W_ABS, 16),
-        jump(BPF_JMP_JEQ_K, 1, 0, 1),
-        stmt(BPF_RET_K, SECCOMP_RET_USER_NOTIF),
-        stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
-    )
-    prog = SockFprog(6, filters)
-    pid = os.fork()
-    if pid == 0:
-        parent.close()
-        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-        if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
-            os._exit(127)
-        listener = libc.syscall(
-            SYS_seccomp,
-            SECCOMP_SET_MODE_FILTER,
-            SECCOMP_FILTER_FLAG_NEW_LISTENER,
-            ctypes.byref(prog),
-        )
-        if listener < 0:
-            os._exit(127)
-        child_sock.sendmsg(
-            [b"x"],
-            [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [listener]).tobytes())],
-        )
-        os.close(listener)
-        child_sock.close()
-        os.execvp(sys.argv[1], sys.argv[1:])
-        os._exit(127)
-
-    child_sock.close()
-    _, anc, _, _ = parent.recvmsg(1, socket.CMSG_SPACE(4))
-    parent.close()
-    listener = None
-    for level, typ, data in anc:
-        if level == socket.SOL_SOCKET and typ == socket.SCM_RIGHTS:
-            listener = struct.unpack("i", data[:4])[0]
-    if listener is None:
-        return 127
-
-    sizes = (ctypes.c_uint16 * 3)()
-    got = libc.syscall(SYS_seccomp, 3, 0, ctypes.byref(sizes))
-    if got != 0:
-        notif_size, resp_size = 80, 24
-    else:
-        notif_size, resp_size = int(sizes[0]), int(sizes[1])
-    recv_ioctl = ioc(3, 0, notif_size)
-    send_ioctl = ioc(3, 1, resp_size)
-    counts = {}
-    libc.ioctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_void_p]
-    while True:
-        ready, _, _ = select.select([listener], [], [], 0.2)
-        if not ready:
-            wpid, status = os.waitpid(pid, os.WNOHANG)
-            if wpid == pid:
-                os.close(listener)
-                if os.WIFEXITED(status):
-                    return os.WEXITSTATUS(status)
-                if os.WIFSIGNALED(status):
-                    return 128 + os.WTERMSIG(status)
-                return 1
-            continue
-        buf = ctypes.create_string_buffer(notif_size)
-        rc = libc.ioctl(listener, recv_ioctl, buf)
-        if rc != 0:
-            err = ctypes.get_errno()
-            if err in (errno.EINTR, errno.EAGAIN):
-                continue
-            break
-        raw = buf.raw
-        note_id = struct.unpack_from("<Q", raw, 0)[0]
-        note_pid = struct.unpack_from("<I", raw, 8)[0]
-        fd = struct.unpack_from("<Q", raw, 32)[0]
-        nr = struct.unpack_from("<i", raw, 16)[0]
-        n = counts.get(note_pid, 0) + 1
-        counts[note_pid] = n
-        if nr == NR_write and fd == 1 and n == 2:
-            time.sleep(DELAY_S)
-        resp = ctypes.create_string_buffer(resp_size)
-        struct.pack_into("<QqII", resp, 0, note_id, 0, 0, SECCOMP_USER_NOTIF_FLAG_CONTINUE)
-        libc.ioctl(listener, send_ioctl, resp)
-    wpid, status = os.waitpid(pid, 0)
-    os.close(listener)
-    if os.WIFEXITED(status):
-        return os.WEXITSTATUS(status)
-    if os.WIFSIGNALED(status):
-        return 128 + os.WTERMSIG(status)
-    return 1
-
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except KeyboardInterrupt:
-        sys.exit(130)
-PY
-chmod +x "$hold_dir/bin/stall.py"
-
 ps_lstart() {
   LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
 }
@@ -408,16 +250,19 @@ hold_collect() {
 }
 
 reap_recorded_tree() {
-  local piddir root
+  local piddir root list
   if [ -z "${hold_dir-}" ] || [ ! -x "${hold_dir}/bin/reap" ]; then
     return 0
   fi
-  for piddir in "$hold_dir"/pids "$hold_dir"/*/*/pids "$hold_dir"/*/*/*/pids "$hold_dir"/*/*/*/*/pids; do
+  list=$(mktemp "$hold_dir/reap.XXXXXX")
+  find "$hold_dir" -type d -name pids > "$list" 2>/dev/null || true
+  while IFS= read -r piddir; do
     if [ -d "$piddir" ]; then
       root=$(dirname "$piddir")
       "${hold_dir}/bin/reap" "$root" || true
     fi
-  done
+  done < "$list"
+  rm -f "$list"
 }
 
 cleanup_on_exit() {
@@ -449,14 +294,50 @@ hold_defer() {
 }
 
 hold_resume() {
-  trap 'exit' INT TERM HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   if [ "${HOLD_SIGNAL-}" = 1 ]; then
     exit
   fi
 }
 
+wait_deadline() {
+  local pid="$1"
+  local seconds="$2"
+  local start now state
+  start=$(date +%s)
+  while true; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      set +e
+      wait "$pid"
+      WAIT_STATUS=$?
+      set -e
+      return 0
+    fi
+    state=$(LC_ALL=C ps -p "$pid" -o stat= 2>/dev/null | tr -d ' ' || true)
+    case "$state" in
+      Z*)
+        set +e
+        wait "$pid"
+        WAIT_STATUS=$?
+        set -e
+        return 0
+        ;;
+    esac
+    now=$(date +%s)
+    if [ $((now - start)) -ge "$seconds" ]; then
+      WAIT_STATUS=
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
 trap cleanup_on_exit EXIT
-trap 'exit' INT TERM HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 start_paired_suites() {
   local mode
@@ -491,12 +372,11 @@ if [ "${OPD_HOLDER_WAIT:-}" = 1 ]; then
   "$hold_dir/bin/note" "$helper" "$$" "$hold_dir/pids" || exit 1
   printf '%s\n' "$helper" > "$hold_dir/helper.ppid"
   : > "$hold_dir/ready"
-  while true; do
-    wait "$helper" || true
-    if ! kill -0 "$helper" 2>/dev/null; then
-      exit 0
-    fi
-  done
+  if ! wait_deadline "$helper" "${OPD_HOLD_DEADLINE:-240}"; then
+    echo "FAIL: holder wait exceeded deadline" >&2
+    exit 1
+  fi
+  exit 0
 fi
 
 if [ "${OPD_CANCEL_PROBE:-}" = 1 ]; then
@@ -533,12 +413,11 @@ if [ "${OPD_CANCEL_PROBE:-}" = 1 ]; then
       printf 'SLEEP %s %s\n' "$helper_pid" "$(ps_lstart "$helper_pid")"
     done
   } > "$OPD_CANCEL_INFO"
-  while true; do
-    wait "$race_a" || true
-    if ! kill -0 "$race_a" 2>/dev/null; then
-      exit 0
-    fi
-  done
+  if ! wait_deadline "$race_a" "${OPD_HOLD_DEADLINE:-240}"; then
+    echo "FAIL: cancel probe exceeded deadline" >&2
+    exit 1
+  fi
+  exit 0
 fi
 
 if [ "${OPD_TRAP_PROBE:-}" = 1 ]; then
@@ -565,20 +444,19 @@ if [ "${OPD_SIGINT_PROBE:-}" = 1 ]; then
   "$hold_dir/bin/note" "$probe_pid" "$$" "$hold_dir/pids" || exit 1
   printf '%s\n%s\n' "$probe_pid" "$(ps_lstart "$probe_pid")" > "$OPD_TRAP_PIDFILE"
   hold_resume
-  while true; do
-    wait "$probe_pid" || true
-    if ! kill -0 "$probe_pid" 2>/dev/null; then
-      exit 0
-    fi
-  done
+  if ! wait_deadline "$probe_pid" "${OPD_HOLD_DEADLINE:-240}"; then
+    echo "FAIL: sigint probe exceeded deadline" >&2
+    exit 1
+  fi
+  exit 0
 fi
 
 write_holding_node() {
   local dest="$1"
   cat > "$dest" << EOF
 #!/bin/sh
-fifo=\$(mktemp -u "\$TMPDIR/fifo.XXXXXX")
-childf=\$TMPDIR/sleep.pid
+fifo=\$(mktemp -u "\${TMPDIR:-/tmp}/fifo.XXXXXX")
+childf=\${TMPDIR:-/tmp}/sleep.pid
 mkfifo "\$fifo"
 exec 3<>"\$fifo"
 /bin/sh -c 'sleep 60 & echo \$! > "\$1"; wait' _ "\$childf" >&3 &
@@ -620,7 +498,7 @@ EOF
 
 run_deploy() {
   local work calls args
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
   calls="$work/calls"
   args="$work/args"
   cat > "$work/wrangler" <<'EOF'
@@ -672,15 +550,41 @@ grep_both() {
   local first="$1"
   local second="$2"
   shift 2
-  local file mid code
-  file=$(mktemp "$hold_dir/lines.XXXXXX")
-  mid=$(mktemp "$hold_dir/lines.XXXXXX")
-  printf '%s\n' "$@" > "$file"
-  grep -F -- "$first" "$file" > "$mid" || true
-  code=0
-  grep -F -q -- "$second" "$mid" || code=$?
+  local file mid code1 code2
+  file=$(mktemp "$hold_dir/lines.XXXXXX") || return 2
+  mid=$(mktemp "$hold_dir/lines.XXXXXX") || return 2
+  if [ ! -f "$file" ] || [ ! -f "$mid" ]; then
+    rm -f "$file" "$mid"
+    return 2
+  fi
+  if ! printf '%s\n' "$@" > "$file"; then
+    rm -f "$file" "$mid"
+    return 2
+  fi
+  if [ "$#" -gt 0 ] && [ ! -s "$file" ]; then
+    rm -f "$file" "$mid"
+    return 2
+  fi
+  set +e
+  grep -F -- "$first" "$file" > "$mid"
+  code1=$?
+  set -e
+  if [ "$code1" -gt 1 ] || [ ! -f "$mid" ]; then
+    rm -f "$file" "$mid"
+    if [ "$code1" -gt 1 ]; then
+      return "$code1"
+    fi
+    return 2
+  fi
+  set +e
+  grep -F -q -- "$second" "$mid"
+  code2=$?
+  set -e
   rm -f "$file" "$mid"
-  return "$code"
+  if [ "$code2" -gt 1 ]; then
+    return "$code2"
+  fi
+  return "$code2"
 }
 
 assert_arg() {
@@ -704,32 +608,65 @@ assert_var_last() {
   fi
 }
 
+if [ "${OPD_GREP_STATUS_PROBE:-}" = 1 ]; then
+  set +e
+  grep_both "ACCESS_ALLOWED_EMAILS" "ACCESS_SERVICE_TOKEN_CLIENT_IDS" "ACCESS_ALLOWED_EMAILS partial"
+  grep_status=$?
+  set -e
+  exit "$grep_status"
+fi
+
 if [ "${OPD_PIPE_PROBE:-}" = 1 ]; then
+  if [ "${OPD_BLOCK_PROBE:-}" = 1 ]; then
+    : > "$hold_dir/outer-ready"
+    sleep 180 &
+    if ! wait_deadline "$!" "${OPD_HOLD_DEADLINE:-240}"; then
+      exit 1
+    fi
+    exit 0
+  fi
+  filler=$(awk 'BEGIN { line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; while (length(out) < 262144) out = out line "\n"; printf "%s", out }')
   CASE_ARGS="deploy
---dry-run
---env
-staging
---config
-other.toml
---var
-ACCESS_ALLOWED_EMAILS:person@example.com
---var
-ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
+${filler}"
   assert_arg "deploy"
   echo "pipe probe passed"
   exit 0
 fi
 
 run_pipe_probe() {
-  local pipe_out pipe_err pipe_code
+  local pipe_out pipe_err pipe_code nest block pipe_pid block_pid
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
   pipe_out=$(mktemp "$hold_dir/pipe.XXXXXX")
   pipe_err=$(mktemp "$hold_dir/pipe.XXXXXX")
+  block=
+  if [ "${OPD_OUTER_MODE:-}" = pipe ]; then
+    block=1
+  fi
   set +e
-  OPD_PIPE_PROBE=1 python3 "$hold_dir/bin/stall.py" "$BASH" "$suite_path" >"$pipe_out" 2>"$pipe_err"
+  TMPDIR="$nest" OPD_PIPE_PROBE=1 OPD_BLOCK_PROBE="$block" \
+    python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$pipe_out" 2>"$pipe_err" &
+  pipe_pid=$!
+  set -e
+  if [ "$block" = 1 ]; then
+    sleep 180 &
+    block_pid=$!
+    wait_deadline "$block_pid" "${OPD_HOLD_DEADLINE:-240}" || true
+    kill -KILL "$block_pid" 2>/dev/null || true
+    wait "$block_pid" 2>/dev/null || true
+    rm -f "$pipe_out" "$pipe_err"
+    return 0
+  fi
+  set +e
+  wait "$pipe_pid"
   pipe_code=$?
   set -e
   if [ "$pipe_code" -ne 0 ] || ! grep -F -q "pipe probe passed" "$pipe_out"; then
-    echo "FAIL: self-test pipe: stalled read missed deploy" >&2
+    echo "FAIL: self-test pipe: early-closing reader missed deploy" >&2
     cat "$pipe_err" >&2
     cat "$pipe_out" >&2
     rm -f "$pipe_out" "$pipe_err"
@@ -741,17 +678,20 @@ run_pipe_probe() {
     rm -f "$pipe_out" "$pipe_err"
     exit 1
   fi
-  echo "self-test pipe: stalled second write still saw deploy"
+  echo "self-test pipe: early-closing reader still saw deploy"
   rm -f "$pipe_out" "$pipe_err"
+  rm -rf "$nest"
 }
 
 cancel_runner() {
   local sig="$1"
   local info out runner spins line path rest pid lstart now child_n sleep_n
+  local nest wait_code expect block_pid
   info=$(mktemp "$hold_dir/cancel.XXXXXX")
   out=$(mktemp "$hold_dir/cancel.XXXXXX")
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
   set +e
-  OPD_CANCEL_PROBE=1 OPD_CANCEL_INFO="$info" \
+  TMPDIR="$nest" OPD_CANCEL_PROBE=1 OPD_CANCEL_INFO="$info" \
     python3 -c 'import os, signal, sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 signal.signal(signal.SIGTERM, signal.SIG_DFL)
@@ -777,6 +717,14 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$out" 2>&1 &
     fi
     sleep 0.05
   done
+  if [ "${OPD_BLOCK_PROBE:-}" = 1 ]; then
+    : > "$hold_dir/outer-ready"
+    sleep 180 &
+    block_pid=$!
+    wait_deadline "$block_pid" "${OPD_HOLD_DEADLINE:-240}" || true
+    kill -KILL "$block_pid" 2>/dev/null || true
+    wait "$block_pid" 2>/dev/null || true
+  fi
   kill -s "$sig" "$runner" 2>/dev/null || true
   spins=0
   while true; do
@@ -794,7 +742,18 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$out" 2>&1 &
   done
   set +e
   wait "$runner"
+  wait_code=$?
   set -e
+  case "$sig" in
+    INT) expect=130 ;;
+    TERM) expect=143 ;;
+    HUP) expect=129 ;;
+  esac
+  if [ "$wait_code" -ne "$expect" ]; then
+    echo "FAIL: self-test cancel $sig: exit $wait_code" >&2
+    rm -f "$info" "$out"
+    exit 1
+  fi
   while IFS= read -r line; do
     case "$line" in
       HOLD\ *|RACE\ *|SUITES\ *|CHILD\ *)
@@ -820,12 +779,154 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$out" 2>&1 &
   done < "$info"
   echo "self-test cancel $sig: runner $runner ended and left 0 holders"
   rm -f "$info" "$out"
+  rm -rf "$nest"
 }
 
+run_grep_status_probe() {
+  local shim real out code nest
+  real=$(command -v grep)
+  shim=$(mktemp -d "$hold_dir/grepshim.XXXXXX")
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
+  cat > "$shim/grep" << EOF
+#!/bin/sh
+if [ "\$1" = "-F" ] && [ "\$2" = "--" ] && [ "\$3" = "ACCESS_ALLOWED_EMAILS" ]; then
+  printf '%s\n' "ACCESS_SERVICE_TOKEN_CLIENT_IDS"
+  exit 2
+fi
+exec ${real} "\$@"
+EOF
+  chmod +x "$shim/grep"
+  out=$(mktemp "$hold_dir/grep.XXXXXX")
+  set +e
+  TMPDIR="$nest" PATH="$shim:$PATH" OPD_GREP_STATUS_PROBE=1 "$BASH" "$suite_path" >"$out" 2>&1
+  code=$?
+  set -e
+  if [ "$code" -ne 2 ]; then
+    echo "FAIL: grep status probe exited $code" >&2
+    cat "$out" >&2
+    exit 1
+  fi
+  rm -f "$out"
+  rm -rf "$shim" "$nest"
+  echo "self-test grep: error with partial matches yielded 2"
+}
+
+run_deep_reap() {
+  local deep pid
+  deep="$hold_dir/a/b/c/d/e/pids"
+  mkdir -p "$deep"
+  sleep 30 &
+  pid=$!
+  "$hold_dir/bin/note" "$pid" "" "$deep" || exit 1
+  reap_recorded_tree
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "FAIL: deep reap left $pid" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    exit 1
+  fi
+  wait "$pid" 2>/dev/null || true
+  echo "self-test reap: recorded tree reaped $pid"
+}
+
+run_deadline_probe() {
+  local out child spins code nest
+  out=$(mktemp "$hold_dir/deadline.XXXXXX")
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
+  set +e
+  TMPDIR="$nest" OPD_HOLDER_WAIT=1 OPD_HOLD_DEADLINE=1 "$BASH" "$suite_path" >"$out" 2>&1 &
+  child=$!
+  set -e
+  spins=0
+  while kill -0 "$child" 2>/dev/null; do
+    spins=$((spins + 1))
+    if [ "$spins" -gt 75 ]; then
+      kill -TERM "$child" 2>/dev/null || true
+      wait "$child" 2>/dev/null || true
+      echo "FAIL: holder deadline did not fire" >&2
+      cat "$out" >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+  set +e
+  wait "$child"
+  code=$?
+  set -e
+  if [ "$code" -eq 0 ] || ! grep -F -q "holder wait exceeded deadline" "$out"; then
+    echo "FAIL: holder deadline exited $code" >&2
+    cat "$out" >&2
+    exit 1
+  fi
+  rm -f "$out"
+  rm -rf "$nest"
+  echo "self-test deadline: holder wait stopped at 1s"
+}
+
+cancel_outer_during() {
+  local mode="$1"
+  local drv runner spins list left
+  drv=$(mktemp -d "$hold_dir/outer.XXXXXX")
+  set +e
+  TMPDIR="$drv" OPD_OUTER_MODE="$mode" "$BASH" "$suite_path" >"$hold_dir/outer-$mode.out" 2>&1 &
+  runner=$!
+  set -e
+  spins=0
+  while true; do
+    list=$(mktemp "$hold_dir/found.XXXXXX")
+    find "$drv" -name outer-ready -type f > "$list" 2>/dev/null || true
+    if [ -s "$list" ]; then
+      rm -f "$list"
+      break
+    fi
+    rm -f "$list"
+    spins=$((spins + 1))
+    if [ "$spins" -gt 400 ]; then
+      echo "FAIL: outer cancel $mode: probe did not start" >&2
+      cat "$hold_dir/outer-$mode.out" >&2
+      kill -TERM "$runner" 2>/dev/null || true
+      wait "$runner" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 0.05
+  done
+  kill -TERM "$runner" 2>/dev/null || true
+  set +e
+  wait "$runner"
+  set -e
+  list=$(mktemp "$hold_dir/found.XXXXXX")
+  find "$drv" -mindepth 1 -print > "$list" 2>/dev/null || true
+  left=$(wc -l < "$list" | tr -d ' ')
+  if [ "${left:-0}" -ne 0 ]; then
+    echo "FAIL: outer cancel $mode: left $left entries" >&2
+    cat "$list" >&2
+    rm -f "$list"
+    exit 1
+  fi
+  rm -f "$list"
+  rm -rf "$drv"
+  echo "self-test outer $mode: TERM left 0 entries"
+}
+
+if [ "${OPD_OUTER_MODE:-}" = pipe ]; then
+  run_pipe_probe
+  exit 0
+fi
+if [ "${OPD_OUTER_MODE:-}" = cancel ]; then
+  OPD_BLOCK_PROBE=1 cancel_runner TERM
+  exit 0
+fi
+
 if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
+  run_grep_status_probe
+  run_deep_reap
+  run_deadline_probe
+  cancel_outer_during pipe
+  cancel_outer_during cancel
   run_pipe_probe
   cancel_runner TERM
   cancel_runner INT
+  cancel_runner HUP
 fi
 
 unset ACCESS_SERVICE_TOKEN_CLIENT_IDS
@@ -865,7 +966,7 @@ fi
 
 run_package_deploy() {
   local work shim code
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
   shim="$work/shim"
   mkdir -p "$shim"
   cat > "$shim/wrangler" << 'EOF'
@@ -1251,7 +1352,7 @@ run_stub_node() {
   local mode="$1"
   shift
   local work
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
   cat > "$work/wrangler" <<'EOF'
 #!/bin/sh
 for arg in "$@"; do
@@ -1379,7 +1480,7 @@ expect_parser_failure "node exited non-zero" "failed (exit 3)"
 
 list_sentinel="zzsecret-${RANDOM}$$@example.com"
 STUB_EMAILS="$list_sentinel"
-leak_notes=$(mktemp)
+leak_notes=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 (
   deadline=$((SECONDS + 14))
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -1487,7 +1588,7 @@ run_signal_case() {
   local want="$2"
   local how="$3"
   local work dpid spins start end code pgid
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
   cat > "$work/wrangler" << 'ENDWR'
 #!/bin/sh
 for arg in "$@"; do
@@ -1631,24 +1732,24 @@ assert_early_reaped() {
   rm -f "$pidfile" "$outfile"
 }
 
-trap_pidfile=$(mktemp)
-trap_out=$(mktemp)
+trap_pidfile=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
+trap_out=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 set +e
 OPD_TRAP_PROBE=1 OPD_TRAP_PIDFILE="$trap_pidfile" "$BASH" "$suite_path" >"$trap_out" 2>&1
 trap_code=$?
 set -e
 assert_early_reaped trap "$trap_pidfile" "$trap_out" "$trap_code"
 
-race_pidfile=$(mktemp)
-race_out=$(mktemp)
+race_pidfile=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
+race_out=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 set +e
 OPD_RACE_PROBE=1 OPD_TRAP_PIDFILE="$race_pidfile" "$BASH" "$suite_path" >"$race_out" 2>&1
 race_code=$?
 set -e
 assert_early_reaped race "$race_pidfile" "$race_out" "$race_code"
 
-sig_pidfile=$(mktemp)
-sig_out=$(mktemp)
+sig_pidfile=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
+sig_out=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 set +e
 OPD_SIGINT_PROBE=1 OPD_TRAP_PIDFILE="$sig_pidfile" \
   python3 -c 'import os, signal, sys
@@ -1718,7 +1819,7 @@ echo "self-test a: unrelated sleep $stray ignored"
 "$hold_dir/bin/reap-one" "$stray" "$hold_dir/side" || true
 wait "$stray" 2>/dev/null || true
 
-bwork=$(mktemp -d)
+bwork=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
 /bin/sh -c 'sleep 60 & echo $! > "$1"; wait' _ "$bwork/child" &
 bholder=$!
 bspins=0
@@ -1763,7 +1864,7 @@ if hold_same "$bholder" "$hold_dir/pids" || hold_same "$bchild" "$hold_dir/pids"
 fi
 rm -rf "$bwork"
 
-cwork=$(mktemp -d)
+cwork=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
 cat > "$cwork/wrap" << EOF
 #!/bin/sh
 "$real_node" "\$@" &
@@ -1867,12 +1968,16 @@ echo "self-test d: pid $reused with a different start time was not killed"
 
 if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
   start_paired_suites suite
-  set +e
-  wait "$race_a"
-  race_a_code=$?
-  wait "$race_b"
-  race_b_code=$?
-  set -e
+  if wait_deadline "$race_a" "${OPD_JOIN_DEADLINE:-600}"; then
+    race_a_code=$WAIT_STATUS
+  else
+    race_a_code=1
+  fi
+  if wait_deadline "$race_b" "${OPD_JOIN_DEADLINE:-600}"; then
+    race_b_code=$WAIT_STATUS
+  else
+    race_b_code=1
+  fi
   if [ "$race_a_code" -ne 0 ] || [ "$race_b_code" -ne 0 ]; then
     echo "FAIL: self-test e: suites exited $race_a_code and $race_b_code" >&2
     echo "---- suite A ----" >&2
