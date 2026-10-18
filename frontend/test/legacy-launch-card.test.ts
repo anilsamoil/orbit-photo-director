@@ -223,20 +223,40 @@ async function pinOverLaunch(page: Page): Promise<boolean> {
   }, undefined, { timeout: 8_000 }).then(() => true, () => false);
 }
 
-async function dropPinOverLaunch(page: Page): Promise<void> {
+async function rightClickCanvas(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const map = (window as unknown as TestWindow).__opdMap;
+    return !!map?.isStyleLoaded() && !map.isMoving();
+  });
   const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
     const box = canvas.getBoundingClientRect();
+    const clear = (x: number, y: number) => {
+      for (const dx of [-12, 0, 12]) {
+        for (const dy of [-12, 0, 12]) {
+          if (document.elementFromPoint(x + dx, y + dy) !== canvas) return false;
+        }
+      }
+      return true;
+    };
+    let fallback: { x: number; y: number } | null = null;
     for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
       for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
         const x = box.x + box.width * fx;
         const y = box.y + box.height * fy;
-        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+        if (document.elementFromPoint(x, y) !== canvas) continue;
+        if (!fallback) fallback = { x, y };
+        if (clear(x, y)) return { x, y };
       }
     }
-    return null;
+    return fallback;
   });
-  expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
-  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+  expect(seed, 'a canvas point for the pin').not.toBeNull();
+  await page.mouse.move(seed!.x, seed!.y);
+  await page.mouse.click(seed!.x, seed!.y, { button: 'right', delay: 40 });
+}
+
+async function dropPinOverLaunch(page: Page): Promise<void> {
+  await rightClickCanvas(page);
   if (await pinOverLaunch(page)) return;
   const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
@@ -292,19 +312,7 @@ function phoneContext(engine: (typeof pinEngines)[number], width: number, height
 }
 
 async function dropPin(page: Page) {
-  const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
-    const box = canvas.getBoundingClientRect();
-    for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-      for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-        const x = box.x + box.width * fx;
-        const y = box.y + box.height * fy;
-        if (document.elementFromPoint(x, y) === canvas) return { x, y };
-      }
-    }
-    return null;
-  });
-  expect(seed, 'a canvas point for the pin').not.toBeNull();
-  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+  await rightClickCanvas(page);
   const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 8_000 }).then(() => true, () => false);
   if (!opened) throw new Error('pin did not open');
 }
