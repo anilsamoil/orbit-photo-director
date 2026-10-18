@@ -268,7 +268,9 @@ describe('account-owned ratings', () => {
   it('preserves existing owner dedupe keys under the bound Google account', async () => {
     await emailBinding('owner@example.com', 'anil');
     const body = { target_id: 'test', pass_time: '2026-09-12T01:00:00Z', action: 'shoot', dedupe_key: 'old-owner-photo', profile: 'anil' };
-    expect(await (await call('/api/log', undefined, 'POST', body, { 'x-calib-token': 'legacy' })).json()).toMatchObject({ ok: true, deduped: false });
+    expect((await call('/api/log', undefined, 'POST', body, { 'x-calib-token': 'legacy' })).status).toBe(401);
+    const month = new Date().toISOString().slice(0, 7).replace('-', '');
+    records.set(`log/${month}/old-owner-photo.json`, JSON.stringify({ ...body, profile: 'anil' }));
     expect(await (await call('/api/log', await jwt('owner-id', 'owner@example.com'), 'POST', body)).json()).toMatchObject({ ok: true, deduped: true });
   });
 });

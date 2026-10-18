@@ -20,7 +20,7 @@ import { handleCloudRequest } from './cloud';
 import { handleWxRequest } from './wx';
 import { handleProfilesRequest } from './profiles';
 import { isValidProfileName } from './shared';
-import { authenticateCalibration } from './calibration-auth';
+import { authenticateCalibration, authenticateHealth } from './calibration-auth';
 import { handleBrowserSession, isOpaqueProfileName, resolveBrowserProfile } from './browser-identity';
 
 export interface Env {
@@ -31,6 +31,7 @@ export interface Env {
   ACCESS_AUD?: string;
   ACCESS_PROFILE_BINDINGS?: string; // private verified-email hash to legacy profile aliases
   ACCESS_PROFILE_GRANTS?: string; // private verified-email hash to explicit additional profiles
+  ACCESS_SERVICE_TOKEN_CLIENT_IDS?: string;
   STALE_THRESHOLD_SECONDS: string;
 }
 
@@ -73,6 +74,7 @@ const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTION
 
 const ALLOWED_ORIGINS = new Set([
   'https://map.astroanil.dev',
+  'https://map.expedition75.com',
   'http://localhost:5173', // vite dev server
   'http://127.0.0.1:5173',
 ]);
@@ -93,6 +95,11 @@ const VALID_OBSTRUCTIONS = new Set([
   'other',
 ]);
 
+/** Machine clients reach profile targets with x-calib-token. Every other path needs the map Access JWT. */
+function isMachineProfilePath(pathname: string): boolean {
+  return pathname === '/api/profiles' || pathname.startsWith('/api/profiles/');
+}
+
 function corsHeaders(origin: string | null): HeadersInit {
   // Only echo trusted origins; otherwise omit ACAO entirely (browser blocks).
   const allowed = origin && ALLOWED_ORIGINS.has(origin) ? origin : null;
@@ -106,6 +113,14 @@ function corsHeaders(origin: string | null): HeadersInit {
     headers['access-control-allow-origin'] = allowed;
   }
   return headers;
+}
+
+function withCors(response: Response, origin: string | null): Response {
+  const merged = new Headers(response.headers);
+  for (const [k, v] of Object.entries(corsHeaders(origin))) {
+    merged.set(k, v as string);
+  }
+  return new Response(response.body, { status: response.status, headers: merged });
 }
 
 /** Day's rate-limit counter: read-only check, used BEFORE the conditional
@@ -591,6 +606,14 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
+    if (!isMachineProfilePath(url.pathname)) {
+      const healthRead = url.pathname === '/api/health' && (request.method === 'GET' || request.method === 'HEAD');
+      const auth = healthRead
+        ? await authenticateHealth(request, env)
+        : await authenticateCalibration(request, env, true);
+      if ('denied' in auth) return withCors(auth.denied, origin);
+    }
+
     let response: Response;
     if (url.pathname === '/api/browser/session' && (request.method === 'GET' || request.method === 'HEAD')) {
       response = await handleBrowserSession(request, env);
@@ -667,7 +690,11 @@ export default {
       if (request.method === 'HEAD') {
         response = new Response(null, { status: response.status, headers: response.headers });
       }
-    } else if (url.pathname.startsWith('/api/profiles/') || url.pathname.startsWith('/api/browser/profiles/')) {
+    } else if (
+      url.pathname === '/api/profiles' ||
+      url.pathname.startsWith('/api/profiles/') ||
+      url.pathname.startsWith('/api/browser/profiles/')
+    ) {
       // Slot 3: per-astronaut profile target CRUD. Auth + per-method routing
       // lives inside handleProfilesRequest so this dispatcher stays thin.
       response = await handleProfilesRequest(request, env);
@@ -700,14 +727,6 @@ export default {
     } else {
       response = jsonResponse({ error: 'not_found' }, 404);
     }
-    // Apply CORS to all API responses
-    const merged = new Headers(response.headers);
-    for (const [k, v] of Object.entries(corsHeaders(origin))) {
-      merged.set(k, v as string);
-    }
-    return new Response(response.body, {
-      status: response.status,
-      headers: merged,
-    });
+    return withCors(response, origin);
   },
 } satisfies ExportedHandler<Env>;
