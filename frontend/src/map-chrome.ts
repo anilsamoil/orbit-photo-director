@@ -256,10 +256,10 @@ function syncFooterClearance(pane: HTMLElement): void {
   };
   const banner = document.getElementById('status-banner');
   const toggle = document.getElementById('map-chrome-toggle');
-  const toggleBox = boxOf(toggle);
-  if (toggleBox.h && toggle) {
-    const used = Number.parseFloat(getComputedStyle(toggle).bottom) || 0;
-    if (Math.abs(toggleBox.y + toggleBox.h - (window.innerHeight - used)) > 1) {
+  const bannerBox = boxOf(banner);
+  if (banner && bannerBox.h) {
+    const used = Number.parseFloat(getComputedStyle(banner).bottom) || 0;
+    if (Math.abs(bannerBox.y + bannerBox.h - (window.innerHeight - used)) > 1) {
       scheduleSync();
       return;
     }
