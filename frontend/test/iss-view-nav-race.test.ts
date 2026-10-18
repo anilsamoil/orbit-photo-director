@@ -145,10 +145,11 @@ async function boot(): Promise<void> {
 }
 
 async function releasePage(): Promise<void> {
+  const main = await import('../src/main');
+  main.stopPollScheduler();
+  main.stopCountdown();
   for (const stop of schedulerStops) stop();
   schedulerStops.clear();
-  const { stopCountdown } = await import('../src/main');
-  stopCountdown();
 }
 
 afterEach(async () => {
@@ -224,18 +225,50 @@ describe('ISS view import lifetime', () => {
     }
   });
 
-  it('second init() replaces the countdown interval', async () => {
+  it('release stops the manifest poll', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
       await boot();
       await boot();
+      const { stopPollScheduler } = await import('../src/main');
+      stopPollScheduler();
+      const before = vi.mocked(manifestModule.fetchManifest).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(vi.mocked(manifestModule.fetchManifest).mock.calls.length - before).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('repeated init() ticks the countdown once per second', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      await boot();
+      await boot();
       const readout = document.getElementById('iss-now');
       if (!readout) throw new Error('missing iss-now');
-      readout.innerHTML = 'sentinel';
-      const { stopCountdown } = await import('../src/main');
-      stopCountdown();
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(readout.innerHTML).toBe('sentinel');
+      let ticks = 0;
+      let host: object = readout;
+      let descriptor: PropertyDescriptor | undefined;
+      while (host) {
+        descriptor = Object.getOwnPropertyDescriptor(host, 'innerHTML');
+        if (descriptor?.set && descriptor.get) break;
+        host = Object.getPrototypeOf(host);
+      }
+      if (!descriptor?.set || !descriptor.get) throw new Error('missing innerHTML');
+      Object.defineProperty(readout, 'innerHTML', {
+        configurable: true,
+        get() {
+          return descriptor.get?.call(this);
+        },
+        set(value: string) {
+          ticks += 1;
+          descriptor.set?.call(this, value);
+        },
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(ticks).toBe(3);
     } finally {
       vi.useRealTimers();
     }

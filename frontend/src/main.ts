@@ -1905,6 +1905,7 @@ export {
   refresh,
   rerenderCountdowns,
   stopCountdown,
+  stopPollScheduler,
   // Test surface — exposed so frontend/test/main-integration.test.ts can
   // exercise the orchestration helpers without going through the full
   // init() / setInterval chain. Production code should use init().
