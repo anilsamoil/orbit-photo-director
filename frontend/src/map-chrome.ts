@@ -362,10 +362,26 @@ export function bindMapChrome(): void {
   });
   observer.observe(document.documentElement);
   observer.observe(ensureInsetProbe());
-  for (const selector of ['#status-banner', '#shotlist-bar', '.map-controls-time', '#satellite-picker-panel']) {
-    const node = document.querySelector(selector);
-    if (node) observer.observe(node);
-  }
+  const cornerSelectors = ['#status-banner', '#shotlist-bar', '.map-controls-time', '#satellite-picker-panel'];
+  const observeCorners = (): void => {
+    for (const selector of cornerSelectors) {
+      const node = document.querySelector(selector);
+      if (node) observer.observe(node);
+    }
+  };
+  observeCorners();
+  const cornerArrivals = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        if (cornerSelectors.some((selector) => node.matches(selector) || node.querySelector(selector) !== null)) {
+          observeCorners();
+          return;
+        }
+      }
+    }
+  });
+  cornerArrivals.observe(document.body, { childList: true, subtree: true });
   const mutations = new MutationObserver(() => {
     // Let slot writes release mute, then settle derived classes before another input.
     queueMicrotask(syncMapChrome);
