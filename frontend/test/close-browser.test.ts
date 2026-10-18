@@ -283,6 +283,20 @@ it('keeps a macOS Chrome path in the launch candidates', () => {
   expect(CHROME_CANDIDATES).toContain('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
 });
 
+async function runningEngine(name: string, type: typeof chromium, executablePath: string): Promise<void> {
+  const session = await launchTracked(type, { headless: true, executablePath });
+  const child = session.server.process();
+  const started = Date.now();
+  try {
+    await closeBrowser(session, `running-${name}`);
+    expect(child.exitCode).toBe(0);
+    expect(child.signalCode).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  } finally {
+    try { await session.server.kill(); } catch {}
+  }
+}
+
 async function stoppedEngine(name: string, type: typeof chromium, executablePath: string): Promise<void> {
   const sibling = track(detached('sleep', ['30']));
   const session = await launchTracked(type, { headless: true, executablePath });
@@ -303,6 +317,22 @@ async function stoppedEngine(name: string, type: typeof chromium, executablePath
 }
 
 describe('launched browsers', () => {
+  it('closes a running chrome process when it exits', async (ctx) => {
+    if (!chromePath) {
+      ctx.skip();
+      return;
+    }
+    await runningEngine('chrome', chromium, chromePath);
+  }, 30_000);
+
+  it('closes a running webkit process when it exits', async (ctx) => {
+    if (!existsSync(webkit.executablePath())) {
+      ctx.skip();
+      return;
+    }
+    await runningEngine('webkit', webkit, webkit.executablePath());
+  }, 30_000);
+
   it('kills a stopped chrome process within the hook budget', async (ctx) => {
     if (!chromePath) {
       ctx.skip();
