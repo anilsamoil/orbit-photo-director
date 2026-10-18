@@ -225,7 +225,11 @@ describe('deferred north recenter', () => {
   });
 
   it('a follow tick does not snap bearing when recenter delivers the user rotate', () => {
-    const { vendor } = armFollow();
+    const { vendor, north } = armFollow();
+    vendor.setBearing(0);
+    north.click();
+    expect(api().currentBearingMode()).toBe('north');
+    expect(localStorage.getItem(PREF_KEYS.bearingMode)).toBe('north');
     vendor.setBearing(40);
     const orig = vendor.setCenter.bind(vendor);
     vendor.setCenter = (at) => {
@@ -236,35 +240,20 @@ describe('deferred north recenter', () => {
     api().applyFollowISS({ lat: 12, lon: 34 });
     expect(vendor.cameraCalls.slice(before).filter((call) => call.method === 'setBearing')).toEqual([]);
     expect(vendor.bearing()).toBe(40);
+    expect(api().currentBearingMode()).toBe('north');
+    expect(localStorage.getItem(PREF_KEYS.bearingMode)).toBe('north');
     expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('drops the click a rotate release delivers to North', () => {
-    vi.useFakeTimers();
-    try {
-      const { vendor, calls, north } = armFollow();
-      vendor.setBearing(40);
-      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      vendor.fire('rotatestart', { byUser: true });
-      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-      north.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
-      const before = calls.length;
-      north.click();
-      expect(calls.length).toBe(before);
-      expect(vendor.bearing()).toBe(40);
-      vi.advanceTimersByTime(200);
-      north.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
-      north.click();
-      expect(calls.at(-1)).toMatchObject({ bearing: 0, duration: 600 });
-      vendor.setBearing(40);
-      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      vendor.fire('rotatestart', { byUser: true });
-      const guarded = calls.length;
-      api().applyBearing(true);
-      expect(calls.length).toBe(guarded);
-    } finally {
-      vi.useRealTimers();
-    }
+  it('a click just after a user rotate still selects North', () => {
+    const { vendor, calls, north } = armFollow();
+    vendor.setBearing(40);
+    vendor.fire('rotatestart', { byUser: true });
+    north.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    north.click();
+    expect(calls.at(-1)).toMatchObject({ bearing: 0, duration: 600 });
+    expect(api().currentBearingMode()).toBe('north');
+    expect(localStorage.getItem(PREF_KEYS.bearingMode)).toBe('north');
   });
 
   it('a keyboard rotate still accepts the next North click', () => {

@@ -376,4 +376,114 @@ for (const engine of [
     console.log(`NORTH_RETARGET_REPS ${engine.name} ${pass}/${finished.length} attempts ${attempts} ${JSON.stringify(reps)}`);
     expect(pass, JSON.stringify(reps, null, 2)).toBe(20);
   }, 700_000);
+
+  async function clickControl(page: Page, selector: string): Promise<void> {
+    const box = await page.locator(selector).boundingBox();
+    if (!box) throw new Error(`${selector} has no box`);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  async function dragRotate(page: Page): Promise<void> {
+    const canvas = page.locator('#map .maplibregl-canvas');
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error('map canvas has no box');
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down({ button: 'right' });
+    let seen = 0;
+    for (let i = 1; seen < 40 && i <= 16; i += 1) {
+      await page.mouse.move(x + i * 14, y);
+      await page.waitForFunction((floor) => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return Math.abs(map.getBearing()) > floor;
+      }, seen);
+      seen = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+    }
+    await page.mouse.up({ button: 'right' });
+    await page.waitForFunction(() => {
+      const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+      return !map.isMoving();
+    });
+  }
+
+  it('a North click 50ms and 150ms after a rotate eases to north', async () => {
+    for (const delay of [50, 150]) {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      try {
+        page.setDefaultTimeout(45_000);
+        await openMap(page);
+        await clickControl(page, '#bearing-north');
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+        });
+        await dragRotate(page);
+        const turned = await page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing());
+        expect(Math.abs(turned)).toBeGreaterThan(20);
+        await page.waitForTimeout(delay);
+        await clickControl(page, '#bearing-north');
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+        });
+        const end = await page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing());
+        expect(Math.abs(end), `${delay}ms end ${end}`).toBeLessThan(0.01);
+        expect(await page.locator('#bearing-north').getAttribute('class')).toContain('active');
+      } finally {
+        await page.close();
+      }
+    }
+  }, 180_000);
+
+  it('Enter and Space activate North and ISS-up', async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    try {
+      page.setDefaultTimeout(20_000);
+      await openMap(page);
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving();
+      });
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-north').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+      });
+      expect(await page.locator('#bearing-north').getAttribute('class')).toContain('active');
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('north');
+
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-iss').focus();
+      await page.keyboard.press('Space');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return document.getElementById('bearing-iss')?.classList.contains('active') === true && !map.isMoving();
+      });
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('iss-up');
+
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-north').focus();
+      await page.keyboard.press('Space');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+      });
+      expect(await page.locator('#bearing-north').getAttribute('class')).toContain('active');
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('north');
+
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-iss').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return document.getElementById('bearing-iss')?.classList.contains('active') === true && !map.isMoving();
+      });
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('iss-up');
+    } finally {
+      await page.close();
+    }
+  }, 120_000);
 });
