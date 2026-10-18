@@ -6,6 +6,7 @@ import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Manifest, Track } from '../src/types';
 import { freezeDate } from './freeze-date';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
 if (!existsSync(webkit.executablePath())) throw new Error(`WebKit is required at ${webkit.executablePath()}`);
@@ -201,11 +202,13 @@ for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
 ]) describe.skipIf(engine.name === 'Chrome' && !existsSync(engine.executablePath))(`map corner lift ${engine.name}`, () => {
   let browser: Browser;
+  let session: TrackedBrowser | undefined;
 
   beforeAll(async () => {
-    browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
+    session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
+    browser = session.browser;
   }, 30_000);
-  afterAll(async () => { await browser?.close(); }, 30_000);
+  afterAll(async () => { await closeBrowser(session, `corner-lift-${engine.name}`); });
 
   async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets, trackFooters = false, e2e = true, countFrames = false): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
@@ -213,57 +216,62 @@ for (const engine of [
       viewport: { width, height },
       serviceWorkers: 'block',
     });
-    if (trackFooters) {
-      await context.addInitScript(() => {
-        const targets = new Set<Element>();
-        const observe = ResizeObserver.prototype.observe;
-        const unobserve = ResizeObserver.prototype.unobserve;
-        ResizeObserver.prototype.observe = function (target: Element) {
-          if (target instanceof Element && target.id === 'status-banner') targets.add(target);
-          return observe.call(this, target);
-        };
-        ResizeObserver.prototype.unobserve = function (target: Element) {
-          targets.delete(target);
-          return unobserve.call(this, target);
-        };
-        (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets = () =>
-          [...targets].map((node) => ({ connected: node.isConnected }));
-      });
-    }
-    if (countFrames) {
-      await context.addInitScript(() => {
-        const view = window as unknown as { __rafs: number; __ros: number };
-        view.__rafs = 0;
-        view.__ros = 0;
-        const raf = window.requestAnimationFrame.bind(window);
-        window.requestAnimationFrame = (callback: FrameRequestCallback) => raf((time) => {
-          view.__rafs += 1;
-          callback(time);
+    try {
+      if (trackFooters) {
+        await context.addInitScript(() => {
+          const targets = new Set<Element>();
+          const observe = ResizeObserver.prototype.observe;
+          const unobserve = ResizeObserver.prototype.unobserve;
+          ResizeObserver.prototype.observe = function (target: Element) {
+            if (target instanceof Element && target.id === 'status-banner') targets.add(target);
+            return observe.call(this, target);
+          };
+          ResizeObserver.prototype.unobserve = function (target: Element) {
+            targets.delete(target);
+            return unobserve.call(this, target);
+          };
+          (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets = () =>
+            [...targets].map((node) => ({ connected: node.isConnected }));
         });
-        const Native = window.ResizeObserver;
-        const Counting = function (this: ResizeObserver, callback: ResizeObserverCallback): ResizeObserver {
-          return new Native((entries, observer) => {
-            view.__ros += 1;
-            callback(entries, observer);
+      }
+      if (countFrames) {
+        await context.addInitScript(() => {
+          const view = window as unknown as { __rafs: number; __ros: number };
+          view.__rafs = 0;
+          view.__ros = 0;
+          const raf = window.requestAnimationFrame.bind(window);
+          window.requestAnimationFrame = (callback: FrameRequestCallback) => raf((time) => {
+            view.__rafs += 1;
+            callback(time);
           });
-        };
-        Counting.prototype = Native.prototype;
-        window.ResizeObserver = Counting as unknown as typeof ResizeObserver;
-      });
+          const Native = window.ResizeObserver;
+          const Counting = function (this: ResizeObserver, callback: ResizeObserverCallback): ResizeObserver {
+            return new Native((entries, observer) => {
+              view.__ros += 1;
+              callback(entries, observer);
+            });
+          };
+          Counting.prototype = Native.prototype;
+          window.ResizeObserver = Counting as unknown as typeof ResizeObserver;
+        });
+      }
+      if (engine.name === 'WebKit') {
+        await context.addInitScript(() => {
+          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
+        });
+      }
+      const page = await context.newPage();
+      if (insets && engine.name === 'Chrome') {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+      }
+      const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
+      await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook, e2e);
+      return { context, page };
+    } catch (error) {
+      await context.close();
+      throw error;
     }
-    if (engine.name === 'WebKit') {
-      await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-      });
-    }
-    const page = await context.newPage();
-    if (insets && engine.name === 'Chrome') {
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
-    }
-    const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
-    await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook, e2e);
-    return { context, page };
   }
 
   it('keeps Hide in the same place across five show/hide cycles at 402x874', async () => {
@@ -535,8 +543,8 @@ for (const engine of [
 
   it('keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
-    const page = await context.newPage();
     try {
+      const page = await context.newPage();
       await boot(page, assets, script);
       await showChrome(page);
       const scrolled = await page.evaluate(() => {
