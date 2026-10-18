@@ -390,12 +390,12 @@ describe('webkit floor', () => {
   });
 
   it('keeps vitest exit 7 when the shard report is not json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shard-step-'));
+    const script = shardShell(7).replaceAll('bun scripts/frontend-shards.ts', `bun ${join(root, 'scripts/frontend-shards.ts')}`);
     try {
-      expect(bash(shardShell(7), root).status).toBe(7);
+      expect(bash(script, dir).status).toBe(7);
     } finally {
-      rmSync(join(root, 'shard-files.txt'), { force: true });
-      rmSync(join(root, 'shard-1-results.json'), { force: true });
-      rmSync(join(root, 'shard-1-time.txt'), { force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
