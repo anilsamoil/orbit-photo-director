@@ -160,15 +160,29 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
     throw new Error('Connect once to verify your Google account. Your saved data is still on this device.');
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const request = fetch('/api/browser/session', {
+    credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
+    signal: controller.signal,
+  }).catch((error: unknown): Promise<Response> => {
+    if (settled) return new Promise<Response>(() => {});
+    return Promise.reject(error);
+  });
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      settled = true;
+      reject(new Error('The session request timed out'));
+      controller.abort();
+    }, 10_000);
+  });
   try {
     let response: Response;
     try {
-      response = await fetch('/api/browser/session', {
-        credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
-        signal: controller.signal,
-      });
+      response = await Promise.race([request, deadline]);
+      settled = true;
     } catch (error) {
+      settled = true;
       // iOS can report online during LOS. A transport failure can resume this
       // tab read-only; an actual HTTP denial or malformed response cannot.
       const cached = resumeOfflineProfile();
