@@ -6,7 +6,7 @@ import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Manifest, Track } from '../src/types';
 import { freezeDate } from './freeze-date';
-import { browserPidSnapshot, browserPidsLaunchedSince, closeBrowser } from './close-browser.mjs';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
 if (!existsSync(webkit.executablePath())) throw new Error(`WebKit is required at ${webkit.executablePath()}`);
@@ -199,14 +199,13 @@ for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
 ]) describe.skipIf(engine.name === 'Chrome' && !existsSync(engine.executablePath))(`map corner lift ${engine.name}`, () => {
   let browser: Browser;
-  let launched: number[] = [];
+  let session: TrackedBrowser | undefined;
 
   beforeAll(async () => {
-    const before = browserPidSnapshot();
-    browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
-    launched = browserPidsLaunchedSince(before);
+    session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
+    browser = session.browser;
   }, 30_000);
-  afterAll(async () => { await closeBrowser(browser, launched, `corner-lift-${engine.name}`); });
+  afterAll(async () => { await closeBrowser(session, `corner-lift-${engine.name}`); });
 
   async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({

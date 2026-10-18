@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { browserPidSnapshot, browserPidsLaunchedSince, closeBrowser } from './close-browser.mjs';
+import { closeBrowser, trackProcess } from './close-browser.mjs';
 
 function alive(pid: number | undefined): boolean {
   if (!pid) return false;
@@ -35,6 +35,10 @@ afterEach(() => {
   groups.length = 0;
 });
 
+function session(child: ChildProcess, close: () => Promise<unknown>) {
+  return { close, tracked: trackProcess(child.pid ?? 0) };
+}
+
 describe('closeBrowser', () => {
   it('unblocks a close that is waiting on a live child', async () => {
     const child = track(detached('sleep', ['30']));
@@ -43,7 +47,7 @@ describe('closeBrowser', () => {
     });
     const started = Date.now();
     try {
-      await closeBrowser({ close: () => closed }, [child.pid ?? 0], 'stuck-child');
+      await closeBrowser(session(child, () => closed), 'stuck-child');
       const elapsed = Date.now() - started;
       expect(elapsed).toBeGreaterThanOrEqual(1000);
       expect(elapsed).toBeLessThan(5_000);
@@ -54,16 +58,13 @@ describe('closeBrowser', () => {
   });
 
   it('leaves an unrelated sibling alive', async () => {
-    const before = browserPidSnapshot();
     const sibling = track(detached('sleep', ['30']));
     const root = track(detached('sleep', ['30']));
-    const launched = browserPidsLaunchedSince(before);
     try {
-      expect(launched).toEqual(expect.arrayContaining([sibling.pid, root.pid]));
       const closed = new Promise<void>((resolve) => {
         root.once('close', () => resolve());
       });
-      await closeBrowser({ close: () => closed }, launched, 'sibling');
+      await closeBrowser(session(root, () => closed), 'sibling');
       expect(alive(sibling.pid)).toBe(true);
       expect(alive(root.pid)).toBe(false);
     } finally {
@@ -83,7 +84,7 @@ describe('closeBrowser', () => {
     });
     try {
       const started = Date.now();
-      await closeBrowser({ close: () => closed }, [root.pid ?? 0], 'grandchild');
+      await closeBrowser(session(root, () => closed), 'grandchild');
       expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
       expect(alive(root.pid)).toBe(false);
       expect(alive(grandchild)).toBe(false);
@@ -102,7 +103,7 @@ describe('closeBrowser', () => {
     let returned = false;
     try {
       await Promise.race([
-        closeBrowser({ close: () => closed }, [root.pid ?? 0], 'late-child').then(() => {
+        closeBrowser(session(root, () => closed), 'late-child').then(() => {
           returned = true;
         }),
         new Promise<void>((resolve) => setTimeout(resolve, 4_000)),
@@ -124,7 +125,7 @@ describe('closeBrowser', () => {
     let returned = false;
     try {
       await Promise.race([
-        closeBrowser({ close: () => new Promise<void>(() => {}) }, [root.pid ?? 0], 'deadline').then(() => {
+        closeBrowser(session(root, () => new Promise<void>(() => {})), 'deadline').then(() => {
           returned = true;
         }),
         new Promise<void>((resolve) => setTimeout(resolve, 4_000)),
@@ -143,11 +144,29 @@ describe('closeBrowser', () => {
     const root = track(detached('sleep', ['30']));
     const started = Date.now();
     try {
-      await closeBrowser({ close: async () => {} }, [root.pid ?? 0], 'early');
+      await closeBrowser(session(root, async () => {}), 'early');
       expect(Date.now() - started).toBeLessThan(1000);
       expect(alive(root.pid)).toBe(true);
     } finally {
       killGroup(root.pid);
+    }
+  });
+
+  it('starts the worker without experimental web storage when this Node has the switch', () => {
+    const flag = '--no-experimental-webstorage';
+    if (!process.allowedNodeEnvironmentFlags.has(flag)) return;
+    expect(process.execArgv).toContain(flag);
+  });
+
+  it('refuses to track a process that is not its own group leader', () => {
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      expect(() => trackProcess(child.pid ?? 0)).toThrow(/process-group leader/);
+      expect(alive(child.pid)).toBe(true);
+    } finally {
+      if (child.pid) {
+        try { process.kill(child.pid, 'SIGKILL'); } catch {}
+      }
     }
   });
 });
