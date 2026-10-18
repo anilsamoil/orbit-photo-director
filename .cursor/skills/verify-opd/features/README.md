@@ -9,6 +9,7 @@ This directory is the source for driving SNAP the way an astronaut does. Read th
 - Open only the URL `doctor` prints. The default is `http://127.0.0.1:41731`.
 - Keep a second run on its own `OPD_VERIFY_HOME` and `OPD_VERIFY_PORT`.
 - The fixture signs in as Anil. Cards are `Verify Reef`, `Verify Delta`, `Verify Mesa`, and `Verify Keepsake`. `Verify Ascent` is the Shot highlight, `Verify Likely` is a pad with no corridor, and `Verify Horizon` is Watch. Upcoming and the map list Ascent and Likely. They do not list Horizon.
+- That sign-in is the Anil fixture. The drive does not send `Cf-Access-Jwt-Assertion`, and the proxy is not the Worker. A green drive does not prove the Access gate. The gate check is `cd worker && bunx vitest run --config ../.cursor/skills/verify-opd/scripts/vitest.config.mjs`. `bash worker/deploy.test.sh` and `bash scripts/upload_frontend.test.sh` are the deploy and upload checklist. Both public hosts are `https://map.astroanil.dev` and `https://map.expedition75.com`. Do not fetch them. The zone redirect on the second host is disabled, not deleted. Shot-list calendar links use the page host.
 
 ## Driving conventions
 
