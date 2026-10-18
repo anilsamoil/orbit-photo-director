@@ -21,6 +21,7 @@ type Runtime = {
   motionWatch: boolean;
   toggleBound: boolean;
   bearingBound: boolean;
+  rotateHold: number | null;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
@@ -42,6 +43,7 @@ const state: Runtime = {
   motionWatch: false,
   toggleBound: false,
   bearingBound: false,
+  rotateHold: null,
   hasTrack: () => false,
   position: () => null,
 };
@@ -72,12 +74,16 @@ export function setFollowEnv(core: MapCore | null, follow: boolean): void {
   state.follow = follow;
 }
 
+function followMayMove(core: MapCore): boolean {
+  return state.follow && state.rotateHold === null && !core.clock.isScrubbed();
+}
+
 /** Recenter on the live ISS while follow is on and the view is live.
  *  setCenter aborts a north ease, so that ease keeps the latest center
  *  and this applies it once the bearing has reached north. */
 export function applyFollowISS(pos: MarkerPosition): void {
   const core = state.core;
-  if (!state.follow || !core || core.clock.isScrubbed()) return;
+  if (!core || !followMayMove(core)) return;
   if (state.mode === 'north' && state.motion) {
     state.motion.pending = pos;
     return;
@@ -99,7 +105,7 @@ function settleMotion(): void {
   const center: [number, number] = [motion.pending.lon, motion.pending.lat];
   requestAnimationFrame(() => {
     const live = state.core;
-    if (live !== core || state.motion || !state.follow || state.mode !== 'north') return;
+    if (live !== core || state.motion || state.mode !== 'north' || !followMayMove(live)) return;
     live.setCenter(center);
   });
 }
@@ -205,8 +211,20 @@ export function bindFollowToggle(): void {
     core.on('zoomstart', ({ byUser }) => {
       if (byUser) exitFollow();
     });
+    const onRotateDown = (event: PointerEvent): void => {
+      if (event.button !== 2) return;
+      state.rotateHold = event.pointerId;
+    };
+    const onRotateEnd = (event: PointerEvent): void => {
+      if (state.rotateHold !== event.pointerId) return;
+      state.rotateHold = null;
+    };
+    document.addEventListener('pointerdown', onRotateDown, true);
+    document.addEventListener('pointerup', onRotateEnd, true);
+    document.addEventListener('pointercancel', onRotateEnd, true);
     core.on('rotatestart', ({ byUser }) => {
       if (!byUser) return;
+      state.rotateHold = null;
       state.motion = null;
       exitFollow();
     });
@@ -241,6 +259,7 @@ export function resetFollowMemoryForTest(): void {
   state.mode = 'north';
   state.motion = null;
   state.motionWatch = false;
+  state.rotateHold = null;
 }
 
 export function clearBearingPref(): void {

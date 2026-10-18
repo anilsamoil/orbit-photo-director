@@ -6,7 +6,7 @@ import fixture from '../../../../test/fixtures/iss-sgp4-fixture.json';
 import { createVendorDouble, type VendorDouble } from '../../../../test/vendor-map-double';
 import type { Track } from '../../../types';
 import { createClock } from '../../map-core/clock';
-import { createMapCore } from '../../map-core/core';
+import { createMapCore, type MapCore } from '../../map-core/core';
 import type { CameraMove } from '../../map-core/vendor-map';
 import { PREF_KEYS } from '../../map-core/prefs';
 
@@ -137,6 +137,7 @@ describe('deferred north recenter', () => {
     frames: FrameRequestCallback[];
     centers: () => [number, number][];
     depth: () => number;
+    core: MapCore;
     north: HTMLButtonElement;
     iss: HTMLButtonElement;
   } {
@@ -173,6 +174,7 @@ describe('deferred north recenter', () => {
       frames,
       centers: () => vendor.cameraCalls.filter((call) => call.method === 'setCenter').map((call) => call.args[0] as [number, number]),
       depth: () => maxDepth,
+      core,
       north: document.getElementById('bearing-north') as HTMLButtonElement,
       iss: document.getElementById('bearing-iss') as HTMLButtonElement,
     };
@@ -193,6 +195,32 @@ describe('deferred north recenter', () => {
     expect(centers()).toEqual([[34, 12]]);
     expect(depth()).toBe(1);
     expect(calls.filter((call) => call.duration === 600)).toHaveLength(1);
+  });
+
+  it('does not apply the deferred recenter after the view is scrubbed', () => {
+    const { vendor, frames, centers, core, north } = armFollow();
+    vendor.setBearing(80);
+    north.click();
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    vendor.setBearing(0);
+    vendor.fire('moveend', undefined);
+    expect(frames).toHaveLength(1);
+    core.clock.setViewTime({ kind: 'scrubbed', atMs: nowMs + 45 * 60_000 });
+    frames[0]!(0);
+    expect(centers()).toEqual([]);
+    expect(vendor.bearing()).toBe(0);
+  });
+
+  it('holds a follow tick while a right-button rotate is waiting for its first frame', () => {
+    const { centers } = armFollow();
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2, pointerId: 4 }));
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(centers()).toEqual([]);
+    expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 2, pointerId: 4 }));
+    api().applyFollowISS({ lat: 1, lon: 2 });
+    expect(centers()).toEqual([[2, 1]]);
+    expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('drops the deferred center when a duration-0 cancel ends the north ease', () => {
