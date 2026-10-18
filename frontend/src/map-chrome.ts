@@ -187,54 +187,86 @@ let mute = false;
 let syncing = false;
 let staleSkips = 0;
 let syncQueued = false;
+const writtenPx = new Map<string, number>();
+
+function wholePx(value: number): number {
+  return Math.round(value);
+}
+
+function writePx(name: string, value: number): void {
+  const px = wholePx(value);
+  if (writtenPx.get(name) === px) return;
+  writtenPx.set(name, px);
+  document.body.style.setProperty(name, `${px}px`);
+}
+
+function setBodyClass(name: string, on: boolean): void {
+  if (document.body.classList.contains(name) === on) return;
+  document.body.classList.toggle(name, on);
+}
+
+function quantizeSlots(slots: ChromeSlots): ChromeSlots {
+  const slot = <T extends { x: number; y: number; w: number; h: number }>(value: T | null | undefined): T | null | undefined => {
+    if (!value) return value;
+    return { ...value, x: wholePx(value.x), y: wholePx(value.y), w: wholePx(value.w), h: wholePx(value.h) };
+  };
+  return {
+    time: slot(slots.time) ?? null,
+    dock: slot(slots.dock) ?? null,
+    legend: slot(slots.legend) ?? null,
+    launch: slot(slots.launch),
+    picker: slot(slots.picker),
+  };
+}
 
 function writeSlot(name: string, value: number): void {
-  document.body.style.setProperty(name, `${value}px`);
+  writePx(name, value);
 }
 
 function applySlots(slots: ChromeSlots, pane: HTMLElement): void {
-  const key = JSON.stringify(slots);
+  const placed = quantizeSlots(slots);
+  const key = JSON.stringify(placed);
   if (key === lastSlots) return;
   lastSlots = key;
   const origin = pane.getBoundingClientRect();
   mute = true;
-  document.body.classList.toggle('map-slot-time', slots.time !== null);
-  document.body.classList.toggle('map-slot-time-line', slots.time !== null && slots.time.h <= timeLinePx);
-  document.body.classList.toggle('map-slot-time-compact', slots.time !== null && slots.time.h <= timeLinePx && slots.time.w < TIME_LINE_WIDTH);
-  document.body.classList.toggle('map-slot-dock', slots.dock !== null);
-  document.body.classList.toggle('map-slot-dock-row', slots.dock?.axis === 'row');
-  document.body.classList.toggle('map-slot-legend', slots.legend !== null);
-  document.body.classList.toggle('map-slot-launch', !!slots.launch);
-  document.body.classList.toggle('map-slot-picker', !!slots.picker);
-  if (slots.time) {
-    writeSlot('--slot-time-x', slots.time.x - origin.left);
-    writeSlot('--slot-time-y', slots.time.y - origin.top);
-    writeSlot('--slot-time-w', slots.time.w);
-    writeSlot('--slot-time-h', slots.time.h);
+  setBodyClass('map-slot-time', placed.time !== null);
+  setBodyClass('map-slot-time-line', placed.time !== null && placed.time.h <= timeLinePx);
+  setBodyClass('map-slot-time-compact', placed.time !== null && placed.time.h <= timeLinePx && placed.time.w < TIME_LINE_WIDTH);
+  setBodyClass('map-slot-dock', placed.dock !== null);
+  setBodyClass('map-slot-dock-row', placed.dock?.axis === 'row');
+  setBodyClass('map-slot-legend', placed.legend !== null);
+  setBodyClass('map-slot-launch', !!placed.launch);
+  setBodyClass('map-slot-picker', !!placed.picker);
+  if (placed.time) {
+    writeSlot('--slot-time-x', placed.time.x - origin.left);
+    writeSlot('--slot-time-y', placed.time.y - origin.top);
+    writeSlot('--slot-time-w', placed.time.w);
+    writeSlot('--slot-time-h', placed.time.h);
   }
-  if (slots.dock) {
-    writeSlot('--slot-dock-x', slots.dock.x - origin.left);
-    writeSlot('--slot-dock-y', slots.dock.y - origin.top);
-    writeSlot('--slot-dock-w', slots.dock.w);
-    writeSlot('--slot-dock-h', slots.dock.h);
+  if (placed.dock) {
+    writeSlot('--slot-dock-x', placed.dock.x - origin.left);
+    writeSlot('--slot-dock-y', placed.dock.y - origin.top);
+    writeSlot('--slot-dock-w', placed.dock.w);
+    writeSlot('--slot-dock-h', placed.dock.h);
   }
-  if (slots.launch) {
-    writeSlot('--slot-launch-x', slots.launch.x - origin.left);
-    writeSlot('--slot-launch-y', slots.launch.y - origin.top);
-    writeSlot('--slot-launch-w', slots.launch.w);
-    writeSlot('--slot-launch-h', slots.launch.h);
+  if (placed.launch) {
+    writeSlot('--slot-launch-x', placed.launch.x - origin.left);
+    writeSlot('--slot-launch-y', placed.launch.y - origin.top);
+    writeSlot('--slot-launch-w', placed.launch.w);
+    writeSlot('--slot-launch-h', placed.launch.h);
   }
-  if (slots.picker) {
-    writeSlot('--slot-picker-x', slots.picker.x - origin.left);
-    writeSlot('--slot-picker-y', slots.picker.y - origin.top);
-    writeSlot('--slot-picker-w', slots.picker.w);
-    writeSlot('--slot-picker-h', slots.picker.h);
+  if (placed.picker) {
+    writeSlot('--slot-picker-x', placed.picker.x - origin.left);
+    writeSlot('--slot-picker-y', placed.picker.y - origin.top);
+    writeSlot('--slot-picker-w', placed.picker.w);
+    writeSlot('--slot-picker-h', placed.picker.h);
   }
-  if (slots.legend) {
-    writeSlot('--slot-legend-x', slots.legend.x);
-    writeSlot('--slot-legend-y', slots.legend.y);
-    writeSlot('--slot-legend-w', slots.legend.w);
-    writeSlot('--slot-legend-h', slots.legend.h);
+  if (placed.legend) {
+    writeSlot('--slot-legend-x', placed.legend.x);
+    writeSlot('--slot-legend-y', placed.legend.y);
+    writeSlot('--slot-legend-w', placed.legend.w);
+    writeSlot('--slot-legend-h', placed.legend.h);
   }
   queueMicrotask(() => {
     mute = false;
@@ -252,9 +284,9 @@ function scheduleSync(): void {
 
 function syncFooterClearance(pane: HTMLElement): void {
   const set = (name: string, value: number): void => {
-    const next = `${Math.round(value * 100) / 100}px`;
-    if (document.body.style.getPropertyValue(name) !== next) document.body.style.setProperty(name, next);
+    writePx(name, value);
   };
+  const applied = (name: string): number => writtenPx.get(name) ?? wholePx(Number.parseFloat(document.body.style.getPropertyValue(name)) || 0);
   const banner = document.getElementById('status-banner');
   const toggle = document.getElementById('map-chrome-toggle');
   const bannerBox = boxOf(banner);
@@ -273,11 +305,10 @@ function syncFooterClearance(pane: HTMLElement): void {
   set('--map-banner-bottom', Math.max(bottomInset, shotList.h));
   const footer = boxOf(banner);
   const floor = Math.min(footer.h ? footer.y : window.innerHeight - bottomInset, shotList.h ? shotList.y : window.innerHeight);
-  const applied = (name: string): number => Number.parseFloat(document.body.style.getPropertyValue(name)) || 0;
   const demand = (name: string, node: Element | null): number => {
     const box = boxOf(node);
     if (!box.h) return 0;
-    return Math.ceil(Math.max(0, box.y + box.h + applied(name) - floor + 8));
+    return Math.max(0, wholePx(box.y) + wholePx(box.h) + applied(name) - wholePx(floor) + 8);
   };
   set('--map-corner-lift', demand('--map-corner-lift', toggle));
   const chip = boxOf(pane.querySelector('.map-controls-time'));
@@ -285,7 +316,7 @@ function syncFooterClearance(pane: HTMLElement): void {
   const naturalOverflow = !document.body.classList.contains('map-slot-time')
     && chip.y < zoom.y && chip.y + chip.h > zoom.y;
   const zoomRow = needsZoomRow(zoom, naturalOverflow ? { ...chip, y: zoom.y } : chip, floor);
-  if (document.body.classList.contains('map-zoom-row') !== zoomRow) document.body.classList.toggle('map-zoom-row', zoomRow);
+  setBodyClass('map-zoom-row', zoomRow);
   if (window.innerWidth <= 719 || document.body.classList.contains('map-chrome-hidden') || document.body.classList.contains('map-slot-time')) {
     set('--map-time-lift', 0);
     return;
@@ -380,9 +411,18 @@ export function bindMapChrome(): void {
       syncMapChrome();
     });
   };
-  const footerWatch = new MutationObserver(syncNow);
+  const footerContent = new MutationObserver(syncNow);
+  const footerStyle = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.target === document.body || record.target === document.documentElement) continue;
+      if (!(record.target instanceof HTMLElement) || record.target.id !== 'status-banner') continue;
+      syncNow();
+      return;
+    }
+  });
   const watchFooter = (node: Element): void => {
-    footerWatch.observe(node, { attributes: true, attributeFilter: ['style', 'class'], childList: true, subtree: true, characterData: true });
+    footerContent.observe(node, { childList: true, subtree: true, characterData: true });
+    footerStyle.observe(node, { attributes: true, attributeFilter: ['style', 'class'] });
   };
   const footerIn = (node: Element): Element | null => node.matches('#status-banner') ? node : node.querySelector('#status-banner');
   const cornerArrivals = new MutationObserver((records) => {
