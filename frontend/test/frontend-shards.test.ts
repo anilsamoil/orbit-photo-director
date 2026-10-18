@@ -49,31 +49,41 @@ describe('frontend shards', () => {
     expect(values).toEqual(Array.from({ length: SHARD_COUNT }, (_, index) => index + 1));
   });
 
-  it('counts executed WebKit cases only in files that launch Playwright WebKit', () => {
+  it('counts a passed WebKit case once and ignores failures and Chrome titles', () => {
     expect(importsPlaywrightWebKit('test/pass-row-fit.test.ts')).toBe(true);
     expect(importsPlaywrightWebKit('test/webkit-gate.test.ts')).toBe(false);
     expect(importsPlaywrightWebKit('test/digits.test.ts')).toBe(false);
+    const passed = {
+      ancestorTitles: ['pin pass row WebKit'],
+      fullName: 'pin pass row WebKit fits',
+      status: 'passed',
+    };
     const imports = (file: string) => file === 'test/pass-row-fit.test.ts';
-    const counted = countWebKitCases([{
-      testResults: [
-        {
-          name: '/work/frontend/test/pass-row-fit.test.ts',
-          assertionResults: [
-            { fullName: 'WebKit rendered pin pass row fits', status: 'passed' },
-            { fullName: 'Chromium rendered pin pass row fits', status: 'passed' },
-            { fullName: 'WebKit rendered pin pass row skipped', status: 'skipped' },
-            { fullName: 'WebKit rendered pin pass row failed', status: 'failed' },
-          ],
-        },
-        {
-          name: '/work/frontend/test/webkit-gate.test.ts',
-          assertionResults: [
-            { fullName: 'throws when CI=true and WebKit cannot launch', status: 'passed' },
-          ],
-        },
-      ],
-    }], imports);
-    expect(counted.cases).toBe(2);
+    const counted = countWebKitCases([
+      {
+        testResults: [
+          {
+            name: '/work/frontend/test/pass-row-fit.test.ts',
+            assertionResults: [
+              passed,
+              { ancestorTitles: ['pin pass row Chrome'], fullName: 'pin pass row Chrome WebKit', status: 'passed' },
+              { ancestorTitles: ['pin pass row WebKit'], fullName: 'pin pass row WebKit skipped', status: 'skipped' },
+              { ancestorTitles: ['pin pass row WebKit'], fullName: 'pin pass row WebKit failed', status: 'failed' },
+            ],
+          },
+          {
+            name: '/work/frontend/test/webkit-gate.test.ts',
+            assertionResults: [
+              { ancestorTitles: ['gate WebKit'], fullName: 'gate WebKit throws when CI=true', status: 'passed' },
+            ],
+          },
+        ],
+      },
+      {
+        testResults: [{ name: 'test/pass-row-fit.test.ts', assertionResults: [passed] }],
+      },
+    ], imports);
+    expect(counted.cases).toBe(1);
     expect(counted.files).toEqual(['test/pass-row-fit.test.ts', 'test/webkit-gate.test.ts']);
     expect(() => assertExecutedFiles(
       ['test/pass-row-fit.test.ts', 'test/webkit-gate.test.ts'],
