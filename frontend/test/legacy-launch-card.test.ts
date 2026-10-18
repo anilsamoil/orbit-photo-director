@@ -251,8 +251,10 @@ async function rightClickCanvas(page: Page): Promise<void> {
     return fallback;
   });
   expect(seed, 'a canvas point for the pin').not.toBeNull();
-  await page.mouse.move(seed!.x, seed!.y);
-  await page.mouse.click(seed!.x, seed!.y, { button: 'right', delay: 40 });
+  await page.evaluate(() => {
+    (window as unknown as TestWindow).__opdMap.dragRotate.disable();
+  });
+  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
 }
 
 async function dropPinOverLaunch(page: Page): Promise<void> {
