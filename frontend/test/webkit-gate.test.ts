@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import config from '../vite.config';
-import { enforceWebKitGate, type WebKitAvailability } from './webkit-gate';
+import { enforceWebKitGate, webKitRequired, type WebKitAvailability } from './webkit-gate';
 
 const missing: WebKitAvailability = {
   status: 'unavailable',
@@ -14,7 +14,7 @@ it('throws when CI=true and WebKit cannot launch', async () => {
   const warnings: string[] = [];
   const probe = vi.fn(async () => missing);
   await expect(enforceWebKitGate({
-    env: { CI: 'true' },
+    ci: true,
     probe,
     stat: () => { throw new Error('stat'); },
     warn: (entry) => warnings.push(entry),
@@ -27,7 +27,7 @@ it('warns and returns when CI is unset and WebKit is missing', async () => {
   const warnings: string[] = [];
   const probe = vi.fn(async (): Promise<WebKitAvailability> => { throw new Error('launched'); });
   await enforceWebKitGate({
-    env: {},
+    ci: false,
     probe,
     stat: () => missing,
     warn: (entry) => warnings.push(entry),
@@ -37,9 +37,12 @@ it('warns and returns when CI is unset and WebKit is missing', async () => {
 });
 
 it('treats CI=1 as a local run', async () => {
+  expect(webKitRequired({ CI: '1' })).toBe(false);
+  expect(webKitRequired({ CI: 'true' })).toBe(true);
+  expect(webKitRequired({})).toBe(false);
   const warnings: string[] = [];
   await enforceWebKitGate({
-    env: { CI: '1' },
+    ci: webKitRequired({ CI: '1' }),
     probe: async () => { throw new Error('launched'); },
     stat: () => missing,
     warn: (entry) => warnings.push(entry),
@@ -50,7 +53,7 @@ it('treats CI=1 as a local run', async () => {
 it('stays quiet when CI=true and WebKit launches', async () => {
   const warnings: string[] = [];
   await enforceWebKitGate({
-    env: { CI: 'true' },
+    ci: true,
     probe: async () => ({ status: 'launchable' }),
     stat: () => missing,
     warn: (entry) => warnings.push(entry),
@@ -62,7 +65,7 @@ it('stays quiet when CI is unset and the binary is present', async () => {
   const warnings: string[] = [];
   const probe = vi.fn(async (): Promise<WebKitAvailability> => { throw new Error('launched'); });
   await enforceWebKitGate({
-    env: {},
+    ci: false,
     probe,
     stat: () => ({ status: 'launchable' }),
     warn: (entry) => warnings.push(entry),
