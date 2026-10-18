@@ -165,7 +165,7 @@ for (const engine of [
   beforeAll(async () => {
     browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
   }, 30_000);
-  afterAll(async () => { await browser?.close(); });
+  afterAll(async () => { await browser?.close(); }, 30_000);
 
   async function contextAt(width: number, height: number): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
