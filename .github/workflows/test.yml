@@ -63,5 +63,7 @@ jobs:
           key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/bun.lock') }}
       - name: Install Playwright WebKit
         run: cd frontend && ./node_modules/.bin/playwright install --with-deps webkit
+      # Each browser-backed file builds the app and launches real browsers.
+      # Keep those files serial within the hosted runner's resource budget.
       - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
       - run: cd frontend && bun run build
