@@ -5,6 +5,7 @@ import { chromium, devices, webkit, type Browser, type BrowserContext, type Page
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Manifest, Track } from '../src/types';
+import { freezeDate } from './freeze-date';
 import { browserPidSnapshot, browserPidsLaunchedSince, closeBrowser } from './close-browser.mjs';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
@@ -53,14 +54,50 @@ type HideBox = {
   height: number;
 };
 
-async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string): Promise<void> {
-  await page.clock.setFixedTime(new Date(now));
+type Insets = { top: number; right: number; bottom: number; left: number };
+
+function cssForInsets(insets: Insets | undefined, engineName: string): string {
+  if (!insets || engineName !== 'WebKit') return stylesheet;
+  return stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof Insets) => `${insets[side]}px`);
+}
+
+function insetHook(insets: Insets): string {
+  return `<script>(function () {
+    var values = ${JSON.stringify(insets)};
+    var styleDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style');
+    if (!styleDesc || !styleDesc.get) return;
+    var replace = function (value) {
+      return String(value).replace(/env\\(safe-area-inset-(top|right|bottom|left)(?:\\s*,[^)]*)?\\)/g, function (_, side) { return values[side] + 'px'; });
+    };
+    Object.defineProperty(HTMLElement.prototype, 'style', {
+      configurable: true,
+      enumerable: styleDesc.enumerable,
+      get: function () {
+        var style = styleDesc.get.call(this);
+        return new Proxy(style, {
+          get: function (target, prop) {
+            var value = Reflect.get(target, prop, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+          set: function (target, prop, value) {
+            target[prop] = typeof value === 'string' ? replace(value) : value;
+            return true;
+          },
+        });
+      },
+    });
+  })();</script>`;
+}
+
+async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string, lateFooter = false, css = stylesheet, hook = ''): Promise<void> {
+  await freezeDate(page, now);
+  const documentHtml = lateFooter ? html.replace(/<footer id="status-banner"[\s\S]*?<\/footer>\s*/, '') : html;
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (url.origin === origin && url.pathname === '/') {
       return route.fulfill({
         contentType: 'text/html',
-        body: html.replace('</head>', `<style>${vendor}\n${stylesheet}</style></head>`).replace('</body>', `<script src="/${script}"></script></body>`),
+        body: documentHtml.replace('</head>', `${hook}<style>${vendor}\n${css}</style></head>`).replace('</body>', `<script src="/${script}"></script></body>`),
       });
     }
     const asset = assets.get(url.pathname);
@@ -171,7 +208,7 @@ for (const engine of [
   }, 30_000);
   afterAll(async () => { await closeBrowser(browser, launched, `corner-lift-${engine.name}`); });
 
-  async function contextAt(width: number, height: number): Promise<{ context: BrowserContext; page: Page }> {
+  async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
       ...iphone17,
       viewport: { width, height },
@@ -183,7 +220,12 @@ for (const engine of [
       });
     }
     const page = await context.newPage();
-    await boot(page, assets, script);
+    if (insets && engine.name === 'Chrome') {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+    }
+    const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
+    await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook);
     return { context, page };
   }
 
@@ -200,7 +242,7 @@ for (const engine of [
       const banner = await page.locator('#status-banner').boundingBox();
       expect(banner!.height).toBeGreaterThan(30);
       expect(raised.bottom).toBeLessThanOrEqual(banner!.y - 7);
-      await page.clock.fastForward(3000);
+      await page.waitForTimeout(3000);
       await frames(page);
       expect(await hideBox(page)).toEqual(raised);
       await cycle(page, 5, raised);
@@ -304,6 +346,156 @@ for (const engine of [
     }
   }, 180_000);
 
+  it('updates the corner lift when a late footer wraps and a trusted tap leaves Hide still', async () => {
+    const { context, page } = await contextAt(402, 874, true);
+    try {
+      await showChrome(page);
+      expect(await page.locator('#status-banner').count()).toBe(0);
+      await page.evaluate(() => {
+        const created = document.createElement('footer');
+        created.id = 'status-banner';
+        created.className = 'banner banner-orange';
+        created.textContent = 'Track ready';
+        document.body.appendChild(created);
+      });
+      await frames(page);
+      const before = await hideBox(page);
+      const short = await page.locator('#status-banner').boundingBox();
+      await page.evaluate(() => {
+        (window as unknown as { __resizes: number }).__resizes = 0;
+        window.addEventListener('resize', () => {
+          (window as unknown as { __resizes: number }).__resizes += 1;
+        });
+        const element = document.getElementById('status-banner')!;
+        const text = 'Last updated 4 min ago · TLE 499h old — live track may drift';
+        const apply = () => { if (element.textContent !== text) element.textContent = text; };
+        apply();
+        new MutationObserver(apply).observe(element, { childList: true, subtree: true, characterData: true });
+      });
+      await page.waitForFunction((floor) => {
+        const banner = document.getElementById('status-banner')!.getBoundingClientRect();
+        const toggle = document.getElementById('map-chrome-toggle')!.getBoundingClientRect();
+        return banner.height > floor && banner.height > 30 && toggle.bottom <= banner.top - 7;
+      }, short!.height);
+      const settled = await hideBox(page);
+      const banner = await page.locator('#status-banner').boundingBox();
+      const resizes = await page.evaluate(() => (window as unknown as { __resizes: number }).__resizes);
+      expect(resizes).toBe(0);
+      expect(banner!.height).toBeGreaterThan(short!.height);
+      expect(banner!.height).toBeGreaterThan(30);
+      expect(settled.lift).not.toBe(before.lift);
+      expect(settled.bottom).toBeLessThanOrEqual(banner!.y - 7);
+      const point = await page.evaluate(() => {
+        const toggle = document.getElementById('map-chrome-toggle')!;
+        const tops: number[] = [];
+        (window as unknown as { __tapTops: number[] }).__tapTops = tops;
+        toggle.addEventListener('pointerdown', () => {
+          tops.push(toggle.getBoundingClientRect().top);
+        }, true);
+        const box = toggle.getBoundingClientRect();
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      });
+      await page.touchscreen.tap(point.x, point.y);
+      await frames(page);
+      const tops = await page.evaluate(() => (window as unknown as { __tapTops: number[] }).__tapTops);
+      expect(tops).toEqual([settled.top]);
+      expect((await hideBox(page)).top).toBe(settled.top);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('keeps Hide still when footer height changes and the trusted tap does not wait for a frame', async () => {
+    const insets = { top: 62, right: 0, bottom: 34, left: 0 };
+    const { context, page } = await contextAt(402, 874, false, insets);
+    try {
+      await showChrome(page);
+      const measuredInsets = await page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.style.paddingTop = 'env(safe-area-inset-top, 0px)';
+        probe.style.paddingRight = 'env(safe-area-inset-right, 0px)';
+        probe.style.paddingBottom = 'env(safe-area-inset-bottom, 0px)';
+        probe.style.paddingLeft = 'env(safe-area-inset-left, 0px)';
+        document.body.appendChild(probe);
+        const style = getComputedStyle(probe);
+        const read = (name: 'paddingTop' | 'paddingRight' | 'paddingBottom' | 'paddingLeft') => Number.parseFloat(style[name]) || 0;
+        const value = { top: read('paddingTop'), right: read('paddingRight'), bottom: read('paddingBottom'), left: read('paddingLeft') };
+        probe.remove();
+        return value;
+      });
+      expect(measuredInsets).toEqual(insets);
+      await page.evaluate(() => {
+        const toggle = document.getElementById('map-chrome-toggle')!;
+        const log: { type: string; top: number; lift: string; target: string }[] = [];
+        (window as unknown as { __heightTap: typeof log }).__heightTap = log;
+        for (const type of ['pointerdown', 'pointerup', 'click']) {
+          toggle.addEventListener(type, (event) => {
+            const box = toggle.getBoundingClientRect();
+            const target = event.target instanceof Element ? event.target.id : '';
+            log.push({
+              type,
+              top: box.top,
+              lift: document.body.style.getPropertyValue('--map-corner-lift'),
+              target,
+            });
+          }, true);
+        }
+      });
+      const misses: { mode: string; rep: number; aimTop: number; lift: string; tops: number[]; targets: string[]; lifts: string[] }[] = [];
+      for (const mode of ['product', 'replaced']) {
+        if (mode === 'replaced') {
+          await page.evaluate(() => {
+            const current = document.getElementById('status-banner')!;
+            const replacement = document.createElement('footer');
+            replacement.id = current.id;
+            replacement.className = current.className;
+            replacement.textContent = current.textContent;
+            current.replaceWith(replacement);
+          });
+        }
+        for (let rep = 0; rep < 20; rep++) {
+          if ((await page.locator('#map-chrome-toggle').textContent()) !== 'Hide') {
+            await page.locator('#map-chrome-toggle').click();
+            await frames(page);
+          }
+          await page.evaluate(() => { document.getElementById('status-banner')!.style.height = ''; });
+          await page.evaluate(() => { document.getElementById('status-banner')!.style.height = '140px'; });
+          const aim = await page.evaluate(() => {
+            const toggle = document.getElementById('map-chrome-toggle')!;
+            const box = toggle.getBoundingClientRect();
+            const footer = document.getElementById('status-banner')!.getBoundingClientRect();
+            (window as unknown as { __heightTap: unknown[] }).__heightTap.length = 0;
+            return {
+              x: box.x + box.width / 2,
+              y: box.y + box.height / 2,
+              top: box.top,
+              bottom: box.bottom,
+              lift: document.body.style.getPropertyValue('--map-corner-lift'),
+              footerTop: footer.top,
+              footerH: footer.height,
+            };
+          });
+          await page.touchscreen.tap(aim.x, aim.y);
+          const log = await page.evaluate(() => (window as unknown as { __heightTap: { type: string; top: number; lift: string; target: string }[] }).__heightTap);
+          const tops = log.map((entry) => entry.top);
+          const targets = log.map((entry) => entry.target);
+          const lifts = log.map((entry) => entry.lift);
+          const moved = aim.footerH < 100
+            || aim.lift === '0px'
+            || aim.bottom > aim.footerTop - 7
+            || log.length !== 3
+            || tops.some((top) => top !== aim.top)
+            || targets.some((target) => target !== 'map-chrome-toggle')
+            || lifts.some((lift) => lift !== aim.lift);
+          if (moved) misses.push({ mode, rep, aimTop: aim.top, lift: aim.lift, tops, targets, lifts });
+        }
+      }
+      expect(misses).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  }, 120_000);
+
   it('keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
     const page = await context.newPage();
@@ -333,7 +525,7 @@ for (const engine of [
           for (const record of records) writes.push(record.attributeName ?? '');
         }).observe(document.body, { attributes: true, attributeFilter: ['style'] });
       });
-      await page.clock.fastForward(3000);
+      await page.waitForTimeout(3000);
       await frames(page);
       const after = await page.evaluate(() => ({
         scrollTop: (document.querySelector('.map-control-dock') as HTMLElement).scrollTop,
