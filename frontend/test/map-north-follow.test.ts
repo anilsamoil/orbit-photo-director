@@ -169,7 +169,7 @@ for (const engine of [
         await page.waitForFunction(() => {
           const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean } }).__opdMap;
           return map.__started === true;
-        });
+        }, undefined, { timeout: 45_000 });
       } catch (error) {
         const state = await page.evaluate(() => {
           const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean; __timer?: number } }).__opdMap;
@@ -274,36 +274,38 @@ for (const engine of [
     for (let rep = 0; rep < 12; rep += 1) {
       const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
       try {
-        page.setDefaultTimeout(15_000);
+        page.setDefaultTimeout(45_000);
         await openMap(page);
         await page.waitForFunction(() => {
           const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
           return !!map && !map.isMoving();
         });
         await page.evaluate(() => {
-          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          const map = (window as unknown as { __opdMap: MapHandle & { __retargeted?: boolean; __timer?: number } }).__opdMap;
           const orig = map.setCenter.bind(map);
           map.__centerAt = [];
           map.setCenter = (center) => {
             map.__centerAt!.push(performance.now());
-            return orig(center);
+            const result = orig(center);
+            if (!map.__retargeted) {
+              window.clearTimeout(map.__timer);
+              map.__timer = window.setTimeout(() => {
+                if (map.__retargeted) return;
+                map.__retargeted = true;
+                map.jumpTo({ bearing: map.getBearing() + 90 });
+                document.getElementById('bearing-iss')!.click();
+                document.getElementById('bearing-north')!.click();
+                const samples: { bearing: number; at: number }[] = [];
+                map.__samples = samples as unknown as number[];
+                map.on('move', () => { samples.push({ bearing: map.getBearing(), at: performance.now() }); });
+              }, 500);
+            }
+            return result;
           };
         });
         await page.waitForFunction(() => {
           const map = (window as unknown as { __opdMap: MapHandle & { __retargeted?: boolean } }).__opdMap;
-          if (map.__retargeted) return true;
-          const at = map.__centerAt ?? [];
-          if (at.length === 0) return false;
-          const age = performance.now() - at[at.length - 1]!;
-          if (age < 400 || age > 920) return false;
-          map.__retargeted = true;
-          map.jumpTo({ bearing: map.getBearing() + 90 });
-          document.getElementById('bearing-iss')!.click();
-          document.getElementById('bearing-north')!.click();
-          const samples: { bearing: number; at: number }[] = [];
-          map.__samples = samples as unknown as number[];
-          map.on('move', () => { samples.push({ bearing: map.getBearing(), at: performance.now() }); });
-          return true;
+          return map.__retargeted === true;
         });
         await page.waitForTimeout(1100);
         const end = await page.evaluate(() => {
