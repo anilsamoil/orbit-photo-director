@@ -546,6 +546,154 @@ grep_lines() {
   return "$code"
 }
 
+run_signal_case() {
+  local sig="$1"
+  local want="$2"
+  local how="$3"
+  local work dpid spins start end code pgid
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
+  cat > "$work/wrangler" << 'ENDWR'
+#!/bin/sh
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
+done
+exit 0
+ENDWR
+  chmod +x "$work/wrangler"
+  write_holding_node "$work/node"
+  PATH="$work:/usr/bin:/bin" \
+    TMPDIR="$work" \
+    WRANGLER_ARGS="$work/args" \
+    ACCESS_ALLOWED_EMAILS="$list_sentinel" \
+    python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
+  dpid=$!
+  if ! "$hold_dir/bin/note" "$dpid" "" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig could not record deploy pid $dpid" >&2
+    new_failures=$((new_failures + 1))
+    wait "$dpid" 2>/dev/null || true
+    rm -rf "$work"
+    return 0
+  fi
+  spins=0
+  while ! read_parser_handoff "$work/node.ready"; do
+    spins=$((spins + 1))
+    if [ "$spins" -ge 50 ]; then
+      echo "FAIL: signal $sig never handed over the node parser" >&2
+      new_failures=$((new_failures + 1))
+      "$hold_dir/bin/reap" "$hold_dir" || true
+      wait "$dpid" 2>/dev/null || true
+      rm -rf "$work"
+      return 0
+    fi
+    sleep 0.1
+  done
+  pgid=$(ps -o pgid= -p "$dpid" | tr -d ' ')
+  if [ "$pgid" != "$dpid" ]; then
+    echo "FAIL: signal $sig deploy pid $dpid is not its process group" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if ! hold_same "$dpid" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig deploy pid $dpid changed start time before the signal" >&2
+    new_failures=$((new_failures + 1))
+    "$hold_dir/bin/reap" "$hold_dir" || true
+    wait "$dpid" 2>/dev/null || true
+    rm -rf "$work"
+    return 0
+  fi
+  start=$(date +%s)
+  if [ "$how" = "group" ]; then
+    python3 -c 'import os, signal, sys; os.killpg(int(sys.argv[1]), getattr(signal, "SIG" + sys.argv[2]))' "$dpid" "$sig"
+  else
+    kill -s "$sig" "$dpid" 2>/dev/null || true
+  fi
+  set +e
+  wait "$dpid"
+  code=$?
+  set -e
+  end=$(date +%s)
+  CASE_CODE=$code
+  if [ -f "$work/args" ]; then
+    CASE_ARGS=$(cat "$work/args")
+  else
+    CASE_ARGS=""
+  fi
+  CASE_ERR=$(cat "$work/err")
+  CASE_OUT=$(cat "$work/out")
+  echo "== signal $sig $how exit $CASE_CODE in $((end - start))s"
+  printf '%s\n' "$CASE_ERR"
+  if [ "$CASE_CODE" -ne "$want" ]; then
+    echo "FAIL: signal $sig $how exited $CASE_CODE, want $want" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if [ -n "$CASE_ARGS" ]; then
+    echo "FAIL: wrangler ran for signal $sig $how" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if [ "$how" = "group" ]; then
+    if [ $((end - start)) -ge 3 ]; then
+      echo "FAIL: signal $sig to the group took $((end - start))s" >&2
+      new_failures=$((new_failures + 1))
+    fi
+  elif [ $((end - start)) -le 8 ] || [ $((end - start)) -ge 16 ]; then
+    echo "FAIL: signal $sig to the pid took $((end - start))s" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if hold_same "$PARSER_PID" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig $how left the parser running" >&2
+    ps_command "$PARSER_PID" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
+    echo "FAIL: signal $sig leaked the allowlist on stdio" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if find "$work" -type f -exec grep -F -q -- "$list_sentinel" {} + 2>/dev/null; then
+    echo "FAIL: signal $sig wrote the allowlist to a file" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  "$hold_dir/bin/reap" "$hold_dir" || true
+  rm -rf "$work"
+}
+
+run_hup_under_nohup() {
+  local out runner
+  out=$(mktemp "$hold_dir/nohup-hup.XXXXXX")
+  nohup env OPD_HUP_ONLY=1 OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$out" 2>&1 </dev/null &
+  runner=$!
+  if ! wait_deadline "$runner" 90; then
+    kill -TERM "$runner" 2>/dev/null || true
+    wait "$runner" 2>/dev/null || true
+    echo "FAIL: nohup HUP self-test did not finish" >&2
+    cat "$out" >&2
+    rm -f "$out"
+    exit 1
+  fi
+  if [ "$WAIT_STATUS" -ne 0 ] || ! grep -F -q '== signal HUP pid exit 129' "$out"; then
+    echo "FAIL: nohup HUP self-test exited ${WAIT_STATUS:-}" >&2
+    cat "$out" >&2
+    rm -f "$out"
+    exit 1
+  fi
+  rm -f "$out"
+  echo "self-test nohup HUP: exit 129"
+}
+
+if [ "${OPD_HUP_ONLY:-}" = 1 ]; then
+  list_sentinel="zzsecret-nohup@example.com"
+  new_failures=0
+  run_signal_case HUP 129 pid
+  if [ "$new_failures" -ne 0 ]; then
+    echo "FAIL: $new_failures new deploy cases" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 grep_both() {
   local first="$1"
   local second="$2"
@@ -918,6 +1066,7 @@ if [ "${OPD_OUTER_MODE:-}" = cancel ]; then
 fi
 
 if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
+  run_hup_under_nohup
   run_grep_status_probe
   run_deep_reap
   run_deadline_probe
@@ -1582,119 +1731,6 @@ if grep -E 'setpgrp|mkfifo|kill |[[:space:]]perl[[:space:]]' deploy.sh >/dev/nul
   echo "FAIL: deploy.sh still supervises the parser process tree" >&2
   new_failures=$((new_failures + 1))
 fi
-
-run_signal_case() {
-  local sig="$1"
-  local want="$2"
-  local how="$3"
-  local work dpid spins start end code pgid
-  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
-  cat > "$work/wrangler" << 'ENDWR'
-#!/bin/sh
-for arg in "$@"; do
-  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
-done
-exit 0
-ENDWR
-  chmod +x "$work/wrangler"
-  write_holding_node "$work/node"
-  PATH="$work:/usr/bin:/bin" \
-    TMPDIR="$work" \
-    WRANGLER_ARGS="$work/args" \
-    ACCESS_ALLOWED_EMAILS="$list_sentinel" \
-    python3 -c 'import os, signal, sys
-signal.signal(signal.SIGINT, signal.SIG_DFL)
-signal.signal(signal.SIGQUIT, signal.SIG_DFL)
-os.setsid()
-os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
-  dpid=$!
-  if ! "$hold_dir/bin/note" "$dpid" "" "$hold_dir/pids"; then
-    echo "FAIL: signal $sig could not record deploy pid $dpid" >&2
-    new_failures=$((new_failures + 1))
-    wait "$dpid" 2>/dev/null || true
-    rm -rf "$work"
-    return 0
-  fi
-  spins=0
-  while ! read_parser_handoff "$work/node.ready"; do
-    spins=$((spins + 1))
-    if [ "$spins" -ge 50 ]; then
-      echo "FAIL: signal $sig never handed over the node parser" >&2
-      new_failures=$((new_failures + 1))
-      "$hold_dir/bin/reap" "$hold_dir" || true
-      wait "$dpid" 2>/dev/null || true
-      rm -rf "$work"
-      return 0
-    fi
-    sleep 0.1
-  done
-  pgid=$(ps -o pgid= -p "$dpid" | tr -d ' ')
-  if [ "$pgid" != "$dpid" ]; then
-    echo "FAIL: signal $sig deploy pid $dpid is not its process group" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if ! hold_same "$dpid" "$hold_dir/pids"; then
-    echo "FAIL: signal $sig deploy pid $dpid changed start time before the signal" >&2
-    new_failures=$((new_failures + 1))
-    "$hold_dir/bin/reap" "$hold_dir" || true
-    wait "$dpid" 2>/dev/null || true
-    rm -rf "$work"
-    return 0
-  fi
-  start=$(date +%s)
-  if [ "$how" = "group" ]; then
-    python3 -c 'import os, signal, sys; os.killpg(int(sys.argv[1]), getattr(signal, "SIG" + sys.argv[2]))' "$dpid" "$sig"
-  else
-    kill -s "$sig" "$dpid" 2>/dev/null || true
-  fi
-  set +e
-  wait "$dpid"
-  code=$?
-  set -e
-  end=$(date +%s)
-  CASE_CODE=$code
-  if [ -f "$work/args" ]; then
-    CASE_ARGS=$(cat "$work/args")
-  else
-    CASE_ARGS=""
-  fi
-  CASE_ERR=$(cat "$work/err")
-  CASE_OUT=$(cat "$work/out")
-  echo "== signal $sig $how exit $CASE_CODE in $((end - start))s"
-  printf '%s\n' "$CASE_ERR"
-  if [ "$CASE_CODE" -ne "$want" ]; then
-    echo "FAIL: signal $sig $how exited $CASE_CODE, want $want" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if [ -n "$CASE_ARGS" ]; then
-    echo "FAIL: wrangler ran for signal $sig $how" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if [ "$how" = "group" ]; then
-    if [ $((end - start)) -ge 3 ]; then
-      echo "FAIL: signal $sig to the group took $((end - start))s" >&2
-      new_failures=$((new_failures + 1))
-    fi
-  elif [ $((end - start)) -le 8 ] || [ $((end - start)) -ge 16 ]; then
-    echo "FAIL: signal $sig to the pid took $((end - start))s" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if hold_same "$PARSER_PID" "$hold_dir/pids"; then
-    echo "FAIL: signal $sig $how left the parser running" >&2
-    ps_command "$PARSER_PID" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
-    echo "FAIL: signal $sig leaked the allowlist on stdio" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if find "$work" -type f -exec grep -F -q -- "$list_sentinel" {} + 2>/dev/null; then
-    echo "FAIL: signal $sig wrote the allowlist to a file" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  "$hold_dir/bin/reap" "$hold_dir" || true
-  rm -rf "$work"
-}
 
 run_signal_case TERM 143 pid
 run_signal_case INT 130 pid
