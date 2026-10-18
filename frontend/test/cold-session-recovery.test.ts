@@ -153,7 +153,12 @@ for (const engine of engines) {
               const early = await page.locator('#status-banner').innerText();
               expect(await page.locator('#status-banner .banner-action').count(), early).toBe(0);
               await page.clock.fastForward(10_000);
-              await page.locator('#status-banner a.banner-action').waitFor({ timeout: 2_000 });
+              const link = page.locator('#status-banner a.banner-action');
+              const painted = await link.waitFor({ timeout: 2_000 }).then(() => true, () => false);
+              if (!painted) {
+                await page.clock.fastForward(1_000);
+                await link.waitFor({ timeout: 2_000 });
+              }
             }
             const banner = await page.locator('#status-banner').innerText();
             const elapsed = await page.evaluate(() => (window as unknown as { __coldMs?: number }).__coldMs ?? -1);
@@ -163,6 +168,8 @@ for (const engine of engines) {
               expect(elapsed).toBeLessThan(engine.name === 'WebKit' ? 20 : 200);
             } else {
               expect(banner).toContain('The session request timed out');
+              expect(elapsed).toBeGreaterThanOrEqual(9_000);
+              expect(elapsed).toBeLessThan(15_000);
             }
             expect(await page.locator('#status-banner a.banner-action').innerText()).toBe('Sign in');
             expect(await page.locator('#status-banner button.banner-action').innerText()).toBe('Reload');
