@@ -2,9 +2,17 @@
 # Proves worker deploy passes the service-token allowlist from the environment.
 set -euo pipefail
 
+suite_path=$0
+case "$suite_path" in
+  /*) ;;
+  *) suite_path=$(pwd)/$suite_path ;;
+esac
+
 cd "$(dirname "$0")"
 deploy_bash=${DEPLOY_BASH:-bash}
 real_node=$(command -v node)
+package_bash=$(command -v bash)
+wrangler_target=""
 
 if grep -n -E '^ACCESS_SERVICE_TOKEN_CLIENT_IDS[[:space:]]*=' wrangler.toml; then
   echo "FAIL: wrangler.toml assigns ACCESS_SERVICE_TOKEN_CLIENT_IDS" >&2
@@ -14,6 +22,272 @@ if grep -n -E '^ACCESS_ALLOWED_EMAILS[[:space:]]*=' wrangler.toml; then
   echo "FAIL: wrangler.toml assigns ACCESS_ALLOWED_EMAILS" >&2
   exit 1
 fi
+
+hold_dir=$(mktemp -d "${TMPDIR:-/tmp}/XXXXXXXX")
+mkdir -p "$hold_dir/pids" "$hold_dir/side" "$hold_dir/bin"
+
+{
+  printf '#!%s\n' "$BASH"
+  cat << 'EOF'
+set -u
+pid=$1
+expect_ppid=${2-}
+dir=$3
+depth=${4:-0}
+if [ "$depth" -gt 8 ]; then
+  exit 0
+fi
+case "$pid" in
+  ''|*[!0-9]*) exit 1 ;;
+esac
+if [ "$pid" -le 1 ]; then
+  exit 1
+fi
+if [ ! -f "$dir/$pid" ]; then
+  if [ -n "$expect_ppid" ]; then
+    have_ppid=$(LC_ALL=C ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ' || true)
+    if [ "$have_ppid" != "$expect_ppid" ]; then
+      exit 1
+    fi
+  fi
+  tries=0
+  lstart=
+  while [ "$tries" -lt 30 ]; do
+    lstart=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+    if [ -n "$lstart" ]; then
+      break
+    fi
+    tries=$((tries + 1))
+    sleep 0.05
+  done
+  if [ -z "$lstart" ]; then
+    exit 1
+  fi
+  printf '%s\n' "$lstart" > "$dir/$pid"
+fi
+children=$(LC_ALL=C ps -axww -o pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2 == p { print $1 }' || true)
+for child in $children; do
+  "$0" "$child" "$pid" "$dir" $((depth + 1)) || true
+done
+exit 0
+EOF
+} > "$hold_dir/bin/note"
+
+{
+  printf '#!%s\n' "$BASH"
+  cat << 'EOF'
+set -u
+pid=$1
+dir=$2
+case "$pid" in
+  ''|*[!0-9]*) exit 0 ;;
+esac
+if [ "$pid" -le 1 ]; then
+  exit 0
+fi
+if [ ! -f "$dir/$pid" ]; then
+  exit 0
+fi
+want=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$dir/$pid")
+have=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+if [ -n "$have" ] && [ "$have" = "$want" ]; then
+  kill -KILL "$pid" 2>/dev/null || true
+fi
+exit 0
+EOF
+} > "$hold_dir/bin/reap-one"
+
+{
+  printf '#!%s\n' "$BASH"
+  cat << 'EOF'
+set -u
+root=$1
+bin=$(dirname "$0")
+for pidfile in "$root"/pids/* "$root"/side/*; do
+  if [ ! -f "$pidfile" ]; then
+    continue
+  fi
+  "$bin/reap-one" "${pidfile##*/}" "$(dirname "$pidfile")" || true
+done
+exit 0
+EOF
+} > "$hold_dir/bin/reap"
+
+{
+  printf '#!%s\n' "$BASH"
+  cat << 'EOF'
+set -u
+root=$1
+: > "$root/left"
+found=1
+for pidfile in "$root"/pids/*; do
+  if [ ! -f "$pidfile" ]; then
+    continue
+  fi
+  pid=${pidfile##*/}
+  case "$pid" in
+    ''|*[!0-9]*) continue ;;
+  esac
+  want=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$pidfile")
+  have=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+  if [ -n "$have" ] && [ "$have" = "$want" ]; then
+    printf '%s %s\n' "$pid" "$have" >> "$root/left"
+    found=0
+  fi
+done
+exit "$found"
+EOF
+} > "$hold_dir/bin/collect"
+
+chmod +x "$hold_dir/bin/note" "$hold_dir/bin/reap-one" "$hold_dir/bin/reap" "$hold_dir/bin/collect"
+
+ps_lstart() {
+  LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
+}
+
+ps_command() {
+  LC_ALL=C ps -ww -p "$1" -o command= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
+}
+
+ps_comm() {
+  LC_ALL=C ps -p "$1" -o comm= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
+}
+
+ps_ppid() {
+  LC_ALL=C ps -p "$1" -o ppid= 2>/dev/null | tr -d ' ' || true
+}
+
+hold_same() {
+  local pid="$1"
+  local dir="$2"
+  local want have
+  if [ ! -f "$dir/$pid" ]; then
+    return 1
+  fi
+  want=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$dir/$pid")
+  have=$(ps_lstart "$pid")
+  [ -n "$have" ] && [ "$have" = "$want" ]
+}
+
+hold_accept_parser() {
+  local pid="$1"
+  local cmd comm have noted
+  if [ ! -f "$hold_dir/pids/$pid" ]; then
+    return 1
+  fi
+  noted=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$hold_dir/pids/$pid")
+  have=$(ps_lstart "$pid")
+  if [ -z "$have" ] || [ "$have" != "$noted" ]; then
+    return 1
+  fi
+  cmd=$(ps_command "$pid")
+  case "$cmd" in
+    "$real_node"|"$real_node "*) ;;
+    *) return 1 ;;
+  esac
+  case "$cmd" in
+    *parseEmailAllowlist*) ;;
+    *) return 1 ;;
+  esac
+  comm=$(ps_comm "$pid")
+  case "$comm" in
+    node|*/node) ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+read_parser_handoff() {
+  local ready="$1"
+  local pid noted filed
+  if [ ! -f "$ready" ]; then
+    return 1
+  fi
+  pid=$(sed -n '1p' "$ready" | tr -d ' ')
+  noted=$(sed -n '2p' "$ready" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  if [ -z "$noted" ] || [ ! -f "$hold_dir/pids/$pid" ]; then
+    return 1
+  fi
+  filed=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$hold_dir/pids/$pid")
+  if [ "$filed" != "$noted" ]; then
+    return 1
+  fi
+  hold_accept_parser "$pid" || return 1
+  PARSER_PID=$pid
+  PARSER_LSTART=$noted
+  return 0
+}
+
+hold_collect() {
+  "$hold_dir/bin/collect" "$hold_dir"
+}
+
+cleanup_on_exit() {
+  if [ -n "${hold_dir-}" ] && [ -x "${hold_dir}/bin/reap" ]; then
+    "${hold_dir}/bin/reap" "$hold_dir" || true
+  fi
+  if [ -n "${hold_dir-}" ]; then
+    rm -rf "$hold_dir"
+  fi
+  true
+}
+trap cleanup_on_exit EXIT
+
+if [ "${OPD_TRAP_PROBE:-}" = 1 ]; then
+  sleep 180 &
+  probe_pid=$!
+  "$hold_dir/bin/note" "$probe_pid" "" "$hold_dir/pids" || exit 1
+  printf '%s\n%s\n' "$probe_pid" "$(ps_lstart "$probe_pid")" > "$OPD_TRAP_PIDFILE"
+  exit 1
+fi
+
+write_holding_node() {
+  local dest="$1"
+  cat > "$dest" << EOF
+#!/bin/sh
+fifo=\$(mktemp -u "\$TMPDIR/fifo.XXXXXX")
+childf=\$TMPDIR/sleep.pid
+mkfifo "\$fifo"
+exec 3<>"\$fifo"
+/bin/sh -c 'sleep 60 & echo \$! > "\$1"; wait' _ "\$childf" >&3 &
+holder=\$!
+tries=0
+while [ ! -s "\$childf" ]; do
+  tries=\$((tries + 1))
+  if [ "\$tries" -gt 50 ]; then
+    exit 1
+  fi
+  sleep 0.05
+done
+"$hold_dir/bin/note" "\$holder" "" "$hold_dir/pids" || exit 1
+child=\$(cat "\$childf")
+tries=0
+while [ ! -f "$hold_dir/pids/\$child" ]; do
+  tries=\$((tries + 1))
+  if [ "\$tries" -gt 30 ]; then
+    exit 1
+  fi
+  "$hold_dir/bin/note" "\$holder" "" "$hold_dir/pids" || true
+  sleep 0.05
+done
+"$real_node" "\$@" <&3 &
+parser=\$!
+"$hold_dir/bin/note" "\$parser" "" "$hold_dir/pids" || exit 1
+lstart=\$(sed 's/^[[:space:]]*//;s/[[:space:]]*\$//' "$hold_dir/pids/\$parser")
+printf '%s\n%s\n' "\$parser" "\$lstart" > "$dest.ready.tmp"
+mv "$dest.ready.tmp" "$dest.ready"
+wait "\$parser"
+rc=\$?
+"$hold_dir/bin/reap-one" "\$holder" "$hold_dir/pids" || true
+"$hold_dir/bin/reap-one" "\$child" "$hold_dir/pids" || true
+rm -f "\$fifo" "\$childf"
+exit "\$rc"
+EOF
+  chmod +x "$dest"
+}
 
 run_deploy() {
   local work calls args
@@ -103,39 +377,30 @@ if printf '%s\n' "$CASE_ARGS" | grep -q "machine-secret"; then
   exit 1
 fi
 
-WRANGLER_BIN_PATH=""
-WRANGLER_BIN_SAVED=""
-restore_package_wrangler() {
-  if [ -n "$WRANGLER_BIN_PATH" ] && [ -n "$WRANGLER_BIN_SAVED" ]; then
-    ln -sfn "$WRANGLER_BIN_SAVED" "$WRANGLER_BIN_PATH"
-    WRANGLER_BIN_PATH=""
-    WRANGLER_BIN_SAVED=""
-  fi
-}
-trap restore_package_wrangler EXIT
-
 run_package_deploy() {
-  local work bin
+  local work shim code
   work=$(mktemp -d)
-  bin="node_modules/.bin/wrangler"
-  WRANGLER_BIN_PATH=$bin
-  WRANGLER_BIN_SAVED=$(readlink "$bin")
-  cat > "$work/wrangler" <<'EOF'
+  shim="$work/shim"
+  mkdir -p "$shim"
+  cat > "$shim/wrangler" << 'EOF'
 #!/bin/sh
 for arg in "$@"; do
   printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
 done
 exit 0
 EOF
-  chmod +x "$work/wrangler"
-  ln -sfn "$work/wrangler" "$bin"
+  cat > "$shim/bash" << EOF
+#!/bin/sh
+export PATH='$shim':\$PATH
+exec '$package_bash' "\$@"
+EOF
+  chmod +x "$shim/wrangler" "$shim/bash"
   set +e
-  PATH="${HOME}/.bun/bin:${PATH}" \
+  PATH="$shim:${HOME}/.bun/bin:${PATH}" \
     WRANGLER_ARGS="$work/args" \
     bun run deploy "$@" >"$work/out" 2>"$work/err"
-  local code=$?
+  code=$?
   set -e
-  restore_package_wrangler
   CASE_CODE=$code
   if [ -f "$work/args" ]; then
     CASE_ARGS=$(cat "$work/args")
@@ -143,6 +408,10 @@ EOF
     CASE_ARGS=""
   fi
   CASE_ERR=$(cat "$work/err")
+  if [ -n "$wrangler_target" ] && [ "$(readlink node_modules/.bin/wrangler)" != "$wrangler_target" ]; then
+    echo "FAIL: shared wrangler link changed during package deploy" >&2
+    exit 1
+  fi
   rm -rf "$work"
   echo "== package deploy ($*) exit $CASE_CODE"
 }
@@ -151,6 +420,7 @@ if [ ! -L node_modules/.bin/wrangler ]; then
   echo "FAIL: worker/node_modules/.bin/wrangler is missing. Run bun install in worker/." >&2
   exit 1
 fi
+wrangler_target=$(readlink node_modules/.bin/wrangler)
 
 unset ACCESS_ALLOWED_EMAILS
 run_package_deploy --dry-run --env staging --config other.toml
@@ -506,23 +776,7 @@ EOF
       chmod +x "$work/node"
       ;;
     hang)
-      cat > "$work/node" << EOF
-#!/bin/sh
-fifo=\$(mktemp -u "\${TMPDIR:-/tmp}/opd-hold.XXXXXX")
-pidfile=\$(mktemp "\${TMPDIR:-/tmp}/opd-hold.XXXXXX")
-mkfifo "\$fifo"
-/bin/sh -c 'sleep 60 & echo \$! > "\$1"; wait' _ "\$pidfile" > "\$fifo" &
-holder=\$!
-"$real_node" "\$@" < "\$fifo"
-rc=\$?
-if [ -s "\$pidfile" ]; then
-  kill -KILL "\$(cat "\$pidfile")" 2>/dev/null || true
-fi
-kill -KILL "\$holder" 2>/dev/null || true
-rm -f "\$fifo" "\$pidfile"
-exit "\$rc"
-EOF
-      chmod +x "$work/node"
+      write_holding_node "$work/node"
       ;;
     garbage)
       cat > "$work/node" <<'EOF'
@@ -627,7 +881,7 @@ echo "== node exited non-zero exit $CASE_CODE"
 printf '%s\n' "$CASE_ERR"
 expect_parser_failure "node exited non-zero" "failed (exit 3)"
 
-list_sentinel=zzsecret-allowlist@example.com
+list_sentinel="zzsecret-${RANDOM}$$@example.com"
 STUB_EMAILS="$list_sentinel"
 leak_notes=$(mktemp)
 (
@@ -655,7 +909,8 @@ leak_scan=$!
 hang_start=$(date +%s)
 run_stub_node hang
 hang_end=$(date +%s)
-kill "$leak_scan" 2>/dev/null || true
+"$hold_dir/bin/note" "$leak_scan" "" "$hold_dir/side" || true
+"$hold_dir/bin/reap-one" "$leak_scan" "$hold_dir/side" || true
 wait "$leak_scan" 2>/dev/null || true
 unset STUB_EMAILS
 echo "== hung node exit $CASE_CODE in $((hang_end - hang_start))s"
@@ -671,11 +926,12 @@ if [ -s "$leak_notes" ]; then
   new_failures=$((new_failures + 1))
 fi
 rm -f "$leak_notes"
-if ps ax -o command= | awk 'index($0, "opd-hold") && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'; then
+if hold_collect; then
   echo "FAIL: hung node left the stdin holder" >&2
-  ps ax -o pid=,command= | awk 'index($0, "opd-hold") && index($0, "awk") == 0 { print }' >&2
+  cat "$hold_dir/left" >&2
   new_failures=$((new_failures + 1))
 fi
+"$hold_dir/bin/reap" "$hold_dir" || true
 
 run_stub_node garbage --dry-run
 echo "== node printed garbage exit $CASE_CODE"
@@ -730,11 +986,6 @@ if grep -E 'setpgrp|mkfifo|kill |[[:space:]]perl[[:space:]]' deploy.sh >/dev/nul
   new_failures=$((new_failures + 1))
 fi
 
-parser_still_running() {
-  ps ax -o command= | awk 'index($0, "parseEmailAllowlist") && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }' \
-    || ps ax -o command= | awk 'index($0, "opd-hold") && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'
-}
-
 run_signal_case() {
   local sig="$1"
   local want="$2"
@@ -749,19 +1000,7 @@ done
 exit 0
 ENDWR
   chmod +x "$work/wrangler"
-  cat > "$work/node" << EOF
-#!/bin/sh
-fifo=\$(mktemp -u "\$TMPDIR/opd-hold.XXXXXX")
-mkfifo "\$fifo"
-/bin/sh -c 'sleep 60 & wait' > "\$fifo" &
-holder=\$!
-$real_node "\$@" < "\$fifo"
-rc=\$?
-kill -KILL \$holder 2>/dev/null || true
-rm -f "\$fifo"
-exit \$rc
-EOF
-  chmod +x "$work/node"
+  write_holding_node "$work/node"
   PATH="$work:/usr/bin:/bin" \
     TMPDIR="$work" \
     WRANGLER_ARGS="$work/args" \
@@ -772,13 +1011,20 @@ signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 os.setsid()
 os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
   dpid=$!
+  if ! "$hold_dir/bin/note" "$dpid" "" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig could not record deploy pid $dpid" >&2
+    new_failures=$((new_failures + 1))
+    wait "$dpid" 2>/dev/null || true
+    rm -rf "$work"
+    return 0
+  fi
   spins=0
-  while ! ps ax -o command= | awk 'index($0, "parseEmailAllowlist") && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'; do
+  while ! read_parser_handoff "$work/node.ready"; do
     spins=$((spins + 1))
-    if [ "$spins" -ge 30 ]; then
-      echo "FAIL: signal $sig never started node" >&2
+    if [ "$spins" -ge 50 ]; then
+      echo "FAIL: signal $sig never handed over the node parser" >&2
       new_failures=$((new_failures + 1))
-      kill -KILL "$dpid" 2>/dev/null || true
+      "$hold_dir/bin/reap" "$hold_dir" || true
       wait "$dpid" 2>/dev/null || true
       rm -rf "$work"
       return 0
@@ -789,6 +1035,14 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>
   if [ "$pgid" != "$dpid" ]; then
     echo "FAIL: signal $sig deploy pid $dpid is not its process group" >&2
     new_failures=$((new_failures + 1))
+  fi
+  if ! hold_same "$dpid" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig deploy pid $dpid changed start time before the signal" >&2
+    new_failures=$((new_failures + 1))
+    "$hold_dir/bin/reap" "$hold_dir" || true
+    wait "$dpid" 2>/dev/null || true
+    rm -rf "$work"
+    return 0
   fi
   start=$(date +%s)
   if [ "$how" = "group" ]; then
@@ -828,9 +1082,9 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>
     echo "FAIL: signal $sig to the pid took $((end - start))s" >&2
     new_failures=$((new_failures + 1))
   fi
-  if parser_still_running; then
-    echo "FAIL: signal $sig $how left node running" >&2
-    ps ax -o pid=,command= | awk 'index($0, "parseEmailAllowlist") || index($0, "opd-hold") { print }' >&2
+  if hold_same "$PARSER_PID" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig $how left the parser running" >&2
+    ps_command "$PARSER_PID" >&2
     new_failures=$((new_failures + 1))
   fi
   if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
@@ -841,6 +1095,7 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>
     echo "FAIL: signal $sig wrote the allowlist to a file" >&2
     new_failures=$((new_failures + 1))
   fi
+  "$hold_dir/bin/reap" "$hold_dir" || true
   rm -rf "$work"
 }
 
@@ -851,6 +1106,231 @@ run_signal_case INT 130 group
 
 if [ "$new_failures" -ne 0 ]; then
   echo "FAIL: $new_failures new deploy cases" >&2
+  exit 1
+fi
+
+trap_pidfile=$(mktemp)
+trap_out=$(mktemp)
+set +e
+OPD_TRAP_PROBE=1 OPD_TRAP_PIDFILE="$trap_pidfile" "$BASH" "$suite_path" >"$trap_out" 2>&1
+trap_code=$?
+set -e
+if [ "$trap_code" -ne 1 ] || [ ! -s "$trap_pidfile" ]; then
+  echo "FAIL: self-test trap: probe exited $trap_code" >&2
+  cat "$trap_out" >&2
+  exit 1
+fi
+trap_pid=$(sed -n '1p' "$trap_pidfile")
+trap_lstart=$(sed -n '2p' "$trap_pidfile")
+trap_now=$(ps_lstart "$trap_pid")
+if [ -n "$trap_now" ] && [ "$trap_now" = "$trap_lstart" ]; then
+  echo "FAIL: self-test trap: early exit left $trap_pid" >&2
+  exit 1
+fi
+echo "self-test trap: early exit reaped $trap_pid"
+rm -f "$trap_pidfile" "$trap_out"
+
+sleep 60 &
+stray=$!
+if ! "$hold_dir/bin/note" "$stray" "" "$hold_dir/side"; then
+  echo "FAIL: self-test a: could not record stray sleep $stray" >&2
+  exit 1
+fi
+if hold_collect; then
+  echo "FAIL: self-test a: unrelated sleep $stray failed the check" >&2
+  cat "$hold_dir/left" >&2
+  exit 1
+fi
+if ! hold_same "$stray" "$hold_dir/side"; then
+  echo "FAIL: self-test a: stray sleep $stray was not alive during the check" >&2
+  exit 1
+fi
+echo "self-test a: unrelated sleep $stray ignored"
+"$hold_dir/bin/reap-one" "$stray" "$hold_dir/side" || true
+wait "$stray" 2>/dev/null || true
+
+bwork=$(mktemp -d)
+/bin/sh -c 'sleep 60 & echo $! > "$1"; wait' _ "$bwork/child" &
+bholder=$!
+bspins=0
+while [ ! -s "$bwork/child" ]; do
+  bspins=$((bspins + 1))
+  if [ "$bspins" -gt 50 ]; then
+    echo "FAIL: self-test b: holder child did not start" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+bchild=$(cat "$bwork/child")
+if ! "$hold_dir/bin/note" "$bholder" "" "$hold_dir/pids"; then
+  echo "FAIL: self-test b: could not record holder $bholder" >&2
+  exit 1
+fi
+bspins=0
+while [ ! -f "$hold_dir/pids/$bchild" ]; do
+  bspins=$((bspins + 1))
+  if [ "$bspins" -gt 30 ]; then
+    echo "FAIL: self-test b: child $bchild was not recorded while its parent link was known" >&2
+    exit 1
+  fi
+  "$hold_dir/bin/note" "$bholder" "" "$hold_dir/pids" || true
+  sleep 0.05
+done
+if ! hold_collect; then
+  echo "FAIL: self-test b: leaked holder $bholder did not fail the check" >&2
+  exit 1
+fi
+if ! grep -q "^$bholder " "$hold_dir/left" || ! grep -q "^$bchild " "$hold_dir/left"; then
+  echo "FAIL: self-test b: check missed the holder or its child" >&2
+  cat "$hold_dir/left" >&2
+  exit 1
+fi
+echo "self-test b: leaked holder $bholder failed the check, with child $bchild"
+"$hold_dir/bin/reap" "$hold_dir" || true
+wait "$bholder" 2>/dev/null || true
+if hold_same "$bholder" "$hold_dir/pids" || hold_same "$bchild" "$hold_dir/pids"; then
+  echo "FAIL: self-test b: reap left the holder or its child" >&2
+  exit 1
+fi
+rm -rf "$bwork"
+
+cwork=$(mktemp -d)
+cat > "$cwork/wrap" << EOF
+#!/bin/sh
+"$real_node" "\$@" &
+echo \$! > "$cwork/parser.pid"
+wait
+EOF
+chmod +x "$cwork/wrap"
+/bin/sh "$cwork/wrap" --input-type=module -e 'import { parseEmailAllowlist } from "./src/email-allowlist.mjs"; setInterval(() => {}, 1000);' &
+cwrap=$!
+/bin/sh -c 'sleep 90 & echo $! > "$1"; wait' _ "$cwork/sleep.pid" &
+cholder=$!
+cspins=0
+while [ ! -s "$cwork/parser.pid" ] || [ ! -s "$cwork/sleep.pid" ]; do
+  cspins=$((cspins + 1))
+  if [ "$cspins" -gt 50 ]; then
+    echo "FAIL: self-test c: parser or holder did not start" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+cparser=$(cat "$cwork/parser.pid")
+csleep=$(cat "$cwork/sleep.pid")
+cwrap_cmd=$(ps_command "$cwrap")
+case "$cwrap_cmd" in
+  *parseEmailAllowlist*) ;;
+  *)
+    echo "FAIL: self-test c: wrapper argv has no parseEmailAllowlist" >&2
+    printf '%s\n' "$cwrap_cmd" >&2
+    exit 1
+    ;;
+esac
+"$hold_dir/bin/note" "$cwrap" "" "$hold_dir/pids" || exit 1
+if hold_accept_parser "$cwrap"; then
+  echo "FAIL: self-test c: accepted the shell wrapper $cwrap as the parser" >&2
+  exit 1
+fi
+"$hold_dir/bin/note" "$cparser" "" "$hold_dir/pids" || exit 1
+if ! hold_accept_parser "$cparser"; then
+  echo "FAIL: self-test c: could not accept node parser $cparser" >&2
+  ps_command "$cparser" >&2
+  exit 1
+fi
+"$hold_dir/bin/note" "$cholder" "" "$hold_dir/pids" || exit 1
+cspins=0
+while [ ! -f "$hold_dir/pids/$csleep" ]; do
+  cspins=$((cspins + 1))
+  if [ "$cspins" -gt 30 ]; then
+    echo "FAIL: self-test c: holder child was not recorded" >&2
+    exit 1
+  fi
+  "$hold_dir/bin/note" "$cholder" "" "$hold_dir/pids" || true
+  sleep 0.05
+done
+if ! hold_same "$cwrap" "$hold_dir/pids" || ! hold_same "$cholder" "$hold_dir/pids"; then
+  echo "FAIL: self-test c: wrapper or holder changed before the kill" >&2
+  exit 1
+fi
+"$hold_dir/bin/reap-one" "$cwrap" "$hold_dir/pids" || true
+wait "$cwrap" 2>/dev/null || true
+"$hold_dir/bin/reap-one" "$cholder" "$hold_dir/pids" || true
+wait "$cholder" 2>/dev/null || true
+if ! hold_same "$cparser" "$hold_dir/pids"; then
+  echo "FAIL: self-test c: parser $cparser died with its wrapper" >&2
+  exit 1
+fi
+cppid=$(ps_ppid "$cparser")
+if [ -z "$cppid" ] || [ "$cppid" = "$cwrap" ] || [ "$cppid" = "$cholder" ]; then
+  echo "FAIL: self-test c: parser ppid $cppid is still the wrapper or holder" >&2
+  exit 1
+fi
+if ! hold_collect || ! grep -q "^$cparser " "$hold_dir/left"; then
+  echo "FAIL: self-test c: check missed surviving parser $cparser" >&2
+  cat "$hold_dir/left" >&2
+  exit 1
+fi
+echo "self-test c: parser $cparser survived wrapper $cwrap and holder $cholder (ppid $cppid)"
+"$hold_dir/bin/reap" "$hold_dir" || true
+rm -rf "$cwork"
+
+sleep 60 &
+reused=$!
+if ! "$hold_dir/bin/note" "$reused" "" "$hold_dir/pids"; then
+  echo "FAIL: self-test d: could not record $reused" >&2
+  exit 1
+fi
+reused_lstart=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$hold_dir/pids/$reused")
+printf '%s\n' "reused-pid-different-start" > "$hold_dir/pids/$reused"
+"$hold_dir/bin/reap-one" "$reused" "$hold_dir/pids" || true
+if [ "$(ps_lstart "$reused")" != "$reused_lstart" ]; then
+  echo "FAIL: self-test d: reap killed pid $reused whose start time did not match" >&2
+  exit 1
+fi
+printf '%s\n' "$reused_lstart" > "$hold_dir/pids/$reused"
+"$hold_dir/bin/reap-one" "$reused" "$hold_dir/pids" || true
+wait "$reused" 2>/dev/null || true
+if [ "$(ps_lstart "$reused")" = "$reused_lstart" ]; then
+  echo "FAIL: self-test d: matching start time did not reap $reused" >&2
+  exit 1
+fi
+echo "self-test d: pid $reused with a different start time was not killed"
+
+if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
+  race1=$(mktemp)
+  race2=$(mktemp)
+  set +e
+  OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race1" 2>&1 &
+  race_a=$!
+  OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race2" 2>&1 &
+  race_b=$!
+  wait "$race_a"
+  race_a_code=$?
+  wait "$race_b"
+  race_b_code=$?
+  set -e
+  if [ "$race_a_code" -ne 0 ] || [ "$race_b_code" -ne 0 ]; then
+    echo "FAIL: self-test e: suites exited $race_a_code and $race_b_code" >&2
+    echo "---- suite A ----" >&2
+    cat "$race1" >&2
+    echo "---- suite B ----" >&2
+    cat "$race2" >&2
+    exit 1
+  fi
+  if grep -F -q "missing arg deploy" "$race1" "$race2"; then
+    echo "FAIL: self-test e: missing arg deploy" >&2
+    exit 1
+  fi
+  if ! grep -F -q "deploy.test.sh passed" "$race1" || ! grep -F -q "deploy.test.sh passed" "$race2"; then
+    echo "FAIL: self-test e: a suite did not pass" >&2
+    exit 1
+  fi
+  echo "self-test e: both suites passed"
+  rm -f "$race1" "$race2"
+fi
+
+if [ -n "$wrangler_target" ] && [ "$(readlink node_modules/.bin/wrangler)" != "$wrangler_target" ]; then
+  echo "FAIL: shared wrangler link changed" >&2
   exit 1
 fi
 
