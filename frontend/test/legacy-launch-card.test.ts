@@ -237,9 +237,9 @@ async function dropPinOverLaunch(page: Page) {
     return null;
   });
   expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
-    if (await pinOverLaunch(page)) return;
+    if (await pinOverLaunch(page)) return attempt;
   }
   const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
@@ -324,9 +324,10 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
         const pad = await padPoint(page);
         await page.touchscreen.tap(pad.x, pad.y);
         await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
-        await dropPinOverLaunch(page);
+        const attempts = await dropPinOverLaunch(page);
+        expect(attempts, `pin drop needed ${attempts} right-clicks`).toBe(1);
         const tap = await centerTap(page);
-        results.push({ rep, ...tap.point, trustedCanvas: tap.trustedCanvas, hits: tap.hits });
+        results.push({ rep, attempts, ...tap.point, trustedCanvas: tap.trustedCanvas, hits: tap.hits });
       } finally {
         await context.close();
       }
