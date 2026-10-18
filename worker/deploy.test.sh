@@ -43,27 +43,34 @@ esac
 if [ "$pid" -le 1 ]; then
   exit 1
 fi
-if [ ! -f "$dir/$pid" ]; then
-  if [ -n "$expect_ppid" ]; then
-    have_ppid=$(LC_ALL=C ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ' || true)
-    if [ "$have_ppid" != "$expect_ppid" ]; then
-      exit 1
-    fi
+if [ -n "$expect_ppid" ]; then
+  have_ppid=$(LC_ALL=C ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ' || true)
+  if [ "$have_ppid" != "$expect_ppid" ]; then
+    exit 1
   fi
+fi
+live=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+if [ -z "$live" ] && [ ! -f "$dir/$pid" ]; then
   tries=0
-  lstart=
   while [ "$tries" -lt 30 ]; do
-    lstart=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
-    if [ -n "$lstart" ]; then
+    live=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+    if [ -n "$live" ]; then
       break
     fi
     tries=$((tries + 1))
     sleep 0.05
   done
-  if [ -z "$lstart" ]; then
-    exit 1
+fi
+if [ -n "$live" ]; then
+  have=
+  if [ -f "$dir/$pid" ]; then
+    have=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$dir/$pid")
   fi
-  printf '%s\n' "$lstart" > "$dir/$pid"
+  if [ "$live" != "$have" ]; then
+    printf '%s\n' "$live" > "$dir/$pid"
+  fi
+elif [ ! -f "$dir/$pid" ]; then
+  exit 1
 fi
 children=$(LC_ALL=C ps -axww -o pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2 == p { print $1 }' || true)
 for child in $children; do
@@ -139,7 +146,25 @@ exit "$found"
 EOF
 } > "$hold_dir/bin/collect"
 
-chmod +x "$hold_dir/bin/note" "$hold_dir/bin/reap-one" "$hold_dir/bin/reap" "$hold_dir/bin/collect"
+{
+  printf '#!%s\n' "$BASH"
+  cat << 'EOF'
+set -u
+root=$1
+hold=$2
+self=$$
+bin=$(dirname "$0")
+kids=$(LC_ALL=C ps -axww -o pid=,ppid= 2>/dev/null | awk -v p="$root" -v s="$self" '$2 == p && $1 != s { print $1 }' || true)
+: > "$hold/kids"
+for kid in $kids; do
+  printf '%s\n' "$kid" >> "$hold/kids"
+  "$bin/note" "$kid" "$root" "$hold/pids" || true
+done
+exit 0
+EOF
+} > "$hold_dir/bin/sweep"
+
+chmod +x "$hold_dir/bin/note" "$hold_dir/bin/reap-one" "$hold_dir/bin/reap" "$hold_dir/bin/collect" "$hold_dir/bin/sweep"
 
 ps_lstart() {
   LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
@@ -226,22 +251,75 @@ hold_collect() {
 }
 
 cleanup_on_exit() {
+  trap '' INT TERM HUP
+  if [ -n "${hold_dir-}" ] && [ -x "${hold_dir}/bin/sweep" ]; then
+    "${hold_dir}/bin/sweep" "$$" "$hold_dir" || true
+  fi
   if [ -n "${hold_dir-}" ] && [ -x "${hold_dir}/bin/reap" ]; then
     "${hold_dir}/bin/reap" "$hold_dir" || true
+  fi
+  if [ -n "${hold_dir-}" ] && [ -f "${hold_dir}/kids" ]; then
+    while read -r kid; do
+      case "$kid" in
+        ''|*[!0-9]*) continue ;;
+      esac
+      state=$(LC_ALL=C ps -p "$kid" -o stat= 2>/dev/null | tr -d ' ' || true)
+      case "$state" in
+        ''|Z*) wait "$kid" 2>/dev/null || true ;;
+      esac
+    done < "${hold_dir}/kids"
   fi
   if [ -n "${hold_dir-}" ]; then
     rm -rf "$hold_dir"
   fi
   true
 }
+
+hold_defer() {
+  HOLD_SIGNAL=
+  trap 'HOLD_SIGNAL=1' INT TERM HUP
+}
+
+hold_resume() {
+  trap 'exit' INT TERM HUP
+  if [ "${HOLD_SIGNAL-}" = 1 ]; then
+    exit
+  fi
+}
+
 trap cleanup_on_exit EXIT
+trap 'exit' INT TERM HUP
 
 if [ "${OPD_TRAP_PROBE:-}" = 1 ]; then
+  hold_defer
   sleep 180 &
   probe_pid=$!
-  "$hold_dir/bin/note" "$probe_pid" "" "$hold_dir/pids" || exit 1
+  "$hold_dir/bin/note" "$probe_pid" "$$" "$hold_dir/pids" || exit 1
+  printf '%s\n%s\n' "$probe_pid" "$(ps_lstart "$probe_pid")" > "$OPD_TRAP_PIDFILE"
+  hold_resume
+  exit 1
+fi
+
+if [ "${OPD_RACE_PROBE:-}" = 1 ]; then
+  sleep 180 &
+  probe_pid=$!
   printf '%s\n%s\n' "$probe_pid" "$(ps_lstart "$probe_pid")" > "$OPD_TRAP_PIDFILE"
   exit 1
+fi
+
+if [ "${OPD_SIGINT_PROBE:-}" = 1 ]; then
+  hold_defer
+  sleep 180 &
+  probe_pid=$!
+  "$hold_dir/bin/note" "$probe_pid" "$$" "$hold_dir/pids" || exit 1
+  printf '%s\n%s\n' "$probe_pid" "$(ps_lstart "$probe_pid")" > "$OPD_TRAP_PIDFILE"
+  hold_resume
+  while true; do
+    wait "$probe_pid" || true
+    if ! kill -0 "$probe_pid" 2>/dev/null; then
+      exit 0
+    fi
+  done
 fi
 
 write_holding_node() {
@@ -897,7 +975,7 @@ leak_notes=$(mktemp)
 (
   deadline=$((SECONDS + 14))
   while [ "$SECONDS" -lt "$deadline" ]; do
-    ps ax -o command= | SENTINEL="$list_sentinel" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { print }' >> "$leak_notes"
+    ps ax -ww -o command= | SENTINEL="$list_sentinel" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { print }' >> "$leak_notes"
     if [ -d /proc ]; then
       for cmdf in /proc/[0-9]*/cmdline; do
         pid=${cmdf#/proc/}
@@ -986,7 +1064,7 @@ if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
   echo "FAIL: early stdin close leaked the allowlist on stdio" >&2
   new_failures=$((new_failures + 1))
 fi
-if ps ax -o command= | SENTINEL="$list_sentinel" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'; then
+if ps ax -ww -o command= | SENTINEL="$list_sentinel" awk 'BEGIN { s = ENVIRON["SENTINEL"] } index($0, s) && index($0, "awk") == 0 { found = 1 } END { exit found ? 0 : 1 }'; then
   echo "FAIL: early stdin close left the allowlist in argv" >&2
   new_failures=$((new_failures + 1))
 fi
@@ -1119,26 +1197,99 @@ if [ "$new_failures" -ne 0 ]; then
   exit 1
 fi
 
+assert_early_reaped() {
+  local label="$1"
+  local pidfile="$2"
+  local outfile="$3"
+  local code="$4"
+  local pid lstart now
+  if [ "$code" -ne 1 ] || [ ! -s "$pidfile" ]; then
+    echo "FAIL: self-test $label: probe exited $code" >&2
+    if [ -f "$outfile" ]; then
+      cat "$outfile" >&2
+    fi
+    rm -f "$pidfile" "$outfile"
+    exit 1
+  fi
+  pid=$(sed -n '1p' "$pidfile" | tr -d ' ')
+  lstart=$(sed -n '2p' "$pidfile" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  now=$(ps_lstart "$pid")
+  if [ -n "$now" ] && { [ -z "$lstart" ] || [ "$now" = "$lstart" ]; }; then
+    echo "FAIL: self-test $label: early exit left $pid" >&2
+    rm -f "$pidfile" "$outfile"
+    exit 1
+  fi
+  echo "self-test $label: early exit reaped $pid"
+  rm -f "$pidfile" "$outfile"
+}
+
 trap_pidfile=$(mktemp)
 trap_out=$(mktemp)
 set +e
 OPD_TRAP_PROBE=1 OPD_TRAP_PIDFILE="$trap_pidfile" "$BASH" "$suite_path" >"$trap_out" 2>&1
 trap_code=$?
 set -e
-if [ "$trap_code" -ne 1 ] || [ ! -s "$trap_pidfile" ]; then
-  echo "FAIL: self-test trap: probe exited $trap_code" >&2
-  cat "$trap_out" >&2
+assert_early_reaped trap "$trap_pidfile" "$trap_out" "$trap_code"
+
+race_pidfile=$(mktemp)
+race_out=$(mktemp)
+set +e
+OPD_RACE_PROBE=1 OPD_TRAP_PIDFILE="$race_pidfile" "$BASH" "$suite_path" >"$race_out" 2>&1
+race_code=$?
+set -e
+assert_early_reaped race "$race_pidfile" "$race_out" "$race_code"
+
+sig_pidfile=$(mktemp)
+sig_out=$(mktemp)
+set +e
+OPD_SIGINT_PROBE=1 OPD_TRAP_PIDFILE="$sig_pidfile" \
+  python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$sig_out" 2>&1 &
+sig_runner=$!
+set -e
+sig_spins=0
+while [ ! -s "$sig_pidfile" ]; do
+  sig_spins=$((sig_spins + 1))
+  if [ "$sig_spins" -gt 50 ]; then
+    echo "FAIL: self-test sigint: runner did not record a holder" >&2
+    cat "$sig_out" >&2
+    rm -f "$sig_pidfile" "$sig_out"
+    exit 1
+  fi
+  sleep 0.05
+done
+sig_holder=$(sed -n '1p' "$sig_pidfile" | tr -d ' ')
+sig_lstart=$(sed -n '2p' "$sig_pidfile" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+kill -INT "$sig_runner" 2>/dev/null || true
+sig_spins=0
+while true; do
+  sig_state=$(LC_ALL=C ps -p "$sig_runner" -o stat= 2>/dev/null | tr -d ' ' || true)
+  case "$sig_state" in
+    ''|Z*) break ;;
+  esac
+  sig_spins=$((sig_spins + 1))
+  if [ "$sig_spins" -gt 50 ]; then
+    echo "FAIL: self-test sigint: runner $sig_runner did not end" >&2
+    rm -f "$sig_pidfile" "$sig_out"
+    exit 1
+  fi
+  sleep 0.05
+done
+set +e
+wait "$sig_runner"
+set -e
+sig_now=$(ps_lstart "$sig_holder")
+if [ -n "$sig_now" ] && { [ -z "$sig_lstart" ] || [ "$sig_now" = "$sig_lstart" ]; }; then
+  echo "FAIL: self-test sigint: runner left holder $sig_holder" >&2
+  rm -f "$sig_pidfile" "$sig_out"
   exit 1
 fi
-trap_pid=$(sed -n '1p' "$trap_pidfile")
-trap_lstart=$(sed -n '2p' "$trap_pidfile")
-trap_now=$(ps_lstart "$trap_pid")
-if [ -n "$trap_now" ] && [ "$trap_now" = "$trap_lstart" ]; then
-  echo "FAIL: self-test trap: early exit left $trap_pid" >&2
-  exit 1
-fi
-echo "self-test trap: early exit reaped $trap_pid"
-rm -f "$trap_pidfile" "$trap_out"
+echo "self-test sigint: runner $sig_runner ended and left 0 holders"
+rm -f "$sig_pidfile" "$sig_out"
 
 sleep 60 &
 stray=$!
@@ -1325,14 +1476,17 @@ if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
     cat "$race1" >&2
     echo "---- suite B ----" >&2
     cat "$race2" >&2
+    rm -f "$race1" "$race2"
     exit 1
   fi
   if grep -F -q "missing arg deploy" "$race1" "$race2"; then
     echo "FAIL: self-test e: missing arg deploy" >&2
+    rm -f "$race1" "$race2"
     exit 1
   fi
   if ! grep -F -q "deploy.test.sh passed" "$race1" || ! grep -F -q "deploy.test.sh passed" "$race2"; then
     echo "FAIL: self-test e: a suite did not pass" >&2
+    rm -f "$race1" "$race2"
     exit 1
   fi
   echo "self-test e: both suites passed"
