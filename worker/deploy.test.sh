@@ -32,11 +32,15 @@ EOF
     WRANGLER_CALLS="$calls" \
     WRANGLER_ARGS="$args" \
     CALIB_TOKEN="machine-secret" \
-    bash ./deploy.sh >"$work/out" 2>"$work/err"
+    bash ./deploy.sh "$@" >"$work/out" 2>"$work/err"
   local code=$?
   set -e
   CASE_CODE=$code
-  CASE_ARGS=$(cat "$args")
+  if [ -f "$args" ]; then
+    CASE_ARGS=$(cat "$args")
+  else
+    CASE_ARGS=""
+  fi
   CASE_ERR=$(cat "$work/err")
   rm -rf "$work"
 }
@@ -420,6 +424,60 @@ ACCESS_ALLOWED_EMAILS='person@example.com' \
 expect_last_four "non-dry-run success" \
   "ACCESS_ALLOWED_EMAILS:person@example.com" \
   "ACCESS_SERVICE_TOKEN_CLIENT_IDS:client.example"
+
+bom=$(printf '\357\273\277')
+nbsp=$(printf '\302\240')
+ideo=$(printf '\343\200\200')
+lsep=$(printf '\342\200\250')
+
+expect_locale_emails() {
+  local locale="$1"
+  local runner="$2"
+  local label="$3"
+  local value="$4"
+  local want="$5"
+  if [ "$runner" = "bash" ]; then
+    LC_ALL="$locale" ACCESS_ALLOWED_EMAILS="$value" run_deploy
+    echo "== bash LC_ALL=$locale $label exit $CASE_CODE"
+  else
+    LC_ALL="$locale" ACCESS_ALLOWED_EMAILS="$value" run_package_deploy
+    echo "== package LC_ALL=$locale $label exit $CASE_CODE"
+  fi
+  if [ "$CASE_CODE" -ne "$want" ]; then
+    echo "FAIL: $runner LC_ALL=$locale $label exited $CASE_CODE, want $want" >&2
+    printf '%s\n' "$CASE_ERR" >&2
+    new_failures=$((new_failures + 1))
+    return 0
+  fi
+  if [ "$want" -eq 2 ]; then
+    if [ -n "$CASE_ARGS" ]; then
+      echo "FAIL: wrangler ran for $runner LC_ALL=$locale $label" >&2
+      printf '%s\n' "$CASE_ARGS" >&2
+      new_failures=$((new_failures + 1))
+      return 0
+    fi
+    if ! printf '%s\n' "$CASE_ERR" | grep -F -q "ERROR: ACCESS_ALLOWED_EMAILS"; then
+      echo "FAIL: $runner LC_ALL=$locale $label did not refuse a blank list" >&2
+      printf '%s\n' "$CASE_ERR" >&2
+      new_failures=$((new_failures + 1))
+    fi
+    return 0
+  fi
+  if ! printf '%s\n' "$CASE_ARGS" | grep -F -q "person@example.com"; then
+    echo "FAIL: $runner LC_ALL=$locale $label did not pass the mailbox" >&2
+    printf '%s\n' "$CASE_ARGS" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  return 0
+}
+
+for locale in C en_US.UTF-8; do
+  for runner in bash package; do
+    expect_locale_emails "$locale" "$runner" "bom-only" "$bom" 2
+    expect_locale_emails "$locale" "$runner" "unicode-commas" "${nbsp},${ideo},${lsep}" 2
+    expect_locale_emails "$locale" "$runner" "mailbox-wrapped" "${bom}person@example.com${nbsp}" 0
+  done
+done
 
 if [ "$new_failures" -ne 0 ]; then
   echo "FAIL: $new_failures new deploy cases" >&2
