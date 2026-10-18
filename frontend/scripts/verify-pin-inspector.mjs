@@ -665,10 +665,7 @@ async function checkPopupParts(page, row, touch) {
   expect(row, 'popup', 'fixture has actual upcoming pass rows', passes.length > 0, passes);
   for (const { index } of passes) {
     await page.locator('.dropped-pin-popup').evaluate((body, index) => {
-      const rows = [...body.querySelectorAll('.pin-pass-row')];
-      const content = body.closest('.maplibregl-popup-content');
-      const target = rows[index];
-      content.scrollTop += target.getBoundingClientRect().top - content.getBoundingClientRect().top - 8;
+      body.querySelectorAll('.pin-pass-row')[index].scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }, index);
     const snapshot = await checkClearance(page, row, `scrolled-pass-row-${index}`);
     const target = snapshot.parts.find((part) => part.label === `pass-row-${index}`);
