@@ -14,6 +14,16 @@ function alive(pid: number | undefined): boolean {
   }
 }
 
+async function dead(pid: number | undefined, child?: ChildProcess): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < 500) {
+    if (child && (child.exitCode !== null || child.signalCode !== null)) return true;
+    if (!alive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return child ? child.exitCode !== null || child.signalCode !== null : !alive(pid);
+}
+
 function detached(command: string, args: string[], stdio: 'ignore' | 'pipe' = 'ignore'): ChildProcess {
   return spawn(command, args, { detached: true, stdio: stdio === 'pipe' ? ['ignore', 'pipe', 'ignore'] : 'ignore' });
 }
@@ -36,7 +46,7 @@ afterEach(() => {
   groups.length = 0;
 });
 
-function browserOf(child: ChildProcess, close: () => Promise<unknown>, kill: () => Promise<unknown>) {
+function browserOf(close: () => Promise<unknown>, kill: () => Promise<unknown>) {
   return { close, server: { close, kill } };
 }
 
@@ -48,7 +58,7 @@ describe('closeBrowser', () => {
     let returned = false;
     try {
       await Promise.race([
-        closeBrowser(browserOf(child, () => new Promise<void>(() => {}), async () => {
+        closeBrowser(browserOf(() => new Promise<void>(() => {}), async () => {
           killed = true;
           killGroup(child.pid);
         }), 'stuck-child').then(() => {
@@ -61,7 +71,7 @@ describe('closeBrowser', () => {
       expect(killed).toBe(true);
       expect(elapsed).toBeGreaterThanOrEqual(1_000);
       expect(elapsed).toBeLessThan(10_000);
-      expect(alive(child.pid)).toBe(false);
+      expect(await dead(child.pid, child)).toBe(true);
     } finally {
       killGroup(child.pid);
     }
@@ -71,11 +81,14 @@ describe('closeBrowser', () => {
     const sibling = track(detached('sleep', ['30']));
     const root = track(detached('sleep', ['30']));
     try {
-      await closeBrowser(browserOf(root, () => new Promise<void>(() => {}), async () => {
+      await closeBrowser(browserOf(() => new Promise<void>(() => {}), async () => {
         killGroup(root.pid);
       }), 'sibling');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(sibling.exitCode).toBeNull();
+      expect(sibling.signalCode).toBeNull();
       expect(alive(sibling.pid)).toBe(true);
-      expect(alive(root.pid)).toBe(false);
+      expect(await dead(root.pid, root)).toBe(true);
     } finally {
       killGroup(sibling.pid);
       killGroup(root.pid);
@@ -91,19 +104,29 @@ describe('closeBrowser', () => {
     let returned = false;
     try {
       await Promise.race([
-        closeBrowser(browserOf(root, async () => {
-          try { process.kill(root.pid!, 'SIGKILL'); } catch {}
-          await new Promise<void>(() => {});
-        }, async () => {
-          killGroup(root.pid);
-        }), 'exited-leader').then(() => {
+        closeBrowser({
+          close: async () => {
+            try { process.kill(root.pid!, 'SIGKILL'); } catch {}
+            await new Promise<void>(() => {});
+          },
+          server: {
+            close: async () => {
+              try { process.kill(root.pid!, 'SIGKILL'); } catch {}
+              await new Promise<void>(() => {});
+            },
+            kill: async () => {
+              killGroup(root.pid);
+            },
+            process: () => ({ pid: root.pid }),
+          },
+        }, 'exited-leader').then(() => {
           returned = true;
         }),
         new Promise<void>((resolve) => setTimeout(resolve, 9_000)),
       ]);
       expect(returned).toBe(true);
-      expect(alive(root.pid)).toBe(false);
-      expect(alive(child)).toBe(false);
+      expect(await dead(root.pid, root)).toBe(true);
+      expect(await dead(child)).toBe(true);
     } finally {
       killGroup(root.pid);
       killGroup(child);
@@ -115,7 +138,7 @@ describe('closeBrowser', () => {
     let killed = false;
     const started = Date.now();
     try {
-      await closeBrowser(browserOf(root, async () => {}, async () => {
+      await closeBrowser(browserOf(async () => {}, async () => {
         killed = true;
         killGroup(root.pid);
       }), 'early');
@@ -194,8 +217,10 @@ describe('launched browsers', () => {
       try {
         await closeBrowser(session, `stopped-${engine.name}`);
         expect(Date.now() - started).toBeLessThan(10_000);
-        expect(alive(leader)).toBe(false);
-        expect(alive(sibling.pid)).toBe(true);
+        expect(await dead(leader)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(sibling.exitCode).toBeNull();
+        expect(sibling.signalCode).toBeNull();
       } finally {
         killGroup(sibling.pid);
         try { await session.server.kill(); } catch {}
