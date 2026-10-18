@@ -28,6 +28,7 @@
   "test/card.test.ts": 0.53,
   "test/category-style.test.ts": 0.332,
   "test/chrome-slots.test.ts": 0.63,
+  "test/close-browser.test.ts": 60,
   "test/countdown.test.ts": 0.335,
   "test/crew-roster.test.ts": 0.391,
   "test/csv-parse.test.ts": 0.359,
