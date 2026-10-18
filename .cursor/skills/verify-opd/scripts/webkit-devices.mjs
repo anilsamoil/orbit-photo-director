@@ -18,6 +18,10 @@ export const VIEWPORT_ALLOWLIST = {
     { width: 834, height: 1210 },
     { width: 1210, height: 834 },
   ],
+  'ipad-3': [
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+  ],
 };
 
 export const IPAD_M4_VIEWPORTS = VIEWPORT_ALLOWLIST['ipad-pro-11'];
@@ -30,7 +34,8 @@ function viewportOverrideHelp() {
   const desktop = VIEWPORT_ALLOWLIST.desktop.map(viewportToken).join(' or ');
   const phone = VIEWPORT_ALLOWLIST['iphone-13'].map(viewportToken).join(' or ');
   const ipad = VIEWPORT_ALLOWLIST['ipad-pro-11'].map(viewportToken).join(' or ');
-  return `OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=desktop with ${desktop}, iphone-17-pro, iphone-13 with ${phone}, or ipad-pro-11 with ${ipad}.`;
+  const ipad3 = VIEWPORT_ALLOWLIST['ipad-3'].map(viewportToken).join(' or ');
+  return `OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=desktop with ${desktop}, iphone-17-pro, iphone-13 with ${phone}, ipad-pro-11 with ${ipad}, or ipad-3 with ${ipad3}.`;
 }
 
 export function desktopViewport(surface, raw) {
@@ -70,8 +75,40 @@ export const WEBKIT_DEVICES = [
   },
 ];
 
+export const IPAD_3 = {
+  name: 'iPad (3rd generation)',
+  slug: 'ipad-3',
+  standalone: false,
+  tap: 'reload',
+  viewport: { width: 768, height: 1024 },
+  deviceScaleFactor: 2,
+  deviceBase: 'iPad (gen 5)',
+};
+
+export const OPTIONAL_WEBKIT_DEVICES = [IPAD_3];
+
+export const DEFAULT_SURFACE_NAMES = ['desktop', 'iphone-13', 'iphone-17-pro', 'ipad-pro-11'];
+
+export function knownSurfaceNames() {
+  return ['desktop', ...WEBKIT_DEVICES.map((spec) => spec.slug), ...OPTIONAL_WEBKIT_DEVICES.map((spec) => spec.slug)];
+}
+
+export function surfacesFor(raw) {
+  const name = String(raw || 'all').trim() || 'all';
+  if (name === 'all') return [...DEFAULT_SURFACE_NAMES];
+  const known = knownSurfaceNames();
+  if (!known.includes(name)) {
+    throw new Error(`unknown OPD_VERIFY_SURFACE ${name}. Choose ${known.join(', ')}, or all.`);
+  }
+  return [name];
+}
+
+export function webkitCatalog() {
+  return [...WEBKIT_DEVICES, ...OPTIONAL_WEBKIT_DEVICES];
+}
+
 export function deviceDescriptor(spec) {
-  const known = devices[spec.name];
+  const known = devices[spec.name] || (spec.deviceBase ? devices[spec.deviceBase] : undefined);
   if (known?.viewport && !spec.viewport) return known;
   if (spec.viewport) {
     const base = known?.viewport ? known : devices['iPhone 13'];

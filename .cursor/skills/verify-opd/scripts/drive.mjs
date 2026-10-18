@@ -8,7 +8,7 @@ import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
 import { NARROW_SLIDER_RIGHT_GAP, timeStripLaidFailures } from './map-strip-contract.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
@@ -145,11 +145,7 @@ const ISS_CLOCK_EXPR = `(() => {
 })()`;
 
 function selectedSurfaceNames() {
-  const raw = (process.env.OPD_VERIFY_SURFACE || 'all').trim();
-  const known = ['desktop', ...WEBKIT_DEVICES.map((spec) => spec.slug)];
-  if (raw === 'all') return known;
-  if (!known.includes(raw)) throw new Error(`unknown OPD_VERIFY_SURFACE ${raw}. Choose ${known.join(', ')}, or all.`);
-  return [raw];
+  return surfacesFor(process.env.OPD_VERIFY_SURFACE || 'all');
 }
 
 function viewportOverride() {
@@ -713,6 +709,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
 
 async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
   slideLaunch(home);
+  await resetFixtureProfile(baseUrl);
   const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -748,7 +745,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
 async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
+  for (const spec of webkitCatalog().filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
     try {
       const override = viewportOverride();
@@ -796,7 +793,7 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home }));
-  if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
+  if (webkitCatalog().some((spec) => names.has(spec.slug))) {
     notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }));
   }
   return notes;
