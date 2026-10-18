@@ -144,27 +144,39 @@ for (const engine of [
       page.setDefaultTimeout(15_000);
       await openMap(page);
       await page.evaluate(() => {
-        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean; __timer?: number } }).__opdMap;
         const orig = map.setCenter.bind(map);
         map.__centerAt = [];
         map.setCenter = (center) => {
           map.__centerAt!.push(performance.now());
-          return orig(center);
+          const result = orig(center);
+          if (!map.__started) {
+            window.clearTimeout(map.__timer);
+            map.__timer = window.setTimeout(() => {
+              if (map.__started) return;
+              map.__started = true;
+              map.jumpTo({ bearing: 80 });
+              document.getElementById('bearing-north')!.click();
+              const samples: { bearing: number; at: number }[] = [];
+              map.__samples = samples as unknown as number[];
+              map.on('move', () => { samples.push({ bearing: map.getBearing(), at: performance.now() }); });
+            }, 500);
+          }
+          return result;
         };
       });
-      await page.waitForFunction(() => {
-        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-        const at = map.__centerAt ?? [];
-        if (at.length === 0) return false;
-        const age = performance.now() - at[at.length - 1]!;
-        if (age < 450 || age > 950) return false;
-        map.jumpTo({ bearing: 80 });
-        document.getElementById('bearing-north')!.click();
-        const samples: { bearing: number; at: number }[] = [];
-        map.__samples = samples as unknown as number[];
-        map.on('move', () => { samples.push({ bearing: map.getBearing(), at: performance.now() }); });
-        return true;
-      });
+      try {
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean } }).__opdMap;
+          return map.__started === true;
+        });
+      } catch (error) {
+        const state = await page.evaluate(() => {
+          const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean; __timer?: number } }).__opdMap;
+          return { started: map.__started === true, centers: map.__centerAt?.length ?? 0, timer: map.__timer ?? null };
+        });
+        throw new Error(`${String(error)} centers ${state.centers} started ${state.started} timer ${state.timer}`);
+      }
       await page.waitForTimeout(1100);
       const end = await page.evaluate(() => {
         const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
