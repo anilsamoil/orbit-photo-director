@@ -2420,12 +2420,17 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
   if (!insetViewportFits(viewport.width, viewport.height)) {
     await waitFor(send, pipAbsentExpression(name), `${name} inset absent`, 10000);
     await shot(send, evidenceDir, `${shotBase}-absent`);
-    const held = [`${viewport.width}x${viewport.height}`];
+    const held = [`${viewport.width}x${viewport.height} gone`];
     for (const pane of phoneInsetPanes(viewport)) {
-      await setViewport(send, pane.width, pane.height, true);
-      await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${pane.width}x${pane.height}`, 10000);
-      await shot(send, evidenceDir, `${shotBase}-absent-${pane.width}x${pane.height}`);
-      held.push(`${pane.width}x${pane.height}`);
+      if (insetViewportFits(pane.width, pane.height)) {
+        await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, { ...pane, mobile: true });
+        held.push(`${pane.width}x${pane.height} present`);
+      } else {
+        await setViewport(send, pane.width, pane.height, true);
+        await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${pane.width}x${pane.height}`, 10000);
+        await shot(send, evidenceDir, `${shotBase}-absent-${pane.width}x${pane.height}`);
+        held.push(`${pane.width}x${pane.height} gone`);
+      }
     }
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
     return `absent ${held.join(' ')}`;
@@ -2438,13 +2443,21 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
   await shot(send, evidenceDir, shotBase);
   const extra = [`${viewport.width}x${viewport.height}`];
   if (viewport.mobile) {
-    await setViewport(send, viewport.height, viewport.width, true);
-    await waitForPip(send, name, `${name} inset landscape`);
-    await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
-    if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers landscape`, 10000);
-    await sleep(800);
-    await shot(send, evidenceDir, `${shotBase}-land`);
-    extra.push(`${viewport.height}x${viewport.width}`);
+    const landW = viewport.height;
+    const landH = viewport.width;
+    await setViewport(send, landW, landH, true);
+    if (insetViewportFits(landW, landH)) {
+      await waitForPip(send, name, `${name} inset landscape`);
+      await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
+      if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers landscape`, 10000);
+      await sleep(800);
+      await shot(send, evidenceDir, `${shotBase}-land`);
+      extra.push(`${landW}x${landH} present`);
+    } else {
+      await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${landW}x${landH}`, 10000);
+      await shot(send, evidenceDir, `${shotBase}-absent-${landW}x${landH}`);
+      extra.push(`${landW}x${landH} gone`);
+    }
     for (const pane of toolbarInsetPanes(true)) {
       await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, pane);
       extra.push(`${pane.width}x${pane.height}`);
