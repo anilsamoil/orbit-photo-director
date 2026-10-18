@@ -141,11 +141,15 @@ function setBanner(state: BannerState): void {
   if (sessionBannerHeld) return;
   const el = document.getElementById('status-banner');
   if (!el) return;
-  el.className = `banner banner-${state.level}`;
-  el.textContent = state.text;
+  const nextClass = `banner banner-${state.level}`;
+  const classChanged = el.className !== nextClass;
+  const textChanged = el.textContent !== state.text;
+  const cursorChanged = el.style.cursor !== '';
+  if (classChanged) el.className = nextClass;
+  if (textChanged) el.textContent = state.text;
   el.onclick = null;
-  el.style.cursor = '';
-  syncMapChrome();
+  if (cursorChanged) el.style.cursor = '';
+  if (classChanged || textChanged || cursorChanged) queueMicrotask(syncMapChrome);
 }
 
 /** Make the banner a one-tap escape to the Cloudflare Access login. */

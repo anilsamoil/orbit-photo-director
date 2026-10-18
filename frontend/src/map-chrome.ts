@@ -371,12 +371,14 @@ export function bindMapChrome(): void {
   };
   observeCorners();
   const syncNow = (): void => {
-    if (mute) {
-      queueMicrotask(syncMapChrome);
-      scheduleSync();
-      return;
-    }
-    syncMapChrome();
+    queueMicrotask(() => {
+      if (mute) {
+        queueMicrotask(syncMapChrome);
+        scheduleSync();
+        return;
+      }
+      syncMapChrome();
+    });
   };
   const footerWatch = new MutationObserver(syncNow);
   const watchFooter = (node: Element): void => {
