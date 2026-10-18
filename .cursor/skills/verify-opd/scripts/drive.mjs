@@ -3074,33 +3074,81 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   );
 }
 
+const VIEWPORT_LAYOUT_MS = 8000;
+const VIEWPORT_DEADLINE_MS = 12000;
+
+async function abortViewportLayout(send) {
+  try {
+    await evaluate(send, 'window.__opdAbortViewportLayout?.()');
+  } catch {
+    return;
+  }
+}
+
+async function readViewportSettled(send) {
+  let timer;
+  const pending = evaluate(send, 'window.__opdViewportSettled');
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      abortViewportLayout(send).then(() => resolve({ deadline: true }));
+    }, VIEWPORT_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([pending, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function whenViewportLaidOut(send, width, height) {
   await evaluate(send, `(() => {
     const width = ${width};
     const height = ${height};
     window.__opdViewportSettled = new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        window.removeEventListener('resize', onResize);
-        resolve({ w: window.innerWidth, h: window.innerHeight, timedOut: true });
-      }, 8000);
-      const finish = () => {
+      let frame = 0;
+      let nested = 0;
+      let settled = false;
+      let finishing = false;
+      function cleanup() {
         clearTimeout(timer);
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          resolve({ w: window.innerWidth, h: window.innerHeight, timedOut: false });
-        }));
-      };
-      function onResize() {
-        if (window.innerWidth !== width || window.innerHeight !== height) return;
+        if (frame) cancelAnimationFrame(frame);
+        if (nested) cancelAnimationFrame(nested);
         window.removeEventListener('resize', onResize);
-        finish();
       }
+      function done(value) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      }
+      function onResize() {
+        if (finishing || settled) return;
+        if (window.innerWidth !== width || window.innerHeight !== height) return;
+        finishing = true;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          nested = requestAnimationFrame(() => {
+            nested = 0;
+            done({ w: window.innerWidth, h: window.innerHeight, timedOut: false });
+          });
+        });
+      }
+      const timer = setTimeout(() => {
+        done({ w: window.innerWidth, h: window.innerHeight, timedOut: true });
+      }, ${VIEWPORT_LAYOUT_MS});
+      window.__opdAbortViewportLayout = () => done({ w: window.innerWidth, h: window.innerHeight, aborted: true });
       window.addEventListener('resize', onResize);
     });
     return true;
   })()`);
-  await setViewport(send, width, height, true);
-  const settled = await evaluate(send, 'window.__opdViewportSettled');
-  if (!settled || settled.timedOut || settled.w !== width || settled.h !== height) {
+  try {
+    await setViewport(send, width, height, true);
+  } catch (error) {
+    await abortViewportLayout(send);
+    throw error;
+  }
+  const settled = await readViewportSettled(send);
+  if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height) {
     throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
   }
 }

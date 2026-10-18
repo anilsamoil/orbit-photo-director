@@ -129,14 +129,14 @@ for (const engine of ['Chrome', 'WebKit']) {
       };
       const started = Date.now();
       await assert.rejects(() => whenViewportLaidOut(send, 390, 520), /viewport command failed/);
-      const state = await page.evaluate(() => Promise.race([
-        window.__opdViewportSettled.then((value) => ({ state: 'settled', value })),
+      const state = await Promise.race([
+        page.evaluate(() => window.__opdViewportSettled.then((value) => ({ state: 'settled', value }))),
         new Promise((resolveState) => setTimeout(() => resolveState({ state: 'pending' }), 400)),
-      ]));
+      ]);
+      const trace = await page.evaluate(() => ({ timers: window.__timers.size, listeners: window.__resizeListeners }));
       assert.equal(state.state, 'settled', JSON.stringify(state));
       assert.equal(state.value.aborted, true);
       assert.ok(Date.now() - started < 2_000);
-      const trace = await page.evaluate(() => ({ timers: window.__timers.size, listeners: window.__resizeListeners }));
       assert.equal(trace.timers, 0);
       assert.equal(trace.listeners, 0);
     } finally {
