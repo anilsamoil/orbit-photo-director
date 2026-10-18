@@ -71,7 +71,7 @@ export function setFollowEnv(core: MapCore | null, follow: boolean): void {
 
 /** Recenter on the live ISS while follow is on and the view is live.
  *  setCenter aborts an in-progress rotate, so the bearing mode is committed
- *  in the same turn. A north ease killed here would otherwise stay mid-angle. */
+ *  in the same turn. */
 export function applyFollowISS(pos: MarkerPosition): void {
   const core = state.core;
   if (!state.follow || !core || core.clock.isScrubbed()) return;
