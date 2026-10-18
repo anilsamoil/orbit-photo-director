@@ -350,16 +350,23 @@ R2 user API tokens don't expire by default but Cloudflare may revoke them if the
 If the calibration token leaks (it lives in browser localStorage, plaintext), rotate:
 
 1. Generate a new token: `python3 -c "import secrets; print(secrets.token_hex(32))"` (copy output).
-2. Set the Worker secret, then deploy with the full service-token allowlist.
-   A bare `wrangler deploy` clears `ACCESS_SERVICE_TOKEN_CLIENT_IDS`.
-   `deploy.sh` reads that name from the environment and passes it as the last `--var`.
+2. Set the Worker secret, then deploy with the human email list and the service-token client ids.
+   Copy `ACCESS_ALLOWED_EMAILS` from the map Access application's Allow policy at deploy time, comma-separated.
+   Keep that env var and the dashboard list the same.
+   A bare `wrangler deploy` clears `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS`.
+   An empty `ACCESS_ALLOWED_EMAILS` makes `deploy.sh` exit 2.
+   A value that is only spaces or commas is empty too.
+   `--dry-run` with an empty list still runs and warns.
+   `deploy.sh` reads `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS` from the environment.
+   The email list is the `--var` immediately before the client ids.
    The wrapper accepts only `--dry-run`, `--env <name>`, `--env=<name>`, `--config <path>`, and `--config=<path>`.
    Any caller `--var`, any other flag, any positional argument, and `--` make it exit before wrangler runs.
-   Replace the value below with every client id, comma-separated. Leave the client secret out.
+   Replace the values below with every allowed mailbox and every client id, comma-separated. Leave the client secret out.
 
    ```bash
    cd ~/orbit-photo-director/worker
    echo "NEW_TOKEN_HERE" | wrangler secret put CALIB_TOKEN
+   ACCESS_ALLOWED_EMAILS='person@example.com, other@example.com' \
    ACCESS_SERVICE_TOKEN_CLIENT_IDS='CLIENT_ID_ONE,CLIENT_ID_TWO' ./deploy.sh
    ```
 3. Confirm the service token. `/api/health` returns 200. Any other path returns 401.
