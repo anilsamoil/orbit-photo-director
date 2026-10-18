@@ -140,7 +140,7 @@ for (const engine of [
     let pass = 0;
     let attempts = 0;
     const misses: string[] = [];
-    while (pass < 12 && attempts < 16) {
+    while (pass < 20 && attempts < 26) {
     attempts += 1;
     console.log(`NORTH_EASE ${engine.name} attempt ${attempts} pass ${pass}`);
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -185,7 +185,10 @@ for (const engine of [
         });
         throw new Error(`${String(error)} centers ${state.centers} started ${state.started} timer ${state.timer}`);
       }
-      await page.waitForTimeout(1100);
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+      });
       const end = await page.evaluate(() => {
         const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
         return {
@@ -210,15 +213,14 @@ for (const engine of [
       await page.close();
     }
     }
-    expect(pass, misses.join('\n')).toBe(12);
-  }, 420_000);
+    expect(pass, misses.join('\n')).toBe(20);
+  }, 700_000);
 
   it('a right-drag across a follow tick does not snap north', async () => {
-    for (let rep = 0; rep < 12; rep += 1) {
-    console.log(`NORTH_DRAG ${engine.name} ${rep}`);
+    for (let rep = 0; rep < 20; rep += 1) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
-      page.setDefaultTimeout(15_000);
+      page.setDefaultTimeout(20_000);
       await openMap(page);
       await page.locator('#bearing-north').click();
       await page.waitForFunction(() => {
@@ -233,25 +235,34 @@ for (const engine of [
       const y = box.y + box.height / 2;
       await page.mouse.move(x, y);
       await page.mouse.down({ button: 'right' });
-      for (let i = 1; i <= 14; i++) {
-        await page.mouse.move(x + i * 16, y, { steps: 2 });
-        await page.waitForTimeout(90);
+      let seen = 0;
+      for (let i = 1; seen < 40 && i <= 16; i += 1) {
+        await page.mouse.move(x + i * 14, y);
+        await page.waitForFunction((floor) => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return Math.abs(map.getBearing()) > floor;
+        }, seen);
+        seen = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
       }
       await page.mouse.up({ button: 'right' });
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving();
+      });
       const samples = await samplesOf(page);
       const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
       const end = Math.abs(samples[samples.length - 1] ?? 0);
-      expect(snappedNorth(samples), `min after leaving north ${Math.min(...samples.map(Math.abs))} end ${end}`).toBe(false);
+      expect(snappedNorth(samples), `end ${end} n ${samples.length}`).toBe(false);
       expect(pressed).toBe('false');
       expect(end).toBeGreaterThan(20);
     } finally {
       await page.close();
     }
     }
-  }, 300_000);
+  }, 600_000);
 
   it('a keyboard rotate across a follow tick does not snap north', async () => {
-    for (let rep = 0; rep < 12; rep += 1) {
+    for (let rep = 0; rep < 20; rep += 1) {
     console.log(`NORTH_KEYS ${engine.name} ${rep}`);
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
@@ -265,12 +276,20 @@ for (const engine of [
       await watchBearing(page);
       await page.locator('#map .maplibregl-canvas').focus();
       await page.keyboard.down('Shift');
-      for (let i = 0; i < 8; i++) {
+      let seen = 0;
+      for (let i = 0; i < 8; i += 1) {
         await page.keyboard.press('ArrowRight');
-        await page.waitForTimeout(160);
+        await page.waitForFunction((floor) => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return Math.abs(map.getBearing()) > floor;
+        }, seen);
+        seen = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
       }
       await page.keyboard.up('Shift');
-      await page.waitForTimeout(400);
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving();
+      });
       const samples = await samplesOf(page);
       const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
       const end = Math.abs(samples[samples.length - 1] ?? 0);
@@ -281,12 +300,12 @@ for (const engine of [
       await page.close();
     }
     }
-  }, 300_000);
+  }, 600_000);
 
   it('keeps a smooth north retarget when a follow tick lands inside it', async () => {
     const reps: { end: number; moving: boolean; rate: number; pressed: string | null; first: number; error?: string }[] = [];
     let attempts = 0;
-    while (reps.filter((rep) => !rep.error).length < 12 && attempts < 16) {
+    while (reps.filter((rep) => !rep.error).length < 20 && attempts < 26) {
     attempts += 1;
       const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
       try {
@@ -323,7 +342,10 @@ for (const engine of [
           const map = (window as unknown as { __opdMap: MapHandle & { __retargeted?: boolean } }).__opdMap;
           return map.__retargeted === true;
         });
-        await page.waitForTimeout(1100);
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+        });
         const end = await page.evaluate(() => {
           const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
           return {
@@ -349,6 +371,6 @@ for (const engine of [
     const finished = reps.filter((rep) => !rep.error);
     const pass = finished.filter((rep) => Math.abs(rep.first) > 20 && Math.abs(rep.end) < 0.01 && !rep.moving && rep.rate < 1 && rep.pressed === 'true').length;
     console.log(`NORTH_RETARGET_REPS ${engine.name} ${pass}/${finished.length} attempts ${attempts} ${JSON.stringify(reps)}`);
-    expect(pass, JSON.stringify(reps, null, 2)).toBe(12);
-  }, 420_000);
+    expect(pass, JSON.stringify(reps, null, 2)).toBe(20);
+  }, 700_000);
 });

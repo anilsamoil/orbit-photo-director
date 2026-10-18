@@ -224,6 +224,47 @@ describe('deferred north recenter', () => {
     expect(centers()).toEqual([]);
   });
 
+  it('a follow tick does not snap bearing when recenter delivers the user rotate', () => {
+    const { vendor } = armFollow();
+    vendor.setBearing(40);
+    const orig = vendor.setCenter.bind(vendor);
+    vendor.setCenter = (at) => {
+      orig(at);
+      vendor.fire('rotatestart', { byUser: true });
+    };
+    const before = vendor.cameraCalls.length;
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(vendor.cameraCalls.slice(before).filter((call) => call.method === 'setBearing')).toEqual([]);
+    expect(vendor.bearing()).toBe(40);
+    expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('drops the click a rotate release delivers to North', () => {
+    const { vendor, calls, frames, north } = armFollow();
+    vendor.setBearing(40);
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    vendor.fire('rotatestart', { byUser: true });
+    const before = calls.length;
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    north.click();
+    expect(calls.length).toBe(before);
+    expect(vendor.bearing()).toBe(40);
+    expect(frames).toHaveLength(1);
+    frames[0]!(0);
+    expect(frames).toHaveLength(2);
+    frames[1]!(0);
+    north.click();
+    expect(calls.at(-1)).toMatchObject({ bearing: 0, duration: 600 });
+  });
+
+  it('a keyboard rotate still accepts the next North click', () => {
+    const { vendor, calls, north } = armFollow();
+    vendor.setBearing(40);
+    vendor.fire('rotatestart', { byUser: true });
+    north.click();
+    expect(calls.at(-1)).toMatchObject({ bearing: 0, duration: 600 });
+  });
+
   it('a user rotate releases follow and does not recenter', () => {
     const { vendor, frames, centers } = armFollow();
     vendor.setBearing(80);

@@ -21,6 +21,7 @@ type Runtime = {
   motionWatch: boolean;
   toggleBound: boolean;
   bearingBound: boolean;
+  clickGuard: boolean;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
@@ -42,6 +43,7 @@ const state: Runtime = {
   motionWatch: false,
   toggleBound: false,
   bearingBound: false,
+  clickGuard: false,
   hasTrack: () => false,
   position: () => null,
 };
@@ -83,7 +85,8 @@ export function applyFollowISS(pos: MarkerPosition): void {
     return;
   }
   core.setCenter([pos.lon, pos.lat]);
-  if (state.mode === 'north') core.setBearing(0);
+  if (!state.follow || state.mode !== 'north') return;
+  core.setBearing(0);
 }
 
 /** The follow handler is registered before the ease watch. It reads a pending
@@ -204,10 +207,24 @@ export function bindFollowToggle(): void {
     core.on('zoomstart', ({ byUser }) => {
       if (byUser) exitFollow();
     });
+    const pointer = { held: false };
+    const releaseClickGuard = (): void => {
+      pointer.held = false;
+      if (!state.clickGuard) return;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => { state.clickGuard = false; });
+      });
+    };
+    const pressPointer = (): void => { pointer.held = true; };
+    document.addEventListener('pointerdown', pressPointer, true);
+    document.addEventListener('mousedown', pressPointer, true);
+    document.addEventListener('pointerup', releaseClickGuard, true);
+    document.addEventListener('mouseup', releaseClickGuard, true);
     core.on('rotatestart', ({ byUser }) => {
       if (!byUser) return;
       state.motion = null;
       exitFollow();
+      if (pointer.held) state.clickGuard = true;
     });
     core.on('moveend', () => { settleMotion(); });
   }
@@ -230,8 +247,15 @@ export function bindBearingToggle(): void {
     reflectActive();
     applyBearing(true);
   };
-  northBtn.addEventListener('click', () => setMode('north'));
-  issBtn.addEventListener('click', () => setMode('iss-up'));
+  const onBearingClick = (mode: BearingMode): void => {
+    if (!state.clickGuard) {
+      setMode(mode);
+      return;
+    }
+    state.clickGuard = false;
+  };
+  northBtn.addEventListener('click', () => onBearingClick('north'));
+  issBtn.addEventListener('click', () => onBearingClick('iss-up'));
   state.bearingBound = true;
 }
 
@@ -240,6 +264,7 @@ export function resetFollowMemoryForTest(): void {
   state.mode = 'north';
   state.motion = null;
   state.motionWatch = false;
+  state.clickGuard = false;
 }
 
 export function clearBearingPref(): void {
