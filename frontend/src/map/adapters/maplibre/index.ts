@@ -181,6 +181,7 @@ function chooseInspectorSlot(
   sideColumn: boolean,
   rowHeight: number,
   passHead: number,
+  reserveDrop: boolean,
 ): (InspectorRect & { score: number }) | null {
   const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
   const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
@@ -204,7 +205,9 @@ function chooseInspectorSlot(
         const score = (readable ? 1e9 : 0) + (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0)
           + (passHead > 0 && column ? Math.min(height, headTarget) * 1e4 : 0)
           + width * Math.min(height, narrow ? preferredHeight : 600)
-          + right / 1e4 + (narrow ? bottom * 1e3 : -top / 1e6);
+          + right / 1e4 + (narrow
+            ? (reserveDrop || (width >= rowHeight && height >= rowHeight) ? bottom * 1e3 : 0)
+            : -top / 1e6);
         if (!best || score > best.score) best = {
           left: x, right, top: narrow ? bottom - height : top,
           bottom: narrow ? bottom : top + height, score,
@@ -245,6 +248,7 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
   const preferredHeight = narrow ? 260 : bounds.bottom - bounds.top;
   const rowHeight = Math.min(NARROW_PASS_ROW_PX, preferredHeight);
   const passHead = sideColumn ? SHORT_PASS_HEAD_PX : 0;
+  const launchSheet = slot.querySelector('.launch-ascent-card') !== null;
   const place = (extra: InspectorRect | null) => chooseInspectorSlot(
     bounds,
     extra ? [...obstacles, inflateObstacle(extra, gap)] : obstacles,
@@ -254,10 +258,11 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     sideColumn,
     rowHeight,
     passHead,
+    !launchSheet,
   );
   const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
   const square = short;
-  let best = narrow || short
+  let best = (narrow || short) && !launchSheet
     ? place(narrowHitObstacle(
       mapRect,
       square ? Math.min(NARROW_HIT_BAND_PX, mapRect.width) : mapRect.width,
@@ -272,7 +277,7 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     return width >= rowHeight && height >= rowHeight
       && (headTarget <= 0 || height >= Math.min(headTarget, preferredHeight));
   };
-  if (square && !readableSlot(best)) {
+  if (!launchSheet && square && !readableSlot(best)) {
     const core = place(narrowHitObstacle(mapRect, Math.min(NARROW_HIT_CORE_PX, mapRect.width), hitHeight));
     if (core && (best === null || core.score > best.score)) best = core;
   }
