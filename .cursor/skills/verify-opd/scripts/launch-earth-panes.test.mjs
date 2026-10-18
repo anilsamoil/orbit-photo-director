@@ -187,3 +187,22 @@ test('a fresh start at least 800 wide that is not those two phones stays at 200'
   assert.equal(pane.minShort, 200);
   assert.equal(pane.minWidth, undefined);
 });
+
+test('width >=1200 keeps side and scales the short-side floor with the split and height', () => {
+  const cases = [
+    [1210, 834, 200],
+    [1280, 800, 200],
+    [1400, 900, 300],
+    [1440, 900, 300],
+    [1200, 599, 400],
+  ];
+  for (const [width, height, minShort] of cases) {
+    const [pane] = launchEarthPanes(width, height);
+    assert.equal(pane.place, 'side', `${width}x${height}`);
+    assert.equal(pane.minShort, minShort, `${width}x${height}`);
+    assert.equal(pane.width, width);
+    assert.equal(pane.height, height);
+  }
+  const drive = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'drive.mjs'), 'utf8');
+  assert.match(drive, /const minShort = splitPlace \? \(height >= 900 \? 300 : 200\) : 400;/);
+});
