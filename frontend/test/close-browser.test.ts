@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync, unlinkSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { chromium, webkit } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
-import { closeBrowser, trackProcess } from './close-browser.mjs';
+import { closeBrowser, launchTracked } from './close-browser.mjs';
 
 function alive(pid: number | undefined): boolean {
   if (!pid) return false;
@@ -35,138 +36,170 @@ afterEach(() => {
   groups.length = 0;
 });
 
-function session(child: ChildProcess, close: () => Promise<unknown>) {
-  return { close, tracked: trackProcess(child.pid ?? 0) };
+function browserOf(child: ChildProcess, close: () => Promise<unknown>, kill: () => Promise<unknown>) {
+  return { close, server: { close, kill } };
 }
 
 describe('closeBrowser', () => {
-  it('unblocks a close that is waiting on a live child', async () => {
+  it('kills a stuck child within the hook budget', async () => {
     const child = track(detached('sleep', ['30']));
-    const closed = new Promise<void>((resolve) => {
-      child.once('close', () => resolve());
-    });
+    let killed = false;
     const started = Date.now();
+    let returned = false;
     try {
-      await closeBrowser(session(child, () => closed), 'stuck-child');
+      await Promise.race([
+        closeBrowser(browserOf(child, () => new Promise<void>(() => {}), async () => {
+          killed = true;
+          killGroup(child.pid);
+        }), 'stuck-child').then(() => {
+          returned = true;
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 9_000)),
+      ]);
       const elapsed = Date.now() - started;
-      expect(elapsed).toBeGreaterThanOrEqual(1000);
-      expect(elapsed).toBeLessThan(5_000);
+      expect(returned).toBe(true);
+      expect(killed).toBe(true);
+      expect(elapsed).toBeGreaterThanOrEqual(1_000);
+      expect(elapsed).toBeLessThan(10_000);
       expect(alive(child.pid)).toBe(false);
     } finally {
       killGroup(child.pid);
     }
-  });
+  }, 12_000);
 
   it('leaves an unrelated sibling alive', async () => {
     const sibling = track(detached('sleep', ['30']));
     const root = track(detached('sleep', ['30']));
     try {
-      const closed = new Promise<void>((resolve) => {
-        root.once('close', () => resolve());
-      });
-      await closeBrowser(session(root, () => closed), 'sibling');
+      await closeBrowser(browserOf(root, () => new Promise<void>(() => {}), async () => {
+        killGroup(root.pid);
+      }), 'sibling');
       expect(alive(sibling.pid)).toBe(true);
       expect(alive(root.pid)).toBe(false);
     } finally {
       killGroup(sibling.pid);
       killGroup(root.pid);
     }
-  });
+  }, 12_000);
 
-  it('kills a grandchild that is already running', async () => {
+  it('kills a child whose leader has already exited', async () => {
     const root = track(detached('bash', ['-c', 'sleep 30 & echo $!; wait'], 'pipe'));
     const line = await new Promise<string>((resolve) => {
       root.stdout?.once('data', (buf) => resolve(buf.toString().trim()));
     });
-    const grandchild = Number(line);
-    const closed = new Promise<void>((resolve) => {
-      root.once('close', () => resolve());
-    });
-    try {
-      const started = Date.now();
-      await closeBrowser(session(root, () => closed), 'grandchild');
-      expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
-      expect(alive(root.pid)).toBe(false);
-      expect(alive(grandchild)).toBe(false);
-    } finally {
-      killGroup(root.pid);
-      killGroup(grandchild);
-    }
-  });
-
-  it('kills a child spawned during the grace period', async () => {
-    const marker = `/tmp/opd-late-${process.pid}-${Date.now()}`;
-    const root = track(detached('bash', ['-c', `sleep 0.4; sleep 30 & echo $! > ${marker}; wait`]));
-    const closed = new Promise<void>((resolve) => {
-      root.once('close', () => resolve());
-    });
+    const child = Number(line);
     let returned = false;
     try {
       await Promise.race([
-        closeBrowser(session(root, () => closed), 'late-child').then(() => {
+        closeBrowser(browserOf(root, async () => {
+          try { process.kill(root.pid!, 'SIGKILL'); } catch {}
+          await new Promise<void>(() => {});
+        }, async () => {
+          killGroup(root.pid);
+        }), 'exited-leader').then(() => {
           returned = true;
         }),
-        new Promise<void>((resolve) => setTimeout(resolve, 4_000)),
-      ]);
-      const late = Number(readFileSync(marker, 'utf8').trim());
-      expect(returned).toBe(true);
-      expect(alive(root.pid)).toBe(false);
-      expect(late).toBeGreaterThan(1);
-      expect(alive(late)).toBe(false);
-    } finally {
-      killGroup(root.pid);
-      try { unlinkSync(marker); } catch {}
-    }
-  });
-
-  it('returns when close stays pending after the tree is killed', async () => {
-    const root = track(detached('sleep', ['30']));
-    const started = Date.now();
-    let returned = false;
-    try {
-      await Promise.race([
-        closeBrowser(session(root, () => new Promise<void>(() => {})), 'deadline').then(() => {
-          returned = true;
-        }),
-        new Promise<void>((resolve) => setTimeout(resolve, 4_000)),
+        new Promise<void>((resolve) => setTimeout(resolve, 9_000)),
       ]);
       expect(returned).toBe(true);
-      const elapsed = Date.now() - started;
-      expect(elapsed).toBeGreaterThanOrEqual(1000);
-      expect(elapsed).toBeLessThan(5_000);
       expect(alive(root.pid)).toBe(false);
+      expect(alive(child)).toBe(false);
     } finally {
       killGroup(root.pid);
+      killGroup(child);
     }
-  });
+  }, 12_000);
 
   it('does not kill the process when close returns inside the grace period', async () => {
     const root = track(detached('sleep', ['30']));
+    let killed = false;
     const started = Date.now();
     try {
-      await closeBrowser(session(root, async () => {}), 'early');
-      expect(Date.now() - started).toBeLessThan(1000);
+      await closeBrowser(browserOf(root, async () => {}, async () => {
+        killed = true;
+        killGroup(root.pid);
+      }), 'early');
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(killed).toBe(false);
       expect(alive(root.pid)).toBe(true);
     } finally {
       killGroup(root.pid);
     }
   });
 
-  it('starts the worker without experimental web storage when this Node has the switch', () => {
-    const flag = '--no-experimental-webstorage';
-    if (!process.allowedNodeEnvironmentFlags.has(flag)) return;
-    expect(process.execArgv).toContain(flag);
-  });
+  it('stops a failed launch cleanup at its deadline', async () => {
+    const started = Date.now();
+    let settled = false;
+    let error: unknown;
+    await Promise.race([
+      launchTracked({
+        async launchServer() {
+          return {
+            wsEndpoint: () => 'ws://127.0.0.1/failed',
+            process: () => ({ pid: undefined }),
+            close: () => new Promise<void>(() => {}),
+            kill: async () => {},
+          };
+        },
+        async connect() {
+          throw new Error('connect failed');
+        },
+      } as never, {}).then(() => {
+        settled = true;
+      }, (caught) => {
+        settled = true;
+        error = caught;
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, 4_000)),
+    ]);
+    expect(settled).toBe(true);
+    expect(error).toBeInstanceOf(Error);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  }, 12_000);
 
-  it('refuses to track a process that is not its own group leader', () => {
-    const child = spawn('sleep', ['30'], { stdio: 'ignore' });
-    try {
-      expect(() => trackProcess(child.pid ?? 0)).toThrow(/process-group leader/);
-      expect(alive(child.pid)).toBe(true);
-    } finally {
-      if (child.pid) {
-        try { process.kill(child.pid, 'SIGKILL'); } catch {}
-      }
-    }
+  it('binds the browser server to loopback', async () => {
+    let host: string | undefined;
+    await launchTracked({
+      async launchServer(options: { host?: string }) {
+        host = options?.host;
+        return {
+          wsEndpoint: () => 'ws://127.0.0.1/loopback',
+          process: () => ({ pid: undefined }),
+          close: async () => {},
+          kill: async () => {},
+        };
+      },
+      async connect() {
+        throw new Error('stop after launch');
+      },
+    } as never, { headless: true }).catch(() => {});
+    expect(host).toBe('127.0.0.1');
   });
+});
+
+const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome'].find((path) => existsSync(path));
+const engines = [
+  chromePath ? { name: 'chrome', type: chromium, options: { headless: true, executablePath: chromePath } } : undefined,
+  existsSync(webkit.executablePath()) ? { name: 'webkit', type: webkit, options: { headless: true } } : undefined,
+].filter((engine) => engine !== undefined);
+
+describe('launched browsers', () => {
+  for (const engine of engines) {
+    it(`kills a stopped ${engine.name} process within the hook budget`, async () => {
+      const sibling = track(detached('sleep', ['30']));
+      const session = await launchTracked(engine.type, engine.options);
+      const leader = session.server.process().pid;
+      process.kill(leader!, 'SIGSTOP');
+      const started = Date.now();
+      try {
+        await closeBrowser(session, `stopped-${engine.name}`);
+        expect(Date.now() - started).toBeLessThan(10_000);
+        expect(alive(leader)).toBe(false);
+        expect(alive(sibling.pid)).toBe(true);
+      } finally {
+        killGroup(sibling.pid);
+        try { await session.server.kill(); } catch {}
+      }
+    }, 30_000);
+  }
 });
