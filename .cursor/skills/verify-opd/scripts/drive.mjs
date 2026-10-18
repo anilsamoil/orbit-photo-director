@@ -8,7 +8,7 @@ import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
 import { NARROW_SLIDER_RIGHT_GAP, timeStripLaidFailures } from './map-strip-contract.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
@@ -145,11 +145,7 @@ const ISS_CLOCK_EXPR = `(() => {
 })()`;
 
 function selectedSurfaceNames() {
-  const raw = (process.env.OPD_VERIFY_SURFACE || 'all').trim();
-  const known = ['desktop', ...WEBKIT_DEVICES.map((spec) => spec.slug)];
-  if (raw === 'all') return known;
-  if (!known.includes(raw)) throw new Error(`unknown OPD_VERIFY_SURFACE ${raw}. Choose ${known.join(', ')}, or all.`);
-  return [raw];
+  return surfacesFor(process.env.OPD_VERIFY_SURFACE || 'all');
 }
 
 function viewportOverride() {
@@ -713,6 +709,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
 
 async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
   slideLaunch(home);
+  await resetFixtureProfile(baseUrl);
   const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -748,7 +745,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
 async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
+  for (const spec of webkitCatalog().filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
     try {
       const override = viewportOverride();
@@ -796,7 +793,7 @@ export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home }));
-  if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
+  if (webkitCatalog().some((spec) => names.has(spec.slug))) {
     notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }));
   }
   return notes;
@@ -2423,12 +2420,17 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
   if (!insetViewportFits(viewport.width, viewport.height)) {
     await waitFor(send, pipAbsentExpression(name), `${name} inset absent`, 10000);
     await shot(send, evidenceDir, `${shotBase}-absent`);
-    const held = [`${viewport.width}x${viewport.height}`];
+    const held = [`${viewport.width}x${viewport.height} gone`];
     for (const pane of phoneInsetPanes(viewport)) {
-      await setViewport(send, pane.width, pane.height, true);
-      await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${pane.width}x${pane.height}`, 10000);
-      await shot(send, evidenceDir, `${shotBase}-absent-${pane.width}x${pane.height}`);
-      held.push(`${pane.width}x${pane.height}`);
+      if (insetViewportFits(pane.width, pane.height)) {
+        await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, { ...pane, mobile: true });
+        held.push(`${pane.width}x${pane.height} present`);
+      } else {
+        await setViewport(send, pane.width, pane.height, true);
+        await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${pane.width}x${pane.height}`, 10000);
+        await shot(send, evidenceDir, `${shotBase}-absent-${pane.width}x${pane.height}`);
+        held.push(`${pane.width}x${pane.height} gone`);
+      }
     }
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
     return `absent ${held.join(' ')}`;
@@ -2441,13 +2443,21 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
   await shot(send, evidenceDir, shotBase);
   const extra = [`${viewport.width}x${viewport.height}`];
   if (viewport.mobile) {
-    await setViewport(send, viewport.height, viewport.width, true);
-    await waitForPip(send, name, `${name} inset landscape`);
-    await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
-    if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers landscape`, 10000);
-    await sleep(800);
-    await shot(send, evidenceDir, `${shotBase}-land`);
-    extra.push(`${viewport.height}x${viewport.width}`);
+    const landW = viewport.height;
+    const landH = viewport.width;
+    await setViewport(send, landW, landH, true);
+    if (insetViewportFits(landW, landH)) {
+      await waitForPip(send, name, `${name} inset landscape`);
+      await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
+      if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers landscape`, 10000);
+      await sleep(800);
+      await shot(send, evidenceDir, `${shotBase}-land`);
+      extra.push(`${landW}x${landH} present`);
+    } else {
+      await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${landW}x${landH}`, 10000);
+      await shot(send, evidenceDir, `${shotBase}-absent-${landW}x${landH}`);
+      extra.push(`${landW}x${landH} gone`);
+    }
     for (const pane of toolbarInsetPanes(true)) {
       await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, pane);
       extra.push(`${pane.width}x${pane.height}`);
