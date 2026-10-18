@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { WEBKIT_PASSED_FLOOR } from '../scripts/webkit-floor';
 import {
   SHARD_COUNT,
   UNSHARDED_WEBKIT_CASES,
@@ -93,9 +94,10 @@ describe('frontend shards', () => {
   });
 
   it('keeps the WebKit floor at the current per-file sum', () => {
-    expect(UNSHARDED_WEBKIT_CASES).toBe(204);
-    expect(() => assertWebKitFloor(204)).not.toThrow();
-    expect(() => assertWebKitFloor(203)).toThrow(/below unsharded count 204/);
+    expect(UNSHARDED_WEBKIT_CASES).toBe(WEBKIT_PASSED_FLOOR);
+    expect(UNSHARDED_WEBKIT_CASES).toBe(206);
+    expect(() => assertWebKitFloor(206)).not.toThrow();
+    expect(() => assertWebKitFloor(205)).toThrow(/below unsharded count 206/);
   });
 
   it('reads max RSS and rejects exit 137 and 143', () => {
