@@ -272,6 +272,89 @@ async function centerTap(page: Page) {
   return { point: point!, trustedCanvas: hits.some((event) => event.type === 'click' && event.trusted && event.target.includes('maplibregl-canvas')) };
 }
 
+type SheetBox = { x: number; y: number; w: number; h: number };
+type SheetProbe = {
+  sheet: SheetBox;
+  row: SheetBox | null;
+  shoot: SheetBox | null;
+  hit: string;
+  canvas: boolean;
+  coverage: SheetBox | null;
+};
+
+function phoneContext(engine: (typeof pinEngines)[number], width: number, height: number) {
+  return engine.browser().newContext({
+    viewport: { width, height },
+    screen: { width, height },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3,
+    serviceWorkers: 'block',
+  });
+}
+
+async function dropPin(page: Page) {
+  const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
+    const box = canvas.getBoundingClientRect();
+    for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
+      for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
+        const x = box.x + box.width * fx;
+        const y = box.y + box.height * fy;
+        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+      }
+    }
+    return null;
+  });
+  expect(seed, 'a canvas point for the pin').not.toBeNull();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+    const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 4_000 }).then(() => true, () => false);
+    if (opened) return;
+  }
+  throw new Error('pin did not open');
+}
+
+async function sheetProbe(page: Page): Promise<SheetProbe> {
+  await page.waitForFunction(() => {
+    const slot = document.getElementById('map-inspector');
+    const box = slot?.getBoundingClientRect();
+    return !!box && box.width > 20 && box.height > 20 && slot?.querySelector('.dropped-pin-popup');
+  });
+  return page.evaluate(() => {
+    const boxOf = (element: Element | null) => {
+      const box = element?.getBoundingClientRect();
+      if (!box || box.width === 0 || box.height === 0) return null;
+      return { x: box.x, y: box.y, w: box.width, h: box.height };
+    };
+    const slot = document.getElementById('map-inspector');
+    const coverage = document.getElementById('map-launch-coverage');
+    const canvas = document.querySelector<HTMLCanvasElement>('.maplibregl-canvas');
+    const canvasBox = canvas!.getBoundingClientRect();
+    const x = canvasBox.x + canvasBox.width / 2;
+    const y = canvasBox.y + canvasBox.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    return {
+      sheet: boxOf(slot)!,
+      row: boxOf(document.querySelector('.pin-pass-row')),
+      shoot: boxOf(document.querySelector('.pin-pass-shoot')),
+      hit: hit?.id || (typeof hit?.className === 'string' ? hit.className : hit?.tagName) || 'none',
+      canvas: hit === canvas,
+      coverage: !coverage || coverage.hidden ? null : boxOf(coverage),
+    };
+  });
+}
+
+function insideViewport(box: SheetBox, width: number, height: number) {
+  return box.x >= -1 && box.y >= -1 && box.x + box.w <= width + 1 && box.y + box.h <= height + 1;
+}
+
+function withinCouple(actual: SheetBox, expected: SheetBox) {
+  return Math.abs(actual.x - expected.x) <= 2
+    && Math.abs(actual.y - expected.y) <= 2
+    && Math.abs(actual.w - expected.w) <= 2
+    && Math.abs(actual.h - expected.h) <= 2;
+}
+
 for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector over a legacy launch card ${engine.name}`, () => {
   it.each([
     { width: 402, height: 874 },
@@ -304,4 +387,40 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
     console.log(`PIN_OVER_LEGACY ${JSON.stringify({ engine: engine.name, width, height, results })}`);
     expect(results.every((result) => result.canvas && result.trustedCanvas), JSON.stringify(results)).toBe(true);
   }, 120_000);
+
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('gives a buried launch card the same pin sheet as no card at $width×$height', async ({ width, height }) => {
+    const context = await phoneContext(engine, width, height);
+    try {
+      const plainPage = await context.newPage();
+      plainPage.setDefaultTimeout(20_000);
+      await prepare(plainPage);
+      await plainPage.locator('#filter-launches-map').click();
+      await plainPage.waitForFunction(() => document.getElementById('map-launch-coverage')?.hidden === true);
+      await dropPin(plainPage);
+      const plain = await sheetProbe(plainPage);
+      await plainPage.close();
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      await prepare(page);
+      const pad = await padPoint(page);
+      await page.touchscreen.tap(pad.x, pad.y);
+      await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+      await dropPinOverLaunch(page);
+      const buried = await sheetProbe(page);
+      const tap = await centerTap(page);
+      const evidence = { engine: engine.name, width, height, plain, buried, trustedCanvas: tap.trustedCanvas };
+      console.log(`BURIED_SHEET ${JSON.stringify(evidence)}`);
+      expect(buried.row, JSON.stringify(evidence)).not.toBeNull();
+      expect(buried.shoot, JSON.stringify(evidence)).not.toBeNull();
+      expect(insideViewport(buried.row!, width, height), JSON.stringify(evidence)).toBe(true);
+      expect(insideViewport(buried.shoot!, width, height), JSON.stringify(evidence)).toBe(true);
+      expect(buried.canvas && tap.trustedCanvas, JSON.stringify(evidence)).toBe(true);
+      expect(withinCouple(buried.sheet, plain.sheet), JSON.stringify(evidence)).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 90_000);
 });

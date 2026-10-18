@@ -237,7 +237,11 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     bottom: Math.min(paneRect.bottom, mapRect.bottom, window.innerHeight - inset('Bottom')) - gap,
   };
   if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
+  const launchSheet = slot.querySelector(':scope > .maplibregl-popup:last-child .launch-ascent-card') !== null;
+  const buriedLaunch = !launchSheet && slot.querySelector('.launch-ascent-card') !== null;
+  const reserveDrop = !launchSheet;
   const obstacles = [...inspectorChromeElements(pane)].flatMap((element) => {
+    if (buriedLaunch && element.closest('#map-launch-coverage')) return [];
     const rect = visibleInspectorRect(element, bounds);
     return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
   });
@@ -248,7 +252,6 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
   const preferredHeight = narrow ? 260 : bounds.bottom - bounds.top;
   const rowHeight = Math.min(NARROW_PASS_ROW_PX, preferredHeight);
   const passHead = sideColumn ? SHORT_PASS_HEAD_PX : 0;
-  const launchSheet = slot.querySelector(':scope > .maplibregl-popup:last-child .launch-ascent-card') !== null;
   const place = (extra: InspectorRect | null) => chooseInspectorSlot(
     bounds,
     extra ? [...obstacles, inflateObstacle(extra, gap)] : obstacles,
@@ -258,11 +261,11 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     sideColumn,
     rowHeight,
     passHead,
-    !launchSheet,
+    reserveDrop,
   );
   const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
   const square = short;
-  let best = (narrow || short) && !launchSheet
+  let best = (narrow || short) && reserveDrop
     ? place(narrowHitObstacle(
       mapRect,
       square ? Math.min(NARROW_HIT_BAND_PX, mapRect.width) : mapRect.width,
@@ -277,7 +280,7 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     return width >= rowHeight && height >= rowHeight
       && (headTarget <= 0 || height >= Math.min(headTarget, preferredHeight));
   };
-  if (!launchSheet && square && !readableSlot(best)) {
+  if (reserveDrop && square && !readableSlot(best)) {
     const core = place(narrowHitObstacle(mapRect, Math.min(NARROW_HIT_CORE_PX, mapRect.width), hitHeight));
     if (core && (best === null || core.score > best.score)) best = core;
   }
