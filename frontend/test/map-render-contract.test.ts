@@ -170,6 +170,8 @@ describe('renderMap bring-up', () => {
       'styledata:*',
       'dragstart:*',
       'zoomstart:*',
+      'rotatestart:*',
+      'moveend:*',
       'error:*',
       'moveend:*',
       'data:*',

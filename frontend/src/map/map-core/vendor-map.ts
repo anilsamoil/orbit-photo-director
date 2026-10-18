@@ -24,6 +24,7 @@ export type VendorEvents = {
   styledata: void;
   dragstart: void;
   zoomstart: { byUser: boolean };
+  rotatestart: { byUser: boolean };
   error: { sourceId?: string };
   data: { sourceId?: string; tileLoaded: boolean };
 };

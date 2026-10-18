@@ -12,10 +12,13 @@ const BEARING_NOOP_THRESHOLD_DEG = 0.5;
 
 type MarkerPosition = { lat: number; lon: number };
 
+type NorthEase = { pending: MarkerPosition | null };
+
 type Runtime = {
   core: MapCore | null;
   mode: BearingMode;
   follow: boolean;
+  northEase: NorthEase | null;
   toggleBound: boolean;
   bearingBound: boolean;
   hasTrack: () => boolean;
@@ -35,6 +38,7 @@ const state: Runtime = {
   core: null,
   mode: readStoredMode(),
   follow: true,
+  northEase: null,
   toggleBound: false,
   bearingBound: false,
   hasTrack: () => false,
@@ -70,14 +74,27 @@ export function setFollowEnv(core: MapCore | null, follow: boolean): void {
 }
 
 /** Recenter on the live ISS while follow is on and the view is live.
- *  setCenter aborts an in-progress rotate, so the bearing mode is committed
- *  in the same turn. */
+ *  setCenter aborts a north ease, so that ease keeps the latest center
+ *  and this applies it once the bearing has reached north. */
 export function applyFollowISS(pos: MarkerPosition): void {
   const core = state.core;
   if (!state.follow || !core || core.clock.isScrubbed()) return;
+  if (state.mode === 'north' && state.northEase) {
+    state.northEase.pending = pos;
+    return;
+  }
   core.setCenter([pos.lon, pos.lat]);
   if (state.mode === 'north') core.setBearing(0);
-  else applyBearing(false);
+}
+
+function settleNorthEase(): void {
+  const ease = state.northEase;
+  if (!ease) return;
+  state.northEase = null;
+  const core = state.core;
+  if (!core || !state.follow || state.mode !== 'north') return;
+  if (Math.abs(core.bearing()) >= 0.01) return;
+  if (ease.pending) core.setCenter([ease.pending.lon, ease.pending.lat]);
 }
 
 /** Leave follow and update the dock button. */
@@ -93,7 +110,7 @@ function reflectFollowButton(): void {
   btn.classList.toggle('active', state.follow);
   btn.setAttribute('aria-pressed', state.follow ? 'true' : 'false');
   btn.title = state.follow
-    ? 'Following ISS — click again or pan/zoom to release'
+    ? 'Following ISS — click again or pan, zoom, or rotate to release'
     : 'Recenter on ISS — click again or pan to release';
 }
 
@@ -109,15 +126,21 @@ export function computeIssHeading(nowMs: number): number | null {
   return greatCircleBearingDeg(here.lat, here.lon, ahead.lat, ahead.lon);
 }
 
-/** Apply the bearing mode. Skips a write when the camera is already there. */
+/** Apply the bearing mode. Skips a write when the camera is already there.
+ *  The north ease is marked after easeTo, so the moveend from the ease
+ *  just interrupted does not drop that mark. A zero-duration ease has
+ *  already finished, and that path settles in this same turn. */
 export function applyBearing(animate: boolean): void {
   const core = state.core;
   if (!core) return;
   const current = core.bearing();
   if (state.mode === 'north') {
     if (Math.abs(current) < BEARING_NOOP_THRESHOLD_DEG) return;
-    if (animate) core.easeTo({ bearing: 0, duration: 600 });
-    else core.setBearing(0);
+    if (animate) {
+      core.easeTo({ bearing: 0, duration: 600 });
+      state.northEase = { pending: null };
+      if (Math.abs(core.bearing()) < 0.01) settleNorthEase();
+    } else core.setBearing(0);
     return;
   }
   const heading = computeIssHeading(core.clock.viewMs());
@@ -152,6 +175,12 @@ export function bindFollowToggle(): void {
     core.on('zoomstart', ({ byUser }) => {
       if (byUser) exitFollow();
     });
+    core.on('rotatestart', ({ byUser }) => {
+      if (!byUser) return;
+      state.northEase = null;
+      exitFollow();
+    });
+    core.on('moveend', () => { settleNorthEase(); });
   }
   state.toggleBound = true;
 }
@@ -182,6 +211,7 @@ export function bindBearingToggle(): void {
 export function resetFollowMemoryForTest(): void {
   state.follow = false;
   state.mode = 'north';
+  state.northEase = null;
 }
 
 export function clearBearingPref(): void {
