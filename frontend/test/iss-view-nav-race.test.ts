@@ -3,21 +3,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Manifest, Track } from '../src/types';
 import * as manifestModule from '../src/manifest';
 
+type IssSceneModule = {
+  mountIssScene: (host: HTMLElement) => { update: () => void; dispose: () => void };
+};
+
 const gate = vi.hoisted(() => {
-  let release: (mod: {
-    mountIssScene: (host: HTMLElement) => { update: () => void; dispose: () => void };
-  }) => void = () => {};
-  const pending = new Promise<{
-    mountIssScene: (host: HTMLElement) => { update: () => void; dispose: () => void };
-  }>((resolve) => {
-    release = resolve;
+  let release: (mod: IssSceneModule) => void = () => {};
+  let pending: Promise<IssSceneModule> = Promise.resolve({
+    mountIssScene: () => ({ update() {}, dispose() {} }),
   });
-  return { pending, release, mounts: { n: 0 } };
+  function reset(): void {
+    pending = new Promise<IssSceneModule>((resolve) => {
+      release = resolve;
+    });
+  }
+  return {
+    mounts: { n: 0 },
+    reset,
+    release(mod: IssSceneModule) {
+      release(mod);
+    },
+    promise(): Promise<IssSceneModule> {
+      return pending;
+    },
+  };
 });
 
 const schedulerStops = vi.hoisted(() => new Set<() => void>());
 
-vi.mock('../src/iss-view', () => gate.pending);
+vi.mock('../src/iss-view', () => gate.promise());
 
 vi.mock('../src/network-status', async () => {
   const actual = await vi.importActual<typeof import('../src/network-status')>('../src/network-status');
@@ -101,7 +115,9 @@ beforeEach(() => {
   document.body.innerHTML = DOM;
   localStorage.clear();
   gate.mounts.n = 0;
+  gate.reset();
   vi.resetModules();
+  vi.doMock('../src/iss-view', () => gate.promise());
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{"targets":[]}')));
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
 });
@@ -140,6 +156,7 @@ afterEach(async () => {
   gate.release({
     mountIssScene: () => ({ update() {}, dispose() {} }),
   });
+  await vi.dynamicImportSettled();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -166,9 +183,8 @@ describe('ISS view import lifetime', () => {
         };
       },
     });
-    await gate.pending;
-    await Promise.resolve();
-    await Promise.resolve();
+    await gate.promise();
+    await vi.dynamicImportSettled();
     expect(gate.mounts.n).toBe(0);
     expect(document.querySelector('[data-iss-scene]')).toBeNull();
   });
@@ -189,4 +205,5 @@ describe('ISS view import lifetime', () => {
       vi.useRealTimers();
     }
   });
+
 });
