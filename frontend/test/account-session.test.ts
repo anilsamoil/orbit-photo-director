@@ -42,6 +42,46 @@ it('an expired session cannot fall back to a previous profile, even after going 
   await expect(session.resolveAccountProfile()).rejects.toThrow('Connect once');
 });
 
+it('rejects a session fetch that ignores abort once the deadline passes', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(() => {
+      init?.signal?.addEventListener('abort', () => {});
+    })));
+    const session = await import('../src/profile-session');
+    let outcome = 'pending';
+    void session.resolveAccountProfile('https://map.astroanil.dev/?u=anil').then(
+      () => { outcome = 'resolved'; },
+      () => { outcome = 'rejected'; },
+    );
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(outcome).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toBe('rejected');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('resumes the cached session when the session fetch ignores abort', async () => {
+  const session = await login();
+  vi.useFakeTimers();
+  try {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(() => {
+      init?.signal?.addEventListener('abort', () => {});
+    })));
+    let outcome: unknown = 'pending';
+    void session.resolveAccountProfile().then(
+      (profile) => { outcome = profile; },
+      () => { outcome = 'rejected'; },
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(outcome).toMatchObject({ name: 'u-jessica', isVerified: false });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('preserves read-only offline access when iOS reports online but transport fails', async () => {
   const session = await login();
   session.fetch.mockRejectedValue(new TypeError('Failed to fetch'));
