@@ -100,7 +100,7 @@ for (const engine of [
 ]) describe.skipIf(!existsSync(engine.executablePath))(`bearing retarget ${engine.name}`, () => {
   let browser: Browser;
   beforeAll(async () => { browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath }); }, 30_000);
-  afterAll(async () => { await browser?.close(); });
+  afterAll(async () => { await browser?.close(); }, 30_000);
 
   it(`settles North at 0 and ISS-up on the heading for ${REPS} real-clock reps`, async () => {
     const reps: { north: number; northMoving: boolean; iss: number; heading: number; issMoving: boolean; error?: string }[] = [];
