@@ -78,11 +78,68 @@ async function openMap(page: Page): Promise<void> {
   });
 }
 
-async function settled(page: Page): Promise<{ bearing: number; moving: boolean }> {
-  await page.waitForFunction(() => {
-    const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
-    return !map.isMoving();
-  }, undefined, { timeout: 4000 });
+async function cameraSnap(page: Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __opdMap: {
+        getBearing(): number;
+        isMoving(): boolean;
+        isRotating(): boolean;
+        isZooming(): boolean;
+        _camera?: { _moving?: boolean; _easeStart?: number; _easeOptions?: { duration?: number }; _easeFrameId?: unknown };
+      };
+    }).__opdMap;
+    const camera = map._camera;
+    const samples = (window as unknown as { __bearingSamples?: unknown[] }).__bearingSamples ?? [];
+    return {
+      bearing: map.getBearing(),
+      moving: map.isMoving(),
+      rotating: map.isRotating(),
+      zooming: map.isZooming(),
+      hidden: document.hidden,
+      visibility: document.visibilityState,
+      perf: performance.now(),
+      camMoving: camera?._moving ?? null,
+      easeStart: camera?._easeStart ?? null,
+      easeDuration: camera?._easeOptions?.duration ?? null,
+      easeFrame: camera?._easeFrameId != null,
+      samples,
+    };
+  });
+}
+
+async function armSamples(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const target = window as unknown as { __bearingSamples?: unknown[]; __bearingSampleTimer?: number };
+    if (target.__bearingSampleTimer !== undefined) window.clearInterval(target.__bearingSampleTimer);
+    target.__bearingSamples = [];
+    const started = performance.now();
+    target.__bearingSampleTimer = window.setInterval(() => {
+      const map = (window as unknown as {
+        __opdMap: { getBearing(): number; isMoving(): boolean; isRotating(): boolean };
+      }).__opdMap;
+      target.__bearingSamples?.push({
+        t: Math.round(performance.now() - started),
+        bearing: map.getBearing(),
+        moving: map.isMoving(),
+        rotating: map.isRotating(),
+      });
+    }, 250);
+  });
+}
+
+async function settled(page: Page, phase: string): Promise<{ bearing: number; moving: boolean }> {
+  await armSamples(page);
+  try {
+    await page.waitForFunction(() => {
+      const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
+      return !map.isMoving();
+    }, undefined, { timeout: 4000 });
+  } catch (error) {
+    const snap = await cameraSnap(page).catch((err: unknown) => ({ evalError: String(err) }));
+    console.log(`SETTLE_TIMEOUT ${phase} ${JSON.stringify(snap)}`);
+    throw error;
+  }
   await page.waitForTimeout(50);
   return page.evaluate(() => {
     const map = (window as unknown as { __opdMap: { getBearing(): number; isMoving(): boolean } }).__opdMap;
@@ -117,14 +174,14 @@ for (const engine of [
           document.getElementById('bearing-iss')!.click();
           document.getElementById('bearing-north')!.click();
         });
-        const north = await settled(page);
+        const north = await settled(page, 'after-north');
         await page.evaluate(() => document.getElementById('bearing-iss')!.click());
-        const headed = await settled(page);
+        const headed = await settled(page, 'after-heading');
         await page.evaluate(() => {
           document.getElementById('bearing-north')!.click();
           document.getElementById('bearing-iss')!.click();
         });
-        const iss = await settled(page);
+        const iss = await settled(page, 'after-retarget');
         reps.push({ north: north.bearing, northMoving: north.moving, iss: iss.bearing, heading: headed.bearing, issMoving: iss.moving });
       } catch (error) {
         reps.push({ north: Number.NaN, northMoving: true, iss: Number.NaN, heading: Number.NaN, issMoving: true, error: String(error) });
