@@ -267,14 +267,14 @@ describe('webkit floor', () => {
     };
     const complete = evaluateWebKitReports([reportFor(named, [])]);
     expect(complete.reasons).toEqual([]);
-    expect(complete.passed).toBe(206);
+    expect(complete.passed).toBe(208);
     for (const fullName of named) {
       const skipped = evaluateWebKitReports([reportFor(named, [fullName])]);
       expect(skipped.reasons).toContain('webkit skipped 1');
       expect(skipped.reasons).toContain(`${file} passed 7 below minimum 8`);
       const omitted = evaluateWebKitReports([reportFor(named.filter((name) => name !== fullName), [])]);
-      expect(omitted.passed).toBe(205);
-      expect(omitted.reasons).toContain('webkit passed 205 below floor 206');
+      expect(omitted.passed).toBe(207);
+      expect(omitted.reasons).toContain('webkit passed 207 below floor 208');
       expect(omitted.reasons).toContain(`${file} passed 7 below minimum 8`);
     }
     const source = readFileSync(join(root, 'test/legacy-launch-card.test.ts'), 'utf8');

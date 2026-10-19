@@ -348,20 +348,22 @@ describe('launched browsers', () => {
     await runningEngine('chrome', chromium, chromePath);
   }, 30_000);
 
-  it('closes a running webkit process when it exits', async (ctx) => {
-    if (!existsSync(webkit.executablePath())) {
-      ctx.skip();
-      return;
-    }
-    await runningEngine('webkit', webkit, webkit.executablePath());
-  }, 30_000);
-
   it('kills a stopped chrome process within the hook budget', async (ctx) => {
     if (!chromePath) {
       ctx.skip();
       return;
     }
     await stoppedEngine('chrome', chromium, chromePath);
+  }, 30_000);
+});
+
+describe('WebKit', () => {
+  it('closes a running webkit process when it exits', async (ctx) => {
+    if (!existsSync(webkit.executablePath())) {
+      ctx.skip();
+      return;
+    }
+    await runningEngine('webkit', webkit, webkit.executablePath());
   }, 30_000);
 
   it('kills a stopped webkit process within the hook budget', async (ctx) => {
