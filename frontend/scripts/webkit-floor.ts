@@ -51,11 +51,10 @@ export function evaluateWebKitReports(reports: readonly unknown[]): WebKitFloorR
   let failed = 0;
   for (const report of reports) {
     for (const testFile of vitestReport(report).testResults) {
-      const file = browserFile(testFile.name);
-      if (file === null) continue;
       for (const assertion of testFile.assertionResults) {
-        if (!isWebKitCase(assertion)) continue;
-        const id = `${file}\0${assertion.fullName}`;
+        const id = webKitCaseId(testFile.name, assertion);
+        if (id === null) continue;
+        const file = id.slice(0, id.indexOf('\0'));
         if (seen.has(id)) {
           duplicates.push(`duplicate webkit case ${file} ${assertion.fullName}`);
           continue;
@@ -121,8 +120,11 @@ function browserFile(name: string): string | null {
   return null;
 }
 
-function isWebKitCase(assertion: Assertion): boolean {
-  return assertion.ancestorTitles.some((title) => /(?:^|\s)WebKit(?:$|\s)/.test(title));
+export function webKitCaseId(fileName: string, assertion: Pick<Assertion, 'ancestorTitles' | 'fullName'>): string | null {
+  const file = browserFile(fileName);
+  if (file === null) return null;
+  if (!assertion.ancestorTitles.some((title) => /(?:^|\s)WebKit(?:$|\s)/.test(title))) return null;
+  return `${file}\0${assertion.fullName}`;
 }
 
 function vitestReport(value: unknown): VitestReport {

@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { discoverTestFiles } from '../scripts/frontend-shards';
 import { BROWSER_FILE_MINIMUMS, WEBKIT_PASSED_FLOOR, evaluateWebKitReports, loadWebKitReports } from '../scripts/webkit-floor';
 
 const root = resolve(__dirname, '..');
@@ -87,22 +88,96 @@ function runCli(report: unknown): { status: number; stdout: string; stderr: stri
   return runCliOn(file);
 }
 
-function bashStatus(script: string): number {
+function workflowText(): string {
+  return readFileSync(resolve(root, '../.github/workflows/test.yml'), 'utf8');
+}
+
+function runBlock(workflow: string, stepName: string): string {
+  const nameAt = workflow.indexOf(`name: ${stepName}\n`);
+  if (nameAt < 0) throw new Error(`missing step ${stepName}`);
+  const runAt = workflow.indexOf('run: |\n', nameAt);
+  if (runAt < 0) throw new Error(`missing run block for ${stepName}`);
+  const nextAt = workflow.indexOf('\n      - ', runAt + 1);
+  const end = nextAt < 0 ? workflow.length : nextAt;
+  return workflow.slice(runAt + 'run: |\n'.length, end).replace(/^ {10}/gm, '').trimEnd();
+}
+
+function bash(script: string, cwd: string, env: Readonly<Record<string, string>> = {}): { status: number; stdout: string; stderr: string } {
   try {
-    execFileSync('bash', ['-c', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    return 0;
+    const stdout = execFileSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', script], {
+      cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...env,
+        PATH: `${process.env.HOME ?? ''}/.bun/bin:${process.env.PATH ?? ''}`,
+        NODE_NO_WARNINGS: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { status: 0, stdout, stderr: '' };
   } catch (error) {
-    const failed = error as { status?: number };
-    return failed.status ?? 1;
+    const failed = error as { status?: number; stdout?: string; stderr?: string };
+    return { status: failed.status ?? 1, stdout: failed.stdout ?? '', stderr: failed.stderr ?? '' };
   }
 }
 
-function testStepScript(): string {
-  const workflow = readFileSync(resolve(root, '../.github/workflows/test.yml'), 'utf8');
-  const nameAt = workflow.indexOf('name: Test\n');
-  const runAt = workflow.indexOf('run: |\n', nameAt);
-  const nextAt = workflow.indexOf('\n      - ', runAt + 1);
-  return workflow.slice(runAt + 'run: |\n'.length, nextAt).replace(/^ {10}/gm, '');
+function shardShell(status: number): string {
+  const script = runBlock(workflowText(), 'Test shard')
+    .replaceAll('${{ matrix.shard }}', '1')
+    .replaceAll('${{ strategy.job-total }}', '2');
+  const vitest = /\/usr\/bin\/time -v -o "shard-1-time\.txt" \\\n\s*bun run test[\s\S]*?"\$\{files\[@\]\}"/;
+  if (!vitest.test(script)) throw new Error('shard vitest command missing');
+  return script.replace(vitest, [
+    `printf '%s\\n' 'not json' > "shard-1-results.json"`,
+    `printf '%s\\n' 'Maximum resident set size (kbytes): 10' 'Exit status: ${status}' > "shard-1-time.txt"`,
+    `(exit ${status})`,
+  ].join('\n'));
+}
+
+function writeShardReports(dir: string): void {
+  const report = browserReport(() => 'passed') as { testResults: { name: string; assertionResults: unknown[] }[] };
+  const casesByFile = new Map(report.testResults.map((file) => {
+    const key = file.name.slice(file.name.indexOf('test/'));
+    return [key, file.assertionResults] as const;
+  }));
+  const shards: { name: string; assertionResults: unknown[] }[][] = [[], []];
+  discoverTestFiles().forEach((file, index) => {
+    shards[index % 2]?.push({
+      name: `/workspace/frontend/${file}`,
+      assertionResults: casesByFile.get(file) ?? [],
+    });
+  });
+  shards.forEach((testResults, index) => {
+    const id = index + 1;
+    writeFileSync(join(dir, `shard-${id}-results.json`), JSON.stringify({ testResults }));
+    writeFileSync(join(dir, `shard-${id}-time.txt`), 'Maximum resident set size (kbytes): 10\nExit status: 0\n');
+  });
+}
+
+function exprTrue(expression: string, shardResult: string, workflowCancelled: boolean): boolean {
+  const js = expression
+    .replaceAll('always()', 'true')
+    .replaceAll('cancelled()', workflowCancelled ? 'true' : 'false')
+    .replaceAll('needs.frontend-shard.result', JSON.stringify(shardResult));
+  if (!/^[\sA-Za-z0-9_'"!=&|()!.-]+$/.test(js)) throw new Error(`unsupported workflow expression ${js}`);
+  try {
+    execFileSync(process.execPath, ['-e', `process.exit((${js}) ? 0 : 1)`], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function frontendVerdict(shardResult: string, workflowCancelled: boolean): 'failure' | 'skipped' | 'success' {
+  const job = workflowText().slice(workflowText().indexOf('\n  frontend:\n') + 1);
+  const jobIf = /^    if: (.+)$/m.exec(job)?.[1]?.trim();
+  if (!jobIf) throw new Error('Frontend job has no if');
+  if (!exprTrue(jobIf, shardResult, workflowCancelled)) return 'skipped';
+  const gate = /        if: (.+)\n        run: (?!\|)(.+)\n/.exec(job);
+  if (!gate?.[1] || !gate[2]) throw new Error('missing shard fail step');
+  if (!exprTrue(gate[1].trim(), shardResult, workflowCancelled)) return 'success';
+  return bash(gate[2].trim(), root).status === 0 ? 'success' : 'failure';
 }
 
 describe('webkit floor', () => {
@@ -314,19 +389,56 @@ describe('webkit floor', () => {
     expect(malformed.stderr).toMatch(/^webkit floor: .+\n$/);
   });
 
-  it('wires the Frontend job to the validator with a 90 minute timeout', () => {
-    const workflow = readFileSync(resolve(root, '../.github/workflows/test.yml'), 'utf8');
-    expect(workflow).toContain('timeout-minutes: 90');
-    expect(workflow).toContain('bun scripts/webkit-floor.ts webkit-report.json');
-    expect(workflow).toContain('--outputFile.json=webkit-report.json');
-    const script = testStepScript();
-    const bothFail = script
-      .replace(/\/usr\/bin\/time -v bun run test[\s\S]*?webkit-report\.json/, '(exit 2)')
-      .replace('bun scripts/webkit-floor.ts webkit-report.json', '(exit 3)');
-    const floorOnly = script
-      .replace(/\/usr\/bin\/time -v bun run test[\s\S]*?webkit-report\.json/, '(exit 0)')
-      .replace('bun scripts/webkit-floor.ts webkit-report.json', '(exit 3)');
-    expect(bashStatus(bothFail)).toBe(2);
-    expect(bashStatus(floorOnly)).toBe(3);
+  it('keeps vitest exit 7 when the shard report is not json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shard-step-'));
+    const script = shardShell(7).replaceAll('bun scripts/frontend-shards.ts', `bun ${join(root, 'scripts/frontend-shards.ts')}`);
+    try {
+      expect(bash(script, dir).status).toBe(7);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes the aggregate shell only when both shard reports are present', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shard-reports-'));
+    try {
+      writeShardReports(dir);
+      const script = runBlock(workflowText(), 'Check shard coverage and WebKit count').replaceAll('shard-reports', dir);
+      expect(bash(script, resolve(root, '..')).status).toBe(0);
+      rmSync(join(dir, 'shard-2-results.json'));
+      rmSync(join(dir, 'shard-2-time.txt'));
+      expect(bash(script, resolve(root, '..')).status).not.toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails the workflow check when a test file has no weight', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'shard-check-'));
+    mkdirSync(join(fixture, 'test'));
+    mkdirSync(join(fixture, 'scripts'));
+    writeFileSync(join(fixture, 'test/a.test.ts'), '');
+    writeFileSync(join(fixture, 'test/b.test.ts'), '');
+    writeFileSync(join(fixture, 'scripts/frontend-shard-weights.json'), JSON.stringify({ 'test/a.test.ts': 1 }));
+    const line = runBlock(workflowText(), 'Check shard coverage and WebKit count').split('\n').find((entry) => entry.includes('--check'));
+    const result = bash(line ?? 'exit 1', resolve(root, '..'), { FRONTEND_SHARD_ROOT: fixture });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('test/b.test.ts');
+  });
+
+  it('fails the Frontend verdict when a shard is cancelled', () => {
+    expect(frontendVerdict('cancelled', true)).toBe('failure');
+  });
+
+  it('fails the Frontend verdict when a shard is skipped', () => {
+    expect(frontendVerdict('skipped', false)).toBe('failure');
+  });
+
+  it('fails the Frontend verdict when a retried shard fails', () => {
+    expect(frontendVerdict('failure', false)).toBe('failure');
+  });
+
+  it('passes the Frontend verdict when every shard succeeded', () => {
+    expect(frontendVerdict('success', false)).toBe('success');
   });
 });
