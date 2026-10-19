@@ -3077,7 +3077,6 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
 const VIEWPORT_LAYOUT_MS = 8000;
 const VIEWPORT_DEADLINE_MS = 12000;
 const VIEWPORT_RESTORE_MS = 500;
-const VIEWPORT_DPR = 1;
 
 async function abortViewportLayout(send) {
   try {
@@ -3096,13 +3095,13 @@ function viewportLayoutScript(width, height) {
   return `(() => {
     const width = ${width};
     const height = ${height};
-    const dpr = ${VIEWPORT_DPR};
     window.__opdViewportSettled = new Promise((resolve) => {
       let frame = 0;
       let nested = 0;
       let defer = 0;
       let settled = false;
       let accepting = false;
+      let expectedDpr = null;
       const sizeMatchedBefore = window.innerWidth === width && window.innerHeight === height;
       let sawResize = false;
       function cleanup() {
@@ -3122,7 +3121,7 @@ function viewportLayoutScript(width, height) {
         return { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio };
       }
       function matches(value) {
-        return value.w === width && value.h === height && value.dpr === dpr;
+        return expectedDpr !== null && value.w === width && value.h === height && value.dpr === expectedDpr;
       }
       function cancelFrames() {
         if (frame) cancelAnimationFrame(frame);
@@ -3179,8 +3178,11 @@ function viewportLayoutScript(width, height) {
         done({ w: value.w, h: value.h, dpr: value.dpr, aborted: true });
       };
       window.addEventListener('resize', onResize);
-      window.__opdArmViewportLayout = () => {
+      window.__opdArmViewportLayout = (nextDpr) => {
         if (accepting || settled) return true;
+        const parsed = Number(nextDpr);
+        if (!Number.isFinite(parsed)) return false;
+        expectedDpr = parsed;
         if (sizeMatchedBefore || sawResize) {
           accepting = true;
           startFrames();
@@ -3200,14 +3202,20 @@ async function readViewportSettled(send) {
 
 async function layOutViewport(send, width, height) {
   await evaluate(send, viewportLayoutScript(width, height));
+  let expectedDpr = null;
   try {
     await setViewport(send, width, height, true);
+    const read = await evaluate(send, 'window.devicePixelRatio');
+    expectedDpr = Number(read);
+    if (!Number.isFinite(expectedDpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
+    await evaluate(send, `window.__opdArmViewportLayout?.(${expectedDpr})`);
   } catch (error) {
     voidViewportAbort(send);
     throw error;
   }
-  await evaluate(send, 'window.__opdArmViewportLayout?.()');
-  return readViewportSettled(send);
+  const settled = await readViewportSettled(send);
+  if (settled && typeof settled === 'object') settled.expectedDpr = expectedDpr;
+  return settled;
 }
 
 export async function whenViewportLaidOut(send, width, height) {
@@ -3222,7 +3230,7 @@ export async function whenViewportLaidOut(send, width, height) {
   });
   try {
     const settled = await Promise.race([pending, deadline]);
-    if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height || settled.dpr !== VIEWPORT_DPR) {
+    if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height || settled.dpr !== settled.expectedDpr) {
       throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
     }
   } finally {

@@ -502,8 +502,8 @@ for (const engine of ['Chrome', 'WebKit']) {
       };
       await whenViewportLaidOut(send, 390, 520);
       const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
-      assert.deepEqual(liveAtRead, [390, 520], JSON.stringify(liveAtRead));
-      assert.deepEqual(size, [390, 520]);
+      assert.deepEqual(size, [390, 520], JSON.stringify({ liveAtRead, size }));
+      assert.deepEqual(liveAtRead, [390, 520], JSON.stringify({ liveAtRead, size }));
     } finally {
       await browser.close();
     }
