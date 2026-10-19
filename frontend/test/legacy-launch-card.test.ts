@@ -154,7 +154,7 @@ async function padPoint(page: Page) {
   }, meta.pad);
 }
 
-describe.skipIf(!webkitReady)('legacy launch card', () => {
+describe.skipIf(!webkitReady)('legacy launch card WebKit', () => {
   it('opens from a trusted tap when controls are shown in landscape', async () => {
     const context = await browser.newContext({
       viewport: { width: 874, height: 402 },
