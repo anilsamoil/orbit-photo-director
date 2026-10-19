@@ -364,6 +364,7 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    globalSetup: 'test/webkit-gate.ts',
     poolOptions: {
       forks: { execArgv: testExecArgv },
       threads: { execArgv: testExecArgv },
