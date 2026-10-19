@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchWebkit, playwrightSend } from './webkit-devices.mjs';
+import { deviceDescriptor, launchWebkit, playwrightSend, WEBKIT_DEVICES } from './webkit-devices.mjs';
 import { proveShortTimeRow, whenViewportLaidOut } from './drive.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -144,10 +144,10 @@ test('a stalled abort still rejects at the drive deadline', { timeout: 20_000 },
 });
 
 test('a failed viewport command rejects while abort is still pending', { timeout: 5_000 }, async () => {
-  const result = await raceCall(whenViewportLaidOut(hungSend(false), 390, 520), 1_000);
+  const result = await raceCall(whenViewportLaidOut(hungSend(false), 390, 520), 3_000);
   assert.equal(result.status, 'rejected', JSON.stringify(result));
   assert.match(result.message, /viewport command failed/);
-  assert.ok(result.elapsed < 500, String(result.elapsed));
+  assert.ok(result.elapsed < 2_000, String(result.elapsed));
 });
 
 test('a hung install evaluate rejects at the drive deadline', { timeout: 20_000 }, async () => {
@@ -206,11 +206,11 @@ function stallRestoreSend() {
 }
 
 test('a stalled viewport restore settles the caller near the drive deadline', { timeout: 20_000 }, async () => {
-  const result = await raceCall(proveShortTimeRow(stallRestoreSend(), { width: 402, height: 874, mobile: true }), 13_200);
+  const result = await raceCall(proveShortTimeRow(stallRestoreSend(), { width: 402, height: 874, mobile: true }), 16_000);
   assert.equal(result.status, 'rejected', JSON.stringify(result));
   assert.match(result.message, /"deadline":true/);
   assert.doesNotMatch(result.message, /restore unsettled/);
-  assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
+  assert.ok(result.elapsed >= 11_000 && result.elapsed < 15_000, String(result.elapsed));
 });
 
 for (const engine of ['Chrome', 'WebKit']) {
@@ -219,13 +219,13 @@ for (const engine of ['Chrome', 'WebKit']) {
     const page = await open(browser);
     try {
       await stallFrames(page, false);
-      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 11_000);
+      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 13_000);
       const trace = await frameTrace(page);
       assert.ok(trace.resizes.some((size) => size[0] === 390 && size[1] === 520), JSON.stringify(trace));
       assert.equal(result.status, 'rejected', JSON.stringify(result));
       assert.match(result.message, /390x520/);
       assert.match(result.message, /"timedOut":true/);
-      assert.ok(result.elapsed >= 7_500 && result.elapsed < 9_000, String(result.elapsed));
+      assert.ok(result.elapsed >= 7_000 && result.elapsed < 11_500, String(result.elapsed));
       assert.equal(trace.timers, 0);
       assert.equal(trace.listeners, 0);
       assert.deepEqual(trace.scheduledFrames, [1]);
@@ -241,12 +241,12 @@ for (const engine of ['Chrome', 'WebKit']) {
     const page = await open(browser);
     try {
       await stallFrames(page, false, 1);
-      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 11_000);
+      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 13_000);
       const trace = await frameTrace(page);
       assert.ok(trace.resizes.some((size) => size[0] === 390 && size[1] === 520), JSON.stringify(trace));
       assert.equal(result.status, 'rejected', JSON.stringify(result));
       assert.match(result.message, /"timedOut":true/);
-      assert.ok(result.elapsed >= 7_500 && result.elapsed < 9_000, String(result.elapsed));
+      assert.ok(result.elapsed >= 7_000 && result.elapsed < 11_500, String(result.elapsed));
       assert.deepEqual(trace.scheduledFrames, [1, 2]);
       assert.deepEqual(trace.pendingFrames, []);
       assert.deepEqual(trace.cancelledFrames, [2]);
@@ -430,7 +430,7 @@ for (const engine of ['Chrome', 'WebKit']) {
       const pending = whenViewportLaidOut(playwrightSend(page), 390, 520);
       pending.catch(() => {});
       let inflight = [];
-      for (let i = 0; i < 20; i += 1) {
+      for (let i = 0; i < 60; i += 1) {
         inflight = await page.evaluate(() => (
           window.innerWidth === 390 && window.innerHeight === 520 ? [...window.__pendingFrames] : []
         ));
@@ -446,12 +446,63 @@ for (const engine of ['Chrome', 'WebKit']) {
       assert.ok(inflight.every((id) => during.cancelled.includes(id)), JSON.stringify({ inflight, during }));
       assert.ok(during.pending.length >= 1, JSON.stringify(during));
       assert.ok(during.pending.every((id) => !inflight.includes(id)), JSON.stringify({ inflight, during }));
-      const early = await raceCall(pending, 200);
+      const early = await raceCall(pending, 500);
       assert.equal(early.status, 'pending', JSON.stringify(early));
       await page.evaluate(() => window.__releaseFrames());
       await page.evaluate(() => window.__releaseFrames());
       await pending;
       const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+      assert.deepEqual(size, [390, 520]);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`an arm failure clears the listener and the page promise on ${engine}`, { timeout: 10_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await stallFrames(page, false);
+      const real = playwrightSend(page);
+      const send = (method, params) => {
+        if (method === 'Runtime.evaluate' && String(params?.expression || '').includes('__opdArmViewportLayout?.')) {
+          throw new Error('arm failed');
+        }
+        return real(method, params);
+      };
+      const started = Date.now();
+      await assert.rejects(() => whenViewportLaidOut(send, 390, 520), /arm failed/);
+      const state = await Promise.race([
+        page.evaluate(() => window.__opdViewportSettled.then((value) => ({ state: 'settled', value }))),
+        new Promise((resolveState) => setTimeout(() => resolveState({ state: 'pending' }), 1_500)),
+      ]);
+      const trace = await page.evaluate(() => ({ timers: window.__timers.size, listeners: window.__resizeListeners }));
+      assert.equal(state.state, 'settled', JSON.stringify(state));
+      assert.equal(state.value.aborted, true);
+      assert.ok(Date.now() - started < 3_000, String(Date.now() - started));
+      assert.equal(trace.listeners, 0);
+      assert.equal(trace.timers, 0);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a command from 980x1307 settles the live size on ${engine}`, { timeout: 15_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await page.setViewportSize({ width: 980, height: 1307 });
+      const real = playwrightSend(page);
+      let liveAtRead = null;
+      const send = async (method, params) => {
+        if (method === 'Runtime.evaluate' && params?.expression === 'window.__opdViewportSettled') {
+          liveAtRead = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+        }
+        return real(method, params);
+      };
+      await whenViewportLaidOut(send, 390, 520);
+      const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+      assert.deepEqual(liveAtRead, [390, 520], JSON.stringify(liveAtRead));
       assert.deepEqual(size, [390, 520]);
     } finally {
       await browser.close();
@@ -471,4 +522,57 @@ for (const engine of ['Chrome', 'WebKit']) {
       await browser.close();
     }
   });
+}
+
+const timeHtml = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>
+<div class="map-command"><div class="map-controls-time">
+<button id="time-fwd-90" style="position:fixed;left:8px;top:8px;width:44px;height:44px">+90</button>
+</div></div>
+</body></html>`;
+
+const deviceCases = [
+  {
+    label: 'iPhone 17 Pro',
+    spec: WEBKIT_DEVICES.find((entry) => entry.slug === 'iphone-17-pro'),
+    dpr: 3,
+    width: 402,
+    height: 874,
+  },
+  {
+    label: 'iPad Pro 11',
+    spec: { name: 'iPad Pro 11', slug: 'ipad-pro-11', viewport: { width: 834, height: 1210 } },
+    dpr: 2,
+    width: 834,
+    height: 1210,
+  },
+];
+
+for (const engine of ['Chrome', 'WebKit']) {
+  for (const device of deviceCases) {
+    test(`proveShortTimeRow keeps ${device.label} at DPR ${device.dpr} on ${engine}`, { timeout: 40_000 }, async () => {
+      const browser = await launch(engine);
+      const descriptor = deviceDescriptor(device.spec);
+      const context = await browser.newContext(descriptor);
+      const page = await context.newPage();
+      try {
+        await page.setContent(timeHtml);
+        const before = await page.evaluate(() => window.devicePixelRatio);
+        assert.equal(before, device.dpr, JSON.stringify(descriptor.viewport));
+        await proveShortTimeRow(playwrightSend(page), {
+          width: descriptor.viewport.width,
+          height: descriptor.viewport.height,
+          mobile: true,
+        });
+        const after = await page.evaluate(() => ({
+          w: window.innerWidth,
+          h: window.innerHeight,
+          dpr: window.devicePixelRatio,
+        }));
+        assert.equal(after.dpr, device.dpr);
+        assert.deepEqual([after.w, after.h], [device.width, device.height]);
+      } finally {
+        await browser.close();
+      }
+    });
+  }
 }

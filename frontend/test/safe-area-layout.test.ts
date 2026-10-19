@@ -294,6 +294,15 @@ for (const engine of [
           return append.call(this, child) as T;
         };
       }, insets);
+      const beforeJs = await page.evaluate(() => {
+        const banner = document.querySelector('#status-banner')!.getBoundingClientRect();
+        return {
+          bannerBottom: banner.bottom,
+          bannerVar: document.body.style.getPropertyValue('--map-banner-bottom'),
+        };
+      });
+      expect(beforeJs.bannerVar).toBe('');
+      expect(beforeJs.bannerBottom).toBe(486);
       await page.addScriptTag({ content: `${ownerScript}\nbindMapChrome(); applyMapChrome(true); window.__opdSyncMapChrome();` });
       await page.waitForTimeout(200);
       const box = await page.evaluate(() => {
