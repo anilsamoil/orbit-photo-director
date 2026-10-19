@@ -104,8 +104,8 @@ for (const engine of [
   beforeAll(async () => {
     session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
     browser = session.browser;
-  }, 30_000);
-  afterAll(async () => { await closeBrowser(session, engine.name); });
+  }, 60_000);
+  afterAll(async () => { await closeBrowser(session, engine.name); }, 60_000);
 
   it(`settles North at 0 and ISS-up on the heading for ${REPS} real-clock reps`, async () => {
     const reps: { north: number; northMoving: boolean; iss: number; heading: number; issMoving: boolean; error?: string }[] = [];
