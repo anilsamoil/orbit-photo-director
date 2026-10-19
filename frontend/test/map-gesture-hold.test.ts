@@ -1,10 +1,11 @@
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { chromium, webkit, type BrowserContext, type CDPSession, type Page } from 'playwright';
 
 const require = createRequire(import.meta.url);
-const wkPageApi = require('/workspace/frontend/node_modules/playwright-core/lib/server/webkit/wkPage.js') as {
+const wkPagePath = resolve(dirname(require.resolve('playwright-core')), 'lib/server/webkit/wkPage.js');
+const wkPageApi = require(wkPagePath) as {
   WKPage: { prototype: object };
 };
 type WebKitTouchSession = { send(method: string, params: object): Promise<unknown> };
