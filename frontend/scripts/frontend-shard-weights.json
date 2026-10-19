@@ -1,4 +1,5 @@
 {
+  "src/map/adapters/maplibre/gesture.test.ts": 0.382,
   "src/map/features/basemap/basemap.test.ts": 0.37,
   "src/map/features/follow-iss/follow-iss.test.ts": 0.398,
   "src/map/features/ground-track/ground-track.test.ts": 0.382,
@@ -102,6 +103,7 @@
   "test/map-corner-lift.test.ts": 96.432,
   "test/map-distance-filter.test.ts": 0.342,
   "test/map-follow.test.ts": 0.516,
+  "test/map-gesture-hold.test.ts": 127.5,
   "test/map-ground-track-contract.test.ts": 0.781,
   "test/map-imagery-date.test.ts": 0.523,
   "test/map-interaction-contract.test.ts": 1.227,
@@ -111,6 +113,7 @@
   "test/map-legend.test.ts": 0.544,
   "test/map-mount-order.test.ts": 0.349,
   "test/map-night-lights.test.ts": 0.618,
+  "test/map-north-follow.test.ts": 766.87,
   "test/map-orbit-split.test.ts": 0.348,
   "test/map-overlay-prefs.test.ts": 0.509,
   "test/map-picker-inspector-safe-area.test.ts": 53.896,

@@ -134,8 +134,8 @@ for (const engine of [
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
 ]) describe.skipIf(!existsSync(engine.executablePath))(`north follow ${engine.name}`, () => {
   let session: TrackedBrowser;
-  beforeAll(async () => { session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath }); }, 30_000);
-  afterAll(async () => { await closeBrowser(session, engine.name); });
+  beforeAll(async () => { session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath }); }, 60_000);
+  afterAll(async () => { await closeBrowser(session, engine.name); }, 60_000);
 
   it('eases to north while follow stays on', async () => {
     let pass = 0;

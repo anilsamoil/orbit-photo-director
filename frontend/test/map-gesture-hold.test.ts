@@ -366,8 +366,8 @@ for (const engine of [
   let session: TrackedBrowser;
   beforeAll(async () => {
     session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
-  }, 30_000);
-  afterAll(async () => { await closeBrowser(session, engine.name); });
+  }, 60_000);
+  afterAll(async () => { await closeBrowser(session, engine.name); }, 60_000);
 
   async function pageAt(width: number, height: number, touch: boolean): Promise<{ page: Page; context: BrowserContext }> {
     const context = await session.browser.newContext({ viewport: { width, height }, hasTouch: touch, isMobile: touch });
