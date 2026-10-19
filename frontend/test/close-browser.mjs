@@ -82,5 +82,7 @@ export async function closeBrowser(session, label = 'browser') {
     const kill = session.server?.kill ?? session.kill;
     if (kill) await within(() => kill.call(session.server ?? session), KILL_DEADLINE_MS);
   }
-  console.log(`CLOSE_BROWSER ${label} ${Date.now() - started}ms${killed ? ' killed' : ''}`);
+  const elapsedMs = Date.now() - started;
+  console.log(`CLOSE_BROWSER ${label} ${elapsedMs}ms${killed ? ' killed' : ''}`);
+  return { killed, elapsedMs };
 }

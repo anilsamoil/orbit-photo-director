@@ -220,6 +220,27 @@ describe('closeBrowser', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it('treats an exit that arrives after the wait starts as closed', async () => {
+    const child = new EventEmitter() as EventEmitter & { exitCode: number | null; signalCode: NodeJS.Signals | null };
+    child.exitCode = null;
+    child.signalCode = null;
+    const outcome = await closeBrowser({
+      browser: { close: async () => {} },
+      server: {
+        process: () => child,
+        close: () => {
+          setTimeout(() => {
+            child.exitCode = 0;
+            child.emit('exit', 0, null);
+          }, 40);
+          return new Promise<void>(() => {});
+        },
+      },
+    }, 'late-exit');
+    expect(outcome?.killed).toBe(false);
+    expect(outcome?.elapsedMs).toBeLessThan(1_000);
+  });
+
   it('stops a hung kill at its deadline', async () => {
     const started = Date.now();
     let settled = false;
@@ -237,8 +258,8 @@ describe('closeBrowser', () => {
     expect(Date.now() - started).toBeLessThan(3_000);
   }, 12_000);
 
-  it('leaves a group member alive after the leader exits', async () => {
-    const root = track(detached('bash', ['-c', 'sleep 30 & echo $!; wait'], 'pipe'));
+  it('leaves an orphan that does not hold stdout alive after the leader exits', async () => {
+    const root = track(detached('bash', ['-c', 'sleep 30 </dev/null >/dev/null 2>&1 & echo $!; wait'], 'pipe'));
     const line = await new Promise<string>((resolve) => {
       root.stdout?.once('data', (buf) => resolve(buf.toString().trim()));
     });
@@ -259,7 +280,7 @@ describe('closeBrowser', () => {
             killGroup(root.pid);
           },
         },
-      }, 'stdio-dropped');
+      }, 'orphan');
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(killed).toBe(false);
       expect(await dead(root.pid, root)).toBe(true);
@@ -274,24 +295,26 @@ describe('closeBrowser', () => {
 export const CHROME_CANDIDATES = [
   '/usr/bin/google-chrome-stable',
   '/usr/bin/google-chrome',
+  '/opt/homebrew/bin/google-chrome',
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ];
 
 const chromePath = CHROME_CANDIDATES.find((path) => existsSync(path));
 
 it('keeps a macOS Chrome path in the launch candidates', () => {
+  expect(CHROME_CANDIDATES).toContain('/opt/homebrew/bin/google-chrome');
   expect(CHROME_CANDIDATES).toContain('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
 });
 
 async function runningEngine(name: string, type: typeof chromium, executablePath: string): Promise<void> {
   const session = await launchTracked(type, { headless: true, executablePath });
   const child = session.server.process();
-  const started = Date.now();
   try {
-    await closeBrowser(session, `running-${name}`);
+    const outcome = await closeBrowser(session, `running-${name}`);
+    expect(outcome?.killed).toBe(false);
+    expect(outcome?.elapsedMs).toBeLessThan(1_000);
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
-    expect(Date.now() - started).toBeLessThan(1_000);
   } finally {
     try { await session.server.kill(); } catch {}
   }

@@ -32,4 +32,4 @@ export function closeBrowser(
     kill?: () => Promise<unknown>;
   } | undefined,
   label?: string,
-): Promise<void>;
+): Promise<{ killed: boolean; elapsedMs: number } | undefined>;
