@@ -299,19 +299,28 @@ for (const engine of [
       const box = await page.evaluate(() => {
         const banner = document.querySelector('#status-banner')!.getBoundingClientRect();
         const time = document.querySelector('#time-fwd-90')!.getBoundingClientRect();
+        const hide = document.querySelector('#map-chrome-toggle')!.getBoundingClientRect();
         return {
           bannerBottom: banner.bottom,
           timeTop: time.top,
           timeBottom: time.bottom,
+          hideBottom: hide.bottom,
           bannerVar: document.body.style.getPropertyValue('--map-banner-bottom'),
         };
       });
       const safeBottom = height - insets.bottom;
+      expect(safeBottom).toBe(486);
       expect(box.timeTop).toBeLessThan(safeBottom - 80);
       expect(box.timeBottom).toBeLessThanOrEqual(safeBottom);
-      expect(box.bannerBottom).toBeGreaterThanOrEqual(safeBottom - 1);
-      expect(box.bannerBottom).toBeLessThanOrEqual(safeBottom);
+      expect(box.bannerBottom).toBe(486);
+      expect(box.bannerBottom).not.toBe(height);
+      expect(box.hideBottom).toBe(height - 36 - insets.bottom);
       expect(box.bannerVar).toBe(`${insets.bottom}px`);
+      const followed = await page.evaluate((bottom) => {
+        document.body.style.setProperty('--map-banner-bottom', `${bottom}px`);
+        return document.querySelector('#status-banner')!.getBoundingClientRect().bottom;
+      }, 80);
+      expect(followed).toBe(height - 80);
     } finally { await context.close(); }
   }, 30_000);
 

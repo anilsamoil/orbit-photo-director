@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchWebkit, playwrightSend } from './webkit-devices.mjs';
-import { whenViewportLaidOut } from './drive.mjs';
+import { proveShortTimeRow, whenViewportLaidOut } from './drive.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const require = createRequire(resolve(root, 'frontend/package.json'));
@@ -164,6 +164,55 @@ test('a hung setViewport rejects at the drive deadline', { timeout: 20_000 }, as
   assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
 });
 
+function pacedSend() {
+  return (method, params) => {
+    const expression = params?.expression ?? '';
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      return new Promise((resolve) => setTimeout(() => resolve({}), 4_500));
+    }
+    if (method !== 'Runtime.evaluate') throw new Error(`unexpected ${method}`);
+    if (expression.includes('__opdViewportSettled = new Promise')) {
+      return new Promise((resolve) => setTimeout(() => resolve({ result: { value: true } }), 4_500));
+    }
+    if (expression === 'window.__opdViewportSettled' || expression.includes('__opdAbortViewportLayout?.()')) {
+      return new Promise(() => {});
+    }
+    return { result: { value: true } };
+  };
+}
+
+test('a 4.5s install and 4.5s viewport share one 12s deadline', { timeout: 20_000 }, async () => {
+  const result = await raceCall(whenViewportLaidOut(pacedSend(), 390, 520), 16_000);
+  assert.equal(result.status, 'rejected', JSON.stringify(result));
+  assert.match(result.message, /"deadline":true/);
+  assert.ok(result.elapsed >= 11_000 && result.elapsed < 14_000, String(result.elapsed));
+});
+
+function stallRestoreSend() {
+  let metrics = 0;
+  return (method, params) => {
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      metrics += 1;
+      if (metrics > 1) return new Promise(() => {});
+      return {};
+    }
+    if (method !== 'Runtime.evaluate') throw new Error(`unexpected ${method}`);
+    const expression = params?.expression ?? '';
+    if (expression === 'window.__opdViewportSettled' || expression.includes('__opdAbortViewportLayout?.()')) {
+      return new Promise(() => {});
+    }
+    return { result: { value: true } };
+  };
+}
+
+test('a stalled viewport restore settles the caller near the drive deadline', { timeout: 20_000 }, async () => {
+  const result = await raceCall(proveShortTimeRow(stallRestoreSend(), { width: 402, height: 874, mobile: true }), 13_200);
+  assert.equal(result.status, 'rejected', JSON.stringify(result));
+  assert.match(result.message, /"deadline":true/);
+  assert.doesNotMatch(result.message, /restore unsettled/);
+  assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
+});
+
 for (const engine of ['Chrome', 'WebKit']) {
   test(`stalled frames after a matching resize reject on ${engine}`, { timeout: 20_000 }, async () => {
     const browser = await launch(engine);
@@ -275,6 +324,133 @@ for (const engine of ['Chrome', 'WebKit']) {
       assert.deepEqual(trace.pendingFrames, []);
       assert.equal(trace.timers, 0);
       assert.equal(trace.listeners, 0);
+      const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+      assert.deepEqual(size, [390, 520]);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a delayed viewport command settles only after it applies on ${engine}`, { timeout: 15_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await page.setViewportSize({ width: 390, height: 520 });
+      await page.evaluate(() => {
+        const real = window.requestAnimationFrame;
+        window.__frameAt = [];
+        window.requestAnimationFrame = (callback) => real((time) => {
+          window.__frameAt.push(performance.now());
+          return callback(time);
+        });
+      });
+      const real = playwrightSend(page);
+      const send = async (method, params) => {
+        if (method !== 'Emulation.setDeviceMetricsOverride') return real(method, params);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        await page.evaluate(() => { window.__commandAt = performance.now(); });
+        return real(method, params);
+      };
+      await whenViewportLaidOut(send, 390, 520);
+      const trace = await page.evaluate(() => ({ frameAt: window.__frameAt, commandAt: window.__commandAt }));
+      const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+      assert.ok(trace.frameAt.length >= 2, JSON.stringify(trace));
+      assert.ok(trace.frameAt.every((time) => time >= trace.commandAt), JSON.stringify(trace));
+      assert.deepEqual(size, [390, 520]);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a DPR change from 3 to 1 settles only after the command on ${engine}`, { timeout: 15_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await page.setViewportSize({ width: 390, height: 520 });
+      await page.evaluate(() => {
+        let dpr = 3;
+        Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => dpr });
+        window.__setDpr = (value) => { dpr = value; };
+        const real = window.requestAnimationFrame;
+        window.__frameDpr = [];
+        window.requestAnimationFrame = (callback) => real((time) => {
+          window.__frameDpr.push(window.devicePixelRatio);
+          return callback(time);
+        });
+      });
+      const real = playwrightSend(page);
+      const send = async (method, params) => {
+        if (method !== 'Emulation.setDeviceMetricsOverride') return real(method, params);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        await page.evaluate(() => window.__setDpr(1));
+        return real(method, params);
+      };
+      await whenViewportLaidOut(send, 390, 520);
+      const dprs = await page.evaluate(() => window.__frameDpr);
+      const dpr = await page.evaluate(() => window.devicePixelRatio);
+      assert.ok(dprs.length >= 2, JSON.stringify(dprs));
+      assert.ok(dprs.every((value) => value === 1), JSON.stringify(dprs));
+      assert.equal(dpr, 1);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a resize during the settle frames restarts and still matches on ${engine}`, { timeout: 15_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await page.evaluate(() => {
+        window.__held = [];
+        window.__scheduledFrames = [];
+        window.__cancelledFrames = [];
+        window.__pendingFrames = new Set();
+        let next = 1;
+        window.requestAnimationFrame = (callback) => {
+          const id = next;
+          next += 1;
+          window.__scheduledFrames.push(id);
+          window.__pendingFrames.add(id);
+          window.__held.push({ id, callback });
+          return id;
+        };
+        window.cancelAnimationFrame = (id) => {
+          window.__cancelledFrames.push(id);
+          window.__pendingFrames.delete(id);
+        };
+        window.__releaseFrames = () => {
+          const batch = window.__held.splice(0);
+          for (const item of batch) {
+            if (!window.__pendingFrames.has(item.id)) continue;
+            window.__pendingFrames.delete(item.id);
+            item.callback(0);
+          }
+        };
+      });
+      const pending = whenViewportLaidOut(playwrightSend(page), 390, 520);
+      pending.catch(() => {});
+      let inflight = [];
+      for (let i = 0; i < 20; i += 1) {
+        inflight = await page.evaluate(() => (
+          window.innerWidth === 390 && window.innerHeight === 520 ? [...window.__pendingFrames] : []
+        ));
+        if (inflight.length >= 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(inflight.length >= 1, JSON.stringify(inflight));
+      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+      const during = await page.evaluate(() => ({
+        cancelled: window.__cancelledFrames.slice(),
+        pending: [...window.__pendingFrames],
+      }));
+      assert.ok(inflight.every((id) => during.cancelled.includes(id)), JSON.stringify({ inflight, during }));
+      assert.ok(during.pending.length >= 1, JSON.stringify(during));
+      assert.ok(during.pending.every((id) => !inflight.includes(id)), JSON.stringify({ inflight, during }));
+      const early = await raceCall(pending, 200);
+      assert.equal(early.status, 'pending', JSON.stringify(early));
+      await page.evaluate(() => window.__releaseFrames());
+      await page.evaluate(() => window.__releaseFrames());
+      await pending;
       const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
       assert.deepEqual(size, [390, 520]);
     } finally {
