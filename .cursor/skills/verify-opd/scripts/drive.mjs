@@ -3076,6 +3076,8 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
 
 const VIEWPORT_LAYOUT_MS = 8000;
 const VIEWPORT_DEADLINE_MS = 12000;
+const VIEWPORT_RESTORE_MS = 500;
+const VIEWPORT_DPR = 1;
 
 async function abortViewportLayout(send) {
   try {
@@ -3094,15 +3096,20 @@ function viewportLayoutScript(width, height) {
   return `(() => {
     const width = ${width};
     const height = ${height};
+    const dpr = ${VIEWPORT_DPR};
     window.__opdViewportSettled = new Promise((resolve) => {
       let frame = 0;
       let nested = 0;
+      let defer = 0;
       let settled = false;
-      let finishing = false;
+      let accepting = false;
+      const sizeMatchedBefore = window.innerWidth === width && window.innerHeight === height;
+      let sawResize = false;
       function cleanup() {
         clearTimeout(timer);
-        if (frame) cancelAnimationFrame(frame);
-        if (nested) cancelAnimationFrame(nested);
+        if (defer) clearTimeout(defer);
+        defer = 0;
+        cancelFrames();
         window.removeEventListener('resize', onResize);
       }
       function done(value) {
@@ -3111,28 +3118,77 @@ function viewportLayoutScript(width, height) {
         cleanup();
         resolve(value);
       }
-      function finishFrames() {
-        if (finishing || settled) return;
-        finishing = true;
+      function sample() {
+        return { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio };
+      }
+      function matches(value) {
+        return value.w === width && value.h === height && value.dpr === dpr;
+      }
+      function cancelFrames() {
+        if (frame) cancelAnimationFrame(frame);
+        if (nested) cancelAnimationFrame(nested);
+        frame = 0;
+        nested = 0;
+      }
+      function startFrames() {
+        if (settled) return;
+        cancelFrames();
+        if (!matches(sample())) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
+          if (!matches(sample())) {
+            startFrames();
+            return;
+          }
           nested = requestAnimationFrame(() => {
             nested = 0;
-            done({ w: window.innerWidth, h: window.innerHeight, timedOut: false });
+            const end = sample();
+            if (!matches(end)) {
+              startFrames();
+              return;
+            }
+            done({ w: end.w, h: end.h, dpr: end.dpr, timedOut: false });
           });
         });
       }
       function onResize() {
-        if (finishing || settled) return;
-        if (window.innerWidth !== width || window.innerHeight !== height) return;
-        finishFrames();
+        sawResize = true;
+        if (settled || !accepting) return;
+        startFrames();
+      }
+      function schedulePump() {
+        defer = setTimeout(() => {
+          const id = defer;
+          defer = 0;
+          clearTimeout(id);
+          if (settled) return;
+          if (!sawResize) {
+            schedulePump();
+            return;
+          }
+          accepting = true;
+          startFrames();
+        }, 0);
       }
       const timer = setTimeout(() => {
-        done({ w: window.innerWidth, h: window.innerHeight, timedOut: true });
+        const value = sample();
+        done({ w: value.w, h: value.h, dpr: value.dpr, timedOut: true });
       }, ${VIEWPORT_LAYOUT_MS});
-      window.__opdAbortViewportLayout = () => done({ w: window.innerWidth, h: window.innerHeight, aborted: true });
+      window.__opdAbortViewportLayout = () => {
+        const value = sample();
+        done({ w: value.w, h: value.h, dpr: value.dpr, aborted: true });
+      };
       window.addEventListener('resize', onResize);
-      if (window.innerWidth === width && window.innerHeight === height) finishFrames();
+      window.__opdArmViewportLayout = () => {
+        if (accepting || settled) return true;
+        if (sizeMatchedBefore || sawResize) {
+          accepting = true;
+          startFrames();
+          return true;
+        }
+        schedulePump();
+        return true;
+      };
     });
     return true;
   })()`;
@@ -3150,6 +3206,7 @@ async function layOutViewport(send, width, height) {
     voidViewportAbort(send);
     throw error;
   }
+  await evaluate(send, 'window.__opdArmViewportLayout?.()');
   return readViewportSettled(send);
 }
 
@@ -3165,7 +3222,7 @@ export async function whenViewportLaidOut(send, width, height) {
   });
   try {
     const settled = await Promise.race([pending, deadline]);
-    if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height) {
+    if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height || settled.dpr !== VIEWPORT_DPR) {
       throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
     }
   } finally {
@@ -3173,13 +3230,28 @@ export async function whenViewportLaidOut(send, width, height) {
   }
 }
 
-async function proveShortTimeRow(send, viewport) {
+async function restoreViewport(send, viewport) {
+  let timer;
+  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  pending.catch(() => {});
+  const limited = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('viewport restore unsettled')), VIEWPORT_RESTORE_MS);
+  });
+  try {
+    return await Promise.race([pending, limited]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function proveShortTimeRow(send, viewport) {
   const sizes = [
     { width: 390, height: 520 },
     { width: 430, height: 400 },
     { width: 664, height: 390 },
     { width: 874, height: 402 },
   ];
+  let failure;
   try {
     for (const size of sizes) {
       await whenViewportLaidOut(send, size.width, size.height);
@@ -3200,9 +3272,16 @@ async function proveShortTimeRow(send, viewport) {
       })()`);
       if (!laid?.ok) throw new Error(`time skip ${size.width}x${size.height} ${JSON.stringify(laid)}`);
     }
+  } catch (error) {
+    failure = error;
   } finally {
-    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    try {
+      await restoreViewport(send, viewport);
+    } catch (restoreError) {
+      if (!failure) failure = restoreError;
+    }
   }
+  if (failure) throw failure;
 }
 
 async function proveNarrowTimeSlider(send, evidenceDir, viewport) {
