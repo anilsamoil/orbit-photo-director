@@ -82,6 +82,8 @@ export interface VendorMap {
   center(): LngLat;
   zoom(): number;
   bearing(): number;
+  moving(): boolean;
+  userGesture(): boolean;
   setCenter(at: LngLat): void;
   setBearing(degrees: number): void;
   easeTo(move: CameraMove): void;

@@ -60,6 +60,8 @@ export interface MapCore {
   center(): LngLat;
   zoom(): number;
   bearing(): number;
+  moving(): boolean;
+  userGesture(): boolean;
   setCenter(at: LngLat): void;
   setBearing(degrees: number): void;
   easeTo(move: CameraMove): void;
@@ -130,6 +132,8 @@ export function createMapCore(vendor: VendorMap, clock: Clock): MapCore {
     center: () => vendor.center(),
     zoom: () => vendor.zoom(),
     bearing: () => vendor.bearing(),
+    moving: () => vendor.moving(),
+    userGesture: () => vendor.userGesture(),
     setCenter: (at) => vendor.setCenter(at),
     setBearing: (degrees) => vendor.setBearing(degrees),
     easeTo: (move) => vendor.easeTo(move),

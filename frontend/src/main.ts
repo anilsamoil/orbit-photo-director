@@ -1457,7 +1457,6 @@ function bindTabs(): void {
       // A failed lazy import (LOS mid-chunk-download) must not be a silent
       // black pane — log it; the next tab click retries the import.
       console.error('[map] map pane failed to load:', err);
-      mapModule = null; // force re-import on next attempt
     });
     setActive('view-map', tabMap);
     // Hydrate shot counts so a target popup can answer "have I shot it yet"
@@ -1641,6 +1640,7 @@ async function loadLogPane(): Promise<void> {
 }
 
 let mapModule: typeof import('./map') | null = null;
+let mapPaneGeneration = 0;
 /** Set when the operator opened the Map tab BEFORE the first manifest
  *  landed (slow uplink / LOS — exactly the station's network). doRefresh
  *  consumes it to render the pane the moment data arrives. Without this,
@@ -1669,20 +1669,27 @@ function showLaunchOnMap(eventId: string): void {
 }
 
 async function loadMapPane(): Promise<void> {
+  const generation = ++mapPaneGeneration;
   if (!currentManifest) {
     mapPaneWaitingForManifest = true;
     return;
   }
   mapPaneWaitingForManifest = false;
-  if (!mapModule) {
-    mapModule = await import('./map');
+  try {
+    if (!mapModule) mapModule = await import('./map');
+    if (generation !== mapPaneGeneration) return;
+    await mapModule.renderMap(currentManifest);
+  } catch (error) {
+    const live = document.querySelector('#map .maplibregl-canvas');
+    if (generation === mapPaneGeneration && !live) mapModule = null;
+    throw error;
   }
-  await mapModule.renderMap(currentManifest);
+  if (generation !== mapPaneGeneration) return;
   // MapLibre needs explicit resize() after its container becomes visible.
   // The container starts hidden (display: none) so the canvas was 0×0 at init.
   // Defer one frame so the browser reflows the now-visible container first.
   requestAnimationFrame(() => {
-    if (!mapModule) return;
+    if (generation !== mapPaneGeneration || !mapModule) return;
     mapModule.resizeMap();
     if (pendingLaunchFocus) {
       const eventId = pendingLaunchFocus;
@@ -1707,7 +1714,6 @@ function renderPendingMapPane(): void {
   }
   loadMapPane().catch((err) => {
     console.error('[map] deferred map pane render failed:', err);
-    mapModule = null;
   });
 }
 
@@ -1783,7 +1789,6 @@ async function init(): Promise<void> {
   // doRefresh() will complete the render once the first manifest arrives.
   loadMapPane().catch((err) => {
     console.warn('[map] auto-init pre-manifest call failed:', err);
-    mapModule = null;
   });
   // Hydrate shot counts so target popups show "already shot" badges without
   // needing a Profile-tab visit first. Mirrors the Map tab click handler.

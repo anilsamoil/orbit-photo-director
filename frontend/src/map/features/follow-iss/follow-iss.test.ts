@@ -159,6 +159,7 @@ describe('deferred north recenter', () => {
     };
     vendor.easeTo = (move) => {
       calls.push(move);
+      if ((move.duration ?? 0) > 0) vendor.setMoving(true);
       if (move.duration === 0) vendor.fire('moveend', undefined);
     };
     const core = createMapCore(vendor, createClock(() => nowMs));
@@ -211,14 +212,60 @@ describe('deferred north recenter', () => {
     expect(vendor.bearing()).toBe(0);
   });
 
-  it('holds a follow tick while a right-button rotate is waiting for its first frame', () => {
-    const { centers } = armFollow();
-    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2, pointerId: 4 }));
+  it('does not recenter while the map reports a user gesture', () => {
+    const { vendor, frames, centers } = armFollow();
+    vendor.setUserGesture(true);
     api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(frames).toHaveLength(1);
+    frames[0]!(0);
     expect(centers()).toEqual([]);
     expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
-    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 2, pointerId: 4 }));
+  });
+
+  it('drops the follow write when a gesture is active by the next frame', () => {
+    const { vendor, frames, centers } = armFollow();
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(centers()).toEqual([]);
+    vendor.setUserGesture(true);
+    frames[0]!(0);
+    expect(centers()).toEqual([]);
+    vendor.setUserGesture(false);
     api().applyFollowISS({ lat: 1, lon: 2 });
+    frames.at(-1)!(0);
+    expect(centers()).toEqual([[2, 1]]);
+    expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('recenters when a north ease record outlives the camera', () => {
+    const { vendor, frames, centers, north } = armFollow();
+    vendor.setBearing(80);
+    north.click();
+    vendor.setBearing(32);
+    vendor.setMoving(false);
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(centers()).toEqual([]);
+    expect(frames.length).toBeGreaterThan(0);
+    frames.at(-1)!(0);
+    expect(centers()).toEqual([[34, 12]]);
+    expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('keeps a north ease record while the camera is still moving', () => {
+    const { vendor, frames, centers, north } = armFollow();
+    vendor.setBearing(80);
+    north.click();
+    vendor.setBearing(40);
+    vendor.setMoving(true);
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(frames).toHaveLength(0);
+    expect(centers()).toEqual([]);
+  });
+
+  it('a right press outside MapLibre does not block the next frame', () => {
+    const { frames, centers } = armFollow();
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2, pointerId: 4 }));
+    api().applyFollowISS({ lat: 1, lon: 2 });
+    frames[0]!(0);
     expect(centers()).toEqual([[2, 1]]);
     expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
   });
@@ -253,7 +300,7 @@ describe('deferred north recenter', () => {
   });
 
   it('a follow tick does not snap bearing when recenter delivers the user rotate', () => {
-    const { vendor, north } = armFollow();
+    const { vendor, frames, north } = armFollow();
     vendor.setBearing(0);
     north.click();
     expect(api().currentBearingMode()).toBe('north');
@@ -266,6 +313,7 @@ describe('deferred north recenter', () => {
     };
     const before = vendor.cameraCalls.length;
     api().applyFollowISS({ lat: 12, lon: 34 });
+    frames.at(-1)!(0);
     expect(vendor.cameraCalls.slice(before).filter((call) => call.method === 'setBearing')).toEqual([]);
     expect(vendor.bearing()).toBe(40);
     expect(api().currentBearingMode()).toBe('north');

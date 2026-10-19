@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { chromium, webkit, type Browser, type Page } from 'playwright';
+import { chromium, webkit, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 import { liveIssPositionSGP4, tleEpochMs } from '../src/iss-sgp4';
 import fixture from './fixtures/iss-sgp4-fixture.json';
 
@@ -132,9 +133,9 @@ for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
 ]) describe.skipIf(!existsSync(engine.executablePath))(`north follow ${engine.name}`, () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath }); }, 30_000);
-  afterAll(async () => { await browser?.close(); });
+  let session: TrackedBrowser;
+  beforeAll(async () => { session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath }); }, 30_000);
+  afterAll(async () => { await closeBrowser(session, engine.name); });
 
   it('eases to north while follow stays on', async () => {
     let pass = 0;
@@ -143,7 +144,7 @@ for (const engine of [
     while (pass < 20 && attempts < 26) {
     attempts += 1;
     console.log(`NORTH_EASE ${engine.name} attempt ${attempts} pass ${pass}`);
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
       page.setDefaultTimeout(45_000);
       await openMap(page);
@@ -218,7 +219,7 @@ for (const engine of [
 
   it('a right-drag across a follow tick does not snap north', async () => {
     for (let rep = 0; rep < 20; rep += 1) {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
       page.setDefaultTimeout(45_000);
       await openMap(page);
@@ -267,7 +268,7 @@ for (const engine of [
   it('a keyboard rotate across a follow tick does not snap north', async () => {
     for (let rep = 0; rep < 20; rep += 1) {
     console.log(`NORTH_KEYS ${engine.name} ${rep}`);
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
       page.setDefaultTimeout(15_000);
       await openMap(page);
@@ -310,7 +311,7 @@ for (const engine of [
     let attempts = 0;
     while (reps.filter((rep) => !rep.error).length < 20 && attempts < 26) {
     attempts += 1;
-      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
       try {
         page.setDefaultTimeout(45_000);
         await openMap(page);
@@ -409,7 +410,7 @@ for (const engine of [
 
   it('a North click 50ms and 150ms after a rotate eases to north', async () => {
     for (const delay of [50, 150]) {
-      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
       try {
         page.setDefaultTimeout(45_000);
         await openMap(page);
@@ -437,7 +438,7 @@ for (const engine of [
   }, 180_000);
 
   it('Enter and Space activate North and ISS-up', async () => {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
     try {
       page.setDefaultTimeout(20_000);
       await openMap(page);

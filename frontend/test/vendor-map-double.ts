@@ -23,6 +23,10 @@ export type VendorDouble = VendorMap & {
   popups: { at: LngLat; content: HTMLElement; maxWidth?: string; closeOnClick?: boolean; removed: boolean; close: () => void }[];
   cameraCalls: { method: string; args: unknown[] }[];
   cursor: string;
+  userGestureActive: boolean;
+  cameraMoving: boolean;
+  setUserGesture(active: boolean): void;
+  setMoving(active: boolean): void;
   fire<K extends keyof VendorEvents>(event: K, payload: VendorEvents[K]): void;
   fireLayer<K extends keyof LayerEvents>(event: K, layer: LayerId, payload: LayerEvents[K]): void;
 };
@@ -50,6 +54,14 @@ export function createVendorDouble(initial: { layers?: LayerSpec[]; sources?: [S
     popups: [],
     cameraCalls: [],
     cursor: '',
+    userGestureActive: false,
+    cameraMoving: false,
+    setUserGesture(active) {
+      double.userGestureActive = active;
+    },
+    setMoving(active) {
+      double.cameraMoving = active;
+    },
 
     whenLoaded: () => Promise.resolve(),
     resize: vi.fn(),
@@ -99,6 +111,8 @@ export function createVendorDouble(initial: { layers?: LayerSpec[]; sources?: [S
     center: () => camera.center,
     zoom: () => camera.zoom,
     bearing: () => camera.bearing,
+    moving: () => double.cameraMoving,
+    userGesture: () => double.userGestureActive,
     setCenter(at) {
       camera = { ...camera, center: at };
       record('setCenter', at);
@@ -109,6 +123,7 @@ export function createVendorDouble(initial: { layers?: LayerSpec[]; sources?: [S
     },
     easeTo(move) {
       camera = { ...camera, ...move };
+      if ((move.duration ?? 0) > 0) double.cameraMoving = true;
       record('easeTo', move);
     },
     flyTo(move) {
@@ -157,6 +172,7 @@ export function createVendorDouble(initial: { layers?: LayerSpec[]; sources?: [S
     },
 
     fire(event, payload) {
+      if (event === 'moveend') double.cameraMoving = false;
       for (const handler of [...(handlers.get(event) ?? [])]) handler(payload);
     },
     fireLayer(event, layer, payload) {

@@ -34,6 +34,12 @@ class FakeMap {
   bearing(): number {
     return this.bearingValue;
   }
+  userGesture(): boolean {
+    return false;
+  }
+  moving(): boolean {
+    return false;
+  }
   setBearing(degrees: number): void {
     this.bearingValue = degrees;
     this.bearingCalls.push(degrees);
@@ -203,6 +209,10 @@ describe('applyFollowISS scrub gate (4A — real implementation)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-10T12:00:00Z'));
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 1;
+    });
     _resetMapStateForTest();
     _resetFollowStateForTest();
     fake = new FakeMap();
@@ -210,6 +220,7 @@ describe('applyFollowISS scrub gate (4A — real implementation)', () => {
 
   afterEach(() => {
     _setFollowEnvForTest(null, false);
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 

@@ -22,7 +22,7 @@ const manifest = {
   freshness: { tle_hours: 0, cloud_hours: 0, ok: true },
   artifacts: Object.fromEntries(['passes', 'track', 'status', 'top5', 'top_24h', 'cupola_windows'].map((key) => [key, { path: `${key}.json`, sha256: '', bytes: 0 }])),
 };
-const REPS = 12;
+const REPS = Number(process.env.BEARING_REPS ?? '12');
 
 let assets: Map<string, string | Uint8Array>;
 let script: string;
@@ -142,5 +142,5 @@ for (const engine of [
     const summary = { engine: engine.name, northPass, issPass, reps };
     console.log(`BEARING_REPS ${JSON.stringify(summary)}`);
     expect(summary, JSON.stringify(summary, null, 2)).toEqual({ ...summary, northPass: REPS, issPass: REPS });
-  }, 180_000);
+  }, Math.max(180_000, REPS * 30_000));
 });
