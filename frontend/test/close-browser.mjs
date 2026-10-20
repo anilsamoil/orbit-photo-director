@@ -68,15 +68,15 @@ async function graceful(session) {
     releaseStdio(child);
     return status;
   }
-  await client;
-  if (server) {
-    await server.close();
+  if (server && typeof server.close === 'function') {
+    await Promise.all([client, Promise.resolve().then(() => server.close())]);
     return 'closed';
   }
   if (typeof session.close === 'function') {
-    await session.close();
+    await Promise.all([client, Promise.resolve().then(() => session.close())]);
     return 'closed';
   }
+  await client;
   return 'closed';
 }
 
