@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { chromium, devices, webkit } from 'playwright';
 import { closeBrowser, launchTracked } from '../test/close-browser.mjs';
 import { installFrozenDate } from '../test/frozen-date.mjs';
+import { passRowReachable } from '../test/pin-pass-reach.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -164,7 +165,7 @@ async function inspect(page, bodySelector) {
     const controlsBox = box(controls);
     const controlsHit = document.elementFromPoint(controlsBox.x + controlsBox.width / 2, controlsBox.y + controlsBox.height / 2);
     const firstPassRow = body.matches('.dropped-pin-popup')
-      ? [...body.querySelectorAll('div')].find((element) => getComputedStyle(element).display === 'grid') : null;
+      ? body.querySelector('.pin-pass-row') : null;
     const firstPassTime = firstPassRow?.children[1];
     const firstPassTimeBox = firstPassTime ? box(firstPassTime) : null;
     const oldPointerEvents = inspector.style.pointerEvents;
@@ -446,7 +447,7 @@ async function geometry(page) {
     const popup = document.querySelector('.dropped-pin-popup')?.closest('.maplibregl-popup');
     const parts = popup ? [
       ['header', popup.querySelector('.dropped-pin-popup > strong, .dropped-pin-popup strong')],
-      ...[...popup.querySelectorAll('.dropped-pin-popup div')].filter((element) => getComputedStyle(element).display === 'grid').map((element, index) => [`pass-row-${index}`, element]),
+      ...[...popup.querySelectorAll('.dropped-pin-popup .pin-pass-row')].map((element, index) => [`pass-row-${index}`, element]),
       ...['.pin-add-button', '.pin-add-save', '.pin-add-cancel', '.maplibregl-popup-close-button'].map((selector) => [selector, popup.querySelector(selector)]),
     ].flatMap(([label, element]) => {
       if (!element) return [];
@@ -462,7 +463,7 @@ async function geometry(page) {
       const overlappingText = textRects.flatMap((a, index) => textRects.slice(index + 1).filter((b) => a.index !== b.index
         && Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.x, b.rect.x) > 0.5
         && Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.y, b.rect.y) > 0.5).map((b) => ({ a, b })));
-      return [{ label, rect, rawHeight: raw.height, hits: samples(element, rect), textOutsideRow, overlappingText }];
+      return [{ label, rect, rawHeight: raw.height, rawWidth: raw.width, hits: samples(element, rect), textOutsideRow, overlappingText }];
     }) : [];
     return { controls, surfaces, parts, popup: popup && visible(popup), content: popup && box(popup.querySelector('.maplibregl-popup-content').getBoundingClientRect()) };
   }, { actionable, surfaceSelectors });
@@ -501,9 +502,32 @@ async function checkClearance(page, row, stage) {
       expect(row, 'popup', `${stage}: ${part.label} text stays inside row`, part.textOutsideRow.length === 0, part.textOutsideRow);
       expect(row, 'popup', `${stage}: ${part.label} text columns do not overlap`, part.overlappingText.length === 0, part.overlappingText);
     }
+    if (part.label === '.maplibregl-popup-close-button') continue;
     expect(row, 'popup', `${stage}: chrome does not cover ${part.label} paint`, part.hits.every((hit) => part.label === 'header' || part.label.startsWith('pass-row-') ? hit.popupClear : hit.clear), part);
   }
+  await expectCloseAtRest(page, row, stage, snapshot);
   return snapshot;
+}
+
+async function expectCloseAtRest(page, row, stage, snapshot) {
+  const saved = await page.locator('.dropped-pin-popup').count() === 1
+    ? await page.locator('.dropped-pin-popup').evaluate((body) => {
+      const content = body.closest('.maplibregl-popup-content');
+      if (!content || content.scrollTop === 0) return 0;
+      const top = content.scrollTop;
+      content.scrollTop = 0;
+      return top;
+    })
+    : 0;
+  const source = saved === 0 ? snapshot : await geometry(page);
+  if (saved !== 0) {
+    await page.locator('.dropped-pin-popup').evaluate((body, top) => {
+      const content = body.closest('.maplibregl-popup-content');
+      if (content) content.scrollTop = top;
+    }, saved);
+  }
+  const close = source.parts.find((part) => part.label === '.maplibregl-popup-close-button');
+  expect(row, 'popup', `${stage}: chrome does not cover .maplibregl-popup-close-button paint`, !!close && close.hits.every((hit) => hit.clear), close);
 }
 
 async function rawTap(page, id, touch, row, label = id) {
@@ -670,18 +694,15 @@ async function checkPopupParts(page, row, touch) {
   const content = page.locator('.dropped-pin-popup').locator('..');
   await content.evaluate((element) => { element.scrollTop = 0; });
   await checkClearance(page, row, 'header-and-initial-pass-rows');
-  const passes = await page.locator('.dropped-pin-popup div').evaluateAll((elements) => elements.filter((element) => getComputedStyle(element).display === 'grid').map((element, index) => ({ index, text: element.textContent })));
+  const passes = await page.locator('.dropped-pin-popup .pin-pass-row').evaluateAll((elements) => elements.map((element, index) => ({ index, text: element.textContent })));
   expect(row, 'popup', 'fixture has actual upcoming pass rows', passes.length > 0, passes);
   for (const { index } of passes) {
     await page.locator('.dropped-pin-popup').evaluate((body, index) => {
-      const rows = [...body.querySelectorAll('div')].filter((element) => getComputedStyle(element).display === 'grid');
-      const content = body.closest('.maplibregl-popup-content');
-      const target = rows[index];
-      content.scrollTop += target.getBoundingClientRect().top - content.getBoundingClientRect().top - 8;
+      body.querySelectorAll('.pin-pass-row')[index].scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }, index);
     const snapshot = await checkClearance(page, row, `scrolled-pass-row-${index}`);
     const target = snapshot.parts.find((part) => part.label === `pass-row-${index}`);
-    expect(row, 'popup', `pass row ${index} fully reachable through internal scroll`, !!target && target.rect.height >= Math.min(target.rawHeight, snapshot.content.height) - 1, target);
+    expect(row, 'popup', `pass row ${index} fully reachable through internal scroll`, passRowReachable(target, snapshot.content), target);
   }
   const tapPart = async (selector) => {
     const locator = page.locator(selector);

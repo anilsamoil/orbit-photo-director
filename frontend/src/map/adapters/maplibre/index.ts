@@ -183,7 +183,6 @@ function chooseInspectorSlot(
   sideColumn: boolean,
   rowHeight: number,
   passHead: number,
-  reserveDrop: boolean,
 ): (InspectorRect & { score: number }) | null {
   const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
   const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
@@ -207,9 +206,7 @@ function chooseInspectorSlot(
         const score = (readable ? 1e9 : 0) + (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0)
           + (passHead > 0 && column ? Math.min(height, headTarget) * 1e4 : 0)
           + width * Math.min(height, narrow ? preferredHeight : 600)
-          + right / 1e4 + (narrow
-            ? (reserveDrop || (width >= rowHeight && height >= rowHeight) ? bottom * 1e3 : 0)
-            : -top / 1e6);
+          + right / 1e4 + (narrow && width >= rowHeight && height >= rowHeight ? bottom * 1e3 : narrow ? 0 : -top / 1e6);
         if (!best || score > best.score) best = {
           left: x, right, top: narrow ? bottom - height : top,
           bottom: narrow ? bottom : top + height, score,
@@ -272,7 +269,6 @@ function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void 
     sideColumn,
     rowHeight,
     passHead,
-    reserveDrop,
   );
   const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
   const square = short;

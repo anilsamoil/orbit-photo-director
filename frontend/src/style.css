@@ -4588,6 +4588,10 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   padding: 8px 12px 12px;
 }
 
+#map-pane.map-inspector-open .maplibregl-popup-content:has(> .launch-ascent-card) {
+  padding: 8px 12px 8px;
+}
+
 .dropped-pin-popup > strong {
   display: block;
   padding-right: 28px;
