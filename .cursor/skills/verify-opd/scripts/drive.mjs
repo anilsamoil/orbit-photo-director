@@ -3074,17 +3074,195 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   );
 }
 
-async function proveShortTimeRow(send, viewport) {
+const VIEWPORT_LAYOUT_MS = 8000;
+const VIEWPORT_DEADLINE_MS = 12000;
+const VIEWPORT_RESTORE_MS = 500;
+
+async function abortViewportLayout(send) {
+  try {
+    await evaluate(send, 'window.__opdAbortViewportLayout?.()');
+  } catch {
+    return;
+  }
+}
+
+function voidViewportAbort(send) {
+  const aborting = abortViewportLayout(send);
+  aborting.catch(() => {});
+}
+
+function viewportLayoutScript(width, height) {
+  return `(() => {
+    const width = ${width};
+    const height = ${height};
+    window.__opdViewportSettled = new Promise((resolve) => {
+      let frame = 0;
+      let nested = 0;
+      let defer = 0;
+      let settled = false;
+      let accepting = false;
+      let expectedDpr = null;
+      const sizeMatchedBefore = window.innerWidth === width && window.innerHeight === height;
+      let sawResize = false;
+      function cleanup() {
+        clearTimeout(timer);
+        if (defer) clearTimeout(defer);
+        defer = 0;
+        cancelFrames();
+        window.removeEventListener('resize', onResize);
+      }
+      function done(value) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      }
+      function sample() {
+        return { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio };
+      }
+      function matches(value) {
+        return expectedDpr !== null && value.w === width && value.h === height && value.dpr === expectedDpr;
+      }
+      function cancelFrames() {
+        if (frame) cancelAnimationFrame(frame);
+        if (nested) cancelAnimationFrame(nested);
+        frame = 0;
+        nested = 0;
+      }
+      function startFrames() {
+        if (settled) return;
+        cancelFrames();
+        if (!matches(sample())) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (!matches(sample())) {
+            startFrames();
+            return;
+          }
+          nested = requestAnimationFrame(() => {
+            nested = 0;
+            const end = sample();
+            if (!matches(end)) {
+              startFrames();
+              return;
+            }
+            done({ w: end.w, h: end.h, dpr: end.dpr, timedOut: false });
+          });
+        });
+      }
+      function onResize() {
+        sawResize = true;
+        if (settled || !accepting) return;
+        startFrames();
+      }
+      function schedulePump() {
+        defer = setTimeout(() => {
+          const id = defer;
+          defer = 0;
+          clearTimeout(id);
+          if (settled) return;
+          if (!sawResize) {
+            schedulePump();
+            return;
+          }
+          accepting = true;
+          startFrames();
+        }, 0);
+      }
+      const timer = setTimeout(() => {
+        const value = sample();
+        done({ w: value.w, h: value.h, dpr: value.dpr, timedOut: true });
+      }, ${VIEWPORT_LAYOUT_MS});
+      window.__opdAbortViewportLayout = () => {
+        const value = sample();
+        done({ w: value.w, h: value.h, dpr: value.dpr, aborted: true });
+      };
+      window.addEventListener('resize', onResize);
+      window.__opdArmViewportLayout = (nextDpr) => {
+        if (accepting || settled) return true;
+        const parsed = Number(nextDpr);
+        if (!Number.isFinite(parsed)) return false;
+        expectedDpr = parsed;
+        if (sizeMatchedBefore || sawResize) {
+          accepting = true;
+          startFrames();
+          return true;
+        }
+        schedulePump();
+        return true;
+      };
+    });
+    return true;
+  })()`;
+}
+
+async function readViewportSettled(send) {
+  return evaluate(send, 'window.__opdViewportSettled');
+}
+
+async function layOutViewport(send, width, height) {
+  await evaluate(send, viewportLayoutScript(width, height));
+  let expectedDpr = null;
+  try {
+    await setViewport(send, width, height, true);
+    const read = await evaluate(send, 'window.devicePixelRatio');
+    expectedDpr = Number(read);
+    if (!Number.isFinite(expectedDpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
+    await evaluate(send, `window.__opdArmViewportLayout?.(${expectedDpr})`);
+  } catch (error) {
+    voidViewportAbort(send);
+    throw error;
+  }
+  const settled = await readViewportSettled(send);
+  if (settled && typeof settled === 'object') settled.expectedDpr = expectedDpr;
+  return settled;
+}
+
+export async function whenViewportLaidOut(send, width, height) {
+  let timer;
+  const pending = layOutViewport(send, width, height);
+  pending.catch(() => {});
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      voidViewportAbort(send);
+      resolve({ deadline: true });
+    }, VIEWPORT_DEADLINE_MS);
+  });
+  try {
+    const settled = await Promise.race([pending, deadline]);
+    if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height || settled.dpr !== settled.expectedDpr) {
+      throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function restoreViewport(send, viewport) {
+  let timer;
+  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  pending.catch(() => {});
+  const limited = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('viewport restore unsettled')), VIEWPORT_RESTORE_MS);
+  });
+  try {
+    return await Promise.race([pending, limited]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function proveShortTimeRow(send, viewport) {
   const sizes = [
     { width: 390, height: 520 },
     { width: 430, height: 400 },
     { width: 664, height: 390 },
     { width: 874, height: 402 },
   ];
+  let failure;
   try {
     for (const size of sizes) {
-      await setViewport(send, size.width, size.height, true);
-      await sleep(200);
+      await whenViewportLaidOut(send, size.width, size.height);
       const laid = await evaluate(send, `(() => {
         const button = document.getElementById('time-fwd-90');
         const chip = document.querySelector('.map-command .map-controls-time');
@@ -3102,9 +3280,16 @@ async function proveShortTimeRow(send, viewport) {
       })()`);
       if (!laid?.ok) throw new Error(`time skip ${size.width}x${size.height} ${JSON.stringify(laid)}`);
     }
+  } catch (error) {
+    failure = error;
   } finally {
-    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    try {
+      await restoreViewport(send, viewport);
+    } catch (restoreError) {
+      if (!failure) failure = restoreError;
+    }
   }
+  if (failure) throw failure;
 }
 
 async function proveNarrowTimeSlider(send, evidenceDir, viewport) {
