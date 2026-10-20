@@ -2,13 +2,13 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const WEBKIT_PASSED_FLOOR = 224;
+export const WEBKIT_PASSED_FLOOR = 225;
 
 export const BROWSER_FILE_MINIMUMS: Readonly<Record<string, number>> = {
   'test/map-time-skip-safe-area.test.ts': 60,
   'test/pass-row-fit.test.ts': 54,
   'test/map-review-targets.test.ts': 28,
-  'test/safe-area-layout.test.ts': 20,
+  'test/safe-area-layout.test.ts': 21,
   'test/map-corner-lift.test.ts': 12,
   'test/map-gesture-hold.test.ts': 12,
   'test/legacy-launch-card.test.ts': 8,
