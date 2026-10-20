@@ -126,6 +126,24 @@ it('rejects redirected login HTML and malformed identities', async () => {
   expect(session.getAccountProfile()).toBeNull();
 });
 
+it('a cold session failure still switches to Queue', async () => {
+  document.body.innerHTML = [
+    '<button id="tab-queue" class="tab" type="button">Queue</button>',
+    '<button id="tab-upcoming" class="tab" type="button">Upcoming</button>',
+    '<button id="tab-map" class="tab active" type="button">Map</button>',
+    '<button id="tab-log" class="tab" type="button">Log</button>',
+    '<main id="view" class="view-map"><div id="cards"></div></main>',
+    '<footer id="status-banner">Loading…</footer>',
+  ].join('');
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Load failed'))));
+  const { init } = await import('../src/main');
+  await init();
+  (document.getElementById('tab-queue') as HTMLButtonElement).click();
+  expect(document.getElementById('view')?.className).toBe('view-queue');
+  expect(document.getElementById('tab-queue')?.classList.contains('active')).toBe(true);
+  expect(document.querySelector('#cards')?.childElementCount).toBe(0);
+});
+
 it('a cold network error offers Sign in and Reload without opening the shell', async () => {
   document.body.innerHTML = '<footer id="status-banner">Loading…</footer><main id="view"><div id="cards"></div></main>';
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Load failed'))));
