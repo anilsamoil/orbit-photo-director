@@ -44,20 +44,31 @@ function releaseStdio(child) {
   for (const stream of child.stdio ?? []) stream?.destroy?.();
 }
 
-async function graceful(session) {
-  const browser = session.browser;
-  if (browser && typeof browser.contexts === 'function') {
-    await Promise.all(browser.contexts().map((context) => context.close().catch(() => {})));
+function begin(work) {
+  Promise.resolve().then(work).catch(() => {});
+}
+
+function beginClientClose(browser) {
+  if (!browser) return Promise.resolve();
+  const work = [];
+  if (typeof browser.contexts === 'function') {
+    for (const context of browser.contexts()) work.push(Promise.resolve().then(() => context.close()).catch(() => {}));
   }
-  if (browser && typeof browser.close === 'function') await browser.close().catch(() => {});
+  if (typeof browser.close === 'function') work.push(Promise.resolve().then(() => browser.close()).catch(() => {}));
+  return Promise.all(work);
+}
+
+async function graceful(session) {
+  const client = beginClientClose(session.browser);
   const server = session.server;
   const child = server?.process?.();
   if (child) {
-    if (typeof server.close === 'function') Promise.resolve(server.close()).catch(() => {});
+    if (typeof server.close === 'function') begin(() => server.close());
     const status = await whenExited(child);
     releaseStdio(child);
     return status;
   }
+  await client;
   if (server) {
     await server.close();
     return 'closed';
