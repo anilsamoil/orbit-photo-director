@@ -1748,6 +1748,7 @@ async function init(): Promise<void> {
   bindTopbarPan(document.querySelector('.tabs'));
   bindLiveReadout();
   // Authenticate before loading any personal cache, target or rating queue.
+  let sessionFailed = false;
   try {
     const account = await resolveAccountProfile();
     const url = new URL(window.location.href);
@@ -1758,13 +1759,15 @@ async function init(): Promise<void> {
     window.history.replaceState({}, '', url.toString());
     currentProfile = loadOrCreateProfileFromURL(window.location.href);
   } catch (e) {
+    sessionFailed = true;
     currentProfile = null;
     console.warn('[profile] account initialization failed:', e);
     const text = e instanceof Error ? e.message : 'Could not verify your profile. Please reload.';
     if (getAccountProfile()) setBanner({ level: 'red', text });
     else showSessionRecovery(text);
-    return;
   }
+  bindTabs();
+  if (sessionFailed) return;
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
   // cross-tab storage event, debounced 150ms). Re-read currentProfile on
   // each fire so the slot 7 distance filter reflects the just-saved
@@ -1782,7 +1785,6 @@ async function init(): Promise<void> {
     track: () => currentTrack,
     nowMs: () => Date.now(),
   });
-  bindTabs();
   mountProfileMenu();
   // Map is the default landing tab (view-map is set in HTML). Trigger the lazy
   // load now so mapPaneWaitingForManifest is set; renderPendingMapPane() in
