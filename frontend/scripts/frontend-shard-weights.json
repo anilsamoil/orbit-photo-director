@@ -138,6 +138,7 @@
   "test/pin-add.test.ts": 0.479,
   "test/pin-drop-popup.test.ts": 0.372,
   "test/pin-drop.test.ts": 0.49,
+  "test/pin-pass-reach.test.ts": 0.332,
   "test/profile-crud-edit.test.ts": 0.52,
   "test/profile-crud.test.ts": 2.327,
   "test/profile-csv-import.test.ts": 0.487,
