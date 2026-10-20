@@ -229,6 +229,7 @@ describe('closeBrowser', () => {
         closed,
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
       ]);
+      expect(killed).toBe(false);
       expect(outcome?.killed).toBe(false);
       expect(outcome?.elapsedMs).toBeLessThan(1_000);
       expect(didClose).toBe(true);
