@@ -287,6 +287,62 @@ describe('closeBrowser', () => {
     }
   });
 
+  it('does not kill when client close waits for a server that has no process', async () => {
+    let open = false;
+    let stop = false;
+    let killed = false;
+    const outcome = await closeBrowser({
+      browser: {
+        close: () => new Promise<void>((resolve) => {
+          const timer = setInterval(() => {
+            if (!open && !stop) return;
+            clearInterval(timer);
+            resolve();
+          }, 0);
+        }),
+      },
+      server: {
+        close: () => {
+          open = true;
+          return Promise.resolve();
+        },
+        kill: async () => { killed = true; },
+      },
+    }, 'no-process-server');
+    stop = true;
+    expect(killed).toBe(false);
+    expect(outcome?.killed).toBe(false);
+    expect(outcome?.elapsedMs).toBeLessThan(1_000);
+    expect(open).toBe(true);
+  });
+
+  it('does not kill when client close waits for a session close', async () => {
+    let open = false;
+    let stop = false;
+    let killed = false;
+    const outcome = await closeBrowser({
+      browser: {
+        close: () => new Promise<void>((resolve) => {
+          const timer = setInterval(() => {
+            if (!open && !stop) return;
+            clearInterval(timer);
+            resolve();
+          }, 0);
+        }),
+      },
+      close: () => {
+        open = true;
+        return Promise.resolve();
+      },
+      kill: async () => { killed = true; },
+    }, 'no-process-session');
+    stop = true;
+    expect(killed).toBe(false);
+    expect(outcome?.killed).toBe(false);
+    expect(outcome?.elapsedMs).toBeLessThan(1_000);
+    expect(open).toBe(true);
+  });
+
   it('treats an exit that arrives after the wait starts as closed', async () => {
     const child = new EventEmitter() as EventEmitter & { exitCode: number | null; signalCode: NodeJS.Signals | null };
     child.exitCode = null;
