@@ -1,3 +1,4 @@
+import { createServer, type Server } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium, webkit, type BrowserType, type Page } from 'playwright';
@@ -201,5 +202,70 @@ for (const engine of engines) {
       }
     }
 
+    if (engine.name === 'WebKit') {
+      it('the first Reload after a stalled session clears Loading', async () => {
+        const sessionJson = JSON.stringify({
+          ok: true,
+          profile: { name: 'anil', displayName: 'Anil' },
+        });
+        let stalled = false;
+        let released = false;
+        const server: Server = createServer((req, res) => {
+          const path = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+          if (path === '/api/browser/session') {
+            if (!stalled) {
+              stalled = true;
+              res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+              res.write('');
+              res.on('close', () => { released = true; });
+              return;
+            }
+            res.writeHead(200, {
+              'content-type': 'application/json',
+              'cache-control': 'no-store',
+              'content-length': Buffer.byteLength(sessionJson),
+            });
+            res.end(sessionJson);
+            return;
+          }
+          if (path === '/' || path === '/api/app') {
+            res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+            res.end(html.replace('</body>', `<script src="/${script}"></script></body>`));
+            return;
+          }
+          const asset = assets.get(path);
+          if (asset !== undefined) {
+            res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
+            res.end(typeof asset === 'string' ? asset : Buffer.from(asset));
+            return;
+          }
+          res.writeHead(404, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+          res.end('missing');
+        });
+        server.maxConnections = 1;
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('session server did not bind');
+        const context = await session!.browser.newContext({ viewport: { width: 402, height: 874 } });
+        const page = await context.newPage();
+        try {
+          await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: 'domcontentloaded' });
+          await page.locator('#status-banner button.banner-action').waitFor({ timeout: 15_000 });
+          expect(released).toBe(true);
+          const started = Date.now();
+          await page.locator('#status-banner button.banner-action').click();
+          await page.waitForURL(/\/api\/app/, { timeout: 5_000 });
+          await page.waitForFunction(() => {
+            const text = document.getElementById('status-banner')?.textContent ?? '';
+            return text.length > 0 && !text.includes('Loading');
+          }, { timeout: 5_000 });
+          expect(Date.now() - started).toBeLessThan(5_000);
+          expect(await page.locator('#status-banner').innerText()).not.toContain('Loading');
+        } finally {
+          await context.close();
+          await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+        }
+      }, 30_000);
+    }
   });
 }
