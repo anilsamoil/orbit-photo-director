@@ -73,7 +73,10 @@ function stub(shape: Shape): string {
         });
       }
       if (shape === 'no-body') {
-        return Promise.resolve(new Response(new ReadableStream({ pull() {}, cancel() {} }), {
+        return Promise.resolve(new Response(new ReadableStream({
+          pull() { return new Promise(() => {}); },
+          cancel() {},
+        }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }));
@@ -143,7 +146,10 @@ for (const engine of engines) {
           const page = await context.newPage();
           try {
             await install(page, shape);
-            if (shape !== 'network') await page.clock.install();
+            if (shape !== 'network') {
+              await page.clock.install();
+              await page.clock.pauseAt(Date.now());
+            }
             await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
             expect(page.viewportSize()).toEqual({ width: size.width, height: size.height });
             await page.waitForFunction(() => typeof (window as unknown as { __coldStart?: number }).__coldStart === 'number');
@@ -153,15 +159,19 @@ for (const engine of engines) {
               const early = await page.locator('#status-banner').innerText();
               expect(await page.locator('#status-banner .banner-action').count(), early).toBe(0);
               await page.clock.fastForward(10_000);
-              const link = page.locator('#status-banner a.banner-action');
-              const painted = await link.waitFor({ timeout: 2_000 }).then(() => true, () => false);
-              if (!painted) {
-                await page.clock.fastForward(1_000);
-                await link.waitFor({ timeout: 2_000 });
-              }
             }
-            const banner = await page.locator('#status-banner').innerText();
-            const elapsed = await page.evaluate(() => (window as unknown as { __coldMs?: number }).__coldMs ?? -1);
+            const state = await page.evaluate(() => {
+              const banner = document.getElementById('status-banner');
+              return {
+                text: banner?.innerText ?? '',
+                signIn: banner?.querySelector('a.banner-action')?.textContent ?? '',
+                reload: banner?.querySelector('button.banner-action')?.textContent ?? '',
+                cards: document.querySelectorAll('#cards > *').length,
+                elapsed: (window as unknown as { __coldMs?: number }).__coldMs ?? -1,
+              };
+            });
+            const banner = state.text;
+            const elapsed = state.elapsed;
             if (shape === 'network') {
               expect(banner).toMatch(/Load failed|Failed to fetch/);
               expect(elapsed).toBeGreaterThanOrEqual(0);
@@ -171,15 +181,16 @@ for (const engine of engines) {
               expect(elapsed).toBeGreaterThanOrEqual(9_000);
               expect(elapsed).toBeLessThan(15_000);
             }
-            expect(await page.locator('#status-banner a.banner-action').innerText()).toBe('Sign in');
-            expect(await page.locator('#status-banner button.banner-action').innerText()).toBe('Reload');
-            expect(await page.locator('#cards > *').count()).toBe(0);
-            const control = shape === 'network'
-              ? page.locator('#status-banner button.banner-action')
-              : page.locator('#status-banner a.banner-action');
+            expect(state.signIn).toBe('Sign in');
+            expect(state.reload).toBe('Reload');
+            expect(state.cards).toBe(0);
+            const control = shape === 'network' ? 'button.banner-action' : 'a.banner-action';
             await Promise.all([
               page.waitForURL(/\/api\/app/),
-              control.click(),
+              page.evaluate((selector) => {
+                const node = document.querySelector(`#status-banner ${selector}`);
+                if (node instanceof HTMLElement) node.click();
+              }, control),
             ]);
             expect(await page.locator('body').innerText()).toContain('recovery');
             console.log(`COLD ${engine.name} ${size.width}x${size.height} ${shape} ${elapsed}ms`);
@@ -189,5 +200,6 @@ for (const engine of engines) {
         }, 30_000);
       }
     }
+
   });
 }
