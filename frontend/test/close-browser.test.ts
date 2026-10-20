@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium, webkit } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { closeBrowser, launchTracked } from './close-browser.mjs';
@@ -198,26 +200,90 @@ describe('closeBrowser', () => {
   });
 
   it('treats process exit as closed while stdio stays open', async () => {
-    const child = new EventEmitter() as EventEmitter & { exitCode: number | null; signalCode: NodeJS.Signals | null };
-    child.exitCode = null;
-    child.signalCode = null;
-    let killed = false;
-    const started = Date.now();
-    await closeBrowser({
-      browser: {
-        close: async () => {
-          child.exitCode = 0;
-          child.emit('exit', 0, null);
+    const dir = mkdtempSync(join(tmpdir(), 'opd-stdio-'));
+    const pidFile = join(dir, 'holder');
+    const child = track(spawn('bash', ['-c', `sleep 30 & echo $! > '${pidFile}' && exit 0`], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }));
+    const closed = new Promise<boolean>((resolve) => {
+      child.once('close', () => resolve(true));
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('exit', () => resolve());
+        child.once('error', reject);
+      });
+      const holder = Number(readFileSync(pidFile, 'utf8').trim());
+      expect(alive(holder)).toBe(true);
+      let killed = false;
+      const outcome = await closeBrowser({
+        browser: { close: async () => {} },
+        server: {
+          process: () => child,
+          close: () => new Promise<void>(() => {}),
+          kill: async () => { killed = true; },
         },
+      }, 'stdio-open');
+      const didClose = await Promise.race([
+        closed,
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+      ]);
+      expect(outcome?.killed).toBe(false);
+      expect(outcome?.elapsedMs).toBeLessThan(1_000);
+      expect(didClose).toBe(true);
+      expect(alive(holder)).toBe(true);
+    } finally {
+      killGroup(child.pid);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 12_000);
+
+  it('does not kill a child that already exited when client close waits on the server', async () => {
+    const child = track(spawn('bash', ['-c', 'exit 0'], { stdio: 'ignore' }));
+    await new Promise<void>((resolve, reject) => {
+      child.once('exit', () => resolve());
+      child.once('error', reject);
+    });
+    let serverStarted = false;
+    let clientSettled = false;
+    let stop = false;
+    let killed = false;
+    const outcome = await closeBrowser({
+      browser: {
+        close: () => new Promise<void>((resolve) => {
+          const timer = setInterval(() => {
+            if (stop) {
+              clearInterval(timer);
+              resolve();
+              return;
+            }
+            if (!serverStarted) return;
+            clearInterval(timer);
+            clientSettled = true;
+            resolve();
+          }, 10);
+        }),
       },
       server: {
         process: () => child,
-        close: () => new Promise<void>(() => {}),
+        close: () => {
+          serverStarted = true;
+          return new Promise<void>(() => {});
+        },
         kill: async () => { killed = true; },
       },
-    }, 'crashpad');
-    expect(killed).toBe(false);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    }, 'already-exited');
+    try {
+      expect(killed).toBe(false);
+      expect(outcome?.killed).toBe(false);
+      expect(outcome?.elapsedMs).toBeLessThan(1_000);
+      expect(serverStarted).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(clientSettled).toBe(true);
+    } finally {
+      stop = true;
+    }
   });
 
   it('treats an exit that arrives after the wait starts as closed', async () => {
