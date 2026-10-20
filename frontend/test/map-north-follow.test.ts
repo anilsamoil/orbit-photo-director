@@ -98,6 +98,20 @@ async function openMap(page: Page): Promise<void> {
   await page.waitForFunction(() => document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'true');
 }
 
+async function settleNorth(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const north = document.getElementById('bearing-north');
+    if (!north) return;
+    north.classList.remove('active');
+    north.click();
+  });
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+    const north = document.getElementById('bearing-north');
+    return north?.classList.contains('active') === true && !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+  });
+}
+
 async function watchBearing(page: Page): Promise<void> {
   await page.evaluate(() => {
     const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
@@ -223,11 +237,7 @@ for (const engine of [
     try {
       page.setDefaultTimeout(45_000);
       await openMap(page);
-      await page.locator('#bearing-north').click();
-      await page.waitForFunction(() => {
-        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
-      });
+      await settleNorth(page);
       await watchBearing(page);
       const canvas = page.locator('#map .maplibregl-canvas');
       const box = await canvas.boundingBox();
@@ -272,11 +282,7 @@ for (const engine of [
     try {
       page.setDefaultTimeout(15_000);
       await openMap(page);
-      await page.locator('#bearing-north').click();
-      await page.waitForFunction(() => {
-        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
-      });
+      await settleNorth(page);
       await watchBearing(page);
       await page.locator('#map .maplibregl-canvas').focus();
       await page.keyboard.down('Shift');
@@ -414,11 +420,7 @@ for (const engine of [
       try {
         page.setDefaultTimeout(45_000);
         await openMap(page);
-        await clickControl(page, '#bearing-north');
-        await page.waitForFunction(() => {
-          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-          return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
-        });
+        await settleNorth(page);
         await dragRotate(page);
         const turned = await page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing());
         expect(Math.abs(turned)).toBeGreaterThan(20);
