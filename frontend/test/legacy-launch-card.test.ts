@@ -9,7 +9,8 @@ import fixture from './fixtures/joint-panels.json';
 
 const webkitReady = existsSync(webkit.executablePath());
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
-const chromeReady = chromePath !== undefined && existsSync(chromePath);
+const chromeReady = !process.env.LEGACY_WEBKIT_ONLY && chromePath !== undefined && existsSync(chromePath);
+const tapReps = Number(process.env.LEGACY_TAP_REPS ?? 3);
 
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45123';
@@ -21,7 +22,13 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const meta = JSON.parse(fixture['meta.json']) as { now: number; pad: { lat: number; lon: number } };
 const bodies = legacyBodies();
 type HitEvent = { type: string; trusted: boolean; target: string };
-type TestWindow = Window & { __opdMap: import('maplibre-gl').Map; __legacyHits: HitEvent[] };
+type TestWindow = Window & {
+  __opdMap: import('maplibre-gl').Map;
+  __legacyHits: HitEvent[];
+  __lastTouchEndAt?: number;
+};
+/** MapLibre double-tap zoom calls preventDefault on touchend inside this window, and WebKit then emits no click. */
+const MAPLIBRE_DOUBLE_TAP_MS = 500;
 let assets: Map<string, string | Uint8Array>;
 let script: string;
 let browser: Browser;
@@ -83,6 +90,9 @@ async function prepare(page: Page) {
     Object.defineProperty(navigator, 'standalone', { get: () => true });
     const state = window as unknown as TestWindow;
     state.__legacyHits = [];
+    document.addEventListener('touchend', () => {
+      state.__lastTouchEndAt = performance.now();
+    }, true);
     for (const type of ['click', 'pointerup'] as const) {
       document.addEventListener(type, (event) => {
         const target = event.target as Element;
@@ -266,6 +276,10 @@ async function centerTap(page: Page) {
     };
   });
   expect(point).not.toBeNull();
+  await page.waitForFunction((gap) => {
+    const last = (window as unknown as TestWindow).__lastTouchEndAt;
+    return last === undefined || performance.now() - last > gap;
+  }, MAPLIBRE_DOUBLE_TAP_MS);
   await page.evaluate(() => { (window as unknown as TestWindow).__legacyHits = []; });
   await page.touchscreen.tap(point!.x, point!.y);
   const hits = await page.evaluate(() => (window as unknown as TestWindow).__legacyHits);
@@ -396,7 +410,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
     { width: 874, height: 402 },
   ])('keeps a center tap on the canvas at $width×$height', async ({ width, height }) => {
     const results = [];
-    for (let rep = 1; rep <= 3; rep += 1) {
+    for (let rep = 1; rep <= tapReps; rep += 1) {
       const context = await engine.browser().newContext({
         viewport: { width, height },
         screen: { width, height },
@@ -421,7 +435,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
     }
     console.log(`PIN_OVER_LEGACY ${JSON.stringify({ engine: engine.name, width, height, results })}`);
     expect(results.every((result) => result.canvas && result.trustedCanvas), JSON.stringify(results)).toBe(true);
-  }, 120_000);
+  }, Math.max(120_000, tapReps * 12_000));
 
   it.each([
     { width: 402, height: 874 },
