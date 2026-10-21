@@ -112,6 +112,33 @@ describe('bearing retarget while an ease is in flight', () => {
     expect(calls.length).toBe(afterFirst);
   });
 
+  it('a late first paint does not ease over a North aim', () => {
+    const { vendor, calls, north } = arm(nowMs);
+    north.click();
+    const afterClick = calls.length;
+    vendor.setBearing(11.2);
+    api().applyInitialBearing();
+    expect(calls.length).toBe(afterClick);
+  });
+
+  it('a late first paint does not ease over a user rotate', () => {
+    const { vendor, calls } = arm(nowMs);
+    document.body.insertAdjacentHTML('beforeend', '<button id="toggle-follow-iss"></button>');
+    api().bindFollowToggle();
+    vendor.fire('rotatestart', { byUser: true });
+    vendor.setBearing(11.2);
+    const before = calls.length;
+    api().applyInitialBearing();
+    expect(calls.length).toBe(before);
+  });
+
+  it('a late first paint still eases when nobody has aimed', () => {
+    const { calls } = arm(nowMs);
+    api().applyInitialBearing();
+    expect(calls.at(-1)?.duration).toBe(600);
+    expect(Math.abs(calls.at(-1)?.bearing ?? 0)).toBeGreaterThan(1);
+  });
+
   it('does not ease when a gesture ends away from the mode', () => {
     const { vendor, calls, north } = arm(nowMs);
     api().applyBearing(true);

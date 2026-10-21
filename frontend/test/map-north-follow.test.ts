@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { chromium, webkit, type Page } from 'playwright';
+import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
@@ -125,6 +125,24 @@ async function samplesOf(page: Page): Promise<number[]> {
   return page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.__samples ?? []);
 }
 
+const surfaces = [
+  { width: 1280, height: 800 },
+  { width: 834, height: 1210 },
+  { width: 402, height: 874 },
+] as const;
+
+async function newSurface(browser: Browser, width: number, height: number): Promise<{ page: Page; close: () => Promise<void> }> {
+  const touch = width < 1280;
+  const context = await browser.newContext({
+    viewport: { width, height },
+    deviceScaleFactor: touch ? (Math.min(width, height) < 500 ? 3 : 2) : 1,
+    hasTouch: touch,
+    isMobile: touch,
+  });
+  const page = await context.newPage();
+  return { page, close: () => context.close() };
+}
+
 function fastestDegPerMs(samples: { bearing: number; at: number }[]): number {
   let rate = 0;
   for (let i = 1; i < samples.length; i++) {
@@ -150,6 +168,8 @@ for (const engine of [
   let session: TrackedBrowser;
   beforeAll(async () => { session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath }); }, 60_000);
   afterAll(async () => { await closeBrowser(session, engine.name); }, 60_000);
+
+  const repeatsFor = (width: number): number => (engine.name === 'WebKit' || width >= 1280 ? 20 : 5);
 
   it('eases to north while follow stays on', async () => {
     let pass = 0;
@@ -232,8 +252,9 @@ for (const engine of [
   }, 700_000);
 
   it('a right-drag across a follow tick does not snap north', async () => {
-    for (let rep = 0; rep < 20; rep += 1) {
-    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+    for (const surface of surfaces) {
+    for (let rep = 0; rep < repeatsFor(surface.width); rep += 1) {
+    const { page, close } = await newSurface(session.browser, surface.width, surface.height);
     try {
       page.setDefaultTimeout(45_000);
       await openMap(page);
@@ -264,16 +285,17 @@ for (const engine of [
       const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
       const end = Math.abs(samples[samples.length - 1] ?? 0);
       if (snappedNorth(samples) || pressed !== 'false' || end <= 20) {
-        console.log(`NORTH_DRAG_FAIL ${engine.name} ${rep} pressed ${pressed}\nSAMPLES ${samples.map((b) => Number(b.toFixed(2))).join(',')}`);
+        console.log(`NORTH_DRAG_FAIL ${engine.name} ${surface.width}x${surface.height} ${rep} pressed ${pressed}\nSAMPLES ${samples.map((b) => Number(b.toFixed(2))).join(',')}`);
       }
-      expect(snappedNorth(samples), `end ${end} n ${samples.length}`).toBe(false);
+      expect(snappedNorth(samples), `${surface.width}x${surface.height} end ${end} n ${samples.length}`).toBe(false);
       expect(pressed).toBe('false');
       expect(end).toBeGreaterThan(20);
     } finally {
-      await page.close();
+      await close();
     }
     }
-  }, 600_000);
+    }
+  }, 900_000);
 
   it('a keyboard rotate across a follow tick does not snap north', async () => {
     for (let rep = 0; rep < 20; rep += 1) {
@@ -491,18 +513,24 @@ for (const engine of [
   }, 120_000);
 
   it('a rotate inside the default north snap stays off north', async () => {
-    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+    for (const surface of surfaces) {
+    for (let rep = 0; rep < repeatsFor(surface.width); rep += 1) {
+    const { page, close } = await newSurface(session.browser, surface.width, surface.height);
     try {
       page.setDefaultTimeout(20_000);
       await openMap(page);
       await settleNorth(page);
-      if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') {
-        await page.locator('#toggle-follow-iss').click();
-      }
+      const follow = page.locator('#toggle-follow-iss');
+      if (await follow.getAttribute('aria-pressed') === 'true') await follow.click();
+      await page.waitForFunction(() => document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'false');
       const box = await page.locator('#map .maplibregl-canvas').boundingBox();
       if (!box) throw new Error('map canvas has no box');
       const x = box.x + box.width / 2;
       const y = box.y + box.height / 2;
+      const readBearing = async (): Promise<number> => {
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+        return page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+      };
       await page.mouse.move(x, y);
       await page.mouse.down({ button: 'right' });
       let offset = 0;
@@ -510,21 +538,23 @@ for (const engine of [
       while (bearing < 3 && offset < 40) {
         offset += 0.25;
         await page.mouse.move(x + offset, y);
-        bearing = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+        bearing = await readBearing();
       }
       while (bearing >= 6 && offset > 0) {
         offset -= 0.25;
         await page.mouse.move(x + offset, y);
-        bearing = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+        bearing = await readBearing();
       }
-      expect(bearing).toBeGreaterThan(2);
-      expect(bearing).toBeLessThan(7);
+      expect(bearing, `${surface.width}x${surface.height} held`).toBeGreaterThan(2);
+      expect(bearing, `${surface.width}x${surface.height} held`).toBeLessThan(7);
       await page.mouse.up({ button: 'right' });
       await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
-      const end = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
-      expect(end).toBeGreaterThan(1);
+      const end = await readBearing();
+      expect(end, `${surface.width}x${surface.height} released`).toBeGreaterThan(1);
     } finally {
-      await page.close();
+      await close();
     }
-  }, 40_000);
+    }
+    }
+  }, 900_000);
 });

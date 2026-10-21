@@ -21,6 +21,7 @@ type Runtime = {
   motionWatch: boolean;
   toggleBound: boolean;
   bearingBound: boolean;
+  operatorAimed: boolean;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
@@ -42,6 +43,7 @@ const state: Runtime = {
   motionWatch: false,
   toggleBound: false,
   bearingBound: false,
+  operatorAimed: false,
   hasTrack: () => false,
   position: () => null,
 };
@@ -197,6 +199,10 @@ export function applyBearing(animate: boolean): void {
   core.setBearing(desired);
 }
 
+export function applyInitialBearing(): void {
+  applyBearing(true);
+}
+
 export function bindFollowToggle(): void {
   if (state.toggleBound) return;
   const btn = document.getElementById('toggle-follow-iss');
@@ -223,6 +229,7 @@ export function bindFollowToggle(): void {
     });
     core.on('rotatestart', ({ byUser }) => {
       if (!byUser) return;
+      state.operatorAimed = true;
       state.motion = null;
       exitFollow();
     });
@@ -243,6 +250,7 @@ export function bindBearingToggle(): void {
   reflectActive();
   const setMode = (mode: BearingMode): void => {
     state.mode = mode;
+    state.operatorAimed = true;
     try { localStorage.setItem(PREF_KEYS.bearingMode, mode); } catch {}
     reflectActive();
     applyBearing(true);
@@ -257,6 +265,7 @@ export function resetFollowMemoryForTest(): void {
   state.mode = 'north';
   state.motion = null;
   state.motionWatch = false;
+  state.operatorAimed = false;
 }
 
 export function clearBearingPref(): void {
