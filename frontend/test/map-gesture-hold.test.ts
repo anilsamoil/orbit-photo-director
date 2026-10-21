@@ -710,6 +710,7 @@ for (const engine of [
         await sendRealTouch(engine.name, client, 'touchMove', [flickAt(2)]);
         await advance(20);
         await sendRealTouch(engine.name, client, 'touchEnd', [flickAt(2)]);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
         await advance(2500);
       } else {
         await Promise.all([
