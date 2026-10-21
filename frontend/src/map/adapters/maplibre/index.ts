@@ -56,13 +56,14 @@ function gesturePending(map: maplibregl.Map): boolean {
 }
 
 /** The MapLibre constructor options for an initial camera. Every gesture is
- *  on, the world repeats across the antimeridian, and the map page does not
- *  mount the attribution control. */
+ *  on, the world repeats across the antimeridian, a rotate near north stays
+ *  put, and the map page does not mount the attribution control. */
 export function maplibreMapOptions(camera: InitialCamera): {
   center: LngLat;
   zoom: number;
   attributionControl: false;
   renderWorldCopies: true;
+  bearingSnap: 0;
   dragPan: true;
   dragRotate: true;
   scrollZoom: true;
@@ -74,6 +75,7 @@ export function maplibreMapOptions(camera: InitialCamera): {
     zoom: camera.zoom,
     attributionControl: false,
     renderWorldCopies: true,
+    bearingSnap: 0,
     dragPan: true,
     dragRotate: true,
     scrollZoom: true,

@@ -49,6 +49,7 @@ describe('construction', () => {
       zoom: 4,
       attributionControl: false,
       renderWorldCopies: true,
+      bearingSnap: 0,
       dragPan: true,
       dragRotate: true,
       scrollZoom: true,
