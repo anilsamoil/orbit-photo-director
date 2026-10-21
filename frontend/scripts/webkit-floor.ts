@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const WEBKIT_PASSED_FLOOR = 207;
+export const WEBKIT_PASSED_FLOOR = 209;
 
 export const BROWSER_FILE_MINIMUMS: Readonly<Record<string, number>> = {
   'test/map-time-skip-safe-area.test.ts': 60,
@@ -18,6 +18,7 @@ export const BROWSER_FILE_MINIMUMS: Readonly<Record<string, number>> = {
   'test/map-satellite-picker-safe-area.test.ts': 3,
   'test/map-bearing-retarget.test.ts': 1,
   'test/map-joint-panel-convergence.test.ts': 1,
+  'test/close-browser.test.ts': 2,
 };
 
 export type WebKitFloorReport = {
