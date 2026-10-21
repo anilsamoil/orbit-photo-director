@@ -489,4 +489,35 @@ for (const engine of [
       await page.close();
     }
   }, 120_000);
+
+  it('a rotate inside the default north snap stays off north', async () => {
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+    try {
+      page.setDefaultTimeout(20_000);
+      await openMap(page);
+      await settleNorth(page);
+      if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') {
+        await page.locator('#toggle-follow-iss').click();
+      }
+      const box = await page.locator('#map .maplibregl-canvas').boundingBox();
+      if (!box) throw new Error('map canvas has no box');
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down({ button: 'right' });
+      let bearing = 0;
+      for (let step = 1; bearing < 3 && step <= 80; step += 1) {
+        await page.mouse.move(x + step, y);
+        bearing = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+      }
+      expect(bearing).toBeGreaterThan(2);
+      expect(bearing).toBeLessThan(7);
+      await page.mouse.up({ button: 'right' });
+      await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+      const end = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+      expect(end).toBeGreaterThan(1);
+    } finally {
+      await page.close();
+    }
+  }, 40_000);
 });
