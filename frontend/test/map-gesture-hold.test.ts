@@ -569,6 +569,36 @@ for (const engine of [
     }
   }, 40_000);
 
+  it('a pointercancel mid-gesture lets follow recenter again', async () => {
+    const { page, context } = await pageAt(1280, 800, false);
+    try {
+      await openMap(page);
+      await northStill(page);
+      const { x, y } = await canvasPoint(page);
+      await page.mouse.move(x, y);
+      await page.mouse.down({ button: 'right' });
+      await page.mouse.move(x + 40, y);
+      await page.waitForFunction(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()) > 10);
+      const rotating = (): Promise<boolean> => page.evaluate(() => {
+        const map = (window as unknown as { __opdMap: MapHandle & { dragRotate: { isActive(): boolean } } }).__opdMap;
+        return map.dragRotate.isActive();
+      });
+      expect(await rotating()).toBe(true);
+      await page.locator('#map .maplibregl-canvas').dispatchEvent('pointercancel');
+      expect(await rotating()).toBe(false);
+      await page.evaluate(() => {
+        const follow = document.getElementById('toggle-follow-iss');
+        if (follow?.getAttribute('aria-pressed') !== 'true') follow?.click();
+      });
+      await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+      await armCenters(page);
+      await page.waitForFunction(() => ((window as unknown as { __opdMap: MapHandle }).__opdMap.__centers ?? 0) > 0);
+      await page.mouse.up({ button: 'right' });
+    } finally {
+      await context.close();
+    }
+  }, 40_000);
+
   it('pointer capture loss mid-gesture lets follow recenter again', async () => {
     const { page, context } = await pageAt(1280, 800, false);
     try {
