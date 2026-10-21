@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const WEBKIT_PASSED_FLOOR = 229;
+export const WEBKIT_PASSED_FLOOR = 230;
 
 export const BROWSER_FILE_MINIMUMS: Readonly<Record<string, number>> = {
   'test/map-time-skip-safe-area.test.ts': 60,
@@ -10,7 +10,7 @@ export const BROWSER_FILE_MINIMUMS: Readonly<Record<string, number>> = {
   'test/map-review-targets.test.ts': 28,
   'test/safe-area-layout.test.ts': 21,
   'test/map-corner-lift.test.ts': 12,
-  'test/map-gesture-hold.test.ts': 12,
+  'test/map-gesture-hold.test.ts': 13,
   'test/legacy-launch-card.test.ts': 10,
   'test/map-chrome-startup.test.ts': 6,
   'test/map-north-follow.test.ts': 6,
