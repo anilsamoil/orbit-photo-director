@@ -616,4 +616,43 @@ for (const engine of [
       await context.close();
     }
   }, 40_000);
+
+  it.each([
+    { width: 402, height: 874 },
+    { width: 834, height: 1210 },
+  ])('a one-finger fling keeps its momentum at $width×$height', async ({ width, height }) => {
+    const { page, context } = await pageAt(width, height, true);
+    const client = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
+    try {
+      await openMap(page);
+      if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') {
+        await page.locator('#toggle-follow-iss').click();
+      }
+      await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+      const center = (): Promise<{ lng: number; lat: number }> => page.evaluate(() => {
+        const at = (window as unknown as { __opdMap: MapHandle }).__opdMap.getCenter();
+        return { lng: at.lng, lat: at.lat };
+      });
+      const apart = (a: { lng: number; lat: number }, b: { lng: number; lat: number }): number => Math.max(Math.abs(a.lng - b.lng), Math.abs(a.lat - b.lat));
+      const box = await page.locator('#map .maplibregl-canvas').boundingBox();
+      if (!box) throw new Error('map canvas has no box');
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height * 0.72;
+      const start = await center();
+      await sendRealTouch(engine.name, client, 'touchStart', [{ x, y, id: 1 }]);
+      for (let step = 1; step <= 8; step += 1) {
+        await sendRealTouch(engine.name, client, 'touchMove', [{ x, y: y - step * 28, id: 1 }]);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+      }
+      const atLift = await center();
+      expect(apart(start, atLift), `${engine.name} ${width}x${height} drag`).toBeGreaterThan(0.05);
+      await sendRealTouch(engine.name, client, 'touchEnd', []);
+      await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+      const after = await center();
+      expect(apart(atLift, after), `${engine.name} ${width}x${height} fling`).toBeGreaterThan(0.15);
+    } finally {
+      await client?.detach();
+      await context.close();
+    }
+  }, 40_000);
 });

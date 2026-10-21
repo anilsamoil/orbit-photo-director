@@ -250,6 +250,18 @@ describe('deferred north recenter', () => {
     expect(document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('ordinary tick -> start North ease -> flush frame', () => {
+    const { vendor, frames, centers, north } = armFollow();
+    api().applyFollowISS({ lat: 12, lon: 34 });
+    expect(frames).toHaveLength(1);
+    vendor.setBearing(80);
+    north.click();
+    frames[0]!(0);
+    expect(centers()).toEqual([]);
+    expect(vendor.bearing()).toBe(80);
+    expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+  });
+
   it('keeps a north ease record while the camera is still moving', () => {
     const { vendor, frames, centers, north } = armFollow();
     vendor.setBearing(80);
