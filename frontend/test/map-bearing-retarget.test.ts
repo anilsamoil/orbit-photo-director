@@ -95,6 +95,76 @@ function northOk(sample: { bearing: number; moving: boolean }): boolean {
   return !sample.moving && Math.abs(sample.bearing) < 0.01;
 }
 
+function apart(a: number, b: number): number {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+async function dragRotate(page: Page): Promise<void> {
+  const box = await page.locator('#map canvas').boundingBox();
+  if (!box) throw new Error('map canvas missing');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(x + 220, y - 30);
+  await page.evaluate(() => {
+    const map = (window as unknown as { __opdMap: { on(event: string, fn: () => void): void; off(event: string, fn: () => void): void } }).__opdMap;
+    (window as unknown as { __opdDragMoveEnd: Promise<void> }).__opdDragMoveEnd = new Promise((resolve) => {
+      let released = false;
+      window.addEventListener('mouseup', () => { released = true; }, { capture: true, once: true });
+      const timer = window.setTimeout(resolve, 4000);
+      const onEnd = () => {
+        if (!released) return;
+        window.clearTimeout(timer);
+        map.off('moveend', onEnd);
+        resolve();
+      };
+      map.on('moveend', onEnd);
+    });
+  });
+  await page.mouse.up({ button: 'right' });
+  await page.evaluate(() => (window as unknown as { __opdDragMoveEnd: Promise<void> }).__opdDragMoveEnd);
+}
+
+async function interruptAndRetap(page: Page, heading: number): Promise<{ before: number; moving: boolean }> {
+  const seen: number[] = [];
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await page.evaluate(() => document.getElementById('bearing-north')!.click());
+    await settled(page);
+    await page.evaluate(() => document.getElementById('bearing-iss')!.click());
+    await page.waitForFunction(() => {
+      const map = (window as unknown as { __opdMap: { isMoving(): boolean } }).__opdMap;
+      return map.isMoving();
+    }, undefined, { timeout: 2000 });
+    await dragRotate(page);
+    const retap = await page.evaluate((target: number) => {
+      const map = (window as unknown as { __opdMap: { getBearing(): number; isMoving(): boolean } }).__opdMap;
+      const before = map.getBearing();
+      const gap = Math.abs(((before - target + 540) % 360) - 180);
+      if (gap < 8) return Promise.resolve({ before, moving: false, skipped: true });
+      const button = document.getElementById('bearing-iss');
+      if (!button) throw new Error('bearing-iss missing');
+      const deliver = (tries: number): Promise<{ before: number; moving: boolean; skipped: false }> => new Promise((resolve, reject) => {
+        let received = false;
+        const mark = () => { received = true; };
+        button.addEventListener('click', mark);
+        button.click();
+        button.removeEventListener('click', mark);
+        if (received) resolve({ before, moving: map.isMoving(), skipped: false });
+        else if (tries <= 1) reject(new Error('bearing-iss click suppressed'));
+        else window.setTimeout(() => { deliver(tries - 1).then(resolve, reject); }, 0);
+      });
+      return deliver(5);
+    }, heading);
+    if (retap.skipped) {
+      seen.push(retap.before);
+      continue;
+    }
+    return { before: retap.before, moving: retap.moving };
+  }
+  throw new Error(`rotate gesture never left heading ${heading}; settled at ${seen.join(', ')}`);
+}
+
 for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
@@ -143,4 +213,45 @@ for (const engine of [
     console.log(`BEARING_REPS ${JSON.stringify(summary)}`);
     expect(summary, JSON.stringify(summary, null, 2)).toEqual({ ...summary, northPass: REPS, issPass: REPS });
   }, 180_000);
+
+  it('starts a fresh ISS-up ease after a rotate gesture interrupts the active ease', async () => {
+    const loops = Number(process.env.GESTURE_LOOPS ?? 1);
+    const failures: string[] = [];
+    for (let loop = 0; loop < loops; loop += 1) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    try {
+      await page.addInitScript(`
+        window.addEventListener('contextmenu', (event) => event.preventDefault(), true);
+        const native = window.setInterval.bind(window);
+        window.setInterval = (handler, timeout, ...args) => {
+          if (typeof timeout === 'number' && timeout >= 1000) return native(() => {}, 60000);
+          return native(handler, timeout, ...args);
+        };
+      `);
+      await install(page);
+      await openMap(page);
+      await page.evaluate(() => {
+        document.getElementById('toggle-follow-iss')!.click();
+        document.getElementById('bearing-iss')!.click();
+      });
+      const headed = await settled(page);
+      const retap = await interruptAndRetap(page, headed.bearing);
+      const summary = { engine: engine.name, heading: headed.bearing, before: retap.before, moving: retap.moving, loop };
+      console.log(`BEARING_GESTURE ${JSON.stringify(summary)}`);
+      if (retap.moving !== true || apart(retap.before, headed.bearing) <= 8) {
+        failures.push(JSON.stringify(summary));
+        continue;
+      }
+      const landed = await settled(page);
+      if (landed.moving !== false || apart(landed.bearing, headed.bearing) >= 0.01) {
+        failures.push(JSON.stringify({ ...summary, landed }));
+      }
+    } finally {
+      await context.close();
+    }
+    }
+    expect(failures, failures.join('\n')).toEqual([]);
+  }, 400_000);
 });
