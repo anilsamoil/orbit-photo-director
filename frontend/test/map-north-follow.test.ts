@@ -505,9 +505,16 @@ for (const engine of [
       const y = box.y + box.height / 2;
       await page.mouse.move(x, y);
       await page.mouse.down({ button: 'right' });
+      let offset = 0;
       let bearing = 0;
-      for (let step = 1; bearing < 3 && step <= 80; step += 1) {
-        await page.mouse.move(x + step, y);
+      while (bearing < 3 && offset < 40) {
+        offset += 0.25;
+        await page.mouse.move(x + offset, y);
+        bearing = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+      }
+      while (bearing >= 6 && offset > 0) {
+        offset -= 0.25;
+        await page.mouse.move(x + offset, y);
         bearing = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
       }
       expect(bearing).toBeGreaterThan(2);
