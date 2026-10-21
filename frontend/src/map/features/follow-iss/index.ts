@@ -76,22 +76,27 @@ function followMayMove(core: MapCore): boolean {
   return state.follow && !core.clock.isScrubbed() && !core.userGesture();
 }
 
+function northEaseHolds(core: MapCore, pos: MarkerPosition): boolean {
+  if (state.mode !== 'north' || state.motion === null) return false;
+  state.motion.pending = pos;
+  const apart = bearingApart(core.bearing(), state.motion.toward) >= 0.01;
+  if (!apart || core.moving() || core.userGesture()) return true;
+  state.motion = null;
+  return false;
+}
+
 /** Recenter on the live ISS while follow is on and the view is live.
  *  setCenter aborts a north ease, so that ease keeps the latest center
  *  and this applies it once the bearing has reached north. */
 export function applyFollowISS(pos: MarkerPosition): void {
   const core = state.core;
   if (!core || !state.follow || core.clock.isScrubbed()) return;
-  if (state.mode === 'north' && state.motion) {
-    state.motion.pending = pos;
-    const apart = bearingApart(core.bearing(), state.motion.toward) >= 0.01;
-    if (!apart || core.moving() || core.userGesture()) return;
-    state.motion = null;
-  }
+  if (northEaseHolds(core, pos)) return;
   const center: [number, number] = [pos.lon, pos.lat];
   requestAnimationFrame(() => {
     const live = state.core;
     if (live !== core || !followMayMove(live)) return;
+    if (northEaseHolds(live, pos)) return;
     live.setCenter(center);
     if (!state.follow || state.mode !== 'north' || !followMayMove(live)) return;
     live.setBearing(0);

@@ -478,7 +478,10 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
     if (!gestureBlocksFollow({ ...reading(), hidden: false })) return;
     map.stop();
   };
-  map.getCanvas().addEventListener('lostpointercapture', releaseAbandoned);
+  map.getCanvas().addEventListener('lostpointercapture', (event) => {
+    if (event.buttons === 0) return;
+    releaseAbandoned();
+  });
   map.getCanvas().addEventListener('pointercancel', releaseAbandoned);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) releaseAbandoned();

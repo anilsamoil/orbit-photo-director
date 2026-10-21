@@ -62,6 +62,7 @@ type MapHandle = {
   isStyleLoaded(): boolean;
   getSource(id: string): unknown;
   getBearing(): number;
+  getCenter(): { lng: number; lat: number };
   getPitch(): number;
   isMoving(): boolean;
   setCenter(center: [number, number]): unknown;
@@ -609,7 +610,7 @@ for (const engine of [
       await page.mouse.down({ button: 'right' });
       await page.mouse.move(x + 40, y);
       await page.waitForFunction(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()) > 10);
-      await page.locator('#map .maplibregl-canvas').dispatchEvent('lostpointercapture');
+      await page.locator('#map .maplibregl-canvas').dispatchEvent('lostpointercapture', { buttons: 2 });
       await page.mouse.up({ button: 'right' });
       await resumeFollow(page);
     } finally {
@@ -628,7 +629,7 @@ for (const engine of [
       if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') {
         await page.locator('#toggle-follow-iss').click();
       }
-      await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+      await northStill(page);
       const center = (): Promise<{ lng: number; lat: number }> => page.evaluate(() => {
         const at = (window as unknown as { __opdMap: MapHandle }).__opdMap.getCenter();
         return { lng: at.lng, lat: at.lat };
@@ -636,19 +637,53 @@ for (const engine of [
       const apart = (a: { lng: number; lat: number }, b: { lng: number; lat: number }): number => Math.max(Math.abs(a.lng - b.lng), Math.abs(a.lat - b.lat));
       const box = await page.locator('#map .maplibregl-canvas').boundingBox();
       if (!box) throw new Error('map canvas has no box');
-      const x = box.x + box.width / 2;
-      const y = box.y + box.height * 0.72;
+      const y = box.y + box.height * 0.55;
+      const x = box.x + Math.min(box.width * 0.28, 180);
+      const travel = Math.min(220, box.width * 0.5);
       const start = await center();
+      await page.evaluate(() => {
+        const w = window as unknown as { __opdMap: MapHandle; __flingAt?: { lng: number; lat: number } };
+        const note = (): void => {
+          if (w.__flingAt) return;
+          const at = w.__opdMap.getCenter();
+          w.__flingAt = { lng: at.lng, lat: at.lat };
+        };
+        window.addEventListener('pointerup', note, true);
+        window.addEventListener('touchend', note, true);
+      });
       await sendRealTouch(engine.name, client, 'touchStart', [{ x, y, id: 1 }]);
-      for (let step = 1; step <= 8; step += 1) {
-        await sendRealTouch(engine.name, client, 'touchMove', [{ x, y: y - step * 28, id: 1 }]);
+      const slowStep = travel / 8;
+      const flickStep = travel / 4;
+      for (let step = 1; step <= 4; step += 1) {
+        await sendRealTouch(engine.name, client, 'touchMove', [{ x: x + step * slowStep, y, id: 1 }]);
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
       }
-      const atLift = await center();
-      expect(apart(start, atLift), `${engine.name} ${width}x${height} drag`).toBeGreaterThan(0.05);
-      await sendRealTouch(engine.name, client, 'touchEnd', []);
+      const flickAt = (step: number): { x: number; y: number; id: number } => ({ x: x + 4 * slowStep + step * flickStep, y, id: 1 });
+      if (engine.name === 'Chrome' && client) {
+        const advance = async (budget: number): Promise<void> => {
+          const expired = new Promise((resolve) => client.once('Emulation.virtualTimeBudgetExpired', resolve));
+          await client.send('Emulation.setVirtualTimePolicy', { policy: 'advance', budget });
+          await expired;
+        };
+        await client.send('Emulation.setVirtualTimePolicy', { policy: 'pause' });
+        await sendRealTouch(engine.name, client, 'touchMove', [flickAt(1)]);
+        await advance(40);
+        await sendRealTouch(engine.name, client, 'touchMove', [flickAt(2)]);
+        await advance(20);
+        await sendRealTouch(engine.name, client, 'touchEnd', [flickAt(2)]);
+        await advance(2500);
+      } else {
+        await Promise.all([
+          sendRealTouch(engine.name, client, 'touchMove', [flickAt(1)]),
+          sendRealTouch(engine.name, client, 'touchMove', [flickAt(2)]),
+          sendRealTouch(engine.name, client, 'touchEnd', [flickAt(2)]),
+        ]);
+      }
       await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+      const atLift = await page.evaluate(() => (window as unknown as { __flingAt?: { lng: number; lat: number } }).__flingAt);
+      if (!atLift) throw new Error(`${engine.name} ${width}x${height} recorded no lift center`);
       const after = await center();
+      expect(apart(start, atLift), `${engine.name} ${width}x${height} drag`).toBeGreaterThan(0.05);
       expect(apart(atLift, after), `${engine.name} ${width}x${height} fling`).toBeGreaterThan(0.15);
     } finally {
       await client?.detach();

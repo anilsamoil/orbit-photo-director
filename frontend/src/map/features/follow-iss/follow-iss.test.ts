@@ -256,10 +256,11 @@ describe('deferred north recenter', () => {
     expect(frames).toHaveLength(1);
     vendor.setBearing(80);
     north.click();
+    const before = vendor.cameraCalls.length;
     frames[0]!(0);
     expect(centers()).toEqual([]);
     expect(vendor.bearing()).toBe(80);
-    expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+    expect(vendor.cameraCalls.slice(before).filter((call) => call.method === 'setBearing')).toEqual([]);
   });
 
   it('keeps a north ease record while the camera is still moving', () => {
