@@ -384,6 +384,45 @@ for (const engine of [
         await openMap(page);
         await northStill(page);
         await watchMove(page);
+        const armCtrl = async (): Promise<void> => {
+          const { x, y } = await canvasPoint(page);
+          await page.mouse.move(x, y);
+          await page.keyboard.down('Control');
+          await page.mouse.down({ button: 'left' });
+        };
+        const disarmCtrl = async (): Promise<void> => {
+          await page.mouse.up({ button: 'left' });
+          await page.keyboard.up('Control');
+          await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+        };
+        for (const kept of ['rotate', 'pitch'] as const) {
+          await armCtrl();
+          await page.evaluate((which) => {
+            const map = (window as unknown as { __opdMap: MapHandle & {
+              dragRotate: { _mouseRotate?: { _lastPoint?: unknown }; _mousePitch?: { _lastPoint?: unknown } };
+              setBearing(degrees: number): void;
+              setCenter(center: { lng: number; lat: number }): void;
+            }; __followWrites?: number }).__opdMap;
+            const held = (window as unknown as { __opdMap: { dragRotate: { _mouseRotate?: { _lastPoint?: unknown }; _mousePitch?: { _lastPoint?: unknown } } } }).__opdMap;
+            const drop = which === 'rotate' ? held.dragRotate._mousePitch : held.dragRotate._mouseRotate;
+            const stay = which === 'rotate' ? held.dragRotate._mouseRotate : held.dragRotate._mousePitch;
+            if (drop) delete drop._lastPoint;
+            if (stay?._lastPoint == null) throw new Error(`${which} lost its point`);
+            const view = window as unknown as { __followWrites: number };
+            view.__followWrites = 0;
+            const bearing = map.setBearing.bind(map);
+            const center = map.setCenter.bind(map) as (at: { lng: number; lat: number } | [number, number]) => void;
+            map.setBearing = (degrees) => { view.__followWrites += 1; bearing(degrees); };
+            map.setCenter = (at) => { view.__followWrites += 1; center(at); };
+          }, kept);
+          await page.waitForTimeout(1200);
+          const pending = await gestureState(page);
+          const writes = await page.evaluate(() => (window as unknown as { __followWrites?: number }).__followWrites ?? 0);
+          expect(writes, `${engine.name} ${kept} ${JSON.stringify(pending)}`).toBe(0);
+          expect(pending.pressed, `${engine.name} ${kept}`).toBe('true');
+          expect(pending.dragRotate, `${engine.name} ${kept}`).toBe(false);
+          await disarmCtrl();
+        }
         const held = await drag(page, 'left', true);
         await page.waitForTimeout(1200);
         const after = await gestureState(page);
