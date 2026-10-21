@@ -200,6 +200,7 @@ export function applyBearing(animate: boolean): void {
 }
 
 export function applyInitialBearing(): void {
+  if (state.operatorAimed) return;
   applyBearing(true);
 }
 
