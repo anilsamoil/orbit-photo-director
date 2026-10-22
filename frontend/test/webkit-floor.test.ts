@@ -15,8 +15,10 @@ const WEBKIT_DESCRIBE: Readonly<Record<string, string>> = {
   'test/map-review-targets.test.ts': 'supported review regressions WebKit',
   'test/safe-area-layout.test.ts': 'safe-area painted layout WebKit',
   'test/map-corner-lift.test.ts': 'map corner lift WebKit',
+  'test/map-gesture-hold.test.ts': 'gesture hold WebKit',
   'test/legacy-launch-card.test.ts': 'pin inspector over a legacy launch card WebKit',
   'test/map-chrome-startup.test.ts': 'supported safe-area startup WebKit',
+  'test/map-north-follow.test.ts': 'north follow WebKit',
   'test/map-repin-safe-area.test.ts': 'trusted centered re-pin WebKit',
   'test/map-chrome-idle.test.ts': 'map chrome tab lifecycle WebKit',
   'test/map-picker-inspector-safe-area.test.ts': 'picker inspector safe insets WebKit',
@@ -342,14 +344,14 @@ describe('webkit floor', () => {
     };
     const complete = evaluateWebKitReports([reportFor(named, [])]);
     expect(complete.reasons).toEqual([]);
-    expect(complete.passed).toBe(211);
+    expect(complete.passed).toBe(233);
     for (const fullName of named) {
       const skipped = evaluateWebKitReports([reportFor(named, [fullName])]);
       expect(skipped.reasons).toContain('webkit skipped 1');
       expect(skipped.reasons).toContain(`${file} passed 9 below minimum 10`);
       const omitted = evaluateWebKitReports([reportFor(named.filter((name) => name !== fullName), [])]);
-      expect(omitted.passed).toBe(210);
-      expect(omitted.reasons).toContain('webkit passed 210 below floor 211');
+      expect(omitted.passed).toBe(232);
+      expect(omitted.reasons).toContain('webkit passed 232 below floor 233');
       expect(omitted.reasons).toContain(`${file} passed 9 below minimum 10`);
     }
     const source = readFileSync(join(root, 'test/legacy-launch-card.test.ts'), 'utf8');
