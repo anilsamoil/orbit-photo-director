@@ -136,6 +136,26 @@ async function frames(page: Page): Promise<void> {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)))));
 }
 
+async function waitForMapIdle(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const view = window as Window & {
+      __opdIdleWait?: 'armed' | 'idle';
+      __opdMap?: { triggerRepaint(): void; once(event: 'idle', listener: () => void): void };
+    };
+    const map = view.__opdMap;
+    if (!map) return false;
+    if (view.__opdIdleWait === 'idle') return true;
+    if (view.__opdIdleWait !== 'armed') {
+      view.__opdIdleWait = 'armed';
+      map.once('idle', () => {
+        view.__opdIdleWait = 'idle';
+      });
+      map.triggerRepaint();
+    }
+    return false;
+  });
+}
+
 async function hideBox(page: Page): Promise<HideBox> {
   return page.evaluate(() => {
     const el = document.getElementById('map-chrome-toggle')!;
@@ -287,7 +307,7 @@ for (const engine of [
       const banner = await page.locator('#status-banner').boundingBox();
       expect(banner!.height).toBeGreaterThan(30);
       expect(raised.bottom).toBeLessThanOrEqual(banner!.y - 7);
-      await page.waitForTimeout(3000);
+      await waitForMapIdle(page);
       await frames(page);
       expect(await hideBox(page)).toEqual(raised);
       await cycle(page, 5, raised);
@@ -570,7 +590,7 @@ for (const engine of [
           for (const record of records) writes.push(record.attributeName ?? '');
         }).observe(document.body, { attributes: true, attributeFilter: ['style'] });
       });
-      await page.waitForTimeout(3000);
+      await waitForMapIdle(page);
       await frames(page);
       const after = await page.evaluate(() => ({
         scrollTop: (document.querySelector('.map-control-dock') as HTMLElement).scrollTop,

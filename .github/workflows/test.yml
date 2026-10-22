@@ -67,7 +67,13 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/bun.lock') }}
       - name: Install Playwright WebKit
-        run: cd frontend && ./node_modules/.bin/playwright install --with-deps webkit
+        run: |
+          sudo tee /etc/apt/apt.conf.d/99opd-acquire >/dev/null <<'EOF'
+          Acquire::http::Timeout "20";
+          Acquire::https::Timeout "20";
+          Acquire::Retries "5";
+          EOF
+          cd frontend && ./node_modules/.bin/playwright install --with-deps webkit
       - name: Test shard
         working-directory: frontend
         run: |
