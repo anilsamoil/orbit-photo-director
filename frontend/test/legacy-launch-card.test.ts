@@ -154,7 +154,7 @@ async function padPoint(page: Page) {
   }, meta.pad);
 }
 
-describe.skipIf(!webkitReady)('legacy launch card', () => {
+describe.skipIf(!webkitReady)('legacy launch card WebKit', () => {
   it('opens from a trusted tap when controls are shown in landscape', async () => {
     const context = await browser.newContext({
       viewport: { width: 874, height: 402 },
@@ -223,23 +223,43 @@ async function pinOverLaunch(page: Page): Promise<boolean> {
   }, undefined, { timeout: 8_000 }).then(() => true, () => false);
 }
 
-async function dropPinOverLaunch(page: Page): Promise<number> {
+async function rightClickCanvas(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const map = (window as unknown as TestWindow).__opdMap;
+    return !!map?.isStyleLoaded() && !map.isMoving();
+  });
   const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
     const box = canvas.getBoundingClientRect();
+    const clear = (x: number, y: number) => {
+      for (const dx of [-12, 0, 12]) {
+        for (const dy of [-12, 0, 12]) {
+          if (document.elementFromPoint(x + dx, y + dy) !== canvas) return false;
+        }
+      }
+      return true;
+    };
+    let fallback: { x: number; y: number } | null = null;
     for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
       for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
         const x = box.x + box.width * fx;
         const y = box.y + box.height * fy;
-        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+        if (document.elementFromPoint(x, y) !== canvas) continue;
+        if (!fallback) fallback = { x, y };
+        if (clear(x, y)) return { x, y };
       }
     }
-    return null;
+    return fallback;
   });
-  expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
-    if (await pinOverLaunch(page)) return attempt;
-  }
+  expect(seed, 'a canvas point for the pin').not.toBeNull();
+  await page.evaluate(() => {
+    (window as unknown as TestWindow).__opdMap.dragRotate.disable();
+  });
+  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+}
+
+async function dropPinOverLaunch(page: Page): Promise<void> {
+  await rightClickCanvas(page);
+  if (await pinOverLaunch(page)) return;
   const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
     const popups = [...(slot?.querySelectorAll(':scope > .maplibregl-popup') ?? [])].map((popup) => popup.querySelector('.launch-ascent-card, .dropped-pin-popup')?.className ?? 'empty');
@@ -294,24 +314,9 @@ function phoneContext(engine: (typeof pinEngines)[number], width: number, height
 }
 
 async function dropPin(page: Page) {
-  const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
-    const box = canvas.getBoundingClientRect();
-    for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-      for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-        const x = box.x + box.width * fx;
-        const y = box.y + box.height * fy;
-        if (document.elementFromPoint(x, y) === canvas) return { x, y };
-      }
-    }
-    return null;
-  });
-  expect(seed, 'a canvas point for the pin').not.toBeNull();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
-    const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 4_000 }).then(() => true, () => false);
-    if (opened) return;
-  }
-  throw new Error('pin did not open');
+  await rightClickCanvas(page);
+  const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 8_000 }).then(() => true, () => false);
+  if (!opened) throw new Error('pin did not open');
 }
 
 async function sheetProbe(page: Page): Promise<SheetProbe> {
@@ -472,7 +477,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
       await page.touchscreen.tap(pad.x, pad.y);
       await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
       const open = await briefState(page);
-      const attempts = await dropPinOverLaunch(page);
+      await dropPinOverLaunch(page);
       const buried = await briefState(page);
       const buriedOverlap = overlapArea(buried.brief, buried.sheet);
       await page.locator('#map-inspector > .maplibregl-popup:last-child .maplibregl-popup-close-button').click();
@@ -483,9 +488,8 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
       });
       const restored = await briefState(page);
       const restoredOverlap = overlapArea(restored.brief, restored.sheet);
-      const evidence = { engine: engine.name, width, height, attempts, open, buried, buriedOverlap, restored, restoredOverlap };
+      const evidence = { engine: engine.name, width, height, open, buried, buriedOverlap, restored, restoredOverlap };
       console.log(`BRIEF_HOLD ${JSON.stringify(evidence)}`);
-      expect(attempts, JSON.stringify(evidence)).toBe(1);
       expect(open.hidden, JSON.stringify(evidence)).toBe(false);
       expect(buried.hidden, JSON.stringify(evidence)).toBe(true);
       expect(buried.display, JSON.stringify(evidence)).toBe('none');
@@ -495,6 +499,62 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
       expect(restored.brief, JSON.stringify(evidence)).not.toBeNull();
       expect(restoredOverlap, JSON.stringify(evidence)).toBe(0);
       expect(restored.hit, JSON.stringify(evidence)).toBe('map-launch-coverage');
+    } finally {
+      await context.close();
+    }
+  }, 90_000);
+
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('keeps the coverage brief hidden when the queue re-renders over a buried card at $width×$height', async ({ width, height }) => {
+    const context = await phoneContext(engine, width, height);
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      await prepare(page);
+      const pad = await padPoint(page);
+      await page.touchscreen.tap(pad.x, pad.y);
+      await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+      await dropPinOverLaunch(page);
+      const buried = await briefState(page);
+      const trace = await page.evaluate(async () => {
+        const brief = document.getElementById('map-launch-coverage');
+        const button = document.querySelector<HTMLButtonElement>('#sort-time-queue');
+        const slot = document.getElementById('map-inspector');
+        const probe = document.createElement('span');
+        probe.id = 'brief-rerender-probe';
+        brief?.append(probe);
+        const samples: boolean[] = [];
+        const observer = new MutationObserver(() => {
+          if (brief) samples.push(brief.hidden);
+        });
+        if (brief) observer.observe(brief, { attributes: true, attributeFilter: ['hidden'] });
+        if (brief) samples.push(brief.hidden);
+        button?.click();
+        if (brief) samples.push(brief.hidden);
+        await new Promise((resolve) => { setTimeout(resolve, 50); });
+        if (brief) samples.push(brief.hidden);
+        observer.disconnect();
+        const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
+        return {
+          samples,
+          rebuilt: brief?.querySelector('#brief-rerender-probe') === null,
+          launchesOn: document.getElementById('filter-launches-map')?.getAttribute('aria-pressed') === 'true',
+          buried: !!slot?.querySelector('.launch-ascent-card') && !last?.querySelector('.launch-ascent-card'),
+        };
+      });
+      const after = await briefState(page);
+      const evidence = { engine: engine.name, width, height, buried, trace, after };
+      console.log(`BRIEF_RERENDER ${JSON.stringify(evidence)}`);
+      expect(buried.hidden, JSON.stringify(evidence)).toBe(true);
+      expect(trace.rebuilt, JSON.stringify(evidence)).toBe(true);
+      expect(trace.launchesOn, JSON.stringify(evidence)).toBe(true);
+      expect(trace.buried, JSON.stringify(evidence)).toBe(true);
+      expect(trace.samples.length, JSON.stringify(evidence)).toBeGreaterThan(0);
+      expect(trace.samples.every((hidden) => hidden), JSON.stringify(evidence)).toBe(true);
+      expect(after.hidden, JSON.stringify(evidence)).toBe(true);
+      expect(after.display, JSON.stringify(evidence)).toBe('none');
     } finally {
       await context.close();
     }

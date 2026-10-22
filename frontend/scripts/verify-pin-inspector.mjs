@@ -4,6 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium, devices, webkit } from 'playwright';
+import { openPinnedBrowsers } from './pin-inspector-sessions.mjs';
+import { launchTracked } from '../test/close-browser.mjs';
 import { installFrozenDate } from '../test/frozen-date.mjs';
 
 const { values } = parseArgs({
@@ -21,8 +23,15 @@ const fixtureDir = resolve(values.fixtures);
 const outputDir = resolve(values.output);
 const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
 mkdirSync(outputDir, { recursive: true });
-const browser = await webkit.launch();
-const desktopBrowser = await chromium.launch(values.chrome ? { executablePath: values.chrome } : { channel: 'chrome' });
+await openPinnedBrowsers(
+  () => launchTracked(webkit),
+  () => launchTracked(chromium, values.chrome ? { executablePath: values.chrome } : { channel: 'chrome' }),
+  runPinnedInspection,
+);
+
+async function runPinnedInspection(webKitSession, desktopSession) {
+const browser = webKitSession.browser;
+const desktopBrowser = desktopSession.browser;
 const results = [];
 const fixtureSaves = new WeakMap();
 const verifierSha256 = createHash('sha256').update(readFileSync(new URL(import.meta.url))).digest('hex');
@@ -794,8 +803,7 @@ try {
   }
 } finally {
   writeFileSync(resolve(outputDir, values.baseline ? 'baseline-report.json' : 'report.json'), JSON.stringify(results, null, 2));
-  await browser.close();
-  await desktopBrowser.close();
 }
 const failed = results.filter((row) => row.failures?.length);
 assert.equal(failed.length, 0, `${failed.length} scenarios failed. See ${resolve(outputDir, values.baseline ? 'baseline-report.json' : 'report.json')}`);
+}

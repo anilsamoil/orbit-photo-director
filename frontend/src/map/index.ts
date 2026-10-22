@@ -25,6 +25,7 @@ import {
 } from './features/basemap';
 import {
   applyBearing,
+  applyInitialBearing,
   bindBearingToggle,
   bindFollowMarker,
   bindFollowToggle,
@@ -447,7 +448,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   refreshBasemap();
   refreshTerminator(core);
   refreshNightLights(core);
-  if (isFirstInit) applyBearing(true);
+  if (isFirstInit) applyInitialBearing();
 }
 
 export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
