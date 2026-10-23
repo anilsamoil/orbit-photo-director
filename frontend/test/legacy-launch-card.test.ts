@@ -232,7 +232,7 @@ async function pinOverLaunch(page: Page): Promise<boolean> {
   }, undefined, { timeout: 8_000 }).then(() => true, () => false);
 }
 
-async function rightClickCanvas(page: Page): Promise<void> {
+async function canvasSeed(page: Page): Promise<{ x: number; y: number }> {
   await page.waitForFunction(() => {
     const map = (window as unknown as TestWindow).__opdMap;
     return !!map?.isStyleLoaded() && !map.isMoving();
@@ -260,25 +260,46 @@ async function rightClickCanvas(page: Page): Promise<void> {
     return fallback;
   });
   expect(seed, 'a canvas point for the pin').not.toBeNull();
-  // MapLibre drops a contextmenu that arrives before mousedown, and drops one
-  // while a touch is active. A Playwright right click and a later evaluate are
-  // separate turns, so on a busy WebKit thread the contextmenu lands first and
-  // the pin never opens. End any touch, then press, contextmenu, and release
-  // in one turn on the element MapLibre listens to.
-  await page.evaluate(({ x, y }) => {
-    const map = (window as unknown as TestWindow).__opdMap;
-    map.dragRotate.disable();
-    const container = map.getCanvasContainer();
-    container.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
-    const at = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 };
-    container.dispatchEvent(new MouseEvent('mousedown', at));
-    container.dispatchEvent(new MouseEvent('contextmenu', at));
-    container.dispatchEvent(new MouseEvent('mouseup', { ...at, buttons: 0 }));
-  }, seed!);
+  return seed!;
+}
+
+function fingerDown(seed: { x: number; y: number }): void {
+  const canvas = (window as unknown as TestWindow).__opdMap.getCanvas();
+  const touch = { identifier: 1, target: canvas, clientX: seed.x, clientY: seed.y };
+  const start = new Event('touchstart', { bubbles: true, cancelable: true });
+  Object.defineProperty(start, 'touches', { value: [touch] });
+  Object.defineProperty(start, 'targetTouches', { value: [touch] });
+  Object.defineProperty(start, 'changedTouches', { value: [touch] });
+  canvas.dispatchEvent(start);
+}
+
+function fingerUp(): void {
+  const canvas = (window as unknown as TestWindow).__opdMap.getCanvas();
+  const end = new Event('touchend', { bubbles: true, cancelable: true });
+  Object.defineProperty(end, 'touches', { value: [] });
+  Object.defineProperty(end, 'targetTouches', { value: [] });
+  Object.defineProperty(end, 'changedTouches', { value: [] });
+  canvas.dispatchEvent(end);
+}
+
+// MapLibre reset()s its context-menu handler while mouse-pan is active, and the
+// reset leaves the next contextmenu ignored until a mousedown it is allowed to
+// see. The pad tap is a left click, so a right click whose contextmenu arrives
+// first never opens the pin. A phone opens it by holding one finger still: the
+// long-press timer fires the menu itself, and a lift before that delay cancels it.
+async function holdPin(page: Page): Promise<void> {
+  const seed = await canvasSeed(page);
+  await page.evaluate(fingerDown, seed);
+  await page.waitForFunction(
+    () => document.querySelector('.dropped-pin-popup') !== null,
+    undefined,
+    { timeout: 8_000 },
+  ).catch(() => undefined);
+  await page.evaluate(fingerUp);
 }
 
 async function dropPinOverLaunch(page: Page): Promise<void> {
-  await rightClickCanvas(page);
+  await holdPin(page);
   if (await pinOverLaunch(page)) return;
   const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
@@ -338,7 +359,7 @@ function phoneContext(engine: (typeof pinEngines)[number], width: number, height
 }
 
 async function dropPin(page: Page) {
-  await rightClickCanvas(page);
+  await holdPin(page);
   const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 8_000 }).then(() => true, () => false);
   if (!opened) throw new Error('pin did not open');
 }
