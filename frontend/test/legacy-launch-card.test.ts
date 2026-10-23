@@ -253,7 +253,18 @@ async function rightClickCanvas(page: Page): Promise<void> {
   await page.evaluate(() => {
     (window as unknown as TestWindow).__opdMap.dragRotate.disable();
   });
-  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+  // MapLibre drops a contextmenu that arrives before mousedown, and drops one
+  // while a touch is active. WebKit on these hasTouch phones does both, so a
+  // bare right click never opens the pin. Press, end the touch, deliver
+  // contextmenu while the button is down, then release so mouseup fires it.
+  await page.mouse.move(seed!.x, seed!.y);
+  await page.mouse.down({ button: 'right' });
+  await page.evaluate(({ x, y }) => {
+    const canvas = document.querySelector('.maplibregl-canvas');
+    canvas?.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
+    canvas?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 }));
+  }, seed!);
+  await page.mouse.up({ button: 'right' });
 }
 
 async function dropPinOverLaunch(page: Page): Promise<void> {
