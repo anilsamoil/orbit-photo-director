@@ -55,7 +55,7 @@ jobs:
     container:
       image: mcr.microsoft.com/playwright:v1.55.0-noble@sha256:b27e719ecbfef153e13fd24e8341736733bf2658b229677eb21ff57ff5d7fb29
       options: --init
-    timeout-minutes: 70
+    timeout-minutes: 75
     name: Frontend shard ${{ matrix.shard }}
     defaults:
       run:

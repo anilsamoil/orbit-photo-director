@@ -4,12 +4,12 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromiumExecutablePath } from './chromium-executable';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/joint-panels.json';
 
 const webkitReady = existsSync(webkit.executablePath());
-const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
-const chromeReady = chromePath !== undefined && existsSync(chromePath);
+const chromePath = chromiumExecutablePath();
 
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45123';
@@ -55,7 +55,6 @@ function legacyBodies(): Record<string, string> {
 }
 
 beforeAll(async () => {
-  if (!webkitReady && !chromeReady) return;
   const output = await build({
     configFile: false,
     root,
@@ -68,7 +67,7 @@ beforeAll(async () => {
   assets = new Map(bundle.output.map((item) => [`/${item.fileName}`, item.type === 'chunk' ? item.code : item.source]));
   script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
   if (webkitReady) browser = await webkit.launch({ headless: true, executablePath: webkit.executablePath() });
-  if (chromeReady) chromeBrowser = await chromium.launch({ headless: true, executablePath: chromePath });
+  chromeBrowser = await chromium.launch({ headless: true, executablePath: chromePath });
 }, 90_000);
 
 afterAll(async () => {
@@ -209,7 +208,7 @@ describe.skipIf(!webkitReady)('legacy launch card WebKit', () => {
 
 const pinEngines = [
   { name: 'WebKit', ready: webkitReady, browser: () => browser },
-  { name: 'Chrome', ready: chromeReady, browser: () => chromeBrowser },
+  { name: 'Chrome', ready: true, browser: () => chromeBrowser },
 ];
 
 async function pinOverLaunch(page: Page): Promise<boolean> {
