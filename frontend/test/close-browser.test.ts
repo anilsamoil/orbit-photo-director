@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { chromium, webkit } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { closeBrowser, launchTracked } from './close-browser.mjs';
+import { CHROME_CANDIDATES, chromiumExecutablePath } from './chromium-executable';
 
 function alive(pid: number | undefined): boolean {
   if (!pid) return false;
@@ -415,15 +416,6 @@ describe('closeBrowser', () => {
   }, 12_000);
 });
 
-export const CHROME_CANDIDATES = [
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/google-chrome',
-  '/opt/homebrew/bin/google-chrome',
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-];
-
-const chromePath = CHROME_CANDIDATES.find((path) => existsSync(path));
-
 it('keeps a macOS Chrome path in the launch candidates', () => {
   expect(CHROME_CANDIDATES).toContain('/opt/homebrew/bin/google-chrome');
   expect(CHROME_CANDIDATES).toContain('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
@@ -463,20 +455,12 @@ async function stoppedEngine(name: string, type: typeof chromium, executablePath
 }
 
 describe('launched browsers', () => {
-  it('closes a running chrome process when it exits', async (ctx) => {
-    if (!chromePath) {
-      ctx.skip();
-      return;
-    }
-    await runningEngine('chrome', chromium, chromePath);
+  it('closes a running chrome process when it exits', async () => {
+    await runningEngine('chrome', chromium, chromiumExecutablePath());
   }, 30_000);
 
-  it('kills a stopped chrome process within the hook budget', async (ctx) => {
-    if (!chromePath) {
-      ctx.skip();
-      return;
-    }
-    await stoppedEngine('chrome', chromium, chromePath);
+  it('kills a stopped chrome process within the hook budget', async () => {
+    await stoppedEngine('chrome', chromium, chromiumExecutablePath());
   }, 30_000);
 });
 

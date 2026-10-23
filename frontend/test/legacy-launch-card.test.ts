@@ -4,12 +4,12 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromiumExecutablePath } from './chromium-executable';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/joint-panels.json';
 
 const webkitReady = existsSync(webkit.executablePath());
-const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
-const chromeReady = chromePath !== undefined && existsSync(chromePath);
+const chromePath = chromiumExecutablePath();
 
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45123';
@@ -55,7 +55,6 @@ function legacyBodies(): Record<string, string> {
 }
 
 beforeAll(async () => {
-  if (!webkitReady && !chromeReady) return;
   const output = await build({
     configFile: false,
     root,
@@ -68,7 +67,7 @@ beforeAll(async () => {
   assets = new Map(bundle.output.map((item) => [`/${item.fileName}`, item.type === 'chunk' ? item.code : item.source]));
   script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
   if (webkitReady) browser = await webkit.launch({ headless: true, executablePath: webkit.executablePath() });
-  if (chromeReady) chromeBrowser = await chromium.launch({ headless: true, executablePath: chromePath });
+  chromeBrowser = await chromium.launch({ headless: true, executablePath: chromePath });
 }, 90_000);
 
 afterAll(async () => {
@@ -209,7 +208,7 @@ describe.skipIf(!webkitReady)('legacy launch card WebKit', () => {
 
 const pinEngines = [
   { name: 'WebKit', ready: webkitReady, browser: () => browser },
-  { name: 'Chrome', ready: chromeReady, browser: () => chromeBrowser },
+  { name: 'Chrome', ready: true, browser: () => chromeBrowser },
 ];
 
 async function pinOverLaunch(page: Page): Promise<boolean> {
@@ -251,10 +250,21 @@ async function rightClickCanvas(page: Page): Promise<void> {
     return fallback;
   });
   expect(seed, 'a canvas point for the pin').not.toBeNull();
-  await page.evaluate(() => {
-    (window as unknown as TestWindow).__opdMap.dragRotate.disable();
-  });
-  await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
+  // MapLibre drops a contextmenu that arrives before mousedown, and drops one
+  // while a touch is active. A Playwright right click and a later evaluate are
+  // separate turns, so on a busy WebKit thread the contextmenu lands first and
+  // the pin never opens. End any touch, then press, contextmenu, and release
+  // in one turn on the element MapLibre listens to.
+  await page.evaluate(({ x, y }) => {
+    const map = (window as unknown as TestWindow).__opdMap;
+    map.dragRotate.disable();
+    const container = map.getCanvasContainer();
+    container.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
+    const at = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 };
+    container.dispatchEvent(new MouseEvent('mousedown', at));
+    container.dispatchEvent(new MouseEvent('contextmenu', at));
+    container.dispatchEvent(new MouseEvent('mouseup', { ...at, buttons: 0 }));
+  }, seed!);
 }
 
 async function dropPinOverLaunch(page: Page): Promise<void> {

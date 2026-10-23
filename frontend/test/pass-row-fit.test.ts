@@ -8,12 +8,8 @@ import { buildPassList } from '../src/map/overlays/pass-list';
 import { tleEpochMs } from '../src/iss-sgp4';
 import { findUpcomingPasses } from '../src/pin-drop';
 import type { Track } from '../src/types';
+import { chromiumExecutablePath } from './chromium-executable';
 import fixture from './fixtures/iss-sgp4-fixture.json';
-
-const chromePath = [
-  '/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-].find((path) => existsSync(path));
 const stylesheet = readFileSync(resolve(__dirname, '../src/style.css'), 'utf8')
   .replace(/url\('\/fonts\/([^']+)'\)/g, (_, filename: string) =>
     `url('data:font/woff2;base64,${readFileSync(resolve(__dirname, '../public/fonts', filename)).toString('base64')}')`);
@@ -187,10 +183,10 @@ function expectReadable(measured: RenderedMeasure, label: string): void {
 }
 
 for (const engine of [
-  { name: 'Chromium', browserType: chromium, executablePath: chromePath },
-  { name: 'WebKit', browserType: webkit, executablePath: webkit.executablePath() },
+  { name: 'Chromium', browserType: chromium, executablePath: chromiumExecutablePath(), optional: false },
+  { name: 'WebKit', browserType: webkit, executablePath: webkit.executablePath(), optional: true },
 ]) {
-  describe.skipIf(!engine.executablePath || !existsSync(engine.executablePath))(`${engine.name} rendered pin pass row`, () => {
+  describe.skipIf(engine.optional && !existsSync(engine.executablePath))(`${engine.name} rendered pin pass row`, () => {
     let browser: Browser | undefined;
     let placementScript = '';
 
