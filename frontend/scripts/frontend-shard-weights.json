@@ -101,7 +101,7 @@
   "test/map-chrome.test.ts": 0.033,
   "test/map-clock.test.ts": 0.013,
   "test/map-core.test.ts": 0.013,
-  "test/map-corner-lift.test.ts": 227.699,
+  "test/map-corner-lift.test.ts": 251.477,
   "test/map-distance-filter.test.ts": 0.004,
   "test/map-follow.test.ts": 0.013,
   "test/map-gesture-hold.test.ts": 265.128,
