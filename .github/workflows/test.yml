@@ -49,7 +49,12 @@ jobs:
     # Playwright 1.55.0 has no WebKit build for Ubuntu 26.04. The image already
     # contains that release's browsers and system libraries.
     runs-on: ubuntu-24.04
-    container: mcr.microsoft.com/playwright:v1.55.0-noble@sha256:b27e719ecbfef153e13fd24e8341736733bf2658b229677eb21ff57ff5d7fb29
+    # Actions starts this container with --entrypoint tail -f /dev/null. tail does not
+    # reap orphans, so a killed process-group member stays a zombie and kill(pid, 0)
+    # still succeeds. --init makes docker-init PID 1, which reaps them.
+    container:
+      image: mcr.microsoft.com/playwright:v1.55.0-noble@sha256:b27e719ecbfef153e13fd24e8341736733bf2658b229677eb21ff57ff5d7fb29
+      options: --init
     timeout-minutes: 70
     name: Frontend shard ${{ matrix.shard }}
     defaults:
