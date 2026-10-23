@@ -2,14 +2,34 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const WEBKIT_PASSED_FLOOR = 235;
+export const WEBKIT_PASSED_FLOOR = 237;
+
+/** Vitest's fullName joins an empty file suite in front, so report names are trimmed before comparison. */
+export const CORNER_LIFT_WEBKIT_CASES = [
+  'map corner lift WebKit keeps Hide in the same place across five show/hide cycles at 402x874',
+  'map corner lift WebKit lifts Hide for the wrapped banner before the next read on return to 402x874',
+  'map corner lift WebKit keeps Hide still under a trusted tap that returns to 402x874 before any resize event',
+  'map corner lift WebKit updates the corner lift when a late footer wraps and a trusted tap leaves Hide still',
+  'map corner lift WebKit keeps Hide still when footer height changes and the trusted tap does not wait for a frame',
+  'map corner lift WebKit keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800',
+  'map corner lift WebKit clears the corner lift in the same frame when the footer is removed',
+  'map corner lift WebKit follows a replacement footer and ignores the detached one',
+  'map corner lift WebKit schedules one sync when the detached footer is edited in the same task',
+  'map corner lift WebKit does not publish the sync counter on a production page',
+  'map corner lift WebKit schedules one sync for a footer mutation batch',
+  'map corner lift WebKit drops the corner-lift observers on pagehide so a mutation writes nothing',
+  'map corner lift WebKit lifts the corners again after a persisted pageshow',
+  'map corner lift WebKit schedules one sync when footer style and text change in the same turn',
+  'map corner lift WebKit schedules no sync for a text change on a footer that is not the watched one',
+  'map corner lift WebKit keeps T+90 inside the 390x520 viewport when the time strip is visible',
+] as const;
 
 export const BROWSER_FILE_MINIMUMS: Readonly<Record<string, number>> = {
   'test/map-time-skip-safe-area.test.ts': 60,
   'test/pass-row-fit.test.ts': 54,
   'test/map-review-targets.test.ts': 28,
   'test/safe-area-layout.test.ts': 21,
-  'test/map-corner-lift.test.ts': 14,
+  'test/map-corner-lift.test.ts': CORNER_LIFT_WEBKIT_CASES.length,
   'test/map-gesture-hold.test.ts': 15,
   'test/legacy-launch-card.test.ts': 10,
   'test/map-chrome-startup.test.ts': 6,
@@ -43,16 +63,30 @@ const frontendRoot = import.meta.url.startsWith('file:')
   ? resolve(fileURLToPath(import.meta.url), '..', '..')
   : process.cwd();
 
+const CORNER_LIFT_FILE = 'test/map-corner-lift.test.ts';
+
+export function cornerLiftWebKitNameReason(names: readonly string[]): string | null {
+  const expected = new Set<string>(CORNER_LIFT_WEBKIT_CASES);
+  const actual = new Set(names.map((name) => name.trim()));
+  if (actual.size === expected.size && [...expected].every((name) => actual.has(name))) return null;
+  const missing = [...expected].filter((name) => !actual.has(name)).sort();
+  const extra = [...actual].filter((name) => !expected.has(name)).sort();
+  return `${CORNER_LIFT_FILE} webkit names missing ${missing.join(', ') || 'none'} extra ${extra.join(', ') || 'none'}`;
+}
+
 export function evaluateWebKitReports(reports: readonly unknown[]): WebKitFloorReport {
   const passedByFile = new Map<string, number>();
   for (const file of Object.keys(BROWSER_FILE_MINIMUMS)) passedByFile.set(file, 0);
   const seen = new Set<string>();
   const duplicates: string[] = [];
+  const cornerNames: string[] = [];
+  let cornerSeen = false;
   let passed = 0;
   let skipped = 0;
   let failed = 0;
   for (const report of reports) {
     for (const testFile of vitestReport(report).testResults) {
+      if (browserFile(testFile.name) === CORNER_LIFT_FILE) cornerSeen = true;
       for (const assertion of testFile.assertionResults) {
         const id = webKitCaseId(testFile.name, assertion);
         if (id === null) continue;
@@ -65,6 +99,7 @@ export function evaluateWebKitReports(reports: readonly unknown[]): WebKitFloorR
         if (assertion.status === 'passed') {
           passed += 1;
           passedByFile.set(file, (passedByFile.get(file) ?? 0) + 1);
+          if (file === CORNER_LIFT_FILE) cornerNames.push(assertion.fullName);
         } else if (assertion.status === 'failed') {
           failed += 1;
         } else {
@@ -86,6 +121,10 @@ export function evaluateWebKitReports(reports: readonly unknown[]): WebKitFloorR
     if (row.passed < row.minimum) reasons.push(`${row.file} passed ${row.passed} below minimum ${row.minimum}`);
   }
   reasons.push(...duplicates);
+  if (cornerSeen) {
+    const names = cornerLiftWebKitNameReason(cornerNames);
+    if (names) reasons.push(names);
+  }
   return { passed, skipped, failed, perFile, reasons };
 }
 

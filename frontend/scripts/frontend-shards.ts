@@ -7,7 +7,7 @@ const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const includeRoots = ['test', join('src', 'map')];
 
 export const SHARD_COUNT = 2;
-export const UNSHARDED_WEBKIT_CASES = 235;
+export const UNSHARDED_WEBKIT_CASES = 237;
 const DEFAULT_WEIGHT_SECONDS = 60;
 
 export type ShardPlan = {
