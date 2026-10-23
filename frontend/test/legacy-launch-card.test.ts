@@ -10,7 +10,16 @@ import fixture from './fixtures/joint-panels.json';
 
 const webkitReady = existsSync(webkit.executablePath());
 const chromePath = chromiumExecutablePath();
-const tapReps = Number(process.env.LEGACY_TAP_REPS ?? 3);
+
+function positiveTapReps(raw: string | undefined): number {
+  const text = raw ?? '3';
+  if (!/^[1-9][0-9]*$/.test(text)) {
+    throw new Error(`LEGACY_TAP_REPS must be a positive integer, received ${text}`);
+  }
+  return Number(text);
+}
+
+const tapReps = positiveTapReps(process.env.LEGACY_TAP_REPS);
 
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45123';
@@ -162,6 +171,44 @@ async function padPoint(page: Page) {
     };
   }, meta.pad);
 }
+
+describe('legacy launch card Chrome', () => {
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('gives an exposed launch card a usable scrollport at $width×$height', async ({ width, height }) => {
+    const context = await chromeBrowser.newContext({
+      viewport: { width, height },
+      screen: { width, height },
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 3,
+      serviceWorkers: 'block',
+    });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      await prepare(page);
+      const point = await padPoint(page);
+      await page.touchscreen.tap(point.x, point.y);
+      await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+      const scroll = await page.locator('.maplibregl-popup-content').evaluate((element) => {
+        const slot = document.getElementById('map-inspector');
+        const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
+        return {
+          clientWidth: element.clientWidth,
+          clientHeight: element.clientHeight,
+          exposed: !!last?.querySelector('.launch-ascent-card') && document.querySelector('.dropped-pin-popup') === null,
+        };
+      });
+      expect(scroll.exposed, JSON.stringify(scroll)).toBe(true);
+      expect(scroll.clientWidth, JSON.stringify(scroll)).toBeGreaterThanOrEqual(200);
+      expect(scroll.clientHeight, JSON.stringify(scroll)).toBeGreaterThanOrEqual(160);
+    } finally {
+      await context.close();
+    }
+  }, 45_000);
+});
 
 describe.skipIf(!webkitReady)('legacy launch card WebKit', () => {
   it('opens from a trusted tap when controls are shown in landscape', async () => {
@@ -576,11 +623,26 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
         });
         if (brief) observer.observe(brief, { attributes: true, attributeFilter: ['hidden'] });
         if (brief) samples.push(brief.hidden);
+        const map = (window as unknown as TestWindow).__opdMap;
+        // renderQueue rebuilds the brief and schedules resizeMap on the next frame.
+        // The inspector remeasures two frames after that resize. The observer stays
+        // connected until that remeasure has returned.
+        const settled = new Promise<void>((resolve) => {
+          map.once('resize', () => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  if (brief) samples.push(brief.hidden);
+                  observer.disconnect();
+                  resolve();
+                });
+              });
+            });
+          });
+        });
         button?.click();
         if (brief) samples.push(brief.hidden);
-        await new Promise((resolve) => { setTimeout(resolve, 50); });
-        if (brief) samples.push(brief.hidden);
-        observer.disconnect();
+        await settled;
         const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
         return {
           samples,
