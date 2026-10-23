@@ -250,21 +250,21 @@ async function rightClickCanvas(page: Page): Promise<void> {
     return fallback;
   });
   expect(seed, 'a canvas point for the pin').not.toBeNull();
-  await page.evaluate(() => {
-    (window as unknown as TestWindow).__opdMap.dragRotate.disable();
-  });
   // MapLibre drops a contextmenu that arrives before mousedown, and drops one
-  // while a touch is active. WebKit on these hasTouch phones does both, so a
-  // bare right click never opens the pin. Press, end the touch, deliver
-  // contextmenu while the button is down, then release so mouseup fires it.
-  await page.mouse.move(seed!.x, seed!.y);
-  await page.mouse.down({ button: 'right' });
+  // while a touch is active. A Playwright right click and a later evaluate are
+  // separate turns, so on a busy WebKit thread the contextmenu lands first and
+  // the pin never opens. End any touch, then press, contextmenu, and release
+  // in one turn on the element MapLibre listens to.
   await page.evaluate(({ x, y }) => {
-    const canvas = document.querySelector('.maplibregl-canvas');
-    canvas?.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
-    canvas?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 }));
+    const map = (window as unknown as TestWindow).__opdMap;
+    map.dragRotate.disable();
+    const container = map.getCanvasContainer();
+    container.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
+    const at = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 };
+    container.dispatchEvent(new MouseEvent('mousedown', at));
+    container.dispatchEvent(new MouseEvent('contextmenu', at));
+    container.dispatchEvent(new MouseEvent('mouseup', { ...at, buttons: 0 }));
   }, seed!);
-  await page.mouse.up({ button: 'right' });
 }
 
 async function dropPinOverLaunch(page: Page): Promise<void> {
