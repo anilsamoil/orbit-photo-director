@@ -331,6 +331,64 @@ for (const engine of ['Chrome', 'WebKit']) {
     }
   });
 
+  test(`a thrown final settle read aborts without waiting on ${engine}`, { timeout: 10_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await stallFrames(page, false);
+      const real = playwrightSend(page);
+      const boom = new Error('settle read failed');
+      boom.settleRead = true;
+      const send = (method, params) => {
+        if (method === 'Runtime.evaluate' && params?.expression === 'window.__opdViewportSettled') throw boom;
+        return real(method, params);
+      };
+      const started = Date.now();
+      await assert.rejects(() => whenViewportLaidOut(send, 390, 520), (error) => {
+        assert.equal(error, boom);
+        return true;
+      });
+      const state = await Promise.race([
+        page.evaluate(() => window.__opdViewportSettled.then((value) => ({ state: 'settled', value }))),
+        new Promise((resolveState) => setTimeout(() => resolveState({ state: 'pending' }), 1_500)),
+      ]);
+      const trace = await page.evaluate(() => ({ timers: window.__timers.size, listeners: window.__resizeListeners }));
+      assert.equal(state.state, 'settled', JSON.stringify(state));
+      assert.equal(state.value.aborted, true);
+      assert.ok(Date.now() - started < 3_000, String(Date.now() - started));
+      assert.equal(trace.listeners, 0);
+      assert.equal(trace.timers, 0);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a delayed command that leaves a different live size rejects on ${engine}`, { timeout: 20_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await page.setViewportSize({ width: 390, height: 520 });
+      const real = playwrightSend(page);
+      const send = async (method, params) => {
+        if (method !== 'Emulation.setDeviceMetricsOverride') return real(method, params);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        await page.setViewportSize({ width: 430, height: 700 });
+        return {};
+      };
+      const result = await raceCall(whenViewportLaidOut(send, 390, 520), 15_000);
+      const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+      assert.equal(result.status, 'rejected', JSON.stringify(result));
+      assert.match(result.message, /390x520/);
+      assert.match(result.message, /"timedOut":true/);
+      assert.match(result.message, /"w":430/);
+      assert.match(result.message, /"h":700/);
+      assert.ok(result.elapsed >= 7_000 && result.elapsed < 12_000, String(result.elapsed));
+      assert.deepEqual(size, [430, 700]);
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`a delayed viewport command settles only after it applies on ${engine}`, { timeout: 15_000 }, async () => {
     const browser = await launch(engine);
     const page = await open(browser);
