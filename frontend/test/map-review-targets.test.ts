@@ -198,9 +198,15 @@ async function prepare(engine: typeof engines[number], target: Target) {
         && (window as unknown as { __reviewReadiness: { countdownTicks: number } }).__reviewReadiness.countdownTicks > 0;
     }, launches.pointer.sha256);
     await click(page, '#tab-map');
+    // isStyleLoaded() stays false until every in-view raster tile decodes.
+    // SwiftShader at 834×1210 still had 31 Esri label tiles loading after the
+    // track layer and canvas were up, and that decode ran past 15s on the
+    // push runner. These asserts hit HTML controls, so the mounted track is
+    // the readiness signal.
     await page.waitForFunction(() => {
       const map = (window as unknown as { __opdMap?: import('maplibre-gl').Map }).__opdMap;
-      return map?.isStyleLoaded() && !!map.getSource('iss-track');
+      const canvas = map?.getCanvas();
+      return !!map?.getSource('iss-track') && !!map?.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0;
     });
     await page.evaluate(() => document.fonts.ready);
     await page.waitForFunction(() => document.body.classList.contains('shotlist-bar-visible'));
