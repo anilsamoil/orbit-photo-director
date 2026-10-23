@@ -95,9 +95,9 @@ describe('frontend shards', () => {
 
   it('keeps the WebKit floor at the current per-file sum', () => {
     expect(UNSHARDED_WEBKIT_CASES).toBe(WEBKIT_PASSED_FLOOR);
-    expect(UNSHARDED_WEBKIT_CASES).toBe(233);
-    expect(() => assertWebKitFloor(233)).not.toThrow();
-    expect(() => assertWebKitFloor(232)).toThrow(/below unsharded count 233/);
+    expect(UNSHARDED_WEBKIT_CASES).toBe(237);
+    expect(() => assertWebKitFloor(237)).not.toThrow();
+    expect(() => assertWebKitFloor(236)).toThrow(/below unsharded count 237/);
   });
 
   it('reads max RSS and rejects exit 137 and 143', () => {

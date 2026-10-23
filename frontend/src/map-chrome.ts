@@ -187,6 +187,7 @@ let mute = false;
 let syncing = false;
 let staleSkips = 0;
 let syncQueued = false;
+let chromeLive = false;
 const writtenPx = new Map<string, number>();
 
 function wholePx(value: number): number {
@@ -325,7 +326,7 @@ function syncFooterClearance(pane: HTMLElement): void {
 }
 
 export function syncMapChrome(): void {
-  if (mute) return;
+  if (!chromeLive || mute) return;
   if (syncing) {
     scheduleSync();
     return;
@@ -376,7 +377,7 @@ function ensureInsetProbe(): HTMLElement {
   return probe;
 }
 
-export function bindMapChrome(): void {
+export function bindMapChrome(): () => void {
   applyMapChrome(readMapChromeShown());
   document.getElementById('map-chrome-toggle')?.addEventListener('click', () => {
     const shown = document.body.classList.contains('map-chrome-hidden');
@@ -391,8 +392,7 @@ export function bindMapChrome(): void {
     if (mute) scheduleSync();
     else syncMapChrome();
   });
-  observer.observe(document.documentElement);
-  observer.observe(ensureInsetProbe());
+  const probe = ensureInsetProbe();
   const cornerSelectors = ['#status-banner', '#shotlist-bar', '.map-controls-time', '#satellite-picker-panel'];
   const observed = new Set<Element>();
   const observeCorners = (): void => {
@@ -412,7 +412,6 @@ export function bindMapChrome(): void {
       observed.add(node);
     }
   };
-  observeCorners();
   const traceSyncs = new URLSearchParams(window.location.search).has('e2e');
   const noteScheduledSync = (): void => {
     if (!traceSyncs) return;
@@ -495,41 +494,84 @@ export function bindMapChrome(): void {
     else releaseFooter();
     syncNow();
   });
-  cornerArrivals.observe(document.body, { childList: true, subtree: true });
   const mutations = new MutationObserver(() => {
     // Let slot writes release mute, then settle derived classes before another input.
     syncNow();
     scheduleSync();
   });
-  mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-  const banner = document.getElementById('status-banner');
-  if (banner) watchFooter(banner);
-  const legend = document.getElementById('map-legend-toggle');
-  if (legend) mutations.observe(legend, { attributes: true, attributeFilter: ['aria-expanded'] });
-  const pane = document.getElementById('map-pane');
-  if (pane) mutations.observe(pane, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open'] });
   const map = document.getElementById('map');
+  let controlsWatched = false;
+  let watchMap: MutationObserver | null = null;
   if (map) {
-    let controlsWatched = false;
-    const watchMap = new MutationObserver(() => {
+    watchMap = new MutationObserver(() => {
       scheduleSync();
       if (controlsWatched) return;
       const controls = map.querySelector('.maplibregl-control-container');
       if (!controls) return;
       controlsWatched = true;
-      watchMap.observe(controls, { childList: true, subtree: true });
+      watchMap?.observe(controls, { childList: true, subtree: true });
     });
-    watchMap.observe(map, { childList: true });
-    const controls = map.querySelector('.maplibregl-control-container');
-    if (controls) {
-      controlsWatched = true;
-      watchMap.observe(controls, { childList: true, subtree: true });
-    }
   }
-  window.addEventListener('resize', syncMapChrome);
-  window.addEventListener('orientationchange', syncMapChrome);
-  screen.orientation?.addEventListener('change', syncMapChrome);
-  window.visualViewport?.addEventListener('resize', syncMapChrome);
+  const owned: { disconnect(): void }[] = [observer, footerContent, footerStyle, cornerArrivals, mutations];
+  if (watchMap) owned.push(watchMap);
+  const publish = (count: number): void => {
+    (window as Window & { __opdCornerObservers?: number }).__opdCornerObservers = count;
+  };
+  let connected = false;
+  const connect = (): void => {
+    if (connected) return;
+    connected = true;
+    chromeLive = true;
+    observer.observe(document.documentElement);
+    observer.observe(probe);
+    observeCorners();
+    cornerArrivals.observe(document.body, { childList: true, subtree: true });
+    mutations.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    const banner = document.getElementById('status-banner');
+    if (banner) watchFooter(banner);
+    const legend = document.getElementById('map-legend-toggle');
+    if (legend) mutations.observe(legend, { attributes: true, attributeFilter: ['aria-expanded'] });
+    const pane = document.getElementById('map-pane');
+    if (pane) mutations.observe(pane, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open'] });
+    if (map && watchMap) {
+      controlsWatched = false;
+      watchMap.observe(map, { childList: true });
+      const controls = map.querySelector('.maplibregl-control-container');
+      if (controls) {
+        controlsWatched = true;
+        watchMap.observe(controls, { childList: true, subtree: true });
+      }
+    }
+    window.addEventListener('resize', syncMapChrome);
+    window.addEventListener('orientationchange', syncMapChrome);
+    screen.orientation?.addEventListener('change', syncMapChrome);
+    window.visualViewport?.addEventListener('resize', syncMapChrome);
+    publish(owned.length);
+    syncMapChrome();
+  };
+  const release = (): void => {
+    if (!connected) return;
+    connected = false;
+    chromeLive = false;
+    for (const item of owned) item.disconnect();
+    observed.clear();
+    watchedFooter = null;
+    window.removeEventListener('resize', syncMapChrome);
+    window.removeEventListener('orientationchange', syncMapChrome);
+    screen.orientation?.removeEventListener('change', syncMapChrome);
+    window.visualViewport?.removeEventListener('resize', syncMapChrome);
+    publish(0);
+  };
+  const onShow = (event: PageTransitionEvent): void => {
+    if (event.persisted) connect();
+  };
+  window.addEventListener('pagehide', release);
+  window.addEventListener('pageshow', onShow);
   (window as Window & { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome = syncMapChrome;
-  syncMapChrome();
+  connect();
+  return () => {
+    release();
+    window.removeEventListener('pagehide', release);
+    window.removeEventListener('pageshow', onShow);
+  };
 }

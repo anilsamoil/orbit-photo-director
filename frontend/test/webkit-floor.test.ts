@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { discoverTestFiles } from '../scripts/frontend-shards';
-import { BROWSER_FILE_MINIMUMS, WEBKIT_PASSED_FLOOR, evaluateWebKitReports, loadWebKitReports } from '../scripts/webkit-floor';
+import { BROWSER_FILE_MINIMUMS, CORNER_LIFT_WEBKIT_CASES, WEBKIT_PASSED_FLOOR, evaluateWebKitReports, loadWebKitReports } from '../scripts/webkit-floor';
 
 const root = resolve(__dirname, '..');
 const webKitCases = Object.values(BROWSER_FILE_MINIMUMS).reduce((sum, count) => sum + count, 0);
@@ -29,6 +29,13 @@ const WEBKIT_DESCRIBE: Readonly<Record<string, string>> = {
 
 function cases(count: number, status: string, label: string): { ancestorTitles: string[]; fullName: string; status: string }[] {
   const suite = WEBKIT_DESCRIBE[label] ?? 'WebKit';
+  if (label === 'test/map-corner-lift.test.ts') {
+    return CORNER_LIFT_WEBKIT_CASES.slice(0, count).map((fullName) => ({
+      ancestorTitles: [suite],
+      fullName,
+      status,
+    }));
+  }
   return Array.from({ length: count }, (_, index) => ({
     ancestorTitles: [suite],
     fullName: `${suite} case ${index}`,
@@ -344,18 +351,44 @@ describe('webkit floor', () => {
     };
     const complete = evaluateWebKitReports([reportFor(named, [])]);
     expect(complete.reasons).toEqual([]);
-    expect(complete.passed).toBe(233);
+    expect(complete.passed).toBe(237);
     for (const fullName of named) {
       const skipped = evaluateWebKitReports([reportFor(named, [fullName])]);
       expect(skipped.reasons).toContain('webkit skipped 1');
       expect(skipped.reasons).toContain(`${file} passed 9 below minimum 10`);
       const omitted = evaluateWebKitReports([reportFor(named.filter((name) => name !== fullName), [])]);
-      expect(omitted.passed).toBe(232);
-      expect(omitted.reasons).toContain('webkit passed 232 below floor 233');
+      expect(omitted.passed).toBe(236);
+      expect(omitted.reasons).toContain('webkit passed 236 below floor 237');
       expect(omitted.reasons).toContain(`${file} passed 9 below minimum 10`);
     }
     const source = readFileSync(join(root, 'test/legacy-launch-card.test.ts'), 'utf8');
     expect(source).toContain("describe.skipIf(!webkitReady)('legacy launch card WebKit'");
+  });
+
+  it('requires the corner-lift WebKit case names, not only the count', () => {
+    const file = 'test/map-corner-lift.test.ts';
+    expect(BROWSER_FILE_MINIMUMS[file]).toBe(CORNER_LIFT_WEBKIT_CASES.length);
+    expect(CORNER_LIFT_WEBKIT_CASES).toHaveLength(16);
+    const source = readFileSync(join(root, file), 'utf8');
+    const titles = [...source.matchAll(/^\s*it\('([^']+)'/gm)].map((match) => match[1]);
+    expect(titles).toEqual(CORNER_LIFT_WEBKIT_CASES.map((name) => name.replace(/^map corner lift WebKit /, '')));
+    const report = browserReport(() => 'passed') as {
+      testResults: { name: string; assertionResults: { fullName: string; status: string }[] }[];
+    };
+    expect(evaluateWebKitReports([report]).reasons).toEqual([]);
+    const renamed = {
+      ...report,
+      testResults: report.testResults.map((entry) => {
+        if (!entry.name.endsWith(file)) return entry;
+        const [first, ...rest] = entry.assertionResults;
+        return { ...entry, assertionResults: [{ ...first!, fullName: 'map corner lift WebKit renamed' }, ...rest] };
+      }),
+    };
+    const verdict = evaluateWebKitReports([renamed]);
+    expect(verdict.passed).toBe(WEBKIT_PASSED_FLOOR);
+    expect(verdict.reasons).toEqual([
+      `${file} webkit names missing ${CORNER_LIFT_WEBKIT_CASES[0]} extra map corner lift WebKit renamed`,
+    ]);
   });
 
   it('does not count a Chrome case whose title is WebKit', () => {
