@@ -1416,7 +1416,7 @@ function showIssBootError(host: HTMLElement): void {
   host.append(note, retry, mapButton);
 }
 
-function bindTabs(): void {
+function bindTabs(profileEnabled = true): void {
   const view = document.getElementById('view');
   const tabQueue = document.getElementById('tab-queue');
   const tabUpcoming = document.getElementById('tab-upcoming');
@@ -1484,7 +1484,7 @@ function bindTabs(): void {
       openIssPane();
     });
   }
-  if (tabProfile) {
+  if (tabProfile && profileEnabled) {
     tabProfile.addEventListener('click', () => {
       insetHost?.releaseHorizon();
       insetHost?.releasePlan();
@@ -1496,6 +1496,9 @@ function bindTabs(): void {
       // matches the lazy-load convention.
       loadLookupPane();
     });
+  } else if (tabProfile) {
+    if (tabProfile instanceof HTMLButtonElement) tabProfile.disabled = true;
+    tabProfile.setAttribute('aria-disabled', 'true');
   }
   tabLog.addEventListener('click', () => {
     insetHost?.releaseHorizon();
@@ -1510,31 +1513,33 @@ function bindTabs(): void {
   // Profile tab, render the pane, then open the inline edit form. Setting the
   // edit flag is honored by buildPersonalRow even if it lands before the pane
   // finishes rendering, so the ordering is race-safe.
-  window.addEventListener(EDIT_TARGET_EVENT, (e) => {
-    const detail = (e as CustomEvent<{ targetId?: unknown }>).detail;
-    const targetId = detail && typeof detail.targetId === 'string' ? detail.targetId : null;
-    if (!targetId) return;
-    const profileName = getCurrentProfile()?.name;
-    if (!profileName) return;
-    releaseIssPane();
-    if (tabProfile) setActive('view-profile', tabProfile);
-    void loadProfilePane().then(async () => {
-      const crud = await import('./profile-crud');
-      crud.openEditTargetForm(profileName, targetId);
-    }).catch((err) => {
-      // A flaky lazy import (LOS mid-chunk) must not leave the operator on a
-      // blank Profile pane with no feedback (Codex review). Surface it; they
-      // can tap Edit on the row manually once the chunk loads.
-      console.error('[edit] deep-link failed to open the edit form:', err);
-      const toast = document.getElementById('toast');
-      if (toast) {
-        toast.className = 'toast error show';
-        toast.textContent = 'Could not open the edit form — open Profile › your target › Edit.';
-        toast.hidden = false;
-        window.setTimeout(() => { toast.classList.remove('show'); toast.hidden = true; }, 3500);
-      }
+  if (profileEnabled) {
+    window.addEventListener(EDIT_TARGET_EVENT, (e) => {
+      const detail = (e as CustomEvent<{ targetId?: unknown }>).detail;
+      const targetId = detail && typeof detail.targetId === 'string' ? detail.targetId : null;
+      if (!targetId) return;
+      const profileName = getCurrentProfile()?.name;
+      if (!profileName) return;
+      releaseIssPane();
+      if (tabProfile) setActive('view-profile', tabProfile);
+      void loadProfilePane().then(async () => {
+        const crud = await import('./profile-crud');
+        crud.openEditTargetForm(profileName, targetId);
+      }).catch((err) => {
+        // A flaky lazy import (LOS mid-chunk) must not leave the operator on a
+        // blank Profile pane with no feedback (Codex review). Surface it; they
+        // can tap Edit on the row manually once the chunk loads.
+        console.error('[edit] deep-link failed to open the edit form:', err);
+        const toast = document.getElementById('toast');
+        if (toast) {
+          toast.className = 'toast error show';
+          toast.textContent = 'Could not open the edit form — open Profile › your target › Edit.';
+          toast.hidden = false;
+          window.setTimeout(() => { toast.classList.remove('show'); toast.hidden = true; }, 3500);
+        }
+      });
     });
-  });
+  }
 }
 
 /** Lazy-load the Profile tab. Same pattern as loadMapPane / loadLogPane —
@@ -1772,7 +1777,7 @@ async function init(): Promise<void> {
     if (getAccountProfile()) setBanner({ level: 'red', text });
     else showSessionRecovery(text);
   }
-  bindTabs();
+  bindTabs(!sessionFailed);
   if (sessionFailed) return;
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
   // cross-tab storage event, debounced 150ms). Re-read currentProfile on

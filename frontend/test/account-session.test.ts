@@ -126,6 +126,80 @@ it('rejects redirected login HTML and malformed identities', async () => {
   expect(session.getAccountProfile()).toBeNull();
 });
 
+it('a denied session keeps Queue and does not render or enable Profile', async () => {
+  document.body.innerHTML = [
+    '<button id="tab-queue" class="tab" type="button">Queue</button>',
+    '<button id="tab-upcoming" class="tab" type="button">Upcoming</button>',
+    '<button id="tab-map" class="tab active" type="button">Map</button>',
+    '<button id="tab-profile" class="tab" type="button">Profile</button>',
+    '<button id="tab-log" class="tab" type="button">Log</button>',
+    '<main id="view" class="view-map"><div id="cards"></div><div id="profile-body"></div></main>',
+    '<footer id="status-banner">Loading…</footer>',
+  ].join('');
+  const previousUrl = window.location.href;
+  window.history.replaceState({}, '', '/?u=anil');
+  const profiles = await import('../src/profile');
+  const validated = profiles.validatePersonalTargetInput({
+    profileName: 'anil',
+    name: 'Backyard shed',
+    lat: 29.76,
+    lon: -95.37,
+    priority: 4,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  });
+  if (!validated.ok) throw new Error(validated.error);
+  profiles.saveProfile(profiles.addPersonalTarget(profiles.createDefaultProfile('anil'), validated.target));
+  profiles.saveProfile(profiles.createDefaultProfile('guest'));
+  const stored = {
+    anil: localStorage.getItem('opd-profile-anil'),
+    guest: localStorage.getItem('opd-profile-guest'),
+    names: localStorage.getItem('opd-profile-names'),
+  };
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('', { status: 401 }))));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  try {
+    const { init } = await import('../src/main');
+    await init();
+    (document.getElementById('tab-queue') as HTMLButtonElement).click();
+    expect(document.getElementById('view')?.className).toBe('view-queue');
+    expect(document.querySelector('#cards')?.childElementCount).toBe(0);
+    const profileTab = document.getElementById('tab-profile') as HTMLButtonElement;
+    profileTab.click();
+    if (document.getElementById('view')?.className === 'view-profile') {
+      await vi.waitFor(() => {
+        expect(document.getElementById('profile-delete-btn')).toBeTruthy();
+      });
+    }
+    const deleteButton = document.getElementById('profile-delete-btn');
+    if (deleteButton instanceof HTMLButtonElement) deleteButton.click();
+    expect({
+      disabled: profileTab.disabled,
+      ariaDisabled: profileTab.getAttribute('aria-disabled'),
+      view: document.getElementById('view')?.className,
+      profileActive: profileTab.classList.contains('active'),
+      showsStoredProfile: (document.getElementById('profile-body')?.textContent ?? '').includes('guest'),
+      showsPersonalTarget: (document.getElementById('profile-body')?.textContent ?? '').includes('Backyard shed'),
+      deleteButton: deleteButton !== null,
+      anil: localStorage.getItem('opd-profile-anil'),
+      guest: localStorage.getItem('opd-profile-guest'),
+      names: localStorage.getItem('opd-profile-names'),
+    }).toEqual({
+      disabled: true,
+      ariaDisabled: 'true',
+      view: 'view-queue',
+      profileActive: false,
+      showsStoredProfile: false,
+      showsPersonalTarget: false,
+      deleteButton: false,
+      anil: stored.anil,
+      guest: stored.guest,
+      names: stored.names,
+    });
+  } finally {
+    window.history.replaceState({}, '', previousUrl);
+  }
+});
+
 it('a cold session failure still switches to Queue', async () => {
   document.body.innerHTML = [
     '<button id="tab-queue" class="tab" type="button">Queue</button>',
