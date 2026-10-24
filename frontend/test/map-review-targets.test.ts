@@ -108,8 +108,21 @@ async function geometry(page: Page, selector: string) {
 }
 
 async function click(page: Page, selector: string) {
-  await page.locator(selector).first().scrollIntoViewIfNeeded();
-  await page.waitForTimeout(120);
+  // scrollIntoViewIfNeeded waits until layout is stable. A large map keeps
+  // shifting while tiles decode, and that stability poll is what stacks past
+  // the file timeout on a faulting runner. The hit-test below is the condition
+  // the click actually requires.
+  await page.locator(selector).first().evaluate((element) => {
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+  await page.waitForFunction((target) => {
+    const element = document.querySelector(target);
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return false;
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return hit === element || !!hit && element.contains(hit);
+  }, selector);
   const measured = await geometry(page, selector);
   expect(measured.points[0]!.owns, JSON.stringify({ selector, measured })).toBe(true);
   await page.mouse.click(measured.points[0]!.x, measured.points[0]!.y);
@@ -124,6 +137,10 @@ async function evidence(page: Page, name: string, value: unknown) {
   await page.screenshot({ path: `${path}.png`, scale: 'css' });
 }
 
+const reviewActionTimeoutMs = 15_000;
+// Launch brief, mounted map, shot list, and six native controls. The file cap
+// is one page timeout per stage. A stuck wait still fails at the page timeout.
+const f1ReadinessWaits = 9;
 const engines = [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
@@ -140,7 +157,7 @@ async function prepare(engine: typeof engines[number], target: Target) {
     const deviceScaleFactor = Math.min(width, height) < 500 ? 3 : width < 1280 ? 2 : 1;
     const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: width < 1300, deviceScaleFactor });
     const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
+    page.setDefaultTimeout(reviewActionTimeoutMs);
     const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
     if (cdp) await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
     else await emulateInsets(page, insets);
@@ -207,6 +224,11 @@ async function prepare(engine: typeof engines[number], target: Target) {
       const map = (window as unknown as { __opdMap?: import('maplibre-gl').Map }).__opdMap;
       const canvas = map?.getCanvas();
       return !!map?.getSource('iss-track') && !!map?.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0;
+    });
+    // These cases hit HTML controls. Leave the map mounted and stop the render
+    // loop so tile decode does not keep the main thread busy through the clicks.
+    await page.evaluate(() => {
+      (window as unknown as { __opdMap?: { stop: () => void } }).__opdMap?.stop();
     });
     await page.evaluate(() => document.fonts.ready);
     await page.waitForFunction(() => document.body.classList.contains('shotlist-bar-visible'));
@@ -322,8 +344,8 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
         (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge = edge;
         panel.addEventListener('scroll', (event) => {
           edge.scrolledAt = event.timeStamp;
-          edge.scrollTrusted = event.isTrusted;
-        }, { once: true });
+          if (event.isTrusted) edge.scrollTrusted = true;
+        });
         for (const type of ['pointerdown', 'pointerup', 'click', 'focus']) document.addEventListener(type, (event) => {
           const hit = event.target as Element;
           edge.events.push({ type, trusted: event.isTrusted, owns: hit === element || element.contains(hit), target: hit.id || hit.tagName, elapsed: edge.scrolledAt === null ? null : event.timeStamp - edge.scrolledAt });
@@ -332,12 +354,28 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       }, target.selector);
       await page.locator(target.selector).scrollIntoViewIfNeeded();
       await page.waitForFunction(() => (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge.scrolledAt !== null);
-      // Exercise the visible native scrollbar, not the settled state after its fade.
-      // Locator preparation can be slow; the timing origin is the browser's scroll event.
-      await page.waitForTimeout(100);
+      // Geometry and touchscreen.tap are harness round trips. On a faulting runner
+      // those gaps run past the overlay-scrollbar fade, so a 1000ms clock that
+      // starts at the first scroll measures scheduling. Keep nudging the same
+      // scroll offset until pointerdown: the scrollbar stays in the just-scrolled
+      // state, and the 1000ms window is the gap since that latest scroll.
+      await page.evaluate(() => {
+        const panel = document.querySelector('#satellite-picker-panel') as HTMLElement;
+        const restore = panel.scrollTop;
+        const nudge = () => {
+          const delta = restore > 0 ? -1 : 1;
+          panel.scrollTop = restore + delta;
+          panel.scrollTop = restore;
+        };
+        nudge();
+        (window as unknown as { __pickerNudge?: number }).__pickerNudge = window.setInterval(nudge, 200);
+      });
       const measured = await geometry(page, target.selector);
       const point = measured.points[2]!;
       await page.touchscreen.tap(point.x, point.y);
+      await page.evaluate(() => {
+        window.clearInterval((window as unknown as { __pickerNudge?: number }).__pickerNudge);
+      });
       await page.waitForTimeout(100);
       const after = await page.evaluate((selector) => {
         const element = document.querySelector(selector)!;
@@ -378,8 +416,11 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
         measured.push({ selector, ...box });
         expect.soft(box.rect.height, JSON.stringify({ selector, box })).toBeGreaterThanOrEqual(44);
         expect.soft(box.points.every((point) => point.owns), JSON.stringify({ selector, box })).toBe(true);
-        await page.waitForFunction(() => document.querySelector('#satellite-picker-status')!.textContent === 'Tracking added');
-        await page.waitForTimeout(100);
+        await page.waitForFunction((label) => {
+          const input = document.querySelector(`${label} input`);
+          return input instanceof HTMLInputElement && input.checked
+            && document.querySelector('#satellite-picker-status')?.textContent === 'Tracking added';
+        }, selector);
         expect(await page.locator(`${selector} input`).isChecked()).toBe(true);
       }
       const input = await click(page, '#satellite-picker-input');
@@ -394,7 +435,7 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       const events = await page.evaluate(() => (window as unknown as { __reviewEvents: unknown[] }).__reviewEvents);
       await evidence(page, `${engine.name}-F1-${target.width}x${target.height}`, { target, measured, events });
     } finally { await browser.close(); }
-  }, 60_000);
+  }, reviewActionTimeoutMs * f1ReadinessWaits);
 
   it.each(targets)('F2: schema-2 fallback title opens details with a 44px native target at $width×$height', async (target) => {
     const { page, browser } = await prepare(engine, target);
