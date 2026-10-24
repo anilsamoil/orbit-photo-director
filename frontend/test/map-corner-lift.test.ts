@@ -6,6 +6,7 @@ import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Manifest, Track } from '../src/types';
 import { freezeDate } from './freeze-date';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 
 const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
 if (!existsSync(webkit.executablePath())) throw new Error(`WebKit is required at ${webkit.executablePath()}`);
@@ -90,6 +91,24 @@ function insetHook(insets: Insets): string {
 
 async function boot(page: Page, assets: Map<string, string | Uint8Array>, script: string, lateFooter = false, css = stylesheet, hook = '', e2e = true): Promise<void> {
   await freezeDate(page, now);
+  await page.addInitScript(() => {
+    const native = window.setInterval.bind(window);
+    const view = window as Window & { __opdSecondTicks?: number; __opdSecondMark?: number };
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 1000 && typeof handler === 'function') {
+        const wrapped = () => {
+          const at = performance.now();
+          if (view.__opdSecondMark === undefined || at - view.__opdSecondMark >= 900) {
+            view.__opdSecondMark = at;
+            view.__opdSecondTicks = (view.__opdSecondTicks ?? 0) + 1;
+          }
+          return handler();
+        };
+        return native(wrapped, timeout, ...args);
+      }
+      return native(handler, timeout as number, ...args);
+    }) as typeof window.setInterval;
+  });
   const documentHtml = lateFooter ? html.replace(/<footer id="status-banner"[\s\S]*?<\/footer>\s*/, '') : html;
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
@@ -133,6 +152,59 @@ async function boot(page: Page, assets: Map<string, string | Uint8Array>, script
 
 async function frames(page: Page): Promise<void> {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)))));
+}
+
+async function waitForSyncTicks(page: Page, count = 3): Promise<void> {
+  const start = await page.evaluate(() => (window as Window & { __opdSecondTicks?: number }).__opdSecondTicks ?? 0);
+  await page.waitForFunction((need) => ((window as Window & { __opdSecondTicks?: number }).__opdSecondTicks ?? 0) >= need, start + count);
+}
+
+type ObserverRow = {
+  id: number;
+  kind: 'resize' | 'mutation';
+  corner: boolean;
+  observes: number;
+  disconnects: number;
+  live: boolean;
+};
+
+async function installCornerLedger(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    type Row = { id: number; kind: 'resize' | 'mutation'; corner: boolean; observes: number; disconnects: number; live: boolean };
+    const rows: Row[] = [];
+    let next = 0;
+    const cornerCallback = (callback: unknown) => {
+      const text = `${typeof callback === 'function' ? callback.toString() : ''}\n${new Error().stack ?? ''}`;
+      return text.includes('bindMapChrome') || text.includes('syncMapChrome') || text.includes('scheduleSync') || text.includes('syncNow') || text.includes('observeCorners') || text.includes('watchFooter');
+    };
+    const wrap = (Native: new (callback: ResizeObserverCallback) => ResizeObserver, kind: Row['kind']) => class extends Native {
+      constructor(callback: ResizeObserverCallback) {
+        super(callback);
+        const record: Row = { id: next, kind, corner: cornerCallback(callback), observes: 0, disconnects: 0, live: false };
+        next += 1;
+        rows.push(record);
+        const observe = this.observe.bind(this);
+        const disconnect = this.disconnect.bind(this);
+        this.observe = ((target: Element, options?: ResizeObserverOptions) => {
+          record.observes += 1;
+          record.live = true;
+          observe(target, options);
+        }) as typeof this.observe;
+        this.disconnect = (() => {
+          record.disconnects += 1;
+          record.live = false;
+          disconnect();
+        }) as typeof this.disconnect;
+      }
+    };
+    window.ResizeObserver = wrap(window.ResizeObserver, 'resize');
+    window.MutationObserver = wrap(window.MutationObserver as unknown as new (callback: ResizeObserverCallback) => ResizeObserver, 'mutation') as unknown as typeof MutationObserver;
+    (window as unknown as { __opdObserverLedger: () => Row[] }).__opdObserverLedger = () => rows.map((row) => ({ ...row }));
+  });
+}
+
+async function cornerLedger(page: Page): Promise<ObserverRow[]> {
+  return page.evaluate(() => (window as unknown as { __opdObserverLedger?: () => ObserverRow[] }).__opdObserverLedger?.() ?? []);
 }
 
 async function hideBox(page: Page): Promise<HideBox> {
@@ -201,69 +273,77 @@ for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
 ]) describe.skipIf(engine.name === 'Chrome' && !existsSync(engine.executablePath))(`map corner lift ${engine.name}`, () => {
   let browser: Browser;
+  let session: TrackedBrowser | undefined;
 
   beforeAll(async () => {
-    browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
+    session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
+    browser = session.browser;
   }, 30_000);
-  afterAll(async () => { await browser?.close(); }, 30_000);
+  afterAll(async () => { await closeBrowser(session, `corner-lift-${engine.name}`); });
 
-  async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets, trackFooters = false, e2e = true, countFrames = false): Promise<{ context: BrowserContext; page: Page }> {
+  async function contextAt(width: number, height: number, lateFooter = false, insets?: Insets, trackFooters = false, e2e = true, countFrames = false, ledger = false): Promise<{ context: BrowserContext; page: Page }> {
     const context = await browser.newContext({
       ...iphone17,
       viewport: { width, height },
       serviceWorkers: 'block',
     });
-    if (trackFooters) {
-      await context.addInitScript(() => {
-        const targets = new Set<Element>();
-        const observe = ResizeObserver.prototype.observe;
-        const unobserve = ResizeObserver.prototype.unobserve;
-        ResizeObserver.prototype.observe = function (target: Element) {
-          if (target instanceof Element && target.id === 'status-banner') targets.add(target);
-          return observe.call(this, target);
-        };
-        ResizeObserver.prototype.unobserve = function (target: Element) {
-          targets.delete(target);
-          return unobserve.call(this, target);
-        };
-        (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets = () =>
-          [...targets].map((node) => ({ connected: node.isConnected }));
-      });
-    }
-    if (countFrames) {
-      await context.addInitScript(() => {
-        const view = window as unknown as { __rafs: number; __ros: number };
-        view.__rafs = 0;
-        view.__ros = 0;
-        const raf = window.requestAnimationFrame.bind(window);
-        window.requestAnimationFrame = (callback: FrameRequestCallback) => raf((time) => {
-          view.__rafs += 1;
-          callback(time);
+    try {
+      if (trackFooters) {
+        await context.addInitScript(() => {
+          const targets = new Set<Element>();
+          const observe = ResizeObserver.prototype.observe;
+          const unobserve = ResizeObserver.prototype.unobserve;
+          ResizeObserver.prototype.observe = function (target: Element) {
+            if (target instanceof Element && target.id === 'status-banner') targets.add(target);
+            return observe.call(this, target);
+          };
+          ResizeObserver.prototype.unobserve = function (target: Element) {
+            targets.delete(target);
+            return unobserve.call(this, target);
+          };
+          (window as unknown as { __footerResizeTargets: () => { connected: boolean }[] }).__footerResizeTargets = () =>
+            [...targets].map((node) => ({ connected: node.isConnected }));
         });
-        const Native = window.ResizeObserver;
-        const Counting = function (this: ResizeObserver, callback: ResizeObserverCallback): ResizeObserver {
-          return new Native((entries, observer) => {
-            view.__ros += 1;
-            callback(entries, observer);
+      }
+      if (countFrames) {
+        await context.addInitScript(() => {
+          const view = window as unknown as { __rafs: number; __ros: number };
+          view.__rafs = 0;
+          view.__ros = 0;
+          const raf = window.requestAnimationFrame.bind(window);
+          window.requestAnimationFrame = (callback: FrameRequestCallback) => raf((time) => {
+            view.__rafs += 1;
+            callback(time);
           });
-        };
-        Counting.prototype = Native.prototype;
-        window.ResizeObserver = Counting as unknown as typeof ResizeObserver;
-      });
+          const Native = window.ResizeObserver;
+          const Counting = function (this: ResizeObserver, callback: ResizeObserverCallback): ResizeObserver {
+            return new Native((entries, observer) => {
+              view.__ros += 1;
+              callback(entries, observer);
+            });
+          };
+          Counting.prototype = Native.prototype;
+          window.ResizeObserver = Counting as unknown as typeof ResizeObserver;
+        });
+      }
+      if (ledger) await installCornerLedger(context);
+      if (engine.name === 'WebKit') {
+        await context.addInitScript(() => {
+          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
+        });
+      }
+      const page = await context.newPage();
+      if (insets && engine.name === 'Chrome') {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+      }
+      const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
+      await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook, e2e);
+      return { context, page };
+    } catch (error) {
+      await context.close();
+      throw error;
     }
-    if (engine.name === 'WebKit') {
-      await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-      });
-    }
-    const page = await context.newPage();
-    if (insets && engine.name === 'Chrome') {
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
-    }
-    const hook = insets && engine.name === 'WebKit' ? insetHook(insets) : '';
-    await boot(page, assets, script, lateFooter, cssForInsets(insets, engine.name), hook, e2e);
-    return { context, page };
   }
 
   it('keeps Hide in the same place across five show/hide cycles at 402x874', async () => {
@@ -279,8 +359,7 @@ for (const engine of [
       const banner = await page.locator('#status-banner').boundingBox();
       expect(banner!.height).toBeGreaterThan(30);
       expect(raised.bottom).toBeLessThanOrEqual(banner!.y - 7);
-      await page.waitForTimeout(3000);
-      await frames(page);
+      await waitForSyncTicks(page);
       expect(await hideBox(page)).toEqual(raised);
       await cycle(page, 5, raised);
     } finally {
@@ -535,8 +614,8 @@ for (const engine of [
 
   it('keeps a fully scrolled Layers dock and a coordinate picker click through sync ticks at 1280x800', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
-    const page = await context.newPage();
     try {
+      const page = await context.newPage();
       await boot(page, assets, script);
       await showChrome(page);
       const scrolled = await page.evaluate(() => {
@@ -562,8 +641,7 @@ for (const engine of [
           for (const record of records) writes.push(record.attributeName ?? '');
         }).observe(document.body, { attributes: true, attributeFilter: ['style'] });
       });
-      await page.waitForTimeout(3000);
-      await frames(page);
+      await waitForSyncTicks(page);
       const after = await page.evaluate(() => ({
         scrollTop: (document.querySelector('.map-control-dock') as HTMLElement).scrollTop,
         writes: (window as unknown as { __styleWrites: string[] }).__styleWrites.length,
@@ -705,6 +783,146 @@ for (const engine of [
         });
       }));
       expect(delta).toBe(1);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('drops the corner-lift observers on pagehide so a mutation writes nothing', async () => {
+    const { context, page } = await contextAt(402, 874, false, undefined, false, true, false, true);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '160px';
+      });
+      const raised = await hideBox(page);
+      expect(Number.parseFloat(raised.lift)).toBeGreaterThan(0);
+      const initial = (await cornerLedger(page)).filter((row) => row.corner);
+      expect(initial.length, JSON.stringify(await cornerLedger(page))).toBeGreaterThan(0);
+      expect(initial.every((row) => row.live)).toBe(true);
+      const ids = initial.map((row) => row.id);
+      for (let cycle = 1; cycle <= 3; cycle += 1) {
+        const hidden = await page.evaluate(() => new Promise<{ atHide: string; writes: number; lift: string }>((resolve) => {
+          const atHide = document.body.style.getPropertyValue('--map-corner-lift');
+          window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+          let writes = 0;
+          const style = document.body.style;
+          const setProperty = style.setProperty.bind(style);
+          style.setProperty = (property: string, value: string, priority?: string) => {
+            writes += 1;
+            return setProperty(property, value, priority);
+          };
+          const banner = document.getElementById('status-banner')!;
+          banner.style.height = '240px';
+          banner.textContent = `${banner.textContent ?? ''} x`;
+          document.body.classList.add('map-slot-probe');
+          document.body.classList.remove('map-slot-probe');
+          queueMicrotask(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+            resolve({ atHide, writes, lift: document.body.style.getPropertyValue('--map-corner-lift') });
+          })));
+        }));
+        const rows = (await cornerLedger(page)).filter((row) => row.corner);
+        expect(rows.map((row) => row.id)).toEqual(ids);
+        expect(rows.every((row) => !row.live && row.disconnects >= cycle), JSON.stringify(rows)).toBe(true);
+        expect(hidden.writes).toBe(0);
+        expect(hidden.lift).toBe(hidden.atHide);
+        await page.evaluate(() => {
+          window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+        });
+        const shown = (await cornerLedger(page)).filter((row) => row.corner);
+        expect(shown.map((row) => row.id)).toEqual(ids);
+        expect(shown.every((row) => row.live), JSON.stringify(shown)).toBe(true);
+        const hiddenObserves = new Map(rows.map((row) => [row.id, row.observes]));
+        expect(shown.every((row) => row.observes > (hiddenObserves.get(row.id) ?? 0))).toBe(true);
+      }
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('lifts the corners again after a persisted pageshow', async () => {
+    const { context, page } = await contextAt(402, 874, false, undefined, false, true, false, true);
+    try {
+      await showChrome(page);
+      await page.evaluate(() => {
+        document.getElementById('status-banner')!.style.height = '80px';
+      });
+      const before = await hideBox(page);
+      expect(Number.parseFloat(before.lift)).toBeGreaterThan(0);
+      const initial = (await cornerLedger(page)).filter((row) => row.corner);
+      expect(initial.length).toBeGreaterThan(0);
+      const ids = initial.map((row) => row.id);
+      for (let cycle = 1; cycle <= 3; cycle += 1) {
+        await page.evaluate(() => {
+          window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        });
+        const hidden = (await cornerLedger(page)).filter((row) => row.corner);
+        expect(hidden.map((row) => row.id)).toEqual(ids);
+        expect(hidden.every((row) => !row.live && row.disconnects >= cycle), JSON.stringify(hidden)).toBe(true);
+        await page.evaluate(() => {
+          window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+        });
+        const shown = (await cornerLedger(page)).filter((row) => row.corner);
+        expect(shown.map((row) => row.id)).toEqual(ids);
+        expect(shown.every((row) => row.live)).toBe(true);
+      }
+      const restored = await page.evaluate(() => new Promise<{ lift: string }>((resolve) => {
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+        document.getElementById('status-banner')!.style.height = '200px';
+        queueMicrotask(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+          resolve({ lift: document.body.style.getPropertyValue('--map-corner-lift') });
+        })));
+      }));
+      const live = (await cornerLedger(page)).filter((row) => row.corner);
+      expect(live.map((row) => row.id)).toEqual(ids);
+      expect(live.every((row) => row.live), JSON.stringify(live)).toBe(true);
+      expect(Number.parseFloat(restored.lift)).toBeGreaterThan(Number.parseFloat(before.lift));
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('schedules one sync when footer style and text change in the same turn', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      const delta = await page.evaluate(() => new Promise<number>((resolve) => {
+        const before = (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0;
+        const element = document.getElementById('status-banner')!;
+        element.style.height = '96px';
+        element.textContent = `${element.textContent ?? ''} · styled`;
+        queueMicrotask(() => {
+          resolve(((window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0) - before);
+        });
+      }));
+      expect(delta).toBe(1);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
+  it('schedules no sync for a text change on a footer that is not the watched one', async () => {
+    const { context, page } = await contextAt(402, 874);
+    try {
+      await showChrome(page);
+      const delta = await page.evaluate(() => new Promise<number>((resolve) => {
+        const banner = document.getElementById('status-banner')!;
+        const nested = document.createElement('span');
+        nested.id = 'status-banner';
+        nested.textContent = 'nested';
+        banner.appendChild(nested);
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            const before = (window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0;
+            nested.textContent = 'nested · changed';
+            queueMicrotask(() => {
+              resolve(((window as unknown as { __opdCornerSyncs?: number }).__opdCornerSyncs ?? 0) - before);
+            });
+          });
+        });
+      }));
+      expect(delta).toBe(0);
     } finally {
       await context.close();
     }

@@ -45,22 +45,100 @@ jobs:
       - run: cd worker && bun run typecheck
       - run: cd worker && bun run test
 
-  frontend:
-    runs-on: ubuntu-latest
-    name: Frontend
+  frontend-shard:
+    # Playwright 1.55.0 has no WebKit build for Ubuntu 26.04. The image already
+    # contains that release's browsers and system libraries.
+    runs-on: ubuntu-24.04
+    # Actions starts this container with --entrypoint tail -f /dev/null. tail does not
+    # reap orphans, so a killed process-group member stays a zombie and kill(pid, 0)
+    # still succeeds. --init makes docker-init PID 1, which reaps them.
+    container:
+      image: mcr.microsoft.com/playwright:v1.55.0-noble@sha256:b27e719ecbfef153e13fd24e8341736733bf2658b229677eb21ff57ff5d7fb29
+      options: --init
+    timeout-minutes: 75
+    name: Frontend shard ${{ matrix.shard }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
+      - uses: actions/checkout@v4
+      - name: Install bun
+        run: npm install -g bun@1.4.4
+      - name: Install GNU time
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --max-time 20 \
+            -o /tmp/time.deb \
+            https://archive.ubuntu.com/ubuntu/pool/main/t/time/time_1.9-0.2build1_amd64.deb
+          echo 'abe09ee9806b336cc255c013cc726b39cbf9d56ff9dc7c2acff5762ab0f07be8  /tmp/time.deb' | sha256sum -c -
+          dpkg -i /tmp/time.deb
+      - run: cd frontend && bun install
+      - run: cd frontend && bun run typecheck
+      - run: cd frontend && bun scripts/frontend-shards.ts --check
+      - name: Test shard
+        working-directory: frontend
+        run: |
+          set +e
+          bun scripts/frontend-shards.ts --shard ${{ matrix.shard }}/${{ strategy.job-total }} > shard-files.txt
+          assign=$?
+          set -e
+          if [ "$assign" -ne 0 ]; then
+            cat shard-files.txt
+            exit "$assign"
+          fi
+          mapfile -t files < shard-files.txt
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "shard ${{ matrix.shard }} assigned no files"
+            exit 1
+          fi
+          set +e
+          /usr/bin/time -v -o "shard-${{ matrix.shard }}-time.txt" \
+            bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism \
+            --reporter=verbose --reporter=json \
+            --outputFile.json="shard-${{ matrix.shard }}-results.json" \
+            "${files[@]}"
+          status=$?
+          cat "shard-${{ matrix.shard }}-time.txt"
+          if [ -f "shard-${{ matrix.shard }}-results.json" ]; then
+            bun scripts/frontend-shards.ts --webkit-count "shard-${{ matrix.shard }}-results.json" --shard-log
+          fi
+          exit "$status"
+      - name: Upload shard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-shard-${{ matrix.shard }}
+          if-no-files-found: warn
+          path: |
+            frontend/shard-${{ matrix.shard }}-results.json
+            frontend/shard-${{ matrix.shard }}-time.txt
+
+  frontend:
+    name: Frontend
+    needs: frontend-shard
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Fail when a shard failed
+        if: always() && needs.frontend-shard.result != 'success'
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: cd frontend && bun install
       - run: cd frontend && bun run typecheck
       - run: bash scripts/upload_frontend.test.sh
-      # Each browser-backed file builds the app and launches real browsers.
-      # Keep those files serial within the hosted runner's resource budget.
-      # map-corner-lift.test.ts throws at load when Playwright WebKit is absent, which
-      # fails this job before Chrome in that file runs. It is the next step.
-      - run: cd frontend && /usr/bin/time -v bun run test --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose --exclude test/map-corner-lift.test.ts
-      - name: Install WebKit
-        run: cd frontend && bunx playwright install --with-deps webkit
-      - name: WebKit map checks
-        run: cd frontend && bun run test test/map-corner-lift.test.ts test/legacy-launch-card.test.ts --maxWorkers=1 --minWorkers=1 --no-file-parallelism --reporter=verbose
       - run: cd frontend && bun run build
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frontend-shard-*
+          path: shard-reports
+          merge-multiple: true
+      - name: Check shard coverage and WebKit count
+        run: |
+          bun frontend/scripts/frontend-shards.ts --check
+          bun frontend/scripts/frontend-shards.ts --webkit-count shard-reports
+          bun frontend/scripts/webkit-floor.ts shard-reports

@@ -4,6 +4,7 @@ import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { tleEpochMs } from '../src/iss-sgp4';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/iss-sgp4-fixture.json';
 
@@ -21,7 +22,7 @@ const manifest = {
   freshness: { tle_hours: 0, cloud_hours: 0, ok: true },
   artifacts: Object.fromEntries(['passes', 'track', 'status', 'top5', 'top_24h', 'cupola_windows'].map((key) => [key, { path: `${key}.json`, sha256: '', bytes: 0 }])),
 };
-const REPS = 12;
+const REPS = Number(process.env.BEARING_REPS ?? '12');
 
 let assets: Map<string, string | Uint8Array>;
 let script: string;
@@ -117,8 +118,12 @@ for (const engine of [
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
 ]) describe.skipIf(!existsSync(engine.executablePath))(`bearing retarget ${engine.name}`, () => {
   let browser: Browser;
-  beforeAll(async () => { browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath }); }, 30_000);
-  afterAll(async () => { await browser?.close(); }, 30_000);
+  let session: TrackedBrowser | undefined;
+  beforeAll(async () => {
+    session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
+    browser = session.browser;
+  }, 60_000);
+  afterAll(async () => { await closeBrowser(session, engine.name); }, 60_000);
 
   it(`settles North at 0 and ISS-up on the heading for ${REPS} real-clock reps`, async () => {
     const reps: { north: number; northMoving: boolean; iss: number; heading: number; issMoving: boolean; error?: string }[] = [];
@@ -141,7 +146,7 @@ for (const engine of [
     const summary = { engine: engine.name, northPass, issPass, reps };
     console.log(`BEARING_REPS ${JSON.stringify(summary)}`);
     expect(summary, JSON.stringify(summary, null, 2)).toEqual({ ...summary, northPass: REPS, issPass: REPS });
-  }, 180_000);
+  }, Math.max(180_000, REPS * 30_000));
 
   it('settles North when no animation frame arrives', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
