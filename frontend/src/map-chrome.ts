@@ -188,6 +188,8 @@ let syncing = false;
 let staleSkips = 0;
 let syncQueued = false;
 let chromeLive = false;
+let togglePressed = false;
+let syncHeld = false;
 const writtenPx = new Map<string, number>();
 
 function wholePx(value: number): number {
@@ -283,6 +285,22 @@ function scheduleSync(): void {
   });
 }
 
+function holdToggleSync(event: PointerEvent): void {
+  if (event.button !== 0) return;
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest('#map-chrome-toggle')) return;
+  togglePressed = true;
+}
+
+function releaseToggleSync(event: PointerEvent): void {
+  if (!togglePressed) return;
+  if (event.type === 'pointerup' && event.button !== 0) return;
+  togglePressed = false;
+  if (!syncHeld) return;
+  syncHeld = false;
+  scheduleSync();
+}
+
 function syncFooterClearance(pane: HTMLElement): void {
   const set = (name: string, value: number): void => {
     writePx(name, value);
@@ -327,6 +345,10 @@ function syncFooterClearance(pane: HTMLElement): void {
 
 export function syncMapChrome(): void {
   if (!chromeLive || mute) return;
+  if (togglePressed) {
+    syncHeld = true;
+    return;
+  }
   if (syncing) {
     scheduleSync();
     return;
@@ -546,6 +568,9 @@ export function bindMapChrome(): () => void {
     window.addEventListener('orientationchange', syncMapChrome);
     screen.orientation?.addEventListener('change', syncMapChrome);
     window.visualViewport?.addEventListener('resize', syncMapChrome);
+    document.addEventListener('pointerdown', holdToggleSync, true);
+    document.addEventListener('pointerup', releaseToggleSync, true);
+    document.addEventListener('pointercancel', releaseToggleSync, true);
     publish(owned.length);
     syncMapChrome();
   };
@@ -560,6 +585,11 @@ export function bindMapChrome(): () => void {
     window.removeEventListener('orientationchange', syncMapChrome);
     screen.orientation?.removeEventListener('change', syncMapChrome);
     window.visualViewport?.removeEventListener('resize', syncMapChrome);
+    document.removeEventListener('pointerdown', holdToggleSync, true);
+    document.removeEventListener('pointerup', releaseToggleSync, true);
+    document.removeEventListener('pointercancel', releaseToggleSync, true);
+    togglePressed = false;
+    syncHeld = false;
     publish(0);
   };
   const onShow = (event: PageTransitionEvent): void => {
