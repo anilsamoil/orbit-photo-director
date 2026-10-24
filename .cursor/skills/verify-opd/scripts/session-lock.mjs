@@ -230,7 +230,7 @@ export async function driveSessionLock({ baseUrl, evidenceDir }) {
       console.log(`viewport session-lock surface ${plan.id} lock profile opened ${plan.width}x${plan.height} created-at-size`);
       const { locked, ready } = await proveProfile(browser, plan, evidenceDir);
       const failures = [...profileLockFailures(locked), ...profileReadyFailures(ready)];
-      line = `session lock profile ${plan.id} disabled ${locked.disabled} ready ${ready.disabled} view ${ready.view}`;
+      line = `session lock profile ${plan.id} locked ${locked.disabled} after-signin-disabled ${ready.disabled} view ${ready.view}`;
       writeFileSync(resolve(evidenceDir, `session-lock-profile-${plan.id}.txt`), `${line}\nbanner ${JSON.stringify(ready.banner)}\n${failures.join('\n')}\n`);
       console.log(line);
       if (failures.length) throw new Error(['session-lock fail', ...failures].join('\n'));
