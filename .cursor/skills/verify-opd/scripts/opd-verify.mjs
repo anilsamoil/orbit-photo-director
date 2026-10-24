@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { driveMapBearing } from './bearing-retarget.mjs';
 import { driveMapPagehide } from './corner-pagehide.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
+import { driveMapHold } from './map-hold.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
+import { driveSessionLock } from './session-lock.mjs';
 import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -815,10 +817,38 @@ async function drive(feature) {
     console.log(`evidence ${state.evidence}`);
     return;
   }
+  if (feature === 'session-lock') {
+    try {
+      const note = await driveSessionLock({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
+  if (feature === 'map-hold') {
+    try {
+      const note = await driveMapHold({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
   if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-corner, map-pagehide, or map-safe-area.`);
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-corner, map-pagehide, map-safe-area, map-hold, or session-lock.`);
     process.exit(2);
   }
   const notes = await driveFeatures({
@@ -949,6 +979,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-corner|map-pagehide|map-safe-area>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-corner|map-pagehide|map-safe-area|map-hold|session-lock>|sw|down|check|serve');
   process.exit(2);
 }
