@@ -253,8 +253,8 @@ async function prepare(engine: typeof engines[number], target: Target) {
       const canvas = map?.getCanvas();
       return !!map?.getSource('iss-track') && !!map?.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0;
     });
-    // These cases hit HTML controls. Leave the map mounted and stop the render
-    // loop so tile decode does not keep the main thread busy through the clicks.
+    // These cases hit HTML controls. map.stop() only stops the camera
+    // animation. The render loop and tile decode keep running.
     await page.evaluate(() => {
       (window as unknown as { __opdMap?: { stop: () => void } }).__opdMap?.stop();
     });
@@ -392,20 +392,15 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       // those gaps run past the overlay-scrollbar fade, so a 1000ms clock that
       // starts at the first scroll measures scheduling. Keep nudging the same
       // scroll offset until pointerdown: the scrollbar stays in the just-scrolled
-      // state, and the 1000ms window is the gap since the latest nudge at or
-      // before the pointer. Stamp the write itself; the scroll event can be
-      // delivered after a pointer the browser already timestamped.
+      // state, and the 1000ms window is the gap since the latest real scroll
+      // event at or before the pointer.
       await page.evaluate(() => {
         const panel = document.querySelector('#satellite-picker-panel') as HTMLElement;
-        const edge = (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge;
         const restore = panel.scrollTop;
         const nudge = () => {
           const delta = restore > 0 ? -1 : 1;
           panel.scrollTop = restore + delta;
           panel.scrollTop = restore;
-          const stamp = performance.now();
-          edge.scrolls.push(stamp);
-          edge.scrolledAt = stamp;
         };
         nudge();
         (window as unknown as { __pickerNudge?: number }).__pickerNudge = window.setInterval(nudge, 200);
