@@ -188,6 +188,8 @@ let syncing = false;
 let staleSkips = 0;
 let syncQueued = false;
 let chromeLive = false;
+let heldPointerId: number | null = null;
+let syncHeld = false;
 const writtenPx = new Map<string, number>();
 
 function wholePx(value: number): number {
@@ -283,6 +285,31 @@ function scheduleSync(): void {
   });
 }
 
+function holdToggleSync(event: PointerEvent): void {
+  if (heldPointerId !== null || event.button !== 0) return;
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest('#map-chrome-toggle')) return;
+  heldPointerId = event.pointerId;
+}
+
+function releaseHeldPointer(): void {
+  if (heldPointerId === null) return;
+  heldPointerId = null;
+  if (!syncHeld) return;
+  syncHeld = false;
+  scheduleSync();
+}
+
+function releaseToggleSync(event: PointerEvent): void {
+  if (heldPointerId === null || event.pointerId !== heldPointerId) return;
+  if (event.type === 'pointerup' && event.buttons !== 0) return;
+  releaseHeldPointer();
+}
+
+function releaseToggleOnBlur(): void {
+  releaseHeldPointer();
+}
+
 function syncFooterClearance(pane: HTMLElement): void {
   const set = (name: string, value: number): void => {
     writePx(name, value);
@@ -327,6 +354,10 @@ function syncFooterClearance(pane: HTMLElement): void {
 
 export function syncMapChrome(): void {
   if (!chromeLive || mute) return;
+  if (heldPointerId !== null) {
+    syncHeld = true;
+    return;
+  }
   if (syncing) {
     scheduleSync();
     return;
@@ -546,6 +577,11 @@ export function bindMapChrome(): () => void {
     window.addEventListener('orientationchange', syncMapChrome);
     screen.orientation?.addEventListener('change', syncMapChrome);
     window.visualViewport?.addEventListener('resize', syncMapChrome);
+    document.addEventListener('pointerdown', holdToggleSync, true);
+    document.addEventListener('pointerup', releaseToggleSync, true);
+    document.addEventListener('pointercancel', releaseToggleSync, true);
+    document.addEventListener('lostpointercapture', releaseToggleSync, true);
+    window.addEventListener('blur', releaseToggleOnBlur);
     publish(owned.length);
     syncMapChrome();
   };
@@ -560,6 +596,13 @@ export function bindMapChrome(): () => void {
     window.removeEventListener('orientationchange', syncMapChrome);
     screen.orientation?.removeEventListener('change', syncMapChrome);
     window.visualViewport?.removeEventListener('resize', syncMapChrome);
+    document.removeEventListener('pointerdown', holdToggleSync, true);
+    document.removeEventListener('pointerup', releaseToggleSync, true);
+    document.removeEventListener('pointercancel', releaseToggleSync, true);
+    document.removeEventListener('lostpointercapture', releaseToggleSync, true);
+    window.removeEventListener('blur', releaseToggleOnBlur);
+    heldPointerId = null;
+    syncHeld = false;
     publish(0);
   };
   const onShow = (event: PageTransitionEvent): void => {

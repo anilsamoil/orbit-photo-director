@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const WEBKIT_PASSED_FLOOR = 237;
+export const WEBKIT_PASSED_FLOOR = 248;
 
 /** Vitest's fullName joins an empty file suite in front, so report names are trimmed before comparison. */
 export const CORNER_LIFT_WEBKIT_CASES = [
@@ -41,6 +41,7 @@ export const BROWSER_FILE_MINIMUMS: Readonly<Record<string, number>> = {
   'test/map-bearing-retarget.test.ts': 1,
   'test/map-joint-panel-convergence.test.ts': 1,
   'test/close-browser.test.ts': 2,
+  'test/cold-session-recovery.test.ts': 11,
 };
 
 export type WebKitFloorReport = {

@@ -232,11 +232,12 @@ export async function connectCdp(port) {
 }
 
 async function evaluate(send, expression) {
-  const result = await send('Runtime.evaluate', {
+  const params = {
     expression,
     awaitPromise: true,
     returnByValue: true,
-  });
+  };
+  const result = await send('Runtime.evaluate', params);
   if (result.exceptionDetails) {
     const text = result.exceptionDetails.text || result.exceptionDetails.exception?.description || 'evaluate failed';
     throw new Error(text);
@@ -562,20 +563,26 @@ async function hideNamed(send, container, name) {
   return id;
 }
 
-async function reloadSettled(send) {
+const RELOAD_BANNER_MS = 30_000;
+
+export async function reloadSettled(send) {
   await send('Page.reload');
-  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', 30000);
-  await waitFor(
-    send,
-    `(() => {
+  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', RELOAD_BANNER_MS);
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < RELOAD_BANNER_MS) {
+    last = await evaluate(send, `(() => {
       const banner = document.getElementById('status-banner');
       const text = banner ? banner.textContent || '' : '';
       if (!text || text.includes('Loading')) return null;
       return { ok: true };
-    })()`,
-    'banner after reload',
-    30000,
-  );
+    })()`);
+    if (last && last.ok) return;
+    const remaining = RELOAD_BANNER_MS - (Date.now() - started);
+    if (remaining <= 0) break;
+    await sleep(Math.min(100, remaining));
+  }
+  throw new Error(`banner after reload timed out. Last value: ${JSON.stringify(last)}`);
 }
 
 function touchPoint(x, y) {
@@ -6649,7 +6656,16 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-all-launches');
-  const frozen = fixtureInstant(evidenceDir);
+  const loadedAnchor = await evaluate(send, `(() => {
+    const entries = performance.getEntriesByType('resource');
+    let anchor = 0;
+    for (const entry of entries) {
+      const match = String(entry.name).match(/\\/launch\\/catalog\\/v\\/c(\\d+)/);
+      if (match) anchor = Number(match[1]);
+    }
+    return anchor > 0 ? anchor : null;
+  })()`);
+  const frozen = loadedAnchor || fixtureInstant(evidenceDir);
   await evaluate(send, `(() => {
     window.__opdRealNow = Date.now;
     const frozen = ${frozen};

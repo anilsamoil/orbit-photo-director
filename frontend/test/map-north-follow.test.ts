@@ -39,8 +39,9 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const origin = 'http://north.test';
 
 type MapHandle = {
-  isStyleLoaded(): boolean;
   getSource(id: string): unknown;
+  getLayer(id: string): unknown;
+  getCanvas(): { width: number; height: number };
   getBearing(): number;
   isMoving(): boolean;
   setCenter(center: [number, number]): unknown;
@@ -91,9 +92,14 @@ async function openMap(page: Page): Promise<void> {
   });
   await page.goto(`${origin}/?e2e&u=north`, { waitUntil: 'domcontentloaded' });
   await page.locator('#tab-map').click();
+  // isStyleLoaded stays false until every in-view raster tile decodes. This
+  // harness aborts the tile URLs it does not stub, so that decode need not
+  // finish inside the 20s click budget. The rotate reads bearing once the
+  // track layer and canvas exist.
   await page.waitForFunction(() => {
     const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
-    return !!map?.isStyleLoaded() && !!map.getSource('iss-track');
+    const canvas = map?.getCanvas();
+    return !!map?.getSource('iss-track') && !!map.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0;
   });
   await page.waitForFunction(() => document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'true');
 }

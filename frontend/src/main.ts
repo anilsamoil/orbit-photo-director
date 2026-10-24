@@ -30,7 +30,7 @@ import {
 import { buildPayload, drainQueue, postCalib, queuedCalibCount } from './calib';
 import type { BannerState } from './banner';
 import { liveIssNow } from './iss';
-import { createPollScheduler, isOnline } from './network-status';
+import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from './pass-filter';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
 import { probeConnectivity } from './network-probe';
@@ -42,7 +42,7 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
-import { getAccountProfile, resolveAccountProfile, SessionSignInRequired } from './profile-session';
+import { getAccountProfile, resolveAccountProfile } from './profile-session';
 import { isRosterProfile } from './crew-roster';
 import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
@@ -749,6 +749,12 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
 }
 
 let countdownTimer: number | null = null;
+let pollScheduler: PollScheduler | null = null;
+
+function stopPollScheduler(): void {
+  pollScheduler?.stop();
+  pollScheduler = null;
+}
 
 function stopCountdown(): void {
   if (countdownTimer === null) return;
@@ -1410,7 +1416,7 @@ function showIssBootError(host: HTMLElement): void {
   host.append(note, retry, mapButton);
 }
 
-function bindTabs(): void {
+function bindTabs(profileEnabled = true): void {
   const view = document.getElementById('view');
   const tabQueue = document.getElementById('tab-queue');
   const tabUpcoming = document.getElementById('tab-upcoming');
@@ -1479,6 +1485,11 @@ function bindTabs(): void {
     });
   }
   if (tabProfile) {
+    if (tabProfile instanceof HTMLButtonElement) tabProfile.disabled = !profileEnabled;
+    if (profileEnabled) tabProfile.removeAttribute('aria-disabled');
+    else tabProfile.setAttribute('aria-disabled', 'true');
+  }
+  if (tabProfile && profileEnabled) {
     tabProfile.addEventListener('click', () => {
       insetHost?.releaseHorizon();
       insetHost?.releasePlan();
@@ -1504,31 +1515,33 @@ function bindTabs(): void {
   // Profile tab, render the pane, then open the inline edit form. Setting the
   // edit flag is honored by buildPersonalRow even if it lands before the pane
   // finishes rendering, so the ordering is race-safe.
-  window.addEventListener(EDIT_TARGET_EVENT, (e) => {
-    const detail = (e as CustomEvent<{ targetId?: unknown }>).detail;
-    const targetId = detail && typeof detail.targetId === 'string' ? detail.targetId : null;
-    if (!targetId) return;
-    const profileName = getCurrentProfile()?.name;
-    if (!profileName) return;
-    releaseIssPane();
-    if (tabProfile) setActive('view-profile', tabProfile);
-    void loadProfilePane().then(async () => {
-      const crud = await import('./profile-crud');
-      crud.openEditTargetForm(profileName, targetId);
-    }).catch((err) => {
-      // A flaky lazy import (LOS mid-chunk) must not leave the operator on a
-      // blank Profile pane with no feedback (Codex review). Surface it; they
-      // can tap Edit on the row manually once the chunk loads.
-      console.error('[edit] deep-link failed to open the edit form:', err);
-      const toast = document.getElementById('toast');
-      if (toast) {
-        toast.className = 'toast error show';
-        toast.textContent = 'Could not open the edit form — open Profile › your target › Edit.';
-        toast.hidden = false;
-        window.setTimeout(() => { toast.classList.remove('show'); toast.hidden = true; }, 3500);
-      }
+  if (profileEnabled) {
+    window.addEventListener(EDIT_TARGET_EVENT, (e) => {
+      const detail = (e as CustomEvent<{ targetId?: unknown }>).detail;
+      const targetId = detail && typeof detail.targetId === 'string' ? detail.targetId : null;
+      if (!targetId) return;
+      const profileName = getCurrentProfile()?.name;
+      if (!profileName) return;
+      releaseIssPane();
+      if (tabProfile) setActive('view-profile', tabProfile);
+      void loadProfilePane().then(async () => {
+        const crud = await import('./profile-crud');
+        crud.openEditTargetForm(profileName, targetId);
+      }).catch((err) => {
+        // A flaky lazy import (LOS mid-chunk) must not leave the operator on a
+        // blank Profile pane with no feedback (Codex review). Surface it; they
+        // can tap Edit on the row manually once the chunk loads.
+        console.error('[edit] deep-link failed to open the edit form:', err);
+        const toast = document.getElementById('toast');
+        if (toast) {
+          toast.className = 'toast error show';
+          toast.textContent = 'Could not open the edit form — open Profile › your target › Edit.';
+          toast.hidden = false;
+          window.setTimeout(() => { toast.classList.remove('show'); toast.hidden = true; }, 3500);
+        }
+      });
     });
-  });
+  }
 }
 
 /** Lazy-load the Profile tab. Same pattern as loadMapPane / loadLogPane —
@@ -1748,6 +1761,7 @@ async function init(): Promise<void> {
   bindTopbarPan(document.querySelector('.tabs'));
   bindLiveReadout();
   // Authenticate before loading any personal cache, target or rating queue.
+  let sessionFailed = false;
   try {
     const account = await resolveAccountProfile();
     const url = new URL(window.location.href);
@@ -1758,13 +1772,15 @@ async function init(): Promise<void> {
     window.history.replaceState({}, '', url.toString());
     currentProfile = loadOrCreateProfileFromURL(window.location.href);
   } catch (e) {
+    sessionFailed = true;
     currentProfile = null;
     console.warn('[profile] account initialization failed:', e);
     const text = e instanceof Error ? e.message : 'Could not verify your profile. Please reload.';
-    if (e instanceof SessionSignInRequired) showSessionRecovery(text);
-    else setBanner({ level: 'red', text });
-    return;
+    if (getAccountProfile()) setBanner({ level: 'red', text });
+    else showSessionRecovery(text);
   }
+  bindTabs(!sessionFailed);
+  if (sessionFailed) return;
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
   // cross-tab storage event, debounced 150ms). Re-read currentProfile on
   // each fire so the slot 7 distance filter reflects the just-saved
@@ -1782,7 +1798,6 @@ async function init(): Promise<void> {
     track: () => currentTrack,
     nowMs: () => Date.now(),
   });
-  bindTabs();
   mountProfileMenu();
   // Map is the default landing tab (view-map is set in HTML). Trigger the lazy
   // load now so mapPaneWaitingForManifest is set; renderPendingMapPane() in
@@ -1884,7 +1899,8 @@ async function init(): Promise<void> {
   // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
   // watching and gives the user fresh data the moment they look at the
   // page after a long pause.
-  createPollScheduler({
+  stopPollScheduler();
+  pollScheduler = createPollScheduler({
     intervalMs: REFRESH_MS,
     onPoll: () => void refresh(),
   });
@@ -1904,6 +1920,7 @@ export {
   refresh,
   rerenderCountdowns,
   stopCountdown,
+  stopPollScheduler,
   // Test surface — exposed so frontend/test/main-integration.test.ts can
   // exercise the orchestration helpers without going through the full
   // init() / setInterval chain. Production code should use init().
