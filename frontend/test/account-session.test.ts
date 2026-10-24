@@ -200,6 +200,60 @@ it('a denied session keeps Queue and does not render or enable Profile', async (
   }
 });
 
+it('a later sign-in enables Profile after a denied session', async () => {
+  document.body.innerHTML = [
+    '<button id="tab-queue" class="tab" type="button">Queue</button>',
+    '<button id="tab-upcoming" class="tab" type="button">Upcoming</button>',
+    '<button id="tab-map" class="tab active" type="button">Map</button>',
+    '<button id="tab-profile" class="tab" type="button">Profile</button>',
+    '<button id="tab-log" class="tab" type="button">Log</button>',
+    '<main id="view" class="view-map"><div id="cards"></div><div id="profile-body"></div></main>',
+    '<footer id="status-banner">Loading…</footer>',
+  ].join('');
+  const previousUrl = window.location.href;
+  window.history.replaceState({}, '', '/?u=anil');
+  let sessionCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo) => {
+    const url = String(input);
+    if (url.includes('/api/browser/session')) {
+      sessionCalls += 1;
+      if (sessionCalls === 1) return new Response('', { status: 401 });
+      return new Response(JSON.stringify({
+        ok: true, profile: { name: 'jessica', displayName: 'Jessica' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response('', { status: 404 });
+  }));
+  const main = await import('../src/main');
+  try {
+    await main.init();
+    const profileTab = document.getElementById('tab-profile') as HTMLButtonElement;
+    expect(profileTab.disabled).toBe(true);
+    expect(profileTab.getAttribute('aria-disabled')).toBe('true');
+    await main.init();
+    profileTab.click();
+    await vi.waitFor(() => {
+      const body = document.getElementById('profile-body')?.textContent ?? '';
+      if (!profileTab.disabled && !body.includes('Jessica')) throw new Error('profile pane has not rendered');
+    });
+    expect({
+      disabled: profileTab.disabled,
+      ariaDisabled: profileTab.getAttribute('aria-disabled'),
+      view: document.getElementById('view')?.className,
+      showsAccount: (document.getElementById('profile-body')?.textContent ?? '').includes('Jessica'),
+    }).toEqual({
+      disabled: false,
+      ariaDisabled: null,
+      view: 'view-profile',
+      showsAccount: true,
+    });
+  } finally {
+    main.stopCountdown();
+    main.stopPollScheduler();
+    window.history.replaceState({}, '', previousUrl);
+  }
+});
+
 it('a cold session failure still switches to Queue', async () => {
   document.body.innerHTML = [
     '<button id="tab-queue" class="tab" type="button">Queue</button>',

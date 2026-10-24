@@ -1484,6 +1484,11 @@ function bindTabs(profileEnabled = true): void {
       openIssPane();
     });
   }
+  if (tabProfile) {
+    if (tabProfile instanceof HTMLButtonElement) tabProfile.disabled = !profileEnabled;
+    if (profileEnabled) tabProfile.removeAttribute('aria-disabled');
+    else tabProfile.setAttribute('aria-disabled', 'true');
+  }
   if (tabProfile && profileEnabled) {
     tabProfile.addEventListener('click', () => {
       insetHost?.releaseHorizon();
@@ -1496,9 +1501,6 @@ function bindTabs(profileEnabled = true): void {
       // matches the lazy-load convention.
       loadLookupPane();
     });
-  } else if (tabProfile) {
-    if (tabProfile instanceof HTMLButtonElement) tabProfile.disabled = true;
-    tabProfile.setAttribute('aria-disabled', 'true');
   }
   tabLog.addEventListener('click', () => {
     insetHost?.releaseHorizon();
