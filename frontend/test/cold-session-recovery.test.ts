@@ -68,9 +68,11 @@ function stub(shape: Shape): string {
         observer.observe(banner, { childList: true, subtree: true, characterData: true });
       }
       if (shape === 'network') {
-        window.__coldMacrotask = -1;
+        window.__coldBannerAtTurn = false;
+        window.__coldTurn = false;
         window.setTimeout(() => {
-          window.__coldMacrotask = performance.now() - window.__coldStart;
+          window.__coldBannerAtTurn = !!document.querySelector('#status-banner .banner-action');
+          window.__coldTurn = true;
         }, 0);
         return Promise.reject(new TypeError('Load failed'));
       }
@@ -161,8 +163,7 @@ for (const engine of engines) {
             expect(page.viewportSize()).toEqual({ width: size.width, height: size.height });
             await page.waitForFunction(() => typeof (window as unknown as { __coldStart?: number }).__coldStart === 'number');
             if (shape === 'network') {
-              await page.locator('#status-banner a.banner-action').waitFor({ timeout: 2_000 });
-              await page.waitForFunction(() => (window as unknown as { __coldMacrotask?: number }).__coldMacrotask! >= 0);
+              await page.waitForFunction(() => (window as unknown as { __coldTurn?: boolean }).__coldTurn === true);
             } else {
               const early = await page.locator('#status-banner').innerText();
               expect(await page.locator('#status-banner .banner-action').count(), early).toBe(0);
@@ -179,7 +180,7 @@ for (const engine of engines) {
                 reload: banner?.querySelector('button.banner-action')?.textContent ?? '',
                 cards: document.querySelectorAll('#cards > *').length,
                 elapsed: (window as unknown as { __coldMs?: number }).__coldMs ?? -1,
-                macrotask: (window as unknown as { __coldMacrotask?: number }).__coldMacrotask ?? -1,
+                bannerAtTurn: (window as unknown as { __coldBannerAtTurn?: boolean }).__coldBannerAtTurn === true,
               };
             });
             const banner = state.text;
@@ -187,8 +188,7 @@ for (const engine of engines) {
             if (shape === 'network') {
               expect(banner).toMatch(/Load failed|Failed to fetch/);
               expect(elapsed).toBeGreaterThanOrEqual(0);
-              expect(state.macrotask).toBeGreaterThanOrEqual(0);
-              expect(elapsed).toBeLessThanOrEqual(state.macrotask);
+              expect(state.bannerAtTurn).toBe(true);
             } else {
               expect(banner).toContain('The session request timed out');
               expect(elapsed).toBeGreaterThanOrEqual(9_000);
