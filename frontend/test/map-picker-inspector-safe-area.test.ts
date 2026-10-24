@@ -41,6 +41,22 @@ async function emulateInsets(page: Page, insets: Insets): Promise<void> {
 }
 
 
+async function settleNorth(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const north = document.getElementById('bearing-north');
+    if (!north) return;
+    north.classList.remove('active');
+    north.click();
+    const events = (window as unknown as { __inspectorEvents?: { trusted: boolean }[] }).__inspectorEvents;
+    while (events?.length && events[events.length - 1]?.trusted === false) events.pop();
+  });
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
+    const north = document.getElementById('bearing-north');
+    return north?.classList.contains('active') === true && !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+  });
+}
+
 const longHeading = 'INTERNATIONALSPACESTATIONZARYAEXPEDITIONINTERNATIONALSPACEST';
 const insets: Insets = { top: 24, right: 0, bottom: 20, left: 47 };
 let assets: Map<string, string | Uint8Array>;
@@ -147,12 +163,8 @@ for (const engine of [
       expect(appliedInsets).toEqual(insets);
       await page.locator('#map-chrome-toggle').click();
       if (await page.locator('#toggle-follow-iss').getAttribute('aria-pressed') === 'true') await page.locator('#toggle-follow-iss').click();
-      await page.locator('#bearing-north').click();
+      await settleNorth(page);
       await page.locator('#map-chrome-toggle').click();
-      await page.waitForFunction(() => {
-        const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
-        return !map.isMoving() && Math.abs(map.getBearing()) < .01;
-      });
       if (heading !== 'ISS') await page.waitForFunction((name) => {
         const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
         return Object.keys(map.getStyle().sources).some((key) => key.endsWith(`name:${name}`));

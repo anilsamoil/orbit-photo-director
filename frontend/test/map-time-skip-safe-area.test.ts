@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/iss-sgp4-fixture.json';
 import type { PassEntry } from '../src/types';
@@ -110,10 +111,12 @@ for (const engine of [
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
 ].filter((engine) => !process.env.OPD_TIME_ENGINE || engine.name === process.env.OPD_TIME_ENGINE)) describe.skipIf(!existsSync(engine.executablePath))(`trusted time controls ${engine.name}`, () => {
   let browser: Browser;
+  let session: TrackedBrowser | undefined;
   beforeAll(async () => {
-    browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
+    session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
+    browser = session.browser;
   }, 60_000);
-  afterAll(async () => { await browser?.close(); }, 30_000);
+  afterAll(async () => { await closeBrowser(session, `time-skip-${engine.name}`); }, 60_000);
 
 
   it.each(cases)('keeps every time step onscreen and out of the banner at $name [legend=$legendOpen]', async ({ name, width, height, insets, banner, selectedShot, legendOpen }) => {

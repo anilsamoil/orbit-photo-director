@@ -4,7 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium, devices, webkit } from 'playwright';
-import { closeBrowser, launchTracked } from '../test/close-browser.mjs';
+import { openPinnedBrowsers } from './pin-inspector-sessions.mjs';
+import { launchTracked } from '../test/close-browser.mjs';
 import { installFrozenDate } from '../test/frozen-date.mjs';
 
 const { values } = parseArgs({
@@ -22,15 +23,14 @@ const fixtureDir = resolve(values.fixtures);
 const outputDir = resolve(values.output);
 const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
 mkdirSync(outputDir, { recursive: true });
-const webKitSession = await launchTracked(webkit);
+await openPinnedBrowsers(
+  () => launchTracked(webkit),
+  () => launchTracked(chromium, values.chrome ? { executablePath: values.chrome } : { channel: 'chrome' }),
+  runPinnedInspection,
+);
+
+async function runPinnedInspection(webKitSession, desktopSession) {
 const browser = webKitSession.browser;
-let desktopSession;
-try {
-  desktopSession = await launchTracked(chromium, values.chrome ? { executablePath: values.chrome } : { channel: 'chrome' });
-} catch (error) {
-  await closeBrowser(webKitSession, 'pin-inspector-webkit');
-  throw error;
-}
 const desktopBrowser = desktopSession.browser;
 const results = [];
 const fixtureSaves = new WeakMap();
@@ -803,8 +803,7 @@ try {
   }
 } finally {
   writeFileSync(resolve(outputDir, values.baseline ? 'baseline-report.json' : 'report.json'), JSON.stringify(results, null, 2));
-  await closeBrowser(webKitSession, 'pin-inspector-webkit');
-  await closeBrowser(desktopSession, 'pin-inspector-chrome');
 }
 const failed = results.filter((row) => row.failures?.length);
 assert.equal(failed.length, 0, `${failed.length} scenarios failed. See ${resolve(outputDir, values.baseline ? 'baseline-report.json' : 'report.json')}`);
+}
