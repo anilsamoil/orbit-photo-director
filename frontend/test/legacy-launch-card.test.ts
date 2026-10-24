@@ -11,6 +11,16 @@ import fixture from './fixtures/joint-panels.json';
 const webkitReady = existsSync(webkit.executablePath());
 const chromePath = chromiumExecutablePath();
 
+function positiveTapReps(raw: string | undefined): number {
+  const text = raw ?? '3';
+  if (!/^[1-9][0-9]*$/.test(text)) {
+    throw new Error(`LEGACY_TAP_REPS must be a positive integer, received ${text}`);
+  }
+  return Number(text);
+}
+
+const tapReps = positiveTapReps(process.env.LEGACY_TAP_REPS);
+
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45123';
 const stylesheet = readFileSync(resolve(root, 'src/style.css'), 'utf8')
@@ -21,7 +31,13 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const meta = JSON.parse(fixture['meta.json']) as { now: number; pad: { lat: number; lon: number } };
 const bodies = legacyBodies();
 type HitEvent = { type: string; trusted: boolean; target: string };
-type TestWindow = Window & { __opdMap: import('maplibre-gl').Map; __legacyHits: HitEvent[] };
+type TestWindow = Window & {
+  __opdMap: import('maplibre-gl').Map;
+  __legacyHits: HitEvent[];
+  __lastTouchEndAt?: number;
+};
+/** MapLibre double-tap zoom calls preventDefault on touchend inside this window, and WebKit then emits no click. */
+const MAPLIBRE_DOUBLE_TAP_MS = 500;
 let assets: Map<string, string | Uint8Array>;
 let script: string;
 let browser: Browser;
@@ -82,6 +98,9 @@ async function prepare(page: Page) {
     Object.defineProperty(navigator, 'standalone', { get: () => true });
     const state = window as unknown as TestWindow;
     state.__legacyHits = [];
+    document.addEventListener('touchend', () => {
+      state.__lastTouchEndAt = performance.now();
+    }, true);
     for (const type of ['click', 'pointerup'] as const) {
       document.addEventListener(type, (event) => {
         const target = event.target as Element;
@@ -153,6 +172,44 @@ async function padPoint(page: Page) {
   }, meta.pad);
 }
 
+describe('legacy launch card Chrome', () => {
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('gives an exposed launch card a usable scrollport at $width×$height', async ({ width, height }) => {
+    const context = await chromeBrowser.newContext({
+      viewport: { width, height },
+      screen: { width, height },
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 3,
+      serviceWorkers: 'block',
+    });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      await prepare(page);
+      const point = await padPoint(page);
+      await page.touchscreen.tap(point.x, point.y);
+      await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+      const scroll = await page.locator('.maplibregl-popup-content').evaluate((element) => {
+        const slot = document.getElementById('map-inspector');
+        const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
+        return {
+          clientWidth: element.clientWidth,
+          clientHeight: element.clientHeight,
+          exposed: !!last?.querySelector('.launch-ascent-card') && document.querySelector('.dropped-pin-popup') === null,
+        };
+      });
+      expect(scroll.exposed, JSON.stringify(scroll)).toBe(true);
+      expect(scroll.clientWidth, JSON.stringify(scroll)).toBeGreaterThanOrEqual(200);
+      expect(scroll.clientHeight, JSON.stringify(scroll)).toBeGreaterThanOrEqual(160);
+    } finally {
+      await context.close();
+    }
+  }, 45_000);
+});
+
 describe.skipIf(!webkitReady)('legacy launch card WebKit', () => {
   it('opens from a trusted tap when controls are shown in landscape', async () => {
     const context = await browser.newContext({
@@ -222,7 +279,7 @@ async function pinOverLaunch(page: Page): Promise<boolean> {
   }, undefined, { timeout: 8_000 }).then(() => true, () => false);
 }
 
-async function rightClickCanvas(page: Page): Promise<void> {
+async function canvasSeed(page: Page): Promise<{ x: number; y: number }> {
   await page.waitForFunction(() => {
     const map = (window as unknown as TestWindow).__opdMap;
     return !!map?.isStyleLoaded() && !map.isMoving();
@@ -250,25 +307,46 @@ async function rightClickCanvas(page: Page): Promise<void> {
     return fallback;
   });
   expect(seed, 'a canvas point for the pin').not.toBeNull();
-  // MapLibre drops a contextmenu that arrives before mousedown, and drops one
-  // while a touch is active. A Playwright right click and a later evaluate are
-  // separate turns, so on a busy WebKit thread the contextmenu lands first and
-  // the pin never opens. End any touch, then press, contextmenu, and release
-  // in one turn on the element MapLibre listens to.
-  await page.evaluate(({ x, y }) => {
-    const map = (window as unknown as TestWindow).__opdMap;
-    map.dragRotate.disable();
-    const container = map.getCanvasContainer();
-    container.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
-    const at = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 };
-    container.dispatchEvent(new MouseEvent('mousedown', at));
-    container.dispatchEvent(new MouseEvent('contextmenu', at));
-    container.dispatchEvent(new MouseEvent('mouseup', { ...at, buttons: 0 }));
-  }, seed!);
+  return seed!;
+}
+
+function fingerDown(seed: { x: number; y: number }): void {
+  const canvas = (window as unknown as TestWindow).__opdMap.getCanvas();
+  const touch = { identifier: 1, target: canvas, clientX: seed.x, clientY: seed.y };
+  const start = new Event('touchstart', { bubbles: true, cancelable: true });
+  Object.defineProperty(start, 'touches', { value: [touch] });
+  Object.defineProperty(start, 'targetTouches', { value: [touch] });
+  Object.defineProperty(start, 'changedTouches', { value: [touch] });
+  canvas.dispatchEvent(start);
+}
+
+function fingerUp(): void {
+  const canvas = (window as unknown as TestWindow).__opdMap.getCanvas();
+  const end = new Event('touchend', { bubbles: true, cancelable: true });
+  Object.defineProperty(end, 'touches', { value: [] });
+  Object.defineProperty(end, 'targetTouches', { value: [] });
+  Object.defineProperty(end, 'changedTouches', { value: [] });
+  canvas.dispatchEvent(end);
+}
+
+// MapLibre reset()s its context-menu handler while mouse-pan is active, and the
+// reset leaves the next contextmenu ignored until a mousedown it is allowed to
+// see. The pad tap is a left click, so a right click whose contextmenu arrives
+// first never opens the pin. A phone opens it by holding one finger still: the
+// long-press timer fires the menu itself, and a lift before that delay cancels it.
+async function holdPin(page: Page): Promise<void> {
+  const seed = await canvasSeed(page);
+  await page.evaluate(fingerDown, seed);
+  await page.waitForFunction(
+    () => document.querySelector('.dropped-pin-popup') !== null,
+    undefined,
+    { timeout: 8_000 },
+  ).catch(() => undefined);
+  await page.evaluate(fingerUp);
 }
 
 async function dropPinOverLaunch(page: Page): Promise<void> {
-  await rightClickCanvas(page);
+  await holdPin(page);
   if (await pinOverLaunch(page)) return;
   const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
@@ -296,6 +374,10 @@ async function centerTap(page: Page) {
     };
   });
   expect(point).not.toBeNull();
+  await page.waitForFunction((gap) => {
+    const last = (window as unknown as TestWindow).__lastTouchEndAt;
+    return last === undefined || performance.now() - last > gap;
+  }, MAPLIBRE_DOUBLE_TAP_MS);
   await page.evaluate(() => { (window as unknown as TestWindow).__legacyHits = []; });
   await page.touchscreen.tap(point!.x, point!.y);
   const hits = await page.evaluate(() => (window as unknown as TestWindow).__legacyHits);
@@ -324,7 +406,7 @@ function phoneContext(engine: (typeof pinEngines)[number], width: number, height
 }
 
 async function dropPin(page: Page) {
-  await rightClickCanvas(page);
+  await holdPin(page);
   const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 8_000 }).then(() => true, () => false);
   if (!opened) throw new Error('pin did not open');
 }
@@ -411,7 +493,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
     { width: 874, height: 402 },
   ])('keeps a center tap on the canvas at $width×$height', async ({ width, height }) => {
     const results = [];
-    for (let rep = 1; rep <= 3; rep += 1) {
+    for (let rep = 1; rep <= tapReps; rep += 1) {
       const context = await engine.browser().newContext({
         viewport: { width, height },
         screen: { width, height },
@@ -436,7 +518,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
     }
     console.log(`PIN_OVER_LEGACY ${JSON.stringify({ engine: engine.name, width, height, results })}`);
     expect(results.every((result) => result.canvas && result.trustedCanvas), JSON.stringify(results)).toBe(true);
-  }, 120_000);
+  }, Math.max(120_000, tapReps * 12_000));
 
   it.each([
     { width: 402, height: 874 },
@@ -541,11 +623,26 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
         });
         if (brief) observer.observe(brief, { attributes: true, attributeFilter: ['hidden'] });
         if (brief) samples.push(brief.hidden);
+        const map = (window as unknown as TestWindow).__opdMap;
+        // renderQueue rebuilds the brief and schedules resizeMap on the next frame.
+        // The inspector remeasures two frames after that resize. The observer stays
+        // connected until that remeasure has returned.
+        const settled = new Promise<void>((resolve) => {
+          map.once('resize', () => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  if (brief) samples.push(brief.hidden);
+                  observer.disconnect();
+                  resolve();
+                });
+              });
+            });
+          });
+        });
         button?.click();
         if (brief) samples.push(brief.hidden);
-        await new Promise((resolve) => { setTimeout(resolve, 50); });
-        if (brief) samples.push(brief.hidden);
-        observer.disconnect();
+        await settled;
         const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
         return {
           samples,
