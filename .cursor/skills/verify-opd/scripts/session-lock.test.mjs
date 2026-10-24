@@ -56,11 +56,20 @@ test('a denied session keeps Queue and locks Profile', () => {
     profileActive: false,
     showsStoredProfile: false,
     showsPersonalTarget: false,
+    keptQueue: '[{"private":"unsent"}]',
   }), []);
   assert.deepEqual(profileReadyFailures({
     disabled: false,
     ariaDisabled: null,
     view: 'view-profile',
     body: 'Anil',
+    banner: 'Last updated 5 min ago',
   }), []);
+  assert.match(profileReadyFailures({
+    disabled: false,
+    ariaDisabled: null,
+    view: 'view-profile',
+    body: 'Anil',
+    banner: 'Please sign in again to open your own profile.',
+  }).join('\n'), /recovery footer remained/);
 });

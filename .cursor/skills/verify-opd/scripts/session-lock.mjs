@@ -68,6 +68,7 @@ export function profileLockFailures(state) {
   if (state?.disabled !== true || state?.ariaDisabled !== 'true') failures.push('profile was not locked');
   if (state?.view === 'view-profile' || state?.profileActive === true) failures.push('profile pane opened');
   if (state?.showsStoredProfile || state?.showsPersonalTarget) failures.push('stored profile rendered');
+  if (state?.keptQueue !== '[{"private":"unsent"}]') failures.push('ratings cleared');
   return failures;
 }
 
@@ -77,6 +78,9 @@ export function profileReadyFailures(state) {
   if (state?.ariaDisabled != null) failures.push(`aria-disabled ${state?.ariaDisabled}`);
   if (state?.view !== 'view-profile') failures.push(`view ${state?.view}`);
   if (!String(state?.body || '').includes('Anil')) failures.push('pane omitted Anil');
+  const banner = String(state?.banner || '');
+  if (!banner.includes('Last updated')) failures.push(`banner ${banner}`);
+  if (/sign in/i.test(banner)) failures.push('recovery footer remained');
   return failures;
 }
 
@@ -174,7 +178,7 @@ async function proveProfile(browser, plan, evidenceDir) {
     await assertCreatedSize(lockedPage, plan);
     await lockedPage.locator('#status-banner').getByRole('link', { name: 'Sign in' }).waitFor({ timeout: 15000 });
     await lockedPage.evaluate(() => {
-      localStorage.setItem('opd-profile-anil', '{"private":"keep this"}');
+      localStorage.setItem('opd-calib-queue', '[{"private":"unsent"}]');
       document.getElementById('tab-profile')?.click();
     });
     locked = await lockedPage.evaluate(() => {
@@ -185,8 +189,9 @@ async function proveProfile(browser, plan, evidenceDir) {
         ariaDisabled: profile?.getAttribute('aria-disabled') ?? null,
         view: document.getElementById('view')?.className || '',
         profileActive: profile?.classList.contains('active') === true,
-        showsStoredProfile: body.includes('keep this'),
+        showsStoredProfile: body.includes('unsent'),
         showsPersonalTarget: body.includes('Backyard'),
+        keptQueue: localStorage.getItem('opd-calib-queue'),
       };
     });
     await lockedPage.screenshot({ path: resolve(evidenceDir, `session-lock-profile-${plan.id}.png`) });
