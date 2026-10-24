@@ -26,17 +26,44 @@ import type {
   VendorMapOptions,
 } from '../../map-core/vendor-map';
 import { getMapLaunchMode, launchCardBuried } from '../../../map-launch-mode';
+import { gestureBlocksFollow, type GestureReading } from './gesture';
 import { collapseAttribution } from './attribution';
 import { layerListener, mapListener, toHit, toLngLat } from './events';
 
+type HeldPoint = { _lastPoint?: object | null };
+type HeldTouches = { _firstTwoTouches?: object | null };
+type RotateHandlers = { _mouseRotate?: HeldPoint; _mousePitch?: HeldPoint; _mouseRoll?: HeldPoint };
+type PinchHandlers = { _touchZoom?: HeldTouches; _touchRotate?: HeldTouches; _tapDragZoom?: HeldTouches };
+
+function pointHeld(handler: HeldPoint | undefined): boolean {
+  return handler?._lastPoint != null;
+}
+
+function touchesHeld(handler: HeldTouches | undefined): boolean {
+  return handler?._firstTwoTouches != null;
+}
+
+/** MapLibre 6.11.2 leaves isActive false until the first move past the click
+ *  tolerance. The handler already recorded the gesture in _lastPoint or
+ *  _firstTwoTouches, and reset clears both. */
+function gesturePending(map: maplibregl.Map): boolean {
+  const rotate = map.dragRotate as unknown as RotateHandlers;
+  const pinch = map.touchZoomRotate as unknown as PinchHandlers;
+  const pitch = map.touchPitch as unknown as HeldTouches;
+  return pointHeld(rotate._mouseRotate) || pointHeld(rotate._mousePitch) || pointHeld(rotate._mouseRoll)
+    || touchesHeld(pinch._touchZoom) || touchesHeld(pinch._touchRotate) || touchesHeld(pinch._tapDragZoom)
+    || touchesHeld(pitch);
+}
+
 /** The MapLibre constructor options for an initial camera. Every gesture is
- *  on, the world repeats across the antimeridian, and the map page does not
- *  mount the attribution control. */
+ *  on, the world repeats across the antimeridian, a rotate near north stays
+ *  put, and the map page does not mount the attribution control. */
 export function maplibreMapOptions(camera: InitialCamera): {
   center: LngLat;
   zoom: number;
   attributionControl: false;
   renderWorldCopies: true;
+  bearingSnap: 0;
   dragPan: true;
   dragRotate: true;
   scrollZoom: true;
@@ -48,6 +75,7 @@ export function maplibreMapOptions(camera: InitialCamera): {
     zoom: camera.zoom,
     attributionControl: false,
     renderWorldCopies: true,
+    bearingSnap: 0,
     dragPan: true,
     dragRotate: true,
     scrollZoom: true,
@@ -423,6 +451,37 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
   collapseAttribution(options.container);
   exposeForEndToEnd(map);
   const syncInspector = inspectorSync(map);
+  let userDriven = false;
+  map.on('movestart', (event) => {
+    userDriven = Boolean(event.originalEvent);
+  });
+  map.on('moveend', () => {
+    userDriven = false;
+  });
+  const reading = (): GestureReading => ({
+    hidden: document.hidden,
+    pending: gesturePending(map),
+    dragRotate: map.dragRotate.isActive(),
+    dragPan: map.dragPan.isActive(),
+    touchZoomRotate: map.touchZoomRotate.isActive(),
+    touchPitch: map.touchPitch.isActive(),
+    keyboard: map.keyboard.isActive(),
+    rotating: map.isRotating(),
+    moving: map.isMoving(),
+    userDriven,
+  });
+  const releaseAbandoned = (): void => {
+    if (!gestureBlocksFollow({ ...reading(), hidden: false })) return;
+    map.stop();
+  };
+  map.getCanvas().addEventListener('lostpointercapture', (event) => {
+    if (event.buttons === 0) return;
+    releaseAbandoned();
+  });
+  map.getCanvas().addEventListener('pointercancel', releaseAbandoned);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseAbandoned();
+  });
 
   return {
     whenLoaded: () => new Promise<void>((resolve) => map.once('load', () => resolve())),
@@ -450,6 +509,8 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
     center: () => toLngLat(map.getCenter()),
     zoom: () => map.getZoom(),
     bearing: () => map.getBearing(),
+    moving: () => map.isMoving(),
+    userGesture: () => gestureBlocksFollow(reading()),
     setCenter: (at: LngLat) => map.setCenter(at),
     setBearing: (degrees: number) => map.setBearing(degrees),
     easeTo: (move: CameraMove) => map.easeTo(move),

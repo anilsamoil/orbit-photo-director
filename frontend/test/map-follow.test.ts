@@ -26,9 +26,24 @@ class FakeMap {
   centerCalls: [number, number][] = [];
   easeCalls: [number, number][] = [];
   flyCalls: { center: [number, number]; duration: number; essential?: boolean }[] = [];
+  bearingCalls: number[] = [];
+  bearingValue = 0;
   dragHandler: (() => void) | null = null;
   zoomHandler: ((e: unknown) => void) | null = null;
 
+  bearing(): number {
+    return this.bearingValue;
+  }
+  userGesture(): boolean {
+    return false;
+  }
+  moving(): boolean {
+    return false;
+  }
+  setBearing(degrees: number): void {
+    this.bearingValue = degrees;
+    this.bearingCalls.push(degrees);
+  }
   setCenter(c: [number, number]): void {
     this.centerCalls.push(c);
   }
@@ -194,6 +209,10 @@ describe('applyFollowISS scrub gate (4A — real implementation)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-10T12:00:00Z'));
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 1;
+    });
     _resetMapStateForTest();
     _resetFollowStateForTest();
     fake = new FakeMap();
@@ -201,6 +220,7 @@ describe('applyFollowISS scrub gate (4A — real implementation)', () => {
 
   afterEach(() => {
     _setFollowEnvForTest(null, false);
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -208,6 +228,24 @@ describe('applyFollowISS scrub gate (4A — real implementation)', () => {
     _setFollowEnvForTest(fake, true);
     realApplyFollowISS({ lat: 30, lon: 50 });
     expect(fake.centerCalls).toEqual([[50, 30]]);
+    expect(fake.bearingCalls).toEqual([0]);
+  });
+
+  it('recenter commits north when a rotate was left mid-angle', () => {
+    fake.bearingValue = 79.97;
+    _setFollowEnvForTest(fake, true);
+    realApplyFollowISS({ lat: 30, lon: 50 });
+    expect(fake.centerCalls).toEqual([[50, 30]]);
+    expect(fake.bearingCalls).toEqual([0]);
+    expect(fake.bearingValue).toBe(0);
+  });
+
+  it('recenter commits north when the aborted rotate is inside the 0.5° skip', () => {
+    fake.bearingValue = 0.47;
+    _setFollowEnvForTest(fake, true);
+    realApplyFollowISS({ lat: 30, lon: 50 });
+    expect(fake.bearingCalls).toEqual([0]);
+    expect(fake.bearingValue).toBe(0);
   });
 
   it('scrubbed + following → no-op (camera must not chase the live position)', () => {
