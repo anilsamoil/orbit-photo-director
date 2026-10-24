@@ -188,7 +188,7 @@ let syncing = false;
 let staleSkips = 0;
 let syncQueued = false;
 let chromeLive = false;
-let togglePressed = false;
+let heldPointerId: number | null = null;
 let syncHeld = false;
 const writtenPx = new Map<string, number>();
 
@@ -286,19 +286,28 @@ function scheduleSync(): void {
 }
 
 function holdToggleSync(event: PointerEvent): void {
-  if (event.button !== 0) return;
+  if (heldPointerId !== null || event.button !== 0) return;
   const target = event.target;
   if (!(target instanceof Element) || !target.closest('#map-chrome-toggle')) return;
-  togglePressed = true;
+  heldPointerId = event.pointerId;
 }
 
-function releaseToggleSync(event: PointerEvent): void {
-  if (!togglePressed) return;
-  if (event.type === 'pointerup' && event.button !== 0) return;
-  togglePressed = false;
+function releaseHeldPointer(): void {
+  if (heldPointerId === null) return;
+  heldPointerId = null;
   if (!syncHeld) return;
   syncHeld = false;
   scheduleSync();
+}
+
+function releaseToggleSync(event: PointerEvent): void {
+  if (heldPointerId === null || event.pointerId !== heldPointerId) return;
+  if (event.type === 'pointerup' && event.buttons !== 0) return;
+  releaseHeldPointer();
+}
+
+function releaseToggleOnBlur(): void {
+  releaseHeldPointer();
 }
 
 function syncFooterClearance(pane: HTMLElement): void {
@@ -345,7 +354,7 @@ function syncFooterClearance(pane: HTMLElement): void {
 
 export function syncMapChrome(): void {
   if (!chromeLive || mute) return;
-  if (togglePressed) {
+  if (heldPointerId !== null) {
     syncHeld = true;
     return;
   }
@@ -571,6 +580,8 @@ export function bindMapChrome(): () => void {
     document.addEventListener('pointerdown', holdToggleSync, true);
     document.addEventListener('pointerup', releaseToggleSync, true);
     document.addEventListener('pointercancel', releaseToggleSync, true);
+    document.addEventListener('lostpointercapture', releaseToggleSync, true);
+    window.addEventListener('blur', releaseToggleOnBlur);
     publish(owned.length);
     syncMapChrome();
   };
@@ -588,7 +599,9 @@ export function bindMapChrome(): () => void {
     document.removeEventListener('pointerdown', holdToggleSync, true);
     document.removeEventListener('pointerup', releaseToggleSync, true);
     document.removeEventListener('pointercancel', releaseToggleSync, true);
-    togglePressed = false;
+    document.removeEventListener('lostpointercapture', releaseToggleSync, true);
+    window.removeEventListener('blur', releaseToggleOnBlur);
+    heldPointerId = null;
     syncHeld = false;
     publish(0);
   };
