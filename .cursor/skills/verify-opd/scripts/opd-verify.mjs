@@ -220,8 +220,15 @@ function startProxy(home) {
   let catalogGate = null;
   function currentCatalog() {
     const now = Date.now();
-    if (catalogLive && now < catalogLive.anchor + 8 * 60_000 && catalogBodies.has(catalogLive.pointer.path)) return catalogLive;
+    const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
+    const cached = catalogLive
+      && now < catalogLive.anchor + 8 * 60_000
+      && Number.isFinite(until)
+      && now < until
+      && catalogBodies.has(catalogLive.pointer.path);
+    if (cached) return catalogLive;
     catalogLive = publishVerifyCatalog(fixtureDir, now);
+    catalogLive.siteAnchor = catalogLive.anchor;
     catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
     return catalogLive;
   }
@@ -268,12 +275,15 @@ function startProxy(home) {
   }
   function bumpHeldCatalog() {
     const live = currentCatalog();
+    const siteAnchor = catalogGate && !catalogGate.released
+      ? catalogGate.siteAnchor
+      : (live.siteAnchor ?? live.anchor);
     const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
     const bodyObj = JSON.parse(base);
     let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
     let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
     let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
-    let revision = `c${generatedMs}`;
+    let revision = `c${siteAnchor}-${generatedMs}`;
     const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
       || (catalogGate && catalogGate.pointer.revision === candidate);
     for (let step = 0; taken(revision) && step < 8; step += 1) {
@@ -299,19 +309,30 @@ function startProxy(home) {
       path: `launch/catalog/v/${revision}.json`,
       sha256: createHash('sha256').update(body).digest('hex'),
     };
-    return { pointer, body };
+    return { pointer, body, siteAnchor };
   }
   function armCatalogGate() {
     const next = bumpHeldCatalog();
     catalogBodies.set(next.pointer.path, next.body);
-    catalogGate = { pointer: next.pointer, body: next.body, released: false };
+    catalogGate = {
+      pointer: next.pointer,
+      body: next.body,
+      siteAnchor: next.siteAnchor,
+      released: false,
+    };
     return next.pointer;
   }
   function releaseCatalogGate() {
     if (catalogGate && !catalogGate.released) {
       catalogGate.released = true;
-      catalogLive = { pointer: catalogGate.pointer, body: catalogGate.body, anchor: Date.now() };
+      catalogLive = {
+        pointer: catalogGate.pointer,
+        body: catalogGate.body,
+        anchor: Date.now(),
+        siteAnchor: catalogGate.siteAnchor,
+      };
       catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
+      writeFileSync(resolve(fixtureDir, 'catalog-clock.json'), JSON.stringify({ anchor: catalogGate.siteAnchor }));
     }
     for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
   }

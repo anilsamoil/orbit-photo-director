@@ -70,11 +70,22 @@ const cases = sizes.flatMap(([width, height]) => insetSets.flatMap((insets) => s
   name: `${width}x${height} B${insets.bottom} ${state.banner}${state.selectedShot ? ' selected shot' : ''}${state.legendOpen ? ' Legend open' : ''}`,
 }))));
 const selectors = ['#time-back-90', '#time-back-45', '#time-now', '#time-fwd-45', '#time-fwd-90'];
+const timeCaseTimeoutMs = 90_000;
 async function waitForMapReady(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
+  // isStyleLoaded stays false until every in-view raster tile decodes. The
+  // time controls are wired once the map's load event has mounted the track,
+  // which is before that decode finishes. Button boxes alone are earlier than
+  // the click handlers, so the slider would ignore the tap. The context's 20s
+  // default is for a click; this wait shares the case cap.
+  await page.waitForFunction((selectors: string[]) => {
     const map = (window as unknown as { __opdMap?: import('maplibre-gl').Map }).__opdMap;
-    return map?.isStyleLoaded() && !!map.getSource('iss-track');
-  });
+    const canvas = map?.getCanvas();
+    const controlsReady = selectors.every((selector) => {
+      const box = document.querySelector(selector)?.getBoundingClientRect();
+      return !!box && box.width > 0 && box.height > 0;
+    });
+    return !!map?.getSource('iss-track') && !!map?.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0 && controlsReady;
+  }, selectors, { timeout: timeCaseTimeoutMs });
 }
 
 async function geometry(page: Page, selector: string) {
@@ -292,5 +303,5 @@ for (const engine of [
       console.error('Time control phase failure', { engine: engine.name, name, phases });
       throw error;
     } finally { await context.close(); }
-  }, 90_000);
+  }, timeCaseTimeoutMs);
 });
