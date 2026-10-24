@@ -131,6 +131,44 @@ async function samplesOf(page: Page): Promise<number[]> {
   return page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.__samples ?? []);
 }
 
+// One turn, after the track layer and a sized canvas exist. A task between
+// the right-button down and the bearing frame (window blur resets MapLibre's
+// handlers, which sets _ignoreContextMenu, and the follow tick then holds
+// bearing at 0) leaves the old poll waiting until timeout. redraw commits
+// the rotate before that task can run. isStyleLoaded stays false here.
+async function commitRightDrag(page: Page, x: number, y: number): Promise<void> {
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
+    const canvas = map?.getCanvas();
+    return !!map?.getSource('iss-track') && !!map.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0;
+  });
+  await page.evaluate(({ x: px, y: py }) => {
+    const map = (window as unknown as { __opdMap: MapHandle & { redraw(): void } }).__opdMap;
+    const canvas = map.getCanvas() as unknown as HTMLCanvasElement;
+    const fire = (type: string, clientX: number, buttons: number): void => {
+      canvas.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 2,
+        buttons,
+        clientX,
+        clientY: py,
+      }));
+    };
+    fire('mousedown', px, 2);
+    let step = 0;
+    while (Math.abs(map.getBearing()) < 40 && step < 16) {
+      step += 1;
+      fire('mousemove', px + step * 14, 2);
+      map.redraw();
+    }
+    fire('mouseup', px + step * 14, 0);
+    map.redraw();
+  }, { x, y });
+  await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+}
+
 const surfaces = [
   { width: 1280, height: 800 },
   { width: 834, height: 1210 },
@@ -271,22 +309,7 @@ for (const engine of [
       if (!box) throw new Error('map canvas has no box');
       const x = box.x + box.width / 2;
       const y = box.y + box.height / 2;
-      await page.mouse.move(x, y);
-      await page.mouse.down({ button: 'right' });
-      let seen = 0;
-      for (let i = 1; seen < 40 && i <= 16; i += 1) {
-        await page.mouse.move(x + i * 14, y);
-        await page.waitForFunction((floor) => {
-          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-          return Math.abs(map.getBearing()) > floor;
-        }, seen);
-        seen = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
-      }
-      await page.mouse.up({ button: 'right' });
-      await page.waitForFunction(() => {
-        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-        return !map.isMoving();
-      });
+      await commitRightDrag(page, x, y);
       const samples = await samplesOf(page);
       const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
       const end = Math.abs(samples[samples.length - 1] ?? 0);
@@ -419,27 +442,9 @@ for (const engine of [
   }
 
   async function dragRotate(page: Page): Promise<void> {
-    const canvas = page.locator('#map .maplibregl-canvas');
-    const box = await canvas.boundingBox();
+    const box = await page.locator('#map .maplibregl-canvas').boundingBox();
     if (!box) throw new Error('map canvas has no box');
-    const x = box.x + box.width / 2;
-    const y = box.y + box.height / 2;
-    await page.mouse.move(x, y);
-    await page.mouse.down({ button: 'right' });
-    let seen = 0;
-    for (let i = 1; seen < 40 && i <= 16; i += 1) {
-      await page.mouse.move(x + i * 14, y);
-      await page.waitForFunction((floor) => {
-        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-        return Math.abs(map.getBearing()) > floor;
-      }, seen);
-      seen = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
-    }
-    await page.mouse.up({ button: 'right' });
-    await page.waitForFunction(() => {
-      const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
-      return !map.isMoving();
-    });
+    await commitRightDrag(page, box.x + box.width / 2, box.y + box.height / 2);
   }
 
   it('a North click 50ms and 150ms after a rotate eases to north', async () => {

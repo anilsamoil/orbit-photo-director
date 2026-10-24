@@ -144,6 +144,7 @@
   "test/pin-drop-popup.test.ts": 0.453,
   "test/pin-drop.test.ts": 0.619,
   "test/pin-inspector-sessions.test.ts": 0.402,
+  "test/pin-pass-reach.test.ts": 1.033,
   "test/profile-crud-edit.test.ts": 0.607,
   "test/profile-crud.test.ts": 2.392,
   "test/profile-csv-import.test.ts": 0.548,
