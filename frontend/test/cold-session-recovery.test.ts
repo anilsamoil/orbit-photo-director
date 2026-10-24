@@ -67,7 +67,13 @@ function stub(shape: Shape): string {
         });
         observer.observe(banner, { childList: true, subtree: true, characterData: true });
       }
-      if (shape === 'network') return Promise.reject(new TypeError('Load failed'));
+      if (shape === 'network') {
+        window.__coldMacrotask = -1;
+        window.setTimeout(() => {
+          window.__coldMacrotask = performance.now() - window.__coldStart;
+        }, 0);
+        return Promise.reject(new TypeError('Load failed'));
+      }
       if (shape === 'slow') {
         return new Promise((resolve) => {
           setTimeout(() => resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })), 15000);
@@ -156,9 +162,13 @@ for (const engine of engines) {
             await page.waitForFunction(() => typeof (window as unknown as { __coldStart?: number }).__coldStart === 'number');
             if (shape === 'network') {
               await page.locator('#status-banner a.banner-action').waitFor({ timeout: 2_000 });
+              await page.waitForFunction(() => (window as unknown as { __coldMacrotask?: number }).__coldMacrotask! >= 0);
             } else {
               const early = await page.locator('#status-banner').innerText();
               expect(await page.locator('#status-banner .banner-action').count(), early).toBe(0);
+              const frozen = await page.evaluate(() => performance.now());
+              await new Promise((resolve) => setTimeout(resolve, 200));
+              expect(await page.evaluate(() => performance.now())).toBe(frozen);
               await page.clock.fastForward(10_000);
             }
             const state = await page.evaluate(() => {
@@ -169,6 +179,7 @@ for (const engine of engines) {
                 reload: banner?.querySelector('button.banner-action')?.textContent ?? '',
                 cards: document.querySelectorAll('#cards > *').length,
                 elapsed: (window as unknown as { __coldMs?: number }).__coldMs ?? -1,
+                macrotask: (window as unknown as { __coldMacrotask?: number }).__coldMacrotask ?? -1,
               };
             });
             const banner = state.text;
@@ -176,7 +187,8 @@ for (const engine of engines) {
             if (shape === 'network') {
               expect(banner).toMatch(/Load failed|Failed to fetch/);
               expect(elapsed).toBeGreaterThanOrEqual(0);
-              expect(elapsed).toBeLessThan(engine.name === 'WebKit' ? 20 : 200);
+              expect(state.macrotask).toBeGreaterThanOrEqual(0);
+              expect(elapsed).toBeLessThanOrEqual(state.macrotask);
             } else {
               expect(banner).toContain('The session request timed out');
               expect(elapsed).toBeGreaterThanOrEqual(9_000);
