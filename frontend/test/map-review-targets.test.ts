@@ -58,9 +58,37 @@ type Target = typeof targets[number];
 type PickerEdgeState = {
   started: number;
   scrolledAt: number | null;
+  scrolls: number[];
   scrollTrusted: boolean;
   events: { type: string; trusted: boolean; owns: boolean; target: string; elapsed: number | null }[];
 };
+
+// Scroll events and pointer events are not delivered in timestamp order. A nudge
+// can land on the main thread before a pointerdown that the browser already
+// stamped, and reading the newest scroll then makes elapsed negative. The 1000ms
+// window is the gap from the latest scroll at or before that pointer.
+function latestScrollBefore(scrolls: readonly number[], at: number): number | null {
+  let prior: number | null = null;
+  for (const stamp of scrolls) {
+    if (stamp <= at && (prior === null || stamp > prior)) prior = stamp;
+  }
+  return prior;
+}
+
+describe('picker scroll reference', () => {
+  it('keeps the 1000ms window on the scroll that preceded the pointer', () => {
+    const scrolledAt = 11468.1;
+    const pointerAt = scrolledAt - 556.2;
+    expect(pointerAt - scrolledAt).toBeLessThan(0);
+    const prior = latestScrollBefore([pointerAt - 180, scrolledAt], pointerAt);
+    expect(prior).toBe(pointerAt - 180);
+    const elapsed = pointerAt - prior!;
+    expect(elapsed).toBeGreaterThanOrEqual(0);
+    expect(elapsed).toBeLessThan(1000);
+    expect(latestScrollBefore([scrolledAt], pointerAt)).toBeNull();
+  });
+});
+
 type PickerTouchState = {
   events: { type: string; trusted: boolean; owns: boolean; target: string; pointerType: string | null; rect: DOMRectJSON }[];
 };
@@ -337,35 +365,47 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       await click(page, '#map-legend-toggle');
       await click(page, '#toggle-satellite-picker');
       await page.waitForSelector('#satellite-picker-panel:not([hidden])');
-      const before = await page.evaluate((selector) => {
+      const before = await page.evaluate(([selector, latestScrollBeforeSource]) => {
+        const latestScrollBefore = new Function(`return (${latestScrollBeforeSource})`)() as (scrolls: number[], at: number) => number | null;
         const panel = document.querySelector('#satellite-picker-panel')!;
         const element = document.querySelector(selector)!;
-        const edge: PickerEdgeState = { started: performance.now(), scrolledAt: null, scrollTrusted: false, events: [] };
+        const edge: PickerEdgeState = { started: performance.now(), scrolledAt: null, scrolls: [], scrollTrusted: false, events: [] };
         (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge = edge;
+        const note = (stamp: number, trusted: boolean) => {
+          edge.scrolls.push(stamp);
+          edge.scrolledAt = stamp;
+          if (trusted) edge.scrollTrusted = true;
+        };
         panel.addEventListener('scroll', (event) => {
-          edge.scrolledAt = event.timeStamp;
-          if (event.isTrusted) edge.scrollTrusted = true;
+          note(event.timeStamp, event.isTrusted);
         });
         for (const type of ['pointerdown', 'pointerup', 'click', 'focus']) document.addEventListener(type, (event) => {
           const hit = event.target as Element;
-          edge.events.push({ type, trusted: event.isTrusted, owns: hit === element || element.contains(hit), target: hit.id || hit.tagName, elapsed: edge.scrolledAt === null ? null : event.timeStamp - edge.scrolledAt });
+          const prior = latestScrollBefore(edge.scrolls, event.timeStamp);
+          edge.events.push({ type, trusted: event.isTrusted, owns: hit === element || element.contains(hit), target: hit.id || hit.tagName, elapsed: prior === null ? null : event.timeStamp - prior });
         }, true);
         return { scrollTop: panel.scrollTop };
-      }, target.selector);
+      }, [target.selector, latestScrollBefore.toString()] as const);
       await page.locator(target.selector).scrollIntoViewIfNeeded();
       await page.waitForFunction(() => (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge.scrolledAt !== null);
       // Geometry and touchscreen.tap are harness round trips. On a faulting runner
       // those gaps run past the overlay-scrollbar fade, so a 1000ms clock that
       // starts at the first scroll measures scheduling. Keep nudging the same
       // scroll offset until pointerdown: the scrollbar stays in the just-scrolled
-      // state, and the 1000ms window is the gap since that latest scroll.
+      // state, and the 1000ms window is the gap since the latest nudge at or
+      // before the pointer. Stamp the write itself; the scroll event can be
+      // delivered after a pointer the browser already timestamped.
       await page.evaluate(() => {
         const panel = document.querySelector('#satellite-picker-panel') as HTMLElement;
+        const edge = (window as unknown as { __pickerEdge: PickerEdgeState }).__pickerEdge;
         const restore = panel.scrollTop;
         const nudge = () => {
           const delta = restore > 0 ? -1 : 1;
           panel.scrollTop = restore + delta;
           panel.scrollTop = restore;
+          const stamp = performance.now();
+          edge.scrolls.push(stamp);
+          edge.scrolledAt = stamp;
         };
         nudge();
         (window as unknown as { __pickerNudge?: number }).__pickerNudge = window.setInterval(nudge, 200);
@@ -400,7 +440,12 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       expect.soft(down?.trusted, JSON.stringify(after)).toBe(true);
       expect.soft(down?.elapsed, JSON.stringify(after)).toBeGreaterThanOrEqual(0);
       expect.soft(down?.elapsed, JSON.stringify(after)).toBeLessThan(1000);
-    } finally { await browser.close(); }
+    } finally {
+      await page.evaluate(() => {
+        window.clearInterval((window as unknown as { __pickerNudge?: number }).__pickerNudge);
+      }).catch(() => undefined);
+      await browser.close();
+    }
   }, 60_000);
 
   it.each(targets)('F1: picker has 44px effective native targets at $width×$height', async (target) => {
