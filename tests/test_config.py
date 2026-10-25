@@ -53,7 +53,7 @@ def test_from_env_honors_environment_variables(
     assert s.pass_window_hours == 12
 
 
-def test_default_tle_url_tries_celestrak_then_ariss_then_wheretheiss(
+def test_default_tle_url_tries_standard_sources_then_supplemental(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("OPD_TLE_URL", raising=False)
@@ -63,6 +63,7 @@ def test_default_tle_url_tries_celestrak_then_ariss_then_wheretheiss(
         "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE",
         "https://live.ariss.org/iss.txt",
         "https://api.wheretheiss.at/v1/satellites/25544/tles",
+        "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?CATNR=25544&FORMAT=TLE",
     ]
 
 
