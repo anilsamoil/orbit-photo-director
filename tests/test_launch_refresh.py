@@ -215,7 +215,7 @@ def test_catalog_restart_rebuilds_unusable_lease_metadata(setup, metadata):
 
 
 @pytest.mark.parametrize("minutes", [75, 80, 179])
-def test_catalog_rebuild_cannot_renew_actionable_tier_from_stale_receipt(visible_setup, minutes):
+def test_qualified_shot_survives_stale_receipt_rebuild_until_liftoff(visible_setup, minutes):
     now, _, output, _, remote, calls, _, run, _ = visible_setup
     run(now)
     original = _published_catalog(remote)
@@ -226,7 +226,7 @@ def test_catalog_rebuild_cannot_renew_actionable_tier_from_stale_receipt(visible
     assert result["reason"] == "UNCHANGED_INPUT"
     assert not result["published"] and not result["notified"]
     assert catalog["generated_at"] == utc(now + timedelta(minutes=minutes))
-    assert catalog["items"][0]["tier"] == "watch"
+    assert catalog["items"][0]["tier"] == "shot"
     assert catalog["coverage"]["schedule_fetched_at"] == utc(now)
     assert catalog["tle"] == original["tle"]
     assert catalog["geometry_valid_until"] <= catalog["schedule_valid_until"] <= utc(now + timedelta(hours=3))

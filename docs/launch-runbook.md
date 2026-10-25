@@ -72,13 +72,15 @@ schedule-receipt/TLE identity once for v2 across restarts. Unchanged input check
 ownership and leaves v2 untouched. The v3 catalog alone is recomputed and published
 when its geometry lease would not cover the next ten-minute check; this reruns
 geometry and tiering, not just timestamps. Actual source timestamps, schedule/TLE
-hashes and TLE epoch are retained. A receipt at least 75 minutes old cannot produce
-an actionable v3 tier on reevaluation; the existing fifteen-minute geometry lease
-is not a continuous 75-minute source-age cutoff.
+hashes and TLE epoch are retained. A receipt at least 75 minutes old does not award a new actionable v3 tier.
+A launch that already qualified as Shot keeps Shot until liftoff when the
+schedule is still Go or Confirmed with second or minute precision. The
+existing fifteen-minute geometry lease is not a continuous 75-minute
+source-age cutoff.
 A refreshed source receipt may publish unchanged event content because the provider
 really was checked again. Source timestamp rollback is rejected.
 
-V3 Shot keeps its 24-hour epoch-to-capture limit and ordinary Likely keeps 48 hours.
+A new Shot still requires the 24-hour epoch-to-capture limit, and ordinary Likely keeps 48 hours.
 A guarded 48–96-hour Likely forecast requires a qualifying envelope at every
 admissible liftoff: score low at least 50, slant at most 800 km, robust geometry,
 and central best-time slack at least 30 seconds or three times the timing scale,

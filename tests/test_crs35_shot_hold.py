@@ -1,11 +1,3 @@
-"""CRS-35 keeps Shot until liftoff once it has qualified.
-
-The saved row is launch bf2c3027-a314-403e-a416-2bfd5d165ad1. A 12-hour
-epoch qualifies that geometry as Shot. The real Oct 9 orbit, a window that
-opens by one second, and a receipt older than 75 minutes each recompute the
-rating downward. The published tier stays Shot until liftoff.
-"""
-
 import copy
 import json
 from datetime import UTC, datetime, timedelta
@@ -43,6 +35,16 @@ def test_crs35_shot_stays_shot_until_liftoff():
     assert qualified["name"] == CRS35_NAME
     assert qualified["tier"] == "shot"
     prior = [qualified]
+
+    bare = _item(payload, tle, now, fetched)
+    assert bare["event_id"] == CRS35_ID
+    assert bare["name"] == CRS35_NAME
+    assert bare["tier"] == "likely"
+    assert "FORECAST_EPHEMERIS" in bare["reasons"]
+    opened_bare = copy.deepcopy(payload)
+    opened_bare["results"][0]["window_end"] = "2026-10-13T10:33:45Z"
+    assert _item(opened_bare, fresh, now, fetched)["tier"] == "watch"
+    assert _item(payload, fresh, fetched + timedelta(minutes=80), fetched)["tier"] == "watch"
 
     aged = _item(payload, tle, now, fetched, prior)
     assert aged["event_id"] == CRS35_ID

@@ -128,10 +128,11 @@ def build_launch_catalog(
     budget = EvaluationBudget()
     items: list[dict] = []
     evaluated = 0
+    qualified = _qualified_ids(prior_items)
     chosen = sorted(near, key=lambda pair: (pair[0].t0, pair[0].id))[:MAX_EVENTS]
     for launch, row in chosen:
         item, finished = _item(
-            launch, row, tle, now, fetched_at, tuple(source_reasons), budget,
+            launch, row, tle, now, fetched_at, tuple(source_reasons), budget, qualified,
         )
         evaluated += int(finished)
         items.append(item)
@@ -171,6 +172,7 @@ def _item(
     fetched_at: datetime | None,
     source_reasons: tuple[str, ...],
     budget: EvaluationBudget,
+    qualified: frozenset[str],
 ) -> tuple[dict, bool]:
     reasons = list(launch.timing_reasons)
     if launch.status_abbrev not in SCHEDULE_STATUS_ABBREVS:
@@ -232,7 +234,9 @@ def _item(
         launch, g1, shots, tle.epoch if tle is not None else None,
         fresh_negative, finished, usable, liftoffs,
     )
-    if (
+    if _keeps_shot(launch, tier, now, launch.id in qualified, source_reasons):
+        tier = "shot"
+    elif (
         tier == "likely" and tle is not None
         and not _covers(shots, liftoffs, tle.epoch, LIKELY_SCORE_LOW, LIKELY_TLE_AGE_H, False)
     ):
@@ -277,6 +281,43 @@ def _can_exclude(
         and launch.status_abbrev in {"Go", "Confirmed"}
         and precision in {"second", "minute"}
     )
+
+
+def _qualified_ids(prior_items: list[dict] | None) -> frozenset[str]:
+    if not prior_items:
+        return frozenset()
+    found: set[str] = set()
+    for item in prior_items:
+        if not isinstance(item, dict):
+            continue
+        event_id = item.get("event_id")
+        if item.get("tier") == "shot" and isinstance(event_id, str):
+            found.add(event_id)
+    return frozenset(found)
+
+
+def _liftoff(launch: Launch) -> datetime:
+    end = launch.window_end
+    if end is not None and end >= launch.t0:
+        return end
+    return launch.t0
+
+
+def _keeps_shot(
+    launch: Launch,
+    fresh: str,
+    now: datetime,
+    qualified: bool,
+    source_reasons: tuple[str, ...],
+) -> bool:
+    if not qualified or fresh in {"shot", "none"}:
+        return False
+    if _UNACTIONABLE_PROVENANCE.intersection(source_reasons):
+        return False
+    precision = (launch.time_precision or "").lower()
+    if launch.status_abbrev not in {"Go", "Confirmed"} or precision not in {"second", "minute"}:
+        return False
+    return now < _liftoff(launch)
 
 
 def _g1(launch: Launch) -> bool:

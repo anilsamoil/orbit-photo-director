@@ -3,7 +3,7 @@ import { launchCatalog } from './launch-catalog';
 import { launchBrief, selectLaunches } from './launch-selectors';
 import { operatorLaunchLines, renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderTierCard } from './launch-tier-card';
-import { tierWord, type TierCatalog } from './launch-tiers';
+import { shotForecastLabel, tierWord, type TierCatalog } from './launch-tiers';
 
 const PRIMARY_OPEN_KEY = 'opd-map-launch-brief-open';
 
@@ -25,7 +25,7 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
   onShowMap: (eventId: string) => void): void {
   const tiers = launchCatalog.read(now);
   if (tiers) {
-    renderTierMapBrief(container, tiers, onShowMap);
+    renderTierMapBrief(container, tiers, now, onShowMap);
     return;
   }
   const previousPrimary = container.querySelector<HTMLDetailsElement>('.map-launch-primary');
@@ -83,7 +83,7 @@ export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState,
   if (primaryHadFocus) container.querySelector<HTMLElement>('.map-launch-primary > summary')?.focus({ preventScroll: true });
 }
 
-function renderTierMapBrief(container: HTMLElement, tiers: TierCatalog, onShowMap: (eventId: string) => void): void {
+function renderTierMapBrief(container: HTMLElement, tiers: TierCatalog, now: number, onShowMap: (eventId: string) => void): void {
   const previousPrimary = container.querySelector<HTMLDetailsElement>('.map-launch-primary');
   const primaryWasOpen = previousPrimary?.open ?? savedPrimaryOpen(container);
   const primaryHadFocus = !!previousPrimary && previousPrimary.querySelector('summary') === document.activeElement;
@@ -98,7 +98,10 @@ function renderTierMapBrief(container: HTMLElement, tiers: TierCatalog, onShowMa
     details.className = 'map-launch-primary';
     details.open = primaryWasOpen;
     const summary = document.createElement('summary');
-    summary.textContent = `Next launch · ${tierWord(primary.tier)}`;
+    const forecast = primary.tier === 'shot'
+      ? shotForecastLabel(primary.schedule.netMs, primary.schedule.windowEndMs, now)
+      : null;
+    summary.textContent = `Next launch · ${forecast ?? tierWord(primary.tier)}`;
     details.append(summary, renderTierCard(primary, onShowMap));
     details.addEventListener('toggle', (event) => {
       if (event.target === details && container.querySelector('.map-launch-primary') === details) {
