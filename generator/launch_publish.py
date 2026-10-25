@@ -159,10 +159,13 @@ def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: C
     ):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     seen.add(item["event_id"])
-    keys(item["site"], "name lat lon")
+    keys(item["site"], "name lat lon pad")
+    pad_name = item["site"]["pad"]
     if not isinstance(item["site"]["name"], str) or not number(item["site"]["lat"], -90, 90):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     if not number(item["site"]["lon"], -180, 180):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if pad_name is not None and (not isinstance(pad_name, str) or not pad_name.strip()):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     schedule = item["schedule"]
     keys(schedule, "net window_start window_end precision status destination")

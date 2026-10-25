@@ -201,6 +201,30 @@ def test_crs35_one_saved_field_releases_shot(field, expected):
     assert released["tier"] == expected
 
 
+def test_crs35_pad_name_change_releases_an_aged_shot():
+    payload, tle = _load()
+    fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))
+    now = NET - timedelta(hours=10)
+    fetched = now - timedelta(minutes=5)
+    prior = [_item(payload, fresh, now, fetched)]
+    assert prior[0]["tier"] == "shot"
+    assert prior[0]["site"]["name"] == "Cape Canaveral SFS, FL, USA"
+    assert prior[0]["site"]["pad"] == "Space Launch Complex 40"
+
+    renamed = copy.deepcopy(payload)
+    renamed["results"][0]["pad"]["name"] = "Space Launch Complex 41"
+    released = build_launch_catalog(
+        renamed, fresh, now, fetched_at=now - timedelta(minutes=80), prior_items=prior,
+    )["items"][0]
+    assert released["site"]["name"] == "Cape Canaveral SFS, FL, USA"
+    assert released["site"]["pad"] == "Space Launch Complex 41"
+    assert released["tier"] == "watch"
+
+    requalified = _item(renamed, fresh, now, fetched, prior)
+    assert requalified["site"]["pad"] == "Space Launch Complex 41"
+    assert requalified["tier"] == "shot"
+
+
 def test_crs35_envelope_set_must_match_the_claim():
     payload, tle = _load()
     fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))

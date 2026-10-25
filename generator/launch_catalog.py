@@ -260,7 +260,12 @@ def _item(
         "event_id": launch.id,
         "name": launch.name,
         "rocket": launch.rocket_type,
-        "site": {"name": launch.site_name, "lat": launch.site_lat, "lon": launch.site_lon},
+        "site": {
+            "name": launch.site_name,
+            "lat": launch.site_lat,
+            "lon": launch.site_lon,
+            "pad": launch.pad_name,
+        },
         "schedule": _schedule(launch, raw),
         "direction": _direction_block(direction),
         "tier": tier,
@@ -349,6 +354,7 @@ def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
             item.get("name"),
             item.get("rocket"),
             site.get("name"),
+            site.get("pad"),
             site.get("lat"),
             site.get("lon"),
             schedule.get("destination"),
@@ -359,14 +365,15 @@ def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
 
 def _same_launch(claim: tuple, launch: Launch, raw: dict) -> bool:
     schedule = _schedule(launch, raw)
-    net, start, end, name, rocket, pad, lat, lon, destination, _marks = claim
+    net, start, end, name, rocket, location, pad_name, lat, lon, destination, _marks = claim
     return (
         net == schedule["net"]
         and start == schedule["window_start"]
         and end == schedule["window_end"]
         and name == launch.name
         and rocket == launch.rocket_type
-        and pad == launch.site_name
+        and location == launch.site_name
+        and pad_name == launch.pad_name
         and lat == launch.site_lat
         and lon == launch.site_lon
         and destination == schedule["destination"]
@@ -374,7 +381,7 @@ def _same_launch(claim: tuple, launch: Launch, raw: dict) -> bool:
 
 
 def _envelopes_remain(claim: tuple, shots: list[dict]) -> bool:
-    earned = claim[9]
+    earned = claim[10]
     if not isinstance(earned, tuple) or not shots:
         return False
     current = tuple(sorted(_envelope_mark(shot) for shot in shots))

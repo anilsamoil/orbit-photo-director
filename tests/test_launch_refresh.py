@@ -247,6 +247,29 @@ def test_cached_republish_releases_shot_when_one_saved_field_changes(visible_set
         assert item["schedule"]["window_end"] == utc(net + timedelta(seconds=1))
 
 
+def test_cached_republish_releases_shot_when_only_the_pad_name_changes(visible_setup):
+    now, _, _, payload, remote, _, write_cache, run, _ = visible_setup
+    row = payload["results"][0]
+    row["pad"]["name"] = "Space Launch Complex 40"
+    write_cache(now)
+    run(now)
+    published = _published_catalog(remote)["items"][0]
+    assert published["tier"] == "shot"
+    assert published["site"]["pad"] == "Space Launch Complex 40"
+    location = published["site"]["name"]
+    row["pad"]["name"] = "Space Launch Complex 41"
+    write_cache(now)
+    run(now + timedelta(minutes=80))
+    released = _published_catalog(remote)["items"][0]
+    assert released["site"]["name"] == location
+    assert released["site"]["pad"] == "Space Launch Complex 41"
+    assert released["tier"] == "watch"
+    fresh_at = now + timedelta(minutes=81)
+    write_cache(fresh_at)
+    run(fresh_at)
+    assert _published_catalog(remote)["items"][0]["tier"] == "shot"
+
+
 @pytest.mark.parametrize("minutes", [75, 80, 179])
 def test_qualified_shot_survives_stale_receipt_rebuild_until_liftoff(visible_setup, minutes):
     now, _, output, _, remote, calls, _, run, _ = visible_setup
