@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } 
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { driveMapBearingCommit } from './bearing-commit.mjs';
 import { driveMapBearing } from './bearing-retarget.mjs';
 import { driveMapPagehide } from './corner-pagehide.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
@@ -776,6 +777,20 @@ async function drive(feature) {
     console.log(`evidence ${state.evidence}`);
     return;
   }
+  if (feature === 'map-bearing-commit') {
+    try {
+      const note = await driveMapBearingCommit({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
   if (feature === 'map-bearing') {
     try {
       const note = await driveMapBearing({
@@ -863,7 +878,7 @@ async function drive(feature) {
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
   if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, or session-lock.`);
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, or session-lock.`);
     process.exit(2);
   }
   const notes = await driveFeatures({
@@ -994,6 +1009,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|session-lock>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|session-lock>|sw|down|check|serve');
   process.exit(2);
 }
