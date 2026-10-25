@@ -94,6 +94,7 @@ def build_launch_catalog(
     fetched_at: datetime | None = None,
     source_reasons: tuple[str, ...] = (),
     prior_items: list[dict] | None = None,
+    include_pad: bool = True,
 ) -> dict:
     """Publish one schema 3 catalog. Schema 2 stays on build_launch_artifact."""
     _ensure_utc(now)
@@ -138,6 +139,7 @@ def build_launch_catalog(
     for launch, row in chosen:
         item, finished = _item(
             launch, row, tle, now, fetched_at, item_reasons, budget, claims.get(launch.id),
+            include_pad=include_pad,
         )
         evaluated += int(finished)
         items.append(item)
@@ -169,6 +171,17 @@ def build_launch_catalog(
     return catalog
 
 
+def _site_block(launch: Launch, include_pad: bool) -> dict:
+    site = {
+        "name": launch.site_name,
+        "lat": launch.site_lat,
+        "lon": launch.site_lon,
+    }
+    if include_pad:
+        site["pad"] = launch.pad_name
+    return site
+
+
 def _item(
     launch: Launch,
     raw: dict,
@@ -178,6 +191,7 @@ def _item(
     source_reasons: tuple[str, ...],
     budget: EvaluationBudget,
     claim: tuple | None,
+    include_pad: bool = True,
 ) -> tuple[dict, bool]:
     reasons = list(launch.timing_reasons)
     if launch.status_abbrev not in SCHEDULE_STATUS_ABBREVS:
@@ -260,12 +274,7 @@ def _item(
         "event_id": launch.id,
         "name": launch.name,
         "rocket": launch.rocket_type,
-        "site": {
-            "name": launch.site_name,
-            "lat": launch.site_lat,
-            "lon": launch.site_lon,
-            "pad": launch.pad_name,
-        },
+        "site": _site_block(launch, include_pad),
         "schedule": _schedule(launch, raw),
         "direction": _direction_block(direction),
         "tier": tier,
@@ -344,6 +353,8 @@ def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
             or not shots
         ):
             continue
+        if "pad" not in site:
+            continue
         marks = tuple(sorted(_envelope_mark(shot) for shot in shots if isinstance(shot, dict)))
         if not marks:
             continue
@@ -354,7 +365,7 @@ def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
             item.get("name"),
             item.get("rocket"),
             site.get("name"),
-            site.get("pad"),
+            site["pad"],
             site.get("lat"),
             site.get("lon"),
             schedule.get("destination"),

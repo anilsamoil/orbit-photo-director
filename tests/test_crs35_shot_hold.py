@@ -225,6 +225,23 @@ def test_crs35_pad_name_change_releases_an_aged_shot():
     assert requalified["tier"] == "shot"
 
 
+def test_crs35_missing_pad_does_not_keep_an_aged_shot():
+    payload, tle = _load()
+    payload["results"][0]["pad"].pop("name")
+    fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))
+    now = NET - timedelta(hours=10)
+    fetched = now - timedelta(minutes=5)
+    prior = [_item(payload, fresh, now, fetched)]
+    assert prior[0]["tier"] == "shot"
+    assert prior[0]["site"]["pad"] is None
+    del prior[0]["site"]["pad"]
+    released = build_launch_catalog(
+        payload, fresh, now, fetched_at=now - timedelta(minutes=80), prior_items=prior,
+    )["items"][0]
+    assert released["site"]["pad"] is None
+    assert released["tier"] == "watch"
+
+
 def test_crs35_envelope_set_must_match_the_claim():
     payload, tle = _load()
     fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))

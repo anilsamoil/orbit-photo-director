@@ -209,6 +209,16 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     return identity, payload, tle
 
 
+def _catalog_records_pad(catalog: dict) -> bool:
+    items = catalog.get("items")
+    if not isinstance(items, list) or not items:
+        return True
+    return all(
+        isinstance(item, dict) and isinstance(item.get("site"), dict) and "pad" in item["site"]
+        for item in items
+    )
+
+
 def _prior_catalog_items(output: Path) -> list[dict]:
     pointer_path = output / "launch/catalog/latest.json"
     if not pointer_path.is_file():
@@ -373,6 +383,7 @@ def refresh_cached(
                         payload, tle, _parse_iso8601_z(catalog["generated_at"]),
                         fetched_at=_parse_iso8601_z(old_input["fetched_at"]),
                         prior_items=prior_items,
+                        include_pad=_catalog_records_pad(catalog),
                     )
                     if _catalog_pointer(rebuilt) != pending:
                         return
