@@ -214,6 +214,39 @@ def test_catalog_restart_rebuilds_unusable_lease_metadata(setup, metadata):
     assert len(calls) == 6
 
 
+@pytest.mark.parametrize("field", ["name", "rocket", "pad", "window_start", "window_end"])
+def test_cached_republish_releases_shot_when_one_saved_field_changes(visible_setup, field):
+    now, _, _, payload, remote, _, write_cache, run, _ = visible_setup
+    run(now)
+    assert _published_catalog(remote)["items"][0]["tier"] == "shot"
+    row = payload["results"][0]
+    net = now + timedelta(hours=3)
+    if field == "name":
+        row["name"] = "Test launch renamed"
+    elif field == "rocket":
+        row["rocket"]["configuration"]["full_name"] = "Falcon 9 Block 5 cargo"
+    elif field == "pad":
+        row["pad"]["location"]["name"] = "Other pad"
+    elif field == "window_start":
+        row["window_start"] = utc(net - timedelta(seconds=1))
+    elif field == "window_end":
+        row["window_end"] = utc(net + timedelta(seconds=1))
+    write_cache(now)
+    run(now + timedelta(minutes=80))
+    item = _published_catalog(remote)["items"][0]
+    assert item["tier"] == "watch"
+    if field == "name":
+        assert item["name"] == "Test launch renamed"
+    elif field == "rocket":
+        assert item["rocket"] == "Falcon 9 Block 5 cargo"
+    elif field == "pad":
+        assert item["site"]["name"] == "Other pad"
+    elif field == "window_start":
+        assert item["schedule"]["window_start"] == utc(net - timedelta(seconds=1))
+    else:
+        assert item["schedule"]["window_end"] == utc(net + timedelta(seconds=1))
+
+
 @pytest.mark.parametrize("minutes", [75, 80, 179])
 def test_qualified_shot_survives_stale_receipt_rebuild_until_liftoff(visible_setup, minutes):
     now, _, output, _, remote, calls, _, run, _ = visible_setup

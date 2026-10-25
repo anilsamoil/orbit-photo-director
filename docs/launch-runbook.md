@@ -75,9 +75,10 @@ geometry and tiering, not just timestamps. Actual source timestamps, schedule/TL
 hashes and TLE epoch are retained. A receipt at least 75 minutes old does not award a new actionable v3 tier.
 A launch that already qualified as Shot keeps Shot until liftoff when the
 schedule is still Go or Confirmed with second or minute precision, and the
-NET, pad, destination, and envelopes that earned it are unchanged. A missing
-orbit, a missing window, Hour precision, a missing, future, or unactionable
-receipt, or an affirmative miss releases it. The existing fifteen-minute geometry lease is not a continuous
+NET, window, name, rocket, pad, destination, and envelopes that earned it
+are unchanged. The envelopes must be the same set. A missing orbit, a missing
+window, Hour precision, a missing, future, or unactionable receipt, or an
+affirmative miss releases it. The existing fifteen-minute geometry lease is not a continuous
 75-minute source-age cutoff.
 A refreshed source receipt may publish unchanged event content because the provider
 really was checked again. Source timestamp rollback is rejected.

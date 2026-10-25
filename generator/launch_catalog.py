@@ -344,6 +344,11 @@ def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
             continue
         claims[event_id] = (
             schedule.get("net"),
+            schedule.get("window_start"),
+            schedule.get("window_end"),
+            item.get("name"),
+            item.get("rocket"),
+            site.get("name"),
             site.get("lat"),
             site.get("lon"),
             schedule.get("destination"),
@@ -353,20 +358,27 @@ def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
 
 
 def _same_launch(claim: tuple, launch: Launch, raw: dict) -> bool:
-    net, lat, lon, destination, _marks = claim
+    schedule = _schedule(launch, raw)
+    net, start, end, name, rocket, pad, lat, lon, destination, _marks = claim
     return (
-        net == utc(launch.t0)
+        net == schedule["net"]
+        and start == schedule["window_start"]
+        and end == schedule["window_end"]
+        and name == launch.name
+        and rocket == launch.rocket_type
+        and pad == launch.site_name
         and lat == launch.site_lat
         and lon == launch.site_lon
-        and destination == _destination_name(raw)
+        and destination == schedule["destination"]
     )
 
 
 def _envelopes_remain(claim: tuple, shots: list[dict]) -> bool:
-    earned = claim[4]
+    earned = claim[9]
     if not isinstance(earned, tuple) or not shots:
         return False
-    return set(earned).issubset(_envelope_mark(shot) for shot in shots)
+    current = tuple(sorted(_envelope_mark(shot) for shot in shots))
+    return earned == current
 
 
 def _liftoff(launch: Launch) -> datetime:

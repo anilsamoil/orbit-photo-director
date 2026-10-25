@@ -3,6 +3,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
+from generator import launch_catalog as catalog
 from generator.launch_catalog import build_launch_catalog
 from generator.orbit import TLE
 
@@ -54,7 +57,7 @@ def test_crs35_shot_stays_shot_until_liftoff():
 
     opened = copy.deepcopy(payload)
     opened["results"][0]["window_end"] = "2026-10-13T10:33:45Z"
-    assert _item(opened, fresh, now, fetched, prior)["tier"] == "shot"
+    assert _item(opened, fresh, now, fetched, prior)["tier"] == "watch"
 
     later = fetched + timedelta(minutes=80)
     assert _item(payload, fresh, later, fetched, prior)["tier"] == "shot"
@@ -156,3 +159,79 @@ def test_crs35_hour_precision_miss_and_unusable_receipt_release_shot():
 
     at_liftoff = _item(payload, tle, NET, NET - timedelta(minutes=5), prior)
     assert at_liftoff["tier"] == "likely"
+
+
+def _change(payload, field: str):
+    changed = copy.deepcopy(payload)
+    row = changed["results"][0]
+    if field == "name":
+        row["name"] = f"{row['name']} renamed"
+    elif field == "rocket":
+        row["rocket"]["configuration"]["full_name"] = "Falcon 9 Block 5 cargo"
+    elif field == "pad":
+        row["pad"]["location"]["name"] = "Other pad"
+    elif field == "window_start":
+        row["window_start"] = "2026-10-13T10:33:43Z"
+    elif field == "window_end":
+        row["window_end"] = "2026-10-13T10:33:45Z"
+    else:
+        raise AssertionError(field)
+    return changed
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("name", "likely"),
+        ("rocket", "likely"),
+        ("pad", "likely"),
+        ("window_start", "watch"),
+        ("window_end", "watch"),
+    ],
+)
+def test_crs35_one_saved_field_releases_shot(field, expected):
+    payload, tle = _load()
+    fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))
+    now = NET - timedelta(hours=10)
+    fetched = now - timedelta(minutes=5)
+    prior = [_item(payload, fresh, now, fetched)]
+    assert prior[0]["tier"] == "shot"
+    released = _item(_change(payload, field), tle, now, fetched, prior)
+    assert released["event_id"] == CRS35_ID
+    assert released["tier"] == expected
+
+
+def test_crs35_envelope_set_must_match_the_claim():
+    payload, tle = _load()
+    fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))
+    now = NET - timedelta(hours=10)
+    fetched = now - timedelta(minutes=5)
+    qualified = _item(payload, fresh, now, fetched)
+    assert _item(payload, tle, now, fetched, [qualified])["tier"] == "shot"
+    narrowed = copy.deepcopy(qualified)
+    narrowed["shots"] = narrowed["shots"][:1]
+    assert narrowed["shots"]
+    released = _item(payload, tle, now, fetched, [narrowed])
+    assert released["tier"] == "likely"
+    assert len(released["shots"]) == len(qualified["shots"])
+
+
+@pytest.mark.parametrize("reason", ["GEOMETRY_INVALID", "EVALUATION_INCOMPLETE", "EPHEMERIS_MISSING"])
+def test_crs35_unusable_evidence_does_not_keep_shot(monkeypatch, reason):
+    payload, tle = _load()
+    fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))
+    now = NET - timedelta(hours=10)
+    fetched = now - timedelta(minutes=5)
+    prior = [_item(payload, fresh, now, fetched)]
+    original = catalog._shots
+
+    def partial(launch, orbit, destination, reasons, liftoffs):
+        shots, direction = original(launch, orbit, destination, reasons, liftoffs)
+        reasons.append(reason)
+        return shots, direction
+
+    monkeypatch.setattr(catalog, "_shots", partial)
+    held = _item(payload, tle, now, fetched, prior)
+    assert held["shots"]
+    assert reason in held["reasons"]
+    assert held["tier"] == "watch"

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { launchCatalog } from '../../../launch-catalog';
 import { renderMapLaunchBrief } from '../../../launch-map-brief';
+import { parseLaunchArtifact } from '../../../launch-schema';
 import { tiersAt } from '../../../launch-tiers';
 import type { PassEntry } from '../../../types';
 import { catalog, catalogItem, NOW, shot, state } from '../../../../test/launch-fixtures';
@@ -109,11 +110,14 @@ describe('launch-corridor', () => {
       ...base,
       shots: base.shots.map((entry) => ({ ...entry, end: new Date(shotEndMs).toISOString() })),
     };
-    const tiers = tiersAt(catalog([item], {
-      generated_at: new Date(now - 60_000).toISOString(),
-      schedule_valid_until: new Date(now + 75 * 60_000).toISOString(),
-      geometry_valid_until: new Date(now + 15 * 60_000).toISOString(),
-    }), now);
+    const generated = now - 60_000;
+    const body = catalog([item], {
+      generated_at: new Date(generated).toISOString(),
+      schedule_valid_until: new Date(generated + 75 * 60_000).toISOString(),
+      geometry_valid_until: new Date(generated + 15 * 60_000).toISOString(),
+    });
+    expect(parseLaunchArtifact(body).schema_version).toBe(3);
+    const tiers = tiersAt(body, now);
     if (!tiers) throw new Error('expected a current catalog');
     const drawn = api().buildTierMapFeatures(tiers, now);
     const container = document.createElement('div');
