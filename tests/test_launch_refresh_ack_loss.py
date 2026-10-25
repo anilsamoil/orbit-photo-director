@@ -12,7 +12,8 @@ from types import SimpleNamespace
 import pytest
 
 from generator.launch_catalog import build_launch_catalog
-from generator.launch_publish import publish_launch_catalog
+from generator.launch_evidence import canonical_bytes, utc
+from generator.launch_publish import _catalog_pointer, _validate_catalog, publish_launch_catalog
 from scripts import launch_refresh
 from tests.test_launch_refresh_ownership import NOW, RENEWAL, LaunchHarness
 
@@ -263,3 +264,100 @@ def test_own_pending_recovers_when_cached_inputs_have_changed(scheduled, failure
         assert catalog["tle"]["epoch"].startswith("2026-10-05")
     assert "catalog_skipped" not in harness.scheduled(at + timedelta(minutes=10))
     assert harness.catalog()["geometry_valid_until"] == "2026-10-10T08:55:00Z"
+
+
+def _without_pad(catalog: dict) -> dict:
+    body = copy.deepcopy(catalog)
+    body.pop("revision")
+    for item in body["items"]:
+        item.pop("revision")
+        del item["site"]["pad"]
+        item["revision"] = hashlib.sha256(canonical_bytes(item)).hexdigest()[:24]
+    body["revision"] = hashlib.sha256(canonical_bytes(body)).hexdigest()[:24]
+    return body
+
+
+def _stage(harness, catalog: dict) -> dict:
+    pointer = _catalog_pointer(catalog)
+    raw = canonical_bytes(catalog)
+    path = harness.output / pointer["path"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    harness.remote[pointer["path"]] = raw
+    return pointer
+
+
+def _retarget(harness, pointer: dict, pending_path: Path | None = None) -> None:
+    raw = canonical_bytes(pointer)
+    harness.remote[CATALOG_KEY] = raw
+    if pending_path is None:
+        (harness.output / CATALOG_KEY).write_bytes(raw)
+        return
+    pending_path.write_bytes(raw)
+
+
+def _republish_legacy(harness, legacy: dict):
+    assert all("pad" not in item["site"] for item in legacy["items"])
+    with pytest.raises(ValueError, match="UNEXPECTED_PUBLIC_LAUNCH_FIELDS"):
+        _validate_catalog(legacy)
+    _validate_catalog(legacy, require_pad=False)
+    retry_at = NOW + timedelta(minutes=30)
+    harness.write_cache(retry_at)
+    result = harness.scheduled(retry_at)
+    assert "catalog_skipped" not in result
+    assert result["reason"] == "PUBLISHED"
+    catalog = harness.catalog()
+    assert catalog["generated_at"] == utc(retry_at)
+    assert all("pad" in item["site"] for item in catalog["items"])
+    state_path = harness.output / ".refresh-catalog-state.json"
+    assert state_path.is_file()
+    state = json.loads(state_path.read_bytes())
+    assert state["pointer"]["revision"] == catalog["revision"]
+    assert (harness.output / CATALOG_KEY).read_bytes() == harness.remote[CATALOG_KEY]
+    return catalog
+
+
+def test_legacy_catalog_state_without_pointer_republishes(scheduled):
+    harness = scheduled
+    legacy = _without_pad(harness.catalog())
+    pointer = _stage(harness, legacy)
+    _retarget(harness, pointer)
+    state_path = harness.output / ".refresh-catalog-state.json"
+    state = json.loads(state_path.read_bytes())
+    state["revision"] = legacy["revision"]
+    state.pop("pointer")
+    state_path.write_bytes(canonical_bytes(state))
+
+    _republish_legacy(harness, legacy)
+
+
+def test_lost_ack_with_intent_accepts_legacy_catalog(scheduled):
+    harness = scheduled
+    pending_path, pointer = _lose_acknowledgment(harness, "rc5")
+    legacy = _without_pad(json.loads((harness.output / pointer["path"]).read_bytes()))
+    new_pointer = _stage(harness, legacy)
+    _retarget(harness, new_pointer, pending_path)
+    intent_path = harness.output / ".refresh-catalog-intent.json"
+    intent = json.loads(intent_path.read_bytes())
+    intent["pointer"] = new_pointer
+    intent_path.write_bytes(canonical_bytes(intent))
+
+    _republish_legacy(harness, legacy)
+    assert not pending_path.exists()
+    assert not intent_path.exists()
+
+
+def test_lost_ack_without_intent_reproduces_legacy_catalog(scheduled):
+    harness = scheduled
+    pending_path, pointer = _lose_acknowledgment(harness, "rc5")
+    legacy = _without_pad(json.loads((harness.output / pointer["path"]).read_bytes()))
+    new_pointer = _stage(harness, legacy)
+    _retarget(harness, new_pointer, pending_path)
+    (harness.output / ".refresh-catalog-intent.json").unlink()
+    state_path = harness.output / ".refresh-catalog-state.json"
+    state = json.loads(state_path.read_bytes())
+    state.pop("pointer")
+    state_path.write_bytes(canonical_bytes(state))
+
+    _republish_legacy(harness, legacy)
+    assert not pending_path.exists()

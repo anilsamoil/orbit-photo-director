@@ -75,7 +75,7 @@ def _validate_artifact(artifact: dict) -> None:
         raise ValueError("INVALID_LAUNCH_VALIDITY")
 
 
-def _validate_catalog(artifact: dict) -> None:
+def _validate_catalog(artifact: dict, *, require_pad: bool = True) -> None:
     def keys(value: object, expected: str) -> None:
         if not isinstance(value, dict) or set(value) != set(expected.split()):
             raise ValueError("UNEXPECTED_PUBLIC_LAUNCH_FIELDS")
@@ -137,7 +137,7 @@ def _validate_catalog(artifact: dict) -> None:
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     seen: set[str] = set()
     for item in artifact["items"]:
-        _validate_catalog_item(item, seen, keys, number)
+        _validate_catalog_item(item, seen, keys, number, require_pad=require_pad)
     expected = hashlib.sha256(
         canonical_bytes({k: v for k, v in artifact.items() if k != "revision"})
     ).hexdigest()[:24]
@@ -147,7 +147,9 @@ def _validate_catalog(artifact: dict) -> None:
         raise ValueError("LAUNCH_ARTIFACT_TOO_LARGE")
 
 
-def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: Callable) -> None:
+def _validate_catalog_item(
+    item: dict, seen: set[str], keys: Callable, number: Callable, *, require_pad: bool = True,
+) -> None:
     keys(item, "event_id revision name rocket site schedule direction tier why reasons shots")
     if (
         not isinstance(item["event_id"], str) or item["event_id"] in seen
@@ -159,10 +161,17 @@ def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: C
     ):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     seen.add(item["event_id"])
-    keys(item["site"], "name lat lon")
-    if not isinstance(item["site"]["name"], str) or not number(item["site"]["lat"], -90, 90):
+    site = item["site"]
+    if require_pad or (isinstance(site, dict) and "pad" in site):
+        keys(site, "name lat lon pad")
+        pad_name = site["pad"]
+        if pad_name is not None and (not isinstance(pad_name, str) or not pad_name.strip()):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    else:
+        keys(site, "name lat lon")
+    if not isinstance(site["name"], str) or not number(site["lat"], -90, 90):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
-    if not number(item["site"]["lon"], -180, 180):
+    if not number(site["lon"], -180, 180):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     schedule = item["schedule"]
     keys(schedule, "net window_start window_end precision status destination")
@@ -560,7 +569,7 @@ def _verified_catalog(output: Path, pointer: dict) -> dict:
         raise ValueError("INVALID_PENDING_LAUNCH_CATALOG")
     body = (output / f"launch/catalog/v/{revision}.json").read_bytes()
     artifact = json.loads(body)
-    _validate_catalog(artifact)
+    _validate_catalog(artifact, require_pad=False)
     if (
         pointer != _catalog_pointer(artifact)
         or hashlib.sha256(body).hexdigest() != pointer["sha256"]
