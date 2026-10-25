@@ -27,8 +27,8 @@ for (const engine of [
   beforeAll(async () => {
     ownerScript = (await transformWithEsbuild(source, 'chrome-owner.ts', { loader: 'ts', target: 'es2022' })).code;
     browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
-  });
-  afterAll(async () => { await browser?.close(); });
+  }, 30_000);
+  afterAll(async () => { await browser?.close(); }, 30_000);
   it.each([
     { width: 402, height: 874, insets: { top: 62, right: 0, bottom: 34, left: 0 } },
     { width: 874, height: 402, insets: { top: 0, right: 62, bottom: 21, left: 62 } },
@@ -260,6 +260,76 @@ for (const engine of [
       expect(target.hits).toEqual([true, true, true, true, true]);
       await action.click();
       expect(await action.getAttribute('data-pressed')).toBe('yes');
+    } finally { await context.close(); }
+  }, 30_000);
+
+  it('keeps the 390x520 status banner on the bottom inset', async () => {
+    const width = 390;
+    const height = 520;
+    const insets = { top: 24, right: 0, bottom: 34, left: 47 };
+    const context = await browser.newContext({ viewport: { width, height } });
+    try {
+      const page = await context.newPage();
+      await page.route('**/*', (route) => route.abort());
+      if (engine.name === 'Chrome') {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+      }
+      const css = engine.name === 'Chrome'
+        ? stylesheet
+        : stylesheet.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof typeof insets) => `${insets[side]}px`);
+      await page.setContent(html.replace('</head>', `<style>${vendor}\n${css}</style></head>`));
+      await page.evaluate(() => {
+        document.querySelector('#view')!.className = 'view-map';
+        document.querySelector('#map-pane')!.classList.add('active');
+        document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button class="maplibregl-ctrl-zoom-in"></button><button class="maplibregl-ctrl-zoom-out"></button><button class="maplibregl-ctrl-compass"></button></div></div></div>';
+        for (const element of document.querySelectorAll('[data-time-utc]')) element.textContent = '12:34Z';
+        document.querySelector('#status-banner')!.textContent = 'Track ready';
+      });
+      await page.evaluate((values) => {
+        const replace = (value: string) => value.replace(/env\(safe-area-inset-(top|right|bottom|left)(?:\s*,[^)]*)?\)/g, (_, side: keyof typeof values) => `${values[side]}px`);
+        const append = Node.prototype.appendChild;
+        Node.prototype.appendChild = function <T extends Node>(child: T): T {
+          if (child instanceof HTMLElement && child.style.cssText.includes('safe-area-inset-')) child.style.cssText = replace(child.style.cssText);
+          return append.call(this, child) as T;
+        };
+      }, insets);
+      const beforeJs = await page.evaluate(() => {
+        const banner = document.querySelector('#status-banner')!.getBoundingClientRect();
+        return {
+          bannerBottom: banner.bottom,
+          bannerVar: document.body.style.getPropertyValue('--map-banner-bottom'),
+        };
+      });
+      expect(beforeJs.bannerVar).toBe('');
+      expect(beforeJs.bannerBottom).toBe(486);
+      await page.addScriptTag({ content: `${ownerScript}\nbindMapChrome(); applyMapChrome(true); window.__opdSyncMapChrome();` });
+      await page.waitForTimeout(200);
+      const box = await page.evaluate(() => {
+        const banner = document.querySelector('#status-banner')!.getBoundingClientRect();
+        const time = document.querySelector('#time-fwd-90')!.getBoundingClientRect();
+        const hide = document.querySelector('#map-chrome-toggle')!.getBoundingClientRect();
+        return {
+          bannerBottom: banner.bottom,
+          timeTop: time.top,
+          timeBottom: time.bottom,
+          hideBottom: hide.bottom,
+          bannerVar: document.body.style.getPropertyValue('--map-banner-bottom'),
+        };
+      });
+      const safeBottom = height - insets.bottom;
+      expect(safeBottom).toBe(486);
+      expect(box.timeTop).toBeLessThan(safeBottom - 80);
+      expect(box.timeBottom).toBeLessThanOrEqual(safeBottom);
+      expect(box.bannerBottom).toBe(486);
+      expect(box.bannerBottom).not.toBe(height);
+      expect(box.hideBottom).toBe(height - 36 - insets.bottom);
+      expect(box.bannerVar).toBe(`${insets.bottom}px`);
+      const followed = await page.evaluate((bottom) => {
+        document.body.style.setProperty('--map-banner-bottom', `${bottom}px`);
+        return document.querySelector('#status-banner')!.getBoundingClientRect().bottom;
+      }, 80);
+      expect(followed).toBe(height - 80);
     } finally { await context.close(); }
   }, 30_000);
 

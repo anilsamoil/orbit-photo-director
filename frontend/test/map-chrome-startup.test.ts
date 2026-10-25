@@ -219,6 +219,20 @@ for (const engine of [
         throw new Error(JSON.stringify(evidence));
       }
       await page.waitForTimeout(500);
+      if (width === 1440 && height === 900) {
+        await page.evaluate(() => {
+          document.addEventListener('pointerdown', (event) => {
+            const target = event.target;
+            if (!(target instanceof Element) || !target.closest('#map-chrome-toggle')) return;
+            const banner = document.getElementById('status-banner');
+            if (banner instanceof HTMLElement) {
+              banner.style.minHeight = '400px';
+              banner.style.pointerEvents = 'none';
+            }
+            (window as unknown as { __opdSyncMapChrome?: () => void }).__opdSyncMapChrome?.();
+          }, true);
+        });
+      }
       const actions: unknown[] = [];
       for (const [selector, expected] of [['#map-chrome-toggle', 'false'], ['#map-chrome-toggle', 'true']] as const) {
         await page.locator(selector).evaluate((element) => {

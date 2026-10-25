@@ -22,7 +22,7 @@ const manifest = {
   freshness: { tle_hours: 0, cloud_hours: 0, ok: true },
   artifacts: Object.fromEntries(['passes', 'track', 'status', 'top5', 'top_24h', 'cupola_windows'].map((key) => [key, { path: `${key}.json`, sha256: '', bytes: 0 }])),
 };
-const REPS = 12;
+const REPS = Number(process.env.BEARING_REPS ?? '12');
 
 let assets: Map<string, string | Uint8Array>;
 let script: string;
@@ -89,6 +89,24 @@ async function settled(page: Page): Promise<{ bearing: number; moving: boolean }
     const map = (window as unknown as { __opdMap: { getBearing(): number; isMoving(): boolean } }).__opdMap;
     return { bearing: map.getBearing(), moving: map.isMoving() };
   });
+}
+
+async function retargetOnce(page: Page): Promise<{ north: number; northMoving: boolean; iss: number; heading: number; issMoving: boolean }> {
+  await page.evaluate(() => {
+    document.getElementById('toggle-follow-iss')!.click();
+    document.getElementById('bearing-north')!.click();
+    document.getElementById('bearing-iss')!.click();
+    document.getElementById('bearing-north')!.click();
+  });
+  const north = await settled(page);
+  await page.evaluate(() => document.getElementById('bearing-iss')!.click());
+  const headed = await settled(page);
+  await page.evaluate(() => {
+    document.getElementById('bearing-north')!.click();
+    document.getElementById('bearing-iss')!.click();
+  });
+  const iss = await settled(page);
+  return { north: north.bearing, northMoving: north.moving, iss: iss.bearing, heading: headed.bearing, issMoving: iss.moving };
 }
 
 function northOk(sample: { bearing: number; moving: boolean }): boolean {
@@ -174,8 +192,8 @@ for (const engine of [
   beforeAll(async () => {
     session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
     browser = session.browser;
-  }, 30_000);
-  afterAll(async () => { await closeBrowser(session, engine.name); });
+  }, 60_000);
+  afterAll(async () => { await closeBrowser(session, engine.name); }, 60_000);
 
   it(`settles North at 0 and ISS-up on the heading for ${REPS} real-clock reps`, async () => {
     const reps: { north: number; northMoving: boolean; iss: number; heading: number; issMoving: boolean; error?: string }[] = [];
@@ -186,21 +204,7 @@ for (const engine of [
       try {
         await install(page);
         await openMap(page);
-        await page.evaluate(() => {
-          document.getElementById('toggle-follow-iss')!.click();
-          document.getElementById('bearing-north')!.click();
-          document.getElementById('bearing-iss')!.click();
-          document.getElementById('bearing-north')!.click();
-        });
-        const north = await settled(page);
-        await page.evaluate(() => document.getElementById('bearing-iss')!.click());
-        const headed = await settled(page);
-        await page.evaluate(() => {
-          document.getElementById('bearing-north')!.click();
-          document.getElementById('bearing-iss')!.click();
-        });
-        const iss = await settled(page);
-        reps.push({ north: north.bearing, northMoving: north.moving, iss: iss.bearing, heading: headed.bearing, issMoving: iss.moving });
+        reps.push(await retargetOnce(page));
       } catch (error) {
         reps.push({ north: Number.NaN, northMoving: true, iss: Number.NaN, heading: Number.NaN, issMoving: true, error: String(error) });
       } finally {
@@ -212,45 +216,63 @@ for (const engine of [
     const summary = { engine: engine.name, northPass, issPass, reps };
     console.log(`BEARING_REPS ${JSON.stringify(summary)}`);
     expect(summary, JSON.stringify(summary, null, 2)).toEqual({ ...summary, northPass: REPS, issPass: REPS });
-  }, 180_000);
+  }, Math.max(180_000, REPS * 30_000));
+
+  it('settles North when no animation frame arrives', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    try {
+      await install(page);
+      await openMap(page);
+      await page.evaluate(() => {
+        window.requestAnimationFrame = () => 0;
+      });
+      const sample = await retargetOnce(page);
+      expect(northOk({ bearing: sample.north, moving: sample.northMoving }), JSON.stringify(sample)).toBe(true);
+      expect(!sample.issMoving && Math.abs((((sample.iss - sample.heading) % 360) + 540) % 360 - 180) < 0.01, JSON.stringify(sample)).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
 
   it('starts a fresh ISS-up ease after a rotate gesture interrupts the active ease', async () => {
     const loops = Number(process.env.GESTURE_LOOPS ?? 1);
     const failures: string[] = [];
     for (let loop = 0; loop < loops; loop += 1) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
-    const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    try {
-      await page.addInitScript(`
-        window.addEventListener('contextmenu', (event) => event.preventDefault(), true);
-        const native = window.setInterval.bind(window);
-        window.setInterval = (handler, timeout, ...args) => {
-          if (typeof timeout === 'number' && timeout >= 1000) return native(() => {}, 60000);
-          return native(handler, timeout, ...args);
-        };
-      `);
-      await install(page);
-      await openMap(page);
-      await page.evaluate(() => {
-        document.getElementById('toggle-follow-iss')!.click();
-        document.getElementById('bearing-iss')!.click();
-      });
-      const headed = await settled(page);
-      const retap = await interruptAndRetap(page, headed.bearing);
-      const summary = { engine: engine.name, heading: headed.bearing, before: retap.before, moving: retap.moving, loop };
-      console.log(`BEARING_GESTURE ${JSON.stringify(summary)}`);
-      if (retap.moving !== true || apart(retap.before, headed.bearing) <= 8) {
-        failures.push(JSON.stringify(summary));
-        continue;
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+      const page = await context.newPage();
+      page.setDefaultTimeout(15_000);
+      try {
+        await page.addInitScript(`
+          window.addEventListener('contextmenu', (event) => event.preventDefault(), true);
+          const native = window.setInterval.bind(window);
+          window.setInterval = (handler, timeout, ...args) => {
+            if (typeof timeout === 'number' && timeout >= 1000) return native(() => {}, 60000);
+            return native(handler, timeout, ...args);
+          };
+        `);
+        await install(page);
+        await openMap(page);
+        await page.evaluate(() => {
+          document.getElementById('toggle-follow-iss')!.click();
+          document.getElementById('bearing-iss')!.click();
+        });
+        const headed = await settled(page);
+        const retap = await interruptAndRetap(page, headed.bearing);
+        const summary = { engine: engine.name, heading: headed.bearing, before: retap.before, moving: retap.moving, loop };
+        console.log(`BEARING_GESTURE ${JSON.stringify(summary)}`);
+        if (retap.moving !== true || apart(retap.before, headed.bearing) <= 8) {
+          failures.push(JSON.stringify(summary));
+          continue;
+        }
+        const landed = await settled(page);
+        if (landed.moving !== false || apart(landed.bearing, headed.bearing) >= 0.01) {
+          failures.push(JSON.stringify({ ...summary, landed }));
+        }
+      } finally {
+        await context.close();
       }
-      const landed = await settled(page);
-      if (landed.moving !== false || apart(landed.bearing, headed.bearing) >= 0.01) {
-        failures.push(JSON.stringify({ ...summary, landed }));
-      }
-    } finally {
-      await context.close();
-    }
     }
     expect(failures, failures.join('\n')).toEqual([]);
   }, 400_000);

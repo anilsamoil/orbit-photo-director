@@ -7,8 +7,12 @@ import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { driveMapBearing } from './bearing-retarget.mjs';
+import { driveMapPagehide } from './corner-pagehide.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
+import { driveMapHold } from './map-hold.mjs';
+import { drivePinFit } from './pin-fit.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
+import { driveSessionLock } from './session-lock.mjs';
 import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -219,8 +223,15 @@ function startProxy(home) {
   let catalogGate = null;
   function currentCatalog() {
     const now = Date.now();
-    if (catalogLive && now < catalogLive.anchor + 8 * 60_000 && catalogBodies.has(catalogLive.pointer.path)) return catalogLive;
+    const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
+    const cached = catalogLive
+      && now < catalogLive.anchor + 8 * 60_000
+      && Number.isFinite(until)
+      && now < until
+      && catalogBodies.has(catalogLive.pointer.path);
+    if (cached) return catalogLive;
     catalogLive = publishVerifyCatalog(fixtureDir, now);
+    catalogLive.siteAnchor = catalogLive.anchor;
     catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
     return catalogLive;
   }
@@ -267,12 +278,15 @@ function startProxy(home) {
   }
   function bumpHeldCatalog() {
     const live = currentCatalog();
+    const siteAnchor = catalogGate && !catalogGate.released
+      ? catalogGate.siteAnchor
+      : (live.siteAnchor ?? live.anchor);
     const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
     const bodyObj = JSON.parse(base);
     let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
     let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
     let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
-    let revision = `c${generatedMs}`;
+    let revision = `c${siteAnchor}-${generatedMs}`;
     const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
       || (catalogGate && catalogGate.pointer.revision === candidate);
     for (let step = 0; taken(revision) && step < 8; step += 1) {
@@ -298,19 +312,30 @@ function startProxy(home) {
       path: `launch/catalog/v/${revision}.json`,
       sha256: createHash('sha256').update(body).digest('hex'),
     };
-    return { pointer, body };
+    return { pointer, body, siteAnchor };
   }
   function armCatalogGate() {
     const next = bumpHeldCatalog();
     catalogBodies.set(next.pointer.path, next.body);
-    catalogGate = { pointer: next.pointer, body: next.body, released: false };
+    catalogGate = {
+      pointer: next.pointer,
+      body: next.body,
+      siteAnchor: next.siteAnchor,
+      released: false,
+    };
     return next.pointer;
   }
   function releaseCatalogGate() {
     if (catalogGate && !catalogGate.released) {
       catalogGate.released = true;
-      catalogLive = { pointer: catalogGate.pointer, body: catalogGate.body, anchor: Date.now() };
+      catalogLive = {
+        pointer: catalogGate.pointer,
+        body: catalogGate.body,
+        anchor: Date.now(),
+        siteAnchor: catalogGate.siteAnchor,
+      };
       catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
+      writeFileSync(resolve(fixtureDir, 'catalog-clock.json'), JSON.stringify({ anchor: catalogGate.siteAnchor }));
     }
     for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
   }
@@ -765,6 +790,20 @@ async function drive(feature) {
     console.log(`evidence ${state.evidence}`);
     return;
   }
+  if (feature === 'map-pagehide') {
+    try {
+      const note = await driveMapPagehide({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
   if (feature === 'map-safe-area') {
     try {
       const note = await driveMapSafeArea({
@@ -779,10 +818,52 @@ async function drive(feature) {
     console.log(`evidence ${state.evidence}`);
     return;
   }
+  if (feature === 'session-lock') {
+    try {
+      const note = await driveSessionLock({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
+  if (feature === 'map-hold') {
+    try {
+      const note = await driveMapHold({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
+  if (feature === 'pin-fit') {
+    try {
+      const note = await drivePinFit({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
   if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-corner, or map-safe-area.`);
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, or session-lock.`);
     process.exit(2);
   }
   const notes = await driveFeatures({
@@ -913,6 +994,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-corner|map-safe-area>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|session-lock>|sw|down|check|serve');
   process.exit(2);
 }

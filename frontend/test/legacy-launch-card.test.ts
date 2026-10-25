@@ -4,12 +4,22 @@ import { resolve } from 'node:path';
 import { chromium, webkit, type Browser, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromiumExecutablePath } from './chromium-executable';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/joint-panels.json';
 
 const webkitReady = existsSync(webkit.executablePath());
-const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
-const chromeReady = chromePath !== undefined && existsSync(chromePath);
+const chromePath = chromiumExecutablePath();
+
+function positiveTapReps(raw: string | undefined): number {
+  const text = raw ?? '3';
+  if (!/^[1-9][0-9]*$/.test(text)) {
+    throw new Error(`LEGACY_TAP_REPS must be a positive integer, received ${text}`);
+  }
+  return Number(text);
+}
+
+const tapReps = positiveTapReps(process.env.LEGACY_TAP_REPS);
 
 const root = resolve(__dirname, '..');
 const origin = 'http://127.0.0.1:45123';
@@ -21,7 +31,13 @@ const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE
 const meta = JSON.parse(fixture['meta.json']) as { now: number; pad: { lat: number; lon: number } };
 const bodies = legacyBodies();
 type HitEvent = { type: string; trusted: boolean; target: string };
-type TestWindow = Window & { __opdMap: import('maplibre-gl').Map; __legacyHits: HitEvent[] };
+type TestWindow = Window & {
+  __opdMap: import('maplibre-gl').Map;
+  __legacyHits: HitEvent[];
+  __lastTouchEndAt?: number;
+};
+/** MapLibre double-tap zoom calls preventDefault on touchend inside this window, and WebKit then emits no click. */
+const MAPLIBRE_DOUBLE_TAP_MS = 500;
 let assets: Map<string, string | Uint8Array>;
 let script: string;
 let browser: Browser;
@@ -55,7 +71,6 @@ function legacyBodies(): Record<string, string> {
 }
 
 beforeAll(async () => {
-  if (!webkitReady && !chromeReady) return;
   const output = await build({
     configFile: false,
     root,
@@ -68,7 +83,7 @@ beforeAll(async () => {
   assets = new Map(bundle.output.map((item) => [`/${item.fileName}`, item.type === 'chunk' ? item.code : item.source]));
   script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
   if (webkitReady) browser = await webkit.launch({ headless: true, executablePath: webkit.executablePath() });
-  if (chromeReady) chromeBrowser = await chromium.launch({ headless: true, executablePath: chromePath });
+  chromeBrowser = await chromium.launch({ headless: true, executablePath: chromePath });
 }, 90_000);
 
 afterAll(async () => {
@@ -83,6 +98,9 @@ async function prepare(page: Page) {
     Object.defineProperty(navigator, 'standalone', { get: () => true });
     const state = window as unknown as TestWindow;
     state.__legacyHits = [];
+    document.addEventListener('touchend', () => {
+      state.__lastTouchEndAt = performance.now();
+    }, true);
     for (const type of ['click', 'pointerup'] as const) {
       document.addEventListener(type, (event) => {
         const target = event.target as Element;
@@ -154,7 +172,45 @@ async function padPoint(page: Page) {
   }, meta.pad);
 }
 
-describe.skipIf(!webkitReady)('legacy launch card', () => {
+describe('legacy launch card Chrome', () => {
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('gives an exposed launch card a usable scrollport at $width×$height', async ({ width, height }) => {
+    const context = await chromeBrowser.newContext({
+      viewport: { width, height },
+      screen: { width, height },
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 3,
+      serviceWorkers: 'block',
+    });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      await prepare(page);
+      const point = await padPoint(page);
+      await page.touchscreen.tap(point.x, point.y);
+      await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+      const scroll = await page.locator('.maplibregl-popup-content').evaluate((element) => {
+        const slot = document.getElementById('map-inspector');
+        const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
+        return {
+          clientWidth: element.clientWidth,
+          clientHeight: element.clientHeight,
+          exposed: !!last?.querySelector('.launch-ascent-card') && document.querySelector('.dropped-pin-popup') === null,
+        };
+      });
+      expect(scroll.exposed, JSON.stringify(scroll)).toBe(true);
+      expect(scroll.clientWidth, JSON.stringify(scroll)).toBeGreaterThanOrEqual(200);
+      expect(scroll.clientHeight, JSON.stringify(scroll)).toBeGreaterThanOrEqual(160);
+    } finally {
+      await context.close();
+    }
+  }, 45_000);
+});
+
+describe.skipIf(!webkitReady)('legacy launch card WebKit', () => {
   it('opens from a trusted tap when controls are shown in landscape', async () => {
     const context = await browser.newContext({
       viewport: { width: 874, height: 402 },
@@ -209,7 +265,7 @@ describe.skipIf(!webkitReady)('legacy launch card', () => {
 
 const pinEngines = [
   { name: 'WebKit', ready: webkitReady, browser: () => browser },
-  { name: 'Chrome', ready: chromeReady, browser: () => chromeBrowser },
+  { name: 'Chrome', ready: true, browser: () => chromeBrowser },
 ];
 
 async function pinOverLaunch(page: Page): Promise<boolean> {
@@ -223,23 +279,75 @@ async function pinOverLaunch(page: Page): Promise<boolean> {
   }, undefined, { timeout: 8_000 }).then(() => true, () => false);
 }
 
-async function dropPinOverLaunch(page: Page): Promise<number> {
+async function canvasSeed(page: Page): Promise<{ x: number; y: number }> {
+  await page.waitForFunction(() => {
+    const map = (window as unknown as TestWindow).__opdMap;
+    return !!map?.isStyleLoaded() && !map.isMoving();
+  });
   const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
     const box = canvas.getBoundingClientRect();
+    const clear = (x: number, y: number) => {
+      for (const dx of [-12, 0, 12]) {
+        for (const dy of [-12, 0, 12]) {
+          if (document.elementFromPoint(x + dx, y + dy) !== canvas) return false;
+        }
+      }
+      return true;
+    };
+    let fallback: { x: number; y: number } | null = null;
     for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
       for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
         const x = box.x + box.width * fx;
         const y = box.y + box.height * fy;
-        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+        if (document.elementFromPoint(x, y) !== canvas) continue;
+        if (!fallback) fallback = { x, y };
+        if (clear(x, y)) return { x, y };
       }
     }
-    return null;
+    return fallback;
   });
-  expect(seed, 'a canvas point beside the legacy card').not.toBeNull();
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
-    if (await pinOverLaunch(page)) return attempt;
-  }
+  expect(seed, 'a canvas point for the pin').not.toBeNull();
+  return seed!;
+}
+
+function fingerDown(seed: { x: number; y: number }): void {
+  const canvas = (window as unknown as TestWindow).__opdMap.getCanvas();
+  const touch = { identifier: 1, target: canvas, clientX: seed.x, clientY: seed.y };
+  const start = new Event('touchstart', { bubbles: true, cancelable: true });
+  Object.defineProperty(start, 'touches', { value: [touch] });
+  Object.defineProperty(start, 'targetTouches', { value: [touch] });
+  Object.defineProperty(start, 'changedTouches', { value: [touch] });
+  canvas.dispatchEvent(start);
+}
+
+function fingerUp(): void {
+  const canvas = (window as unknown as TestWindow).__opdMap.getCanvas();
+  const end = new Event('touchend', { bubbles: true, cancelable: true });
+  Object.defineProperty(end, 'touches', { value: [] });
+  Object.defineProperty(end, 'targetTouches', { value: [] });
+  Object.defineProperty(end, 'changedTouches', { value: [] });
+  canvas.dispatchEvent(end);
+}
+
+// MapLibre reset()s its context-menu handler while mouse-pan is active, and the
+// reset leaves the next contextmenu ignored until a mousedown it is allowed to
+// see. The pad tap is a left click, so a right click whose contextmenu arrives
+// first never opens the pin. A phone opens it by holding one finger still: the
+// long-press timer fires the menu itself, and a lift before that delay cancels it.
+async function holdPin(page: Page): Promise<void> {
+  const seed = await canvasSeed(page);
+  await page.evaluate(fingerDown, seed);
+  await page.waitForFunction(
+    () => document.querySelector('.dropped-pin-popup') !== null,
+    undefined,
+    { timeout: 8_000 },
+  ).catch(() => undefined);
+  await page.evaluate(fingerUp);
+}
+
+async function dropPinOverLaunch(page: Page): Promise<void> {
+  await holdPin(page);
+  if (await pinOverLaunch(page)) return;
   const state = await page.evaluate(() => {
     const slot = document.getElementById('map-inspector');
     const popups = [...(slot?.querySelectorAll(':scope > .maplibregl-popup') ?? [])].map((popup) => popup.querySelector('.launch-ascent-card, .dropped-pin-popup')?.className ?? 'empty');
@@ -266,6 +374,10 @@ async function centerTap(page: Page) {
     };
   });
   expect(point).not.toBeNull();
+  await page.waitForFunction((gap) => {
+    const last = (window as unknown as TestWindow).__lastTouchEndAt;
+    return last === undefined || performance.now() - last > gap;
+  }, MAPLIBRE_DOUBLE_TAP_MS);
   await page.evaluate(() => { (window as unknown as TestWindow).__legacyHits = []; });
   await page.touchscreen.tap(point!.x, point!.y);
   const hits = await page.evaluate(() => (window as unknown as TestWindow).__legacyHits);
@@ -294,24 +406,9 @@ function phoneContext(engine: (typeof pinEngines)[number], width: number, height
 }
 
 async function dropPin(page: Page) {
-  const seed = await page.locator('.maplibregl-canvas').evaluate((canvas) => {
-    const box = canvas.getBoundingClientRect();
-    for (const fy of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-      for (const fx of [0.18, 0.32, 0.5, 0.68, 0.82]) {
-        const x = box.x + box.width * fx;
-        const y = box.y + box.height * fy;
-        if (document.elementFromPoint(x, y) === canvas) return { x, y };
-      }
-    }
-    return null;
-  });
-  expect(seed, 'a canvas point for the pin').not.toBeNull();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await page.mouse.click(seed!.x, seed!.y, { button: 'right' });
-    const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 4_000 }).then(() => true, () => false);
-    if (opened) return;
-  }
-  throw new Error('pin did not open');
+  await holdPin(page);
+  const opened = await page.locator('.dropped-pin-popup').waitFor({ timeout: 8_000 }).then(() => true, () => false);
+  if (!opened) throw new Error('pin did not open');
 }
 
 async function sheetProbe(page: Page): Promise<SheetProbe> {
@@ -396,7 +493,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
     { width: 874, height: 402 },
   ])('keeps a center tap on the canvas at $width×$height', async ({ width, height }) => {
     const results = [];
-    for (let rep = 1; rep <= 3; rep += 1) {
+    for (let rep = 1; rep <= tapReps; rep += 1) {
       const context = await engine.browser().newContext({
         viewport: { width, height },
         screen: { width, height },
@@ -421,7 +518,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
     }
     console.log(`PIN_OVER_LEGACY ${JSON.stringify({ engine: engine.name, width, height, results })}`);
     expect(results.every((result) => result.canvas && result.trustedCanvas), JSON.stringify(results)).toBe(true);
-  }, 120_000);
+  }, Math.max(120_000, tapReps * 12_000));
 
   it.each([
     { width: 402, height: 874 },
@@ -472,7 +569,7 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
       await page.touchscreen.tap(pad.x, pad.y);
       await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
       const open = await briefState(page);
-      const attempts = await dropPinOverLaunch(page);
+      await dropPinOverLaunch(page);
       const buried = await briefState(page);
       const buriedOverlap = overlapArea(buried.brief, buried.sheet);
       await page.locator('#map-inspector > .maplibregl-popup:last-child .maplibregl-popup-close-button').click();
@@ -483,9 +580,8 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
       });
       const restored = await briefState(page);
       const restoredOverlap = overlapArea(restored.brief, restored.sheet);
-      const evidence = { engine: engine.name, width, height, attempts, open, buried, buriedOverlap, restored, restoredOverlap };
+      const evidence = { engine: engine.name, width, height, open, buried, buriedOverlap, restored, restoredOverlap };
       console.log(`BRIEF_HOLD ${JSON.stringify(evidence)}`);
-      expect(attempts, JSON.stringify(evidence)).toBe(1);
       expect(open.hidden, JSON.stringify(evidence)).toBe(false);
       expect(buried.hidden, JSON.stringify(evidence)).toBe(true);
       expect(buried.display, JSON.stringify(evidence)).toBe('none');
@@ -495,6 +591,77 @@ for (const engine of pinEngines) describe.skipIf(!engine.ready)(`pin inspector o
       expect(restored.brief, JSON.stringify(evidence)).not.toBeNull();
       expect(restoredOverlap, JSON.stringify(evidence)).toBe(0);
       expect(restored.hit, JSON.stringify(evidence)).toBe('map-launch-coverage');
+    } finally {
+      await context.close();
+    }
+  }, 90_000);
+
+  it.each([
+    { width: 402, height: 874 },
+    { width: 874, height: 402 },
+  ])('keeps the coverage brief hidden when the queue re-renders over a buried card at $width×$height', async ({ width, height }) => {
+    const context = await phoneContext(engine, width, height);
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(20_000);
+      await prepare(page);
+      const pad = await padPoint(page);
+      await page.touchscreen.tap(pad.x, pad.y);
+      await page.locator('.launch-ascent-card[data-launch="legacy"]').waitFor();
+      await dropPinOverLaunch(page);
+      const buried = await briefState(page);
+      const trace = await page.evaluate(async () => {
+        const brief = document.getElementById('map-launch-coverage');
+        const button = document.querySelector<HTMLButtonElement>('#sort-time-queue');
+        const slot = document.getElementById('map-inspector');
+        const probe = document.createElement('span');
+        probe.id = 'brief-rerender-probe';
+        brief?.append(probe);
+        const samples: boolean[] = [];
+        const observer = new MutationObserver(() => {
+          if (brief) samples.push(brief.hidden);
+        });
+        if (brief) observer.observe(brief, { attributes: true, attributeFilter: ['hidden'] });
+        if (brief) samples.push(brief.hidden);
+        const map = (window as unknown as TestWindow).__opdMap;
+        // renderQueue rebuilds the brief and schedules resizeMap on the next frame.
+        // The inspector remeasures two frames after that resize. The observer stays
+        // connected until that remeasure has returned.
+        const settled = new Promise<void>((resolve) => {
+          map.once('resize', () => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  if (brief) samples.push(brief.hidden);
+                  observer.disconnect();
+                  resolve();
+                });
+              });
+            });
+          });
+        });
+        button?.click();
+        if (brief) samples.push(brief.hidden);
+        await settled;
+        const last = slot?.querySelector(':scope > .maplibregl-popup:last-child');
+        return {
+          samples,
+          rebuilt: brief?.querySelector('#brief-rerender-probe') === null,
+          launchesOn: document.getElementById('filter-launches-map')?.getAttribute('aria-pressed') === 'true',
+          buried: !!slot?.querySelector('.launch-ascent-card') && !last?.querySelector('.launch-ascent-card'),
+        };
+      });
+      const after = await briefState(page);
+      const evidence = { engine: engine.name, width, height, buried, trace, after };
+      console.log(`BRIEF_RERENDER ${JSON.stringify(evidence)}`);
+      expect(buried.hidden, JSON.stringify(evidence)).toBe(true);
+      expect(trace.rebuilt, JSON.stringify(evidence)).toBe(true);
+      expect(trace.launchesOn, JSON.stringify(evidence)).toBe(true);
+      expect(trace.buried, JSON.stringify(evidence)).toBe(true);
+      expect(trace.samples.length, JSON.stringify(evidence)).toBeGreaterThan(0);
+      expect(trace.samples.every((hidden) => hidden), JSON.stringify(evidence)).toBe(true);
+      expect(after.hidden, JSON.stringify(evidence)).toBe(true);
+      expect(after.display, JSON.stringify(evidence)).toBe('none');
     } finally {
       await context.close();
     }
