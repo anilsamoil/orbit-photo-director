@@ -67,3 +67,92 @@ def test_crs35_shot_stays_shot_until_liftoff():
     scrubbed = copy.deepcopy(payload)
     scrubbed["results"][0]["status"] = {"abbrev": "TBC", "name": "To Be Confirmed"}
     assert _item(scrubbed, fresh, now, fetched, prior)["tier"] == "watch"
+
+
+def _shift_net(payload, when: datetime):
+    moved = copy.deepcopy(payload)
+    text = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    moved["results"][0]["net"] = text
+    moved["results"][0]["window_start"] = text
+    moved["results"][0]["window_end"] = text
+    return moved
+
+
+def test_crs35_shot_releases_when_the_launch_that_earned_it_changes():
+    payload, tle = _load()
+    fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))
+    now = NET - timedelta(hours=10)
+    fetched = now - timedelta(minutes=5)
+    prior = [_item(payload, fresh, now, fetched)]
+    assert prior[0]["tier"] == "shot"
+
+    for hours in (1, 24, 48):
+        slipped = _item(_shift_net(payload, NET + timedelta(hours=hours)), tle, now, fetched, prior)
+        assert slipped["event_id"] == CRS35_ID
+        assert slipped["tier"] == "watch"
+
+    moved = copy.deepcopy(payload)
+    moved["results"][0]["pad"]["latitude"] = 0.0
+    assert _item(moved, tle, now, fetched, prior)["tier"] == "watch"
+
+    elsewhere = copy.deepcopy(payload)
+    elsewhere["results"][0]["rocket"]["spacecraft_stage"][0]["destination"] = "LEO"
+    diverted = _item(elsewhere, tle, now, fetched, prior)
+    assert diverted["schedule"]["destination"] == "other"
+    assert diverted["tier"] == "likely"
+
+    assert _item(payload, None, now, fetched, prior)["shots"] == []
+    assert _item(payload, None, now, fetched, prior)["tier"] == "watch"
+
+    missing_window = copy.deepcopy(payload)
+    missing_window["results"][0]["window_start"] = None
+    missing_window["results"][0]["window_end"] = None
+    unassessed = _item(missing_window, fresh, now, fetched, prior)
+    assert unassessed["shots"] == []
+    assert unassessed["tier"] == "unassessed"
+
+    opposite = TLE.from_text(
+        "1 25544U 98067A   26282.95044904  .00006711  00000-0  13074-3 0  9998\n"
+        "2 25544  51.6315 272.1575 0006672 244.0714 115.9587 15.48795780589546\n"
+    )
+    far = TLE(line1=opposite.line1, line2=opposite.line2, epoch=opposite.epoch)
+    emptied = _item(payload, far, now, fetched, prior)
+    assert emptied["shots"] == []
+    assert emptied["tier"] == "watch"
+
+
+def test_crs35_hour_precision_miss_and_unusable_receipt_release_shot():
+    payload, tle = _load()
+    fresh = TLE(line1=tle.line1, line2=tle.line2, epoch=NET - timedelta(hours=12))
+    now = NET - timedelta(hours=10)
+    fetched = now - timedelta(minutes=5)
+    prior = [_item(payload, fresh, now, fetched)]
+
+    hour = copy.deepcopy(payload)
+    hour["results"][0]["net_precision"] = {"name": "Hour"}
+    assert _item(hour, fresh, now, fetched, prior)["tier"] == "watch"
+
+    opposite = TLE.from_text(
+        "1 25544U 98067A   26282.95044904  .00006711  00000-0  13074-3 0  9998\n"
+        "2 25544  51.6315 272.1575 0006672 244.0714 115.9587 15.48795780589546\n"
+    )
+    missed_tle = TLE(line1=opposite.line1, line2=opposite.line2, epoch=NET - timedelta(hours=12))
+    missed = _item(payload, missed_tle, now, fetched, prior)
+    assert missed["name"] == CRS35_NAME
+    assert missed["tier"] == "none"
+    assert missed["why"] == "The ascent stays behind Earth on a fresh orbit."
+
+    stale_receipt = build_launch_catalog(
+        payload, tle, now, fetched_at=fetched, source_reasons=("SOURCE_AGE_MTIME_ONLY",), prior_items=prior,
+    )["items"][0]
+    assert stale_receipt["tier"] == "watch"
+
+    unknown = build_launch_catalog(payload, tle, now, fetched_at=None, prior_items=prior)["items"][0]
+    assert unknown["tier"] == "watch"
+    future = build_launch_catalog(
+        payload, tle, now, fetched_at=now + timedelta(minutes=5), prior_items=prior,
+    )["items"][0]
+    assert future["tier"] == "watch"
+
+    at_liftoff = _item(payload, tle, NET, NET - timedelta(minutes=5), prior)
+    assert at_liftoff["tier"] == "likely"

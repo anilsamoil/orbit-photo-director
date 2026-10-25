@@ -79,26 +79,40 @@ describe('launch-corridor', () => {
   const CRS35_NET_MS = Date.parse('2026-10-13T10:33:44Z');
   const FORECAST_MS = 48 * 60 * 60 * 1000;
 
-  function crs35At(now: number): { label: unknown; summary: string | null | undefined; name: string | null | undefined } {
-    const tiers = tiersAt(catalog([
-      catalogItem({
-        event_id: CRS35_ID,
-        name: CRS35_NAME,
-        tier: 'shot',
-        site: { name: 'SLC-40', lat: 28.56194122, lon: -80.57735736 },
-        schedule: {
-          net: '2026-10-13T10:33:44Z',
-          window_start: '2026-10-13T10:33:44Z',
-          window_end: '2026-10-13T10:33:44Z',
-          precision: 'Second',
-          status: 'Go',
-          destination: 'ISS',
-        },
-      }),
-    ], {
-      generated_at: '2026-10-01T00:00:00.000Z',
-      schedule_valid_until: '2026-10-20T00:00:00.000Z',
-      geometry_valid_until: '2026-10-20T00:00:00.000Z',
+  function crs35At(
+    now: number,
+    schedule: {
+      net: string;
+      window_start: string | null;
+      window_end: string | null;
+      precision: string | null;
+      status: string;
+      destination: string | null;
+    } = {
+      net: '2026-10-13T10:33:44Z',
+      window_start: '2026-10-13T10:33:44Z',
+      window_end: '2026-10-13T10:33:44Z',
+      precision: 'Second',
+      status: 'Go',
+      destination: 'ISS',
+    },
+    shotEndMs = 0,
+  ): { label: unknown; summary: string | null | undefined; name: string | null | undefined } {
+    const base = catalogItem({
+      event_id: CRS35_ID,
+      name: CRS35_NAME,
+      tier: 'shot',
+      site: { name: 'SLC-40', lat: 28.56194122, lon: -80.57735736 },
+      schedule,
+    });
+    const item = shotEndMs === 0 ? base : {
+      ...base,
+      shots: base.shots.map((entry) => ({ ...entry, end: new Date(shotEndMs).toISOString() })),
+    };
+    const tiers = tiersAt(catalog([item], {
+      generated_at: new Date(now - 60_000).toISOString(),
+      schedule_valid_until: new Date(now + 75 * 60_000).toISOString(),
+      geometry_valid_until: new Date(now + 15 * 60_000).toISOString(),
     }), now);
     if (!tiers) throw new Error('expected a current catalog');
     const drawn = api().buildTierMapFeatures(tiers, now);
@@ -128,5 +142,30 @@ describe('launch-corridor', () => {
     expect(shown.name).toBe(CRS35_NAME);
     expect(shown.label).toBe('LAUNCH / SHOT');
     expect(shown.summary).toBe('Next launch · Shot');
+  });
+
+  it('drops the forecast label at liftoff and after it', () => {
+    const atLiftoff = crs35At(CRS35_NET_MS, undefined, CRS35_NET_MS + 120_000);
+    expect(atLiftoff.name).toBe(CRS35_NAME);
+    expect(atLiftoff.label).toBe('LAUNCH / SHOT');
+    expect(atLiftoff.summary).toBe('Next launch · Shot');
+    const after = crs35At(CRS35_NET_MS + 1000, undefined, CRS35_NET_MS + 120_000);
+    expect(after.label).toBe('LAUNCH / SHOT');
+    expect(after.summary).toBe('Next launch · Shot');
+  });
+
+  it('labels Shot (forecast) from the window end when that is the liftoff', () => {
+    const windowEnd = CRS35_NET_MS + 60 * 60 * 1000;
+    const shown = crs35At(CRS35_NET_MS + 30 * 60 * 1000, {
+      net: '2026-10-13T10:33:44Z',
+      window_start: '2026-10-13T10:33:44Z',
+      window_end: new Date(windowEnd).toISOString(),
+      precision: 'Second',
+      status: 'Go',
+      destination: 'ISS',
+    }, windowEnd + 120_000);
+    expect(shown.name).toBe(CRS35_NAME);
+    expect(shown.label).toBe('Shot (forecast)');
+    expect(shown.summary).toBe('Next launch · Shot (forecast)');
   });
 });

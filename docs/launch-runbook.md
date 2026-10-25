@@ -74,9 +74,11 @@ when its geometry lease would not cover the next ten-minute check; this reruns
 geometry and tiering, not just timestamps. Actual source timestamps, schedule/TLE
 hashes and TLE epoch are retained. A receipt at least 75 minutes old does not award a new actionable v3 tier.
 A launch that already qualified as Shot keeps Shot until liftoff when the
-schedule is still Go or Confirmed with second or minute precision. The
-existing fifteen-minute geometry lease is not a continuous 75-minute
-source-age cutoff.
+schedule is still Go or Confirmed with second or minute precision, and the
+NET, pad, destination, and envelopes that earned it are unchanged. A missing
+orbit, a missing window, Hour precision, a missing, future, or unactionable
+receipt, or an affirmative miss releases it. The existing fifteen-minute geometry lease is not a continuous
+75-minute source-age cutoff.
 A refreshed source receipt may publish unchanged event content because the provider
 really was checked again. Source timestamp rollback is rejected.
 
@@ -85,7 +87,7 @@ A guarded 48–96-hour Likely forecast requires a qualifying envelope at every
 admissible liftoff: score low at least 50, slant at most 800 km, robust geometry,
 and central best-time slack at least 30 seconds or three times the timing scale,
 whichever is larger. Incomplete evaluation or a recorded geometry error blocks
-this forecast path. Nonzero launch windows, TBC and Hour precision remain Watch.
+this forecast path. On a first look, nonzero launch windows, TBC and Hour precision remain Watch.
 Forecast items retain `TLE_AGE_OVER_48H`, add `FORECAST_EPHEMERIS`, and say
 “Likely forecast — recheck with a fresh ISS orbit.” These are provisional planning
 guardrails; scores are not photo probabilities. Queue admission is unchanged.

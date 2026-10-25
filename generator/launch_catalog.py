@@ -128,11 +128,16 @@ def build_launch_catalog(
     budget = EvaluationBudget()
     items: list[dict] = []
     evaluated = 0
-    qualified = _qualified_ids(prior_items)
+    claims = _shot_claims(prior_items)
+    item_reasons = tuple(source_reasons)
+    if fetched_at is None:
+        item_reasons = (*item_reasons, "SOURCE_AGE_UNKNOWN")
+    elif fetched_at > now:
+        item_reasons = (*item_reasons, "REPLAY_SOURCE_MISMATCH")
     chosen = sorted(near, key=lambda pair: (pair[0].t0, pair[0].id))[:MAX_EVENTS]
     for launch, row in chosen:
         item, finished = _item(
-            launch, row, tle, now, fetched_at, tuple(source_reasons), budget, qualified,
+            launch, row, tle, now, fetched_at, item_reasons, budget, claims.get(launch.id),
         )
         evaluated += int(finished)
         items.append(item)
@@ -172,7 +177,7 @@ def _item(
     fetched_at: datetime | None,
     source_reasons: tuple[str, ...],
     budget: EvaluationBudget,
-    qualified: frozenset[str],
+    claim: tuple | None,
 ) -> tuple[dict, bool]:
     reasons = list(launch.timing_reasons)
     if launch.status_abbrev not in SCHEDULE_STATUS_ABBREVS:
@@ -234,7 +239,9 @@ def _item(
         launch, g1, shots, tle.epoch if tle is not None else None,
         fresh_negative, finished, usable, liftoffs,
     )
-    if _keeps_shot(launch, tier, now, launch.id in qualified, source_reasons):
+    if _keeps_shot(
+        launch, raw, tier, now, fetched_at, source_reasons, shots, finished, reasons, claim,
+    ):
         tier = "shot"
     elif (
         tier == "likely" and tle is not None
@@ -283,17 +290,83 @@ def _can_exclude(
     )
 
 
-def _qualified_ids(prior_items: list[dict] | None) -> frozenset[str]:
+def _envelope_mark(shot: dict) -> tuple:
+    look = shot.get("look") if isinstance(shot.get("look"), dict) else {}
+    direction = shot.get("direction") if isinstance(shot.get("direction"), dict) else {}
+    score = shot.get("score") if isinstance(shot.get("score"), dict) else {}
+    track = shot.get("track") if isinstance(shot.get("track"), list) else []
+    return (
+        shot.get("subject"),
+        shot.get("liftoff"),
+        shot.get("start"),
+        shot.get("best"),
+        shot.get("end"),
+        shot.get("best_offset_s"),
+        shot.get("window"),
+        shot.get("light"),
+        shot.get("slant_km"),
+        look.get("azimuth_deg"),
+        look.get("off_nadir_deg"),
+        direction.get("kind"),
+        direction.get("azimuth_deg"),
+        direction.get("off_plane_deg"),
+        score.get("low"),
+        score.get("high"),
+        tuple(
+            (point.get("t_offset_s"), point.get("lat"), point.get("lon"), point.get("alt_km"))
+            for point in track
+            if isinstance(point, dict)
+        ),
+    )
+
+
+def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
+    claims: dict[str, tuple] = {}
     if not prior_items:
-        return frozenset()
-    found: set[str] = set()
+        return claims
     for item in prior_items:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or item.get("tier") != "shot":
             continue
         event_id = item.get("event_id")
-        if item.get("tier") == "shot" and isinstance(event_id, str):
-            found.add(event_id)
-    return frozenset(found)
+        schedule = item.get("schedule")
+        site = item.get("site")
+        shots = item.get("shots")
+        if (
+            not isinstance(event_id, str)
+            or not isinstance(schedule, dict)
+            or not isinstance(site, dict)
+            or not isinstance(shots, list)
+            or not shots
+        ):
+            continue
+        marks = tuple(sorted(_envelope_mark(shot) for shot in shots if isinstance(shot, dict)))
+        if not marks:
+            continue
+        claims[event_id] = (
+            schedule.get("net"),
+            site.get("lat"),
+            site.get("lon"),
+            schedule.get("destination"),
+            marks,
+        )
+    return claims
+
+
+def _same_launch(claim: tuple, launch: Launch, raw: dict) -> bool:
+    net, lat, lon, destination, _marks = claim
+    return (
+        net == utc(launch.t0)
+        and lat == launch.site_lat
+        and lon == launch.site_lon
+        and destination == _destination_name(raw)
+    )
+
+
+def _envelopes_remain(claim: tuple, shots: list[dict]) -> bool:
+    earned = claim[4]
+    if not isinstance(earned, tuple) or not shots:
+        return False
+    return set(earned).issubset(_envelope_mark(shot) for shot in shots)
 
 
 def _liftoff(launch: Launch) -> datetime:
@@ -305,19 +378,40 @@ def _liftoff(launch: Launch) -> datetime:
 
 def _keeps_shot(
     launch: Launch,
+    raw: dict,
     fresh: str,
     now: datetime,
-    qualified: bool,
+    fetched_at: datetime | None,
     source_reasons: tuple[str, ...],
+    shots: list[dict],
+    finished: bool,
+    reasons: list[str],
+    claim: tuple | None,
 ) -> bool:
-    if not qualified or fresh in {"shot", "none"}:
+    if claim is None or fresh == "shot":
         return False
-    if _UNACTIONABLE_PROVENANCE.intersection(source_reasons):
+    if not _receipt_sourced(now, fetched_at, source_reasons):
         return False
     precision = (launch.time_precision or "").lower()
     if launch.status_abbrev not in {"Go", "Confirmed"} or precision not in {"second", "minute"}:
         return False
-    return now < _liftoff(launch)
+    if now >= _liftoff(launch):
+        return False
+    if (
+        launch.window_start is None or launch.window_end is None or not finished
+        or "GEOMETRY_INVALID" in reasons or "EVALUATION_INCOMPLETE" in reasons
+        or "EPHEMERIS_MISSING" in reasons
+    ):
+        return False
+    if not _same_launch(claim, launch, raw):
+        return False
+    if shots:
+        return _envelopes_remain(claim, shots)
+    if fresh != "none":
+        return False
+    if fresh == "none":
+        return False
+    return True
 
 
 def _g1(launch: Launch) -> bool:
@@ -824,14 +918,22 @@ def _lease_end(now: datetime, until: datetime) -> datetime:
     return until
 
 
-def _receipt_usable(
+def _receipt_sourced(
     now: datetime,
     fetched_at: datetime | None,
     source_reasons: tuple[str, ...] = (),
 ) -> bool:
     if _UNACTIONABLE_PROVENANCE.intersection(source_reasons):
         return False
-    if fetched_at is None or fetched_at > now:
+    return fetched_at is not None and fetched_at <= now
+
+
+def _receipt_usable(
+    now: datetime,
+    fetched_at: datetime | None,
+    source_reasons: tuple[str, ...] = (),
+) -> bool:
+    if not _receipt_sourced(now, fetched_at, source_reasons) or fetched_at is None:
         return False
     evidence_deadline = fetched_at + timedelta(seconds=SCHEDULE_LEASE_SECONDS)
     receipt_deadline = fetched_at + timedelta(seconds=PLANNING_VALID_SECONDS)
