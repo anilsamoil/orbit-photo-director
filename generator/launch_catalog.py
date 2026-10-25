@@ -93,10 +93,13 @@ def build_launch_catalog(
     *,
     fetched_at: datetime | None = None,
     source_reasons: tuple[str, ...] = (),
+    prior_items: list[dict] | None = None,
 ) -> dict:
     """Publish one schema 3 catalog. Schema 2 stays on build_launch_artifact."""
     _ensure_utc(now)
     validate_feed(payload)
+    if prior_items is not None and not isinstance(prior_items, list):
+        raise TypeError("prior catalog items must be a list")
     if fetched_at is not None:
         _ensure_utc(fetched_at)
     horizon = now + timedelta(hours=HORIZON_HOURS)
