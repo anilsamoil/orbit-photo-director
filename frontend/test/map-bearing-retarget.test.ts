@@ -91,6 +91,24 @@ async function settled(page: Page): Promise<{ bearing: number; moving: boolean }
   });
 }
 
+async function retargetOnce(page: Page): Promise<{ north: number; northMoving: boolean; iss: number; heading: number; issMoving: boolean }> {
+  await page.evaluate(() => {
+    document.getElementById('toggle-follow-iss')!.click();
+    document.getElementById('bearing-north')!.click();
+    document.getElementById('bearing-iss')!.click();
+    document.getElementById('bearing-north')!.click();
+  });
+  const north = await settled(page);
+  await page.evaluate(() => document.getElementById('bearing-iss')!.click());
+  const headed = await settled(page);
+  await page.evaluate(() => {
+    document.getElementById('bearing-north')!.click();
+    document.getElementById('bearing-iss')!.click();
+  });
+  const iss = await settled(page);
+  return { north: north.bearing, northMoving: north.moving, iss: iss.bearing, heading: headed.bearing, issMoving: iss.moving };
+}
+
 function northOk(sample: { bearing: number; moving: boolean }): boolean {
   return !sample.moving && Math.abs(sample.bearing) < 0.01;
 }
@@ -116,21 +134,7 @@ for (const engine of [
       try {
         await install(page);
         await openMap(page);
-        await page.evaluate(() => {
-          document.getElementById('toggle-follow-iss')!.click();
-          document.getElementById('bearing-north')!.click();
-          document.getElementById('bearing-iss')!.click();
-          document.getElementById('bearing-north')!.click();
-        });
-        const north = await settled(page);
-        await page.evaluate(() => document.getElementById('bearing-iss')!.click());
-        const headed = await settled(page);
-        await page.evaluate(() => {
-          document.getElementById('bearing-north')!.click();
-          document.getElementById('bearing-iss')!.click();
-        });
-        const iss = await settled(page);
-        reps.push({ north: north.bearing, northMoving: north.moving, iss: iss.bearing, heading: headed.bearing, issMoving: iss.moving });
+        reps.push(await retargetOnce(page));
       } catch (error) {
         reps.push({ north: Number.NaN, northMoving: true, iss: Number.NaN, heading: Number.NaN, issMoving: true, error: String(error) });
       } finally {
@@ -143,4 +147,22 @@ for (const engine of [
     console.log(`BEARING_REPS ${JSON.stringify(summary)}`);
     expect(summary, JSON.stringify(summary, null, 2)).toEqual({ ...summary, northPass: REPS, issPass: REPS });
   }, Math.max(180_000, REPS * 30_000));
+
+  it('settles North when no animation frame arrives', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    try {
+      await install(page);
+      await openMap(page);
+      await page.evaluate(() => {
+        window.requestAnimationFrame = () => 0;
+      });
+      const sample = await retargetOnce(page);
+      expect(northOk({ bearing: sample.north, moving: sample.northMoving }), JSON.stringify(sample)).toBe(true);
+      expect(!sample.issMoving && Math.abs((((sample.iss - sample.heading) % 360) + 540) % 360 - 180) < 0.01, JSON.stringify(sample)).toBe(true);
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
 });

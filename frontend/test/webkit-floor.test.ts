@@ -222,7 +222,7 @@ describe('webkit floor', () => {
   });
 
   it('rejects a single WebKit case', () => {
-    const report = browserReport((file) => file === 'test/map-bearing-retarget.test.ts' ? 'passed' : 'skipped');
+    const report = browserReport((file) => file === 'test/map-joint-panel-convergence.test.ts' ? 'passed' : 'skipped');
     const verdict = evaluateWebKitReports([report]);
     expect(verdict.passed).toBe(1);
     expect(verdict.skipped).toBe(webKitCases - 1);

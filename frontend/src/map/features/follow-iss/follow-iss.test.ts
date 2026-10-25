@@ -149,6 +149,116 @@ describe('bearing retarget while an ease is in flight', () => {
     north.click();
     expect(calls.at(-1)).toMatchObject({ bearing: 0 });
   });
+
+  it('commits the bearing when the ease frame does not arrive', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { vendor, north } = arm(nowMs);
+      vendor.setBearing(40);
+      vendor.cameraCalls.length = 0;
+      north.click();
+      vi.advanceTimersByTime(599);
+      expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([
+        { method: 'setBearing', args: [0] },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves a finished ease alone', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { vendor, north } = arm(nowMs);
+      vendor.setBearing(40);
+      vendor.cameraCalls.length = 0;
+      north.click();
+      vendor.fire('moveend', undefined);
+      vi.advanceTimersByTime(600);
+      expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('commits the later bearing when North is replaced before the frame', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { vendor, north, iss } = arm(nowMs);
+      const heading = api().computeIssHeading(nowMs);
+      expect(heading).not.toBeNull();
+      vendor.setBearing(40);
+      vendor.cameraCalls.length = 0;
+      north.click();
+      iss.click();
+      vi.advanceTimersByTime(600);
+      const writes = vendor.cameraCalls.filter((call) => call.method === 'setBearing');
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.args[0]).toBeCloseTo(heading!, 5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not commit after a drag takes the camera', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { vendor, north } = arm(nowMs);
+      document.body.insertAdjacentHTML('beforeend', '<button id="toggle-follow-iss"></button>');
+      api().bindFollowToggle();
+      vendor.setBearing(40);
+      vendor.cameraCalls.length = 0;
+      north.click();
+      vendor.fire('dragstart', undefined);
+      vi.advanceTimersByTime(600);
+      expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not commit during a right-drag that never emits dragstart', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { vendor, north } = arm(nowMs);
+      vendor.setBearing(40);
+      vendor.cameraCalls.length = 0;
+      north.click();
+      vendor.setUserGesture(true);
+      vi.advanceTimersByTime(600);
+      expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+      expect(vendor.bearing()).toBe(40);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not commit over an iPhone pinch-rotate', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { vendor, north } = arm(nowMs);
+      document.body.insertAdjacentHTML('beforeend', '<button id="toggle-follow-iss"></button>');
+      api().bindFollowToggle();
+      vendor.setBearing(40);
+      vendor.cameraCalls.length = 0;
+      north.click();
+      vendor.setUserGesture(true);
+      vi.advanceTimersByTime(600);
+      expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+      expect(vendor.bearing()).toBe(40);
+      vendor.fire('rotatestart', { byUser: true });
+      vendor.setBearing(55);
+      vendor.cameraCalls.length = 0;
+      vendor.setUserGesture(false);
+      vi.advanceTimersByTime(600);
+      expect(vendor.cameraCalls.filter((call) => call.method === 'setBearing')).toEqual([]);
+      expect(vendor.bearing()).toBe(55);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('deferred north recenter', () => {

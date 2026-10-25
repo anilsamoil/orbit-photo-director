@@ -8,6 +8,7 @@ import { PREF_KEYS } from '../../map-core/prefs';
 export type BearingMode = 'north' | 'iss-up';
 
 const BEARING_NOOP_THRESHOLD_DEG = 0.5;
+const BEARING_EASE_MS = 600;
 
 type MarkerPosition = { lat: number; lon: number };
 
@@ -22,6 +23,7 @@ type Runtime = {
   toggleBound: boolean;
   bearingBound: boolean;
   operatorAimed: boolean;
+  commit: number;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
@@ -44,6 +46,7 @@ const state: Runtime = {
   toggleBound: false,
   bearingBound: false,
   operatorAimed: false,
+  commit: 0,
   hasTrack: () => false,
   position: () => null,
 };
@@ -165,6 +168,10 @@ function watchMotion(core: MapCore): void {
   });
 }
 
+function releaseBearingCommit(): void {
+  state.commit += 1;
+}
+
 function desiredBearing(core: MapCore): number | null {
   if (state.mode === 'north') return 0;
   return computeIssHeading(core.clock.viewMs());
@@ -173,7 +180,10 @@ function desiredBearing(core: MapCore): number | null {
 /** Apply the bearing mode. A camera already on that bearing stays put, and an ease toward another bearing is replaced.
  *  The record is marked after easeTo, so the moveend from the ease just
  *  interrupted does not drop that mark. An ease that has already finished,
- *  including a duration-0 cancel, clears the record in this same turn. */
+ *  including a duration-0 cancel, clears the record in this same turn.
+ *  When the duration ends and no frame has arrived, setBearing writes the
+ *  bearing. A user gesture keeps that write from running, including a
+ *  right-drag that has not emitted dragstart. */
 export function applyBearing(animate: boolean): void {
   const core = state.core;
   if (!core) return;
@@ -184,17 +194,32 @@ export function applyBearing(animate: boolean): void {
   const current = core.bearing();
   if (nearBearing(current, desired)) {
     if (state.motion !== null) {
+      releaseBearingCommit();
       state.motion = null;
       core.easeTo({ bearing: desired, duration: 0 });
     }
     return;
   }
   if (animate) {
-    core.easeTo({ bearing: desired, duration: 600 });
+    releaseBearingCommit();
+    const token = state.commit;
+    core.easeTo({ bearing: desired, duration: BEARING_EASE_MS });
     state.motion = { toward: desired, pending: null };
-    if (nearBearing(core.bearing(), desired)) state.motion = null;
+    if (nearBearing(core.bearing(), desired)) {
+      state.motion = null;
+      return;
+    }
+    window.setTimeout(() => {
+      if (token !== state.commit) return;
+      const live = state.core;
+      if (live !== core || state.motion === null || !nearBearing(state.motion.toward, desired)) return;
+      if (live.userGesture()) return;
+      state.motion = null;
+      live.setBearing(desired);
+    }, BEARING_EASE_MS);
     return;
   }
+  releaseBearingCommit();
   state.motion = null;
   core.setBearing(desired);
 }
@@ -224,12 +249,18 @@ export function bindFollowToggle(): void {
   });
   const core = state.core;
   if (core) {
-    core.on('dragstart', () => { exitFollow(); });
+    core.on('dragstart', () => {
+      releaseBearingCommit();
+      exitFollow();
+    });
     core.on('zoomstart', ({ byUser }) => {
-      if (byUser) exitFollow();
+      if (!byUser) return;
+      releaseBearingCommit();
+      exitFollow();
     });
     core.on('rotatestart', ({ byUser }) => {
       if (!byUser) return;
+      releaseBearingCommit();
       state.operatorAimed = true;
       state.motion = null;
       exitFollow();
@@ -262,6 +293,7 @@ export function bindBearingToggle(): void {
 }
 
 export function resetFollowMemoryForTest(): void {
+  releaseBearingCommit();
   state.follow = false;
   state.mode = 'north';
   state.motion = null;

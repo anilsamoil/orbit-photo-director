@@ -234,6 +234,36 @@ async function armGestureTrace(page: Page): Promise<void> {
   });
 }
 
+async function keepFlingClock(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const map = (window as unknown as { __opdMap: MapHandle & { _handlers: { _inertia: {
+      record(settings: { panDelta?: { x: number; y: number } }): void;
+      _onMoveEnd(options?: unknown): unknown;
+      _inertiaBuffer: { time: number }[];
+    } } } }).__opdMap;
+    const inertia = map._handlers._inertia;
+    const record = inertia.record.bind(inertia);
+    const onMoveEnd = inertia._onMoveEnd.bind(inertia);
+    const restamp = (end: number): void => {
+      const entries = inertia._inertiaBuffer;
+      for (let index = 0; index < entries.length; index += 1) {
+        const entry = entries[index];
+        if (!entry) continue;
+        entry.time = end - (entries.length - 1 - index) * 20;
+      }
+    };
+    inertia.record = (settings) => {
+      restamp(performance.now());
+      record(settings);
+      restamp(performance.now());
+    };
+    inertia._onMoveEnd = (options) => {
+      restamp(performance.now());
+      return onMoveEnd(options);
+    };
+  });
+}
+
 async function sendRealTouch(engine: string, client: CDPSession | null, type: 'touchStart' | 'touchMove' | 'touchEnd', points: { x: number; y: number; id: number }[]): Promise<void> {
   const touchPoints = points.map((point) => ({ x: Math.round(point.x), y: Math.round(point.y), id: point.id }));
   if (engine === 'Chrome') {
@@ -690,6 +720,7 @@ for (const engine of [
         window.addEventListener('pointerup', note, true);
         window.addEventListener('touchend', note, true);
       });
+      if (engine.name === 'Chrome') await keepFlingClock(page);
       await sendRealTouch(engine.name, client, 'touchStart', [{ x, y, id: 1 }]);
       const slowStep = travel / 8;
       const flickStep = travel / 4;
@@ -698,20 +729,12 @@ for (const engine of [
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
       }
       const flickAt = (step: number): { x: number; y: number; id: number } => ({ x: x + 4 * slowStep + step * flickStep, y, id: 1 });
-      if (engine.name === 'Chrome' && client) {
-        const advance = async (budget: number): Promise<void> => {
-          const expired = new Promise((resolve) => client.once('Emulation.virtualTimeBudgetExpired', resolve));
-          await client.send('Emulation.setVirtualTimePolicy', { policy: 'advance', budget });
-          await expired;
-        };
-        await client.send('Emulation.setVirtualTimePolicy', { policy: 'pause' });
+      if (engine.name === 'Chrome') {
         await sendRealTouch(engine.name, client, 'touchMove', [flickAt(1)]);
-        await advance(40);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
         await sendRealTouch(engine.name, client, 'touchMove', [flickAt(2)]);
-        await advance(20);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
         await sendRealTouch(engine.name, client, 'touchEnd', [flickAt(2)]);
-        await advance(16);
-        await advance(500);
       } else {
         await Promise.all([
           sendRealTouch(engine.name, client, 'touchMove', [flickAt(1)]),
