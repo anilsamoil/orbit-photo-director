@@ -3431,6 +3431,18 @@ async function proveRaisedHideDock(send, evidenceDir, viewport) {
   }
 }
 
+function legendPanelFixtureExpression() {
+  return `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const date = document.querySelector('.map-imagery-date');
+    if (!button || !date) return false;
+    button.setAttribute('aria-expanded', 'true');
+    const line = 'LIVE now (not the scrubbed time)';
+    date.textContent = Array.from({ length: 40 }, () => line).join(' ');
+    return true;
+  })()`;
+}
+
 export async function proveLegendPanelBounds(send, evidenceDir, viewport) {
   const saved = await evaluate(send, `(() => {
     const button = document.getElementById('map-legend-toggle');
@@ -3444,14 +3456,6 @@ export async function proveLegendPanelBounds(send, evidenceDir, viewport) {
     { width: 800, height: 600, insets: { top: 24, left: 0, bottom: 20, right: 0 }, name: '800x600' },
   ];
   try {
-    await evaluate(send, `(() => {
-      const button = document.getElementById('map-legend-toggle');
-      const date = document.querySelector('.map-imagery-date');
-      button.setAttribute('aria-expanded', 'true');
-      const line = 'LIVE now (not the scrubbed time)';
-      date.textContent = Array.from({ length: 40 }, () => line).join(' ');
-      return true;
-    })()`);
     await withBannerActions(send, async () => {
       for (const pane of cases) {
         await setViewport(send, pane.width, pane.height, true);
@@ -3459,6 +3463,8 @@ export async function proveLegendPanelBounds(send, evidenceDir, viewport) {
         if (!applied && !viewport.mobile) throw new Error(`safe area override failed at ${pane.name}`);
         if (!applied) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
         await sleep(250);
+        const armed = await evaluate(send, legendPanelFixtureExpression());
+        if (!armed) throw new Error(`legend fixture missing after ${pane.name}`);
         const laid = await evaluate(send, `(() => {
           const actions = ${bannerInjectExpression()};
           const panel = document.getElementById('map-legend-panel');
