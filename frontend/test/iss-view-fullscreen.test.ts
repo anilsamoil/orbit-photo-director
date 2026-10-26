@@ -153,6 +153,39 @@ function observedResizes(): { resize(): void } {
   };
 }
 
+function place(element: Element, x: number, y: number, width: number, height: number): void {
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => new DOMRect(x, y, width, height),
+  });
+}
+
+function installHitTest(): void {
+  const original = document.elementFromPoint.bind(document);
+  document.elementFromPoint = (x: number, y: number): Element | null => {
+    const hits: { el: Element; z: number; order: number }[] = [];
+    let order = 0;
+    const walk = (el: Element): void => {
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      const box = el.getBoundingClientRect();
+      const covers = box.width > 0 && box.height > 0 && x >= box.left && x < box.right && y >= box.top && y < box.bottom;
+      if (covers && style.pointerEvents !== 'none') {
+        const z = Number(style.zIndex);
+        hits.push({ el, z: Number.isFinite(z) ? z : 0, order });
+      }
+      order += 1;
+      for (const child of el.children) walk(child);
+    };
+    walk(document.body);
+    hits.sort((a, b) => a.z - b.z || a.order - b.order);
+    return hits.at(-1)?.el ?? original(x, y);
+  };
+  cleanups.push(() => {
+    document.elementFromPoint = original;
+  });
+}
+
 function styled(): void {
   const style = document.createElement('style');
   style.textContent = STYLE_CSS;
@@ -222,8 +255,8 @@ describe('ISS fullscreen toggle', () => {
   it.each(['standard', 'webkit', 'both'] as const)('enters and leaves element fullscreen through the %s API', async (api) => {
     const fullscreen = browser(api);
     const view = await mounted();
-    expect(view.button.previousElementSibling?.hasAttribute('data-iss-telemetry')).toBe(true);
-    expect(view.button.parentElement?.hasAttribute('data-iss-controls')).toBe(true);
+    expect(view.button.parentElement).toBe(view.root);
+    expect(view.root.contains(view.button)).toBe(true);
     expect(name(view.button)).toBe('Full screen');
     expect(view.button.title).toBe('Full screen');
     expect(view.button.hasAttribute('aria-pressed')).toBe(false);
@@ -398,6 +431,7 @@ describe('ISS fullscreen Escape', () => {
 
   it('closes an open shortcut sheet on enter, so aim keys work and Escape does not bring it back', async () => {
     styled();
+    installHitTest();
     browser('missing');
     const view = await mounted({ session: { mode: 'horizon' } });
     const help = query(view.root, '[data-iss-aim-help]');
@@ -414,11 +448,17 @@ describe('ISS fullscreen Escape', () => {
     expect(getComputedStyle(toolbar).pointerEvents).toBe('none');
     expect(getComputedStyle(card).pointerEvents).toBe('none');
     expect(getComputedStyle(view.button).pointerEvents).toBe('auto');
-    expect(getComputedStyle(view.button).zIndex).toBe('1');
+    expect(Number(getComputedStyle(view.button).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
     expect(Number(getComputedStyle(toolbar).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
     expect(Number(getComputedStyle(card).zIndex)).toBeGreaterThan(Number(getComputedStyle(scrim).zIndex));
-
-    view.button.click();
+    place(view.root, 0, 0, 800, 600);
+    place(scrim, 0, 0, 800, 600);
+    place(view.button, 744, 544, 44, 44);
+    const box = view.button.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    expect(hit === view.button || view.button.contains(hit)).toBe(true);
+    if (!(hit instanceof HTMLElement)) throw new Error('fullscreen hit is not an element');
+    hit.click();
     expect(marked(view.root)).toBe(true);
     expect(view.root.hasAttribute('data-iss-aim-open')).toBe(false);
     expect(query(view.root, '[data-iss-aim-sheet]').hidden).toBe(true);
@@ -611,6 +651,32 @@ describe('ISS fullscreen frame', () => {
   });
 });
 
+describe('ISS control placement', () => {
+  it('puts SNAP help between the launch menu and the site name, and parks fullscreen on the scene corner', async () => {
+    styled();
+    browser('missing');
+    const view = await mounted();
+    const help = query(view.root, '[data-iss-snap-help]');
+    const picker = query(view.root, '[data-iss-launch-picker-wrap]');
+    const launches = query(view.root, '[data-iss-launches]');
+    expect(help.textContent).toBe('?');
+    expect(help.getAttribute('aria-label')).toBe('Help — how to use SNAP');
+    expect(help.getAttribute('title')).toBe('Help');
+    expect(picker.nextElementSibling).toBe(help);
+    expect(help.nextElementSibling).toBe(launches);
+    expect(view.button.parentElement).toBe(view.root);
+    expect(getComputedStyle(view.button).position).toBe('absolute');
+    expect(STYLE_CSS).toContain('right: max(0.75rem, env(safe-area-inset-right))');
+    expect(STYLE_CSS).toContain('bottom: max(0.75rem, env(safe-area-inset-bottom))');
+    expect(STYLE_CSS).toContain('[data-iss-scene][data-iss-aim-open] [data-iss-snap-help]');
+    if (!(help instanceof HTMLButtonElement)) throw new Error('help control is not a native button');
+    help.click();
+    const dialog = document.querySelector('.help-modal');
+    expect(dialog?.getAttribute('aria-label')).toBe('Help — how to use SNAP');
+    cleanups.push(() => document.querySelector('.modal-backdrop')?.remove());
+  });
+});
+
 describe('ISS fullscreen binding', () => {
   it('mounts when the controls sit outside the scene', () => {
     const scene = document.createElement('section');
@@ -629,11 +695,12 @@ describe('ISS fullscreen binding', () => {
       controls.remove();
       outside.remove();
     });
-    const binding = bindIssFullscreen({ scene, controls, telemetry, relayout() {} });
+    const binding = bindIssFullscreen({ scene, controls, relayout() {} });
     cleanups.push(() => binding.dispose());
-    const button = controls.querySelector('[data-iss-fullscreen]');
+    const button = scene.querySelector('[data-iss-fullscreen]');
     if (!(button instanceof HTMLButtonElement)) throw new Error('fullscreen button missing');
-    expect(button.previousElementSibling).toBe(telemetry);
+    expect(button.parentElement).toBe(scene);
+    expect(controls.contains(button)).toBe(false);
     expect(scene.contains(controls)).toBe(false);
     button.click();
     expect(scene.hasAttribute('data-iss-fullscreen-active')).toBe(true);
@@ -737,11 +804,11 @@ describe('ISS fullscreen styles', () => {
     const exitBox = view.button.getBoundingClientRect();
     const parked = `card ${getComputedStyle(card).display} telemetry ${telemetryBox.width}x${telemetryBox.height} exit ${exitBox.width}x${exitBox.height}`;
     expect(getComputedStyle(card).display, parked).toBe('block');
-    expect(view.button.previousElementSibling).toBe(telemetry);
+    expect(view.button.parentElement).toBe(view.root);
     expect(getComputedStyle(telemetry).height).toBe('44px');
     expect(getComputedStyle(view.button).width).toBe('44px');
     expect(getComputedStyle(view.button).height).toBe('44px');
-    expect(getComputedStyle(view.button).position).toBe('relative');
+    expect(getComputedStyle(view.button).position).toBe('absolute');
 
     telemetry.click();
     const body = query(pane, '[data-iss-telemetry-body]');
