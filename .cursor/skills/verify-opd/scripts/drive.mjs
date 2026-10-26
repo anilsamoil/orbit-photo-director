@@ -4920,80 +4920,127 @@ async function dispatchPlanTouch(send, type, x, y) {
   if (!sent?.ok) throw new Error(`plan touch ${type} ${JSON.stringify(sent)}`);
 }
 
-async function provePlanGestureHolds(send, viewport) {
-  const start = await planCamera(send);
-  if (!start) throw new Error('plan camera missing before the gesture');
-  const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
-  await sleep(200);
-  const panned = await planCamera(send);
-  if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
-  const nextWidth = Math.max(800, Math.round(start.width) - 40);
-  await setViewport(send, nextWidth, start.height, viewport.mobile);
-  await evaluate(send, `(() => {
-    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => 2 });
-    return window.devicePixelRatio;
+async function beginPlanLayout(send) {
+  const saved = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame?.querySelector('canvas');
+    const orbit = frame?.__opdTrackInset;
+    if (!frame || !canvas || !orbit) return null;
+    const width = frame.clientWidth;
+    const height = frame.clientHeight;
+    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') };
+    return { width, height, dpr: window.devicePixelRatio };
   })()`);
-  let previous = panned;
-  for (let tick = 1; tick <= 3; tick += 1) {
-    await sleep(1100);
+  if (!saved) throw new Error('plan layout fixture missing');
+  return saved;
+}
+
+async function changePlanLayout(send, size) {
+  const changed = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    if (!saved || frame !== saved.frame || frame.querySelector('canvas') !== saved.canvas || frame.__opdTrackInset !== saved.orbit) return false;
+    frame.style.width = ${JSON.stringify(size.width + 'px')};
+    frame.style.height = ${JSON.stringify(size.height + 'px')};
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => ${size.dpr} });
+    return frame.clientWidth === ${size.width} && frame.clientHeight === ${size.height} && window.devicePixelRatio === ${size.dpr};
+  })()`);
+  if (!changed) throw new Error('plan layout did not change on the same canvas');
+}
+
+async function assertPlanLayoutIdentity(send) {
+  const same = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    return !!saved && frame === saved.frame && frame.querySelector('canvas') === saved.canvas && frame.__opdTrackInset === saved.orbit;
+  })()`);
+  if (!same) throw new Error('plan document, frame, canvas or renderer replaced during the gesture');
+}
+
+async function restorePlanLayout(send) {
+  await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    if (!saved) return;
+    if (saved.style === null) saved.frame.removeAttribute('style');
+    else saved.frame.setAttribute('style', saved.style);
+    if (saved.dpr) Object.defineProperty(window, 'devicePixelRatio', saved.dpr);
+    else delete window.devicePixelRatio;
+    delete window.__opdPlanLayout;
+  })()`);
+}
+
+export async function provePlanGestureHolds(send) {
+  const layout = await beginPlanLayout(send);
+  try {
+    const start = await planCamera(send);
+    if (!start) throw new Error('plan camera missing before the gesture');
+    const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
+    await sleep(200);
+    const panned = await planCamera(send);
+    if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
+    await changePlanLayout(send, { width: layout.width - 24, height: layout.height - 20, dpr: layout.dpr === 2 ? 1 : 2 });
+    let previous = panned;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: start.x + step * (tick + 1),
+        y: start.y,
+        button: 'left',
+        buttons: 1,
+      });
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(previous, next)) {
+        throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+      }
+      previous = next;
+    }
     await send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: start.x + step * (tick + 1),
+      type: 'mouseReleased',
+      x: start.x + step * 4,
       y: start.y,
       button: 'left',
-      buttons: 1,
+      buttons: 0,
+      clickCount: 1,
     });
-    await sleep(150);
-    const next = await planCamera(send);
-    if (!cameraMoved(previous, next)) {
-      throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+    await sleep(450);
+    const released = await planCamera(send);
+    if (!released || released.view !== 'view-iss') {
+      throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
     }
-    previous = next;
-  }
-  await send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: start.x + step * 4,
-    y: start.y,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  });
-  await sleep(450);
-  const released = await planCamera(send);
-  if (!released || released.view !== 'view-iss') {
-    throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
-  }
-  const touchStart = await planCamera(send);
-  await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
-  await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
-  await sleep(200);
-  const touched = await planCamera(send);
-  if (!cameraMoved(touchStart, touched)) {
-    throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
-  }
-  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
-  await evaluate(send, `(() => {
-    delete window.devicePixelRatio;
-    return window.devicePixelRatio;
-  })()`);
-  let touchPrevious = touched;
-  for (let tick = 1; tick <= 3; tick += 1) {
-    await sleep(1100);
-    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
-    await sleep(150);
-    const next = await planCamera(send);
-    if (!cameraMoved(touchPrevious, next)) {
-      throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+    const touchStart = await planCamera(send);
+    await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
+    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
+    await sleep(200);
+    const touched = await planCamera(send);
+    if (!cameraMoved(touchStart, touched)) {
+      throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
     }
-    touchPrevious = next;
-  }
-  await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
-  await sleep(450);
-  const ended = await planCamera(send);
-  if (!ended || ended.view !== 'view-iss') {
-    throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+    await changePlanLayout(send, layout);
+    let touchPrevious = touched;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(touchPrevious, next)) {
+        throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+      }
+      touchPrevious = next;
+    }
+    await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
+    await sleep(450);
+    const ended = await planCamera(send);
+    if (!ended || ended.view !== 'view-iss') {
+      throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+    }
+  } finally {
+    await restorePlanLayout(send);
   }
 }
 
@@ -5250,7 +5297,7 @@ async function returnToPlan(send) {
   await waitForPip(send, 'plan', 'plan framed after an outside gesture', 20000);
 }
 
-async function provePlanOutsideEnding(send, viewport, kind, from, to) {
+export async function provePlanOutsideEnding(send, viewport, kind, from, to) {
   await send('Emulation.setDeviceMetricsOverride', {
     width: from.width,
     height: from.height,
@@ -5259,59 +5306,64 @@ async function provePlanOutsideEnding(send, viewport, kind, from, to) {
   });
   await sleep(400);
   await waitForPip(send, 'plan', `plan before ${kind}`, 20000);
-  const before = await planFrameMetrics(send);
-  if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
-  await armPlanPointer(send);
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: before.outsideX,
-    y: before.outsideY,
-    button: 'left',
-    buttons: 1,
-  });
-  await endPlanGesture(send, kind, before);
-  await send('Emulation.setDeviceMetricsOverride', {
-    width: to.width,
-    height: to.height,
-    deviceScaleFactor: to.dpr,
-    mobile: viewport.mobile,
-  });
-  for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
-  const after = await planFrameMetrics(send);
-  const expected = planCanvasReady(after);
-  const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
-  if (!after || !expected || !changed || after.view !== 'view-iss'
-    || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
-    || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
-    throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
-  }
-  await evaluate(send, `(() => {
-    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
-    if (orbit?.stop) orbit.stop();
-    return true;
-  })()`);
-  if (kind !== 'up') {
+  const layout = await beginPlanLayout(send);
+  try {
+    const before = await planFrameMetrics(send);
+    if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
+    await armPlanPointer(send);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
     await send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
+      type: 'mouseMoved',
       x: before.outsideX,
       y: before.outsideY,
       button: 'left',
-      buttons: 0,
-      clickCount: 1,
+      buttons: 1,
     });
+    await endPlanGesture(send, kind, before);
+    await changePlanLayout(send, {
+      width: Math.round(layout.width * to.width / from.width),
+      height: Math.round(layout.height * to.height / from.height),
+      dpr: to.dpr,
+    });
+    for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
+    await assertPlanLayoutIdentity(send);
+    const after = await planFrameMetrics(send);
+    const expected = planCanvasReady(after);
+    const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
+    if (!after || !expected || !changed || after.view !== 'view-iss'
+      || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
+      || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
+      throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
+    }
+    await evaluate(send, `(() => {
+      const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+      if (orbit?.stop) orbit.stop();
+      return true;
+    })()`);
+    if (kind !== 'up') {
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: before.outsideX,
+        y: before.outsideY,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      });
+    }
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+    const clickAt = await planFrameMetrics(send);
+    await mouseClick(send, clickAt.x, clickAt.y);
+    await waitFor(
+      send,
+      `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
+      `plan ${kind} click opens map`,
+      8000,
+    );
+    await returnToPlan(send);
+    return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
+  } finally {
+    await restorePlanLayout(send);
   }
-  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
-  const clickAt = await planFrameMetrics(send);
-  await mouseClick(send, clickAt.x, clickAt.y);
-  await waitFor(
-    send,
-    `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
-    `plan ${kind} click opens map`,
-    8000,
-  );
-  await returnToPlan(send);
-  return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
 }
 
 async function provePlanOutsideRelease(send, viewport) {
@@ -5350,7 +5402,7 @@ async function provePlanMapLive(send, viewport) {
     await waitForPip(send, 'plan', 'plan framed before an outside release', 20000);
     const outside = await provePlanOutsideRelease(send, viewport);
     await provePlanRasterNames(send);
-    await provePlanGestureHolds(send, viewport);
+    await provePlanGestureHolds(send);
     await provePlanRotatingPinch(send);
     return `wheel ${zoom.toFixed(2)}; ${outside}`;
   } finally {

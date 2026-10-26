@@ -19,7 +19,7 @@ function missingHtml(phase) {
   const details = phase === 'before'
     ? '<details data-opd-control="schedule"><summary>Launch data details · schedule checked 12:00Z</summary></details>'
     : '';
-  return shell(`<section id="coverage">${details}</section>`);
+  return shell(`<section id="coverage">${details}<details id="unrelated-preferences"><summary>Unrelated preferences</summary></details></section>`);
 }
 
 function wrongOpenHtml(phase) {
@@ -88,12 +88,20 @@ async function handoff(launch, render, prepare, read) {
     await session.page.goto(served.url, { waitUntil: 'domcontentloaded' });
     if (prepare) await prepare(session.page);
     served.publish();
-    await playwrightSend(session)('Emulation.setDeviceMetricsOverride', {
-      width: 874,
-      height: 402,
-      deviceScaleFactor: 1,
-      mobile: true,
-    });
+    const predecessor = session.page;
+    try {
+      await playwrightSend(session)('Emulation.setDeviceMetricsOverride', {
+        width: 874,
+        height: 402,
+        deviceScaleFactor: 1,
+        mobile: true,
+      });
+    } catch (error) {
+      assert.equal(session.page, predecessor, 'rejection retains the public predecessor');
+      assert.equal(predecessor.isClosed(), false, 'rejection keeps the predecessor alive');
+      assert.equal(browser.contexts().length, 1, 'rejection closes the candidate');
+      throw error;
+    }
     return read ? await read(session.page) : null;
   } finally {
     await browser?.close();
@@ -140,6 +148,15 @@ for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrom
     await assert.rejects(
       () => handoff(launch, missingHtml, (open) => open.evaluate(() => {
         document.querySelector('[data-opd-control="schedule"]').open = true;
+      })),
+      /restored controls before context switch/,
+    );
+  });
+
+  serial(`${engine}: a missing stable ID beside an unrelated survivor fails settle`, async () => {
+    await assert.rejects(
+      () => handoff(launch, (phase) => missingHtml(phase).replace('data-opd-control="schedule"', 'id="persistent-preferences"'), (open) => open.evaluate(() => {
+        document.getElementById('persistent-preferences').open = true;
       })),
       /restored controls before context switch/,
     );

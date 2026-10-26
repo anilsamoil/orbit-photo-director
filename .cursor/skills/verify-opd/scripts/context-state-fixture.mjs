@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -11,7 +12,7 @@ const require = createRequire(resolve(root, 'frontend/package.json'));
 
 // The real SNAP modules and renderer, with the normal verify manifest/launch
 // fixtures. Only disposable fixture/cache files are written; Vite binds port 0.
-export async function serveSnap({ catalog = 'valid' } = {}) {
+export async function serveSnap({ catalog = 'valid', emptyCatalog = false } = {}) {
   if (!['valid', 'fallback'].includes(catalog)) throw new Error(`unknown SNAP catalog fixture: ${catalog}`);
   const home = await mkdtemp(resolve(tmpdir(), 'opd-context-state-'));
   const fixtureDir = resolve(home, 'fixtures');
@@ -26,6 +27,13 @@ export async function serveSnap({ catalog = 'valid' } = {}) {
     globalThis.fetch = realFetch;
   }
   const tierCatalog = publishVerifyCatalog(fixtureDir, built.meta.now);
+  if (emptyCatalog) {
+    const body = JSON.parse(tierCatalog.body);
+    body.items = [];
+    Object.assign(body.coverage, { received: 0, listed: 0, evaluated: 0, tier_counts: { shot: 0, likely: 0, watch: 0, unassessed: 0, none: 0 } });
+    tierCatalog.body = JSON.stringify(body);
+    tierCatalog.pointer.sha256 = createHash('sha256').update(tierCatalog.body).digest('hex');
+  }
   let catalogEnabled = catalog === 'valid';
   const { createServer } = await import(pathToFileURL(resolve(dirname(require.resolve('vite/package.json')), 'dist/node/index.js')));
   const server = createHttpServer();

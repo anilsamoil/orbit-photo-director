@@ -32,9 +32,9 @@ async function disclosureState(page) {
 
 for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrome]]) {
   test(`${engine}: real SNAP reconciles delayed catalog disclosures with shown and hidden Map chrome`, { timeout: 180000 }, async (t) => {
-    for (const hidden of [false, true]) {
-      await t.test(`Map chrome ${hidden ? 'hidden' : 'shown'}`, async () => {
-        const served = await serveSnap({ catalog: 'fallback' });
+    for (const [hidden, emptyCatalog] of [[false, false], [true, false], [false, true], [true, true]]) {
+      await t.test(`Map chrome ${hidden ? 'hidden' : 'shown'}, catalog ${emptyCatalog ? 'empty' : 'populated'}`, async () => {
+        const served = await serveSnap({ catalog: 'fallback', emptyCatalog });
         let browser;
         let changing;
         const releaseCatalog = deferred();
@@ -49,6 +49,7 @@ for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrom
           await session.page.evaluate(async () => {
             const app = await import('/src/main.ts');
             await app.refresh();
+            app.rerenderCountdowns();
           });
           await session.page.waitForFunction(() => document.querySelector('#map-launch-coverage .launch-data-details'));
           if (await session.page.evaluate(() => document.body.classList.contains('map-chrome-hidden')) !== hidden) {
@@ -64,6 +65,17 @@ for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrom
           assert.deepEqual(before.survivors.map((entry) => entry.open), [true, false]);
           assert.equal(before.insertedMore, undefined);
           const predecessor = session.page;
+          const evaluatePredecessor = predecessor.evaluate.bind(predecessor);
+          let captures = 0;
+          predecessor.evaluate = async (fn, arg) => {
+            const value = await evaluatePredecessor(fn, arg);
+            if (value?.view && Array.isArray(value.details)) {
+              captures += 1;
+              const captured = value.details.filter((detail) => ['cards-launch-coverage', 'upcoming-cards-launch-coverage'].includes(detail.ownerId));
+              assert.deepEqual(captured.map((detail) => detail.open), before.survivors.map((detail) => detail.open), 'capture reads the prepared predecessor disclosure states');
+            }
+            return value;
+          };
           const candidate = deferred();
           const catalogRequested = deferred();
           const original = browser.newContext.bind(browser);
@@ -88,12 +100,16 @@ for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrom
           served.activateCatalog();
           releaseCatalog.resolve();
           await changing;
+          assert.equal(captures, 1, 'the real predecessor pose was captured once');
           const after = await disclosureState(session.page);
           assert.equal(after.hidden, hidden);
           assert.equal(after.legacyMapData, false, 'tier catalog legitimately retires the captured closed disclosure');
-          assert.match(after.primary, /Shot/i, 'real schema-3 catalog was parsed and rendered');
+          if (emptyCatalog) {
+            assert.equal(after.primary, undefined, 'empty catalog retires the primary disclosure');
+            assert.match(await session.page.locator('#map-launch-coverage').textContent(), /No Shot or Likely launch/);
+          } else assert.match(after.primary, /Shot/i, 'real schema-3 catalog was parsed and rendered');
           assert.deepEqual(after.survivors, before.survivors, 'mixed extant disclosures survive the refresh');
-          assert.equal(after.insertedMore, false, 'new catalog disclosure keeps its default closed state');
+          assert.equal(after.insertedMore, emptyCatalog ? undefined : false, 'catalog controls use their expected defaults');
           assert.equal(predecessor.isClosed(), true);
           assert.equal(browser.contexts().length, 1);
           await session.page.waitForTimeout(1100);

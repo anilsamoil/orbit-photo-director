@@ -232,18 +232,11 @@ function disclosureApi() {
     return [...document.querySelectorAll('details')].find((el) => identityOf(el) === saved.key) || null;
   }
 
-  function retired(saved) {
-    if (!saved || find(saved)) return false;
-    if (!saved.ownerId) return false;
-    const owner = document.getElementById(saved.ownerId);
-    if (!owner) return false;
-    const replacements = [...owner.querySelectorAll('details')].filter((el) => (
-      ownerId(el) === saved.ownerId && identityOf(el) !== saved.key
-    ));
-    if (!replacements.length) return false;
-    const summary = saved.summary || '';
-    if (summary && replacements.some((el) => summaryText(el) === summary)) return false;
-    return true;
+  function retired(saved, retiredMapRoles) {
+    return retiredMapRoles.some((role) => saved?.key === `role:${role}@map-launch-coverage#0`)
+      && saved.ownerId === 'map-launch-coverage'
+      && !find(saved)
+      && !!document.getElementById('map-launch-coverage');
   }
 
   function capture(el) {
@@ -731,15 +724,32 @@ async function restoreDisclosures(page, pose) {
 
 async function settleFocusedPose(page, pose) {
   if (!pose) return;
+  let retiredMapRoles = [];
   if (pose.viteApp) {
-    await page.evaluate(async () => {
+    retiredMapRoles = await page.evaluate(async () => {
       // Becoming visible asks SNAP to refresh Queue/Upcoming. Join those app
       // promises before their DOM rebuild can overwrite restored disclosures.
-      const [app, { launchCatalog }] = await Promise.all([
+      const [app, { launchCatalog }, { launchStore }, { selectLaunches }] = await Promise.all([
         import('/src/main.ts'), import('/src/launch-catalog.ts'),
+        import('/src/launch-store.ts'), import('/src/launch-selectors.ts'),
       ]);
       await Promise.all([app.refresh(), launchCatalog.refresh()]);
       app.rerenderCountdowns();
+      const now = Date.now();
+      const tiers = launchCatalog.read(now);
+      if (!tiers) {
+        const selections = selectLaunches(launchStore.getState(), now, 'map');
+        return [
+          ...(!selections.length ? ['map-launch-primary'] : []),
+          ...(selections.length <= 1 ? ['map-launch-more'] : []),
+        ];
+      }
+      const primary = tiers.highlights[0];
+      return [
+        'launch-data-details',
+        ...(!primary ? ['map-launch-primary'] : []),
+        ...(!tiers.pins.some((pin) => pin !== primary) ? ['map-launch-more'] : []),
+      ];
     });
   }
   await restoreDisclosures(page, pose);
@@ -753,7 +763,7 @@ async function settleFocusedPose(page, pose) {
         if (!(el instanceof HTMLDetailsElement) || el.open !== saved.open) {
           misses.push({ key: saved.key, ownerId: saved.ownerId, summary: saved.summary, savedOpen: saved.open, foundOpen: el.open });
         }
-      } else if (!window.__opdDisclosure.retired(saved)) {
+      } else if (!window.__opdDisclosure.retired(saved, expected.retiredMapRoles)) {
         misses.push({ key: saved.key, ownerId: saved.ownerId, summary: saved.summary, savedOpen: saved.open, missing: true });
       }
     }
@@ -772,7 +782,7 @@ async function settleFocusedPose(page, pose) {
       || document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === String(expected.follow);
     const live = !expected.time || !document.getElementById('time-slider-readout')?.classList.contains('time-slider-scrubbed') === expected.time.live;
     return { ok: disclosures && expanded && help && follow && live, disclosures, expanded, help, follow, live, misses, now };
-  }, 'restored controls before context switch', 10000, pose);
+  }, 'restored controls before context switch', 10000, { ...pose, retiredMapRoles });
 }
 
 async function restorePage(session, snapshot) {
