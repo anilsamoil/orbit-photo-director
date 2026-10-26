@@ -52,7 +52,7 @@ export function planOpenFailures(result) {
     if (result.nightRebuilt !== true) failures.push('night minute');
     if (!(Number(result.zoomDelta) > 0.05)) failures.push(`wheel ${result.zoomDelta}`);
     if (result.zoomHeld !== true) failures.push('wheel reset');
-    if (result.panMoved !== true || result.panOpened === true) failures.push('pointer pan');
+    if (result.panMoved !== true || result.panOpened === true) failures.push(`pointer pan ${result.panDelta ?? ''}`);
     if (result.detailClickOpened === true) failures.push('detail click opened Map');
     if (result.enterView !== 'view-map') failures.push(`enter ${result.enterView}`);
     if (result.spaceView !== 'view-map') failures.push(`space ${result.spaceView}`);
@@ -254,7 +254,7 @@ async function provePlanLive(page, plan, shotPath) {
     };
   });
   const kind = await pointerKind(plan);
-  const pan = await page.evaluate((pointerType) => {
+  const pan = await page.evaluate(async (pointerType) => {
     const canvas = document.querySelector('[data-pip="plan"] canvas');
     const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
     if (!canvas || !orbit?.getCenter) return { moved: false, opened: true, reason: 'map' };
@@ -288,9 +288,20 @@ async function provePlanLive(page, plan, shotPath) {
     send('pointermove', 'mousemove', x + 48, y, 1);
     send('pointermove', 'mousemove', x + 96, y, 1);
     send('pointerup', 'mouseup', x + 96, y, 0);
-    const after = orbit.getCenter();
-    const moved = Math.abs(before.lng - after.lng) + Math.abs(before.lat - after.lat) > 0.02;
-    return { moved, opened: document.getElementById('view')?.className !== 'view-iss', view: document.getElementById('view')?.className || '' };
+    let after = orbit.getCenter();
+    for (let frame = 0; frame < 8; frame += 1) {
+      const shift = Math.abs(before.lng - after.lng) + Math.abs(before.lat - after.lat);
+      if (shift > 0.02) break;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      after = orbit.getCenter();
+    }
+    const delta = Math.abs(before.lng - after.lng) + Math.abs(before.lat - after.lat);
+    return {
+      moved: delta > 0.02,
+      delta,
+      opened: document.getElementById('view')?.className !== 'view-iss',
+      view: document.getElementById('view')?.className || '',
+    };
   }, kind);
   if (shotPath) await page.screenshot({ path: shotPath });
   const detail = await page.evaluate((pointerType) => {
@@ -384,6 +395,7 @@ async function provePlanLive(page, plan, shotPath) {
     zoomDelta,
     zoomHeld,
     panMoved: pan?.moved === true,
+    panDelta: pan?.delta,
     panOpened: pan?.opened === true,
     detailClickOpened: detail?.opened === true,
     enterView,
