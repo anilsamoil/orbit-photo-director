@@ -81,7 +81,7 @@ export function refreshAscentTrajectorySource(): void {
   const tiers = launchCatalog.read(now);
   const launchState: LaunchState = launchStore.getState();
   const { lines, pads } = tiers
-    ? buildTierMapFeatures(tiers)
+    ? buildTierMapFeatures(tiers, now)
     : launchState.artifact
       ? buildLaunchMapFeatures(launchState, now)
       : buildAscentFeatures(legacyPassesInHorizon(state.passes, now));

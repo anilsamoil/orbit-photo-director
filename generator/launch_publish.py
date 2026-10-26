@@ -75,7 +75,7 @@ def _validate_artifact(artifact: dict) -> None:
         raise ValueError("INVALID_LAUNCH_VALIDITY")
 
 
-def _validate_catalog(artifact: dict) -> None:
+def _validate_catalog(artifact: dict, *, require_pad: bool = True) -> None:
     def keys(value: object, expected: str) -> None:
         if not isinstance(value, dict) or set(value) != set(expected.split()):
             raise ValueError("UNEXPECTED_PUBLIC_LAUNCH_FIELDS")
@@ -137,7 +137,7 @@ def _validate_catalog(artifact: dict) -> None:
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     seen: set[str] = set()
     for item in artifact["items"]:
-        _validate_catalog_item(item, seen, keys, number)
+        _validate_catalog_item(item, seen, keys, number, require_pad=require_pad)
     expected = hashlib.sha256(
         canonical_bytes({k: v for k, v in artifact.items() if k != "revision"})
     ).hexdigest()[:24]
@@ -147,7 +147,9 @@ def _validate_catalog(artifact: dict) -> None:
         raise ValueError("LAUNCH_ARTIFACT_TOO_LARGE")
 
 
-def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: Callable) -> None:
+def _validate_catalog_item(
+    item: dict, seen: set[str], keys: Callable, number: Callable, *, require_pad: bool = True,
+) -> None:
     keys(item, "event_id revision name rocket site schedule direction tier why reasons shots")
     if (
         not isinstance(item["event_id"], str) or item["event_id"] in seen
@@ -159,10 +161,17 @@ def _validate_catalog_item(item: dict, seen: set[str], keys: Callable, number: C
     ):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     seen.add(item["event_id"])
-    keys(item["site"], "name lat lon")
-    if not isinstance(item["site"]["name"], str) or not number(item["site"]["lat"], -90, 90):
+    site = item["site"]
+    if require_pad or (isinstance(site, dict) and "pad" in site):
+        keys(site, "name lat lon pad")
+        pad_name = site["pad"]
+        if pad_name is not None and (not isinstance(pad_name, str) or not pad_name.strip()):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    else:
+        keys(site, "name lat lon")
+    if not isinstance(site["name"], str) or not number(site["lat"], -90, 90):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
-    if not number(item["site"]["lon"], -180, 180):
+    if not number(site["lon"], -180, 180):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     schedule = item["schedule"]
     keys(schedule, "net window_start window_end precision status destination")
@@ -542,11 +551,40 @@ def publish_launch_artifact(
         return pointer
 
 
+def _catalog_pointer(artifact: dict) -> dict:
+    return {
+        "schema_version": 2,
+        "revision": artifact["revision"],
+        "generated_at": artifact["generated_at"],
+        "valid_until": artifact["geometry_valid_until"],
+        "path": f"launch/catalog/v/{artifact['revision']}.json",
+        "sha256": hashlib.sha256(canonical_bytes(artifact)).hexdigest(),
+    }
+
+
+def _verified_catalog(output: Path, pointer: dict) -> dict:
+    """Verify local immutable bytes before adopting a remotely accepted commit."""
+    revision = pointer.get("revision")
+    if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{24}", revision):
+        raise ValueError("INVALID_PENDING_LAUNCH_CATALOG")
+    body = (output / f"launch/catalog/v/{revision}.json").read_bytes()
+    artifact = json.loads(body)
+    _validate_catalog(artifact, require_pad=False)
+    if (
+        pointer != _catalog_pointer(artifact)
+        or hashlib.sha256(body).hexdigest() != pointer["sha256"]
+    ):
+        raise ValueError("INVALID_PENDING_LAUNCH_CATALOG")
+    return artifact
+
+
 def publish_launch_catalog(
     artifact: dict,
     output: Path,
     *,
     upload: Callable[[Path, str, bool], None] | None = None,
+    before_publish: Callable[[], None] | None = None,
+    after_publish: Callable[[], None] | None = None,
 ) -> dict:
     """Schema 3 catalog beside the live schema 2 publication."""
     _validate_catalog(artifact)
@@ -558,7 +596,18 @@ def publish_launch_catalog(
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("LAUNCH_PUBLISHER_BUSY") from exc
+        if before_publish:
+            before_publish()
         revision = artifact["revision"]
+        pointer_path = output / "launch/catalog/latest.json"
+        if pointer_path.exists():
+            previous = json.loads(pointer_path.read_bytes())
+            generated = _parse_iso8601_z(artifact["generated_at"])
+            previous_generated = _parse_iso8601_z(previous.get("generated_at"))
+            if previous_generated > generated:
+                raise ValueError("OBSOLETE_LAUNCH_CATALOG")
+            if previous_generated == generated and previous.get("revision") != revision:
+                raise ValueError("CONFLICTING_LAUNCH_CATALOG_REVISION")
         relative = f"launch/catalog/v/{revision}.json"
         artifact_path = output / relative
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -568,15 +617,7 @@ def publish_launch_catalog(
         pending_artifact = artifact_path.with_suffix(".pending")
         _write_bytes_atomic(pending_artifact, body)
         os.replace(pending_artifact, artifact_path)
-        pointer = {
-            "schema_version": 2,
-            "revision": revision,
-            "generated_at": artifact["generated_at"],
-            "valid_until": artifact["geometry_valid_until"],
-            "path": relative,
-            "sha256": hashlib.sha256(body).hexdigest(),
-        }
-        pointer_path = output / "launch/catalog/latest.json"
+        pointer = _catalog_pointer(artifact)
         pointer_path.parent.mkdir(parents=True, exist_ok=True)
         pending = output / "launch/catalog/.latest.pending.json"
         _write_bytes_atomic(pending, canonical_bytes(pointer))
@@ -584,7 +625,54 @@ def publish_launch_catalog(
             upload(artifact_path, relative, True)
             upload(pending, "launch/catalog/latest.json", False)
         os.replace(pending, pointer_path)
+        if after_publish:
+            after_publish()
         return pointer
+
+
+def rclone_catalog_reader(remote: str) -> Callable[[], dict | None]:
+    """Read the catalog commit token; only a confirmed missing object is absent."""
+    if not remote or remote.startswith("-") or "\n" in remote:
+        raise ValueError("invalid remote")
+    executable = shutil.which("rclone")
+    if executable is None:
+        raise FileNotFoundError("rclone executable not found")
+    executable = str(Path(executable).resolve())
+
+    def read() -> dict | None:
+        try:
+            result = _rclone(
+                [executable, "cat", f"{remote.rstrip('/')}/launch/catalog/latest.json",
+                 "--count", "4097"],
+                45,
+            )
+        except ValueError as exc:
+            if str(exc).startswith(("RCLONE_EXIT_3:", "RCLONE_EXIT_4:")):
+                return None
+            raise
+        if len(result.stdout) > 4096:
+            raise ValueError("REMOTE_LAUNCH_CATALOG_TOO_LARGE")
+        try:
+            pointer = json.loads(result.stdout)
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER") from exc
+        if not isinstance(pointer, dict) or set(pointer) != {
+            "schema_version", "revision", "generated_at", "valid_until", "path", "sha256",
+        }:
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER")
+        revision, digest = pointer["revision"], pointer["sha256"]
+        if (
+            pointer["schema_version"] != 2
+            or not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{24}", revision)
+            or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            or pointer["path"] != f"launch/catalog/v/{revision}.json"
+        ):
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER")
+        if _parse_iso8601_z(pointer["valid_until"]) <= _parse_iso8601_z(pointer["generated_at"]):
+            raise ValueError("INVALID_REMOTE_LAUNCH_CATALOG_POINTER")
+        return pointer
+
+    return read
 
 
 def rclone_uploader(remote: str) -> Callable[[Path, str, bool], None]:
