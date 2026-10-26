@@ -12,8 +12,12 @@ test('WebKit time-row verification restores a real SNAP context before returning
     const spec = WEBKIT_DEVICES.find((entry) => entry.slug === 'iphone-17-pro');
     const session = await openDeviceContext(browser, spec);
     await session.page.goto(`${served.url}/?e2e`);
+    await session.page.locator('#tab-map').evaluate((el) => el.click());
     await session.page.waitForFunction(() => window.__opdMap?.getLayer('iss-track-layer')
       && document.getElementById('toggle-follow-iss')?.hasAttribute('aria-pressed'));
+    if (await session.page.evaluate(() => document.body.classList.contains('map-chrome-hidden'))) {
+      await session.page.locator('#map-chrome-toggle').evaluate((el) => el.click());
+    }
     await proveShortTimeRow(playwrightSend(session), { width: 402, height: 874, mobile: true });
     assert.deepEqual(await session.page.evaluate(() => [innerWidth, innerHeight, devicePixelRatio]), [402, 874, 3]);
     assert.equal(browser.contexts().length, 1);
