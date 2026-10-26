@@ -192,6 +192,69 @@ function freezeDescriptor(descriptor) {
   return Object.freeze(descriptor);
 }
 
+function disclosureApi() {
+  function summaryText(el) {
+    return el.querySelector(':scope > summary')?.textContent?.trim() || '';
+  }
+
+  function ownerId(el) {
+    return el.parentElement?.closest('[id]')?.id || '';
+  }
+
+  function explicitToken(el) {
+    if (el.id) return `id:${el.id}`;
+    const control = el.getAttribute('data-opd-control');
+    if (control) return `control:${control}`;
+    const names = el.getAttributeNames().filter((name) => name.startsWith('data-') && el.getAttribute(name) === '').sort();
+    if (!names.length) return '';
+    return `data:${names.join('&')}`;
+  }
+
+  function roleToken(el) {
+    const classes = [...el.classList].filter(Boolean).sort();
+    return classes.length ? `role:${classes.join('.')}` : 'role:details';
+  }
+
+  function identityOf(el) {
+    const owner = ownerId(el);
+    const explicit = explicitToken(el);
+    if (explicit) return `${explicit}@${owner}`;
+    const role = roleToken(el);
+    const scope = owner ? document.getElementById(owner) : document;
+    const peers = [...(scope?.querySelectorAll('details') || [])].filter((entry) => (
+      ownerId(entry) === owner && !explicitToken(entry) && roleToken(entry) === role
+    ));
+    return `${role}@${owner}#${peers.indexOf(el)}`;
+  }
+
+  function find(saved) {
+    if (!saved?.key) return null;
+    return [...document.querySelectorAll('details')].find((el) => identityOf(el) === saved.key) || null;
+  }
+
+  function retired(saved) {
+    if (!saved || find(saved)) return false;
+    if (!saved.ownerId) return false;
+    const owner = document.getElementById(saved.ownerId);
+    if (!owner) return false;
+    const replacements = [...owner.querySelectorAll('details')].filter((el) => (
+      ownerId(el) === saved.ownerId && identityOf(el) !== saved.key
+    ));
+    if (!replacements.length) return false;
+    const summary = saved.summary || '';
+    if (summary && replacements.some((el) => summaryText(el) === summary)) return false;
+    return true;
+  }
+
+  function capture(el) {
+    return { key: identityOf(el), ownerId: ownerId(el), summary: summaryText(el), open: el.open };
+  }
+
+  return { capture, find, retired };
+}
+
+const DISCLOSURE_BOOT = `window.__opdDisclosure = (${disclosureApi.toString()})();`;
+
 export async function openDeviceContext(browser, spec, hooks = {}) {
   const baseDescriptor = hooks.baseDescriptor || freezeDescriptor(contextDescriptor(spec));
   const descriptor = freezeDescriptor({
@@ -206,6 +269,7 @@ export async function openDeviceContext(browser, spec, hooks = {}) {
   try {
     const initScripts = (hooks.initScripts || []).filter((source) => source !== STANDALONE_INIT);
     if (spec.standalone) initScripts.unshift(STANDALONE_INIT);
+    if (!initScripts.includes(DISCLOSURE_BOOT)) initScripts.push(DISCLOSURE_BOOT);
     for (const source of initScripts) await context.addInitScript(source);
     const page = await context.newPage();
     const requestHandlers = [...(hooks.requestHandlers || [])];
@@ -285,14 +349,8 @@ async function capturePage(page) {
       const slider = document.getElementById('time-slider');
       const follow = document.getElementById('toggle-follow-iss');
       const followPressed = follow?.getAttribute('aria-pressed');
-      const details = [...document.querySelectorAll('details')].map((el) => {
-        const scope = el.parentElement?.closest('[id]');
-        const selector = `details${[...el.classList].map((name) => `.${CSS.escape(name)}`).join('')}`;
-        const peers = [...(scope || document).querySelectorAll(selector)];
-        const summary = el.querySelector(':scope > summary')?.textContent?.trim() || '';
-        const labeled = peers.filter((entry) => (entry.querySelector(':scope > summary')?.textContent?.trim() || '') === summary);
-        return { id: el.id, scopeId: scope?.id || null, selector, summary, occurrence: labeled.indexOf(el), open: el.open };
-      });
+      if (!window.__opdDisclosure) throw new Error('disclosure identity missing');
+      const details = [...document.querySelectorAll('details')].map((el) => window.__opdDisclosure.capture(el));
       const scene = document.querySelector('[data-iss-scene]');
       const picker = document.querySelector('[data-iss-launch-picker]');
       return {
@@ -654,11 +712,9 @@ async function restoreDisclosures(page, pose) {
     }
   }, pose.expanded);
   await page.evaluate((details) => {
+    if (!window.__opdDisclosure) throw new Error('disclosure identity missing');
     for (const saved of details || []) {
-      const scope = saved.scopeId ? document.getElementById(saved.scopeId) : document;
-      const peers = [...(scope?.querySelectorAll(saved.selector) || [])];
-      const labeled = peers.filter((entry) => (entry.querySelector(':scope > summary')?.textContent?.trim() || '') === saved.summary);
-      const el = saved.id ? document.getElementById(saved.id) : labeled[saved.occurrence];
+      const el = window.__opdDisclosure.find(saved);
       if (el instanceof HTMLDetailsElement) el.open = saved.open;
     }
   }, pose.details);
@@ -685,14 +741,11 @@ async function settleFocusedPose(page, pose) {
   await restoreDisclosures(page, pose);
   if (pose.view === 'view-map' || pose.view === 'view-iss') await renderedFrame(page, pose.view);
   await pollPage(page, (expected) => {
+    if (!window.__opdDisclosure) return { ok: false, disclosures: false, expanded: false, help: false, follow: false, live: false };
     const disclosures = (expected.details || []).every((saved) => {
-      const scope = saved.scopeId ? document.getElementById(saved.scopeId) : document;
-      const peers = [...(scope?.querySelectorAll(saved.selector) || [])];
-      const labeled = peers.filter((entry) => (entry.querySelector(':scope > summary')?.textContent?.trim() || '') === saved.summary);
-      const el = saved.id ? document.getElementById(saved.id) : labeled[saved.occurrence];
-      // Catalog refresh can retire a disclosure. Only surviving identities
-      // carry state; a new control at the old position keeps its own default.
-      return !el || (el instanceof HTMLDetailsElement && el.open === saved.open);
+      const el = window.__opdDisclosure.find(saved);
+      if (el) return el instanceof HTMLDetailsElement && el.open === saved.open;
+      return window.__opdDisclosure.retired(saved);
     });
     const expanded = (expected.expanded || []).every((saved) => {
       const el = document.getElementById(saved.id);

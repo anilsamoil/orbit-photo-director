@@ -143,7 +143,7 @@ test('inserted disclosure wrappers do not redirect saved open or closed states',
         <details class="launch-data-details"><summary>Duplicate label</summary></details>
         <details class="launch-data-details"><summary>Duplicate label</summary></details>
       </section>
-      <section id="retiring-pane"><details class="launch-data-details" ${primary ? 'open' : ''}><summary>${primary ? 'New catalog data' : 'Retired legacy data'}</summary></details></section>`);
+      <section id="retiring-pane"><details class="launch-data-details" data-opd-control="${primary ? 'catalog-data' : 'legacy-data'}" ${primary ? 'open' : ''}><summary>${primary ? 'New catalog data' : 'Retired legacy data'}</summary></details></section>`);
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   let browser;
