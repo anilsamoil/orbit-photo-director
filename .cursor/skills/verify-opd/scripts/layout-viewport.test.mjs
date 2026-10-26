@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { whenViewportLaidOut } from './drive.mjs';
 import { launchWebkit, openDeviceContext, playwrightSend } from './webkit-devices.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -37,12 +38,7 @@ test('landscape, portrait, then landscape keeps the product viewport meta', asyn
       [844, 390],
     ];
     for (const [width, height] of rotate) {
-      await send('Emulation.setDeviceMetricsOverride', {
-        width,
-        height,
-        deviceScaleFactor: 1,
-        mobile: true,
-      });
+      await whenViewportLaidOut(send, width, height);
     }
     const laid = await session.page.evaluate(() => ({
       meta: document.querySelector('meta[name="viewport"]')?.getAttribute('content') || '',
