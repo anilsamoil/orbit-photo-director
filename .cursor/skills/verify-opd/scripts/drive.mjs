@@ -3431,7 +3431,7 @@ async function proveRaisedHideDock(send, evidenceDir, viewport) {
   }
 }
 
-async function proveLegendPanelBounds(send, evidenceDir, viewport) {
+export async function proveLegendPanelBounds(send, evidenceDir, viewport) {
   const saved = await evaluate(send, `(() => {
     const button = document.getElementById('map-legend-toggle');
     const date = document.querySelector('.map-imagery-date');
