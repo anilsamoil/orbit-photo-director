@@ -88,6 +88,86 @@ describe('inset host', () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it('does not open Map when a drag ends on the plan button', async () => {
+    installViewport();
+    const { plan, tabMap } = mount();
+    document.getElementById('view')!.className = 'view-iss';
+    plan.hidden = false;
+    let mapOpens = 0;
+    tabMap.addEventListener('click', () => {
+      mapOpens += 1;
+      document.getElementById('view')!.className = 'view-map';
+    });
+    bindInsets({
+      mounts: async () => null,
+      track: () => track,
+      nowMs: () => 0,
+    });
+    plan.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      clientX: 40,
+      clientY: 40,
+      pointerId: 1,
+      pointerType: 'mouse',
+      button: 0,
+    }));
+    plan.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true,
+      clientX: 52,
+      clientY: 40,
+      pointerId: 1,
+      pointerType: 'mouse',
+    }));
+    plan.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true,
+      clientX: 52,
+      clientY: 40,
+      pointerId: 1,
+      pointerType: 'mouse',
+    }));
+    plan.click();
+    await Promise.resolve();
+    expect(mapOpens).toBe(0);
+    expect(document.getElementById('view')!.className).toBe('view-iss');
+  });
+
+  it('opens Map on a real tap of the plan button', async () => {
+    installViewport();
+    const { plan, tabMap } = mount();
+    document.getElementById('view')!.className = 'view-iss';
+    plan.hidden = false;
+    let mapOpens = 0;
+    tabMap.addEventListener('click', () => {
+      mapOpens += 1;
+      document.getElementById('view')!.className = 'view-map';
+    });
+    bindInsets({
+      mounts: async () => null,
+      track: () => track,
+      nowMs: () => 0,
+    });
+    plan.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      clientX: 40,
+      clientY: 40,
+      pointerId: 2,
+      pointerType: 'mouse',
+      button: 0,
+    }));
+    plan.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true,
+      clientX: 40,
+      clientY: 40,
+      pointerId: 2,
+      pointerType: 'mouse',
+    }));
+    plan.click();
+    await Promise.resolve();
+    expect(mapOpens).toBe(1);
+    expect(document.activeElement).toBe(tabMap);
+    expect(document.getElementById('view')!.className).toBe('view-map');
+  });
+
   it('keeps the horizon inset off while map chrome is hidden', async () => {
     installViewport();
     const { horizon } = mount();
