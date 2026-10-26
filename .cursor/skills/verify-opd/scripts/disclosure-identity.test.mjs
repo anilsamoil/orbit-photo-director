@@ -41,6 +41,14 @@ function stolenSummaryHtml(phase) {
   return shell('<section id="coverage"><details data-opd-control="catalog" open><summary>Retired legacy data</summary></details></section>');
 }
 
+function attributionHtml(phase) {
+  const stamp = phase === 'before' ? '12:00Z' : '12:05Z';
+  const attrib = phase === 'before'
+    ? '<div id="map-pane"><details class="maplibregl-ctrl maplibregl-ctrl-attrib maplibregl-compact" open><summary class="maplibregl-ctrl-attrib-button"></summary></details></div>'
+    : '<div id="map-pane"></div>';
+  return shell(`${attrib}<section id="coverage"><details data-opd-control="schedule"><summary>Launch data details · schedule checked ${stamp}</summary></details></section>`);
+}
+
 function insertedHtml(phase) {
   if (phase === 'before') {
     return shell('<section id="coverage"><details data-opd-control="kept"><summary>Launch data details · schedule checked 12:00Z</summary></details></section>');
@@ -153,6 +161,15 @@ for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrom
       })),
       /restored controls before context switch/,
     );
+  });
+
+  serial(`${engine}: an unmounted map attribution does not drop a saved disclosure`, async () => {
+    const rows = await handoff(launch, attributionHtml, (open) => open.evaluate(() => {
+      document.querySelector('[data-opd-control="schedule"]').open = true;
+    }), readDisclosures);
+    assert.deepEqual(rows, [
+      { control: 'schedule', summary: 'Launch data details · schedule checked 12:05Z', open: true },
+    ]);
   });
 
   serial(`${engine}: an inserted default-open disclosure does not take a saved open state`, async () => {
