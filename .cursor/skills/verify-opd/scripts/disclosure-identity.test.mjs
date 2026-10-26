@@ -34,6 +34,13 @@ function wrongOpenHtml(phase) {
     </script></section>`);
 }
 
+function stolenSummaryHtml(phase) {
+  if (phase === 'before') {
+    return shell('<section id="coverage"><details data-opd-control="legacy"><summary>Retired legacy data</summary></details></section>');
+  }
+  return shell('<section id="coverage"><details data-opd-control="catalog" open><summary>Retired legacy data</summary></details></section>');
+}
+
 function insertedHtml(phase) {
   if (phase === 'before') {
     return shell('<section id="coverage"><details data-opd-control="kept"><summary>Launch data details · schedule checked 12:00Z</summary></details></section>');
@@ -134,6 +141,15 @@ for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrom
     await assert.rejects(
       () => handoff(launch, wrongOpenHtml, (open) => open.evaluate(() => {
         document.querySelector('[data-opd-control="schedule"]').open = true;
+      })),
+      /restored controls before context switch/,
+    );
+  });
+
+  serial(`${engine}: a new control that copies a retired summary fails settle`, async () => {
+    await assert.rejects(
+      () => handoff(launch, stolenSummaryHtml, (open) => open.evaluate(() => {
+        document.querySelector('[data-opd-control="legacy"]').open = false;
       })),
       /restored controls before context switch/,
     );
