@@ -10,11 +10,12 @@ import { driveMapBearingCommit } from './bearing-commit.mjs';
 import { driveMapBearing } from './bearing-retarget.mjs';
 import { driveMapPagehide } from './corner-pagehide.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
+import { driveLaunchShotForecast } from './launch-shot-forecast.mjs';
 import { driveMapHold } from './map-hold.mjs';
 import { drivePinFit } from './pin-fit.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
-import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
+import { bostonTrackText, buildFixtures, publishForecastEdgeCatalog, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -222,6 +223,13 @@ function startProxy(home) {
   const catalogBodies = new Map();
   let catalogLive = null;
   let catalogGate = null;
+  let forecastEdge = null;
+  function armForecastEdge(boundaryMs) {
+    const published = publishForecastEdgeCatalog(fixtureDir, boundaryMs);
+    catalogBodies.set(published.pointer.path, published.body);
+    forecastEdge = published;
+    return published;
+  }
   function currentCatalog() {
     const now = Date.now();
     const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
@@ -343,6 +351,21 @@ function startProxy(home) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
+    if (cookieValue(req, 'opd-verify-catalog') === 'forecast-edge') {
+      if (!forecastEdge) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end('missing');
+        return;
+      }
+      if (path === '/launch/catalog/latest.json') {
+        sendJson(res, JSON.stringify(forecastEdge.pointer));
+        return;
+      }
+      if (path === `/${forecastEdge.pointer.path}`) {
+        sendJson(res, forecastEdge.body);
+        return;
+      }
+    }
     const sendFile = (name) => {
       const file = resolve(fixtureDir, name);
       if (!existsSync(file)) {
@@ -454,6 +477,12 @@ function startProxy(home) {
       await readBody(req);
       releaseLaunchHold();
       json(res, 200, { ok: true, pending: launchHoldWaiters.length });
+      return;
+    }
+    if (path === '/api/verify/forecast-edge' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const published = armForecastEdge(payload.boundary ?? Date.now());
+      json(res, 200, { ok: true, revision: published.pointer.revision, ...published.clock });
       return;
     }
     if (path === '/api/verify/catalog-hold' && req.method === 'GET') {
@@ -861,6 +890,20 @@ async function drive(feature) {
     console.log(`evidence ${state.evidence}`);
     return;
   }
+  if (feature === 'launch-shot-forecast') {
+    try {
+      const note = await driveLaunchShotForecast({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
   if (feature === 'pin-fit') {
     try {
       const note = await drivePinFit({
@@ -878,7 +921,7 @@ async function drive(feature) {
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
   if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, or session-lock.`);
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, launch-shot-forecast, or session-lock.`);
     process.exit(2);
   }
   const notes = await driveFeatures({
@@ -1009,6 +1052,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|session-lock>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|launch-shot-forecast|session-lock>|sw|down|check|serve');
   process.exit(2);
 }
