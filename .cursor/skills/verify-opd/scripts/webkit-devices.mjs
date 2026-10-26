@@ -776,10 +776,11 @@ export async function readContextMetrics(page) {
 }
 
 export function playwrightSend(session) {
-  return async function send(method, params = {}) {
+  const send = async function send(method, params = {}) {
     if (method === 'Emulation.setDeviceMetricsOverride') {
+      const predecessor = session.page;
       await replaceDeviceContext(session, params);
-      return {};
+      return { contextReplaced: session.page !== predecessor };
     }
     const page = session.page;
     if (method === 'Runtime.evaluate') {
@@ -891,6 +892,8 @@ export function playwrightSend(session) {
     }
     throw new Error(`webkit send has no ${method}`);
   };
+  send.replacesContext = true;
+  return send;
 }
 
 async function hit(page, locator) {

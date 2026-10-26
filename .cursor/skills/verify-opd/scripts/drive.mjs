@@ -333,7 +333,7 @@ async function mouseClick(send, x, y, button = 'left') {
 
 async function setViewport(send, width, height, mobile) {
   if (FIXED_SURFACE) throw new Error(`fixed-surface drive attempted resize to ${width}x${height}`);
-  await send('Emulation.setDeviceMetricsOverride', {
+  return send('Emulation.setDeviceMetricsOverride', {
     width,
     height,
     deviceScaleFactor: 1,
@@ -3200,7 +3200,8 @@ async function layOutViewport(send, width, height) {
   await evaluate(send, viewportLayoutScript(width, height));
   let expectedDpr = null;
   try {
-    await setViewport(send, width, height, true);
+    const changed = await setViewport(send, width, height, true);
+    if (changed?.contextReplaced) await evaluate(send, viewportLayoutScript(width, height));
     const read = await evaluate(send, 'window.devicePixelRatio');
     expectedDpr = Number(read);
     if (!Number.isFinite(expectedDpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
@@ -3239,7 +3240,7 @@ async function restoreViewport(send, viewport) {
   const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile);
   pending.catch(() => {});
   const limited = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error('viewport restore unsettled')), VIEWPORT_RESTORE_MS);
+    timer = setTimeout(() => reject(new Error('viewport restore unsettled')), send.replacesContext ? VIEWPORT_DEADLINE_MS : VIEWPORT_RESTORE_MS);
   });
   try {
     return await Promise.race([pending, limited]);
