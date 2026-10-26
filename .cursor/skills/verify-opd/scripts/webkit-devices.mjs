@@ -247,6 +247,7 @@ function disclosureApi() {
   }
 
   function capture(el) {
+    if (el.classList.contains('maplibregl-ctrl-attrib')) return null;
     return { key: identityOf(el), ownerId: ownerId(el), summary: summaryText(el), open: el.open };
   }
 
@@ -350,7 +351,10 @@ async function capturePage(page) {
       const follow = document.getElementById('toggle-follow-iss');
       const followPressed = follow?.getAttribute('aria-pressed');
       if (!window.__opdDisclosure) throw new Error('disclosure identity missing');
-      const details = [...document.querySelectorAll('details')].map((el) => window.__opdDisclosure.capture(el));
+      const details = [...document.querySelectorAll('details')].flatMap((el) => {
+        const saved = window.__opdDisclosure.capture(el);
+        return saved ? [saved] : [];
+      });
       const scene = document.querySelector('[data-iss-scene]');
       const picker = document.querySelector('[data-iss-launch-picker]');
       return {
@@ -742,10 +746,21 @@ async function settleFocusedPose(page, pose) {
   if (pose.view === 'view-map' || pose.view === 'view-iss') await renderedFrame(page, pose.view);
   await pollPage(page, (expected) => {
     if (!window.__opdDisclosure) return { ok: false, disclosures: false, expanded: false, help: false, follow: false, live: false };
-    const disclosures = (expected.details || []).every((saved) => {
+    const misses = [];
+    for (const saved of expected.details || []) {
       const el = window.__opdDisclosure.find(saved);
-      if (el) return el instanceof HTMLDetailsElement && el.open === saved.open;
-      return window.__opdDisclosure.retired(saved);
+      if (el) {
+        if (!(el instanceof HTMLDetailsElement) || el.open !== saved.open) {
+          misses.push({ key: saved.key, ownerId: saved.ownerId, summary: saved.summary, savedOpen: saved.open, foundOpen: el.open });
+        }
+      } else if (!window.__opdDisclosure.retired(saved)) {
+        misses.push({ key: saved.key, ownerId: saved.ownerId, summary: saved.summary, savedOpen: saved.open, missing: true });
+      }
+    }
+    const disclosures = misses.length === 0;
+    const now = disclosures ? [] : [...document.querySelectorAll('details')].flatMap((el) => {
+      const saved = window.__opdDisclosure.capture(el);
+      return saved ? [saved] : [];
     });
     const expanded = (expected.expanded || []).every((saved) => {
       const el = document.getElementById(saved.id);
@@ -756,7 +771,7 @@ async function settleFocusedPose(page, pose) {
     const follow = expected.follow === null
       || document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === String(expected.follow);
     const live = !expected.time || !document.getElementById('time-slider-readout')?.classList.contains('time-slider-scrubbed') === expected.time.live;
-    return { ok: disclosures && expanded && help && follow && live, disclosures, expanded, help, follow, live };
+    return { ok: disclosures && expanded && help && follow && live, disclosures, expanded, help, follow, live, misses, now };
   }, 'restored controls before context switch', 10000, pose);
 }
 
