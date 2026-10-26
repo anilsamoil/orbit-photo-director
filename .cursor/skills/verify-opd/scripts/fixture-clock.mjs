@@ -31,12 +31,16 @@ export function restoreFixtureClock() {
   return true;
 }
 
+export function matchesDocument(pageUrl, requestUrl) {
+  const page = new URL(pageUrl);
+  const request = requestUrl instanceof URL ? requestUrl : new URL(String(requestUrl));
+  return request.origin === page.origin && request.pathname === page.pathname;
+}
+
 // Playwright init scripts survive reloads and cannot be removed through its
 // public API. Seed only this initial app response, before any module executes.
 export async function installOneShotClock(page, url, frozen) {
   if (!Number.isFinite(frozen)) return async () => {};
-  const target = new URL(url);
-  target.hash = '';
   const source = `(${freezeFixtureClock.toString()})(${JSON.stringify(frozen)});`;
   const seed = async (route) => {
     const response = await route.fetch();
@@ -47,6 +51,7 @@ export async function installOneShotClock(page, url, frozen) {
       : html.replace(/^(\s*<!doctype[^>]*>)?/i, (doctype) => doctype + script);
     await route.fulfill({ response, body });
   };
-  await page.route(target.href, seed, { times: 1 });
-  return () => page.unroute(target.href, seed);
+  const matches = (requestUrl) => matchesDocument(url, requestUrl);
+  await page.route(matches, seed, { times: 1 });
+  return () => page.unroute(matches, seed);
 }
