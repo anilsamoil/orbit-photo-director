@@ -51,6 +51,7 @@ export function mapListener<K extends keyof VendorEvents>(
     case 'touchmove':
       return ((e: maplibregl.MapTouchEvent) => deliver({ touches: toTouches(e) })) as maplibregl.Listener;
     case 'zoomstart':
+    case 'rotatestart':
       return ((e: { originalEvent?: unknown } | undefined) => deliver({ byUser: Boolean(e?.originalEvent) })) as maplibregl.Listener;
     case 'error':
       return ((e: unknown) => deliver({ sourceId: sourceIdOf(e) })) as maplibregl.Listener;

@@ -6,6 +6,62 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
 const { devices, webkit } = require('playwright');
 
+export const VIEWPORT_ALLOWLIST = {
+  desktop: [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 800 },
+  ],
+  'iphone-13': [
+    { width: 844, height: 390 },
+  ],
+  'ipad-pro-11': [
+    { width: 834, height: 1210 },
+    { width: 1210, height: 834 },
+  ],
+  'ipad-3': [
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+  ],
+};
+
+export const IPAD_M4_VIEWPORTS = VIEWPORT_ALLOWLIST['ipad-pro-11'];
+
+function viewportToken(entry) {
+  return `${entry.width}x${entry.height}`;
+}
+
+function viewportOverrideHelp() {
+  const desktop = VIEWPORT_ALLOWLIST.desktop.map(viewportToken).join(' or ');
+  const phone = VIEWPORT_ALLOWLIST['iphone-13'].map(viewportToken).join(' or ');
+  const ipad = VIEWPORT_ALLOWLIST['ipad-pro-11'].map(viewportToken).join(' or ');
+  const ipad3 = VIEWPORT_ALLOWLIST['ipad-3'].map(viewportToken).join(' or ');
+  return `OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=desktop with ${desktop}, iphone-17-pro, iphone-13 with ${phone}, ipad-pro-11 with ${ipad}, or ipad-3 with ${ipad3}.`;
+}
+
+export function desktopViewport(surface, raw) {
+  const override = surface === 'desktop' ? parseViewportOverride('desktop', raw) : null;
+  return {
+    width: override?.width ?? 1400,
+    height: override?.height ?? 900,
+    mobile: false,
+  };
+}
+
+export function parseViewportOverride(surface, raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const match = /^(\d+)x(\d+)$/.exec(text);
+  if (!match) throw new Error(`OPD_VERIFY_VIEWPORT must be WIDTHxHEIGHT, got ${text}`);
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const size = { width, height, raw: text };
+  if (surface === 'desktop' && ((width === 1440 && height === 900) || (width === 1280 && height === 800))) return size;
+  if (surface === 'iphone-17-pro') return size;
+  const allowed = VIEWPORT_ALLOWLIST[surface];
+  if (allowed?.some((entry) => entry.width === width && entry.height === height)) return size;
+  throw new Error(viewportOverrideHelp());
+}
+
 export const WEBKIT_DEVICES = [
   { name: 'iPhone 13', slug: 'iphone-13', standalone: true, tap: 'sign-in' },
   { name: 'iPad Pro 11', slug: 'ipad-pro-11', standalone: false, tap: 'reload' },
@@ -19,8 +75,40 @@ export const WEBKIT_DEVICES = [
   },
 ];
 
+export const IPAD_3 = {
+  name: 'iPad (3rd generation)',
+  slug: 'ipad-3',
+  standalone: false,
+  tap: 'reload',
+  viewport: { width: 768, height: 1024 },
+  deviceScaleFactor: 2,
+  deviceBase: 'iPad (gen 5)',
+};
+
+export const OPTIONAL_WEBKIT_DEVICES = [IPAD_3];
+
+export const DEFAULT_SURFACE_NAMES = ['desktop', 'iphone-13', 'iphone-17-pro', 'ipad-pro-11'];
+
+export function knownSurfaceNames() {
+  return ['desktop', ...WEBKIT_DEVICES.map((spec) => spec.slug), ...OPTIONAL_WEBKIT_DEVICES.map((spec) => spec.slug)];
+}
+
+export function surfacesFor(raw) {
+  const name = String(raw || 'all').trim() || 'all';
+  if (name === 'all') return [...DEFAULT_SURFACE_NAMES];
+  const known = knownSurfaceNames();
+  if (!known.includes(name)) {
+    throw new Error(`unknown OPD_VERIFY_SURFACE ${name}. Choose ${known.join(', ')}, or all.`);
+  }
+  return [name];
+}
+
+export function webkitCatalog() {
+  return [...WEBKIT_DEVICES, ...OPTIONAL_WEBKIT_DEVICES];
+}
+
 export function deviceDescriptor(spec) {
-  const known = devices[spec.name];
+  const known = devices[spec.name] || (spec.deviceBase ? devices[spec.deviceBase] : undefined);
   if (known?.viewport && !spec.viewport) return known;
   if (spec.viewport) {
     const base = known?.viewport ? known : devices['iPhone 13'];
@@ -86,12 +174,16 @@ async function syncLayoutViewport(page, width, height) {
 export function playwrightSend(page) {
   return async function send(method, params = {}) {
     if (method === 'Runtime.evaluate') {
+      const unbounded = params.timeout === 0;
+      if (unbounded) page.setDefaultTimeout(0);
       try {
         const value = await page.evaluate(params.expression);
         return { result: { value } };
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         return { exceptionDetails: { text }, result: {} };
+      } finally {
+        if (unbounded) page.setDefaultTimeout(30_000);
       }
     }
     if (method === 'Page.captureScreenshot') {

@@ -26,7 +26,7 @@ Preconditions:
 - `OPD_VERIFY_TRACKED=lookup_failed` on `up` publishes `reason: lookup_failed` and no element lines.
 - `OPD_VERIFY_TRACKED=missing` on `up` omits `tracked` from the manifest.
 
-- **No orbit.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive tracked`. The script taps `Controls` when the legend is hidden. The legend text does not contain `Starship`. There is no `.tracked-marker` and no `sat-track-layer-starship`. The ISS marker and `iss-track-layer` are present.
+- **No orbit.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive tracked`. The script reads the legend while chrome is still hidden and requires that text not to contain `Starship`, then taps `Controls`. There is no `.tracked-marker` and no `sat-track-layer-starship`. The ISS marker and `iss-track-layer` are present.
 - **Elements.** Bring the instance down, set `OPD_VERIFY_TRACKED=elements`, and run `up` again, then `drive tracked`. The marker label is `Starship`. The marker title names the stand-in catalog name. The legend does not. `sat-track-layer-starship` exists. The script turns follow off, frames that track, and saves desktop, iPad, and iPhone screenshots.
 - **Missing artifact.** Bring the instance down, set `OPD_VERIFY_TRACKED=missing`, and run `up` again, then `drive tracked`. The manifest has no `tracked` entry. The legend does not name Starship. Nothing is drawn for Starship.
 - **Age-out.** Bring the instance down, set `OPD_VERIFY_TRACKED=aged_out`, and run `up` again, then `drive tracked`. The legend does not say `Starship: public orbit expired`. The marker and `sat-track-layer-starship` are absent. The ISS marker and track stay.

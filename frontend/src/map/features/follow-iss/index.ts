@@ -5,19 +5,25 @@ import type { MapCore } from '../../map-core/core';
 import type { MapFeature } from '../../map-core/feature';
 import { PREF_KEYS } from '../../map-core/prefs';
 
-/** North-up, or rotated so the ISS direction of travel points up. */
 export type BearingMode = 'north' | 'iss-up';
 
 const BEARING_NOOP_THRESHOLD_DEG = 0.5;
+const BEARING_EASE_MS = 600;
 
 type MarkerPosition = { lat: number; lon: number };
+
+type Motion = { toward: number; pending: MarkerPosition | null };
 
 type Runtime = {
   core: MapCore | null;
   mode: BearingMode;
   follow: boolean;
+  motion: Motion | null;
+  motionWatch: boolean;
   toggleBound: boolean;
   bearingBound: boolean;
+  operatorAimed: boolean;
+  commit: number;
   hasTrack: () => boolean;
   position: () => MarkerPosition | null;
 };
@@ -35,13 +41,16 @@ const state: Runtime = {
   core: null,
   mode: readStoredMode(),
   follow: true,
+  motion: null,
+  motionWatch: false,
   toggleBound: false,
   bearingBound: false,
+  operatorAimed: false,
+  commit: 0,
   hasTrack: () => false,
   position: () => null,
 };
 
-/** Default iss-up. Only a stored `'north'` selects north-up. */
 export function readBearingMode(): BearingMode {
   return readStoredMode();
 }
@@ -58,7 +67,6 @@ export function noteFollowCore(core: MapCore | null): void {
   state.core = core;
 }
 
-/** Marker position for the follow click. The root installs the ISS marker. */
 export function bindFollowMarker(marker: { hasTrack(): boolean; position(): MarkerPosition | null }): void {
   state.hasTrack = marker.hasTrack;
   state.position = marker.position;
@@ -69,14 +77,54 @@ export function setFollowEnv(core: MapCore | null, follow: boolean): void {
   state.follow = follow;
 }
 
-/** Recenter on the live ISS while follow is on and the view is live. */
-export function applyFollowISS(pos: MarkerPosition): void {
-  const core = state.core;
-  if (!state.follow || !core || core.clock.isScrubbed()) return;
-  core.setCenter([pos.lon, pos.lat]);
+function followMayMove(core: MapCore): boolean {
+  return state.follow && !core.clock.isScrubbed() && !core.userGesture();
 }
 
-/** Leave follow and update the dock button. */
+function northEaseHolds(core: MapCore, pos: MarkerPosition): boolean {
+  if (state.mode !== 'north' || state.motion === null) return false;
+  state.motion.pending = pos;
+  const apart = bearingApart(core.bearing(), state.motion.toward) >= 0.01;
+  if (!apart || core.moving() || core.userGesture()) return true;
+  state.motion = null;
+  return false;
+}
+
+/** Recenter on the live ISS while follow is on and the view is live.
+ *  setCenter aborts a north ease, so that ease keeps the latest center
+ *  and this applies it once the bearing has reached north. */
+export function applyFollowISS(pos: MarkerPosition): void {
+  const core = state.core;
+  if (!core || !state.follow || core.clock.isScrubbed()) return;
+  if (northEaseHolds(core, pos)) return;
+  const center: [number, number] = [pos.lon, pos.lat];
+  requestAnimationFrame(() => {
+    const live = state.core;
+    if (live !== core || !followMayMove(live)) return;
+    if (northEaseHolds(live, pos)) return;
+    live.setCenter(center);
+    if (!state.follow || state.mode !== 'north' || !followMayMove(live)) return;
+    live.setBearing(0);
+  });
+}
+
+/** The follow handler is registered before the ease watch. It reads a pending
+ *  center before that watch clears the record, and applies the center on a
+ *  later frame. setCenter here would fire another moveend inside this one. */
+function settleMotion(): void {
+  const motion = state.motion;
+  if (!motion?.pending) return;
+  const core = state.core;
+  if (!core || !state.follow || state.mode !== 'north') return;
+  if (Math.abs(core.bearing()) >= 0.01) return;
+  const center: [number, number] = [motion.pending.lon, motion.pending.lat];
+  requestAnimationFrame(() => {
+    const live = state.core;
+    if (live !== core || state.motion || state.mode !== 'north' || !followMayMove(live)) return;
+    live.setCenter(center);
+  });
+}
+
 export function exitFollow(): void {
   if (!state.follow) return;
   state.follow = false;
@@ -89,11 +137,10 @@ function reflectFollowButton(): void {
   btn.classList.toggle('active', state.follow);
   btn.setAttribute('aria-pressed', state.follow ? 'true' : 'false');
   btn.title = state.follow
-    ? 'Following ISS — click again or pan/zoom to release'
+    ? 'Following ISS — click again or pan, zoom, or rotate to release'
     : 'Recenter on ISS — click again or pan to release';
 }
 
-/** Heading from a sample now and a sample 30 seconds ahead. */
 export function computeIssHeading(nowMs: number): number | null {
   const core = state.core;
   const track = core?.view().track;
@@ -105,23 +152,81 @@ export function computeIssHeading(nowMs: number): number | null {
   return greatCircleBearingDeg(here.lat, here.lon, ahead.lat, ahead.lon);
 }
 
-/** Apply the bearing mode. Skips a write when the camera is already there. */
+function bearingApart(a: number, b: number): number {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+function nearBearing(a: number, b: number): boolean {
+  return bearingApart(a, b) < BEARING_NOOP_THRESHOLD_DEG;
+}
+
+function watchMotion(core: MapCore): void {
+  if (state.motionWatch) return;
+  state.motionWatch = true;
+  core.on('moveend', () => {
+    state.motion = null;
+  });
+}
+
+function releaseBearingCommit(): void {
+  state.commit += 1;
+}
+
+function desiredBearing(core: MapCore): number | null {
+  if (state.mode === 'north') return 0;
+  return computeIssHeading(core.clock.viewMs());
+}
+
+/** Apply the bearing mode. A camera already on that bearing stays put, and an ease toward another bearing is replaced.
+ *  The record is marked after easeTo, so the moveend from the ease just
+ *  interrupted does not drop that mark. An ease that has already finished,
+ *  including a duration-0 cancel, clears the record in this same turn.
+ *  When the duration ends and no frame has arrived, setBearing writes the
+ *  bearing. A user gesture keeps that write from running, including a
+ *  right-drag that has not emitted dragstart. */
 export function applyBearing(animate: boolean): void {
   const core = state.core;
   if (!core) return;
+  watchMotion(core);
+  const desired = desiredBearing(core);
+  if (desired === null) return;
+  if (state.motion !== null && nearBearing(state.motion.toward, desired)) return;
   const current = core.bearing();
-  if (state.mode === 'north') {
-    if (Math.abs(current) < BEARING_NOOP_THRESHOLD_DEG) return;
-    if (animate) core.easeTo({ bearing: 0, duration: 600 });
-    else core.setBearing(0);
+  if (nearBearing(current, desired)) {
+    if (state.motion !== null) {
+      releaseBearingCommit();
+      state.motion = null;
+      core.easeTo({ bearing: desired, duration: 0 });
+    }
     return;
   }
-  const heading = computeIssHeading(core.clock.viewMs());
-  if (heading === null) return;
-  const delta = Math.abs(((heading - current + 540) % 360) - 180);
-  if (delta < BEARING_NOOP_THRESHOLD_DEG) return;
-  if (animate) core.easeTo({ bearing: heading, duration: 600 });
-  else core.setBearing(heading);
+  if (animate) {
+    releaseBearingCommit();
+    const token = state.commit;
+    core.easeTo({ bearing: desired, duration: BEARING_EASE_MS });
+    state.motion = { toward: desired, pending: null };
+    if (nearBearing(core.bearing(), desired)) {
+      state.motion = null;
+      return;
+    }
+    window.setTimeout(() => {
+      if (token !== state.commit) return;
+      const live = state.core;
+      if (live !== core || state.motion === null || !nearBearing(state.motion.toward, desired)) return;
+      if (live.userGesture()) return;
+      state.motion = null;
+      live.setBearing(desired);
+    }, BEARING_EASE_MS);
+    return;
+  }
+  releaseBearingCommit();
+  state.motion = null;
+  core.setBearing(desired);
+}
+
+export function applyInitialBearing(): void {
+  if (state.operatorAimed) return;
+  applyBearing(true);
 }
 
 export function bindFollowToggle(): void {
@@ -144,10 +249,23 @@ export function bindFollowToggle(): void {
   });
   const core = state.core;
   if (core) {
-    core.on('dragstart', () => { exitFollow(); });
-    core.on('zoomstart', ({ byUser }) => {
-      if (byUser) exitFollow();
+    core.on('dragstart', () => {
+      releaseBearingCommit();
+      exitFollow();
     });
+    core.on('zoomstart', ({ byUser }) => {
+      if (!byUser) return;
+      releaseBearingCommit();
+      exitFollow();
+    });
+    core.on('rotatestart', ({ byUser }) => {
+      if (!byUser) return;
+      releaseBearingCommit();
+      state.operatorAimed = true;
+      state.motion = null;
+      exitFollow();
+    });
+    core.on('moveend', () => { settleMotion(); });
   }
   state.toggleBound = true;
 }
@@ -163,21 +281,24 @@ export function bindBearingToggle(): void {
   };
   reflectActive();
   const setMode = (mode: BearingMode): void => {
-    if (mode === state.mode) return;
     state.mode = mode;
+    state.operatorAimed = true;
     try { localStorage.setItem(PREF_KEYS.bearingMode, mode); } catch {}
     reflectActive();
     applyBearing(true);
   };
-  northBtn.addEventListener('click', () => setMode('north'));
-  issBtn.addEventListener('click', () => setMode('iss-up'));
+  northBtn.addEventListener('click', () => { setMode('north'); });
+  issBtn.addEventListener('click', () => { setMode('iss-up'); });
   state.bearingBound = true;
 }
 
-/** Tests assume follow is off and bearing is north. The stored key is cleared separately. */
 export function resetFollowMemoryForTest(): void {
+  releaseBearingCommit();
   state.follow = false;
   state.mode = 'north';
+  state.motion = null;
+  state.motionWatch = false;
+  state.operatorAimed = false;
 }
 
 export function clearBearingPref(): void {
@@ -193,7 +314,6 @@ export function _resetFollowStateForTest(): void {
   state.follow = false;
 }
 
-/** Follow the ISS, and rotate the map to its direction of travel. */
 export const followIss: MapFeature = {
   id: 'follow-iss',
   mount(core) {

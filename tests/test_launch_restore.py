@@ -113,6 +113,8 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: dict[str, bytes]) -> list[l
         if op == "cat":
             target = argv[2]
             assert target.startswith(PREFIX)
+            if target == f"{PREFIX}launch/catalog/latest.json" and target[len(PREFIX) :] not in store:
+                return SimpleNamespace(stdout=b"", stderr=b"object not found", returncode=4)
             return SimpleNamespace(stdout=store.get(target[len(PREFIX) :], b""), returncode=0)
         raise AssertionError(argv)
 
