@@ -679,6 +679,7 @@ async function settleFocusedPose(page, pose) {
         import('/src/main.ts'), import('/src/launch-catalog.ts'),
       ]);
       await Promise.all([app.refresh(), launchCatalog.refresh()]);
+      app.rerenderCountdowns();
     });
   }
   await restoreDisclosures(page, pose);
