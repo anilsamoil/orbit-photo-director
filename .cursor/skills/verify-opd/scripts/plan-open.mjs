@@ -254,7 +254,6 @@ async function provePlanLive(page, plan, shotPath) {
     };
   });
   const kind = await pointerKind(plan);
-  if (shotPath) await page.screenshot({ path: shotPath });
   const pan = await page.evaluate((pointerType) => {
     const canvas = document.querySelector('[data-pip="plan"] canvas');
     const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
@@ -263,25 +262,37 @@ async function provePlanLive(page, plan, shotPath) {
     const x = box.left + box.width / 2;
     const y = box.top + box.height / 2;
     const before = orbit.getCenter();
-    const send = (type, clientX, clientY) => canvas.dispatchEvent(new PointerEvent(type, {
-      bubbles: true,
-      cancelable: true,
-      clientX,
-      clientY,
-      pointerId: 7,
-      pointerType,
-      isPrimary: true,
-      button: 0,
-      buttons: type === 'pointerup' ? 0 : 1,
-    }));
-    send('pointerdown', x, y);
-    send('pointermove', x + 48, y);
-    send('pointermove', x + 96, y);
-    send('pointerup', x + 96, y);
+    const send = (pointerName, mouseName, clientX, clientY, buttons) => {
+      canvas.dispatchEvent(new PointerEvent(pointerName, {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        pointerId: 7,
+        pointerType,
+        isPrimary: true,
+        button: 0,
+        buttons,
+      }));
+      canvas.dispatchEvent(new MouseEvent(mouseName, {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        button: 0,
+        buttons,
+        detail: 1,
+      }));
+    };
+    send('pointerdown', 'mousedown', x, y, 1);
+    send('pointermove', 'mousemove', x + 48, y, 1);
+    send('pointermove', 'mousemove', x + 96, y, 1);
+    send('pointerup', 'mouseup', x + 96, y, 0);
     const after = orbit.getCenter();
     const moved = Math.abs(before.lng - after.lng) + Math.abs(before.lat - after.lat) > 0.02;
     return { moved, opened: document.getElementById('view')?.className !== 'view-iss', view: document.getElementById('view')?.className || '' };
   }, kind);
+  if (shotPath) await page.screenshot({ path: shotPath });
   const detail = await page.evaluate((pointerType) => {
     const button = document.querySelector('[data-pip="plan"]');
     if (!(button instanceof HTMLButtonElement)) return { opened: true, reason: 'button' };
