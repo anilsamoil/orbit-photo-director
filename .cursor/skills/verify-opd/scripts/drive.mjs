@@ -331,14 +331,15 @@ async function mouseClick(send, x, y, button = 'left') {
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons: 0, clickCount: 1 });
 }
 
-async function setViewport(send, width, height, mobile) {
+async function setViewport(send, width, height, mobile, signal) {
+  signal?.throwIfAborted();
   if (FIXED_SURFACE) throw new Error(`fixed-surface drive attempted resize to ${width}x${height}`);
   return send('Emulation.setDeviceMetricsOverride', {
     width,
     height,
     deviceScaleFactor: 1,
     mobile,
-  });
+  }, { signal });
 }
 
 async function reportViewport(send, feature, viewport) {
@@ -3196,11 +3197,12 @@ async function readViewportSettled(send) {
   return evaluate(send, 'window.__opdViewportSettled');
 }
 
-async function layOutViewport(send, width, height) {
+async function layOutViewport(send, width, height, signal) {
   await evaluate(send, viewportLayoutScript(width, height));
   let expectedDpr = null;
   try {
-    const changed = await setViewport(send, width, height, true);
+    const changed = await setViewport(send, width, height, true, signal);
+    signal.throwIfAborted();
     if (changed?.contextReplaced) await evaluate(send, viewportLayoutScript(width, height));
     const read = await evaluate(send, 'window.devicePixelRatio');
     expectedDpr = Number(read);
@@ -3217,10 +3219,12 @@ async function layOutViewport(send, width, height) {
 
 export async function whenViewportLaidOut(send, width, height) {
   let timer;
-  const pending = layOutViewport(send, width, height);
+  const controller = new AbortController();
+  const pending = layOutViewport(send, width, height, controller.signal);
   pending.catch(() => {});
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => {
+      controller.abort(new Error('viewport deadline exceeded'));
       voidViewportAbort(send);
       resolve({ deadline: true });
     }, VIEWPORT_DEADLINE_MS);
@@ -3237,10 +3241,15 @@ export async function whenViewportLaidOut(send, width, height) {
 
 async function restoreViewport(send, viewport) {
   let timer;
-  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  const controller = new AbortController();
+  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile, controller.signal);
   pending.catch(() => {});
   const limited = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error('viewport restore unsettled')), send.replacesContext ? VIEWPORT_DEADLINE_MS : VIEWPORT_RESTORE_MS);
+    timer = setTimeout(() => {
+      const error = new Error('viewport restore unsettled');
+      controller.abort(error);
+      reject(error);
+    }, send.replacesContext ? VIEWPORT_DEADLINE_MS : VIEWPORT_RESTORE_MS);
   });
   try {
     return await Promise.race([pending, limited]);

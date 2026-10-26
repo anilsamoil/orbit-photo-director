@@ -83,8 +83,8 @@ test('a timed-out replacement cannot commit after navigation resumes', { timeout
     };
     const real = playwrightSend(session);
     let replacing;
-    const send = Object.assign((method, params) => {
-      const pending = real(method, params);
+    const send = Object.assign((method, params, options) => {
+      const pending = real(method, params, options);
       if (method === 'Emulation.setDeviceMetricsOverride') replacing = pending;
       return pending;
     }, real);
@@ -102,4 +102,51 @@ test('a timed-out replacement cannot commit after navigation resumes', { timeout
     server.closeAllConnections();
     await new Promise((done) => server.close(done));
   }
+});
+
+test('cancelling during context creation discards the late factory result', async () => {
+  const browser = await launchWebkit();
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  try {
+    const session = await openDeviceContext(browser, { name: 'iPhone 13', standalone: true });
+    const predecessor = session.page;
+    let created;
+    const creation = new Promise((done) => { created = done; });
+    const original = browser.newContext.bind(browser);
+    browser.newContext = async (...args) => {
+      const context = await original(...args);
+      created();
+      await gate;
+      return context;
+    };
+    const controller = new AbortController();
+    const pending = playwrightSend(session)('Emulation.setDeviceMetricsOverride', { width: 844, height: 390 }, { signal: controller.signal });
+    const rejected = assert.rejects(pending, /cancel factory/);
+    await creation;
+    controller.abort(new Error('cancel factory'));
+    release();
+    await rejected;
+    assert.equal(session.page === predecessor, true);
+    assert.equal(predecessor.isClosed(), false);
+    assert.equal(browser.contexts().length, 1);
+  } finally {
+    release();
+    await browser.close();
+  }
+});
+
+test('a deadline during initial layout installation prevents a later size command', { timeout: 15000 }, async () => {
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  let metrics = 0;
+  const send = async (method, params) => {
+    if (method === 'Emulation.setDeviceMetricsOverride') metrics += 1;
+    if (params?.expression?.includes('__opdViewportSettled = new Promise')) await gate;
+    return { result: { value: true } };
+  };
+  await assert.rejects(whenViewportLaidOut(send, 844, 390), /"deadline":true/);
+  release();
+  await new Promise((done) => setImmediate(done));
+  assert.equal(metrics, 0, 'cancelled installation must not begin a late context replacement');
 });

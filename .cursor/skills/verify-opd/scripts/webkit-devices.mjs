@@ -737,9 +737,11 @@ async function restorePage(session, snapshot) {
   await applyPose(session.page, snapshot.pose);
 }
 
-export async function replaceDeviceContext(session, params) {
+export async function replaceDeviceContext(session, params, signal) {
+  signal?.throwIfAborted();
   if (metricsMatch(session, params)) return;
   const snapshot = await capturePage(session.page);
+  signal?.throwIfAborted();
   const spec = specForMetrics(session, params);
   const opened = await openDeviceContext(session.browser, spec, {
     initScripts: session.initScripts,
@@ -747,19 +749,26 @@ export async function replaceDeviceContext(session, params) {
     baseDescriptor: params.deviceSpec ? undefined : session.baseDescriptor,
     storageState: snapshot.storageState,
   });
+  let closing;
+  const closeCandidate = () => (closing ??= opened.context.close());
+  const abortCandidate = () => { closeCandidate().catch(() => {}); };
+  signal?.addEventListener('abort', abortCandidate, { once: true });
   let removeClockSeed;
   try {
+    signal?.throwIfAborted();
     removeClockSeed = await installOneShotClock(opened.page, snapshot.url, snapshot.pose?.frozenNow);
     // Keep the rendered predecessor and public session untouched throughout
     // navigation, app boot, pose restoration and the final renderer frame.
     await restorePage(opened, snapshot);
     await opened.page.bringToFront();
     await settleFocusedPose(opened.page, snapshot.pose);
+    if (removeClockSeed && !opened.page.isClosed()) await removeClockSeed();
+    signal?.throwIfAborted();
   } catch (error) {
-    await opened.context.close();
+    await closeCandidate();
     throw error;
   } finally {
-    if (removeClockSeed && !opened.page.isClosed()) await removeClockSeed();
+    signal?.removeEventListener('abort', abortCandidate);
   }
   const previous = session.context;
   Object.assign(session, opened);
@@ -777,10 +786,10 @@ export async function readContextMetrics(page) {
 }
 
 export function playwrightSend(session) {
-  const send = async function send(method, params = {}) {
+  const send = async function send(method, params = {}, { signal } = {}) {
     if (method === 'Emulation.setDeviceMetricsOverride') {
       const predecessor = session.page;
-      await replaceDeviceContext(session, params);
+      await replaceDeviceContext(session, params, signal);
       return { contextReplaced: session.page !== predecessor };
     }
     const page = session.page;
