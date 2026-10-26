@@ -68,10 +68,10 @@ function bindTapOpen(button: HTMLButtonElement | null, tabId: string): void {
   button.addEventListener('pointercancel', () => {
     gesture = null;
   }, true);
-  button.addEventListener('click', () => {
+  button.addEventListener('click', (event) => {
     const current = gesture;
     gesture = null;
-    if (current?.moved) return;
+    if (current?.moved && event.detail !== 0) return;
     openTab(tabId);
   });
 }
