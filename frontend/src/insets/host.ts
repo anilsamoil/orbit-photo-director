@@ -58,22 +58,12 @@ function bindTapOpen(button: HTMLButtonElement | null, tabId: string): void {
   button.addEventListener('pointerdown', (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     gesture = { x: event.clientX, y: event.clientY, moved: false };
-    try {
-      button.setPointerCapture(event.pointerId);
-    } catch {
-    }
   }, true);
   button.addEventListener('pointermove', (event) => {
     if (!gesture) return;
     const dx = event.clientX - gesture.x;
     const dy = event.clientY - gesture.y;
     if (dx * dx + dy * dy > PIP_TAP_SLOP_PX * PIP_TAP_SLOP_PX) gesture.moved = true;
-  }, true);
-  button.addEventListener('pointerup', () => {
-    const current = gesture;
-    queueMicrotask(() => {
-      if (gesture === current) gesture = null;
-    });
   }, true);
   button.addEventListener('pointercancel', () => {
     gesture = null;
