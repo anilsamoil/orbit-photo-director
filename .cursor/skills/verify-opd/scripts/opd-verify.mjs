@@ -12,6 +12,7 @@ import { driveMapPagehide } from './corner-pagehide.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
 import { driveMapHold } from './map-hold.mjs';
 import { drivePinFit } from './pin-fit.mjs';
+import { drivePlanOpen } from './plan-open.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
 import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
@@ -864,6 +865,20 @@ async function drive(feature) {
   if (feature === 'pin-fit') {
     try {
       const note = await drivePinFit({
+        baseUrl: state.url,
+        evidenceDir: state.evidence,
+      });
+      console.log(note);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    console.log(`evidence ${state.evidence}`);
+    return;
+  }
+  if (feature === 'plan-open') {
+    try {
+      const note = await drivePlanOpen({
         baseUrl: state.url,
         evidenceDir: state.evidence,
       });
