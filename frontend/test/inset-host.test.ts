@@ -92,11 +92,21 @@ function dispatchPointer(
   }));
 }
 
+/** Pointer-origin click. Real browsers set detail >= 1; HTMLElement.click() is detail 0. */
+function pointerClick(plan: HTMLButtonElement): void {
+  plan.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+}
+
+/** Keyboard-origin click. Enter/Space synthesize detail 0. */
+function keyboardClick(plan: HTMLButtonElement): void {
+  plan.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
+}
+
 /** Real browser order: pointerup microtasks run before the click. */
 async function releaseThenClick(plan: HTMLButtonElement, point: Point, kind: PointerKind, pointerId: number): Promise<void> {
   dispatchPointer(plan, 'pointerup', point, kind, pointerId);
   await Promise.resolve();
-  plan.click();
+  pointerClick(plan);
 }
 
 async function dragOnPlan(
@@ -235,6 +245,46 @@ describe('inset host', () => {
     await dragOnPlan(plan, 'touch', { x: 40, y: 40 }, { x: 60, y: 55 }, 61);
     expect(mapOpens).toBe(0);
     expect(document.getElementById('view')!.className).toBe('view-iss');
+  });
+
+  it.each([
+    { kind: 'mouse' as const, pointerId: 71, key: 'Enter' },
+    { kind: 'mouse' as const, pointerId: 72, key: ' ' },
+    { kind: 'touch' as const, pointerId: 73, key: 'Enter' },
+    { kind: 'touch' as const, pointerId: 74, key: ' ' },
+  ])('opens Map on the first $key after a $kind drag whose click never arrives', async ({ kind, pointerId, key }) => {
+    const { plan, tabMap, mapOpens } = preparePlan();
+    await dragOnPlan(plan, kind, { x: 40, y: 40 }, { x: 80, y: 55 }, pointerId, false);
+    expect(mapOpens()).toBe(0);
+    plan.focus();
+    plan.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    if (key === ' ') {
+      plan.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
+    }
+    keyboardClick(plan);
+    expect(mapOpens()).toBe(1);
+    expect(document.activeElement).toBe(tabMap);
+    expect(document.getElementById('view')!.className).toBe('view-map');
+  });
+
+  it('opens Map on the first Enter after a touch drag with no click at iPad 834x1194', async () => {
+    installViewport(834, 1194);
+    const { plan, tabMap } = mount();
+    document.getElementById('view')!.className = 'view-iss';
+    plan.hidden = false;
+    let mapOpens = 0;
+    tabMap.addEventListener('click', () => {
+      mapOpens += 1;
+      document.getElementById('view')!.className = 'view-map';
+    });
+    bindPlanHost();
+    await dragOnPlan(plan, 'touch', { x: 40, y: 40 }, { x: 70, y: 60 }, 75, false);
+    expect(mapOpens).toBe(0);
+    plan.focus();
+    plan.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    keyboardClick(plan);
+    expect(mapOpens).toBe(1);
+    expect(document.activeElement).toBe(tabMap);
   });
 
   it('keeps the horizon inset off while map chrome is hidden', async () => {
