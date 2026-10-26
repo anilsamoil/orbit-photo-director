@@ -46,7 +46,7 @@
   "test/host-urls.test.ts": 0.366,
   "test/ics.test.ts": 0.447,
   "test/inset-gate.test.ts": 0.339,
-  "test/inset-host.test.ts": 0.483,
+  "test/inset-host.test.ts": 0.746,
   "test/iss-aim-keys.test.ts": 0.429,
   "test/iss-catalog-retention.test.ts": 1.811,
   "test/iss-catalog-retry.test.ts": 0.276,
