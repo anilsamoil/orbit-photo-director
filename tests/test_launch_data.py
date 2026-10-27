@@ -70,6 +70,7 @@ def test_parse_response_falcon9_fields(fixture_payload: dict) -> None:
     assert falcon.site_lat == pytest.approx(28.6082)
     assert falcon.site_lon == pytest.approx(-80.6041)
     assert falcon.site_name == "Kennedy Space Center, FL, USA"
+    assert falcon.pad_name == "Launch Complex 39A"
     assert falcon.rocket_type == "Falcon 9 Block 5"
     assert falcon.status_abbrev == "Go"
 

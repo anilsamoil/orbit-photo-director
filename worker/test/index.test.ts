@@ -3,8 +3,17 @@
  * Avoids miniflare for portability — passes a mock Env with in-memory R2 stubs.
  */
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import worker from '../src/index';
+
+const ACCESS_ISSUER = 'https://test-team.cloudflareaccess.com';
+const ACCESS_AUD = 'map-audience';
+const ACCESS_EMAIL = 'operator@example.com';
+let accessKeys: Awaited<ReturnType<typeof generateKeyPair>>;
+let accessJwks = '';
+let accessBindings = '{}';
+let accessGrants = '{}';
 
 interface MockObj {
   body: string;
@@ -98,6 +107,11 @@ interface TestEnv {
   CALIB: MockR2Bucket;
   CALIB_TOKEN: string;
   STALE_THRESHOLD_SECONDS: string;
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_AUD?: string;
+  ACCESS_PROFILE_BINDINGS?: string;
+  ACCESS_PROFILE_GRANTS?: string;
+  ACCESS_ALLOWED_EMAILS?: string;
 }
 
 function makeEnv(overrides: Partial<TestEnv> = {}): TestEnv {
@@ -106,18 +120,69 @@ function makeEnv(overrides: Partial<TestEnv> = {}): TestEnv {
     CALIB: new MockR2Bucket(),
     CALIB_TOKEN: 'test-secret-123',
     STALE_THRESHOLD_SECONDS: '1800',
+    ACCESS_TEAM_DOMAIN: ACCESS_ISSUER,
+    ACCESS_AUD,
+    ACCESS_PROFILE_BINDINGS: accessBindings,
+    ACCESS_PROFILE_GRANTS: accessGrants,
+    ACCESS_ALLOWED_EMAILS: ACCESS_EMAIL,
     ...overrides,
   };
+}
+
+beforeAll(async () => {
+  accessKeys = await generateKeyPair('RS256');
+  accessJwks = JSON.stringify({ keys: [{ ...await exportJWK(accessKeys.publicKey), kid: 'index-key' }] });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ACCESS_EMAIL));
+  const emailKey = 'email:' + [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  accessBindings = JSON.stringify({ [emailKey]: 'anil' });
+  accessGrants = JSON.stringify({
+    [emailKey]: [
+      { name: 'jack', displayName: 'Jack' },
+      { name: 'chris', displayName: 'Chris' },
+    ],
+  });
+});
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url !== `${ACCESS_ISSUER}/cdn-cgi/access/certs`) throw new Error(`unexpected fetch ${url}`);
+    return new Response(accessJwks, { headers: { 'content-type': 'application/json' } });
+  }));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+async function accessToken(): Promise<string> {
+  return new SignJWT({
+    sub: 'operator-1',
+    email: ACCESS_EMAIL,
+    iss: ACCESS_ISSUER,
+    aud: ACCESS_AUD,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 300,
+  }).setProtectedHeader({ alg: 'RS256', kid: 'index-key' }).sign(accessKeys.privateKey);
 }
 
 async function fetchWorker(
   env: TestEnv,
   path: string,
-  init: RequestInit & { headers?: Record<string, string> } = {}
+  init: RequestInit & { headers?: Record<string, string> } = {},
+  access: 'session' | 'anonymous' = 'session',
 ): Promise<Response> {
   const url = `https://example.com${path}`;
+  const headers = new Headers(init.headers);
+  if (access === 'session') {
+    headers.set('cf-access-jwt-assertion', await accessToken());
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !headers.has('origin')) {
+      headers.set('origin', 'https://example.com');
+    }
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return await (worker as any).fetch(new Request(url, init), env, {});
+  return await (worker as any).fetch(new Request(url, { ...init, headers }), env, {});
 }
 
 // --------------------------------------------------------------------------
@@ -136,7 +201,7 @@ describe('POST /api/log', () => {
       method: 'POST',
       body: JSON.stringify({}),
       headers: { 'content-type': 'application/json' },
-    });
+    }, 'anonymous');
     expect(r.status).toBe(401);
   });
 
@@ -145,7 +210,7 @@ describe('POST /api/log', () => {
       method: 'POST',
       body: JSON.stringify({}),
       headers: { 'content-type': 'application/json', 'x-calib-token': 'wrong' },
-    });
+    }, 'anonymous');
     expect(r.status).toBe(401);
   });
 
@@ -387,7 +452,7 @@ describe('GET /api/log', () => {
   });
 
   it('rejects without token', async () => {
-    const r = await fetchWorker(env, '/api/log');
+    const r = await fetchWorker(env, '/api/log', {}, 'anonymous');
     expect(r.status).toBe(401);
   });
 
@@ -720,24 +785,30 @@ describe('handleStatic (R2 fallback)', () => {
 // --------------------------------------------------------------------------
 
 describe('CALIB_TOKEN unset', () => {
-  it('POST /api/log returns 503 when CALIB_TOKEN is missing', async () => {
+  it('POST /api/log returns 401 when Access is configured and the caller has no JWT', async () => {
     const env = makeEnv({ CALIB_TOKEN: '' as string });
     const r = await fetchWorker(env, '/api/log', {
       method: 'POST',
       body: JSON.stringify({ target_id: 'x', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }),
       headers: { 'content-type': 'application/json', 'x-calib-token': 'whatever' },
+    }, 'anonymous');
+    expect(r.status).toBe(401);
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toBe('unauthorized');
+  });
+
+  it('GET /api/log returns 503 when neither Access nor the machine token is configured', async () => {
+    const env = makeEnv({
+      CALIB_TOKEN: '' as string,
+      ACCESS_TEAM_DOMAIN: '',
+      ACCESS_AUD: '',
     });
+    const r = await fetchWorker(env, '/api/log', {
+      headers: { 'x-calib-token': 'whatever' },
+    }, 'anonymous');
     expect(r.status).toBe(503);
     const body = (await r.json()) as { error: string };
     expect(body.error).toBe('service_misconfigured');
-  });
-
-  it('GET /api/log returns 503 when CALIB_TOKEN is missing', async () => {
-    const env = makeEnv({ CALIB_TOKEN: '' as string });
-    const r = await fetchWorker(env, '/api/log', {
-      headers: { 'x-calib-token': 'whatever' },
-    });
-    expect(r.status).toBe(503);
   });
 });
 
@@ -784,7 +855,7 @@ describe('rate limit', () => {
       method: 'POST',
       body: JSON.stringify({ target_id: 't', pass_time: '2024-10-17T12:00:00Z', action: 'shoot' }),
       headers: { 'content-type': 'application/json', 'x-calib-token': 'WRONG-TOKEN' },
-    });
+    }, 'anonymous');
     const meta = Array.from(env.CALIB['store'].keys()).filter((k) => k.startsWith('_meta/ratelimit/'));
     expect(meta).toHaveLength(0);
   });

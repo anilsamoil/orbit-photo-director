@@ -3,21 +3,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Manifest, Track } from '../src/types';
 import * as manifestModule from '../src/manifest';
 
+type IssSceneModule = {
+  mountIssScene: (host: HTMLElement) => { update: () => void; dispose: () => void };
+};
+
 const gate = vi.hoisted(() => {
-  let release: (mod: {
-    mountIssScene: (host: HTMLElement) => { update: () => void; dispose: () => void };
-  }) => void = () => {};
-  const pending = new Promise<{
-    mountIssScene: (host: HTMLElement) => { update: () => void; dispose: () => void };
-  }>((resolve) => {
-    release = resolve;
+  let release: (mod: IssSceneModule) => void = () => {};
+  let pending: Promise<IssSceneModule> = Promise.resolve({
+    mountIssScene: () => ({ update() {}, dispose() {} }),
   });
-  return { pending, release, mounts: { n: 0 } };
+  function reset(): void {
+    pending = new Promise<IssSceneModule>((resolve) => {
+      release = resolve;
+    });
+  }
+  return {
+    mounts: { n: 0 },
+    reset,
+    release(mod: IssSceneModule) {
+      release(mod);
+    },
+    promise(): Promise<IssSceneModule> {
+      return pending;
+    },
+  };
 });
 
 const schedulerStops = vi.hoisted(() => new Set<() => void>());
 
-vi.mock('../src/iss-view', () => gate.pending);
+vi.mock('../src/iss-view', () => gate.promise());
 
 vi.mock('../src/network-status', async () => {
   const actual = await vi.importActual<typeof import('../src/network-status')>('../src/network-status');
@@ -101,38 +115,82 @@ beforeEach(() => {
   document.body.innerHTML = DOM;
   localStorage.clear();
   gate.mounts.n = 0;
+  gate.reset();
   vi.resetModules();
+  vi.doMock('../src/iss-view', () => gate.promise());
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{"targets":[]}')));
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
 });
 
-afterEach(() => {
+function track(): Track {
+  return {
+    iss_polynomial: {
+      start: '2024-10-17T12:00:00Z',
+      duration_seconds: 60,
+      lat_coeffs: [0],
+      lon_coeffs: [0],
+      polynomial_order: 0,
+    },
+    tle_epoch: '2024-10-16T18:58:11.999Z',
+    tle_age_hours: 1,
+    tle_freshness_factor: 1,
+  };
+}
+
+async function boot(): Promise<void> {
+  vi.mocked(manifestModule.fetchManifest).mockResolvedValue(manifest());
+  vi.mocked(manifestModule.fetchTrack).mockResolvedValue(track());
+  const { init } = await import('../src/main');
+  await init();
+}
+
+async function releasePage(): Promise<void> {
+  const main = await import('../src/main');
+  main.stopPollScheduler();
+  main.stopCountdown();
   for (const stop of schedulerStops) stop();
   schedulerStops.clear();
+}
+
+afterEach(async () => {
+  await releasePage();
   gate.release({
     mountIssScene: () => ({ update() {}, dispose() {} }),
   });
+  await vi.dynamicImportSettled();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('ISS view import lifetime', () => {
-  it('does not mount a scene whose import finishes after the operator leaves', async () => {
-    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(manifest());
-    vi.mocked(manifestModule.fetchTrack).mockResolvedValue({
-      iss_polynomial: {
-        start: '2024-10-17T12:00:00Z',
-        duration_seconds: 60,
-        lat_coeffs: [0],
-        lon_coeffs: [0],
-        polynomial_order: 0,
+  it('mounts the scene when this test releases the import while ISS stays open', async () => {
+    await boot();
+    (document.getElementById('tab-iss') as HTMLElement).click();
+    await vi.dynamicImportSettled();
+    expect(gate.mounts.n).toBe(0);
+    expect(document.querySelector('[data-iss-scene]')).toBeNull();
+    gate.release({
+      mountIssScene(host) {
+        gate.mounts.n += 1;
+        const node = document.createElement('section');
+        node.dataset.issScene = '';
+        host.append(node);
+        return {
+          update() {},
+          dispose() {
+            node.remove();
+          },
+        };
       },
-      tle_epoch: '2024-10-16T18:58:11.999Z',
-      tle_age_hours: 1,
-      tle_freshness_factor: 1,
-    } satisfies Track);
-    const { init } = await import('../src/main');
-    await init();
+    });
+    await gate.promise();
+    await vi.dynamicImportSettled();
+    expect(gate.mounts.n).toBe(1);
+    expect(document.querySelector('[data-iss-scene]')).not.toBeNull();
+  });
+
+  it('does not mount a scene whose import finishes after the operator leaves', async () => {
+    await boot();
     (document.getElementById('tab-iss') as HTMLElement).click();
     await Promise.resolve();
     expect(gate.mounts.n).toBe(0);
@@ -152,10 +210,93 @@ describe('ISS view import lifetime', () => {
         };
       },
     });
-    await gate.pending;
-    await Promise.resolve();
-    await Promise.resolve();
+    await gate.promise();
+    await vi.dynamicImportSettled();
     expect(gate.mounts.n).toBe(0);
     expect(document.querySelector('[data-iss-scene]')).toBeNull();
+  });
+
+  it('does not call updateIssNow after the page is released', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      const readout = document.getElementById('iss-now');
+      if (!readout) throw new Error('missing iss-now');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(readout.textContent).toContain('ISS');
+      readout.innerHTML = 'sentinel';
+      await releasePage();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(readout.innerHTML).toBe('sentinel');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a second init leaves one manifest poll', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      await boot();
+      const stops = [...schedulerStops];
+      expect(stops.length).toBe(2);
+      const latest = stops[1];
+      if (!latest) throw new Error('missing poll stop');
+      latest();
+      const before = vi.mocked(manifestModule.fetchManifest).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(vi.mocked(manifestModule.fetchManifest).mock.calls.length - before).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('release stops the manifest poll', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      await boot();
+      const { stopPollScheduler } = await import('../src/main');
+      stopPollScheduler();
+      const before = vi.mocked(manifestModule.fetchManifest).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(vi.mocked(manifestModule.fetchManifest).mock.calls.length - before).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('repeated init() ticks the countdown once per second', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await boot();
+      await boot();
+      await boot();
+      const readout = document.getElementById('iss-now');
+      if (!readout) throw new Error('missing iss-now');
+      let ticks = 0;
+      let host: object = readout;
+      let descriptor: PropertyDescriptor | undefined;
+      while (host) {
+        descriptor = Object.getOwnPropertyDescriptor(host, 'innerHTML');
+        if (descriptor?.set && descriptor.get) break;
+        host = Object.getPrototypeOf(host);
+      }
+      if (!descriptor?.set || !descriptor.get) throw new Error('missing innerHTML');
+      Object.defineProperty(readout, 'innerHTML', {
+        configurable: true,
+        get() {
+          return descriptor.get?.call(this);
+        },
+        set(value: string) {
+          ticks += 1;
+          descriptor.set?.call(this, value);
+        },
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(ticks).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

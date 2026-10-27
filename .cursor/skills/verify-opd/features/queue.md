@@ -24,8 +24,8 @@ Queue is the next passes to shoot. The fixture puts Verify Reef 20 minutes after
 Preconditions:
 
 - `doctor` prints `ok`.
-- The manifest `generated_at` is under 60 minutes old, or Shoot stays disabled.
-- Run `down`, then `up`, when an earlier drive on this proxy hid a fixture card. The proxy keeps `removedCuratedIds` until `down`, and a fresh Chrome hides those cards before any click.
+- The manifest `generated_at` is under 60 minutes old and `freshness.ok` is true, or Shoot stays disabled. `isStaleManifest` in `frontend/src/main.ts` is true when that age is at least 60 minutes or when `freshness.ok` is false.
+- Each drive start, including desktop, PUTs `{ targets: [], removedCuratedIds: [] }` before the page loads. An earlier Hide does not hide the cards on the next drive. Run `down`, then `up`, when Verify Reef or Verify Delta has left the 90-minute queue. That reset does not rebuild pass times.
 
 - **Open Queue.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive queue`. The card list contains Verify Reef and Verify Delta.
 - **Score.** The first score control opens a breakdown panel. The panel is visible, not only present while `hidden`.
@@ -42,10 +42,11 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 
 ## Gotchas
 
-- Shoot on a stale manifest is disabled. `up` stamps `generated_at` 30 seconds before it starts, and a reused `up` does not rebuild that stamp. `doctor` fails about 13 minutes after `up`, while the manifest is still under the 60-minute Shoot gate.
+- Shoot on a stale manifest is disabled, including when `freshness.ok` is false inside the 60-minute window. `up` stamps `generated_at` 30 seconds before it starts, and a reused `up` does not rebuild that stamp. A bare `doctor` fails about 13 minutes after `up`, while the manifest is still under the 60-minute Shoot gate.
 - The queue lists a pass until its closest approach. The drive rewrites Verify Reef to 20 minutes after its captured start and Verify Delta to 50 minutes. The page clock is that start plus elapsed time, so the cards stay near-term for the drive. `resetFixtureProfile` clears hides and does not rebuild pass times. A new `drive` stamps the times again.
 - The mine filter matches personal targets. The fixture cards are shared, and an added personal target has no pass in this fixture, so Mine stays empty. Mine writes the shared `opd_target_filter_v1=mine`, so Upcoming and the map follow Mine on purpose. Launches does not write that key. This drive clicks All after Launches, which sets both keys back to `all` before Hide.
 - Forecast cards in Upcoming do not have Shoot. Shoot lives on Queue.
-- Hide on Queue and Hide on Upcoming write the same `removedCuratedIds` list. The proxy keeps that list until `down`. `drive upcoming` reloads the same Chrome, then opens a new Chrome profile and checks that Verify Mesa is already gone. It does not check Verify Delta.
+- Hide on Queue and Hide on Upcoming write the same `removedCuratedIds` list. Inside one drive the proxy keeps that list, and the next drive start clears it. `drive upcoming` reloads the same Chrome, then opens a new Chrome profile and checks that Verify Mesa is already gone. It does not check Verify Delta.
+- A cold HTTP 401 still opens Queue. `#tab-queue` switches `#view` to `view-queue`, `#cards` stays empty, and `#tab-profile` stays `disabled` with `aria-disabled` `true`. `frontend/test/account-session.test.ts` is `a denied session keeps Queue and does not render or enable Profile` and `a cold session failure still switches to Queue`. `OPD_VERIFY_LOCK=queue node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive session-lock` is one WebKit process. `OPD_VERIFY_SURFACE=iphone-17-pro OPD_VERIFY_VIEWPORT=402x874` and `OPD_VERIFY_SURFACE=ipad-pro-11 OPD_VERIFY_VIEWPORT=834x1210` are the two drives. The cookie is `opd-verify-session=deny`. Stdout is `session lock queue <id> view view-queue cards 0`. The shot is `evidence/session-lock-queue-<id>.png`. `drive queue` and `drive all` leave this probe out.
 - The last-card empty state is `showQueueEmpty` from `handleHideAction` in `frontend/src/main.ts`. Hiding one card while another remains leaves `#empty` hidden because the queue host still has a child. The default sentence is `No passes in the next 90 minutes.` Mine and a stale manifest use different sentences. This drive is on All with a fresh manifest.
 - `queue-empty.png` is taken before Verify Reef is restored. Restoring Reef is what lets the later map step find that pin and hide it. Delta stays hidden.

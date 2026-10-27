@@ -70,9 +70,13 @@ ENCOUNTER_PREROLL_SECONDS = 600  # 10 min — generous vs the ~2-4 min crossing
 TLE_WARN_AGE_HOURS = 24.0
 TLE_FLOOR_FRESHNESS = 0.5
 CELESTRAK_ISS_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE"
+CELESTRAK_ISS_SUPPLEMENTAL_TLE_URL = (
+    "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?CATNR=25544&FORMAT=TLE"
+)
 WHERETHEISS_ISS_TLE_URL = "https://api.wheretheiss.at/v1/satellites/25544/tles"
 DEFAULT_TLE_URL = (
-    f"{CELESTRAK_ISS_TLE_URL},{ARISS_ISS_TLE_URL},{WHERETHEISS_ISS_TLE_URL}"
+    f"{CELESTRAK_ISS_TLE_URL},{ARISS_ISS_TLE_URL},{WHERETHEISS_ISS_TLE_URL},"
+    f"{CELESTRAK_ISS_SUPPLEMENTAL_TLE_URL}"
 )
 
 # Sun-glint
