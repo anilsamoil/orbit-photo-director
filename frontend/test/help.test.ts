@@ -71,7 +71,13 @@ describe('openHelpModal', () => {
     expect(text).toContain('launch, day, twilight, and eclipse');
     expect(text).toContain('Anil\'s targets, Starship, and your white rings are not rows');
     expect(text).toContain('Starship is not a legend row');
-    expect(text).toContain('Tap Legend on the left edge');
+    expect(text).toContain('On a wide screen, Legend sits immediately left of Hide in the bottom-right corner');
+    expect(text).toContain('On a narrow screen, Legend stays immediately left of Hide');
+    expect(text).toContain('the open list sits above the time row when that band can hold it');
+    expect(text).toContain('the list scrolls in the free space above the footer, clear of the zoom column, the time row, and the Legend button');
+    expect(text).not.toContain('Tap Legend on the left edge');
+    expect(text).not.toContain('right of the zoom buttons');
+    expect(text).not.toContain('of the zoom buttons');
     expect(text).toContain('shows only while the legend is open');
     expect(text).toContain('A live IR warning adds a mark on Legend');
     expect(text).not.toContain('Starship: no public orbit yet');
@@ -219,7 +225,7 @@ describe('bindHelp', () => {
     expect(() => bindHelp()).not.toThrow();
   });
 
-  it('hides the corner button on the map and shows it on the other views', () => {
+  it('hides the corner button on the map and the ISS view, and shows it on the other views', () => {
     document.body.innerHTML = `
       <main id="view" class="view-map"></main>
       <button id="help-fab" type="button">?</button>
@@ -230,7 +236,10 @@ describe('bindHelp', () => {
     document.getElementById('view')!.className = 'view-queue';
     syncHelpButton();
     expect(fab.hidden).toBe(false);
-    for (const view of ['view-upcoming', 'view-iss', 'view-profile', 'view-log']) {
+    document.getElementById('view')!.className = 'view-iss';
+    syncHelpButton();
+    expect(fab.hidden).toBe(true);
+    for (const view of ['view-upcoming', 'view-profile', 'view-log']) {
       document.getElementById('view')!.className = view;
       syncHelpButton();
       expect(fab.hidden).toBe(false);

@@ -68,7 +68,7 @@ export interface ShotEnvelope {
 
 export interface LaunchCatalogItem {
   event_id: string; revision: string; name: string; rocket: string;
-  site: { name: string; lat: number; lon: number };
+  site: { name: string; lat: number; lon: number; pad?: string | null };
   schedule: {
     net: string; window_start: string | null; window_end: string | null;
     precision: string | null; status: string; destination: string | null;
@@ -361,9 +361,10 @@ function parseSchema3(value: unknown): LaunchCatalog {
     requireValue(string(item.event_id) && !ids.has(item.event_id));
     ids.add(item.event_id);
     requireValue(revision(item.revision) && string(item.name) && string(item.rocket) && string(item.why));
-    const site = record(item.site, 'name lat lon');
+    const site = record(item.site, 'name lat lon', 'pad');
     requireValue(string(site.name));
     coordinates(site);
+    if (Object.hasOwn(site, 'pad')) requireValue(site.pad === null || string(site.pad));
     const schedule = record(item.schedule, 'net window_start window_end precision status destination');
     timestamp(schedule.net);
     timestamp(schedule.window_start, true);
