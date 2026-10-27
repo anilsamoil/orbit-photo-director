@@ -31,18 +31,17 @@ export function restoreFixtureClock() {
   return true;
 }
 
-export function matchesDocument(pageUrl, requestUrl) {
-  const page = new URL(pageUrl);
-  const request = requestUrl instanceof URL ? requestUrl : new URL(String(requestUrl));
-  return request.origin === page.origin && request.pathname === page.pathname;
-}
-
 // Playwright init scripts survive reloads and cannot be removed through its
 // public API. Seed only this initial app response, before any module executes.
 export async function installOneShotClock(page, url, frozen) {
   if (!Number.isFinite(frozen)) return async () => {};
   const source = `(${freezeFixtureClock.toString()})(${JSON.stringify(frozen)});`;
-  const seed = async (route) => {
+  const document = new URL(url);
+  const escaped = `${document.origin}${document.pathname}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Function predicates become protocol **/* and borrow unrelated context routes.
+  const matches = new RegExp(`^${escaped}(?:[?#].*)?$`);
+  let seeding;
+  const seed = (route) => (seeding = (async () => {
     const response = await route.fetch();
     const html = await response.text();
     const script = `<script>${source}</script>`;
@@ -50,8 +49,11 @@ export async function installOneShotClock(page, url, frozen) {
       ? html.replace(/<head(?:\s[^>]*)?>/i, (head) => head + script)
       : html.replace(/^(\s*<!doctype[^>]*>)?/i, (doctype) => doctype + script);
     await route.fulfill({ response, body });
-  };
-  const matches = (requestUrl) => matchesDocument(url, requestUrl);
+  })());
   await page.route(matches, seed, { times: 1 });
-  return () => page.unroute(matches, seed);
+  return async () => {
+    // Removing a current interceptor advances its request in Playwright 1.55.
+    await seeding;
+    await page.unroute(matches, seed);
+  };
 }

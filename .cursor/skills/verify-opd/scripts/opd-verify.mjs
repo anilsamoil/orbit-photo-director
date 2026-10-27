@@ -14,7 +14,7 @@ import { driveMapHold } from './map-hold.mjs';
 import { drivePinFit } from './pin-fit.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
-import { bostonTrackText, buildFixtures, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
+import { bostonTrackText, bodyForRequestPath, buildFixtures, driveStartMs, effectiveNowMs, liveFixtureRoot, publishVerifyCatalog, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -223,15 +223,20 @@ function startProxy(home) {
   let catalogLive = null;
   let catalogGate = null;
   function currentCatalog() {
-    const now = Date.now();
+    const root = liveFixtureRoot(fixtureDir);
+    const clock = readDriveClock(root);
+    const clockKey = JSON.stringify(clock);
+    const now = Date.now() + (clock?.startOffset ?? 0);
     const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
     const cached = catalogLive
+      && catalogLive.clockKey === clockKey
       && now < catalogLive.anchor + 8 * 60_000
       && Number.isFinite(until)
       && now < until
       && catalogBodies.has(catalogLive.pointer.path);
     if (cached) return catalogLive;
-    catalogLive = publishVerifyCatalog(fixtureDir, now);
+    catalogLive = publishVerifyCatalog(root, now, clock?.start ?? now);
+    catalogLive.clockKey = clockKey;
     catalogLive.siteAnchor = catalogLive.anchor;
     catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
     return catalogLive;
@@ -332,15 +337,16 @@ function startProxy(home) {
       catalogLive = {
         pointer: catalogGate.pointer,
         body: catalogGate.body,
-        anchor: Date.now(),
+        anchor: effectiveNowMs(fixtureDir),
+        clockKey: JSON.stringify(readDriveClock(fixtureDir)),
         siteAnchor: catalogGate.siteAnchor,
       };
       catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
-      writeFileSync(resolve(fixtureDir, 'catalog-clock.json'), JSON.stringify({ anchor: catalogGate.siteAnchor }));
     }
     for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
   }
   const server = createServer(async (req, res) => {
+    const fixtureDir = liveFixtureRoot(resolve(home, 'fixtures'));
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
     const sendFile = (name) => {
@@ -428,17 +434,21 @@ function startProxy(home) {
       res.end(body);
       return;
     }
-    const artifact = {
-      '/v/verify/passes.json': 'passes.json',
-      '/v/verify/top5.json': 'top5.json',
-      '/v/verify/top_24h.json': 'top_24h.json',
-      '/v/verify/track.json': 'track.json',
-      '/v/verify/status.json': 'status.json',
-      '/v/verify/targets.json': 'targets.json',
-      '/v/verify/cupola_windows.json': 'cupola_windows.json',
-      '/v/verify/tracked.json': 'tracked.json',
-    }[path];
-    if (artifact) return sendFile(artifact);
+    const hashed = bodyForRequestPath(resolve(home, 'fixtures'), path);
+    if (hashed) {
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': hashed.length,
+      });
+      res.end(hashed);
+      return;
+    }
+    if (/^\/v\/verify\/[a-f0-9]{64}\/[^/]+$/.test(path)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
+      return;
+    }
     if (path === '/launch/latest.json') {
       const rung = cookieValue(req, 'opd-verify-launch');
       const published = launchRung(fixtureDir, rung);
@@ -502,6 +512,11 @@ function startProxy(home) {
         return;
       }
       sendJson(res, body);
+      return;
+    }
+    if (/^\/launch\/v\/[a-f0-9]{64}\.json$/.test(path)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
       return;
     }
     if (path === '/api/browser/session') {
@@ -654,7 +669,8 @@ async function doctor(home = homeDir()) {
         const manifestResponse = await fetch(`http://127.0.0.1:${state.port}/manifest.json`);
         const manifest = await manifestResponse.json();
         if (!manifest.version || !manifest.generated_at) problems.push('manifest missing version');
-        if (Date.parse(state.launchValidUntil) <= Date.now()) problems.push('launch fixture expired. Run down, then up.');
+        const fixtureNow = effectiveNowMs(resolve(home, 'fixtures'));
+        if (Date.parse(state.launchValidUntil) <= fixtureNow) problems.push('launch fixture expired. Run down, then up.');
       } catch (error) {
         problems.push(error instanceof Error ? error.message : String(error));
       }
@@ -753,8 +769,13 @@ function down() {
 }
 
 async function drive(feature) {
+  const wall = Date.now();
+  const eventStart = driveStartMs(process.env.OPD_VERIFY_DRIVE_START, wall);
   const home = homeDir();
-  const until = refreshLaunchClock(resolve(home, 'fixtures'));
+  const fixtureDir = resolve(home, 'fixtures');
+  stampEventTimes(fixtureDir, eventStart, wall);
+  const startOffset = readDriveClock(fixtureDir).startOffset;
+  const until = refreshLaunchClock(fixtureDir, effectiveNowMs(fixtureDir));
   const early = readState(home);
   if (early) {
     early.launchValidUntil = until;
@@ -768,6 +789,7 @@ async function drive(feature) {
         baseUrl: state.url,
         evidenceDir: state.evidence,
         home,
+        startOffset,
       });
       console.log(note);
     } catch (error) {
@@ -886,6 +908,7 @@ async function drive(feature) {
     evidenceDir: state.evidence,
     meta,
     features,
+    startOffset,
   });
   for (const note of notes) console.log(note);
   console.log(`evidence ${state.evidence}`);
