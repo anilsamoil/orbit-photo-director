@@ -193,29 +193,33 @@ function prepareBearingTrack(baseUrl) {
   return () => {
     if (!pending) {
       pending = (async () => {
-        const response = await fetch(`${baseUrl}/v/verify/track.json`);
+        const manifestResponse = await fetch(`${baseUrl}/manifest.json`);
+        if (!manifestResponse.ok) throw new Error(`bearing manifest fetch ${manifestResponse.status}`);
+        const manifest = await manifestResponse.json();
+        const response = await fetch(new URL(manifest.artifacts.track.path, `${baseUrl}/`));
         if (!response.ok) throw new Error(`bearing track fetch ${response.status}`);
         const track = await response.json();
         track.iss_polynomial = bearingPolynomial();
         const body = JSON.stringify(track);
-        return { body, sha256: createHash('sha256').update(body).digest('hex'), bytes: Buffer.byteLength(body) };
+        const sha256 = createHash('sha256').update(body).digest('hex');
+        return { body, path: `v/verify/${sha256}/track.json`, sha256, bytes: Buffer.byteLength(body) };
       })();
     }
     return pending;
   };
 }
 
-async function installBearingTrack(page, baseUrl) {
+export async function installBearingTrack(page, baseUrl) {
   const prepared = prepareBearingTrack(baseUrl);
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
-    if (path !== '/manifest.json' && path !== '/v/verify/track.json') {
+    if (path !== '/manifest.json' && !/^\/v\/verify\/[a-f0-9]{64}\/track\.json$/.test(path)) {
       await route.continue();
       return;
     }
     const track = await prepared();
-    if (path === '/v/verify/track.json') {
+    if (path === `/${track.path}`) {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -224,9 +228,14 @@ async function installBearingTrack(page, baseUrl) {
       });
       return;
     }
+    if (path !== '/manifest.json') {
+      await route.continue();
+      return;
+    }
     const response = await route.fetch();
     const manifest = await response.json();
     if (manifest?.artifacts?.track) {
+      manifest.artifacts.track.path = track.path;
       manifest.artifacts.track.sha256 = track.sha256;
       manifest.artifacts.track.bytes = track.bytes;
     }
