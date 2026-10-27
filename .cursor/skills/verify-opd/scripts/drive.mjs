@@ -5,10 +5,11 @@ import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
 import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
 import { NARROW_SLIDER_RIGHT_GAP, timeStripLaidFailures } from './map-strip-contract.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
+import { deviceDescriptor, deviceViewport, launchWebkit, openDeviceContext, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
@@ -330,14 +331,15 @@ async function mouseClick(send, x, y, button = 'left') {
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons: 0, clickCount: 1 });
 }
 
-async function setViewport(send, width, height, mobile) {
+async function setViewport(send, width, height, mobile, signal) {
+  signal?.throwIfAborted();
   if (FIXED_SURFACE) throw new Error(`fixed-surface drive attempted resize to ${width}x${height}`);
-  await send('Emulation.setDeviceMetricsOverride', {
+  return send('Emulation.setDeviceMetricsOverride', {
     width,
     height,
     deviceScaleFactor: 1,
     mobile,
-  });
+  }, { signal });
 }
 
 async function reportViewport(send, feature, viewport) {
@@ -764,26 +766,19 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(home);
       await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active), serviceWorkers: 'block' });
-      if (spec.standalone) {
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-        });
-      }
-      const page = await context.newPage();
+      const cartoDark = [];
+      const session = await openDeviceContext(browser, active, {
+        requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+      });
       try {
-        const cartoDark = [];
-        page.on('request', (request) => {
-          noteRequest(cartoDark, request.url());
-        });
-        const send = playwrightSend(page);
+        const send = playwrightSend(session);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
         await openApp(send, baseUrl);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
-        await context.close();
+        await session.context.close();
       }
       notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir)}`);
     } finally {
@@ -1134,12 +1129,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
   const before = shown.text;
   const beforeAge = bannerAgeToken(before);
   if (!beforeAge) throw new Error(`stale TLE banner has no age label: ${before}`);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const base = Date.now();
-    Date.now = () => base + 70000;
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(Date.now() + 70000)`);
   let afterTick = before;
   let afterAge = beforeAge;
   const started = Date.now();
@@ -1164,7 +1154,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
       await sleep(100);
     }
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   if (!afterTick.includes(suffix) || bannerAgeNormalized(afterTick) !== bannerAgeNormalized(before)) {
     throw new Error(`countdown dropped the TLE suffix: ${afterTick}`);
@@ -3207,11 +3197,13 @@ async function readViewportSettled(send) {
   return evaluate(send, 'window.__opdViewportSettled');
 }
 
-async function layOutViewport(send, width, height) {
+async function layOutViewport(send, width, height, signal) {
   await evaluate(send, viewportLayoutScript(width, height));
   let expectedDpr = null;
   try {
-    await setViewport(send, width, height, true);
+    const changed = await setViewport(send, width, height, true, signal);
+    signal.throwIfAborted();
+    if (changed?.contextReplaced) await evaluate(send, viewportLayoutScript(width, height));
     const read = await evaluate(send, 'window.devicePixelRatio');
     expectedDpr = Number(read);
     if (!Number.isFinite(expectedDpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
@@ -3227,10 +3219,12 @@ async function layOutViewport(send, width, height) {
 
 export async function whenViewportLaidOut(send, width, height) {
   let timer;
-  const pending = layOutViewport(send, width, height);
+  const controller = new AbortController();
+  const pending = layOutViewport(send, width, height, controller.signal);
   pending.catch(() => {});
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => {
+      controller.abort(new Error('viewport deadline exceeded'));
       voidViewportAbort(send);
       resolve({ deadline: true });
     }, VIEWPORT_DEADLINE_MS);
@@ -3247,10 +3241,15 @@ export async function whenViewportLaidOut(send, width, height) {
 
 async function restoreViewport(send, viewport) {
   let timer;
-  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  const controller = new AbortController();
+  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile, controller.signal);
   pending.catch(() => {});
   const limited = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error('viewport restore unsettled')), VIEWPORT_RESTORE_MS);
+    timer = setTimeout(() => {
+      const error = new Error('viewport restore unsettled');
+      controller.abort(error);
+      reject(error);
+    }, send.replacesContext ? VIEWPORT_DEADLINE_MS : VIEWPORT_RESTORE_MS);
   });
   try {
     return await Promise.race([pending, limited]);
@@ -3432,7 +3431,19 @@ async function proveRaisedHideDock(send, evidenceDir, viewport) {
   }
 }
 
-async function proveLegendPanelBounds(send, evidenceDir, viewport) {
+function legendPanelFixtureExpression() {
+  return `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const date = document.querySelector('.map-imagery-date');
+    if (!button || !date) return false;
+    button.setAttribute('aria-expanded', 'true');
+    const line = 'LIVE now (not the scrubbed time)';
+    date.textContent = Array.from({ length: 40 }, () => line).join(' ');
+    return true;
+  })()`;
+}
+
+export async function proveLegendPanelBounds(send, evidenceDir, viewport) {
   const saved = await evaluate(send, `(() => {
     const button = document.getElementById('map-legend-toggle');
     const date = document.querySelector('.map-imagery-date');
@@ -3445,14 +3456,6 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
     { width: 800, height: 600, insets: { top: 24, left: 0, bottom: 20, right: 0 }, name: '800x600' },
   ];
   try {
-    await evaluate(send, `(() => {
-      const button = document.getElementById('map-legend-toggle');
-      const date = document.querySelector('.map-imagery-date');
-      button.setAttribute('aria-expanded', 'true');
-      const line = 'LIVE now (not the scrubbed time)';
-      date.textContent = Array.from({ length: 40 }, () => line).join(' ');
-      return true;
-    })()`);
     await withBannerActions(send, async () => {
       for (const pane of cases) {
         await setViewport(send, pane.width, pane.height, true);
@@ -3460,6 +3463,8 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
         if (!applied && !viewport.mobile) throw new Error(`safe area override failed at ${pane.name}`);
         if (!applied) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
         await sleep(250);
+        const armed = await evaluate(send, legendPanelFixtureExpression());
+        if (!armed) throw new Error(`legend fixture missing after ${pane.name}`);
         const laid = await evaluate(send, `(() => {
           const actions = ${bannerInjectExpression()};
           const panel = document.getElementById('map-legend-panel');
@@ -4915,80 +4920,127 @@ async function dispatchPlanTouch(send, type, x, y) {
   if (!sent?.ok) throw new Error(`plan touch ${type} ${JSON.stringify(sent)}`);
 }
 
-async function provePlanGestureHolds(send, viewport) {
-  const start = await planCamera(send);
-  if (!start) throw new Error('plan camera missing before the gesture');
-  const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
-  await sleep(200);
-  const panned = await planCamera(send);
-  if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
-  const nextWidth = Math.max(800, Math.round(start.width) - 40);
-  await setViewport(send, nextWidth, start.height, viewport.mobile);
-  await evaluate(send, `(() => {
-    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => 2 });
-    return window.devicePixelRatio;
+async function beginPlanLayout(send) {
+  const saved = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame?.querySelector('canvas');
+    const orbit = frame?.__opdTrackInset;
+    if (!frame || !canvas || !orbit) return null;
+    const width = frame.clientWidth;
+    const height = frame.clientHeight;
+    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') };
+    return { width, height, dpr: window.devicePixelRatio };
   })()`);
-  let previous = panned;
-  for (let tick = 1; tick <= 3; tick += 1) {
-    await sleep(1100);
+  if (!saved) throw new Error('plan layout fixture missing');
+  return saved;
+}
+
+async function changePlanLayout(send, size) {
+  const changed = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    if (!saved || frame !== saved.frame || frame.querySelector('canvas') !== saved.canvas || frame.__opdTrackInset !== saved.orbit) return false;
+    frame.style.width = ${JSON.stringify(size.width + 'px')};
+    frame.style.height = ${JSON.stringify(size.height + 'px')};
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => ${size.dpr} });
+    return frame.clientWidth === ${size.width} && frame.clientHeight === ${size.height} && window.devicePixelRatio === ${size.dpr};
+  })()`);
+  if (!changed) throw new Error('plan layout did not change on the same canvas');
+}
+
+async function assertPlanLayoutIdentity(send) {
+  const same = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    return !!saved && frame === saved.frame && frame.querySelector('canvas') === saved.canvas && frame.__opdTrackInset === saved.orbit;
+  })()`);
+  if (!same) throw new Error('plan document, frame, canvas or renderer replaced during the gesture');
+}
+
+async function restorePlanLayout(send) {
+  await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    if (!saved) return;
+    if (saved.style === null) saved.frame.removeAttribute('style');
+    else saved.frame.setAttribute('style', saved.style);
+    if (saved.dpr) Object.defineProperty(window, 'devicePixelRatio', saved.dpr);
+    else delete window.devicePixelRatio;
+    delete window.__opdPlanLayout;
+  })()`);
+}
+
+export async function provePlanGestureHolds(send) {
+  const layout = await beginPlanLayout(send);
+  try {
+    const start = await planCamera(send);
+    if (!start) throw new Error('plan camera missing before the gesture');
+    const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
+    await sleep(200);
+    const panned = await planCamera(send);
+    if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
+    await changePlanLayout(send, { width: layout.width - 24, height: layout.height - 20, dpr: layout.dpr === 2 ? 1 : 2 });
+    let previous = panned;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: start.x + step * (tick + 1),
+        y: start.y,
+        button: 'left',
+        buttons: 1,
+      });
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(previous, next)) {
+        throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+      }
+      previous = next;
+    }
     await send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: start.x + step * (tick + 1),
+      type: 'mouseReleased',
+      x: start.x + step * 4,
       y: start.y,
       button: 'left',
-      buttons: 1,
+      buttons: 0,
+      clickCount: 1,
     });
-    await sleep(150);
-    const next = await planCamera(send);
-    if (!cameraMoved(previous, next)) {
-      throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+    await sleep(450);
+    const released = await planCamera(send);
+    if (!released || released.view !== 'view-iss') {
+      throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
     }
-    previous = next;
-  }
-  await send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: start.x + step * 4,
-    y: start.y,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  });
-  await sleep(450);
-  const released = await planCamera(send);
-  if (!released || released.view !== 'view-iss') {
-    throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
-  }
-  const touchStart = await planCamera(send);
-  await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
-  await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
-  await sleep(200);
-  const touched = await planCamera(send);
-  if (!cameraMoved(touchStart, touched)) {
-    throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
-  }
-  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
-  await evaluate(send, `(() => {
-    delete window.devicePixelRatio;
-    return window.devicePixelRatio;
-  })()`);
-  let touchPrevious = touched;
-  for (let tick = 1; tick <= 3; tick += 1) {
-    await sleep(1100);
-    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
-    await sleep(150);
-    const next = await planCamera(send);
-    if (!cameraMoved(touchPrevious, next)) {
-      throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+    const touchStart = await planCamera(send);
+    await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
+    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
+    await sleep(200);
+    const touched = await planCamera(send);
+    if (!cameraMoved(touchStart, touched)) {
+      throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
     }
-    touchPrevious = next;
-  }
-  await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
-  await sleep(450);
-  const ended = await planCamera(send);
-  if (!ended || ended.view !== 'view-iss') {
-    throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+    await changePlanLayout(send, layout);
+    let touchPrevious = touched;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(touchPrevious, next)) {
+        throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+      }
+      touchPrevious = next;
+    }
+    await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
+    await sleep(450);
+    const ended = await planCamera(send);
+    if (!ended || ended.view !== 'view-iss') {
+      throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+    }
+  } finally {
+    await restorePlanLayout(send);
   }
 }
 
@@ -5245,7 +5297,7 @@ async function returnToPlan(send) {
   await waitForPip(send, 'plan', 'plan framed after an outside gesture', 20000);
 }
 
-async function provePlanOutsideEnding(send, viewport, kind, from, to) {
+export async function provePlanOutsideEnding(send, viewport, kind, from, to) {
   await send('Emulation.setDeviceMetricsOverride', {
     width: from.width,
     height: from.height,
@@ -5254,59 +5306,64 @@ async function provePlanOutsideEnding(send, viewport, kind, from, to) {
   });
   await sleep(400);
   await waitForPip(send, 'plan', `plan before ${kind}`, 20000);
-  const before = await planFrameMetrics(send);
-  if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
-  await armPlanPointer(send);
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: before.outsideX,
-    y: before.outsideY,
-    button: 'left',
-    buttons: 1,
-  });
-  await endPlanGesture(send, kind, before);
-  await send('Emulation.setDeviceMetricsOverride', {
-    width: to.width,
-    height: to.height,
-    deviceScaleFactor: to.dpr,
-    mobile: viewport.mobile,
-  });
-  for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
-  const after = await planFrameMetrics(send);
-  const expected = planCanvasReady(after);
-  const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
-  if (!after || !expected || !changed || after.view !== 'view-iss'
-    || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
-    || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
-    throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
-  }
-  await evaluate(send, `(() => {
-    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
-    if (orbit?.stop) orbit.stop();
-    return true;
-  })()`);
-  if (kind !== 'up') {
+  const layout = await beginPlanLayout(send);
+  try {
+    const before = await planFrameMetrics(send);
+    if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
+    await armPlanPointer(send);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
     await send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
+      type: 'mouseMoved',
       x: before.outsideX,
       y: before.outsideY,
       button: 'left',
-      buttons: 0,
-      clickCount: 1,
+      buttons: 1,
     });
+    await endPlanGesture(send, kind, before);
+    await changePlanLayout(send, {
+      width: Math.round(layout.width * to.width / from.width),
+      height: Math.round(layout.height * to.height / from.height),
+      dpr: to.dpr,
+    });
+    for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
+    await assertPlanLayoutIdentity(send);
+    const after = await planFrameMetrics(send);
+    const expected = planCanvasReady(after);
+    const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
+    if (!after || !expected || !changed || after.view !== 'view-iss'
+      || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
+      || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
+      throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
+    }
+    await evaluate(send, `(() => {
+      const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+      if (orbit?.stop) orbit.stop();
+      return true;
+    })()`);
+    if (kind !== 'up') {
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: before.outsideX,
+        y: before.outsideY,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      });
+    }
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+    const clickAt = await planFrameMetrics(send);
+    await mouseClick(send, clickAt.x, clickAt.y);
+    await waitFor(
+      send,
+      `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
+      `plan ${kind} click opens map`,
+      8000,
+    );
+    await returnToPlan(send);
+    return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
+  } finally {
+    await restorePlanLayout(send);
   }
-  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
-  const clickAt = await planFrameMetrics(send);
-  await mouseClick(send, clickAt.x, clickAt.y);
-  await waitFor(
-    send,
-    `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
-    `plan ${kind} click opens map`,
-    8000,
-  );
-  await returnToPlan(send);
-  return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
 }
 
 async function provePlanOutsideRelease(send, viewport) {
@@ -5345,7 +5402,7 @@ async function provePlanMapLive(send, viewport) {
     await waitForPip(send, 'plan', 'plan framed before an outside release', 20000);
     const outside = await provePlanOutsideRelease(send, viewport);
     await provePlanRasterNames(send);
-    await provePlanGestureHolds(send, viewport);
+    await provePlanGestureHolds(send);
     await provePlanRotatingPinch(send);
     return `wheel ${zoom.toFixed(2)}; ${outside}`;
   } finally {
@@ -5737,7 +5794,7 @@ async function proveIssTownRetry(send, evidenceDir, viewport) {
     return `${portrait}; ${landscape}`;
   } finally {
     await evaluate(send, `(() => {
-      if (window.__opdRealNow) Date.now = window.__opdRealNow;
+      (${restoreFixtureClock.toString()})();
       document.cookie = 'opd-verify-towns=; path=/; max-age=0';
       document.cookie = 'opd-verify-nadir=; path=/; max-age=0';
       return true;
@@ -5762,11 +5819,7 @@ async function proveIssTownsOnce(send, evidenceDir, shotSuffix) {
     return true;
   })()`);
   await reloadSettled(send);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    Date.now = () => ${BOSTON_NADIR_EPOCH_MS};
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(${BOSTON_NADIR_EPOCH_MS})`);
   await click(send, '#tab-iss');
   const blocked = await waitFor(
     send,
@@ -7348,12 +7401,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     return anchor > 0 ? anchor : null;
   })()`);
   const frozen = loadedAnchor || fixtureInstant(evidenceDir);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const frozen = ${frozen};
-    Date.now = () => frozen;
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
   try {
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
@@ -7398,7 +7446,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   );
   await shot(send, evidenceDir, 'iss-all-launches-pin');
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
