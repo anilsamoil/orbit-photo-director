@@ -42,6 +42,8 @@ The command needs `bun`, installed `frontend/node_modules`, `lsof`, Chrome, and 
 
 The proxy signs the browser in as profile `anil` with display name `Anil`. That identity is a fixture. It is not a Google session. The fixture names are `Verify Reef`, `Verify Delta`, `Verify Mesa`, `Verify Keepsake`, `Verify Ascent`, `Verify Likely`, and `Verify Horizon`. Reef and Delta are Queue cards. Mesa is an Upcoming card. Keepsake is the Cupola window. Ascent is the Shot highlight. Likely is a pad with no corridor. Horizon is Watch, so Upcoming and the map do not list it. The proxy serves the schema 2 launch artifact and a current schema 3 catalog. The drive does not fetch Launch Library 2.
 
+The [pending RealEarth regression](scripts/hanging-realearth.md) exercises full stock drives while third-party tiles remain pending and checks replacement painting independently of tile completion.
+
 ## Doctor
 
 ```bash

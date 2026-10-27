@@ -485,22 +485,42 @@ async function restoreMapClockAndFollow(page, pose) {
 async function renderedFrame(page, view) {
   await page.evaluate((activeView) => new Promise((done, reject) => {
     const map = activeView === 'view-iss' ? window.__opdIss : window.__opdMap;
+    let idleTimer;
+    let settled = false;
     const cleanup = () => {
       clearTimeout(timer);
+      clearTimeout(idleTimer);
       map.off('render', painted);
+      map.off('idle', idle);
+    };
+    const idle = () => {
+      settled = true;
+      map.triggerRepaint();
     };
     const painted = () => {
-      // A render event also fires for a clear-only frame while the restored
-      // camera's tiles are pending. Wait for MapLibre's loaded lifecycle;
-      // settled tile failures count as loaded, so this does not require every
-      // remote imagery request to succeed.
-      if (!map.loaded()) return;
+      // MapLibre's isStyleLoaded() also waits for every source's tiles.
+      if (!map.style?._loaded || (idleTimer && !settled)) return;
       const canvas = map.getCanvas();
       const gl = map.painter?.context?.gl;
-      cleanup();
       if (!canvas?.width || !canvas?.height || !gl || gl.isContextLost()) {
+        cleanup();
         reject(new Error(`${activeView} renderer has no live drawing buffer`));
-      } else requestAnimationFrame(() => done());
+        return;
+      }
+      const pixels = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4);
+      gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      let hasPaint = false;
+      for (let offset = 3; offset < pixels.length; offset += 4) {
+        if (pixels[offset] > 0) { hasPaint = true; break; }
+      }
+      if (!hasPaint) return;
+      if (settled) {
+        cleanup();
+        requestAnimationFrame(() => done());
+      } else if (!idleTimer) {
+        map.on('idle', idle);
+        idleTimer = setTimeout(idle, 1200);
+      }
     };
     const timer = setTimeout(() => {
       cleanup();

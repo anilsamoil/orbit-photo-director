@@ -273,6 +273,14 @@ test('candidate is painted before context switch', { timeout: 90000 }, async () 
           get: () => heldMap,
           set(map) {
             heldMap = map;
+            const render = map.painter.render.bind(map.painter);
+            map.painter.render = (...args) => {
+              render(...args);
+              if (window.__allowCandidatePaint) return;
+              const gl = map.painter.context.gl;
+              gl.clearColor(0, 0, 0, 0);
+              gl.clear(gl.COLOR_BUFFER_BIT);
+            };
             map.on('render', () => {
               const gl = map.painter?.context?.gl;
               if (!gl) return;
@@ -303,7 +311,10 @@ test('candidate is painted before context switch', { timeout: 90000 }, async () 
     await candidate.waitForFunction(() => window.__opdMap?.getZoom() > 6 && window.__opdMap.getLayer('iss-track-layer'));
     await new Promise((done) => setTimeout(done, 4000));
     const beforeRelease = { completed, oldAlive: !oldPage.isClosed(), publicPage: session.page === oldPage };
+    const clear = await candidate.evaluate(() => window.__lastRasterFrame);
+    assert.ok(clear.pixels.every((pixel) => pixel.every((channel) => channel === 0)), JSON.stringify(clear));
     releaseTiles();
+    await candidate.evaluate(() => { window.__allowCandidatePaint = true; window.__opdMap.triggerRepaint(); });
     await changing;
     assert.ok(heldRequests > 0, 'the replacement camera requested held high-zoom raster tiles');
     assert.deepEqual(beforeRelease, { completed: false, oldAlive: true, publicPage: true }, 'a clear-only render must not replace the visible page');
