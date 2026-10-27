@@ -2051,7 +2051,6 @@ async function init(): Promise<void> {
     }
     if (currentManifest) renderQueue();
   });
-  bindTabs();
   restoreMapImportView();
   insetHost = bindInsets({
     mounts: async () => mapModule ?? loadMapModule(),
