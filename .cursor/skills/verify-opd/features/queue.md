@@ -25,7 +25,7 @@ Preconditions:
 
 - `doctor` prints `ok`.
 - The manifest `generated_at` is under 60 minutes old and `freshness.ok` is true, or Shoot stays disabled. `isStaleManifest` in `frontend/src/main.ts` is true when that age is at least 60 minutes or when `freshness.ok` is false.
-- Each drive start, including desktop, PUTs `{ targets: [], removedCuratedIds: [] }` before the page loads. An earlier Hide does not hide the cards on the next drive. Run `down`, then `up`, when Verify Reef or Verify Delta has left the 90-minute queue. That reset does not rebuild pass times.
+- Each drive start, including desktop, PUTs `{ targets: [], removedCuratedIds: [] }` before the page loads. An earlier Hide does not hide the cards on the next drive. The profile reset does not rebuild pass times; each new `drive` separately restamps Reef and Delta from its captured start, including when `up` reused the instance.
 
 - **Open Queue.** Run `node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive queue`. The card list contains Verify Reef and Verify Delta.
 - **Score.** The first score control opens a breakdown panel. The panel is visible, not only present while `hidden`.
