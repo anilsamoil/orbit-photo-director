@@ -813,8 +813,11 @@ export async function buildFixtures(logicalDir, now = Date.now(), eventStart = n
       switchToGeneration(logicalDir, next, previous);
     });
     return built;
-  } finally {
-    if (liveFixtureRoot(logicalDir) !== liveFixtureRoot(next)) rmSync(next, { recursive: true, force: true });
+  } catch (error) {
+    if (!existsSync(join(next, '.published')) && liveFixtureRoot(logicalDir) !== liveFixtureRoot(next)) {
+      rmSync(next, { recursive: true, force: true });
+    }
+    throw error;
   }
 }
 
