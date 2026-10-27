@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildFixtures, publishVerifyCatalog } from './fixtures.mjs';
+import { bodyForRequestPath, buildFixtures, publishVerifyCatalog } from './fixtures.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const require = createRequire(resolve(root, 'frontend/package.json'));
@@ -55,7 +55,10 @@ export async function serveSnap({ catalog = 'valid', emptyCatalog = false } = {}
       : path === '/launch/latest.json' ? 'launch-latest.json'
         : path === '/launch/v/verifyrev.json' ? 'launch.json'
           : /^\/v\/verify\/[a-z0-9_]+\.json$/.test(path) ? path.split('/').at(-1) : null;
-    if (file) {
+    const hashed = bodyForRequestPath(fixtureDir, path);
+    if (hashed) json(hashed.toString('utf8'));
+    else if (/^\/v\/verify\/[a-f0-9]{64}\/[^/]+$/.test(path) || /^\/launch\/v\/[a-f0-9]{64}\.json$/.test(path)) json({}, 404);
+    else if (file) {
       try { json(await readFile(resolve(fixtureDir, file), 'utf8')); } catch { json({}, 404); }
     } else if (path === '/api/browser/session') json({ ok: true, profile: { name: 'anil', displayName: 'Anil' } });
     else if (path === '/api/kp') json({ kp: 3, timestamp: new Date(built.meta.now).toISOString(), age_min: 5 });
