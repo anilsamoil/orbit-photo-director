@@ -223,15 +223,20 @@ function startProxy(home) {
   let catalogLive = null;
   let catalogGate = null;
   function currentCatalog() {
-    const now = Date.now();
+    const root = liveFixtureRoot(fixtureDir);
+    const clock = readDriveClock(root);
+    const clockKey = JSON.stringify(clock);
+    const now = Date.now() + (clock?.startOffset ?? 0);
     const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
     const cached = catalogLive
+      && catalogLive.clockKey === clockKey
       && now < catalogLive.anchor + 8 * 60_000
       && Number.isFinite(until)
       && now < until
       && catalogBodies.has(catalogLive.pointer.path);
     if (cached) return catalogLive;
-    catalogLive = publishVerifyCatalog(fixtureDir, now);
+    catalogLive = publishVerifyCatalog(root, now, clock?.start ?? now);
+    catalogLive.clockKey = clockKey;
     catalogLive.siteAnchor = catalogLive.anchor;
     catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
     return catalogLive;
@@ -332,11 +337,11 @@ function startProxy(home) {
       catalogLive = {
         pointer: catalogGate.pointer,
         body: catalogGate.body,
-        anchor: Date.now(),
+        anchor: effectiveNowMs(fixtureDir),
+        clockKey: JSON.stringify(readDriveClock(fixtureDir)),
         siteAnchor: catalogGate.siteAnchor,
       };
       catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
-      writeFileSync(resolve(fixtureDir, 'catalog-clock.json'), JSON.stringify({ anchor: catalogGate.siteAnchor }));
     }
     for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
   }

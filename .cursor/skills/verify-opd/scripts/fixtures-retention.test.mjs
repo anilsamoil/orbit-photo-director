@@ -5,7 +5,7 @@ import fs, { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rm
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { bodyForRequestPath, buildFixtures, generationRoots, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
+import { bodyForRequestPath, buildFixtures, CATALOG_NET_OFFSET_MS, effectiveNowMs, generationRoots, publishVerifyCatalog, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const start = Date.parse('2026-10-10T12:00:00Z');
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -33,6 +33,20 @@ function policy(t, retention, count) {
   }
 }
 
+test('rebuilding fixtures resets the clock and retains published bodies', async (t) => {
+  const { dir } = await fixture(t);
+  stampEventTimes(dir, start + 30 * 60_000, start);
+  const previousRoot = realpathSync(dir);
+  const held = json(dir, 'manifest.json').artifacts.top5;
+  const bytes = bodyForRequestPath(dir, `/${held.path}`);
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline fixture test'); });
+  await buildFixtures(dir, start + 1000);
+  assert.notEqual(realpathSync(dir), previousRoot);
+  assert.deepEqual(readDriveClock(dir), { start: start + 1000, startOffset: 0 });
+  assert.ok(Date.parse(json(dir, 'launch-latest.json').valid_until) > effectiveNowMs(dir, start + 1000));
+  assert.deepEqual(bodyForRequestPath(dir, `/${held.path}`), bytes);
+});
+
 async function proxy(t, home) {
   writeFileSync(join(home, 'state.json'), JSON.stringify({ port: 0 }));
   // Observe the kernel-selected port without modifying the production proxy.
@@ -59,6 +73,28 @@ async function proxy(t, home) {
   });
   return `http://127.0.0.1:${port}`;
 }
+
+test('served catalogs use the drive clock and invalidate cached events on a new drive', async (t) => {
+  const { home, dir } = await fixture(t);
+  const origin = await proxy(t, home);
+  let previous;
+  for (const offset of [30 * 60_000, -10 * 60_000]) {
+    const wall = Date.now();
+    const eventStart = wall + offset;
+    stampEventTimes(dir, eventStart, wall);
+    const pointer = await (await fetch(`${origin}/launch/catalog/latest.json`)).json();
+    const bytes = await (await fetch(`${origin}/${pointer.path}`)).text();
+    const catalog = JSON.parse(bytes);
+    const now = effectiveNowMs(dir);
+    assert.ok(Date.parse(catalog.generated_at) <= now && now < Date.parse(catalog.geometry_valid_until), 'catalog lease contains the page clock');
+    assert.ok(Math.abs(Date.parse(catalog.items[0].schedule.net) - eventStart - CATALOG_NET_OFFSET_MS) < 1000, 'catalog NET stays anchored to drive start');
+    assert.equal(digest(bytes), pointer.sha256);
+    if (previous) assert.equal(await (await fetch(`${origin}/${previous.pointer.path}`)).text(), previous.bytes);
+    previous = { pointer, bytes };
+    const renewed = JSON.parse(publishVerifyCatalog(dir, now + 9 * 60_000).body);
+    assert.equal(renewed.items[0].schedule.net, catalog.items[0].schedule.net);
+  }
+});
 
 test('held /tmp manifest and immutable launch URL survive many publications through the proxy', async (t) => {
   const { home, dir } = await fixture(t);
