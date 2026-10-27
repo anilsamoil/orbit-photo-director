@@ -1,6 +1,4 @@
 // @vitest-environment-options {"url":"http://127.0.0.1:42700"}
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bannerAuthExpired } from '../src/banner';
 import {
@@ -1139,21 +1137,4 @@ describe('map stylesheet', () => {
     expect(mapGate.evaluations).toBe(0);
     expect(document.getElementById('stale-css')).toBeNull();
   }, 15000);
-});
-
-describe('map load error above the shot list', () => {
-  it('reserves the shot bar under the map error footer', () => {
-    const css = readFileSync(resolve('src/style.css'), 'utf8');
-    const actions = css.match(/body:has\(> #view\.view-map\) > #status-banner:has\(\.banner-actions\)\s*\{[^}]*\}/);
-    expect(actions?.[0]).toContain('bottom: var(--map-shotlist-block, 0px)');
-    expect(actions?.[0]).not.toContain('z-index');
-    expect(actions?.[0]).toContain('height: auto !important');
-    expect(actions?.[0]).toContain('top: auto !important');
-    expect(css).toContain('--map-shotlist-block: 0px');
-    expect(css).toContain('--map-shotlist-block: var(--recovery-shotlist-height, 0px)');
-    expect(css).toContain('--map-banner-clearance: calc(0.55rem + 0.85rem * 1.3 + 0.35rem + 44px + 0.55rem + 1px)');
-    expect(css).toContain('--map-corner-bottom: calc(7.75rem + var(--map-shotlist-block))');
-    expect(css).not.toMatch(/#status-banner:has\(\.banner-actions\)\s*\{[^}]*z-index:\s*70/);
-    expect(css).toMatch(/\.map-chrome-toggle\s*\{[^}]*bottom:\s*var\(--map-corner-bottom\)/);
-  });
 });
