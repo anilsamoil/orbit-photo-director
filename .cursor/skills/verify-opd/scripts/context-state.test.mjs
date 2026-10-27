@@ -8,6 +8,35 @@ const frames = [{ width: 874, height: 402 }, { width: 390, height: 520 }, { widt
 const tick = (page) => page.waitForTimeout(1150);
 const click = (page, selector) => page.locator(selector).first().evaluate((el) => el.click());
 
+test('fixture registers one external protocol route per context, leaving local page routes alone', async () => {
+  const contexts = [];
+  const browser = {
+    async newContext() {
+      const context = { routes: [], async route(matcher, handler) { this.routes.push({ matcher, handler }); } };
+      contexts.push(context);
+      return context;
+    },
+  };
+  const origin = 'http://127.0.0.1:41731';
+  isolateSnapRequests(browser, origin);
+  await browser.newContext();
+  await browser.newContext();
+  for (const context of contexts) {
+    assert.equal(context.routes.length, 1, 'one isolation route for each new context');
+    const { matcher } = context.routes[0];
+    // Playwright sends function matchers to the browser as **/*, which still
+    // intercepts local requests before the client-side predicate can reject them.
+    assert.ok(matcher instanceof RegExp, 'exclude local requests in the protocol interception pattern');
+    for (const path of ['', '/', '/?e2e', '/__opd_context_storage_bootstrap__', '/manifest.json']) {
+      assert.equal(matcher.test(`${origin}${path}`), false, `local request ${path}`);
+    }
+    for (const url of ['https://realearth.ssec.wisc.edu/api/image', 'https://server.arcgisonline.com/tile/6/1/1', 'http://127X0X0X1:41731/tile/6/1/1', 'http://127.0.0.1:417310/tile/6/1/1']) {
+      assert.equal(matcher.test(url), true, `external request ${url}`);
+    }
+    assert.equal(matcher.test('data:image/png;base64,AA=='), false);
+  }
+});
+
 async function mapReady(page) {
   await page.waitForFunction(() => window.__opdMap?.getLayer('iss-track-layer')
     && document.getElementById('toggle-follow-iss')?.hasAttribute('aria-pressed'));

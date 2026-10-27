@@ -78,13 +78,16 @@ export async function serveSnap({ catalog = 'valid', emptyCatalog = false } = {}
 
 export function isolateSnapRequests(browser, origin, { tileHeaders = {}, onTile } = {}) {
   const original = browser.newContext.bind(browser);
+  const escapedOrigin = origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const external = new RegExp(`^(?!${escapedOrigin}(?:/|$))https?://`);
   // A deterministic opaque blue tile. Raster fetching is isolated, but all
   // application code, MapLibre workers, WebGL drawing and controls are real.
   const tile = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQzlv1HwAELgI7OfS9ngAAAABJRU5ErkJggg==', 'base64');
   browser.newContext = async (...args) => {
     const context = await original(...args);
-    await context.route(/^https?:\/\//, async (route) => {
-      if (new URL(route.request().url()).origin === origin) return route.continue();
+    // Register one external isolation route per context; local requests belong
+    // to the one-shot page clock/bootstrap routes during state replay.
+    await context.route(external, async (route) => {
       if (route.request().resourceType() === 'image' || /\/tile\/|\/wmts\//.test(route.request().url())) {
         onTile?.(route.request());
         return route.fulfill({ contentType: 'image/png', headers: tileHeaders, body: tile });
