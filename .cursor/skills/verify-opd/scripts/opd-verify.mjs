@@ -108,7 +108,9 @@ function isFixturePath(path) {
     || path.startsWith('/v/verify/')
     || path === '/launch/latest.json'
     || path.startsWith('/launch/v/')
-    || path.startsWith('/launch/catalog/');
+    || path.startsWith('/launch/catalog/')
+    || path === '/api/log'
+    || /^\/api\/browser\/profiles\/[^/]+\/targets(?:\/[^/]+)?$/.test(path);
 }
 
 function cookieValue(req, name) {
@@ -240,10 +242,13 @@ function startProxy(home) {
     }
     return entry.dir;
   }
-  const logEntries = [];
-  const personalTargets = [];
-  let removedCuratedIds = null;
-  let removedCuratedUpdatedAt = null;
+  const profileSessions = new Map();
+  function profileFor(fixtureDir) {
+    if (!profileSessions.has(fixtureDir)) {
+      profileSessions.set(fixtureDir, { logEntries: [], personalTargets: [], removedCuratedIds: null, removedCuratedUpdatedAt: null });
+    }
+    return profileSessions.get(fixtureDir);
+  }
   const launchHoldWaiters = [];
   function parkLaunchBody(res, body) {
     return new Promise((resolvePark) => {
@@ -393,6 +398,7 @@ function startProxy(home) {
     if (entry) {
       catalogSessions.get(entry.dir)?.dispose();
       catalogSessions.delete(entry.dir);
+      profileSessions.delete(entry.dir);
     }
     driveFixtures.delete(token);
   }
@@ -463,6 +469,7 @@ function startProxy(home) {
     }
     const fixtureDir = owned || homeFixtures;
     const catalog = catalogFor(fixtureDir);
+    const profile = profileFor(fixtureDir);
     const sendFile = (name) => {
       const file = resolve(fixtureDir, name);
       if (!existsSync(file)) {
@@ -653,7 +660,7 @@ function startProxy(home) {
       return;
     }
     if (path === '/api/log' && req.method === 'GET') {
-      json(res, 200, { entries: logEntries });
+      json(res, 200, { entries: profile.logEntries });
       return;
     }
     if (path === '/api/log' && req.method === 'POST') {
@@ -673,7 +680,7 @@ function startProxy(home) {
       if (typeof payload.target_name === 'string' && payload.target_name.length > 0 && payload.target_name.length <= 200) {
         entry.target_name = payload.target_name;
       }
-      logEntries.push(entry);
+      profile.logEntries.push(entry);
       json(res, 200, { ok: true });
       return;
     }
@@ -681,15 +688,15 @@ function startProxy(home) {
     if (targetRoute && req.method === 'GET') {
       json(res, 200, {
         ok: true,
-        targets: personalTargets,
-        removedCuratedIds,
-        removedCuratedUpdatedAt,
+        targets: profile.personalTargets,
+        removedCuratedIds: profile.removedCuratedIds,
+        removedCuratedUpdatedAt: profile.removedCuratedUpdatedAt,
       });
       return;
     }
     if (targetRoute && req.method === 'POST') {
-      personalTargets.push(JSON.parse(await readBody(req) || '{}'));
-      json(res, 200, { ok: true, count: personalTargets.length });
+      profile.personalTargets.push(JSON.parse(await readBody(req) || '{}'));
+      json(res, 200, { ok: true, count: profile.personalTargets.length });
       return;
     }
     if (targetRoute && req.method === 'PUT') {
@@ -700,20 +707,20 @@ function startProxy(home) {
         json(res, 400, { error: 'targets_must_be_array' });
         return;
       }
-      if (hasTargets) personalTargets.splice(0, personalTargets.length, ...body.targets);
+      if (hasTargets) profile.personalTargets.splice(0, profile.personalTargets.length, ...body.targets);
       if (hasRemoved) {
-        removedCuratedIds = body.removedCuratedIds.filter((id) => typeof id === 'string');
-        removedCuratedUpdatedAt = typeof body.removedCuratedUpdatedAt === 'string'
+        profile.removedCuratedIds = body.removedCuratedIds.filter((id) => typeof id === 'string');
+        profile.removedCuratedUpdatedAt = typeof body.removedCuratedUpdatedAt === 'string'
           ? body.removedCuratedUpdatedAt
           : new Date().toISOString();
       }
-      json(res, 200, { ok: true, count: hasRemoved && !hasTargets ? removedCuratedIds.length : personalTargets.length });
+      json(res, 200, { ok: true, count: hasRemoved && !hasTargets ? profile.removedCuratedIds.length : profile.personalTargets.length });
       return;
     }
     if (targetRoute && req.method === 'DELETE') {
       const id = decodeURIComponent(targetRoute[2] || '');
-      const index = personalTargets.findIndex((target) => target.id === id);
-      if (index >= 0) personalTargets.splice(index, 1);
+      const index = profile.personalTargets.findIndex((target) => target.id === id);
+      if (index >= 0) profile.personalTargets.splice(index, 1);
       json(res, 200, { ok: true });
       return;
     }

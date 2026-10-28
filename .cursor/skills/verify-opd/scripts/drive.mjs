@@ -470,17 +470,17 @@ async function removedCuratedIds(send) {
   return Array.isArray(ids) ? ids : [];
 }
 
-async function serverRemoved(baseUrl) {
-  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`);
+async function serverRemoved(send, baseUrl) {
+  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, { headers: fixtureHeaders(send) });
   if (!response.ok) throw new Error(`profile GET ${response.status}`);
   return response.json();
 }
 
-async function waitServerRemoved(baseUrl, includes, excludes) {
+async function waitServerRemoved(send, baseUrl, includes, excludes) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < 10000) {
-    last = await serverRemoved(baseUrl);
+    last = await serverRemoved(send, baseUrl);
     const ids = Array.isArray(last.removedCuratedIds) ? last.removedCuratedIds : [];
     const hasAll = includes.every((id) => ids.includes(id));
     const hasNone = excludes.every((id) => !ids.includes(id));
@@ -496,7 +496,8 @@ export async function freshProfile(baseUrl, home, fixtureToken, run) {
   const profile = resolve(home, `chrome-guest-${debugPort}`);
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -513,6 +514,10 @@ export async function freshProfile(baseUrl, home, fixtureToken, run) {
   child.unref();
   trackBrowser(child.pid);
   try {
+    if (!child.pid) {
+      child.once('error', () => {});
+      throw new Error(`Chrome failed to start: ${executable}`);
+    }
     const cdp = await connectCdp(debugPort);
     try {
       await cdp.send('Page.enable');
@@ -658,7 +663,8 @@ export function startChrome(home, debugPort) {
   const profile = resolve(home, 'chrome-profile');
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -673,6 +679,11 @@ export function startChrome(home, debugPort) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  if (!child.pid) {
+    child.once('error', () => {});
+    rmSync(profile, { recursive: true, force: true });
+    throw new Error(`Chrome failed to start: ${executable}`);
+  }
   if (browsersStopped) {
     try { process.kill(child.pid, 'SIGTERM'); } catch { /* shutting down */ }
     throw new Error('drive is shutting down');
@@ -690,10 +701,10 @@ function slideLaunch(dir) {
   return refreshLaunchClock(dir, effectiveNowMs(dir));
 }
 
-async function resetFixtureProfile(baseUrl) {
+async function resetFixtureProfile(baseUrl, fixtureToken) {
   const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders({ fixtureToken }) },
     body: JSON.stringify({ targets: [], removedCuratedIds: [] }),
   });
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
@@ -753,7 +764,7 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
 
 async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
   slideLaunch(fixtureDir || resolve(home, 'fixtures'));
-  await resetFixtureProfile(baseUrl);
+  await resetFixtureProfile(baseUrl, fixtureToken);
   const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -806,7 +817,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
       const label = overridden ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
       slideLaunch(fixtureDir || resolve(home, 'fixtures'));
-      await resetFixtureProfile(baseUrl);
+      await resetFixtureProfile(baseUrl, fixtureToken);
       const cartoDark = [];
       const session = await openDeviceContext(browser, active, {
         baseUrl, fixtureToken,
@@ -1834,7 +1845,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   );
   const stored = await removedCuratedIds(send);
   if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
-  await waitServerRemoved(baseUrl, [deltaId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId], []);
   const reefName = meta.names.queue[0];
   const partial = await evaluate(send, `(() => {
     const empty = document.getElementById('empty');
@@ -1879,7 +1890,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     10000,
   );
   await shot(send, evidenceDir, 'queue-empty');
-  await waitServerRemoved(baseUrl, [deltaId, reefId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId, reefId], []);
   const restoredAt = new Date().toISOString();
   const restoredIds = await evaluate(send, `(() => {
     const key = 'opd-profile-anil';
@@ -1895,11 +1906,11 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   }
   const put = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders(send) },
     body: JSON.stringify({ removedCuratedIds: restoredIds, removedCuratedUpdatedAt: restoredAt }),
   });
   if (!put.ok) throw new Error(`queue restore PUT ${put.status}`);
-  await waitServerRemoved(baseUrl, [deltaId], [reefId]);
+  await waitServerRemoved(send, baseUrl, [deltaId], [reefId]);
   await reloadSettled(send);
   await waitFor(
     send,
@@ -1960,7 +1971,7 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToke
   const storedAfter = await removedCuratedIds(send);
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
-  const server = await waitServerRemoved(baseUrl, [mesaId], []);
+  const server = await waitServerRemoved(send, baseUrl, [mesaId], []);
   await expectFreshHide(baseUrl, home, fixtureToken, {
     id: mesaId,
     name: mesa,
@@ -4447,7 +4458,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     'reef pin hidden',
     10000,
   );
-  await waitServerRemoved(baseUrl, ['verify-reef'], []);
+  await waitServerRemoved(send, baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
   const narrowNote = narrowLaid && narrowLaid.reserved ? ` narrow command ${Math.round(narrowLaid.reserved.height)}px` : '';
@@ -9107,7 +9118,7 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fi
   await shot(send, evidenceDir, 'profile-hidden');
   await evaluate(send, `document.querySelector('[data-curated-id="verify-mesa"] button')?.click()`);
   await waitFor(send, `!document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'mesa restored');
-  const restored = await waitServerRemoved(baseUrl, [], ['verify-mesa']);
+  const restored = await waitServerRemoved(send, baseUrl, [], ['verify-mesa']);
   await expectFreshHide(baseUrl, home, fixtureToken, {
     id: 'verify-mesa',
     name: meta.names.upcoming[0],
@@ -9287,7 +9298,7 @@ async function driveLog(send, evidenceDir, baseUrl) {
     })()`,
     'log row',
   );
-  const listed = await fetch(`${baseUrl}/api/log`).then((response) => response.json());
+  const listed = await fetch(`${baseUrl}/api/log`, { headers: fixtureHeaders(send) }).then((response) => response.json());
   const shoot = Array.isArray(listed.entries)
     ? listed.entries.find((entry) => entry.action === 'shoot' && entry.target_id === 'verify-reef')
     : null;
