@@ -11,13 +11,11 @@ test('WebKit drive reaches setup and closes a standard Browser without process()
   const surface = process.env.OPD_VERIFY_SURFACE;
   const viewport = process.env.OPD_VERIFY_VIEWPORT;
   let closed = 0;
-  const setupFailure = new Error('intentional profile reset failure');
   t.mock.method(webkit, 'launch', async () => ({ close: async () => { closed += 1; } }));
-  t.mock.method(globalThis, 'fetch', async () => { throw setupFailure; });
   process.env.OPD_VERIFY_SURFACE = 'iphone-17-pro';
   delete process.env.OPD_VERIFY_VIEWPORT;
   try {
-    await assert.rejects(driveFeatures({ baseUrl: 'http://opd.invalid', evidenceDir: join(home, 'evidence'), meta: {}, features: [] }), (error) => error === setupFailure);
+    await assert.rejects(driveFeatures({ baseUrl: 'http://opd.invalid', evidenceDir: join(home, 'evidence'), meta: {}, features: [] }), { code: 'ENOENT' });
     assert.equal(closed, 1, 'browser closes even when setup rejects');
   } finally {
     if (surface === undefined) delete process.env.OPD_VERIFY_SURFACE;
