@@ -4,14 +4,36 @@ import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
+import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
 import { NARROW_SLIDER_RIGHT_GAP, timeStripLaidFailures } from './map-strip-contract.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, openDeviceContext, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
+import { deviceViewport, launchWebkit, openDeviceContext, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
+
+const browserPids = new Set();
+let browsersStopped = false;
+
+export function trackBrowser(pid) {
+  if (!pid || browsersStopped) return pid;
+  browserPids.add(pid);
+  return pid;
+}
+
+export function untrackBrowser(pid) {
+  browserPids.delete(pid);
+}
+
+export function stopBrowsers() {
+  browsersStopped = true;
+  for (const pid of browserPids) {
+    try { process.kill(-pid, 'SIGTERM'); } catch { /* not a process group */ }
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+}
 
 const FIXED_SURFACE = process.env.OPD_VERIFY_FIXED_SURFACE === '1';
 const desktopOverride = process.env.OPD_VERIFY_SURFACE === 'desktop' ? parseViewportOverride('desktop', process.env.OPD_VERIFY_VIEWPORT || '') : null;
@@ -448,17 +470,17 @@ async function removedCuratedIds(send) {
   return Array.isArray(ids) ? ids : [];
 }
 
-async function serverRemoved(baseUrl) {
-  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`);
+async function serverRemoved(send, baseUrl) {
+  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, { headers: fixtureHeaders(send) });
   if (!response.ok) throw new Error(`profile GET ${response.status}`);
   return response.json();
 }
 
-async function waitServerRemoved(baseUrl, includes, excludes) {
+async function waitServerRemoved(send, baseUrl, includes, excludes) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < 10000) {
-    last = await serverRemoved(baseUrl);
+    last = await serverRemoved(send, baseUrl);
     const ids = Array.isArray(last.removedCuratedIds) ? last.removedCuratedIds : [];
     const hasAll = includes.every((id) => ids.includes(id));
     const hasNone = excludes.every((id) => !ids.includes(id));
@@ -468,13 +490,14 @@ async function waitServerRemoved(baseUrl, includes, excludes) {
   throw new Error(`profile GET did not reach ${JSON.stringify({ includes, excludes })}. Last: ${JSON.stringify(last)}`);
 }
 
-async function freshProfile(baseUrl, home, run) {
+export async function freshProfile(baseUrl, home, fixtureToken, run) {
   const debugPort = Number(process.env.OPD_VERIFY_GUEST_CDP_PORT || 19000 + Math.floor(Math.random() * 1000));
   if (debugPort === Number(process.env.OPD_VERIFY_CDP_PORT)) throw new Error('guest and primary Chrome debugging ports must differ');
   const profile = resolve(home, `chrome-guest-${debugPort}`);
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -489,10 +512,16 @@ async function freshProfile(baseUrl, home, run) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  trackBrowser(child.pid);
   try {
+    if (!child.pid) {
+      child.once('error', () => {});
+      throw new Error(`Chrome failed to start: ${executable}`);
+    }
     const cdp = await connectCdp(debugPort);
     try {
       await cdp.send('Page.enable');
+      await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       await cdp.send('Page.navigate', { url: `${baseUrl}/?e2e` });
       await waitFor(cdp.send, `document.readyState === 'complete' ? { ok: true } : null`, 'guest page load', 30000);
       await waitFor(
@@ -515,6 +544,7 @@ async function freshProfile(baseUrl, home, run) {
     } catch {
       /* guest already exited */
     }
+    untrackBrowser(child.pid);
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await sleep(150);
       try {
@@ -527,8 +557,8 @@ async function freshProfile(baseUrl, home, run) {
   }
 }
 
-async function expectFreshHide(baseUrl, home, { id, name, updatedAt, visible }) {
-  await freshProfile(baseUrl, home, async (send) => {
+async function expectFreshHide(baseUrl, home, fixtureToken, { id, name, updatedAt, visible }) {
+  await freshProfile(baseUrl, home, fixtureToken, async (send) => {
     await click(send, '#tab-upcoming');
     await waitFor(
       send,
@@ -633,7 +663,8 @@ export function startChrome(home, debugPort) {
   const profile = resolve(home, 'chrome-profile');
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -648,6 +679,16 @@ export function startChrome(home, debugPort) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  if (!child.pid) {
+    child.once('error', () => {});
+    rmSync(profile, { recursive: true, force: true });
+    throw new Error(`Chrome failed to start: ${executable}`);
+  }
+  if (browsersStopped) {
+    try { process.kill(child.pid, 'SIGTERM'); } catch { /* shutting down */ }
+    throw new Error('drive is shutting down');
+  }
+  trackBrowser(child.pid);
   return child.pid;
 }
 
@@ -656,21 +697,14 @@ const LOG_HOOK = `window.__opdLogs = [];
   const original = console.error;
   console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
 
-function slideLaunch(home) {
-  const dir = resolve(home, 'fixtures');
-  const until = refreshLaunchClock(dir, effectiveNowMs(dir));
-  const stateFile = resolve(home, 'state.json');
-  if (!existsSync(stateFile)) return until;
-  const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-  state.launchValidUntil = until;
-  writeFileSync(stateFile, JSON.stringify(state));
-  return until;
+function slideLaunch(dir) {
+  return refreshLaunchClock(dir, effectiveNowMs(dir));
 }
 
-async function resetFixtureProfile(baseUrl) {
+async function resetFixtureProfile(baseUrl, fixtureToken) {
   const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders({ fixtureToken }) },
     body: JSON.stringify({ targets: [], removedCuratedIds: [] }),
   });
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
@@ -706,7 +740,7 @@ async function openApp(send, baseUrl, startOffset) {
   );
 }
 
-async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport) {
+async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport, fixtureToken) {
   mkdirSync(evidenceDir, { recursive: true });
   const selected = features.includes('all') ? BROWSER_FEATURES : features;
   const notes = [];
@@ -715,11 +749,11 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir, baseUrl));
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
-    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
-    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport));
+    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
     else if (feature === 'phone') notes.push(await drivePhone(send, evidenceDir, meta, viewport));
     else if (feature === 'tracked') notes.push(await driveTracked(send, evidenceDir, meta, viewport));
@@ -728,9 +762,9 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   return notes;
 }
 
-async function driveChrome({ baseUrl, evidenceDir, meta, features, home, startOffset }) {
-  slideLaunch(home);
-  await resetFixtureProfile(baseUrl);
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
+  await resetFixtureProfile(baseUrl, fixtureToken);
   const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -748,9 +782,12 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, startOf
         noteRequest(cartoDark, params.request && params.request.url);
       });
       await cdp.send('Network.enable');
+      await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
+      cdp.send.fixtureToken = fixtureToken;
+      cdp.send.fixtureDir = fixtureDir;
       await openApp(cdp.send, baseUrl, startOffset);
-      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
+      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
       cdp.close();
@@ -760,14 +797,17 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, startOf
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
 }
 
-async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, startOffset }) {
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   for (const spec of webkitCatalog().filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
+    const webkitPid = browser.process?.()?.pid;
+    if (webkitPid) trackBrowser(webkitPid);
     try {
       const override = viewportOverride();
       const active = specForSurface(spec);
@@ -776,10 +816,11 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
       const folder = overridden ? `${spec.slug}-${override.raw}` : spec.slug;
       const label = overridden ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
-      slideLaunch(home);
-      await resetFixtureProfile(baseUrl);
+      slideLaunch(fixtureDir || resolve(home, 'fixtures'));
+      await resetFixtureProfile(baseUrl, fixtureToken);
       const cartoDark = [];
       const session = await openDeviceContext(browser, active, {
+        baseUrl, fixtureToken,
         initScripts: Number.isFinite(startOffset) ? [pageClockSource(startOffset)] : [],
         requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
       });
@@ -787,29 +828,32 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
         const send = playwrightSend(session);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
-        await openApp(send, baseUrl);
-        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
+        send.fixtureToken = fixtureToken;
+        send.fixtureDir = fixtureDir;
+        await openApp(send, baseUrl, startOffset);
+        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport, fixtureToken);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
         await session.context.close();
       }
-      notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir)}`);
+      notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir, fixtureToken)}`);
     } finally {
       await browser.close();
+      if (webkitPid) untrackBrowser(webkitPid);
     }
   }
   return notes;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features, startOffset }) {
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features, fixtureDir, fixtureToken, startOffset }) {
   viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, startOffset }));
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
   if (webkitCatalog().some((spec) => names.has(spec.slug))) {
-    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, startOffset }));
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
   }
   return notes;
 }
@@ -852,9 +896,9 @@ const CORNER_BOX = `
   };
 `;
 
-export async function driveMapCorner({ baseUrl, evidenceDir, home, startOffset }) {
+export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken, startOffset }) {
   mkdirSync(evidenceDir, { recursive: true });
-  slideLaunch(home);
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
   const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -865,6 +909,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home, startOffset }
     const send = cdp.send;
     try {
       await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
+      await pinFixtureCookie(send, baseUrl, fixtureToken);
       await openApp(send, baseUrl, startOffset);
       const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
       if (!shown) {
@@ -1033,6 +1078,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home, startOffset }
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
   writeFileSync(resolve(evidenceDir, 'map-corner.txt'), `${lines.join('\n')}\n`);
   for (const line of lines) console.log(line);
@@ -1799,7 +1845,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   );
   const stored = await removedCuratedIds(send);
   if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
-  await waitServerRemoved(baseUrl, [deltaId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId], []);
   const reefName = meta.names.queue[0];
   const partial = await evaluate(send, `(() => {
     const empty = document.getElementById('empty');
@@ -1844,7 +1890,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     10000,
   );
   await shot(send, evidenceDir, 'queue-empty');
-  await waitServerRemoved(baseUrl, [deltaId, reefId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId, reefId], []);
   const restoredAt = new Date().toISOString();
   const restoredIds = await evaluate(send, `(() => {
     const key = 'opd-profile-anil';
@@ -1860,11 +1906,11 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   }
   const put = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders(send) },
     body: JSON.stringify({ removedCuratedIds: restoredIds, removedCuratedUpdatedAt: restoredAt }),
   });
   if (!put.ok) throw new Error(`queue restore PUT ${put.status}`);
-  await waitServerRemoved(baseUrl, [deltaId], [reefId]);
+  await waitServerRemoved(send, baseUrl, [deltaId], [reefId]);
   await reloadSettled(send);
   await waitFor(
     send,
@@ -1895,7 +1941,7 @@ function upcomingListExpression(mesa, ascent, { hidden }) {
   })()`;
 }
 
-async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
+async function driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken) {
   const mesa = meta.names.upcoming[0];
   const ascent = meta.names.launch;
   await click(send, '#tab-upcoming');
@@ -1925,8 +1971,8 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   const storedAfter = await removedCuratedIds(send);
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
-  const server = await waitServerRemoved(baseUrl, [mesaId], []);
-  await expectFreshHide(baseUrl, home, {
+  const server = await waitServerRemoved(send, baseUrl, [mesaId], []);
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: mesaId,
     name: mesa,
     updatedAt: server.removedCuratedUpdatedAt,
@@ -4412,7 +4458,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     'reef pin hidden',
     10000,
   );
-  await waitServerRemoved(baseUrl, ['verify-reef'], []);
+  await waitServerRemoved(send, baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
   const narrowNote = narrowLaid && narrowLaid.reserved ? ` narrow command ${Math.round(narrowLaid.reserved.height)}px` : '';
@@ -7118,7 +7164,16 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
-function fixtureInstant(evidenceDir) {
+export function fixtureInstant(evidenceDir, fixtureDir) {
+  if (fixtureDir) {
+    for (const [name, key] of [['catalog-clock.json', 'anchor'], ['meta.json', 'now']]) {
+      const path = resolve(fixtureDir, name);
+      if (!existsSync(path)) continue;
+      const value = JSON.parse(readFileSync(path, 'utf8'))[key];
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    throw new Error('private verify fixture clock missing');
+  }
   let dir = evidenceDir;
   for (let step = 0; step < 4; step += 1) {
     const path = resolve(dir, 'fixtures/meta.json');
@@ -7136,8 +7191,12 @@ function fixtureInstant(evidenceDir) {
   throw new Error('verify fixture meta missing');
 }
 
-async function armCatalogHold(baseUrl) {
-  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST' });
+function fixtureHeaders(send) {
+  return send.fixtureToken ? { cookie: `opd-verify-fixtures=${send.fixtureToken}` } : {};
+}
+
+async function armCatalogHold(send, baseUrl) {
+  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!armed.ok) throw new Error(`catalog hold ${armed.status}`);
   return armed.json();
 }
@@ -7146,15 +7205,15 @@ async function nudgeUntilCatalogPending(send, baseUrl) {
   const started = Date.now();
   while (Date.now() - started < 15000) {
     await nudgeCatalogRefresh(send);
-    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`).then((response) => response.json());
+    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`, { headers: fixtureHeaders(send) }).then((response) => response.json());
     if (status.pending) return;
     await sleep(250);
   }
   throw new Error('iss tier pick pending catalog body timed out');
 }
 
-async function releaseCatalogHold(baseUrl) {
-  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST' });
+async function releaseCatalogHold(send, baseUrl) {
+  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!released.ok) throw new Error(`catalog release ${released.status}`);
 }
 
@@ -7167,13 +7226,13 @@ async function nudgeCatalogRefresh(send) {
   })()`);
 }
 
-async function withHeldCatalog(send, baseUrl, body) {
-  await armCatalogHold(baseUrl);
+export async function withHeldCatalog(send, baseUrl, body) {
+  await armCatalogHold(send, baseUrl);
   try {
     await nudgeUntilCatalogPending(send, baseUrl);
     await body();
   } finally {
-    await releaseCatalogHold(baseUrl);
+    await releaseCatalogHold(send, baseUrl);
   }
 }
 
@@ -7413,7 +7472,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     }
     return anchor > 0 ? anchor : null;
   })()`);
-  const frozen = loadedAnchor || fixtureInstant(evidenceDir);
+  const frozen = loadedAnchor || fixtureInstant(evidenceDir, send.fixtureDir);
   await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
   try {
   await click(send, '[data-iss-preset="nadir"]');
@@ -9008,7 +9067,7 @@ const LAST_GOOD_TLE = {
   at: '2026-09-29T04:10:50.460Z',
 };
 
-async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
+async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken) {
   await click(send, '#tab-profile');
   await waitFor(
     send,
@@ -9059,8 +9118,8 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
   await shot(send, evidenceDir, 'profile-hidden');
   await evaluate(send, `document.querySelector('[data-curated-id="verify-mesa"] button')?.click()`);
   await waitFor(send, `!document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'mesa restored');
-  const restored = await waitServerRemoved(baseUrl, [], ['verify-mesa']);
-  await expectFreshHide(baseUrl, home, {
+  const restored = await waitServerRemoved(send, baseUrl, [], ['verify-mesa']);
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: 'verify-mesa',
     name: meta.names.upcoming[0],
     updatedAt: restored.removedCuratedUpdatedAt,
@@ -9239,7 +9298,7 @@ async function driveLog(send, evidenceDir, baseUrl) {
     })()`,
     'log row',
   );
-  const listed = await fetch(`${baseUrl}/api/log`).then((response) => response.json());
+  const listed = await fetch(`${baseUrl}/api/log`, { headers: fixtureHeaders(send) }).then((response) => response.json());
   const shoot = Array.isArray(listed.entries)
     ? listed.entries.find((entry) => entry.action === 'shoot' && entry.target_id === 'verify-reef')
     : null;

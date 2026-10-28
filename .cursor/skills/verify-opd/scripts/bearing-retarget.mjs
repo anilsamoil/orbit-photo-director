@@ -1,3 +1,4 @@
+import { createDeviceContext } from './fixture-session.mjs';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -415,14 +416,14 @@ async function proveDrag(page, plan) {
   return held;
 }
 
-export async function driveMapBearing({ baseUrl, evidenceDir }) {
+export async function driveMapBearing({ baseUrl, evidenceDir, fixtureToken, startOffset = 0 }) {
   const plan = bearingPlan(process.env.OPD_VERIFY_SURFACE, process.env.OPD_VERIFY_VIEWPORT);
   mkdirSync(evidenceDir, { recursive: true });
   const browser = plan.engine === 'chrome'
     ? await chromium.launch({ headless: true, executablePath: chromePath() })
     : await webkit.launch();
   try {
-    const context = await browser.newContext(contextOptions(plan));
+    const context = await createDeviceContext(browser, contextOptions(plan), { baseUrl, token: fixtureToken });
     if (plan.surface === 'iphone-17-pro') {
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });

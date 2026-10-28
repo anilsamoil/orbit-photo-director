@@ -1,3 +1,4 @@
+import { createDeviceContext } from './fixture-session.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { deviceDescriptor, launchWebkit } from './webkit-devices.mjs';
@@ -92,7 +93,7 @@ function contextOptions(plan) {
 }
 
 async function preparedContext(browser, plan) {
-  const context = await browser.newContext(contextOptions(plan));
+  const context = await createDeviceContext(browser, contextOptions(plan), { baseUrl: plan.baseUrl, token: plan.fixtureToken, startOffset: plan.startOffset });
   if (plan.standalone) {
     await context.addInitScript(() => {
       Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
@@ -219,9 +220,11 @@ async function proveProfile(browser, plan, evidenceDir) {
   }
 }
 
-export async function driveSessionLock({ baseUrl, evidenceDir }) {
+export async function driveSessionLock({ baseUrl, evidenceDir, fixtureToken, startOffset = 0 }) {
   const plan = sessionLockPlan(process.env.OPD_VERIFY_SURFACE, process.env.OPD_VERIFY_VIEWPORT, process.env.OPD_VERIFY_LOCK);
   plan.baseUrl = baseUrl;
+  plan.fixtureToken = fixtureToken;
+  plan.startOffset = startOffset;
   mkdirSync(evidenceDir, { recursive: true });
   const browser = await launchWebkit();
   let line = '';
