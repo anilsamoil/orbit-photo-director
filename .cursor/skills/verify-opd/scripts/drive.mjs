@@ -793,7 +793,7 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
   const notes = [];
   for (const spec of webkitCatalog().filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
-    const webkitPid = browser.process()?.pid;
+    const webkitPid = browser.process?.()?.pid;
     if (webkitPid) trackBrowser(webkitPid);
     try {
       const override = viewportOverride();
