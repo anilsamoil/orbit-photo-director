@@ -1421,6 +1421,101 @@ export function publishVerifyCatalog(dir, nowMs = effectiveNowMs(dir), eventStar
   return { pointer, body, anchor: nowMs };
 }
 
+export const SHOT_FORECAST_MS = 48 * 60 * 60 * 1000;
+
+export function forecastEdgeClock(boundaryMs) {
+  const boundary = Math.floor(Number(boundaryMs) / 1000) * 1000;
+  if (!Number.isFinite(boundary)) throw new Error('forecast edge boundary');
+  const generated = boundary - 2 * 60_000;
+  const geometry = generated + 14 * 60_000;
+  const schedule = generated + 75 * 60_000;
+  return {
+    boundary,
+    plain: boundary - 1000,
+    forecast: boundary + 1000,
+    generated,
+    geometry,
+    schedule,
+    liftoff: boundary + SHOT_FORECAST_MS,
+  };
+}
+
+export function publishForecastEdgeCatalog(dir, boundaryMs) {
+  const clock = forecastEdgeClock(boundaryMs);
+  const meta = JSON.parse(readFileSync(resolve(dir, 'meta.json'), 'utf8'));
+  const pad = meta.pad;
+  const liftoff = launchIso(clock.liftoff);
+  const generated = launchIso(clock.generated);
+  const geometry = launchIso(clock.geometry);
+  const schedule = launchIso(clock.schedule);
+  const revision = `f${clock.boundary}`;
+  const shotEnd = launchIso(clock.liftoff + 120_000);
+  const items = [
+    {
+      event_id: 'verify-ascent',
+      revision: 'eventrev',
+      name: 'Verify Ascent',
+      rocket: 'Verify Rocket',
+      site: { name: 'Verify Pad', lat: pad.lat, lon: pad.lon, pad: 'Verify Complex' },
+      schedule: {
+        net: liftoff,
+        window_start: liftoff,
+        window_end: liftoff,
+        precision: 'Second',
+        status: 'Go',
+        destination: 'ISS',
+      },
+      direction: { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss_tle_plane', off_plane_deg: 0.35 },
+      tier: 'shot',
+      why: 'Verify ascent is a shot.',
+      reasons: [],
+      shots: [catalogShot({
+        liftoff,
+        start: liftoff,
+        best: liftoff,
+        end: shotEnd,
+        subject: 'ascent',
+        score: 80,
+        track: [
+          { t_offset_s: 0, lat: pad.lat, lon: pad.lon, alt_km: 0 },
+          { t_offset_s: 60, lat: pad.lat + 0.4, lon: wrapLon(pad.lon + 0.4), alt_km: 40 },
+        ],
+      })],
+    },
+  ];
+  const bodyObj = {
+    schema_version: 3,
+    revision,
+    generated_at: generated,
+    schedule_valid_until: schedule,
+    geometry_valid_until: geometry,
+    tle: { epoch: generated, sha256: 'a'.repeat(64), source: 'celestrak' },
+    coverage: {
+      from: launchIso(clock.boundary - 60 * 60_000),
+      until: launchIso(clock.liftoff + 24 * 60 * 60_000),
+      schedule_fetched_at: generated,
+      pages: 1,
+      received: items.length,
+      listed: items.length,
+      evaluated: items.length,
+      tier_counts: { shot: 1, likely: 0, watch: 0, unassessed: 0, none: 0 },
+      complete: true,
+      reasons: [],
+    },
+    items,
+  };
+  const body = JSON.stringify(bodyObj);
+  const pointer = {
+    schema_version: 2,
+    revision,
+    generated_at: generated,
+    valid_until: geometry,
+    path: `launch/catalog/v/${revision}.json`,
+    sha256: sha256(body),
+  };
+  return { pointer, body, anchor: clock.boundary, clock };
+}
+
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isDirect) {
   const dir = process.argv[2];

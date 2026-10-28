@@ -11,13 +11,14 @@ import { driveMapBearingCommit } from './bearing-commit.mjs';
 import { driveMapBearing } from './bearing-retarget.mjs';
 import { driveMapPagehide } from './corner-pagehide.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner, stopBrowsers } from './drive.mjs';
+import { driveLaunchShotForecast } from './launch-shot-forecast.mjs';
 import { driveMapHold } from './map-hold.mjs';
 import { driveMapImport } from './map-import-failure.mjs';
 import { drivePinFit } from './pin-fit.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
 import { closeFixtureBrowsers } from './fixture-session.mjs';
-import { bostonTrackText, bodyForRequestPath, buildFixtures, discardDriveFixtures, driveStartMs, effectiveNowMs, FIXTURE_COOKIE, liveFixtureRoot, publishDriveFixtures, publishVerifyCatalog, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
+import { bostonTrackText, bodyForRequestPath, buildFixtures, discardDriveFixtures, driveStartMs, effectiveNowMs, FIXTURE_COOKIE, liveFixtureRoot, publishDriveFixtures, publishForecastEdgeCatalog, publishVerifyCatalog, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -381,6 +382,13 @@ function startProxy(home) {
       }
       for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
     }
+    let forecastEdge = null;
+    function armForecastEdge(boundaryMs) {
+      const published = publishForecastEdgeCatalog(fixtureDir, boundaryMs);
+      catalogBodies.set(published.pointer.path, published.body);
+      forecastEdge = published;
+      return published;
+    }
     const session = {
       get gate() { return catalogGate; },
       bodies: catalogBodies,
@@ -389,6 +397,8 @@ function startProxy(home) {
       park: parkCatalogBody,
       arm: armCatalogGate,
       release: releaseCatalogGate,
+      forecast() { return forecastEdge; },
+      armForecast: armForecastEdge,
       dispose() { for (const waiter of [...catalogHoldWaiters]) waiter.finish(false); },
     };
     catalogSessions.set(fixtureDir, session);
@@ -604,6 +614,12 @@ function startProxy(home) {
       json(res, 200, { ok: true, pending: catalog.waiters.length });
       return;
     }
+    if (path === '/api/verify/forecast-edge' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const published = catalog.armForecast(payload.boundary ?? Date.now());
+      json(res, 200, { ok: true, revision: published.pointer.revision, ...published.clock });
+      return;
+    }
     if (path === '/launch/v/verifyrev-hold.json') {
       await parkLaunchBody(res, launchRung(fixtureDir, 'hold').body);
       return;
@@ -617,6 +633,25 @@ function startProxy(home) {
       return;
     }
     if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
+    if (cookieValue(req, 'opd-verify-catalog') === 'forecast-edge' && (path === '/launch/catalog/latest.json' || path.startsWith('/launch/catalog/v/'))) {
+      const edge = catalog.forecast();
+      if (!edge) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end('missing');
+        return;
+      }
+      if (path === '/launch/catalog/latest.json') {
+        sendJson(res, JSON.stringify(edge.pointer));
+        return;
+      }
+      if (path === `/${edge.pointer.path}`) {
+        sendJson(res, edge.body);
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
+      return;
+    }
     if (path === '/launch/catalog/latest.json') {
       const pointer = catalog.gate && !catalog.gate.released ? catalog.gate.pointer : catalog.current().pointer;
       sendJson(res, JSON.stringify(pointer));
@@ -1082,6 +1117,22 @@ async function drive(feature) {
       console.log(`evidence ${state.evidence}`);
       return;
     }
+    if (feature === 'launch-shot-forecast') {
+      try {
+        const note = await driveLaunchShotForecast({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
+    }
     if (feature === 'pin-fit') {
       try {
         const note = await drivePinFit({
@@ -1102,7 +1153,7 @@ async function drive(feature) {
     const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
     const features = feature === 'all' ? ['all'] : [feature];
     if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-      console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, or session-lock. map-import is \`drive map-import\` and does not use up.`);
+      console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, launch-shot-forecast, or session-lock. map-import is \`drive map-import\` and does not use up.`);
       process.exitCode = 2;
       return;
     }
@@ -1248,6 +1299,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|session-lock>|drive map-import|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|launch-shot-forecast|session-lock>|drive map-import|sw|down|check|serve');
   process.exit(2);
 }
