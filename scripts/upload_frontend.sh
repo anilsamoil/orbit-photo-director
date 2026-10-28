@@ -62,25 +62,70 @@ if [ "$find_status" -ne 0 ]; then
 fi
 
 index_assets() {
-  python3 - "$1" <<'PY'
+  python3 - "$@" <<'PY'
+import os
+import posixpath
 import re
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 class IndexAssets(HTMLParser):
     def __init__(self):
         super().__init__()
         self.assets = set()
+        self.root = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
+        self.upload_keys = set()
+        if self.root is not None:
+            self.upload_keys = {
+                os.path.relpath(os.fsdecode(entry), sys.argv[2])
+                for entry in Path(sys.argv[3]).read_bytes().split(b"\0") if entry
+            }
+
+    def validate_local_asset(self, path):
+        if path.endswith("/") or path.rsplit("/", 1)[-1] in {".", ".."}:
+            print("ERROR: local asset URL names a directory.", file=sys.stderr)
+            sys.exit(3)
+        key = posixpath.normpath(path.lstrip("/"))
+        if "\0" in key or "\\" in key:
+            print("ERROR: ambiguous local asset path in index.html.", file=sys.stderr)
+            sys.exit(3)
+        try:
+            target = (self.root / key).resolve()
+            target.relative_to(self.root)
+        except (ValueError, OSError, RuntimeError):
+            print(f"ERROR: local asset escapes dist: {key}", file=sys.stderr)
+            sys.exit(3)
+        if key not in self.upload_keys or not target.is_file():
+            print(f"ERROR: local asset missing or excluded from upload: {key}", file=sys.stderr)
+            sys.exit(3)
 
     def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if self.root is not None and tag == "base" and values.get("href"):
+            print("ERROR: local asset preflight does not support base href.", file=sys.stderr)
+            sys.exit(3)
+        resource_link = tag == "link" and bool(
+            set((values.get("rel") or "").lower().split()) & {
+                "stylesheet", "modulepreload", "preload", "prefetch", "manifest",
+                "icon", "apple-touch-icon", "apple-touch-icon-precomposed", "mask-icon",
+            }
+        )
         for name, value in attrs:
             if name in {"src", "href"} and value:
-                path = urlsplit(value).path
+                if name == "href" and tag in {"a", "area", "form"}:
+                    continue
+                url = urlsplit(value)
+                external = bool(url.scheme or url.netloc)
+                path = url.path if external else unquote(url.path, errors="strict")
                 if re.search(r"(?:^|/)index-[\w-]+\.(?:js|css)$", path):
                     self.assets.add(path)
+                if self.root is not None and not external and path:
+                    hashed = re.search(r"(?:^|/)[^/]+-[\w-]+\.[\w.]+$", path)
+                    if name == "src" or resource_link or hashed:
+                        self.validate_local_asset(path)
 
 
 parser = IndexAssets()
@@ -91,8 +136,13 @@ print("\n".join(sorted(parser.assets)))
 PY
 }
 
-if ! index_assets "$DIST_DIR/index.html" > "$work_dir/local-assets"; then
+local_status=0
+index_assets "$DIST_DIR/index.html" "$DIST_DIR" "$file_list" > "$work_dir/local-assets" || local_status=$?
+if [ "$local_status" -ne 0 ]; then
   echo "ERROR: cannot validate local index.html. No file was published." >&2
+  if [ "$local_status" -eq 3 ]; then
+    exit 3
+  fi
   exit 2
 fi
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SCRIPT="$ROOT/scripts/upload_frontend.sh"
+SCRIPT="${UPLOAD_FRONTEND_SCRIPT:-$ROOT/scripts/upload_frontend.sh}"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
@@ -113,6 +113,84 @@ run_case() {
       mv "$CASE_DIR/dist/assets/index-current.js" "$CASE_DIR/dist/index-current.js"
       mv "$CASE_DIR/dist/assets/index-current.css" "$CASE_DIR/dist/index-current.css"
       printf '<script src="/index-current.js"></script><link href="/index-current.css">' > "$CASE_DIR/dist/index.html" ;;
+    missing-index-js) rm "$CASE_DIR/dist/assets/index-current.js" ;;
+    missing-index-css) rm "$CASE_DIR/dist/assets/index-current.css" ;;
+    missing-modulepreload)
+      printf '<link rel="modulepreload" href="/assets/vendor-DEADBEEF.js">' >> "$CASE_DIR/dist/index.html" ;;
+    missing-registersw)
+      printf '<script src="/registerSW.js"></script>' >> "$CASE_DIR/dist/index.html"
+      rm "$CASE_DIR/dist/registerSW.js" ;;
+    missing-helper)
+      printf '<script src="./sw-shell.js"></script>' >> "$CASE_DIR/dist/index.html"
+      rm "$CASE_DIR/dist/sw-shell.js" ;;
+    missing-manifest)
+      printf '<link rel="manifest" href="./manifest.webmanifest">' >> "$CASE_DIR/dist/index.html"
+      rm "$CASE_DIR/dist/manifest.webmanifest" ;;
+    missing-other-hashed-link)
+      printf '<link rel="alternate" href="/assets/vendor-DEADBEEF.js">' >> "$CASE_DIR/dist/index.html" ;;
+    missing-image)
+      printf '<img src="/images/missing.png">' >> "$CASE_DIR/dist/index.html" ;;
+    missing-icon)
+      printf '<link rel="shortcut icon" href="/missing.svg">' >> "$CASE_DIR/dist/index.html" ;;
+    missing-preload)
+      printf '<link rel="preload" as="font" href="/fonts/missing.woff2">' >> "$CASE_DIR/dist/index.html" ;;
+    missing-encoded-path)
+      printf '<script src="/assets/missing%%20file.js?v=1#module"></script>' >> "$CASE_DIR/dist/index.html" ;;
+    outside-traversal|outside-encoded-traversal)
+      printf 'outside' > "$CASE_DIR/outside.js"
+      if [ "$name" = outside-traversal ]; then
+        printf '<script src="../outside.js"></script>' >> "$CASE_DIR/dist/index.html"
+      else
+        printf '<script src="%%2e%%2e/outside.js"></script>' >> "$CASE_DIR/dist/index.html"
+      fi ;;
+    symlink-alias)
+      ln -s index-current.js "$CASE_DIR/dist/assets/alias.js"
+      printf '<script src="/assets/alias.js"></script>' >> "$CASE_DIR/dist/index.html" ;;
+    symlink-outside-file)
+      printf 'outside' > "$CASE_DIR/outside.js"
+      ln -s "$CASE_DIR/outside.js" "$CASE_DIR/dist/outside.js"
+      printf '<script src="/outside.js"></script>' >> "$CASE_DIR/dist/index.html" ;;
+    symlink-outside-directory)
+      mkdir "$CASE_DIR/outside"
+      printf 'outside' > "$CASE_DIR/outside/module.js"
+      ln -s "$CASE_DIR/outside" "$CASE_DIR/dist/linked"
+      printf '<script src="/linked/module.js"></script>' >> "$CASE_DIR/dist/index.html" ;;
+    directory-resource)
+      printf '<script src="/assets"></script>' >> "$CASE_DIR/dist/index.html" ;;
+    trailing-slash-resource)
+      printf '<img src="/assets/index-current.js/">' >> "$CASE_DIR/dist/index.html" ;;
+    encoded-trailing-slash-resource)
+      printf '<img src="/assets/index-current.js%%2F">' >> "$CASE_DIR/dist/index.html" ;;
+    trailing-dot-resource)
+      printf '<img src="/assets/index-current.js/.">' >> "$CASE_DIR/dist/index.html" ;;
+    unsupported-base)
+      printf '<base href="/nested/">' >> "$CASE_DIR/dist/index.html" ;;
+    valid-resource-urls)
+      printf 'literal percent' > "$CASE_DIR/dist/assets/literal%20name.js"
+      cat > "$CASE_DIR/dist/index.html" <<'HTML'
+<base href="">
+<script src="./assets/index%2Dcurrent.js?v=1#module"></script>
+<link rel="stylesheet" href="/assets/index-current.css?v=2#style">
+<link rel="modulepreload" href="./assets/index-current.js?preload#module">
+<link rel="preload" href="/glyphs/Open%20Sans%20Regular/0-255.pbf?v=1#glyph">
+<script src="/assets/literal%2520name.js"></script>
+<script src="./registerSW.js"></script>
+<link rel="manifest" href="/manifest.webmanifest?version=1">
+HTML
+      ;;
+    ignored-external-navigation)
+      cat >> "$CASE_DIR/dist/index.html" <<'HTML'
+<script src="https://cdn.invalid/absent.js"></script>
+<img src="https://example.com/%FF.png">
+<script src="//cdn.invalid/absent.js"></script>
+<script src="data:text/javascript,void(0)"></script>
+<script src="blob:https://example.invalid/id"></script>
+<img src="#fragment">
+<a href="/settings">Settings</a>
+<a href="/assets/navigation-DEADBEEF.js">Download</a>
+<form action="/submit"><button formaction="/elsewhere">Submit</button></form>
+HTML
+      ;;
     listing-failure)
       printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/find"
       chmod +x "$WORK/bin/find" ;;
@@ -223,4 +301,13 @@ for probe in success auth403; do
     run_case "$probe-$read_mode" "$probe" "" "$read_mode"; assert_code 3
   done
 done
-echo "upload_frontend.test.sh passed (25 offline cases)"
+for name in missing-index-js missing-index-css missing-modulepreload missing-registersw missing-helper \
+  missing-manifest missing-other-hashed-link missing-image missing-icon missing-preload missing-encoded-path \
+  outside-traversal outside-encoded-traversal symlink-alias symlink-outside-file symlink-outside-directory \
+  directory-resource trailing-slash-resource encoded-trailing-slash-resource trailing-dot-resource unsupported-base; do
+  run_case "$name"; assert_code 3; assert_calls no-network
+done
+for name in valid-resource-urls ignored-external-navigation; do
+  run_case "$name"; assert_code 0
+done
+echo "upload_frontend.test.sh passed (48 offline cases)"
