@@ -11,6 +11,7 @@ import { driveMapBearing } from './bearing-retarget.mjs';
 import { driveMapPagehide } from './corner-pagehide.mjs';
 import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
 import { driveMapHold } from './map-hold.mjs';
+import { driveMapImport } from './map-import-failure.mjs';
 import { drivePinFit } from './pin-fit.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
@@ -900,7 +901,7 @@ async function drive(feature) {
   const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
   const features = feature === 'all' ? ['all'] : [feature];
   if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, or session-lock.`);
+    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, or session-lock. map-import is \`drive map-import\` and does not use up.`);
     process.exit(2);
   }
   const notes = await driveFeatures({
@@ -1028,10 +1029,18 @@ else if (command === 'doctor') {
   }
 }
 else if (command === 'down') down();
+else if (command === 'drive' && process.argv[3] === 'map-import') {
+  try {
+    console.log(await driveMapImport());
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
 else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|session-lock>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|session-lock>|drive map-import|sw|down|check|serve');
   process.exit(2);
 }
