@@ -4,13 +4,36 @@ import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
 import { planLabelReaders } from './plan-label-verdict.mjs';
-import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { pinFixtureCookie } from './fixture-session.mjs';
+import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
+import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
 import { sideColumnReachReaders } from './side-column-reach.mjs';
 import { NARROW_SLIDER_RIGHT_GAP, timeStripLaidFailures } from './map-strip-contract.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
+import { deviceViewport, launchWebkit, openDeviceContext, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
+
+const browserPids = new Set();
+let browsersStopped = false;
+
+export function trackBrowser(pid) {
+  if (!pid || browsersStopped) return pid;
+  browserPids.add(pid);
+  return pid;
+}
+
+export function untrackBrowser(pid) {
+  browserPids.delete(pid);
+}
+
+export function stopBrowsers() {
+  browsersStopped = true;
+  for (const pid of browserPids) {
+    try { process.kill(-pid, 'SIGTERM'); } catch { /* not a process group */ }
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+}
 
 const FIXED_SURFACE = process.env.OPD_VERIFY_FIXED_SURFACE === '1';
 const desktopOverride = process.env.OPD_VERIFY_SURFACE === 'desktop' ? parseViewportOverride('desktop', process.env.OPD_VERIFY_VIEWPORT || '') : null;
@@ -330,14 +353,15 @@ async function mouseClick(send, x, y, button = 'left') {
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons: 0, clickCount: 1 });
 }
 
-async function setViewport(send, width, height, mobile) {
+async function setViewport(send, width, height, mobile, signal) {
+  signal?.throwIfAborted();
   if (FIXED_SURFACE) throw new Error(`fixed-surface drive attempted resize to ${width}x${height}`);
-  await send('Emulation.setDeviceMetricsOverride', {
+  return send('Emulation.setDeviceMetricsOverride', {
     width,
     height,
     deviceScaleFactor: 1,
     mobile,
-  });
+  }, { signal });
 }
 
 async function reportViewport(send, feature, viewport) {
@@ -446,17 +470,17 @@ async function removedCuratedIds(send) {
   return Array.isArray(ids) ? ids : [];
 }
 
-async function serverRemoved(baseUrl) {
-  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`);
+async function serverRemoved(send, baseUrl) {
+  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, { headers: fixtureHeaders(send) });
   if (!response.ok) throw new Error(`profile GET ${response.status}`);
   return response.json();
 }
 
-async function waitServerRemoved(baseUrl, includes, excludes) {
+async function waitServerRemoved(send, baseUrl, includes, excludes) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < 10000) {
-    last = await serverRemoved(baseUrl);
+    last = await serverRemoved(send, baseUrl);
     const ids = Array.isArray(last.removedCuratedIds) ? last.removedCuratedIds : [];
     const hasAll = includes.every((id) => ids.includes(id));
     const hasNone = excludes.every((id) => !ids.includes(id));
@@ -466,13 +490,14 @@ async function waitServerRemoved(baseUrl, includes, excludes) {
   throw new Error(`profile GET did not reach ${JSON.stringify({ includes, excludes })}. Last: ${JSON.stringify(last)}`);
 }
 
-async function freshProfile(baseUrl, home, run) {
+export async function freshProfile(baseUrl, home, fixtureToken, run) {
   const debugPort = Number(process.env.OPD_VERIFY_GUEST_CDP_PORT || 19000 + Math.floor(Math.random() * 1000));
   if (debugPort === Number(process.env.OPD_VERIFY_CDP_PORT)) throw new Error('guest and primary Chrome debugging ports must differ');
   const profile = resolve(home, `chrome-guest-${debugPort}`);
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -487,10 +512,16 @@ async function freshProfile(baseUrl, home, run) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  trackBrowser(child.pid);
   try {
+    if (!child.pid) {
+      child.once('error', () => {});
+      throw new Error(`Chrome failed to start: ${executable}`);
+    }
     const cdp = await connectCdp(debugPort);
     try {
       await cdp.send('Page.enable');
+      await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       await cdp.send('Page.navigate', { url: `${baseUrl}/?e2e` });
       await waitFor(cdp.send, `document.readyState === 'complete' ? { ok: true } : null`, 'guest page load', 30000);
       await waitFor(
@@ -513,6 +544,7 @@ async function freshProfile(baseUrl, home, run) {
     } catch {
       /* guest already exited */
     }
+    untrackBrowser(child.pid);
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await sleep(150);
       try {
@@ -525,8 +557,8 @@ async function freshProfile(baseUrl, home, run) {
   }
 }
 
-async function expectFreshHide(baseUrl, home, { id, name, updatedAt, visible }) {
-  await freshProfile(baseUrl, home, async (send) => {
+async function expectFreshHide(baseUrl, home, fixtureToken, { id, name, updatedAt, visible }) {
+  await freshProfile(baseUrl, home, fixtureToken, async (send) => {
     await click(send, '#tab-upcoming');
     await waitFor(
       send,
@@ -631,7 +663,8 @@ export function startChrome(home, debugPort) {
   const profile = resolve(home, 'chrome-profile');
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -646,6 +679,16 @@ export function startChrome(home, debugPort) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  if (!child.pid) {
+    child.once('error', () => {});
+    rmSync(profile, { recursive: true, force: true });
+    throw new Error(`Chrome failed to start: ${executable}`);
+  }
+  if (browsersStopped) {
+    try { process.kill(child.pid, 'SIGTERM'); } catch { /* shutting down */ }
+    throw new Error('drive is shutting down');
+  }
+  trackBrowser(child.pid);
   return child.pid;
 }
 
@@ -654,27 +697,32 @@ const LOG_HOOK = `window.__opdLogs = [];
   const original = console.error;
   console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
 
-function slideLaunch(home) {
-  const until = refreshLaunchClock(resolve(home, 'fixtures'));
-  const stateFile = resolve(home, 'state.json');
-  if (!existsSync(stateFile)) return until;
-  const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-  state.launchValidUntil = until;
-  writeFileSync(stateFile, JSON.stringify(state));
-  return until;
+function slideLaunch(dir) {
+  return refreshLaunchClock(dir, effectiveNowMs(dir));
 }
 
-async function resetFixtureProfile(baseUrl) {
+async function resetFixtureProfile(baseUrl, fixtureToken) {
   const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders({ fixtureToken }) },
     body: JSON.stringify({ targets: [], removedCuratedIds: [] }),
   });
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
 }
 
-async function openApp(send, baseUrl) {
+function pageClockSource(startOffset) {
+  return `(() => {
+    const startOffset = ${Number(startOffset)};
+    const real = Date.now.bind(Date);
+    Date.now = () => real() + startOffset;
+  })();`;
+}
+
+async function openApp(send, baseUrl, startOffset) {
   await send('Page.enable');
+  if (Number.isFinite(startOffset)) {
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: pageClockSource(startOffset) });
+  }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: LOG_HOOK });
   await send('Page.navigate', { url: `${baseUrl}/?e2e` });
   await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'page load', 30000);
@@ -692,7 +740,7 @@ async function openApp(send, baseUrl) {
   );
 }
 
-async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport) {
+async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport, fixtureToken) {
   mkdirSync(evidenceDir, { recursive: true });
   const selected = features.includes('all') ? BROWSER_FEATURES : features;
   const notes = [];
@@ -701,11 +749,11 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
     if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir, baseUrl));
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
-    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
-    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport));
+    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
     else if (feature === 'phone') notes.push(await drivePhone(send, evidenceDir, meta, viewport));
     else if (feature === 'tracked') notes.push(await driveTracked(send, evidenceDir, meta, viewport));
@@ -714,9 +762,9 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   return notes;
 }
 
-async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
-  slideLaunch(home);
-  await resetFixtureProfile(baseUrl);
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
+  await resetFixtureProfile(baseUrl, fixtureToken);
   const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -734,9 +782,12 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
         noteRequest(cartoDark, params.request && params.request.url);
       });
       await cdp.send('Network.enable');
+      await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
-      await openApp(cdp.send, baseUrl);
-      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
+      cdp.send.fixtureToken = fixtureToken;
+      cdp.send.fixtureDir = fixtureDir;
+      await openApp(cdp.send, baseUrl, startOffset);
+      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
       cdp.close();
@@ -746,14 +797,17 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
 }
 
-async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
   for (const spec of webkitCatalog().filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
+    const webkitPid = browser.process?.()?.pid;
+    if (webkitPid) trackBrowser(webkitPid);
     try {
       const override = viewportOverride();
       const active = specForSurface(spec);
@@ -762,46 +816,44 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const folder = overridden ? `${spec.slug}-${override.raw}` : spec.slug;
       const label = overridden ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
-      slideLaunch(home);
-      await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active), serviceWorkers: 'block' });
-      if (spec.standalone) {
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-        });
-      }
-      const page = await context.newPage();
+      slideLaunch(fixtureDir || resolve(home, 'fixtures'));
+      await resetFixtureProfile(baseUrl, fixtureToken);
+      const cartoDark = [];
+      const session = await openDeviceContext(browser, active, {
+        baseUrl, fixtureToken,
+        initScripts: Number.isFinite(startOffset) ? [pageClockSource(startOffset)] : [],
+        requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+      });
       try {
-        const cartoDark = [];
-        page.on('request', (request) => {
-          noteRequest(cartoDark, request.url());
-        });
-        const send = playwrightSend(page);
+        const send = playwrightSend(session);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
-        await openApp(send, baseUrl);
-        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
+        send.fixtureToken = fixtureToken;
+        send.fixtureDir = fixtureDir;
+        await openApp(send, baseUrl, startOffset);
+        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport, fixtureToken);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
-        await context.close();
+        await session.context.close();
       }
-      notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir)}`);
+      notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir, fixtureToken)}`);
     } finally {
       await browser.close();
+      if (webkitPid) untrackBrowser(webkitPid);
     }
   }
   return notes;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features, fixtureDir, fixtureToken, startOffset }) {
   viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home }));
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
   if (webkitCatalog().some((spec) => names.has(spec.slug))) {
-    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }));
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
   }
   return notes;
 }
@@ -844,9 +896,9 @@ const CORNER_BOX = `
   };
 `;
 
-export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
+export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken, startOffset }) {
   mkdirSync(evidenceDir, { recursive: true });
-  slideLaunch(home);
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
   const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
@@ -857,7 +909,8 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
     const send = cdp.send;
     try {
       await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
-      await openApp(send, baseUrl);
+      await pinFixtureCookie(send, baseUrl, fixtureToken);
+      await openApp(send, baseUrl, startOffset);
       const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
       if (!shown) {
         await click(send, '#map-chrome-toggle');
@@ -1025,6 +1078,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
   writeFileSync(resolve(evidenceDir, 'map-corner.txt'), `${lines.join('\n')}\n`);
   for (const line of lines) console.log(line);
@@ -1134,12 +1188,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
   const before = shown.text;
   const beforeAge = bannerAgeToken(before);
   if (!beforeAge) throw new Error(`stale TLE banner has no age label: ${before}`);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const base = Date.now();
-    Date.now = () => base + 70000;
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(Date.now() + 70000)`);
   let afterTick = before;
   let afterAge = beforeAge;
   const started = Date.now();
@@ -1164,7 +1213,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
       await sleep(100);
     }
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   if (!afterTick.includes(suffix) || bannerAgeNormalized(afterTick) !== bannerAgeNormalized(before)) {
     throw new Error(`countdown dropped the TLE suffix: ${afterTick}`);
@@ -1796,7 +1845,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   );
   const stored = await removedCuratedIds(send);
   if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
-  await waitServerRemoved(baseUrl, [deltaId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId], []);
   const reefName = meta.names.queue[0];
   const partial = await evaluate(send, `(() => {
     const empty = document.getElementById('empty');
@@ -1841,7 +1890,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     10000,
   );
   await shot(send, evidenceDir, 'queue-empty');
-  await waitServerRemoved(baseUrl, [deltaId, reefId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId, reefId], []);
   const restoredAt = new Date().toISOString();
   const restoredIds = await evaluate(send, `(() => {
     const key = 'opd-profile-anil';
@@ -1857,11 +1906,11 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   }
   const put = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders(send) },
     body: JSON.stringify({ removedCuratedIds: restoredIds, removedCuratedUpdatedAt: restoredAt }),
   });
   if (!put.ok) throw new Error(`queue restore PUT ${put.status}`);
-  await waitServerRemoved(baseUrl, [deltaId], [reefId]);
+  await waitServerRemoved(send, baseUrl, [deltaId], [reefId]);
   await reloadSettled(send);
   await waitFor(
     send,
@@ -1892,7 +1941,7 @@ function upcomingListExpression(mesa, ascent, { hidden }) {
   })()`;
 }
 
-async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
+async function driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken) {
   const mesa = meta.names.upcoming[0];
   const ascent = meta.names.launch;
   await click(send, '#tab-upcoming');
@@ -1922,8 +1971,8 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   const storedAfter = await removedCuratedIds(send);
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
-  const server = await waitServerRemoved(baseUrl, [mesaId], []);
-  await expectFreshHide(baseUrl, home, {
+  const server = await waitServerRemoved(send, baseUrl, [mesaId], []);
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: mesaId,
     name: mesa,
     updatedAt: server.removedCuratedUpdatedAt,
@@ -3207,11 +3256,13 @@ async function readViewportSettled(send) {
   return evaluate(send, 'window.__opdViewportSettled');
 }
 
-async function layOutViewport(send, width, height) {
+async function layOutViewport(send, width, height, signal) {
   await evaluate(send, viewportLayoutScript(width, height));
   let expectedDpr = null;
   try {
-    await setViewport(send, width, height, true);
+    const changed = await setViewport(send, width, height, true, signal);
+    signal.throwIfAborted();
+    if (changed?.contextReplaced) await evaluate(send, viewportLayoutScript(width, height));
     const read = await evaluate(send, 'window.devicePixelRatio');
     expectedDpr = Number(read);
     if (!Number.isFinite(expectedDpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
@@ -3227,10 +3278,12 @@ async function layOutViewport(send, width, height) {
 
 export async function whenViewportLaidOut(send, width, height) {
   let timer;
-  const pending = layOutViewport(send, width, height);
+  const controller = new AbortController();
+  const pending = layOutViewport(send, width, height, controller.signal);
   pending.catch(() => {});
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => {
+      controller.abort(new Error('viewport deadline exceeded'));
       voidViewportAbort(send);
       resolve({ deadline: true });
     }, VIEWPORT_DEADLINE_MS);
@@ -3247,10 +3300,15 @@ export async function whenViewportLaidOut(send, width, height) {
 
 async function restoreViewport(send, viewport) {
   let timer;
-  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  const controller = new AbortController();
+  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile, controller.signal);
   pending.catch(() => {});
   const limited = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error('viewport restore unsettled')), VIEWPORT_RESTORE_MS);
+    timer = setTimeout(() => {
+      const error = new Error('viewport restore unsettled');
+      controller.abort(error);
+      reject(error);
+    }, send.replacesContext ? VIEWPORT_DEADLINE_MS : VIEWPORT_RESTORE_MS);
   });
   try {
     return await Promise.race([pending, limited]);
@@ -3432,7 +3490,19 @@ async function proveRaisedHideDock(send, evidenceDir, viewport) {
   }
 }
 
-async function proveLegendPanelBounds(send, evidenceDir, viewport) {
+function legendPanelFixtureExpression() {
+  return `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const date = document.querySelector('.map-imagery-date');
+    if (!button || !date) return false;
+    button.setAttribute('aria-expanded', 'true');
+    const line = 'LIVE now (not the scrubbed time)';
+    date.textContent = Array.from({ length: 40 }, () => line).join(' ');
+    return true;
+  })()`;
+}
+
+export async function proveLegendPanelBounds(send, evidenceDir, viewport) {
   const saved = await evaluate(send, `(() => {
     const button = document.getElementById('map-legend-toggle');
     const date = document.querySelector('.map-imagery-date');
@@ -3445,14 +3515,6 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
     { width: 800, height: 600, insets: { top: 24, left: 0, bottom: 20, right: 0 }, name: '800x600' },
   ];
   try {
-    await evaluate(send, `(() => {
-      const button = document.getElementById('map-legend-toggle');
-      const date = document.querySelector('.map-imagery-date');
-      button.setAttribute('aria-expanded', 'true');
-      const line = 'LIVE now (not the scrubbed time)';
-      date.textContent = Array.from({ length: 40 }, () => line).join(' ');
-      return true;
-    })()`);
     await withBannerActions(send, async () => {
       for (const pane of cases) {
         await setViewport(send, pane.width, pane.height, true);
@@ -3460,6 +3522,8 @@ async function proveLegendPanelBounds(send, evidenceDir, viewport) {
         if (!applied && !viewport.mobile) throw new Error(`safe area override failed at ${pane.name}`);
         if (!applied) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
         await sleep(250);
+        const armed = await evaluate(send, legendPanelFixtureExpression());
+        if (!armed) throw new Error(`legend fixture missing after ${pane.name}`);
         const laid = await evaluate(send, `(() => {
           const actions = ${bannerInjectExpression()};
           const panel = document.getElementById('map-legend-panel');
@@ -4394,7 +4458,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     'reef pin hidden',
     10000,
   );
-  await waitServerRemoved(baseUrl, ['verify-reef'], []);
+  await waitServerRemoved(send, baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
   const narrowNote = narrowLaid && narrowLaid.reserved ? ` narrow command ${Math.round(narrowLaid.reserved.height)}px` : '';
@@ -4915,80 +4979,127 @@ async function dispatchPlanTouch(send, type, x, y) {
   if (!sent?.ok) throw new Error(`plan touch ${type} ${JSON.stringify(sent)}`);
 }
 
-async function provePlanGestureHolds(send, viewport) {
-  const start = await planCamera(send);
-  if (!start) throw new Error('plan camera missing before the gesture');
-  const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
-  await sleep(200);
-  const panned = await planCamera(send);
-  if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
-  const nextWidth = Math.max(800, Math.round(start.width) - 40);
-  await setViewport(send, nextWidth, start.height, viewport.mobile);
-  await evaluate(send, `(() => {
-    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => 2 });
-    return window.devicePixelRatio;
+async function beginPlanLayout(send) {
+  const saved = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame?.querySelector('canvas');
+    const orbit = frame?.__opdTrackInset;
+    if (!frame || !canvas || !orbit) return null;
+    const width = frame.clientWidth;
+    const height = frame.clientHeight;
+    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') };
+    return { width, height, dpr: window.devicePixelRatio };
   })()`);
-  let previous = panned;
-  for (let tick = 1; tick <= 3; tick += 1) {
-    await sleep(1100);
+  if (!saved) throw new Error('plan layout fixture missing');
+  return saved;
+}
+
+async function changePlanLayout(send, size) {
+  const changed = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    if (!saved || frame !== saved.frame || frame.querySelector('canvas') !== saved.canvas || frame.__opdTrackInset !== saved.orbit) return false;
+    frame.style.width = ${JSON.stringify(size.width + 'px')};
+    frame.style.height = ${JSON.stringify(size.height + 'px')};
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => ${size.dpr} });
+    return frame.clientWidth === ${size.width} && frame.clientHeight === ${size.height} && window.devicePixelRatio === ${size.dpr};
+  })()`);
+  if (!changed) throw new Error('plan layout did not change on the same canvas');
+}
+
+async function assertPlanLayoutIdentity(send) {
+  const same = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    return !!saved && frame === saved.frame && frame.querySelector('canvas') === saved.canvas && frame.__opdTrackInset === saved.orbit;
+  })()`);
+  if (!same) throw new Error('plan document, frame, canvas or renderer replaced during the gesture');
+}
+
+async function restorePlanLayout(send) {
+  await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    if (!saved) return;
+    if (saved.style === null) saved.frame.removeAttribute('style');
+    else saved.frame.setAttribute('style', saved.style);
+    if (saved.dpr) Object.defineProperty(window, 'devicePixelRatio', saved.dpr);
+    else delete window.devicePixelRatio;
+    delete window.__opdPlanLayout;
+  })()`);
+}
+
+export async function provePlanGestureHolds(send) {
+  const layout = await beginPlanLayout(send);
+  try {
+    const start = await planCamera(send);
+    if (!start) throw new Error('plan camera missing before the gesture');
+    const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
+    await sleep(200);
+    const panned = await planCamera(send);
+    if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
+    await changePlanLayout(send, { width: layout.width - 24, height: layout.height - 20, dpr: layout.dpr === 2 ? 1 : 2 });
+    let previous = panned;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: start.x + step * (tick + 1),
+        y: start.y,
+        button: 'left',
+        buttons: 1,
+      });
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(previous, next)) {
+        throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+      }
+      previous = next;
+    }
     await send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: start.x + step * (tick + 1),
+      type: 'mouseReleased',
+      x: start.x + step * 4,
       y: start.y,
       button: 'left',
-      buttons: 1,
+      buttons: 0,
+      clickCount: 1,
     });
-    await sleep(150);
-    const next = await planCamera(send);
-    if (!cameraMoved(previous, next)) {
-      throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+    await sleep(450);
+    const released = await planCamera(send);
+    if (!released || released.view !== 'view-iss') {
+      throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
     }
-    previous = next;
-  }
-  await send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: start.x + step * 4,
-    y: start.y,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  });
-  await sleep(450);
-  const released = await planCamera(send);
-  if (!released || released.view !== 'view-iss') {
-    throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
-  }
-  const touchStart = await planCamera(send);
-  await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
-  await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
-  await sleep(200);
-  const touched = await planCamera(send);
-  if (!cameraMoved(touchStart, touched)) {
-    throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
-  }
-  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
-  await evaluate(send, `(() => {
-    delete window.devicePixelRatio;
-    return window.devicePixelRatio;
-  })()`);
-  let touchPrevious = touched;
-  for (let tick = 1; tick <= 3; tick += 1) {
-    await sleep(1100);
-    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
-    await sleep(150);
-    const next = await planCamera(send);
-    if (!cameraMoved(touchPrevious, next)) {
-      throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+    const touchStart = await planCamera(send);
+    await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
+    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
+    await sleep(200);
+    const touched = await planCamera(send);
+    if (!cameraMoved(touchStart, touched)) {
+      throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
     }
-    touchPrevious = next;
-  }
-  await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
-  await sleep(450);
-  const ended = await planCamera(send);
-  if (!ended || ended.view !== 'view-iss') {
-    throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+    await changePlanLayout(send, layout);
+    let touchPrevious = touched;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(touchPrevious, next)) {
+        throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+      }
+      touchPrevious = next;
+    }
+    await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
+    await sleep(450);
+    const ended = await planCamera(send);
+    if (!ended || ended.view !== 'view-iss') {
+      throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+    }
+  } finally {
+    await restorePlanLayout(send);
   }
 }
 
@@ -5245,7 +5356,7 @@ async function returnToPlan(send) {
   await waitForPip(send, 'plan', 'plan framed after an outside gesture', 20000);
 }
 
-async function provePlanOutsideEnding(send, viewport, kind, from, to) {
+export async function provePlanOutsideEnding(send, viewport, kind, from, to) {
   await send('Emulation.setDeviceMetricsOverride', {
     width: from.width,
     height: from.height,
@@ -5254,59 +5365,64 @@ async function provePlanOutsideEnding(send, viewport, kind, from, to) {
   });
   await sleep(400);
   await waitForPip(send, 'plan', `plan before ${kind}`, 20000);
-  const before = await planFrameMetrics(send);
-  if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
-  await armPlanPointer(send);
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
-  await send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: before.outsideX,
-    y: before.outsideY,
-    button: 'left',
-    buttons: 1,
-  });
-  await endPlanGesture(send, kind, before);
-  await send('Emulation.setDeviceMetricsOverride', {
-    width: to.width,
-    height: to.height,
-    deviceScaleFactor: to.dpr,
-    mobile: viewport.mobile,
-  });
-  for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
-  const after = await planFrameMetrics(send);
-  const expected = planCanvasReady(after);
-  const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
-  if (!after || !expected || !changed || after.view !== 'view-iss'
-    || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
-    || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
-    throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
-  }
-  await evaluate(send, `(() => {
-    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
-    if (orbit?.stop) orbit.stop();
-    return true;
-  })()`);
-  if (kind !== 'up') {
+  const layout = await beginPlanLayout(send);
+  try {
+    const before = await planFrameMetrics(send);
+    if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
+    await armPlanPointer(send);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
     await send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
+      type: 'mouseMoved',
       x: before.outsideX,
       y: before.outsideY,
       button: 'left',
-      buttons: 0,
-      clickCount: 1,
+      buttons: 1,
     });
+    await endPlanGesture(send, kind, before);
+    await changePlanLayout(send, {
+      width: Math.round(layout.width * to.width / from.width),
+      height: Math.round(layout.height * to.height / from.height),
+      dpr: to.dpr,
+    });
+    for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
+    await assertPlanLayoutIdentity(send);
+    const after = await planFrameMetrics(send);
+    const expected = planCanvasReady(after);
+    const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
+    if (!after || !expected || !changed || after.view !== 'view-iss'
+      || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
+      || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
+      throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
+    }
+    await evaluate(send, `(() => {
+      const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+      if (orbit?.stop) orbit.stop();
+      return true;
+    })()`);
+    if (kind !== 'up') {
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: before.outsideX,
+        y: before.outsideY,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      });
+    }
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+    const clickAt = await planFrameMetrics(send);
+    await mouseClick(send, clickAt.x, clickAt.y);
+    await waitFor(
+      send,
+      `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
+      `plan ${kind} click opens map`,
+      8000,
+    );
+    await returnToPlan(send);
+    return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
+  } finally {
+    await restorePlanLayout(send);
   }
-  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
-  const clickAt = await planFrameMetrics(send);
-  await mouseClick(send, clickAt.x, clickAt.y);
-  await waitFor(
-    send,
-    `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
-    `plan ${kind} click opens map`,
-    8000,
-  );
-  await returnToPlan(send);
-  return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
 }
 
 async function provePlanOutsideRelease(send, viewport) {
@@ -5345,7 +5461,7 @@ async function provePlanMapLive(send, viewport) {
     await waitForPip(send, 'plan', 'plan framed before an outside release', 20000);
     const outside = await provePlanOutsideRelease(send, viewport);
     await provePlanRasterNames(send);
-    await provePlanGestureHolds(send, viewport);
+    await provePlanGestureHolds(send);
     await provePlanRotatingPinch(send);
     return `wheel ${zoom.toFixed(2)}; ${outside}`;
   } finally {
@@ -5737,7 +5853,7 @@ async function proveIssTownRetry(send, evidenceDir, viewport) {
     return `${portrait}; ${landscape}`;
   } finally {
     await evaluate(send, `(() => {
-      if (window.__opdRealNow) Date.now = window.__opdRealNow;
+      (${restoreFixtureClock.toString()})();
       document.cookie = 'opd-verify-towns=; path=/; max-age=0';
       document.cookie = 'opd-verify-nadir=; path=/; max-age=0';
       return true;
@@ -5762,11 +5878,7 @@ async function proveIssTownsOnce(send, evidenceDir, shotSuffix) {
     return true;
   })()`);
   await reloadSettled(send);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    Date.now = () => ${BOSTON_NADIR_EPOCH_MS};
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(${BOSTON_NADIR_EPOCH_MS})`);
   await click(send, '#tab-iss');
   const blocked = await waitFor(
     send,
@@ -7052,7 +7164,16 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
-function fixtureInstant(evidenceDir) {
+export function fixtureInstant(evidenceDir, fixtureDir) {
+  if (fixtureDir) {
+    for (const [name, key] of [['catalog-clock.json', 'anchor'], ['meta.json', 'now']]) {
+      const path = resolve(fixtureDir, name);
+      if (!existsSync(path)) continue;
+      const value = JSON.parse(readFileSync(path, 'utf8'))[key];
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    throw new Error('private verify fixture clock missing');
+  }
   let dir = evidenceDir;
   for (let step = 0; step < 4; step += 1) {
     const path = resolve(dir, 'fixtures/meta.json');
@@ -7070,8 +7191,12 @@ function fixtureInstant(evidenceDir) {
   throw new Error('verify fixture meta missing');
 }
 
-async function armCatalogHold(baseUrl) {
-  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST' });
+function fixtureHeaders(send) {
+  return send.fixtureToken ? { cookie: `opd-verify-fixtures=${send.fixtureToken}` } : {};
+}
+
+async function armCatalogHold(send, baseUrl) {
+  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!armed.ok) throw new Error(`catalog hold ${armed.status}`);
   return armed.json();
 }
@@ -7080,15 +7205,15 @@ async function nudgeUntilCatalogPending(send, baseUrl) {
   const started = Date.now();
   while (Date.now() - started < 15000) {
     await nudgeCatalogRefresh(send);
-    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`).then((response) => response.json());
+    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`, { headers: fixtureHeaders(send) }).then((response) => response.json());
     if (status.pending) return;
     await sleep(250);
   }
   throw new Error('iss tier pick pending catalog body timed out');
 }
 
-async function releaseCatalogHold(baseUrl) {
-  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST' });
+async function releaseCatalogHold(send, baseUrl) {
+  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!released.ok) throw new Error(`catalog release ${released.status}`);
 }
 
@@ -7101,13 +7226,13 @@ async function nudgeCatalogRefresh(send) {
   })()`);
 }
 
-async function withHeldCatalog(send, baseUrl, body) {
-  await armCatalogHold(baseUrl);
+export async function withHeldCatalog(send, baseUrl, body) {
+  await armCatalogHold(send, baseUrl);
   try {
     await nudgeUntilCatalogPending(send, baseUrl);
     await body();
   } finally {
-    await releaseCatalogHold(baseUrl);
+    await releaseCatalogHold(send, baseUrl);
   }
 }
 
@@ -7347,13 +7472,8 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     }
     return anchor > 0 ? anchor : null;
   })()`);
-  const frozen = loadedAnchor || fixtureInstant(evidenceDir);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const frozen = ${frozen};
-    Date.now = () => frozen;
-    return true;
-  })()`);
+  const frozen = loadedAnchor || fixtureInstant(evidenceDir, send.fixtureDir);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
   try {
   await click(send, '[data-iss-preset="nadir"]');
   await waitFor(
@@ -7398,7 +7518,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   );
   await shot(send, evidenceDir, 'iss-all-launches-pin');
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
@@ -8947,7 +9067,7 @@ const LAST_GOOD_TLE = {
   at: '2026-09-29T04:10:50.460Z',
 };
 
-async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
+async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken) {
   await click(send, '#tab-profile');
   await waitFor(
     send,
@@ -8998,8 +9118,8 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
   await shot(send, evidenceDir, 'profile-hidden');
   await evaluate(send, `document.querySelector('[data-curated-id="verify-mesa"] button')?.click()`);
   await waitFor(send, `!document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'mesa restored');
-  const restored = await waitServerRemoved(baseUrl, [], ['verify-mesa']);
-  await expectFreshHide(baseUrl, home, {
+  const restored = await waitServerRemoved(send, baseUrl, [], ['verify-mesa']);
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: 'verify-mesa',
     name: meta.names.upcoming[0],
     updatedAt: restored.removedCuratedUpdatedAt,
@@ -9178,7 +9298,7 @@ async function driveLog(send, evidenceDir, baseUrl) {
     })()`,
     'log row',
   );
-  const listed = await fetch(`${baseUrl}/api/log`).then((response) => response.json());
+  const listed = await fetch(`${baseUrl}/api/log`, { headers: fixtureHeaders(send) }).then((response) => response.json());
   const shoot = Array.isArray(listed.entries)
     ? listed.entries.find((entry) => entry.action === 'shoot' && entry.target_id === 'verify-reef')
     : null;

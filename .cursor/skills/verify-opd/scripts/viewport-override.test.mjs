@@ -82,7 +82,7 @@ test('ipad-3 is the 3rd-generation iPad at 768x1024 and 1024x768, DPR 2, and sta
 test('desktop drive resets hidden targets before the page loads', () => {
   const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'drive.mjs'), 'utf8');
   const chrome = source.slice(source.indexOf('async function driveChrome'), source.indexOf('async function driveWebkitSurfaces'));
-  const reset = chrome.indexOf('await resetFixtureProfile(baseUrl)');
+  const reset = chrome.indexOf('await resetFixtureProfile(baseUrl, fixtureToken)');
   const open = chrome.indexOf('openApp(');
   assert.ok(reset !== -1 && open !== -1 && reset < open);
 });

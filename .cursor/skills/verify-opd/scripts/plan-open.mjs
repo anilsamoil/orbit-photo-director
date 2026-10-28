@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createDeviceContext } from './fixture-session.mjs';
 import { deviceDescriptor, launchWebkit } from './webkit-devices.mjs';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
@@ -403,7 +404,7 @@ async function provePlanLive(page, plan, shotPath) {
   };
 }
 
-export async function drivePlanOpen({ baseUrl, evidenceDir }) {
+export async function drivePlanOpen({ baseUrl, evidenceDir, fixtureToken, startOffset = 0 }) {
   const plan = planOpenPlan(process.env.OPD_VERIFY_SURFACE, process.env.OPD_VERIFY_VIEWPORT);
   if (plan.fits !== insetGateFits(plan.width, plan.height)) {
     throw new Error(`gate mismatch ${plan.id}`);
@@ -418,7 +419,11 @@ export async function drivePlanOpen({ baseUrl, evidenceDir }) {
     : await launchWebkit();
   let result;
   try {
-    const context = await browser.newContext(contextOptions(plan));
+    const context = await createDeviceContext(browser, contextOptions(plan), {
+      baseUrl,
+      token: fixtureToken,
+      startOffset,
+    });
     if (plan.surface === 'iphone-17-pro') {
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
