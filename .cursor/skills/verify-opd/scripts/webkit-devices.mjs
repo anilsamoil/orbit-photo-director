@@ -1,10 +1,24 @@
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
+import { fixtureCookie } from './fixture-session.mjs';
+import { installOneShotClock } from './fixture-clock.mjs';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
-const { devices, webkit } = require('playwright');
+const { chromium, devices, webkit } = require('playwright');
+
+const STANDALONE_INIT = `Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });`;
+
+const desktopChrome = devices['Desktop Chrome'];
+export const DESKTOP_CHROME_SPEC = {
+  name: 'Desktop Chrome',
+  descriptor: {
+    ...desktopChrome,
+    viewport: { width: 1400, height: 900 },
+  },
+};
 
 export const VIEWPORT_ALLOWLIST = {
   desktop: [
@@ -108,21 +122,14 @@ export function webkitCatalog() {
 }
 
 export function deviceDescriptor(spec) {
-  const known = devices[spec.name] || (spec.deviceBase ? devices[spec.deviceBase] : undefined);
-  if (known?.viewport && !spec.viewport) return known;
-  if (spec.viewport) {
-    const base = known?.viewport ? known : devices['iPhone 13'];
-    return {
-      ...base,
-      viewport: { width: spec.viewport.width, height: spec.viewport.height },
-      deviceScaleFactor: spec.deviceScaleFactor ?? base.deviceScaleFactor,
-      isMobile: true,
-      hasTouch: true,
-      defaultBrowserType: 'webkit',
-    };
-  }
-  if (known?.viewport) return known;
-  throw new Error(`Playwright has no ${spec.name} descriptor`);
+  const base = spec.descriptor || devices[spec.name] || devices[spec.deviceBase]
+    || (spec.name === 'iPhone 17 Pro' ? devices['iPhone 13'] : null);
+  if (!base?.viewport) throw new Error(`Playwright has no ${spec.name} descriptor`);
+  const descriptor = structuredClone(base);
+  if (spec.viewport) descriptor.viewport = { ...spec.viewport };
+  if (spec.deviceScaleFactor !== undefined) descriptor.deviceScaleFactor = spec.deviceScaleFactor;
+  if (!spec.descriptor && !descriptor.screen) descriptor.screen = { ...descriptor.viewport };
+  return descriptor;
 }
 
 export function deviceViewport(spec) {
@@ -143,36 +150,749 @@ export async function launchWebkit() {
   }
 }
 
-const productViewportMeta = new WeakMap();
+function chromeExecutable() {
+  if (process.env.OPD_VERIFY_CHROME) return process.env.OPD_VERIFY_CHROME;
+  if (existsSync('/usr/bin/google-chrome-stable')) return '/usr/bin/google-chrome-stable';
+  if (existsSync('/usr/bin/google-chrome')) return '/usr/bin/google-chrome';
+  return 'google-chrome';
+}
 
-async function syncLayoutViewport(page, width, height) {
-  const laid = await page.evaluate(({ width, height, product }) => {
-    const root = document.documentElement;
-    const meta = document.querySelector('meta[name="viewport"]');
-    if (!root) return null;
-    const current = meta ? meta.getAttribute('content') || '' : '';
-    const remembered = product || (current.includes('width=device-width') ? current : '');
-    const explicit = `width=${width}, height=${height}, initial-scale=1, viewport-fit=cover`;
-    const matches = () => root.clientWidth === width && root.clientHeight === height;
-    if (!matches() && meta) meta.setAttribute('content', explicit);
-    if (matches() && meta && remembered && meta.getAttribute('content') !== remembered) {
-      meta.setAttribute('content', remembered);
-      if (!matches()) meta.setAttribute('content', explicit);
+export async function launchChrome() {
+  return chromium.launch({
+    executablePath: chromeExecutable(),
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  });
+}
+
+function contextDescriptor(spec) {
+  const descriptor = deviceDescriptor(spec);
+  for (const key of ['viewport', 'screen']) {
+    for (const dimension of ['width', 'height']) {
+      if (!Number.isInteger(descriptor[key]?.[dimension]) || descriptor[key][dimension] <= 0) {
+        throw new Error(`device descriptor needs ${key}.${dimension}`);
+      }
     }
-    return {
-      width: root.clientWidth,
-      height: root.clientHeight,
-      product: remembered,
-    };
-  }, { width, height, product: productViewportMeta.get(page) || '' });
-  if (laid?.product) productViewportMeta.set(page, laid.product);
-  if (laid && (laid.width !== width || laid.height !== height)) {
-    throw new Error(`layout viewport ${laid.width}x${laid.height} after set ${width}x${height}`);
+  }
+  for (const key of ['isMobile', 'hasTouch']) {
+    if (typeof descriptor[key] !== 'boolean') throw new Error(`device descriptor needs ${key}`);
+  }
+  if (!Number.isFinite(descriptor.deviceScaleFactor) || descriptor.deviceScaleFactor <= 0) {
+    throw new Error('device descriptor needs deviceScaleFactor');
+  }
+  for (const key of ['userAgent', 'defaultBrowserType']) {
+    if (typeof descriptor[key] !== 'string' || !descriptor[key]) throw new Error(`device descriptor needs ${key}`);
+  }
+  return descriptor;
+}
+
+function freezeDescriptor(descriptor) {
+  for (const value of Object.values(descriptor)) {
+    if (value && typeof value === 'object') freezeDescriptor(value);
+  }
+  return Object.freeze(descriptor);
+}
+
+function disclosureApi() {
+  function summaryText(el) {
+    return el.querySelector(':scope > summary')?.textContent?.trim() || '';
+  }
+
+  function ownerId(el) {
+    return el.parentElement?.closest('[id]')?.id || '';
+  }
+
+  function explicitToken(el) {
+    if (el.id) return `id:${el.id}`;
+    const control = el.getAttribute('data-opd-control');
+    if (control) return `control:${control}`;
+    const names = el.getAttributeNames().filter((name) => name.startsWith('data-') && el.getAttribute(name) === '').sort();
+    if (!names.length) return '';
+    return `data:${names.join('&')}`;
+  }
+
+  function roleToken(el) {
+    const classes = [...el.classList].filter(Boolean).sort();
+    return classes.length ? `role:${classes.join('.')}` : 'role:details';
+  }
+
+  function identityOf(el) {
+    const owner = ownerId(el);
+    const explicit = explicitToken(el);
+    if (explicit) return `${explicit}@${owner}`;
+    const role = roleToken(el);
+    const scope = owner ? document.getElementById(owner) : document;
+    const peers = [...(scope?.querySelectorAll('details') || [])].filter((entry) => (
+      ownerId(entry) === owner && !explicitToken(entry) && roleToken(entry) === role
+    ));
+    return `${role}@${owner}#${peers.indexOf(el)}`;
+  }
+
+  function find(saved) {
+    if (!saved?.key) return null;
+    return [...document.querySelectorAll('details')].find((el) => identityOf(el) === saved.key) || null;
+  }
+
+  function retired(saved, retiredMapRoles) {
+    return retiredMapRoles.some((role) => saved?.key === `role:${role}@map-launch-coverage#0`)
+      && saved.ownerId === 'map-launch-coverage'
+      && !find(saved)
+      && !!document.getElementById('map-launch-coverage');
+  }
+
+  function capture(el) {
+    if (el.classList.contains('maplibregl-ctrl-attrib')) return null;
+    return { key: identityOf(el), ownerId: ownerId(el), summary: summaryText(el), open: el.open };
+  }
+
+  return { capture, find, retired };
+}
+
+const DISCLOSURE_BOOT = `window.__opdDisclosure = (${disclosureApi.toString()})();`;
+
+export async function openDeviceContext(browser, spec, hooks = {}) {
+  const baseDescriptor = hooks.baseDescriptor || freezeDescriptor(contextDescriptor(spec));
+  const descriptor = freezeDescriptor({
+    ...baseDescriptor,
+    viewport: { ...(spec.viewport || baseDescriptor.viewport) },
+  });
+  const context = await browser.newContext({
+    ...descriptor,
+    serviceWorkers: 'block',
+    ...(hooks.storageState ? { storageState: hooks.storageState } : {}),
+  });
+  try {
+    if (hooks.fixtureToken) await context.addCookies([fixtureCookie(hooks.baseUrl, hooks.fixtureToken)]);
+    const initScripts = (hooks.initScripts || []).filter((source) => source !== STANDALONE_INIT);
+    if (spec.standalone) initScripts.unshift(STANDALONE_INIT);
+    if (!initScripts.includes(DISCLOSURE_BOOT)) initScripts.push(DISCLOSURE_BOOT);
+    for (const source of initScripts) await context.addInitScript(source);
+    const page = await context.newPage();
+    const requestHandlers = [...(hooks.requestHandlers || [])];
+    for (const handler of requestHandlers) page.on('request', handler);
+    return { browser, context, page, spec: freezeDescriptor(structuredClone(spec)), baseDescriptor, descriptor, initScripts, requestHandlers };
+  } catch (error) {
+    await context.close();
+    throw error;
   }
 }
 
-export function playwrightSend(page) {
-  return async function send(method, params = {}) {
+function metricsMatch(session, params) {
+  if (!Number.isFinite(params.width) || !Number.isFinite(params.height)) return false;
+  const viewport = session.descriptor.viewport || {};
+  if (viewport.width !== params.width || viewport.height !== params.height) return false;
+  if (!params.deviceSpec) return true;
+  return Boolean(params.deviceSpec.standalone) === Boolean(session.spec.standalone)
+    && isDeepStrictEqual({ ...contextDescriptor(params.deviceSpec), viewport }, session.descriptor);
+}
+
+async function capturePage(page) {
+  const url = page.url();
+  let storage = { session: {} };
+  try {
+    storage = await page.evaluate(() => {
+      const copy = (store) => {
+        const out = {};
+        for (let index = 0; index < store.length; index += 1) {
+          const key = store.key(index);
+          out[key] = store.getItem(key);
+        }
+        return out;
+      };
+      return { session: copy(sessionStorage) };
+    });
+  } catch {
+    storage = { session: {} };
+  }
+  const pose = await page.evaluate(async () => {
+      const viewEl = document.getElementById('view');
+      const view = viewEl ? (viewEl.className || '').split(/\s+/).find((token) => token.startsWith('view-')) || '' : '';
+      if (!view) return null;
+      const map = window.__opdMap;
+      let camera = null;
+      if (map && map.getCenter && map.getZoom) {
+        const center = map.getCenter();
+        camera = {
+          lng: center.lng,
+          lat: center.lat,
+          zoom: map.getZoom(),
+          bearing: map.getBearing ? map.getBearing() : 0,
+          pitch: map.getPitch ? map.getPitch() : 0,
+        };
+      }
+      const iss = window.__opdIss;
+      let issCamera = null;
+      if (iss && iss.getCenter && iss.getZoom) {
+        const center = iss.getCenter();
+        issCamera = {
+          lng: center.lng,
+          lat: center.lat,
+          zoom: iss.getZoom(),
+          bearing: iss.getBearing ? iss.getBearing() : 0,
+          pitch: iss.getPitch ? iss.getPitch() : 0,
+          fov: iss.getVerticalFieldOfView ? iss.getVerticalFieldOfView() : null,
+        };
+      }
+      // This is the local Vite verification harness. Use the app's existing
+      // clock accessor so a scrub retains its absolute instant, not a rounded
+      // slider minute that would creep forwards on every replacement.
+      const viteApp = !!document.querySelector('script[type="module"][src*="/src/main.ts"]');
+      let viewTimeMs = null;
+      if (viteApp && map) {
+        const clock = await import('/src/map/features/time-scrub/index.ts');
+        viewTimeMs = clock._getViewTimeMsForTest();
+      }
+      const slider = document.getElementById('time-slider');
+      const follow = document.getElementById('toggle-follow-iss');
+      const followPressed = follow?.getAttribute('aria-pressed');
+      if (!window.__opdDisclosure) throw new Error('disclosure identity missing');
+      const details = [...document.querySelectorAll('details')].flatMap((el) => {
+        const saved = window.__opdDisclosure.capture(el);
+        return saved ? [saved] : [];
+      });
+      const scene = document.querySelector('[data-iss-scene]');
+      const picker = document.querySelector('[data-iss-launch-picker]');
+      return {
+        view,
+        viteApp,
+        chromeShown: !document.body.classList.contains('map-chrome-hidden'),
+        shotlist: document.body.classList.contains('shotlist-bar-visible'),
+        legendOpen: document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true',
+        details,
+        expanded: [...document.querySelectorAll('[id][aria-expanded][aria-controls]')].map((el) => ({ id: el.id, open: el.getAttribute('aria-expanded') === 'true' })),
+        aimHelpOpen: document.querySelector('[data-iss-aim-help]')?.getAttribute('aria-expanded') === 'true',
+        follow: followPressed === 'true' ? true : followPressed === 'false' ? false : null,
+        time: slider && map ? {
+          minutes: Number(slider.value),
+          live: !document.getElementById('time-slider-readout')?.classList.contains('time-slider-scrubbed'),
+          viewTimeMs,
+          viteApp,
+        } : null,
+        telemetryOpen: document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'true',
+        fullscreen: !!(scene && scene.hasAttribute('data-iss-fullscreen-active')),
+        launchValue: picker instanceof HTMLSelectElement ? picker.value : '',
+        frozenNow: typeof window.__opdRealNow === 'function' && Date.now !== window.__opdRealNow ? Date.now() : null,
+        fovWatch: typeof window.__opdFovWatch === 'object' && window.__opdFovWatch !== null,
+        camera,
+        issCamera,
+      };
+    });
+  const storageState = await page.context().storageState();
+  return { url, storage, storageState, pose };
+}
+
+function specForMetrics(session, params) {
+  if (!Number.isInteger(params.width) || params.width <= 0 || !Number.isInteger(params.height) || params.height <= 0) {
+    throw new Error(`context size needs width and height, got ${params.width}x${params.height}`);
+  }
+  const viewport = { width: params.width, height: params.height };
+  const spec = params.deviceSpec || session.spec;
+  return {
+    ...spec,
+    descriptor: params.deviceSpec ? contextDescriptor(spec) : session.baseDescriptor,
+    viewport,
+  };
+}
+
+const VIEW_TABS = {
+  'view-queue': '#tab-queue',
+  'view-upcoming': '#tab-upcoming',
+  'view-map': '#tab-map',
+  'view-iss': '#tab-iss',
+  'view-profile': '#tab-profile',
+  'view-log': '#tab-log',
+};
+
+function sleep(ms) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+async function pollPage(page, read, label, timeoutMs, arg) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await page.evaluate(read, arg);
+    if (last && last.ok === true) return last;
+    await sleep(250);
+  }
+  throw new Error(`${label} timed out. Last value: ${JSON.stringify(last)}`);
+}
+
+async function matchesSoon(page, read, arg, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const last = await page.evaluate(read, arg);
+    if (last && last.ok === true) return true;
+    await sleep(100);
+  }
+  return false;
+}
+
+async function clickSelector(page, selector) {
+  await page.evaluate((target) => {
+    const el = document.querySelector(target);
+    if (el) el.click();
+  }, selector);
+}
+
+async function waitForContextSize(page, descriptor) {
+  const viewport = descriptor.viewport || {};
+  const expected = { width: viewport.width, height: viewport.height, deviceScaleFactor: descriptor.deviceScaleFactor };
+  await pollPage(page, (size) => ({
+    ok: window.innerWidth === size.width
+      && window.innerHeight === size.height
+      && window.devicePixelRatio === size.deviceScaleFactor,
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio,
+  }), `context ${viewport.width}x${viewport.height}`, 10000, expected);
+}
+
+async function restoreMapClockAndFollow(page, pose) {
+  await page.evaluate(async ({ follow, time }) => {
+    const toggle = document.getElementById('toggle-follow-iss');
+    if (typeof follow === 'boolean' && toggle
+      && (toggle.getAttribute('aria-pressed') === 'true') !== follow) toggle.click();
+    if (!time) return;
+    if (time.viteApp) {
+      const clock = await import('/src/map/features/time-scrub/index.ts');
+      const now = Date.now;
+      const minutes = time.live ? 0 : Math.max(1, time.minutes);
+      try {
+        // setLookahead accepts whole minutes. Anchor its calculation at the
+        // captured instant, then immediately restore the real/fixture clock.
+        if (!time.live && Number.isFinite(time.viewTimeMs)) {
+          Date.now = () => time.viewTimeMs - minutes * 60_000;
+        }
+        clock.setLookahead(minutes, false);
+      } finally {
+        Date.now = now;
+      }
+      clock.updateTimeStepLabels();
+    } else {
+      const slider = document.getElementById('time-slider');
+      if (time.live) document.getElementById('time-now')?.click();
+      else if (slider) {
+        slider.value = String(time.minutes);
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+        slider.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+  }, pose);
+  // Drain the slider's RAF and any follow/recenter animation before replaying
+  // the captured camera. Otherwise the very next app tick can undo the pose.
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+}
+
+async function renderedFrame(page, view) {
+  await page.evaluate((activeView) => new Promise((done, reject) => {
+    const map = activeView === 'view-iss' ? window.__opdIss : window.__opdMap;
+    let idleTimer;
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearTimeout(idleTimer);
+      map.off('render', painted);
+      map.off('idle', idle);
+    };
+    const idle = () => {
+      settled = true;
+      map.triggerRepaint();
+    };
+    const painted = () => {
+      // MapLibre's isStyleLoaded() also waits for every source's tiles.
+      if (!map.style?._loaded || (idleTimer && !settled)) return;
+      const canvas = map.getCanvas();
+      const gl = map.painter?.context?.gl;
+      if (!canvas?.width || !canvas?.height || !gl || gl.isContextLost()) {
+        cleanup();
+        reject(new Error(`${activeView} renderer has no live drawing buffer`));
+        return;
+      }
+      const pixels = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4);
+      gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      let hasPaint = false;
+      for (let offset = 3; offset < pixels.length; offset += 4) {
+        if (pixels[offset] > 0) { hasPaint = true; break; }
+      }
+      if (!hasPaint) return;
+      if (settled) {
+        cleanup();
+        requestAnimationFrame(() => done());
+      } else if (!idleTimer) {
+        map.on('idle', idle);
+        idleTimer = setTimeout(idle, 1200);
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${activeView} renderer did not finish painting`));
+    }, 30000);
+    map.on('render', painted);
+    map.triggerRepaint();
+  }), view);
+}
+
+async function applyPose(page, pose) {
+  if (!pose) return;
+  await pollPage(page, () => {
+    const text = document.getElementById('status-banner')?.textContent || '';
+    return text && !text.includes('Loading') ? { ok: true } : { text };
+  }, 'snap after context replace', 30000);
+  if (pose.fovWatch) {
+    await page.evaluate(() => {
+      if (window.__opdFovWatch) return;
+      const watch = { bad: null, settled: false };
+      const read = () => {
+        if (watch.bad || watch.settled) return;
+        const label = document.querySelector('[data-iss-fov]');
+        if (!label || label.getAttribute('data-iss-fov-state') !== 'live') return;
+        const text = (label.textContent || '').trim();
+        const shown = Number.parseFloat(text);
+        const phase = document.querySelector('[data-iss-scene]')?.getAttribute('data-iss-phase') || '';
+        const map = window.__opdIss;
+        const fov = map && typeof map.getVerticalFieldOfView === 'function' ? map.getVerticalFieldOfView() : null;
+        const roll = map && typeof map.getRoll === 'function' ? ((map.getRoll() % 360) + 360) % 360 : null;
+        const matched = text.length > 0
+          && phase === 'running'
+          && typeof fov === 'number' && Number.isFinite(fov)
+          && Number.isFinite(shown)
+          && Math.abs(shown - fov) <= 0.15
+          && typeof roll === 'number' && Math.abs(roll - 180) <= 0.5;
+        if (matched) watch.settled = true;
+        else watch.bad = { text, shown, phase, fov, roll };
+      };
+      new MutationObserver(read).observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        characterData: true,
+      });
+      const pump = () => {
+        read();
+        if (!watch.bad && !watch.settled) requestAnimationFrame(pump);
+      };
+      requestAnimationFrame(pump);
+      window.__opdFovWatch = watch;
+    });
+  }
+  // SNAP keeps the Map instance while another tab is open. Rebuild that
+  // off-tab state too, then return to the captured active tab.
+  if (pose.view !== 'view-map' && pose.camera) await applyPose(page, { ...pose, view: 'view-map' });
+  const tab = VIEW_TABS[pose.view];
+  if (tab) {
+    const current = await page.evaluate(() => {
+      const view = document.getElementById('view');
+      return view ? (view.className || '').split(/\s+/).find((token) => token.startsWith('view-')) || '' : '';
+    });
+    if (current !== pose.view) await clickSelector(page, tab);
+  }
+  if (pose.view === 'view-map') {
+    await pollPage(page, () => {
+      const map = window.__opdMap;
+      const canvas = document.querySelector('#map .maplibregl-canvas');
+      if (!map || !canvas || !map.getLayer('iss-track-layer') || !document.querySelector('.iss-marker') || !document.querySelector('.map-legend')) return { step: 'map' };
+      return { ok: true };
+    }, 'map after context replace', 45000);
+    await restoreMapClockAndFollow(page, pose);
+    if (pose.camera) {
+      await page.evaluate((camera) => {
+        const map = window.__opdMap;
+        if (map && map.jumpTo) {
+          map.stop();
+          map.jumpTo({
+            center: [camera.lng, camera.lat],
+            zoom: camera.zoom,
+            bearing: camera.bearing,
+            pitch: camera.pitch,
+          });
+        }
+      }, pose.camera);
+    }
+    const chromeSettled = await matchesSoon(page, (shown) => {
+      const hidden = document.body.classList.contains('map-chrome-hidden');
+      return (shown ? !hidden : hidden) ? { ok: true } : null;
+    }, pose.chromeShown, 2000);
+    if (!chromeSettled) await clickSelector(page, '#map-chrome-toggle');
+    await pollPage(page, (shown) => {
+      const hidden = document.body.classList.contains('map-chrome-hidden');
+      const toggle = (document.getElementById('map-chrome-toggle')?.textContent || '').trim();
+      const strip = document.querySelector('.map-command');
+      const zoom = document.querySelector('.maplibregl-ctrl-zoom-in');
+      const step = document.getElementById('time-fwd-90');
+      const stepBox = step ? step.getBoundingClientRect() : null;
+      if (shown) {
+        if (hidden || toggle !== 'Hide' || !strip || getComputedStyle(strip).display === 'none' || !zoom) {
+          return { step: 'chrome', hidden, toggle };
+        }
+        if (!stepBox || stepBox.width < 8 || stepBox.height < 8) return { step: 'time' };
+        return { ok: true };
+      }
+      if (!hidden || toggle !== 'Controls') return { step: 'hidden', hidden, toggle };
+      return { ok: true };
+    }, 'map chrome after context replace', 10000, pose.chromeShown);
+    if (pose.legendOpen) {
+      const open = await page.evaluate(() => document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') === 'true');
+      if (!open) await clickSelector(page, '#map-legend-toggle');
+    }
+  } else if (pose.view === 'view-iss') {
+    await pollPage(page, () => {
+      const scene = document.querySelector('[data-iss-scene]');
+      const frame = document.querySelector('[data-iss-frame]');
+      const box = frame ? frame.getBoundingClientRect() : null;
+      const telemetry = document.querySelector('[data-iss-telemetry]');
+      const fullscreen = document.querySelector('[data-iss-fullscreen]');
+      const telemetryBox = telemetry ? telemetry.getBoundingClientRect() : null;
+      const fullscreenBox = fullscreen ? fullscreen.getBoundingClientRect() : null;
+      if (!scene || !box || box.width < 40) return { step: 'scene' };
+      const renderer = window.__opdIss;
+      const canvas = renderer?.getCanvas();
+      if (scene.getAttribute('data-iss-phase') !== 'running' || !canvas?.width || !canvas?.height
+        || document.querySelector('[data-iss-fov]')?.getAttribute('data-iss-fov-state') !== 'live') {
+        return { step: 'renderer', phase: scene.getAttribute('data-iss-phase') };
+      }
+      if (!telemetryBox || telemetryBox.width < 8 || !fullscreenBox || fullscreenBox.width < 8) return { step: 'controls' };
+      if (window.innerHeight <= 564 && !scene.hasAttribute('data-iss-short')) return { step: 'short' };
+      return { ok: true };
+    }, 'iss after context replace', 45000);
+    if (pose.issCamera && Number.isFinite(pose.issCamera.fov)) {
+      const fov = pose.issCamera.fov;
+      const held = await matchesSoon(page, (expected) => {
+        const current = window.__opdIss && window.__opdIss.getVerticalFieldOfView ? window.__opdIss.getVerticalFieldOfView() : null;
+        return Number.isFinite(current) && Math.abs(current - expected) <= 0.5 ? { ok: true } : { current };
+      }, fov, 5000);
+      if (!held) {
+        await page.evaluate((expected) => {
+          const map = window.__opdIss;
+          const frame = document.querySelector('[data-iss-frame]');
+          const current = map?.getVerticalFieldOfView();
+          if (frame && Number.isFinite(current)) {
+            // Replay the control, not just the renderer property: SNAP's next
+            // timer tick reads its optical-FOV state and must keep this value.
+            frame.dispatchEvent(new WheelEvent('wheel', {
+              deltaY: Math.log(expected / current) / 0.0015,
+              bubbles: true,
+              cancelable: true,
+            }));
+          }
+        }, fov);
+        await pollPage(page, (expected) => {
+          const current = window.__opdIss && window.__opdIss.getVerticalFieldOfView ? window.__opdIss.getVerticalFieldOfView() : null;
+          return Number.isFinite(current) && Math.abs(current - expected) <= 0.5 ? { ok: true, current } : { current };
+        }, 'iss fov after context replace', 10000, fov);
+      }
+    }
+    const fullscreenHeld = await page.evaluate(() => !!document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-fullscreen-active'));
+    if (fullscreenHeld !== pose.fullscreen) await clickSelector(page, '[data-iss-fullscreen]');
+    await pollPage(page, (expected) => ({
+      ok: !!document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-fullscreen-active') === expected,
+    }), 'iss fullscreen after context replace', 10000, pose.fullscreen);
+    const telemetryHeld = await page.evaluate(() => document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'true');
+    if (telemetryHeld !== pose.telemetryOpen) await clickSelector(page, '[data-iss-telemetry]');
+    await pollPage(page, (expected) => ({
+      ok: (document.querySelector('[data-iss-telemetry]')?.getAttribute('aria-expanded') === 'true') === expected,
+    }), 'iss telemetry after context replace', 10000, pose.telemetryOpen);
+    if (pose.launchValue) {
+      await page.evaluate((value) => { window.__opdRestoreLaunch = value; }, pose.launchValue);
+      await pollPage(page, () => {
+        const value = window.__opdRestoreLaunch;
+        const picker = document.querySelector('[data-iss-launch-picker]');
+        if (!(picker instanceof HTMLSelectElement)) return { step: 'picker' };
+        if (!window.__opdRestoreLaunchArmed) {
+          if (![...picker.options].some((entry) => entry.value === value)) return { step: 'option', count: picker.options.length };
+          picker.value = value;
+          picker.dispatchEvent(new Event('change', { bubbles: true }));
+          window.__opdRestoreLaunchArmed = true;
+        }
+        if (value === 'none') return picker.value === 'none' ? { ok: true } : { step: 'none', value: picker.value };
+        const card = document.querySelector('[data-iss-launch-card]');
+        const name = card && card.querySelector('[data-iss-launch-name]') ? card.querySelector('[data-iss-launch-name]').textContent : '';
+        if (!card || card.hasAttribute('hidden') || !name) return { step: 'card', value: picker.value };
+        return { ok: true, name };
+      }, 'iss launch after context replace', 15000);
+    }
+  } else if (tab) {
+    await pollPage(page, (view) => {
+      const current = (document.getElementById('view')?.className || '').split(/\s+/).find((token) => token.startsWith('view-')) || '';
+      return current === view ? { ok: true } : { current };
+    }, `${pose.view} after context replace`, 20000, pose.view);
+  }
+  await restoreDisclosures(page, pose);
+  await page.evaluate((visible) => document.body.classList.toggle('shotlist-bar-visible', visible), Boolean(pose.shotlist));
+  if (pose.view === 'view-map' || pose.view === 'view-iss') await renderedFrame(page, pose.view);
+}
+
+async function restoreDisclosures(page, pose) {
+  if (!pose) return;
+  await page.evaluate((expanded) => {
+    for (const saved of expanded || []) {
+      const el = document.getElementById(saved.id);
+      if (el && (el.getAttribute('aria-expanded') === 'true') !== saved.open) el.click();
+    }
+  }, pose.expanded);
+  await page.evaluate((details) => {
+    if (!window.__opdDisclosure) throw new Error('disclosure identity missing');
+    for (const saved of details || []) {
+      const el = window.__opdDisclosure.find(saved);
+      if (el instanceof HTMLDetailsElement) el.open = saved.open;
+    }
+  }, pose.details);
+  // Other control clicks dismiss the ISS shortcut sheet, so reopen it last.
+  if (pose.view === 'view-iss') {
+    const helpOpen = await page.evaluate(() => document.querySelector('[data-iss-aim-help]')?.getAttribute('aria-expanded') === 'true');
+    if (helpOpen !== pose.aimHelpOpen) await clickSelector(page, '[data-iss-aim-help]');
+  }
+}
+
+async function settleFocusedPose(page, pose) {
+  if (!pose) return;
+  let retiredMapRoles = [];
+  if (pose.viteApp) {
+    retiredMapRoles = await page.evaluate(async () => {
+      // Becoming visible asks SNAP to refresh Queue/Upcoming. Join those app
+      // promises before their DOM rebuild can overwrite restored disclosures.
+      const [app, { launchCatalog }, { launchStore }, { selectLaunches }] = await Promise.all([
+        import('/src/main.ts'), import('/src/launch-catalog.ts'),
+        import('/src/launch-store.ts'), import('/src/launch-selectors.ts'),
+      ]);
+      await Promise.all([app.refresh(), launchCatalog.refresh()]);
+      app.rerenderCountdowns();
+      const now = Date.now();
+      const tiers = launchCatalog.read(now);
+      if (!tiers) {
+        const selections = selectLaunches(launchStore.getState(), now, 'map');
+        return [
+          ...(!selections.length ? ['map-launch-primary'] : []),
+          ...(selections.length <= 1 ? ['map-launch-more'] : []),
+        ];
+      }
+      const primary = tiers.highlights[0];
+      return [
+        'launch-data-details',
+        ...(!primary ? ['map-launch-primary'] : []),
+        ...(!tiers.pins.some((pin) => pin !== primary) ? ['map-launch-more'] : []),
+      ];
+    });
+  }
+  await restoreDisclosures(page, pose);
+  if (pose.view === 'view-map' || pose.view === 'view-iss') await renderedFrame(page, pose.view);
+  await pollPage(page, (expected) => {
+    if (!window.__opdDisclosure) return { ok: false, disclosures: false, expanded: false, help: false, follow: false, live: false };
+    const misses = [];
+    for (const saved of expected.details || []) {
+      const el = window.__opdDisclosure.find(saved);
+      if (el) {
+        if (!(el instanceof HTMLDetailsElement) || el.open !== saved.open) {
+          misses.push({ key: saved.key, ownerId: saved.ownerId, summary: saved.summary, savedOpen: saved.open, foundOpen: el.open });
+        }
+      } else if (!window.__opdDisclosure.retired(saved, expected.retiredMapRoles)) {
+        misses.push({ key: saved.key, ownerId: saved.ownerId, summary: saved.summary, savedOpen: saved.open, missing: true });
+      }
+    }
+    const disclosures = misses.length === 0;
+    const now = disclosures ? [] : [...document.querySelectorAll('details')].flatMap((el) => {
+      const saved = window.__opdDisclosure.capture(el);
+      return saved ? [saved] : [];
+    });
+    const expanded = (expected.expanded || []).every((saved) => {
+      const el = document.getElementById(saved.id);
+      return el && (el.getAttribute('aria-expanded') === 'true') === saved.open;
+    });
+    const help = expected.view !== 'view-iss'
+      || (document.querySelector('[data-iss-aim-help]')?.getAttribute('aria-expanded') === 'true') === expected.aimHelpOpen;
+    const follow = expected.follow === null
+      || document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === String(expected.follow);
+    const live = !expected.time || !document.getElementById('time-slider-readout')?.classList.contains('time-slider-scrubbed') === expected.time.live;
+    return { ok: disclosures && expanded && help && follow && live, disclosures, expanded, help, follow, live, misses, now };
+  }, 'restored controls before context switch', 10000, { ...pose, retiredMapRoles });
+}
+
+async function restorePage(session, snapshot) {
+  if (!snapshot.url || snapshot.url === 'about:blank') return;
+  // localStorage/cookies are seeded by newContext's origin-scoped storageState.
+  // A disposable same-origin document seeds this tab's sessionStorage exactly once.
+  // No init callback or erasable storage sentinel survives to replay it on reload.
+  if (Object.keys(snapshot.storage.session).length) {
+    const origin = new URL(snapshot.url).origin;
+    if (origin !== 'null') {
+      const bootstrapUrl = `${origin}/__opd_context_storage_bootstrap__`;
+      const bootstrap = route => route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">',
+      });
+      await session.page.route(bootstrapUrl, bootstrap);
+      try {
+        await session.page.goto(bootstrapUrl, { waitUntil: 'domcontentloaded' });
+        await session.page.evaluate((entries) => {
+          for (const [key, value] of Object.entries(entries)) sessionStorage.setItem(key, value);
+        }, snapshot.storage.session);
+      } finally {
+        await session.page.unroute(bootstrapUrl, bootstrap);
+      }
+    }
+  }
+  await session.page.goto(snapshot.url, { waitUntil: 'domcontentloaded' });
+  await waitForContextSize(session.page, session.descriptor);
+  await applyPose(session.page, snapshot.pose);
+}
+
+export async function replaceDeviceContext(session, params, signal) {
+  signal?.throwIfAborted();
+  if (metricsMatch(session, params)) return;
+  const snapshot = await capturePage(session.page);
+  signal?.throwIfAborted();
+  const spec = specForMetrics(session, params);
+  const opened = await openDeviceContext(session.browser, spec, {
+    initScripts: session.initScripts,
+    requestHandlers: session.requestHandlers,
+    baseDescriptor: params.deviceSpec ? undefined : session.baseDescriptor,
+    storageState: snapshot.storageState,
+  });
+  let closing;
+  const closeCandidate = () => (closing ??= opened.context.close());
+  const abortCandidate = () => { closeCandidate().catch(() => {}); };
+  signal?.addEventListener('abort', abortCandidate, { once: true });
+  let removeClockSeed;
+  try {
+    signal?.throwIfAborted();
+    removeClockSeed = await installOneShotClock(opened.page, snapshot.url, snapshot.pose?.frozenNow);
+    // Keep the rendered predecessor and public session untouched throughout
+    // navigation, app boot, pose restoration and the final renderer frame.
+    await restorePage(opened, snapshot);
+    await opened.page.bringToFront();
+    await settleFocusedPose(opened.page, snapshot.pose);
+    if (removeClockSeed && !opened.page.isClosed()) await removeClockSeed();
+    signal?.throwIfAborted();
+  } catch (error) {
+    await closeCandidate();
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', abortCandidate);
+  }
+  const previous = session.context;
+  Object.assign(session, opened);
+  await previous.close();
+}
+
+export async function readContextMetrics(page) {
+  return page.evaluate(() => ({
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio,
+    userAgent: navigator.userAgent,
+    maxTouchPoints: navigator.maxTouchPoints,
+  }));
+}
+
+export function playwrightSend(session) {
+  const send = async function send(method, params = {}, { signal } = {}) {
+    if (method === 'Emulation.setDeviceMetricsOverride') {
+      const predecessor = session.page;
+      await replaceDeviceContext(session, params, signal);
+      return { contextReplaced: session.page !== predecessor };
+    }
+    const page = session.page;
     if (method === 'Runtime.evaluate') {
       const unbounded = params.timeout === 0;
       if (unbounded) page.setDefaultTimeout(0);
@@ -209,12 +929,8 @@ export function playwrightSend(page) {
     }
     if (method === 'Page.enable') return {};
     if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+      session.initScripts.push(params.source);
       await page.addInitScript(params.source);
-      return {};
-    }
-    if (method === 'Emulation.setDeviceMetricsOverride') {
-      await page.setViewportSize({ width: params.width, height: params.height });
-      await syncLayoutViewport(page, params.width, params.height);
       return {};
     }
     if (method === 'Emulation.setSafeAreaInsetsOverride') {
@@ -286,6 +1002,8 @@ export function playwrightSend(page) {
     }
     throw new Error(`webkit send has no ${method}`);
   };
+  send.replacesContext = true;
+  return send;
 }
 
 async function hit(page, locator) {
@@ -298,17 +1016,11 @@ async function hit(page, locator) {
   }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
 }
 
-export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
+export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir, fixtureToken) {
   mkdirSync(evidenceDir, { recursive: true });
-  const device = deviceDescriptor(spec);
-  const context = await browser.newContext({ ...device, serviceWorkers: 'block' });
-  await context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
-  if (spec.standalone) {
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-    });
-  }
-  const page = await context.newPage();
+  const session = await openDeviceContext(browser, spec, { baseUrl, fixtureToken });
+  await session.context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
+  const page = session.page;
   try {
     await page.goto(`${baseUrl}/?u=anil`, { waitUntil: 'domcontentloaded' });
     const signIn = page.locator('#status-banner').getByRole('link', { name: 'Sign in' });
@@ -327,6 +1039,6 @@ export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
     if (kept !== '[{"private":"unsent"}]') throw new Error(`${spec.name} recovery cleared saved ratings`);
     return `${spec.name} ${spec.tap} reached ${page.url()}`;
   } finally {
-    await context.close();
+    await session.context.close();
   }
 }

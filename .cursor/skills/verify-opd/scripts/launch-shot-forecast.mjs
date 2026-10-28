@@ -2,6 +2,8 @@ import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FIXTURE_COOKIE } from './fixtures.mjs';
+import { createDeviceContext } from './fixture-session.mjs';
 import { deviceDescriptor, launchWebkit } from './webkit-devices.mjs';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
@@ -67,10 +69,12 @@ function contextOptions(plan) {
   return { ...deviceDescriptor(spec), viewport: { width: plan.width, height: plan.height }, serviceWorkers: 'block' };
 }
 
-async function armForecastEdge(baseUrl) {
+async function armForecastEdge(baseUrl, fixtureToken) {
+  const headers = { 'content-type': 'application/json' };
+  if (fixtureToken) headers.cookie = `${FIXTURE_COOKIE}=${fixtureToken}`;
   const response = await fetch(`${baseUrl}/api/verify/forecast-edge`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify({ boundary: Date.now() }),
   });
   if (!response.ok) throw new Error(`forecast edge arm ${response.status}`);
@@ -97,10 +101,10 @@ async function dumpBrief(page) {
   });
 }
 
-export async function driveLaunchShotForecast({ baseUrl, evidenceDir }) {
+export async function driveLaunchShotForecast({ baseUrl, evidenceDir, fixtureToken, startOffset = 0 }) {
   const plan = launchShotForecastPlan(process.env.OPD_VERIFY_SURFACE, process.env.OPD_VERIFY_VIEWPORT);
   mkdirSync(evidenceDir, { recursive: true });
-  const clock = await armForecastEdge(baseUrl);
+  const clock = await armForecastEdge(baseUrl, fixtureToken);
   const browser = plan.engine === 'chrome'
     ? await chromium.launch({
       headless: true,
@@ -110,12 +114,12 @@ export async function driveLaunchShotForecast({ baseUrl, evidenceDir }) {
     : await launchWebkit();
   let sample;
   try {
-    const context = await browser.newContext(contextOptions(plan));
-    await context.addCookies([{
-      name: 'opd-verify-catalog',
-      value: 'forecast-edge',
-      url: baseUrl,
-    }]);
+    const context = await createDeviceContext(browser, contextOptions(plan), {
+      baseUrl,
+      token: fixtureToken,
+      startOffset,
+      cookies: [{ name: 'opd-verify-catalog', value: 'forecast-edge', url: baseUrl }],
+    });
     if (plan.surface === 'iphone-17-pro') {
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });

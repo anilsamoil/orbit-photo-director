@@ -1,3 +1,4 @@
+import { createDeviceContext } from './fixture-session.mjs';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
@@ -169,7 +170,7 @@ async function readCycle(page) {
   });
 }
 
-export async function driveMapPagehide({ baseUrl, evidenceDir }) {
+export async function driveMapPagehide({ baseUrl, evidenceDir, fixtureToken, startOffset = 0 }) {
   const plan = pagehidePlan(process.env.OPD_VERIFY_SURFACE, process.env.OPD_VERIFY_VIEWPORT);
   mkdirSync(evidenceDir, { recursive: true });
   const browser = plan.engine === 'chrome'
@@ -181,7 +182,7 @@ export async function driveMapPagehide({ baseUrl, evidenceDir }) {
     : await launchWebkit();
   let sample;
   try {
-    const context = await browser.newContext(contextOptions(plan));
+    const context = await createDeviceContext(browser, contextOptions(plan), { baseUrl, token: fixtureToken, startOffset });
     if (plan.surface === 'iphone-17-pro') {
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });

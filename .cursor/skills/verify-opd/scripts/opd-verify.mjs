@@ -1,21 +1,24 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer, request as httpRequest } from 'node:http';
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { driveMapBearingCommit } from './bearing-commit.mjs';
 import { driveMapBearing } from './bearing-retarget.mjs';
 import { driveMapPagehide } from './corner-pagehide.mjs';
-import { BROWSER_FEATURES, driveFeatures, driveMapCorner } from './drive.mjs';
+import { BROWSER_FEATURES, driveFeatures, driveMapCorner, stopBrowsers } from './drive.mjs';
 import { driveLaunchShotForecast } from './launch-shot-forecast.mjs';
 import { driveMapHold } from './map-hold.mjs';
+import { driveMapImport } from './map-import-failure.mjs';
 import { drivePinFit } from './pin-fit.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
-import { bostonTrackText, buildFixtures, publishForecastEdgeCatalog, publishVerifyCatalog, refreshLaunchClock } from './fixtures.mjs';
+import { closeFixtureBrowsers } from './fixture-session.mjs';
+import { bostonTrackText, bodyForRequestPath, buildFixtures, discardDriveFixtures, driveStartMs, effectiveNowMs, FIXTURE_COOKIE, liveFixtureRoot, publishDriveFixtures, publishForecastEdgeCatalog, publishVerifyCatalog, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
@@ -39,7 +42,10 @@ function readState(home = homeDir()) {
 
 function writeState(state) {
   mkdirSync(state.home, { recursive: true });
-  writeFileSync(statePath(state.home), JSON.stringify(state, null, 2));
+  const file = statePath(state.home);
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  renameSync(tmp, file);
 }
 
 function alive(pid) {
@@ -97,6 +103,16 @@ async function waitForHttp(url, timeoutMs = 30000) {
     await new Promise((resolveSleep) => setTimeout(resolveSleep, 300));
   }
   throw new Error(`${url} not ready: ${last}`);
+}
+
+function isFixturePath(path) {
+  return path === '/manifest.json'
+    || path.startsWith('/v/verify/')
+    || path === '/launch/latest.json'
+    || path.startsWith('/launch/v/')
+    || path.startsWith('/launch/catalog/')
+    || path === '/api/log'
+    || /^\/api\/browser\/profiles\/[^/]+\/targets(?:\/[^/]+)?$/.test(path);
 }
 
 function cookieValue(req, name) {
@@ -212,38 +228,30 @@ function sendJson(res, text) {
 
 function startProxy(home) {
   const state = readState(home);
-  const fixtureDir = resolve(home, 'fixtures');
-  const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
-  const logEntries = [];
-  const personalTargets = [];
-  let removedCuratedIds = null;
-  let removedCuratedUpdatedAt = null;
+  if (!state.registrySecret) {
+    state.registrySecret = randomBytes(16).toString('hex');
+    if (state.home) writeState(state);
+  }
+  const homeFixtures = resolve(home, 'fixtures');
+  const meta = JSON.parse(readFileSync(resolve(homeFixtures, 'meta.json'), 'utf8'));
+  const driveFixtures = new Map();
+  function pruneRegistration(token) {
+    const entry = driveFixtures.get(token);
+    if (!entry) return null;
+    if (!entry.dir || !existsSync(entry.dir) || !alive(entry.pid)) {
+      forgetRegistration(token);
+      return null;
+    }
+    return entry.dir;
+  }
+  const profileSessions = new Map();
+  function profileFor(fixtureDir) {
+    if (!profileSessions.has(fixtureDir)) {
+      profileSessions.set(fixtureDir, { logEntries: [], personalTargets: [], removedCuratedIds: null, removedCuratedUpdatedAt: null });
+    }
+    return profileSessions.get(fixtureDir);
+  }
   const launchHoldWaiters = [];
-  const catalogHoldWaiters = [];
-  const catalogBodies = new Map();
-  let catalogLive = null;
-  let catalogGate = null;
-  let forecastEdge = null;
-  function armForecastEdge(boundaryMs) {
-    const published = publishForecastEdgeCatalog(fixtureDir, boundaryMs);
-    catalogBodies.set(published.pointer.path, published.body);
-    forecastEdge = published;
-    return published;
-  }
-  function currentCatalog() {
-    const now = Date.now();
-    const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
-    const cached = catalogLive
-      && now < catalogLive.anchor + 8 * 60_000
-      && Number.isFinite(until)
-      && now < until
-      && catalogBodies.has(catalogLive.pointer.path);
-    if (cached) return catalogLive;
-    catalogLive = publishVerifyCatalog(fixtureDir, now);
-    catalogLive.siteAnchor = catalogLive.anchor;
-    catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
-    return catalogLive;
-  }
   function parkLaunchBody(res, body) {
     return new Promise((resolvePark) => {
       let settled = false;
@@ -266,106 +274,213 @@ function startProxy(home) {
   function releaseLaunchHold() {
     for (const waiter of [...launchHoldWaiters]) waiter.finish(true);
   }
-  function parkCatalogBody(res, body) {
-    return new Promise((resolvePark) => {
-      let settled = false;
-      const waiter = {
-        finish(send) {
-          if (settled) return;
-          settled = true;
-          const index = catalogHoldWaiters.indexOf(waiter);
-          if (index >= 0) catalogHoldWaiters.splice(index, 1);
-          if (send && !res.writableEnded) {
-            try { sendJson(res, body); } catch { /* the browser already left */ }
-          }
-          resolvePark();
-        },
-      };
-      catalogHoldWaiters.push(waiter);
-      res.on('close', () => waiter.finish(false));
-    });
-  }
-  function bumpHeldCatalog() {
-    const live = currentCatalog();
-    const siteAnchor = catalogGate && !catalogGate.released
-      ? catalogGate.siteAnchor
-      : (live.siteAnchor ?? live.anchor);
-    const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
-    const bodyObj = JSON.parse(base);
-    let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
-    let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
-    let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
-    let revision = `c${siteAnchor}-${generatedMs}`;
-    const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
-      || (catalogGate && catalogGate.pointer.revision === candidate);
-    for (let step = 0; taken(revision) && step < 8; step += 1) {
-      generatedMs += 1000;
-      geometryMs += 1000;
-      scheduleMs += 1000;
-      revision = `c${generatedMs}`;
+  const catalogSessions = new Map();
+  function catalogFor(fixtureDir) {
+    if (catalogSessions.has(fixtureDir)) return catalogSessions.get(fixtureDir);
+    const catalogHoldWaiters = [];
+    const catalogBodies = new Map();
+    let catalogLive = null;
+    let catalogGate = null;
+    function currentCatalog() {
+      const root = liveFixtureRoot(fixtureDir);
+      const clock = readDriveClock(root);
+      const clockKey = JSON.stringify(clock);
+      const now = Date.now() + (clock?.startOffset ?? 0);
+      const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
+      const cached = catalogLive
+        && catalogLive.clockKey === clockKey
+        && now < catalogLive.anchor + 8 * 60_000
+        && Number.isFinite(until)
+        && now < until
+        && catalogBodies.has(catalogLive.pointer.path);
+      if (cached) return catalogLive;
+      catalogLive = publishVerifyCatalog(root, now, clock?.start ?? now);
+      catalogLive.clockKey = clockKey;
+      catalogLive.siteAnchor = catalogLive.anchor;
+      catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
+      return catalogLive;
     }
-    const generated = new Date(generatedMs).toISOString();
-    const geometry = new Date(geometryMs).toISOString();
-    const schedule = new Date(scheduleMs).toISOString();
-    bodyObj.generated_at = generated;
-    bodyObj.geometry_valid_until = geometry;
-    bodyObj.schedule_valid_until = schedule;
-    bodyObj.revision = revision;
-    if (bodyObj.tle && typeof bodyObj.tle === 'object') bodyObj.tle.epoch = generated;
-    const body = JSON.stringify(bodyObj);
-    const pointer = {
-      schema_version: 2,
-      revision,
-      generated_at: generated,
-      valid_until: geometry,
-      path: `launch/catalog/v/${revision}.json`,
-      sha256: createHash('sha256').update(body).digest('hex'),
-    };
-    return { pointer, body, siteAnchor };
-  }
-  function armCatalogGate() {
-    const next = bumpHeldCatalog();
-    catalogBodies.set(next.pointer.path, next.body);
-    catalogGate = {
-      pointer: next.pointer,
-      body: next.body,
-      siteAnchor: next.siteAnchor,
-      released: false,
-    };
-    return next.pointer;
-  }
-  function releaseCatalogGate() {
-    if (catalogGate && !catalogGate.released) {
-      catalogGate.released = true;
-      catalogLive = {
-        pointer: catalogGate.pointer,
-        body: catalogGate.body,
-        anchor: Date.now(),
-        siteAnchor: catalogGate.siteAnchor,
-      };
-      catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
-      writeFileSync(resolve(fixtureDir, 'catalog-clock.json'), JSON.stringify({ anchor: catalogGate.siteAnchor }));
+    function parkCatalogBody(res, body) {
+      return new Promise((resolvePark) => {
+        let settled = false;
+        const waiter = {
+          finish(send) {
+            if (settled) return;
+            settled = true;
+            const index = catalogHoldWaiters.indexOf(waiter);
+            if (index >= 0) catalogHoldWaiters.splice(index, 1);
+            if (send && !res.writableEnded) {
+              try { sendJson(res, body); } catch { /* the browser already left */ }
+            }
+            resolvePark();
+          },
+        };
+        catalogHoldWaiters.push(waiter);
+        res.on('close', () => waiter.finish(false));
+      });
     }
-    for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
+    function bumpHeldCatalog() {
+      const live = currentCatalog();
+      const siteAnchor = catalogGate && !catalogGate.released
+        ? catalogGate.siteAnchor
+        : (live.siteAnchor ?? live.anchor);
+      const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
+      const bodyObj = JSON.parse(base);
+      let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
+      let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
+      let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
+      let revision = `c${siteAnchor}-${generatedMs}`;
+      const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
+        || (catalogGate && catalogGate.pointer.revision === candidate);
+      for (let step = 0; taken(revision) && step < 8; step += 1) {
+        generatedMs += 1000;
+        geometryMs += 1000;
+        scheduleMs += 1000;
+        revision = `c${generatedMs}`;
+      }
+      const generated = new Date(generatedMs).toISOString();
+      const geometry = new Date(geometryMs).toISOString();
+      const schedule = new Date(scheduleMs).toISOString();
+      bodyObj.generated_at = generated;
+      bodyObj.geometry_valid_until = geometry;
+      bodyObj.schedule_valid_until = schedule;
+      bodyObj.revision = revision;
+      if (bodyObj.tle && typeof bodyObj.tle === 'object') bodyObj.tle.epoch = generated;
+      const body = JSON.stringify(bodyObj);
+      const pointer = {
+        schema_version: 2,
+        revision,
+        generated_at: generated,
+        valid_until: geometry,
+        path: `launch/catalog/v/${revision}.json`,
+        sha256: createHash('sha256').update(body).digest('hex'),
+      };
+      return { pointer, body, siteAnchor };
+    }
+    function armCatalogGate() {
+      const next = bumpHeldCatalog();
+      catalogBodies.set(next.pointer.path, next.body);
+      catalogGate = {
+        pointer: next.pointer,
+        body: next.body,
+        siteAnchor: next.siteAnchor,
+        released: false,
+      };
+      return next.pointer;
+    }
+    function releaseCatalogGate() {
+      if (catalogGate && !catalogGate.released) {
+        catalogGate.released = true;
+        catalogLive = {
+          pointer: catalogGate.pointer,
+          body: catalogGate.body,
+          anchor: effectiveNowMs(fixtureDir),
+          clockKey: JSON.stringify(readDriveClock(fixtureDir)),
+          siteAnchor: catalogGate.siteAnchor,
+        };
+        catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
+      }
+      for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
+    }
+    let forecastEdge = null;
+    function armForecastEdge(boundaryMs) {
+      const published = publishForecastEdgeCatalog(fixtureDir, boundaryMs);
+      catalogBodies.set(published.pointer.path, published.body);
+      forecastEdge = published;
+      return published;
+    }
+    const session = {
+      get gate() { return catalogGate; },
+      bodies: catalogBodies,
+      waiters: catalogHoldWaiters,
+      current: currentCatalog,
+      park: parkCatalogBody,
+      arm: armCatalogGate,
+      release: releaseCatalogGate,
+      forecast() { return forecastEdge; },
+      armForecast: armForecastEdge,
+      dispose() { for (const waiter of [...catalogHoldWaiters]) waiter.finish(false); },
+    };
+    catalogSessions.set(fixtureDir, session);
+    return session;
+  }
+  function forgetRegistration(token) {
+    const entry = driveFixtures.get(token);
+    if (entry) {
+      catalogSessions.get(entry.dir)?.dispose();
+      catalogSessions.delete(entry.dir);
+      profileSessions.delete(entry.dir);
+    }
+    driveFixtures.delete(token);
   }
   const server = createServer(async (req, res) => {
+    try {
     const url = new URL(req.url || '/', `http://127.0.0.1:${state.port}`);
     const path = url.pathname;
-    if (cookieValue(req, 'opd-verify-catalog') === 'forecast-edge') {
-      if (!forecastEdge) {
-        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-        res.end('missing');
-        return;
-      }
-      if (path === '/launch/catalog/latest.json') {
-        sendJson(res, JSON.stringify(forecastEdge.pointer));
-        return;
-      }
-      if (path === `/${forecastEdge.pointer.path}`) {
-        sendJson(res, forecastEdge.body);
-        return;
-      }
+    function registryAuthorized(req) {
+      const header = req.headers['x-opd-verify-registry'];
+      const presented = Array.isArray(header) ? header[0] : (header || '');
+      return presented.length > 0 && presented === state.registrySecret;
     }
+    if (path === '/api/verify/fixtures' && (req.method === 'GET' || req.method === 'POST') && !registryAuthorized(req)) {
+      json(res, 401, { ok: false });
+      return;
+    }
+    if (path === '/api/verify/fixtures' && req.method === 'GET') {
+      const entries = [...driveFixtures.entries()].map(([token, entry]) => ({
+        token,
+        dir: entry.dir,
+        pid: entry.pid,
+      }));
+      json(res, 200, { count: entries.length, entries });
+      return;
+    }
+    if (path === '/api/verify/fixtures' && req.method === 'POST') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const token = typeof body.token === 'string' ? body.token : '';
+      if (!/^[a-f0-9]{16}$/.test(token)) {
+        json(res, 400, { ok: false });
+        return;
+      }
+      const existing = driveFixtures.get(token);
+      if (body.forget === true) {
+        if (existing && body.secret !== existing.secret) {
+          json(res, 403, { ok: false });
+          return;
+        }
+        forgetRegistration(token);
+        json(res, 200, { ok: true, count: driveFixtures.size });
+        return;
+      }
+      if (existing && body.secret !== existing.secret) {
+        json(res, 409, { ok: false });
+        return;
+      }
+      const dir = typeof body.dir === 'string' ? resolve(body.dir) : '';
+      const pid = Number(body.pid);
+      const tempRoot = resolve(tmpdir());
+      const allowed = Number.isInteger(pid)
+        && pid > 0
+        && dir.startsWith(`${tempRoot}${sep}`)
+        && existsSync(resolve(dir, 'manifest.json'));
+      if (!allowed) {
+        json(res, 400, { ok: false });
+        return;
+      }
+      const secret = existing ? existing.secret : randomBytes(16).toString('hex');
+      driveFixtures.set(token, { dir, pid, secret });
+      json(res, 200, { ok: true, secret });
+      return;
+    }
+    const token = cookieValue(req, FIXTURE_COOKIE);
+    const owned = token ? pruneRegistration(token) : homeFixtures;
+    if (token && !owned && isFixturePath(path)) {
+      json(res, 404, { error: `unknown ${FIXTURE_COOKIE}` });
+      return;
+    }
+    const fixtureDir = owned || homeFixtures;
+    const catalog = catalogFor(fixtureDir);
+    const profile = profileFor(fixtureDir);
     const sendFile = (name) => {
       const file = resolve(fixtureDir, name);
       if (!existsSync(file)) {
@@ -451,17 +566,21 @@ function startProxy(home) {
       res.end(body);
       return;
     }
-    const artifact = {
-      '/v/verify/passes.json': 'passes.json',
-      '/v/verify/top5.json': 'top5.json',
-      '/v/verify/top_24h.json': 'top_24h.json',
-      '/v/verify/track.json': 'track.json',
-      '/v/verify/status.json': 'status.json',
-      '/v/verify/targets.json': 'targets.json',
-      '/v/verify/cupola_windows.json': 'cupola_windows.json',
-      '/v/verify/tracked.json': 'tracked.json',
-    }[path];
-    if (artifact) return sendFile(artifact);
+    const hashed = bodyForRequestPath(fixtureDir, path);
+    if (hashed) {
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': hashed.length,
+      });
+      res.end(hashed);
+      return;
+    }
+    if (/^\/v\/verify\/[a-f0-9]{64}\/[^/]+$/.test(path)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
+      return;
+    }
     if (path === '/launch/latest.json') {
       const rung = cookieValue(req, 'opd-verify-launch');
       const published = launchRung(fixtureDir, rung);
@@ -479,26 +598,26 @@ function startProxy(home) {
       json(res, 200, { ok: true, pending: launchHoldWaiters.length });
       return;
     }
-    if (path === '/api/verify/forecast-edge' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
-      const published = armForecastEdge(payload.boundary ?? Date.now());
-      json(res, 200, { ok: true, revision: published.pointer.revision, ...published.clock });
-      return;
-    }
     if (path === '/api/verify/catalog-hold' && req.method === 'GET') {
-      json(res, 200, { pending: catalogHoldWaiters.length > 0 });
+      json(res, 200, { pending: catalog.waiters.length > 0 });
       return;
     }
     if (path === '/api/verify/catalog-hold' && req.method === 'POST') {
       await readBody(req);
-      const pointer = armCatalogGate();
+      const pointer = catalog.arm();
       json(res, 200, { ok: true, revision: pointer.revision });
       return;
     }
     if (path === '/api/verify/catalog-release' && req.method === 'POST') {
       await readBody(req);
-      releaseCatalogGate();
-      json(res, 200, { ok: true, pending: catalogHoldWaiters.length });
+      catalog.release();
+      json(res, 200, { ok: true, pending: catalog.waiters.length });
+      return;
+    }
+    if (path === '/api/verify/forecast-edge' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const published = catalog.armForecast(payload.boundary ?? Date.now());
+      json(res, 200, { ok: true, revision: published.pointer.revision, ...published.clock });
       return;
     }
     if (path === '/launch/v/verifyrev-hold.json') {
@@ -514,23 +633,47 @@ function startProxy(home) {
       return;
     }
     if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
+    if (cookieValue(req, 'opd-verify-catalog') === 'forecast-edge' && (path === '/launch/catalog/latest.json' || path.startsWith('/launch/catalog/v/'))) {
+      const edge = catalog.forecast();
+      if (!edge) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end('missing');
+        return;
+      }
+      if (path === '/launch/catalog/latest.json') {
+        sendJson(res, JSON.stringify(edge.pointer));
+        return;
+      }
+      if (path === `/${edge.pointer.path}`) {
+        sendJson(res, edge.body);
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
+      return;
+    }
     if (path === '/launch/catalog/latest.json') {
-      const pointer = catalogGate && !catalogGate.released ? catalogGate.pointer : currentCatalog().pointer;
+      const pointer = catalog.gate && !catalog.gate.released ? catalog.gate.pointer : catalog.current().pointer;
       sendJson(res, JSON.stringify(pointer));
       return;
     }
     if (path.startsWith('/launch/catalog/v/') && path.endsWith('.json')) {
-      if (catalogGate && !catalogGate.released && path.slice(1) === catalogGate.pointer.path) {
-        await parkCatalogBody(res, catalogGate.body);
+      if (catalog.gate && !catalog.gate.released && path.slice(1) === catalog.gate.pointer.path) {
+        await catalog.park(res, catalog.gate.body);
         return;
       }
-      const body = catalogBodies.get(path.slice(1));
+      const body = catalog.bodies.get(path.slice(1));
       if (!body) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
         res.end('missing');
         return;
       }
       sendJson(res, body);
+      return;
+    }
+    if (/^\/launch\/v\/[a-f0-9]{64}\.json$/.test(path)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('missing');
       return;
     }
     if (path === '/api/browser/session') {
@@ -553,7 +696,7 @@ function startProxy(home) {
       return;
     }
     if (path === '/api/log' && req.method === 'GET') {
-      json(res, 200, { entries: logEntries });
+      json(res, 200, { entries: profile.logEntries });
       return;
     }
     if (path === '/api/log' && req.method === 'POST') {
@@ -573,7 +716,7 @@ function startProxy(home) {
       if (typeof payload.target_name === 'string' && payload.target_name.length > 0 && payload.target_name.length <= 200) {
         entry.target_name = payload.target_name;
       }
-      logEntries.push(entry);
+      profile.logEntries.push(entry);
       json(res, 200, { ok: true });
       return;
     }
@@ -581,15 +724,15 @@ function startProxy(home) {
     if (targetRoute && req.method === 'GET') {
       json(res, 200, {
         ok: true,
-        targets: personalTargets,
-        removedCuratedIds,
-        removedCuratedUpdatedAt,
+        targets: profile.personalTargets,
+        removedCuratedIds: profile.removedCuratedIds,
+        removedCuratedUpdatedAt: profile.removedCuratedUpdatedAt,
       });
       return;
     }
     if (targetRoute && req.method === 'POST') {
-      personalTargets.push(JSON.parse(await readBody(req) || '{}'));
-      json(res, 200, { ok: true, count: personalTargets.length });
+      profile.personalTargets.push(JSON.parse(await readBody(req) || '{}'));
+      json(res, 200, { ok: true, count: profile.personalTargets.length });
       return;
     }
     if (targetRoute && req.method === 'PUT') {
@@ -600,20 +743,20 @@ function startProxy(home) {
         json(res, 400, { error: 'targets_must_be_array' });
         return;
       }
-      if (hasTargets) personalTargets.splice(0, personalTargets.length, ...body.targets);
+      if (hasTargets) profile.personalTargets.splice(0, profile.personalTargets.length, ...body.targets);
       if (hasRemoved) {
-        removedCuratedIds = body.removedCuratedIds.filter((id) => typeof id === 'string');
-        removedCuratedUpdatedAt = typeof body.removedCuratedUpdatedAt === 'string'
+        profile.removedCuratedIds = body.removedCuratedIds.filter((id) => typeof id === 'string');
+        profile.removedCuratedUpdatedAt = typeof body.removedCuratedUpdatedAt === 'string'
           ? body.removedCuratedUpdatedAt
           : new Date().toISOString();
       }
-      json(res, 200, { ok: true, count: hasRemoved && !hasTargets ? removedCuratedIds.length : personalTargets.length });
+      json(res, 200, { ok: true, count: hasRemoved && !hasTargets ? profile.removedCuratedIds.length : profile.personalTargets.length });
       return;
     }
     if (targetRoute && req.method === 'DELETE') {
       const id = decodeURIComponent(targetRoute[2] || '');
-      const index = personalTargets.findIndex((target) => target.id === id);
-      if (index >= 0) personalTargets.splice(index, 1);
+      const index = profile.personalTargets.findIndex((target) => target.id === id);
+      if (index >= 0) profile.personalTargets.splice(index, 1);
       json(res, 200, { ok: true });
       return;
     }
@@ -642,7 +785,19 @@ function startProxy(home) {
       return;
     }
     await proxyRequest(state, req, res);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(error instanceof Error ? error.message : String(error));
+      }
+    }
   });
+  const sweep = setInterval(() => {
+    for (const [token, entry] of driveFixtures) {
+      if (!entry.dir || !existsSync(entry.dir) || !alive(entry.pid)) forgetRegistration(token);
+    }
+  }, 200);
+  sweep.unref();
   server.listen(state.port, '127.0.0.1');
   console.log(`proxy listening ${state.port}`);
 }
@@ -683,7 +838,8 @@ async function doctor(home = homeDir()) {
         const manifestResponse = await fetch(`http://127.0.0.1:${state.port}/manifest.json`);
         const manifest = await manifestResponse.json();
         if (!manifest.version || !manifest.generated_at) problems.push('manifest missing version');
-        if (Date.parse(state.launchValidUntil) <= Date.now()) problems.push('launch fixture expired. Run down, then up.');
+        const fixtureNow = effectiveNowMs(resolve(home, 'fixtures'));
+        if (Date.parse(state.launchValidUntil) <= fixtureNow) problems.push('launch fixture expired. Run down, then up.');
       } catch (error) {
         problems.push(error instanceof Error ? error.message : String(error));
       }
@@ -743,6 +899,7 @@ async function up() {
     manifestVersion: built.manifest.version,
     launchValidUntil: built.meta.launchValidUntil,
     tleSource: built.meta.tleSource,
+    registrySecret: randomBytes(16).toString('hex'),
   };
   writeState(state);
   state.proxyPid = spawnDetached(process.execPath, [fileURLToPath(import.meta.url), 'serve'], repoRoot, resolve(home, 'proxy.log'));
@@ -782,156 +939,238 @@ function down() {
 }
 
 async function drive(feature) {
+  const wall = Date.now();
+  const eventStart = driveStartMs(process.env.OPD_VERIFY_DRIVE_START, wall);
   const home = homeDir();
-  const until = refreshLaunchClock(resolve(home, 'fixtures'));
-  const early = readState(home);
-  if (early) {
-    early.launchValidUntil = until;
-    writeState(early);
-  }
-  await doctor(home);
-  const state = readState(home);
-  if (feature === 'map-corner') {
-    try {
-      const note = await driveMapCorner({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-        home,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+  const published = publishDriveFixtures(resolve(home, 'fixtures'), eventStart, wall);
+  const fixtureDir = published.dir;
+  stampEventTimes(fixtureDir, eventStart, wall);
+  const startOffset = readDriveClock(fixtureDir).startOffset;
+  refreshLaunchClock(fixtureDir, effectiveNowMs(fixtureDir));
+  const token = randomBytes(8).toString('hex');
+  let releasePromise = null;
+  const release = () => {
+    if (!releasePromise) {
+      releasePromise = (async () => {
+        stopBrowsers();
+        await closeFixtureBrowsers();
+        discardDriveFixtures(fixtureDir);
+        const current = readState(home);
+        if (current?.url && current.registrySecret) {
+          try {
+            await fetch(`${current.url}/api/verify/fixtures`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-opd-verify-registry': current.registrySecret,
+              },
+              body: JSON.stringify({ token, secret: leaseSecret, forget: true }),
+              signal: AbortSignal.timeout(2000),
+            });
+          } catch {
+            /* the proxy is already gone */
+          }
+        }
+      })();
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'map-bearing-commit') {
-    try {
-      const note = await driveMapBearingCommit({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    return releasePromise;
+  };
+  let leaseSecret = '';
+  const stop = (code) => {
+    process.exitCode = code;
+    stopBrowsers();
+    release().finally(() => process.exit(code));
+  };
+  process.once('SIGINT', () => stop(130));
+  process.once('SIGTERM', () => stop(143));
+  process.once('SIGHUP', () => stop(129));
+  try {
+    await doctor(home);
+    const state = readState(home);
+    const registered = await fetch(`${state.url}/api/verify/fixtures`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opd-verify-registry': state.registrySecret,
+      },
+      body: JSON.stringify({ token, dir: fixtureDir, pid: process.pid }),
+    });
+    if (!registered.ok) throw new Error(`fixture register ${registered.status}`);
+    leaseSecret = (await registered.json()).secret;
+    if (feature === 'map-corner') {
+      try {
+        const note = await driveMapCorner({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          home,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+        console.log(`evidence ${state.evidence}`);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      return;
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'map-bearing') {
-    try {
-      const note = await driveMapBearing({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    if (feature === 'map-bearing-commit') {
+      try {
+        const note = await driveMapBearingCommit({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'map-pagehide') {
-    try {
-      const note = await driveMapPagehide({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    if (feature === 'map-bearing') {
+      try {
+        const note = await driveMapBearing({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'map-safe-area') {
-    try {
-      const note = await driveMapSafeArea({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    if (feature === 'map-pagehide') {
+      try {
+        const note = await driveMapPagehide({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'session-lock') {
-    try {
-      const note = await driveSessionLock({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    if (feature === 'map-safe-area') {
+      try {
+        const note = await driveMapSafeArea({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'map-hold') {
-    try {
-      const note = await driveMapHold({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    if (feature === 'session-lock') {
+      try {
+        const note = await driveSessionLock({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'launch-shot-forecast') {
-    try {
-      const note = await driveLaunchShotForecast({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    if (feature === 'map-hold') {
+      try {
+        const note = await driveMapHold({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
     }
-    console.log(`evidence ${state.evidence}`);
-    return;
-  }
-  if (feature === 'pin-fit') {
-    try {
-      const note = await drivePinFit({
-        baseUrl: state.url,
-        evidenceDir: state.evidence,
-      });
-      console.log(note);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+    if (feature === 'launch-shot-forecast') {
+      try {
+        const note = await driveLaunchShotForecast({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
     }
+    if (feature === 'pin-fit') {
+      try {
+        const note = await drivePinFit({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureDir,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
+    }
+    const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
+    const features = feature === 'all' ? ['all'] : [feature];
+    if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
+      console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, launch-shot-forecast, or session-lock. map-import is \`drive map-import\` and does not use up.`);
+      process.exitCode = 2;
+      return;
+    }
+    const notes = await driveFeatures({
+      baseUrl: state.url,
+      evidenceDir: state.evidence,
+      meta,
+      features,
+      fixtureDir,
+      fixtureToken: token,
+      startOffset,
+    });
+    for (const note of notes) console.log(note);
     console.log(`evidence ${state.evidence}`);
-    return;
+  } finally {
+    await release();
   }
-  const meta = JSON.parse(readFileSync(resolve(home, 'fixtures/meta.json'), 'utf8'));
-  const features = feature === 'all' ? ['all'] : [feature];
-  if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-    console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, launch-shot-forecast, or session-lock.`);
-    process.exit(2);
-  }
-  const notes = await driveFeatures({
-    baseUrl: state.url,
-    evidenceDir: state.evidence,
-    meta,
-    features,
-  });
-  for (const note of notes) console.log(note);
-  console.log(`evidence ${state.evidence}`);
 }
 
 function staticType(file) {
@@ -1048,10 +1287,18 @@ else if (command === 'doctor') {
   }
 }
 else if (command === 'down') down();
+else if (command === 'drive' && process.argv[3] === 'map-import') {
+  try {
+    console.log(await driveMapImport());
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
 else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|launch-shot-forecast|session-lock>|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|launch-shot-forecast|session-lock>|drive map-import|sw|down|check|serve');
   process.exit(2);
 }

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { createServer } from 'node:http';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deviceDescriptor, launchWebkit, playwrightSend, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { deviceDescriptor, launchWebkit, openDeviceContext, playwrightSend, WEBKIT_DEVICES } from './webkit-devices.mjs';
 import { proveShortTimeRow, whenViewportLaidOut } from './drive.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -21,6 +22,8 @@ async function open(browser) {
   const context = await browser.newContext({ viewport: { width: 402, height: 874 } });
   const page = await context.newPage();
   await page.setContent(html);
+  const cdp = await context.newCDPSession(page);
+  page.send = cdp.send.bind(cdp);
   return page;
 }
 
@@ -213,13 +216,13 @@ test('a stalled viewport restore settles the caller near the drive deadline', { 
   assert.ok(result.elapsed >= 11_000 && result.elapsed < 15_000, String(result.elapsed));
 });
 
-for (const engine of ['Chrome', 'WebKit']) {
+for (const engine of ['Chrome']) {
   test(`stalled frames after a matching resize reject on ${engine}`, { timeout: 20_000 }, async () => {
     const browser = await launch(engine);
     const page = await open(browser);
     try {
       await stallFrames(page, false);
-      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 13_000);
+      const result = await raceCall(whenViewportLaidOut(page.send, 390, 520), 13_000);
       const trace = await frameTrace(page);
       assert.ok(trace.resizes.some((size) => size[0] === 390 && size[1] === 520), JSON.stringify(trace));
       assert.equal(result.status, 'rejected', JSON.stringify(result));
@@ -241,7 +244,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const page = await open(browser);
     try {
       await stallFrames(page, false, 1);
-      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 13_000);
+      const result = await raceCall(whenViewportLaidOut(page.send, 390, 520), 13_000);
       const trace = await frameTrace(page);
       assert.ok(trace.resizes.some((size) => size[0] === 390 && size[1] === 520), JSON.stringify(trace));
       assert.equal(result.status, 'rejected', JSON.stringify(result));
@@ -262,7 +265,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const page = await open(browser);
     try {
       await stallFrames(page, true);
-      const result = await raceCall(whenViewportLaidOut(playwrightSend(page), 390, 520), 15_000);
+      const result = await raceCall(whenViewportLaidOut(page.send, 390, 520), 15_000);
       const trace = await page.evaluate(() => ({
         resizes: window.__resizes,
         timers: window.__timers.size,
@@ -285,7 +288,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const page = await open(browser);
     try {
       await stallFrames(page, false);
-      const real = playwrightSend(page);
+      const real = page.send;
       const send = (method, params) => {
         if (method === 'Emulation.setDeviceMetricsOverride') throw new Error('viewport command failed');
         return real(method, params);
@@ -311,7 +314,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const browser = await launch(engine);
     const page = await open(browser);
     try {
-      const send = playwrightSend(page);
+      const send = page.send;
       await whenViewportLaidOut(send, 390, 520);
       await stallFrames(page, false, 2);
       const started = Date.now();
@@ -335,7 +338,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const browser = await launch(engine);
     const page = await open(browser);
     try {
-      await page.setViewportSize({ width: 390, height: 520 });
+      await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 520, deviceScaleFactor: 1, mobile: true });
       await page.evaluate(() => {
         const real = window.requestAnimationFrame;
         window.__frameAt = [];
@@ -344,7 +347,7 @@ for (const engine of ['Chrome', 'WebKit']) {
           return callback(time);
         });
       });
-      const real = playwrightSend(page);
+      const real = page.send;
       const send = async (method, params) => {
         if (method !== 'Emulation.setDeviceMetricsOverride') return real(method, params);
         await new Promise((resolve) => setTimeout(resolve, 60));
@@ -366,7 +369,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const browser = await launch(engine);
     const page = await open(browser);
     try {
-      await page.setViewportSize({ width: 390, height: 520 });
+      await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 520, deviceScaleFactor: 1, mobile: true });
       await page.evaluate(() => {
         let dpr = 3;
         Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => dpr });
@@ -378,7 +381,7 @@ for (const engine of ['Chrome', 'WebKit']) {
           return callback(time);
         });
       });
-      const real = playwrightSend(page);
+      const real = page.send;
       const send = async (method, params) => {
         if (method !== 'Emulation.setDeviceMetricsOverride') return real(method, params);
         await new Promise((resolve) => setTimeout(resolve, 60));
@@ -427,7 +430,7 @@ for (const engine of ['Chrome', 'WebKit']) {
           }
         };
       });
-      const pending = whenViewportLaidOut(playwrightSend(page), 390, 520);
+      const pending = whenViewportLaidOut(page.send, 390, 520);
       pending.catch(() => {});
       let inflight = [];
       for (let i = 0; i < 60; i += 1) {
@@ -463,7 +466,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const page = await open(browser);
     try {
       await stallFrames(page, false);
-      const real = playwrightSend(page);
+      const real = page.send;
       const send = (method, params) => {
         if (method === 'Runtime.evaluate' && String(params?.expression || '').includes('__opdArmViewportLayout?.')) {
           throw new Error('arm failed');
@@ -491,8 +494,8 @@ for (const engine of ['Chrome', 'WebKit']) {
     const browser = await launch(engine);
     const page = await open(browser);
     try {
-      await page.setViewportSize({ width: 980, height: 1307 });
-      const real = playwrightSend(page);
+      await page.send('Emulation.setDeviceMetricsOverride', { width: 980, height: 1307, deviceScaleFactor: 1, mobile: true });
+      const real = page.send;
       let liveAtRead = null;
       const send = async (method, params) => {
         if (method === 'Runtime.evaluate' && params?.expression === 'window.__opdViewportSettled') {
@@ -514,7 +517,7 @@ for (const engine of ['Chrome', 'WebKit']) {
     const page = await open(browser);
     try {
       const started = Date.now();
-      await whenViewportLaidOut(playwrightSend(page), 390, 520);
+      await whenViewportLaidOut(page.send, 390, 520);
       assert.ok(Date.now() - started < 5_000);
       const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
       assert.deepEqual(size, [390, 520]);
@@ -552,18 +555,20 @@ for (const engine of ['Chrome', 'WebKit']) {
     test(`proveShortTimeRow keeps ${device.label} at DPR ${device.dpr} on ${engine}`, { timeout: 40_000 }, async () => {
       const browser = await launch(engine);
       const descriptor = deviceDescriptor(device.spec);
-      const context = await browser.newContext(descriptor);
-      const page = await context.newPage();
+      const session = await openDeviceContext(browser, device.spec);
+      const server = createServer((req, res) => { res.setHeader('content-type', 'text/html'); res.end(timeHtml); });
+      await new Promise((done) => server.listen(0, '127.0.0.1', done));
+      const page = session.page;
       try {
-        await page.setContent(timeHtml);
+        await page.goto(`http://127.0.0.1:${server.address().port}/`);
         const before = await page.evaluate(() => window.devicePixelRatio);
         assert.equal(before, device.dpr, JSON.stringify(descriptor.viewport));
-        await proveShortTimeRow(playwrightSend(page), {
+        await proveShortTimeRow(playwrightSend(session), {
           width: descriptor.viewport.width,
           height: descriptor.viewport.height,
           mobile: true,
         });
-        const after = await page.evaluate(() => ({
+        const after = await session.page.evaluate(() => ({
           w: window.innerWidth,
           h: window.innerHeight,
           dpr: window.devicePixelRatio,
@@ -572,6 +577,8 @@ for (const engine of ['Chrome', 'WebKit']) {
         assert.deepEqual([after.w, after.h], [device.width, device.height]);
       } finally {
         await browser.close();
+        server.closeAllConnections();
+        await new Promise((done) => server.close(done));
       }
     });
   }

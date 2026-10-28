@@ -1,3 +1,4 @@
+import { createDeviceContext } from './fixture-session.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { deviceDescriptor, launchWebkit } from './webkit-devices.mjs';
@@ -151,13 +152,13 @@ function formatBearing(bearing) {
   return value.toFixed(2);
 }
 
-export async function driveMapBearingCommit({ baseUrl, evidenceDir }) {
+export async function driveMapBearingCommit({ baseUrl, evidenceDir, fixtureToken, startOffset = 0 }) {
   const plan = bearingCommitPlan(process.env.OPD_VERIFY_SURFACE, process.env.OPD_VERIFY_VIEWPORT);
   mkdirSync(evidenceDir, { recursive: true });
   const browser = await launchWebkit();
   const sample = {};
   try {
-    const context = await browser.newContext(contextOptions(plan));
+    const context = await createDeviceContext(browser, contextOptions(plan), { baseUrl, token: fixtureToken, startOffset });
     if (plan.standalone) {
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
