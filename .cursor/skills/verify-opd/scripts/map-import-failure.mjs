@@ -366,6 +366,7 @@ export async function driveMapImport(env = process.env) {
     const tabbable = await tabReachesRetry(page);
     const documentsAtError = hosted.hits.documents.length;
     await new Promise((done) => setTimeout(done, HOLD_MS));
+    const documentsAfterHold = hosted.hits.documents.length;
     const held = await readFailure(page);
     await page.screenshot({ path: join(evidenceDir, `map-import-${plan.id}-error.png`) });
     hosted.control.fault = 'ok';
@@ -401,7 +402,7 @@ export async function driveMapImport(env = process.env) {
       platform: process.platform,
       browser: plan.browser,
       documentsAtError,
-      documentsAfterHold: hosted.hits.documents.length,
+      documentsAfterHold,
       heldBanner: held.banner,
       retryFlag: failed.retryFlag,
       storedUrlIncludesEntry: Boolean(failed.storedUrl?.includes(assets.entry)),
