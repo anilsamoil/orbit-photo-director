@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { fixtureCookie } from './fixture-session.mjs';
 import { installOneShotClock } from './fixture-clock.mjs';
 
 const require = createRequire(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../frontend/package.json'));
@@ -261,6 +262,7 @@ export async function openDeviceContext(browser, spec, hooks = {}) {
     ...(hooks.storageState ? { storageState: hooks.storageState } : {}),
   });
   try {
+    if (hooks.fixtureToken) await context.addCookies([fixtureCookie(hooks.baseUrl, hooks.fixtureToken)]);
     const initScripts = (hooks.initScripts || []).filter((source) => source !== STANDALONE_INIT);
     if (spec.standalone) initScripts.unshift(STANDALONE_INIT);
     if (!initScripts.includes(DISCLOSURE_BOOT)) initScripts.push(DISCLOSURE_BOOT);
@@ -1014,9 +1016,9 @@ async function hit(page, locator) {
   }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
 }
 
-export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir) {
+export async function proveDeniedFooter(browser, spec, baseUrl, evidenceDir, fixtureToken) {
   mkdirSync(evidenceDir, { recursive: true });
-  const session = await openDeviceContext(browser, spec);
+  const session = await openDeviceContext(browser, spec, { baseUrl, fixtureToken });
   await session.context.addCookies([{ name: 'opd-verify-session', value: 'deny', url: baseUrl }]);
   const page = session.page;
   try {
