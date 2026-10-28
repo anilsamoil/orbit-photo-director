@@ -15,6 +15,7 @@ import { driveMapHold } from './map-hold.mjs';
 import { drivePinFit } from './pin-fit.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
+import { closeFixtureBrowsers } from './fixture-session.mjs';
 import { bostonTrackText, bodyForRequestPath, buildFixtures, discardDriveFixtures, driveStartMs, effectiveNowMs, FIXTURE_COOKIE, liveFixtureRoot, publishDriveFixtures, publishVerifyCatalog, readDriveClock, refreshLaunchClock, stampEventTimes } from './fixtures.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -234,7 +235,7 @@ function startProxy(home) {
     const entry = driveFixtures.get(token);
     if (!entry) return null;
     if (!entry.dir || !existsSync(entry.dir) || !alive(entry.pid)) {
-      driveFixtures.delete(token);
+      forgetRegistration(token);
       return null;
     }
     return entry.dir;
@@ -244,29 +245,6 @@ function startProxy(home) {
   let removedCuratedIds = null;
   let removedCuratedUpdatedAt = null;
   const launchHoldWaiters = [];
-  const catalogHoldWaiters = [];
-  const catalogBodies = new Map();
-  let catalogLive = null;
-  let catalogGate = null;
-  function currentCatalog() {
-    const root = liveFixtureRoot(homeFixtures);
-    const clock = readDriveClock(root);
-    const clockKey = JSON.stringify(clock);
-    const now = Date.now() + (clock?.startOffset ?? 0);
-    const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
-    const cached = catalogLive
-      && catalogLive.clockKey === clockKey
-      && now < catalogLive.anchor + 8 * 60_000
-      && Number.isFinite(until)
-      && now < until
-      && catalogBodies.has(catalogLive.pointer.path);
-    if (cached) return catalogLive;
-    catalogLive = publishVerifyCatalog(root, now, clock?.start ?? now);
-    catalogLive.clockKey = clockKey;
-    catalogLive.siteAnchor = catalogLive.anchor;
-    catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
-    return catalogLive;
-  }
   function parkLaunchBody(res, body) {
     return new Promise((resolvePark) => {
       let settled = false;
@@ -289,87 +267,134 @@ function startProxy(home) {
   function releaseLaunchHold() {
     for (const waiter of [...launchHoldWaiters]) waiter.finish(true);
   }
-  function parkCatalogBody(res, body) {
-    return new Promise((resolvePark) => {
-      let settled = false;
-      const waiter = {
-        finish(send) {
-          if (settled) return;
-          settled = true;
-          const index = catalogHoldWaiters.indexOf(waiter);
-          if (index >= 0) catalogHoldWaiters.splice(index, 1);
-          if (send && !res.writableEnded) {
-            try { sendJson(res, body); } catch { /* the browser already left */ }
-          }
-          resolvePark();
-        },
-      };
-      catalogHoldWaiters.push(waiter);
-      res.on('close', () => waiter.finish(false));
-    });
-  }
-  function bumpHeldCatalog() {
-    const live = currentCatalog();
-    const siteAnchor = catalogGate && !catalogGate.released
-      ? catalogGate.siteAnchor
-      : (live.siteAnchor ?? live.anchor);
-    const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
-    const bodyObj = JSON.parse(base);
-    let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
-    let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
-    let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
-    let revision = `c${siteAnchor}-${generatedMs}`;
-    const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
-      || (catalogGate && catalogGate.pointer.revision === candidate);
-    for (let step = 0; taken(revision) && step < 8; step += 1) {
-      generatedMs += 1000;
-      geometryMs += 1000;
-      scheduleMs += 1000;
-      revision = `c${generatedMs}`;
+  const catalogSessions = new Map();
+  function catalogFor(fixtureDir) {
+    if (catalogSessions.has(fixtureDir)) return catalogSessions.get(fixtureDir);
+    const catalogHoldWaiters = [];
+    const catalogBodies = new Map();
+    let catalogLive = null;
+    let catalogGate = null;
+    function currentCatalog() {
+      const root = liveFixtureRoot(fixtureDir);
+      const clock = readDriveClock(root);
+      const clockKey = JSON.stringify(clock);
+      const now = Date.now() + (clock?.startOffset ?? 0);
+      const until = catalogLive ? Date.parse(catalogLive.pointer.valid_until) : Number.NaN;
+      const cached = catalogLive
+        && catalogLive.clockKey === clockKey
+        && now < catalogLive.anchor + 8 * 60_000
+        && Number.isFinite(until)
+        && now < until
+        && catalogBodies.has(catalogLive.pointer.path);
+      if (cached) return catalogLive;
+      catalogLive = publishVerifyCatalog(root, now, clock?.start ?? now);
+      catalogLive.clockKey = clockKey;
+      catalogLive.siteAnchor = catalogLive.anchor;
+      catalogBodies.set(catalogLive.pointer.path, catalogLive.body);
+      return catalogLive;
     }
-    const generated = new Date(generatedMs).toISOString();
-    const geometry = new Date(geometryMs).toISOString();
-    const schedule = new Date(scheduleMs).toISOString();
-    bodyObj.generated_at = generated;
-    bodyObj.geometry_valid_until = geometry;
-    bodyObj.schedule_valid_until = schedule;
-    bodyObj.revision = revision;
-    if (bodyObj.tle && typeof bodyObj.tle === 'object') bodyObj.tle.epoch = generated;
-    const body = JSON.stringify(bodyObj);
-    const pointer = {
-      schema_version: 2,
-      revision,
-      generated_at: generated,
-      valid_until: geometry,
-      path: `launch/catalog/v/${revision}.json`,
-      sha256: createHash('sha256').update(body).digest('hex'),
-    };
-    return { pointer, body, siteAnchor };
-  }
-  function armCatalogGate() {
-    const next = bumpHeldCatalog();
-    catalogBodies.set(next.pointer.path, next.body);
-    catalogGate = {
-      pointer: next.pointer,
-      body: next.body,
-      siteAnchor: next.siteAnchor,
-      released: false,
-    };
-    return next.pointer;
-  }
-  function releaseCatalogGate() {
-    if (catalogGate && !catalogGate.released) {
-      catalogGate.released = true;
-      catalogLive = {
-        pointer: catalogGate.pointer,
-        body: catalogGate.body,
-        anchor: effectiveNowMs(fixtureDir),
-        clockKey: JSON.stringify(readDriveClock(fixtureDir)),
-        siteAnchor: catalogGate.siteAnchor,
-      };
-      catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
+    function parkCatalogBody(res, body) {
+      return new Promise((resolvePark) => {
+        let settled = false;
+        const waiter = {
+          finish(send) {
+            if (settled) return;
+            settled = true;
+            const index = catalogHoldWaiters.indexOf(waiter);
+            if (index >= 0) catalogHoldWaiters.splice(index, 1);
+            if (send && !res.writableEnded) {
+              try { sendJson(res, body); } catch { /* the browser already left */ }
+            }
+            resolvePark();
+          },
+        };
+        catalogHoldWaiters.push(waiter);
+        res.on('close', () => waiter.finish(false));
+      });
     }
-    for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
+    function bumpHeldCatalog() {
+      const live = currentCatalog();
+      const siteAnchor = catalogGate && !catalogGate.released
+        ? catalogGate.siteAnchor
+        : (live.siteAnchor ?? live.anchor);
+      const base = catalogGate && !catalogGate.released ? catalogGate.body : live.body;
+      const bodyObj = JSON.parse(base);
+      let generatedMs = Date.parse(bodyObj.generated_at) + 1000;
+      let geometryMs = Date.parse(bodyObj.geometry_valid_until) + 1000;
+      let scheduleMs = Date.parse(bodyObj.schedule_valid_until) + 1000;
+      let revision = `c${siteAnchor}-${generatedMs}`;
+      const taken = (candidate) => catalogBodies.has(`launch/catalog/v/${candidate}.json`)
+        || (catalogGate && catalogGate.pointer.revision === candidate);
+      for (let step = 0; taken(revision) && step < 8; step += 1) {
+        generatedMs += 1000;
+        geometryMs += 1000;
+        scheduleMs += 1000;
+        revision = `c${generatedMs}`;
+      }
+      const generated = new Date(generatedMs).toISOString();
+      const geometry = new Date(geometryMs).toISOString();
+      const schedule = new Date(scheduleMs).toISOString();
+      bodyObj.generated_at = generated;
+      bodyObj.geometry_valid_until = geometry;
+      bodyObj.schedule_valid_until = schedule;
+      bodyObj.revision = revision;
+      if (bodyObj.tle && typeof bodyObj.tle === 'object') bodyObj.tle.epoch = generated;
+      const body = JSON.stringify(bodyObj);
+      const pointer = {
+        schema_version: 2,
+        revision,
+        generated_at: generated,
+        valid_until: geometry,
+        path: `launch/catalog/v/${revision}.json`,
+        sha256: createHash('sha256').update(body).digest('hex'),
+      };
+      return { pointer, body, siteAnchor };
+    }
+    function armCatalogGate() {
+      const next = bumpHeldCatalog();
+      catalogBodies.set(next.pointer.path, next.body);
+      catalogGate = {
+        pointer: next.pointer,
+        body: next.body,
+        siteAnchor: next.siteAnchor,
+        released: false,
+      };
+      return next.pointer;
+    }
+    function releaseCatalogGate() {
+      if (catalogGate && !catalogGate.released) {
+        catalogGate.released = true;
+        catalogLive = {
+          pointer: catalogGate.pointer,
+          body: catalogGate.body,
+          anchor: effectiveNowMs(fixtureDir),
+          clockKey: JSON.stringify(readDriveClock(fixtureDir)),
+          siteAnchor: catalogGate.siteAnchor,
+        };
+        catalogBodies.set(catalogGate.pointer.path, catalogGate.body);
+      }
+      for (const waiter of [...catalogHoldWaiters]) waiter.finish(true);
+    }
+    const session = {
+      get gate() { return catalogGate; },
+      bodies: catalogBodies,
+      waiters: catalogHoldWaiters,
+      current: currentCatalog,
+      park: parkCatalogBody,
+      arm: armCatalogGate,
+      release: releaseCatalogGate,
+      dispose() { for (const waiter of [...catalogHoldWaiters]) waiter.finish(false); },
+    };
+    catalogSessions.set(fixtureDir, session);
+    return session;
+  }
+  function forgetRegistration(token) {
+    const entry = driveFixtures.get(token);
+    if (entry) {
+      catalogSessions.get(entry.dir)?.dispose();
+      catalogSessions.delete(entry.dir);
+    }
+    driveFixtures.delete(token);
   }
   const server = createServer(async (req, res) => {
     try {
@@ -406,7 +431,7 @@ function startProxy(home) {
           json(res, 403, { ok: false });
           return;
         }
-        driveFixtures.delete(token);
+        forgetRegistration(token);
         json(res, 200, { ok: true, count: driveFixtures.size });
         return;
       }
@@ -437,6 +462,7 @@ function startProxy(home) {
       return;
     }
     const fixtureDir = owned || homeFixtures;
+    const catalog = catalogFor(fixtureDir);
     const sendFile = (name) => {
       const file = resolve(fixtureDir, name);
       if (!existsSync(file)) {
@@ -555,19 +581,19 @@ function startProxy(home) {
       return;
     }
     if (path === '/api/verify/catalog-hold' && req.method === 'GET') {
-      json(res, 200, { pending: catalogHoldWaiters.length > 0 });
+      json(res, 200, { pending: catalog.waiters.length > 0 });
       return;
     }
     if (path === '/api/verify/catalog-hold' && req.method === 'POST') {
       await readBody(req);
-      const pointer = armCatalogGate();
+      const pointer = catalog.arm();
       json(res, 200, { ok: true, revision: pointer.revision });
       return;
     }
     if (path === '/api/verify/catalog-release' && req.method === 'POST') {
       await readBody(req);
-      releaseCatalogGate();
-      json(res, 200, { ok: true, pending: catalogHoldWaiters.length });
+      catalog.release();
+      json(res, 200, { ok: true, pending: catalog.waiters.length });
       return;
     }
     if (path === '/launch/v/verifyrev-hold.json') {
@@ -584,16 +610,16 @@ function startProxy(home) {
     }
     if (path === '/launch/v/verifyrev.json') return sendFile('launch.json');
     if (path === '/launch/catalog/latest.json') {
-      const pointer = catalogGate && !catalogGate.released ? catalogGate.pointer : currentCatalog().pointer;
+      const pointer = catalog.gate && !catalog.gate.released ? catalog.gate.pointer : catalog.current().pointer;
       sendJson(res, JSON.stringify(pointer));
       return;
     }
     if (path.startsWith('/launch/catalog/v/') && path.endsWith('.json')) {
-      if (catalogGate && !catalogGate.released && path.slice(1) === catalogGate.pointer.path) {
-        await parkCatalogBody(res, catalogGate.body);
+      if (catalog.gate && !catalog.gate.released && path.slice(1) === catalog.gate.pointer.path) {
+        await catalog.park(res, catalog.gate.body);
         return;
       }
-      const body = catalogBodies.get(path.slice(1));
+      const body = catalog.bodies.get(path.slice(1));
       if (!body) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
         res.end('missing');
@@ -725,7 +751,7 @@ function startProxy(home) {
   });
   const sweep = setInterval(() => {
     for (const [token, entry] of driveFixtures) {
-      if (!entry.dir || !existsSync(entry.dir) || !alive(entry.pid)) driveFixtures.delete(token);
+      if (!entry.dir || !existsSync(entry.dir) || !alive(entry.pid)) forgetRegistration(token);
     }
   }, 200);
   sweep.unref();
@@ -884,6 +910,7 @@ async function drive(feature) {
     if (!releasePromise) {
       releasePromise = (async () => {
         stopBrowsers();
+        await closeFixtureBrowsers();
         discardDriveFixtures(fixtureDir);
         const current = readState(home);
         if (current?.url && current.registrySecret) {

@@ -773,6 +773,8 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
       await cdp.send('Network.enable');
       await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
+      cdp.send.fixtureToken = fixtureToken;
+      cdp.send.fixtureDir = fixtureDir;
       await openApp(cdp.send, baseUrl, startOffset);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
       return notes.map((note) => `desktop: ${note}`);
@@ -815,6 +817,8 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home,
         const send = playwrightSend(session);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
+        send.fixtureToken = fixtureToken;
+        send.fixtureDir = fixtureDir;
         await openApp(send, baseUrl, startOffset);
         const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport, fixtureToken);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
@@ -7149,7 +7153,16 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
-function fixtureInstant(evidenceDir) {
+export function fixtureInstant(evidenceDir, fixtureDir) {
+  if (fixtureDir) {
+    for (const [name, key] of [['catalog-clock.json', 'anchor'], ['meta.json', 'now']]) {
+      const path = resolve(fixtureDir, name);
+      if (!existsSync(path)) continue;
+      const value = JSON.parse(readFileSync(path, 'utf8'))[key];
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    throw new Error('private verify fixture clock missing');
+  }
   let dir = evidenceDir;
   for (let step = 0; step < 4; step += 1) {
     const path = resolve(dir, 'fixtures/meta.json');
@@ -7167,8 +7180,12 @@ function fixtureInstant(evidenceDir) {
   throw new Error('verify fixture meta missing');
 }
 
-async function armCatalogHold(baseUrl) {
-  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST' });
+function fixtureHeaders(send) {
+  return send.fixtureToken ? { cookie: `opd-verify-fixtures=${send.fixtureToken}` } : {};
+}
+
+async function armCatalogHold(send, baseUrl) {
+  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!armed.ok) throw new Error(`catalog hold ${armed.status}`);
   return armed.json();
 }
@@ -7177,15 +7194,15 @@ async function nudgeUntilCatalogPending(send, baseUrl) {
   const started = Date.now();
   while (Date.now() - started < 15000) {
     await nudgeCatalogRefresh(send);
-    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`).then((response) => response.json());
+    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`, { headers: fixtureHeaders(send) }).then((response) => response.json());
     if (status.pending) return;
     await sleep(250);
   }
   throw new Error('iss tier pick pending catalog body timed out');
 }
 
-async function releaseCatalogHold(baseUrl) {
-  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST' });
+async function releaseCatalogHold(send, baseUrl) {
+  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!released.ok) throw new Error(`catalog release ${released.status}`);
 }
 
@@ -7198,13 +7215,13 @@ async function nudgeCatalogRefresh(send) {
   })()`);
 }
 
-async function withHeldCatalog(send, baseUrl, body) {
-  await armCatalogHold(baseUrl);
+export async function withHeldCatalog(send, baseUrl, body) {
+  await armCatalogHold(send, baseUrl);
   try {
     await nudgeUntilCatalogPending(send, baseUrl);
     await body();
   } finally {
-    await releaseCatalogHold(baseUrl);
+    await releaseCatalogHold(send, baseUrl);
   }
 }
 
@@ -7444,7 +7461,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     }
     return anchor > 0 ? anchor : null;
   })()`);
-  const frozen = loadedAnchor || fixtureInstant(evidenceDir);
+  const frozen = loadedAnchor || fixtureInstant(evidenceDir, send.fixtureDir);
   await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
   try {
   await click(send, '[data-iss-preset="nadir"]');

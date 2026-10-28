@@ -300,6 +300,15 @@ test('SIGINT kills the detached browser and removes the private copy', { timeout
   }
 });
 
+test('SIGTERM kills the detached browser and removes the private copy', { timeout: 60000 }, async () => {
+  const harness = await startHarness();
+  try {
+    await signalDrive(harness, 'SIGTERM', 143);
+  } finally {
+    await harness.stop();
+  }
+});
+
 test('SIGHUP uses the same shutdown', { timeout: 60000 }, async () => {
   const harness = await startHarness();
   try {
@@ -594,7 +603,10 @@ test('chrome and webkit contexts open through the fixture cookie helper', () => 
   const drive = readFileSync(join(import.meta.dirname, 'drive.mjs'), 'utf8');
   const webkit = readFileSync(join(import.meta.dirname, 'webkit-devices.mjs'), 'utf8');
   assert.equal(drive.includes('.newContext('), false);
-  assert.equal(webkit.includes('.newContext('), false);
+  const open = sliceBetween(webkit, 'export async function openDeviceContext', 'function metricsMatch');
+  assert.equal((webkit.match(/\.newContext\(/g) || []).length, 1);
+  assert.match(open, /fixtureCookie\(hooks\.baseUrl, hooks\.fixtureToken\)/);
+  assert.ok(open.indexOf('fixtureCookie(') < open.indexOf('context.newPage('), 'cookie must precede the first page');
   const fresh = sliceBetween(drive, 'export async function freshProfile', 'async function expectFreshHide');
   assert.match(fresh, /pinFixtureCookie\(cdp\.send, baseUrl, fixtureToken\)/);
   const guest = sliceBetween(drive, 'async function expectFreshHide', 'async function hideNamed');
@@ -602,9 +614,11 @@ test('chrome and webkit contexts open through the fixture cookie helper', () => 
   const chrome = sliceBetween(drive, 'async function driveChrome', 'async function driveWebkitSurfaces');
   assert.match(chrome, /pinFixtureCookie\(cdp\.send, baseUrl, fixtureToken\)/);
   const devices = sliceBetween(drive, 'async function driveWebkitSurfaces', 'export async function driveFeatures');
-  assert.match(devices, /createDeviceContext\(browser, deviceDescriptor\(active\), \{ baseUrl, token: fixtureToken \}\)/);
+  assert.match(devices, /openDeviceContext\(browser, active, \{\s*baseUrl, fixtureToken/);
   const corner = sliceBetween(drive, 'export async function driveMapCorner', 'async function dismissShotlist');
   assert.match(corner, /pinFixtureCookie\(send, baseUrl, fixtureToken\)/);
   const denied = sliceBetween(webkit, 'export async function proveDeniedFooter', 'finally {');
-  assert.match(denied, /createDeviceContext\(browser, device, \{[\s\S]*token: fixtureToken/);
+  assert.match(denied, /openDeviceContext\(browser, spec, \{ baseUrl, fixtureToken \}\)/);
+  const replacement = sliceBetween(webkit, 'export async function replaceDeviceContext', 'export async function readContextMetrics');
+  assert.match(replacement, /storageState: snapshot\.storageState/);
 });
