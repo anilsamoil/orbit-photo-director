@@ -69,7 +69,7 @@ export function buildTargetPopupContent(
 ): HTMLElement {
   const body = document.createElement('div');
   body.className = 'map-target-popup';
-  body.style.cssText = 'min-width:200px';
+  body.style.cssText = 'min-width:min(200px, 100%)';
 
   const addRow = (cls: string, text: string, style: string): HTMLDivElement => {
     const row = document.createElement('div');

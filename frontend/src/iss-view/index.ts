@@ -31,8 +31,9 @@ import {
 } from './launches';
 import { launchCatalog, subscribeLaunchSlots } from '../launch-catalog';
 import { launchVerdictBlock, selectLaunches, utc, type LaunchSelection } from '../launch-selectors';
-import { scheduleLabel, tierLabel, tierWindowUtc, type TierCatalog, type TierLaunch } from '../launch-tiers';
+import { launchPickerLabels, scheduleLabel, tierLabel, tierWindowUtc, type TierCatalog, type TierLaunch } from '../launch-tiers';
 import { launchStore } from '../launch-store';
+import { openHelpModal } from '../help';
 import { bindAimKeys, type AimAction } from './aim-keys';
 import { bindIssFullscreen } from './fullscreen';
 import { paintEqualDigits } from '../digits';
@@ -364,7 +365,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const pickerWrap = document.createElement('div');
   pickerWrap.dataset.issLaunchPickerWrap = '';
   pickerWrap.append(picker);
-  controls.append(telemetry, pickerWrap, launchesHost);
+  const snapHelp = document.createElement('button');
+  snapHelp.type = 'button';
+  snapHelp.dataset.issSnapHelp = '';
+  snapHelp.textContent = '?';
+  snapHelp.setAttribute('aria-label', 'Help — how to use SNAP');
+  snapHelp.title = 'Help';
+  snapHelp.addEventListener('click', () => openHelpModal());
+  controls.append(telemetry, pickerWrap, snapHelp, launchesHost);
   card.append(controls, telemetryBody);
   root.append(toolbar, view, card);
   host.append(root);
@@ -374,7 +382,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (pickerSync) return;
     const tiers = readTiers();
     if (tiers || tierChoices) {
-      const selected = picker.selectedOptions[0];
+      const selected = picker.options[picker.selectedIndex];
       const parent = selected?.parentElement;
       const groupLabel = parent instanceof HTMLOptGroupElement ? parent.label : '';
       const next = tiers ? reduceTierPick(tierPick, picker.value, tiers) : reduceTierIntent(tierPick, picker.value, groupLabel);
@@ -476,7 +484,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   const fullscreen = bindIssFullscreen({
     scene: root,
     controls,
-    telemetry,
     relayout: () => {
       if (phase === 'running' && rendererReady) void paint();
       else layout();
@@ -745,14 +752,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       { value: 'none', label: 'None', group: null },
     ];
     for (const selection of selections) {
-      rows.push({ value: selection.item.event_id, label: launchChoiceLabel(selection, state, now), group: null });
+      for (const label of launchPickerLabels(selection.item.name, launchChoiceLabel(selection, state, now))) {
+        rows.push({ value: selection.item.event_id, label, group: null });
+      }
     }
     for (const selection of all) {
-      rows.push({
-        value: `all:${selection.item.event_id}`,
-        label: launchChoiceLabel(selection, state, now),
-        group: 'All launches',
-      });
+      for (const label of launchPickerLabels(selection.item.name, launchChoiceLabel(selection, state, now))) {
+        rows.push({ value: `all:${selection.item.event_id}`, label, group: 'All launches' });
+      }
     }
     writePicker(rows, pickValue(next));
     const site = choice ? launchSiteFromSelection(choice) : null;
@@ -784,10 +791,18 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       ['Watch', tiers.groups.watch],
     ] as const) {
       if (!group[1].length) continue;
-      for (const item of group[1]) rows.push({ value: item.eventId, label: tierLabel(item), group: group[0] });
+      for (const item of group[1]) {
+        for (const label of launchPickerLabels(item.name, tierLabel(item))) {
+          rows.push({ value: item.eventId, label, group: group[0] });
+        }
+      }
     }
     if (tiers.all.length) {
-      for (const item of tiers.all) rows.push({ value: `all:${item.eventId}`, label: scheduleLabel(item), group: 'All launches' });
+      for (const item of tiers.all) {
+        for (const label of launchPickerLabels(item.name, scheduleLabel(item))) {
+          rows.push({ value: `all:${item.eventId}`, label, group: 'All launches' });
+        }
+      }
     }
     writePicker(rows, tierPickValue(next));
     const site = next.kind === 'held' && launch ? tierSite(launch) : null;

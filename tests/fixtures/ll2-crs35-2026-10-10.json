@@ -1,0 +1,57 @@
+{
+  "count": 1,
+  "next": null,
+  "results": [
+    {
+      "id": "bf2c3027-a314-403e-a416-2bfd5d165ad1",
+      "name": "Falcon 9 Block 5 | Dragon CRS-2 SpX-35",
+      "last_updated": "2026-10-09T16:17:04Z",
+      "net": "2026-10-13T10:33:44Z",
+      "window_start": "2026-10-13T10:33:44Z",
+      "window_end": "2026-10-13T10:33:44Z",
+      "net_precision": {
+        "id": 0,
+        "name": "Second",
+        "abbrev": "SEC",
+        "description": "The T-0 is accurate to the second."
+      },
+      "status": {
+        "id": 1,
+        "name": "Go for Launch",
+        "abbrev": "Go",
+        "description": "Current T-0 confirmed by official or reliable sources."
+      },
+      "rocket": {
+        "configuration": {
+          "name": "Falcon 9",
+          "full_name": "Falcon 9 Block 5"
+        },
+        "spacecraft_stage": [
+          {
+            "destination": "ISS"
+          }
+        ]
+      },
+      "pad": {
+        "name": "Space Launch Complex 40",
+        "latitude": 28.56194122,
+        "longitude": -80.57735736,
+        "location": {
+          "name": "Cape Canaveral SFS, FL, USA"
+        }
+      },
+      "mission": {
+        "orbit": {
+          "id": 8,
+          "name": "Low Earth Orbit",
+          "abbrev": "LEO",
+          "celestial_body": {
+            "response_mode": "list",
+            "id": 1,
+            "name": "Earth"
+          }
+        }
+      }
+    }
+  ]
+}

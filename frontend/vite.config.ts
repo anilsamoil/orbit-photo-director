@@ -11,6 +11,9 @@ import { VitePWA } from 'vite-plugin-pwa';
 // `profile-crud.ts` as `APP_VERSION = '1.6.12.0'` — stale on every ship.
 const APP_VERSION = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
 
+const noWebStorage = '--no-experimental-webstorage';
+const testExecArgv = process.allowedNodeEnvironmentFlags?.has(noWebStorage) ? [noWebStorage] : [];
+
 export default defineConfig({
   cacheDir: '.vite-cache',
   define: {
@@ -20,6 +23,23 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
   plugins: [
+    {
+      name: 'opd-map-stylesheet-identity',
+      apply: 'build',
+      transformIndexHtml: {
+        order: 'post',
+        handler(_html, context) {
+          const stylesheets = Object.values(context.bundle ?? {}).filter((asset) =>
+            asset.type === 'asset' && /(?:^|\/)maplibre-vendor-[^/]+\.css$/.test(asset.fileName));
+          if (stylesheets.length !== 1) throw new Error('Expected one native MapLibre stylesheet');
+          return [{
+            tag: 'meta',
+            attrs: { name: 'opd-map-stylesheet', content: `/${stylesheets[0]!.fileName}` },
+            injectTo: 'head',
+          }];
+        },
+      },
+    },
     VitePWA({
       // registerType: 'prompt' so vite-plugin-pwa does not inject its own
       // clientsClaim via 'autoUpdate'. This file's workbox block is the
@@ -361,6 +381,11 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    globalSetup: 'test/webkit-gate.ts',
+    poolOptions: {
+      forks: { execArgv: testExecArgv },
+      threads: { execArgv: testExecArgv },
+    },
     setupFiles: ['test/setup.ts'],
     include: ['test/**/*.test.ts', 'src/map/**/*.test.ts'],
     coverage: {

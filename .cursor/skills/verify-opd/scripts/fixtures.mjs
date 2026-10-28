@@ -680,29 +680,12 @@ function pruneGenerations(logicalDir, keep) {
   return retained;
 }
 
-function sealFixtureRoot(dir) {
-  if (lstatSync(dir).isSymbolicLink()) return;
-  const next = `${dir}.gen-${process.pid}-${randomBytes(6).toString('hex')}`;
-  writeFileSync(join(dir, '.published'), '');
-  renameSync(dir, next);
-  try {
-    symlinkSync(next, dir);
-  } catch (error) {
-    try {
-      renameSync(next, dir);
-    } catch {
-      // The original directory could not be restored.
-    }
-    throw error;
-  }
-}
-
 function switchToGeneration(logicalDir, next, previousRoot) {
   if (previousRoot) {
     writeFileSync(join(previousRoot, '.published'), '');
     rmSync(join(previousRoot, '.retired-at'), { force: true });
   }
-  if (lstatSync(logicalDir).isSymbolicLink()) {
+  if (!existsSync(logicalDir) || lstatSync(logicalDir).isSymbolicLink()) {
     swapGenerationLink(logicalDir, next);
   } else {
     const displaced = `${logicalDir}.displaced-${randomBytes(4).toString('hex')}`;
@@ -855,7 +838,29 @@ function artifact(body) {
   return { text, sha256: sha256(text), bytes: Buffer.byteLength(text) };
 }
 
-export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
+export async function buildFixtures(logicalDir, now = Date.now(), eventStart = now) {
+  mkdirSync(dirname(logicalDir), { recursive: true });
+  const next = `${logicalDir}.gen-${process.pid}-${randomBytes(6).toString('hex')}`;
+  try {
+    const built = await buildGeneration(next, now, eventStart);
+    withFixtureLock(logicalDir, () => {
+      const previous = existsSync(logicalDir) ? liveFixtureRoot(logicalDir) : null;
+      const keep = new Set(previous ? [previous, next] : [next]);
+      if (pruneGenerations(logicalDir, keep) > retentionPolicy().maxGenerations) {
+        throw new Error('fixture retention capacity reached; retry after the reader retention window');
+      }
+      switchToGeneration(logicalDir, next, previous);
+    });
+    return built;
+  } catch (error) {
+    if (!existsSync(join(next, '.published')) && liveFixtureRoot(logicalDir) !== liveFixtureRoot(next)) {
+      rmSync(next, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
+async function buildGeneration(dir, now, eventStart) {
   mkdirSync(dir, { recursive: true });
   const tle = await loadTle();
   const satrec = satellite.twoline2satrec(tle.line1, tle.line2);
@@ -1141,7 +1146,7 @@ export async function buildFixtures(dir, now = Date.now(), eventStart = now) {
     standIn: standIn ? standIn.name : null,
   };
   writeFileSync(resolve(dir, 'meta.json'), JSON.stringify(meta, null, 2));
-  sealFixtureRoot(dir);
+  writeFileSync(resolve(dir, 'drive-clock.json'), JSON.stringify({ start: eventStart, startOffset: eventStart - now }));
   return { manifest, meta, pointer, launchBody };
 }
 
@@ -1318,20 +1323,20 @@ function catalogShot(spec) {
   };
 }
 
-export function publishVerifyCatalog(dir, wallMs = Date.now()) {
+export function publishVerifyCatalog(dir, nowMs = effectiveNowMs(dir), eventStart = readDriveClock(dir)?.start ?? nowMs) {
   const meta = JSON.parse(readFileSync(resolve(dir, 'meta.json'), 'utf8'));
   const track = JSON.parse(readFileSync(resolve(dir, 'track.json'), 'utf8'));
   const satrec = satellite.twoline2satrec(track.tle.line1, track.tle.line2);
-  const iss = positionAt(satrec, wallMs) ?? meta.iss;
+  const iss = positionAt(satrec, nowMs) ?? meta.iss;
   const pad = meta.pad;
-  const generated = launchIso(wallMs - 60_000);
-  const geometry = launchIso(wallMs - 60_000 + 14 * 60_000);
-  const schedule = launchIso(wallMs - 60_000 + 2 * 60 * 60_000);
-  const net = launchIso(wallMs + 2 * 60 * 60_000);
-  const windowEnd = launchIso(wallMs + 2 * 60 * 60_000 + 9 * 60_000);
-  const best = launchIso(wallMs + 2 * 60 * 60_000 + 60_000);
-  const shotEnd = launchIso(wallMs + 2 * 60 * 60_000 + 8 * 60_000);
-  const revision = `c${wallMs}`;
+  const generated = launchIso(nowMs - 60_000);
+  const geometry = launchIso(nowMs - 60_000 + 14 * 60_000);
+  const schedule = launchIso(nowMs - 60_000 + 2 * 60 * 60_000);
+  const net = launchIso(eventStart + 2 * 60 * 60_000);
+  const windowEnd = launchIso(eventStart + 2 * 60 * 60_000 + 9 * 60_000);
+  const best = launchIso(eventStart + 2 * 60 * 60_000 + 60_000);
+  const shotEnd = launchIso(eventStart + 2 * 60 * 60_000 + 8 * 60_000);
+  const revision = `c${nowMs}-${eventStart}`;
   const none = { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null };
   const times = { liftoff: net, start: net, best, end: shotEnd };
   const items = [
@@ -1391,8 +1396,8 @@ export function publishVerifyCatalog(dir, wallMs = Date.now()) {
     geometry_valid_until: geometry,
     tle: { epoch: generated, sha256: 'a'.repeat(64), source: 'celestrak' },
     coverage: {
-      from: launchIso(wallMs - 60 * 60_000),
-      until: launchIso(wallMs + 14 * 24 * 60 * 60_000),
+      from: launchIso(nowMs - 60 * 60_000),
+      until: launchIso(nowMs + 14 * 24 * 60 * 60_000),
       schedule_fetched_at: generated,
       pages: 1,
       received: items.length,
@@ -1413,8 +1418,7 @@ export function publishVerifyCatalog(dir, wallMs = Date.now()) {
     path: `launch/catalog/v/${revision}.json`,
     sha256: sha256(body),
   };
-  writeFileSync(resolve(dir, 'catalog-clock.json'), JSON.stringify({ anchor: wallMs }));
-  return { pointer, body, anchor: wallMs };
+  return { pointer, body, anchor: nowMs };
 }
 
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);

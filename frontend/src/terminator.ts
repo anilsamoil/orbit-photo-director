@@ -194,6 +194,92 @@ export function subsolarFeature(when: Date): GeoJSON.Feature {
  *  ~5ms. Called from map.ts's refreshTerminatorSources, same cadence as the
  *  line (30s tick + lookahead-scrub).
  */
+function eastward(west: number, east: number): { west: number; east: number } {
+  let end = east;
+  while (end < west) end += 360;
+  return { west, east: end };
+}
+
+/** Adjacent night rows share one continuous longitude frame before the antimeridian cut. */
+function sharedNightInterval(
+  south: { west: number; east: number },
+  north: { west: number; east: number },
+): { sw: number; se: number; nw: number; ne: number } {
+  const s = eastward(south.west, south.east);
+  let n = eastward(north.west, north.east);
+  while (n.west - s.west > 180) n = { west: n.west - 360, east: n.east - 360 };
+  while (s.west - n.west > 180) n = { west: n.west + 360, east: n.east + 360 };
+  return { sw: s.west, se: s.east, nw: n.west, ne: n.east };
+}
+
+function clipVertical(ring: readonly [number, number][], edge: number, keep: 'le' | 'ge'): [number, number][] {
+  const inside = (lon: number): boolean => (keep === 'le' ? lon <= edge + 1e-8 : lon >= edge - 1e-8);
+  const cross = (a: [number, number], b: [number, number]): [number, number] => {
+    const span = b[0] - a[0];
+    const t = span === 0 ? 0 : (edge - a[0]) / span;
+    return [edge, a[1] + (b[1] - a[1]) * t];
+  };
+  const open = ring.length > 1 && ring[0]![0] === ring[ring.length - 1]![0] && ring[0]![1] === ring[ring.length - 1]![1]
+    ? ring.slice(0, -1)
+    : ring;
+  const out: [number, number][] = [];
+  for (let i = 0; i < open.length; i += 1) {
+    const a = open[i]!;
+    const b = open[(i + 1) % open.length]!;
+    const aIn = inside(a[0]);
+    const bIn = inside(b[0]);
+    if (aIn && bIn) out.push([b[0], b[1]]);
+    else if (aIn && !bIn) out.push(cross(a, b));
+    else if (!aIn && bIn) {
+      out.push(cross(a, b));
+      out.push([b[0], b[1]]);
+    }
+  }
+  return out;
+}
+
+function wrapRing(ring: readonly [number, number][]): [number, number][] {
+  const lons = ring.map(([lon]) => lon);
+  const mid = (Math.min(...lons) + Math.max(...lons)) / 2;
+  let offset = 0;
+  while (mid + offset > 180) offset -= 360;
+  while (mid + offset <= -180) offset += 360;
+  const shifted = ring.map(([lon, lat]) => [lon + offset, lat] as [number, number]);
+  const first = shifted[0];
+  const last = shifted[shifted.length - 1];
+  if (first && last && (first[0] !== last[0] || first[1] !== last[1])) shifted.push([first[0], first[1]]);
+  return shifted;
+}
+
+function nightBandRings(
+  latS: number,
+  latN: number,
+  south: { west: number; east: number },
+  north: { west: number; east: number },
+): [number, number][][] {
+  const { sw, se, nw, ne } = sharedNightInterval(south, north);
+  if (se <= sw && ne <= nw) return [];
+  let pieces: [number, number][][] = [[[sw, latS], [se, latS], [ne, latN], [nw, latN]]];
+  const minL = Math.min(sw, se, nw, ne);
+  const maxL = Math.max(sw, se, nw, ne);
+  const cuts: number[] = [];
+  for (let k = -2; k <= 3; k += 1) {
+    const edge = 180 + k * 360;
+    if (edge > minL && edge < maxL) cuts.push(edge);
+  }
+  for (const edge of cuts) {
+    const next: [number, number][][] = [];
+    for (const piece of pieces) {
+      const west = clipVertical(piece, edge, 'le');
+      const east = clipVertical(piece, edge, 'ge');
+      if (west.length >= 3) next.push(west);
+      if (east.length >= 3) next.push(east);
+    }
+    pieces = next;
+  }
+  return pieces.map(wrapRing).filter((ring) => ring.length >= 4);
+}
+
 export function terminatorNightPolygonFeatures(when: Date): GeoJSON.Feature[] {
   const subsolar = subsolarPoint(when);
   const LAT_STEP = 2; // 2° step is plenty for visual fill; halves polygon count vs 1° step
@@ -275,118 +361,7 @@ export function terminatorNightPolygonFeatures(when: Date): GeoJSON.Feature[] {
     // imperceptible vs the math complexity).
     const safeS = arcS === null ? arcN as { west: number; east: number } : arcS;
     const safeN = arcN === null ? arcS as { west: number; east: number } : arcN;
-
-    // Walk from safeS.west → safeS.east going east; same for north row.
-    // To produce clean quads that never span > 180° of longitude (which
-    // would cause MapLibre to render the polygon across the wrong side
-    // of the antimeridian), parameterize the eastward walk in [0, 360)
-    // for both rows in their own continuous space, then split at the
-    // first +180-crossing the band as a whole encounters.
-    const buildQuads = (
-      sw: number, se: number, nw: number, ne: number,
-    ): [number, number][][] => {
-      // Normalize so each row's east >= west; track each row's offset
-      // so we can map back to wrapped lons after computing quad bounds.
-      let seN = se, neN = ne;
-      if (seN < sw) seN += 360;
-      if (neN < nw) neN += 360;
-      // Convert each row's [west, east] into a continuous parametric
-      // range expressed as raw eastward-walk lons (possibly > 180).
-      // Then unify: take the unioned start = min(sw, nw), unioned end
-      // = max(seN, neN). This guarantees both row endpoints lie inside
-      // the unified band, so the resulting quads enclose the night arc
-      // without spanning the wrong way around the globe.
-      //
-      // The unified band's total width is bounded by max(seN-sw, neN-nw)
-      // — both row widths are independently < 180° (night arcs at one
-      // latitude can be at most 360° - 2H_min which is ≤ 180° at extreme
-      // latitudes; the geometry guarantees this). The union widens at
-      // most by the latitude-to-latitude wobble of the terminator lon,
-      // which is small per 2° step.
-      const startN = Math.min(sw, nw);
-      const endN = Math.max(seN, neN);
-      // If the unified band fits in [startN, startN+180], single quad;
-      // otherwise split it at the antimeridian (lon = 180 in absolute).
-      // Express the antimeridian crossing as the first multiple of 180
-      // strictly greater than startN.
-      const totalSpan = endN - startN;
-      if (totalSpan <= 0) return [];
-      // Find the antimeridian crossing inside the unioned walk (the lon
-      // value that's congruent to 180 mod 360 and falls in (startN, endN)).
-      let crossing: number | null = null;
-      // Try +180 and +180+360 — startN ∈ [-180, 540] practically; the
-      // crossing of interest is the smallest 180+k*360 > startN.
-      for (let k = -1; k <= 2; k++) {
-        const c = 180 + k * 360;
-        if (c > startN && c < endN) { crossing = c; break; }
-      }
-      // Build per-row endpoint lons in the unioned coordinate frame, then
-      // wrap back. The polygon ring uses the unioned-frame values for the
-      // interior calculation (no wrap), then we wrap_back when emitting
-      // the final coordinates — but the wrap-back can re-introduce the
-      // 180-bleed. Easier: emit the quad in the UNIONED frame (lons may
-      // exceed 180), then split at the crossing, then wrap each split
-      // piece back to world coords.
-      const quadsRaw: [number, number][][] = [];
-      if (crossing === null) {
-        // Single quad in unioned frame.
-        quadsRaw.push([
-          [sw, latS], [seN, latS], [neN, latN], [nw, latN], [sw, latS],
-        ]);
-      } else {
-        // Split at `crossing` (= 180 + k*360). Piece-1: [startN, crossing].
-        // Piece-2: [crossing, endN]. For each row, clip the [west, east]
-        // segment at `crossing` and emit either or both pieces depending
-        // on which side the row's lons fall.
-        // West piece (row segments restricted to <= crossing):
-        const piece1 = (
-          rowWest: number, rowEast: number,
-        ): [number, number] | null => {
-          if (rowEast <= crossing!) return [rowWest, rowEast];
-          if (rowWest >= crossing!) return null;
-          return [rowWest, crossing!];
-        };
-        // East piece (row segments restricted to >= crossing):
-        const piece2 = (
-          rowWest: number, rowEast: number,
-        ): [number, number] | null => {
-          if (rowWest >= crossing!) return [rowWest, rowEast];
-          if (rowEast <= crossing!) return null;
-          return [crossing!, rowEast];
-        };
-        const s1 = piece1(sw, seN), n1 = piece1(nw, neN);
-        if (s1 && n1) {
-          quadsRaw.push([
-            [s1[0], latS], [s1[1], latS],
-            [n1[1], latN], [n1[0], latN],
-            [s1[0], latS],
-          ]);
-        }
-        const s2 = piece2(sw, seN), n2 = piece2(nw, neN);
-        if (s2 && n2) {
-          quadsRaw.push([
-            [s2[0], latS], [s2[1], latS],
-            [n2[1], latN], [n2[0], latN],
-            [s2[0], latS],
-          ]);
-        }
-      }
-      // Wrap each raw quad as a WHOLE: compute a single offset (multiple
-      // of 360) that brings the quad's MIDPOINT into [-180, 180], then
-      // apply that offset to every vertex. This keeps the quad's lons
-      // monotonic across the antimeridian rather than wrapping individual
-      // vertices independently (which would tear a [180, 250] piece into
-      // [180, -110]).
-      return quadsRaw.map((q) => {
-        const lons = q.map(([lon]) => lon);
-        const mid = (Math.min(...lons) + Math.max(...lons)) / 2;
-        let offset = 0;
-        while (mid + offset > 180) offset -= 360;
-        while (mid + offset <= -180) offset += 360;
-        return q.map(([lon, lat]) => [lon + offset, lat] as [number, number]);
-      });
-    };
-    const quads = buildQuads(safeS.west, safeS.east, safeN.west, safeN.east);
+    const quads = nightBandRings(latS, latN, safeS, safeN);
     for (const q of quads) {
       features.push({
         type: 'Feature',

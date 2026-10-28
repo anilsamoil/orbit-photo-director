@@ -25,6 +25,7 @@ import {
 } from './features/basemap';
 import {
   applyBearing,
+  applyInitialBearing,
   bindBearingToggle,
   bindFollowMarker,
   bindFollowToggle,
@@ -447,7 +448,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   refreshBasemap();
   refreshTerminator(core);
   refreshNightLights(core);
-  if (isFirstInit) applyBearing(true);
+  if (isFirstInit) applyInitialBearing();
 }
 
 export async function refreshMapForManifest(manifest: Manifest): Promise<void> {
@@ -565,7 +566,7 @@ export function mountPlanInset(frame: HTMLElement, track: Track, nowMs: () => nu
     const features = ticks === 1 || ticks % PLAN_TRACK_EVERY === 0
       ? groundTrackFeatures(held.track, false)
       : null;
-    inset.show(features, position);
+    inset.show(features, position, new Date(nowMs()));
   };
   paint();
   const timer = window.setInterval(paint, PLAN_INSET_MS);

@@ -7,7 +7,10 @@ The Worker validates the signed Cloudflare Access assertion with `jose`: RS256
 signature, configured issuer and application audience, expiration and required
 user identity claims. An email header alone is never trusted. Session-authenticated
 writes must be same-origin. Cloudflare public keys are cached with bounded fetch
-timeouts. Invalid/missing credentials fail closed; no Access policy was expanded.
+timeouts. Invalid or missing credentials fail closed. The Worker admits a verified
+human only when the email claim is on `ACCESS_ALLOWED_EMAILS`. The match is
+case-insensitive and exact. An empty list returns 403 for humans. Service
+tokens on health and the profile machine token are not on that list.
 
 Browser target sync uses `/api/browser/profiles/<name>/targets`, under the
 existing Google Access application. The legacy `/api/profiles` path keeps its

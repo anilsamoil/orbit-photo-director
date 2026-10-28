@@ -92,7 +92,12 @@ test('desktop drive applies the effective offset to its page clock and keeps it 
     stopped.push(pid);
     return true;
   });
-  t.mock.method(globalThis, 'fetch', async (url) => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (new URL(url).pathname === '/api/browser/profiles/anil/targets') {
+      assert.equal(options.method, 'PUT');
+      assert.deepEqual(JSON.parse(options.body).removedCuratedIds, []);
+      return { ok: true };
+    }
     assert.equal(new URL(url).pathname, '/json/list');
     return {
       ok: true,
@@ -102,7 +107,7 @@ test('desktop drive applies the effective offset to its page clock and keeps it 
 
   try {
     for (const offset of [-19 * 60_000, 39 * 60_000 + 250, 0]) {
-      writeFileSync(join(fixtureDir, 'drive-clock.json'), JSON.stringify({ startOffset: offset }));
+      writeFileSync(join(fixtureDir, 'drive-clock.json'), JSON.stringify({ start: Date.now() + offset, startOffset: offset }));
       const notes = await driveFeatures({
         baseUrl: 'http://opd.invalid',
         evidenceDir: join(home, 'evidence'),
