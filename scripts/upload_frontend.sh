@@ -159,7 +159,7 @@ if probe_error=$(wrangler r2 object put "$BUCKET/$probe_key" \
 elif grep -Ei '(code["[:space:]:=]+(403|10000)([^0-9]|$)|HTTP[^[:alnum:]]+403([^0-9]|$)|403[[:space:]]+Forbidden|status["[:space:]:=]+403([^0-9]|$))' \
   <<< "$probe_error" > /dev/null; then
   echo "ERROR: token lacks R2 write on $BUCKET (Cloudflare 403/10000)." >&2
-  echo "==> Falling back to additive rclone copy; assets first, index.html then sw.js last."
+  echo "==> Falling back to per-file rclone copyto; assets first, index.html then sw.js last."
   if ! command -v rclone > /dev/null 2>&1; then
     echo "ERROR: rclone is unavailable. No frontend file was published." >&2
     exit 3
