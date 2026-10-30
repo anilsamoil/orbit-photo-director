@@ -165,7 +165,6 @@ EOF
 } > "$hold_dir/bin/sweep"
 
 chmod +x "$hold_dir/bin/note" "$hold_dir/bin/reap-one" "$hold_dir/bin/reap" "$hold_dir/bin/collect" "$hold_dir/bin/sweep"
-
 ps_lstart() {
   LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
 }
@@ -250,14 +249,28 @@ hold_collect() {
   "$hold_dir/bin/collect" "$hold_dir"
 }
 
+reap_recorded_tree() {
+  local piddir root list
+  if [ -z "${hold_dir-}" ] || [ ! -x "${hold_dir}/bin/reap" ]; then
+    return 0
+  fi
+  list=$(mktemp "$hold_dir/reap.XXXXXX")
+  find "$hold_dir" -type d -name pids > "$list" 2>/dev/null || true
+  while IFS= read -r piddir; do
+    if [ -d "$piddir" ]; then
+      root=$(dirname "$piddir")
+      "${hold_dir}/bin/reap" "$root" || true
+    fi
+  done < "$list"
+  rm -f "$list"
+}
+
 cleanup_on_exit() {
   trap '' INT TERM HUP
   if [ -n "${hold_dir-}" ] && [ -x "${hold_dir}/bin/sweep" ]; then
     "${hold_dir}/bin/sweep" "$$" "$hold_dir" || true
   fi
-  if [ -n "${hold_dir-}" ] && [ -x "${hold_dir}/bin/reap" ]; then
-    "${hold_dir}/bin/reap" "$hold_dir" || true
-  fi
+  reap_recorded_tree
   if [ -n "${hold_dir-}" ] && [ -f "${hold_dir}/kids" ]; then
     while read -r kid; do
       case "$kid" in
@@ -281,14 +294,131 @@ hold_defer() {
 }
 
 hold_resume() {
-  trap 'exit' INT TERM HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   if [ "${HOLD_SIGNAL-}" = 1 ]; then
     exit
   fi
 }
 
+wait_deadline() {
+  local pid="$1"
+  local seconds="$2"
+  local start now state
+  start=$(date +%s)
+  while true; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      set +e
+      wait "$pid"
+      WAIT_STATUS=$?
+      set -e
+      return 0
+    fi
+    state=$(LC_ALL=C ps -p "$pid" -o stat= 2>/dev/null | tr -d ' ' || true)
+    case "$state" in
+      Z*)
+        set +e
+        wait "$pid"
+        WAIT_STATUS=$?
+        set -e
+        return 0
+        ;;
+    esac
+    now=$(date +%s)
+    if [ $((now - start)) -ge "$seconds" ]; then
+      WAIT_STATUS=
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
 trap cleanup_on_exit EXIT
-trap 'exit' INT TERM HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+start_paired_suites() {
+  local mode
+  mode=${1:-suite}
+  race1=$(mktemp "$hold_dir/race.XXXXXX")
+  race2=$(mktemp "$hold_dir/race.XXXXXX")
+  suite_tmp=$(mktemp -d "$hold_dir/suites.XXXXXX")
+  if [ "$mode" = holder ]; then
+    TMPDIR="$suite_tmp" OPD_HOLDER_WAIT=1 "$BASH" "$suite_path" >"$race1" 2>&1 &
+    race_a=$!
+    TMPDIR="$suite_tmp" OPD_HOLDER_WAIT=1 "$BASH" "$suite_path" >"$race2" 2>&1 &
+    race_b=$!
+  else
+    TMPDIR="$suite_tmp" OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race1" 2>&1 &
+    race_a=$!
+    TMPDIR="$suite_tmp" OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race2" 2>&1 &
+    race_b=$!
+  fi
+}
+
+if [ "${OPD_HOLDER_WAIT:-}" = 1 ]; then
+  /bin/sh -c 'sleep 180 & echo $! > "$1"; wait' _ "$hold_dir/helper.pid" &
+  helper=$!
+  spins=0
+  while [ ! -s "$hold_dir/helper.pid" ]; do
+    spins=$((spins + 1))
+    if [ "$spins" -gt 50 ]; then
+      exit 1
+    fi
+    sleep 0.05
+  done
+  "$hold_dir/bin/note" "$helper" "$$" "$hold_dir/pids" || exit 1
+  printf '%s\n' "$helper" > "$hold_dir/helper.ppid"
+  : > "$hold_dir/ready"
+  if ! wait_deadline "$helper" "${OPD_HOLD_DEADLINE:-240}"; then
+    echo "FAIL: holder wait exceeded deadline" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+if [ "${OPD_CANCEL_PROBE:-}" = 1 ]; then
+  start_paired_suites holder
+  spins=0
+  while true; do
+    ready_n=0
+    for ready in "$suite_tmp"/*/ready; do
+      if [ -f "$ready" ]; then
+        ready_n=$((ready_n + 1))
+      fi
+    done
+    if [ "$ready_n" -ge 2 ]; then
+      break
+    fi
+    spins=$((spins + 1))
+    if [ "$spins" -gt 100 ]; then
+      echo "FAIL: cancel probe children did not start" >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+  {
+    printf 'HOLD %s\n' "$hold_dir"
+    printf 'RACE %s\n' "$race1"
+    printf 'RACE %s\n' "$race2"
+    printf 'SUITES %s\n' "$suite_tmp"
+    for meta in "$suite_tmp"/*/helper.pid; do
+      child_dir=$(dirname "$meta")
+      sleep_pid=$(tr -d ' ' < "$meta")
+      helper_pid=$(tr -d ' ' < "$child_dir/helper.ppid")
+      printf 'CHILD %s\n' "$child_dir"
+      printf 'SLEEP %s %s\n' "$sleep_pid" "$(ps_lstart "$sleep_pid")"
+      printf 'SLEEP %s %s\n' "$helper_pid" "$(ps_lstart "$helper_pid")"
+    done
+  } > "$OPD_CANCEL_INFO"
+  if ! wait_deadline "$race_a" "${OPD_HOLD_DEADLINE:-240}"; then
+    echo "FAIL: cancel probe exceeded deadline" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 if [ "${OPD_TRAP_PROBE:-}" = 1 ]; then
   hold_defer
@@ -314,20 +444,19 @@ if [ "${OPD_SIGINT_PROBE:-}" = 1 ]; then
   "$hold_dir/bin/note" "$probe_pid" "$$" "$hold_dir/pids" || exit 1
   printf '%s\n%s\n' "$probe_pid" "$(ps_lstart "$probe_pid")" > "$OPD_TRAP_PIDFILE"
   hold_resume
-  while true; do
-    wait "$probe_pid" || true
-    if ! kill -0 "$probe_pid" 2>/dev/null; then
-      exit 0
-    fi
-  done
+  if ! wait_deadline "$probe_pid" "${OPD_HOLD_DEADLINE:-240}"; then
+    echo "FAIL: sigint probe exceeded deadline" >&2
+    exit 1
+  fi
+  exit 0
 fi
 
 write_holding_node() {
   local dest="$1"
   cat > "$dest" << EOF
 #!/bin/sh
-fifo=\$(mktemp -u "\$TMPDIR/fifo.XXXXXX")
-childf=\$TMPDIR/sleep.pid
+fifo=\$(mktemp -u "\${TMPDIR:-/tmp}/fifo.XXXXXX")
+childf=\${TMPDIR:-/tmp}/sleep.pid
 mkfifo "\$fifo"
 exec 3<>"\$fifo"
 /bin/sh -c 'sleep 60 & echo \$! > "\$1"; wait' _ "\$childf" >&3 &
@@ -369,7 +498,7 @@ EOF
 
 run_deploy() {
   local work calls args
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
   calls="$work/calls"
   args="$work/args"
   cat > "$work/wrangler" <<'EOF'
@@ -399,9 +528,216 @@ EOF
   rm -rf "$work"
 }
 
+grep_lines() {
+  local flags="$1"
+  local pattern="$2"
+  shift 2
+  local file code
+  file=$(mktemp "$hold_dir/lines.XXXXXX")
+  printf '%s\n' "$@" > "$file"
+  code=0
+  case "$flags" in
+    Fxq) grep -Fxq -- "$pattern" "$file" || code=$? ;;
+    Fq) grep -F -q -- "$pattern" "$file" || code=$? ;;
+    q) grep -q -- "$pattern" "$file" || code=$? ;;
+    *) code=2 ;;
+  esac
+  rm -f "$file"
+  return "$code"
+}
+
+run_signal_case() {
+  local sig="$1"
+  local want="$2"
+  local how="$3"
+  local work dpid spins start end code pgid
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
+  cat > "$work/wrangler" << 'ENDWR'
+#!/bin/sh
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
+done
+exit 0
+ENDWR
+  chmod +x "$work/wrangler"
+  write_holding_node "$work/node"
+  PATH="$work:/usr/bin:/bin" \
+    TMPDIR="$work" \
+    WRANGLER_ARGS="$work/args" \
+    ACCESS_ALLOWED_EMAILS="$list_sentinel" \
+    python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
+  dpid=$!
+  if ! "$hold_dir/bin/note" "$dpid" "" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig could not record deploy pid $dpid" >&2
+    new_failures=$((new_failures + 1))
+    wait "$dpid" 2>/dev/null || true
+    rm -rf "$work"
+    return 0
+  fi
+  spins=0
+  while ! read_parser_handoff "$work/node.ready"; do
+    spins=$((spins + 1))
+    if [ "$spins" -ge 50 ]; then
+      echo "FAIL: signal $sig never handed over the node parser" >&2
+      new_failures=$((new_failures + 1))
+      "$hold_dir/bin/reap" "$hold_dir" || true
+      wait "$dpid" 2>/dev/null || true
+      rm -rf "$work"
+      return 0
+    fi
+    sleep 0.1
+  done
+  pgid=$(ps -o pgid= -p "$dpid" | tr -d ' ')
+  if [ "$pgid" != "$dpid" ]; then
+    echo "FAIL: signal $sig deploy pid $dpid is not its process group" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if ! hold_same "$dpid" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig deploy pid $dpid changed start time before the signal" >&2
+    new_failures=$((new_failures + 1))
+    "$hold_dir/bin/reap" "$hold_dir" || true
+    wait "$dpid" 2>/dev/null || true
+    rm -rf "$work"
+    return 0
+  fi
+  start=$(date +%s)
+  if [ "$how" = "group" ]; then
+    python3 -c 'import os, signal, sys; os.killpg(int(sys.argv[1]), getattr(signal, "SIG" + sys.argv[2]))' "$dpid" "$sig"
+  else
+    kill -s "$sig" "$dpid" 2>/dev/null || true
+  fi
+  set +e
+  wait "$dpid"
+  code=$?
+  set -e
+  end=$(date +%s)
+  CASE_CODE=$code
+  if [ -f "$work/args" ]; then
+    CASE_ARGS=$(cat "$work/args")
+  else
+    CASE_ARGS=""
+  fi
+  CASE_ERR=$(cat "$work/err")
+  CASE_OUT=$(cat "$work/out")
+  echo "== signal $sig $how exit $CASE_CODE in $((end - start))s"
+  printf '%s\n' "$CASE_ERR"
+  if [ "$CASE_CODE" -ne "$want" ]; then
+    echo "FAIL: signal $sig $how exited $CASE_CODE, want $want" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if [ -n "$CASE_ARGS" ]; then
+    echo "FAIL: wrangler ran for signal $sig $how" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if [ "$how" = "group" ]; then
+    if [ $((end - start)) -ge 3 ]; then
+      echo "FAIL: signal $sig to the group took $((end - start))s" >&2
+      new_failures=$((new_failures + 1))
+    fi
+  elif [ $((end - start)) -le 8 ] || [ $((end - start)) -ge 16 ]; then
+    echo "FAIL: signal $sig to the pid took $((end - start))s" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if hold_same "$PARSER_PID" "$hold_dir/pids"; then
+    echo "FAIL: signal $sig $how left the parser running" >&2
+    ps_command "$PARSER_PID" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
+    echo "FAIL: signal $sig leaked the allowlist on stdio" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  if find "$work" -type f -exec grep -F -q -- "$list_sentinel" {} + 2>/dev/null; then
+    echo "FAIL: signal $sig wrote the allowlist to a file" >&2
+    new_failures=$((new_failures + 1))
+  fi
+  "$hold_dir/bin/reap" "$hold_dir" || true
+  rm -rf "$work"
+}
+
+run_hup_under_nohup() {
+  local out runner
+  out=$(mktemp "$hold_dir/nohup-hup.XXXXXX")
+  nohup env OPD_HUP_ONLY=1 OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$out" 2>&1 </dev/null &
+  runner=$!
+  if ! wait_deadline "$runner" 90; then
+    kill -TERM "$runner" 2>/dev/null || true
+    wait "$runner" 2>/dev/null || true
+    echo "FAIL: nohup HUP self-test did not finish" >&2
+    cat "$out" >&2
+    rm -f "$out"
+    exit 1
+  fi
+  if [ "$WAIT_STATUS" -ne 0 ] || ! grep -F -q '== signal HUP pid exit 129' "$out"; then
+    echo "FAIL: nohup HUP self-test exited ${WAIT_STATUS:-}" >&2
+    cat "$out" >&2
+    rm -f "$out"
+    exit 1
+  fi
+  rm -f "$out"
+  echo "self-test nohup HUP: exit 129"
+}
+
+if [ "${OPD_HUP_ONLY:-}" = 1 ]; then
+  list_sentinel="zzsecret-nohup@example.com"
+  new_failures=0
+  run_signal_case HUP 129 pid
+  if [ "$new_failures" -ne 0 ]; then
+    echo "FAIL: $new_failures new deploy cases" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+grep_both() {
+  local first="$1"
+  local second="$2"
+  shift 2
+  local file mid code1 code2
+  file=$(mktemp "$hold_dir/lines.XXXXXX") || return 2
+  mid=$(mktemp "$hold_dir/lines.XXXXXX") || return 2
+  if [ ! -f "$file" ] || [ ! -f "$mid" ]; then
+    rm -f "$file" "$mid"
+    return 2
+  fi
+  if ! printf '%s\n' "$@" > "$file"; then
+    rm -f "$file" "$mid"
+    return 2
+  fi
+  if [ "$#" -gt 0 ] && [ ! -s "$file" ]; then
+    rm -f "$file" "$mid"
+    return 2
+  fi
+  set +e
+  grep -F -- "$first" "$file" > "$mid"
+  code1=$?
+  set -e
+  if [ "$code1" -gt 1 ] || [ ! -f "$mid" ]; then
+    rm -f "$file" "$mid"
+    if [ "$code1" -gt 1 ]; then
+      return "$code1"
+    fi
+    return 2
+  fi
+  set +e
+  grep -F -q -- "$second" "$mid"
+  code2=$?
+  set -e
+  rm -f "$file" "$mid"
+  if [ "$code2" -gt 1 ]; then
+    return "$code2"
+  fi
+  return "$code2"
+}
+
 assert_arg() {
   local expected="$1"
-  if ! printf '%s\n' "$CASE_ARGS" | grep -Fxq -- "$expected"; then
+  if ! grep_lines Fxq "$expected" "$CASE_ARGS"; then
     echo "FAIL: missing arg $expected" >&2
     printf '%s\n' "$CASE_ARGS" >&2
     exit 1
@@ -420,6 +756,328 @@ assert_var_last() {
   fi
 }
 
+if [ "${OPD_GREP_STATUS_PROBE:-}" = 1 ]; then
+  set +e
+  grep_both "ACCESS_ALLOWED_EMAILS" "ACCESS_SERVICE_TOKEN_CLIENT_IDS" "ACCESS_ALLOWED_EMAILS partial"
+  grep_status=$?
+  set -e
+  exit "$grep_status"
+fi
+
+if [ "${OPD_PIPE_PROBE:-}" = 1 ]; then
+  if [ "${OPD_BLOCK_PROBE:-}" = 1 ]; then
+    : > "$hold_dir/outer-ready"
+    sleep 180 &
+    if ! wait_deadline "$!" "${OPD_HOLD_DEADLINE:-240}"; then
+      exit 1
+    fi
+    exit 0
+  fi
+  filler=$(awk 'BEGIN { line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; while (length(out) < 262144) out = out line "\n"; printf "%s", out }')
+  CASE_ARGS="deploy
+${filler}"
+  assert_arg "deploy"
+  echo "pipe probe passed"
+  exit 0
+fi
+
+run_pipe_probe() {
+  local pipe_out pipe_err pipe_code nest block pipe_pid block_pid
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
+  pipe_out=$(mktemp "$hold_dir/pipe.XXXXXX")
+  pipe_err=$(mktemp "$hold_dir/pipe.XXXXXX")
+  block=
+  if [ "${OPD_OUTER_MODE:-}" = pipe ]; then
+    block=1
+  fi
+  set +e
+  TMPDIR="$nest" OPD_PIPE_PROBE=1 OPD_BLOCK_PROBE="$block" \
+    python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$pipe_out" 2>"$pipe_err" &
+  pipe_pid=$!
+  set -e
+  if [ "$block" = 1 ]; then
+    sleep 180 &
+    block_pid=$!
+    wait_deadline "$block_pid" "${OPD_HOLD_DEADLINE:-240}" || true
+    kill -KILL "$block_pid" 2>/dev/null || true
+    wait "$block_pid" 2>/dev/null || true
+    rm -f "$pipe_out" "$pipe_err"
+    return 0
+  fi
+  set +e
+  wait "$pipe_pid"
+  pipe_code=$?
+  set -e
+  if [ "$pipe_code" -ne 0 ] || ! grep -F -q "pipe probe passed" "$pipe_out"; then
+    echo "FAIL: self-test pipe: early-closing reader missed deploy" >&2
+    cat "$pipe_err" >&2
+    cat "$pipe_out" >&2
+    rm -f "$pipe_out" "$pipe_err"
+    exit 1
+  fi
+  if grep -F -q "Broken pipe" "$pipe_err"; then
+    echo "FAIL: self-test pipe: broken pipe" >&2
+    cat "$pipe_err" >&2
+    rm -f "$pipe_out" "$pipe_err"
+    exit 1
+  fi
+  echo "self-test pipe: early-closing reader still saw deploy"
+  rm -f "$pipe_out" "$pipe_err"
+  rm -rf "$nest"
+}
+
+cancel_runner() {
+  local sig="$1"
+  local info out runner spins line path rest pid lstart now child_n sleep_n
+  local nest wait_code expect block_pid
+  info=$(mktemp "$hold_dir/cancel.XXXXXX")
+  out=$(mktemp "$hold_dir/cancel.XXXXXX")
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
+  set +e
+  TMPDIR="$nest" OPD_CANCEL_PROBE=1 OPD_CANCEL_INFO="$info" \
+    python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])' "$BASH" "$suite_path" >"$out" 2>&1 &
+  runner=$!
+  set -e
+  spins=0
+  while true; do
+    child_n=$(grep -c '^CHILD ' "$info" 2>/dev/null || true)
+    sleep_n=$(grep -c '^SLEEP ' "$info" 2>/dev/null || true)
+    if [ "${child_n:-0}" -ge 2 ] && [ "${sleep_n:-0}" -ge 4 ]; then
+      break
+    fi
+    spins=$((spins + 1))
+    if [ "$spins" -gt 100 ]; then
+      echo "FAIL: self-test cancel $sig: runner did not record holders" >&2
+      cat "$out" >&2
+      cat "$info" >&2
+      rm -f "$info" "$out"
+      exit 1
+    fi
+    sleep 0.05
+  done
+  if [ "${OPD_BLOCK_PROBE:-}" = 1 ]; then
+    : > "$hold_dir/outer-ready"
+    sleep 180 &
+    block_pid=$!
+    wait_deadline "$block_pid" "${OPD_HOLD_DEADLINE:-240}" || true
+    kill -KILL "$block_pid" 2>/dev/null || true
+    wait "$block_pid" 2>/dev/null || true
+  fi
+  kill -s "$sig" "$runner" 2>/dev/null || true
+  spins=0
+  while true; do
+    state=$(LC_ALL=C ps -p "$runner" -o stat= 2>/dev/null | tr -d ' ' || true)
+    case "$state" in
+      ''|Z*) break ;;
+    esac
+    spins=$((spins + 1))
+    if [ "$spins" -gt 50 ]; then
+      echo "FAIL: self-test cancel $sig: runner $runner did not end" >&2
+      rm -f "$info" "$out"
+      exit 1
+    fi
+    sleep 0.05
+  done
+  set +e
+  wait "$runner"
+  wait_code=$?
+  set -e
+  case "$sig" in
+    INT) expect=130 ;;
+    TERM) expect=143 ;;
+    HUP) expect=129 ;;
+  esac
+  if [ "$wait_code" -ne "$expect" ]; then
+    echo "FAIL: self-test cancel $sig: exit $wait_code" >&2
+    rm -f "$info" "$out"
+    exit 1
+  fi
+  while IFS= read -r line; do
+    case "$line" in
+      HOLD\ *|RACE\ *|SUITES\ *|CHILD\ *)
+        path=${line#* }
+        if [ -e "$path" ]; then
+          echo "FAIL: self-test cancel $sig: left $path" >&2
+          rm -f "$info" "$out"
+          exit 1
+        fi
+        ;;
+      SLEEP\ *)
+        rest=${line#SLEEP }
+        pid=${rest%% *}
+        lstart=${rest#* }
+        now=$(ps_lstart "$pid")
+        if [ -n "$now" ] && [ "$now" = "$lstart" ]; then
+          echo "FAIL: self-test cancel $sig: left holder $pid" >&2
+          rm -f "$info" "$out"
+          exit 1
+        fi
+        ;;
+    esac
+  done < "$info"
+  echo "self-test cancel $sig: runner $runner ended and left 0 holders"
+  rm -f "$info" "$out"
+  rm -rf "$nest"
+}
+
+run_grep_status_probe() {
+  local shim real out code nest
+  real=$(command -v grep)
+  shim=$(mktemp -d "$hold_dir/grepshim.XXXXXX")
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
+  cat > "$shim/grep" << EOF
+#!/bin/sh
+if [ "\$1" = "-F" ] && [ "\$2" = "--" ] && [ "\$3" = "ACCESS_ALLOWED_EMAILS" ]; then
+  printf '%s\n' "ACCESS_SERVICE_TOKEN_CLIENT_IDS"
+  exit 2
+fi
+exec ${real} "\$@"
+EOF
+  chmod +x "$shim/grep"
+  out=$(mktemp "$hold_dir/grep.XXXXXX")
+  set +e
+  TMPDIR="$nest" PATH="$shim:$PATH" OPD_GREP_STATUS_PROBE=1 "$BASH" "$suite_path" >"$out" 2>&1
+  code=$?
+  set -e
+  if [ "$code" -ne 2 ]; then
+    echo "FAIL: grep status probe exited $code" >&2
+    cat "$out" >&2
+    exit 1
+  fi
+  rm -f "$out"
+  rm -rf "$shim" "$nest"
+  echo "self-test grep: error with partial matches yielded 2"
+}
+
+run_deep_reap() {
+  local deep pid
+  deep="$hold_dir/a/b/c/d/e/pids"
+  mkdir -p "$deep"
+  sleep 30 &
+  pid=$!
+  "$hold_dir/bin/note" "$pid" "" "$deep" || exit 1
+  reap_recorded_tree
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "FAIL: deep reap left $pid" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    exit 1
+  fi
+  wait "$pid" 2>/dev/null || true
+  echo "self-test reap: recorded tree reaped $pid"
+}
+
+run_deadline_probe() {
+  local out child spins code nest
+  out=$(mktemp "$hold_dir/deadline.XXXXXX")
+  nest=$(mktemp -d "$hold_dir/nested.XXXXXX")
+  set +e
+  TMPDIR="$nest" OPD_HOLDER_WAIT=1 OPD_HOLD_DEADLINE=1 "$BASH" "$suite_path" >"$out" 2>&1 &
+  child=$!
+  set -e
+  spins=0
+  while kill -0 "$child" 2>/dev/null; do
+    spins=$((spins + 1))
+    if [ "$spins" -gt 75 ]; then
+      kill -TERM "$child" 2>/dev/null || true
+      wait "$child" 2>/dev/null || true
+      echo "FAIL: holder deadline did not fire" >&2
+      cat "$out" >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+  set +e
+  wait "$child"
+  code=$?
+  set -e
+  if [ "$code" -eq 0 ] || ! grep -F -q "holder wait exceeded deadline" "$out"; then
+    echo "FAIL: holder deadline exited $code" >&2
+    cat "$out" >&2
+    exit 1
+  fi
+  rm -f "$out"
+  rm -rf "$nest"
+  echo "self-test deadline: holder wait stopped at 1s"
+}
+
+cancel_outer_during() {
+  local mode="$1"
+  local drv runner spins list left
+  drv=$(mktemp -d "$hold_dir/outer.XXXXXX")
+  set +e
+  TMPDIR="$drv" OPD_OUTER_MODE="$mode" "$BASH" "$suite_path" >"$hold_dir/outer-$mode.out" 2>&1 &
+  runner=$!
+  set -e
+  spins=0
+  while true; do
+    list=$(mktemp "$hold_dir/found.XXXXXX")
+    find "$drv" -name outer-ready -type f > "$list" 2>/dev/null || true
+    if [ -s "$list" ]; then
+      rm -f "$list"
+      break
+    fi
+    rm -f "$list"
+    spins=$((spins + 1))
+    if [ "$spins" -gt 400 ]; then
+      echo "FAIL: outer cancel $mode: probe did not start" >&2
+      cat "$hold_dir/outer-$mode.out" >&2
+      kill -TERM "$runner" 2>/dev/null || true
+      wait "$runner" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 0.05
+  done
+  kill -TERM "$runner" 2>/dev/null || true
+  set +e
+  wait "$runner"
+  set -e
+  list=$(mktemp "$hold_dir/found.XXXXXX")
+  find "$drv" -mindepth 1 -print > "$list" 2>/dev/null || true
+  left=$(wc -l < "$list" | tr -d ' ')
+  if [ "${left:-0}" -ne 0 ]; then
+    echo "FAIL: outer cancel $mode: left $left entries" >&2
+    cat "$list" >&2
+    rm -f "$list"
+    exit 1
+  fi
+  rm -f "$list"
+  rm -rf "$drv"
+  echo "self-test outer $mode: TERM left 0 entries"
+}
+
+if [ "${OPD_OUTER_MODE:-}" = pipe ]; then
+  run_pipe_probe
+  exit 0
+fi
+if [ "${OPD_OUTER_MODE:-}" = cancel ]; then
+  OPD_BLOCK_PROBE=1 cancel_runner TERM
+  exit 0
+fi
+
+if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
+  run_hup_under_nohup
+  run_grep_status_probe
+  run_deep_reap
+  run_deadline_probe
+  cancel_outer_during pipe
+  cancel_outer_during cancel
+  run_pipe_probe
+  cancel_runner TERM
+  cancel_runner INT
+  cancel_runner HUP
+fi
+
 unset ACCESS_SERVICE_TOKEN_CLIENT_IDS
 ACCESS_ALLOWED_EMAILS='person@example.com' run_deploy
 if [ "$CASE_CODE" -ne 0 ]; then
@@ -430,12 +1088,12 @@ fi
 assert_arg "deploy"
 assert_arg "--var"
 assert_arg "ACCESS_SERVICE_TOKEN_CLIENT_IDS:"
-if ! printf '%s\n' "$CASE_ERR" | grep -q "empties the allowlist"; then
+if ! grep_lines q "empties the allowlist" "$CASE_ERR"; then
   echo "FAIL: unset deploy did not warn that the allowlist is emptied" >&2
   printf '%s\n' "$CASE_ERR" >&2
   exit 1
 fi
-if printf '%s\n' "$CASE_ARGS" | grep -q "machine-secret"; then
+if grep_lines q "machine-secret" "$CASE_ARGS"; then
   echo "FAIL: deploy forwarded the calibration secret" >&2
   exit 1
 fi
@@ -446,18 +1104,18 @@ if [ "$CASE_CODE" -ne 0 ]; then
   exit 1
 fi
 assert_arg "ACCESS_SERVICE_TOKEN_CLIENT_IDS:uptime-robot, other-monitor"
-if printf '%s\n' "$CASE_ERR" | grep -q "empties the allowlist"; then
+if grep_lines q "empties the allowlist" "$CASE_ERR"; then
   echo "FAIL: a set allowlist still warned" >&2
   exit 1
 fi
-if printf '%s\n' "$CASE_ARGS" | grep -q "machine-secret"; then
+if grep_lines q "machine-secret" "$CASE_ARGS"; then
   echo "FAIL: deploy forwarded the calibration secret" >&2
   exit 1
 fi
 
 run_package_deploy() {
   local work shim code
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
   shim="$work/shim"
   mkdir -p "$shim"
   cat > "$shim/wrangler" << 'EOF'
@@ -549,7 +1207,7 @@ reject_allowlist_override() {
     printf '%s\n' "$CASE_ARGS" >&2
     exit 1
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F "ACCESS_ALLOWED_EMAILS" | grep -F -q "ACCESS_SERVICE_TOKEN_CLIENT_IDS"; then
+  if ! grep_both "ACCESS_ALLOWED_EMAILS" "ACCESS_SERVICE_TOKEN_CLIENT_IDS" "$CASE_ERR"; then
     echo "FAIL: rejected allowlist --var did not name both variables ($1)" >&2
     printf '%s\n' "$CASE_ERR" >&2
     exit 1
@@ -609,7 +1267,7 @@ expect_reject() {
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F -q -- "$needle"; then
+  if ! grep_lines Fq "$needle" "$CASE_ERR"; then
     echo "FAIL: $label did not name $needle" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
@@ -626,7 +1284,7 @@ expect_var_names() {
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F "ACCESS_ALLOWED_EMAILS" | grep -F -q "ACCESS_SERVICE_TOKEN_CLIENT_IDS"; then
+  if ! grep_both "ACCESS_ALLOWED_EMAILS" "ACCESS_SERVICE_TOKEN_CLIENT_IDS" "$CASE_ERR"; then
     echo "FAIL: $label did not name both variables" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
@@ -816,14 +1474,14 @@ expect_locale_emails() {
       new_failures=$((new_failures + 1))
       return 0
     fi
-    if ! printf '%s\n' "$CASE_ERR" | grep -F -q "ACCESS_ALLOWED_EMAILS is empty"; then
+    if ! grep_lines Fq "ACCESS_ALLOWED_EMAILS is empty" "$CASE_ERR"; then
       echo "FAIL: $runner LC_ALL=$locale $label did not refuse a blank list" >&2
       printf '%s\n' "$CASE_ERR" >&2
       new_failures=$((new_failures + 1))
     fi
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ARGS" | grep -F -q "person@example.com"; then
+  if ! grep_lines Fq "person@example.com" "$CASE_ARGS"; then
     echo "FAIL: $runner LC_ALL=$locale $label did not pass the mailbox" >&2
     printf '%s\n' "$CASE_ARGS" >&2
     new_failures=$((new_failures + 1))
@@ -843,7 +1501,7 @@ run_stub_node() {
   local mode="$1"
   shift
   local work
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
   cat > "$work/wrangler" <<'EOF'
 #!/bin/sh
 for arg in "$@"; do
@@ -939,19 +1597,19 @@ expect_parser_failure() {
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if ! printf '%s\n' "$CASE_ERR" | grep -F -q -- "$needle"; then
+  if ! grep_lines Fq "$needle" "$CASE_ERR"; then
     echo "FAIL: $label did not say $needle" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q "list is empty"; then
+  if grep_lines Fq "list is empty" "$CASE_ERR" "$CASE_OUT"; then
     echo "FAIL: $label printed list is empty" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
     return 0
   fi
-  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q "is empty"; then
+  if grep_lines Fq "is empty" "$CASE_ERR" "$CASE_OUT"; then
     echo "FAIL: $label printed the empty-list message" >&2
     printf '%s\n' "$CASE_ERR" >&2
     new_failures=$((new_failures + 1))
@@ -971,7 +1629,7 @@ expect_parser_failure "node exited non-zero" "failed (exit 3)"
 
 list_sentinel="zzsecret-${RANDOM}$$@example.com"
 STUB_EMAILS="$list_sentinel"
-leak_notes=$(mktemp)
+leak_notes=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 (
   deadline=$((SECONDS + 14))
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -1027,7 +1685,7 @@ printf '%s\n' "$CASE_ERR"
 expect_parser_failure "node printed garbage" "unexpected output"
 
 
-if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
   echo "FAIL: hung node leaked the allowlist on stdio" >&2
   new_failures=$((new_failures + 1))
 fi
@@ -1060,7 +1718,7 @@ if [ $((close_end - close_start)) -ge 3 ]; then
   echo "FAIL: early stdin close took $((close_end - close_start))s" >&2
   new_failures=$((new_failures + 1))
 fi
-if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
+if grep_lines Fq "$list_sentinel" "$CASE_ERR" "$CASE_OUT"; then
   echo "FAIL: early stdin close leaked the allowlist on stdio" >&2
   new_failures=$((new_failures + 1))
 fi
@@ -1073,119 +1731,6 @@ if grep -E 'setpgrp|mkfifo|kill |[[:space:]]perl[[:space:]]' deploy.sh >/dev/nul
   echo "FAIL: deploy.sh still supervises the parser process tree" >&2
   new_failures=$((new_failures + 1))
 fi
-
-run_signal_case() {
-  local sig="$1"
-  local want="$2"
-  local how="$3"
-  local work dpid spins start end code pgid
-  work=$(mktemp -d)
-  cat > "$work/wrangler" << 'ENDWR'
-#!/bin/sh
-for arg in "$@"; do
-  printf '%s\n' "$arg" >> "$WRANGLER_ARGS"
-done
-exit 0
-ENDWR
-  chmod +x "$work/wrangler"
-  write_holding_node "$work/node"
-  PATH="$work:/usr/bin:/bin" \
-    TMPDIR="$work" \
-    WRANGLER_ARGS="$work/args" \
-    ACCESS_ALLOWED_EMAILS="$list_sentinel" \
-    python3 -c 'import os, signal, sys
-signal.signal(signal.SIGINT, signal.SIG_DFL)
-signal.signal(signal.SIGQUIT, signal.SIG_DFL)
-os.setsid()
-os.execvp(sys.argv[1], sys.argv[1:])' "$deploy_bash" ./deploy.sh >"$work/out" 2>"$work/err" &
-  dpid=$!
-  if ! "$hold_dir/bin/note" "$dpid" "" "$hold_dir/pids"; then
-    echo "FAIL: signal $sig could not record deploy pid $dpid" >&2
-    new_failures=$((new_failures + 1))
-    wait "$dpid" 2>/dev/null || true
-    rm -rf "$work"
-    return 0
-  fi
-  spins=0
-  while ! read_parser_handoff "$work/node.ready"; do
-    spins=$((spins + 1))
-    if [ "$spins" -ge 50 ]; then
-      echo "FAIL: signal $sig never handed over the node parser" >&2
-      new_failures=$((new_failures + 1))
-      "$hold_dir/bin/reap" "$hold_dir" || true
-      wait "$dpid" 2>/dev/null || true
-      rm -rf "$work"
-      return 0
-    fi
-    sleep 0.1
-  done
-  pgid=$(ps -o pgid= -p "$dpid" | tr -d ' ')
-  if [ "$pgid" != "$dpid" ]; then
-    echo "FAIL: signal $sig deploy pid $dpid is not its process group" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if ! hold_same "$dpid" "$hold_dir/pids"; then
-    echo "FAIL: signal $sig deploy pid $dpid changed start time before the signal" >&2
-    new_failures=$((new_failures + 1))
-    "$hold_dir/bin/reap" "$hold_dir" || true
-    wait "$dpid" 2>/dev/null || true
-    rm -rf "$work"
-    return 0
-  fi
-  start=$(date +%s)
-  if [ "$how" = "group" ]; then
-    python3 -c 'import os, signal, sys; os.killpg(int(sys.argv[1]), getattr(signal, "SIG" + sys.argv[2]))' "$dpid" "$sig"
-  else
-    kill -s "$sig" "$dpid" 2>/dev/null || true
-  fi
-  set +e
-  wait "$dpid"
-  code=$?
-  set -e
-  end=$(date +%s)
-  CASE_CODE=$code
-  if [ -f "$work/args" ]; then
-    CASE_ARGS=$(cat "$work/args")
-  else
-    CASE_ARGS=""
-  fi
-  CASE_ERR=$(cat "$work/err")
-  CASE_OUT=$(cat "$work/out")
-  echo "== signal $sig $how exit $CASE_CODE in $((end - start))s"
-  printf '%s\n' "$CASE_ERR"
-  if [ "$CASE_CODE" -ne "$want" ]; then
-    echo "FAIL: signal $sig $how exited $CASE_CODE, want $want" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if [ -n "$CASE_ARGS" ]; then
-    echo "FAIL: wrangler ran for signal $sig $how" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if [ "$how" = "group" ]; then
-    if [ $((end - start)) -ge 3 ]; then
-      echo "FAIL: signal $sig to the group took $((end - start))s" >&2
-      new_failures=$((new_failures + 1))
-    fi
-  elif [ $((end - start)) -le 8 ] || [ $((end - start)) -ge 16 ]; then
-    echo "FAIL: signal $sig to the pid took $((end - start))s" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if hold_same "$PARSER_PID" "$hold_dir/pids"; then
-    echo "FAIL: signal $sig $how left the parser running" >&2
-    ps_command "$PARSER_PID" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if printf '%s\n' "$CASE_ERR" "$CASE_OUT" | grep -F -q -- "$list_sentinel"; then
-    echo "FAIL: signal $sig leaked the allowlist on stdio" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  if find "$work" -type f -exec grep -F -q -- "$list_sentinel" {} + 2>/dev/null; then
-    echo "FAIL: signal $sig wrote the allowlist to a file" >&2
-    new_failures=$((new_failures + 1))
-  fi
-  "$hold_dir/bin/reap" "$hold_dir" || true
-  rm -rf "$work"
-}
 
 run_signal_case TERM 143 pid
 run_signal_case INT 130 pid
@@ -1223,24 +1768,24 @@ assert_early_reaped() {
   rm -f "$pidfile" "$outfile"
 }
 
-trap_pidfile=$(mktemp)
-trap_out=$(mktemp)
+trap_pidfile=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
+trap_out=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 set +e
 OPD_TRAP_PROBE=1 OPD_TRAP_PIDFILE="$trap_pidfile" "$BASH" "$suite_path" >"$trap_out" 2>&1
 trap_code=$?
 set -e
 assert_early_reaped trap "$trap_pidfile" "$trap_out" "$trap_code"
 
-race_pidfile=$(mktemp)
-race_out=$(mktemp)
+race_pidfile=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
+race_out=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 set +e
 OPD_RACE_PROBE=1 OPD_TRAP_PIDFILE="$race_pidfile" "$BASH" "$suite_path" >"$race_out" 2>&1
 race_code=$?
 set -e
 assert_early_reaped race "$race_pidfile" "$race_out" "$race_code"
 
-sig_pidfile=$(mktemp)
-sig_out=$(mktemp)
+sig_pidfile=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
+sig_out=$(mktemp "${TMPDIR:-/tmp}/opd.XXXXXX")
 set +e
 OPD_SIGINT_PROBE=1 OPD_TRAP_PIDFILE="$sig_pidfile" \
   python3 -c 'import os, signal, sys
@@ -1310,7 +1855,7 @@ echo "self-test a: unrelated sleep $stray ignored"
 "$hold_dir/bin/reap-one" "$stray" "$hold_dir/side" || true
 wait "$stray" 2>/dev/null || true
 
-bwork=$(mktemp -d)
+bwork=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
 /bin/sh -c 'sleep 60 & echo $! > "$1"; wait' _ "$bwork/child" &
 bholder=$!
 bspins=0
@@ -1355,7 +1900,7 @@ if hold_same "$bholder" "$hold_dir/pids" || hold_same "$bchild" "$hold_dir/pids"
 fi
 rm -rf "$bwork"
 
-cwork=$(mktemp -d)
+cwork=$(mktemp -d "${TMPDIR:-/tmp}/opd.XXXXXX")
 cat > "$cwork/wrap" << EOF
 #!/bin/sh
 "$real_node" "\$@" &
@@ -1458,18 +2003,17 @@ fi
 echo "self-test d: pid $reused with a different start time was not killed"
 
 if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
-  race1=$(mktemp)
-  race2=$(mktemp)
-  set +e
-  OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race1" 2>&1 &
-  race_a=$!
-  OPD_SUITE_CHILD=1 "$BASH" "$suite_path" >"$race2" 2>&1 &
-  race_b=$!
-  wait "$race_a"
-  race_a_code=$?
-  wait "$race_b"
-  race_b_code=$?
-  set -e
+  start_paired_suites suite
+  if wait_deadline "$race_a" "${OPD_JOIN_DEADLINE:-600}"; then
+    race_a_code=$WAIT_STATUS
+  else
+    race_a_code=1
+  fi
+  if wait_deadline "$race_b" "${OPD_JOIN_DEADLINE:-600}"; then
+    race_b_code=$WAIT_STATUS
+  else
+    race_b_code=1
+  fi
   if [ "$race_a_code" -ne 0 ] || [ "$race_b_code" -ne 0 ]; then
     echo "FAIL: self-test e: suites exited $race_a_code and $race_b_code" >&2
     echo "---- suite A ----" >&2
@@ -1477,20 +2021,24 @@ if [ "${OPD_SUITE_CHILD:-}" != 1 ]; then
     echo "---- suite B ----" >&2
     cat "$race2" >&2
     rm -f "$race1" "$race2"
+    rm -rf "$suite_tmp"
     exit 1
   fi
   if grep -F -q "missing arg deploy" "$race1" "$race2"; then
     echo "FAIL: self-test e: missing arg deploy" >&2
     rm -f "$race1" "$race2"
+    rm -rf "$suite_tmp"
     exit 1
   fi
   if ! grep -F -q "deploy.test.sh passed" "$race1" || ! grep -F -q "deploy.test.sh passed" "$race2"; then
     echo "FAIL: self-test e: a suite did not pass" >&2
     rm -f "$race1" "$race2"
+    rm -rf "$suite_tmp"
     exit 1
   fi
   echo "self-test e: both suites passed"
   rm -f "$race1" "$race2"
+  rm -rf "$suite_tmp"
 fi
 
 if [ -n "$wrangler_target" ] && [ "$(readlink node_modules/.bin/wrangler)" != "$wrangler_target" ]; then
