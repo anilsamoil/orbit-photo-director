@@ -3147,6 +3147,15 @@ function voidViewportAbort(send) {
   aborting.catch(() => {});
 }
 
+async function withViewportCleanup(send, step, signal) {
+  try {
+    return await step();
+  } catch (error) {
+    if (!signal?.aborted) voidViewportAbort(send);
+    throw error;
+  }
+}
+
 function viewportLayoutScript(width, height) {
   return `(() => {
     const width = ${width};
@@ -3258,20 +3267,17 @@ async function readViewportSettled(send) {
 
 async function layOutViewport(send, width, height, signal) {
   await evaluate(send, viewportLayoutScript(width, height));
-  let expectedDpr = null;
-  try {
+  const expectedDpr = await withViewportCleanup(send, async () => {
     const changed = await setViewport(send, width, height, true, signal);
     signal.throwIfAborted();
     if (changed?.contextReplaced) await evaluate(send, viewportLayoutScript(width, height));
     const read = await evaluate(send, 'window.devicePixelRatio');
-    expectedDpr = Number(read);
-    if (!Number.isFinite(expectedDpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
-    await evaluate(send, `window.__opdArmViewportLayout?.(${expectedDpr})`);
-  } catch (error) {
-    voidViewportAbort(send);
-    throw error;
-  }
-  const settled = await readViewportSettled(send);
+    const dpr = Number(read);
+    if (!Number.isFinite(dpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
+    await evaluate(send, `window.__opdArmViewportLayout?.(${dpr})`);
+    return dpr;
+  }, signal);
+  const settled = await withViewportCleanup(send, () => readViewportSettled(send), signal);
   if (settled && typeof settled === 'object') settled.expectedDpr = expectedDpr;
   return settled;
 }
