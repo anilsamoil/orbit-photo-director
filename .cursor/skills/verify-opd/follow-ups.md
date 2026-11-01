@@ -7,3 +7,9 @@ Product gaps found while maintaining this skill. A maintain run does not change 
 `init` in `frontend/src/main.ts` calls `bindTabs(!sessionFailed)` once. Re-adding the duplicate second `bindTabs()` call in `main.ts` leaves `frontend/test/map-import-failure.test.ts` green. A second call registers another click listener on each tab, so one click runs the handler twice. A product test should assert that `bindTabs` binds once (no double handlers).
 
 Recorded after #269 (`a9df092f486cda4a05c4328d1a5b430047e7bdb9`).
+
+## Deploy note: upload without CLOUDFLARE_API_TOKEN
+
+`scripts/upload_frontend.sh` probes R2 with `wrangler r2 object put`. The rclone fallback (`copyto`, then `cat`) runs only when that probe's error matches a Cloudflare 403 or code 10000. A missing `CLOUDFLARE_API_TOKEN` is not that match. The script prints `R2 write preflight failed without a recognized 403/10000` and exits 3. No frontend file is published, and rclone is not called. `bash scripts/upload_frontend.test.sh` covers a non-403 probe as `generic` and `timeout10000` (exit 3, no publish). This skill does not deploy and does not use real R2.
+
+Recorded after #345 (`5ef2db8c`). The product script stays as it is.
