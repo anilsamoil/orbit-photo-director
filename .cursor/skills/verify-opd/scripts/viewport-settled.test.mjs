@@ -167,6 +167,67 @@ test('a hung setViewport rejects at the drive deadline', { timeout: 20_000 }, as
   assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
 });
 
+test('a late settle-read rejection after timeout does not abort the next resize', { timeout: 20_000 }, async () => {
+  let generation = 0;
+  const aborted = new Set();
+  let rejectLateRead;
+  const lateRead = new Promise((resolve, reject) => {
+    rejectLateRead = reject;
+  });
+  let markSecondReading;
+  const secondReading = new Promise((resolve) => {
+    markSecondReading = resolve;
+  });
+  let releaseSecondRead;
+  const secondRead = new Promise((resolve) => {
+    releaseSecondRead = resolve;
+  });
+  let settleReads = 0;
+  const send = (method, params) => {
+    if (method === 'Emulation.setDeviceMetricsOverride') return {};
+    if (method !== 'Runtime.evaluate') throw new Error(`unexpected ${method}`);
+    const expression = params?.expression ?? '';
+    if (expression.includes('__opdViewportSettled = new Promise')) {
+      generation += 1;
+      return { result: { value: true } };
+    }
+    if (expression.includes('__opdAbortViewportLayout?.()')) {
+      aborted.add(generation);
+      return { result: { value: true } };
+    }
+    if (expression === 'window.devicePixelRatio') return { result: { value: 1 } };
+    if (expression.includes('__opdArmViewportLayout')) return { result: { value: true } };
+    if (expression === 'window.__opdViewportSettled') {
+      settleReads += 1;
+      if (settleReads === 1) return lateRead;
+      markSecondReading();
+      return secondRead.then(() => ({
+        result: {
+          value: aborted.has(generation)
+            ? { w: 390, h: 520, dpr: 1, aborted: true, timedOut: false }
+            : { w: 390, h: 520, dpr: 1, timedOut: false },
+        },
+      }));
+    }
+    throw new Error(`unexpected evaluate ${expression.slice(0, 120)}`);
+  };
+  const first = whenViewportLaidOut(send, 390, 520);
+  const timedOut = await raceCall(first, 13_000);
+  assert.equal(timedOut.status, 'rejected', JSON.stringify(timedOut));
+  assert.match(timedOut.message, /"deadline":true/);
+  assert.ok(timedOut.elapsed >= 11_000 && timedOut.elapsed < 13_000, String(timedOut.elapsed));
+  assert.equal(aborted.has(1), true);
+  const second = whenViewportLaidOut(send, 390, 520);
+  second.catch(() => {});
+  await secondReading;
+  rejectLateRead(new Error('late settle read'));
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(aborted.has(2), false, `stale cleanup aborted generation ${[...aborted].join(',')}`);
+  releaseSecondRead();
+  await second;
+  assert.equal(aborted.has(2), false);
+});
+
 function pacedSend() {
   return (method, params) => {
     const expression = params?.expression ?? '';
