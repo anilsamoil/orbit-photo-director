@@ -38,7 +38,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -85,6 +85,7 @@ class LightningSample:
     flash_rate_per_min: float
     sample_time: datetime
     source: str  # placeholder | glm | blitzortung | gfs-cape | combined-no-data
+    observed_at: datetime | None = None
 
 
 class LightningSampler(Protocol):
@@ -122,31 +123,33 @@ class PlaceholderLightningSampler:
 # ---------------------------------------------------------------------------
 #
 # Source: NOAA Big Data on AWS S3, anonymous public bucket
-#   noaa-goes16 (GOES-East, lon -75.2°) — Americas + Atlantic
+#   noaa-goes19 (GOES-East, lon -75.2°) — Americas + Atlantic
 #   noaa-goes18 (GOES-West, lon -137.0°) — E.Pacific + Americas
 # Format: GLM-L2-LCFA NetCDF granules, ~20s cadence, ~30-100KB each.
-# Path: GLM-L2-LCFA/YYYY/DOY/HH/OR_GLM-L2-LCFA_G{16,18}_s{...}_e{...}_c{...}.nc
+# Path: GLM-L2-LCFA/YYYY/DOY/HH/OR_GLM-L2-LCFA_G{19,18}_s{...}_e{...}_c{...}.nc
 #
 # v1.5.5.0 design (per /plan-eng-review 2026-05-21):
 # - A1: 60-min window per tick (matches tick cadence; ~18MB/tick total)
-# - A2: skip targets outside GOES coverage (lat outside [-60, 60] or lon
-#       outside [-180, -25]) — no point fetching for Europe/Africa/Asia
+# - A2: report missing sectors separately from quiet observed regions
 # - A3: companion `make glm-smoke` target for live-S3 verification
 # - A4: granule age carried in lightning_source (e.g., "glm-45m")
 # - A5: log warning when expected listing is empty (silent-degrade detection)
 # - P2: 5° × 5° spatial bucket index for O(1) per-target lookup
-#
-# Sim-env caveat: NOAA S3 only has data through 2025; in this dev
-# environment the sampler returns 0-potential for "today's" date.
-# Tests use mocked fixtures + the live path is verified only via
-# `make glm-smoke` after real-world deployment.
 #
 # Structural similarity to GFSForecastSampler.fetch_batches: both list
 # URLs in a time window, fetch each, parse, aggregate. Different formats
 # (NetCDF vs JSON) and different cadences (20s vs 1h), so the
 # generalization isn't worth a shared abstraction.
 
-GLM_S3_BUCKETS = ("noaa-goes16", "noaa-goes18")
+# Use a conservative inner footprint for negative observations. A nearby
+# detected flash is direct evidence even near the edge of either GLM sector.
+GLM_SUBPOINT_LON = {"noaa-goes19": -75.2, "noaa-goes18": -137.0}
+GLM_INNER_RADIUS_KM = 5500
+# Negative evidence needs a recent successful read. Five minutes allows
+# fifteen nominal 20-second publication cycles. Positive flashes retain the
+# existing one-hour evidence window for imminent passes.
+GLM_QUIET_FRESHNESS_MINUTES = 5
+GLM_PASS_HORIZON_MINUTES = 20
 GLM_LISTING_TIMEOUT_SECONDS = 30
 GLM_GRANULE_TIMEOUT_SECONDS = 30
 # Parallelism for the per-tick granule fetch. NOAA S3 reliably handles 16
@@ -183,32 +186,18 @@ SPRITE_ANNULUS_OUTER_KM = 3200.0
 # charge-moment threshold — GLM total-flash count only loosely tracks the
 # high-charge-moment +CG strokes in a storm's stratiform region that actually
 # trigger sprites. Set conservatively (anti-over-fire; ~4 flashes/min average
-# over the hour = a genuinely active mesoscale system) and SOAK-TUNABLE: the
-# dev env has no live GLM past 2025, so this only exercises under `make
-# glm-smoke` / production. Raise if the soak shows noise, lower if it never
-# fires.
+# over the hour = a genuinely active mesoscale system).
 SPRITE_MIN_FLASHES = 250
 # Coarse spatial-index bucket size (P2). 5° lat/lon ≈ 555km × 555km at
 # the equator; a 100km lookup radius always lands within at most 4
 # adjacent buckets, so the per-target retrieval is O(1) bucket fetch
 # followed by an O(k) distance check across ≤4 buckets.
 GLM_SPATIAL_BUCKET_DEG = 5.0
-# GOES nominal full-disk coverage envelope. Real coverage is a circle
-# centered on each satellite's sub-point; using a lat/lon box gates the
-# work without over-fetching. Outside this envelope, GLM has nothing
-# to say and the sampler skips immediately.
-GLM_COVERAGE_LAT_MIN = -60.0
-GLM_COVERAGE_LAT_MAX = 60.0
-GLM_COVERAGE_LON_MIN = -180.0
-GLM_COVERAGE_LON_MAX = -25.0
-
-
-def _in_glm_coverage(lat: float, lon: float) -> bool:
-    """A2: return False for points outside the combined GOES-East+West disk."""
-    return (
-        GLM_COVERAGE_LAT_MIN <= lat <= GLM_COVERAGE_LAT_MAX
-        and GLM_COVERAGE_LON_MIN <= lon <= GLM_COVERAGE_LON_MAX
-    )
+def _covering_satellites(lat: float, lon: float) -> list[str]:
+    return [
+        sat for sat, center in GLM_SUBPOINT_LON.items()
+        if great_circle_km(lat, lon, 0, center) <= GLM_INNER_RADIUS_KM
+    ]
 
 
 def _glm_granule_urls(bucket: str, when: datetime, window_minutes: int) -> list[str]:
@@ -273,7 +262,7 @@ def _glm_granule_urls(bucket: str, when: datetime, window_minutes: int) -> list[
                                               minutes=stamp_m, seconds=stamp_s)
             except (ValueError, IndexError):
                 continue
-            if granule_dt.timestamp() < cutoff:
+            if not cutoff <= granule_dt.timestamp() <= when.timestamp():
                 continue
             out.append(f"https://{bucket}.s3.amazonaws.com/{key}")
     return out
@@ -287,66 +276,48 @@ class _GLMFlash:
     t: datetime
 
 
-def _decode_glm_granule(buf: bytes) -> list[_GLMFlash]:
-    """Parse one GLM-L2-LCFA NetCDF buffer; return list of (lat, lon, time)
-    for each flash. Returns empty list on parse failure (caller silently
-    skips and tries the next granule).
+@dataclass(frozen=True)
+class _GLMGranule:
+    start: datetime
+    flashes: list[_GLMFlash]
 
-    GLM-L2-LCFA schema (per NOAA GOES-R Product Definition):
-      variables: flash_lat[N], flash_lon[N],
-                 flash_time_offset_of_first_event[N] (float seconds)
-      attribute: time_coverage_start ISO 8601 string
-    """
+
+def _decode_glm_granule(buf: bytes) -> _GLMGranule | None:
+    """A valid granule may contain zero flashes. Unusable data returns None."""
     try:
         import netCDF4
-    except ImportError:
-        log.warning("netCDF4 not available; cannot decode GLM granules")
-        return []
-    try:
-        ds = netCDF4.Dataset("inmemory.nc", mode="r", memory=buf)
-    except Exception as exc:  # noqa: BLE001
+
+        with netCDF4.Dataset("inmemory.nc", mode="r", memory=buf) as ds:
+            start = datetime.fromisoformat(ds.time_coverage_start.replace("Z", "+00:00"))
+            if start.tzinfo is None:
+                raise ValueError("missing time zone in granule start")
+            start = start.astimezone(UTC)
+            flashes = []
+            for lat, lon, offset in zip(
+                ds["flash_lat"][:], ds["flash_lon"][:],
+                ds["flash_time_offset_of_first_event"][:], strict=True,
+            ):
+                if not (-90 <= lat <= 90 and -180 <= lon <= 180 and math.isfinite(offset)):
+                    raise ValueError("invalid flash coordinates or offset")
+                t = start + timedelta(seconds=float(offset))
+                flashes.append(_GLMFlash(float(lat), float(lon), t))
+            return _GLMGranule(start, flashes)
+    except (ImportError, OSError, RuntimeError, ValueError, AttributeError, IndexError,
+            KeyError, TypeError, OverflowError) as exc:
         log.warning("GLM granule decode failed: %s", exc)
-        return []
-    try:
-        if "flash_lat" not in ds.variables:
-            return []
-        flash_lat = ds.variables["flash_lat"][:]
-        flash_lon = ds.variables["flash_lon"][:]
-        if "flash_time_offset_of_first_event" in ds.variables:
-            flash_offsets = ds.variables["flash_time_offset_of_first_event"][:]
-        else:
-            flash_offsets = [0.0] * len(flash_lat)
-        ref_str = getattr(ds, "time_coverage_start", None)
-        if ref_str:
-            try:
-                ref = datetime.fromisoformat(str(ref_str).replace("Z", "+00:00"))
-                if ref.tzinfo is None:
-                    ref = ref.replace(tzinfo=UTC)
-            except ValueError:
-                ref = datetime.now(tz=UTC)
-        else:
-            ref = datetime.now(tz=UTC)
-        from datetime import timedelta as _td
-        flashes: list[_GLMFlash] = []
-        for i in range(len(flash_lat)):
-            try:
-                lat = float(flash_lat[i])
-                lon = float(flash_lon[i])
-                offset = float(flash_offsets[i]) if i < len(flash_offsets) else 0.0
-                t = ref + _td(seconds=offset)
-                flashes.append(_GLMFlash(lat=lat, lon=lon, t=t))
-            except (ValueError, TypeError):
-                continue
-        return flashes
-    finally:
-        ds.close()
+        return None
+
+
+def _wrap_lon_bucket(index: int) -> int:
+    half_world = int(180 / GLM_SPATIAL_BUCKET_DEG)
+    return (index + half_world) % (2 * half_world) - half_world
 
 
 def _bucket_key(lat: float, lon: float) -> tuple[int, int]:
     """5° × 5° lat/lon bucket key for the GLM spatial index (P2)."""
     return (
         int(lat // GLM_SPATIAL_BUCKET_DEG),
-        int(lon // GLM_SPATIAL_BUCKET_DEG),
+        int(((lon + 180) % 360 - 180) // GLM_SPATIAL_BUCKET_DEG),
     )
 
 
@@ -368,8 +339,7 @@ class GLMSampler:
     calls are O(1) bucket lookup + O(k) flashes-in-bucket distance check.
 
     Returns lightning_source="glm-{N}m" where N is the age in minutes
-    of the OLDEST granule that contributed flashes (per A4 — operator
-    visibility into freshness).
+    of the oldest nearby flash, or the latest covering granule for a quiet target.
     """
 
     def __init__(
@@ -384,9 +354,8 @@ class GLMSampler:
         self._when = when
         self._window_minutes = window_minutes
         self._flashes_by_bucket: dict[tuple[int, int], list[_GLMFlash]] = {}
-        # Track the oldest granule we contributed from, for the lightning_source
-        # age suffix.
-        self._oldest_granule_age_min: int | None = None
+        self._latest_by_satellite: dict[str, datetime] = {}
+        cutoff = when - timedelta(minutes=window_minutes)
 
         if fetcher is None:
             def _fetch_bytes(url: str) -> bytes:
@@ -402,8 +371,8 @@ class GLMSampler:
                 return _glm_granule_urls(bucket, when, window_minutes)
             lister = _list_urls
 
-        all_urls: list[str] = []
-        for bucket in GLM_S3_BUCKETS:
+        all_urls: list[tuple[str, str]] = []
+        for bucket in GLM_SUBPOINT_LON:
             urls = lister(bucket)
             if not urls:
                 # A5: log warning when a window where we expect data is empty.
@@ -413,7 +382,7 @@ class GLMSampler:
                     "environment's wall-clock is ahead of the bucket's data.",
                     bucket, window_minutes, window_minutes * 3,
                 )
-            all_urls.extend(urls)
+            all_urls.extend((bucket, url) for url in urls)
 
         # Parallel granule fetch. NOAA S3 is the per-tick latency hot-path:
         # when one of the two GOES buckets is empty and the other returns
@@ -428,7 +397,8 @@ class GLMSampler:
         # if aggregate decode is ever observed >30s, fold _decode_glm_granule
         # into the worker callable.
         decode_seconds = 0.0
-        decoded_granules = 0
+        decoded: list[tuple[str, _GLMGranule]] = []
+        sources_by_start: dict[datetime, set[str]] = {}
         # Note: not using `with ThreadPoolExecutor()` because its __exit__
         # blocks waiting for in-flight workers — `time.sleep` (or a stuck
         # socket recv) can't be cancelled, so a hung S3 worker would
@@ -440,30 +410,27 @@ class GLMSampler:
         ex = concurrent.futures.ThreadPoolExecutor(
             max_workers=GLM_FETCH_MAX_WORKERS
         )
-        futures = {ex.submit(fetcher, url): url for url in all_urls}
+        futures = {ex.submit(fetcher, url): (bucket, url) for bucket, url in all_urls}
         try:
             for fut in concurrent.futures.as_completed(
                 futures, timeout=GLM_FETCH_BUDGET_SECONDS
             ):
-                url = futures[fut]
+                bucket, url = futures[fut]
                 try:
                     buf = fut.result()
                 except requests.RequestException as exc:
                     log.warning("GLM granule fetch failed for %s: %s", url, exc)
                     continue
                 decode_start = time.monotonic()
-                flashes = _decode_glm_granule(buf)
+                granule = _decode_glm_granule(buf)
                 decode_seconds += time.monotonic() - decode_start
-                decoded_granules += 1
-                for flash in flashes:
-                    key = _bucket_key(flash.lat, flash.lon)
-                    self._flashes_by_bucket.setdefault(key, []).append(flash)
-                    age_min = int((when - flash.t).total_seconds() / 60)
-                    if (
-                        self._oldest_granule_age_min is None
-                        or age_min > self._oldest_granule_age_min
-                    ):
-                        self._oldest_granule_age_min = age_min
+                if granule is None or not cutoff <= granule.start <= when:
+                    continue
+                self._latest_by_satellite[bucket] = max(
+                    granule.start, self._latest_by_satellite.get(bucket, granule.start),
+                )
+                decoded.append((bucket, granule))
+                sources_by_start.setdefault(granule.start, set()).add(bucket)
         except concurrent.futures.TimeoutError:
             completed = sum(1 for f in futures if f.done())
             log.warning(
@@ -477,6 +444,20 @@ class GLMSampler:
             # read (the daemon's `GLM_GRANULE_TIMEOUT_SECONDS` request
             # timeout still bounds those threads to ≤30s background drain).
             ex.shutdown(wait=False, cancel_futures=True)
+        # Simultaneous sectors overlap. In paired granules each longitude
+        # belongs to the closer satellite; a lone granule keeps its full field.
+        for bucket, granule in decoded:
+            paired = len(sources_by_start[granule.start]) == 2
+            for flash in granule.flashes:
+                if not cutoff <= flash.t <= when:
+                    continue
+                if paired:
+                    east_sector = -106.1 <= flash.lon < 73.9
+                    if east_sector != (bucket == "noaa-goes19"):
+                        continue
+                key = _bucket_key(flash.lat, flash.lon)
+                self._flashes_by_bucket.setdefault(key, []).append(flash)
+        decoded_granules = len(decoded)
         if decoded_granules > 0:
             log.info(
                 "GLM granule decode: %d granules in %.2fs (%.1fms/granule avg)",
@@ -486,39 +467,47 @@ class GLMSampler:
             )
 
     def sample(self, lat: float, lon: float, when: datetime) -> LightningSample:
-        # A2: skip GLM lookup for targets outside GOES coverage envelope.
-        if not _in_glm_coverage(lat, lon):
-            return LightningSample(
-                lightning_potential=0.0,
-                flash_rate_per_min=0.0,
-                sample_time=when,
-                source="glm-out-of-coverage",
-            )
-        # Lookup the 4 adjacent buckets (handles the 5°×5° grid + the 100km
-        # lookup radius landing across bucket boundaries).
+        cutoff = when - timedelta(minutes=self._window_minutes)
+        if when > self._when + timedelta(minutes=GLM_PASS_HORIZON_MINUTES):
+            return LightningSample(0.0, 0.0, when, "glm-no-data")
+        # Include neighboring 5° cells across the antimeridian.
         candidates: list[_GLMFlash] = []
         center_key = _bucket_key(lat, lon)
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
-                key = (center_key[0] + dy, center_key[1] + dx)
+                key = (center_key[0] + dy, _wrap_lon_bucket(center_key[1] + dx))
                 candidates.extend(self._flashes_by_bucket.get(key, []))
         # Filter by distance + the window.
-        nearby = 0
-        for flash in candidates:
-            if great_circle_km(lat, lon, flash.lat, flash.lon) <= GLM_LOOKUP_RADIUS_KM:
-                nearby += 1
-        flash_rate_per_min = nearby / max(1.0, self._window_minutes)
+        nearby = [
+            flash.t for flash in candidates if cutoff <= flash.t <= when
+            and great_circle_km(lat, lon, flash.lat, flash.lon) <= GLM_LOOKUP_RADIUS_KM
+        ]
+        if nearby:
+            oldest, latest = min(nearby), max(nearby)
+        else:
+            covering = _covering_satellites(lat, lon)
+            if not covering:
+                return LightningSample(0.0, 0.0, when, "glm-out-of-coverage")
+            fresh_since = self._when - timedelta(minutes=GLM_QUIET_FRESHNESS_MINUTES)
+            available = [
+                t for sat, t in self._latest_by_satellite.items()
+                if sat in covering and max(cutoff, fresh_since) <= t <= when
+            ]
+            if not available:
+                return LightningSample(0.0, 0.0, when, "glm-no-data")
+            oldest = latest = max(available)
+        flash_rate_per_min = len(nearby) / max(1.0, self._window_minutes)
         # Convert flashes/min → potential. Saturate at 30 flashes/min
         # (active-storm threshold). Per D5.
         potential = min(1.0, flash_rate_per_min / 30.0)
         # A4: surface granule age in source so operator sees freshness.
-        age = self._oldest_granule_age_min
-        age_suffix = f"-{age}m" if age is not None else ""
+        age = int((when - oldest).total_seconds() / 60)
         return LightningSample(
             lightning_potential=potential,
             flash_rate_per_min=flash_rate_per_min,
             sample_time=when,
-            source=f"glm{age_suffix}",
+            source=f"glm-{age}m",
+            observed_at=latest,
         )
 
     def strongest_cluster_in_annulus(
@@ -528,18 +517,19 @@ class GLMSampler:
         inner_km: float = SPRITE_ANNULUS_INNER_KM,
         outer_km: float = SPRITE_ANNULUS_OUTER_KM,
         min_flashes: int = SPRITE_MIN_FLASHES,
+        *, when: datetime | None = None,
     ) -> StrongCluster | None:
         """Sprite-watch (Unit 7): strongest storm cluster in the limb annulus
         [inner_km, outer_km] around (lat, lon) — the ISS sub-point. Reuses
         the prebuilt 5° flash index (zero new I/O). Returns the densest 5°
         bucket's in-annulus flashes as a StrongCluster (flash-weighted
         centroid, distance + true bearing from the sub-point), or None if no
-        bucket clears `min_flashes`. Cheap first cut: the sub-point must be
-        inside GOES coverage (a non-None result outside it is impossible, and
-        the box check avoids scanning when the orbit is over Asia/Pacific).
+        bucket clears `min_flashes`.
         """
-        if not _in_glm_coverage(lat, lon):
+        query = when or self._when
+        if query > self._when + timedelta(minutes=GLM_PASS_HORIZON_MINUTES):
             return None
+        cutoff = query - timedelta(minutes=self._window_minutes)
         # Bucket window sized from the OUTER radius. cos-lat widens the
         # longitude span toward the poles; floor near the equator is fine.
         deg_pad = outer_km / 111.0
@@ -552,12 +542,13 @@ class GLMSampler:
         best_count = 0
         for by in range(clat - lat_span, clat + lat_span + 1):
             for bx in range(clon - lon_span, clon + lon_span + 1):
-                bucket = self._flashes_by_bucket.get((by, bx))
+                bucket = self._flashes_by_bucket.get((by, _wrap_lon_bucket(bx)))
                 if not bucket:
                     continue
                 in_ann = [
                     f for f in bucket
-                    if inner_km <= great_circle_km(lat, lon, f.lat, f.lon) <= outer_km
+                    if cutoff <= f.t <= query
+                    and inner_km <= great_circle_km(lat, lon, f.lat, f.lon) <= outer_km
                 ]
                 if len(in_ann) >= min_flashes and len(in_ann) > best_count:
                     best_count = len(in_ann)
@@ -657,13 +648,13 @@ class CombinedLightningSampler:
         self._forecast = forecast
 
     def strongest_cluster_in_annulus(
-        self, lat: float, lon: float,
+        self, lat: float, lon: float, *, when: datetime | None = None,
     ) -> StrongCluster | None:
         """Sprite watch (Unit 7): delegate to the observed (GLM) sampler;
         forecast/placeholder samplers have no flash field → None."""
         obs = self._observed
         if obs is not None and hasattr(obs, "strongest_cluster_in_annulus"):
-            return obs.strongest_cluster_in_annulus(lat, lon)
+            return obs.strongest_cluster_in_annulus(lat, lon, when=when)
         return None
 
     def sample(self, lat: float, lon: float, when: datetime) -> LightningSample:
@@ -719,6 +710,7 @@ class CombinedLightningSampler:
 
         return LightningSample(
             lightning_potential=combined_potential,
+            observed_at=obs.observed_at if obs_has_data and obs else None,
             flash_rate_per_min=flash_rate,
             sample_time=when,
             source=source,

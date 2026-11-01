@@ -563,6 +563,7 @@ def score_pass_for_target(
     lightning_potential: float | None = None
     flash_rate_per_min: float | None = None
     lightning_source: str | None = None
+    lightning_observed_at: datetime | None = None
     lightning_bonus_value: float = 0.0
     hurricane_dict: dict[str, Any] | None = None
     if lightning_sampler is not None:
@@ -572,6 +573,7 @@ def score_pass_for_target(
         lightning_potential = round(lsample.lightning_potential, 3)
         flash_rate_per_min = round(lsample.flash_rate_per_min, 2)
         lightning_source = lsample.source
+        lightning_observed_at = lsample.observed_at
         # Local import to keep top-of-file deps minimal; lightning is a
         # leaf module without circular-import risk.
         from .lightning import lightning_bonus as _lightning_bonus
@@ -674,6 +676,8 @@ def score_pass_for_target(
         out["lightning_potential"] = lightning_potential
         out["flash_rate_per_min"] = flash_rate_per_min
         out["lightning_source"] = lightning_source
+        if lightning_observed_at is not None:
+            out["lightning_observed_at"] = utcnow_iso(lightning_observed_at)
         out["lightning_bonus"] = round(lightning_bonus_value, 3)
     if hurricane_dict is not None:
         out["hurricane_nearby"] = hurricane_dict
@@ -700,7 +704,7 @@ def score_pass_for_target(
         if iss_regime == "night" and hasattr(
             lightning_sampler, "strongest_cluster_in_annulus"
         ):
-            cluster = lightning_sampler.strongest_cluster_in_annulus(iss.lat, iss.lon)
+            cluster = lightning_sampler.strongest_cluster_in_annulus(iss.lat, iss.lon, when=when)
             if cluster is not None:
                 out["sprite"] = {
                     "distance_km": cluster.distance_km,

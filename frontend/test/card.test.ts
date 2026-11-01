@@ -37,6 +37,27 @@ beforeEach(() => {
 });
 
 describe('renderCard', () => {
+  it.each([
+    ['glm-45m', 1, 'observed lightning flashes'],
+    ['glm', undefined, 'observed lightning flashes'],
+    ['blitzortung', 2, 'observed lightning flashes'],
+    ['glm-5m', 0, 'lightning forecast'],
+    ['gfs-cape', 0, 'lightning forecast'],
+  ] as const)('labels %s with rate %s', (source, rate, label) => {
+    const el = renderCard(samplePass({
+      lightning_potential: 0.8, lightning_source: source, flash_rate_per_min: rate,
+    }), NOW, false, () => undefined);
+    expect(el.querySelector('.weather-lightning')?.textContent).toContain(label);
+  });
+
+  it('uses observation metadata with a positive measured flash rate', () => {
+    const el = renderCard(samplePass({
+      lightning_potential: 0.5, flash_rate_per_min: 2,
+      lightning_observed_at: '2024-10-17T11:59:00Z',
+    }), NOW, false, () => undefined);
+    expect(el.querySelector('.weather-lightning')?.textContent).toContain('observed lightning flashes');
+  });
+
   it('renders the target name', () => {
     const el = renderCard(samplePass(), NOW, false, () => undefined);
     expect(el.querySelector('.card-name')!.textContent).toBe('Tokyo at night');
