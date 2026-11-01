@@ -973,6 +973,23 @@ describe('measured inspector chrome clearance', () => {
     expect(inspector.style.left).toBe('997.844px');
     expect(writes).toHaveBeenCalledTimes(1);
   });
+
+  it('takes the 200px slot instead of the 50px bottom sliver on a short narrow map', () => {
+    const width = 360;
+    const height = 390;
+    viewport(width, height, { left: 0, top: 0, width, height });
+    mockRect(container, { left: 0, top: 0, width, height });
+    pane.classList.remove('map-chrome-hidden');
+    const sliver = chrome('.map-toolbar', { left: 0, top: 220, width, height: 104 });
+    const wall = chrome('.map-control-dock', { left: 216, top: 0, width: 14, height });
+    openPopup();
+    flushFrames();
+    const sheet = inspectorRect();
+    expectInsideMap(sheet);
+    expectClear(sheet, sliver, wall);
+    expect(sheet.height, `sheet ${Math.round(sheet.width)}×${Math.round(sheet.height)} at ${Math.round(sheet.top)}`).toBeGreaterThanOrEqual(200);
+    expect(sheet.bottom, `sheet ${Math.round(sheet.width)}×${Math.round(sheet.height)} at ${Math.round(sheet.top)}`).toBeLessThanOrEqual(220);
+  });
 });
 
 describe('container-backed map inspector', () => {

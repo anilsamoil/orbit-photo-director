@@ -49,6 +49,33 @@ function openTab(id: string): void {
   tab.click();
 }
 
+/** A move past this is a drag. Releasing it must not open a tab. */
+const PIP_TAP_SLOP_PX = 1;
+
+function bindTapOpen(button: HTMLButtonElement | null, tabId: string): void {
+  if (!button) return;
+  let gesture: { x: number; y: number; moved: boolean } | null = null;
+  button.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    gesture = { x: event.clientX, y: event.clientY, moved: false };
+  }, true);
+  button.addEventListener('pointermove', (event) => {
+    if (!gesture) return;
+    const dx = event.clientX - gesture.x;
+    const dy = event.clientY - gesture.y;
+    if (dx * dx + dy * dy > PIP_TAP_SLOP_PX * PIP_TAP_SLOP_PX) gesture.moved = true;
+  }, true);
+  button.addEventListener('pointercancel', () => {
+    gesture = null;
+  }, true);
+  button.addEventListener('click', (event) => {
+    const current = gesture;
+    gesture = null;
+    if (current?.moved && event.detail !== 0) return;
+    openTab(tabId);
+  });
+}
+
 export function bindInsets(options: {
   mounts: () => Promise<InsetMounts | null>;
   track: () => Track | null;
@@ -177,12 +204,8 @@ export function bindInsets(options: {
   watch(document.getElementById('map-pane'), ['class'], false);
   watch(document.getElementById('satellite-picker-panel'), ['hidden'], false);
   watch(document.getElementById('iss-pane'), ['data-iss-fullscreen-active'], true);
-  buttonOf('plan')?.addEventListener('click', () => {
-    openTab('tab-map');
-  });
-  buttonOf('horizon')?.addEventListener('click', () => {
-    openTab('tab-iss');
-  });
+  bindTapOpen(buttonOf('plan'), 'tab-map');
+  bindTapOpen(buttonOf('horizon'), 'tab-iss');
   sync();
   return { sync, releaseHorizon, releasePlan };
 }

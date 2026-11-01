@@ -1,0 +1,571 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { chromium, webkit, type Browser, type Page } from 'playwright';
+import { build } from 'vite';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
+import { liveIssPositionSGP4, tleEpochMs } from '../src/iss-sgp4';
+import fixture from './fixtures/iss-sgp4-fixture.json';
+
+const root = resolve(__dirname, '..');
+const chromePath = ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome'].find(existsSync);
+const stylesheet = readFileSync(resolve(root, 'src/style.css'), 'utf8');
+const vendorCss = readFileSync(resolve(root, 'node_modules/maplibre-gl/dist/maplibre-gl.css'), 'utf8');
+const html = readFileSync(resolve(root, 'index.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '');
+
+function tleAt(line1: string, epochMs: number): string {
+  const year = new Date(epochMs).getUTCFullYear();
+  const day = (epochMs - Date.UTC(year, 0, 1)) / 86_400_000 + 1;
+  const whole = Math.floor(day);
+  const fraction = (day - whole).toFixed(8).slice(1);
+  const epoch = `${String(year % 100).padStart(2, '0')}${String(whole).padStart(3, '0')}${fraction}`;
+  const body = `${line1.slice(0, 18)}${epoch}${line1.slice(32, 68)}`;
+  const checksum = [...body].reduce((sum, ch) => sum + (ch === '-' ? 1 : ch >= '0' && ch <= '9' ? Number(ch) : 0), 0) % 10;
+  return `${body}${checksum}`;
+}
+
+const tle = { line1: tleAt(fixture.tle.line1, Date.now() - 60_000), line2: fixture.tle.line2 };
+const tleEpoch = new Date(tleEpochMs(tle)!).toISOString();
+const live = liveIssPositionSGP4({ ...fixture, tle, tle_epoch: tleEpoch, tle_age_hours: 0, tle_freshness_factor: 1 }, Date.now());
+if (!live) throw new Error('retargeted TLE does not propagate on the real clock');
+
+const manifest = {
+  version: 'north', generated_at: fixture.start, tle_epoch: tleEpoch,
+  cloud_composite_hour: fixture.start, target_data_version: 'north', build_version: 'north',
+  freshness: { tle_hours: 0, cloud_hours: 0, ok: true },
+  artifacts: Object.fromEntries(['passes', 'track', 'status', 'top5', 'top_24h', 'cupola_windows'].map((key) => [key, { path: `${key}.json`, sha256: '', bytes: 0 }])),
+};
+const raster = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNg5+L9DwABWAEegV7pegAAAABJRU5ErkJggg==', 'base64');
+const origin = 'http://north.test';
+
+type MapHandle = {
+  getSource(id: string): unknown;
+  getLayer(id: string): unknown;
+  getCanvas(): { width: number; height: number };
+  getBearing(): number;
+  isMoving(): boolean;
+  setCenter(center: [number, number]): unknown;
+  jumpTo(camera: { bearing: number }): void;
+  on(event: 'move', handler: () => void): void;
+  __centerAt?: number[];
+  __samples?: number[];
+};
+
+let assets: Map<string, string | Uint8Array>;
+let script: string;
+
+beforeAll(async () => {
+  const output = await build({
+    configFile: false, root, logLevel: 'silent', define: { __APP_VERSION__: JSON.stringify('north-test') },
+    build: { write: false, minify: false, lib: { entry: resolve(root, 'src/main.ts'), name: 'north', formats: ['iife'] } },
+  });
+  const bundle = Array.isArray(output) ? output[0]! : output;
+  if (!('output' in bundle)) throw new Error('Expected one in-memory browser bundle');
+  assets = new Map(bundle.output.map((item) => [`/${item.fileName}`, item.type === 'chunk' ? item.code : item.source]));
+  script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
+}, 60_000);
+
+async function openMap(page: Page): Promise<void> {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.route('**/*', async (route) => {
+    if (new URL(route.request().url()).hostname === 'celestrak.org') {
+      return route.fulfill({ contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: `ISS\n${tle.line1}\n${tle.line2}` });
+    }
+    const url = new URL(route.request().url());
+    if (url.origin === origin && url.pathname === '/') {
+      return route.fulfill({ contentType: 'text/html', body: html.replace('</head>', `<style>${vendorCss}\n${stylesheet}</style></head>`).replace('</body>', `<script src="/${script}"></script></body>`) });
+    }
+    const asset = assets.get(url.pathname);
+    if (url.origin === origin && asset !== undefined) return route.fulfill({ contentType: url.pathname.endsWith('.css') ? 'text/css' : 'text/javascript', body: typeof asset === 'string' ? asset : Buffer.from(asset) });
+    if (url.pathname === '/manifest.json') return route.fulfill({ json: manifest });
+    if (['/passes.json', '/top5.json', '/top_24h.json', '/cupola_windows.json'].includes(url.pathname)) return route.fulfill({ json: [] });
+    if (url.pathname === '/status.json') return route.fulfill({ json: { last_run: fixture.start, tick_minutes: 30, tle_age_hours: 0, tle_freshness_factor: 1, cloud_source: 'gibs', cloud_composite_hour: fixture.start, target_count: 0, pass_count: 0, version: 'north', build_version: 'north' } });
+    if (url.pathname === '/api/browser/session') return route.fulfill({ json: { ok: true, profile: { name: 'north', displayName: 'Local fixture' } } });
+    if (url.pathname.startsWith('/api/browser/profiles/')) return route.fulfill({ json: { ok: true, count: 0, targets: [] } });
+    if (url.pathname.startsWith('/api/')) return route.fulfill({ status: 401, json: { error: 'not_authenticated' } });
+    if (url.pathname === '/track.json') return route.fulfill({ json: { ...fixture, tle, tle_epoch: tleEpoch, tle_age_hours: 0, tle_freshness_factor: 1 } });
+    if (/\.(png|jpe?g)$/.test(url.pathname) || url.pathname.includes('/MapServer/tile/')) return route.fulfill({ contentType: 'image/png', body: raster });
+    return route.abort();
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('opd-map-chrome', 'shown');
+  });
+  await page.goto(`${origin}/?e2e&u=north`, { waitUntil: 'domcontentloaded' });
+  await page.locator('#tab-map').click();
+  // isStyleLoaded stays false until every in-view raster tile decodes. This
+  // harness aborts the tile URLs it does not stub, so that decode need not
+  // finish inside the 20s click budget. The rotate reads bearing once the
+  // track layer and canvas exist.
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
+    const canvas = map?.getCanvas();
+    return !!map?.getSource('iss-track') && !!map.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0;
+  });
+  await page.waitForFunction(() => document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'true');
+}
+
+async function settleNorth(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const north = document.getElementById('bearing-north');
+    if (!north) return;
+    north.classList.remove('active');
+    north.click();
+  });
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+    const north = document.getElementById('bearing-north');
+    return north?.classList.contains('active') === true && !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+  });
+}
+
+async function watchBearing(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+    const samples: number[] = [];
+    map.__samples = samples;
+    map.on('move', () => { samples.push(map.getBearing()); });
+  });
+}
+
+async function samplesOf(page: Page): Promise<number[]> {
+  return page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.__samples ?? []);
+}
+
+// One turn, after the track layer and a sized canvas exist. A task between
+// the right-button down and the bearing frame (window blur resets MapLibre's
+// handlers, which sets _ignoreContextMenu, and the follow tick then holds
+// bearing at 0) leaves the old poll waiting until timeout. redraw commits
+// the rotate before that task can run. isStyleLoaded stays false here.
+async function commitRightDrag(page: Page, x: number, y: number): Promise<void> {
+  await page.waitForFunction(() => {
+    const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
+    const canvas = map?.getCanvas();
+    return !!map?.getSource('iss-track') && !!map.getLayer('iss-track-layer') && !!canvas && canvas.width > 0 && canvas.height > 0;
+  });
+  await page.evaluate(({ x: px, y: py }) => {
+    const map = (window as unknown as { __opdMap: MapHandle & { redraw(): void } }).__opdMap;
+    const canvas = map.getCanvas() as unknown as HTMLCanvasElement;
+    const fire = (type: string, clientX: number, buttons: number): void => {
+      canvas.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 2,
+        buttons,
+        clientX,
+        clientY: py,
+      }));
+    };
+    fire('mousedown', px, 2);
+    let step = 0;
+    while (Math.abs(map.getBearing()) < 40 && step < 16) {
+      step += 1;
+      fire('mousemove', px + step * 14, 2);
+      map.redraw();
+    }
+    fire('mouseup', px + step * 14, 0);
+    map.redraw();
+  }, { x, y });
+  await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+}
+
+const surfaces = [
+  { width: 1280, height: 800 },
+  { width: 834, height: 1210 },
+  { width: 402, height: 874 },
+] as const;
+
+async function newSurface(browser: Browser, width: number, height: number): Promise<{ page: Page; close: () => Promise<void> }> {
+  const touch = width < 1280;
+  const context = await browser.newContext({
+    viewport: { width, height },
+    deviceScaleFactor: touch ? (Math.min(width, height) < 500 ? 3 : 2) : 1,
+    hasTouch: touch,
+    isMobile: touch,
+  });
+  const page = await context.newPage();
+  return { page, close: () => context.close() };
+}
+
+function fastestDegPerMs(samples: { bearing: number; at: number }[]): number {
+  let rate = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const dt = Math.max(1, samples[i]!.at - samples[i - 1]!.at);
+    rate = Math.max(rate, Math.abs(samples[i]!.bearing - samples[i - 1]!.bearing) / dt);
+  }
+  return rate;
+}
+
+function snappedNorth(samples: number[]): boolean {
+  let left = false;
+  for (const bearing of samples) {
+    if (Math.abs(bearing) > 15) left = true;
+    if (left && Math.abs(bearing) < 1) return true;
+  }
+  return false;
+}
+
+for (const engine of [
+  { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
+  { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
+]) describe.skipIf(!existsSync(engine.executablePath))(`north follow ${engine.name}`, () => {
+  let session: TrackedBrowser;
+  beforeAll(async () => { session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath }); }, 60_000);
+  afterAll(async () => { await closeBrowser(session, engine.name); }, 60_000);
+
+  const repeatsFor = (width: number): number => (engine.name === 'WebKit' || width >= 1280 ? 20 : 5);
+
+  it('eases to north while follow stays on', async () => {
+    let pass = 0;
+    let attempts = 0;
+    const misses: string[] = [];
+    while (pass < 20 && attempts < 26) {
+    attempts += 1;
+    console.log(`NORTH_EASE ${engine.name} attempt ${attempts} pass ${pass}`);
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+    try {
+      page.setDefaultTimeout(45_000);
+      await openMap(page);
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
+        return !!map && !map.isMoving();
+      });
+      await page.evaluate(() => {
+        const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean; __timer?: number } }).__opdMap;
+        const orig = map.setCenter.bind(map);
+        map.__centerAt = [];
+        map.setCenter = (center) => {
+          map.__centerAt!.push(performance.now());
+          const result = orig(center);
+          if (!map.__started) {
+            window.clearTimeout(map.__timer);
+            map.__timer = window.setTimeout(() => {
+              if (map.__started) return;
+              map.__started = true;
+              map.jumpTo({ bearing: 80 });
+              document.getElementById('bearing-north')!.click();
+              const samples: { bearing: number; at: number }[] = [];
+              map.__samples = samples as unknown as number[];
+              map.on('move', () => { samples.push({ bearing: map.getBearing(), at: performance.now() }); });
+            }, 500);
+          }
+          return result;
+        };
+      });
+      try {
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean } }).__opdMap;
+          return map.__started === true;
+        }, undefined, { timeout: 45_000 });
+      } catch (error) {
+        const state = await page.evaluate(() => {
+          const map = (window as unknown as { __opdMap: MapHandle & { __started?: boolean; __timer?: number } }).__opdMap;
+          return { started: map.__started === true, centers: map.__centerAt?.length ?? 0, timer: map.__timer ?? null };
+        });
+        throw new Error(`${String(error)} centers ${state.centers} started ${state.started} timer ${state.timer}`);
+      }
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+      });
+      const end = await page.evaluate(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return {
+          bearing: map.getBearing(),
+          moving: map.isMoving(),
+          samples: (map.__samples ?? []) as unknown as { bearing: number; at: number }[],
+        };
+      });
+      const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
+      const rate = fastestDegPerMs(end.samples);
+      expect(Math.abs(end.samples[0]?.bearing ?? 0), `first ${end.samples[0]?.bearing}`).toBeGreaterThan(20);
+      expect(Math.abs(end.bearing), `end ${end.bearing} rate ${rate}`).toBeLessThan(0.01);
+      expect(end.moving).toBe(false);
+      expect(rate, `rate ${rate} over ${end.samples.length} moves`).toBeLessThan(0.5);
+      expect(pressed).toBe('true');
+      pass += 1;
+    } catch (error) {
+      const message = String(error);
+      if (!message.includes('centers 0') && !message.includes('Timeout')) throw error;
+      misses.push(message);
+    } finally {
+      await page.close();
+    }
+    }
+    expect(pass, misses.join('\n')).toBe(20);
+  }, 700_000);
+
+  it('a right-drag across a follow tick does not snap north', async () => {
+    for (const surface of surfaces) {
+    for (let rep = 0; rep < repeatsFor(surface.width); rep += 1) {
+    const { page, close } = await newSurface(session.browser, surface.width, surface.height);
+    try {
+      page.setDefaultTimeout(45_000);
+      await openMap(page);
+      await settleNorth(page);
+      await watchBearing(page);
+      const canvas = page.locator('#map .maplibregl-canvas');
+      const box = await canvas.boundingBox();
+      if (!box) throw new Error('map canvas has no box');
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await commitRightDrag(page, x, y);
+      const samples = await samplesOf(page);
+      const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
+      const end = Math.abs(samples[samples.length - 1] ?? 0);
+      if (snappedNorth(samples) || pressed !== 'false' || end <= 20) {
+        console.log(`NORTH_DRAG_FAIL ${engine.name} ${surface.width}x${surface.height} ${rep} pressed ${pressed}\nSAMPLES ${samples.map((b) => Number(b.toFixed(2))).join(',')}`);
+      }
+      expect(snappedNorth(samples), `${surface.width}x${surface.height} end ${end} n ${samples.length}`).toBe(false);
+      expect(pressed).toBe('false');
+      expect(end).toBeGreaterThan(20);
+    } finally {
+      await close();
+    }
+    }
+    }
+  }, 900_000);
+
+  it('a keyboard rotate across a follow tick does not snap north', async () => {
+    for (let rep = 0; rep < 20; rep += 1) {
+    console.log(`NORTH_KEYS ${engine.name} ${rep}`);
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+    try {
+      page.setDefaultTimeout(15_000);
+      await openMap(page);
+      await settleNorth(page);
+      await watchBearing(page);
+      await page.locator('#map .maplibregl-canvas').focus();
+      await page.keyboard.down('Shift');
+      let seen = 0;
+      for (let i = 0; i < 8; i += 1) {
+        await page.keyboard.press('ArrowRight');
+        await page.waitForFunction((floor) => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return Math.abs(map.getBearing()) > floor;
+        }, seen);
+        seen = await page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+      }
+      await page.keyboard.up('Shift');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving();
+      });
+      const samples = await samplesOf(page);
+      const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
+      const end = Math.abs(samples[samples.length - 1] ?? 0);
+      expect(snappedNorth(samples), `end ${end} n ${samples.length}`).toBe(false);
+      expect(pressed).toBe('false');
+      expect(end).toBeGreaterThan(5);
+    } finally {
+      await page.close();
+    }
+    }
+  }, 600_000);
+
+  it('keeps a smooth north retarget when a follow tick lands inside it', async () => {
+    const reps: { end: number; moving: boolean; rate: number; pressed: string | null; first: number; error?: string }[] = [];
+    let attempts = 0;
+    while (reps.filter((rep) => !rep.error).length < 20 && attempts < 26) {
+    attempts += 1;
+      const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+      try {
+        page.setDefaultTimeout(45_000);
+        await openMap(page);
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap?: MapHandle }).__opdMap;
+          return !!map && !map.isMoving();
+        });
+        await page.evaluate(() => {
+          const map = (window as unknown as { __opdMap: MapHandle & { __retargeted?: boolean; __timer?: number } }).__opdMap;
+          const orig = map.setCenter.bind(map);
+          map.__centerAt = [];
+          map.setCenter = (center) => {
+            map.__centerAt!.push(performance.now());
+            const result = orig(center);
+            if (!map.__retargeted) {
+              window.clearTimeout(map.__timer);
+              map.__timer = window.setTimeout(() => {
+                if (map.__retargeted) return;
+                map.__retargeted = true;
+                map.jumpTo({ bearing: map.getBearing() + 90 });
+                document.getElementById('bearing-iss')!.click();
+                document.getElementById('bearing-north')!.click();
+                const samples: { bearing: number; at: number }[] = [];
+                map.__samples = samples as unknown as number[];
+                map.on('move', () => { samples.push({ bearing: map.getBearing(), at: performance.now() }); });
+              }, 500);
+            }
+            return result;
+          };
+        });
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle & { __retargeted?: boolean } }).__opdMap;
+          return map.__retargeted === true;
+        });
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+        });
+        const end = await page.evaluate(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return {
+            bearing: map.getBearing(),
+            moving: map.isMoving(),
+            samples: (map.__samples ?? []) as unknown as { bearing: number; at: number }[],
+          };
+        });
+        const pressed = await page.locator('#toggle-follow-iss').getAttribute('aria-pressed');
+        reps.push({
+          end: end.bearing,
+          moving: end.moving,
+          rate: fastestDegPerMs(end.samples),
+          pressed,
+          first: end.samples[0]?.bearing ?? 0,
+        });
+      } catch (error) {
+        reps.push({ end: Number.NaN, moving: true, rate: 99, pressed: null, first: 0, error: String(error) });
+      } finally {
+        await page.close();
+      }
+    }
+    const finished = reps.filter((rep) => !rep.error);
+    const pass = finished.filter((rep) => Math.abs(rep.first) > 20 && Math.abs(rep.end) < 0.01 && !rep.moving && rep.rate < 1 && rep.pressed === 'true').length;
+    console.log(`NORTH_RETARGET_REPS ${engine.name} ${pass}/${finished.length} attempts ${attempts} ${JSON.stringify(reps)}`);
+    expect(pass, JSON.stringify(reps, null, 2)).toBe(20);
+  }, 700_000);
+
+  async function clickControl(page: Page, selector: string): Promise<void> {
+    const box = await page.locator(selector).boundingBox();
+    if (!box) throw new Error(`${selector} has no box`);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  async function dragRotate(page: Page): Promise<void> {
+    const box = await page.locator('#map .maplibregl-canvas').boundingBox();
+    if (!box) throw new Error('map canvas has no box');
+    await commitRightDrag(page, box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  it('a North click 50ms and 150ms after a rotate eases to north', async () => {
+    for (const delay of [50, 150]) {
+      const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+      try {
+        page.setDefaultTimeout(45_000);
+        await openMap(page);
+        await settleNorth(page);
+        await dragRotate(page);
+        const turned = await page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing());
+        expect(Math.abs(turned)).toBeGreaterThan(20);
+        await page.waitForTimeout(delay);
+        await clickControl(page, '#bearing-north');
+        await page.waitForFunction(() => {
+          const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+          return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+        });
+        const end = await page.evaluate(() => (window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing());
+        expect(Math.abs(end), `${delay}ms end ${end}`).toBeLessThan(0.01);
+        expect(await page.locator('#bearing-north').getAttribute('class')).toContain('active');
+      } finally {
+        await page.close();
+      }
+    }
+  }, 180_000);
+
+  it('Enter and Space activate North and ISS-up', async () => {
+    const page = await session.browser.newPage({ viewport: { width: 1280, height: 800 } });
+    try {
+      page.setDefaultTimeout(20_000);
+      await openMap(page);
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving();
+      });
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-north').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+      });
+      expect(await page.locator('#bearing-north').getAttribute('class')).toContain('active');
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('north');
+
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-iss').focus();
+      await page.keyboard.press('Space');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return document.getElementById('bearing-iss')?.classList.contains('active') === true && !map.isMoving();
+      });
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('iss-up');
+
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-north').focus();
+      await page.keyboard.press('Space');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return !map.isMoving() && Math.abs(map.getBearing()) < 0.01;
+      });
+      expect(await page.locator('#bearing-north').getAttribute('class')).toContain('active');
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('north');
+
+      await page.evaluate(() => { (window as unknown as { __opdMap: MapHandle }).__opdMap.jumpTo({ bearing: 80 }); });
+      await page.locator('#bearing-iss').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => {
+        const map = (window as unknown as { __opdMap: MapHandle }).__opdMap;
+        return document.getElementById('bearing-iss')?.classList.contains('active') === true && !map.isMoving();
+      });
+      expect(await page.evaluate(() => localStorage.getItem('opd-map-bearing-mode'))).toBe('iss-up');
+    } finally {
+      await page.close();
+    }
+  }, 120_000);
+
+  it('a rotate inside the default north snap stays off north', async () => {
+    for (const surface of surfaces) {
+    for (let rep = 0; rep < repeatsFor(surface.width); rep += 1) {
+    const { page, close } = await newSurface(session.browser, surface.width, surface.height);
+    try {
+      page.setDefaultTimeout(20_000);
+      await openMap(page);
+      await settleNorth(page);
+      const follow = page.locator('#toggle-follow-iss');
+      if (await follow.getAttribute('aria-pressed') === 'true') await follow.click();
+      await page.waitForFunction(() => document.getElementById('toggle-follow-iss')?.getAttribute('aria-pressed') === 'false');
+      const box = await page.locator('#map .maplibregl-canvas').boundingBox();
+      if (!box) throw new Error('map canvas has no box');
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      const readBearing = async (): Promise<number> => {
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+        return page.evaluate(() => Math.abs((window as unknown as { __opdMap: MapHandle }).__opdMap.getBearing()));
+      };
+      await page.mouse.move(x, y);
+      await page.mouse.down({ button: 'right' });
+      let offset = 0;
+      let bearing = 0;
+      while (bearing < 3 && offset < 40) {
+        offset += 0.25;
+        await page.mouse.move(x + offset, y);
+        bearing = await readBearing();
+      }
+      while (bearing >= 6 && offset > 0) {
+        offset -= 0.25;
+        await page.mouse.move(x + offset, y);
+        bearing = await readBearing();
+      }
+      expect(bearing, `${surface.width}x${surface.height} held`).toBeGreaterThan(2);
+      expect(bearing, `${surface.width}x${surface.height} held`).toBeLessThan(7);
+      await page.mouse.up({ button: 'right' });
+      await page.waitForFunction(() => !(window as unknown as { __opdMap: MapHandle }).__opdMap.isMoving());
+      const end = await readBearing();
+      expect(end, `${surface.width}x${surface.height} released`).toBeGreaterThan(1);
+    } finally {
+      await close();
+    }
+    }
+    }
+  }, 900_000);
+});

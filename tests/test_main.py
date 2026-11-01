@@ -929,7 +929,10 @@ def test_ariss_newer_epoch_wins_when_celestrak_times_out(
         raise AssertionError(url)
 
     with caplog.at_level(logging.INFO, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert budgets == [5.0, 5.0]
     assert tle.line1 == line1
     assert tle.line2 == line2
@@ -957,7 +960,10 @@ def test_ariss_bad_checksum_is_rejected(
         raise AssertionError(url)
 
     with caplog.at_level(logging.WARNING, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert cache.read_text() == SAMPLE_TLE_TEXT
     assert any("checksum" in record.message.lower() for record in caplog.records)
@@ -980,7 +986,10 @@ def test_ariss_wrong_norad_is_rejected(
         raise AssertionError(url)
 
     with caplog.at_level(logging.WARNING, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert "99999" not in cache.read_text()
     assert any("norad" in record.message.lower() for record in caplog.records)
@@ -1036,7 +1045,10 @@ def test_ariss_older_epoch_falls_through_to_wheretheiss(tmp_path: Path) -> None:
             return TextStream(payload)
         raise AssertionError(url)
 
-    tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+    tle = fetch_tle(
+        DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+        sources=_client(cache, transport),
+    )
     assert calls == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
     assert tle.line1 == line1
     assert cache.read_text() == f"{line1}\n{line2}\n"
@@ -1063,7 +1075,10 @@ def test_ariss_and_wheretheiss_older_epochs_keep_the_cache(
         raise AssertionError(url)
 
     with caplog.at_level(logging.WARNING, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert calls == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert cache.read_text() == SAMPLE_TLE_TEXT

@@ -93,10 +93,14 @@ def build_launch_catalog(
     *,
     fetched_at: datetime | None = None,
     source_reasons: tuple[str, ...] = (),
+    prior_items: list[dict] | None = None,
+    include_pad: bool = True,
 ) -> dict:
     """Publish one schema 3 catalog. Schema 2 stays on build_launch_artifact."""
     _ensure_utc(now)
     validate_feed(payload)
+    if prior_items is not None and not isinstance(prior_items, list):
+        raise TypeError("prior catalog items must be a list")
     if fetched_at is not None:
         _ensure_utc(fetched_at)
     horizon = now + timedelta(hours=HORIZON_HOURS)
@@ -125,10 +129,17 @@ def build_launch_catalog(
     budget = EvaluationBudget()
     items: list[dict] = []
     evaluated = 0
+    claims = _shot_claims(prior_items)
+    item_reasons = tuple(source_reasons)
+    if fetched_at is None:
+        item_reasons = (*item_reasons, "SOURCE_AGE_UNKNOWN")
+    elif fetched_at > now:
+        item_reasons = (*item_reasons, "REPLAY_SOURCE_MISMATCH")
     chosen = sorted(near, key=lambda pair: (pair[0].t0, pair[0].id))[:MAX_EVENTS]
     for launch, row in chosen:
         item, finished = _item(
-            launch, row, tle, now, fetched_at, tuple(source_reasons), budget,
+            launch, row, tle, now, fetched_at, item_reasons, budget, claims.get(launch.id),
+            include_pad=include_pad,
         )
         evaluated += int(finished)
         items.append(item)
@@ -160,6 +171,17 @@ def build_launch_catalog(
     return catalog
 
 
+def _site_block(launch: Launch, include_pad: bool) -> dict:
+    site = {
+        "name": launch.site_name,
+        "lat": launch.site_lat,
+        "lon": launch.site_lon,
+    }
+    if include_pad:
+        site["pad"] = launch.pad_name
+    return site
+
+
 def _item(
     launch: Launch,
     raw: dict,
@@ -168,6 +190,8 @@ def _item(
     fetched_at: datetime | None,
     source_reasons: tuple[str, ...],
     budget: EvaluationBudget,
+    claim: tuple | None,
+    include_pad: bool = True,
 ) -> tuple[dict, bool]:
     reasons = list(launch.timing_reasons)
     if launch.status_abbrev not in SCHEDULE_STATUS_ABBREVS:
@@ -229,7 +253,11 @@ def _item(
         launch, g1, shots, tle.epoch if tle is not None else None,
         fresh_negative, finished, usable, liftoffs,
     )
-    if (
+    if _keeps_shot(
+        launch, raw, tier, now, fetched_at, source_reasons, shots, finished, reasons, claim,
+    ):
+        tier = "shot"
+    elif (
         tier == "likely" and tle is not None
         and not _covers(shots, liftoffs, tle.epoch, LIKELY_SCORE_LOW, LIKELY_TLE_AGE_H, False)
     ):
@@ -246,7 +274,7 @@ def _item(
         "event_id": launch.id,
         "name": launch.name,
         "rocket": launch.rocket_type,
-        "site": {"name": launch.site_name, "lat": launch.site_lat, "lon": launch.site_lon},
+        "site": _site_block(launch, include_pad),
         "schedule": _schedule(launch, raw),
         "direction": _direction_block(direction),
         "tier": tier,
@@ -274,6 +302,146 @@ def _can_exclude(
         and launch.status_abbrev in {"Go", "Confirmed"}
         and precision in {"second", "minute"}
     )
+
+
+def _envelope_mark(shot: dict) -> tuple:
+    look = shot.get("look") if isinstance(shot.get("look"), dict) else {}
+    direction = shot.get("direction") if isinstance(shot.get("direction"), dict) else {}
+    score = shot.get("score") if isinstance(shot.get("score"), dict) else {}
+    track = shot.get("track") if isinstance(shot.get("track"), list) else []
+    return (
+        shot.get("subject"),
+        shot.get("liftoff"),
+        shot.get("start"),
+        shot.get("best"),
+        shot.get("end"),
+        shot.get("best_offset_s"),
+        shot.get("window"),
+        shot.get("light"),
+        shot.get("slant_km"),
+        look.get("azimuth_deg"),
+        look.get("off_nadir_deg"),
+        direction.get("kind"),
+        direction.get("azimuth_deg"),
+        direction.get("off_plane_deg"),
+        score.get("low"),
+        score.get("high"),
+        tuple(
+            (point.get("t_offset_s"), point.get("lat"), point.get("lon"), point.get("alt_km"))
+            for point in track
+            if isinstance(point, dict)
+        ),
+    )
+
+
+def _shot_claims(prior_items: list[dict] | None) -> dict[str, tuple]:
+    claims: dict[str, tuple] = {}
+    if not prior_items:
+        return claims
+    for item in prior_items:
+        if not isinstance(item, dict) or item.get("tier") != "shot":
+            continue
+        event_id = item.get("event_id")
+        schedule = item.get("schedule")
+        site = item.get("site")
+        shots = item.get("shots")
+        if (
+            not isinstance(event_id, str)
+            or not isinstance(schedule, dict)
+            or not isinstance(site, dict)
+            or not isinstance(shots, list)
+            or not shots
+        ):
+            continue
+        if "pad" not in site:
+            continue
+        marks = tuple(sorted(_envelope_mark(shot) for shot in shots if isinstance(shot, dict)))
+        if not marks:
+            continue
+        claims[event_id] = (
+            schedule.get("net"),
+            schedule.get("window_start"),
+            schedule.get("window_end"),
+            item.get("name"),
+            item.get("rocket"),
+            site.get("name"),
+            site["pad"],
+            site.get("lat"),
+            site.get("lon"),
+            schedule.get("destination"),
+            marks,
+        )
+    return claims
+
+
+def _same_launch(claim: tuple, launch: Launch, raw: dict) -> bool:
+    schedule = _schedule(launch, raw)
+    net, start, end, name, rocket, location, pad_name, lat, lon, destination, _marks = claim
+    return (
+        net == schedule["net"]
+        and start == schedule["window_start"]
+        and end == schedule["window_end"]
+        and name == launch.name
+        and rocket == launch.rocket_type
+        and location == launch.site_name
+        and pad_name == launch.pad_name
+        and lat == launch.site_lat
+        and lon == launch.site_lon
+        and destination == schedule["destination"]
+    )
+
+
+def _envelopes_remain(claim: tuple, shots: list[dict]) -> bool:
+    earned = claim[10]
+    if not isinstance(earned, tuple) or not shots:
+        return False
+    current = tuple(sorted(_envelope_mark(shot) for shot in shots))
+    return earned == current
+
+
+def _liftoff(launch: Launch) -> datetime:
+    end = launch.window_end
+    if end is not None and end >= launch.t0:
+        return end
+    return launch.t0
+
+
+def _keeps_shot(
+    launch: Launch,
+    raw: dict,
+    fresh: str,
+    now: datetime,
+    fetched_at: datetime | None,
+    source_reasons: tuple[str, ...],
+    shots: list[dict],
+    finished: bool,
+    reasons: list[str],
+    claim: tuple | None,
+) -> bool:
+    if claim is None or fresh == "shot":
+        return False
+    if not _receipt_sourced(now, fetched_at, source_reasons):
+        return False
+    precision = (launch.time_precision or "").lower()
+    if launch.status_abbrev not in {"Go", "Confirmed"} or precision not in {"second", "minute"}:
+        return False
+    if now >= _liftoff(launch):
+        return False
+    if (
+        launch.window_start is None or launch.window_end is None or not finished
+        or "GEOMETRY_INVALID" in reasons or "EVALUATION_INCOMPLETE" in reasons
+        or "EPHEMERIS_MISSING" in reasons
+    ):
+        return False
+    if not _same_launch(claim, launch, raw):
+        return False
+    if shots:
+        return _envelopes_remain(claim, shots)
+    if fresh != "none":
+        return False
+    if fresh == "none":
+        return False
+    return True
 
 
 def _g1(launch: Launch) -> bool:
@@ -780,14 +948,22 @@ def _lease_end(now: datetime, until: datetime) -> datetime:
     return until
 
 
-def _receipt_usable(
+def _receipt_sourced(
     now: datetime,
     fetched_at: datetime | None,
     source_reasons: tuple[str, ...] = (),
 ) -> bool:
     if _UNACTIONABLE_PROVENANCE.intersection(source_reasons):
         return False
-    if fetched_at is None or fetched_at > now:
+    return fetched_at is not None and fetched_at <= now
+
+
+def _receipt_usable(
+    now: datetime,
+    fetched_at: datetime | None,
+    source_reasons: tuple[str, ...] = (),
+) -> bool:
+    if not _receipt_sourced(now, fetched_at, source_reasons) or fetched_at is None:
         return False
     evidence_deadline = fetched_at + timedelta(seconds=SCHEDULE_LEASE_SECONDS)
     receipt_deadline = fetched_at + timedelta(seconds=PLANNING_VALID_SECONDS)

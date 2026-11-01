@@ -63,6 +63,7 @@ describe('maplibreMapOptions', () => {
   it('passes exactly the options the adapter spreads into the constructor, and no others', () => {
     expect(Object.keys(maplibreMapOptions(initialCamera(1024))).sort()).toEqual([
       'attributionControl',
+      'bearingSnap',
       'center',
       'dragPan',
       'dragRotate',

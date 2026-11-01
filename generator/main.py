@@ -13,7 +13,9 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import math
 import os
+import re
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -47,6 +49,7 @@ from .cloud import (
     sun_subpoint,
 )
 from .config import (
+    CELESTRAK_ISS_SUPPLEMENTAL_TLE_URL,
     DEFAULT_TOP_MAP,
     DEFAULT_TOP_QUEUE,
     DEFAULT_TOP_UPCOMING,
@@ -54,6 +57,7 @@ from .config import (
     OBSERVED_CLOUD_HORIZON_MINUTES,
     PASS_MAX_DISTANCE_KM,
     PASS_SAMPLE_STEP_SECONDS,
+    TLE_WARN_AGE_HOURS,
     Settings,
     load_targets,
 )
@@ -82,6 +86,7 @@ from .orbit import (
     fit_iss_polynomial,
     freshness_factor,
     great_circle_km,
+    propagate,
     sample_track_points,
     tle_age_hours,
 )
@@ -150,6 +155,49 @@ def _parse_iss_reply(status: int, text: str) -> TLE:
     return tle
 
 
+def _parse_iss_supplemental_reply(status: int, text: str, now: datetime) -> TLE:
+    if status != 200:
+        raise ValueError(f"HTTP {status}")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    candidates: list[TLE] = []
+    for index, line1 in enumerate(lines):
+        if not line1.startswith("1 "):
+            continue
+        line2 = lines[index + 1] if index + 1 < len(lines) else ""
+        if (
+            len(line1) != 69 or len(line2) != 69
+            or not line1.startswith("1 25544C ") or not line2.startswith("2 25544 ")
+            or not re.fullmatch(r"\d{5}\.\d{8}", line1[18:32])
+            or not re.fullmatch(r"[ +\-]\.\d{8}", line1[33:43])
+            or not re.fullmatch(r"[ +\-]\d{5}[+\-]\d", line1[44:52])
+            or not re.fullmatch(r"[ +\-]\d{5}[+\-]\d", line1[53:61])
+            or not line1[64:69].strip().isdigit()
+            or not _tle_checksum_ok(line2)
+        ):
+            raise ValueError("malformed ISS supplemental TLE pair")
+        # SupGP uses all five final columns for the segment counter, not a checksum.
+        body = line1[:68]
+        checksum = sum(int(c) if c.isdigit() else c == "-" for c in body) % 10
+        tle = _parse_iss_reply(200, f"{body}{checksum}\n{line2}\n")
+        if tle.epoch.year % 100 != int(line1[18:20]):
+            raise ValueError("invalid ISS supplemental epoch")
+        try:
+            position = propagate(tle, tle.epoch)
+        except RuntimeError as exc:
+            raise ValueError("invalid ISS supplemental orbit") from exc
+        if not all(math.isfinite(v) for v in (position.lat, position.lon, position.alt_km)):
+            raise ValueError("invalid ISS supplemental orbit")
+        if not 100 <= position.alt_km <= 1000:
+            raise ValueError("ISS supplemental altitude outside 100..1000 km")
+        candidates.append(tle)
+    if not candidates:
+        raise ValueError("no ISS supplemental TLE pairs")
+    closest = min(candidates, key=lambda tle: abs((tle.epoch - now).total_seconds()))
+    if abs(tle_age_hours(closest, now)) > TLE_WARN_AGE_HOURS:
+        raise ValueError("no ISS supplemental epoch within 24 hours")
+    return closest
+
+
 def _read_prior(cache_path: Path) -> TLE | None:
     if not cache_path.exists():
         return None
@@ -201,11 +249,51 @@ def fetch_tle(
     *,
     sources: TleSources | None = None,
 ) -> TLE:
-    """Newest acceptable ISS TLE, or the cache when no source has a newer epoch."""
+    """Use nearby supplemental ISS segments when the standard TLE is stale."""
     n = now or datetime.now(tz=UTC)
+    client = sources if sources is not None else TleSources(cache_path.parent)
+    urls = _tle_source_urls(url)
+    standard_urls = [item for item in urls if item != CELESTRAK_ISS_SUPPLEMENTAL_TLE_URL]
+    tle = _fetch_standard_tle(",".join(standard_urls), cache_path, n, sources=client)
+    if CELESTRAK_ISS_SUPPLEMENTAL_TLE_URL not in urls:
+        if tle is None:
+            raise RuntimeError("TLE fetch failed and no cache available")
+        return tle
+    if (tle is not None and tle.line1[7:8] != "C"
+            and abs(tle_age_hours(tle, n)) <= TLE_WARN_AGE_HOURS):
+        return tle
+    reply = client.ask(
+        CELESTRAK_ISS_SUPPLEMENTAL_TLE_URL,
+        lambda status, text: _parse_iss_supplemental_reply(status, text, n),
+        budget_s=TLE_SOURCE_TIMEOUT_SECONDS,
+        lift_answer_rest=tle is None,
+    )
+    if isinstance(reply, Answered):
+        candidate = reply.value
+        if tle is None or abs(tle_age_hours(candidate, n)) < abs(tle_age_hours(tle, n)):
+            adopted, wrote = _adopt(candidate, "CelesTrak supplemental", tle, cache_path)
+            if not wrote:
+                client.clear_rest(CELESTRAK_ISS_SUPPLEMENTAL_TLE_URL)
+            return adopted
+    elif isinstance(reply, Failed):
+        log.warning("ISS supplemental TLE failed: %s; keeping prior TLE", reply.reason)
+    if tle is None:
+        raise RuntimeError("TLE fetch failed and no cache available")
+    return tle
+
+
+def _fetch_standard_tle(
+    url: str,
+    cache_path: Path,
+    now: datetime,
+    *,
+    sources: TleSources,
+) -> TLE | None:
+    """Newest acceptable ISS TLE, or the cache when no source has a newer epoch."""
+    n = now
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     prior = _read_prior(cache_path)
-    client = sources if sources is not None else TleSources(cache_path.parent)
+    client = sources
     expiring = prior is not None and _iss_expiring(prior, n)
     configured = _tle_source_urls(url)
     confirmed: list[str] = []
@@ -222,7 +310,10 @@ def fetch_tle(
         )
         if isinstance(reply, Answered):
             fetched = reply.value
-            if prior is None or fetched.epoch > prior.epoch:
+            improves = prior is None or fetched.epoch > prior.epoch
+            if prior is not None and prior.line1[7:8] == "C":
+                improves = abs(tle_age_hours(fetched, n)) <= abs(tle_age_hours(prior, n))
+            if improves:
                 adopted, wrote = _adopt(fetched, label, prior, cache_path)
                 if not wrote:
                     client.clear_rest(source_url)
@@ -266,9 +357,7 @@ def fetch_tle(
         )
     if prior is not None:
         return prior
-    if cache_path.exists():
-        return TLE.from_text(cache_path.read_text())
-    raise RuntimeError("TLE fetch failed and no cache available")
+    return None
 
 
 class CombinedCloudSampler:

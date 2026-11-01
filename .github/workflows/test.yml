@@ -46,28 +46,38 @@ jobs:
       - run: cd worker && bun run test
 
   frontend-shard:
-    # Playwright 1.55.0 has no WebKit build for ubuntu 26.04. ubuntu-latest starts
-    # moving there on 2026-10-19.
+    # Playwright 1.55.0 has no WebKit build for Ubuntu 26.04. The image already
+    # contains that release's browsers and system libraries.
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Actions starts this container with --entrypoint tail -f /dev/null. tail does not
+    # reap orphans, so a killed process-group member stays a zombie and kill(pid, 0)
+    # still succeeds. --init makes docker-init PID 1, which reaps them.
+    container:
+      image: mcr.microsoft.com/playwright:v1.55.0-noble@sha256:b27e719ecbfef153e13fd24e8341736733bf2658b229677eb21ff57ff5d7fb29
+      options: --init
+    timeout-minutes: 75
     name: Frontend shard ${{ matrix.shard }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - name: Install bun
+        run: npm install -g bun@1.4.4
+      - name: Install GNU time
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --max-time 20 \
+            -o /tmp/time.deb \
+            https://archive.ubuntu.com/ubuntu/pool/main/t/time/time_1.9-0.2build1_amd64.deb
+          echo 'abe09ee9806b336cc255c013cc726b39cbf9d56ff9dc7c2acff5762ab0f07be8  /tmp/time.deb' | sha256sum -c -
+          dpkg -i /tmp/time.deb
       - run: cd frontend && bun install
       - run: cd frontend && bun run typecheck
       - run: cd frontend && bun scripts/frontend-shards.ts --check
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/bun.lock') }}
-      - name: Install Playwright WebKit
-        run: cd frontend && ./node_modules/.bin/playwright install --with-deps webkit
       - name: Test shard
         working-directory: frontend
         run: |

@@ -24,6 +24,7 @@ export type VendorEvents = {
   styledata: void;
   dragstart: void;
   zoomstart: { byUser: boolean };
+  rotatestart: { byUser: boolean };
   error: { sourceId?: string };
   data: { sourceId?: string; tileLoaded: boolean };
 };
@@ -81,6 +82,8 @@ export interface VendorMap {
   center(): LngLat;
   zoom(): number;
   bearing(): number;
+  moving(): boolean;
+  userGesture(): boolean;
   setCenter(at: LngLat): void;
   setBearing(degrees: number): void;
   easeTo(move: CameraMove): void;

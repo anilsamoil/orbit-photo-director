@@ -1,3 +1,4 @@
+import { createDeviceContext } from './fixture-session.mjs';
 import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -100,7 +101,7 @@ async function showChrome(page) {
   await page.evaluate(() => window.__opdSyncMapChrome());
 }
 
-export async function driveMapSafeArea({ baseUrl, evidenceDir }) {
+export async function driveMapSafeArea({ baseUrl, evidenceDir, fixtureToken, startOffset = 0 }) {
   mkdirSync(evidenceDir, { recursive: true });
   const { chromium } = require('playwright');
   const browser = await chromium.launch({
@@ -121,11 +122,11 @@ export async function driveMapSafeArea({ baseUrl, evidenceDir }) {
     for (const insets of SAFE_AREA_INSET_SETS) {
       for (const size of SAFE_AREA_SIZES) {
         const label = `${size.width}x${size.height} ${insets.name} top/right/bottom/left ${insets.top}/${insets.right}/${insets.bottom}/${insets.left}`;
-        const context = await browser.newContext({
+        const context = await createDeviceContext(browser, {
           viewport: { width: size.width, height: size.height },
           screen: { width: size.width, height: size.height },
           deviceScaleFactor: 1,
-        });
+        }, { baseUrl, token: fixtureToken, startOffset });
         const page = await context.newPage();
         try {
           const client = await context.newCDPSession(page);

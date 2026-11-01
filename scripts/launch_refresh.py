@@ -209,16 +209,43 @@ def _cached_inputs(cache: Path, now: datetime) -> tuple[dict, dict, TLE | None]:
     return identity, payload, tle
 
 
+def _catalog_records_pad(catalog: dict) -> bool:
+    items = catalog.get("items")
+    if not isinstance(items, list) or not items:
+        return True
+    return all(
+        isinstance(item, dict) and isinstance(item.get("site"), dict) and "pad" in item["site"]
+        for item in items
+    )
+
+
+def _prior_catalog_items(output: Path) -> list[dict]:
+    pointer_path = output / "launch/catalog/latest.json"
+    if not pointer_path.is_file():
+        return []
+    try:
+        pointer = json.loads(pointer_path.read_bytes())
+        catalog = _verified_catalog(output, pointer)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, json.JSONDecodeError):
+        return []
+    items = catalog.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
 def _prepare_catalog(
     payload: dict,
     tle: TLE | None,
     now: datetime,
     fetched_at: datetime,
     source_reasons: tuple[str, ...] = (),
+    prior_items: list[dict] | None = None,
 ) -> tuple[dict | None, str | None]:
     try:
         catalog = build_launch_catalog(
             payload, tle, now, fetched_at=fetched_at, source_reasons=source_reasons,
+            prior_items=prior_items,
         )
         _validate_catalog(catalog)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
@@ -314,6 +341,7 @@ def refresh_cached(
             prepared_error: str | None = None,
         ) -> str | None:
             verified_owner = None
+            prior_items = _prior_catalog_items(output)
 
             def commit_catalog(catalog: dict, input_id: str, pointer: dict) -> None:
                 nonlocal catalog_state, catalog_intent, expected_catalog
@@ -354,6 +382,8 @@ def refresh_cached(
                     rebuilt = build_launch_catalog(
                         payload, tle, _parse_iso8601_z(catalog["generated_at"]),
                         fetched_at=_parse_iso8601_z(old_input["fetched_at"]),
+                        prior_items=prior_items,
+                        include_pad=_catalog_records_pad(catalog),
                     )
                     if _catalog_pointer(rebuilt) != pending:
                         return
@@ -398,7 +428,9 @@ def refresh_cached(
             try:
                 catalog = prepared
                 if catalog is None:
-                    catalog = build_launch_catalog(payload, tle, now, fetched_at=fetched_at)
+                    catalog = build_launch_catalog(
+                        payload, tle, now, fetched_at=fetched_at, prior_items=prior_items,
+                    )
                     _validate_catalog(catalog)
 
                 def prepare_publish() -> None:
@@ -475,7 +507,9 @@ def refresh_cached(
                     result["catalog_skipped"] = skipped
                 return _note_heals(output, read_remote, result)
         artifact = build_launch_artifact(payload, tle, now, fetched_at=fetched_at)
-        prepared_catalog, prepared_error = _prepare_catalog(payload, tle, now, fetched_at)
+        prepared_catalog, prepared_error = _prepare_catalog(
+            payload, tle, now, fetched_at, prior_items=_prior_catalog_items(output),
+        )
         _validate_artifact(artifact)
         intent = {"remote": remote, "input": identity, "artifact": artifact}
         _atomic_json(intent_path, intent)
@@ -549,7 +583,7 @@ def main(argv: list[str] | None = None) -> int:
             payload, tle, now, fetched_at=fetched, source_reasons=source_reasons,
         )
         catalog, catalog_error = _prepare_catalog(
-            payload, tle, now, fetched, source_reasons,
+            payload, tle, now, fetched, source_reasons, _prior_catalog_items(args.output),
         )
         _validate_artifact(artifact)
         upload = rclone_uploader(args.remote) if args.publish else None

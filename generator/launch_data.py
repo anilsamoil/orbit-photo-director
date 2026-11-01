@@ -147,6 +147,7 @@ class Launch:
     launch_azimuth_deg: float | None = None
     trajectory_source: str | None = None
     last_updated: datetime | None = None
+    pad_name: str | None = None
 
 
 def _parse_iso8601_z(text: str) -> datetime:
@@ -351,6 +352,7 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
         )
         pad = result["pad"]
         site_name = pad["location"]["name"]
+        pad_name = _text(pad.get("name"))
         site_lat = _coordinate(pad.get("latitude"))
         site_lon = _coordinate(pad.get("longitude"))
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
@@ -397,6 +399,7 @@ def _parse_one_result(result: dict[str, Any], now: datetime | None = None) -> La
         timing_reasons=tuple(reasons),
         mission_inclination_deg=inclination,
         last_updated=_optional_timestamp(result.get("last_updated")),
+        pad_name=pad_name,
     )
 
 
