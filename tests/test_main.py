@@ -342,7 +342,7 @@ def test_score_pass_for_target_serializes_sprite_on_night_limb_storm(
         """Always reports a vigorous limb cluster, regardless of position."""
 
         def sample(self, lat: float, lon: float, w: datetime) -> LightningSample:
-            return _empty_sample(lat, lon, w)
+            return LightningSample(0.5, 3.0, w, "glm-2m", w - timedelta(minutes=2))
 
         def strongest_cluster_in_annulus(self, lat: float, lon: float, **_: object):
             return StrongCluster(distance_km=1480.0, bearing_deg=216.8, flash_count=1689)
@@ -371,12 +371,15 @@ def test_score_pass_for_target_serializes_sprite_on_night_limb_storm(
 
     # NIGHT ISS sub-point + storm → sprite serialized verbatim.
     night = _score(180.0, _StormSampler())
+    assert night["lightning_observed_at"] == "2024-10-17T11:58:00Z"
     assert night["sprite"] == {
         "distance_km": 1480.0, "bearing_deg": 216.8, "flash_count": 1689,
     }
 
     # NIGHT but quiet sky → key absent (NOT null) so bytes are unchanged.
-    assert "sprite" not in _score(180.0, _QuietSampler())
+    quiet = _score(180.0, _QuietSampler())
+    assert "sprite" not in quiet
+    assert "lightning_observed_at" not in quiet
 
     # The night gate itself: a DAYLIT ISS sub-point omits sprite even though
     # the very same storm sampler would report a cluster.

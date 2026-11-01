@@ -86,9 +86,7 @@ ll2-diff:
 
 # Live-S3 smoke test for the GLM sampler (v1.5.5.0 / weather v1.3.2).
 # Build a GLMSampler at "now" and report what it finds. Use this to verify
-# the live path after real-world deployment when NOAA S3 has data for
-# today. In simulated-2026 dev env this prints "0 granules" because the
-# bucket only has data through 2025 — that's expected, not a bug.
+# the live path against the current operational satellite feeds.
 glm-smoke:
 	$(PYTHON) scripts/glm_smoke.py
 
