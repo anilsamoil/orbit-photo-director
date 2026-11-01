@@ -167,6 +167,67 @@ test('a hung setViewport rejects at the drive deadline', { timeout: 20_000 }, as
   assert.ok(result.elapsed >= 11_000 && result.elapsed < 13_000, String(result.elapsed));
 });
 
+test('a late settle-read rejection after timeout does not abort the next resize', { timeout: 20_000 }, async () => {
+  let generation = 0;
+  const aborted = new Set();
+  let rejectLateRead;
+  const lateRead = new Promise((resolve, reject) => {
+    rejectLateRead = reject;
+  });
+  let markSecondReading;
+  const secondReading = new Promise((resolve) => {
+    markSecondReading = resolve;
+  });
+  let releaseSecondRead;
+  const secondRead = new Promise((resolve) => {
+    releaseSecondRead = resolve;
+  });
+  let settleReads = 0;
+  const send = (method, params) => {
+    if (method === 'Emulation.setDeviceMetricsOverride') return {};
+    if (method !== 'Runtime.evaluate') throw new Error(`unexpected ${method}`);
+    const expression = params?.expression ?? '';
+    if (expression.includes('__opdViewportSettled = new Promise')) {
+      generation += 1;
+      return { result: { value: true } };
+    }
+    if (expression.includes('__opdAbortViewportLayout?.()')) {
+      aborted.add(generation);
+      return { result: { value: true } };
+    }
+    if (expression === 'window.devicePixelRatio') return { result: { value: 1 } };
+    if (expression.includes('__opdArmViewportLayout')) return { result: { value: true } };
+    if (expression === 'window.__opdViewportSettled') {
+      settleReads += 1;
+      if (settleReads === 1) return lateRead;
+      markSecondReading();
+      return secondRead.then(() => ({
+        result: {
+          value: aborted.has(generation)
+            ? { w: 390, h: 520, dpr: 1, aborted: true, timedOut: false }
+            : { w: 390, h: 520, dpr: 1, timedOut: false },
+        },
+      }));
+    }
+    throw new Error(`unexpected evaluate ${expression.slice(0, 120)}`);
+  };
+  const first = whenViewportLaidOut(send, 390, 520);
+  const timedOut = await raceCall(first, 13_000);
+  assert.equal(timedOut.status, 'rejected', JSON.stringify(timedOut));
+  assert.match(timedOut.message, /"deadline":true/);
+  assert.ok(timedOut.elapsed >= 11_000 && timedOut.elapsed < 13_000, String(timedOut.elapsed));
+  assert.equal(aborted.has(1), true);
+  const second = whenViewportLaidOut(send, 390, 520);
+  second.catch(() => {});
+  await secondReading;
+  rejectLateRead(new Error('late settle read'));
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(aborted.has(2), false, `stale cleanup aborted generation ${[...aborted].join(',')}`);
+  releaseSecondRead();
+  await second;
+  assert.equal(aborted.has(2), false);
+});
+
 function pacedSend() {
   return (method, params) => {
     const expression = params?.expression ?? '';
@@ -329,6 +390,63 @@ for (const engine of ['Chrome']) {
       assert.equal(trace.listeners, 0);
       const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
       assert.deepEqual(size, [390, 520]);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a thrown final settle read aborts without waiting on ${engine}`, { timeout: 10_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await stallFrames(page, false);
+      const real = page.send;
+      const boom = new Error('settle read failed');
+      boom.settleRead = true;
+      const send = (method, params) => {
+        if (method === 'Runtime.evaluate' && params?.expression === 'window.__opdViewportSettled') throw boom;
+        return real(method, params);
+      };
+      const started = Date.now();
+      await assert.rejects(() => whenViewportLaidOut(send, 390, 520), (error) => {
+        assert.equal(error, boom);
+        return true;
+      });
+      const state = await Promise.race([
+        page.evaluate(() => window.__opdViewportSettled.then((value) => ({ state: 'settled', value }))),
+        new Promise((resolveState) => setTimeout(() => resolveState({ state: 'pending' }), 1_500)),
+      ]);
+      const trace = await page.evaluate(() => ({ timers: window.__timers.size, listeners: window.__resizeListeners }));
+      assert.equal(state.state, 'settled', JSON.stringify(state));
+      assert.equal(state.value.aborted, true);
+      assert.ok(Date.now() - started < 3_000, String(Date.now() - started));
+      assert.equal(trace.listeners, 0);
+      assert.equal(trace.timers, 0);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a delayed command that leaves a different live size rejects on ${engine}`, { timeout: 20_000 }, async () => {
+    const browser = await launch(engine);
+    const page = await open(browser);
+    try {
+      await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 520, deviceScaleFactor: 1, mobile: true });
+      const real = page.send;
+      const send = async (method, params) => {
+        if (method !== 'Emulation.setDeviceMetricsOverride') return real(method, params);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return real(method, { ...params, width: 430, height: 700 });
+      };
+      const result = await raceCall(whenViewportLaidOut(send, 390, 520), 15_000);
+      const size = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+      assert.equal(result.status, 'rejected', JSON.stringify(result));
+      assert.match(result.message, /390x520/);
+      assert.match(result.message, /"timedOut":true/);
+      assert.match(result.message, /"w":430/);
+      assert.match(result.message, /"h":700/);
+      assert.ok(result.elapsed >= 7_000 && result.elapsed < 12_000, String(result.elapsed));
+      assert.deepEqual(size, [430, 700]);
     } finally {
       await browser.close();
     }
