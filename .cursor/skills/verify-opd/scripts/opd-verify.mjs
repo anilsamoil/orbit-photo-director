@@ -15,6 +15,7 @@ import { driveLaunchShotForecast } from './launch-shot-forecast.mjs';
 import { driveMapHold } from './map-hold.mjs';
 import { driveMapImport } from './map-import-failure.mjs';
 import { drivePinFit } from './pin-fit.mjs';
+import { drivePinTitle } from './pin-title.mjs';
 import { drivePlanOpen } from './plan-open.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
@@ -1167,10 +1168,26 @@ async function drive(feature) {
       console.log(`evidence ${state.evidence}`);
       return;
     }
+    if (feature === 'pin-title') {
+      try {
+        const note = await drivePinTitle({
+          baseUrl: state.url,
+          evidenceDir: state.evidence,
+          fixtureToken: token,
+          startOffset,
+        });
+        console.log(note);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+      console.log(`evidence ${state.evidence}`);
+      return;
+    }
     const meta = JSON.parse(readFileSync(resolve(fixtureDir, 'meta.json'), 'utf8'));
     const features = feature === 'all' ? ['all'] : [feature];
     if (feature !== 'all' && !BROWSER_FEATURES.includes(feature)) {
-      console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, launch-shot-forecast, plan-open, or session-lock. map-import is \`drive map-import\` and does not use up.`);
+      console.error(`unknown feature ${feature}. Choose ${BROWSER_FEATURES.join(', ')}, all, map-bearing, map-bearing-commit, map-corner, map-pagehide, map-safe-area, map-hold, pin-fit, pin-title, launch-shot-forecast, plan-open, or session-lock. map-import is \`drive map-import\` and does not use up.`);
       process.exitCode = 2;
       return;
     }
@@ -1316,6 +1333,6 @@ else if (command === 'drive') await drive(process.argv[3] || 'all');
 else if (command === 'sw') await sw();
 else if (command === 'check') checkMap();
 else {
-  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|launch-shot-forecast|plan-open|session-lock>|drive map-import|sw|down|check|serve');
+  console.error('usage: opd-verify.mjs up|doctor|drive <feature|all|map-bearing|map-bearing-commit|map-corner|map-pagehide|map-safe-area|map-hold|pin-fit|pin-title|launch-shot-forecast|plan-open|session-lock>|drive map-import|sw|down|check|serve');
   process.exit(2);
 }
