@@ -364,31 +364,42 @@ def test_glm_sampler_aggregates_synthetic_flashes() -> None:
     assert result.source == "glm-0m"
 
 
-@pytest.mark.parametrize(("age", "expected"), [
-    (0, "glm-0m"), (5, "glm-5m"), (6, "glm-no-data"), (61, "glm-no-data"),
-    (-1, "glm-no-data"),
+@pytest.mark.parametrize(("age", "complete", "expected"), [
+    (0, True, "glm-0m"), (5, True, "glm-5m"), (6, True, "glm-no-data"),
+    (0, False, "glm-no-data"),
 ])
-def test_quiet_east_granule_requires_fresh_coverage(tmp_path, age, expected):
-    import netCDF4
+def test_quiet_requires_fresh_continuous_covering_sector(monkeypatch, age, complete, expected):
+    from generator.lightning import _GLMGranule
 
     when = datetime(2026, 5, 21, 12, tzinfo=UTC)
-    start = when - timedelta(minutes=age)
+    latest = when - timedelta(minutes=age)
+    starts = list(range(3600, age * 60 - 1, -20)) if complete else [0]
+    monkeypatch.setattr(
+        "generator.lightning._decode_glm_granule",
+        lambda offset: _GLMGranule(when - timedelta(seconds=offset), []),
+    )
+    sampler = GLMSampler(
+        when, fetcher=int, lister=lambda sat: list(map(str, starts)) if sat == "noaa-goes19" else [],
+    )
+    sample = sampler.sample(0, -75, when)
+    assert sample.source == expected
+    assert sample.observed_at == (latest if complete and age <= 5 else None)
+    assert sampler.sample(0, -150, when).source == "glm-no-data"
+    assert sampler.sample(0, 0, when).source == "glm-out-of-coverage"
+    assert sampler.sample(0, -75, when + timedelta(minutes=21)).source == "glm-no-data"
+
+
+def test_decoder_distinguishes_valid_empty_granule(tmp_path):
+    import netCDF4
+
     path = tmp_path / "quiet.nc"
     with netCDF4.Dataset(path, "w") as ds:
         ds.createDimension("flashes", None)
         for field in ("flash_lat", "flash_lon", "flash_time_offset_of_first_event"):
             ds.createVariable(field, "f4", ("flashes",))
-        ds.time_coverage_start = start.isoformat()
-    sampler = GLMSampler(
-        when, fetcher=lambda _: path.read_bytes(),
-        lister=lambda sat: ["east"] if sat == "noaa-goes19" else [],
-    )
-    sample = sampler.sample(0, -75, when)
-    assert sample.source == expected
-    assert sample.observed_at == (start if 0 <= age <= 5 else None)
-    assert sampler.sample(0, -150, when).source == "glm-no-data"
-    assert sampler.sample(0, 0, when).source == "glm-out-of-coverage"
-    assert sampler.sample(0, -75, when + timedelta(minutes=21)).source == "glm-no-data"
+        ds.time_coverage_start = "2026-05-21T12:00:00Z"
+    granule = _decode_glm_granule(path.read_bytes())
+    assert granule is not None and granule.flashes == []
 
 
 def test_paired_sectors_count_overlap_once_and_wrap_dateline(monkeypatch):

@@ -39,6 +39,7 @@ import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -149,6 +150,7 @@ GLM_INNER_RADIUS_KM = 5500
 # fifteen nominal 20-second publication cycles. Positive flashes retain the
 # existing one-hour evidence window for imminent passes.
 GLM_QUIET_FRESHNESS_MINUTES = 5
+GLM_GRANULE_CADENCE = timedelta(seconds=20)
 GLM_PASS_HORIZON_MINUTES = 20
 GLM_LISTING_TIMEOUT_SECONDS = 30
 GLM_GRANULE_TIMEOUT_SECONDS = 30
@@ -355,6 +357,7 @@ class GLMSampler:
         self._window_minutes = window_minutes
         self._flashes_by_bucket: dict[tuple[int, int], list[_GLMFlash]] = {}
         self._latest_by_satellite: dict[str, datetime] = {}
+        self._continuous_sectors: set[str] = set()
         cutoff = when - timedelta(minutes=window_minutes)
 
         if fetcher is None:
@@ -444,6 +447,14 @@ class GLMSampler:
             # read (the daemon's `GLM_GRANULE_TIMEOUT_SECONDS` request
             # timeout still bounds those threads to ≤30s background drain).
             ex.shutdown(wait=False, cancel_futures=True)
+        # A recent file proves liveness only. Quiet requires continuous
+        # coverage from the window boundary to the latest available file.
+        for sat in self._latest_by_satellite:
+            starts = sorted(t for t, sources in sources_by_start.items() if sat in sources)
+            if starts[0] - cutoff <= GLM_GRANULE_CADENCE and all(
+                later - earlier <= GLM_GRANULE_CADENCE for earlier, later in pairwise(starts)
+            ):
+                self._continuous_sectors.add(sat)
         # Simultaneous sectors overlap. In paired granules each longitude
         # belongs to the closer satellite; a lone granule keeps its full field.
         for bucket, granule in decoded:
@@ -491,7 +502,8 @@ class GLMSampler:
             fresh_since = self._when - timedelta(minutes=GLM_QUIET_FRESHNESS_MINUTES)
             available = [
                 t for sat, t in self._latest_by_satellite.items()
-                if sat in covering and max(cutoff, fresh_since) <= t <= when
+                if sat in covering and sat in self._continuous_sectors
+                and max(cutoff, fresh_since) <= t <= when
             ]
             if not available:
                 return LightningSample(0.0, 0.0, when, "glm-no-data")
