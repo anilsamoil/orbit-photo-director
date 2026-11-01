@@ -3147,11 +3147,11 @@ function voidViewportAbort(send) {
   aborting.catch(() => {});
 }
 
-async function withViewportCleanup(send, step) {
+async function withViewportCleanup(send, step, signal) {
   try {
     return await step();
   } catch (error) {
-    voidViewportAbort(send);
+    if (!signal?.aborted) voidViewportAbort(send);
     throw error;
   }
 }
@@ -3276,8 +3276,8 @@ async function layOutViewport(send, width, height, signal) {
     if (!Number.isFinite(dpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
     await evaluate(send, `window.__opdArmViewportLayout?.(${dpr})`);
     return dpr;
-  });
-  const settled = await withViewportCleanup(send, () => readViewportSettled(send));
+  }, signal);
+  const settled = await withViewportCleanup(send, () => readViewportSettled(send), signal);
   if (settled && typeof settled === 'object') settled.expectedDpr = expectedDpr;
   return settled;
 }
