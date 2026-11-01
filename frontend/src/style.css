@@ -4627,6 +4627,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 .map-inspector .dropped-pin-popup > strong {
   font-size: 0.8rem;
   line-height: 1.15;
+  overflow-wrap: anywhere;
 }
 
 .map-inspector .dropped-pin-popup {

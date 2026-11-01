@@ -171,6 +171,63 @@ async function measure(page: Page, targetRow = 0): Promise<RenderedMeasure> {
   }, targetRow);
 }
 
+function pinMarkup(unbroken: boolean): string {
+  const body = buildPassList(40, -90, 1, [{
+    name: unbroken ? heading60 : 'ISS',
+    color: '#5cd0ff',
+    passes,
+  }], now);
+  if (unbroken) {
+    body.querySelector('.pin-pass-heading')!.textContent = heading60;
+    body.querySelector('strong')!.textContent = heading60;
+  }
+  return body.outerHTML;
+}
+
+interface HeadingBox {
+  clientWidth: number;
+  scrollWidth: number;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  texts: { left: number; right: number; top: number; bottom: number }[];
+}
+
+interface HeadingFit {
+  container: number;
+  inspector: { left: number; right: number; top: number; bottom: number };
+  heading: HeadingBox;
+  title: HeadingBox;
+}
+
+function expectHeadingFits(measured: HeadingFit, label: string, unbroken: boolean): void {
+  const details = `${label} ${JSON.stringify(measured)}`;
+  const parts = [
+    ['pin-pass-heading', measured.heading],
+    ['strong', measured.title],
+  ] as const;
+  for (const [name, part] of parts) {
+    expect.soft(part.scrollWidth, `${details} ${name} scrollWidth`).toBeLessThanOrEqual(part.clientWidth);
+    expect.soft(part.left, `${details} ${name} left`).toBeGreaterThanOrEqual(measured.inspector.left - 1);
+    expect.soft(part.right, `${details} ${name} right`).toBeLessThanOrEqual(measured.inspector.right + 1);
+    expect.soft(part.top, `${details} ${name} top`).toBeGreaterThanOrEqual(measured.inspector.top - 1);
+    expect.soft(part.bottom, `${details} ${name} bottom`).toBeLessThanOrEqual(measured.inspector.bottom + 1);
+    expect.soft(part.texts.length, `${details} ${name} text`).toBeGreaterThan(0);
+    if (unbroken) expect.soft(part.texts.length, `${details} ${name} wraps`).toBeGreaterThan(1);
+    for (const text of part.texts) {
+      expect.soft(text.left, `${details} ${name} text left`).toBeGreaterThanOrEqual(measured.inspector.left - 1);
+      expect.soft(text.right, `${details} ${name} text right`).toBeLessThanOrEqual(measured.inspector.right + 1);
+      expect.soft(text.top, `${details} ${name} text top`).toBeGreaterThanOrEqual(measured.inspector.top - 1);
+      expect.soft(text.bottom, `${details} ${name} text bottom`).toBeLessThanOrEqual(measured.inspector.bottom + 1);
+    }
+  }
+  if (!unbroken && measured.container > 260) {
+    expect.soft(measured.heading.texts.length, `${details} normal heading lines`).toBe(1);
+    expect.soft(measured.title.texts.length, `${details} normal title lines`).toBe(1);
+  }
+}
+
 function expectReadable(measured: RenderedMeasure, label: string): void {
   const details = `${label}: ${JSON.stringify(measured)}`;
   expect.soft(measured.sheet.width, details).toBeGreaterThan(0);
@@ -253,6 +310,77 @@ for (const engine of [
       } finally {
         await context.close();
       }
+    }, 120_000);
+
+    it('keeps a 60-character unbroken heading inside the inspector', async () => {
+      if (!browser) throw new Error(`${engine.name} was not opened`);
+      const layouts = [
+        { width: 402, height: 874 },
+        { width: 568, height: 320 },
+        { width: 1024, height: 768 },
+        { width: 1210, height: 834 },
+      ];
+      const containers: number[] = [];
+      for (const size of layouts) for (const shown of [false, true]) for (const unbroken of [true, false]) {
+        const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1 });
+        try {
+          const page = await context.newPage();
+          await page.route('**/*', (route) => route.abort());
+          await page.setContent(html, { waitUntil: 'domcontentloaded' });
+          await page.evaluate(() => document.fonts.ready);
+          await page.evaluate((chromeShown) => {
+            document.body.classList.toggle('map-chrome-hidden', !chromeShown);
+            document.querySelector('#view')!.classList.add('view-map');
+            document.querySelector('#map-pane')!.classList.add('active');
+            document.querySelector('#map-pane')!.classList.toggle('map-chrome-hidden', !chromeShown);
+            document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button></button><button></button><button></button></div></div></div>';
+            const toggle = document.querySelector('#map-chrome-toggle')!;
+            toggle.textContent = chromeShown ? 'Hide' : 'Controls';
+            toggle.setAttribute('aria-expanded', String(chromeShown));
+          }, shown);
+          await page.addScriptTag({ content: `${placementScript}\nwindow.placeInspector = inspectorSync({ getContainer: () => document.querySelector('#map'), resize() {} });` });
+          await page.evaluate((markup) => {
+            document.querySelector('#map-inspector')!.innerHTML = `<div class="maplibregl-popup"><div class="maplibregl-popup-content">${markup}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>`;
+            (window as unknown as { placeInspector: () => void }).placeInspector();
+          }, pinMarkup(unbroken));
+          await page.evaluate(() => document.fonts.ready);
+          await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          const measured = await page.evaluate(() => {
+            const inspector = document.querySelector('#map-inspector')!;
+            const popup = document.querySelector<HTMLElement>('.dropped-pin-popup')!;
+            const bounds = inspector.getBoundingClientRect();
+            const read = (element: HTMLElement) => {
+              const rect = element.getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return {
+                clientWidth: element.clientWidth,
+                scrollWidth: element.scrollWidth,
+                left: rect.left,
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom,
+                texts: [...range.getClientRects()].filter((text) => text.width > 0 && text.height > 0).map((text) => ({
+                  left: text.left, right: text.right, top: text.top, bottom: text.bottom,
+                })),
+              };
+            };
+            return {
+              container: popup.clientWidth,
+              inspector: { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom },
+              heading: read(document.querySelector<HTMLElement>('.pin-pass-heading')!),
+              title: read(document.querySelector<HTMLElement>('.dropped-pin-popup > strong')!),
+            };
+          });
+          containers.push(measured.container);
+          const label = `${engine.name} ${size.width}×${size.height} ${shown ? 'shown' : 'hidden'} ${unbroken ? 'heading60' : 'normal'} container ${measured.container}`;
+          expectHeadingFits(measured, label, unbroken);
+        } finally {
+          await context.close();
+        }
+      }
+      expect.soft(containers.some((width) => width <= 260), `${engine.name} containers ${containers.join(',')}`).toBe(true);
+      expect.soft(containers.some((width) => width > 260), `${engine.name} containers ${containers.join(',')}`).toBe(true);
     }, 120_000);
   });
 }
